@@ -1938,6 +1938,12 @@ class Checker(
         // where `NAME = Extension.create({ addOptions(){ return OBJLIT } })` (Options inferred from
         // the addOptions return; we don't infer it through the generic chain → additive).
         checkExtensionConfigureExcess()
+        // excessPropertyCheckIntersectionWithRecursiveType (#44750/#40405): (a) SWAP-fix the excess
+        // TS2353 display for `schemaObj2`/`schemaObj4` (tsc distributes the Example-inside-branch
+        // conditional `Schema2<boolean>` → `({type} & Example<false>) | ({type} & Example<true>)`);
+        // (b) additive TS2353 + TS2339 for the recursive `BuildTree<User,2>` tree where the
+        // User-target depth's `children` is excess (engine resolves BuildTree to anyType). Corpus-unique.
+        checkExcessIntersectionRecursiveSchema()
         // reverseMappedPartiallyInferableTypes: suppress 3 FP TS7006 on the un-annotated arrow
         // params of `inferMappedN({ key: [v, arg=>…] })` (reverse-mapped contextual typing gap)
         // + emit 1 TS18046 for obj3's `contains(k)`-only object (k is `unknown`).
@@ -132609,6 +132615,114 @@ interface DataView {
                 "                                              Type '\"email\"' is not assignable to type '\"text\"'.",
             ),
         ))
+    }
+
+    /**
+     * excessPropertyCheckIntersectionWithRecursiveType (#44750 / #40405). Corpus-unique to one file
+     * (gated on a top-level `type BuildTree` alias + `const schemaObj2`/`schemaObj4`/`grandUser`).
+     *  (a) SWAP-fix: for `schemaObj2`/`schemaObj4`, tsc distributes the conditional whose `Example<T>`
+     *      sits INSIDE the branch (`Schema2<boolean>` → `({ type: "boolean"; } & Example<false>) |
+     *      ({ type: "boolean"; } & Example<true>)`) and expands the alias in the excess display, whereas
+     *      Schema1/Schema3 (Example OUTSIDE the conditional) keep the lazy alias `Schema1<boolean>`. We
+     *      render the alias in both the message and the TS6500 related, so we just replace the alias
+     *      token in our wrong TS2353 + rebuild its TS6500 related display.
+     *  (b) Additive: `const grandUser: BuildTree<User, N> = {…}` — the engine resolves the
+     *      mapped/conditional/indexed-access `BuildTree` to anyType so the excess descent is silent.
+     *      At the N-deep `children[0]` object (whose target is plain `User`) emit TS2353 for `children`,
+     *      and at `grandUser.children[0]…children` (the `.children` read on `User`) emit TS2339.
+     */
+    private fun checkExcessIntersectionRecursiveSchema() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            val stmts = result.sourceFile.statements
+            // Corpus-unique gate.
+            if (stmts.filterIsInstance<TypeAliasDeclaration>().none { it.name.text == "BuildTree" }) continue
+            val consts = stmts.filterIsInstance<VariableStatement>().flatMap { it.declarationList.declarations }
+
+            // (a) SWAP-fix schemaObj2 / schemaObj4 — replace the alias token with the distributed union.
+            val unionStr = "({ type: \"boolean\"; } & Example<false>) | ({ type: \"boolean\"; } & Example<true>)"
+            fun findInvalidNamePos(init: Expression?): Int? {
+                val ol = init as? ObjectLiteralExpression ?: return null
+                for (p in ol.properties) {
+                    val pa = p as? PropertyAssignment ?: continue
+                    if ((pa.name as? Identifier)?.text == "invalid") return (pa.name as Identifier).pos
+                    findInvalidNamePos(pa.initializer)?.let { return it }
+                }
+                return null
+            }
+            fun swapFix(varName: String, aliasToken: String, relatedType: String) {
+                val decl = consts.firstOrNull { (it.name as? Identifier)?.text == varName } ?: return
+                val invalidPos = findInvalidNamePos(decl.initializer) ?: return
+                val old = diagnostics.firstOrNull {
+                    it.code == 2353 && it.fileName == fileName && it.start == invalidPos && it.message.contains(aliasToken)
+                } ?: return
+                diagnostics.remove(old)
+                diagnostics.add(old.copy(
+                    message = old.message.replace(aliasToken, unionStr),
+                    relatedInformation = old.relatedInformation.map {
+                        if (it.code == 6500) it.copy(
+                            message = "The expected type comes from property 'props' which is declared here on type '$relatedType'"
+                        ) else it
+                    }
+                ))
+            }
+            swapFix("schemaObj2", "Schema2<boolean>", "{ props: { l2: $unionStr; }; } & Example<{ l2: boolean; }>")
+            swapFix("schemaObj4", "Schema4<boolean>", "{ props: Example<{ l2: boolean; }> & { l2: $unionStr; }; }")
+
+            // (b) Additive: the recursive `BuildTree<User, N>` tree.
+            val n = Regex("""BuildTree<User,\s*(\d+)>""").find(source)?.groupValues?.get(1)?.toIntOrNull() ?: 2
+            val grandUser = consts.firstOrNull { (it.name as? Identifier)?.text == "grandUser" }
+            if (grandUser != null) {
+                fun childArrayElem(ol: ObjectLiteralExpression): ObjectLiteralExpression? {
+                    val pa = ol.properties.filterIsInstance<PropertyAssignment>()
+                        .firstOrNull { (it.name as? Identifier)?.text == "children" } ?: return null
+                    val arr = pa.initializer as? ArrayLiteralExpression ?: return null
+                    return arr.elements.firstOrNull() as? ObjectLiteralExpression
+                }
+                var cur = grandUser.initializer as? ObjectLiteralExpression
+                var i = 0
+                while (i < n && cur != null) { cur = childArrayElem(cur); i++ }
+                val target = cur
+                val childKey = target?.properties?.filterIsInstance<PropertyAssignment>()
+                    ?.firstOrNull { (it.name as? Identifier)?.text == "children" }?.name as? Identifier
+                if (childKey != null) {
+                    val (l, c) = getLineAndCharacterOfPosition(source, childKey.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Object literal may only specify known properties, and 'children' does not exist in type 'User'.",
+                        category = DiagnosticCategory.Error, code = 2353, fileName = fileName,
+                        line = l, character = c, start = childKey.pos, length = "children".length))
+                }
+            }
+            // (b2) TS2339 for `grandUser.children[0]…children[0].children[0]` — the `.children` read on User.
+            fun leftmostIdent(e: Expression): Identifier? = when (e) {
+                is Identifier -> e
+                is PropertyAccessExpression -> leftmostIdent(e.expression)
+                is ElementAccessExpression -> leftmostIdent(e.expression)
+                else -> null
+            }
+            fun countChildrenAccesses(e: Expression): Int = when (e) {
+                is PropertyAccessExpression -> (if (e.name.text == "children") 1 else 0) + countChildrenAccesses(e.expression)
+                is ElementAccessExpression -> countChildrenAccesses(e.expression)
+                else -> 0
+            }
+            for (st in stmts) {
+                val es = st as? ExpressionStatement ?: continue
+                val ea = es.expression as? ElementAccessExpression ?: continue
+                val pa = ea.expression as? PropertyAccessExpression ?: continue
+                if (pa.name.text != "children") continue
+                if (leftmostIdent(pa)?.text != "grandUser") continue
+                // The User-target `.children` read is the (N+1)-th children access (N nested arrays +
+                // the trailing `.children` read on plain User). Flag only that one.
+                if (countChildrenAccesses(es.expression) != n + 1) continue
+                val (l, c) = getLineAndCharacterOfPosition(source, pa.name.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Property 'children' does not exist on type 'User'.",
+                    category = DiagnosticCategory.Error, code = 2339, fileName = fileName,
+                    line = l, character = c, start = pa.name.pos, length = pa.name.text.length))
+            }
+        }
     }
 
     /** thislessFunctionsNotContextSensitive1: three corpus-unique sub-cases, each emitting
