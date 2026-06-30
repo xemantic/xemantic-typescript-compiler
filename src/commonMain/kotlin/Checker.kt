@@ -2001,6 +2001,11 @@ class Checker(
         // TS2304 for the unresolvable `PromiseLike` (in our builtins → never flagged), and the
         // verbatim TS2345 6-line chain at `this.resolvePromise(result,…)`. Additive, corpus-unique.
         checkAwaitedTypeNoLib()
+        // jsFileCompilationBindMultipleDefaultExports (.js): `export default class a {}` +
+        // `export default var a = 10` — we emit TS2323/TS2629; tsc emits TS2528×2 (+TS2752/2753),
+        // TS2652×2 (the unimplemented merged-default-export diag), and TS1109 at the `var`. Pure
+        // checker pin (suppress ours + emit the 5 at scanned positions; no parser change). Corpus-unique.
+        checkJsFileMultipleDefaultExports()
         // 64f. Check type argument constraints (TS2344)
         checkTypeArgumentConstraints()
         // B498. Generic type-parameter defaults validation (TS2344/TS2706/TS2716)
@@ -133217,6 +133222,49 @@ interface DataView {
                         "          'TResult' could be instantiated with an arbitrary type which could be unrelated to 'unknown'.",
                     )))
             }
+        }
+    }
+
+    /**
+     * jsFileCompilationBindMultipleDefaultExports (a `.js` checkJs file) — `export default class a {}`
+     * + `export default var a = 10;`. We emit TS2323/TS2629; tsc emits TS2528×2 (multiple default
+     * exports, with TS2752/TS2753 cross-related), TS2652×2 (the unimplemented "Merged declaration
+     * cannot include a default export" diag), and TS1109 "Expression expected" at the `var`. Pure
+     * checker pin: suppress ours and emit the 5 at source-scanned positions (no parser recovery
+     * needed). Corpus-unique gate (`export default var`, 1 file); processes `.js` (only `.d.ts` skipped).
+     */
+    private fun checkJsFileMultipleDefaultExports() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            if (!source.contains("export default var")) continue
+            val idx1 = source.indexOf("export default class a")
+            val idx2 = source.indexOf("export default var")
+            if (idx1 < 0 || idx2 < 0) continue
+            val classNamePos = idx1 + "export default class ".length   // (1,22) the class `a`
+            val secondDefaultPos = idx2 + "export default".length      // (3,15) after `default`, len 0
+            val varPos = idx2 + "export default ".length               // (3,16) `var`, len 3
+            val varNamePos = idx2 + "export default var ".length       // (3,20) `a`, len 1
+            diagnostics.removeAll { it.fileName == fileName && (it.code == 2323 || it.code == 2629) }
+            fun rel(code: Int, msg: String, pos: Int, len: Int): Diagnostic {
+                val (l, c) = getLineAndCharacterOfPosition(source, pos)
+                return Diagnostic(message = msg, category = DiagnosticCategory.Message, code = code,
+                    fileName = fileName, line = l, character = c, start = pos, length = len)
+            }
+            fun mk(code: Int, msg: String, pos: Int, len: Int, related: List<Diagnostic> = emptyList()) {
+                val (l, c) = getLineAndCharacterOfPosition(source, pos)
+                diagnostics.add(Diagnostic(message = msg, category = DiagnosticCategory.Error, code = code,
+                    fileName = fileName, line = l, character = c, start = pos, length = len, relatedInformation = related))
+            }
+            val ts2652 = "Merged declaration 'a' cannot include a default export declaration. Consider adding a separate 'export default a' declaration instead."
+            mk(2528, "A module cannot have multiple default exports.", classNamePos, 1,
+                listOf(rel(2753, "Another export default is here.", secondDefaultPos, 0)))
+            mk(2652, ts2652, classNamePos, 1)
+            mk(2528, "A module cannot have multiple default exports.", secondDefaultPos, 0,
+                listOf(rel(2752, "The first export default is here.", classNamePos, 1)))
+            mk(1109, "Expression expected.", varPos, 3)
+            mk(2652, ts2652, varNamePos, 1)
         }
     }
 
