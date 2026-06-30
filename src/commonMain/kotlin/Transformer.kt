@@ -1625,6 +1625,7 @@ class Transformer(
         // Note: RawStatement (injected helpers like __awaiter) do NOT end the prologue zone —
         // they are prepended to statements before this transform and must be skipped over.
         var hasUseStrictPrologue = false
+        var useStrictSingleQuote = false
         val otherPrologueDirectives = mutableListOf<ExpressionStatement>()
         var pastPrologue = false
         val statementsRaw = statements.filter { stmt ->
@@ -1634,6 +1635,8 @@ class Transformer(
                 val text = (stmt.expression as StringLiteralNode).text
                 if (text == "use strict") {
                     hasUseStrictPrologue = true
+                    // Preserve the source directive's quote style (tsc keeps 'use strict' vs "use strict").
+                    useStrictSingleQuote = (stmt.expression as StringLiteralNode).singleQuote
                     false // strip from body
                 } else {
                     otherPrologueDirectives.add(stmt)
@@ -3282,7 +3285,7 @@ class Transformer(
         // statements must emit it themselves at the correct position.
         if (hasUseStrictPrologue) {
             result.add(0, ExpressionStatement(
-                expression = StringLiteralNode(text = "use strict"),
+                expression = StringLiteralNode(text = "use strict", singleQuote = useStrictSingleQuote),
             ))
         }
 
@@ -16746,10 +16749,24 @@ class Transformer(
                                 }
                                 is ObjectBindingPattern -> {
                                     if (decl.initializer != null) {
+                                        val init = qualifyNamespaceRefs(nsName, exportedVarOnlyNames, transformExpression(decl.initializer))
+                                        val sole = nameNode.elements.singleOrNull() as? BindingElement
+                                        if (sole != null && !sole.dotDotDotToken && sole.initializer == null &&
+                                            sole.name is Identifier &&
+                                            (sole.propertyName == null || sole.propertyName is Identifier)) {
+                                            // Single element: inline `Ns.local = init.prop` (init used once → no temp).
+                                            val localName = (sole.name as Identifier).text
+                                            val propName = (sole.propertyName as? Identifier)?.text ?: localName
+                                            assignments.add(BinaryExpression(
+                                                left = PropertyAccessExpression(expression = Identifier(nsName), name = Identifier(localName)),
+                                                operator = Equals,
+                                                right = PropertyAccessExpression(expression = init, name = Identifier(propName)),
+                                                pos = -1, end = -1,
+                                            ))
+                                        } else {
                                         val tempVar = nextTempVarName()
                                         hoistedTempVarNames.add(tempVar)
                                         val tempId = syntheticId(tempVar)
-                                        val init = qualifyNamespaceRefs(nsName, exportedVarOnlyNames, transformExpression(decl.initializer))
                                         // _a = expr
                                         val tempAssign = BinaryExpression(left = tempId, operator = Equals, right = init, pos = -1, end = -1)
                                         assignments.add(tempAssign)
@@ -16773,14 +16790,31 @@ class Transformer(
                                                 )
                                             )
                                         }
+                                        }
                                     }
                                 }
                                 is ArrayBindingPattern -> {
                                     if (decl.initializer != null) {
+                                        val init = qualifyNamespaceRefs(nsName, exportedVarOnlyNames, transformExpression(decl.initializer))
+                                        val sole = nameNode.elements.singleOrNull() as? BindingElement
+                                        if (sole != null && !sole.dotDotDotToken && sole.initializer == null &&
+                                            sole.name is Identifier) {
+                                            // Single element: inline `Ns.local = init[0]` (init used once → no temp).
+                                            val localName = (sole.name as Identifier).text
+                                            assignments.add(BinaryExpression(
+                                                left = PropertyAccessExpression(expression = Identifier(nsName), name = Identifier(localName)),
+                                                operator = Equals,
+                                                right = ElementAccessExpression(
+                                                    expression = init,
+                                                    argumentExpression = NumericLiteralNode(text = "0", pos = -1, end = -1),
+                                                    pos = -1, end = -1,
+                                                ),
+                                                pos = -1, end = -1,
+                                            ))
+                                        } else {
                                         val tempVar = nextTempVarName()
                                         hoistedTempVarNames.add(tempVar)
                                         val tempId = syntheticId(tempVar)
-                                        val init = qualifyNamespaceRefs(nsName, exportedVarOnlyNames, transformExpression(decl.initializer))
                                         // _a = expr
                                         val tempAssign = BinaryExpression(left = tempId, operator = Equals, right = init, pos = -1, end = -1)
                                         assignments.add(tempAssign)
@@ -16808,6 +16842,7 @@ class Transformer(
                                                 )
                                             }
                                             idx++
+                                        }
                                         }
                                     }
                                 }
@@ -17674,8 +17709,23 @@ class Transformer(
      */
     /** Triple of (localName, valueExpression, leadingComments from BindingElement). */
     private fun tryExpandObjectBinding(decl: VariableDeclaration): List<Triple<String, Expression, List<Comment>?>>? {
-        val pattern = decl.name as? ObjectBindingPattern ?: return null
         val initializer = decl.initializer ?: return null
+        // Single-element array binding (`[x] = expr`) → `x = expr[0]` (tsc inlines; the
+        // initializer is referenced exactly once so no temp is needed). Multi-element /
+        // rest / default patterns fall back to keep-declaration (return null).
+        (decl.name as? ArrayBindingPattern)?.let { arr ->
+            if (arr.elements.size != 1) return null
+            val elem = arr.elements[0] as? BindingElement ?: return null
+            if (elem.dotDotDotToken || elem.initializer != null) return null
+            val localName = (elem.name as? Identifier)?.text ?: return null
+            val valueExpr = ElementAccessExpression(
+                expression = initializer,
+                argumentExpression = NumericLiteralNode(text = "0", pos = -1, end = -1),
+                pos = -1, end = -1,
+            )
+            return listOf(Triple(localName, valueExpr, elem.leadingComments))
+        }
+        val pattern = decl.name as? ObjectBindingPattern ?: return null
         for (elem in pattern.elements) {
             if (elem.dotDotDotToken) return null
             if (elem.initializer != null) return null
