@@ -91,6 +91,7 @@ Add entries as ` - \`name_ts\` — reason `.
 - `systemModule17_ts` — explicit `@module: system` JS-emit test (System module emit removed in TS7/tsgo).
 - `dynamicImportWithNestedThis_es2015_ts` — explicit `@module: umd` JS-emit test (UMD module emit removed in TS7/tsgo).
 - `dynamicImportWithNestedThis_es5_ts` — explicit `@module: umd` JS-emit test (UMD module emit removed in TS7/tsgo).
+- `importedAliasesInTypePositions_ts` — explicit `@module: amd` JS-emit test (AMD `define(...)` emit removed in TS7/tsgo); the errors subtest already passes (only the AMD JS-emit dimension diffs).
 
 ## Curated DIVERGES
 
