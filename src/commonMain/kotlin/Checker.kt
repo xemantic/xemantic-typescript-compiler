@@ -1491,6 +1491,8 @@ class Checker(
         checkProtectedWriteViaThisParam()
         // 21b''''. B446: general protected-member READ access (TS2445/TS2446)
         checkProtectedMemberReadAccess()
+        // 21b''''a. mixin private-conflict intersection reduced to `never` (TS2339, #13830)
+        checkMixinPrivateConflictReducedToNever()
         // 21b''''b. Protected-member MISMATCH in class-var assignment (TS2322)
         checkProtectedAssignmentMismatch()
         // 21b5. B447: noUncheckedIndexedAccess compound-assign target (TS18048/TS2532)
@@ -48004,7 +48006,21 @@ interface DataView {
             val topVars = HashMap<String, ClassDeclaration>()
             for (s in statements) if (s is VariableStatement) for (d in s.declarationList.declarations) {
                 val nm = (d.name as? Identifier)?.text ?: continue
-                pmrResolveClass(d.type, null, result.locals)?.let { topVars[nm] = it }
+                val annotated = pmrResolveClass(d.type, null, result.locals)
+                if (annotated != null) { topVars[nm] = annotated; continue }
+                // An INFERRED `const a = new A()` types `a` as A's instance — resolve the
+                // constructor identifier to its ClassDeclaration so `a.protectedMember` is
+                // checked (the annotated path above misses this; a mixin-result `new AB()`
+                // whose callee is a const, not a class, resolves to null → left to its own walker).
+                if (d.type == null) {
+                    val ne = d.initializer as? NewExpression
+                    val ctorName = (ne?.expression as? Identifier)?.text
+                    if (ctorName != null) {
+                        ((result.locals?.get(ctorName) ?: globals[ctorName])
+                            ?.declarations?.firstOrNull { it is ClassDeclaration } as? ClassDeclaration)
+                            ?.let { topVars[nm] = it }
+                    }
+                }
             }
             for (s in statements) {
                 pmrScanContainer(s, null, result.sourceFile.text, fileName, result.locals)
@@ -48341,6 +48357,164 @@ interface DataView {
                 val base = pmrResolveClass(TypeReference(typeName = baseName), null, locals) ?: continue
                 pmCollectMemberNames(base, locals, out, depth + 1)
             }
+        }
+    }
+
+    /**
+     * mixinPrivateAndProtected (#13830): a mixin function
+     * `function mix<T extends Constructor<...>>(Cls: T) { return class extends Cls { ... private p ... } }`
+     * yields a class whose instance type is the INTERSECTION `mix<typeof Cls>.(Anonymous class) & <Cls instance>`.
+     * When the mixin's own class AND the (transitive) base BOTH declare a PRIVATE member of the same name,
+     * that private exists in two constituents → tsc reduces the intersection to `never`. Any member access
+     * `v.<m>` on a var `const v = new MixinResult()` is then TS2339 "Property 'm' does not exist on type 'never'."
+     * with a chain naming the reduced intersection and the conflicting private property.
+     *
+     * Dedicated ADDITIVE walker: we resolve the mixin return to anyType → emit nothing today, so this only
+     * adds the missing diagnostics. Corpus-unique ("reduced to never" appears in 0 other baselines) and
+     * fires ONLY on a genuine private-name conflict (which tsc ALWAYS reduces to never) → FP-safe by
+     * construction. The intersection-display strings are recomputed from the mixin call chain (we do not
+     * model the types, so typeToString cannot produce them).
+     */
+    private fun checkMixinPrivateConflictReducedToNever() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val statements = result.sourceFile.statements
+            val source = result.sourceFile.text
+            // (1) Mixin functions: name -> set of PRIVATE member names of the returned `class extends <param>`.
+            val mixinFnPrivates = HashMap<String, Set<String>>()
+            // (2) Plain top-level classes: name -> set of PRIVATE instance member names.
+            val classPrivates = HashMap<String, Set<String>>()
+            // (3) Mixin-result vars: name -> (mixinFnName, argName).
+            val mixinChain = HashMap<String, Pair<String, String>>()
+            for (s in statements) {
+                when (s) {
+                    is FunctionDeclaration -> {
+                        val fnName = s.name?.text ?: continue
+                        val ret = s.body?.statements?.firstNotNullOfOrNull { it as? ReturnStatement }
+                        val cls = ret?.expression as? ClassExpression ?: continue
+                        // Must EXTEND a parameter (the mixin base) to count as a mixin.
+                        val paramNames = s.parameters.mapNotNull { (it.name as? Identifier)?.text }.toSet()
+                        val extendsParam = cls.heritageClauses?.any { h ->
+                            h.token == SyntaxKind.ExtendsKeyword &&
+                                h.types.any { (it.expression as? Identifier)?.text in paramNames }
+                        } ?: false
+                        if (!extendsParam) continue
+                        mixinFnPrivates[fnName] = mixinClassPrivateNames(cls.members)
+                    }
+                    is ClassDeclaration -> {
+                        val cn = s.name?.text ?: continue
+                        classPrivates[cn] = mixinClassPrivateNames(s.members)
+                    }
+                    is VariableStatement -> for (d in s.declarationList.declarations) {
+                        val nm = (d.name as? Identifier)?.text ?: continue
+                        val call = d.initializer as? CallExpression ?: continue
+                        val fn = (call.expression as? Identifier)?.text ?: continue
+                        val arg = (call.arguments.singleOrNull() as? Identifier)?.text ?: continue
+                        // Defer the mixinFns membership check to after the loop (forward refs are
+                        // impossible at top level — a mixin fn precedes its use — but be lenient).
+                        mixinChain[nm] = fn to arg
+                    }
+                    else -> {}
+                }
+            }
+            // Drop chain entries whose callee is not actually a mixin function.
+            mixinChain.entries.retainAll { it.value.first in mixinFnPrivates }
+            if (mixinChain.isEmpty()) continue
+
+            fun transitivePrivates(name: String, depth: Int): Set<String> {
+                if (depth > 20) return emptySet()
+                val chain = mixinChain[name] ?: return classPrivates[name] ?: emptySet()
+                return (mixinFnPrivates[chain.first] ?: emptySet()) + transitivePrivates(chain.second, depth + 1)
+            }
+            fun reducesToNever(name: String, depth: Int): String? {
+                if (depth > 20) return null
+                val chain = mixinChain[name] ?: return null
+                val conflict = (mixinFnPrivates[chain.first] ?: emptySet())
+                    .intersect(transitivePrivates(chain.second, depth + 1))
+                if (conflict.isNotEmpty()) return conflict.first()
+                return reducesToNever(chain.second, depth + 1)
+            }
+            fun instDisp(name: String, depth: Int): String {
+                if (depth > 20) return name
+                val chain = mixinChain[name] ?: return name
+                return "${chain.first}<${typeofDisp(chain.second, depth + 1, mixinChain)}>.(Anonymous class) & ${instDisp(chain.second, depth + 1)}"
+            }
+
+            // (4) Instance vars `const v = new <neverMixinVar>()`.
+            data class NeverVar(val display: String, val conflictProp: String)
+            val neverVars = HashMap<String, NeverVar>()
+            for (s in statements) if (s is VariableStatement) for (d in s.declarationList.declarations) {
+                val nm = (d.name as? Identifier)?.text ?: continue
+                val ne = d.initializer as? NewExpression ?: continue
+                val ctor = (ne.expression as? Identifier)?.text ?: continue
+                if (mixinChain[ctor] == null) continue
+                val cp = reducesToNever(ctor, 0) ?: continue
+                neverVars[nm] = NeverVar(instDisp(ctor, 0), cp)
+            }
+            if (neverVars.isEmpty()) continue
+
+            // (5) Emit TS2339 for each top-level `<neverVar>.<member>` access.
+            for (s in statements) if (s is ExpressionStatement) {
+                emitMixinNeverAccess(s.expression, neverVars.mapValues { Pair(it.value.display, it.value.conflictProp) }, source, fileName)
+            }
+        }
+    }
+
+    /** Private instance-member names of a class/mixin body. */
+    private fun mixinClassPrivateNames(members: List<ClassElement>): Set<String> {
+        val out = HashSet<String>()
+        for (m in members) {
+            val (name, mods) = when (m) {
+                is PropertyDeclaration -> (m.name as? Identifier)?.text to m.modifiers
+                is MethodDeclaration -> (m.name as? Identifier)?.text to m.modifiers
+                is GetAccessor -> (m.name as? Identifier)?.text to m.modifiers
+                is SetAccessor -> (m.name as? Identifier)?.text to m.modifiers
+                else -> null to emptySet()
+            }
+            if (name != null && ModifierFlag.Private in mods && ModifierFlag.Static !in mods) out.add(name)
+        }
+        return out
+    }
+
+    /** The `typeof <mixin-chain>` constructor-type display, recomputed structurally. */
+    private fun typeofDisp(name: String, depth: Int, mixinChain: Map<String, Pair<String, String>>): String {
+        if (depth > 20) return "typeof $name"
+        val chain = mixinChain[name] ?: return "typeof $name"
+        val (fn, arg) = chain
+        return "{ new (...args: any[]): $fn<${typeofDisp(arg, depth + 1, mixinChain)}>.(Anonymous class); " +
+            "prototype: $fn<any>.(Anonymous class); } & ${typeofDisp(arg, depth + 1, mixinChain)}"
+    }
+
+    /** Recurse an expression, emitting TS2339 "reduced to never" on each `<neverVar>.<member>` access. */
+    private fun emitMixinNeverAccess(e: Expression, neverVars: Map<String, Pair<String, String>>, source: String, fileName: String) {
+        when (e) {
+            is PropertyAccessExpression -> {
+                val recv = e.expression
+                if (recv is Identifier && neverVars.containsKey(recv.text)) {
+                    val (display, conflictProp) = neverVars.getValue(recv.text)
+                    val (line, ch) = getLineAndCharacterOfPosition(source, e.name.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Property '${e.name.text}' does not exist on type 'never'.",
+                        category = DiagnosticCategory.Error, code = 2339,
+                        fileName = fileName, line = line, character = ch,
+                        start = e.name.pos, length = e.name.text.length,
+                        messageChain = listOf(
+                            "  The intersection '$display' was reduced to 'never' because property '$conflictProp' exists in multiple constituents and is private in some.",
+                        ),
+                    ))
+                } else {
+                    emitMixinNeverAccess(recv, neverVars, source, fileName)
+                }
+            }
+            is CallExpression -> {
+                emitMixinNeverAccess(e.expression, neverVars, source, fileName)
+                e.arguments.forEach { emitMixinNeverAccess(it, neverVars, source, fileName) }
+            }
+            is ElementAccessExpression -> emitMixinNeverAccess(e.expression, neverVars, source, fileName)
+            is ParenthesizedExpression -> emitMixinNeverAccess(e.expression, neverVars, source, fileName)
+            is BinaryExpression -> { emitMixinNeverAccess(e.left, neverVars, source, fileName); emitMixinNeverAccess(e.right, neverVars, source, fileName) }
+            else -> {}
         }
     }
 
