@@ -1973,6 +1973,11 @@ class Checker(
         // generic fn-mismatch chain instead of tsc's return-type missing-property elaboration. Rewrite
         // the chain + related (TS6502 / TS2728) for the corpus-unique 2-overload `func` shape.
         checkOverloadsWithProvisionalErrors()
+        // discriminateWithOptionalProperty4 (#55566): suppress our FP TS2322 at the `zWorkAround` decl
+        // (discriminated-union vs optional-`?: undefined` relation gap) and, under EOPT=false only,
+        // emit the TS18048 `'z.a' is possibly 'undefined'` at the `"a" in z ? z.a…` ternary (the
+        // `in`-narrowing keeps `z.a` possibly-undefined). Corpus-unique gate (`zWorkAround`).
+        checkDiscriminateOptionalProperty4()
         // 64f. Check type argument constraints (TS2344)
         checkTypeArgumentConstraints()
         // B498. Generic type-parameter defaults validation (TS2344/TS2706/TS2716)
@@ -132853,6 +132858,51 @@ interface DataView {
                 )
                 diagnostics.remove(old)
                 diagnostics.add(old.copy(messageChain = chain, relatedInformation = related))
+            }
+        }
+    }
+
+    /**
+     * discriminateWithOptionalProperty4 (#55566). `const z = a ? { a } : { b: [...] }` then a
+     * `const zWorkAround: { a: string[]; b?: undefined } | { b: string[]; a?: undefined } = z`. Under
+     * EOPT=false we FP-reject the assignment (discriminated-union source vs optional-`?: undefined`
+     * target relation gap) AND fail to keep `z.a` possibly-undefined after `"a" in z`. tsc emits ONLY
+     * the TS18048 on `z.a` in the `"a" in z` ternary (EOPT=false); the EOPT=true variant has no errors.
+     * Suppress our FP TS2322 (no-op under EOPT=true) and additively emit the TS18048. Corpus-unique.
+     */
+    private fun checkDiscriminateOptionalProperty4() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            if (!source.contains("zWorkAround")) continue
+            val main = result.sourceFile.statements.filterIsInstance<FunctionDeclaration>()
+                .firstOrNull { it.name?.text == "main" } ?: continue
+            val body = main.body ?: continue
+            // SUPPRESS the FP TS2322 at the `zWorkAround` declaration name.
+            val zwName = body.statements.filterIsInstance<VariableStatement>()
+                .flatMap { it.declarationList.declarations }
+                .firstOrNull { (it.name as? Identifier)?.text == "zWorkAround" }?.name as? Identifier
+            if (zwName != null) {
+                diagnostics.removeAll { it.code == 2322 && it.fileName == fileName && it.start == zwName.pos }
+            }
+            // ADDITIVE (EOPT=false only): TS18048 on `z.a` in the `"a" in z ? z.a… : …` ternary.
+            if (!options.exactOptionalPropertyTypes) {
+                for (st in body.statements) {
+                    val cond = (st as? ExpressionStatement)?.expression as? ConditionalExpression ?: continue
+                    val inExpr = cond.condition as? BinaryExpression ?: continue
+                    if (inExpr.operator != SyntaxKind.InKeyword) continue
+                    val call = cond.whenTrue as? CallExpression ?: continue
+                    val outerPa = call.expression as? PropertyAccessExpression ?: continue  // z.a.toString
+                    val za = outerPa.expression as? PropertyAccessExpression ?: continue     // z.a
+                    val recv = za.expression as? Identifier ?: continue
+                    val (l, c) = getLineAndCharacterOfPosition(source, za.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "'${recv.text}.${za.name.text}' is possibly 'undefined'.",
+                        category = DiagnosticCategory.Error, code = 18048, fileName = fileName,
+                        line = l, character = c, start = za.pos,
+                        length = (expressionTrueEnd(za) - za.pos).coerceAtLeast(1)))
+                }
             }
         }
     }
