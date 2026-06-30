@@ -3043,6 +3043,14 @@ class Emitter(
     }
 
     private fun emitParenthesizedExpression(node: ParenthesizedExpression) {
+        // expressionWithJSDocTypeArguments: a value-position instantiation `foo<?string>` whose
+        // type args are pure-JSDoc-nullable is re-printed verbatim (no paren wrap, no TS-strip)
+        // because the JSDoc factories never set ContainsTypeScript. Emit `expr<...>` and return.
+        node.instantiationJsDocTypeArgsText?.let {
+            emitExpression(node.expression)
+            write(it)
+            return
+        }
         write("(")
         // Emit leading comments between '(' and inner expression (e.g. `( /* Preserve */j = f())`)
         if (!options.removeComments) {

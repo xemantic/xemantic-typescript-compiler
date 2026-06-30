@@ -828,6 +828,11 @@ data class ParenthesizedExpression(
      *  TS2532 squiggle position computation (covers `expr<T>` from `expr.pos` to
      *  `instantiationEnd`). */
     val instantiationEnd: Int? = null,
+    /** expressionWithJSDocTypeArguments: when non-null, this synthetic instantiation paren had
+     *  JSDoc-`?` (nullable) type arguments (`foo<?string>`/`foo<string?>`), which tsc preserves
+     *  in value-position JS emit (re-printed with the `?` normalized to a prefix). Holds the
+     *  normalized `<...>` text; the emitter prints `expr<...>` instead of `(expr)`. */
+    val instantiationJsDocTypeArgsText: String? = null,
     /** 17.140b: when non-null, this paren is a JSDoc type cast `/** @type {T} */ (expr)`.
      *  The checker uses this to override the inner expression's type. JS-like files only. */
     val jsdocCastType: TypeNode? = null,

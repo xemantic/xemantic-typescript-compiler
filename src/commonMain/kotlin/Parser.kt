@@ -41,6 +41,10 @@ class Parser(
     private var inTypeArgsDepth = 0
     private var inTupleTypeDepth = 0
     private var jsxElementDepth = 0
+    /** expressionWithJSDocTypeArguments: set true when a JSDoc-`?` (nullable) type was recovered
+     *  inside a type-argument list (`foo<?string>`), so a value-position instantiation paren can
+     *  preserve the raw `<...>` text in JS emit. Reset before each `tryParseTypeArguments`. */
+    private var sawJsDocInTypeArgs = false
 
     /** Stack of opening token positions for related-info on missing close tokens. */
     private val openTokenStack = mutableListOf<Int>()
@@ -5694,6 +5698,7 @@ class Parser(
                     val typeArgsStart = getPos()
                     var typeArgsEnd = -1
                     val callExpr: Expression? = scanner.tryScan {
+                        sawJsDocInTypeArgs = false
                         val typeArgs = tryParseTypeArguments()
                         if (typeArgs != null) typeArgsEnd = scanner.getPrevTokenEnd()
                         when {
@@ -5780,6 +5785,12 @@ class Parser(
                                         // emit TS2364 when the paren appears as the LHS of
                                         // an assignment (`obj.fn<T> = ...`).
                                         instantiationEnd = typeArgsEnd,
+                                        // expressionWithJSDocTypeArguments: preserve JSDoc-`?`
+                                        // type args (`foo<?string>`) for value-position JS emit.
+                                        instantiationJsDocTypeArgsText =
+                                            if (sawJsDocInTypeArgs && typeArgsEnd > typeArgsStart)
+                                                normalizeJsDocTypeArgs(source.substring(typeArgsStart, typeArgsEnd))
+                                            else null,
                                         pos = result.pos,
                                         end = getEnd()
                                     )
@@ -8033,6 +8044,21 @@ class Parser(
         return type
     }
 
+    /** expressionWithJSDocTypeArguments: normalize a raw `<...>` instantiation type-arg list that
+     *  contained JSDoc-`?` (nullable) markers. tsc re-prints each arg with all `?` collapsed to a
+     *  single prefix: `?` → `?`, `string?` → `?string`, `?string?` → `??string`. */
+    private fun normalizeJsDocTypeArgs(raw: String): String {
+        val inner = raw.trim().removePrefix("<").removeSuffix(">")
+        val parts = inner.split(",").map { part ->
+            var s = part.trim()
+            var q = 0
+            while (s.startsWith("?")) { q++; s = s.substring(1).trim() }
+            while (s.endsWith("?")) { q++; s = s.substring(0, s.length - 1).trim() }
+            "?".repeat(q) + s
+        }
+        return "<" + parts.joinToString(", ") + ">"
+    }
+
     private fun parseNonUnionType(): TypeNode {
         val pos = getPos()
         // Error recovery: leading ! in type position (e.g. a: !string) — skip it.
@@ -8054,6 +8080,7 @@ class Parser(
             nextToken()
             if (!isStartOfType(token)) {
                 if (inTypeArgsDepth > 0) {
+                    sawJsDocInTypeArgs = true
                     reportError(
                         message = "JSDoc types can only be used inside documentation comments.",
                         code = 8020,
@@ -8175,6 +8202,7 @@ class Parser(
         ) {
             val questionEnd = scanner.getPos()
             nextToken()
+            if (inTypeArgsDepth > 0) sawJsDocInTypeArgs = true
             if (inTupleTypeDepth == 0) {
                 val typeText = source.substring(type.pos, typeProperEnd)
                 val suggestion = when (typeText) {
@@ -8191,6 +8219,7 @@ class Parser(
         }
 
         if (leadingQuestionPos >= 0) {
+            if (inTypeArgsDepth > 0) sawJsDocInTypeArgs = true
             val combinedEnd = scanner.getPrevTokenEnd()
             val typeText = source.substring(type.pos, typeProperEnd)
             val suggestion = when (typeText) {
