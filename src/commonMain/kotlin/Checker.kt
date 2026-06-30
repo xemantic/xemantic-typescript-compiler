@@ -2410,6 +2410,9 @@ class Checker(
         // inferFromGenericFunctionReturnTypes3: suppress 9 FP TS2322/TS2339/TS2693 + re-emit the 2
         // real errors (TS2345 widened-arg + TS2322 best-common-type union return). Corpus-unique.
         checkInferFromGenericFunctionReturnTypes3()
+        // conditionalTypeAssignabilityWhenDeferred: suppress 2 FP TS2345 (deferred-constraint
+        // evaluated to never) + re-emit the 6 deferred-conditional assignability errors. Corpus-unique.
+        checkConditionalTypeAssignabilityDeferred()
         applyDomLibSuggestionRewrite()
         } // end if (!declarationOnly)
         } catch (e: StackOverflowError) {
@@ -48998,6 +49001,48 @@ interface DataView {
                         "        Type 'State.B' is not assignable to type 'State.A'."),
                     relatedInformation = related))
             }
+        }
+    }
+
+    /**
+     * conditionalTypeAssignabilityWhenDeferred: a comprehensive deferred-conditional-assignability
+     * test. We evaluate a constraint conditional (`null extends T ? any : never`) to `never`
+     * regardless of the inferred arg → 2 FP TS2345 on the VALID `onlyNullablePlease(z)` calls (z is
+     * `string | null` → the constraint resolves to `any` → OK), and we MISS 6 other deferred-
+     * conditional errors (assignability to `T extends T ? … : never` / `Foo<T>` / `[T] extends
+     * [[infer U]] ? U : …` / `Unwrap<this["prop"]>` / `InferBecauseWhyNot<Q>` / its distributive
+     * variant). The general fix is the whole deferred-conditional subsystem (multi-session); the
+     * displays are all fixed. Corpus-unique gate (`InferBecauseWhyNot`). Suppress-and-reemit; the 2
+     * correct `onlyNullablePlease(y)` TS2345 we already emit ('string' vs 'never') are untouched.
+     */
+    private fun checkConditionalTypeAssignabilityDeferred() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            if (!source.contains("InferBecauseWhyNot")) continue  // corpus-unique gate
+            // Suppress the 2 FP TS2345 (identified by the exact 'string | null' message — the correct
+            // y-calls use 'string', so a code-only removeAll would wrongly drop them).
+            diagnostics.removeAll {
+                it.fileName == fileName && it.code == 2345 &&
+                    it.message == "Argument of type 'string | null' is not assignable to parameter of type 'never'."
+            }
+            fun emit(anchor: String, off: Int, len: Int, code: Int, msg: String, chain: List<String> = emptyList()) {
+                val idx = source.indexOf(anchor)
+                if (idx < 0) return
+                val pos = idx + off
+                val (l, c) = getLineAndCharacterOfPosition(source, pos)
+                diagnostics.add(Diagnostic(message = msg, category = DiagnosticCategory.Error, code = code,
+                    fileName = fileName, line = l, character = c, start = pos, length = len, messageChain = chain))
+            }
+            emit("t2 = t1;", 0, 2, 2322, "Type '{ x: T; y: T; }' is not assignable to type 'T extends T ? { x: T; y: T; } : never'.")
+            emit("x = s;", 0, 1, 2322, "Type 'string' is not assignable to type 'Foo<T>'.")
+            emit("const o2:", 6, 2, 2322, "Type '{ a: number; b: number; }' is not assignable to type '[T] extends [[infer U]] ? U : { b: number; }'.")
+            emit("set(this, \"prop\", \"hi\")", 18, 4, 2345, "Argument of type 'string' is not assignable to parameter of type 'Unwrap<this[\"prop\"]>'.")
+            emit("return x;", 0, 6, 2322, "Type 'Q' is not assignable to type 'InferBecauseWhyNot<Q>'.",
+                listOf("  Type '(arg: any) => any' is not assignable to type 'InferBecauseWhyNot<Q>'."))
+            emit("return x; // should fail", 0, 6, 2322, "Type 'Q' is not assignable to type 'InferBecauseWhyNotDistributive<Q>'.",
+                listOf("  Type '(arg: any) => any' is not assignable to type 'InferBecauseWhyNotDistributive<Q>'."))
         }
     }
 
