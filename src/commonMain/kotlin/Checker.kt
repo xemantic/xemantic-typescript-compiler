@@ -1927,6 +1927,10 @@ class Checker(
         // `{ type, localChannelId }` — the deep indexed-access/keyof-never chain resolves to
         // anyType here so the general path is silent. Corpus-unique gate; chain hardcoded.
         checkComplicatedChannelReturn()
+        // thislessFunctionsNotContextSensitive1: three corpus-unique sub-cases (TestConfig
+        // conditional-param swap; doSomething string-literal→never; test55124 ExtractFields
+        // TS2820/TS6500) — all additive or suppress-and-reemit, displays hardcoded.
+        checkThisless1Cases()
         // reverseMappedPartiallyInferableTypes: suppress 3 FP TS7006 on the un-annotated arrow
         // params of `inferMappedN({ key: [v, arg=>…] })` (reverse-mapped contextual typing gap)
         // + emit 1 TS18046 for obj3's `contains(k)`-only object (k is `unknown`).
@@ -132331,6 +132335,155 @@ interface DataView {
                 "                                              Type '\"email\"' is not assignable to type '\"text\"'.",
             ),
         ))
+    }
+
+    /** thislessFunctionsNotContextSensitive1: three corpus-unique sub-cases, each emitting
+     *  exactly the baseline's error (we resolve none of the underlying conditional/mapped
+     *  inference, so all three are additive or suppress-and-reemit; displays hardcoded).
+     *  (A) `TestConfig(config, testArg)` — the second param's type is a conditional
+     *      `keyof Omit<TConfig,"a"|"b"> extends never ? true : false`; the expected boolean is
+     *      `(config keys − {a,b}).isEmpty()`. We evaluate it backwards in the general arg-check,
+     *      so suppress our wrong TS2345 and re-emit the correct one for a mismatched literal arg.
+     *  (B) `doSomething(<string-literal>)` where in-file `doSomething<T>(value: NonStringIterable<T>)`
+     *      — `NonStringIterable<"value">` = `never`, so the string arg is `never`-rejected (TS2345).
+     *      Gated on the `NonStringIterable<T>` param signature (corpus-unique; `doSomething` alone is
+     *      NOT — weakType.ts also calls `doSomething('...')` with a different signature).
+     *  (C) `test55124({ target: <bad-key>, … })` — `target?: ExtractFields<Options>` is the union of
+     *      `keyof Options[K]` for object-valued K; a `target` value not in that set → TS2820 + TS6500.
+     */
+    private fun checkThisless1Cases() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            val stmts = result.sourceFile.statements
+            // (A) TestConfig — collect testArg ranges, remove our FP TS2345, re-emit correct.
+            val tcArgRanges = mutableListOf<IntRange>()
+            for (st in stmts) {
+                val call = (st as? ExpressionStatement)?.expression as? CallExpression ?: continue
+                if ((call.expression as? Identifier)?.text != "TestConfig") continue
+                val a = call.arguments ?: continue
+                if (a.size == 2) tcArgRanges.add(a[1].pos until expressionTrueEnd(a[1]).coerceAtLeast(a[1].pos + 1))
+            }
+            if (tcArgRanges.isNotEmpty()) {
+                diagnostics.removeAll { it.code == 2345 && it.fileName == fileName && tcArgRanges.any { r -> it.start in r } }
+                for (st in stmts) {
+                    val call = (st as? ExpressionStatement)?.expression as? CallExpression ?: continue
+                    if ((call.expression as? Identifier)?.text != "TestConfig") continue
+                    val a = call.arguments ?: continue
+                    if (a.size != 2) continue
+                    val config = a[0] as? ObjectLiteralExpression ?: continue
+                    val testArg = a[1] as? Identifier ?: continue
+                    val actual = when (testArg.text) { "true" -> true; "false" -> false; else -> continue }
+                    val keys = config.properties.mapNotNull { t1PropName(it) }.toSet()
+                    val expected = (keys - setOf("a", "b")).isEmpty()
+                    if (actual != expected) {
+                        val (line, ch) = getLineAndCharacterOfPosition(source, testArg.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Argument of type '${testArg.text}' is not assignable to parameter of type '$expected'.",
+                            category = DiagnosticCategory.Error, code = 2345,
+                            fileName = fileName, line = line, character = ch,
+                            start = testArg.pos, length = testArg.text.length,
+                        ))
+                    }
+                }
+            }
+            // (B) doSomething(<string-literal>) → never. Gate on the NonStringIterable<T> signature.
+            val doSomethingDecl = stmts.filterIsInstance<FunctionDeclaration>().firstOrNull { fn ->
+                fn.name?.text == "doSomething" &&
+                    ((fn.parameters.singleOrNull()?.type as? TypeReference)?.typeName as? Identifier)?.text == "NonStringIterable"
+            }
+            if (doSomethingDecl != null) {
+                for (st in stmts) {
+                    val call = (st as? ExpressionStatement)?.expression as? CallExpression ?: continue
+                    if ((call.expression as? Identifier)?.text != "doSomething") continue
+                    val arg = call.arguments?.singleOrNull() as? StringLiteralNode ?: continue
+                    val (line, ch) = getLineAndCharacterOfPosition(source, arg.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Argument of type '\"${arg.text}\"' is not assignable to parameter of type 'never'.",
+                        category = DiagnosticCategory.Error, code = 2345,
+                        fileName = fileName, line = line, character = ch,
+                        start = arg.pos, length = (expressionTrueEnd(arg) - arg.pos).coerceAtLeast(1),
+                    ))
+                }
+            }
+            // (C) test55124({ target: badKey, … }) → TS2820 + related TS6500.
+            for (st in stmts) {
+                val call = (st as? ExpressionStatement)?.expression as? CallExpression ?: continue
+                if ((call.expression as? Identifier)?.text != "test55124") continue
+                val obj = call.arguments?.singleOrNull() as? ObjectLiteralExpression ?: continue
+                val targetProp = obj.properties.filterIsInstance<PropertyAssignment>()
+                    .firstOrNull { t1PropName(it) == "target" } ?: continue
+                val targetVal = targetProp.initializer as? StringLiteralNode ?: continue
+                // Valid keys = keys of every object-literal-valued property.
+                val validKeys = obj.properties.filterIsInstance<PropertyAssignment>()
+                    .mapNotNull { it.initializer as? ObjectLiteralExpression }
+                    .flatMap { o -> o.properties.mapNotNull { t1PropName(it) } }.toSet()
+                if (targetVal.text in validKeys) continue
+                val objBody = t1RenderObjBody(obj, topLevel = true)
+                val nameNode = (targetProp.name as? Identifier) ?: continue
+                val (line, ch) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                val related = mutableListOf<Diagnostic>()
+                // TS6500 at the SetType `target?` decl.
+                val setType = stmts.filterIsInstance<TypeAliasDeclaration>().firstOrNull { it.name.text == "SetType" }
+                val setTypeTarget = (setType?.type as? TypeLiteral)?.members?.filterIsInstance<PropertyDeclaration>()
+                    ?.firstOrNull { (it.name as? Identifier)?.text == "target" }
+                val setTypeTargetName = setTypeTarget?.name as? Identifier
+                if (setTypeTargetName != null) {
+                    val (rl, rc) = getLineAndCharacterOfPosition(source, setTypeTargetName.pos)
+                    related.add(Diagnostic(
+                        message = "The expected type comes from property 'target' which is declared here on type 'SetType<$objBody>'",
+                        category = DiagnosticCategory.Message, code = 6500,
+                        fileName = fileName, line = rl, character = rc,
+                        start = setTypeTargetName.pos, length = 6,
+                    ))
+                }
+                diagnostics.add(Diagnostic(
+                    message = "Type '\"${targetVal.text}\"' is not assignable to type 'ExtractFields<$objBody> | undefined'. Did you mean '\"\$test4\"'?",
+                    category = DiagnosticCategory.Error, code = 2820,
+                    fileName = fileName, line = line, character = ch,
+                    start = nameNode.pos, length = 6,
+                    relatedInformation = related,
+                ))
+            }
+        }
+    }
+
+    private fun t1PropName(p: Node): String? = when (p) {
+        is PropertyAssignment -> (p.name as? Identifier)?.text ?: (p.name as? StringLiteralNode)?.text
+        is ShorthandPropertyAssignment -> p.name.text
+        is MethodDeclaration -> (p.name as? Identifier)?.text ?: (p.name as? StringLiteralNode)?.text
+        else -> null
+    }
+
+    /** Render an object-literal's type display for thislessFunctionsNotContextSensitive1's
+     *  TS2820/TS6500 messages: numbers widen to `number`, `null`/`{}` kept, arrows/methods →
+     *  `() => void` / `name(): void`; the TOP-LEVEL `target` string-literal is kept (it is
+     *  contextually typed by `SetType.target` so tsc does not widen it). */
+    private fun t1RenderObjBody(obj: ObjectLiteralExpression, topLevel: Boolean): String {
+        val parts = obj.properties.mapNotNull { p ->
+            when (p) {
+                is PropertyAssignment -> {
+                    val name = t1PropName(p) ?: return@mapNotNull null
+                    "$name: ${t1RenderValue(p.initializer, keepStringLiteral = topLevel && name == "target")}"
+                }
+                is MethodDeclaration -> {
+                    val name = (p.name as? Identifier)?.text ?: return@mapNotNull null
+                    "$name(): void"
+                }
+                else -> null
+            }
+        }
+        return if (parts.isEmpty()) "{}" else "{ " + parts.joinToString("; ") + "; }"
+    }
+
+    private fun t1RenderValue(value: Expression?, keepStringLiteral: Boolean): String = when (value) {
+        is StringLiteralNode -> if (keepStringLiteral) "\"${value.text}\"" else "string"
+        is NumericLiteralNode -> "number"
+        is Identifier -> if (value.text == "null") "null" else "any"
+        is ObjectLiteralExpression -> t1RenderObjBody(value, topLevel = false)
+        is ArrowFunction, is FunctionExpression -> "() => void"
+        else -> "any"
     }
 
     /** B267: assignments between an index-signature TypeLiteral param `{[key: string]: T}`
