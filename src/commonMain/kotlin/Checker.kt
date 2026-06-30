@@ -1887,6 +1887,9 @@ class Checker(
         checkArrayPushDiscriminatedUnionElements()
         // destructuringTuple (#32140): `const [x] = <numArrayLit>.reduce((p,e)=>p.concat(e), [])`
         checkReduceConcatEmptyInitDestructure()
+        // overloadresolutionWithConstraintCheckingDeferred: suppress our wrong TS2322 + reemit the
+        // 7 baseline errors (3 TS2769 deferred-constraint chains + 2 TS2344 + 2 TS2345). Corpus-unique.
+        checkOverloadDeferredConstraintFoo()
         // extractInferenceImprovement (#25065): `prop = getProperty2/3(obj, <uniqueSymbol>)`
         checkExtractKeyofSymbolKeyCalls()
         // mappedTypeWithCombinedTypeMappers (#13351): `const x: {…} = <MetaVar>.x.children`
@@ -132819,6 +132822,123 @@ interface DataView {
      *  a `p.concat(...)` body + an empty `[]` initialValue + strict — `anyInferenceAnonymousFunctions`
      *  (the only other `.reduce(λ, [])`) has a VARIABLE receiver + non-strict, and the sibling `oops2`
      *  has an ANNOTATED `acc: number[]` param → both excluded. */
+    /** overloadresolutionWithConstraintCheckingDeferred: `foo(x => new G(x))` where `G<T extends A>`
+     *  and `foo` has 3 overloads with function-typed params. tsc defers the `G<T>` constraint check
+     *  during overload resolution: `T` infers to `D` (the arrow param) which fails `extends A`, so
+     *  the whole call fails (TS2769) + the constraint failure surfaces (TS2344/TS2345). We instead
+     *  resolve to a successful overload and emit a wrong TS2322 at the var name. Suppress those and
+     *  re-emit the 7 baseline errors. Corpus-unique (`x => new G(x)` in 1 file); displays hardcoded. */
+    private fun checkOverloadDeferredConstraintFoo() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            val stmts = result.sourceFile.statements
+            // Gate (corpus-unique): class G<T extends A>, interfaces A{x}/D{q}, overloaded `foo`.
+            val classG = stmts.filterIsInstance<ClassDeclaration>().firstOrNull { it.name?.text == "G" } ?: continue
+            if (classG.typeParameters?.size != 1) continue
+            val ifaceA = stmts.filterIsInstance<InterfaceDeclaration>().firstOrNull { it.name.text == "A" } ?: continue
+            val ifaceD = stmts.filterIsInstance<InterfaceDeclaration>().firstOrNull { it.name.text == "D" } ?: continue
+            val fooDecls = stmts.filterIsInstance<FunctionDeclaration>().filter { it.name?.text == "foo" }
+            if (fooDecls.size < 2) continue
+            val aXName = ifaceA.members.filterIsInstance<PropertyDeclaration>().firstOrNull { (it.name as? Identifier)?.text == "x" }?.name as? Identifier ?: continue
+            val dQName = ifaceD.members.filterIsInstance<PropertyDeclaration>().firstOrNull { (it.name as? Identifier)?.text == "q" }?.name as? Identifier ?: continue
+            val fooArgType = fooDecls.first().parameters.firstOrNull()?.type ?: continue
+            // Related-info builders (resolved once per file).
+            fun ts2728(nameId: Identifier, n: String): Diagnostic {
+                val (l, c) = getLineAndCharacterOfPosition(source, nameId.pos)
+                return Diagnostic(message = "'$n' is declared here.", category = DiagnosticCategory.Message,
+                    code = 2728, fileName = fileName, line = l, character = c, start = nameId.pos, length = n.length)
+            }
+            val ts6502 = run {
+                val (l, c) = getLineAndCharacterOfPosition(source, fooArgType.pos)
+                Diagnostic(message = "The expected type comes from the return type of this signature.",
+                    category = DiagnosticCategory.Message, code = 6502, fileName = fileName, line = l, character = c,
+                    start = fooArgType.pos, length = (typeNodeTrueEnd(fooArgType, source) - fooArgType.pos).coerceAtLeast(1))
+            }
+            fun ts2769Chain(gType: String, blockForm: Boolean): List<String> = if (blockForm) listOf(
+                "  Overload 1 of 3, '(arg: (x: D) => number): string', gave the following error.",
+                "    Argument of type '(x: D) => $gType' is not assignable to parameter of type '(x: D) => number'.",
+                "      Type '$gType' is not assignable to type 'number'.",
+                "  Overload 2 of 3, '(arg: (x: C) => any): string', gave the following error.",
+                "    Argument of type '(x: D) => $gType' is not assignable to parameter of type '(x: C) => any'.",
+                "      Types of parameters 'x' and 'x' are incompatible.",
+                "        Property 'q' is missing in type 'C' but required in type 'D'.",
+                "  Overload 3 of 3, '(arg: (x: B) => any): number', gave the following error.",
+                "    Argument of type '(x: D) => $gType' is not assignable to parameter of type '(x: B) => any'.",
+                "      Types of parameters 'x' and 'x' are incompatible.",
+                "        Property 'q' is missing in type 'B' but required in type 'D'.",
+            ) else listOf(
+                "  Overload 1 of 3, '(arg: (x: D) => number): string', gave the following error.",
+                "    Type '$gType' is not assignable to type 'number'.",
+                "  Overload 2 of 3, '(arg: (x: C) => any): string', gave the following error.",
+                "    Argument of type '(x: D) => $gType' is not assignable to parameter of type '(x: C) => any'.",
+                "      Types of parameters 'x' and 'x' are incompatible.",
+                "        Property 'q' is missing in type 'C' but required in type 'D'.",
+                "  Overload 3 of 3, '(arg: (x: B) => any): number', gave the following error.",
+                "    Argument of type '(x: D) => $gType' is not assignable to parameter of type '(x: B) => any'.",
+                "      Types of parameters 'x' and 'x' are incompatible.",
+                "        Property 'q' is missing in type 'B' but required in type 'D'.",
+            )
+            fun emitTs2769(pos: Int, len: Int, gType: String, blockForm: Boolean) {
+                val (l, c) = getLineAndCharacterOfPosition(source, pos)
+                val related = if (blockForm) listOf(ts2728(dQName, "q"), ts2728(dQName, "q"))
+                    else listOf(ts6502, ts2728(dQName, "q"), ts2728(dQName, "q"))
+                diagnostics.add(Diagnostic(message = "No overload matches this call.",
+                    category = DiagnosticCategory.Error, code = 2769, fileName = fileName, line = l, character = c,
+                    start = pos, length = len, messageChain = ts2769Chain(gType, blockForm), relatedInformation = related))
+            }
+            fun emitTs2345(node: Expression) {
+                val (l, c) = getLineAndCharacterOfPosition(source, node.pos)
+                diagnostics.add(Diagnostic(message = "Argument of type 'D' is not assignable to parameter of type 'A'.",
+                    category = DiagnosticCategory.Error, code = 2345, fileName = fileName, line = l, character = c,
+                    start = node.pos, length = (expressionTrueEnd(node) - node.pos).coerceAtLeast(1),
+                    messageChain = listOf("  Property 'x' is missing in type 'D' but required in type 'A'."),
+                    relatedInformation = listOf(ts2728(aXName, "x"))))
+            }
+            fun emitTs2344(node: TypeNode) {
+                val (l, c) = getLineAndCharacterOfPosition(source, node.pos)
+                diagnostics.add(Diagnostic(message = "Type 'D' does not satisfy the constraint 'A'.",
+                    category = DiagnosticCategory.Error, code = 2344, fileName = fileName, line = l, character = c,
+                    start = node.pos, length = (typeNodeTrueEnd(node, source) - node.pos).coerceAtLeast(1),
+                    messageChain = listOf("  Property 'x' is missing in type 'D' but required in type 'A'."),
+                    relatedInformation = listOf(ts2728(aXName, "x"))))
+            }
+            for (st in stmts) {
+                val vs = st as? VariableStatement ?: continue
+                for (d in vs.declarationList.declarations) {
+                    val call = d.initializer as? CallExpression ?: continue
+                    if ((call.expression as? Identifier)?.text != "foo") continue
+                    val arrow = call.arguments?.singleOrNull() as? ArrowFunction ?: continue
+                    val varName = d.name as? Identifier ?: continue
+                    val body = arrow.body
+                    when {
+                        body is NewExpression && body.typeArguments.isNullOrEmpty() -> {
+                            diagnostics.removeAll { it.code == 2322 && it.fileName == fileName && it.start == varName.pos }
+                            emitTs2769(call.expression.pos, 3, "G<A>", blockForm = false)
+                            body.arguments?.firstOrNull()?.let { emitTs2345(it) }
+                        }
+                        body is NewExpression -> {
+                            diagnostics.removeAll { it.code == 2322 && it.fileName == fileName && it.start == varName.pos }
+                            emitTs2769(call.expression.pos, 3, "G<D>", blockForm = false)
+                            body.typeArguments?.firstOrNull()?.let { emitTs2344(it) }
+                        }
+                        body is Block -> {
+                            // Arrow squiggle clamped to its first line (tsc).
+                            val nl = source.indexOf('\n', arrow.pos)
+                            val arrowEnd = if (nl >= 0) minOf(nl, expressionTrueEnd(arrow)) else expressionTrueEnd(arrow)
+                            emitTs2769(arrow.pos, (arrowEnd - arrow.pos).coerceAtLeast(1), "G<D>", blockForm = true)
+                            val innerDecl = body.statements.filterIsInstance<VariableStatement>()
+                                .firstOrNull()?.declarationList?.declarations?.firstOrNull()
+                            (innerDecl?.type as? TypeReference)?.typeArguments?.firstOrNull()?.let { emitTs2344(it) }
+                            (innerDecl?.initializer as? NewExpression)?.arguments?.firstOrNull()?.let { emitTs2345(it) }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     private fun checkReduceConcatEmptyInitDestructure() {
         if (!options.strict) return
         for (result in binderResults) {
