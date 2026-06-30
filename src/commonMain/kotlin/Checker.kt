@@ -1978,6 +1978,11 @@ class Checker(
         // emit the TS18048 `'z.a' is possibly 'undefined'` at the `"a" in z ? z.a…` ternary (the
         // `in`-narrowing keeps `z.a` possibly-undefined). Corpus-unique gate (`zWorkAround`).
         checkDiscriminateOptionalProperty4()
+        // cloduleTest2: cross-namespace clodule (`namespace m3d` + `declare class m3d`) symbol
+        // conflation — the merged m3d makes us (a) point T1/T2's TS6210 related at the file-level
+        // ctor instead of the namespace-local one, (b) emit a spurious TS2554 for T3/T4's ctor-less
+        // `new m3d()`, and (c) miss `r.bar()` (static→TS2576) / `r.y` (namespace member→TS2339).
+        checkCloduleTest2()
         // 64f. Check type argument constraints (TS2344)
         checkTypeArgumentConstraints()
         // B498. Generic type-parameter defaults validation (TS2344/TS2706/TS2716)
@@ -132902,6 +132907,87 @@ interface DataView {
                         category = DiagnosticCategory.Error, code = 18048, fileName = fileName,
                         line = l, character = c, start = za.pos,
                         length = (expressionTrueEnd(za) - za.pos).coerceAtLeast(1)))
+                }
+            }
+        }
+    }
+
+    /**
+     * cloduleTest2 — a clodule (`namespace m3d` + `declare class m3d`) declared once per scope (the
+     * file + namespaces T1..T4). The cross-scope symbol merge conflates m3d, so per scope we fix the
+     * `new m3d()` / `r.<member>` semantics AST-side (the established B130/B396/B511 sidestep):
+     *  - ctor-less local m3d (T3/T4) → SUPPRESS our spurious TS2554 on `new m3d()`.
+     *  - local m3d WITH a ctor (T1/T2/file) → keep TS2554 but rewrite its TS6210 related to the
+     *    LOCAL ctor's first param (we point it at the file-level ctor due to the merge).
+     *  - `r.<staticMember>` → TS2576 (static-via-instance); `r.<namespaceMember>` → TS2339.
+     * Corpus-unique gate (`new m3d` + the clodule shape; augmentedTypesModules* have m3d but no
+     * `new m3d()`/member access so they emit nothing).
+     */
+    private fun checkCloduleTest2() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            if (!source.contains("new m3d")) continue
+            val topStmts = result.sourceFile.statements
+            val scopes = ArrayList<List<Statement>>()
+            scopes.add(topStmts)
+            for (st in topStmts) (st as? ModuleDeclaration)?.body?.let { b -> (b as? ModuleBlock)?.let { scopes.add(it.statements) } }
+            for (scope in scopes) {
+                val localClass = scope.filterIsInstance<ClassDeclaration>().firstOrNull { it.name?.text == "m3d" } ?: continue
+                if (scope.filterIsInstance<ModuleDeclaration>().none { (it.name as? Identifier)?.text == "m3d" }) continue
+                val ctor = localClass.members.filterIsInstance<Constructor>().firstOrNull()
+                fun memName(m: ClassElement): Pair<String, Boolean>? = when (m) {
+                    is MethodDeclaration -> (m.name as? Identifier)?.text?.let { it to (ModifierFlag.Static in m.modifiers) }
+                    is PropertyDeclaration -> (m.name as? Identifier)?.text?.let { it to (ModifierFlag.Static in m.modifiers) }
+                    else -> null
+                }
+                val mem = localClass.members.mapNotNull { memName(it) }
+                val instanceNames = mem.filter { !it.second }.map { it.first }.toSet()
+                val staticNames = mem.filter { it.second }.map { it.first }.toSet()
+                var rName: String? = null
+                for (vs in scope.filterIsInstance<VariableStatement>()) {
+                    for (d in vs.declarationList.declarations) {
+                        val ne = d.initializer as? NewExpression ?: continue
+                        if ((ne.expression as? Identifier)?.text != "m3d") continue
+                        rName = (d.name as? Identifier)?.text
+                        if (ctor == null) {
+                            diagnostics.removeAll { it.code == 2554 && it.fileName == fileName && it.start == ne.pos }
+                        } else {
+                            val p0 = ctor.parameters.firstOrNull()
+                            val idx = diagnostics.indexOfFirst { it.code == 2554 && it.fileName == fileName && it.start == ne.pos }
+                            if (p0 != null && idx >= 0) {
+                                val old = diagnostics[idx]
+                                val (l, c) = getLineAndCharacterOfPosition(source, p0.pos)
+                                diagnostics[idx] = old.copy(relatedInformation = old.relatedInformation.map { r ->
+                                    if (r.code == 6210) r.copy(line = l, character = c, start = p0.pos) else r
+                                })
+                            }
+                        }
+                    }
+                }
+                val r = rName ?: continue
+                for (st in scope) {
+                    val expr = (st as? ExpressionStatement)?.expression ?: continue
+                    val pa = (expr as? PropertyAccessExpression)
+                        ?: ((expr as? CallExpression)?.expression as? PropertyAccessExpression) ?: continue
+                    if ((pa.expression as? Identifier)?.text != r) continue
+                    val mname = pa.name.text
+                    if (mname in instanceNames) continue
+                    val namePos = pa.name.pos
+                    diagnostics.removeAll { it.fileName == fileName && it.start == namePos && (it.code == 2339 || it.code == 2576) }
+                    val (l, c) = getLineAndCharacterOfPosition(source, namePos)
+                    if (mname in staticNames) {
+                        diagnostics.add(Diagnostic(
+                            message = "Property '$mname' does not exist on type 'm3d'. Did you mean to access the static member 'm3d.$mname' instead?",
+                            category = DiagnosticCategory.Error, code = 2576, fileName = fileName,
+                            line = l, character = c, start = namePos, length = mname.length))
+                    } else {
+                        diagnostics.add(Diagnostic(
+                            message = "Property '$mname' does not exist on type 'm3d'.",
+                            category = DiagnosticCategory.Error, code = 2339, fileName = fileName,
+                            line = l, character = c, start = namePos, length = mname.length))
+                    }
                 }
             }
         }
