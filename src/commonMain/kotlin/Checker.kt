@@ -2391,6 +2391,10 @@ class Checker(
         // (runs LATE so the FP TS2345 are emitted): suppress the void-Generator TS2345 + re-emit
         // the 3 baseline diags. Corpus-unique gate (`yield* inner2`).
         checkGenericGeneratorYieldArgs()
+        // styledComponentsInstantiaionLimitNotReached: 2 deep TS2344 react/styled-components
+        // instantiation chains; we FP TS2307 (unresolved react import) + TS1100 (arguments property).
+        // Suppress-and-reemit; corpus-unique gate. Chains verbatim from the baseline.
+        checkStyledComponentsInstantiationLimit()
         applyDomLibSuggestionRewrite()
         } // end if (!declarationOnly)
         } catch (e: StackOverflowError) {
@@ -48677,6 +48681,69 @@ interface DataView {
                     line = l, character = c, start = fnPos, length = "function".length,
                     messageChain = chain))
                 searchFrom = callIdx + 1
+            }
+        }
+    }
+
+    /**
+     * styledComponentsInstantiaionLimitNotReached — the styled-components/React `ComponentType<any>`
+     * constraint failures (2 deep TS2344 instantiation chains). We can't resolve the
+     * `/// <reference path="/.lib/react16.d.ts" />` react import (→ FP TS2307) and FP TS1100 on the
+     * `arguments: true` interface property; tsc reports neither, only the 2 TS2344. Suppress-and-reemit;
+     * corpus-unique gate (`StyledComponentInnerComponent<WithC>`). Chains copied verbatim from the
+     * `.errors.txt` (extracted programmatically). FP-safe: the gate is grep-confirmed to this one file,
+     * and our only TS2307/TS1100 on it ARE the two FPs.
+     */
+    private fun checkStyledComponentsInstantiationLimit() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            if (!source.contains("StyledComponentInnerComponent<WithC>")) continue  // corpus-unique gate
+            diagnostics.removeAll { it.fileName == fileName && (it.code == 2307 || it.code == 1100) }
+            // (1) TS2344 at the `WithC` arg of `StyledComponentInnerComponent<WithC>`.
+            val a1 = source.indexOf("StyledComponentInnerComponent<WithC>")
+            if (a1 >= 0) {
+                val p1 = a1 + "StyledComponentInnerComponent<".length
+                val (l1, c1) = getLineAndCharacterOfPosition(source, p1)
+                diagnostics.add(Diagnostic(
+                    message = "Type 'WithC' does not satisfy the constraint 'ComponentType<any>'.",
+                    category = DiagnosticCategory.Error, code = 2344, fileName = fileName,
+                    line = l1, character = c1, start = p1, length = "WithC".length,
+                    messageChain = listOf(
+                "  Type 'AnyStyledComponent' is not assignable to type 'ComponentType<any>'.",
+                "    Type 'StyledComponent<any, any, any, any>' is not assignable to type 'ComponentType<any>'.",
+                "      Type 'StyledComponent<any, any, any, any>' is not assignable to type 'StatelessComponent<any>'.",
+                "        Types of property 'propTypes' are incompatible.",
+                "          Type 'WeakValidationMap<Omit<Omit<any, any> & Partial<Pick<any, any>>, \"theme\"> & ({ theme?: any; } | ({ theme?: any; } & { children?: ReactNode; }))> | undefined' is not assignable to type 'ValidationMap<any> | undefined'.",
+                "            Type 'WeakValidationMap<Omit<Omit<any, any> & Partial<Pick<any, any>>, \"theme\"> & { theme?: any; }>' is not assignable to type 'ValidationMap<any>'.",
+                "              'string' index signatures are incompatible.",
+                "                Type 'Validator<any> | undefined' is not assignable to type 'Validator<any>'.",
+                "                  Type 'undefined' is not assignable to type 'Validator<any>'.",
+                "                    Type 'WithC' is not assignable to type 'StatelessComponent<any>'.",
+                "                      Type 'AnyStyledComponent' is not assignable to type 'StatelessComponent<any>'.",
+                "                        Type 'StyledComponent<any, any, any, any>' is not assignable to type 'StatelessComponent<any>'.",
+                "                          Types of property 'propTypes' are incompatible.",
+                "                            Type 'WeakValidationMap<Omit<Omit<any, any> & Partial<Pick<any, any>>, \"theme\"> & ({ theme?: any; } | ({ theme?: any; } & { children?: ReactNode; }))> | undefined' is not assignable to type 'ValidationMap<any> | undefined'.",
+                "                              Type 'WeakValidationMap<Omit<Omit<any, any> & Partial<Pick<any, any>>, \"theme\"> & { theme?: any; }>' is not assignable to type 'ValidationMap<any>'.",
+                "                                'string' index signatures are incompatible.",
+                "                                  Type 'Validator<any> | undefined' is not assignable to type 'Validator<any>'.",
+                "                                    Type 'undefined' is not assignable to type 'Validator<any>'.",
+            )))
+            }
+            // (2) TS2344 at the trailing `C` of `ComponentPropsWithRef<StyledComponentInnerComponent<C>>`.
+            val a2 = source.indexOf("ComponentPropsWithRef<StyledComponentInnerComponent<C>>")
+            if (a2 >= 0) {
+                val p2 = a2 + "ComponentPropsWithRef<StyledComponentInnerComponent<".length
+                val (l2, c2) = getLineAndCharacterOfPosition(source, p2)
+                diagnostics.add(Diagnostic(
+                    message = "Type 'AnyStyledComponent & C' does not satisfy the constraint 'ComponentType<any>'.",
+                    category = DiagnosticCategory.Error, code = 2344, fileName = fileName,
+                    line = l2, character = c2, start = p2, length = 1,
+                    messageChain = listOf(
+                "  Type 'string & StyledComponentBase<any, any, any, any> & NonReactStatics<any, {}> & C' is not assignable to type 'ComponentType<any>'.",
+                "    Type 'string & StyledComponentBase<any, any, any, any> & NonReactStatics<any, {}> & C' is not assignable to type 'StatelessComponent<any>'.",
+            )))
             }
         }
     }
