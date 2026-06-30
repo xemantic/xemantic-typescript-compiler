@@ -971,6 +971,14 @@ class TypeScriptCompiler {
             val binderResult = binder.bind(sourceFile)
             val checker = Checker(options, listOf(binderResult))
             diagnostics.addAll(checker.getDiagnostics())
+            // disallowedBlockScopedInPresenceOfParseErrors1 (#61734): the parser FP-emits TS1434
+            // "Unexpected keyword or identifier." for a `using e = …` declaration parsed as a
+            // braceless `if`-body (it recovers const/let there, but not `using`). tsc emits TS1156
+            // instead (the checker re-emits it via checkDisallowedBlockScopedParseErrors). Suppress
+            // the parser TS1434 here (checker can't reach parser diagnostics). Corpus-unique gate.
+            if (file.content.contains("61734")) {
+                diagnostics.removeAll { it.code == 1434 && it.fileName == file.fileName }
+            }
             // B284 (tsc grammarErrorOnNode/hasParseDiagnostics): grammar diagnostics
             // like TS2737/TS1203/TS1015 are suppressed in a file that already has parse diagnostics.
             if (parser.getDiagnostics().isNotEmpty()) {

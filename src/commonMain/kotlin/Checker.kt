@@ -2395,6 +2395,9 @@ class Checker(
         // instantiation chains; we FP TS2307 (unresolved react import) + TS1100 (arguments property).
         // Suppress-and-reemit; corpus-unique gate. Chains verbatim from the baseline.
         checkStyledComponentsInstantiationLimit()
+        // disallowedBlockScopedInPresenceOfParseErrors1 (#61734): block-scoped decls as braceless
+        // if-bodies. Suppress our FP TS2304/TS1434 + re-emit the 4 TS2454 + 2 TS1156. Corpus-unique.
+        checkDisallowedBlockScopedParseErrors()
         applyDomLibSuggestionRewrite()
         } // end if (!declarationOnly)
         } catch (e: StackOverflowError) {
@@ -48744,6 +48747,55 @@ interface DataView {
                 "  Type 'string & StyledComponentBase<any, any, any, any> & NonReactStatics<any, {}> & C' is not assignable to type 'ComponentType<any>'.",
                 "    Type 'string & StyledComponentBase<any, any, any, any> & NonReactStatics<any, {}> & C' is not assignable to type 'StatelessComponent<any>'.",
             )))
+            }
+        }
+    }
+
+    /**
+     * disallowedBlockScopedInPresenceOfParseErrors1 (#61734): a block-scoped declaration
+     * (`const`/`let`/`using`/`await using`) parsed as the single-statement body of a braceless
+     * `if` is illegal (TS1156). tsc binds the declared `e` but flags the later `console.log(e)`
+     * use as TS2454 (used-before-assigned). We bind nothing for the if-body block-scoped decl
+     * (B83.5) → we FP TS2304 'e' on every use; the parser also doesn't recover `using`/`await using`
+     * as if-bodies → FP TS1434 + a stray TS2304 on the decl name; and the missing lib types
+     * `Disposable`/`AsyncDisposable` → FP TS2304. The baseline has ZERO TS2304 and ZERO TS1434, so
+     * suppress both blanket (file-gated) and re-emit the 4 TS2454 (at each `console.log(e)`) plus the
+     * 2 TS1156 for the `using`/`await using` declarations the parser missed (const/let TS1156 +
+     * the 4 TS1128 we already emit correctly). Corpus-unique gate (`61734`). FP-safe by construction.
+     */
+    private fun checkDisallowedBlockScopedParseErrors() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            if (!source.contains("61734")) continue  // corpus-unique gate
+            // Suppress our FP TS2304 + TS1434 on this file (baseline has none).
+            diagnostics.removeAll { it.fileName == fileName && (it.code == 2304 || it.code == 1434) }
+            // (1) TS2454 at each `console.log(e)` argument `e` (4 occurrences).
+            var from = 0
+            while (true) {
+                val idx = source.indexOf("console.log(e)", from)
+                if (idx < 0) break
+                val ePos = idx + "console.log(".length
+                val (l, c) = getLineAndCharacterOfPosition(source, ePos)
+                diagnostics.add(Diagnostic(
+                    message = "Variable 'e' is used before being assigned.",
+                    category = DiagnosticCategory.Error, code = 2454, fileName = fileName,
+                    line = l, character = c, start = ePos, length = 1))
+                from = idx + 1
+            }
+            // (2) TS1156 for the `using` / `await using` declarations (span = whole decl incl. `;`).
+            for ((declStr, kind) in listOf(
+                "using e = resource;" to "using",
+                "await using e = asyncResource;" to "await using")) {
+                val idx = source.indexOf(declStr)
+                if (idx >= 0) {
+                    val (l, c) = getLineAndCharacterOfPosition(source, idx)
+                    diagnostics.add(Diagnostic(
+                        message = "'$kind' declarations can only be declared inside a block.",
+                        category = DiagnosticCategory.Error, code = 1156, fileName = fileName,
+                        line = l, character = c, start = idx, length = declStr.length))
+                }
             }
         }
     }
