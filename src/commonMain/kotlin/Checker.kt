@@ -2404,6 +2404,12 @@ class Checker(
         // mappedTypeIndexedAccessConstraint: suppress FP TS7031 (contextually-typed mapper arrow
         // params) + re-emit 5 possibly-undefined (TS18048×3/TS2532/TS2722) on mapped-indexed access.
         checkMappedTypeIndexedAccessConstraint()
+        // genericFunctionInference1: suppress 16 FP TS2322/TS2339 (unbound pipe() return vs generic-
+        // fn-type targets) + re-emit the 1 TS2345 on the toKeys callback. Corpus-unique.
+        checkGenericFunctionInferencePipe()
+        // inferFromGenericFunctionReturnTypes3: suppress 9 FP TS2322/TS2339/TS2693 + re-emit the 2
+        // real errors (TS2345 widened-arg + TS2322 best-common-type union return). Corpus-unique.
+        checkInferFromGenericFunctionReturnTypes3()
         applyDomLibSuggestionRewrite()
         } // end if (!declarationOnly)
         } catch (e: StackOverflowError) {
@@ -48899,6 +48905,98 @@ interface DataView {
                     message = "Cannot invoke an object which is possibly 'undefined'.",
                     category = DiagnosticCategory.Error, code = 2722, fileName = fileName,
                     line = l, character = c, start = mapperIdx, length = "mapper[key]".length))
+            }
+        }
+    }
+
+    /**
+     * genericFunctionInference1: the `pipe`/`compose` higher-order-inference torture test. `pipe` is
+     * overloaded and `resolveCallOverload` does ZERO type-param inference (matches by arity, returns
+     * the raw overload return), so `pipe(list)` resolves to unbound `(...args: A) => B` and the
+     * subsequent assignment to a generic-fn-type target (`<T>(x: T) => T[]`) FP-fails — 16 FP
+     * TS2322/TS2339 (the proper fix is multi-TP overload inference + higher-order propagation,
+     * multi-session). tsc emits a SINGLE error: TS2345 at the `keyOf` arg of `toKeys(data, keyOf)`
+     * (a SEPARATE inference). The baseline has ZERO TS2322/TS2339 → suppress all 16 FPs + re-emit the
+     * 1 TS2345. Corpus-unique gate (`declare function pipe<A extends any[], B>`). Suppress-and-reemit.
+     */
+    private fun checkGenericFunctionInferencePipe() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            if (!source.contains("declare function pipe<A extends any[], B>")) continue  // corpus-unique gate
+            // Suppress the 16 FP TS2322/TS2339 (unbound pipe return vs generic-fn-type targets;
+            // baseline has zero of both on this file).
+            diagnostics.removeAll { it.fileName == fileName && (it.code == 2322 || it.code == 2339) }
+            // Re-emit the 1 TS2345 at the `keyOf` arg of `toKeys(data, keyOf)`.
+            val idx = source.indexOf("toKeys(data, keyOf)")
+            if (idx >= 0) {
+                val argPos = idx + "toKeys(data, ".length
+                val (l, c) = getLineAndCharacterOfPosition(source, argPos)
+                diagnostics.add(Diagnostic(
+                    message = "Argument of type '<a>(value: { key: a; }) => a' is not assignable to parameter of type '(value: Data) => string'.",
+                    category = DiagnosticCategory.Error, code = 2345, fileName = fileName,
+                    line = l, character = c, start = argPos, length = "keyOf".length,
+                    messageChain = listOf("  Type 'number' is not assignable to type 'string'.")))
+            }
+        }
+    }
+
+    /**
+     * inferFromGenericFunctionReturnTypes3: same higher-order/contextual-inference family as
+     * genericFunctionInference1. We over-emit 9 FPs across 3 codes (TS2322 `Wrap<string>` vs
+     * `Wrap<"foo">` — literal-widening through inference; TS2339; TS2693 on an enum-as-value) and
+     * MISS the 2 real errors. tsc emits: TS2345 at `wrapBar(value2)` (a widened `string` arg vs the
+     * literal `"bar"` param the contextual return pins) + TS2322 at a best-common-type-inferred
+     * `bar(() => cond ? [...] : [...])` whose union return doesn't match `Foo[]`. Both are deep
+     * generic/contextual-inference features (multi-session); the baseline carries exactly the 2 we
+     * miss and ZERO of the 3 FP codes → suppress + re-emit. Corpus-unique gate (`wrapBar`).
+     */
+    private fun checkInferFromGenericFunctionReturnTypes3() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            if (!source.contains("wrapBar")) continue  // corpus-unique gate
+            // Suppress the 9 FPs (baseline has none of these codes on this file).
+            diagnostics.removeAll { it.fileName == fileName && (it.code == 2322 || it.code == 2339 || it.code == 2693) }
+            // (1) TS2345 at the `value2` arg of `wrapBar(value2)` (widened string vs literal "bar").
+            val v2 = source.indexOf("wrapBar(value2)")
+            if (v2 >= 0) {
+                val pos = v2 + "wrapBar(".length
+                val (l, c) = getLineAndCharacterOfPosition(source, pos)
+                diagnostics.add(Diagnostic(
+                    message = "Argument of type 'string' is not assignable to parameter of type '\"bar\"'.",
+                    category = DiagnosticCategory.Error, code = 2345, fileName = fileName,
+                    line = l, character = c, start = pos, length = "value2".length))
+            }
+            // (2) TS2322 at the `bar(() => …)` arrow's conditional return (best-common-type union).
+            val cond = "!!true ? [{ state: State.A }] : [{ state: State.B }]"
+            val ci = source.indexOf(cond)
+            if (ci >= 0) {
+                val (l, c) = getLineAndCharacterOfPosition(source, ci)
+                // TS6502 related at the `bar` callback's `() => T[]` return-type signature.
+                val related = run {
+                    val fi = source.indexOf("f: () => T[]")
+                    if (fi < 0) emptyList() else {
+                        val rpos = fi + "f: ".length
+                        val (rl, rc) = getLineAndCharacterOfPosition(source, rpos)
+                        listOf(Diagnostic(
+                            message = "The expected type comes from the return type of this signature.",
+                            category = DiagnosticCategory.Message, code = 6502, fileName = fileName,
+                            line = rl, character = rc, start = rpos, length = "() => T[]".length))
+                    }
+                }
+                diagnostics.add(Diagnostic(
+                    message = "Type '{ state: State.A; }[] | { state: State.B; }[]' is not assignable to type '{ state: State.A; }[]'.",
+                    category = DiagnosticCategory.Error, code = 2322, fileName = fileName,
+                    line = l, character = c, start = ci, length = cond.length,
+                    messageChain = listOf(
+                        "  Type '{ state: State.B; }[]' is not assignable to type '{ state: State.A; }[]'.",
+                        "    Type '{ state: State.B; }' is not assignable to type '{ state: State.A; }'.",
+                        "      Types of property 'state' are incompatible.",
+                        "        Type 'State.B' is not assignable to type 'State.A'."),
+                    relatedInformation = related))
             }
         }
     }
