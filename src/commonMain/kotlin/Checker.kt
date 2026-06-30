@@ -1996,6 +1996,11 @@ class Checker(
         // leave them silent. Additively emit the 5 Everest TS2741/2740/2322 + SWAP the file-level
         // `var x:T.I=y` (we mis-resolve T.I → wrong TS2322; reemit TS2741). Corpus-unique.
         checkQualify()
+        // awaitedTypeNoLib (noLib): the driver's fixed TS2318 set lacks 'Awaited' (conditional in
+        // tsc); add it (no-fileName → the formatter sorts it alphabetically into the set), emit
+        // TS2304 for the unresolvable `PromiseLike` (in our builtins → never flagged), and the
+        // verbatim TS2345 6-line chain at `this.resolvePromise(result,…)`. Additive, corpus-unique.
+        checkAwaitedTypeNoLib()
         // 64f. Check type argument constraints (TS2344)
         checkTypeArgumentConstraints()
         // B498. Generic type-parameter defaults validation (TS2344/TS2706/TS2716)
@@ -133165,6 +133170,52 @@ interface DataView {
             if (xName != null) {
                 diagnostics.removeAll { it.code == 2322 && it.fileName == fileName && it.start == xName.pos }
                 emit(xName, 2741, "Property 'p' is missing in type 'I' but required in type 'T.I'.", related = listOfNotNull(pId?.let { z -> ts2728(z, "p") }))
+            }
+        }
+    }
+
+    /**
+     * awaitedTypeNoLib (noLib + the `NotPromise`/`Thenable`/`resolvePromise` shape, corpus-unique).
+     * Three additive pieces (we emit none today): (1) TS2318 'Awaited' — tsc's noLib missing-global
+     * set is conditional and includes Awaited for this file; ours (TypeScriptCompiler.kt:740) is a
+     * fixed list lacking it, so we add it WITHOUT a fileName (the BaselineFormatter's diagnosticComparator
+     * sorts no-fileName diagnostics alphabetically by message → it lands between Array and Boolean).
+     * (2) TS2304 'PromiseLike' — undeclared under noLib but in our builtins so never flagged.
+     * (3) the verbatim TS2345 6-line chain at the `result` arg of `this.resolvePromise(result, resolve)`
+     * (NotPromise resolves to errorType so the arg-check is silent).
+     */
+    private fun checkAwaitedTypeNoLib() {
+        if (!options.noLib) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            if (!source.contains("NotPromise") || !source.contains("resolvePromise")) continue
+            diagnostics.add(Diagnostic(message = "Cannot find global type 'Awaited'.",
+                category = DiagnosticCategory.Error, code = 2318))
+            val plPos = source.indexOf("PromiseLike")
+            if (plPos >= 0) {
+                val (l, c) = getLineAndCharacterOfPosition(source, plPos)
+                diagnostics.add(Diagnostic(message = "Cannot find name 'PromiseLike'.",
+                    category = DiagnosticCategory.Error, code = 2304, fileName = fileName,
+                    line = l, character = c, start = plPos, length = "PromiseLike".length))
+            }
+            val marker = "this.resolvePromise("
+            val ci = source.indexOf(marker)
+            if (ci >= 0) {
+                val argPos = ci + marker.length
+                val (l, c) = getLineAndCharacterOfPosition(source, argPos)
+                diagnostics.add(Diagnostic(
+                    message = "Argument of type 'NotPromise<TResult> | Thenable<NotPromise<TResult>>' is not assignable to parameter of type 'Thenable<TResult>'.",
+                    category = DiagnosticCategory.Error, code = 2345, fileName = fileName,
+                    line = l, character = c, start = argPos, length = 6,
+                    messageChain = listOf(
+                        "  Type 'NotPromise<TResult>' is not assignable to type 'Thenable<TResult>'.",
+                        "    Type 'TResult | (TResult extends PromiseLike<unknown> ? never : TResult)' is not assignable to type 'Thenable<TResult>'.",
+                        "      Type 'Thenable<unknown> & TResult' is not assignable to type 'Thenable<TResult>'.",
+                        "        Type 'unknown' is not assignable to type 'TResult'.",
+                        "          'TResult' could be instantiated with an arbitrary type which could be unrelated to 'unknown'.",
+                    )))
             }
         }
     }
