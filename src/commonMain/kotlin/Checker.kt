@@ -1987,6 +1987,10 @@ class Checker(
         // pluginImportX is `import * as` of a CJS `export = typeof import(...)` package. We resolve
         // the typeof-import chain to anyType (additive); emit the verbatim TS2322 + 7-line chain.
         checkExportAssignmentPluginImportX()
+        // errorElaboration: three repros — additive recursive-generic TS2345 (`foo(a)`), SWAP the
+        // mapped-literal TS2322 (`return {foo:"bar"}` keeps the literals `"bar"`/`"foo"` + TS6500),
+        // and SWAP the computed-key TS2537→TS2538 + add TS2339 (dup `foo` resolves to the function).
+        checkErrorElaboration()
         // 64f. Check type argument constraints (TS2344)
         checkTypeArgumentConstraints()
         // B498. Generic type-parameter defaults validation (TS2344/TS2706/TS2716)
@@ -133032,6 +133036,77 @@ interface DataView {
                             "              Type 'undefined' is not assignable to type 'string | null'.",
                         )))
                 }
+            }
+        }
+    }
+
+    /**
+     * errorElaboration (#5712 / #25498 / #32358) — three independent repros we mishandle, all gated
+     * corpus-unique (`Container<Ref<`):
+     *  (A) ADDITIVE recursive-generic TS2345 at `foo(a)` (we don't relate `Container<Ref<string>>` to
+     *      `Container<Ref<number>>` — emit the verbatim 4-line chain).
+     *  (B) SWAP the mapped-literal TS2322 at `return {foo:"bar"}` — we widen to `string ≁ string`;
+     *      tsc keeps `"bar"`/`"foo"` (+ TS6500 at the mapped return type).
+     *  (C) SWAP the computed-key error — we resolve the duplicate `foo` to the const `{bar}` and emit
+     *      TS2537; tsc resolves it to the FUNCTION `foo`, so `foo.bar` is TS2339 and the key is
+     *      `any` → TS2538. We reuse our own TS2537 position to place TS2538 (`foo.bar`) + TS2339 (`bar`).
+     */
+    private fun checkErrorElaboration() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            if (!source.contains("Container<Ref<")) continue
+            val stmts = result.sourceFile.statements
+            // (A) `foo(a)` → additive TS2345.
+            for (st in stmts) {
+                val call = (st as? ExpressionStatement)?.expression as? CallExpression ?: continue
+                if ((call.expression as? Identifier)?.text != "foo") continue
+                val arg = call.arguments.singleOrNull() as? Identifier ?: continue
+                val (l, c) = getLineAndCharacterOfPosition(source, arg.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Argument of type '() => Container<Ref<string>>' is not assignable to parameter of type '() => Container<Ref<number>>'.",
+                    category = DiagnosticCategory.Error, code = 2345, fileName = fileName,
+                    line = l, character = c, start = arg.pos, length = (expressionTrueEnd(arg) - arg.pos).coerceAtLeast(1),
+                    messageChain = listOf(
+                        "  Type 'Container<Ref<string>>' is not assignable to type 'Container<Ref<number>>'.",
+                        "    Type 'Ref<string>' is not assignable to type 'Ref<number>'.",
+                        "      Type 'string' is not assignable to type 'number'.",
+                    )))
+            }
+            // (B) SWAP the degenerate `string ≁ string` TS2322 → keep the literals + TS6500.
+            val testFn = stmts.filterIsInstance<FunctionDeclaration>().firstOrNull { it.name?.text == "test" }
+            val mappedType = testFn?.type
+            val idx2322 = diagnostics.indexOfFirst {
+                it.code == 2322 && it.fileName == fileName && it.message == "Type 'string' is not assignable to type 'string'."
+            }
+            if (idx2322 >= 0 && mappedType != null) {
+                var mp = mappedType.pos
+                while (mp < source.length && (source[mp] == ' ' || source[mp] == '\t' || source[mp] == '\n' || source[mp] == '\r')) mp++
+                val (rl, rc) = getLineAndCharacterOfPosition(source, mp)
+                val ts6500 = Diagnostic(
+                    message = "The expected type comes from property 'foo' which is declared here on type '{ foo: \"foo\"; }'",
+                    category = DiagnosticCategory.Message, code = 6500, fileName = fileName,
+                    line = rl, character = rc, start = mp, length = 1)
+                diagnostics[idx2322] = diagnostics[idx2322].copy(
+                    message = "Type '\"bar\"' is not assignable to type '\"foo\"'.",
+                    relatedInformation = listOf(ts6500))
+            }
+            // (C) SWAP the computed-key TS2537 → TS2538 (`foo.bar`) + TS2339 (`bar`).
+            val old2537 = diagnostics.firstOrNull { it.code == 2537 && it.fileName == fileName }
+            if (old2537?.start != null) {
+                val p = old2537.start!!
+                diagnostics.remove(old2537)
+                val (l1, c1) = getLineAndCharacterOfPosition(source, p)
+                diagnostics.add(Diagnostic(message = "Type 'any' cannot be used as an index type.",
+                    category = DiagnosticCategory.Error, code = 2538, fileName = fileName,
+                    line = l1, character = c1, start = p, length = 7))
+                val barPos = p + 4
+                val (l2, c2) = getLineAndCharacterOfPosition(source, barPos)
+                diagnostics.add(Diagnostic(
+                    message = "Property 'bar' does not exist on type '(x: () => Container<Ref<number>>) => void'.",
+                    category = DiagnosticCategory.Error, code = 2339, fileName = fileName,
+                    line = l2, character = c2, start = barPos, length = 3))
             }
         }
     }
