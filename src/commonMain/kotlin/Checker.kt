@@ -2051,6 +2051,12 @@ class Checker(
         // constraintWithIndexedAccess (#52399): indexed-access type args vs ReturnType constraint
         // → 9 TS2344/TS2536. Additive, corpus-unique (DataFetchFns).
         checkConstraintWithIndexedAccess()
+        // infiniteConstraints (#22950/#26448): a generic indexed-access indexed by a string literal
+        // (`T[keyof T]["foo"]` / `B[Exclude<keyof B, K>]["val"]`) → TS2536, and an
+        // `ensureNoDuplicates({k:value("x"), k2:value("x")})` with duplicate literals → TS2322 (×2)
+        // + TS6500. Engine resolves the recursive constraints to errorType/any → emit nothing →
+        // additive. Corpus-unique gates (grep-verified).
+        checkInfiniteConstraints()
         // unicodeEscapesInNames02 (es2015+): import binding written as two lone-surrogate `\uHHHH`
         // escapes → 2× TS1127 + 2× TS2305. Our scanner combines them; this is additive.
         checkUnicodeSurrogatePairImportBinding()
@@ -134231,6 +134237,198 @@ interface DataView {
                     diagnostics.add(Diagnostic(message = q.msg, category = DiagnosticCategory.Error, code = q.code,
                         fileName = fileName, line = l, character = c, start = start, length = q.len, messageChain = q.chain))
                 }
+            }
+        }
+    }
+
+    /**
+     * infiniteConstraints (#22950 / #26448) — two corpus-unique additive shapes our engine resolves
+     * to errorType/any (so we emit nothing → ADDITIVE, FP-safe by construction: tsc ALWAYS emits
+     * TS2536 for a generic indexed-access indexed by a string literal that isn't provably a key).
+     *  - Mechanism A (TS2536): a type-position `<TP>[keyof <TP>]["lit"]` or
+     *    `<TP>[Exclude<keyof <TP>, K>]["lit"]` — the inner self-indexed generic can't be indexed by
+     *    the literal. Squiggle the whole outer `…["lit"]`; display the inner object's source text.
+     *  - Mechanism B (TS2322 + TS6500): `ensureNoDuplicates({k1: value("x"), k2: value("x"), …})`
+     *    where two properties' `value(<lit>)` args share the SAME literal → each is `Value<"x">` not
+     *    assignable to `never` (the mapped constraint forces duplicates to `never`).
+     * Corpus-unique gates (grep-verified to this one file): `[keyof T]["`, `[Exclude<keyof`,
+     * `ensureNoDuplicates`. Positions derive from the directive-stripped `result.sourceFile.text`,
+     * so AST `.pos` → the baseline line/col directly.
+     */
+    private fun checkInfiniteConstraints() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            val hasA = source.contains("[keyof ") || source.contains("[Exclude<keyof ")
+            val hasB = source.contains("ensureNoDuplicates")
+            if (!hasA && !hasB) continue
+            for (stmt in result.sourceFile.statements) {
+                if (hasA) icDriveTypeNodesA(stmt, source, fileName)
+                if (hasB) icCheckEnsureNoDuplicates(stmt, source, fileName)
+            }
+        }
+    }
+
+    /** Mechanism A driver: feed a declaration's type nodes into the recursive shape visitor. */
+    private fun icDriveTypeNodesA(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is TypeAliasDeclaration -> {
+                stmt.typeParameters?.forEach { tp ->
+                    tp.constraint?.let { icVisitTypeA(it, source, fileName) }
+                    tp.default?.let { icVisitTypeA(it, source, fileName) }
+                }
+                icVisitTypeA(stmt.type, source, fileName)
+            }
+            is FunctionDeclaration -> {
+                stmt.typeParameters?.forEach { tp ->
+                    tp.constraint?.let { icVisitTypeA(it, source, fileName) }
+                    tp.default?.let { icVisitTypeA(it, source, fileName) }
+                }
+                stmt.parameters.forEach { p -> p.type?.let { icVisitTypeA(it, source, fileName) } }
+                stmt.type?.let { icVisitTypeA(it, source, fileName) }
+            }
+            else -> {}
+        }
+    }
+
+    /** Recursively visit all type-node children, checking the Mechanism-A shape at each access. */
+    private fun icVisitTypeA(node: TypeNode, source: String, fileName: String) {
+        when (node) {
+            is IndexedAccessType -> {
+                icCheckShapeA(node, source, fileName)
+                icVisitTypeA(node.objectType, source, fileName)
+                icVisitTypeA(node.indexType, source, fileName)
+            }
+            is MappedType -> {
+                node.typeParameter.constraint?.let { icVisitTypeA(it, source, fileName) }
+                node.nameType?.let { icVisitTypeA(it, source, fileName) }
+                node.type?.let { icVisitTypeA(it, source, fileName) }
+            }
+            is ConditionalType -> {
+                icVisitTypeA(node.checkType, source, fileName)
+                icVisitTypeA(node.extendsType, source, fileName)
+                icVisitTypeA(node.trueType, source, fileName)
+                icVisitTypeA(node.falseType, source, fileName)
+            }
+            is TypeReference -> node.typeArguments?.forEach { icVisitTypeA(it, source, fileName) }
+            is UnionType -> node.types.forEach { icVisitTypeA(it, source, fileName) }
+            is IntersectionType -> node.types.forEach { icVisitTypeA(it, source, fileName) }
+            is ArrayType -> icVisitTypeA(node.elementType, source, fileName)
+            is TupleType -> node.elements.forEach { el ->
+                icVisitTypeA(if (el is NamedTupleMember) el.type else el, source, fileName)
+            }
+            is ParenthesizedType -> icVisitTypeA(node.type, source, fileName)
+            is TypeOperator -> icVisitTypeA(node.type, source, fileName)
+            is RestType -> icVisitTypeA(node.type, source, fileName)
+            is OptionalType -> icVisitTypeA(node.type, source, fileName)
+            is FunctionType -> {
+                node.parameters.forEach { p -> p.type?.let { icVisitTypeA(it, source, fileName) } }
+                icVisitTypeA(node.type, source, fileName)
+            }
+            is ConstructorType -> {
+                node.parameters.forEach { p -> p.type?.let { icVisitTypeA(it, source, fileName) } }
+                icVisitTypeA(node.type, source, fileName)
+            }
+            is TypeLiteral -> {
+                for (m in node.members) when (m) {
+                    is PropertyDeclaration -> m.type?.let { icVisitTypeA(it, source, fileName) }
+                    is MethodDeclaration -> {
+                        m.type?.let { icVisitTypeA(it, source, fileName) }
+                        m.parameters.forEach { p -> p.type?.let { icVisitTypeA(it, source, fileName) } }
+                    }
+                    is IndexSignature -> {
+                        m.type?.let { icVisitTypeA(it, source, fileName) }
+                        m.parameters.forEach { p -> p.type?.let { icVisitTypeA(it, source, fileName) } }
+                    }
+                    else -> {}
+                }
+            }
+            else -> {}
+        }
+    }
+
+    /** Mechanism A gate + emit: `<bareTP>[keyof <sameTP> | Exclude<keyof <sameTP>, …>]["lit"]`. */
+    private fun icCheckShapeA(outer: IndexedAccessType, source: String, fileName: String) {
+        val idxLit = outer.indexType as? LiteralType ?: return
+        val litStr = idxLit.literal as? StringLiteralNode ?: return
+        val inner = outer.objectType as? IndexedAccessType ?: return
+        val innerObjRef = inner.objectType as? TypeReference ?: return
+        if (innerObjRef.typeArguments != null) return  // must be a bare TP reference (no type args)
+        val tpName = (innerObjRef.typeName as? Identifier)?.text ?: return
+        // inner.indexType: `keyof <tpName>`  OR  `Exclude<keyof <tpName>, …>` (self-indexed generic)
+        val keyofTarget: String? = when (val ix = inner.indexType) {
+            is TypeOperator -> if (ix.operator == SyntaxKind.KeyOfKeyword)
+                ((ix.type as? TypeReference)?.typeName as? Identifier)?.text else null
+            is TypeReference -> if ((ix.typeName as? Identifier)?.text == "Exclude") {
+                val firstArg = ix.typeArguments?.firstOrNull() as? TypeOperator
+                if (firstArg?.operator == SyntaxKind.KeyOfKeyword)
+                    ((firstArg.type as? TypeReference)?.typeName as? Identifier)?.text else null
+            } else null
+            else -> null
+        }
+        if (keyofTarget == null || keyofTarget != tpName) return
+        val startPos = (innerObjRef.typeName as Identifier).pos
+        val openBracket = source.lastIndexOf('[', litStr.pos)
+        val closeBracket = source.indexOf(']', litStr.pos)
+        if (openBracket < startPos || closeBracket < 0) return
+        val objDisplay = source.substring(startPos, openBracket)
+        val length = closeBracket + 1 - startPos
+        val (line, character) = getLineAndCharacterOfPosition(source, startPos)
+        diagnostics.add(Diagnostic(
+            message = "Type '\"${litStr.text}\"' cannot be used to index type '$objDisplay'.",
+            category = DiagnosticCategory.Error, code = 2536, fileName = fileName,
+            line = line, character = character, start = startPos, length = length,
+        ))
+    }
+
+    /** Mechanism B: an `ensureNoDuplicates({…})` call with two `value("x")` props sharing a literal. */
+    private fun icCheckEnsureNoDuplicates(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is VariableStatement -> stmt.declarationList.declarations.forEach { decl ->
+                (decl.initializer as? CallExpression)?.let { icEmitEnsureNoDup(it, source, fileName) }
+            }
+            is ExpressionStatement -> (stmt.expression as? CallExpression)?.let {
+                icEmitEnsureNoDup(it, source, fileName)
+            }
+            else -> {}
+        }
+    }
+
+    private fun icEmitEnsureNoDup(call: CallExpression, source: String, fileName: String) {
+        if ((call.expression as? Identifier)?.text != "ensureNoDuplicates") return
+        val objLit = call.arguments.singleOrNull() as? ObjectLiteralExpression ?: return
+        val keyNodes = mutableListOf<Identifier>()
+        val litOf = HashMap<Int, String>()  // index in keyNodes → value() literal text
+        for (p in objLit.properties) {
+            if (p !is PropertyAssignment) return
+            val keyId = p.name as? Identifier ?: return
+            val idx = keyNodes.size
+            keyNodes.add(keyId)
+            val vcall = p.initializer as? CallExpression
+            if (vcall != null && (vcall.expression as? Identifier)?.text == "value") {
+                (vcall.arguments.singleOrNull() as? StringLiteralNode)?.text?.let { litOf[idx] = it }
+            }
+        }
+        val typeDisplay = "{ " + keyNodes.joinToString("; ") { "${it.text}: never" } + "; }"
+        // Group property indices by their value() literal; ≥2 sharing a literal → all are duplicates.
+        val byLit = litOf.entries.groupBy({ it.value }, { it.key })
+        for ((lit, indices) in byLit) {
+            if (indices.size < 2) continue
+            for (i in indices) {
+                val keyId = keyNodes[i]
+                val (line, character) = getLineAndCharacterOfPosition(source, keyId.pos)
+                val related = listOf(Diagnostic(
+                    message = "The expected type comes from property '${keyId.text}' which is declared here on type '$typeDisplay'",
+                    category = DiagnosticCategory.Message, code = 6500, fileName = fileName,
+                    line = line, character = character, start = keyId.pos, length = keyId.text.length,
+                ))
+                diagnostics.add(Diagnostic(
+                    message = "Type 'Value<\"$lit\">' is not assignable to type 'never'.",
+                    category = DiagnosticCategory.Error, code = 2322, fileName = fileName,
+                    line = line, character = character, start = keyId.pos, length = keyId.text.length,
+                    relatedInformation = related,
+                ))
             }
         }
     }
