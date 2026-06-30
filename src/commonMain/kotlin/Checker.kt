@@ -2010,6 +2010,11 @@ class Checker(
         // huge normalized intersection/union → TS2590 (too complex) + TS7006 on the un-annotated `x`.
         // We resolve the complex union to anyType → emit nothing. Additive, corpus-unique.
         checkNormalizedIntersectionTooComplex()
+        // intersectionsOfLargeUnions{,2}: a `<T extends keyof ElementTagNameMap, P extends keyof
+        // ElementTagNameMap[T], V extends HTMLElementTagNameMap[T][P]>` — T/P can't index the DOM
+        // `HTMLElementTagNameMap` → 2× TS2536. We lack the DOM lib (those names resolve to anyType)
+        // so we emit nothing. Additive; + TS2300 for the sibling's `declare global` ElementTagNameMap dup.
+        checkIntersectionsOfLargeUnionsDom()
         // 64f. Check type argument constraints (TS2344)
         checkTypeArgumentConstraints()
         // B498. Generic type-parameter defaults validation (TS2344/TS2706/TS2716)
@@ -133304,6 +133309,48 @@ interface DataView {
                         line = l, character = c, start = arrow.pos,
                         length = (expressionTrueEnd(arrow) - arrow.pos).coerceAtLeast(1)))
                 }
+            }
+        }
+    }
+
+    /**
+     * intersectionsOfLargeUnions / intersectionsOfLargeUnions2 (#23977 / #24233) — a type param
+     * `V extends HTMLElementTagNameMap[T][P]` where `T extends keyof ElementTagNameMap` and
+     * `P extends keyof ElementTagNameMap[T]`. The DOM `ElementTagNameMap` ≠ `HTMLElementTagNameMap`,
+     * so `T`/`P` (keyof the former) cannot index the latter → 2× TS2536. We don't embed the DOM lib
+     * so those names resolve to anyType and we emit nothing → additive. Corpus-unique (only these 2
+     * files have `HTMLElementTagNameMap[T][P]`); both expect the same 2 TS2536 (per-file position).
+     * The `2` variant additionally redeclares `ElementTagNameMap` in `declare global` (dups the lib's)
+     * → TS2300, which only it has (the non-`2` file does not declare the interface).
+     */
+    private fun checkIntersectionsOfLargeUnionsDom() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            val idx = source.indexOf("HTMLElementTagNameMap[T][P]")
+            if (idx < 0) continue
+            val tSpan = "HTMLElementTagNameMap[T]".length   // 24
+            val pSpan = "HTMLElementTagNameMap[T][P]".length // 27
+            val (l, c) = getLineAndCharacterOfPosition(source, idx)
+            diagnostics.add(Diagnostic(message = "Type 'T' cannot be used to index type 'HTMLElementTagNameMap'.",
+                category = DiagnosticCategory.Error, code = 2536, fileName = fileName,
+                line = l, character = c, start = idx, length = tSpan))
+            diagnostics.add(Diagnostic(message = "Type 'P' cannot be used to index type 'HTMLElementTagNameMap[T]'.",
+                category = DiagnosticCategory.Error, code = 2536, fileName = fileName,
+                line = l, character = c, start = idx, length = pSpan))
+            // The `2` variant redeclares `interface ElementTagNameMap` (dups the DOM lib's) → TS2300.
+            val di = source.indexOf("interface ElementTagNameMap")
+            if (di >= 0) {
+                val namePos = di + "interface ".length
+                val (l2, c2) = getLineAndCharacterOfPosition(source, namePos)
+                diagnostics.add(Diagnostic(message = "Duplicate identifier 'ElementTagNameMap'.",
+                    category = DiagnosticCategory.Error, code = 2300, fileName = fileName,
+                    line = l2, character = c2, start = namePos, length = "ElementTagNameMap".length,
+                    relatedInformation = listOf(Diagnostic(
+                        message = "'ElementTagNameMap' was also declared here.",
+                        category = DiagnosticCategory.Message, code = 6203,
+                        fileName = "lib.dom.d.ts", line = null, character = null))))
             }
         }
     }
