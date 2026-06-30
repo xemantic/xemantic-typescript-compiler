@@ -80473,6 +80473,19 @@ interface DataView {
                 checkArrayLiteralElementsAgainstTuple(init, targetType, source, fileName)
                 return
             }
+            // intersectionsAndOptionalProperties (#38348): `const yy: number[] &
+            // [number, ...number[]] = [1]` — tsc contextually types the array literal as a
+            // tuple of its elements, which satisfies BOTH the Array<T> and the tuple
+            // constituent. We don't do contextual tuple typing, so `[1]` widens to `number[]`
+            // and FP-fails the tuple constituent. Suppress the coarse TS2322 when the
+            // annotation is an intersection of array-like (ArrayType / TupleType) members and
+            // the array literal genuinely conforms (FP-safe: corpus-rare shape).
+            if (canUse && !isAssignable && init is ArrayLiteralExpression &&
+                typeAnnotation is IntersectionType &&
+                arrayLiteralFitsArrayTupleIntersection(init, typeAnnotation)
+            ) {
+                return
+            }
             // B395: a nested object-literal value missing required props already emitted the
             // precise per-key TS2741 (with TS6500) — suppress the coarse whole-init TS2322
             // chain that would otherwise double-report the same `something.a.b.thing` failure.
@@ -84420,13 +84433,20 @@ interface DataView {
                     return
                 }
             }
-            if (!canUseTypeEngine(valueType, pt)) return
+            // intersectionsAndOptionalProperties: an OPTIONAL target property's write-type
+            // includes `| undefined` (non-eOPT), so a nullish RHS elaborates against
+            // `number | undefined` (matches tsc). No-op for a concrete (non-nullish) source
+            // or a non-optional prop (see widenOptionalTargetPropType). The null/undefined
+            // bail above used the UNWIDENED `pt` (so a `null` source to `field?: number`
+            // still falls through to the failing relation here).
+            val ptForRel = targetPropSym?.let { widenOptionalTargetPropType(pt, it, valueType) } ?: pt
+            if (!canUseTypeEngine(valueType, ptForRel)) return
             lastMissingIndexSigKind = null
-            if (checkTypeRelatedTo(valueType, pt, assignableRelation)) return
+            if (checkTypeRelatedTo(valueType, ptForRel, assignableRelation)) return
             // Object literal — emit TS2353 for excess instead
             if (value is ObjectLiteralExpression) {
-                val displayTarget = typeToString(pt)
-                if (checkExcessProperties(value, valueType, pt, displayTarget, source, fileName)) return
+                val displayTarget = typeToString(ptForRel)
+                if (checkExcessProperties(value, valueType, ptForRel, displayTarget, source, fileName)) return
             }
             val displaySource = typeToString(valueType)
             // B585: inside an object-literal method whose object literal is contextually
@@ -84435,13 +84455,13 @@ interface DataView {
             // type (`(val: any) => void`). Only for the `this.X` write shape.
             val displayTarget = (objLitMethodThisIndexAliasDisplay?.takeIf {
                 (target.expression as? Identifier)?.text == "this"
-            }) ?: typeToString(pt)
+            }) ?: typeToString(ptForRel)
             // Property-level elaboration chain (16.1) — adds "Types of property 'X' are
             // incompatible." + nested type chain when source/target are both objects.
             val chain = mutableListOf<String>()
-            if (valueType is Type.Object && pt is Type.Object) {
+            if (valueType is Type.Object && ptForRel is Type.Object) {
                 lastChainMissingPropSymbol = null
-                getPropertyElaborationChain(valueType, pt)?.let { chain.addAll(it) }
+                getPropertyElaborationChain(valueType, ptForRel)?.let { chain.addAll(it) }
             }
             // Missing index signature elaboration (mirrors var-decl path at ~33177): when
             // the relation failed because target has a string/number index signature that
@@ -85743,8 +85763,17 @@ interface DataView {
                 // constituent (`Common = X | Y; A = Common & {foo:1}` → display `A`,
                 // not the distributed structural form). Flat intersections of named
                 // types stay unfolded.
+                // intersectionsAndOptionalProperties: ALSO register an intersection whose
+                // constituents are ALL ANONYMOUS object types (TypeLiterals / materialized
+                // utilities like Omit<...>) — `From = { field: null } & Omit<To,'field'>` →
+                // display `From`, not the expanded `{ field: null; } & { anotherField: any; }`.
+                // A NAMED intersection (`Foo & Bar`, Type.Interface/Reference constituents)
+                // stays unfolded per tsc (the load-bearing TS2416 case above).
                 val shouldRegister = resolved is Type.Object && resolved !is Type.Reference ||
-                    (resolved is Type.Intersection && resolved.types.any { it is Type.Union })
+                    (resolved is Type.Intersection && (
+                        resolved.types.any { it is Type.Union } ||
+                        resolved.types.all { c -> c is Type.Object && c !is Type.Reference && c.symbol == null }
+                    ))
                 if (decl != null && decl.typeParameters.isNullOrEmpty() &&
                     shouldRegister && !aliasDisplayMap.containsKey(resolved.id)
                 ) {
@@ -91919,6 +91948,27 @@ interface DataView {
             // fall through to standard handling for the non-Union case below
             // (which will hit the original `getApparentType(union)` no-op +
             // `getPropertyOfType(union)` "all constituents" path → null → anyType).
+        }
+        // intersectionsAndOptionalProperties: an INTERSECTION receiver — a property
+        // exists if ANY constituent declares it; its type is the intersection of the
+        // per-constituent property types (a single contributor → that type). Without
+        // this branch `v.field` where `v: { field: null } & Omit<To,'field'>` resolves
+        // to anyType (getPropertyOfType has no Intersection branch), so the write-check
+        // `x.field = v.field` never sees `null`.
+        if (objectType is Type.Intersection) {
+            val contributed = mutableListOf<Type>()
+            for (c in objectType.types) {
+                val app = getApparentType(c)
+                val p = getPropertyOfType(app, propName) ?: continue
+                contributed.add(
+                    if (app is Type.Reference) resolveGenericPropertyType(app, p) ?: getTypeOfSymbol(p)
+                    else getTypeOfSymbol(p)
+                )
+            }
+            if (contributed.isNotEmpty()) {
+                return if (contributed.size == 1) contributed[0] else getIntersectionType(contributed)
+            }
+            // no constituent has the property → fall through to anyType
         }
         // If object resolved, check its apparent type for the property
         if (objectType !== anyType && objectType !== errorType) {
@@ -120242,6 +120292,53 @@ interface DataView {
      * any/error/TypeParam slots and non-simple types. Excess/short elements (arity)
      * are deliberately NOT reported here (separate diagnostic, not exercised).
      */
+    /**
+     * intersectionsAndOptionalProperties (#38348): true when an array-literal initializer
+     * would conform (under contextual tuple typing) to an intersection of array-like members
+     * (`number[] & [number, ...number[]]`). We don't contextually type array literals as
+     * tuples, so `[1]` widens to `number[]` and FP-fails the tuple constituent — this gate
+     * suppresses that coarse TS2322. FP-safe: requires BOTH an ArrayType and a TupleType
+     * member, every member to be array-like, every element to fit each ArrayType element type,
+     * and the element count + fixed slots to satisfy every TupleType (so a genuine
+     * count/element mismatch like `number[] & [number, number] = [1]` is NOT suppressed).
+     */
+    private fun arrayLiteralFitsArrayTupleIntersection(
+        arrLit: ArrayLiteralExpression, ann: IntersectionType
+    ): Boolean {
+        val arrays = ann.types.filterIsInstance<ArrayType>()
+        val tuples = ann.types.filterIsInstance<TupleType>()
+        if (arrays.isEmpty() || tuples.isEmpty()) return false
+        if (arrays.size + tuples.size != ann.types.size) return false // a non-array-like member
+        if (arrLit.elements.any { it is SpreadElement || it is OmittedExpression }) return false
+        val elemTypes = arrLit.elements.map { getTypeOfExpression(it) }
+        if (elemTypes.any { it === errorType }) return false
+        // every element fits every ArrayType element type
+        for (a in arrays) {
+            val et = getTypeFromTypeNode(a.elementType)
+            if (et === anyType || et === errorType) continue
+            for (e in elemTypes) {
+                if (e === anyType) continue
+                if (!checkTypeRelatedTo(e, et, assignableRelation)) return false
+            }
+        }
+        // each TupleType: required length met, no overflow without a rest, fixed slots fit
+        for (t in tuples) {
+            val required = t.elements.takeWhile { it !is RestType && it !is OptionalType }.size
+            if (arrLit.elements.size < required) return false
+            val hasRest = t.elements.any { it is RestType }
+            if (!hasRest && arrLit.elements.size > t.elements.size) return false
+            for ((i, e) in elemTypes.withIndex()) {
+                val slotNode = t.elements.getOrNull(i) ?: continue
+                if (slotNode is RestType || slotNode is OptionalType) continue
+                val sn = if (slotNode is NamedTupleMember) slotNode.type else slotNode
+                val slot = getTypeFromTypeNode(sn)
+                if (slot === anyType || slot === errorType || e === anyType) continue
+                if (!checkTypeRelatedTo(e, slot, assignableRelation)) return false
+            }
+        }
+        return true
+    }
+
     private fun checkArrayLiteralElementsAgainstTuple(
         arrLit: ArrayLiteralExpression, tupleType: Type.Object, source: String, fileName: String,
     ) {
