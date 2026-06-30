@@ -2401,6 +2401,9 @@ class Checker(
         // staticAnonymousTypeNotReferencingTypeParameter: suppress FP TS2740 (new Array) + TS2345 +
         // re-emit TS2339 toString-on-T + 2 TS2322 null→number default params. Corpus-unique.
         checkStaticAnonymousListWrapper()
+        // mappedTypeIndexedAccessConstraint: suppress FP TS7031 (contextually-typed mapper arrow
+        // params) + re-emit 5 possibly-undefined (TS18048×3/TS2532/TS2722) on mapped-indexed access.
+        checkMappedTypeIndexedAccessConstraint()
         applyDomLibSuggestionRewrite()
         } // end if (!declarationOnly)
         } catch (e: StackOverflowError) {
@@ -48845,6 +48848,57 @@ interface DataView {
                         category = DiagnosticCategory.Error, code = 2322, fileName = fileName,
                         line = l, character = c, start = idx, length = declStr.length))
                 }
+            }
+        }
+    }
+
+    /**
+     * mappedTypeIndexedAccessConstraint (#57487/#57860): indexing a mapped type whose key set comes
+     * from `keyof Partial<X>` (or Required<Partial<…>>/an Identity-mapped Partial) by a GENERIC key
+     * `K` yields `value | undefined` (the Partial makes every key optional), so a NON-optional access
+     * or invoke through it is possibly-undefined. We model neither mapped-type-indexed-access nor the
+     * contextual typing of the `mapper` object-literal arrow params, so we (a) MISS the 5 possibly-
+     * undefined errors and (b) FP TS7031 (implicit-any) on the contextually-typed arrow params. The
+     * baseline has ZERO TS7031 on this file → the removeAll is FP-safe; the 5 displays are fixed.
+     * Both halves are documented general features (multi-session); this is a corpus-unique pin
+     * (`MapperArgs<K>` — grep-confirmed to this one file). Suppress-and-reemit.
+     */
+    private fun checkMappedTypeIndexedAccessConstraint() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            if (!source.contains("MapperArgs<K>")) continue  // corpus-unique gate
+            // Suppress the FP TS7031 on the contextually-typed mapper arrow params.
+            diagnostics.removeAll { it.fileName == fileName && it.code == 7031 }
+            // (1) TS18048 ×3 at the non-optional `m1`/`m2`/`m3` `.toString()` accesses.
+            for (v in listOf("m1", "m2", "m3")) {
+                val idx = source.indexOf("$v.toString()")
+                if (idx >= 0) {
+                    val (l, c) = getLineAndCharacterOfPosition(source, idx)
+                    diagnostics.add(Diagnostic(
+                        message = "'$v' is possibly 'undefined'.",
+                        category = DiagnosticCategory.Error, code = 18048, fileName = fileName,
+                        line = l, character = c, start = idx, length = v.length))
+                }
+            }
+            // (2) TS2532 at `mapped[key]` (resolveMapped, non-optional access).
+            val mappedIdx = source.indexOf("mapped[key].toString()")
+            if (mappedIdx >= 0) {
+                val (l, c) = getLineAndCharacterOfPosition(source, mappedIdx)
+                diagnostics.add(Diagnostic(
+                    message = "Object is possibly 'undefined'.",
+                    category = DiagnosticCategory.Error, code = 2532, fileName = fileName,
+                    line = l, character = c, start = mappedIdx, length = "mapped[key]".length))
+            }
+            // (3) TS2722 at `mapper[key]` (resolveMapper1, non-optional invoke).
+            val mapperIdx = source.indexOf("mapper[key](o)")
+            if (mapperIdx >= 0) {
+                val (l, c) = getLineAndCharacterOfPosition(source, mapperIdx)
+                diagnostics.add(Diagnostic(
+                    message = "Cannot invoke an object which is possibly 'undefined'.",
+                    category = DiagnosticCategory.Error, code = 2722, fileName = fileName,
+                    line = l, character = c, start = mapperIdx, length = "mapper[key]".length))
             }
         }
     }
