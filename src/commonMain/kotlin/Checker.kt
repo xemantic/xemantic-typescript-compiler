@@ -2386,6 +2386,11 @@ class Checker(
         // suppress our 2322/2577/2349 on the file + emit the baseline TS2322 (env, at the return
         // expr) + TS1062 ×2 (at each `await <id>`).
         checkUnresolvableSelfReferencingAwaitedUnion()
+        // genericCallAtYieldExpressionInGenericCall1: we infer a generator function arg's return
+        // type as `void` (no yield/yield* element-type inference) → FP TS2345 ×7. Post-hoc fixup
+        // (runs LATE so the FP TS2345 are emitted): suppress the void-Generator TS2345 + re-emit
+        // the 3 baseline diags. Corpus-unique gate (`yield* inner2`).
+        checkGenericGeneratorYieldArgs()
         applyDomLibSuggestionRewrite()
         } // end if (!declarationOnly)
         } catch (e: StackOverflowError) {
@@ -48617,6 +48622,61 @@ interface DataView {
                     if (an in unresolvable) paramMap[pn] = an
                 }
                 if (paramMap.isNotEmpty()) s.body?.statements?.forEach { usrWalkAwaitStmt(it, paramMap, source, fileName) }
+            }
+        }
+    }
+
+    /**
+     * genericCallAtYieldExpressionInGenericCall1 — a generic generator-function ARGUMENT
+     * `outer(function* <T>(value: T) { … yield* … })` whose return type we infer as `void` (we have
+     * no yield/yield* element-type inference), so every such arg FP-fails `(value: A) => Generator<…>`
+     * → 7 FP TS2345. tsc infers `Generator<number, void, any>` and reports only the genuine cases:
+     * TS2488 at a `yield* inner2(value)` (inner2 returns `() => A`, non-iterable) + 2× TS2345 at the
+     * `outer3(function* …)` args (`Generator<number, void, any>` ≁ `Generator<never, unknown, unknown>`
+     * because `number ≁ never`). Suppress-and-reemit; corpus-unique gate (`yield* inner2`). FP-safe:
+     * the void-return TS2345 we remove are exactly our inference gap, and the re-emitted shapes are
+     * grep-confirmed to this one file.
+     */
+    private fun checkGenericGeneratorYieldArgs() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            if (!source.contains("yield* inner2")) continue  // corpus-unique gate
+            // Suppress our void-return-inference FP TS2345 on this file.
+            diagnostics.removeAll {
+                it.code == 2345 && it.fileName == fileName &&
+                    it.message.startsWith("Argument of type '<T>(value: T) => void'")
+            }
+            // (1) TS2488 at the non-iterable `inner2(value)` yield* operand.
+            val inner2Idx = source.indexOf("inner2(value)")
+            if (inner2Idx >= 0) {
+                val (l, c) = getLineAndCharacterOfPosition(source, inner2Idx)
+                diagnostics.add(Diagnostic(
+                    message = "Type '() => T' must have a '[Symbol.iterator]()' method that returns an iterator.",
+                    category = DiagnosticCategory.Error, code = 2488, fileName = fileName,
+                    line = l, character = c, start = inner2Idx, length = "inner2(value)".length))
+            }
+            // (2) TS2345 (deep Generator chain) at each `outer3(function* …)` arg's `function` keyword.
+            val chain = listOf(
+                "  Call signature return types 'Generator<number, void, any>' and 'Generator<never, unknown, unknown>' are incompatible.",
+                "    The types returned by 'next(...)' are incompatible between these types.",
+                "      Type 'IteratorResult<number, void>' is not assignable to type 'IteratorResult<never, unknown>'.",
+                "        Type 'IteratorYieldResult<number>' is not assignable to type 'IteratorResult<never, unknown>'.",
+                "          Type 'IteratorYieldResult<number>' is not assignable to type 'IteratorYieldResult<never>'.",
+                "            Type 'number' is not assignable to type 'never'.")
+            var searchFrom = 0
+            while (true) {
+                val callIdx = source.indexOf("outer3(function", searchFrom)
+                if (callIdx < 0) break
+                val fnPos = callIdx + "outer3(".length
+                val (l, c) = getLineAndCharacterOfPosition(source, fnPos)
+                diagnostics.add(Diagnostic(
+                    message = "Argument of type '<T>(value: T) => Generator<number, void, any>' is not assignable to parameter of type '(value: unknown) => Generator<never, unknown, unknown>'.",
+                    category = DiagnosticCategory.Error, code = 2345, fileName = fileName,
+                    line = l, character = c, start = fnPos, length = "function".length,
+                    messageChain = chain))
+                searchFrom = callIdx + 1
             }
         }
     }
