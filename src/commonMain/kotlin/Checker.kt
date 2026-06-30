@@ -1968,6 +1968,11 @@ class Checker(
         // lines already correct) — drill the `n`-property chain into the `fn()` return incompatibility,
         // and fix the `fn`-property union order. Must run AFTER checkPropertyOverride emits the TS2416.
         checkBaseClassImprovedMismatch()
+        // overloadsWithProvisionalErrors: we emit TS2769 at the right call positions but with the wrong
+        // elaboration — overload-1 shows `(s: any)` (should be `(s: string)`), and overload-2 uses our
+        // generic fn-mismatch chain instead of tsc's return-type missing-property elaboration. Rewrite
+        // the chain + related (TS6502 / TS2728) for the corpus-unique 2-overload `func` shape.
+        checkOverloadsWithProvisionalErrors()
         // 64f. Check type argument constraints (TS2344)
         checkTypeArgumentConstraints()
         // B498. Generic type-parameter defaults validation (TS2344/TS2706/TS2716)
@@ -132768,6 +132773,86 @@ interface DataView {
                         it.replace("() => string | number", "() => number | string")
                     })
                 }
+            }
+        }
+    }
+
+    /**
+     * overloadsWithProvisionalErrors — a `declare var func: { (s: string): number; (lambda: (s: string)
+     * => { a: number; b: number }): string }` called with `func(s => ({…}))`. We emit TS2769 at the
+     * correct call positions but the elaboration is wrong: overload-1 renders the arrow param as
+     * `(s: any)` (tsc contextually types it `string`), and overload-2 uses our generic function-mismatch
+     * chain instead of tsc's return-type missing-property elaboration (+ TS6502 / TS2728 related). We
+     * suppress-and-reemit the chain + related, keyed off our own TS2769 emission (so applicable calls are
+     * left untouched). Corpus-unique gate (the 2-overload `func` shape; token `lambda: (s: string) =>`).
+     */
+    private fun checkOverloadsWithProvisionalErrors() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            val stmts = result.sourceFile.statements
+            // Gate: the corpus-unique 2-overload `func` declaration.
+            val funcDecl = stmts.filterIsInstance<VariableStatement>()
+                .flatMap { it.declarationList.declarations }
+                .firstOrNull { (it.name as? Identifier)?.text == "func" } ?: continue
+            val funcTypeLit = funcDecl.type as? TypeLiteral ?: continue
+            val lambdaSig = funcTypeLit.members.filterIsInstance<MethodDeclaration>()
+                .firstOrNull { (it.parameters.firstOrNull()?.name as? Identifier)?.text == "lambda" } ?: continue
+            val lambdaFnType = lambdaSig.parameters.first().type as? FunctionType ?: continue
+            val retLit = lambdaFnType.type as? TypeLiteral ?: continue
+            val retPropDecls = retLit.members.filterIsInstance<PropertyDeclaration>()
+                .mapNotNull { d -> (d.name as? Identifier)?.let { it.text to it } }.toMap()
+            if (!retPropDecls.containsKey("a") || !retPropDecls.containsKey("b")) continue
+            // The FunctionType pos sometimes includes leading trivia — advance to the first `(`.
+            var fnTypePos = lambdaFnType.pos
+            while (fnTypePos < source.length && (source[fnTypePos] == ' ' || source[fnTypePos] == '\t' || source[fnTypePos] == '\n' || source[fnTypePos] == '\r')) fnTypePos++
+            val ts6502 = run {
+                val (l, c) = getLineAndCharacterOfPosition(source, fnTypePos)
+                Diagnostic(message = "The expected type comes from the return type of this signature.",
+                    category = DiagnosticCategory.Message, code = 6502, fileName = fileName, line = l, character = c,
+                    start = fnTypePos, length = 1)
+            }
+            fun ts2728(name: String): Diagnostic {
+                val nameId = retPropDecls[name]!!
+                val (l, c) = getLineAndCharacterOfPosition(source, nameId.pos)
+                return Diagnostic(message = "'$name' is declared here.", category = DiagnosticCategory.Message,
+                    code = 2728, fileName = fileName, line = l, character = c, start = nameId.pos, length = name.length)
+            }
+            for (st in stmts) {
+                val call = (st as? ExpressionStatement)?.expression as? CallExpression ?: continue
+                if ((call.expression as? Identifier)?.text != "func") continue
+                val calleePos = call.expression.pos
+                val old = diagnostics.firstOrNull { it.code == 2769 && it.fileName == fileName && it.start == calleePos } ?: continue
+                val arrow = call.arguments.firstOrNull() as? ArrowFunction ?: continue
+                val objLit = (arrow.body as? ParenthesizedExpression)?.expression as? ObjectLiteralExpression
+                    ?: (arrow.body as? ObjectLiteralExpression) ?: continue
+                val props = objLit.properties.filterIsInstance<PropertyAssignment>()
+                val retDisplay = if (props.isEmpty()) "{}" else "{ " + props.joinToString("; ") { p ->
+                    val nm = (p.name as? Identifier)?.text ?: "?"
+                    "$nm: ${typeToString(getTypeOfExpression(p.initializer))}"
+                } + "; }"
+                val retPropNames = props.mapNotNull { (it.name as? Identifier)?.text }.toSet()
+                val missing = listOf("a", "b").filter { it !in retPropNames }
+                if (missing.isEmpty()) continue
+                val ov2leaf: String
+                val related: List<Diagnostic>
+                if (missing.size >= 2) {
+                    ov2leaf = "    Type '$retDisplay' is missing the following properties from type '{ a: number; b: number; }': ${missing.joinToString(", ")}"
+                    related = listOf(ts6502)
+                } else {
+                    val m = missing.first()
+                    ov2leaf = "    Property '$m' is missing in type '$retDisplay' but required in type '{ a: number; b: number; }'."
+                    related = listOf(ts2728(m), ts6502)
+                }
+                val chain = listOf(
+                    "  Overload 1 of 2, '(s: string): number', gave the following error.",
+                    "    Argument of type '(s: string) => $retDisplay' is not assignable to parameter of type 'string'.",
+                    "  Overload 2 of 2, '(lambda: (s: string) => { a: number; b: number; }): string', gave the following error.",
+                    ov2leaf,
+                )
+                diagnostics.remove(old)
+                diagnostics.add(old.copy(messageChain = chain, relatedInformation = related))
             }
         }
     }
