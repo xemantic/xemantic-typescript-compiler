@@ -826,6 +826,22 @@ The plain (no-flag) buckets only see tests that already emit some `error TSxxxx`
 — ~33 of >1000 failures. **`--none` is where ~60% of the remaining work lives**
 (see PLAN-PHASE-4.md § "STRATEGIC MAP"). Do not call the pool exhausted until
 `--fresh`, `--none --fresh`, and `--output --fresh` are all dry.
+**The `--none` list IS reliable (it reads our ACTUAL emitted diagnostics from the
+XMLs), but an OFF-LIST "we emit nothing → additive" pick is NOT — round 348 a
+read-only engine-decomposition agent rated `genericFunctionInference1` "additive
+NONE"; it actually OVER-emits ~33 FP diagnostics (generic-source-fn-type
+`(...args:A)=>B` vs generic-target-fn-type `<T>(…)=>…` over-rejections in the pipe/
+compose family), so the one correct TS2345 a dedicated walker adds CANNOT flip it.
+Before treating any test as an additive pin, confirm it appears in `--none` (or run
+`dump_diff.py` and verify we emit nothing) — never trust an agent's "we emit X"
+claim about checker output the agent could not actually run.**
+**Pin positions are directive-offset-free: the checker's `result.sourceFile.text`
+is the directive-STRIPPED source (leading `// @directive`/blank lines removed), and
+AST `.pos`/`source.indexOf` index into it, so `getLineAndCharacterOfPosition(source,
+pos)` yields the baseline line numbers automatically — never hardcode line/col,
+derive from AST/indexOf (proven: `intersectionsOfLargeUnions` raw line 24 → baseline
+line 21). Same-position diagnostics auto-order by the formatter's `diagnosticComparator`
+(start→length→code→message) — give each the right span and they sort correctly.**
 
 **tsgo-relevance target (2026-06-05):** the compatibility target is the FUTURE
 **tsgo** (TypeScript 7.0 / "Corsa"), NOT the legacy tsc 5.x corpus. Tests whose
