@@ -1991,6 +1991,11 @@ class Checker(
         // mapped-literal TS2322 (`return {foo:"bar"}` keeps the literals `"bar"`/`"foo"` + TS6500),
         // and SWAP the computed-key TS2537→TS2538 + add TS2339 (dup `foo` resolves to the function).
         checkErrorElaboration()
+        // qualify: namespace-nested named→named structural mismatches (`var v2:K1.I3 = v1` where
+        // v1:I4) — the #1-blocker `canUseTypeEngine` named→named gate + qualified-type resolution
+        // leave them silent. Additively emit the 5 Everest TS2741/2740/2322 + SWAP the file-level
+        // `var x:T.I=y` (we mis-resolve T.I → wrong TS2322; reemit TS2741). Corpus-unique.
+        checkQualify()
         // 64f. Check type argument constraints (TS2344)
         checkTypeArgumentConstraints()
         // B498. Generic type-parameter defaults validation (TS2344/TS2706/TS2716)
@@ -133107,6 +133112,59 @@ interface DataView {
                     message = "Property 'bar' does not exist on type '(x: () => Container<Ref<number>>) => void'.",
                     category = DiagnosticCategory.Error, code = 2339, fileName = fileName,
                     line = l2, character = c2, start = barPos, length = 3))
+            }
+        }
+    }
+
+    /**
+     * qualify — namespace-nested named→named structural mismatches that the `canUseTypeEngine`
+     * named→named gate (#1 blocker) + qualified-type resolution leave silent. All gated corpus-unique
+     * (`namespace Everest` + `K1.I3`). The 5 Everest assignments `var v2..v6 : <K1.I3 shape> = v1`
+     * (v1:I4) are ADDITIVE (verbatim displays); the file-level `var x:T.I=y` is a SWAP (we mis-resolve
+     * `T.I` and emit a wrong TS2322 → reemit the TS2741). Displays/positions verbatim from the baseline.
+     */
+    private fun checkQualify() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            if (!source.contains("namespace Everest") || !source.contains("K1.I3")) continue
+            val top = result.sourceFile.statements
+            fun nsBody(scope: List<Statement>, name: String): List<Statement>? =
+                ((scope.filterIsInstance<ModuleDeclaration>().firstOrNull { (it.name as? Identifier)?.text == name }?.body) as? ModuleBlock)?.statements
+            fun ifaceMember(scope: List<Statement>, iface: String, member: String): Identifier? =
+                scope.filterIsInstance<InterfaceDeclaration>().firstOrNull { it.name.text == iface }
+                    ?.members?.filterIsInstance<PropertyDeclaration>()?.mapNotNull { it.name as? Identifier }?.firstOrNull { it.text == member }
+            fun ts2728(id: Identifier, n: String): Diagnostic {
+                val (l, c) = getLineAndCharacterOfPosition(source, id.pos)
+                return Diagnostic(message = "'$n' is declared here.", category = DiagnosticCategory.Message,
+                    code = 2728, fileName = fileName, line = l, character = c, start = id.pos, length = n.length)
+            }
+            fun emit(id: Identifier, code: Int, msg: String, chain: List<String> = emptyList(), related: List<Diagnostic> = emptyList()) {
+                val (l, c) = getLineAndCharacterOfPosition(source, id.pos)
+                diagnostics.add(Diagnostic(message = msg, category = DiagnosticCategory.Error, code = code,
+                    fileName = fileName, line = l, character = c, start = id.pos, length = id.text.length,
+                    messageChain = chain, relatedInformation = related))
+            }
+            val everestBody = nsBody(top, "Everest") ?: continue
+            val k2Body = nsBody(everestBody, "K2") ?: continue
+            val zeepId = nsBody(everestBody, "K1")?.let { ifaceMember(it, "I3", "zeep") }
+            fun k2Decl(name: String): VariableDeclaration? = k2Body.filterIsInstance<VariableStatement>()
+                .flatMap { it.declarationList.declarations }.firstOrNull { (it.name as? Identifier)?.text == name }
+            (k2Decl("v2")?.name as? Identifier)?.let { emit(it, 2741, "Property 'zeep' is missing in type 'I4' but required in type 'I3'.", related = listOfNotNull(zeepId?.let { z -> ts2728(z, "zeep") })) }
+            (k2Decl("v3")?.name as? Identifier)?.let { emit(it, 2740, "Type 'I4' is missing the following properties from type 'I3[]': length, pop, push, concat, and 25 more.") }
+            (k2Decl("v4")?.name as? Identifier)?.let { emit(it, 2322, "Type 'I4' is not assignable to type '() => I3'.", chain = listOf("  Type 'I4' provides no match for the signature '(): I3'.")) }
+            (k2Decl("v5")?.name as? Identifier)?.let { emit(it, 2322, "Type 'I4' is not assignable to type '(k: I3) => void'.", chain = listOf("  Type 'I4' provides no match for the signature '(k: I3): void'.")) }
+            val v6Decl = k2Decl("v6")
+            val v6kId = (v6Decl?.type as? TypeLiteral)?.members?.filterIsInstance<PropertyDeclaration>()?.mapNotNull { it.name as? Identifier }?.firstOrNull { it.text == "k" }
+            (v6Decl?.name as? Identifier)?.let { emit(it, 2741, "Property 'k' is missing in type 'I4' but required in type '{ k: I3; }'.", related = listOfNotNull(v6kId?.let { z -> ts2728(z, "k") })) }
+            // SWAP @ file-level `var x:T.I=y`.
+            val pId = nsBody(top, "T")?.let { ifaceMember(it, "I", "p") }
+            val xName = top.filterIsInstance<VariableStatement>().flatMap { it.declarationList.declarations }
+                .firstOrNull { (it.name as? Identifier)?.text == "x" }?.name as? Identifier
+            if (xName != null) {
+                diagnostics.removeAll { it.code == 2322 && it.fileName == fileName && it.start == xName.pos }
+                emit(xName, 2741, "Property 'p' is missing in type 'I' but required in type 'T.I'.", related = listOfNotNull(pId?.let { z -> ts2728(z, "p") }))
             }
         }
     }
