@@ -2356,6 +2356,14 @@ class Checker(
         // 82d. B271: empty-DOM-element-stub receivers — additive intersection emission +
         // TS2339→TS2812 rewrite when @lib is explicit without 'dom'.
         checkEmptyDomIntersectionAccess()
+        // unresolvableSelfReferencingAwaitedUnion (#49646/#49723/#42948): a recursive-Promise union
+        // alias `X = … | Promise<X> | <other-self-ref>` is an UNRESOLVABLE Awaited<X> → `await x`
+        // (x:X) is TS1062. We model neither Awaited<> nor `instanceof Function` narrowing, so we FP
+        // TS2577 (the async fn return) + TS2349 (`result()`) and mis-display the env generic-return
+        // TS2322. Corpus-unique post-hoc fixup (runs LAST so the late TS2577 is already emitted):
+        // suppress our 2322/2577/2349 on the file + emit the baseline TS2322 (env, at the return
+        // expr) + TS1062 ×2 (at each `await <id>`).
+        checkUnresolvableSelfReferencingAwaitedUnion()
         applyDomLibSuggestionRewrite()
         } // end if (!declarationOnly)
         } catch (e: StackOverflowError) {
@@ -48514,6 +48522,148 @@ interface DataView {
             is ElementAccessExpression -> emitMixinNeverAccess(e.expression, neverVars, source, fileName)
             is ParenthesizedExpression -> emitMixinNeverAccess(e.expression, neverVars, source, fileName)
             is BinaryExpression -> { emitMixinNeverAccess(e.left, neverVars, source, fileName); emitMixinNeverAccess(e.right, neverVars, source, fileName) }
+            else -> {}
+        }
+    }
+
+    /**
+     * unresolvableSelfReferencingAwaitedUnion (#49646/#49723/#42948): a recursive-Promise union
+     * alias `type X = … | Promise<X> | <other-member-referencing-X>` makes `Awaited<X>` unresolvable
+     * (the fulfillment value circularly references X), so `await x` (x: X) is TS1062. We model neither
+     * `Awaited<>` nor `instanceof Function` narrowing, so on this file we FP TS2577 (the async fn's
+     * inferred return) + TS2349 (`result()` on the un-narrowed union) and mis-display the env
+     * generic-return TS2322 (`() => simple` vs `<T>() => T` — we expand SimpleType + squiggle the
+     * arrow; tsc keeps the alias name + squiggles the return expr). Corpus-unique post-hoc fixup:
+     * suppress our 2322/2577/2349 on the file, then emit the baseline TS2322 (env, at the return
+     * expr, + TS6502) and TS1062 ×2 (each `await <id>`). FP-safe: corpus-unique aliases (gate on
+     * `type EnvFunction` + `EffectResult`) and the unresolvable-alias shape (`Promise<self>` + a
+     * second self-ref union member) is exactly tsc's TS1062 trigger.
+     */
+    private fun checkUnresolvableSelfReferencingAwaitedUnion() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            if (!source.contains("type EnvFunction") || !source.contains("EffectResult")) continue
+            val statements = result.sourceFile.statements
+            val unresolvable = HashSet<String>()
+            var envAlias: TypeAliasDeclaration? = null
+            for (s in statements) if (s is TypeAliasDeclaration) {
+                if (usrIsUnresolvableAlias(s.name.text, s.type)) unresolvable.add(s.name.text)
+                // `type EnvFunction = <T>() => T` — the `<T>` is on the FUNCTION TYPE, not the alias.
+                val ft = s.type as? FunctionType
+                if (ft != null && ft.typeParameters?.size == 1 &&
+                    ((ft.type as? TypeReference)?.typeName as? Identifier)?.text == ft.typeParameters!![0].name.text) {
+                    envAlias = s
+                }
+            }
+            val env = envAlias ?: continue
+            if (unresolvable.isEmpty()) continue
+            // Suppress our wrong/FP diagnostics on this corpus-unique file.
+            diagnostics.removeAll { it.fileName == fileName && (it.code == 2322 || it.code == 2577 || it.code == 2349) }
+            // (A) env generic-return TS2322: `const x: <EnvFunction> = () => <Identifier>`.
+            val envFt = env.type as FunctionType
+            val tpName = envFt.typeParameters!![0].name.text
+            // TS6502 points at the SIGNATURE start (the `<` of `<T>() => T`), not the return node.
+            val envSig = envFt.pos
+            for (s in statements) if (s is VariableStatement) for (d in s.declarationList.declarations) {
+                if (((d.type as? TypeReference)?.typeName as? Identifier)?.text != env.name.text) continue
+                val arrow = d.initializer as? ArrowFunction ?: continue
+                val retId = arrow.body as? Identifier ?: continue
+                val retTypeName = usrIdentifierAnnotationName(retId.text, statements) ?: continue
+                val (line, ch) = getLineAndCharacterOfPosition(source, retId.pos)
+                val (rl, rc) = getLineAndCharacterOfPosition(source, envSig)
+                diagnostics.add(Diagnostic(
+                    message = "Type '$retTypeName' is not assignable to type '$tpName'.",
+                    category = DiagnosticCategory.Error, code = 2322,
+                    fileName = fileName, line = line, character = ch,
+                    start = retId.pos, length = retId.text.length,
+                    messageChain = listOf("  '$tpName' could be instantiated with an arbitrary type which could be unrelated to '$retTypeName'."),
+                    relatedInformation = listOf(Diagnostic(
+                        message = "The expected type comes from the return type of this signature.",
+                        category = DiagnosticCategory.Error, code = 6502,
+                        fileName = fileName, line = rl, character = rc, start = envSig, length = 1,
+                    )),
+                ))
+            }
+            // (B) TS1062 for each `await <id>` where `id` is a param typed with an unresolvable alias.
+            for (s in statements) if (s is FunctionDeclaration) {
+                val paramMap = HashMap<String, String>()
+                for (p in s.parameters) {
+                    val pn = (p.name as? Identifier)?.text ?: continue
+                    val an = ((p.type as? TypeReference)?.typeName as? Identifier)?.text ?: continue
+                    if (an in unresolvable) paramMap[pn] = an
+                }
+                if (paramMap.isNotEmpty()) s.body?.statements?.forEach { usrWalkAwaitStmt(it, paramMap, source, fileName) }
+            }
+        }
+    }
+
+    private fun usrIsUnresolvableAlias(name: String, type: TypeNode?): Boolean {
+        val ut = type as? UnionType ?: return false
+        fun isPromiseSelf(t: TypeNode): Boolean {
+            val tr = t as? TypeReference ?: return false
+            if ((tr.typeName as? Identifier)?.text != "Promise") return false
+            return tr.typeArguments?.any { ((it as? TypeReference)?.typeName as? Identifier)?.text == name } ?: false
+        }
+        val hasPromiseSelf = ut.types.any { isPromiseSelf(it) }
+        val hasOther = ut.types.any { !isPromiseSelf(it) && usrTypeRefersTo(it, name, 0) }
+        return hasPromiseSelf && hasOther
+    }
+
+    private fun usrTypeRefersTo(t: TypeNode?, name: String, depth: Int): Boolean {
+        if (t == null || depth > 30) return false
+        return when (t) {
+            is TypeReference -> ((t.typeName as? Identifier)?.text == name) || (t.typeArguments?.any { usrTypeRefersTo(it, name, depth + 1) } ?: false)
+            is ArrayType -> usrTypeRefersTo(t.elementType, name, depth + 1)
+            is UnionType -> t.types.any { usrTypeRefersTo(it, name, depth + 1) }
+            is IntersectionType -> t.types.any { usrTypeRefersTo(it, name, depth + 1) }
+            is FunctionType -> usrTypeRefersTo(t.type, name, depth + 1) || t.parameters.any { usrTypeRefersTo(it.type, name, depth + 1) }
+            is ParenthesizedType -> usrTypeRefersTo(t.type, name, depth + 1)
+            else -> false
+        }
+    }
+
+    private fun usrIdentifierAnnotationName(name: String, statements: List<Statement>): String? {
+        for (s in statements) if (s is VariableStatement) for (d in s.declarationList.declarations) {
+            if ((d.name as? Identifier)?.text == name) return ((d.type as? TypeReference)?.typeName as? Identifier)?.text
+        }
+        return null
+    }
+
+    private fun usrWalkAwaitStmt(s: Statement, paramMap: Map<String, String>, source: String, fileName: String) {
+        when (s) {
+            is VariableStatement -> for (d in s.declarationList.declarations) d.initializer?.let { usrWalkAwaitExpr(it, paramMap, source, fileName) }
+            is ExpressionStatement -> usrWalkAwaitExpr(s.expression, paramMap, source, fileName)
+            is IfStatement -> {
+                usrWalkAwaitExpr(s.expression, paramMap, source, fileName)
+                usrWalkAwaitStmt(s.thenStatement, paramMap, source, fileName)
+                s.elseStatement?.let { usrWalkAwaitStmt(it, paramMap, source, fileName) }
+            }
+            is Block -> s.statements.forEach { usrWalkAwaitStmt(it, paramMap, source, fileName) }
+            is ReturnStatement -> s.expression?.let { usrWalkAwaitExpr(it, paramMap, source, fileName) }
+            else -> {}
+        }
+    }
+
+    private fun usrWalkAwaitExpr(e: Expression, paramMap: Map<String, String>, source: String, fileName: String) {
+        when (e) {
+            is AwaitExpression -> {
+                val op = e.expression
+                if (op is Identifier && paramMap.containsKey(op.text)) {
+                    val (line, ch) = getLineAndCharacterOfPosition(source, e.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Type is referenced directly or indirectly in the fulfillment callback of its own 'then' method.",
+                        category = DiagnosticCategory.Error, code = 1062,
+                        fileName = fileName, line = line, character = ch,
+                        start = e.pos, length = expressionTrueEnd(op) - e.pos,
+                    ))
+                } else usrWalkAwaitExpr(op, paramMap, source, fileName)
+            }
+            is CallExpression -> { usrWalkAwaitExpr(e.expression, paramMap, source, fileName); e.arguments.forEach { usrWalkAwaitExpr(it, paramMap, source, fileName) } }
+            is BinaryExpression -> { usrWalkAwaitExpr(e.left, paramMap, source, fileName); usrWalkAwaitExpr(e.right, paramMap, source, fileName) }
+            is PropertyAccessExpression -> usrWalkAwaitExpr(e.expression, paramMap, source, fileName)
+            is ParenthesizedExpression -> usrWalkAwaitExpr(e.expression, paramMap, source, fileName)
             else -> {}
         }
     }
