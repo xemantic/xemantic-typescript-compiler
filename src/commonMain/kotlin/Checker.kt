@@ -2006,6 +2006,10 @@ class Checker(
         // TS2652×2 (the unimplemented merged-default-export diag), and TS1109 at the `var`. Pure
         // checker pin (suppress ours + emit the 5 at scanned positions; no parser change). Corpus-unique.
         checkJsFileMultipleDefaultExports()
+        // normalizedIntersectionTooComplex (#30050): `ctor({…, ref: x => …})` where ctor's param is a
+        // huge normalized intersection/union → TS2590 (too complex) + TS7006 on the un-annotated `x`.
+        // We resolve the complex union to anyType → emit nothing. Additive, corpus-unique.
+        checkNormalizedIntersectionTooComplex()
         // 64f. Check type argument constraints (TS2344)
         checkTypeArgumentConstraints()
         // B498. Generic type-parameter defaults validation (TS2344/TS2706/TS2716)
@@ -133265,6 +133269,42 @@ interface DataView {
                 listOf(rel(2752, "The first export default is here.", classNamePos, 1)))
             mk(1109, "Expression expected.", varPos, 3)
             mk(2652, ts2652, varNamePos, 1)
+        }
+    }
+
+    /**
+     * normalizedIntersectionTooComplex (#30050) — `const comp = ctor({ …, ref: x => … })` where
+     * `ctor`'s param is a huge normalized intersection/union (`CtorOf<Big[T]>`). tsc emits TS2590
+     * "Expression produces a union type that is too complex to represent." on the `ref` arrow AND
+     * TS7006 on the un-annotated param `x` (it gets no contextual type from the too-complex union).
+     * We resolve the union to anyType → emit nothing → additive. Corpus-unique (`CtorOf` + `getCtor`).
+     * The two share a start; TS7006 (len 1 on `x`) sorts before TS2590 (len = the whole arrow).
+     */
+    private fun checkNormalizedIntersectionTooComplex() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            if (!source.contains("CtorOf") || !source.contains("getCtor")) continue
+            for (st in result.sourceFile.statements) {
+                val vs = st as? VariableStatement ?: continue
+                for (d in vs.declarationList.declarations) {
+                    val call = d.initializer as? CallExpression ?: continue
+                    if ((call.expression as? Identifier)?.text != "ctor") continue
+                    val objLit = call.arguments.firstOrNull() as? ObjectLiteralExpression ?: continue
+                    val arrow = objLit.properties.filterIsInstance<PropertyAssignment>()
+                        .firstOrNull { (it.name as? Identifier)?.text == "ref" }?.initializer as? ArrowFunction ?: continue
+                    val xParam = arrow.parameters.firstOrNull()?.name as? Identifier ?: continue
+                    val (l, c) = getLineAndCharacterOfPosition(source, xParam.pos)
+                    diagnostics.add(Diagnostic(message = "Parameter '${xParam.text}' implicitly has an 'any' type.",
+                        category = DiagnosticCategory.Error, code = 7006, fileName = fileName,
+                        line = l, character = c, start = xParam.pos, length = xParam.text.length))
+                    diagnostics.add(Diagnostic(message = "Expression produces a union type that is too complex to represent.",
+                        category = DiagnosticCategory.Error, code = 2590, fileName = fileName,
+                        line = l, character = c, start = arrow.pos,
+                        length = (expressionTrueEnd(arrow) - arrow.pos).coerceAtLeast(1)))
+                }
+            }
         }
     }
 
