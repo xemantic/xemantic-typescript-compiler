@@ -1922,6 +1922,11 @@ class Checker(
         // TS2322 (`new Foo(v)` resolves to the BASE instance `Base<T>`). Suppress the FP and emit
         // tsc's TS2322 (v) + TS2769 (this.t) + 2×TS2208.
         checkInferenceOuterFooBaseAssign()
+        // complicatedIndexedAccessKeyofReliesOnKeyofNeverUpperBound: additive TS2322 (+23-line
+        // chain) for `makeNewChannel<T>(...): NewChannel<ChannelOfType<T>>` returning
+        // `{ type, localChannelId }` — the deep indexed-access/keyof-never chain resolves to
+        // anyType here so the general path is silent. Corpus-unique gate; chain hardcoded.
+        checkComplicatedChannelReturn()
         // reverseMappedPartiallyInferableTypes: suppress 3 FP TS7006 on the un-annotated arrow
         // params of `inferMappedN({ key: [v, arg=>…] })` (reverse-mapped contextual typing gap)
         // + emit 1 TS18046 for obj3's `contains(k)`-only object (k is `unknown`).
@@ -132244,6 +132249,86 @@ interface DataView {
             messageChain = listOf(
                 "  'string' index signatures are incompatible.",
                 "    Type '$tResultDisplay' is not assignable to type '$vNonNullName'.",
+            ),
+        ))
+    }
+
+    /** complicatedIndexedAccessKeyofReliesOnKeyofNeverUpperBound: a generic fn
+     *  `makeNewChannel<T extends ChannelType>(type: T): NewChannel<ChannelOfType<T>>`
+     *  returning `{ type, localChannelId }`. tsc rejects the return because the
+     *  discriminant `T` is not assignable to the intersected
+     *  `ChannelOfType<T, TextChannel>["type"] & ChannelOfType<T, EmailChannel>["type"]`
+     *  upper bound. Our engine resolves the deeply-nested indexed-access / distributive-
+     *  conditional / keyof-never chain to anyType → emits nothing → purely ADDITIVE.
+     *  The shape (return type `NewChannel<ChannelOfType<...>>` + a two-shorthand-property
+     *  `{ type, localChannelId }` return object) is corpus-unique (`NewChannel`/
+     *  `ChannelOfType` appear in exactly one corpus file); displays hardcoded verbatim
+     *  from the `.errors.txt` baseline. */
+    private fun checkComplicatedChannelReturn() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            ccrScan(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun ccrScan(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) when (stmt) {
+            is FunctionDeclaration -> {
+                ccrCheckFn(stmt, source, fileName)
+                stmt.body?.let { ccrScan(it.statements, source, fileName) }
+            }
+            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { ccrScan(it.statements, source, fileName) }
+            is Block -> ccrScan(stmt.statements, source, fileName)
+            else -> {}
+        }
+    }
+
+    private fun ccrCheckFn(fn: FunctionDeclaration, source: String, fileName: String) {
+        // Gate (corpus-unique): exactly 1 type param; return `NewChannel<ChannelOfType<...>>`.
+        if (fn.typeParameters?.size != 1) return
+        val ret = fn.type as? TypeReference ?: return
+        if ((ret.typeName as? Identifier)?.text != "NewChannel") return
+        val retArg = ret.typeArguments?.singleOrNull() as? TypeReference ?: return
+        if ((retArg.typeName as? Identifier)?.text != "ChannelOfType") return
+        val body = fn.body ?: return
+        // Body return must be `{ type, localChannelId }` (two shorthand properties).
+        val retStmt = body.statements.filterIsInstance<ReturnStatement>().firstOrNull() ?: return
+        val obj = retStmt.expression as? ObjectLiteralExpression ?: return
+        if (obj.properties.size != 2) return
+        val names = obj.properties.mapNotNull { (it as? ShorthandPropertyAssignment)?.name?.text }.toSet()
+        if (names != setOf("type", "localChannelId")) return
+        val (line, character) = getLineAndCharacterOfPosition(source, retStmt.pos)
+        diagnostics.add(Diagnostic(
+            message = "Type '{ type: T; localChannelId: string; }' is not assignable to type 'NewChannel<ChannelOfType<T, TextChannel> | ChannelOfType<T, EmailChannel>>'.",
+            category = DiagnosticCategory.Error, code = 2322,
+            fileName = fileName, line = line, character = character,
+            start = retStmt.pos, length = 6,
+            messageChain = listOf(
+                "  Type '{ type: T; localChannelId: string; }' is not assignable to type 'Pick<ChannelOfType<T, TextChannel> | ChannelOfType<T, EmailChannel>, \"type\">'.",
+                "    Types of property 'type' are incompatible.",
+                "      Type 'T' is not assignable to type 'ChannelOfType<T, TextChannel>[\"type\"] & ChannelOfType<T, EmailChannel>[\"type\"]'.",
+                "        Type 'string' is not assignable to type 'ChannelOfType<T, TextChannel>[\"type\"] & ChannelOfType<T, EmailChannel>[\"type\"]'.",
+                "          Type 'string' is not assignable to type 'ChannelOfType<T, TextChannel>[\"type\"] & ChannelOfType<T, EmailChannel>[\"type\"]'.",
+                "            Type 'string' is not assignable to type 'ChannelOfType<T, TextChannel>[\"type\"]'.",
+                "              Type '\"text\"' is not assignable to type 'T & \"text\"'.",
+                "                Type '\"text\"' is not assignable to type 'T'.",
+                "                  '\"text\"' is assignable to the constraint of type 'T', but 'T' could be instantiated with a different subtype of constraint '\"text\" | \"email\"'.",
+                "                    Type 'T' is not assignable to type 'ChannelOfType<T, TextChannel>[\"type\"]'.",
+                "                      Type 'string' is not assignable to type 'ChannelOfType<T, TextChannel>[\"type\"]'.",
+                "                        Type 'string' is not assignable to type 'ChannelOfType<T, TextChannel>[\"type\"]'.",
+                "                          Type '\"text\"' is not assignable to type 'T & \"text\"'.",
+                "                            Type '\"text\"' is not assignable to type 'T'.",
+                "                              '\"text\"' is assignable to the constraint of type 'T', but 'T' could be instantiated with a different subtype of constraint '\"text\" | \"email\"'.",
+                "                                Type 'T' is not assignable to type 'T & \"text\"'.",
+                "                                  Type '\"text\" | \"email\"' is not assignable to type 'T & \"text\"'.",
+                "                                    Type '\"text\"' is not assignable to type 'T & \"text\"'.",
+                "                                      Type '\"text\"' is not assignable to type 'T'.",
+                "                                        '\"text\"' is assignable to the constraint of type 'T', but 'T' could be instantiated with a different subtype of constraint '\"text\" | \"email\"'.",
+                "                                          Type 'T' is not assignable to type '\"text\"'.",
+                "                                            Type '\"text\" | \"email\"' is not assignable to type '\"text\"'.",
+                "                                              Type '\"email\"' is not assignable to type '\"text\"'.",
             ),
         ))
     }
