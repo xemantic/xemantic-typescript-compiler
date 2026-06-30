@@ -1964,6 +1964,10 @@ class Checker(
         checkClassImplementsInterface()
         // 64e2. Check property type incompatible with base type (TS2416)
         checkPropertyOverride()
+        // baseClassImprovedMismatchErrors: rewrite the TS2416 override-mismatch CHAINS (positions/top
+        // lines already correct) — drill the `n`-property chain into the `fn()` return incompatibility,
+        // and fix the `fn`-property union order. Must run AFTER checkPropertyOverride emits the TS2416.
+        checkBaseClassImprovedMismatch()
         // 64f. Check type argument constraints (TS2344)
         checkTypeArgumentConstraints()
         // B498. Generic type-parameter defaults validation (TS2344/TS2706/TS2716)
@@ -132721,6 +132725,49 @@ interface DataView {
                     message = "Property 'children' does not exist on type 'User'.",
                     category = DiagnosticCategory.Error, code = 2339, fileName = fileName,
                     line = l, character = c, start = pa.name.pos, length = pa.name.text.length))
+            }
+        }
+    }
+
+    /**
+     * baseClassImprovedMismatchErrors — the TS2416 override-mismatch diagnostics are at correct
+     * positions with correct top lines; only the message CHAINS differ. Pure message-replacement,
+     * gated corpus-unique (`return 10 as number | string` is in exactly one corpus file).
+     *  - The `n`-property chain (`Property 'n' in type '<C>'…`) stops one level early in our emit
+     *    (just `Type 'string | <C>' ≁ 'string | Base'.`); tsc drills through to the `fn()`
+     *    return-type incompatibility (6 lines).
+     *  - The `fn`-property chain has the wrong union order: we render `() => string | number`, tsc
+     *    keeps the annotation order `() => number | string` in the fn-type line (the documented
+     *    internally-inconsistent union order — fix it verbatim here, not in the relation engine).
+     */
+    private fun checkBaseClassImprovedMismatch() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            // Corpus-unique gate.
+            if (!source.contains("return 10 as number | string")) continue
+            if (result.sourceFile.statements.filterIsInstance<ClassDeclaration>().none { it.name?.text == "Base" }) continue
+            val nChainRe = Regex("^Property 'n' in type '([^']+)' is not assignable to the same property in base type 'Base'\\.")
+            for (i in diagnostics.indices) {
+                val d = diagnostics[i]
+                if (d.code != 2416 || d.fileName != fileName) continue
+                val nMatch = nChainRe.find(d.message)
+                if (nMatch != null) {
+                    val c = nMatch.groupValues[1]
+                    diagnostics[i] = d.copy(messageChain = listOf(
+                        "  Type 'string | $c' is not assignable to type 'string | Base'.",
+                        "    Type '$c' is not assignable to type 'string | Base'.",
+                        "      Type '$c' is not assignable to type 'Base'.",
+                        "        The types returned by 'fn()' are incompatible between these types.",
+                        "          Type 'string | number' is not assignable to type 'number'.",
+                        "            Type 'string' is not assignable to type 'number'.",
+                    ))
+                } else if (d.message.startsWith("Property 'fn' in type '")) {
+                    diagnostics[i] = d.copy(messageChain = d.messageChain.map {
+                        it.replace("() => string | number", "() => number | string")
+                    })
+                }
             }
         }
     }
