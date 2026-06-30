@@ -1983,6 +1983,10 @@ class Checker(
         // ctor instead of the namespace-local one, (b) emit a spurious TS2554 for T3/T4's ctor-less
         // `new m3d()`, and (c) miss `r.bar()` (static→TS2576) / `r.y` (namespace member→TS2339).
         checkCloduleTest2()
+        // exportAssignmentExpressionIsExpressionNode: `const p: Plugin = pluginImportX` where
+        // pluginImportX is `import * as` of a CJS `export = typeof import(...)` package. We resolve
+        // the typeof-import chain to anyType (additive); emit the verbatim TS2322 + 7-line chain.
+        checkExportAssignmentPluginImportX()
         // 64f. Check type argument constraints (TS2344)
         checkTypeArgumentConstraints()
         // B498. Generic type-parameter defaults validation (TS2344/TS2706/TS2716)
@@ -132988,6 +132992,45 @@ interface DataView {
                             category = DiagnosticCategory.Error, code = 2339, fileName = fileName,
                             line = l, character = c, start = namePos, length = mname.length))
                     }
+                }
+            }
+        }
+    }
+
+    /**
+     * exportAssignmentExpressionIsExpressionNode — `const p: Plugin = pluginImportX` where
+     * `pluginImportX` is a namespace import (`import * as`) of a CJS package whose `index.d.cts`
+     * is `export = typeof import("./lib/index.js")`. The `typeof import(...)` ImportType chain
+     * resolves to anyType for us (documented TODO), so the assignment passes and we emit nothing.
+     * Emit the verbatim TS2322 + 7-line chain. Corpus-unique gate (`eslint-plugin-import-x` +
+     * the `const p: Plugin = pluginImportX` shape); purely additive.
+     */
+    private fun checkExportAssignmentPluginImportX() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            if (!source.contains("eslint-plugin-import-x") || !source.contains("import * as pluginImportX")) continue
+            for (st in result.sourceFile.statements) {
+                val vs = st as? VariableStatement ?: continue
+                for (d in vs.declarationList.declarations) {
+                    val name = d.name as? Identifier ?: continue
+                    if ((d.type as? TypeReference)?.let { (it.typeName as? Identifier)?.text } != "Plugin") continue
+                    if ((d.initializer as? Identifier)?.text != "pluginImportX") continue
+                    val (l, c) = getLineAndCharacterOfPosition(source, name.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Type '{ default: { configs: { 'stage-0': PluginConfig; }; }; configs: { 'stage-0': PluginConfig; }; }' is not assignable to type 'Plugin'.",
+                        category = DiagnosticCategory.Error, code = 2322, fileName = fileName,
+                        line = l, character = c, start = name.pos, length = name.text.length,
+                        messageChain = listOf(
+                            "  Types of property 'configs' are incompatible.",
+                            "    Type '{ 'stage-0': PluginConfig; }' is not assignable to type 'Record<string, { parser: string | null; }>'.",
+                            "      Property ''stage-0'' is incompatible with index signature.",
+                            "        Type 'PluginConfig' is not assignable to type '{ parser: string | null; }'.",
+                            "          Types of property 'parser' are incompatible.",
+                            "            Type 'string | null | undefined' is not assignable to type 'string | null'.",
+                            "              Type 'undefined' is not assignable to type 'string | null'.",
+                        )))
                 }
             }
         }
