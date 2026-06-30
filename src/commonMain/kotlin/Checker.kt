@@ -28585,6 +28585,11 @@ class Checker(
             // duplicate-identifier pipeline below stays .ts-only (B98.r81 ambient-merge skip).
             if (!fileName.contains("node_modules/")) {
                 checkAccessorSelfTypeofInStatements(result.sourceFile.statements, result.sourceFile.text, fileName)
+                // implicitAnyFromCircularInference: mutual var→typeof cycle (TS2502) + var-self-call
+                // fn (TS7023) + mutual fn-decl recursion (TS7023). Skips .d.ts/.js (handled below).
+                if (!isDtsFile(fileName) && !isJsLikeFileName(fileName)) {
+                    checkCircularInferenceImplicitAny(result.sourceFile.statements, result.sourceFile.text, fileName)
+                }
             }
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -29066,6 +29071,152 @@ class Checker(
                 else -> {}
             }
         }
+    }
+
+    /** implicitAnyFromCircularInference: three circular-inference shapes the existing self-typeof
+     *  and getter checks miss. (a) MUTUAL `var b: typeof c; var c: typeof b` → TS2502 on each
+     *  (direct self-loops `var a: typeof a` are already emitted). (b) a VAR-assigned unannotated
+     *  fn-expr/arrow that return-CALLS itself (`var f1 = function(){ return f1(); }`) → TS7023.
+     *  (c) MUTUAL unannotated fn-decl recursion (`function h(){return foo()} function foo(){return
+     *  h()||"x"}`) → TS7023 on each. NOTE a DIRECT self-call fn-decl (`function g(){return g()}`)
+     *  is NOT a tsc error → excluded (2-cycle only). The getter case (d) is in
+     *  checkGetAccessorForImplicitReturn. */
+    private fun checkCircularInferenceImplicitAny(stmts: List<Statement>, source: String, fileName: String) {
+        // (a) var → typeof-var mutual cycles (size ≥ 2) → TS2502.
+        val typeofGraph = mutableMapOf<String, Set<String>>()
+        val varNamePos = mutableMapOf<String, Int>()
+        for (st in stmts) {
+            val vs = st as? VariableStatement ?: continue
+            for (vd in vs.declarationList.declarations) {
+                val nm = vd.name as? Identifier ?: continue
+                val refs = ciaCollectTypeofRefs(vd.type)
+                if (refs.isNotEmpty()) { typeofGraph[nm.text] = refs; varNamePos.putIfAbsent(nm.text, nm.pos) }
+            }
+        }
+        for ((n, refs) in typeofGraph) {
+            if ((refs - n).any { m -> typeofGraph[m]?.contains(n) == true }) {
+                emitTs2502AtPosition(varNamePos[n]!!, n, source, fileName)
+            }
+        }
+        if (!(options.noImplicitAny || options.strict)) return
+        // A `import * as N` namespace-import const-self-call (`export const N = () => N()`) is
+        // owned by checkConflictingNamespaceImportSelfConst (TS7023) — exclude those names here
+        // to avoid a double-emit (conflictingDeclarationsImportFromNamespace).
+        val nsImportNames = stmts.filterIsInstance<ImportDeclaration>()
+            .mapNotNull { (it.importClause?.namedBindings as? NamespaceImport)?.name?.text }.toSet()
+        // (b) var = unannotated self-calling fn-expr/arrow → TS7023.
+        for (st in stmts) {
+            val vs = st as? VariableStatement ?: continue
+            for (vd in vs.declarationList.declarations) {
+                val nm = vd.name as? Identifier ?: continue
+                if (nm.text in nsImportNames) continue
+                val (retAnn, retExprs) = ciaFnReturnInfo(vd.initializer) ?: continue
+                if (retAnn != null) continue
+                if (retExprs.any { it != null && ciaExprCallsName(it, nm.text) }) {
+                    emitTs7023At(nm.pos, nm.text, source, fileName)
+                }
+            }
+        }
+        // (c) mutual unannotated fn-decl recursion (2-cycle) → TS7023.
+        ciaMutualFnDecls(stmts, source, fileName)
+    }
+
+    /** typeof-X references in a type annotation (descends into TypeReference type-args + Array
+     *  element — NOT into FunctionType/ConstructorType, which break the cycle). */
+    private fun ciaCollectTypeofRefs(t: TypeNode?): Set<String> {
+        val out = mutableSetOf<String>()
+        fun walk(n: TypeNode?) {
+            when (n) {
+                is TypeQuery -> (n.exprName as? Identifier)?.let { out.add(it.text) }
+                is TypeReference -> n.typeArguments?.forEach { walk(it) }
+                is ArrayType -> walk(n.elementType)
+                else -> {}
+            }
+        }
+        walk(t)
+        return out
+    }
+
+    /** (return-annotation, return-expressions) of a fn-expr/arrow initializer, or null. */
+    private fun ciaFnReturnInfo(init: Expression?): Pair<TypeNode?, List<Expression?>>? = when (init) {
+        is FunctionExpression -> init.type to (init.body?.let { val o = mutableListOf<Expression?>(); collectReturnExpressions(it.statements, o); o } ?: emptyList())
+        is ArrowFunction -> init.type to (if (init.body is Block) { val o = mutableListOf<Expression?>(); collectReturnExpressions((init.body as Block).statements, o); o } else listOf(init.body as? Expression))
+        else -> null
+    }
+
+    /** True if [expr] contains a CallExpression whose callee is `Identifier(name)`. */
+    private fun ciaExprCallsName(expr: Expression, name: String): Boolean {
+        val names = mutableSetOf<String>()
+        ciaCollectCallNames(expr, names)
+        return name in names
+    }
+
+    private fun ciaCollectCallNames(expr: Expression?, out: MutableSet<String>) {
+        when (expr) {
+            is CallExpression -> { (expr.expression as? Identifier)?.let { out.add(it.text) }; ciaCollectCallNames(expr.expression, out); expr.arguments?.forEach { ciaCollectCallNames(it, out) } }
+            is BinaryExpression -> { ciaCollectCallNames(expr.left, out); ciaCollectCallNames(expr.right, out) }
+            is ParenthesizedExpression -> ciaCollectCallNames(expr.expression, out)
+            is ConditionalExpression -> { ciaCollectCallNames(expr.condition, out); ciaCollectCallNames(expr.whenTrue, out); ciaCollectCallNames(expr.whenFalse, out) }
+            is PrefixUnaryExpression -> ciaCollectCallNames(expr.operand, out)
+            is PropertyAccessExpression -> ciaCollectCallNames(expr.expression, out)
+            else -> {}
+        }
+    }
+
+    private class CiaFnNode(val name: String, val nameNode: Identifier, val hasRetAnn: Boolean, val callNames: Set<String>, var parent: CiaFnNode?)
+
+    /** (c): collect unannotated fn-decls + scope-aware resolution, emit TS7023 on each member of a
+     *  2-cycle (A return-calls B, B return-calls A, A≠B, both unannotated). */
+    private fun ciaMutualFnDecls(topStmts: List<Statement>, source: String, fileName: String) {
+        val allFns = mutableListOf<CiaFnNode>()
+        fun collect(stmts: List<Statement>, parent: CiaFnNode?) {
+            for (s in stmts) when (s) {
+                is FunctionDeclaration -> {
+                    val nm = s.name; val body = s.body
+                    if (nm != null && body != null) {
+                        val rets = mutableListOf<Expression?>(); collectReturnExpressions(body.statements, rets)
+                        val calls = mutableSetOf<String>()
+                        for (r in rets) if (r != null) ciaCollectCallNames(r, calls)
+                        val node = CiaFnNode(nm.text, nm, s.type != null, calls, parent)
+                        allFns.add(node)
+                        collect(body.statements, node)
+                    }
+                }
+                is Block -> collect(s.statements, parent)
+                else -> {}
+            }
+        }
+        collect(topStmts, null)
+        fun resolve(from: CiaFnNode?, name: String): CiaFnNode? {
+            var scope = from
+            while (scope != null) {
+                allFns.firstOrNull { it.parent === scope && it.name == name }?.let { return it }
+                if (scope.name == name) return scope
+                scope = scope.parent
+            }
+            return allFns.firstOrNull { it.parent == null && it.name == name }
+        }
+        val emitted = mutableSetOf<Int>()
+        for (a in allFns) {
+            if (a.hasRetAnn) continue
+            for (cn in a.callNames) {
+                val b = resolve(a, cn) ?: continue
+                if (b === a || b.hasRetAnn) continue
+                if (b.callNames.any { resolve(b, it) === a }) {
+                    if (emitted.add(a.nameNode.pos)) emitTs7023At(a.nameNode.pos, a.name, source, fileName)
+                    if (emitted.add(b.nameNode.pos)) emitTs7023At(b.nameNode.pos, b.name, source, fileName)
+                }
+            }
+        }
+    }
+
+    private fun emitTs7023At(pos: Int, name: String, source: String, fileName: String) {
+        val (line, character) = getLineAndCharacterOfPosition(source, pos)
+        diagnostics.add(Diagnostic(
+            message = "'$name' implicitly has return type 'any' because it does not have a return type annotation and is referenced directly or indirectly in one of its return expressions.",
+            category = DiagnosticCategory.Error, code = 7023,
+            fileName = fileName, line = line, character = character, start = pos, length = name.length,
+        ))
     }
 
     private fun checkAccessorSelfTypeofInClass(
@@ -73681,7 +73832,16 @@ interface DataView {
             val cycleViaThisInObjLit = returnExprs.isNotEmpty() && returnExprs.all { ret ->
                 ret != null && isAsExprWrappingObjLitWithThis(ret)
             }
-            if (cycleViaThisInObjLit) {
+            // implicitAnyFromCircularInference (d): `get x() { return this.x; }` — the getter
+            // returns its OWN member, so inferring its return type needs its own type → circular.
+            // Gated to noImplicitAny/strict: tsc only emits TS7023 for an own-member getter cycle
+            // under noImplicitAny (recursiveProperties is `@strict:false` → no error).
+            val cycleViaThisOwnMember = (options.noImplicitAny || options.strict) &&
+                returnExprs.isNotEmpty() && returnExprs.all { ret ->
+                ret is PropertyAccessExpression && (ret.expression as? Identifier)?.text == "this" &&
+                    ret.name.text == nameNode.text
+            }
+            if (cycleViaThisInObjLit || cycleViaThisOwnMember) {
                 val start = nameNode.pos
                 val (line, character) = getLineAndCharacterOfPosition(source, start)
                 diagnostics.add(Diagnostic(
