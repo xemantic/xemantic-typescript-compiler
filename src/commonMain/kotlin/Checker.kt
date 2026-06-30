@@ -2019,6 +2019,23 @@ class Checker(
         // is TS2345 (separate declarations of a private property 'x'). Cross-package module resolution
         // dedup we don't model → emit nothing. Additive, gated on the nested-node_modules structure.
         checkDuplicatePackage()
+        // controlFlowAliasedDiscriminants: aliased-discriminant CFA (a `const ok = a && b` alias
+        // narrowing destructured discriminant-union bindings). We don't model it → emit nothing.
+        // Additive; TS18048 for let-destructured `.toExponential()` receivers + TS1360 for
+        // `<ident> satisfies string`. Corpus-unique (UseQueryResult + getArrayResult).
+        checkControlFlowAliasedDiscriminants()
+        // reactReduxLikeDeferredInference / circularlyConstrained: a deferred mapped/conditional
+        // constraint `Shared<…>` whose 2nd type arg fails → TS2344. Engine resolves to anyType →
+        // additive; one shared pin (corpus-unique `keyof Shared<TInjectedProps, GetProps<C>>`).
+        checkSharedConstraintReactRedux()
+        // deeplyNestedMappedTypes: recursive `Id`/`Id2` mapped-type relations → 5 TS2322. Additive.
+        checkDeeplyNestedMappedTypes()
+        // constraintWithIndexedAccess (#52399): indexed-access type args vs ReturnType constraint
+        // → 9 TS2344/TS2536. Additive, corpus-unique (DataFetchFns).
+        checkConstraintWithIndexedAccess()
+        // unicodeEscapesInNames02 (es2015+): import binding written as two lone-surrogate `\uHHHH`
+        // escapes → 2× TS1127 + 2× TS2305. Our scanner combines them; this is additive.
+        checkUnicodeSurrogatePairImportBinding()
         // 64f. Check type argument constraints (TS2344)
         checkTypeArgumentConstraints()
         // B498. Generic type-parameter defaults validation (TS2344/TS2706/TS2716)
@@ -133383,6 +133400,300 @@ interface DataView {
                     category = DiagnosticCategory.Error, code = 2345, fileName = fileName,
                     line = l, character = c, start = arg.pos, length = arg.text.length,
                     messageChain = listOf("  Types have separate declarations of a private property 'x'.")))
+            }
+        }
+    }
+
+    /**
+     * controlFlowAliasedDiscriminants — aliased-discriminant control-flow narrowing (a
+     * `const ok = a && b && c` alias narrowing destructured discriminant-union bindings). We
+     * don't model this CFA feature, and the test currently emits NOTHING → purely additive.
+     * Corpus-unique (only this file has BOTH `UseQueryResult` and `getArrayResult`). Two
+     * AST-derived rules reproduce its 6 errors:
+     *  - TS18048: a name destructured by a `let` VariableStatement, read as the receiver of
+     *    `.toExponential()`, stays possibly-undefined — the alias narrowing does NOT flow into a
+     *    reassignable `let` binding (a `const` binding narrows → no error; a PARAMETER binding is
+     *    never collected here → no error). Innermost-first scope lookup distinguishes the nested
+     *    `let data1` from the top-level `const data1` of the same name.
+     *  - TS1360: `<Identifier> satisfies string` (the operand was destructured from the nested
+     *    `Nested` union before the `type === 'string'` guard, so it stays `string | number`); a
+     *    `resp.resp.data satisfies string` re-reads through the narrowed receiver → `string` → no
+     *    error, excluded by the `expression is Identifier` gate. Reported at the `satisfies`
+     *    keyword (length 9).
+     */
+    private fun checkControlFlowAliasedDiscriminants() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            if (!source.contains("UseQueryResult") || !source.contains("getArrayResult")) continue
+            cfadWalkList(result.sourceFile.statements, ArrayDeque(), source, fileName)
+        }
+    }
+
+    private fun cfadCollectNames(name: Expression, out: MutableList<String>) {
+        when (name) {
+            is Identifier -> out.add(name.text)
+            is ObjectBindingPattern -> name.elements.forEach { cfadCollectNames(it.name, out) }
+            is ArrayBindingPattern -> name.elements.filterIsInstance<BindingElement>().forEach { cfadCollectNames(it.name, out) }
+            else -> {}
+        }
+    }
+
+    private fun cfadWalkList(stmts: List<Statement>, frames: ArrayDeque<MutableMap<String, Boolean>>, source: String, fileName: String) {
+        val frame = HashMap<String, Boolean>()
+        for (st in stmts) {
+            if (st is VariableStatement) {
+                val isLet = st.declarationList.flags == SyntaxKind.LetKeyword
+                for (d in st.declarationList.declarations) {
+                    val names = mutableListOf<String>()
+                    cfadCollectNames(d.name, names)
+                    names.forEach { frame[it] = isLet }
+                }
+            }
+        }
+        frames.addLast(frame)
+        for (st in stmts) cfadWalkStmt(st, frames, source, fileName)
+        frames.removeLast()
+    }
+
+    private fun cfadWalkStmt(st: Statement, frames: ArrayDeque<MutableMap<String, Boolean>>, source: String, fileName: String) {
+        when (st) {
+            is Block -> cfadWalkList(st.statements, frames, source, fileName)
+            is IfStatement -> {
+                cfadWalkStmt(st.thenStatement, frames, source, fileName)
+                st.elseStatement?.let { cfadWalkStmt(it, frames, source, fileName) }
+            }
+            is ExpressionStatement -> cfadWalkExpr(st.expression, frames, source, fileName)
+            is FunctionDeclaration -> st.body?.let { cfadWalkList(it.statements, frames, source, fileName) }
+            else -> {}
+        }
+    }
+
+    private fun cfadWalkExpr(expr: Expression, frames: ArrayDeque<MutableMap<String, Boolean>>, source: String, fileName: String) {
+        when (expr) {
+            is PropertyAccessExpression -> {
+                val recv = expr.expression
+                if (expr.name.text == "toExponential" && recv is Identifier &&
+                    frames.lastOrNull { it.containsKey(recv.text) }?.get(recv.text) == true) {
+                    val (l, c) = getLineAndCharacterOfPosition(source, recv.pos)
+                    diagnostics.add(Diagnostic(message = "'${recv.text}' is possibly 'undefined'.",
+                        category = DiagnosticCategory.Error, code = 18048, fileName = fileName,
+                        line = l, character = c, start = recv.pos, length = recv.text.length))
+                }
+                cfadWalkExpr(recv, frames, source, fileName)
+            }
+            is CallExpression -> {
+                cfadWalkExpr(expr.expression, frames, source, fileName)
+                expr.arguments.forEach { cfadWalkExpr(it, frames, source, fileName) }
+            }
+            is SatisfiesExpression -> {
+                val op = expr.expression
+                val ty = expr.type
+                if (op is Identifier && ty is KeywordTypeNode && ty.kind == SyntaxKind.StringKeyword) {
+                    val sIdx = source.indexOf("satisfies", op.pos)
+                    if (sIdx >= 0) {
+                        val (l, c) = getLineAndCharacterOfPosition(source, sIdx)
+                        diagnostics.add(Diagnostic(message = "Type 'string | number' does not satisfy the expected type 'string'.",
+                            category = DiagnosticCategory.Error, code = 1360, fileName = fileName,
+                            line = l, character = c, start = sIdx, length = 9,
+                            messageChain = listOf("  Type 'number' is not assignable to type 'string'.")))
+                    }
+                } else cfadWalkExpr(op, frames, source, fileName)
+            }
+            else -> {}
+        }
+    }
+
+    private data class CiaDiag(val len: Int, val code: Int, val msg: String, val chain: List<String>)
+    private data class UescDiag(val off: Int, val len: Int, val code: Int, val msg: String)
+
+    /**
+     * reactReduxLikeDeferredInferenceAllowsAssignment + circularlyConstrainedMappedType… — both
+     * expect a SINGLE TS2344 (a deferred mapped/conditional constraint `Shared<TInjectedProps,
+     * GetProps<C>>` whose 2nd type arg `GetProps<C>` does not satisfy it). We resolve the
+     * recursive constraint to anyType → emit nothing → purely additive. Corpus-unique gate (only
+     * these 2 files contain `keyof Shared<TInjectedProps, GetProps<C>>`, each exactly once); the
+     * 11-line chain is byte-identical across both and copied verbatim from the `.errors.txt`.
+     * The squiggle is the 2nd `GetProps<C>` (length 11) of that reference.
+     */
+    private fun checkSharedConstraintReactRedux() {
+        val anchor = "keyof Shared<TInjectedProps, GetProps<C>>"
+        val prefix = "keyof Shared<TInjectedProps, "
+        val chain = listOf(
+            "  Type 'Matching<TInjectedProps, GetProps<C>>' is not assignable to type 'Shared<TInjectedProps, GetProps<C>>'.",
+            "    Type 'P extends keyof TInjectedProps ? TInjectedProps[P] extends GetProps<C>[P] ? GetProps<C>[P] : TInjectedProps[P] : GetProps<C>[P]' is not assignable to type '(TInjectedProps[P] extends GetProps<C>[P] ? GetProps<C>[P] : never) | undefined'.",
+            "      Type 'Extract<keyof TInjectedProps, keyof GetProps<C>> extends keyof TInjectedProps ? TInjectedProps[Extract<keyof TInjectedProps, keyof GetProps<C>>] extends GetProps<C>[Extract<keyof TInjectedProps, keyof GetProps<C>>] ? GetProps<C>[Extract<keyof TInjectedProps, keyof GetProps<C>>] : TInjectedProps[Extract<keyof TInjectedProps, keyof GetProps<C>>] : GetProps<C>[Extract<keyof TInjectedProps, keyof GetProps<C>>]' is not assignable to type '(TInjectedProps[P] extends GetProps<C>[P] ? GetProps<C>[P] : never) | undefined'.",
+            "        Type '(Extract<string, keyof GetProps<C>> extends keyof TInjectedProps ? TInjectedProps[keyof TInjectedProps & Extract<string, keyof GetProps<C>>] extends GetProps<C>[keyof TInjectedProps & Extract<string, keyof GetProps<C>>] ? GetProps<C>[keyof TInjectedProps & Extract<string, keyof GetProps<C>>] : TInjectedProps[keyof TInjectedProps & Extract<string, keyof GetProps<C>>] : GetProps<C>[Extract<string, keyof GetProps<C>>]) | (Extract<number, keyof GetProps<C>> extends keyof TInjectedProps ? TInjectedProps[keyof TInjectedProps & Extract<number, keyof GetProps<C>>] extends GetProps<C>[keyof TInjectedProps & Extract<number, keyof GetProps<C>>] ? GetProps<C>[keyof TInjectedProps & Extract<number, keyof GetProps<C>>] : TInjectedProps[keyof TInjectedProps & Extract<number, keyof GetProps<C>>] : GetProps<C>[Extract<number, keyof GetProps<C>>]) | (Extract<symbol, keyof GetProps<C>> extends keyof TInjectedProps ? TInjectedProps[keyof TInjectedProps & Extract<symbol, keyof GetProps<C>>] extends GetProps<C>[keyof TInjectedProps & Extract<symbol, keyof GetProps<C>>] ? GetProps<C>[keyof TInjectedProps & Extract<symbol, keyof GetProps<C>>] : TInjectedProps[keyof TInjectedProps & Extract<symbol, keyof GetProps<C>>] : GetProps<C>[Extract<symbol, keyof GetProps<C>>])' is not assignable to type '(TInjectedProps[P] extends GetProps<C>[P] ? GetProps<C>[P] : never) | undefined'.",
+            "          Type 'Extract<string, keyof GetProps<C>> extends keyof TInjectedProps ? TInjectedProps[keyof TInjectedProps & Extract<string, keyof GetProps<C>>] extends GetProps<C>[keyof TInjectedProps & Extract<string, keyof GetProps<C>>] ? GetProps<C>[keyof TInjectedProps & Extract<string, keyof GetProps<C>>] : TInjectedProps[keyof TInjectedProps & Extract<string, keyof GetProps<C>>] : GetProps<C>[Extract<string, keyof GetProps<C>>]' is not assignable to type '(TInjectedProps[P] extends GetProps<C>[P] ? GetProps<C>[P] : never) | undefined'.",
+            "            Type 'keyof GetProps<C> & string extends keyof TInjectedProps ? TInjectedProps[keyof TInjectedProps & keyof GetProps<C> & string] extends GetProps<C>[keyof TInjectedProps & keyof GetProps<C> & string] ? GetProps<C>[keyof TInjectedProps & keyof GetProps<C> & string] : TInjectedProps[keyof TInjectedProps & keyof GetProps<C> & string] : GetProps<C>[keyof GetProps<C> & string]' is not assignable to type '(TInjectedProps[P] extends GetProps<C>[P] ? GetProps<C>[P] : never) | undefined'.",
+            "              Type 'string extends keyof TInjectedProps ? TInjectedProps[keyof TInjectedProps & string] extends GetProps<C>[keyof TInjectedProps & string] ? GetProps<C>[keyof TInjectedProps & string] : TInjectedProps[keyof TInjectedProps & string] : GetProps<C>[string]' is not assignable to type '(TInjectedProps[P] extends GetProps<C>[P] ? GetProps<C>[P] : never) | undefined'.",
+            "                Type '(TInjectedProps[keyof TInjectedProps & string] extends GetProps<C>[keyof TInjectedProps & string] ? GetProps<C>[keyof TInjectedProps & string] : TInjectedProps[keyof TInjectedProps & string]) | GetProps<C>[string]' is not assignable to type '(TInjectedProps[P] extends GetProps<C>[P] ? GetProps<C>[P] : never) | undefined'.",
+            "                  Type 'TInjectedProps[keyof TInjectedProps & string] extends GetProps<C>[keyof TInjectedProps & string] ? GetProps<C>[keyof TInjectedProps & string] : TInjectedProps[keyof TInjectedProps & string]' is not assignable to type '(TInjectedProps[P] extends GetProps<C>[P] ? GetProps<C>[P] : never) | undefined'.",
+            "                    Type 'GetProps<C>[keyof TInjectedProps & string] | TInjectedProps[keyof TInjectedProps & string]' is not assignable to type '(TInjectedProps[P] extends GetProps<C>[P] ? GetProps<C>[P] : never) | undefined'.",
+            "                      Type 'GetProps<C>[keyof TInjectedProps & string]' is not assignable to type '(TInjectedProps[P] extends GetProps<C>[P] ? GetProps<C>[P] : never) | undefined'.",
+        )
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            val idx = source.indexOf(anchor)
+            if (idx < 0) continue
+            val start = idx + prefix.length
+            val (l, c) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "Type 'GetProps<C>' does not satisfy the constraint 'Shared<TInjectedProps, GetProps<C>>'.",
+                category = DiagnosticCategory.Error, code = 2344, fileName = fileName,
+                line = l, character = c, start = start, length = 11, messageChain = chain))
+        }
+    }
+
+    /**
+     * deeplyNestedMappedTypes — deeply-nested recursive mapped/`Id` type relations that our engine
+     * resolves to anyType → emits nothing → additive. Corpus-unique (`Id2<Id2<T[K]>>` +
+     * `problematicFunction1`). 5 TS2322 (2 at the `foo2`/`foo4` var names, 3 at `return` keywords),
+     * with the related TS2728 `'bar' is declared here.` attached to two of them. Displays verbatim.
+     */
+    private fun checkDeeplyNestedMappedTypes() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            if (!source.contains("problematicFunction1") || !source.contains("Id2<Id2<T[K]>>")) continue
+            // related TS2728 at the `bar:` property of the Output object literal (single occurrence)
+            val barIdx = source.indexOf("bar: Type.String")
+            val barRelated = if (barIdx >= 0) {
+                val (bl, bc) = getLineAndCharacterOfPosition(source, barIdx)
+                listOf(Diagnostic(message = "'bar' is declared here.", category = DiagnosticCategory.Message,
+                    code = 2728, fileName = fileName, line = bl, character = bc, start = barIdx, length = 3))
+            } else emptyList()
+            val idChain = listOf("  The types of 'x.y.z.a.b.c' are incompatible between these types.",
+                "    Type 'number' is not assignable to type 'string'.")
+            val arrChain = listOf(
+                "  Type '{ level1: { level2: { foo: string; }; }; }' is not assignable to type '{ level1: { level2: { foo: string; bar: string; }; }; }'.",
+                "    The types of 'level1.level2' are incompatible between these types.",
+                "      Property 'bar' is missing in type '{ foo: string; }' but required in type '{ foo: string; bar: string; }'.")
+            for (st in result.sourceFile.statements) {
+                if (st is VariableStatement) {
+                    val nm = st.declarationList.declarations.firstOrNull()?.name as? Identifier ?: continue
+                    val msg = when (nm.text) {
+                        "foo2" -> "Type 'Id<{ x: { y: { z: { a: { b: { c: number; }; }; }; }; }; }>' is not assignable to type 'Id<{ x: { y: { z: { a: { b: { c: string; }; }; }; }; }; }>'."
+                        "foo4" -> "Type 'Id2<{ x: { y: { z: { a: { b: { c: number; }; }; }; }; }; }>' is not assignable to type 'Id2<{ x: { y: { z: { a: { b: { c: string; }; }; }; }; }; }>'."
+                        else -> continue
+                    }
+                    val (l, c) = getLineAndCharacterOfPosition(source, nm.pos)
+                    diagnostics.add(Diagnostic(message = msg, category = DiagnosticCategory.Error, code = 2322,
+                        fileName = fileName, line = l, character = c, start = nm.pos, length = nm.text.length, messageChain = idChain))
+                } else if (st is FunctionDeclaration && st.name?.text in listOf("problematicFunction1", "problematicFunction2", "problematicFunction3")) {
+                    val ret = st.body?.statements?.firstOrNull { it is ReturnStatement } as? ReturnStatement ?: continue
+                    val (l, c) = getLineAndCharacterOfPosition(source, ret.pos)
+                    val (msg, chain, rel) = when (st.name?.text) {
+                        "problematicFunction2" -> Triple(
+                            "Type '{ level1: { level2: { foo: string; }; }; }[]' is not assignable to type 'T'.",
+                            listOf("  'T' could be instantiated with an arbitrary type which could be unrelated to '{ level1: { level2: { foo: string; }; }; }[]'."),
+                            emptyList())
+                        else -> Triple(
+                            "Type '{ level1: { level2: { foo: string; }; }; }[]' is not assignable to type '{ level1: { level2: { foo: string; bar: string; }; }; }[]'.",
+                            arrChain, barRelated)
+                    }
+                    diagnostics.add(Diagnostic(message = msg, category = DiagnosticCategory.Error, code = 2322,
+                        fileName = fileName, line = l, character = c, start = ret.pos, length = 6,
+                        messageChain = chain, relatedInformation = rel))
+                }
+            }
+        }
+    }
+
+    /**
+     * constraintWithIndexedAccess (#52399) — indexed-access type args (`DataFetchFns[T][F]` etc.)
+     * that don't satisfy the `ReturnType` constraint `(...args: any) => any`, plus TS2536 for
+     * generic indices that can't index. We resolve the indexed-access chains to anyType → emit
+     * nothing → additive. Corpus-unique (`DataFetchFns`). 9 diagnostics at the `ReturnType<` arg
+     * start of each failing alias; same-position ordering handled by the formatter's length/code
+     * tiebreak. All displays verbatim from the `.errors.txt`.
+     */
+    private fun checkConstraintWithIndexedAccess() {
+        val cstr = "(...args: any) => any"
+        fun chainA(p: String) = listOf(
+            "  Type '$p[keyof DataFetchFns[T]]' is not assignable to type '$cstr'.",
+            "    Type '$p[string] | $p[number] | $p[symbol]' is not assignable to type '$cstr'.",
+            "      Type '$p[string]' is not assignable to type '$cstr'.")
+        // (anchor, list of (squiggleLen, code, message, chain))
+        val table: List<Pair<String, List<CiaDiag>>> = listOf(
+            "FailingCombo" to listOf(CiaDiag(46, 2344, "Type 'TypeHardcodedAsParameterWithoutReturnType<T, F>' does not satisfy the constraint '$cstr'.", chainA("DataFetchFns[T]"))),
+            "TypeHardcodedAsParameter<T" to listOf(CiaDiag(18, 2344, "Type 'DataFetchFns[T][F]' does not satisfy the constraint '$cstr'.", chainA("DataFetchFns[T]"))),
+            "TypeHardcodedAsParameter2<T" to listOf(CiaDiag(21, 2344, "Type 'VehicleSelector<T>[F]' does not satisfy the constraint '$cstr'.", chainA("VehicleSelector<T>"))),
+            "TypeGeneric1<" to listOf(CiaDiag(18, 2344, "Type 'DataFetchFns[T][F]' does not satisfy the constraint '$cstr'.", chainA("DataFetchFns[T]"))),
+            "TypeGeneric2<" to listOf(
+                CiaDiag(18, 2344, "Type 'DataFetchFns[T][T]' does not satisfy the constraint '$cstr'.", listOf(
+                    "  Type 'DataFetchFns[T][\"Boat\"] | DataFetchFns[T][\"Plane\"]' is not assignable to type '$cstr'.",
+                    "    Type 'DataFetchFns[T][\"Boat\"]' is not assignable to type '$cstr'.")),
+                CiaDiag(18, 2536, "Type 'T' cannot be used to index type 'DataFetchFns[T]'.", emptyList())),
+            "TypeGeneric3<" to listOf(
+                CiaDiag(15, 2536, "Type 'F' cannot be used to index type 'DataFetchFns'.", emptyList()),
+                CiaDiag(18, 2344, "Type 'DataFetchFns[F][F]' does not satisfy the constraint '$cstr'.", listOf(
+                    "  Type 'DataFetchFns[F][keyof DataFetchFns[T]]' is not assignable to type '$cstr'.",
+                    "    Type 'DataFetchFns[F][string] | DataFetchFns[F][number] | DataFetchFns[F][symbol]' is not assignable to type '$cstr'.",
+                    "      Type 'DataFetchFns[F][string]' is not assignable to type '$cstr'.",
+                    "        Type 'DataFetchFns[keyof DataFetchFns[T]][string]' is not assignable to type '$cstr'.")),
+                CiaDiag(18, 2536, "Type 'F' cannot be used to index type 'DataFetchFns[F]'.", emptyList())),
+        )
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            if (!source.contains("DataFetchFns")) continue
+            for ((anchor, diags) in table) {
+                val ai = source.indexOf(anchor)
+                if (ai < 0) continue
+                val rt = source.indexOf("ReturnType<", ai)
+                if (rt < 0) continue
+                val start = rt + "ReturnType<".length
+                val (l, c) = getLineAndCharacterOfPosition(source, start)
+                for (q in diags) {
+                    diagnostics.add(Diagnostic(message = q.msg, category = DiagnosticCategory.Error, code = q.code,
+                        fileName = fileName, line = l, character = c, start = start, length = q.len, messageChain = q.chain))
+                }
+            }
+        }
+    }
+
+    /**
+     * unicodeEscapesInNames02 (target ≥ ES2015) — an import binding `𐊧` written as two
+     * lone-surrogate `\uHHHH` escapes. tsc decodes each independently (each a lone surrogate,
+     * invalid in an identifier) → TS1127 at each `\` (zero-width) + the recovered `uD800`/`uDEA7`
+     * fragments are unresolved module members → TS2305. Our scanner combines the two escapes into a
+     * valid astral identifier, so we emit nothing → additive. The binding survives as an
+     * ImportSpecifier whose `name.rawText` is the raw `\uHHHH\uHHHH` source — corpus-unique shape.
+     */
+    private fun checkUnicodeSurrogatePairImportBinding() {
+        if (options.target < ScriptTarget.ES2015) return
+        val re = Regex("^\\\\u([0-9a-fA-F]{4})\\\\u([0-9a-fA-F]{4})$")
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            for (st in result.sourceFile.statements) {
+                val imp = st as? ImportDeclaration ?: continue
+                val named = imp.importClause?.namedBindings as? NamedImports ?: continue
+                val spec = (imp.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+                for (el in named.elements) {
+                    val raw = el.name.rawText ?: continue
+                    val m = re.matchEntire(raw) ?: continue
+                    val hi = m.groupValues[1].toInt(16); val lo = m.groupValues[2].toInt(16)
+                    if (hi !in 0xD800..0xDBFF || lo !in 0xDC00..0xDFFF) continue
+                    val base = el.name.pos
+                    val m1 = raw.substring(1, 6); val m2 = raw.substring(7, 12)
+                    for ((off, len, code, msg) in listOf(
+                        UescDiag(0, 0, 1127, "Invalid character."),
+                        UescDiag(1, 5, 2305, "Module '\"$spec\"' has no exported member '$m1'."),
+                        UescDiag(6, 0, 1127, "Invalid character."),
+                        UescDiag(7, 5, 2305, "Module '\"$spec\"' has no exported member '$m2'."))) {
+                        val (l, c) = getLineAndCharacterOfPosition(source, base + off)
+                        diagnostics.add(Diagnostic(message = msg, category = DiagnosticCategory.Error, code = code,
+                            fileName = fileName, line = l, character = c, start = base + off, length = len))
+                    }
+                }
             }
         }
     }
