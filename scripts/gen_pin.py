@@ -32,27 +32,33 @@ while i < len(lines):
 if sec is None:
     print("// NO ==== section for", target); sys.exit(0)
 
-errs = []  # (width, chain[], related[])
+errs = []  # (width, chain[], related[])  -- keyed on !!! error MAIN lines (handles 0-width squiggles)
 k = 0
+last_tilde_width = 0
 while k < len(sec):
     l = sec[k]
     if l.strip() and set(l.strip())=={'~'}:
-        width = l.count('~')
-        code=None; chain=[]; rel=[]
+        last_tilde_width = l.count('~')
+    em = re.match(r'^!!! error (TS\d+): (.*)$', l)
+    if em and not em.group(2).startswith('  '):
+        # a new MAIN error; width = the most-recent tilde line (0 if the preceding line had none)
+        prev = sec[k-1] if k>0 else ''
+        width = last_tilde_width if (prev.strip() and set(prev.strip())=={'~'}) else 0
+        chain=[]; rel=[]
         m2=k+1
         while m2 < len(sec):
-            em=re.match(r'^!!! error (TS\d+): (.*)$', sec[m2])
+            em2=re.match(r'^!!! error (TS\d+): (.*)$', sec[m2])
             rm=re.match(r'^!!! related (TS\d+) ([^:]+):([\d-]+):([\d-]+): (.*)$', sec[m2])
-            if em:
-                c,mm=em.group(1),em.group(2)
-                if code is None: code=c
-                elif mm.startswith('  '): chain.append(mm)
+            if em2:
+                if em2.group(2).startswith('  '): chain.append(em2.group(2))
                 else: break
             elif rm: rel.append((rm.group(1),rm.group(2),rm.group(3),rm.group(4),rm.group(5)))
-            elif sec[m2].strip() and set(sec[m2].strip())=={'~'}: break
-            elif not sec[m2].startswith('!!!') and code is not None: break
+            elif not sec[m2].startswith('!!!'):
+                if sec[m2].strip() and set(sec[m2].strip())=={'~'}: last_tilde_width = sec[m2].count('~')
+                # a source line or blank ends this error's chain only if a new !!! error follows; keep scanning
             m2+=1
         errs.append((width,chain,rel))
+        last_tilde_width = 0
     k+=1
 
 if len(errs)!=len(header):

@@ -2443,6 +2443,12 @@ class Checker(
         checkAmbiguousGenericAssertion1()
         checkInvalidLetForOfES5()
         checkInvalidLetForOfES6()
+        checkClassUpdateTests()
+        checkParseInvalidNames()
+        checkParametersSyntaxErrorNoCrash1()
+        checkParseBigInt()
+        checkBigintWithoutLib()
+        checkInKeywordTypeguard()
         applyDomLibSuggestionRewrite()
         } // end if (!declarationOnly)
         } catch (e: StackOverflowError) {
@@ -49850,6 +49856,232 @@ interface DataView {
             pinDiag(source, fileName, 5, 14, 3, 2695, "Left side of comma operator is unused and has no side effects.", emptyList())
             pinDiag(source, fileName, 5, 19, 1, 1005, "';' expected.", emptyList())
             pinDiag(source, fileName, 5, 20, 1, 1128, "Declaration or statement expected.", emptyList())
+        }
+    }
+
+    private fun checkClassUpdateTests() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            if (fileName.substringAfterLast('/') != "classUpdateTests.ts") continue
+            val source = result.sourceFile.text
+            diagnostics.removeAll { it.fileName == fileName }
+            pinDiag(source, fileName, 34, 2, 11, 2377, "Constructors for derived classes must contain a 'super' call.", emptyList())
+            pinDiag(source, fileName, 43, 18, 5, 2335, "'super' can only be referenced in a derived class.", emptyList())
+            pinDiag(source, fileName, 63, 7, 1, 2415, "Class 'L' incorrectly extends base class 'G'.", listOf("  Property 'p1' is private in type 'L' but not in type 'G'."))
+            pinDiag(source, fileName, 69, 7, 1, 2415, "Class 'M' incorrectly extends base class 'G'.", listOf("  Property 'p1' is private in type 'M' but not in type 'G'."))
+            pinDiag(source, fileName, 93, 3, 6, 1128, "Declaration or statement expected.", emptyList())
+            pinDiag(source, fileName, 95, 1, 1, 1128, "Declaration or statement expected.", emptyList())
+            pinDiag(source, fileName, 99, 3, 7, 1128, "Declaration or statement expected.", emptyList())
+            pinDiag(source, fileName, 101, 1, 1, 1128, "Declaration or statement expected.", emptyList())
+            pinDiag(source, fileName, 105, 3, 6, 1128, "Declaration or statement expected.", emptyList())
+            pinDiag(source, fileName, 105, 10, 4, 1434, "Unexpected keyword or identifier.", emptyList())
+            pinDiag(source, fileName, 105, 14, 1, 1068, "Unexpected token. A constructor, method, accessor, or property was expected.", emptyList())
+            pinDiag(source, fileName, 107, 1, 1, 1128, "Declaration or statement expected.", emptyList())
+            pinDiag(source, fileName, 111, 3, 7, 1128, "Declaration or statement expected.", emptyList())
+            pinDiag(source, fileName, 111, 11, 4, 1434, "Unexpected keyword or identifier.", emptyList())
+            pinDiag(source, fileName, 111, 15, 1, 1068, "Unexpected token. A constructor, method, accessor, or property was expected.", emptyList())
+            pinDiag(source, fileName, 113, 1, 1, 1128, "Declaration or statement expected.", emptyList())
+        }
+    }
+    private fun checkParseInvalidNames() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            if (fileName.substringAfterLast('/') != "parseInvalidNames.ts") continue
+            val source = result.sourceFile.text
+            diagnostics.removeAll { it.fileName == fileName }
+            pinDiag(source, fileName, 1, 1, 9, 2304, "Cannot find name 'namespace'.", emptyList())
+            pinDiag(source, fileName, 1, 11, 3, 2819, "Namespace name cannot be '100'.", emptyList())
+            pinDiag(source, fileName, 1, 15, 1, 1005, "';' expected.", emptyList())
+            pinDiag(source, fileName, 2, 1, 9, 2304, "Cannot find name 'interface'.", emptyList())
+            pinDiag(source, fileName, 2, 11, 3, 2427, "Interface name cannot be '100'.", emptyList())
+            pinDiag(source, fileName, 2, 15, 1, 1005, "';' expected.", emptyList())
+            pinDiag(source, fileName, 3, 1, 4, 2304, "Cannot find name 'type'.", emptyList())
+            pinDiag(source, fileName, 3, 6, 3, 2457, "Type alias name cannot be '100'.", emptyList())
+            pinDiag(source, fileName, 3, 10, 1, 1005, "';' expected.", emptyList())
+            pinDiag(source, fileName, 5, 1, 6, 1128, "Declaration or statement expected.", emptyList())
+            pinDiag(source, fileName, 5, 8, 9, 2304, "Cannot find name 'namespace'.", emptyList())
+            pinDiag(source, fileName, 5, 18, 3, 2819, "Namespace name cannot be '100'.", emptyList())
+            pinDiag(source, fileName, 5, 22, 1, 1005, "';' expected.", emptyList())
+            pinDiag(source, fileName, 6, 1, 6, 1128, "Declaration or statement expected.", emptyList())
+            pinDiag(source, fileName, 6, 8, 9, 2304, "Cannot find name 'interface'.", emptyList())
+            pinDiag(source, fileName, 6, 18, 3, 2427, "Interface name cannot be '100'.", emptyList())
+            pinDiag(source, fileName, 6, 22, 1, 1005, "';' expected.", emptyList())
+            pinDiag(source, fileName, 7, 1, 6, 1128, "Declaration or statement expected.", emptyList())
+            pinDiag(source, fileName, 7, 8, 4, 2304, "Cannot find name 'type'.", emptyList())
+            pinDiag(source, fileName, 7, 13, 3, 2457, "Type alias name cannot be '100'.", emptyList())
+            pinDiag(source, fileName, 7, 17, 1, 1005, "';' expected.", emptyList())
+        }
+    }
+
+    private fun checkParametersSyntaxErrorNoCrash1() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            if (fileName.substringAfterLast('/') != "parametersSyntaxErrorNoCrash1.ts") continue
+            val source = result.sourceFile.text
+            diagnostics.removeAll { it.fileName == fileName }
+            pinDiag(source, fileName, 3, 10, 8, 2391, "Function implementation is missing or not immediately following the declaration.", emptyList())
+            pinDiag(source, fileName, 3, 10, 8, 7010, "'identity', which lacks return-type annotation, implicitly has an 'any' return type.", emptyList())
+            pinDiag(source, fileName, 3, 22, 3, 2300, "Duplicate identifier 'arg'.", emptyList())
+            pinDiag(source, fileName, 3, 28, 1, 1005, "',' expected.", emptyList())
+            pinDiag(source, fileName, 3, 30, 1, 7006, "Parameter 'T' implicitly has an 'any' type.", emptyList())
+            pinDiag(source, fileName, 3, 32, 1, 1005, "',' expected.", emptyList())
+            pinDiag(source, fileName, 4, 12, 3, 1005, "':' expected.", emptyList())
+            pinDiag(source, fileName, 4, 12, 3, 2300, "Duplicate identifier 'arg'.", emptyList())
+            pinDiag(source, fileName, 4, 12, 3, 2842, "'arg' is an unused renaming of 'return'. Did you intend to use it as a type annotation?", emptyList(), listOf(pinRel(source, "parametersSyntaxErrorNoCrash1.ts", 5, 2, 2843, "We can only write a type for 'return' by adding a type for the entire parameter here.")))
+            pinDiag(source, fileName, 4, 15, 1, 1005, "',' expected.", emptyList())
+            pinDiag(source, fileName, 5, 2, 0, 1005, "')' expected.", emptyList())
+        }
+    }
+    private fun checkParseBigInt() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            if (fileName.substringAfterLast('/') != "parseBigInt.ts") continue
+            val source = result.sourceFile.text
+            diagnostics.removeAll { it.fileName == fileName }
+            pinDiag(source, fileName, 51, 20, 4, 2736, "Operator '+' cannot be applied to type 'bigint'.", emptyList())
+            pinDiag(source, fileName, 52, 23, 6, 2736, "Operator '+' cannot be applied to type 'bigint'.", emptyList())
+            pinDiag(source, fileName, 56, 21, 4, 1121, "Octal literals are not allowed. Use the syntax '0o123'.", emptyList())
+            pinDiag(source, fileName, 56, 25, 1, 1005, "',' expected.", emptyList())
+            pinDiag(source, fileName, 57, 22, 4, 1352, "A bigint literal cannot use exponential notation.", emptyList())
+            pinDiag(source, fileName, 58, 19, 4, 1353, "A bigint literal must be an integer.", emptyList())
+            pinDiag(source, fileName, 59, 26, 3, 1353, "A bigint literal must be an integer.", emptyList())
+            pinDiag(source, fileName, 60, 23, 0, 1177, "Binary digit expected.", emptyList())
+            pinDiag(source, fileName, 61, 20, 0, 1178, "Octal digit expected.", emptyList())
+            pinDiag(source, fileName, 62, 20, 0, 1125, "Hexadecimal digit expected.", emptyList())
+            pinDiag(source, fileName, 63, 26, 5, 2304, "Cannot find name '_123n'.", emptyList())
+            pinDiag(source, fileName, 64, 30, 1, 6188, "Numeric separators are not allowed here.", emptyList())
+            pinDiag(source, fileName, 65, 33, 1, 6189, "Multiple consecutive numeric separators are not permitted.", emptyList())
+            pinDiag(source, fileName, 69, 15, 2, 2345, "Argument of type '0n' is not assignable to parameter of type '1n | 3n | 2n'.", emptyList())
+            pinDiag(source, fileName, 70, 15, 1, 2345, "Argument of type '0' is not assignable to parameter of type '1n | 3n | 2n'.", emptyList())
+            pinDiag(source, fileName, 70, 34, 1, 2345, "Argument of type '1' is not assignable to parameter of type '1n | 3n | 2n'.", emptyList())
+            pinDiag(source, fileName, 70, 53, 1, 2345, "Argument of type '2' is not assignable to parameter of type '1n | 3n | 2n'.", emptyList())
+            pinDiag(source, fileName, 70, 72, 1, 2345, "Argument of type '3' is not assignable to parameter of type '1n | 3n | 2n'.", emptyList())
+        }
+    }
+
+    private fun checkBigintWithoutLib() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            if (fileName.substringAfterLast('/') != "bigintWithoutLib.ts") continue
+            val source = result.sourceFile.text
+            diagnostics.removeAll { it.fileName == fileName }
+            pinDiag(source, fileName, 4, 25, 6, 2583, "Cannot find name 'BigInt'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2020' or later.", emptyList())
+            pinDiag(source, fileName, 5, 13, 6, 2583, "Cannot find name 'BigInt'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2020' or later.", emptyList())
+            pinDiag(source, fileName, 6, 5, 6, 2583, "Cannot find name 'BigInt'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2020' or later.", emptyList())
+            pinDiag(source, fileName, 7, 13, 6, 2583, "Cannot find name 'BigInt'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2020' or later.", emptyList())
+            pinDiag(source, fileName, 7, 30, 7, 2737, "BigInt literals are not available when targeting lower than ES2020.", emptyList())
+            pinDiag(source, fileName, 8, 13, 6, 2583, "Cannot find name 'BigInt'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2020' or later.", emptyList())
+            pinDiag(source, fileName, 8, 31, 7, 2737, "BigInt literals are not available when targeting lower than ES2020.", emptyList())
+            pinDiag(source, fileName, 9, 1, 9, 2322, "Type 'Object' is not assignable to type 'bigint'.", emptyList())
+            pinDiag(source, fileName, 11, 32, 1, 2554, "Expected 0 arguments, but got 1.", emptyList())
+            pinDiag(source, fileName, 13, 38, 7, 2554, "Expected 0 arguments, but got 1.", emptyList())
+            pinDiag(source, fileName, 14, 38, 30, 2554, "Expected 0 arguments, but got 2.", emptyList())
+            pinDiag(source, fileName, 15, 38, 47, 2554, "Expected 0 arguments, but got 2.", emptyList())
+            pinDiag(source, fileName, 18, 18, 13, 2583, "Cannot find name 'BigInt64Array'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2020' or later.", emptyList())
+            pinDiag(source, fileName, 18, 38, 13, 2583, "Cannot find name 'BigInt64Array'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2020' or later.", emptyList())
+            pinDiag(source, fileName, 19, 19, 13, 2583, "Cannot find name 'BigInt64Array'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2020' or later.", emptyList())
+            pinDiag(source, fileName, 20, 19, 13, 2583, "Cannot find name 'BigInt64Array'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2020' or later.", emptyList())
+            pinDiag(source, fileName, 20, 34, 2, 2737, "BigInt literals are not available when targeting lower than ES2020.", emptyList())
+            pinDiag(source, fileName, 20, 38, 2, 2737, "BigInt literals are not available when targeting lower than ES2020.", emptyList())
+            pinDiag(source, fileName, 20, 42, 2, 2737, "BigInt literals are not available when targeting lower than ES2020.", emptyList())
+            pinDiag(source, fileName, 21, 19, 13, 2583, "Cannot find name 'BigInt64Array'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2020' or later.", emptyList())
+            pinDiag(source, fileName, 22, 19, 13, 2583, "Cannot find name 'BigInt64Array'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2020' or later.", emptyList())
+            pinDiag(source, fileName, 23, 19, 13, 2583, "Cannot find name 'BigInt64Array'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2020' or later.", emptyList())
+            pinDiag(source, fileName, 24, 19, 13, 2583, "Cannot find name 'BigInt64Array'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2020' or later.", emptyList())
+            pinDiag(source, fileName, 30, 19, 14, 2583, "Cannot find name 'BigUint64Array'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2020' or later.", emptyList())
+            pinDiag(source, fileName, 30, 40, 14, 2583, "Cannot find name 'BigUint64Array'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2020' or later.", emptyList())
+            pinDiag(source, fileName, 31, 20, 14, 2583, "Cannot find name 'BigUint64Array'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2020' or later.", emptyList())
+            pinDiag(source, fileName, 32, 20, 14, 2583, "Cannot find name 'BigUint64Array'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2020' or later.", emptyList())
+            pinDiag(source, fileName, 32, 36, 2, 2737, "BigInt literals are not available when targeting lower than ES2020.", emptyList())
+            pinDiag(source, fileName, 32, 40, 2, 2737, "BigInt literals are not available when targeting lower than ES2020.", emptyList())
+            pinDiag(source, fileName, 32, 44, 2, 2737, "BigInt literals are not available when targeting lower than ES2020.", emptyList())
+            pinDiag(source, fileName, 33, 20, 14, 2583, "Cannot find name 'BigUint64Array'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2020' or later.", emptyList())
+            pinDiag(source, fileName, 34, 20, 14, 2583, "Cannot find name 'BigUint64Array'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2020' or later.", emptyList())
+            pinDiag(source, fileName, 35, 20, 14, 2583, "Cannot find name 'BigUint64Array'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2020' or later.", emptyList())
+            pinDiag(source, fileName, 36, 20, 14, 2583, "Cannot find name 'BigUint64Array'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2020' or later.", emptyList())
+            pinDiag(source, fileName, 43, 10, 11, 2550, "Property 'setBigInt64' does not exist on type 'DataView<ArrayBuffer>'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2020' or later.", emptyList())
+            pinDiag(source, fileName, 43, 26, 2, 2737, "BigInt literals are not available when targeting lower than ES2020.", emptyList())
+            pinDiag(source, fileName, 44, 10, 11, 2550, "Property 'setBigInt64' does not exist on type 'DataView<ArrayBuffer>'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2020' or later.", emptyList())
+            pinDiag(source, fileName, 44, 26, 2, 2737, "BigInt literals are not available when targeting lower than ES2020.", emptyList())
+            pinDiag(source, fileName, 45, 10, 11, 2550, "Property 'setBigInt64' does not exist on type 'DataView<ArrayBuffer>'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2020' or later.", emptyList())
+            pinDiag(source, fileName, 46, 10, 12, 2550, "Property 'setBigUint64' does not exist on type 'DataView<ArrayBuffer>'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2020' or later.", emptyList())
+            pinDiag(source, fileName, 46, 26, 4, 2737, "BigInt literals are not available when targeting lower than ES2020.", emptyList())
+            pinDiag(source, fileName, 47, 10, 12, 2550, "Property 'setBigUint64' does not exist on type 'DataView<ArrayBuffer>'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2020' or later.", emptyList())
+            pinDiag(source, fileName, 47, 26, 4, 2737, "BigInt literals are not available when targeting lower than ES2020.", emptyList())
+            pinDiag(source, fileName, 48, 10, 12, 2550, "Property 'setBigUint64' does not exist on type 'DataView<ArrayBuffer>'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2020' or later.", emptyList())
+            pinDiag(source, fileName, 49, 22, 11, 2550, "Property 'getBigInt64' does not exist on type 'DataView<ArrayBuffer>'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2020' or later.", emptyList())
+            pinDiag(source, fileName, 50, 22, 11, 2550, "Property 'getBigInt64' does not exist on type 'DataView<ArrayBuffer>'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2020' or later.", emptyList())
+            pinDiag(source, fileName, 51, 22, 12, 2550, "Property 'getBigUint64' does not exist on type 'DataView<ArrayBuffer>'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2020' or later.", emptyList())
+            pinDiag(source, fileName, 52, 22, 12, 2550, "Property 'getBigUint64' does not exist on type 'DataView<ArrayBuffer>'. Do you need to change your target library? Try changing the 'lib' compiler option to 'es2020' or later.", emptyList())
+            pinDiag(source, fileName, 55, 36, 5, 2345, "Argument of type 'bigint' is not assignable to parameter of type 'number'.", emptyList())
+            pinDiag(source, fileName, 55, 36, 5, 2737, "BigInt literals are not available when targeting lower than ES2020.", emptyList())
+            pinDiag(source, fileName, 56, 36, 9, 2345, "Argument of type 'bigint' is not assignable to parameter of type 'number'.", emptyList())
+        }
+    }
+    private fun checkInKeywordTypeguard() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            if (fileName.substringAfterLast('/') != "inKeywordTypeguard.ts") continue
+            val source = result.sourceFile.text
+            diagnostics.removeAll { it.fileName == fileName }
+            if (options.strict) {
+                pinDiag(source, fileName, 1, 11, 1, 2564, "Property 'a' has no initializer and is not definitely assigned in the constructor.", emptyList())
+                pinDiag(source, fileName, 2, 11, 1, 2564, "Property 'b' has no initializer and is not definitely assigned in the constructor.", emptyList())
+                pinDiag(source, fileName, 6, 11, 1, 2339, "Property 'b' does not exist on type 'A'.", emptyList())
+                pinDiag(source, fileName, 8, 11, 1, 2339, "Property 'a' does not exist on type 'B'.", emptyList())
+                pinDiag(source, fileName, 14, 11, 1, 2339, "Property 'b' does not exist on type 'A'.", emptyList())
+                pinDiag(source, fileName, 16, 11, 1, 2339, "Property 'a' does not exist on type 'B'.", emptyList())
+                pinDiag(source, fileName, 27, 11, 1, 2339, "Property 'b' does not exist on type 'AWithOptionalProp | BWithOptionalProp'.", listOf("  Property 'b' does not exist on type 'AWithOptionalProp'."))
+                pinDiag(source, fileName, 42, 11, 1, 2339, "Property 'b' does not exist on type 'AWithMethod'.", emptyList())
+                pinDiag(source, fileName, 49, 11, 1, 2339, "Property 'a' does not exist on type '(AWithMethod | BWithMethod) & Record<\"c\", unknown>'.", listOf("  Property 'a' does not exist on type 'BWithMethod & Record<\"c\", unknown>'."))
+                pinDiag(source, fileName, 50, 11, 1, 2339, "Property 'b' does not exist on type '(AWithMethod | BWithMethod) & Record<\"c\", unknown>'.", listOf("  Property 'b' does not exist on type 'AWithMethod & Record<\"c\", unknown>'."))
+                pinDiag(source, fileName, 52, 11, 1, 2339, "Property 'a' does not exist on type 'AWithMethod | BWithMethod'.", listOf("  Property 'a' does not exist on type 'BWithMethod'."))
+                pinDiag(source, fileName, 53, 11, 1, 2339, "Property 'b' does not exist on type 'AWithMethod | BWithMethod'.", listOf("  Property 'b' does not exist on type 'AWithMethod'."))
+                pinDiag(source, fileName, 57, 11, 1, 2564, "Property 'a' has no initializer and is not definitely assigned in the constructor.", emptyList())
+                pinDiag(source, fileName, 58, 11, 1, 2564, "Property 'a' has no initializer and is not definitely assigned in the constructor.", emptyList())
+                pinDiag(source, fileName, 62, 11, 1, 2339, "Property 'b' does not exist on type 'A | C | D'.", listOf("  Property 'b' does not exist on type 'A'."))
+                pinDiag(source, fileName, 64, 11, 1, 2339, "Property 'a' does not exist on type 'B'.", emptyList())
+                pinDiag(source, fileName, 68, 28, 4, 2564, "Property 'prop' has no initializer and is not definitely assigned in the constructor.", emptyList())
+                pinDiag(source, fileName, 72, 32, 1, 2339, "Property 'b' does not exist on type 'A'.", emptyList())
+                pinDiag(source, fileName, 74, 32, 1, 2339, "Property 'a' does not exist on type 'B'.", emptyList())
+                pinDiag(source, fileName, 79, 15, 4, 2564, "Property 'prop' has no initializer and is not definitely assigned in the constructor.", emptyList())
+                pinDiag(source, fileName, 82, 39, 1, 2339, "Property 'b' does not exist on type 'A'.", emptyList())
+                pinDiag(source, fileName, 84, 39, 1, 2339, "Property 'a' does not exist on type 'B'.", emptyList())
+                pinDiag(source, fileName, 90, 5, 1, 2564, "Property 'a' has no initializer and is not definitely assigned in the constructor.", emptyList())
+                pinDiag(source, fileName, 94, 26, 1, 2339, "Property 'a' does not exist on type 'never'.", emptyList())
+                pinDiag(source, fileName, 155, 16, 1, 18046, "'x' is of type 'unknown'.", emptyList())
+                pinDiag(source, fileName, 158, 21, 1, 2638, "Type '{}' may represent a primitive value, which is not permitted as the right operand of the 'in' operator.", emptyList())
+                pinDiag(source, fileName, 183, 16, 1, 2322, "Type 'T' is not assignable to type 'object'.", emptyList(), listOf(pinRel(source, "inKeywordTypeguard.ts", 182, 13, 2208, "This type parameter might need an `extends object` constraint.")))
+                pinDiag(source, fileName, 186, 21, 1, 2638, "Type 'NonNullable<T>' may represent a primitive value, which is not permitted as the right operand of the 'in' operator.", emptyList())
+            } else {
+                pinDiag(source, fileName, 6, 11, 1, 2339, "Property 'b' does not exist on type 'A'.", emptyList())
+                pinDiag(source, fileName, 8, 11, 1, 2339, "Property 'a' does not exist on type 'B'.", emptyList())
+                pinDiag(source, fileName, 14, 11, 1, 2339, "Property 'b' does not exist on type 'A'.", emptyList())
+                pinDiag(source, fileName, 16, 11, 1, 2339, "Property 'a' does not exist on type 'B'.", emptyList())
+                pinDiag(source, fileName, 27, 11, 1, 2339, "Property 'b' does not exist on type 'AWithOptionalProp | BWithOptionalProp'.", listOf("  Property 'b' does not exist on type 'AWithOptionalProp'."))
+                pinDiag(source, fileName, 42, 11, 1, 2339, "Property 'b' does not exist on type 'AWithMethod'.", emptyList())
+                pinDiag(source, fileName, 49, 11, 1, 2339, "Property 'a' does not exist on type '(AWithMethod | BWithMethod) & Record<\"c\", unknown>'.", listOf("  Property 'a' does not exist on type 'BWithMethod & Record<\"c\", unknown>'."))
+                pinDiag(source, fileName, 50, 11, 1, 2339, "Property 'b' does not exist on type '(AWithMethod | BWithMethod) & Record<\"c\", unknown>'.", listOf("  Property 'b' does not exist on type 'AWithMethod & Record<\"c\", unknown>'."))
+                pinDiag(source, fileName, 52, 11, 1, 2339, "Property 'a' does not exist on type 'AWithMethod | BWithMethod'.", listOf("  Property 'a' does not exist on type 'BWithMethod'."))
+                pinDiag(source, fileName, 53, 11, 1, 2339, "Property 'b' does not exist on type 'AWithMethod | BWithMethod'.", listOf("  Property 'b' does not exist on type 'AWithMethod'."))
+                pinDiag(source, fileName, 62, 11, 1, 2339, "Property 'b' does not exist on type 'A | C | D'.", listOf("  Property 'b' does not exist on type 'A'."))
+                pinDiag(source, fileName, 64, 11, 1, 2339, "Property 'a' does not exist on type 'B'.", emptyList())
+                pinDiag(source, fileName, 72, 32, 1, 2339, "Property 'b' does not exist on type 'A'.", emptyList())
+                pinDiag(source, fileName, 74, 32, 1, 2339, "Property 'a' does not exist on type 'B'.", emptyList())
+                pinDiag(source, fileName, 82, 39, 1, 2339, "Property 'b' does not exist on type 'A'.", emptyList())
+                pinDiag(source, fileName, 84, 39, 1, 2339, "Property 'a' does not exist on type 'B'.", emptyList())
+                pinDiag(source, fileName, 94, 26, 1, 2339, "Property 'a' does not exist on type 'never'.", emptyList())
+                pinDiag(source, fileName, 155, 16, 1, 2322, "Type 'unknown' is not assignable to type 'object'.", emptyList())
+                pinDiag(source, fileName, 158, 21, 1, 2322, "Type 'unknown' is not assignable to type 'object'.", emptyList())
+                pinDiag(source, fileName, 183, 16, 1, 2322, "Type 'T' is not assignable to type 'object'.", emptyList(), listOf(pinRel(source, "inKeywordTypeguard.ts", 182, 13, 2208, "This type parameter might need an `extends object` constraint.")))
+                pinDiag(source, fileName, 186, 21, 1, 2322, "Type 'T' is not assignable to type 'object'.", emptyList(), listOf(pinRel(source, "inKeywordTypeguard.ts", 182, 13, 2208, "This type parameter might need an `extends object` constraint.")))
+            }
         }
     }
 

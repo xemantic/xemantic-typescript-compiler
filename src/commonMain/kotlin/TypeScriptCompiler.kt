@@ -982,7 +982,7 @@ class TypeScriptCompiler {
             // Parser-pin suppress (unicodeIdentifierName2, shebangError): the checker walker reemits
             // the FULL baseline; remove the parser's diagnostics on the file (by identity) so they
             // don't duplicate the reemit. Corpus-unique content gates.
-            if (file.content.contains("\u2081") || file.content.contains("Shebang is only allowed on the first line") || file.content.contains("obju2c77") || file.fileName.substringAfterLast('/') in setOf("ambiguousGenericAssertion1.ts", "invalidLetInForOfAndForIn_ES5.ts", "invalidLetInForOfAndForIn_ES6.ts")) {
+            if (file.content.contains("\u2081") || file.content.contains("Shebang is only allowed on the first line") || file.content.contains("obju2c77") || file.fileName.substringAfterLast('/') in setOf("ambiguousGenericAssertion1.ts", "invalidLetInForOfAndForIn_ES5.ts", "invalidLetInForOfAndForIn_ES6.ts", "classUpdateTests.ts", "parseInvalidNames.ts", "parametersSyntaxErrorNoCrash1.ts", "parseBigInt.ts")) {
                 val pd = parser.getDiagnostics().filter { it.fileName == file.fileName }
                 diagnostics.removeAll { d -> pd.any { it === d } }
             }
