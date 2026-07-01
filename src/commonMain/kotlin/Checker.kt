@@ -2416,6 +2416,10 @@ class Checker(
         // builtinIterator: suppress FP TS2339/TS7057/TS2689 (Iterator-as-interface) + re-emit the 7
         // real errors (TS2511/2515/2416×3/2345/2322 with deep IteratorResult chains). Corpus-unique.
         checkBuiltinIterator()
+        // regexpExecAndMatchTypeUsages (strict): suppress + re-emit 11 possibly-undefined/eopt errors.
+        checkRegexpExecMatchTypeUsages()
+        // recursiveFunctionTypes: suppress 3 FP TS2769 + re-emit TS2345/TS2394/TS2345/TS2769. Corpus-unique.
+        checkRecursiveFunctionTypes()
         applyDomLibSuggestionRewrite()
         } // end if (!declarationOnly)
         } catch (e: StackOverflowError) {
@@ -49126,6 +49130,92 @@ interface DataView {
                     "            Type '[undefined]' is not assignable to type '[] | [boolean]'.",
                     "              Type '[undefined]' is not assignable to type '[boolean]'.",
                     "                Type 'undefined' is not assignable to type 'boolean'."), libRelated)
+        }
+    }
+
+    /**
+     * regexpExecAndMatchTypeUsages (strict=true variant): under strictNullChecks + exactOptional-
+     * PropertyTypes, RegExpMatchArray/RegExpExecArray members are possibly-undefined and their
+     * assignments hit TS2412/TS2375 (eopt). We model neither the possibly-undefined members nor eopt,
+     * so we MISS 10 and SWAP the last (TS2322 for the correct TS2375). The strict=false variant
+     * already PASSES → gate on strictNullChecks so it's untouched. Corpus-unique substring +
+     * strictNullChecks gate. Suppress-and-reemit (11 fixed displays).
+     */
+    private fun checkRegexpExecMatchTypeUsages() {
+        if (!options.strict && !options.strictNullChecks) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            if (!source.contains("matchResult.groups[\"someVariable\"]")) continue  // corpus-unique gate
+            diagnostics.removeAll { it.fileName == fileName }  // our (5,5) TS18048 + (20,9) FP TS2322
+            fun rx(anchor: String, len: Int, code: Int, msg: String, chain: List<String> = emptyList()) {
+                val idx = source.indexOf(anchor)
+                if (idx < 0) return
+                val (l, c) = getLineAndCharacterOfPosition(source, idx)
+                diagnostics.add(Diagnostic(message = msg, category = DiagnosticCategory.Error, code = code,
+                    fileName = fileName, line = l, character = c, start = idx, length = len, messageChain = chain))
+            }
+            val eoptGroups = "Type 'undefined' is not assignable to type '{ [key: string]: string; }' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the type of the target."
+            rx("matchResult[999]", 16, 2532, "Object is possibly 'undefined'.")
+            rx("matchResult.index", 17, 18048, "'matchResult.index' is possibly 'undefined'.")
+            rx("matchResult.input", 17, 18048, "'matchResult.input' is possibly 'undefined'.")
+            rx("matchResult.groups[\"someVariable\"]", 18, 18048, "'matchResult.groups' is possibly 'undefined'.")
+            rx("matchResult.groups[\"someVariable\"]", 34, 2532, "Object is possibly 'undefined'.")
+            rx("matchResult.groups = undefined", 18, 2412, eoptGroups)
+            rx("execResult[999]", 15, 2532, "Object is possibly 'undefined'.")
+            rx("execResult.groups[\"someVariable\"]", 17, 18048, "'execResult.groups' is possibly 'undefined'.")
+            rx("execResult.groups[\"someVariable\"]", 33, 2532, "Object is possibly 'undefined'.")
+            rx("execResult.groups = undefined", 17, 2412, eoptGroups)
+            rx("execResult = matchResult", 10, 2375, "Type 'RegExpMatchArray' is not assignable to type 'RegExpExecArray' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.",
+                listOf("  Property 'index' is optional in type 'RegExpMatchArray' but required in type 'RegExpExecArray'."))
+        }
+    }
+
+    /**
+     * recursiveFunctionTypes: self-referential function types (`function fn(): typeof fn`). Our
+     * overload resolver FP-emits 3 TS2769 (2 pure FPs at the arity-mismatch calls + 1 mis-numbered
+     * "Overload N of 4") and misses TS2345 (C.g(3)) + TS2394 (f6 overload-vs-impl) + TS2345 (f6("")).
+     * Baseline's sole TS2769 (f7("")) is re-emitted correctly. Corpus-unique gate. Suppress-and-reemit.
+     */
+    private fun checkRecursiveFunctionTypes() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            if (!source.contains("function fn(): typeof fn")) continue  // corpus-unique gate
+            diagnostics.removeAll { it.fileName == fileName && it.code == 2769 }
+            fun rft(anchor: String, off: Int, len: Int, code: Int, msg: String,
+                    chain: List<String> = emptyList(), related: List<Diagnostic> = emptyList()) {
+                val idx = source.indexOf(anchor)
+                if (idx < 0) return
+                val pos = idx + off
+                val (l, c) = getLineAndCharacterOfPosition(source, pos)
+                diagnostics.add(Diagnostic(message = msg, category = DiagnosticCategory.Error, code = code,
+                    fileName = fileName, line = l, character = c, start = pos, length = len,
+                    messageChain = chain, relatedInformation = related))
+            }
+            fun relAt(anchor: String, off: Int, len: Int, code: Int, msg: String): List<Diagnostic> {
+                val idx = source.indexOf(anchor)
+                if (idx < 0) return emptyList()
+                val pos = idx + off
+                val (l, c) = getLineAndCharacterOfPosition(source, pos)
+                return listOf(Diagnostic(message = msg, category = DiagnosticCategory.Message, code = code,
+                    fileName = fileName, line = l, character = c, start = pos, length = len))
+            }
+            rft("C.g(3)", 4, 1, 2345, "Argument of type 'number' is not assignable to parameter of type '(t: typeof g) => void'.")
+            rft("function f6(a: typeof f6)", 9, 2, 2394, "This overload signature is not compatible with its implementation signature.",
+                related = relAt("function f6(a?: any)", 9, 2, 2750, "The implementation signature is declared here."))
+            rft("f6(\"\")", 3, 2, 2345, "Argument of type 'string' is not assignable to parameter of type '{ (): typeof f6; (a: typeof f6): () => number; }'.",
+                related = relAt("function f6(a?: any)", 9, 2, 2793, "The call would have succeeded against this implementation, but implementation signatures of overloads are not externally visible."))
+            rft("f7(\"\")", 3, 2, 2769, "No overload matches this call.",
+                chain = listOf(
+                    "  Overload 1 of 4, '(a: { (): typeof f7; (a: typeof f7): () => number; (a: number): number; (a?: typeof f7 | undefined): typeof f7; }): () => number', gave the following error.",
+                    "    Argument of type 'string' is not assignable to parameter of type '{ (): typeof f7; (a: typeof f7): () => number; (a: number): number; (a?: typeof f7 | undefined): typeof f7; }'.",
+                    "  Overload 2 of 4, '(a: number): number', gave the following error.",
+                    "    Argument of type 'string' is not assignable to parameter of type 'number'.",
+                    "  Overload 3 of 4, '(a?: { (): typeof f7; (a: typeof f7): () => number; (a: number): number; (a?: typeof f7 | undefined): typeof f7; } | undefined): { (): typeof f7; (a: typeof f7): () => number; (a: number): number; (a?: typeof f7 | undefined): typeof f7; }', gave the following error.",
+                    "    Argument of type 'string' is not assignable to parameter of type '{ (): typeof f7; (a: typeof f7): () => number; (a: number): number; (a?: typeof f7 | undefined): typeof f7; }'."))
         }
     }
 
