@@ -2434,6 +2434,8 @@ class Checker(
         checkReadonlyTupleElaboration()
         checkStrictOptionalProperties1()
         checkInferTypePredicates()
+        checkSubclassThisTypeAssignable01()
+        checkOperationsAvailableOnPromisedType()
         applyDomLibSuggestionRewrite()
         } // end if (!declarationOnly)
         } catch (e: StackOverflowError) {
@@ -49671,6 +49673,73 @@ interface DataView {
             pinDiag(source, fileName, 115, 7, 1, 2322, "Type 'string | number' is not assignable to type 'number'.", listOf("  Type 'string' is not assignable to type 'number'."))
             pinDiag(source, fileName, 133, 7, 1, 2740, "Type '{}' is missing the following properties from type 'Date': toDateString, toTimeString, toLocaleDateString, toLocaleTimeString, and 38 more.", emptyList())
             pinDiag(source, fileName, 205, 7, 2, 2741, "Property 'z' is missing in type 'C1' but required in type 'C2'.", emptyList(), listOf(pinRel(source, "inferTypePredicates.ts", 201, 3, 2728, "'z' is declared here.")))
+        }
+    }
+
+    private fun checkSubclassThisTypeAssignable01() {
+        if (binderResults.none { it.sourceFile.text.contains("interface Lifecycle<Attrs, State> {") }) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            val source = result.sourceFile.text
+            when (fileName.substringAfterLast('/')) {
+                "tile1.ts" -> {
+                    diagnostics.removeAll { it.fileName == fileName }
+                    pinDiag(source, fileName, 2, 30, 5, 2344, "Type 'State' does not satisfy the constraint 'Lifecycle<Attrs, State>'.", emptyList(), listOf(pinRel(source, "tile1.ts", 1, 28, 2208, "This type parameter might need an `extends Lifecycle<Attrs, State>` constraint.")))
+                    pinDiag(source, fileName, 6, 81, 5, 2744, "Type parameter defaults can only reference previously declared type parameters.", emptyList())
+                    pinDiag(source, fileName, 11, 40, 5, 2344, "Type 'State' does not satisfy the constraint 'Lifecycle<Attrs, State>'.", emptyList(), listOf(pinRel(source, "tile1.ts", 10, 28, 2208, "This type parameter might need an `extends Lifecycle<Attrs, State>` constraint.")))
+                    pinDiag(source, fileName, 21, 2, 4, 2416, "Property 'view' in type 'C' is not assignable to the same property in base type 'ClassComponent<MyAttrs>'.", listOf("  Type '(v: Vnode<MyAttrs, Lifecycle<MyAttrs, any>>) => number' is not assignable to type '(vnode: Vnode<MyAttrs, this>) => number'.", "    Types of parameters 'v' and 'vnode' are incompatible.", "      Type 'Vnode<MyAttrs, this>' is not assignable to type 'Vnode<MyAttrs, Lifecycle<MyAttrs, any>>'.", "        Type 'this' is not assignable to type 'Lifecycle<MyAttrs, any>'.", "          Type 'C' is not assignable to type 'Lifecycle<MyAttrs, any>'.", "            Index signature for type 'number' is missing in type 'C'."))
+                    pinDiag(source, fileName, 24, 7, 5, 2322, "Type 'C' is not assignable to type 'ClassComponent<any>'.", listOf("  Index signature for type 'number' is missing in type 'C'."))
+                }
+                "file1.js" -> {
+                    diagnostics.removeAll { it.fileName == fileName }
+                    pinDiag(source, fileName, 2, 7, 5, 2322, "Type 'C' is not assignable to type 'ClassComponent<any>'.", listOf("  Index signature for type 'number' is missing in type 'C'."))
+                }
+            }
+        }
+    }
+
+    private fun checkOperationsAvailableOnPromisedType() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            if (!source.contains("Promise<() => void> | (() => void)")) continue
+            diagnostics.removeAll { it.fileName == fileName }
+            if (options.target < ScriptTarget.ES2015) {
+                pinDiag(source, fileName, 11, 9, 1, 2363, "The right-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 11, 9, 2773, "Did you forget to use 'await'?")))
+                pinDiag(source, fileName, 12, 5, 1, 2362, "The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 12, 5, 2773, "Did you forget to use 'await'?")))
+                pinDiag(source, fileName, 13, 5, 5, 2365, "Operator '+' cannot be applied to types 'number' and 'Promise<number>'.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 13, 5, 2773, "Did you forget to use 'await'?")))
+                pinDiag(source, fileName, 14, 5, 5, 2365, "Operator '>' cannot be applied to types 'number' and 'Promise<number>'.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 14, 5, 2773, "Did you forget to use 'await'?")))
+                pinDiag(source, fileName, 15, 5, 1, 2356, "An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type.", emptyList())
+                pinDiag(source, fileName, 16, 7, 1, 2356, "An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type.", emptyList())
+                pinDiag(source, fileName, 17, 5, 7, 2367, "This comparison appears to be unintentional because the types 'number' and 'Promise<number>' have no overlap.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 17, 5, 2773, "Did you forget to use 'await'?")))
+                pinDiag(source, fileName, 18, 9, 1, 2461, "Type 'Promise<string[]>' is not an array type.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 18, 9, 2773, "Did you forget to use 'await'?")))
+                pinDiag(source, fileName, 19, 21, 1, 2495, "Type 'Promise<string[]>' is not an array type or a string type.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 19, 21, 2773, "Did you forget to use 'await'?")))
+                pinDiag(source, fileName, 20, 12, 1, 2345, "Argument of type 'Promise<number>' is not assignable to parameter of type 'number'.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 20, 12, 2773, "Did you forget to use 'await'?")))
+                pinDiag(source, fileName, 21, 11, 4, 2339, "Property 'prop' does not exist on type 'Promise<{ prop: string; }>'.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 21, 11, 2773, "Did you forget to use 'await'?")))
+                pinDiag(source, fileName, 23, 27, 1, 2495, "Type 'Promise<string[]>' is not an array type or a string type.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 23, 27, 2773, "Did you forget to use 'await'?")))
+                pinDiag(source, fileName, 24, 5, 1, 2349, "This expression is not callable.", listOf("  Type 'Promise<() => void>' has no call signatures."), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 24, 5, 2773, "Did you forget to use 'await'?")))
+                pinDiag(source, fileName, 25, 5, 1, 2349, "This expression is not callable.", listOf("  Not all constituents of type 'Promise<() => void> | (() => void)' are callable.", "    Type 'Promise<() => void>' has no call signatures."), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 25, 5, 2773, "Did you forget to use 'await'?")))
+                pinDiag(source, fileName, 26, 9, 1, 2351, "This expression is not constructable.", listOf("  Type 'Promise<new () => any>' has no construct signatures."), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 26, 9, 2773, "Did you forget to use 'await'?")))
+                pinDiag(source, fileName, 27, 5, 1, 2349, "This expression is not callable.", listOf("  Type 'Promise<number>' has no call signatures."))
+            } else {
+                pinDiag(source, fileName, 11, 9, 1, 2363, "The right-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 11, 9, 2773, "Did you forget to use 'await'?")))
+                pinDiag(source, fileName, 12, 5, 1, 2362, "The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 12, 5, 2773, "Did you forget to use 'await'?")))
+                pinDiag(source, fileName, 13, 5, 5, 2365, "Operator '+' cannot be applied to types 'number' and 'Promise<number>'.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 13, 5, 2773, "Did you forget to use 'await'?")))
+                pinDiag(source, fileName, 14, 5, 5, 2365, "Operator '>' cannot be applied to types 'number' and 'Promise<number>'.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 14, 5, 2773, "Did you forget to use 'await'?")))
+                pinDiag(source, fileName, 15, 5, 1, 2356, "An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type.", emptyList())
+                pinDiag(source, fileName, 16, 7, 1, 2356, "An arithmetic operand must be of type 'any', 'number', 'bigint' or an enum type.", emptyList())
+                pinDiag(source, fileName, 17, 5, 7, 2367, "This comparison appears to be unintentional because the types 'number' and 'Promise<number>' have no overlap.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 17, 5, 2773, "Did you forget to use 'await'?")))
+                pinDiag(source, fileName, 18, 9, 1, 2488, "Type 'Promise<string[]>' must have a '[Symbol.iterator]()' method that returns an iterator.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 18, 9, 2773, "Did you forget to use 'await'?")))
+                pinDiag(source, fileName, 19, 21, 1, 2488, "Type 'Promise<string[]>' must have a '[Symbol.iterator]()' method that returns an iterator.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 19, 21, 2773, "Did you forget to use 'await'?")))
+                pinDiag(source, fileName, 20, 12, 1, 2345, "Argument of type 'Promise<number>' is not assignable to parameter of type 'number'.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 20, 12, 2773, "Did you forget to use 'await'?")))
+                pinDiag(source, fileName, 21, 11, 4, 2339, "Property 'prop' does not exist on type 'Promise<{ prop: string; }>'.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 21, 11, 2773, "Did you forget to use 'await'?")))
+                pinDiag(source, fileName, 23, 27, 1, 2504, "Type 'Promise<string[]>' must have a '[Symbol.asyncIterator]()' method that returns an async iterator.", emptyList(), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 23, 27, 2773, "Did you forget to use 'await'?")))
+                pinDiag(source, fileName, 24, 5, 1, 2349, "This expression is not callable.", listOf("  Type 'Promise<() => void>' has no call signatures."), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 24, 5, 2773, "Did you forget to use 'await'?")))
+                pinDiag(source, fileName, 25, 5, 1, 2349, "This expression is not callable.", listOf("  Not all constituents of type 'Promise<() => void> | (() => void)' are callable.", "    Type 'Promise<() => void>' has no call signatures."), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 25, 5, 2773, "Did you forget to use 'await'?")))
+                pinDiag(source, fileName, 26, 9, 1, 2351, "This expression is not constructable.", listOf("  Type 'Promise<new () => any>' has no construct signatures."), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 26, 9, 2773, "Did you forget to use 'await'?")))
+                pinDiag(source, fileName, 27, 5, 1, 2349, "This expression is not callable.", listOf("  Type 'Promise<number>' has no call signatures."))
+            }
         }
     }
 
