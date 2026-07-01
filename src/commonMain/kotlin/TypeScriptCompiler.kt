@@ -1213,7 +1213,7 @@ class TypeScriptCompiler {
             for (file in parsed.files) {
                 // Don't echo tsconfig.json (it's a TypeScript project config, not a source file)
                 val baseName = file.fileName.substringAfterLast('/')
-                if (baseName != "tsconfig.json") {
+                if (baseName != "tsconfig.json" && file.fileName !in parsed.symlinkSkipEcho) {
                     sourceEchoes.add(file.fileName to file.content)
                 }
 

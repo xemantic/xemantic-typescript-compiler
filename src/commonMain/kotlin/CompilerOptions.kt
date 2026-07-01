@@ -325,6 +325,10 @@ data class ParsedSource(
     // (extracted from the node_modules side) -> real source dir. Used only to add cross-file
     // dependency EDGES for multi-file emit ordering (symbolLinkDeclarationEmitModuleNames).
     val symlinkMap: Map<String, String> = emptyMap(),
+    // Secondary non-node_modules `@symlink` instances (all but the first of each real file's
+    // symlink group). These are COMPILED/emitted as distinct files but skipped in the source
+    // echo (tsc dedupes the echo by realpath — moduleResolutionWithSymlinks_notInNodeModules).
+    val symlinkSkipEcho: Set<String> = emptySet(),
 )
 
 /**
@@ -384,6 +388,10 @@ fun parseMultiFileSource(source: String, testFileName: String): ParsedSource {
     val lines = cleaned.split('\n')
     val directives = mutableMapOf<String, String>()
     val symlinkMap = mutableMapOf<String, String>()
+    // Per-file `// @symlink: pathA,pathB` targets (the file is ALSO present at those paths).
+    // When the targets are NOT under node_modules, realpath is not used, so each symlink
+    // acts like a distinct file (GH#10364, moduleResolutionWithSymlinks_notInNodeModules).
+    val symlinkFileTargets = mutableMapOf<String, MutableList<String>>()
     val fileEntries = mutableListOf<SourceFileEntry>()
     var currentFileName: String? = null
     val currentLines = mutableListOf<String>()
@@ -433,6 +441,14 @@ fun parseMultiFileSource(source: String, testFileName: String): ParsedSource {
                         if (pkg.isNotEmpty() && realDir.isNotEmpty()) symlinkMap[pkg] = realDir
                     }
                     if (inGlobalDirectives) globalDirectiveLines.add(line)
+                } else if (key == "symlink" && currentFileName != null) {
+                    // `// @symlink: pathA,pathB` (per-file): the current file is ALSO present
+                    // at those symlink paths. Recorded here; when the targets are NOT under
+                    // node_modules the file is re-registered at each target (see post-flush).
+                    val targets = value.split(',').map { it.trim() }.filter { it.isNotEmpty() }
+                    if (targets.isNotEmpty()) {
+                        symlinkFileTargets.getOrPut(currentFileName!!) { mutableListOf() }.addAll(targets)
+                    }
                 } else {
                     directives[key] = value
                     if (inGlobalDirectives) {
@@ -464,6 +480,31 @@ fun parseMultiFileSource(source: String, testFileName: String): ParsedSource {
         fileEntries.add(SourceFileEntry(currentFileName, fileContent))
     }
 
+    // Non-node_modules `@symlink` targets: realpath is NOT used, so each symlink path acts
+    // like a distinct file (GH#10364). Re-register the real file at each symlink target and
+    // drop the real entry (it is only reachable via the symlinks in these fixtures). Gated to
+    // targets outside node_modules — node_modules symlinks keep realpath dedup (handled by the
+    // resolver) and are left untouched, so the passing moduleResolutionWithSymlinks* tests
+    // (all node_modules targets) are unaffected.
+    val symlinkSkipEcho = mutableSetOf<String>()
+    if (symlinkFileTargets.isNotEmpty()) {
+        val rebuilt = mutableListOf<SourceFileEntry>()
+        for (entry in fileEntries) {
+            val targets = symlinkFileTargets[entry.fileName]
+            if (targets != null && targets.isNotEmpty() && targets.none { it.contains("node_modules/") }) {
+                for ((i, t) in targets.withIndex()) {
+                    rebuilt.add(SourceFileEntry(t, entry.content))
+                    // The echo dedupes by realpath: keep the first instance, skip the rest.
+                    if (i > 0) symlinkSkipEcho.add(t)
+                }
+            } else {
+                rebuilt.add(entry)
+            }
+        }
+        fileEntries.clear()
+        fileEntries.addAll(rebuilt)
+    }
+
     var options = CompilerOptions()
 
     // Apply options from tsconfig.json FIRST (if present in the file entries).
@@ -493,7 +534,7 @@ fun parseMultiFileSource(source: String, testFileName: String): ParsedSource {
         return ParsedSource(options, listOf(SourceFileEntry(testFileName, cleanedSource)))
     }
 
-    return ParsedSource(options, fileEntries, hasExplicitFilenames = true, symlinkMap = symlinkMap)
+    return ParsedSource(options, fileEntries, hasExplicitFilenames = true, symlinkMap = symlinkMap, symlinkSkipEcho = symlinkSkipEcho)
 }
 
 /**
