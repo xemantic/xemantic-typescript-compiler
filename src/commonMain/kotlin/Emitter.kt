@@ -1675,10 +1675,15 @@ class Emitter(
         if (block.statements.isEmpty() && !block.multiLine) {
             write(" { }")
         } else if (!block.multiLine && block.statements.isNotEmpty() && isFunctionBody &&
-            block.statements.any { it is IfStatement }) {
-            // Semi-inline function body: contains if/else — keep outer braces on same line
-            // but expand content to multi-line (TypeScript's format for single-line source bodies
-            // with compound statements). e.g.: `function foo() { if (true)\n    return "";\nelse\n    return 0; }`
+            block.statements.any { it is IfStatement && it.pos >= 0 }) {
+            // Semi-inline function body: contains a SOURCE if/else — keep outer braces on
+            // same line but expand content to multi-line (tsc's block statement lists default
+            // to MultiLineBlockStatements even in a single-line function body),
+            // e.g.: `function foo() { if (true)\n    return "";\nelse\n    return 0; }`.
+            // A SYNTHESIZED if (pos < 0 — the default-param `if (c === void 0)` conversion)
+            // carries tsc's EmitFlags.SingleLine and stays fully inline via the single-line
+            // branch below (`{ var _r; if (c === void 0) { c = (…); } }` —
+            // staticFieldWithInterfaceContext).
             write(" { ")
             skipNextIndent = true
             val savedForce = forceBlocksMultiLine
@@ -2340,7 +2345,9 @@ class Emitter(
                 emitInlineLeadingComments(element)
                 // ClassExpression bodies are always multiline; indent so the closing `}` aligns
                 // at +1 relative to the array context (mirrors TypeScript emitter behavior).
-                val classInArray = element is ClassExpression
+                // A transformed class-expression capture list (CommaListExpression) likewise gets
+                // the array-literal ListFormat.Indented level (staticFieldWithInterfaceContext).
+                val classInArray = element is ClassExpression || element is CommaListExpression
                 if (classInArray) indentLevel++
                 emitExpression(element)
                 if (classInArray) indentLevel--
@@ -2484,7 +2491,11 @@ class Emitter(
                 // its own continuation level; this adds the missing object-literal level).
                 val valueWraps = prop is PropertyAssignment &&
                     prop.initializer.let { v ->
-                        v is BinaryExpression && v.left.end > 0 && hasNewLineInSource(v.left.end, v.right.pos)
+                        (v is BinaryExpression && v.left.end > 0 && hasNewLineInSource(v.left.end, v.right.pos)) ||
+                            // A transformed class-expression capture list always breaks lines —
+                            // its continuation gets the object-literal ListFormat.Indented level
+                            // (staticFieldWithInterfaceContext: `{ c: (_d = class {` → 8-space).
+                            v is CommaListExpression
                     }
                 val needsExtraIndent =
                     (isSyntheticObject && (prop is MethodDeclaration || prop is GetAccessor || prop is SetAccessor)) ||
@@ -3595,6 +3606,16 @@ class Emitter(
         if (withParens) write("(")
         indentLevel++
         for ((i, elem) in node.elements.withIndex()) {
+            // A capture element carrying a static prop's leading comment prints it on its own
+            // line at the continuation indent (staticFieldWithInterfaceContext).
+            if (!options.removeComments && i > 0) {
+                elem.leadingComments?.forEach { comment ->
+                    write(comment.text)
+                    writeNewLine()
+                    repeat(indentLevel) { sb.append("    ") }
+                    isStartOfLine = false
+                }
+            }
             emitExpression(elem)
             if (i < node.elements.size - 1) {
                 write(",")

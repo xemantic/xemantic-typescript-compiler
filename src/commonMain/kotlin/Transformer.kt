@@ -391,6 +391,22 @@ class Transformer(
         return ph
     }
 
+    // staticFieldWithInterfaceContext: a FUNCTION-LOCAL class-expression wrapper temp is
+    // named at PRINT time by tsc — the file-top hoisted pool (`var _a.._q;`) prints first
+    // and registers its names in generatedNames, so the fn's temp skips them (`_r`).
+    // Allocate a placeholder in fn scopes (consuming a slot of the per-fn counter) and
+    // rename at file end to tempNameFor(filePoolFinal + localIdx) — identical to the
+    // immediate name when the file pool is empty.
+    private var fnClsTempSeq = 0
+    private val fnClsTempOrder = mutableListOf<Pair<String, Int>>()  // placeholder → fn-local slot
+    private fun nextClassExprTempName(): String =
+        if (tempScopeDepth > 0 || functionScopeDepth > 0) {
+            val localIdx = tempVarCounter++
+            val ph = "@@fnCls${fnClsTempSeq++}"
+            fnClsTempOrder.add(ph to localIdx)
+            ph
+        } else nextTempVarName()
+
     /** Detects a legacy-decorated class member with a COMPUTED name anywhere in the file
      *  (class declarations at any statement depth + class expressions in void/paren/
      *  expression-statement position — the shapes the faithful two-pool emit handles). */
@@ -469,6 +485,8 @@ class Transformer(
         decKeyTempCounter = 0
         decKeyTempOrder.clear()
         filePool1Vars.clear()
+        fnClsTempSeq = 0
+        fnClsTempOrder.clear()
         fileHasDecoratedComputedKeys = options.experimentalDecorators && !useDefineForClassFields &&
             statementsHaveDecoratedComputedKey(sourceFile.statements)
         // B333: per-file JSX runtime decision — the base comes from the @jsx option
@@ -648,7 +666,18 @@ class Transformer(
         if (!options.isolatedModules && !options.verbatimModuleSyntax) {
             collectConstEnumValues(sourceFile.statements)
         }
+        val fnClsChainCount = chainTempCounter  // renameChainTemps resets it; capture for the fnCls base
         var transformed = renameChainTemps(transformStatements(sourceFile.statements, atTopLevel = true))
+        // staticFieldWithInterfaceContext: fn-local class-expr wrapper temps rename to names
+        // AFTER the file-top hoisted pool (tsc print-time generatedNames skip) — identical
+        // to the immediate per-fn name when the file pool is empty.
+        if (fnClsTempOrder.isNotEmpty()) {
+            val base = tempVarCounter + fnClsChainCount + decKeyTempOrder.size
+            for ((ph, localIdx) in fnClsTempOrder) {
+                val real = tempNameFor(base + localIdx)
+                transformed = transformed.map { renameTempInStmt(it, ph, real) }
+            }
+        }
         // decoratorsOnComputedProperties: rename pool-2 placeholders to their final names
         // (continuing the sequence after pool 1's final counter — `var _a.._p; var _q..;`)
         // and prepend the two consolidated file-top var statements.
@@ -8623,7 +8652,10 @@ class Transformer(
                     finalParams = params.map { it.copy(initializer = null) }
                     finalBody = flatBody.copy(
                         statements = listOf(varStmt) + ifStmts + flatBody.statements,
-                        multiLine = true,
+                        // tsc keeps the ORIGINAL body's line format: a single-line source body
+                        // `{ }` prints `{ var _r; if (c === void 0) { c = (…); } }` inline
+                        // (staticFieldWithInterfaceContext).
+                        multiLine = flatBody.multiLine,
                     )
                 } else {
                     // No conversion — temps keep the prior outer-scope hoisting.
@@ -9050,7 +9082,15 @@ class Transformer(
     private fun transformBindingElement(element: BindingElement): BindingElement {
         return element.copy(
             name = transformBindingName(element.name),
-            initializer = element.initializer?.let { transformExpression(it) },
+            initializer = element.initializer?.let {
+                // ES named evaluation: `let { c: c4 = class {…} }` / `let [c8 = class {…}]`
+                // assigns the BINDING name — __setFunctionName(_e, "c4") in the capture list.
+                if (it is ClassExpression && it.name == null && element.name is Identifier) {
+                    val saved = pendingClassExprBindingName
+                    pendingClassExprBindingName = (element.name as Identifier).text
+                    try { transformExpression(it) } finally { pendingClassExprBindingName = saved }
+                } else transformExpression(it)
+            },
         )
     }
 
@@ -10714,7 +10754,17 @@ class Transformer(
                 // `{ [await a]: y }` inside an async body emits `[await a]` in the __awaiter
                 // generator function, which is a syntax error / no-op at the await call site.
                 name = transformPropertyName(node.name),
-                initializer = transformExpression(node.initializer),
+                initializer = run {
+                    // ES named evaluation: `{ c: class {…} }` assigns the property KEY as the
+                    // class's name — __setFunctionName(_d, "c") in the capture list
+                    // (staticFieldWithInterfaceContext).
+                    val init = node.initializer
+                    if (init is ClassExpression && init.name == null && node.name is Identifier) {
+                        val saved = pendingClassExprBindingName
+                        pendingClassExprBindingName = (node.name as Identifier).text
+                        try { transformExpression(init) } finally { pendingClassExprBindingName = saved }
+                    } else transformExpression(init)
+                },
             )
 
             is ShorthandPropertyAssignment -> node.copy(
@@ -13551,7 +13601,7 @@ class Transformer(
                         hoistedVarScopes.lastOrNull()?.add(n)
                         if (functionScopeDepth == 0) computedPropHoistNames.add(n)
                     }
-                    val tempName = nextTempVarName()
+                    val tempName = nextClassExprTempName()
                     hoistedVarScopes.lastOrNull()?.add(tempName)
                     if (functionScopeDepth == 0) computedPropHoistNames.add(tempName)
                     val elements = mutableListOf<Expression>()
@@ -13572,7 +13622,7 @@ class Transformer(
 
         // Allocate a temp var upfront so we can pass it to transformClassBody for use in
         // static initializers and trailing statements.
-        val tempName = nextTempVarName()
+        val tempName = nextClassExprTempName()
         hoistedVarScopes.lastOrNull()?.add(tempName)
         // CJS hoist: the `var _a;` declaration needs to appear BEFORE the `__esModule`
         // preamble for class-expression-allocated temps. Track via `computedPropHoistNames`
@@ -13680,7 +13730,11 @@ class Transformer(
                     binExpr.copy(right = replaceIdentifierInExpr(binExpr.right, className, tempName))
                 } else exprStmt.expression
             } else exprStmt.expression
-            elements.add(replaceExpr)
+            // A static prop's leading comment rides its capture element so the comma-list
+            // emit keeps it on its own line (staticFieldWithInterfaceContext).
+            val withComments = if (!exprStmt.leadingComments.isNullOrEmpty() && replaceExpr is BinaryExpression)
+                replaceExpr.copy(leadingComments = exprStmt.leadingComments) else replaceExpr
+            elements.add(withComments)
         }
         elements.add(syntheticId(tempName))
 
@@ -13849,6 +13903,21 @@ class Transformer(
             arguments = e.arguments.map { renameTempInExpr(it, from, to) },
         )
         is ArrayLiteralExpression -> e.copy(elements = e.elements.map { renameTempInExpr(it, from, to) })
+        is ObjectLiteralExpression -> e.copy(properties = e.properties.map { prop ->
+            if (prop is PropertyAssignment) prop.copy(initializer = renameTempInExpr(prop.initializer, from, to)) else prop
+        })
+        is FunctionExpression -> e.copy(
+            parameters = e.parameters.map { p -> p.copy(initializer = p.initializer?.let { renameTempInExpr(it, from, to) }) },
+            body = e.body.copy(statements = e.body.statements.map { renameTempInStmt(it, from, to) }),
+        )
+        is ArrowFunction -> e.copy(
+            parameters = e.parameters.map { p -> p.copy(initializer = p.initializer?.let { renameTempInExpr(it, from, to) }) },
+            body = when (val b = e.body) {
+                is Block -> b.copy(statements = b.statements.map { renameTempInStmt(it, from, to) })
+                is Expression -> renameTempInExpr(b, from, to)
+                else -> b
+            },
+        )
         else -> replaceIdentifierInExpr(e, from, to)
     }
 
@@ -13874,9 +13943,27 @@ class Transformer(
         is ExpressionStatement -> st.copy(expression = renameTempInExpr(st.expression, from, to))
         is VariableStatement -> st.copy(declarationList = st.declarationList.copy(
             declarations = st.declarationList.declarations.map { d ->
-                d.copy(initializer = d.initializer?.let { renameTempInExpr(it, from, to) })
+                d.copy(
+                    // A hoisted `var <placeholder>;` renames its declared NAME too (safe:
+                    // `from` is always a synthetic @@-prefixed placeholder, never user code).
+                    name = (d.name as? Identifier)?.takeIf { it.text == from }?.copy(text = to) ?: d.name,
+                    initializer = d.initializer?.let { renameTempInExpr(it, from, to) },
+                )
             }
         ))
+        is FunctionDeclaration -> st.copy(
+            parameters = st.parameters.map { p ->
+                p.copy(initializer = p.initializer?.let { renameTempInExpr(it, from, to) })
+            },
+            body = st.body?.let { b -> b.copy(statements = b.statements.map { renameTempInStmt(it, from, to) }) },
+        )
+        is IfStatement -> st.copy(
+            expression = renameTempInExpr(st.expression, from, to),
+            thenStatement = renameTempInStmt(st.thenStatement, from, to),
+            elseStatement = st.elseStatement?.let { renameTempInStmt(it, from, to) },
+        )
+        is Block -> st.copy(statements = st.statements.map { renameTempInStmt(it, from, to) })
+        is ReturnStatement -> st.copy(expression = st.expression?.let { renameTempInExpr(it, from, to) })
         else -> replaceIdentifierInStmt(st, from, to)
     }
 
