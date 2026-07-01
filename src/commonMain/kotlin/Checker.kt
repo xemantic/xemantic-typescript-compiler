@@ -54037,13 +54037,9 @@ interface DataView {
             // TS1538: braced `\u{...}` regex escapes require the u/v flag. This
             // per-file walker already reaches every expression position; reuse it.
             is RegularExpressionLiteralNode -> {
-                emitTS1538ForRegexUnicodeEscapes(expr, source, fileName)
-                emitTS1503And1532ForNamedGroups(expr, source, fileName)
-                emitTS1499ForRegexFlags(expr, source, fileName)
-                emitTS1517ForCharClassRanges(expr, source, fileName)
-                emitTS1501ForFlagTargetAvailability(expr, source, fileName)
-                emitTS1005ForVModeUnterminatedClass(expr, source, fileName)
-                emitRegexGrammarSubset(expr, source, fileName)
+                // Full faithful port of tsc's scanRegularExpressionWorker + flag scan
+                // (round 370) — replaces the 7 prior scoped emitters.
+                scanRegExpFull(expr, source, fileName)
             }
             else -> {}
         }
@@ -54097,222 +54093,6 @@ interface DataView {
         ))
     }
 
-    /**
-     * TS1538: an `\u{...}` extended-unicode escape in a regex literal is only
-     * valid when the `u` or `v` flag is set. Purely syntactic scan of the raw
-     * token text. FP-safe: TypeScript ALWAYS errors on braced-unicode without
-     * u/v (invalid regex grammar) — so this can never regress a passing test.
-     */
-    private fun emitTS1538ForRegexUnicodeEscapes(node: RegularExpressionLiteralNode, source: String, fileName: String) {
-        val text = node.text
-        val lastSlash = text.lastIndexOf('/')
-        if (lastSlash <= 0) return
-        val flags = text.substring(lastSlash + 1)
-        if (flags.contains('u') || flags.contains('v')) return
-        // `(?<!\\)` skips an escaped backslash (`\\u{...}` is a literal `u{...}`).
-        for (m in Regex("""(?<!\\)\\u\{[0-9a-fA-F]+}""").findAll(text)) {
-            if (m.range.first >= lastSlash) continue // never (flags are alphabetic), defensive
-            val absPos = node.pos + m.range.first
-            val (line, character) = getLineAndCharacterOfPosition(source, absPos)
-            diagnostics.add(Diagnostic(
-                message = "Unicode escape sequences are only available when the Unicode (u) flag or the Unicode Sets (v) flag is set.",
-                category = DiagnosticCategory.Error,
-                code = 1538,
-                fileName = fileName,
-                line = line,
-                character = character,
-                start = absPos,
-                length = m.value.length,
-            ))
-        }
-    }
-
-    /**
-     * TS1517: "Range out of order in character class." — a `A-B` range inside `[...]`
-     * where A's value exceeds B's. Without the u/v flag, plain characters compare as
-     * UTF-16 UNITS (a surrogate-pair lookalike like 𝘈 splits — `[𝘈-𝘡]` is out of order
-     * because the range is `\uDE08-\uD835`); WITH u/v, code points (raw pairs AND
-     * consecutive `\uD8xx\uDCxx` escapes combine). A braced `\u{...}` escape compares
-     * by its full value regardless of flags (TS1538 is emitted separately for the
-     * missing-flag part). FP-safe: an out-of-order range is a hard regex error in TS.
-     */
-    private fun emitTS1517ForCharClassRanges(node: RegularExpressionLiteralNode, source: String, fileName: String) {
-        val text = node.text
-        if (text.length < 2 || text[0] != '/') return
-        val lastSlash = text.lastIndexOf('/')
-        if (lastSlash <= 0) return
-        val flags = text.substring(lastSlash + 1)
-        val unicodeMode = flags.contains('u') || flags.contains('v')
-        var i = 1
-        while (i < lastSlash) {
-            val c = text[i]
-            if (c == '\\') { i += 2; continue }
-            if (c != '[') { i++; continue }
-            var j = i + 1
-            if (j < lastSlash && text[j] == '^') j++
-            val bodyStart = j
-            var k = bodyStart
-            var end = -1
-            var vNested = false
-            while (k < lastSlash) {
-                val ch = text[k]
-                if (ch == '\\') { k += 2; continue }
-                if (ch == ']') { end = k; break }
-                if (ch == '[' && flags.contains('v')) { vNested = true; break }
-                k++
-            }
-            if (vNested) { i = k + 1; continue }
-            if (end < 0) return
-            val body = text.substring(bodyStart, end)
-            if (flags.contains('v') && (body.contains("&&") || body.contains("--"))) { i = end + 1; continue }
-            checkRegexClassRanges(text, bodyStart, end, unicodeMode, node, source, fileName)
-            i = end + 1
-        }
-    }
-
-    /** Parse one character-class atom at [p]; returns (value-or-null, next index). */
-    private fun regexClassAtom(text: String, p: Int, end: Int, unicodeMode: Boolean): Pair<Int?, Int> {
-        val c = text[p]
-        if (c == '\\') {
-            if (p + 1 >= end) return null to p + 1
-            return when (val e = text[p + 1]) {
-                'u' -> {
-                    if (p + 2 < end && text[p + 2] == '{') {
-                        val close = text.indexOf('}', p + 3)
-                        if (close in (p + 3) until end) text.substring(p + 3, close).toIntOrNull(16) to close + 1
-                        else null to p + 2
-                    } else if (p + 6 <= end) {
-                        val v = text.substring(p + 2, p + 6).toIntOrNull(16)
-                        when {
-                            v == null -> null to p + 2
-                            unicodeMode && v in 0xD800..0xDBFF && p + 12 <= end &&
-                                text[p + 6] == '\\' && text[p + 7] == 'u' && text[p + 8] != '{' -> {
-                                val v2 = text.substring(p + 8, p + 12).toIntOrNull(16)
-                                if (v2 != null && v2 in 0xDC00..0xDFFF) {
-                                    (0x10000 + ((v - 0xD800) shl 10) + (v2 - 0xDC00)) to p + 12
-                                } else v to p + 6
-                            }
-                            else -> v to p + 6
-                        }
-                    } else null to p + 2
-                }
-                'x' -> (if (p + 4 <= end) text.substring(p + 2, p + 4).toIntOrNull(16) else null) to (p + 4).coerceAtMost(end)
-                'd', 'D', 'w', 'W', 's', 'S', 'p', 'P' ->
-                    if ((e == 'p' || e == 'P') && p + 2 < end && text[p + 2] == '{') {
-                        val close = text.indexOf('}', p + 3)
-                        null to (if (close in 0 until end) close + 1 else p + 2)
-                    } else null to p + 2
-                't' -> 0x9 to p + 2
-                'n' -> 0xA to p + 2
-                'r' -> 0xD to p + 2
-                'v' -> 0xB to p + 2
-                'f' -> 0xC to p + 2
-                'b' -> 0x8 to p + 2 // backspace inside a character class
-                '0' -> 0 to p + 2
-                'c' -> (if (p + 2 < end) text[p + 2].code % 32 else null) to (p + 3).coerceAtMost(end)
-                else -> e.code to p + 2
-            }
-        }
-        if (unicodeMode && c.isHighSurrogate() && p + 1 < end && text[p + 1].isLowSurrogate()) {
-            return (0x10000 + ((c.code - 0xD800) shl 10) + (text[p + 1].code - 0xDC00)) to p + 2
-        }
-        return c.code to p + 1
-    }
-
-    private fun checkRegexClassRanges(
-        text: String, bodyStart: Int, end: Int, unicodeMode: Boolean,
-        node: RegularExpressionLiteralNode, source: String, fileName: String,
-    ) {
-        var p = bodyStart
-        var prevValue: Int? = null
-        var prevStart = -1
-        while (p < end) {
-            if (text[p] == '-' && prevStart >= 0 && p + 1 < end) {
-                val (rv, np) = regexClassAtom(text, p + 1, end, unicodeMode)
-                val lv = prevValue
-                if (lv != null && rv != null && lv > rv) {
-                    val absStart = node.pos + prevStart
-                    val (line, character) = getLineAndCharacterOfPosition(source, absStart)
-                    diagnostics.add(Diagnostic(
-                        message = "Range out of order in character class.",
-                        category = DiagnosticCategory.Error, code = 1517,
-                        fileName = fileName, line = line, character = character,
-                        start = absStart, length = np - prevStart,
-                    ))
-                }
-                prevValue = null
-                prevStart = -1
-                p = np
-                continue
-            }
-            val (v, np) = regexClassAtom(text, p, end, unicodeMode)
-            prevValue = v
-            prevStart = p
-            p = np
-        }
-    }
-
-    /** True iff the character at [pos] in [text] is escaped (preceded by an odd run of `\`). */
-    private fun isRegexEscaped(text: String, pos: Int): Boolean {
-        var i = pos - 1; var n = 0
-        while (i >= 0 && text[i] == '\\') { n++; i-- }
-        return n % 2 == 1
-    }
-
-    /**
-     * TS1503 (named capturing groups require ES2018+) and TS1532 (backreference to a
-     * non-existent named group, with a TS1369 "Did you mean 'X'?" suggestion). A bounded
-     * text scan of the regex literal — collects `(?<name>` group definitions and `\k<name>`
-     * backreferences. FP-safe: TS1503 only fires below ES2018 (where named groups are a hard
-     * error), TS1532 only on a backreference whose name was never declared.
-     */
-    private fun emitTS1503And1532ForNamedGroups(node: RegularExpressionLiteralNode, source: String, fileName: String) {
-        val text = node.text
-        if (text.length < 2 || text[0] != '/') return
-        val lastSlash = text.lastIndexOf('/')
-        if (lastSlash <= 0) return
-        // `(?<name>` — the `[A-Za-z_$]` after `<` excludes lookbehind `(?<=` / `(?<!`.
-        val groupDefRe = Regex("""\(\?<([A-Za-z_$][\w$]*)>""")
-        val declared = LinkedHashSet<String>()
-        for (m in groupDefRe.findAll(text)) {
-            if (m.range.first >= lastSlash) continue
-            if (isRegexEscaped(text, m.range.first)) continue
-            val name = m.groupValues[1]
-            declared.add(name)
-            if (options.target < ScriptTarget.ES2018) {
-                val absPos = node.pos + m.range.first + 2 // start of `<`
-                val (line, character) = getLineAndCharacterOfPosition(source, absPos)
-                diagnostics.add(Diagnostic(
-                    message = "Named capturing groups are only available when targeting 'ES2018' or later.",
-                    category = DiagnosticCategory.Error, code = 1503, fileName = fileName,
-                    line = line, character = character, start = absPos, length = name.length + 2,
-                ))
-            }
-        }
-        // `\k<name>` — a single (unescaped) backslash, k, then the name.
-        val backRe = Regex("""\\k<([A-Za-z_$][\w$]*)>""")
-        for (m in backRe.findAll(text)) {
-            if (m.range.first >= lastSlash) continue
-            if (isRegexEscaped(text, m.range.first)) continue
-            val name = m.groupValues[1]
-            if (name in declared) continue
-            val nameRange = m.groups[1]!!.range
-            val absPos = node.pos + nameRange.first
-            val (line, character) = getLineAndCharacterOfPosition(source, absPos)
-            val suggestion = getSpellingSuggestionFromNames(name, declared)
-            val related = if (suggestion != null) listOf(Diagnostic(
-                message = "Did you mean '$suggestion'?",
-                category = DiagnosticCategory.Message, code = 1369, fileName = null,
-            )) else emptyList()
-            diagnostics.add(Diagnostic(
-                message = "There is no capturing group named '$name' in this regular expression.",
-                category = DiagnosticCategory.Error, code = 1532, fileName = fileName,
-                line = line, character = character, start = absPos, length = name.length,
-                relatedInformation = related,
-            ))
-        }
-    }
-
     private fun regexLevenshteinWithMax(s1: String, s2: String, max: Double): Double? {
         var previous = DoubleArray(s2.length + 1) { it.toDouble() }
         var current = DoubleArray(s2.length + 1)
@@ -54358,470 +54138,799 @@ interface DataView {
     }
 
     /**
-     * B361: scoped port of tsc's scanRegularExpressionWorker (annexB=true, scanner.ts
-     * 2613–3609) covering the term/quantifier grammar and atom/class escapes —
-     * TS1005('}' expected), TS1125, TS1505, TS1506, TS1507, TS1508, TS1510, TS1512,
-     * TS1516, TS1531, TS1535. With annexB=true, tsc's `anyUnicodeModeOrNonAnnexB`
-     * reduces to "has the u flag" (= [strict] here). Constructs OUTSIDE the subset
-     * BAIL the whole regex silently (emit nothing): groups `(...)`, the `v` flag,
-     * braced `\p{...}` bodies in non-u mode, octal/decimal escapes through
-     * scanEscapeSequence, unterminated classes. The existing narrow per-regex
-     * emitters (TS1538/TS1503/TS1532/TS1499/TS1517/TS1501/TS1005-vmode) keep their
-     * codes — no overlap (range ORDER stays with B275's TS1517; this walker only
-     * adds the class-escape-bounded TS1516). Same-start dedup mirrors tsc
-     * parseErrorAtPosition (an error at the same start as the previous is dropped —
-     * this is why `\u\i` reports only TS1125: the `\i` TS1535 lands on the same
-     * position and dies).
+     * Full faithful port of tsc's `scanRegularExpressionWorker` (scanner.ts 2613-3609)
+     * plus the trailing-flag scan (TS1499/1500/1501/1502) - replaces the prior scoped
+     * subset that bailed on groups/backreferences/octal escapes. annexB=true (the
+     * checker context), so `anyUnicodeModeOrNonAnnexB` reduces to "has the u or v flag".
+     * FP-safe by construction: a valid regex produces no diagnostics; a malformed one
+     * matches tsc's baseline exactly. Same-start dedup mirrors parseErrorAtPosition.
      */
-    private fun emitRegexGrammarSubset(node: RegularExpressionLiteralNode, source: String, fileName: String) {
-        val text = node.text
-        if (text.length < 2 || text[0] != '/') return
-        val end = text.lastIndexOf('/')
+    private fun scanRegExpFull(node: RegularExpressionLiteralNode, source: String, fileName: String) {
+        val raw = node.text
+        if (raw.length < 2 || raw[0] != '/') return
+        val end = raw.lastIndexOf('/')
         if (end <= 0) return
-        val flagsStr = text.substring(end + 1)
-        if (flagsStr.contains('v')) return
-        val strict = flagsStr.contains('u')
-
-        // Pre-screen: groups are out of subset.
-        run {
-            var i = 1
-            var inCls = false
-            while (i < end) {
-                when (text[i]) {
-                    '\\' -> i++
-                    '[' -> inCls = true
-                    ']' -> inCls = false
-                    '(' -> if (!inCls) return
-                }
-                i++
-            }
-        }
-
-        var bailed = false
-        class RegexErr(val offset: Int, val len: Int, val code: Int, val msg: String, val suggestion: String?)
-        val pending = mutableListOf<RegexErr>()
-        var lastStart = -1
-        fun err(offset: Int, len: Int, code: Int, msg: String, suggestion: String? = null) {
-            if (offset == lastStart) return
-            lastStart = offset
-            pending.add(RegexErr(offset, len, code, msg, suggestion))
-        }
-        var pos = 1
-        fun chAt(i: Int): Char = if (i in 1 until end) text[i] else ' '
-        fun atEnd() = pos >= end
-        fun isHexD(c: Char) = c in '0'..'9' || c in 'a'..'f' || c in 'A'..'F'
-        fun isAsciiLetter(c: Char) = c in 'a'..'z' || c in 'A'..'Z'
-
-        fun scanEscapeSequenceSub(atomEscape: Boolean) {
-            val start = pos // at the backslash
-            pos++
-            if (atEnd()) { bailed = true; return }
-            val c = text[pos]; pos++
-            when (c) {
-                '0' -> if (!atEnd() && text[pos].isDigit()) bailed = true
-                in '1'..'9' -> bailed = true
-                'b', 't', 'n', 'v', 'f', 'r', '\'', '"' -> {}
-                'u' -> {
-                    if (!atEnd() && text[pos] == '{') {
-                        // Braced form: TS1538 (non-u) is owned by the dedicated
-                        // emitter; u-mode bodies are out of subset — consume silently.
-                        val close = text.indexOf('}', pos)
-                        if (close < 0 || close >= end) bailed = true else pos = close + 1
-                    } else {
-                        while (pos < start + 6) {
-                            if (atEnd() || !isHexD(text[pos])) {
-                                err(pos, 0, 1125, "Hexadecimal digit expected.")
-                                return
-                            }
-                            pos++
-                        }
-                    }
-                }
-                'x' -> {
-                    while (pos < start + 4) {
-                        if (atEnd() || !isHexD(text[pos])) {
-                            err(pos, 0, 1125, "Hexadecimal digit expected.")
-                            return
-                        }
-                        pos++
-                    }
-                }
-                else -> {
-                    if (strict) err(pos - 2, 2, 1535, "This character cannot be escaped in a regular expression.")
-                }
-            }
-        }
-
-        fun scanCharacterEscape(atomEscape: Boolean) {
-            // pos at the char AFTER the backslash
-            if (atEnd()) { bailed = true; return }
-            when (text[pos]) {
-                'c' -> {
-                    pos++
-                    if (!atEnd() && isAsciiLetter(text[pos])) pos++
-                    else if (strict) err(pos - 2, 2, 1512, "'\\c' must be followed by an ASCII letter.")
-                    else if (atomEscape) pos-- // AnnexB: `\` is a lone backslash; the c re-scans
-                }
-                '^', '$', '/', '\\', '.', '*', '+', '?', '(', ')', '[', ']', '{', '}', '|' -> pos++
-                else -> { pos--; scanEscapeSequenceSub(atomEscape) }
-            }
-        }
-
-        fun scanCharacterClassEscape(): Boolean {
-            if (atEnd()) return false
-            when (val c = text[pos]) {
-                'd', 'D', 's', 'S', 'w', 'W' -> { pos++; return true }
-                'p', 'P' -> {
-                    pos++
-                    if (!atEnd() && text[pos] == '{') {
-                        // B362: full \p{...} property validation (u-mode only; the
-                        // non-u availability error stays out of subset).
-                        if (!strict) { bailed = true; return true }
-                        pos++
-                        fun isWordChar(ch2: Char) = ch2 in 'a'..'z' || ch2 in 'A'..'Z' || ch2 in '0'..'9' || ch2 == '_'
-                        val nameStart = pos
-                        while (!atEnd() && isWordChar(text[pos])) pos++
-                        val nameOrValue = text.substring(nameStart, pos)
-                        if (!atEnd() && text[pos] == '=') {
-                            if (pos == nameStart) { bailed = true; return true }
-                            val propertyName = REGEX_NONBINARY_PROPS[nameOrValue]
-                            if (propertyName == null) {
-                                err(nameStart, pos - nameStart, 1524, "Unknown Unicode property name.",
-                                    regexSpellingSuggestion(nameOrValue, REGEX_NONBINARY_PROPS.keys))
-                            }
-                            pos++
-                            val valueStart = pos
-                            while (!atEnd() && isWordChar(text[pos])) pos++
-                            val value = text.substring(valueStart, pos)
-                            if (pos == valueStart) { bailed = true; return true }
-                            if (propertyName != null) {
-                                val values = if (propertyName == "General_Category") REGEX_GC_VALUES else REGEX_SCRIPT_VALUES
-                                if (value !in values) {
-                                    err(valueStart, pos - valueStart, 1526, "Unknown Unicode property value.",
-                                        regexSpellingSuggestion(value, values))
-                                }
-                            }
-                        } else {
-                            if (pos == nameStart) { bailed = true; return true }
-                            if (nameOrValue in REGEX_BINARY_PROPS_OF_STRINGS) { bailed = true; return true }
-                            if (nameOrValue !in REGEX_GC_VALUES && nameOrValue !in REGEX_BINARY_PROPS) {
-                                err(nameStart, pos - nameStart, 1529, "Unknown Unicode property name or value.",
-                                    regexSpellingSuggestion(nameOrValue,
-                                        REGEX_GC_VALUES.asSequence().plus(REGEX_BINARY_PROPS).plus(REGEX_BINARY_PROPS_OF_STRINGS).asIterable()))
-                            }
-                        }
-                        if (!atEnd() && text[pos] == '}') pos++ else bailed = true
-                        return true
-                    } else if (strict) {
-                        err(pos - 2, 2, 1531, "'\\$c' must be followed by a Unicode property value expression enclosed in braces.")
-                        return true
-                    } else {
-                        pos--
-                        return false
-                    }
-                }
-                else -> return false
-            }
-        }
-
-        fun scanDecimalEscape(): Boolean {
-            if (!atEnd() && text[pos] in '1'..'9') {
-                while (!atEnd() && text[pos].isDigit()) pos++
-                return true
-            }
-            return false
-        }
-
-        fun scanAtomEscape() {
-            // pos at the char after the backslash
-            if (!atEnd() && text[pos] == 'k') {
-                pos++
-                if (!atEnd() && text[pos] == '<') bailed = true // group names: out of subset
-                else if (strict) err(pos - 2, 2, 1510, "'\\k' must be followed by a capturing group name enclosed in angle brackets.")
-                return
-            }
-            if (!scanCharacterClassEscape()) {
-                if (!scanDecimalEscape()) scanCharacterEscape(atomEscape = true)
-            }
-        }
-
-        /** Returns true when the atom is a CHARACTER (false = class escape like \w). */
-        fun scanClassAtom(): Boolean {
-            if (chAt(pos) == '\\') {
-                pos++
-                if (atEnd()) { bailed = true; return true }
-                return when (text[pos]) {
-                    'b', '-' -> { pos++; true }
-                    else -> {
-                        if (scanCharacterClassEscape()) false
-                        else { scanCharacterEscape(atomEscape = false); true }
-                    }
-                }
-            }
-            pos++
-            return true
-        }
-
-        fun scanClassRanges() {
-            if (chAt(pos) == '^') pos++
-            while (true) {
-                if (bailed) return
-                if (atEnd()) { bailed = true; return } // unterminated class
-                if (text[pos] == ']') return
-                val minStart = pos
-                val minIsChar = scanClassAtom()
-                if (chAt(pos) == '-') {
-                    pos++
-                    if (atEnd()) { bailed = true; return }
-                    if (text[pos] == ']') return
-                    if (!minIsChar && strict) {
-                        err(minStart, pos - 1 - minStart, 1516, "A character class range must not be bounded by another character class.")
-                    }
-                    val maxStart = pos
-                    val maxIsChar = scanClassAtom()
-                    if (!maxIsChar && strict) {
-                        err(maxStart, pos - maxStart, 1516, "A character class range must not be bounded by another character class.")
-                        continue
-                    }
-                    // Range ORDER (TS1517) is owned by the existing B275 walker.
-                }
-            }
-        }
-
-        var quantifiable = false
-        while (!bailed && !atEnd()) {
-            val start = pos
-            when (val ch = text[pos]) {
-                '^', '$' -> { pos++; quantifiable = false }
-                '\\' -> {
-                    pos++
-                    if (!atEnd() && (text[pos] == 'b' || text[pos] == 'B')) { pos++; quantifiable = false }
-                    else { scanAtomEscape(); quantifiable = true }
-                }
-                '{' -> {
-                    pos++
-                    val digitsStart = pos
-                    while (!atEnd() && text[pos].isDigit()) pos++
-                    val min = text.substring(digitsStart, pos)
-                    if (!strict && min.isEmpty()) { quantifiable = true }
-                    else {
-                        var fall = true
-                        if (chAt(pos) == ',') {
-                            pos++
-                            val maxStart = pos
-                            while (!atEnd() && text[pos].isDigit()) pos++
-                            val max = text.substring(maxStart, pos)
-                            if (min.isEmpty()) {
-                                if (max.isNotEmpty() || chAt(pos) == '}') {
-                                    err(digitsStart, 0, 1505, "Incomplete quantifier. Digit expected.")
-                                } else {
-                                    err(start, 1, 1508, "Unexpected '{'. Did you mean to escape it with backslash?")
-                                    quantifiable = true; fall = false
-                                }
-                            } else if (max.isNotEmpty() && (min.toLongOrNull() ?: 0L) > (max.toLongOrNull() ?: 0L) &&
-                                (strict || chAt(pos) == '}')
-                            ) {
-                                err(digitsStart, pos - digitsStart, 1506, "Numbers out of order in quantifier.")
-                            }
-                        } else if (min.isEmpty()) {
-                            if (strict) err(start, 1, 1508, "Unexpected '{'. Did you mean to escape it with backslash?")
-                            quantifiable = true; fall = false
-                        }
-                        if (fall) {
-                            if (chAt(pos) != '}') {
-                                if (strict) { err(pos, 0, 1005, "'}' expected."); pos-- }
-                                else { quantifiable = true; fall = false }
-                            }
-                            if (fall) {
-                                pos++
-                                if (chAt(pos) == '?') pos++
-                                if (!quantifiable) err(start, pos - start, 1507, "There is nothing available for repetition.")
-                                quantifiable = false
-                            }
-                        }
-                    }
-                }
-                '*', '+', '?' -> {
-                    pos++
-                    if (chAt(pos) == '?') pos++
-                    if (!quantifiable) err(start, pos - start, 1507, "There is nothing available for repetition.")
-                    quantifiable = false
-                }
-                '.' -> { pos++; quantifiable = true }
-                '[' -> {
-                    pos++
-                    scanClassRanges()
-                    if (bailed) return
-                    if (chAt(pos) == ']') pos++ else { bailed = true; return }
-                    quantifiable = true
-                }
-                ')', ']', '}' -> {
-                    if (strict || ch == ')') err(pos, 1, 1508, "Unexpected '$ch'. Did you mean to escape it with backslash?")
-                    pos++
-                    quantifiable = true
-                }
-                '|' -> { pos++; quantifiable = false }
-                else -> { pos++; quantifiable = true }
-            }
-        }
-        if (bailed) return
-        for (e in pending) {
+        val hasNamedGroups = Regex("""\(\?<[A-Za-z_$]""").containsMatchIn(raw.substring(0, end))
+        val scanner = RegExpGrammarScanner(raw, end, hasNamedGroups)
+        scanner.run()
+        for (e in scanner.errors) {
             val absPos = node.pos + e.offset
-            val (l, c2) = getLineAndCharacterOfPosition(source, absPos)
+            val (line, character) = getLineAndCharacterOfPosition(source, absPos)
             diagnostics.add(Diagnostic(
                 message = e.msg, category = DiagnosticCategory.Error, code = e.code,
-                fileName = fileName, line = l, character = c2, start = absPos, length = e.len,
+                fileName = fileName, line = line, character = character, start = absPos, length = e.len,
                 relatedInformation = if (e.suggestion != null) listOf(Diagnostic(
                     message = "Did you mean '${e.suggestion}'?",
-                    category = DiagnosticCategory.Message, code = 1369,
+                    category = DiagnosticCategory.Message, code = 1369, fileName = null,
                 )) else emptyList(),
             ))
         }
     }
 
-    /**
-     * TS1501 "This regular expression flag is only available when targeting '<v>' or
-     * later." — per-flag minimum targets (tsc regExpFlagToFirstAvailableLanguageVersion):
-     * u/y → ES2015 (displayed 'es6'), s → ES2018, d → ES2022, v → ES2024. One per flag
-     * char, at the flag position. FP-safe: a below-target flag is a hard error in tsc.
-     */
-    private fun emitTS1501ForFlagTargetAvailability(node: RegularExpressionLiteralNode, source: String, fileName: String) {
-        val text = node.text
-        if (text.length < 2 || text[0] != '/') return
-        val lastSlash = text.lastIndexOf('/')
-        if (lastSlash <= 0) return
-        for (i in lastSlash + 1 until text.length) {
-            val (minTarget, display) = when (text[i]) {
-                'u', 'y' -> ScriptTarget.ES2015 to "es6"
-                's' -> ScriptTarget.ES2018 to "es2018"
-                'd' -> ScriptTarget.ES2022 to "es2022"
-                'v' -> ScriptTarget.ES2024 to "es2024"
-                else -> continue
+    private inner class RegExpGrammarScanner(val raw: String, val end: Int, val namedCaptureGroups: Boolean) {
+        inner class RErr(val offset: Int, val len: Int, val code: Int, val msg: String, val suggestion: String?)
+        val errors = ArrayList<RErr>()
+        private var lastStart = -1
+        var pos = 1
+
+        var regExpFlags = 0
+        private val unicodeSetsMode get() = (regExpFlags and 0x40) != 0
+        private val anyUnicodeMode get() = (regExpFlags and 0x60) != 0
+        // annexB is always true in the checker context, so anyUnicodeModeOrNonAnnexB == anyUnicodeMode
+        private val strictMode get() = anyUnicodeMode
+
+        private var mayContainStrings = false
+        private var numberOfCapturingGroups = 0
+        private var groupSpecifiers: HashSet<String>? = null
+        private val groupNameReferences = ArrayList<Triple<Int, Int, String>>()   // (pos, end, name)
+        private val decimalEscapes = ArrayList<Triple<Int, Int, Long>>()          // (pos, end, value)
+        private val namedScopeStack = ArrayDeque<HashSet<String>?>()
+        private var topNamedScope: HashSet<String>? = null
+
+        private fun err(code: Int, msg: String, errPos: Int = pos, len: Int = 0, suggestion: String? = null) {
+            if (errPos == lastStart) return
+            lastStart = errPos
+            errors.add(RErr(errPos, len, code, msg, suggestion))
+        }
+        private fun unexpectedMsg(ch: Int) = "Unexpected '" + ch.toChar() + "'. Did you mean to escape it with backslash?"
+
+        private fun cc(p: Int): Int = if (p in 0 until end) raw[p].code else -1
+        private fun isDigit(c: Int) = c in '0'.code..'9'.code
+        private fun isOctal(c: Int) = c in '0'.code..'7'.code
+        private fun isHex(c: Int) = c in '0'.code..'9'.code || c in 'a'.code..'f'.code || c in 'A'.code..'F'.code
+        private fun isAsciiLetter(c: Int) = c in 'a'.code..'z'.code || c in 'A'.code..'Z'.code
+        private fun isWordChar(c: Int) = isAsciiLetter(c) || isDigit(c) || c == '_'.code
+        private fun isIdentPart(c: Int) = isAsciiLetter(c) || isDigit(c) || c == '_'.code || c == '$'.code || c > 127
+        private fun isIdentStart(c: Int) = isAsciiLetter(c) || c == '_'.code || c == '$'.code || c > 127
+        private fun codePoint(p: Int): Int {
+            if (p !in 0 until end) return -1
+            val c = raw[p]
+            if (c.isHighSurrogate() && p + 1 < end && raw[p + 1].isLowSurrogate())
+                return 0x10000 + ((c.code - 0xD800) shl 10) + (raw[p + 1].code - 0xDC00)
+            return c.code
+        }
+        private fun rawCodePoint(p: Int): Int {
+            val c = raw[p]
+            if (c.isHighSurrogate() && p + 1 < raw.length && raw[p + 1].isLowSurrogate())
+                return 0x10000 + ((c.code - 0xD800) shl 10) + (raw[p + 1].code - 0xDC00)
+            return c.code
+        }
+        private fun charSize(cp: Int) = if (cp >= 0x10000) 2 else 1
+        private fun strCodePoint(s: String): Int {
+            if (s.isEmpty()) return -1
+            val c = s[0]
+            if (c.isHighSurrogate() && s.length > 1 && s[1].isLowSurrogate())
+                return 0x10000 + ((c.code - 0xD800) shl 10) + (s[1].code - 0xDC00)
+            return c.code
+        }
+
+        fun run() {
+            scanFlags()
+            scanDisjunction(false)
+            for ((rpos, rend, name) in groupNameReferences) {
+                if (groupSpecifiers?.contains(name) != true) {
+                    val sugg = groupSpecifiers?.let { regexSpellingSuggestion(name, it) }
+                    err(1532, "There is no capturing group named '$name' in this regular expression.", rpos, rend - rpos, sugg)
+                }
             }
-            if (options.target >= minTarget) continue
-            val absPos = node.pos + i
-            val (line, character) = getLineAndCharacterOfPosition(source, absPos)
-            diagnostics.add(Diagnostic(
-                message = "This regular expression flag is only available when targeting '$display' or later.",
-                category = DiagnosticCategory.Error, code = 1501, fileName = fileName,
-                line = line, character = character, start = absPos, length = 1,
-            ))
-        }
-    }
-
-    /**
-     * TS1005 "']' expected." for a `v`-flag regex whose character class never closes:
-     * in UnicodeSets mode an unescaped `[` INSIDE a class opens a NESTED class, so
-     * `/[[]/v` ends scanning with the outer class still open — tsc reports at the
-     * terminating `/` with a ZERO-width span. Non-v regexes treat `[` in a class as a
-     * literal (no nesting). FP-safe: only fires when the v-flagged body's bracket
-     * depth is still positive at the closing slash.
-     */
-    private fun emitTS1005ForVModeUnterminatedClass(node: RegularExpressionLiteralNode, source: String, fileName: String) {
-        val text = node.text
-        if (text.length < 2 || text[0] != '/') return
-        val lastSlash = text.lastIndexOf('/')
-        if (lastSlash <= 0) return
-        if (!text.substring(lastSlash + 1).contains('v')) return
-        var depth = 0
-        var i = 1
-        while (i < lastSlash) {
-            when (text[i]) {
-                '\\' -> i++
-                '[' -> depth++
-                ']' -> if (depth > 0) depth--
+            for ((epos, eend, value) in decimalEscapes) {
+                if (value > numberOfCapturingGroups) {
+                    if (numberOfCapturingGroups > 0)
+                        err(1533, "This backreference refers to a group that does not exist. There are only $numberOfCapturingGroups capturing groups in this regular expression.", epos, eend - epos)
+                    else
+                        err(1534, "This backreference refers to a group that does not exist. There are no capturing groups in this regular expression.", epos, eend - epos)
+                }
             }
-            i++
-        }
-        if (depth <= 0) return
-        val absPos = node.pos + lastSlash
-        val (line, character) = getLineAndCharacterOfPosition(source, absPos)
-        diagnostics.add(Diagnostic(
-            message = "']' expected.",
-            category = DiagnosticCategory.Error, code = 1005, fileName = fileName,
-            line = line, character = character, start = absPos, length = 0,
-        ))
-    }
-
-    /**
-     * TS1499 "Unknown regular expression flag." Validates BOTH the trailing flags
-     * (after the closing `/`) against the valid set `d g i m s u v y`, and the
-     * inline modifier-group flags `(?ims:` / `(?ims-ims:` against the valid set
-     * `i m s`. Purely syntactic; iterates by CODE POINT so a non-BMP "flag"
-     * (surrogate pair) is one unknown flag of length 2. FP-safe: a `(?`-construct
-     * is treated as a modifier group ONLY when it is not `(?:`/`(?=`/`(?!`/`(?<…`
-     * AND its flag region (terminated by `:`, before any regex structural char)
-     * contains only flag chars / a single `-` — there is no other valid regex
-     * construct of that shape, and the valid-flag sets mean a legal regex never
-     * trips it.
-     */
-    private fun emitTS1499ForRegexFlags(node: RegularExpressionLiteralNode, source: String, fileName: String) {
-        val text = node.text
-        if (text.length < 2 || text[0] != '/') return
-        val lastSlash = text.lastIndexOf('/')
-        if (lastSlash <= 0) return
-
-        fun cpLen(i: Int): Int =
-            if (text[i].isHighSurrogate() && i + 1 < text.length && text[i + 1].isLowSurrogate()) 2 else 1
-
-        fun emit(offset: Int, len: Int) {
-            val absPos = node.pos + offset
-            val (line, character) = getLineAndCharacterOfPosition(source, absPos)
-            diagnostics.add(Diagnostic(
-                message = "Unknown regular expression flag.",
-                category = DiagnosticCategory.Error, code = 1499, fileName = fileName,
-                line = line, character = character, start = absPos, length = len,
-            ))
         }
 
-        // Trailing flags (after the closing `/`): valid = d/g/i/m/s/u/v/y.
-        var i = lastSlash + 1
-        while (i < text.length) {
-            val len = cpLen(i)
-            if (!(len == 1 && text[i] in "dgimsuvy")) emit(i, len)
-            i += len
+        // ---- Flags (TS1499/1500/1501/1502) ----
+        private fun flagBit(cp: Int): Int = when (cp) {
+            'd'.code -> 0x01; 'g'.code -> 0x02; 'i'.code -> 0x04; 'm'.code -> 0x08
+            's'.code -> 0x10; 'u'.code -> 0x20; 'v'.code -> 0x40; 'y'.code -> 0x80
+            else -> 0
+        }
+        private fun flagAvail(flag: Int): Pair<ScriptTarget, String>? = when (flag) {
+            0x01 -> ScriptTarget.ES2022 to "es2022"   // d
+            0x10 -> ScriptTarget.ES2018 to "es2018"   // s
+            0x20 -> ScriptTarget.ES2015 to "es6"      // u
+            0x40 -> ScriptTarget.ES2024 to "es2024"   // v
+            0x80 -> ScriptTarget.ES2015 to "es6"      // y
+            else -> null
+        }
+        private fun checkFlagAvail(flag: Int, at: Int, size: Int) {
+            val a = flagAvail(flag) ?: return
+            if (options.target < a.first)
+                err(1501, "This regular expression flag is only available when targeting '${a.second}' or later.", at, size)
+        }
+        private fun scanFlags() {
+            var i = end + 1
+            while (i < raw.length) {
+                val cp = rawCodePoint(i)
+                if (!isIdentPart(cp)) break
+                val size = charSize(cp)
+                val flag = flagBit(cp)
+                when {
+                    flag == 0 -> err(1499, "Unknown regular expression flag.", i, size)
+                    (regExpFlags and flag) != 0 -> err(1500, "Duplicate regular expression flag.", i, size)
+                    ((regExpFlags or flag) and 0x60) == 0x60 -> err(1502, "The Unicode (u) flag and the Unicode Sets (v) flag cannot be set simultaneously.", i, size)
+                    else -> { regExpFlags = regExpFlags or flag; checkFlagAvail(flag, i, size) }
+                }
+                i += size
+            }
         }
 
-        // Inline modifier groups `(?<flags>-<flags>:` in the body (valid = i/m/s).
-        var inClass = false
-        var j = 1
-        while (j < lastSlash) {
-            val c = text[j]
-            when {
-                c == '\\' -> j += 2
-                c == '[' && !inClass -> { inClass = true; j++ }
-                c == ']' && inClass -> { inClass = false; j++ }
-                inClass -> j++
-                c == '(' && j + 2 < lastSlash && text[j + 1] == '?' -> {
-                    val after = j + 2
-                    val a = text[after]
-                    if (a == ':' || a == '=' || a == '!' || a == '<') {
-                        j = after
-                    } else {
-                        // Scan for the terminating `:`; bail (not a modifier group)
-                        // on any regex structural char.
-                        var k = after
-                        var foundColon = false
-                        while (k < lastSlash) {
-                            val ck = text[k]
-                            if (ck == ':') { foundColon = true; break }
-                            if (ck in ")(|[]<>\\/") break
-                            k++
-                        }
-                        if (foundColon) {
-                            var m = after
-                            while (m < k) {
-                                if (text[m] == '-') { m++; continue }
-                                val len = cpLen(m)
-                                if (!(len == 1 && text[m] in "ims")) emit(m, len)
-                                m += len
+        private fun scanDigits(): String {
+            val s = pos
+            while (isDigit(cc(pos))) pos++
+            return raw.substring(s, pos)
+        }
+
+        private fun scanExpectedChar(ch: Char) {
+            if (cc(pos) == ch.code) pos++
+            else err(1005, "'$ch' expected.", pos, 0)
+        }
+
+        // ---- Disjunction / Alternative ----
+        private fun scanDisjunction(isInGroup: Boolean) {
+            while (true) {
+                namedScopeStack.addLast(topNamedScope)
+                topNamedScope = null
+                scanAlternative(isInGroup)
+                topNamedScope = namedScopeStack.removeLast()
+                if (cc(pos) != '|'.code) return
+                pos++
+            }
+        }
+
+        private fun quantifierTail(start: Int, quantifiable: Boolean): Boolean {
+            pos++
+            if (cc(pos) == '?'.code) pos++
+            if (!quantifiable) err(1507, "There is nothing available for repetition.", start, pos - start)
+            return false
+        }
+
+        private fun scanAlternative(isInGroup: Boolean) {
+            var quantifiable = false
+            while (true) {
+                val start = pos
+                val ch = cc(pos)
+                when (ch) {
+                    -1 -> return
+                    '^'.code, '$'.code -> { pos++; quantifiable = false }
+                    '\\'.code -> {
+                        pos++
+                        if (cc(pos) == 'b'.code || cc(pos) == 'B'.code) { pos++; quantifiable = false }
+                        else { scanAtomEscape(); quantifiable = true }
+                    }
+                    '('.code -> {
+                        pos++
+                        if (cc(pos) == '?'.code) {
+                            pos++
+                            when (cc(pos)) {
+                                '='.code, '!'.code -> { pos++; quantifiable = !strictMode }
+                                '<'.code -> {
+                                    val groupNameStart = pos
+                                    pos++
+                                    when (cc(pos)) {
+                                        '='.code, '!'.code -> { pos++; quantifiable = false }
+                                        else -> {
+                                            scanGroupName(false)
+                                            scanExpectedChar('>')
+                                            if (options.target < ScriptTarget.ES2018) {
+                                                err(1503, "Named capturing groups are only available when targeting 'ES2018' or later.", groupNameStart, pos - groupNameStart)
+                                            }
+                                            numberOfCapturingGroups++
+                                            quantifiable = true
+                                        }
+                                    }
+                                }
+                                else -> {
+                                    val modStart = pos
+                                    val setFlags = scanPatternModifiers(0)
+                                    if (cc(pos) == '-'.code) {
+                                        pos++
+                                        scanPatternModifiers(setFlags)
+                                        if (pos == modStart + 1) {
+                                            err(1504, "Subpattern flags must be present when there is a minus sign.", modStart, pos - modStart)
+                                        }
+                                    }
+                                    scanExpectedChar(':')
+                                    quantifiable = true
+                                }
                             }
-                            j = k + 1
-                        } else j = after
+                        } else {
+                            numberOfCapturingGroups++
+                            quantifiable = true
+                        }
+                        scanDisjunction(true)
+                        scanExpectedChar(')')
+                    }
+                    '{'.code -> {
+                        pos++
+                        val digitsStart = pos
+                        val min = scanDigits()
+                        var handled = false
+                        if (!strictMode && min.isEmpty()) {
+                            quantifiable = true; handled = true
+                        } else {
+                            if (cc(pos) == ','.code) {
+                                pos++
+                                val max = scanDigits()
+                                if (min.isEmpty()) {
+                                    if (max.isNotEmpty() || cc(pos) == '}'.code) {
+                                        err(1505, "Incomplete quantifier. Digit expected.", digitsStart, 0)
+                                    } else {
+                                        err(1508, unexpectedMsg(ch), start, 1)
+                                        quantifiable = true; handled = true
+                                    }
+                                } else if (max.isNotEmpty() && (min.toLongOrNull() ?: 0L) > (max.toLongOrNull() ?: 0L) &&
+                                    (strictMode || cc(pos) == '}'.code)
+                                ) {
+                                    err(1506, "Numbers out of order in quantifier.", digitsStart, pos - digitsStart)
+                                }
+                            } else if (min.isEmpty()) {
+                                if (strictMode) err(1508, unexpectedMsg(ch), start, 1)
+                                quantifiable = true; handled = true
+                            }
+                            if (!handled && cc(pos) != '}'.code) {
+                                if (strictMode) { err(1005, "'}' expected.", pos, 0); pos-- }
+                                else { quantifiable = true; handled = true }
+                            }
+                        }
+                        if (!handled) quantifiable = quantifierTail(start, quantifiable)
+                    }
+                    '*'.code, '+'.code, '?'.code -> quantifiable = quantifierTail(start, quantifiable)
+                    '.'.code -> { pos++; quantifiable = true }
+                    '['.code -> {
+                        pos++
+                        if (unicodeSetsMode) scanClassSetExpression() else scanClassRanges()
+                        scanExpectedChar(']')
+                        quantifiable = true
+                    }
+                    ')'.code -> {
+                        if (isInGroup) return
+                        err(1508, unexpectedMsg(ch), pos, 1)
+                        pos++; quantifiable = true
+                    }
+                    ']'.code, '}'.code -> {
+                        if (strictMode) err(1508, unexpectedMsg(ch), pos, 1)
+                        pos++; quantifiable = true
+                    }
+                    '/'.code, '|'.code -> return
+                    else -> { scanSourceCharacter(); quantifiable = true }
+                }
+            }
+        }
+
+        private fun scanPatternModifiers(currFlagsIn: Int): Int {
+            var currFlags = currFlagsIn
+            while (true) {
+                val cp = codePoint(pos)
+                if (cp == -1 || !isIdentPart(cp)) break
+                val size = charSize(cp)
+                val flag = flagBit(cp)
+                when {
+                    flag == 0 -> err(1499, "Unknown regular expression flag.", pos, size)
+                    (currFlags and flag) != 0 -> err(1500, "Duplicate regular expression flag.", pos, size)
+                    (flag and 0x1C) == 0 -> err(1509, "This regular expression flag cannot be toggled within a subpattern.", pos, size) // 0x1C = i|m|s
+                    else -> { currFlags = currFlags or flag; checkFlagAvail(flag, pos, size) }
+                }
+                pos += size
+            }
+            return currFlags
+        }
+
+        // ---- Atom escapes ----
+        private fun scanAtomEscape() {
+            // pos at char after backslash
+            if (cc(pos) == 'k'.code) {
+                pos++
+                if (cc(pos) == '<'.code) {
+                    pos++
+                    scanGroupName(true)
+                    scanExpectedChar('>')
+                } else if (strictMode || namedCaptureGroups) {
+                    err(1510, "'\\k' must be followed by a capturing group name enclosed in angle brackets.", pos - 2, 2)
+                }
+                return
+            }
+            if (cc(pos) == 'q'.code && unicodeSetsMode) {
+                pos++
+                err(1511, "'\\q' is only available inside character class.", pos - 2, 2)
+                return
+            }
+            if (!scanCharacterClassEscape()) {
+                if (!scanDecimalEscape()) scanCharacterEscape(true)
+            }
+        }
+
+        private fun scanDecimalEscape(): Boolean {
+            val c = cc(pos)
+            if (c in '1'.code..'9'.code) {
+                val start = pos
+                val v = scanDigits()
+                decimalEscapes.add(Triple(start, pos, v.toLongOrNull() ?: Long.MAX_VALUE))
+                return true
+            }
+            return false
+        }
+
+        private fun scanGroupName(isReference: Boolean) {
+            // pos after '<'
+            val tokenStart = pos
+            if (isIdentStart(cc(pos))) {
+                pos++
+                while (isIdentPart(cc(pos))) pos++
+            }
+            val name = raw.substring(tokenStart, pos)
+            when {
+                pos == tokenStart -> err(1514, "Expected a capturing group name.", pos, 0)
+                isReference -> groupNameReferences.add(Triple(tokenStart, pos, name))
+                topNamedScope?.contains(name) == true || namedScopeStack.any { it?.contains(name) == true } ->
+                    err(1515, "Named capturing groups with the same name must be mutually exclusive to each other.", tokenStart, pos - tokenStart)
+                else -> {
+                    (topNamedScope ?: HashSet<String>().also { topNamedScope = it }).add(name)
+                    (groupSpecifiers ?: HashSet<String>().also { groupSpecifiers = it }).add(name)
+                }
+            }
+        }
+
+        // CharacterEscape ::= `c` ControlLetter | IdentityEscape | (scanEscapeSequence)
+        private fun scanCharacterEscape(atomEscape: Boolean): String {
+            when (val ch = cc(pos)) {
+                -1 -> { err(1513, "Undetermined character escape.", pos - 1, 1); return "\\" }
+                'c'.code -> {
+                    pos++
+                    val c2 = cc(pos)
+                    if (isAsciiLetter(c2)) { pos++; return (c2 and 0x1f).toChar().toString() }
+                    if (strictMode) err(1512, "'\\c' must be followed by an ASCII letter.", pos - 2, 2)
+                    else if (atomEscape) { pos--; return "\\" }
+                    return c2.toChar().toString()
+                }
+                '^'.code, '$'.code, '/'.code, '\\'.code, '.'.code, '*'.code, '+'.code, '?'.code,
+                '('.code, ')'.code, '['.code, ']'.code, '{'.code, '}'.code, '|'.code -> {
+                    pos++; return ch.toChar().toString()
+                }
+                else -> { pos--; return scanEscapeSequence(atomEscape) }
+            }
+        }
+
+        // Only the regex-reachable cases of tsc scanEscapeSequence (RegularExpression flag,
+        // annexB=true always; AtomEscape set iff atomEscape).
+        private fun scanEscapeSequence(atomEscape: Boolean): String {
+            val start = pos
+            pos++ // skip backslash
+            if (pos >= end) { err(1126, "Unexpected end of text.", pos, 0); return "" }
+            val ch = cc(pos); pos++
+            when (ch) {
+                '0'.code -> {
+                    if (pos >= end || !isDigit(cc(pos))) return " "
+                    consumeOctalTail()
+                    return reportOctalEscape(start, atomEscape, ch)
+                }
+                in '1'.code..'3'.code -> {
+                    if (pos < end && isOctal(cc(pos))) pos++
+                    if (pos < end && isOctal(cc(pos))) pos++
+                    return reportOctalEscape(start, atomEscape, ch)
+                }
+                in '4'.code..'7'.code -> {
+                    if (pos < end && isOctal(cc(pos))) pos++
+                    return reportOctalEscape(start, atomEscape, ch)
+                }
+                '8'.code, '9'.code -> return reportDecimalEscape(start, atomEscape, ch)
+                'b'.code -> return "\b"
+                't'.code -> return "\t"
+                'n'.code -> return "\n"
+                'v'.code -> return ""
+                'f'.code -> return ""
+                'r'.code -> return "\r"
+                '\''.code -> return "'"
+                '"'.code -> return "\""
+                'u'.code -> {
+                    if (pos < end && cc(pos) == '{'.code) {
+                        pos -= 2
+                        val result = scanExtendedUnicodeEscape()
+                        if (!anyUnicodeMode) {
+                            err(1538, "Unicode escape sequences are only available when the Unicode (u) flag or the Unicode Sets (v) flag is set.", start, pos - start)
+                        }
+                        return result
+                    }
+                    while (pos < start + 6) {
+                        if (!(pos < end && isHex(cc(pos)))) { err(1125, "Hexadecimal digit expected.", pos, 0); return raw.substring(start, pos) }
+                        pos++
+                    }
+                    val escapedValue = raw.substring(start + 2, pos).toInt(16)
+                    val escapedValueString = escapedValue.toChar().toString()
+                    if (anyUnicodeMode && escapedValue in 0xD800..0xDBFF &&
+                        pos + 6 < end && raw.substring(pos, pos + 2) == "\\u" && cc(pos + 2) != '{'.code) {
+                        val nextStart = pos
+                        var nextPos = pos + 2
+                        while (nextPos < nextStart + 6) {
+                            if (!isHex(cc(nextPos))) return escapedValueString
+                            nextPos++
+                        }
+                        val nextEscapedValue = raw.substring(nextStart + 2, nextPos).toInt(16)
+                        if (nextEscapedValue in 0xDC00..0xDFFF) { pos = nextPos; return escapedValueString + nextEscapedValue.toChar() }
+                    }
+                    return escapedValueString
+                }
+                'x'.code -> {
+                    while (pos < start + 4) {
+                        if (!(pos < end && isHex(cc(pos)))) { err(1125, "Hexadecimal digit expected.", pos, 0); return raw.substring(start, pos) }
+                        pos++
+                    }
+                    return raw.substring(start + 2, pos).toInt(16).toChar().toString()
+                }
+                '\r'.code -> { if (pos < end && cc(pos) == '\n'.code) pos++; return "" }
+                '\n'.code, 0x2028, 0x2029 -> return ""
+                else -> {
+                    if (anyUnicodeMode) err(1535, "This character cannot be escaped in a regular expression.", pos - 2, 2)
+                    return ch.toChar().toString()
+                }
+            }
+        }
+        private fun consumeOctalTail() {
+            if (pos < end && isOctal(cc(pos))) pos++
+            if (pos < end && isOctal(cc(pos))) pos++
+        }
+        private fun reportOctalEscape(start: Int, atomEscape: Boolean, ch: Int): String {
+            val code = raw.substring(start + 1, pos).toIntOrNull(8) ?: 0
+            val hex = "\\x" + code.toString(16).padStart(2, '0')
+            if (!atomEscape && ch != '0'.code)
+                err(1536, "Octal escape sequences and backreferences are not allowed in a character class. If this was intended as an escape sequence, use the syntax '$hex' instead.", start, pos - start)
+            else
+                err(1487, "Octal escape sequences are not allowed. Use the syntax '$hex'.", start, pos - start)
+            return code.toChar().toString()
+        }
+        private fun reportDecimalEscape(start: Int, atomEscape: Boolean, ch: Int): String {
+            if (!atomEscape)
+                err(1537, "Decimal escape sequences and backreferences are not allowed in a character class.", start, pos - start)
+            else
+                err(1488, "Escape sequence '${raw.substring(start, pos)}' is not allowed.", start, pos - start)
+            return ch.toChar().toString()
+        }
+
+        private fun scanExtendedUnicodeEscape(): String {
+            val start = pos
+            pos += 3 // backslash u {
+            val escapedStart = pos
+            while (pos < end && isHex(cc(pos))) pos++
+            val hexStr = raw.substring(escapedStart, pos)
+            val escapedValue = if (hexStr.isNotEmpty()) hexStr.toLongOrNull(16) ?: -1L else -1L
+            var invalid = false
+            if (escapedValue < 0) { err(1125, "Hexadecimal digit expected.", pos, 0); invalid = true }
+            else if (escapedValue > 0x10FFFF) { err(1198, "An extended Unicode escape value must be between 0x0 and 0x10FFFF inclusive.", escapedStart, pos - escapedStart); invalid = true }
+            if (pos >= end) { err(1126, "Unexpected end of text.", pos, 0); invalid = true }
+            else if (cc(pos) == '}'.code) pos++
+            else { err(1199, "Unterminated Unicode escape sequence.", pos, 0); invalid = true }
+            // tsc returns the ENCODED character (utf16EncodeAsString) so range-order
+            // comparison sees the real code point / length — NOT the raw \u{...} text.
+            return if (invalid) raw.substring(start, pos) else utf16Encode(escapedValue.toInt())
+        }
+        private fun utf16Encode(cp: Int): String {
+            if (cp <= 0xFFFF) return cp.toChar().toString()
+            val v = cp - 0x10000
+            return charArrayOf((0xD800 + (v shr 10)).toChar(), (0xDC00 + (v and 0x3FF)).toChar()).concatToString()
+        }
+
+        // CharacterClassEscape ::= 'd'|'D'|'s'|'S'|'w'|'W' | ('p'|'P') '{' UnicodePropertyValueExpression '}'
+        private fun scanCharacterClassEscape(): Boolean {
+            val start = pos - 1
+            return when (val ch = cc(pos)) {
+                'd'.code, 'D'.code, 's'.code, 'S'.code, 'w'.code, 'W'.code -> { pos++; true }
+                'P'.code -> scanUnicodeProperty(start, ch, true)
+                'p'.code -> scanUnicodeProperty(start, ch, false)
+                else -> false
+            }
+        }
+        private fun scanUnicodeProperty(start: Int, ch: Int, isCharacterComplement: Boolean): Boolean {
+            pos++
+            if (cc(pos) == '{'.code) {
+                pos++
+                val propStart = pos
+                val propertyNameOrValue = scanWordCharacters()
+                if (cc(pos) == '='.code) {
+                    val propertyName = REGEX_NONBINARY_PROPS[propertyNameOrValue]
+                    if (pos == propStart) err(1523, "Expected a Unicode property name.", pos, 0)
+                    else if (propertyName == null) {
+                        val sugg = regexSpellingSuggestion(propertyNameOrValue, REGEX_NONBINARY_PROPS.keys)
+                        err(1524, "Unknown Unicode property name.", propStart, pos - propStart, sugg)
+                    }
+                    pos++
+                    val valueStart = pos
+                    val propertyValue = scanWordCharacters()
+                    if (pos == valueStart) err(1525, "Expected a Unicode property value.", pos, 0)
+                    else if (propertyName != null) {
+                        val values = if (propertyName == "General_Category") REGEX_GC_VALUES else REGEX_SCRIPT_VALUES
+                        if (propertyValue !in values) {
+                            val sugg = regexSpellingSuggestion(propertyValue, values)
+                            err(1526, "Unknown Unicode property value.", valueStart, pos - valueStart, sugg)
+                        }
+                    }
+                } else {
+                    if (pos == propStart) err(1527, "Expected a Unicode property name or value.", pos, 0)
+                    else if (propertyNameOrValue in REGEX_BINARY_PROPS_OF_STRINGS) {
+                        if (!unicodeSetsMode) err(1528, "Any Unicode property that would possibly match more than a single character is only available when the Unicode Sets (v) flag is set.", propStart, pos - propStart)
+                        else if (isCharacterComplement) err(1518, "Anything that would possibly match more than a single character is invalid inside a negated character class.", propStart, pos - propStart)
+                        else mayContainStrings = true
+                    } else if (propertyNameOrValue !in REGEX_GC_VALUES && propertyNameOrValue !in REGEX_BINARY_PROPS) {
+                        val sugg = regexSpellingSuggestion(propertyNameOrValue, REGEX_GC_VALUES.asSequence().plus(REGEX_BINARY_PROPS).plus(REGEX_BINARY_PROPS_OF_STRINGS).asIterable())
+                        err(1529, "Unknown Unicode property name or value.", propStart, pos - propStart, sugg)
                     }
                 }
-                else -> j++
+                scanExpectedChar('}')
+                if (!anyUnicodeMode) err(1530, "Unicode property value expressions are only available when the Unicode (u) flag or the Unicode Sets (v) flag is set.", start, pos - start)
+            } else if (strictMode) {
+                err(1531, "'\\${ch.toChar()}' must be followed by a Unicode property value expression enclosed in braces.", pos - 2, 2)
+            } else {
+                pos--
+                return false
             }
+            return true
+        }
+
+        private fun scanWordCharacters(): String {
+            val s = pos
+            while (isWordChar(cc(pos))) pos++
+            return raw.substring(s, pos)
+        }
+
+        private fun scanSourceCharacter(): String {
+            val size = if (anyUnicodeMode) charSize(codePoint(pos)) else 1
+            pos += size
+            return if (size > 0) raw.substring(pos - size, pos) else ""
+        }
+
+        private fun isClassContentExit(ch: Int) = ch == ']'.code || ch == -1 || pos >= end
+
+        // ---- non-v-mode class ranges ----
+        private fun scanClassRanges() {
+            if (cc(pos) == '^'.code) pos++
+            while (true) {
+                val ch = cc(pos)
+                if (isClassContentExit(ch)) return
+                val minStart = pos
+                val minCharacter = scanClassAtom()
+                if (cc(pos) == '-'.code) {
+                    pos++
+                    if (isClassContentExit(cc(pos))) return
+                    if (minCharacter.isEmpty() && strictMode)
+                        err(1516, "A character class range must not be bounded by another character class.", minStart, pos - 1 - minStart)
+                    val maxStart = pos
+                    val maxCharacter = scanClassAtom()
+                    if (maxCharacter.isEmpty() && strictMode) {
+                        err(1516, "A character class range must not be bounded by another character class.", maxStart, pos - maxStart)
+                        continue
+                    }
+                    if (minCharacter.isEmpty()) continue
+                    val minV = strCodePoint(minCharacter); val maxV = strCodePoint(maxCharacter)
+                    if (minCharacter.length == charSize(minV) && maxCharacter.length == charSize(maxV) && minV > maxV)
+                        err(1517, "Range out of order in character class.", minStart, pos - minStart)
+                }
+            }
+        }
+
+        private fun scanClassAtom(): String {
+            if (cc(pos) == '\\'.code) {
+                pos++
+                return when (cc(pos)) {
+                    'b'.code -> { pos++; "\b" }
+                    '-'.code -> { pos++; "-" }
+                    else -> if (scanCharacterClassEscape()) "" else scanCharacterEscape(false)
+                }
+            }
+            return scanSourceCharacter()
+        }
+
+        // ---- v-mode ClassSetExpression ----
+        private fun scanClassSetExpression() {
+            var isCharacterComplement = false
+            if (cc(pos) == '^'.code) { pos++; isCharacterComplement = true }
+            var expressionMayContainStrings = false
+            var ch = cc(pos)
+            if (isClassContentExit(ch)) return
+            var start = pos
+            var operand = ""
+            if ((cc(pos) == '-'.code && cc(pos + 1) == '-'.code) || (cc(pos) == '&'.code && cc(pos + 1) == '&'.code)) {
+                err(1520, "Expected a class set operand.", pos, 0)
+                mayContainStrings = false
+            } else {
+                operand = scanClassSetOperand()
+            }
+            when (cc(pos)) {
+                '-'.code -> {
+                    if (cc(pos + 1) == '-'.code) {
+                        if (isCharacterComplement && mayContainStrings) err(1518, "Anything that would possibly match more than a single character is invalid inside a negated character class.", start, pos - start)
+                        expressionMayContainStrings = mayContainStrings
+                        scanClassSetSubExpression(3) // ClassSubtraction
+                        mayContainStrings = !isCharacterComplement && expressionMayContainStrings
+                        return
+                    }
+                }
+                '&'.code -> {
+                    if (cc(pos + 1) == '&'.code) {
+                        scanClassSetSubExpression(2) // ClassIntersection
+                        if (isCharacterComplement && mayContainStrings) err(1518, "Anything that would possibly match more than a single character is invalid inside a negated character class.", start, pos - start)
+                        expressionMayContainStrings = mayContainStrings
+                        mayContainStrings = !isCharacterComplement && expressionMayContainStrings
+                        return
+                    } else {
+                        err(1508, unexpectedMsg(ch), pos, 1)
+                    }
+                }
+                else -> {
+                    if (isCharacterComplement && mayContainStrings) err(1518, "Anything that would possibly match more than a single character is invalid inside a negated character class.", start, pos - start)
+                    expressionMayContainStrings = mayContainStrings
+                }
+            }
+            while (true) {
+                ch = cc(pos)
+                if (ch == -1) break
+                when (ch) {
+                    '-'.code -> {
+                        pos++
+                        ch = cc(pos)
+                        if (isClassContentExit(ch)) { mayContainStrings = !isCharacterComplement && expressionMayContainStrings; return }
+                        if (ch == '-'.code) {
+                            pos++
+                            err(1519, "Operators must not be mixed within a character class. Wrap it in a nested class instead.", pos - 2, 2)
+                            start = pos - 2
+                            operand = raw.substring(start, pos)
+                            continue
+                        } else {
+                            if (operand.isEmpty()) err(1516, "A character class range must not be bounded by another character class.", start, pos - 1 - start)
+                            val secondStart = pos
+                            val secondOperand = scanClassSetOperand()
+                            if (isCharacterComplement && mayContainStrings) err(1518, "Anything that would possibly match more than a single character is invalid inside a negated character class.", secondStart, pos - secondStart)
+                            expressionMayContainStrings = expressionMayContainStrings || mayContainStrings
+                            if (secondOperand.isEmpty()) { err(1516, "A character class range must not be bounded by another character class.", secondStart, pos - secondStart) }
+                            else if (operand.isNotEmpty()) {
+                                val minV = strCodePoint(operand); val maxV = strCodePoint(secondOperand)
+                                if (operand.length == charSize(minV) && secondOperand.length == charSize(maxV) && minV > maxV)
+                                    err(1517, "Range out of order in character class.", start, pos - start)
+                            }
+                        }
+                    }
+                    '&'.code -> {
+                        start = pos; pos++
+                        if (cc(pos) == '&'.code) {
+                            pos++
+                            err(1519, "Operators must not be mixed within a character class. Wrap it in a nested class instead.", pos - 2, 2)
+                            if (cc(pos) == '&'.code) { err(1508, unexpectedMsg(ch), pos, 1); pos++ }
+                        } else {
+                            err(1508, unexpectedMsg(ch), pos - 1, 1)
+                        }
+                        operand = raw.substring(start, pos)
+                        continue
+                    }
+                }
+                if (isClassContentExit(cc(pos))) break
+                start = pos
+                if ((cc(pos) == '-'.code && cc(pos + 1) == '-'.code) || (cc(pos) == '&'.code && cc(pos + 1) == '&'.code)) {
+                    err(1519, "Operators must not be mixed within a character class. Wrap it in a nested class instead.", pos, 2)
+                    pos += 2
+                    operand = raw.substring(start, pos)
+                } else {
+                    operand = scanClassSetOperand()
+                }
+            }
+            mayContainStrings = !isCharacterComplement && expressionMayContainStrings
+        }
+
+        private fun scanClassSetSubExpression(expressionType: Int) {
+            var expressionMayContainStrings = mayContainStrings
+            while (true) {
+                var ch = cc(pos)
+                if (isClassContentExit(ch)) break
+                when (ch) {
+                    '-'.code -> {
+                        pos++
+                        if (cc(pos) == '-'.code) {
+                            pos++
+                            if (expressionType != 3) err(1519, "Operators must not be mixed within a character class. Wrap it in a nested class instead.", pos - 2, 2)
+                        } else err(1519, "Operators must not be mixed within a character class. Wrap it in a nested class instead.", pos - 1, 1)
+                    }
+                    '&'.code -> {
+                        pos++
+                        if (cc(pos) == '&'.code) {
+                            pos++
+                            if (expressionType != 2) err(1519, "Operators must not be mixed within a character class. Wrap it in a nested class instead.", pos - 2, 2)
+                            if (cc(pos) == '&'.code) { err(1508, unexpectedMsg(ch), pos, 1); pos++ }
+                        } else err(1508, unexpectedMsg(ch), pos - 1, 1)
+                    }
+                    else -> when (expressionType) {
+                        3 -> err(1005, "'--' expected.", pos, 0)
+                        2 -> err(1005, "'&&' expected.", pos, 0)
+                    }
+                }
+                ch = cc(pos)
+                if (isClassContentExit(ch)) { err(1520, "Expected a class set operand.", pos, 0); break }
+                scanClassSetOperand()
+                if (expressionType == 2) expressionMayContainStrings = expressionMayContainStrings && mayContainStrings
+            }
+            mayContainStrings = expressionMayContainStrings
+        }
+
+        private fun scanClassSetOperand(): String {
+            mayContainStrings = false
+            when (cc(pos)) {
+                -1 -> return ""
+                '['.code -> { pos++; scanClassSetExpression(); scanExpectedChar(']'); return "" }
+                '\\'.code -> {
+                    pos++
+                    if (scanCharacterClassEscape()) return ""
+                    else if (cc(pos) == 'q'.code) {
+                        pos++
+                        if (cc(pos) == '{'.code) { pos++; scanClassStringDisjunctionContents(); scanExpectedChar('}'); return "" }
+                        else { err(1521, "'\\q' must be followed by string alternatives enclosed in braces.", pos - 2, 2); return "q" }
+                    }
+                    pos--
+                    return scanClassSetCharacter()
+                }
+                else -> return scanClassSetCharacter()
+            }
+        }
+
+        private fun scanClassStringDisjunctionContents() {
+            var characterCount = 0
+            while (true) {
+                when (cc(pos)) {
+                    -1 -> return
+                    '}'.code -> { if (characterCount != 1) mayContainStrings = true; return }
+                    '|'.code -> { if (characterCount != 1) mayContainStrings = true; pos++; characterCount = 0 }
+                    else -> { scanClassSetCharacter(); characterCount++ }
+                }
+            }
+        }
+
+        private fun scanClassSetCharacter(): String {
+            val ch = cc(pos)
+            if (ch == -1) return ""
+            if (ch == '\\'.code) {
+                pos++
+                val c2 = cc(pos)
+                when (c2) {
+                    'b'.code -> { pos++; return "\b" }
+                    '&'.code, '-'.code, '!'.code, '#'.code, '%'.code, ','.code, ':'.code, ';'.code,
+                    '<'.code, '='.code, '>'.code, '@'.code, '`'.code, '~'.code -> { pos++; return c2.toChar().toString() }
+                    else -> return scanCharacterEscape(false)
+                }
+            } else if (ch == cc(pos + 1)) {
+                when (ch) {
+                    '&'.code, '!'.code, '#'.code, '%'.code, '*'.code, '+'.code, ','.code, '.'.code,
+                    ':'.code, ';'.code, '<'.code, '='.code, '>'.code, '?'.code, '@'.code, '`'.code, '~'.code -> {
+                        err(1522, "A character class must not contain a reserved double punctuator. Did you mean to escape it with backslash?", pos, 2)
+                        pos += 2
+                        return raw.substring(pos - 2, pos)
+                    }
+                }
+            }
+            when (ch) {
+                '/'.code, '('.code, ')'.code, '['.code, ']'.code, '{'.code, '}'.code, '-'.code, '|'.code -> {
+                    err(1508, unexpectedMsg(ch), pos, 1); pos++; return ch.toChar().toString()
+                }
+            }
+            return scanSourceCharacter()
         }
     }
 
