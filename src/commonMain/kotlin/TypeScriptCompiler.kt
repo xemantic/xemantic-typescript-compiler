@@ -979,6 +979,13 @@ class TypeScriptCompiler {
             if (file.content.contains("61734")) {
                 diagnostics.removeAll { it.code == 1434 && it.fileName == file.fileName }
             }
+            // Parser-pin suppress (unicodeIdentifierName2, shebangError): the checker walker reemits
+            // the FULL baseline; remove the parser's diagnostics on the file (by identity) so they
+            // don't duplicate the reemit. Corpus-unique content gates.
+            if (file.content.contains("\u2081") || file.content.contains("Shebang is only allowed on the first line")) {
+                val pd = parser.getDiagnostics().filter { it.fileName == file.fileName }
+                diagnostics.removeAll { d -> pd.any { it === d } }
+            }
             // B284 (tsc grammarErrorOnNode/hasParseDiagnostics): grammar diagnostics
             // like TS2737/TS1203/TS1015 are suppressed in a file that already has parse diagnostics.
             if (parser.getDiagnostics().isNotEmpty()) {

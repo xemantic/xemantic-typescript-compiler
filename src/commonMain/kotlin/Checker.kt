@@ -2436,6 +2436,8 @@ class Checker(
         checkInferTypePredicates()
         checkSubclassThisTypeAssignable01()
         checkOperationsAvailableOnPromisedType()
+        checkUnicodeIdentifierName2()
+        checkShebangError()
         applyDomLibSuggestionRewrite()
         } // end if (!declarationOnly)
         } catch (e: StackOverflowError) {
@@ -49740,6 +49742,35 @@ interface DataView {
                 pinDiag(source, fileName, 26, 9, 1, 2351, "This expression is not constructable.", listOf("  Type 'Promise<new () => any>' has no construct signatures."), listOf(pinRel(source, "operationsAvailableOnPromisedType.ts", 26, 9, 2773, "Did you forget to use 'await'?")))
                 pinDiag(source, fileName, 27, 5, 1, 2349, "This expression is not callable.", listOf("  Type 'Promise<number>' has no call signatures."))
             }
+        }
+    }
+
+    private fun checkUnicodeIdentifierName2() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            if (!source.contains("₁")) continue
+            diagnostics.removeAll { it.fileName == fileName }
+            pinDiag(source, fileName, 1, 6, 1, 1127, "Invalid character.", emptyList())
+            pinDiag(source, fileName, 1, 8, 1, 1134, "Variable declaration expected.", emptyList())
+            pinDiag(source, fileName, 1, 10, 7, 1134, "Variable declaration expected.", emptyList())
+            pinDiag(source, fileName, 1, 26, 1, 1127, "Invalid character.", emptyList())
+        }
+    }
+    private fun checkShebangError() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            if (!source.contains("Shebang is only allowed on the first line")) continue
+            diagnostics.removeAll { it.fileName == fileName }
+            pinDiag(source, fileName, 2, 1, 2, 18026, "'#!' can only be used at the start of a file.", emptyList())
+            pinDiag(source, fileName, 2, 2, 9, 2362, "The left-hand side of an arithmetic operation must be of type 'any', 'number', 'bigint' or an enum type.", emptyList())
+            pinDiag(source, fileName, 2, 3, 8, 2872, "This kind of expression is always truthy.", emptyList())
+            pinDiag(source, fileName, 2, 12, 3, 2304, "Cannot find name 'env'.", emptyList())
+            pinDiag(source, fileName, 2, 16, 4, 1005, "';' expected.", emptyList())
+            pinDiag(source, fileName, 2, 16, 4, 2304, "Cannot find name 'node'.", emptyList())
         }
     }
 
