@@ -383,15 +383,18 @@ class Emitter(
         writeNewLine()
     }
 
-    private fun emitVariableDeclarationList(node: VariableDeclarationList) {
+    private fun emitVariableDeclarationList(node: VariableDeclarationList, emptyKeywordSpace: Boolean = false) {
         val keyword = when (node.flags) {
             SyntaxKind.LetKeyword -> "let"
             SyntaxKind.ConstKeyword -> "const"
             else -> "var"
         }
         write(keyword)
-        // TypeScript always writes a space after var/const, but not after let when declarations are empty
-        if (node.declarations.isNotEmpty() || keyword != "let") write(" ")
+        // TypeScript always writes a space after var/const, but not after let when declarations are
+        // empty — EXCEPT in a for-in/for-of header, where an empty `let` list (error recovery, e.g.
+        // `for (let in [1,2,3])`) still emits `let ` (→ `let  in`, matching tsc's empty-decl-list emit;
+        // a bare `let;` statement stays `let;`). See emptyKeywordSpace from the for-header call sites.
+        if (node.declarations.isNotEmpty() || keyword != "let" || emptyKeywordSpace) write(" ")
         for ((index, decl) in node.declarations.withIndex()) {
             val isLast = index == node.declarations.size - 1
             emitVariableDeclaration(decl)
@@ -709,7 +712,7 @@ class Emitter(
         write(" (")
         emitInnerComments(node.afterOpenParenComments, trailingSpace = false)
         when (val init = node.initializer) {
-            is VariableDeclarationList -> emitVariableDeclarationList(init)
+            is VariableDeclarationList -> emitVariableDeclarationList(init, emptyKeywordSpace = true)
             is Expression -> emitExpression(init)
             else -> { /* should not happen */
             }
@@ -736,7 +739,7 @@ class Emitter(
         write("(")
         emitInnerComments(node.afterOpenParenComments, trailingSpace = false)
         when (val init = node.initializer) {
-            is VariableDeclarationList -> emitVariableDeclarationList(init)
+            is VariableDeclarationList -> emitVariableDeclarationList(init, emptyKeywordSpace = true)
             is Expression -> emitExpression(init)
             else -> { /* should not happen */
             }

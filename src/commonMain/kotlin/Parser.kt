@@ -37,6 +37,12 @@ class Parser(
     private val diagnostics = mutableListOf<Diagnostic>()
     private var inAsyncContext = topLevelAwait
     private var disallowIn = false
+    // tsc parseDelimitedList(ArrayBindingElements) abort: set by the for-init var-decl-list
+    // recovery so a binding pattern started as a mis-recovered subsequent declarator
+    // (`for (let of [1,2,3])` → `[]`) ABORTS on the first non-binding-element token
+    // (a numeric/string literal is a valid enclosing-context statement start) instead of
+    // consuming it. Read+reset at parseArrayBindingPattern entry so nested patterns don't inherit.
+    private var bindingPatternAbortMode = false
     private var classBodyDepth = 0
     private var inTypeArgsDepth = 0
     private var inTupleTypeDepth = 0
@@ -1009,7 +1015,7 @@ class Parser(
         )
     }
 
-    private fun parseVariableDeclarationList(): VariableDeclarationList {
+    private fun parseVariableDeclarationList(inForInitializer: Boolean = false): VariableDeclarationList {
         val pos = getPos()
         val flags = token
         nextToken() // consume var/let/const
@@ -1049,6 +1055,17 @@ class Parser(
                     reportError("Invalid character.", code = 1127, overrideLength = 0)
                     nextToken() // consume the Unknown token (the invalid character)
                     decls.add(parseVariableDeclaration())
+                } else if (inForInitializer && (token == SyntaxKind.OpenBracket || token == SyntaxKind.OpenBrace)
+                    && !scanner.hasPrecedingLineBreak()) {
+                    // tsc parseDelimitedList(VariableDeclarations): a binding-pattern start with
+                    // no preceding comma is the NEXT declarator (',' expected); in a for-init the
+                    // pattern ABORTS on its first non-binding token (`for (let of [1,2,3])` →
+                    // `let of, []` + the C-style condition `1,2,3`; invalidLetInForOfAndForIn_ES5/ES6).
+                    // Errors for these tests are pinned — this fixes the JS-emit AST only.
+                    parseExpected(SyntaxKind.Comma)
+                    bindingPatternAbortMode = true
+                    decls.add(parseVariableDeclaration())
+                    bindingPatternAbortMode = false
                 } else {
                     // tsc parseDelimitedList: a same-line `(` can't start another
                     // declaration and isn't a list terminator (canParseSemicolon/in/of)
@@ -1236,6 +1253,10 @@ class Parser(
 
     private fun parseArrayBindingPattern(): ArrayBindingPattern {
         val pos = getPos()
+        // Read+reset the for-init recovery abort flag so ONLY this outermost pattern aborts
+        // (nested patterns parse normally).
+        val abortMode = bindingPatternAbortMode
+        bindingPatternAbortMode = false
         parseExpected(SyntaxKind.OpenBracket)
         val elements = mutableListOf<Node>()
         var trailingComma = false
@@ -1244,6 +1265,16 @@ class Parser(
                 elements.add(OmittedExpression(pos = getPos(), end = getPos()))
                 nextToken()
                 continue
+            }
+            // tsc parseDelimitedList(ArrayBindingElements) abort arm (for-init recovery): a token
+            // that can't start a binding element (a numeric/string literal, an operator, …) IS a
+            // valid statement/expression start in the enclosing context, so tsc emits TS1181 and
+            // leaves it UNCONSUMED (`for (let of [1,2,3])` → `[]` + condition `1,2,3`).
+            if (abortMode && !(isIdentifier() || token == SyntaxKind.OpenBracket
+                    || token == SyntaxKind.OpenBrace || token == SyntaxKind.DotDotDot)) {
+                reportError("Array element destructuring pattern expected.", code = 1181,
+                    overrideLength = scanner.getTokenText().length.coerceAtLeast(1))
+                break
             }
             // tsc parsingContextErrors(ArrayBindingElements) ABORT arm: a fully-RESERVED
             // keyword (`var [debugger, if] = …`) can't start an element but CAN start a
@@ -1658,7 +1689,7 @@ class Parser(
         val initializer: Node? = when (token) {
             VarKeyword, LetKeyword, ConstKeyword -> {
                 disallowIn = true
-                val v = parseVariableDeclarationList()
+                val v = parseVariableDeclarationList(inForInitializer = true)
                 disallowIn = false
                 v
             }
