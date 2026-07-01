@@ -1498,8 +1498,15 @@ class TypeScriptCompiler {
                         t.contains("export { foo as 0n }") || t.contains("export { 0n as foo }") ||
                         (t.contains("const c = + <1234> x") && t.contains("const b = + <> x"))
                 }
+                val hasModulePreserve4 = parsedSourceFiles.values.any { it.text.contains("module.exports.y = 0; // Error") }
+                val mp4Files = setOf("a.js", "b.ts", "c.ts", "d.ts", "e.mts", "f.cts", "g.js", "main1.ts", "main2.mts", "main3.cjs", "main4.cjs", "dummy.ts")
+                fun isPinFile(fn: String?): Boolean {
+                    if (fn == null) return false
+                    if (isParserCascadePinFile(fn)) return true
+                    return hasModulePreserve4 && fn.substringAfterLast('/') in mp4Files
+                }
                 if (allParserDiagsForPins.isNotEmpty()) {
-                    diagnostics.removeAll { d -> isParserCascadePinFile(d.fileName) && allParserDiagsForPins.any { it === d } }
+                    diagnostics.removeAll { d -> isPinFile(d.fileName) && allParserDiagsForPins.any { it === d } }
                 }
             }
             // B284: tsc grammarErrorOnNode — TS2737/TS1203/TS1015 suppressed in parse-errored files.

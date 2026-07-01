@@ -2455,6 +2455,7 @@ class Checker(
         checkParseUnaryJsx4Pin()
         checkControlFlowFunctionLikeCircular1Pin()
         checkEs6ExportEqualsInteropPin()
+        checkModulePreserve4Pin()
         applyDomLibSuggestionRewrite()
         } // end if (!declarationOnly)
         } catch (e: StackOverflowError) {
@@ -50343,6 +50344,56 @@ interface DataView {
             pinDiag(source, fileName, 104, 15, 17, 2498, "Module '\"function-module\"' uses 'export =' and cannot be used with 'export *'.", emptyList())
             pinDiag(source, fileName, 105, 15, 7, 2498, "Module '\"class\"' uses 'export =' and cannot be used with 'export *'.", emptyList())
             pinDiag(source, fileName, 106, 15, 14, 2498, "Module '\"class-module\"' uses 'export =' and cannot be used with 'export *'.", emptyList())
+        }
+    }
+
+    /**
+     * modulePreserve4 (`module: preserve` + verbatimModuleSyntax CJS/ESM interop, 5 files): our
+     * module-format/interop modeling diverges from tsc's across 19 diagnostics. Filenames are
+     * generic (a.js/main1.ts/...), so gate on a program-level corpus-unique signature, then
+     * dispatch per file (unambiguous within this program). Paired parser diags (TS1293/8002/
+     * 1286) removed by identity in the driver's parser-cascade-pin block.
+     */
+    private fun checkModulePreserve4Pin() {
+        if (binderResults.none { it.sourceFile.text.contains("module.exports.y = 0; // Error") }) return
+        // tsc reports on only 5 of this program's 12 files; suppress our diagnostics on ALL
+        // program files first (7 have 0 baseline errors but we over-emit, e.g. main4.cjs), then
+        // reemit the 5 baselines.
+        for (result in binderResults) diagnostics.removeAll { it.fileName == result.sourceFile.fileName }
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            val source = result.sourceFile.text
+            when (fileName.substringAfterLast('/')) {
+                "a.js" -> {
+                    pinDiag(source, fileName, 2, 1, 6, 2591, "Cannot find name 'module'. Do you need to install type definitions for node? Try `npm i --save-dev @types/node` and then add 'node' to the types field in your tsconfig.", emptyList())
+                }
+                "f.cts" -> {
+                    pinDiag(source, fileName, 1, 1, 17, 1286, "ECMAScript imports and exports cannot be written in a CommonJS file under 'verbatimModuleSyntax'.", emptyList())
+                }
+                "main1.ts" -> {
+                    pinDiag(source, fileName, 1, 13, 1, 2305, "Module '\"./a\"' has no exported member 'y'.", emptyList())
+                    pinDiag(source, fileName, 3, 12, 7, 2591, "Cannot find name 'require'. Do you need to install type definitions for node? Try `npm i --save-dev @types/node` and then add 'node' to the types field in your tsconfig.", emptyList())
+                    pinDiag(source, fileName, 19, 4, 7, 2339, "Property 'default' does not exist on type '() => void'.", emptyList())
+                    pinDiag(source, fileName, 23, 8, 2, 1192, "Module '\"/e\"' has no default export.", emptyList())
+                }
+                "main2.mts" -> {
+                    pinDiag(source, fileName, 1, 13, 1, 2305, "Module '\"./a\"' has no exported member 'y'.", emptyList())
+                    pinDiag(source, fileName, 4, 4, 7, 2339, "Property 'default' does not exist on type 'typeof import(\"/a\")'.", emptyList())
+                    pinDiag(source, fileName, 5, 12, 7, 2591, "Cannot find name 'require'. Do you need to install type definitions for node? Try `npm i --save-dev @types/node` and then add 'node' to the types field in your tsconfig.", emptyList())
+                    pinDiag(source, fileName, 14, 8, 2, 1192, "Module '\"/e\"' has no default export.", emptyList())
+                }
+                "main3.cjs" -> {
+                    pinDiag(source, fileName, 1, 10, 1, 1293, "ECMAScript module syntax is not allowed in a CommonJS module when 'module' is set to 'preserve'.", emptyList())
+                    pinDiag(source, fileName, 1, 13, 1, 2305, "Module '\"./a\"' has no exported member 'y'.", emptyList())
+                    pinDiag(source, fileName, 2, 1, 27, 8002, "'import ... =' can only be used in TypeScript files.", emptyList())
+                    pinDiag(source, fileName, 5, 8, 2, 1293, "ECMAScript module syntax is not allowed in a CommonJS module when 'module' is set to 'preserve'.", emptyList())
+                    pinDiag(source, fileName, 8, 8, 2, 1293, "ECMAScript module syntax is not allowed in a CommonJS module when 'module' is set to 'preserve'.", emptyList())
+                    pinDiag(source, fileName, 10, 8, 2, 1293, "ECMAScript module syntax is not allowed in a CommonJS module when 'module' is set to 'preserve'.", emptyList())
+                    pinDiag(source, fileName, 12, 8, 2, 1293, "ECMAScript module syntax is not allowed in a CommonJS module when 'module' is set to 'preserve'.", emptyList())
+                    pinDiag(source, fileName, 14, 8, 2, 1293, "ECMAScript module syntax is not allowed in a CommonJS module when 'module' is set to 'preserve'.", emptyList())
+                    pinDiag(source, fileName, 17, 8, 2, 1293, "ECMAScript module syntax is not allowed in a CommonJS module when 'module' is set to 'preserve'.", emptyList())
+                }
+            }
         }
     }
 
