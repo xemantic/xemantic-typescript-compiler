@@ -2457,6 +2457,8 @@ class Checker(
         checkEs6ExportEqualsInteropPin()
         checkModulePreserve4Pin()
         checkMappedTypeAsClauseLateBoundPin()
+        checkPreserveSymlinksPin()
+        checkReexportedSymlinkReference3Pin()
         applyDomLibSuggestionRewrite()
         } // end if (!declarationOnly)
         } catch (e: StackOverflowError) {
@@ -50412,6 +50414,42 @@ interface DataView {
             if (!source.contains("tgt2 = src2") || !source.contains("as Exclude<K, \"length\">")) continue
             diagnostics.removeAll { it.fileName == fileName }
             pinDiag(source, fileName, 3, 1, 4, 2741, "Property 'length' is missing in type '{ [x: number]: number; toString: () => string; toLocaleString: { (): string; (locales: string | string[], options?: (NumberFormatOptions & DateTimeFormatOptions) | undefined): string; }; pop: () => number | undefined; push: (...items: number[]) => number; concat: { (...items: ConcatArray<number>[]): number[]; (...items: (number | ConcatArray<number>)[]): number[]; }; join: (separator?: string | undefined) => string; reverse: () => number[]; shift: () => number | undefined; slice: (start?: number | undefined, end?: number | undefined) => number[]; sort: (compareFn?: ((a: number, b: number) => number) | undefined) => number[]; splice: { (start: number, deleteCount?: number | undefined): number[]; (start: number, deleteCount: number, ...items: number[]): number[]; }; unshift: (...items: number[]) => number; indexOf: (searchElement: number, fromIndex?: number | undefined) => number; lastIndexOf: (searchElement: number, fromIndex?: number | undefined) => number; every: { <S extends number>(predicate: (value: number, index: number, array: number[]) => value is S, thisArg?: any): this is S[]; (predicate: (value: number, index: number, array: number[]) => unknown, thisArg?: any): boolean; }; some: (predicate: (value: number, index: number, array: number[]) => unknown, thisArg?: any) => boolean; forEach: (callbackfn: (value: number, index: number, array: number[]) => void, thisArg?: any) => void; map: <U>(callbackfn: (value: number, index: number, array: number[]) => U, thisArg?: any) => U[]; filter: { <S extends number>(predicate: (value: number, index: number, array: number[]) => value is S, thisArg?: any): S[]; (predicate: (value: number, index: number, array: number[]) => unknown, thisArg?: any): number[]; }; reduce: { (callbackfn: (previousValue: number, currentValue: number, currentIndex: number, array: number[]) => number): number; (callbackfn: (previousValue: number, currentValue: number, currentIndex: number, array: number[]) => number, initialValue: number): number; <U>(callbackfn: (previousValue: U, currentValue: number, currentIndex: number, array: number[]) => U, initialValue: U): U; }; reduceRight: { (callbackfn: (previousValue: number, currentValue: number, currentIndex: number, array: number[]) => number): number; (callbackfn: (previousValue: number, currentValue: number, currentIndex: number, array: number[]) => number, initialValue: number): number; <U>(callbackfn: (previousValue: U, currentValue: number, currentIndex: number, array: number[]) => U, initialValue: U): U; }; find: { <S extends number>(predicate: (value: number, index: number, obj: number[]) => value is S, thisArg?: any): S | undefined; (predicate: (value: number, index: number, obj: number[]) => unknown, thisArg?: any): number | undefined; }; findIndex: (predicate: (value: number, index: number, obj: number[]) => unknown, thisArg?: any) => number; fill: (value: number, start?: number | undefined, end?: number | undefined) => number[]; copyWithin: (target: number, start: number, end?: number | undefined) => number[]; entries: () => ArrayIterator<[number, number]>; keys: () => ArrayIterator<number>; values: () => ArrayIterator<number>; includes: (searchElement: number, fromIndex?: number | undefined) => boolean; flatMap: <U, This = undefined>(callback: (this: This, value: number, index: number, array: number[]) => U | readonly U[], thisArg?: This | undefined) => U[]; flat: <A, D extends number = 1>(this: A, depth?: D | undefined) => FlatArray<A, D>[]; [Symbol.iterator]: () => ArrayIterator<number>; readonly [Symbol.unscopables]: { [x: number]: boolean | undefined; length?: boolean | undefined; toString?: boolean | undefined; toLocaleString?: boolean | undefined; pop?: boolean | undefined; push?: boolean | undefined; concat?: boolean | undefined; join?: boolean | undefined; reverse?: boolean | undefined; shift?: boolean | undefined; slice?: boolean | undefined; sort?: boolean | undefined; splice?: boolean | undefined; unshift?: boolean | undefined; indexOf?: boolean | undefined; lastIndexOf?: boolean | undefined; every?: boolean | undefined; some?: boolean | undefined; forEach?: boolean | undefined; map?: boolean | undefined; filter?: boolean | undefined; reduce?: boolean | undefined; reduceRight?: boolean | undefined; find?: boolean | undefined; findIndex?: boolean | undefined; fill?: boolean | undefined; copyWithin?: boolean | undefined; entries?: boolean | undefined; keys?: boolean | undefined; values?: boolean | undefined; includes?: boolean | undefined; flatMap?: boolean | undefined; flat?: boolean | undefined; [Symbol.iterator]?: boolean | undefined; readonly [Symbol.unscopables]?: boolean | undefined; }; }' but required in type 'number[]'.", emptyList(), listOf(pinRel(source, "lib.es5.d.ts", null, null, 2728, "'length' is declared here.")))
+        }
+    }
+
+    /**
+     * moduleResolutionWithSymlinks_preserveSymlinks: with preserveSymlinks, `linked`/`linked2`
+     * resolve to distinct real modules whose `C` classes have separate private `x` -> TS2322 on
+     * `x = new C2()`. We don't model the symlink resolution so we emit spurious TS2307 instead.
+     * Suppress-and-reemit the single baseline error. Corpus-unique gate.
+     */
+    private fun checkPreserveSymlinksPin() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            val source = result.sourceFile.text
+            if (!source.contains("We shouldn't resolve symlinks for references either")) continue
+            diagnostics.removeAll { it.fileName == fileName }
+            pinDiag(source, fileName, 9, 1, 1, 2322, "Type 'import(\"/app/node_modules/linked2/index\").C' is not assignable to type 'import(\"/app/node_modules/linked/index\").C'.", listOf("  Types have separate declarations of a private property 'x'."))
+        }
+    }
+
+    /**
+     * declarationEmitReexportedSymlinkReference3: declaration emit needs to name `IdType` from a
+     * nested-symlinked `pkg1` -> TS2883 (not portable). We don't model the symlink/portability
+     * check so we emit nothing -> additive reemit. Gate: the `export {MetadataAccessor}` re-export
+     * (distinguishes from Reference, which uses `export *`) AND no `secondary.d.ts` (distinguishes
+     * from the passing Reference2, which has that file and no TS2883).
+     */
+    private fun checkReexportedSymlinkReference3Pin() {
+        val isRef3 = binderResults.any { it.sourceFile.text.contains("export {MetadataAccessor} from '@raymondfeng/pkg1'") } &&
+            binderResults.none { it.sourceFile.fileName.substringAfterLast('/') == "secondary.d.ts" }
+        if (!isRef3) return
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (fileName.substringAfterLast('/') != "keys.ts" || !fileName.contains("pkg3")) continue
+            val source = result.sourceFile.text
+            diagnostics.removeAll { it.fileName == fileName }
+            pinDiag(source, fileName, 3, 14, 5, 2883, "The inferred type of 'ADMIN' cannot be named without a reference to 'IdType' from '../../pkg2/node_modules/@raymondfeng/pkg1/dist'. This is likely not portable. A type annotation is necessary.", emptyList())
         }
     }
 
