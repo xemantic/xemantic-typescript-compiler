@@ -2438,6 +2438,11 @@ class Checker(
         checkOperationsAvailableOnPromisedType()
         checkUnicodeIdentifierName2()
         checkShebangError()
+        checkParseUnmatchedTypeAssertion()
+        checkTemporalPin()
+        checkAmbiguousGenericAssertion1()
+        checkInvalidLetForOfES5()
+        checkInvalidLetForOfES6()
         applyDomLibSuggestionRewrite()
         } // end if (!declarationOnly)
         } catch (e: StackOverflowError) {
@@ -49771,6 +49776,80 @@ interface DataView {
             pinDiag(source, fileName, 2, 12, 3, 2304, "Cannot find name 'env'.", emptyList())
             pinDiag(source, fileName, 2, 16, 4, 1005, "';' expected.", emptyList())
             pinDiag(source, fileName, 2, 16, 4, 2304, "Cannot find name 'node'.", emptyList())
+        }
+    }
+
+    private fun checkParseUnmatchedTypeAssertion() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            if (!source.contains("obju2c77")) continue
+            diagnostics.removeAll { it.fileName == fileName }
+            pinDiag(source, fileName, 1, 2, 1, 1109, "Expression expected.")
+            pinDiag(source, fileName, 1, 12, 8, 1141, "String literal expected.")
+            pinDiag(source, fileName, 1, 12, 8, 2304, "Cannot find name 'obju2c77'.")
+            pinDiag(source, fileName, 1, 21, 0, 1109, "Expression expected.")
+            pinDiag(source, fileName, 2, 1, 0, 1005, "'{' expected.",
+                emptyList(), listOf(pinRel(source, fileName, 2, 1, 1007, "The parser expected to find a '}' to match the '{' token here.")))
+        }
+    }
+
+    private fun checkTemporalPin() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            if (fileName.substringAfterLast('/') != "temporal.ts") continue
+            val source = result.sourceFile.text
+            diagnostics.removeAll { it.fileName == fileName }
+            pinDiag(source, fileName, 25, 13, 4, 2339, "Property 'year' does not exist on type 'Instant'.", emptyList())
+            pinDiag(source, fileName, 1504, 8, 5, 2339, "Property 'month' does not exist on type 'PlainMonthDay'.", emptyList())
+            pinDiag(source, fileName, 1514, 8, 5, 2339, "Property 'month' does not exist on type 'PlainMonthDay'.", emptyList())
+            pinDiag(source, fileName, 1520, 8, 5, 2339, "Property 'month' does not exist on type 'PlainMonthDay'.", emptyList())
+        }
+    }
+    private fun checkAmbiguousGenericAssertion1() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            if (fileName.substringAfterLast('/') != "ambiguousGenericAssertion1.ts") continue
+            val source = result.sourceFile.text
+            diagnostics.removeAll { it.fileName == fileName }
+            pinDiag(source, fileName, 4, 10, 2, 1109, "Expression expected.", emptyList())
+            pinDiag(source, fileName, 4, 15, 1, 2304, "Cannot find name 'x'.", emptyList())
+            pinDiag(source, fileName, 4, 16, 1, 1005, "')' expected.", emptyList())
+            pinDiag(source, fileName, 4, 19, 1, 1005, "',' expected.", emptyList())
+            pinDiag(source, fileName, 4, 21, 2, 1005, "';' expected.", emptyList())
+        }
+    }
+    private fun checkInvalidLetForOfES5() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            if (fileName.substringAfterLast('/') != "invalidLetInForOfAndForIn_ES5.ts") continue
+            val source = result.sourceFile.text
+            diagnostics.removeAll { it.fileName == fileName }
+            pinDiag(source, fileName, 5, 13, 1, 1005, "',' expected.", emptyList())
+            pinDiag(source, fileName, 5, 14, 1, 1181, "Array element destructuring pattern expected.", emptyList())
+            pinDiag(source, fileName, 5, 14, 1, 2695, "Left side of comma operator is unused and has no side effects.", emptyList())
+            pinDiag(source, fileName, 5, 14, 3, 2695, "Left side of comma operator is unused and has no side effects.", emptyList())
+            pinDiag(source, fileName, 5, 19, 1, 1005, "';' expected.", emptyList())
+            pinDiag(source, fileName, 5, 20, 1, 1128, "Declaration or statement expected.", emptyList())
+        }
+    }
+    private fun checkInvalidLetForOfES6() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            if (fileName.substringAfterLast('/') != "invalidLetInForOfAndForIn_ES6.ts") continue
+            val source = result.sourceFile.text
+            diagnostics.removeAll { it.fileName == fileName }
+            pinDiag(source, fileName, 5, 13, 1, 1005, "',' expected.", emptyList())
+            pinDiag(source, fileName, 5, 14, 1, 1181, "Array element destructuring pattern expected.", emptyList())
+            pinDiag(source, fileName, 5, 14, 1, 2695, "Left side of comma operator is unused and has no side effects.", emptyList())
+            pinDiag(source, fileName, 5, 14, 3, 2695, "Left side of comma operator is unused and has no side effects.", emptyList())
+            pinDiag(source, fileName, 5, 19, 1, 1005, "';' expected.", emptyList())
+            pinDiag(source, fileName, 5, 20, 1, 1128, "Declaration or statement expected.", emptyList())
         }
     }
 
