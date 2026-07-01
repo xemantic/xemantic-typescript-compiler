@@ -1055,6 +1055,14 @@ class Parser(
                     reportError("Invalid character.", code = 1127, overrideLength = 0)
                     nextToken() // consume the Unknown token (the invalid character)
                     decls.add(parseVariableDeclaration())
+                } else if (inForInitializer && token == SyntaxKind.CloseParen
+                    && !scanner.hasPrecedingLineBreak()) {
+                    // tsc abortParsingListOrMoveToNextToken: a stray `)` (not valid in any enclosing
+                    // parsing context) after a for-init declarator is `,`-expected + SKIPPED, so the
+                    // list continues (`for (let x: y) { z(x); }` → `let x, { z }` + condition `(x)`;
+                    // unusedLocalsAndParameters). Errors are pinned; this fixes the JS-emit AST only.
+                    parseExpected(SyntaxKind.Comma)
+                    nextToken() // skip the stray `)`
                 } else if (inForInitializer && (token == SyntaxKind.OpenBracket || token == SyntaxKind.OpenBrace)
                     && !scanner.hasPrecedingLineBreak()) {
                     // tsc parseDelimitedList(VariableDeclarations): a binding-pattern start with
@@ -1197,6 +1205,9 @@ class Parser(
 
     private fun parseObjectBindingPattern(): ObjectBindingPattern {
         val pos = getPos()
+        // Clear the for-init recovery abort flag (an object element `{ z(x); }` → `{ z }` is already
+        // recovered by the loop below; reset so a nested array pattern doesn't wrongly inherit it).
+        bindingPatternAbortMode = false
         parseExpected(SyntaxKind.OpenBrace)
         val elements = mutableListOf<BindingElement>()
         var hasTrailingComma = false
