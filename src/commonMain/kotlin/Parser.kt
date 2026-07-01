@@ -704,17 +704,19 @@ class Parser(
             val nextIsParen = scanner.lookAhead { scanner.scan(); scanner.getToken() == SyntaxKind.OpenParen }
             val nextIsDot = scanner.lookAhead { scanner.scan(); scanner.getToken() == SyntaxKind.Dot }
             // B22.1: when the token after `import` is clearly not a valid import-clause start
-            // (e.g. `import 10;` — numeric/bigint/regex literal), emit TS1128 at the `import`
-            // keyword and skip only the keyword so the remainder parses as a regular statement.
-            // Valid import starts: StringLiteral (side-effect), Identifier (default name),
-            // OpenBrace (named), Asterisk (namespace), TypeKeyword (type-only).
+            // (e.g. `import 10;` — numeric/bigint/regex literal, or `import , {a}` — a comma),
+            // emit TS1128 at the `import` keyword and skip only the keyword so the remainder
+            // parses as a regular statement. This mirrors tsc `isDeclaration`'s ImportKeyword
+            // case: `import` starts a declaration iff the next token is a String literal, `*`,
+            // `{`, or an identifier-or-keyword (`import(` / `import.` are handled above as
+            // expressions). Any other follower (`,`, punctuation, literals) → not a declaration
+            // → `import` re-parses as its own (erroneous) statement and the rest recovers
+            // (es6ImportNamedImportParsingError: `import , { a } from "x"` → `{ a; }` block).
             val nextIsInvalid = scanner.lookAhead {
                 scanner.scan()
-                when (scanner.getToken()) {
-                    SyntaxKind.NumericLiteral, SyntaxKind.BigIntLiteral,
-                    SyntaxKind.RegularExpressionLiteral -> true
-                    else -> false
-                }
+                val t = scanner.getToken()
+                !(t == SyntaxKind.StringLiteral || t == SyntaxKind.Asterisk ||
+                    t == SyntaxKind.OpenBrace || isIdentifierToken(t) || t.name.endsWith("Keyword"))
             }
             if (nextIsParen || nextIsDot) parseExpressionStatement()
             else if (nextIsInvalid) {
@@ -3934,10 +3936,17 @@ class Parser(
             // bigint literal (e.g. `import { 0n as foo } from "./foo"` → the list bails on
             // `0n`, `from` is missing, and `0n as foo` is now at the specifier position),
             // consume it as the specifier expression so it does NOT re-parse as a leftover
-            // statement (bigintArbirtraryIdentifier). Gated to numeric/bigint literals: an
-            // identifier / reserved keyword (`import * as while from "foo"`) keeps the
-            // missing-node path below so it re-parses as its own statement (reservedWords2).
-            if (token == SyntaxKind.NumericLiteral || token == SyntaxKind.BigIntLiteral) {
+            // statement (bigintArbirtraryIdentifier). tsc's parseModuleSpecifier ALWAYS parses
+            // a non-string specifier as an expression, so consume any token `parseExpression`
+            // would advance over — a numeric/bigint literal, an expression-start, a leading
+            // binary operator (`import { * } from` → the aborted `*` becomes `<missing> *
+            // <missing>`), or a `,` (`import { a }, from "x"` → `<missing> , from`). A
+            // statement keyword like `while` (`import * as while from "foo"`) is NOT an
+            // expression start / binary operator, so it keeps the missing-node path below and
+            // re-parses as its own statement (reservedWords2).
+            if (token == SyntaxKind.NumericLiteral || token == SyntaxKind.BigIntLiteral ||
+                isStartOfExpression() || getBinaryOperatorPrecedence(token) > 0 ||
+                token == SyntaxKind.Comma) {
                 val expr = parseExpression()
                 val assertClause = parseImportAttributes()
                 val assertClausePos = lastImportAttributesPos
@@ -4031,18 +4040,91 @@ class Parser(
         }
     }
 
+    // tsc `isListElement(ImportOrExportSpecifiers)`: the current token is a valid
+    // import/export specifier start. Bails on `from "..."` (so `import { from "mod"`
+    // stops for a better error), accepts a string literal (arbitrary module namespace
+    // identifiers), otherwise requires an identifier-or-keyword.
+    private fun isImportOrExportSpecifierListElement(): Boolean {
+        if (token == SyntaxKind.FromKeyword &&
+            scanner.lookAhead { scanner.scan(); scanner.getToken() == SyntaxKind.StringLiteral }) {
+            return false
+        }
+        if (token == SyntaxKind.StringLiteral) return true
+        return isIdentifier() || isKeyword()
+    }
+
+    // tsc `isInSomeParsingContext()` for the ImportOrExportSpecifiers abort: the offending
+    // token is retried against the enclosing contexts. An import/export specifier list is
+    // always nested in a statement context (SourceElements/BlockStatements/ModuleBlock), so
+    // the token is "in a parsing context" iff it can start a statement (≈ a statement keyword
+    // or an expression start, incl. a binary-operator error-tolerance start like `*`) OR it is
+    // the list's own terminator `}` OR still a specifier-element candidate. When true, the list
+    // aborts WITHOUT consuming the token, so it re-parses as its own statement (tsc
+    // `abortParsingListOrMoveToNextToken` → return true); when false, tsc consumes one token
+    // (`nextToken`) and continues the list — e.g. a stray `,`.
+    private fun isImportSpecifierAbortInEnclosingContext(): Boolean {
+        if (token == SyntaxKind.CloseBrace) return true
+        if (isImportOrExportSpecifierListElement()) return true
+        return canStartStatementForRecovery()
+    }
+
+    // tsc `isStartOfStatement()` — approximated for error recovery. Covers statement keywords
+    // plus `isStartOfExpression()` (with the binary-operator error-tolerance start). Used only
+    // to decide whether a malformed list element re-parses as a statement.
+    private fun canStartStatementForRecovery(): Boolean = when (token) {
+        SyntaxKind.Semicolon, SyntaxKind.At,
+        SyntaxKind.VarKeyword, SyntaxKind.LetKeyword, SyntaxKind.UsingKeyword,
+        SyntaxKind.FunctionKeyword, SyntaxKind.ClassKeyword, SyntaxKind.EnumKeyword,
+        SyntaxKind.IfKeyword, SyntaxKind.DoKeyword, SyntaxKind.WhileKeyword,
+        SyntaxKind.ForKeyword, SyntaxKind.ContinueKeyword, SyntaxKind.BreakKeyword,
+        SyntaxKind.ReturnKeyword, SyntaxKind.WithKeyword, SyntaxKind.SwitchKeyword,
+        SyntaxKind.ThrowKeyword, SyntaxKind.TryKeyword, SyntaxKind.DebuggerKeyword,
+        SyntaxKind.CatchKeyword, SyntaxKind.FinallyKeyword,
+        SyntaxKind.ImportKeyword, SyntaxKind.ConstKeyword, SyntaxKind.ExportKeyword,
+        SyntaxKind.InterfaceKeyword, SyntaxKind.ModuleKeyword, SyntaxKind.NamespaceKeyword,
+        SyntaxKind.DeclareKeyword, SyntaxKind.AsyncKeyword, SyntaxKind.TypeKeyword,
+        SyntaxKind.GlobalKeyword -> true
+        else -> isStartOfExpression() || getBinaryOperatorPrecedence(token) > 0
+    }
+
+    // tsc `parseNamedImportsOrExports(NamedImports)` =
+    // `parseBracketedList(ImportOrExportSpecifiers, parseImportSpecifier, {, })`, i.e.
+    // `parseExpected({) && parseDelimitedList && parseExpected(})`. The faithful recovery
+    // (abort-without-consuming a non-specifier token that can start an enclosing statement)
+    // is what produces tsc's byte-exact garble for malformed named imports.
     private fun parseNamedImports(): NamedImports {
         val pos = getPos()
-        parseExpected(SyntaxKind.OpenBrace)
-        captureIeSlot() // after `{`, before the first specifier
         val elements = mutableListOf<ImportSpecifier>()
-        while (token != SyntaxKind.CloseBrace && token != SyntaxKind.EndOfFile) {
-            elements.add(parseImportSpecifier())
-            captureIeSlot() // after the specifier's binding name, before `,`/`}`
-            if (!parseOptional(SyntaxKind.Comma)) break
-            captureIeSlot() // after `,`, before the next specifier
+        if (parseExpected(SyntaxKind.OpenBrace)) {
+            captureIeSlot() // after `{`, before the first specifier
+            // parseDelimitedList(ImportOrExportSpecifiers, parseImportSpecifier)
+            while (true) {
+                if (isImportOrExportSpecifierListElement()) {
+                    val startFull = scanner.getTokenPos()
+                    elements.add(parseImportSpecifier())
+                    captureIeSlot() // after the specifier's binding name, before `,`/`}`
+                    if (parseOptional(SyntaxKind.Comma)) {
+                        captureIeSlot() // after `,`, before the next specifier
+                        continue
+                    }
+                    if (token == SyntaxKind.CloseBrace) break // list terminator
+                    // No comma and not terminated: report a comma for a good error, then continue.
+                    parseExpected(SyntaxKind.Comma)
+                    if (startFull == scanner.getTokenPos()) nextToken() // avoid an infinite loop
+                    continue
+                }
+                if (token == SyntaxKind.CloseBrace) break
+                // abortParsingListOrMoveToNextToken(ImportOrExportSpecifiers)
+                if (token == SyntaxKind.FromKeyword) {
+                    reportError("'}' expected.", code = 1005)
+                } else {
+                    reportError("Identifier expected.", code = 1003)
+                }
+                if (isImportSpecifierAbortInEnclosingContext()) break
+                nextToken()
+            }
+            parseExpected(SyntaxKind.CloseBrace)
         }
-        parseExpected(SyntaxKind.CloseBrace)
         return NamedImports(elements = elements, pos = pos, end = getEnd())
     }
 
