@@ -174,11 +174,35 @@ tasks.register<JavaExec>("compileTsProject") {
 val typeScriptRepoDir = projectDir.resolve("typescript-repo")
 
 /**
- * Performs a sparse, shallow clone of the Microsoft TypeScript repository,
+ * The exact mainline TypeScript commit our test corpus is PINNED to. This is the
+ * PRISTINE tsc commit that tsgo's `_submodules/TypeScript` submodule MERGES IN — the
+ * `main`-side parent of tsgo's current `tsgo-port` merge — NOT the tsgo-port branch
+ * tip itself.
+ *
+ * That distinction is LOAD-BEARING: the tsgo-port branch REGENERATES its reference
+ * baselines to the Go compiler's output (e.g. a different, type-id-based union-member
+ * display ordering: `'boolean' | 'number'` where tsc emits `'number' | 'boolean'`),
+ * which are tsgo DIVERGENCES. We deliberately diff char-by-char against ORIGINAL tsc
+ * (project owner's directive), so we pin to the pristine `main` commit tsgo tracks —
+ * giving tsgo's exact test-case set (set A) with real tsc baselines.
+ *
+ * To follow tsgo forward, read tsgo's submodule sha, then take its `main`-side parent:
+ *   S=$(curl -s https://api.github.com/repos/microsoft/typescript-go/contents/_submodules/TypeScript | grep '"sha"')
+ *   # that sha is a "Merge branch 'main' into tsgo-port" commit; the pristine target
+ *   # is its 2nd parent:
+ *   curl -s https://api.github.com/repos/microsoft/TypeScript/commits/<sha>   # -> parents[1].sha
+ */
+val typeScriptCommit = "637d5746b70257028fb95aad32ddec6b26ab0a14" // pristine tsc @ 2026-06-25 (main-parent of tsgo pin 4d4f005c)
+
+/**
+ * Performs a sparse, PINNED, partial clone of the Microsoft TypeScript repository,
  * fetching only the compiler test cases and their expected baselines.
  *
- * The clone is idempotent: if `typescript-repo/.git` already exists the task
- * reports the fact and exits immediately, making repeated builds fast.
+ * The clone is PINNED to [typeScriptCommit] (tsgo's submodule commit) and the task
+ * is idempotent: if `typescript-repo/.git` already exists it fetches + checks out
+ * the pin in place (a no-op if already there); otherwise it does a fresh
+ * partial+sparse clone and checks out the pin. [typeScriptCommit] is declared as a
+ * task input, so bumping it re-runs the task and the corpus follows the pin.
  *
  * Run explicitly before the first test run, or simply invoke any test task
  * (which depends on this task transitively via `generateTypeScriptTests`):
@@ -189,38 +213,46 @@ val typeScriptRepoDir = projectDir.resolve("typescript-repo")
  */
 val cloneTypeScriptRepo by tasks.registering {
     group = "typescript"
-    description = "Sparse-clones the TypeScript repository (tests only) for the compiler test harness."
+    description = "Sparse-clones the TypeScript repository (tests only), pinned to tsgo's submodule commit."
+    inputs.property("typeScriptCommit", typeScriptCommit) // re-run when the pin changes
     outputs.dir(typeScriptRepoDir)
 
     doLast {
+        val sparsePaths = arrayOf("tests/cases/compiler", "tests/baselines/reference")
+
         if (typeScriptRepoDir.resolve(".git").exists()) {
-            logger.lifecycle("TypeScript repository already present at: $typeScriptRepoDir")
+            // Re-pin an existing clone. `fetch --depth=1 <sha>` grabs just the pinned
+            // commit (GitHub serves a reachable SHA); checkout is a no-op if already there.
+            logger.lifecycle("Re-pinning TypeScript repository to $typeScriptCommit ...")
+            runCommand("git", "sparse-checkout", "set", *sparsePaths, workingDir = typeScriptRepoDir)
+            runCommand("git", "fetch", "--depth=1", "origin", typeScriptCommit, workingDir = typeScriptRepoDir)
+            runCommand("git", "checkout", "--force", typeScriptCommit, workingDir = typeScriptRepoDir)
+            logger.lifecycle("TypeScript repository re-pinned successfully.")
             return@doLast
         }
 
-        logger.lifecycle("Cloning TypeScript repository (sparse checkout) into: $typeScriptRepoDir ...")
+        logger.lifecycle("Cloning TypeScript repository (pinned $typeScriptCommit, partial+sparse) into: $typeScriptRepoDir ...")
 
-        // Step 1: shallow clone with no blob objects and sparse-checkout enabled.
-        //         Only tree/commit objects are fetched; blobs are lazy-loaded on demand.
+        // Step 1: depth-1 partial (blob:none) + sparse + no-checkout clone — fetch only
+        //         tree/commit objects (blobs lazy-loaded) and don't materialize a working
+        //         tree until we pin the commit.
         runCommand(
             "git", "clone",
             "--depth=1",
             "--filter=blob:none",
             "--sparse",
+            "--no-checkout",
             "https://github.com/microsoft/TypeScript.git",
             typeScriptRepoDir.absolutePath,
         )
+        // Step 2: restrict the working tree to only the paths we need (blobs fetched
+        //         exclusively for these two directories).
+        runCommand("git", "sparse-checkout", "set", *sparsePaths, workingDir = typeScriptRepoDir)
+        // Step 3: fetch and check out exactly the pinned commit (depth=1 — no history).
+        runCommand("git", "fetch", "--depth=1", "origin", typeScriptCommit, workingDir = typeScriptRepoDir)
+        runCommand("git", "checkout", typeScriptCommit, workingDir = typeScriptRepoDir)
 
-        // Step 2: restrict the working tree to only the paths we need.
-        //         Git will now fetch blobs exclusively for these two directories.
-        runCommand(
-            "git", "sparse-checkout", "set",
-            "tests/cases/compiler",
-            "tests/baselines/reference",
-            workingDir = typeScriptRepoDir,
-        )
-
-        logger.lifecycle("TypeScript repository cloned successfully.")
+        logger.lifecycle("TypeScript repository cloned + pinned successfully.")
     }
 }
 
