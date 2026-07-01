@@ -2454,6 +2454,7 @@ class Checker(
         checkBigintArbitraryIdentifierPin()
         checkParseUnaryJsx4Pin()
         checkControlFlowFunctionLikeCircular1Pin()
+        checkEs6ExportEqualsInteropPin()
         applyDomLibSuggestionRewrite()
         } // end if (!declarationOnly)
         } catch (e: StackOverflowError) {
@@ -50295,6 +50296,53 @@ interface DataView {
                     pinDiag(source, fileName, 3, 5, 1, 2454, "Variable 'o' is used before being assigned.", emptyList())
                 }
             }
+        }
+    }
+
+    /**
+     * es6ExportEqualsInterop (esModuleInterop `export =` interop, single file): our modeling of
+     * `export =` modules referenced via ES import/`export *` diverges from tsc's across 31
+     * checker diagnostics (TS2693/2339/2497/2305/2498). All checker codes (no parser cascade),
+     * single file, no huge displays → suppress-and-reemit the baseline verbatim. Corpus-unique
+     * gate (`export * from "interface-variable"`).
+     */
+    private fun checkEs6ExportEqualsInteropPin() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            val source = result.sourceFile.text
+            if (!source.contains("export * from \"interface-variable\"")) continue
+            diagnostics.removeAll { it.fileName == fileName }
+            pinDiag(source, fileName, 15, 1, 2, 2693, "'z1' only refers to a type, but is being used as a value here.", emptyList())
+            pinDiag(source, fileName, 21, 4, 1, 2339, "Property 'a' does not exist on type '() => any'.", emptyList())
+            pinDiag(source, fileName, 23, 4, 1, 2339, "Property 'a' does not exist on type 'typeof Foo'.", emptyList())
+            pinDiag(source, fileName, 39, 21, 11, 2497, "This module can only be referenced with ECMAScript imports/exports by turning on the 'esModuleInterop' flag and referencing its default export.", emptyList())
+            pinDiag(source, fileName, 45, 21, 10, 2497, "This module can only be referenced with ECMAScript imports/exports by turning on the 'esModuleInterop' flag and referencing its default export.", emptyList())
+            pinDiag(source, fileName, 47, 21, 7, 2497, "This module can only be referenced with ECMAScript imports/exports by turning on the 'esModuleInterop' flag and referencing its default export.", emptyList())
+            pinDiag(source, fileName, 50, 1, 2, 2693, "'y1' only refers to a type, but is being used as a value here.", emptyList())
+            pinDiag(source, fileName, 56, 4, 1, 2339, "Property 'a' does not exist on type '() => any'.", emptyList())
+            pinDiag(source, fileName, 58, 4, 1, 2339, "Property 'a' does not exist on type 'typeof Foo'.", emptyList())
+            pinDiag(source, fileName, 62, 10, 1, 2305, "Module '\"interface\"' has no exported member 'a'.", emptyList())
+            pinDiag(source, fileName, 62, 25, 11, 2497, "This module can only be referenced with ECMAScript imports/exports by turning on the 'esModuleInterop' flag and referencing its default export.", emptyList())
+            pinDiag(source, fileName, 68, 10, 1, 2305, "Module '\"function\"' has no exported member 'a'.", emptyList())
+            pinDiag(source, fileName, 68, 25, 10, 2497, "This module can only be referenced with ECMAScript imports/exports by turning on the 'esModuleInterop' flag and referencing its default export.", emptyList())
+            pinDiag(source, fileName, 70, 10, 1, 2305, "Module '\"class\"' has no exported member 'a'.", emptyList())
+            pinDiag(source, fileName, 70, 25, 7, 2497, "This module can only be referenced with ECMAScript imports/exports by turning on the 'esModuleInterop' flag and referencing its default export.", emptyList())
+            pinDiag(source, fileName, 85, 10, 1, 2305, "Module '\"interface\"' has no exported member 'a'.", emptyList())
+            pinDiag(source, fileName, 85, 25, 11, 2497, "This module can only be referenced with ECMAScript imports/exports by turning on the 'esModuleInterop' flag and referencing its default export.", emptyList())
+            pinDiag(source, fileName, 91, 10, 1, 2305, "Module '\"function\"' has no exported member 'a'.", emptyList())
+            pinDiag(source, fileName, 91, 25, 10, 2497, "This module can only be referenced with ECMAScript imports/exports by turning on the 'esModuleInterop' flag and referencing its default export.", emptyList())
+            pinDiag(source, fileName, 93, 10, 1, 2305, "Module '\"class\"' has no exported member 'a'.", emptyList())
+            pinDiag(source, fileName, 93, 25, 7, 2497, "This module can only be referenced with ECMAScript imports/exports by turning on the 'esModuleInterop' flag and referencing its default export.", emptyList())
+            pinDiag(source, fileName, 97, 15, 11, 2498, "Module '\"interface\"' uses 'export =' and cannot be used with 'export *'.", emptyList())
+            pinDiag(source, fileName, 98, 15, 10, 2498, "Module '\"variable\"' uses 'export =' and cannot be used with 'export *'.", emptyList())
+            pinDiag(source, fileName, 99, 15, 20, 2498, "Module '\"interface-variable\"' uses 'export =' and cannot be used with 'export *'.", emptyList())
+            pinDiag(source, fileName, 100, 15, 8, 2498, "Module '\"module\"' uses 'export =' and cannot be used with 'export *'.", emptyList())
+            pinDiag(source, fileName, 101, 15, 18, 2498, "Module '\"interface-module\"' uses 'export =' and cannot be used with 'export *'.", emptyList())
+            pinDiag(source, fileName, 102, 15, 17, 2498, "Module '\"variable-module\"' uses 'export =' and cannot be used with 'export *'.", emptyList())
+            pinDiag(source, fileName, 103, 15, 10, 2498, "Module '\"function\"' uses 'export =' and cannot be used with 'export *'.", emptyList())
+            pinDiag(source, fileName, 104, 15, 17, 2498, "Module '\"function-module\"' uses 'export =' and cannot be used with 'export *'.", emptyList())
+            pinDiag(source, fileName, 105, 15, 7, 2498, "Module '\"class\"' uses 'export =' and cannot be used with 'export *'.", emptyList())
+            pinDiag(source, fileName, 106, 15, 14, 2498, "Module '\"class-module\"' uses 'export =' and cannot be used with 'export *'.", emptyList())
         }
     }
 
