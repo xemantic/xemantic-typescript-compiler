@@ -346,6 +346,65 @@ val generateTypeScriptTests by tasks.registering {
             return "$baseName($configStr).$ext"
         }
 
+        // tsgo set-B — the EXACT two mechanisms tsgo's harness uses to reduce the tsc corpus
+        // (verbatim from microsoft/typescript-go, see TSGO-RELEVANCE.md):
+        //
+        // 1. `skippedTests` (internal/testrunner/compiler_runner.go) — files tsgo drops ENTIRELY.
+        //    Two groups: tests that depend on `typescript.d.ts` (the TS public API — we don't
+        //    implement it), and tests using options tsgo removed so completely they no longer PARSE
+        //    (verbatimModuleSyntax compat shims, preserveValueImports, importsNotUsedAsValues,
+        //    keyofStringsOnly, noStrictGenericChecks, module:none emit, noImplicitUseStrict, …).
+        //    (tsgo's `skippedEmitTests` — 8 files skipped only because Go's PARALLEL emit is
+        //    nondeterministic — is deliberately NOT mirrored: it is a Go-runtime artifact, not a
+        //    removed feature, and our single-threaded harness is deterministic.)
+        val tsgoSkippedTests = setOf(
+            // depend on typescript.d.ts (TS public-API self-hosting tests)
+            "APILibCheck", "APISample_Watch", "APISample_WatchWithDefaults",
+            "APISample_WatchWithOwnWatchHost", "APISample_compile", "APISample_jsdoc",
+            "APISample_linter", "APISample_parseConfig", "APISample_transform", "APISample_watcher",
+            // options removed in tsgo → fail to parse there
+            "preserveUnusedImports", "noCrashWithVerbatimModuleSyntaxAndImportsNotUsedAsValues",
+            "verbatimModuleSyntaxCompat", "verbatimModuleSyntaxCompat2", "verbatimModuleSyntaxCompat3",
+            "verbatimModuleSyntaxCompat4", "preserveValueImports",
+            "preserveValueImports_importsNotUsedAsValues", "preserveValueImports_errors",
+            "preserveValueImports_mixedImports", "preserveValueImports_module",
+            "importsNotUsedAsValues_error", "alwaysStrictNoImplicitUseStrict",
+            "nonPrimitiveIndexingWithForInSupressError", "parameterInitializerBeforeDestructuringEmit",
+            "mappedTypeUnionConstraintInferences", "lateBoundConstraintTypeChecksCorrectly",
+            "keyofDoesntContainSymbols", "isolatedModulesOut", "noStrictGenericChecks",
+            "noImplicitUseStrict_umd", "noImplicitUseStrict_system", "noImplicitUseStrict_es6",
+            "noImplicitUseStrict_commonjs", "noImplicitUseStrict_amd", "noImplicitAnyIndexingSuppressed",
+            "excessPropertyErrorsSuppressed", "moduleNoneDynamicImport", "moduleNoneErrors",
+            "moduleNoneOutFile", "noErrorUsingImportExportModuleAugmentationInDeclarationFile1",
+            "noErrorUsingImportExportModuleAugmentationInDeclarationFile2",
+            "noErrorUsingImportExportModuleAugmentationInDeclarationFile3",
+            "requireOfJsonFileWithModuleEmitNone", "requireOfJsonFileWithModuleNodeResolutionEmitNone",
+        )
+
+        // 2. `SkipUnsupportedCompilerOptions` (internal/testutil/harnessutil/harnessutil.go) — skip a
+        //    whole test CONFIG (BOTH its .errors.txt AND its .js/.d.ts subtests) when its resolved
+        //    options include a tsgo-removed feature. Verbatim port of that function's switch/if chain.
+        //    tsgo applies it to the harness-PARSED options (explicit directives only — unset options
+        //    stay at their zero value and never match), so matching on source directives here is
+        //    faithful: it fires only on an EXPLICIT directive. (es3 is included alongside es5 — es3 was
+        //    removed one release earlier; both are dead emit targets. "node" is the legacy alias for
+        //    the removed node10 resolution.)
+        fun usesUnsupportedOption(directives: Map<String, String>, config: Map<String, String>): Boolean {
+            fun getVal(key: String): String? = config[key] ?: directives[key]
+            fun anyOf(key: String, bad: Set<String>): Boolean =
+                getVal(key)?.split(',')?.any { it.trim().lowercase() in bad } == true
+            fun isFalse(key: String): Boolean =
+                getVal(key)?.split(',')?.any { it.trim().lowercase() == "false" } == true
+            return anyOf("target", setOf("es3", "es5")) ||
+                anyOf("module", setOf("amd", "umd", "system")) ||
+                anyOf("moduleresolution", setOf("node", "node10", "classic")) ||
+                getVal("outfile")?.isNotBlank() == true ||
+                getVal("baseurl")?.isNotBlank() == true ||
+                isFalse("esmoduleinterop") ||
+                isFalse("allowsyntheticdefaultimports") ||
+                isFalse("alwaysstrict")
+        }
+
         // Group by first character to keep individual files manageable
         val groups = testFiles.groupBy { file ->
             val ch = file.nameWithoutExtension.first()
@@ -378,27 +437,20 @@ val generateTypeScriptTests by tasks.registering {
                 val source = file.readText()
                 val directives = parseDirectives(source)
 
-                // tsgo-relevance elimination (owner-approved 2026-07-01) — see TSGO-RELEVANCE.md.
-                // tsgo (TS7.0 / "Corsa") removes a set of legacy features; a test whose whole point is
-                // one of them is dropped from generation entirely so it never counts against progress.
-                val deprecatedTargets = setOf("es3", "es5")
-                val deprecatedModules = setOf("amd", "system", "umd")
-                // (a) removed BEHAVIOR options (`keyofStringsOnly`, `noStrictGenericChecks`) — the whole
-                //     test exercises removed behavior → skip EVERY subtest of this file.
-                if (directives.containsKey("keyofstringsonly") || directives.containsKey("nostrictgenericchecks")) {
-                    continue
-                }
-                // (b) removed EMIT targets/modules (ES3/ES5, AMD/System/UMD) — the emitted JS no longer
-                //     exists in tsgo, so the JS-emit subtests are dropped. Error/decl subtests are KEPT
-                //     (relevant — the TS5107/TS5102 deprecation diagnostics and .d.ts shapes still apply).
-                val fixedDeprecatedEmit =
-                    (directives["target"]?.split(',')?.any { it.trim().lowercase() in deprecatedTargets } == true) ||
-                    (directives["module"]?.split(',')?.any { it.trim().lowercase() in deprecatedModules } == true)
+                // tsgo set-B (see the tsgoSkippedTests / usesUnsupportedOption definitions above):
+                // (1) whole-file skip for tsgo's hardcoded skippedTests list.
+                if (name in tsgoSkippedTests) continue
+                // (2) whole-CONFIG skip (errors AND emit) when the bare config's fixed directives
+                //     resolve to a tsgo-removed option. Unlike the previous heuristic (which dropped
+                //     only the JS-emit subtest and KEPT the error baseline for ES3/ES5/AMD/System/UMD),
+                //     tsgo's SkipUnsupportedCompilerOptions skips the whole config, so the error
+                //     baseline is dropped too.
+                val bareUnsupported = usesUnsupportedOption(directives, emptyMap())
 
                 val jsBaseline = baselinesDir.resolve("$name.js")
                 // .d.ts sections in baselines are stripped by TypeScriptTestSupport.stripDtsSection()
                 // so tests with declaration output can be included safely.
-                if (jsBaseline.exists() && !fixedDeprecatedEmit) {
+                if (jsBaseline.exists() && !bareUnsupported) {
                     totalBareTests++
                     sb.appendLine()
                     sb.appendLine("    @Test")
@@ -416,17 +468,10 @@ val generateTypeScriptTests by tasks.registering {
                     val paramName = paramBaselineName(name, config, "js")
                     val paramBaseline = baselinesDir.resolve(paramName)
                     if (paramBaseline.exists()) {
-                        // Skip JS emit for deprecated target/module combinations
-                        // Check both varying config AND fixed directives (e.g. @module: system with @target: ES5, ES2015
-                        // means module is fixed in directives but not in config)
-                        val targetVal = config["target"] ?: directives["target"]?.trim()?.lowercase()
-                        val moduleVal = config["module"] ?: directives["module"]?.trim()?.lowercase()
-                        val isDeprecatedTarget = targetVal in deprecatedTargets
-                        val isDeprecatedModule = moduleVal in deprecatedModules
-                        if (isDeprecatedTarget || isDeprecatedModule) {
-                            // Don't generate JS emit test — downlevel transforms deprecated in TS7
-                            continue
-                        }
+                        // Skip this whole config if its resolved options include a tsgo-removed
+                        // feature (the varying config value overrides the fixed directive of the
+                        // same key; a fixed unsupported directive is caught via `directives`).
+                        if (usesUnsupportedOption(directives, config)) continue
                         totalParamTests++
                         // Build config suffix for test function name (e.g., target_es5 or alwaysstrict_true_target_es2015)
                         val configId = config.entries.sortedBy { it.key }
@@ -445,9 +490,10 @@ val generateTypeScriptTests by tasks.registering {
                     }
                 }
 
-                // .errors.txt baseline test (bare-name)
+                // .errors.txt baseline test (bare-name). tsgo skips the WHOLE config (the error
+                // baseline too, not just emit) for a removed-feature option, so gate on bareUnsupported.
                 val errorsBaseline = baselinesDir.resolve("$name.errors.txt")
-                if (errorsBaseline.exists()) {
+                if (errorsBaseline.exists() && !bareUnsupported) {
                     totalErrorTests++
                     sb.appendLine()
                     sb.appendLine("    @Test")
@@ -462,7 +508,7 @@ val generateTypeScriptTests by tasks.registering {
                 for (config in variations) {
                     val paramErrorName = paramBaselineName(name, config, "errors.txt")
                     val paramErrorBaseline = baselinesDir.resolve(paramErrorName)
-                    if (paramErrorBaseline.exists()) {
+                    if (paramErrorBaseline.exists() && !usesUnsupportedOption(directives, config)) {
                         totalErrorTests++
                         val configId = config.entries.sortedBy { it.key }
                             .joinToString("_") { "${it.key}_${it.value}" }
