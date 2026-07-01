@@ -20826,9 +20826,21 @@ class Checker(
             // Skip `this` parameter
             val name = param.name
             if (name is Identifier && name.text == "this") continue
-            // Skip error-recovery placeholders (empty name) unless it's a rest parameter
-            // e.g. `function t1(...) {}` — TS7019 fires with name "(Missing)"
-            if (name is Identifier && name.text.isEmpty() && !param.dotDotDotToken) continue
+            // A ZERO-WIDTH missing name (tsc createMissingNode — a non-name token in
+            // parameter position, reachabilityChecksNoCrash1's `!`/`<`) gets TS7006 with
+            // the '(Missing)' display; other empty-name recovery shapes stay skipped.
+            if (name is Identifier && name.text.isEmpty() && !param.dotDotDotToken) {
+                if (name.pos >= 0 && name.pos == name.end && param.type == null && param.initializer == null) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Parameter '(Missing)' implicitly has an 'any' type.",
+                        category = DiagnosticCategory.Error, code = 7006,
+                        fileName = fileName, line = line, character = character,
+                        start = name.pos, length = 0,
+                    ))
+                }
+                continue
+            }
             // Destructured parameters (ArrayBindingPattern / ObjectBindingPattern): emit
             // TS7031 at each binding element when the enclosing param has no type AND no
             // initializer, and the binding element itself has no initializer. Matches
@@ -20982,6 +20994,9 @@ class Checker(
         val names: MutableSet<String> = mutableSetOf(),
         val hasArguments: Boolean = false,
         val classContext: ClassContext? = null,
+        /** True inside any function-like body — tsc checkReturnStatement skips a return's
+         *  EXPRESSION entirely when there is no containing function (reachabilityChecksNoCrash1). */
+        val inFunction: Boolean = false,
         /** Names added as type parameters — excluded from TS2552 value-position suggestions. */
         val typeParamNames: MutableSet<String> = mutableSetOf(),
         /** Type-eligible names (classes, interfaces, type aliases, enums) declared in this scope. */
@@ -21030,7 +21045,8 @@ class Checker(
         fun child(
             hasArguments: Boolean = false,
             classContext: ClassContext? = this.classContext,
-        ): NameScope = NameScope(parent = this, hasArguments = hasArguments, classContext = classContext)
+            inFunction: Boolean = this.inFunction || hasArguments,
+        ): NameScope = NameScope(parent = this, hasArguments = hasArguments, classContext = classContext, inFunction = inFunction)
     }
 
     /**
@@ -21074,10 +21090,13 @@ class Checker(
      * Check for references to names that cannot be resolved.
      * Emits TS2304: "Cannot find name 'X'."
      */
+    private var unresolvedCurrentFileIsModule = false
+
     private fun checkUnresolvedNames() {
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
+            unresolvedCurrentFileIsModule = isModuleFile(result.sourceFile.statements)
             // Skip JS files without checkJs — TS2304/TS2552 not applicable
             if (!options.checkJs && (fileName.endsWith(".js") || fileName.endsWith(".jsx"))) continue
             val source = result.sourceFile.text
@@ -21447,7 +21466,15 @@ class Checker(
                 checkUnresolvedInExpr(stmt.expression, scope, source, fileName)
             }
             is ReturnStatement -> {
-                stmt.expression?.let { checkUnresolvedInExpr(it, scope, source, fileName) }
+                // tsc checkReturnStatement: NO containing function → grammarErrorOnFirstToken
+                // (TS1108, suppressed under parse errors) and the EXPRESSION IS NEVER CHECKED —
+                // a top-level `return out;` gets no TS2304 (reachabilityChecksNoCrash1). The
+                // file-root scope has parent == null; every function-like arm creates a child.
+                // The pre-emit skip is observable only in MODULE files (reachability) — a
+                // SCRIPT file's skipped names get re-added by tsc's emit resolver post-emit
+                // (multiLinePropertyAccessAndArrowFunctionIndent1's TS-1 relateds), which our
+                // single-pass union-emission models by checking them normally.
+                if (scope.inFunction || !unresolvedCurrentFileIsModule) stmt.expression?.let { checkUnresolvedInExpr(it, scope, source, fileName) }
             }
             is IfStatement -> {
                 checkUnresolvedInExpr(stmt.expression, scope, source, fileName)
@@ -22667,7 +22694,7 @@ class Checker(
                 checkUnresolvedInExpr(expr.expression, scope, source, fileName)
             }
             is ArrowFunction -> {
-                val arrowScope = scope.child(hasArguments = false)
+                val arrowScope = scope.child(hasArguments = false, inFunction = true)
                 expr.typeParameters?.forEach { arrowScope.addTypeParam(it.name.text, it.constraint) }
                 expr.typeParameters?.forEach { tp ->
                     tp.constraint?.let { checkUnresolvedInType(it, arrowScope, source, fileName) }
@@ -25728,7 +25755,10 @@ class Checker(
         val name = prop.name.text
         if (name.isEmpty()) return
         if (name[0] !in 'A'..'Z' && name[0] !in 'a'..'z' && name[0] != '_' && name[0] != '$') return
-        if (name in KEYWORD_IDENTIFIERS) return
+        // A shorthand's name token was isIdentifier() at parse time — CONTEXTUAL keywords
+        // (`of`, `out`, `as`, …) are real identifiers tsc resolves (TS18004 when unresolved,
+        // reachabilityChecksNoCrash1); only the value-keyword recovery shapes are excluded.
+        if (name in setOf("this", "super", "true", "false", "null")) return
         if (scope.has(name)) return
 
         val start = prop.name.pos
@@ -38768,7 +38798,7 @@ class Checker(
             "static", "declare", "override", "accessor",
             "async", "await", "type", "namespace", "module",
             "interface", "enum", "implements", "is",
-            "infer", "keyof", "unique", "asserts", "satisfies", "out",
+            "infer", "keyof", "unique", "asserts", "satisfies",
             // JS strict mode reserved words
             "package",
             // ECMAScript resource management
@@ -91424,16 +91454,28 @@ interface DataView {
                         (prop.initializer is ArrowFunction || prop.initializer is FunctionExpression)
                     if (useCtx) contextualType = propCtx
                     val propType = try {
-                        getTypeOfExpression(prop.initializer)
+                        // A recovered `name: lhs = rhs` member (assignment as the VALUE —
+                        // reachabilityChecksNoCrash1's `const: out = []`) displays as `any`
+                        // in tsc's object-literal type.
+                        if (prop.initializer.let { it is BinaryExpression && it.operator == SyntaxKind.Equals })
+                            anyType
+                        else getTypeOfExpression(prop.initializer)
                     } finally {
                         if (useCtx) contextualType = savedCtx
                     }
-                    val sym = Symbol(SymbolFlags.Property, name)
-                    sym.declarations.add(prop)
-                    sym.valueDeclaration = prop
-                    members[name] = sym
-                    properties.add(sym)
-                    symbolTypes[sym.id] = propType
+                    // Duplicate member name: tsc's symbol table keeps ONE entry (the display
+                    // shows the FIRST position; the value type updates last-wins).
+                    val existing = members[name]
+                    if (existing != null) {
+                        symbolTypes[existing.id] = propType
+                    } else {
+                        val sym = Symbol(SymbolFlags.Property, name)
+                        sym.declarations.add(prop)
+                        sym.valueDeclaration = prop
+                        members[name] = sym
+                        properties.add(sym)
+                        symbolTypes[sym.id] = propType
+                    }
                 }
                 is ShorthandPropertyAssignment -> {
                     val name = prop.name.text
@@ -125699,6 +125741,9 @@ interface DataView {
             // single-quoted source name, `{ "0": number; }` for a double-quoted one.
             return if (nameNode.singleQuote) "'$name'" else "\"$name\""
         }
+        // A recovery-synthesized MISSING member name renders quoted-empty: `"": any`
+        // (reachabilityChecksNoCrash1's `<missing>: .push(await v)` member).
+        if (name.isEmpty()) return "\"\""
         return name
     }
 

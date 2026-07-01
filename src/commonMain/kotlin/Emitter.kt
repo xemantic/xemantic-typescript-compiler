@@ -295,6 +295,7 @@ class Emitter(
         is FunctionDeclaration -> {
             ModifierFlag.Declare in statement.modifiers
                     || statement.body == null // overload signature
+
         }
 
         is ClassDeclaration -> ModifierFlag.Declare in statement.modifiers
@@ -2401,8 +2402,20 @@ class Emitter(
                 val sameLineAsPrev = if (index == 0) false else {
                     val prev = properties[index - 1]
                     val prevEnd = prev.end; val currStart = prop.pos
-                    prevEnd > 0 && currStart > 0 && prevEnd <= currStart && currStart <= sourceText.length &&
+                    if (prevEnd > 0 && currStart > 0 && prevEnd <= currStart && currStart <= sourceText.length)
                         !sourceText.substring(prevEnd, currStart).contains('\n')
+                    else if (prevEnd > 0 && currStart in 1..sourceText.length && prevEnd > currStart) {
+                        // node.end OVERSHOOT (recovered members whose end includes the next
+                        // token — reachabilityChecksNoCrash1): same-line iff no newline sits
+                        // in the whitespace immediately before the current member's start.
+                        var i = currStart - 1
+                        var sawNl = false
+                        while (i >= 0 && sourceText[i].isWhitespace()) {
+                            if (sourceText[i] == '\n') { sawNl = true; break }
+                            i--
+                        }
+                        !sawNl
+                    } else false
                 }
                 if (sameLineAsPrev) {
                     write(" ")
@@ -2415,8 +2428,17 @@ class Emitter(
                 val nextOnSameLine = !isLast && run {
                     val next = properties[index + 1]
                     val currEnd = prop.end; val nextStart = next.pos
-                    currEnd > 0 && nextStart > 0 && currEnd <= nextStart && nextStart <= sourceText.length &&
+                    if (currEnd > 0 && nextStart > 0 && currEnd <= nextStart && nextStart <= sourceText.length)
                         !sourceText.substring(currEnd, nextStart).contains('\n')
+                    else if (currEnd > 0 && nextStart in 1..sourceText.length && currEnd > nextStart) {
+                        var i = nextStart - 1
+                        var sawNl = false
+                        while (i >= 0 && sourceText[i].isWhitespace()) {
+                            if (sourceText[i] == '\n') { sawNl = true; break }
+                            i--
+                        }
+                        !sawNl
+                    } else false
                 }
                 // For block-bodied elements (get/set/method), block comments go BEFORE the comma: `} /*trailing 1*/,`
                 // but line comments go AFTER: `}, // line comment` (since // consumes rest of line)

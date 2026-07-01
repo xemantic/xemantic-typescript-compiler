@@ -938,7 +938,7 @@ class TypeScriptCompiler {
                     topLevelAwait = options.effectiveModule.let { m ->
                         m == ModuleKind.ES2022 || m == ModuleKind.ESNext || m.isNodeNext ||
                             m == ModuleKind.Preserve || m == ModuleKind.System
-                    },
+                    } || fileLooksLikeModuleForAwait(file.content),
                     noImplicitAny = options.noImplicitAny || options.strict)
                 val edoSourceFile = edoParser.parse()
                 diagnostics.addAll(edoParser.getDiagnostics())
@@ -961,7 +961,7 @@ class TypeScriptCompiler {
             val topLevelAwait = options.effectiveModule.let { m ->
                 m == ModuleKind.ES2022 || m == ModuleKind.ESNext || m.isNodeNext ||
                     m == ModuleKind.Preserve || m == ModuleKind.System
-            }
+            } || fileLooksLikeModuleForAwait(file.content)
             val needsJsxFlag = computeNeedsJsxFlag(file.fileName, options, forceJsxForJs)
             val parser = Parser(file.content, file.fileName, forceJsx = forceJsxForJs, topLevelAwait = topLevelAwait, needsJsxFlag = needsJsxFlag, noImplicitAny = options.noImplicitAny || options.strict)
             val sourceFile = parser.parse()
@@ -995,7 +995,7 @@ class TypeScriptCompiler {
             // diagnostics suppress — grammar-class codes our parser emits (TS1021/TS1096/TS1183…)
             // are checker-side in tsc and never trigger hasParseDiagnostics (giant).
             if (parser.getDiagnostics().any { it.code !in GRAMMAR_CLASS_CODES }) {
-                diagnostics.removeAll { it.code == 1036 }
+                diagnostics.removeAll { it.code == 1036 || it.code == 1117 }
             }
             // B310: TS1248/TS1031 (tsc checkGrammarModifiers via grammarErrorOnNode) are
             // suppressed when the file has REAL parse diagnostics. Grammar-class codes our
@@ -1074,7 +1074,7 @@ class TypeScriptCompiler {
                         val topLevelAwait = options.effectiveModule.let { m ->
                             m == ModuleKind.ES2022 || m == ModuleKind.ESNext || m.isNodeNext ||
                                 m == ModuleKind.Preserve || m == ModuleKind.System
-                        }
+                        } || fileLooksLikeModuleForAwait(file.content)
                         val needsJsxFlag = computeNeedsJsxFlag(file.fileName, options, forceJsxForJs)
                         val parser = Parser(file.content, file.fileName, forceJsx = forceJsxForJs, topLevelAwait = topLevelAwait, needsJsxFlag = needsJsxFlag, noImplicitAny = options.noImplicitAny || options.strict)
                         val sourceFile = parser.parse()
@@ -1375,7 +1375,7 @@ class TypeScriptCompiler {
                 val topLevelAwaitMulti = options.effectiveModule.let { m ->
                     m == ModuleKind.ES2022 || m == ModuleKind.ESNext || m.isNodeNext ||
                         m == ModuleKind.Preserve || m == ModuleKind.System
-                }
+                } || fileLooksLikeModuleForAwait(file.content)
                 val needsJsxFlagMulti = computeNeedsJsxFlag(file.fileName, options, forceJsxForJsMulti)
                 val parser = Parser(file.content, file.fileName, forceJsx = forceJsxForJsMulti, topLevelAwait = topLevelAwaitMulti, needsJsxFlag = needsJsxFlagMulti, noImplicitAny = options.noImplicitAny || options.strict)
                 val sourceFile = parser.parse()
@@ -1554,7 +1554,7 @@ class TypeScriptCompiler {
             }
             // TS1036: only REAL parse diagnostics suppress (see the single-file path note).
             if (filesWithRealParseDiagnostics.isNotEmpty()) {
-                diagnostics.removeAll { it.code == 1036 && it.fileName in filesWithRealParseDiagnostics }
+                diagnostics.removeAll { (it.code == 1036 || it.code == 1117) && it.fileName in filesWithRealParseDiagnostics }
             }
             // B310: TS1248/TS1031 suppressed in TS files with REAL parse diagnostics
             // (see the single-file path note).
@@ -2261,6 +2261,14 @@ private fun extractJsonExportsValue(json: String): String? {
  * Extracts relative import paths from a source file and resolves them to actual file names
  * from the list of known files in the compilation.
  */
+/** tsc reparseTopLevelAwait: an EXTERNAL MODULE file (has top-level import/export)
+ *  parses top-level `await` in await-context REGARDLESS of the module option (the
+ *  module-kind restriction is checker-side TS1378, suppressed under parse errors).
+ *  Approximates the post-parse isExternalModule with a line-start import/export scan,
+ *  gated on the file actually containing `await` (the reparse trigger). */
+private fun fileLooksLikeModuleForAwait(content: String): Boolean =
+    content.contains("await") && Regex("""(?m)^\s*(?:import|export)\b""").containsMatchIn(content)
+
 private fun computeNeedsJsxFlag(fileName: String, options: CompilerOptions, forceJsxForJs: Boolean): Boolean {
     val jsxUnset = options.jsx.let { it.isNullOrBlank() || it.equals("none", ignoreCase = true) }
     if (!jsxUnset) return false

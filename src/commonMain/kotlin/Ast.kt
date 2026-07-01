@@ -400,6 +400,8 @@ data class FunctionDeclaration(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
+    /** True when the parameter list ABORTED (tsc abortParsingList) — the ts-transform elides the whole declaration (reachabilityChecksNoCrash1); other zero-width-missing-body recoveries still print `{ }` (reservedWords3). */
+    val signatureAborted: Boolean = false,
 ) : Declaration {
     override val kind: SyntaxKind = SyntaxKind.FunctionDeclaration
 }

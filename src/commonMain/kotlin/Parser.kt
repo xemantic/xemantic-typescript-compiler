@@ -36,6 +36,11 @@ class Parser(
     private var prevToken: SyntaxKind = SyntaxKind.Unknown
     private val diagnostics = mutableListOf<Diagnostic>()
     private var inAsyncContext = topLevelAwait
+    // tsc reparseTopLevelAwait: tracks function nesting so a TOP-LEVEL AwaitExpression can be
+    // detected (the reparse's direct-parseStatement loop changes stray-`}` recovery — TS1109
+    // ExpressionStatement(missing) instead of the SourceElements TS1128-skip).
+    private var functionLikeDepth = 0
+    private var sawTopLevelAwaitExpr = false
     private var disallowIn = false
     // tsc parses a PARENTHESIZED arrow (`(params) => body`) only at the ASSIGNMENT-expression
     // level, NOT as a binary/relational operand — so `a << (x) => y` is `(a << (x))` + leftover
@@ -633,6 +638,21 @@ class Parser(
         while (token != SyntaxKind.EndOfFile) {
             if (token == SyntaxKind.CloseBrace) {
                 if (topLevel) {
+                    // tsc reparseTopLevelAwait: when the file is a module with TOP-LEVEL
+                    // await, the reparse loop calls parseStatement DIRECTLY (no
+                    // isStartOfStatement gate) — a stray `}` becomes an
+                    // ExpressionStatement(missing) with TS1109 'Expression expected.'
+                    // and prints as `;` (reachabilityChecksNoCrash1's trailing `}`).
+                    if (sawTopLevelAwaitExpr) {
+                        val mPos = scanner.getTokenPos()
+                        reportError("Expression expected.", code = 1109)
+                        nextToken()
+                        stmts.add(ExpressionStatement(
+                            expression = Identifier(text = "", pos = mPos, end = mPos),
+                            pos = mPos, end = mPos,
+                        ))
+                        continue
+                    }
                     // Stray '}' at file top level — emit TS1128 and skip
                     reportError("Declaration or statement expected.", code = 1128)
                     nextToken()
@@ -676,6 +696,15 @@ class Parser(
             // numeric `.5` scans as NumericLiteral and `...`/`?.` are distinct tokens, so a Dot
             // token here is always a stray leading dot.
             if (token == SyntaxKind.Dot) {
+                reportError("Declaration or statement expected.", code = 1128)
+                nextToken()
+                continue
+            }
+            // A bare `:` can never START a statement either (a label's colon is consumed by
+            // parseStatement's identifier+colon path) — TS1128 + skip (tsc SourceElements
+            // abortParsingListOrMoveToNextToken; reachabilityChecksNoCrash1's leftover
+            // return-type `:` after the aborted signature re-parse).
+            if (token == SyntaxKind.Colon) {
                 reportError("Declaration or statement expected.", code = 1128)
                 nextToken()
                 continue
@@ -2193,12 +2222,14 @@ class Parser(
         // when no TS-level `<T>` was parsed. Mirror of B5.3 for ClassDeclaration.
         val typeParams = parsedTypeParams ?: parseJSDocTemplateTypeParams(comments)
         val rawParams = parseParameterList()
+        val sigAborted = paramListAborted
         // 17.140: in JS-like files, bridge JSDoc `@param {primitive} name` tags
         // to parameter types when the parameter is un-annotated.
         val params = applyJSDocParamPrimitiveTypes(rawParams, comments)
         val returnType = if (parseOptional(SyntaxKind.Colon)) parseType() else null
         val savedAsync = inAsyncContext
         inAsyncContext = ModifierFlag.Async in modifiers
+        functionLikeDepth++
         val body = if (token == SyntaxKind.OpenBrace) parseBlock()
             else if (!canParseSemicolon()) {
                 // B324/B325 (tsc parseFunctionBlockOrSemicolon with Diagnostics.or_expected):
@@ -2215,13 +2246,15 @@ class Parser(
                 else Block(statements = emptyList(), multiLine = false,
                     pos = scanner.getTokenPos(), end = scanner.getTokenPos(), closeBracePos = -1)
             } else null
+        functionLikeDepth--
         inAsyncContext = savedAsync
         if (body == null) parseSemicolon()
         val trailing = trailingComments()
         return FunctionDeclaration(
             name = name, typeParameters = typeParams, parameters = params,
             type = returnType, body = body, modifiers = modifiers, asteriskToken = asterisk,
-            pos = pos, end = getEnd(), leadingComments = comments, trailingComments = trailing
+            pos = pos, end = getEnd(), leadingComments = comments, trailingComments = trailing,
+            signatureAborted = sigAborted,
         )
     }
 
@@ -2695,6 +2728,7 @@ class Parser(
             val returnType = if (parseOptional(SyntaxKind.Colon)) parseType() else null
             val savedAsync = inAsyncContext
             inAsyncContext = ModifierFlag.Async in modifiers
+            functionLikeDepth++
             // B325 (tsc parseFunctionBlockOrSemicolon with Diagnostics.or_expected): a
             // same-line non-'{' follow (no ASI) gets TS1144 "'{' or ';' expected." and a
             // MISSING zero-width Block body — the checker treats it as bodyless and the
@@ -2707,6 +2741,7 @@ class Parser(
                 } else {
                     parseSemicolon(); null
                 }
+            functionLikeDepth--
             inAsyncContext = savedAsync
             val methodTrailing = trailingComments()
             MethodDeclaration(
@@ -5220,6 +5255,7 @@ class Parser(
                     // Inline comments between keyword and expression appear as trailing trivia
                     // of the scan (e.g., `await /*c*/ x` — `/*c*/` is trailingComments, not leading).
                     val innerComments = scanner.getTrailingComments()
+                    if (functionLikeDepth == 0) sawTopLevelAwaitExpr = true
                     val innerExpr = parseUnaryExpression()
                     AwaitExpression(
                         expression = if (innerComments != null && innerExpr.leadingComments == null)
@@ -6782,7 +6818,16 @@ class Parser(
 
         val pos = getPos()
         parseExpected(SyntaxKind.OpenParen)
-        val expr = parseExpression()
+        // tsc parseExpression → parsePrimaryExpression at a RESERVED keyword that cannot
+        // start an expression: TS1109 'Expression expected.' + a ZERO-WIDTH missing inner
+        // WITHOUT consuming — the ')' -expected below same-start-dedups and the keyword
+        // re-parses in the enclosing context (reachabilityChecksNoCrash1's
+        // `await (const v of asyncIterable)` → `await ()` + members `const: v`, `of`, …).
+        val expr = if (isKeyword() && !isIdentifier() && !isStartOfExpressionKeyword()) {
+            val mPos = scanner.getTokenPos()
+            reportError("Expression expected.", code = 1109)
+            Identifier(text = "", pos = mPos, end = mPos)
+        } else parseExpression()
         // Capture same-line trailing comments between inner expression and ')' (e.g. `(a => 0 /*t3*/)`).
         val innerTrailing = scanner.getTrailingComments()
         // Capture comments on new lines before ')' (e.g. `//close`, `/*3*/` in multi-line paren).
@@ -6829,6 +6874,7 @@ class Parser(
         parseExpected(SyntaxKind.EqualsGreaterThan)
         val savedAsync = inAsyncContext
         inAsyncContext = async
+        functionLikeDepth++
         // tsc parseParenthesizedArrowFunctionExpression: the body parses only when
         // the token after the signature was '=>' or '{'; otherwise the body is a
         // ZERO-WIDTH missing identifier (the TS1003 would be same-start-deduped by
@@ -6856,6 +6902,7 @@ class Parser(
         } else {
             Identifier(text = "", pos = getPos(), end = getPos())
         }
+        functionLikeDepth--
         inAsyncContext = savedAsync
         return ArrowFunction(
             typeParameters = typeParams, parameters = params, type = returnType,
@@ -6985,6 +7032,29 @@ class Parser(
                 if (token == SyntaxKind.CloseBrace) hasTrailingComma = true
                 continue
             }
+            // tsc abortParsingListOrMoveToNextToken(ObjectLiteralMembers): a token that
+            // cannot START a member (member starts per tsc isListElement: any literal
+            // property name incl. keywords, `[`, `*`, `...`, `.`) → TS1136 (same-start-
+            // deduped against a preceding ',' expected) + SKIP and continue — tsc skips
+            // `)` AND `{` here (reachabilityChecksNoCrash1: the .types baseline shows all
+            // six recovered members in ONE object literal spanning the derailed for-header).
+            if (!isObjectLiteralMemberStartToken()) {
+                reportError("Property assignment expected.", code = 1136,
+                    overrideStart = getPos(), overrideLength = 1)
+                // tsc abortParsingListOrMoveToNextToken → isInSomeParsingContext: ABORT
+                // unconsumed when an ENCLOSING context claims the token — `=>` terminates a
+                // variable-declarator list (parseErrorIncorrectReturnToken), a statement
+                // start aborts via SourceElements. EXCEPTION: under the top-level-await
+                // REPARSE (tsc reparseTopLevelAwait calls parseListElement directly, so the
+                // SourceElements BIT IS NOT SET) statement starts do NOT abort — `)` and `{`
+                // are SKIPPED (reachabilityChecksNoCrash1's .types baseline is the proof).
+                if (token == SyntaxKind.EqualsGreaterThan ||
+                    (!sawTopLevelAwaitExpr && canStartStatementForRecovery())) {
+                    break
+                }
+                nextToken()
+                continue
+            }
             properties.add(parseObjectLiteralElement())
             // Object literals use commas, NOT semicolons, as property separators.
             // Semicolons are errors — TypeScript reports ',' expected at each `;`.
@@ -7011,7 +7081,12 @@ class Parser(
                 hasTrailingComma = hadComma && (token == SyntaxKind.CloseBrace)
             } else {
                 hasTrailingComma = false
-                break
+                if (token == SyntaxKind.CloseBrace || token == SyntaxKind.EndOfFile) break
+                // tsc parseDelimitedList: no comma + not the terminator → "',' expected."
+                // at the token; the loop re-enters (a member-start token parses the next
+                // member; a non-member gets the TS1136+skip above).
+                reportError("',' expected.", code = 1005)
+                continue
             }
         }
         // Capture any comments before the closing `}` (e.g., trailing comments inside
@@ -7047,6 +7122,21 @@ class Parser(
             // Capture any same-line trailing comment after the spread expression (e.g. `...x // comment`)
             val spreadTrailing = scanner.consumeTrailingComments()
             return SpreadAssignment(expression = spreadExpr, pos = pos, end = getEnd(), leadingComments = comments, trailingComments = spreadTrailing)
+        }
+
+        // tsc ObjectLiteralMembers isListElement includes Dot ("don't close the object") —
+        // the member gets a MISSING zero-width name (TS1003 + ':' expected, both same-start-
+        // deduped against the preceding ',' expected) and the VALUE parses from the dot
+        // (`<missing>.push(await v)` — reachabilityChecksNoCrash1 line 4).
+        if (token == SyntaxKind.Dot) {
+            val missingPos = scanner.getTokenPos()
+            reportError("Identifier expected.", code = 1003)
+            reportError("':' expected.", code = 1005)
+            val value = parseAssignmentExpression()
+            return PropertyAssignment(
+                name = Identifier(text = "", pos = missingPos, end = missingPos),
+                initializer = value, pos = pos, end = getEnd(), leadingComments = comments,
+            )
         }
 
         // In object literals, modifier keywords (public, private, etc.) can also be property
@@ -7094,6 +7184,9 @@ class Parser(
             }
         }
 
+        // tsc records whether the name token was a (binding) identifier BEFORE parsing it —
+        // reserved keywords can be property NAMES but never SHORTHAND members.
+        val nameWasReservedKeyword = isKeyword() && !isIdentifier()
         val name = parsePropertyName()
 
         // 17.158: TS1162 — object literal members cannot be declared optional.
@@ -7169,6 +7262,17 @@ class Parser(
                 pos = pos, end = getEnd(), leadingComments = comments)
         }
 
+        // tsc parseObjectLiteralElement: SHORTHAND requires the name TOKEN to have been an
+        // IDENTIFIER (incl. contextual keywords) — a RESERVED-keyword name (`const`, `for`)
+        // takes parseExpected(Colon) → "':' expected." at the current token + parses the
+        // VALUE anyway (reachabilityChecksNoCrash1's `{ const out = []; for await (…) }`).
+        if (nameWasReservedKeyword && name is Identifier) {
+            reportError("':' expected.", code = 1005)
+            val value = parseAssignmentExpression()
+            return PropertyAssignment(name = name, initializer = value, modifiers = modifiers,
+                pos = pos, end = getEnd(), leadingComments = comments)
+        }
+
         // Shorthand: { name } or { name = default }
         if (name is Identifier) {
             val init = if (parseOptional(SyntaxKind.Equals)) parseAssignmentExpression() else null
@@ -7197,7 +7301,9 @@ class Parser(
         val returnType = if (parseOptional(SyntaxKind.Colon)) parseType() else null
         val savedAsync = inAsyncContext
         inAsyncContext = ModifierFlag.Async in modifiers
+        functionLikeDepth++
         val body = parseBlock()
+        functionLikeDepth--
         inAsyncContext = savedAsync
         return FunctionExpression(
             name = name, typeParameters = typeParams, parameters = params,
@@ -7584,6 +7690,21 @@ class Parser(
                 paramListAborted = true
                 return params
             }
+            // tsc abortParsingListOrMoveToNextToken (non-keyword case): a token that cannot
+            // START a parameter (tsc isStartOfParameter incl. isStartOfType punctuation) →
+            // TS1138 'Parameter declaration expected.' (same-start-deduped), then ABORT
+            // unconsumed when the token can start an enclosing-context statement
+            // (isInSomeParsingContext — incl. the binary-operator expression tolerance,
+            // reachabilityChecksNoCrash1's `>`), else SKIP it and continue.
+            if (!isStartOfParameterToken()) {
+                reportError("Parameter declaration expected.", code = 1138, overrideLength = 1)
+                if (canStartStatementForRecovery()) {
+                    paramListAborted = true
+                    break
+                }
+                nextToken()
+                continue
+            }
             val paramStartPos = scanner.getTokenPos()
             var param = parseParameter()
             // tsc parseDelimitedList no-progress guard + skip-recovery: a parameter that
@@ -7626,10 +7747,7 @@ class Parser(
                 // parameter would be dropped and the constructor body would never be reached.
                 val nextLooksLikeParam = token != SyntaxKind.CloseParen &&
                     token != SyntaxKind.EndOfFile &&
-                    (isIdentifier() ||
-                        token == SyntaxKind.DotDotDot ||
-                        token == SyntaxKind.OpenBrace ||
-                        token == SyntaxKind.OpenBracket)
+                    isStartOfParameterToken()
                 if (nextLooksLikeParam) {
                     // B18.2: squiggle covers the unexpected next token (e.g. `rest`
                     // in `(...public rest)`) — TypeScript points TS1005 at the
@@ -7640,7 +7758,26 @@ class Parser(
                     reportError("',' expected.", code = 1005,
                         overrideStart = recPos, overrideLength = recLen)
                     params.add(param)
-                    nextParamFromCommaRecovery = true
+                    // B18.2 checker-suppression marking stays confined to the ORIGINAL
+                    // recovery shapes — a type-start punctuation re-entry (missing-name
+                    // recovery) keeps its checker diagnostics (reachability's '(Missing)'
+                    // TS7006/TS2300).
+                    if (isIdentifier() || token == SyntaxKind.DotDotDot ||
+                        token == SyntaxKind.OpenBrace || token == SyntaxKind.OpenBracket) {
+                        nextParamFromCommaRecovery = true
+                    }
+                    continue
+                }
+                // tsc parseDelimitedList: no comma, not the terminator, not a parameter
+                // start → parseExpected(Comma) reports ',' expected at the token, then the
+                // LOOP TOP's abort logic (TS1138-deduped + abort-or-skip) decides
+                // (reachabilityChecksNoCrash1's `>` after param `T`).
+                if (token != SyntaxKind.CloseParen && token != SyntaxKind.EndOfFile) {
+                    val recPos = scanner.getTokenPos()
+                    val recLen = (scanner.getPos() - recPos).coerceAtLeast(1)
+                    reportError("',' expected.", code = 1005,
+                        overrideStart = recPos, overrideLength = recLen)
+                    params.add(param)
                     continue
                 }
                 // No comma and next token doesn't look like a param — we're done. Capture
@@ -7722,11 +7859,17 @@ class Parser(
                 nextToken()
             }
             missing
+        } else if (token != SyntaxKind.OpenBrace && token != SyntaxKind.OpenBracket &&
+            token != SyntaxKind.ThisKeyword && !isIdentifier()) {
+            // tsc parseNameOfParameter → createMissingNode: a NON-name token (`!`, `<`, …)
+            // yields a ZERO-WIDTH missing name WITHOUT consuming (TS1003 same-start-deduped
+            // against the preceding ',' expected); the list's zero-progress guard then
+            // advances past the token (reachabilityChecksNoCrash1). NOTE: tsc does NOT
+            // accept a definite-assignment `!` on a parameter — `asyncIterable!: T` derails.
+            val missingPos = scanner.getTokenPos()
+            reportError("Identifier expected.", code = 1003)
+            Identifier(text = "", pos = missingPos, end = missingPos)
         } else parseBindingNameOrPattern()
-        // Consume optional `!` (definite assignment assertion on parameter, e.g. `param!: Type`).
-        // This is a TypeScript-specific syntax; the `!` is consumed but not stored since it has no
-        // semantic effect after type erasure.
-        parseOptional(SyntaxKind.Exclamation)
         // Capture trailing comments after the name before type annotation, since they will be lost
         // when the type annotation is parsed and erased (e.g. `...restGreetings /* comment */: string[]`)
         val nameTrailing = if (token == SyntaxKind.Colon || token == SyntaxKind.Question) {
@@ -8653,6 +8796,42 @@ class Parser(
     }
 
     /** Returns true if the given token kind can start a type. Safe to use inside scanner.lookAhead. */
+    /** tsc isStartOfParameter (isJSDocParameter=false): rest/patterns/this/decorator/
+     *  binding identifiers/modifier keywords + isStartOfType(inStartOfParameter=true) —
+     *  which INCLUDES `!`/`?`/`*`/`<`/`|`/`&`/literals but EXCLUDES `(`/`-`/`function`.
+     *  Keywords reaching this (after parseParameterList's keyword-abort branch filtered
+     *  the non-starts) are all parameter starts. */
+    /** Reserved keywords that CAN start an expression (tsc isStartOfLeftHandSideExpression/
+     *  isStartOfExpression keyword cases). Contextual keywords pass isIdentifier() and never
+     *  reach the callers' `isKeyword() && !isIdentifier()` gates. */
+    private fun isStartOfExpressionKeyword(): Boolean = when (token) {
+        SyntaxKind.ThisKeyword, SyntaxKind.SuperKeyword, SyntaxKind.NullKeyword,
+        SyntaxKind.TrueKeyword, SyntaxKind.FalseKeyword, SyntaxKind.FunctionKeyword,
+        SyntaxKind.ClassKeyword, SyntaxKind.NewKeyword, SyntaxKind.DeleteKeyword,
+        SyntaxKind.TypeOfKeyword, SyntaxKind.VoidKeyword, SyntaxKind.AwaitKeyword,
+        SyntaxKind.YieldKeyword, SyntaxKind.ImportKeyword -> true
+        else -> false
+    }
+
+    /** tsc isListElement(ObjectLiteralMembers): `[` computed / `*` generator / `...` spread /
+     *  `.` ("don't close the object") / any literal property name (identifier, keyword,
+     *  string/numeric literal). */
+    private fun isObjectLiteralMemberStartToken(): Boolean = when (token) {
+        SyntaxKind.OpenBracket, SyntaxKind.Asterisk, SyntaxKind.DotDotDot, SyntaxKind.Dot,
+        SyntaxKind.StringLiteral, SyntaxKind.NumericLiteral, SyntaxKind.BigIntLiteral -> true
+        else -> isIdentifier() || isKeyword()
+    }
+
+    private fun isStartOfParameterToken(): Boolean = when (token) {
+        SyntaxKind.DotDotDot, SyntaxKind.OpenBrace, SyntaxKind.OpenBracket, SyntaxKind.ThisKeyword,
+        SyntaxKind.At,
+        SyntaxKind.LessThan, SyntaxKind.Bar, SyntaxKind.Ampersand, SyntaxKind.Exclamation,
+        SyntaxKind.Question, SyntaxKind.Asterisk, SyntaxKind.NewKeyword,
+        SyntaxKind.StringLiteral, SyntaxKind.NumericLiteral, SyntaxKind.BigIntLiteral,
+        SyntaxKind.NoSubstitutionTemplateLiteral, SyntaxKind.TemplateHead -> true
+        else -> isIdentifier() || isKeyword()
+    }
+
     private fun isStartOfType(tok: SyntaxKind = token): Boolean = when (tok) {
         AnyKeyword, StringKeyword, NumberKeyword, BooleanKeyword,
         BigIntKeyword, SymbolKeyword, VoidKeyword, NeverKeyword,

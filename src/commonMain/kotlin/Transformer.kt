@@ -8528,6 +8528,18 @@ class Transformer(
         // Overload signatures (no body, not declare) are erased.
         // Preserve any detached/file-start comments (orphanedComments handles the rules).
         if (decl.body == null) return orphanedComments(decl)
+        // tsc ts-transform visitFunctionDeclaration → shouldEmitFunctionLikeDeclaration
+        // (!nodeIsMissing(body)): an ABORTED-signature fn with a zero-width MISSING body is
+        // elided — but the ts visitor only RUNS when the node ContainsTypeScript (type
+        // params / annotations / param modifiers); a plain-JS recovered fn keeps the `{ }`
+        // print (reservedWords2/3, B324 — vs reachabilityChecksNoCrash1's `<T>` fn).
+        if (decl.signatureAborted && decl.body.pos >= 0 && decl.body.pos == decl.body.end &&
+            decl.body.statements.isEmpty() &&
+            (decl.typeParameters != null || decl.type != null ||
+                decl.parameters.any { it.type != null || it.modifiers.isNotEmpty() || it.questionToken })
+        ) {
+            return orphanedComments(decl)
+        }
 
         val strippedModifiers = stripTypeScriptModifiers(decl.modifiers)
         // B348: async GENERATORS are an ES2018 feature — they downlevel at target es2017
@@ -8570,8 +8582,14 @@ class Transformer(
                 requireHelper("__awaiter")
                 // Transform parameters inside the function scope so async arrows in
                 // default parameters see the correct functionScopeDepth for `this` binding.
+                // Param-default `await`s belong to the async body being __awaiter-downleveled
+                // — rewrite them to `yield` via inAsyncBody (the parser-side inAsyncContext
+                // field is ambient-context-dependent since the reparseTopLevelAwait change).
                 functionScopeDepth++
+                val savedAsyncParams = inAsyncBody
+                inAsyncBody = true
                 val transformedParams = transformParameters(decl.parameters)
+                inAsyncBody = savedAsyncParams
                 functionScopeDepth--
                 // When any parameter has a default value, move all params to the generator
                 // and pass `arguments` as the 2nd arg to __awaiter so defaults can be re-evaluated.

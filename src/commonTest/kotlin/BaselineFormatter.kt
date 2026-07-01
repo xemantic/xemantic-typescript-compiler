@@ -803,6 +803,49 @@ fun formatErrorBaseline(
                             +"    "
                             +"\r\n"
                         }
+                        // A continuation line's OWN diagnostics interleave right after its
+                        // continuation squiggle when the multi-line diag does NOT end here
+                        // (reachabilityChecksNoCrash1: TS2365 spans lines 2-5, each carrying
+                        // its own recovery diagnostics). On the ENDING line the deferred
+                        // message prints FIRST (start-order — jsFileCompilation…), so that
+                        // line's own diags stay with the post-message loop below.
+                        val contLineNum = nextLineIdx + 1
+                        val endsHere = (remaining - squiggleLen) <= 1 || (nextLineIdx + 1) >= sourceLines.size
+                        val contDiags = if (endsHere) emptyList() else fileDiags
+                            .filter { it.line == contLineNum && it !== diag }
+                            .sortedWith(compareBy({ it.character ?: 0 }, { it.length ?: 0 }, { it.code }))
+                        for (moreDiag in contDiags) {
+                            val mCol = ((moreDiag.character ?: 1) - 1).coerceAtLeast(0)
+                            val mLen = moreDiag.length ?: 1
+                            if (mLen == 0) {
+                                +"    "
+                                +nextLine.take(mCol).map { if (it == '\t') '\t' else ' ' }.joinToString("")
+                                +"\r\n"
+                            } else {
+                                val mCharsOnLine = (nextLine.length - mCol).coerceAtLeast(1)
+                                val mFirstLineLen = mLen.coerceAtMost(mCharsOnLine)
+                                +"    "
+                                +nextLine.take(mCol).map { if (it == '\t') '\t' else ' ' }.joinToString("")
+                                +"~".repeat(mFirstLineLen)
+                                +"\r\n"
+                            }
+                            +"!!! "
+                            +moreDiag.category.name.lowercase()
+                            +" TS"
+                            +moreDiag.code.toString()
+                            +": "
+                            +moreDiag.message
+                            +"\r\n"
+                            for (chain in moreDiag.messageChain) {
+                                +"!!! "
+                                +moreDiag.category.name.lowercase()
+                                +" TS"
+                                +moreDiag.code.toString()
+                                +": "
+                                +chain
+                                +"\r\n"
+                            }
+                        }
                         remaining -= squiggleLen
                         nextLineIdx++
                     }
@@ -848,8 +891,9 @@ fun formatErrorBaseline(
                             +"\r\n"
                         }
                     }
-                    // Additional diagnostics starting on this diag's continuation lines.
-                    for (contLineIdx in continuationLineIndices) {
+                    // Additional diagnostics starting on the ENDING continuation line
+                    // (earlier lines' diags interleaved above).
+                    for (contLineIdx in listOfNotNull(continuationLineIndices.lastOrNull())) {
                         val contLineNum = contLineIdx + 1
                         val contLineContent = sourceLines[contLineIdx]
                         val moreDiags = fileDiags
