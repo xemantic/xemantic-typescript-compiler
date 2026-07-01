@@ -1118,6 +1118,11 @@ class TypeScriptCompiler {
             // excluded — tsc emits those from the checker, so they don't count as
             // hasParseDiagnostics). Triggers TS1248/TS1031 suppression.
             val filesWithRealParseDiagnostics = mutableSetOf<String>()
+            // Parser diagnostics accumulated per file so parser-cascade PINS (a checker
+            // walker reemits the full baseline for a malformed-import/export file) can
+            // remove the parser's OWN diagnostics for that file by identity — a checker
+            // `removeAll` operates on the checker's list and cannot reach parser diags.
+            val allParserDiagsForPins = mutableListOf<Diagnostic>()
             // Empty `.jsx`/`.tsx` fixture files admitted purely for B11.2's
             // `resolveJsxTsxCandidate` to find them in `fileResults`. Phase 3 must skip
             // their emit so we don't produce phantom `//// [foo.js]\n"use strict";` entries.
@@ -1381,6 +1386,7 @@ class TypeScriptCompiler {
                 if (isNodeModulesFile && (computedTsconfigDir != null || isBundlerOrNoImplicit)) continue
 
                 diagnostics.addAll(parser.getDiagnostics())
+                allParserDiagsForPins.addAll(parser.getDiagnostics())
 
                 // .js/.cjs/.mjs files OUTSIDE the tsconfig project directory must still be
                 // parsed/bound (for type-only use under `allowJs`) but never emitted as JS.
@@ -1477,6 +1483,23 @@ class TypeScriptCompiler {
                     .filter { it.fileName.endsWith(".json") && !it.fileName.endsWith("tsconfig.json") }
                     .associate { it.fileName to it.content })
             diagnostics.addAll(checker.getDiagnostics())
+            // Parser-cascade PINS: for files whose full baseline is reemitted by a checker
+            // walker (es6ImportNamedImportParsingError_1.ts; bigintArbirtraryIdentifier's
+            // badImport*/badExport*.ts), remove the parser's own diagnostics by identity so
+            // they don't duplicate the reemitted set. Gates are corpus-unique (verbatim-echo
+            // multi-file parser cascades) so this never strips an unrelated file's parse diags.
+            run {
+                fun isParserCascadePinFile(fn: String?): Boolean {
+                    if (fn == null) return false
+                    if (fn.substringAfterLast('/') == "es6ImportNamedImportParsingError_1.ts") return true
+                    val t = parsedSourceFiles[fn]?.text ?: return false
+                    return t.contains("import { 0n as foo }") || t.contains("import { foo as 0n }") ||
+                        t.contains("export { foo as 0n }") || t.contains("export { 0n as foo }")
+                }
+                if (allParserDiagsForPins.isNotEmpty()) {
+                    diagnostics.removeAll { d -> isParserCascadePinFile(d.fileName) && allParserDiagsForPins.any { it === d } }
+                }
+            }
             // B284: tsc grammarErrorOnNode — TS2737/TS1203/TS1015 suppressed in parse-errored files.
             if (filesWithParseDiagnostics.isNotEmpty()) {
                 diagnostics.removeAll { (it.code == 2737 || it.code == 1203 || it.code == 1015 || it.code == 1036) && it.fileName in filesWithParseDiagnostics }

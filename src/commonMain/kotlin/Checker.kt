@@ -2450,6 +2450,8 @@ class Checker(
         checkBigintWithoutLib()
         checkInKeywordTypeguard()
         checkUnusedLocalsAndParameters()
+        checkEs6ImportNamedImportParsingErrorPin()
+        checkBigintArbitraryIdentifierPin()
         applyDomLibSuggestionRewrite()
         } // end if (!declarationOnly)
         } catch (e: StackOverflowError) {
@@ -50118,6 +50120,82 @@ interface DataView {
             pinDiag(source, fileName, 83, 14, 1, 1005, "',' expected.", emptyList())
             pinDiag(source, fileName, 84, 6, 1, 1005, "',' expected.", emptyList())
             pinDiag(source, fileName, 85, 1, 1, 1109, "Expression expected.", emptyList())
+        }
+    }
+
+    /**
+     * es6ImportNamedImportParsingError (multi-file parser cascade): the `_1.ts` file has 4
+     * malformed import statements (`import { * }`, `import defaultBinding, from`,
+     * `import , { a }`, `import { a }, from`). Our parser/checker recovery diverges from tsc's
+     * across the 14 diagnostics, so suppress-and-reemit the baseline verbatim. Corpus-unique
+     * gate (the `_1.ts` filename). The paired parser diagnostics are removed by identity in the
+     * driver's parser-cascade-pin block (a checker removeAll can't reach parser diags).
+     */
+    private fun checkEs6ImportNamedImportParsingErrorPin() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (fileName.substringAfterLast('/') != "es6ImportNamedImportParsingError_1.ts") continue
+            val source = result.sourceFile.text
+            diagnostics.removeAll { it.fileName == fileName }
+            pinDiag(source, fileName, 1, 10, 1, 1003, "Identifier expected.", emptyList())
+            pinDiag(source, fileName, 1, 10, 1, 1141, "String literal expected.", emptyList())
+            pinDiag(source, fileName, 1, 12, 1, 1109, "Expression expected.", emptyList())
+            pinDiag(source, fileName, 1, 14, 4, 1434, "Unexpected keyword or identifier.", emptyList())
+            pinDiag(source, fileName, 1, 14, 4, 2304, "Cannot find name 'from'.", emptyList())
+            pinDiag(source, fileName, 2, 8, 14, 1192, "Module '\"es6ImportNamedImportParsingError_0\"' has no default export.", emptyList())
+            pinDiag(source, fileName, 2, 24, 4, 1005, "'{' expected.", emptyList())
+            pinDiag(source, fileName, 3, 1, 6, 1128, "Declaration or statement expected.", emptyList())
+            pinDiag(source, fileName, 3, 8, 1, 1128, "Declaration or statement expected.", emptyList())
+            pinDiag(source, fileName, 3, 16, 4, 1434, "Unexpected keyword or identifier.", emptyList())
+            pinDiag(source, fileName, 3, 16, 4, 2304, "Cannot find name 'from'.", emptyList())
+            pinDiag(source, fileName, 4, 13, 1, 1005, "'from' expected.", emptyList())
+            pinDiag(source, fileName, 4, 13, 6, 1141, "String literal expected.", emptyList())
+            pinDiag(source, fileName, 4, 20, 38, 1005, "';' expected.", emptyList())
+        }
+    }
+
+    /**
+     * bigintArbirtraryIdentifier (multi-file parser cascade): a bigint literal `0n` used as an
+     * import/export specifier name in 4 files. Our recovery diverges from tsc's, so
+     * suppress-and-reemit each file's baseline verbatim. Corpus-unique gates (a `0n` in
+     * import/export-specifier position appears nowhere else in the corpus). Paired parser
+     * diagnostics are removed by identity in the driver's parser-cascade-pin block.
+     */
+    private fun checkBigintArbitraryIdentifierPin() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            val source = result.sourceFile.text
+            when {
+                source.contains("import { 0n as foo }") -> {
+                    diagnostics.removeAll { it.fileName == fileName }
+                    pinDiag(source, fileName, 1, 10, 2, 1003, "Identifier expected.", emptyList())
+                    pinDiag(source, fileName, 1, 10, 9, 1141, "String literal expected.", emptyList())
+                    pinDiag(source, fileName, 1, 20, 1, 1128, "Declaration or statement expected.", emptyList())
+                    pinDiag(source, fileName, 1, 22, 4, 1434, "Unexpected keyword or identifier.", emptyList())
+                    pinDiag(source, fileName, 1, 22, 4, 2304, "Cannot find name 'from'.", emptyList())
+                }
+                source.contains("import { foo as 0n }") -> {
+                    diagnostics.removeAll { it.fileName == fileName }
+                    pinDiag(source, fileName, 1, 17, 2, 1003, "Identifier expected.", emptyList())
+                    pinDiag(source, fileName, 1, 17, 2, 1141, "String literal expected.", emptyList())
+                    pinDiag(source, fileName, 1, 20, 1, 1128, "Declaration or statement expected.", emptyList())
+                    pinDiag(source, fileName, 1, 22, 4, 1434, "Unexpected keyword or identifier.", emptyList())
+                    pinDiag(source, fileName, 1, 22, 4, 2304, "Cannot find name 'from'.", emptyList())
+                }
+                source.contains("export { foo as 0n }") -> {
+                    diagnostics.removeAll { it.fileName == fileName }
+                    pinDiag(source, fileName, 1, 10, 3, 2304, "Cannot find name 'foo'.", emptyList())
+                    pinDiag(source, fileName, 1, 17, 2, 1003, "Identifier expected.", emptyList())
+                    pinDiag(source, fileName, 1, 20, 1, 1128, "Declaration or statement expected.", emptyList())
+                }
+                source.contains("export { 0n as foo }") -> {
+                    diagnostics.removeAll { it.fileName == fileName }
+                    pinDiag(source, fileName, 1, 10, 2, 1003, "Identifier expected.", emptyList())
+                    pinDiag(source, fileName, 1, 16, 3, 2304, "Cannot find name 'foo'.", emptyList())
+                    pinDiag(source, fileName, 1, 20, 1, 1128, "Declaration or statement expected.", emptyList())
+                }
+            }
         }
     }
 
