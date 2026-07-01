@@ -635,6 +635,12 @@ fun formatErrorBaseline(
                     .filter { it.line == lineNum }
                     .sortedWith(compareBy({ it.character ?: 0 }, { it.length ?: 0 }, { it.code }))
 
+                // tsc renders a MULTI-LINE-span diagnostic's message DEFERRED: the first
+                // squiggle prints in column order, then the SAME-LINE sibling diagnostics
+                // (squiggle + message each), then the continuation lines and finally the
+                // deferred message (jsFileCompilationTypeArgumentSyntaxOfCall). With no
+                // same-line siblings the output is identical to the inline order.
+                val deferredMultis = mutableListOf<Diagnostic>()
                 for (diag in lineDiags) {
                     val col = ((diag.character ?: 1) - 1).coerceAtLeast(0) // convert to 0-based
                     val len = diag.length ?: 1
@@ -656,34 +662,15 @@ fun formatErrorBaseline(
                         +lineContent.take(col).map { if (it == '\t') '\t' else ' ' }.joinToString("")
                         +"~".repeat(firstLineLen)
                         +"\r\n"
-                        // Multi-line span continuation
-                        var remaining = len - firstLineLen
-                        var nextLineIdx = lineIdx + 1
-                        while (remaining > 0 && nextLineIdx < sourceLines.size) {
-                            // Account for the newline character(s) between lines
-                            remaining-- // consume the \n between lines
-                            if (remaining <= 0) break
-                            val nextLine = sourceLines[nextLineIdx]
-                            skipLines.add(nextLineIdx)
-                            continuationLineIndices.add(nextLineIdx)
-                            // Emit source line
-                            +"    "
-                            +nextLine
-                            +"\r\n"
-                            // Emit squiggles (cover entire line or remaining).
-                            val squiggleLen = remaining.coerceAtMost(nextLine.length)
-                            if (squiggleLen > 0) {
-                                +"    "
-                                +"~".repeat(squiggleLen)
-                                +"\r\n"
-                            } else if (nextLine.isEmpty()) {
-                                // Blank lines within a multi-line span get an empty squiggle line —
-                                // TypeScript emits a blank indent line even with no tildes.
-                                +"    "
-                                +"\r\n"
-                            }
-                            remaining -= squiggleLen
-                            nextLineIdx++
+                        if (len > charsOnFirstLine + 1) {
+                            // Multi-line span REACHING next-line content: defer the
+                            // continuation + message past the same-line siblings. A span
+                            // overhanging only into the line's newline (len ==
+                            // charsOnFirstLine + 1) renders no continuation — its message
+                            // stays inline (nestedUnaryExpressionHang's TS2363 vs TS1109
+                            // ordering).
+                            deferredMultis.add(diag)
+                            continue
                         }
                     }
 
@@ -748,6 +735,120 @@ fun formatErrorBaseline(
                     // emit only the squiggle + !!! annotation, not the source line again).
                     // Only handle single-line additional diagnostics — multi-line additionals would
                     // re-emit overlapping source and are rare in practice.
+                    for (contLineIdx in continuationLineIndices) {
+                        val contLineNum = contLineIdx + 1
+                        val contLineContent = sourceLines[contLineIdx]
+                        val moreDiags = fileDiags
+                            .filter { it.line == contLineNum && it !== diag }
+                            .sortedWith(compareBy({ it.character ?: 0 }, { it.length ?: 0 }, { it.code }))
+                        for (moreDiag in moreDiags) {
+                            val mCol = ((moreDiag.character ?: 1) - 1).coerceAtLeast(0)
+                            val mLen = moreDiag.length ?: 1
+                            if (mLen == 0) {
+                                +"    "
+                                +contLineContent.take(mCol).map { if (it == '\t') '\t' else ' ' }.joinToString("")
+                                +"\r\n"
+                            } else {
+                                val mCharsOnLine = (contLineContent.length - mCol).coerceAtLeast(1)
+                                val mFirstLineLen = mLen.coerceAtMost(mCharsOnLine)
+                                +"    "
+                                +contLineContent.take(mCol).map { if (it == '\t') '\t' else ' ' }.joinToString("")
+                                +"~".repeat(mFirstLineLen)
+                                +"\r\n"
+                            }
+                            +"!!! "
+                            +moreDiag.category.name.lowercase()
+                            +" TS"
+                            +moreDiag.code.toString()
+                            +": "
+                            +moreDiag.message
+                            +"\r\n"
+                            for (chain in moreDiag.messageChain) {
+                                +"!!! "
+                                +moreDiag.category.name.lowercase()
+                                +" TS"
+                                +moreDiag.code.toString()
+                                +": "
+                                +chain
+                                +"\r\n"
+                            }
+                        }
+                    }
+                }
+
+                // Deferred multi-line-span diagnostics: continuation lines + the message
+                // render AFTER the same-line siblings (tsc's multi-line-span order).
+                for (diag in deferredMultis) {
+                    val col = ((diag.character ?: 1) - 1).coerceAtLeast(0)
+                    val len = diag.length ?: 1
+                    val charsOnFirstLine = (lineContent.length - col).coerceAtLeast(1)
+                    val continuationLineIndices = mutableListOf<Int>()
+                    var remaining = len - charsOnFirstLine
+                    var nextLineIdx = lineIdx + 1
+                    while (remaining > 0 && nextLineIdx < sourceLines.size) {
+                        remaining-- // consume the \n between lines
+                        if (remaining <= 0) break
+                        val nextLine = sourceLines[nextLineIdx]
+                        skipLines.add(nextLineIdx)
+                        continuationLineIndices.add(nextLineIdx)
+                        +"    "
+                        +nextLine
+                        +"\r\n"
+                        val squiggleLen = remaining.coerceAtMost(nextLine.length)
+                        if (squiggleLen > 0) {
+                            +"    "
+                            +"~".repeat(squiggleLen)
+                            +"\r\n"
+                        } else if (nextLine.isEmpty()) {
+                            +"    "
+                            +"\r\n"
+                        }
+                        remaining -= squiggleLen
+                        nextLineIdx++
+                    }
+                    +"!!! "
+                    +diag.category.name.lowercase()
+                    +" TS"
+                    +diag.code.toString()
+                    +": "
+                    +diag.message
+                    +"\r\n"
+                    for (chain in diag.messageChain) {
+                        +"!!! "
+                        +diag.category.name.lowercase()
+                        +" TS"
+                        +diag.code.toString()
+                        +": "
+                        +chain
+                        +"\r\n"
+                    }
+                    for (related in diag.relatedInformation) {
+                        +"!!! related TS"
+                        +related.code.toString()
+                        val relFile = related.fileName
+                        if (relFile != null) {
+                            +" "
+                            +relFile.removePrefix("./")
+                            +":"
+                            val base = relFile.substringAfterLast('/').substringAfterLast('\\')
+                            val isLib = base.startsWith("lib.") && base.endsWith(".d.ts")
+                            if (isLib && related.line == null) {
+                                +"--:--"
+                            } else {
+                                +(related.line ?: 0).toString()
+                                +":"
+                                +(related.character ?: 0).toString()
+                            }
+                        }
+                        +": "
+                        +related.message
+                        +"\r\n"
+                        for (relChain in related.messageChain) {
+                            +relChain
+                            +"\r\n"
+                        }
+                    }
+                    // Additional diagnostics starting on this diag's continuation lines.
                     for (contLineIdx in continuationLineIndices) {
                         val contLineNum = contLineIdx + 1
                         val contLineContent = sourceLines[contLineIdx]

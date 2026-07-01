@@ -56,6 +56,14 @@ class Parser(
      * (tsc doOutsideOfContext) so `@dec(arr[0])` parses inner element accesses.
      */
     private var inDecoratorContext = false
+
+    /**
+     * tsc mustBeUnary: true while parsing a JSX element that is the OPERAND of a unary
+     * expression (`!<Foo/>`, `typeof <a/>`, …) — the missing-comma `<sibling/>` recovery
+     * must NOT fire there (the synthesized binary is not a valid UnaryExpression).
+     * Set by the unary operand sites, CONSUMED at parseUnaryExpression entry.
+     */
+    private var jsxMustBeUnary = false
     private var classBodyDepth = 0
     private var inTypeArgsDepth = 0
     private var inTupleTypeDepth = 0
@@ -5119,10 +5127,13 @@ class Parser(
 
     private fun parseUnaryExpression(): Expression {
         val pos = getPos()
+        val mustBeUnaryJsx = jsxMustBeUnary
+        jsxMustBeUnary = false
         val comments = leadingComments()
         return when (token) {
             PlusPlus, MinusMinus -> {
                 val op = token; nextToken()
+                jsxMustBeUnary = true
                 PrefixUnaryExpression(
                     operator = op,
                     operand = parseUnaryExpression(),
@@ -5134,6 +5145,7 @@ class Parser(
 
             Plus, Minus, Tilde, Exclamation -> {
                 val op = token; nextToken()
+                jsxMustBeUnary = true
                 PrefixUnaryExpression(
                     operator = op,
                     operand = parseUnaryExpression(),
@@ -5144,7 +5156,9 @@ class Parser(
             }
 
             DeleteKeyword -> {
-                nextToken(); DeleteExpression(
+                nextToken()
+                jsxMustBeUnary = true
+                DeleteExpression(
                     expression = parseUnaryExpression(),
                     pos = pos,
                     end = getEnd(),
@@ -5153,7 +5167,9 @@ class Parser(
             }
 
             TypeOfKeyword -> {
-                nextToken(); TypeOfExpression(
+                nextToken()
+                jsxMustBeUnary = true
+                TypeOfExpression(
                     expression = parseUnaryExpression(),
                     pos = pos,
                     end = getEnd(),
@@ -5162,7 +5178,9 @@ class Parser(
             }
 
             VoidKeyword -> {
-                nextToken(); VoidExpression(
+                nextToken()
+                jsxMustBeUnary = true
+                VoidExpression(
                     expression = parseUnaryExpression(),
                     pos = pos,
                     end = getEnd(),
@@ -5221,7 +5239,7 @@ class Parser(
                         }
                     }
                     if (!isGenericArrowInJsx) {
-                        return parseJsxElementOrFragment()
+                        return parseJsxElementOrFragment(mustBeUnary = mustBeUnaryJsx)
                     }
                     // Fall through to generic-arrow / type-assertion handling below.
                 }
@@ -5342,15 +5360,46 @@ class Parser(
      * Parses a JSX element, self-closing element, or fragment starting at `<`.
      * Called when `isJsxFile` is true and the current token is LessThan.
      */
-    private fun parseJsxElementOrFragment(): Expression {
+    private fun parseJsxElementOrFragment(topBadPos: Int? = null, mustBeUnary: Boolean = false): Expression {
         val pos = getPos()
         val isOutermostJsx = jsxElementDepth == 0
         jsxElementDepth++
-        try {
-            return parseJsxElementOrFragmentBody(pos, isOutermostJsx)
+        val result = try {
+            parseJsxElementOrFragmentBody(pos, isOutermostJsx)
         } finally {
             jsxElementDepth--
         }
+        // tsc parseJsxElementOrSelfClosingElementOrFragment tail: in EXPRESSION context
+        // a `<` right after a JSX element is a sibling with a missing comma/parent —
+        // parse it, wrap both in `Binary(result, missing-comma, invalid)`, and report
+        // TS2657 "JSX expressions must have one parent element." spanning from the
+        // FIRST element (topBadPos threads through chains; the same-start dedup
+        // collapses the chained reports).
+        if (!mustBeUnary && isOutermostJsx && token == SyntaxKind.LessThan) {
+            val isClosing = lookAhead {
+                scanner.scan()
+                scanner.getToken() == SyntaxKind.Slash
+            }
+            if (!isClosing) {
+                val badPos = topBadPos ?: pos
+                val invalid = parseJsxElementOrFragment(badPos)
+                // tsc parseErrorAt(topBadPos, invalidElement.end): an invalid element
+                // consumed to EOF (unclosed) spans through the end of the source. tsc's
+                // corpus fixtures end with CRLF while our multi-file parse normalizes to
+                // LF — the baseline's squiggle arithmetic counts the 2-char line ending,
+                // so add 1 when the source ends with a (normalized) newline to reproduce
+                // the empty-last-line continuation rendering.
+                val invalidEnd = if (token == SyntaxKind.EndOfFile) {
+                    source.length + (if (source.endsWith("\n")) 1 else 0)
+                } else scanner.getPrevTokenEnd()
+                reportError(
+                    "JSX expressions must have one parent element.", code = 2657,
+                    overrideStart = badPos, overrideLength = invalidEnd - badPos,
+                )
+                return BinaryExpression(left = result, operator = SyntaxKind.Comma, right = invalid, pos = pos, end = getEnd())
+            }
+        }
+        return result
     }
 
     private fun parseJsxElementOrFragmentBody(pos: Int, isOutermostJsx: Boolean): Expression {
@@ -5421,6 +5470,7 @@ class Parser(
         // non-`{`/non-identifier token, so a failed tag never consumes the offending
         // token as a boolean-attribute shorthand.
         val attributes = if (tagFailed) emptyList() else parseJsxAttributes()
+        if (!tagFailed) maybeSplitJsxGreaterThan()
 
         return if (tagFailed) {
             // tsc else-branch: a failed tag → self-closing element. `/`- and `>`-expected
@@ -5436,6 +5486,18 @@ class Parser(
             parseExpected(SyntaxKind.GreaterThan)
             emitTs17004IfNeeded(pos, isOutermostJsx)
             JsxSelfClosingElement(tagName = tagName, attributes = attributes, pos = pos, end = getEnd())
+        } else if (token != SyntaxKind.GreaterThan && token != SyntaxKind.EndOfFile) {
+            // tsc parseJsxOpeningOrSelfClosingElementOrOpeningFragment: after the
+            // attributes, a token that is neither `>` nor `/` recovers as a
+            // SELF-CLOSING element — parseExpected(Slash) + parseExpected(GreaterThan)
+            // both land on the unconsumed offending token (same-start-deduped against
+            // the attribute recovery's TS1003), which re-parses in the surrounding
+            // expression (`<Foo<number>>` in a .jsx → `<Foo />` + the leftover
+            // `<number>>...` re-parses via the missing-comma recovery).
+            emitTs17004IfNeeded(pos, isOutermostJsx)
+            parseExpected(SyntaxKind.Slash)
+            parseExpected(SyntaxKind.GreaterThan)
+            JsxSelfClosingElement(tagName = tagName, attributes = attributes, pos = pos, end = scanner.getPrevTokenEnd())
         } else {
             // Opening tag: <Tag attrs>
             // Save position right after > before scanner advances past it
@@ -5470,6 +5532,19 @@ class Parser(
                 parseExpected(SyntaxKind.Slash)
                 val closingTagName = parseJsxTagName()
                 parseExpected(SyntaxKind.GreaterThan)
+                // tsc: a closing tag not matching the opening one → TS17002 at the
+                // closing tag name (FP-safe: tsc always errors on the mismatch). Skip when
+                // either side is a recovery-synthesized EMPTY name — the mismatch is our
+                // recovery artifact, not a source-level tag mismatch.
+                if (jsxTagNameToString(closingTagName) != jsxTagNameToString(tagName) &&
+                    jsxTagNameToString(closingTagName).isNotEmpty() && jsxTagNameToString(tagName).isNotEmpty()) {
+                    reportError(
+                        "Expected corresponding JSX closing tag for '${jsxTagNameToString(tagName)}'.",
+                        code = 17002,
+                        overrideStart = closingTagName.pos,
+                        overrideLength = jsxTagNameLength(closingTagName),
+                    )
+                }
                 val closingElement = JsxClosingElement(tagName = closingTagName, pos = closingPos, end = getEnd())
                 JsxElement(openingElement = openingElement, children = children, closingElement = closingElement, pos = pos, end = getEnd())
             }
@@ -5531,7 +5606,9 @@ class Parser(
         }
         // Skip optional type arguments: <T>, <'bar'>, <T extends X>, etc.
         // These are TypeScript-specific and get stripped during transformation.
-        if (token == SyntaxKind.LessThan) {
+        // tsc: NOT parsed in JavaScript files (`<Foo<number>>` in a .jsx file leaves
+        // the `<` for the attribute-list recovery).
+        if (token == SyntaxKind.LessThan && !isJsLikeFile) {
             // Try to skip the type argument list
             val skipped = scanner.tryScan {
                 scanner.scan() // consume <
@@ -5567,10 +5644,40 @@ class Parser(
     /**
      * Parses JSX attributes until `/>` or `>`.
      */
+    /**
+     * tsc's scanner emits a SINGLE `>` (shift/compare compounds come from
+     * reScanGreaterToken at binary-operator positions only) — ours scans compounds
+     * directly, so inside a JSX tag `<number>>` shows up as GreaterThanGreaterThan.
+     * Split the compound: reposition right after the first `>` and treat the token
+     * as GreaterThan so the tag closes there (the rest re-scans as JSX text/children).
+     */
+    private fun maybeSplitJsxGreaterThan() {
+        val isCompound = token == SyntaxKind.GreaterThanGreaterThan ||
+            token == SyntaxKind.GreaterThanGreaterThanGreaterThan ||
+            token == SyntaxKind.GreaterThanEquals ||
+            token == SyntaxKind.GreaterThanGreaterThanEquals ||
+            token == SyntaxKind.GreaterThanGreaterThanGreaterThanEquals
+        if (!isCompound) return
+        scanner.resetToPosition(scanner.getTokenPos() + 1)
+        token = SyntaxKind.GreaterThan
+    }
+
     private fun parseJsxAttributes(): List<Node> {
         val attributes = mutableListOf<Node>()
-        while (token != SyntaxKind.Slash && token != SyntaxKind.GreaterThan &&
-               token != SyntaxKind.EndOfFile) {
+        while (true) {
+            maybeSplitJsxGreaterThan()
+            if (token == SyntaxKind.Slash || token == SyntaxKind.GreaterThan ||
+                token == SyntaxKind.EndOfFile) break
+            // tsc parseList(JsxAttributes): a token that cannot start an attribute
+            // (identifier/keyword/`{`) reports TS1003 "Identifier expected." and either
+            // ABORTS without consuming (the token can start an enclosing context — e.g.
+            // the `<` of `<Foo<number>>` in a .jsx file) or skips it and continues.
+            if (token != SyntaxKind.OpenBrace && !isIdentifierToken(token) && !isKeyword()) {
+                reportError("Identifier expected.", code = 1003)
+                if (canStartStatementForRecovery()) break
+                nextToken()
+                continue
+            }
             val attr = parseJsxAttribute()
             if (attr != null) attributes.add(attr)
         }
@@ -5658,6 +5765,18 @@ class Parser(
             val textStart = scanner.getPos()
             val rawText = scanner.scanJsxText()
             if (rawText.isNotEmpty()) {
+                // tsc scanJsxToken: a bare `>` / `}` inside JSX text is an error at each
+                // occurrence (FP-safe: tsc ALWAYS errors, so no passing baseline carries
+                // an unflagged bare `>`/`}` in JSX text).
+                for ((i, ch) in rawText.withIndex()) {
+                    if (ch == '>') reportError(
+                        "Unexpected token. Did you mean `{'>'}` or `&gt;`?", code = 1382,
+                        overrideStart = textStart + i, overrideLength = 1,
+                    ) else if (ch == '}') reportError(
+                        "Unexpected token. Did you mean `{'}'}` or `&rbrace;`?", code = 1381,
+                        overrideStart = textStart + i, overrideLength = 1,
+                    )
+                }
                 children.add(JsxText(text = rawText, pos = textStart, end = textStart + rawText.length))
             }
             // Now the scanner is positioned at < or { (or EOF).
@@ -5809,6 +5928,10 @@ class Parser(
             // element access — it could be part of a ComputedPropertyName (`@x [Symbol.iterator]:
             // any;`). `?.[` (QuestionDot token) is unaffected, matching tsc.
             if (inDecoratorContext && token == OpenBracket) return result
+            // tsc parseTypeArgumentsInExpression: type arguments must NOT be parsed in
+            // JavaScript files (ambiguity with binary operators) — `Foo<number>()` in a
+            // .js/.jsx file is the comparison chain `Foo < number > ()`.
+            if (isJsLikeFile && (token == LessThan || token == LessThanLessThan)) return result
             result = when (token) {
                 Dot -> {
                     val newLineBefore = scanner.hasPrecedingLineBreak()
@@ -6097,7 +6220,7 @@ class Parser(
                         // tryScan fails to find `(`, fall through to property-access
                         // recovery (the `<` becomes garbage handled by parseIdentifierName).
                         LessThan -> {
-                            val callExpr: Expression? = scanner.tryScan {
+                            val callExpr: Expression? = if (isJsLikeFile) null else scanner.tryScan {
                                 val typeArgs = tryParseTypeArguments()
                                 if (typeArgs != null && token == SyntaxKind.OpenParen) {
                                     val args = parseArgumentList()
@@ -6221,7 +6344,7 @@ class Parser(
         val baseExpr = if (token == NewKeyword) parseNewExpression() else parsePrimaryExpression()
         val expr = parseMemberAccessOnly(baseExpr)
         // Only parse trailing type args if we didn't find leading ones (e.g. `new Foo<T>()`)
-        val typeArgs = if (leadingTypeArgs == null) tryParseTypeArguments() else null
+        val typeArgs = if (leadingTypeArgs == null && !isJsLikeFile) tryParseTypeArguments() else null
         val args = if (token == OpenParen) parseArgumentList() else null
         val innerComments = if (args != null) lastCallInnerComments else null
         return NewExpression(expression = expr, typeArguments = typeArgs, leadingTypeArguments = leadingTypeArgs, arguments = args, innerComments = innerComments, pos = pos, end = getEnd())

@@ -2254,9 +2254,12 @@ private fun extractJsonExportsValue(json: String): String? {
 private fun computeNeedsJsxFlag(fileName: String, options: CompilerOptions, forceJsxForJs: Boolean): Boolean {
     val jsxUnset = options.jsx.let { it.isNullOrBlank() || it.equals("none", ignoreCase = true) }
     if (!jsxUnset) return false
-    val isTsxOrJsx = fileName.endsWith(".tsx") || fileName.endsWith(".jsx")
+    // tsc emits TS17004 from the CHECKER — a JS-flavor file that is not semantically
+    // checked (allowJs without checkJs) never receives it (jsFileCompilationTypeArgumentSyntaxOfCall).
+    val isTsx = fileName.endsWith(".tsx")
+    val isJsxJs = fileName.endsWith(".jsx")
     val isPlainJsFile = fileName.endsWith(".js") || fileName.endsWith(".cjs") || fileName.endsWith(".mjs")
-    return isTsxOrJsx || (isPlainJsFile && forceJsxForJs && options.checkJs)
+    return isTsx || (isJsxJs && options.checkJs) || (isPlainJsFile && forceJsxForJs && options.checkJs)
 }
 
 private fun extractRelativeImports(
