@@ -1449,6 +1449,7 @@ class TypeScriptCompiler {
                     baseUrl = options.baseUrl,
                     tsconfigDir = computedTsconfigDir,
                     rootDirs = options.rootDirs,
+                    symlinkMap = parsed.symlinkMap,
                 )
                 // Also compute deps WITHOUT ref-path edges as a fallback. If the
                 // full deps graph forms a cycle (mutual `/// <reference>` between
@@ -1460,6 +1461,7 @@ class TypeScriptCompiler {
                     baseUrl = options.baseUrl,
                     tsconfigDir = computedTsconfigDir,
                     rootDirs = options.rootDirs,
+                    symlinkMap = parsed.symlinkMap,
                 )
                 // Detect whether this file uses `import X = require("...")` (CJS-style
                 // import-equals). When an entry-point file uses this form, TypeScript
@@ -2181,6 +2183,7 @@ private fun extractRelativeImports(
     baseUrl: String? = null,
     tsconfigDir: String? = null,
     rootDirs: List<String>? = null,
+    symlinkMap: Map<String, String> = emptyMap(),
 ): List<String> {
     val allTsFileNames = allFiles.map { it.fileName }.toSet()
     val deps = mutableListOf<String>()
@@ -2247,6 +2250,17 @@ private fun extractRelativeImports(
             resolveRelativePath(dir, specifier)
         } else {
             specifier
+        }
+
+        // @link symlink resolution (bare package specifier -> real source dir): resolve
+        // `<realDir>/index.{ts,tsx,d.ts}` (or a same-name file) and add it as a dependency EDGE
+        // so multi-file emit ordering is dependency-first (symbolLinkDeclarationEmitModuleNames).
+        if (specifier in symlinkMap) {
+            val realDir = symlinkMap.getValue(specifier)
+            val target = listOf("$realDir/index.ts", "$realDir/index.tsx", "$realDir/index.d.ts",
+                "$realDir.ts", "$realDir.tsx", "$realDir.d.ts").firstOrNull { it in allTsFileNames }
+            if (target != null && target != currentFileName) deps.add(target)
+            continue
         }
 
         // For non-relative specifiers, try `paths` mapping first. When a pattern matches

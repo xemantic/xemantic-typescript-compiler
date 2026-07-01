@@ -321,6 +321,10 @@ data class ParsedSource(
     val options: CompilerOptions,
     val files: List<SourceFileEntry>,
     val hasExplicitFilenames: Boolean = false,
+    // `// @link: <realDir> -> <node_modules/pkgPath>` symlink map: bare package specifier
+    // (extracted from the node_modules side) -> real source dir. Used only to add cross-file
+    // dependency EDGES for multi-file emit ordering (symbolLinkDeclarationEmitModuleNames).
+    val symlinkMap: Map<String, String> = emptyMap(),
 )
 
 /**
@@ -379,6 +383,7 @@ fun parseMultiFileSource(source: String, testFileName: String): ParsedSource {
     val cleaned = source.removePrefix("\uFEFF").replace("\r\n", "\n").replace("\r", "\n")
     val lines = cleaned.split('\n')
     val directives = mutableMapOf<String, String>()
+    val symlinkMap = mutableMapOf<String, String>()
     val fileEntries = mutableListOf<SourceFileEntry>()
     var currentFileName: String? = null
     val currentLines = mutableListOf<String>()
@@ -417,6 +422,17 @@ fun parseMultiFileSource(source: String, testFileName: String): ParsedSource {
                     // not a harness option — keep it as source content
                     // (checkJsFiles_skipDiagnostics relies on the line surviving).
                     if (!inGlobalDirectives) currentLines.add(line)
+                } else if (key == "link") {
+                    // `// @link: <realDir> -> <.../node_modules/<pkg>>`: a package symlink.
+                    // Record <pkg> -> <realDir> so a bare import of <pkg> resolves to the real
+                    // source dir for dependency-ordering (symbolLinkDeclarationEmitModuleNames).
+                    val parts = value.split("->").map { it.trim() }
+                    if (parts.size == 2) {
+                        val realDir = parts[0]
+                        val pkg = parts[1].substringAfterLast("node_modules/")
+                        if (pkg.isNotEmpty() && realDir.isNotEmpty()) symlinkMap[pkg] = realDir
+                    }
+                    if (inGlobalDirectives) globalDirectiveLines.add(line)
                 } else {
                     directives[key] = value
                     if (inGlobalDirectives) {
@@ -477,7 +493,7 @@ fun parseMultiFileSource(source: String, testFileName: String): ParsedSource {
         return ParsedSource(options, listOf(SourceFileEntry(testFileName, cleanedSource)))
     }
 
-    return ParsedSource(options, fileEntries, hasExplicitFilenames = true)
+    return ParsedSource(options, fileEntries, hasExplicitFilenames = true, symlinkMap = symlinkMap)
 }
 
 /**
