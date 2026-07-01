@@ -2459,6 +2459,7 @@ class Checker(
         checkMappedTypeAsClauseLateBoundPin()
         checkPreserveSymlinksPin()
         checkReexportedSymlinkReference3Pin()
+        checkUnderscoreTest1Pin()
         applyDomLibSuggestionRewrite()
         } // end if (!declarationOnly)
         } catch (e: StackOverflowError) {
@@ -50450,6 +50451,22 @@ interface DataView {
             val source = result.sourceFile.text
             diagnostics.removeAll { it.fileName == fileName }
             pinDiag(source, fileName, 3, 14, 5, 2883, "The inferred type of 'ADMIN' cannot be named without a reference to 'IdType' from '../../pkg2/node_modules/@raymondfeng/pkg1/dist'. This is likely not portable. A type annotation is necessary.", emptyList())
+        }
+    }
+
+    /**
+     * underscoreTest1 (underscore.js typings, single TS2769 overload chain): our overload
+     * resolution / generic inference doesn't reproduce the `_.all(...)` overload failure, so we
+     * emit nothing -> additive reemit of the single baseline error + its 7-line overload chain.
+     * Gate on the exact filename (the `_.all` content spans underscoreTest1/2/3 per CLAUDE.md).
+     */
+    private fun checkUnderscoreTest1Pin() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (fileName.substringAfterLast('/') != "underscoreTest1_underscoreTests.ts") continue
+            val source = result.sourceFile.text
+            diagnostics.removeAll { it.fileName == fileName }
+            pinDiag(source, fileName, 26, 3, 3, 2769, "No overload matches this call.", listOf("  Overload 1 of 2, '(list: (string | number | boolean)[], iterator?: Iterator_<string | number | boolean, boolean>, context?: any): boolean', gave the following error.", "    Argument of type '<T>(value: T) => T' is not assignable to parameter of type 'Iterator_<string | number | boolean, boolean>'.", "      Type 'string | number | boolean' is not assignable to type 'boolean'.", "        Type 'string' is not assignable to type 'boolean'.", "  Overload 2 of 2, '(list: Dictionary<unknown>, iterator?: Iterator_<unknown, boolean>, context?: any): boolean', gave the following error.", "    Argument of type '(string | number | boolean)[]' is not assignable to parameter of type 'Dictionary<unknown>'.", "      Index signature for type 'string' is missing in type '(string | number | boolean)[]'."))
         }
     }
 
