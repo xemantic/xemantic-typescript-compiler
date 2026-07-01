@@ -67200,6 +67200,61 @@ interface DataView {
             expr.expression, expr.type, expr.pos, expressionTrueEnd(expr.expression), source, fileName,
         )
         emitTS2352IfObjectLiteralToInterfaceCast(expr, source, fileName)
+        emitTS2352IfClassInstanceToSigInterfaceCast(expr, source, fileName)
+    }
+
+    /**
+     * intTypeCheck: `<i7>new Base` — a type assertion of a CLASS INSTANCE to a pure user
+     * interface whose (own or inherited) call/construct signatures the class instance
+     * lacks, where the reverse direction is ALSO incomparable (tsc's bidirectional overlap
+     * rule) → TS2352 "Conversion ... may be a mistake because neither type sufficiently
+     * overlaps with the other." + the "provides no match for the signature" chain.
+     * FP-safe: a signature-less class instance is never comparable to a signature-bearing
+     * interface, and the reverse comparability check suppresses legal casts (an interface
+     * comparable to the class shape overlaps → no error, matching tsc).
+     */
+    private fun emitTS2352IfClassInstanceToSigInterfaceCast(expr: TypeAssertionExpression, source: String, fileName: String) {
+        val tref = expr.type as? TypeReference ?: return
+        if (tref.typeArguments != null) return
+        val name = (tref.typeName as? Identifier)?.text ?: return
+        var op: Expression = expr.expression
+        while (op is ParenthesizedExpression) op = op.expression
+        val ne = op as? NewExpression ?: return
+        if (ne.arguments != null) return
+        val calleeIdent = ne.expression as? Identifier ?: return
+        val calleeSym = currentFileLocals?.get(calleeIdent.text) ?: globals[calleeIdent.text] ?: return
+        if (!calleeSym.flags.hasAny(SymbolFlags.Class)) return
+        if (calleeSym.declarations.any { it in builtinLibDecls }) return
+        val tgt = try { getTypeFromTypeNode(tref) } catch (_: Throwable) { return }
+        if (tgt !is Type.Interface || tgt is Type.Reference) return
+        val tsym = tgt.symbol ?: return
+        if (!tsym.flags.hasAny(SymbolFlags.Interface) || tsym.flags.hasAny(SymbolFlags.Class)) return
+        if (tsym.declarations.any { it in builtinLibDecls }) return
+        resolveStructuredTypeMembers(tgt)
+        val tCall = tgt.callSignatures ?: emptyList()
+        val tCtor = tgt.constructSignatures ?: emptyList()
+        if (tCall.isEmpty() && tCtor.isEmpty()) return
+        val srcType = try { getReturnTypeOfNewExpression(ne) } catch (_: Throwable) { return }
+        val srcObj = srcType as? Type.Interface ?: return
+        resolveStructuredTypeMembers(srcObj)
+        if (!srcObj.callSignatures.isNullOrEmpty() || !srcObj.constructSignatures.isNullOrEmpty()) return
+        // Bidirectional overlap: suppress when the TARGET is comparable to the source.
+        if (checkTypeRelatedTo(tgt, srcObj, comparableRelation)) return
+        val displaySrc = typeToString(srcObj)
+        val sigLine = if (tCall.isNotEmpty())
+            "Type '$displaySrc' provides no match for the signature '${signatureToStringColon(tCall.first(), isConstruct = false)}'."
+        else
+            "Type '$displaySrc' provides no match for the signature '${signatureToStringColon(tCtor.first(), isConstruct = true)}'."
+        val start = expr.pos
+        val end = expressionTrueEnd(ne.expression)
+        if (end <= start) return
+        val (line, ch) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "Conversion of type '$displaySrc' to type '$name' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.",
+            category = DiagnosticCategory.Error, code = 2352,
+            fileName = fileName, line = line, character = ch, start = start, length = end - start,
+            messageChain = listOf("  $sigLine"),
+        ))
     }
 
     /**
@@ -82407,12 +82462,20 @@ interface DataView {
                     val displaySource = typeToString(sourceType)
                     val displayTarget = formatTypeForDisplay(typeAnnotation) ?: typeToString(targetType)
                     val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
+                    // intTypeCheck: a lib-`Object` source nests the sig line under the
+                    // TS2696 hint line (tsc's Object-source elaboration form).
+                    val isLibObjectSrc = sourceType is Type.Interface && sourceType.symbol?.name == "Object" &&
+                        sourceType.symbol!!.declarations.any { it in builtinLibDecls }
+                    val ctorChain = if (isLibObjectSrc)
+                        listOf("  The 'Object' type is assignable to very few other types. Did you mean to use the 'any' type instead?") +
+                            srcCtorElab.map { "  $it" }
+                    else srcCtorElab
                     diagnostics.add(Diagnostic(
                         message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
                         category = DiagnosticCategory.Error, code = 2322,
                         fileName = fileName, line = line, character = character,
                         start = name.pos, length = name.text.length,
-                        messageChain = srcCtorElab,
+                        messageChain = ctorChain,
                     ))
                     return
                 }
@@ -82493,6 +82556,73 @@ interface DataView {
                     ))
                     return
                 }
+            }
+            // intTypeCheck: sources that can NEVER satisfy a pure-interface target whose
+            // (own or inherited) call/construct signatures the relation engine skips.
+            // (a) `boolean` (a comparison result) → sig/index-bearing interface: the relation
+            //     passes vacuously (no properties to fail; construct sigs are skipped for
+            //     instance targets; named-target index checks don't run for primitives) →
+            //     flat TS2322 (tsc: boolean never satisfies a sig/index-bearing target).
+            // (b) an empty `{}` literal / lib `Object` instance / class instance lacking
+            //     call+construct signatures → interface WITH call/construct sigs: TS2322 +
+            //     "provides no match for the signature" chain ('Object' nests it under the
+            //     TS2696 hint line). FP-safe by construction: tsc ALWAYS errors on these
+            //     shapes (a signature-less source can't satisfy a signature-bearing target).
+            run {
+                if (targetType !is Type.Interface || targetType is Type.Reference) return@run
+                val tsym = targetType.symbol ?: return@run
+                if (!tsym.flags.hasAny(SymbolFlags.Interface) || tsym.flags.hasAny(SymbolFlags.Class)) return@run
+                if (tsym.declarations.any { it in builtinLibDecls }) return@run
+                resolveStructuredTypeMembers(targetType)
+                val tCall = targetType.callSignatures ?: emptyList()
+                val tCtor = targetType.constructSignatures ?: emptyList()
+                val displayTgt = formatTypeForDisplay(typeAnnotation) ?: typeToString(targetType)
+                val (nLine, nChar) = getLineAndCharacterOfPosition(source, name.pos)
+                // (a) boolean source — only when the standard path stays silent.
+                if (sourceType === booleanType) {
+                    if (canUse && !isAssignable) return@run // standard path owns it
+                    val hasAnyShape = tCall.isNotEmpty() || tCtor.isNotEmpty() ||
+                        targetType.stringIndexInfo != null || targetType.numberIndexInfo != null
+                    if (!hasAnyShape) return@run
+                    diagnostics.add(Diagnostic(
+                        message = "Type 'boolean' is not assignable to type '$displayTgt'.",
+                        category = DiagnosticCategory.Error, code = 2322,
+                        fileName = fileName, line = nLine, character = nChar,
+                        start = name.pos, length = name.text.length,
+                    ))
+                    return
+                }
+                // (b) signature-mismatch chain sources.
+                if (tCall.isEmpty() && tCtor.isEmpty()) return@run
+                val src = sourceType as? Type.Object ?: return@run
+                resolveStructuredTypeMembers(src)
+                if (!src.callSignatures.isNullOrEmpty() || !src.constructSignatures.isNullOrEmpty()) return@run
+                val isEmptyLit = init is ObjectLiteralExpression && init.properties.isEmpty()
+                val srcSym = src.symbol
+                val isLibObject = src is Type.Interface && srcSym?.name == "Object" &&
+                    srcSym.declarations.any { it in builtinLibDecls }
+                val isClassInst = src is Type.Interface && srcSym?.flags?.hasAny(SymbolFlags.Class) == true
+                if (!isEmptyLit && !isLibObject && !isClassInst) return@run
+                val missing = try { collectMissingProperties(src, targetType) }
+                    catch (e: StackOverflowError) { reportCheckerStackOverflow(e); emptyList() }
+                if (missing.isNotEmpty()) return@run // missing-prop form owns it
+                val displaySrc = typeToString(src)
+                val sigLine = if (tCall.isNotEmpty())
+                    "Type '$displaySrc' provides no match for the signature '${signatureToStringColon(tCall.first(), isConstruct = false)}'."
+                else
+                    "Type '$displaySrc' provides no match for the signature '${signatureToStringColon(tCtor.first(), isConstruct = true)}'."
+                val chain = if (isLibObject) listOf(
+                    "  The 'Object' type is assignable to very few other types. Did you mean to use the 'any' type instead?",
+                    "    $sigLine",
+                ) else listOf("  $sigLine")
+                diagnostics.add(Diagnostic(
+                    message = "Type '$displaySrc' is not assignable to type '$displayTgt'.",
+                    category = DiagnosticCategory.Error, code = 2322,
+                    fileName = fileName, line = nLine, character = nChar,
+                    start = name.pos, length = name.text.length,
+                    messageChain = chain,
+                ))
+                return
             }
             // B87.6b (round 73): array-VARIABLE source → tuple target tuple-arity TS2322 for
             // VAR-DECL — completes the tuple-arity feature uniformly with the async-return
@@ -82912,7 +83042,7 @@ interface DataView {
                 // Function→function: add specific elaboration (return/param mismatch)
                 if (sourceType is Type.Object && !sourceType.callSignatures.isNullOrEmpty() &&
                     targetType is Type.Object && !targetType.callSignatures.isNullOrEmpty()) {
-                    chain.addAll(getFunctionMismatchElaboration(sourceType, targetType))
+                    chain.addAll(getFunctionMismatchElaborationMultiSig(sourceType, targetType))
                     // 17.155: When fn-vs-fn call signature matches but target ALSO has
                     // construct signatures that source lacks, the relation engine still
                     // returned `false` (construct sigs unsatisfied). Emit the construct-
@@ -83004,6 +83134,9 @@ interface DataView {
                         init !is ElementAccessExpression && init !is AsExpression &&
                         init !is TypeAssertionExpression &&
                         init !is PropertyAccessExpression &&
+                        // intTypeCheck: a fn-expression init vs a sig-less interface target
+                        // gets the FLAT TS2322 in tsc (`var obj6: i1 = function () { };`)
+                        init !is FunctionExpression && init !is ArrowFunction &&
                         init !is ArrayLiteralExpression && init !is ObjectLiteralExpression
                     if (needsElaboration) chain.add("  $message")
                     }
@@ -115582,8 +115715,79 @@ interface DataView {
             ))
             return
         }
+        // intTypeCheck: `new {}` (no argument list) — an empty object literal has no
+        // construct signatures. FP-safe: tsc ALWAYS errors on `new {}`. Squiggle = the
+        // `{}` literal. Gated to arguments == null so the with-parens path (which flows
+        // through the signatures.isEmpty() handling below) is untouched.
+        if (expr.arguments == null && expr.expression is ObjectLiteralExpression &&
+            (expr.expression as ObjectLiteralExpression).properties.isEmpty()) {
+            val ol = expr.expression as ObjectLiteralExpression
+            val close = source.indexOf('}', ol.pos)
+            val length = if (close >= ol.pos) close + 1 - ol.pos else 2
+            val (line, character) = getLineAndCharacterOfPosition(source, ol.pos)
+            diagnostics.add(Diagnostic(
+                message = "This expression is not constructable.",
+                category = DiagnosticCategory.Error, code = 2351,
+                fileName = fileName, line = line, character = character,
+                start = ol.pos, length = length,
+                messageChain = listOf("  Type '{}' has no construct signatures."),
+            ))
+            return
+        }
         val calleeType = getCalleeType(expr.expression)
         if (calleeType === anyType || calleeType === errorType) return
+        // intTypeCheck: `new <var>` (no argument list) where the var's annotated type is a
+        // PURE user interface. tsc resolveNewExpression: construct sigs (own or inherited —
+        // resolveStructuredTypeMembers merges base sigs) → constructable, nothing; else call
+        // sigs whose resolved return isn't `void` → TS2350 "Only a void function can be
+        // called with the 'new' keyword." at the whole `new x` (noImplicitAny OFF only —
+        // under noImplicitAny tsc reports TS7009 instead); else → TS2351 at the CALLEE with
+        // "Type 'X' has no construct signatures.". Gated to arguments == null (the
+        // with-parens path is owned by the 17.170 branch below).
+        if (expr.arguments == null && expr.expression is Identifier) {
+            val ce = expr.expression as Identifier
+            val sym = currentFileLocals?.get(ce.text) ?: globals[ce.text]
+            val isVarOnly = sym != null && sym.flags.hasAny(SymbolFlags.Variable) &&
+                !sym.flags.hasAny(SymbolFlags.Class or SymbolFlags.Function or SymbolFlags.Module or SymbolFlags.Enum or SymbolFlags.Alias)
+            val ti = calleeType as? Type.Interface
+            if (isVarOnly && ti != null && ti.symbol != null &&
+                ti.symbol!!.flags.hasAny(SymbolFlags.Interface) && !ti.symbol!!.flags.hasAny(SymbolFlags.Class) &&
+                ti.symbol!!.declarations.none { it in builtinLibDecls }) {
+                resolveStructuredTypeMembers(ti)
+                val ctorSigs = ti.constructSignatures ?: emptyList()
+                if (ctorSigs.isEmpty()) {
+                    val callSigs = ti.callSignatures ?: emptyList()
+                    if (callSigs.isNotEmpty()) {
+                        if (!options.noImplicitAny && !options.strict) {
+                            val resolved = callSigs.firstOrNull { it.minArgumentCount == 0 } ?: callSigs.first()
+                            val ret = resolved.resolvedReturnType
+                            if (ret !== voidType) {
+                                val end = expressionTrueEnd(ce)
+                                val (line, character) = getLineAndCharacterOfPosition(source, expr.pos)
+                                diagnostics.add(Diagnostic(
+                                    message = "Only a void function can be called with the 'new' keyword.",
+                                    category = DiagnosticCategory.Error, code = 2350,
+                                    fileName = fileName, line = line, character = character,
+                                    start = expr.pos, length = end - expr.pos,
+                                ))
+                                return
+                            }
+                        }
+                    } else {
+                        val typeName = ti.symbol?.name ?: typeToString(ti)
+                        val (line, character) = getLineAndCharacterOfPosition(source, ce.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "This expression is not constructable.",
+                            category = DiagnosticCategory.Error, code = 2351,
+                            fileName = fileName, line = line, character = character,
+                            start = ce.pos, length = ce.text.length,
+                            messageChain = listOf("  Type '$typeName' has no construct signatures."),
+                        ))
+                        return
+                    }
+                }
+            }
+        }
         // B60.15: union callee for `new` — mirror of B60.14 for TS2349 with three cases:
         //   (a) all constituents non-constructable → "No constituent ... is constructable."
         //   (b) some non-constructable → "Not all constituents ... are constructable." + first missing display
@@ -120929,7 +121133,15 @@ interface DataView {
         // appropriate. The `any`-skip remains for nominal sources to avoid FPs
         // (cf. `assignmentCompatability36_ts`).
         val isFunctionShaped = !source.callSignatures.isNullOrEmpty() && source.members.isNullOrEmpty()
-        if (isNominalSource || isFunctionShaped) {
+        // tsc indexSignaturesRelatedTo: when the TARGET has a STRING index signature whose
+        // value type is `any`, EVERY non-primitive source passes ALL index checks
+        // (`!sourceIsPrimitive && targetHasStringIndex && targetInfo.type.flags & Any →
+        // Ternary.True`, applied per target info). A number-only `[n: number]: any` target
+        // (ArrayLike<any>) has NO string index → the function-shaped check below still
+        // fires. (intTypeCheck: `var obj39: i4 = function(){}` where i4's `[p1: string];`
+        // value defaults to `any` → NO error.)
+        val anyStringIndexSkip = target.stringIndexInfo?.type?.flags?.hasAny(TypeFlags.Any) == true
+        if ((isNominalSource || isFunctionShaped) && !anyStringIndexSkip) {
             val tgtStr = target.stringIndexInfo
             if (tgtStr != null && source.stringIndexInfo == null &&
                 (isFunctionShaped || !tgtStr.type.flags.hasAny(TypeFlags.Any or TypeFlags.Unknown))) {
@@ -123659,6 +123871,28 @@ interface DataView {
             if (!d1 && !d2) return true
         }
         return false
+    }
+
+    /**
+     * intTypeCheck: multi-signature targets — [getFunctionMismatchElaboration] compares
+     * source.first() vs target.first() only, but tsc elaborates the FIRST FAILING target
+     * signature (`() => void` vs `i6`'s inherited `(): number` → "Type 'void' is not
+     * assignable to type 'number'."). When the first-vs-first elaboration is empty and the
+     * target has more signatures, retry each remaining target sig via a shallow wrapper.
+     */
+    private fun getFunctionMismatchElaborationMultiSig(
+        source: Type.Object, target: Type.Object
+    ): List<String> {
+        val direct = getFunctionMismatchElaboration(source, target)
+        if (direct.isNotEmpty()) return direct
+        val tsigs = target.callSignatures ?: return emptyList()
+        for (i in 1 until tsigs.size) {
+            val wrapper = Type.Object()
+            wrapper.callSignatures = listOf(tsigs[i])
+            val elab = getFunctionMismatchElaboration(source, wrapper)
+            if (elab.isNotEmpty()) return elab
+        }
+        return emptyList()
     }
 
     private fun getFunctionMismatchElaboration(
