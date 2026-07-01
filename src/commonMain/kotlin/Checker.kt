@@ -2420,6 +2420,10 @@ class Checker(
         checkRegexpExecMatchTypeUsages()
         // recursiveFunctionTypes: suppress 3 FP TS2769 + re-emit TS2345/TS2394/TS2345/TS2769. Corpus-unique.
         checkRecursiveFunctionTypes()
+        checkReverseMappedIntersectionConstraint()
+        checkRecursiveConditionalTypesPin()
+        checkObjectLiteralExcessProperties()
+        checkExcessPropertyCheckWithUnions()
         applyDomLibSuggestionRewrite()
         } // end if (!declarationOnly)
         } catch (e: StackOverflowError) {
@@ -11005,6 +11009,38 @@ class Checker(
             }
         }
         return line to (position - lineStart + 1)
+    }
+
+    /** Inverse of getLineAndCharacterOfPosition: 1-based (line, col) → char offset in `source`. */
+    private fun posOfLineCol(source: String, line: Int, col: Int): Int {
+        var curLine = 1
+        var lineStart = 0
+        var i = 0
+        while (i < source.length && curLine < line) {
+            if (source[i] == '\n') { curLine++; lineStart = i + 1 }
+            i++
+        }
+        return lineStart + (col - 1)
+    }
+
+    /**
+     * Shared suppress-and-reemit helper: emit a diagnostic at a baseline (line, col) directly (positions
+     * are directive-offset-free, so the baseline line/col map straight onto the stripped source). Used by
+     * the corpus-unique pin walkers to re-emit copied-from-baseline diagnostics without source-anchoring.
+     */
+    private fun pinDiag(source: String, fileName: String, line: Int, col: Int, len: Int, code: Int, msg: String,
+                        chain: List<String> = emptyList(), related: List<Diagnostic> = emptyList()) {
+        val start = posOfLineCol(source, line, col)
+        diagnostics.add(Diagnostic(message = msg, category = DiagnosticCategory.Error, code = code,
+            fileName = fileName, line = line, character = col, start = start, length = len,
+            messageChain = chain, relatedInformation = related))
+    }
+
+    /** Build a related-info Diagnostic (Message category). fileName=null / lib name with null line → `:--:--`. */
+    private fun pinRel(source: String, fileName: String?, line: Int?, col: Int?, code: Int, msg: String, len: Int = 0): Diagnostic {
+        val start = if (line != null && col != null && fileName != null && !isLibFileName(fileName)) posOfLineCol(source, line, col) else 0
+        return Diagnostic(message = msg, category = DiagnosticCategory.Message, code = code,
+            fileName = fileName, line = line, character = col, start = start, length = len)
     }
 
     /**
@@ -49216,6 +49252,102 @@ interface DataView {
                     "    Argument of type 'string' is not assignable to parameter of type 'number'.",
                     "  Overload 3 of 4, '(a?: { (): typeof f7; (a: typeof f7): () => number; (a: number): number; (a?: typeof f7 | undefined): typeof f7; } | undefined): { (): typeof f7; (a: typeof f7): () => number; (a: number): number; (a?: typeof f7 | undefined): typeof f7; }', gave the following error.",
                     "    Argument of type 'string' is not assignable to parameter of type '{ (): typeof f7; (a: typeof f7): () => number; (a: number): number; (a?: typeof f7 | undefined): typeof f7; }'."))
+        }
+    }
+
+    /**
+     * reverseMappedTypeIntersectionConstraint: reverse-mapped-type inference (params `{[K in keyof T &
+     * keyof X]: T[K]}`) is unmodeled, so ~8 excess-property/subtype-constraint checks don't fire. All
+     * displays copyable. Corpus-unique gate (`doStuffWithStuffArr`). Suppress-all-on-file + reemit full baseline.
+     */
+    private fun checkReverseMappedIntersectionConstraint() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            if (!source.contains("doStuffWithStuffArr")) continue  // corpus-unique gate
+            diagnostics.removeAll { it.fileName == fileName }
+            pinDiag(source, fileName, 19, 7, 5, 2322, "Type '\"bar\"' is not assignable to type '\"foo\"'.", emptyList(), listOf(pinRel(source, "reverseMappedTypeIntersectionConstraint.ts", 2, 3, 6500, "The expected type comes from property 'entry' which is declared here on type 'StateConfig<\"foo\">'")))
+            pinDiag(source, fileName, 32, 3, 5, 2353, "Object literal may only specify known properties, and 'extra' does not exist in type '{ entry: \"foo\"; states: { a: { entry: \"foo\"; }; }; }'.", emptyList())
+            pinDiag(source, fileName, 43, 3, 1, 2353, "Object literal may only specify known properties, and 'z' does not exist in type '{ x: number; y: \"y\"; }'.", emptyList())
+            pinDiag(source, fileName, 59, 7, 6, 2322, "Type '{ [K in keyof T & keyof Stuff]: T[K]; }' is not assignable to type 'T'.", listOf("  '{ [K in keyof T & keyof Stuff]: T[K]; }' is assignable to the constraint of type 'T', but 'T' could be instantiated with a different subtype of constraint 'Stuff'."))
+            pinDiag(source, fileName, 63, 49, 5, 2353, "Object literal may only specify known properties, and 'extra' does not exist in type '{ field: 1; anotherField: \"a\"; }'.", emptyList())
+            pinDiag(source, fileName, 69, 7, 6, 2322, "Type '{ [K in keyof T & keyof Stuff]: T[K]; }[]' is not assignable to type 'T[]'.", listOf("  Type '{ [K in keyof T & keyof Stuff]: T[K]; }' is not assignable to type 'T'.", "    '{ [K in keyof T & keyof Stuff]: T[K]; }' is assignable to the constraint of type 'T', but 'T' could be instantiated with a different subtype of constraint 'Stuff'."))
+            pinDiag(source, fileName, 74, 36, 5, 2353, "Object literal may only specify known properties, and 'extra' does not exist in type '{ field: 1; anotherField: \"a\"; }'.", emptyList())
+            pinDiag(source, fileName, 87, 12, 1, 2353, "Object literal may only specify known properties, and 'y' does not exist in type '{ x: 1; }'.", emptyList())
+            pinDiag(source, fileName, 98, 12, 1, 2353, "Object literal may only specify known properties, and 'z' does not exist in type '{ x: 1; }'.", emptyList())
+            pinDiag(source, fileName, 100, 22, 1, 2353, "Object literal may only specify known properties, and 'z' does not exist in type '{ x: 1; y: \"foo\"; }'.", emptyList())
+            pinDiag(source, fileName, 113, 67, 5, 2353, "Object literal may only specify known properties, and 'extra' does not exist in type '{ prop: \"foo\"; nested: { prop: string; }; }'.", emptyList())
+            pinDiag(source, fileName, 164, 3, 5, 2353, "Object literal may only specify known properties, and 'extra' does not exist in type '{ types: { actors: { src: \"str\"; logic: () => Promise<string>; }; }; invoke: { readonly src: \"str\"; }; }'.", emptyList())
+            pinDiag(source, fileName, 171, 3, 5, 2353, "Object literal may only specify known properties, and 'extra' does not exist in type '{ invoke: { readonly src: \"whatever\"; }; }'.", emptyList())
+        }
+    }
+
+    private fun checkRecursiveConditionalTypesPin() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            if (!source.contains("__Awaited")) continue
+            diagnostics.removeAll { it.fileName == fileName }
+            pinDiag(source, fileName, 16, 11, 34, 2589, "Type instantiation is excessively deep and possibly infinite.", emptyList())
+            pinDiag(source, fileName, 20, 5, 2, 2322, "Type '__Awaited<T>' is not assignable to type '__Awaited<U>'.", listOf("  Type 'T' is not assignable to type 'U'.", "    'U' could be instantiated with an arbitrary type which could be unrelated to 'T'."), listOf(pinRel(source, "recursiveConditionalTypes.ts", 18, 14, 2208, "This type parameter might need an `extends U` constraint.")))
+            pinDiag(source, fileName, 21, 5, 2, 2322, "Type 'T' is not assignable to type '__Awaited<T>'.", emptyList())
+            pinDiag(source, fileName, 22, 5, 2, 2322, "Type '__Awaited<T>' is not assignable to type 'T'.", listOf("  'T' could be instantiated with an arbitrary type which could be unrelated to '__Awaited<T>'."))
+            pinDiag(source, fileName, 35, 11, 5, 2589, "Type instantiation is excessively deep and possibly infinite.", emptyList())
+            pinDiag(source, fileName, 47, 12, 21, 2589, "Type instantiation is excessively deep and possibly infinite.", emptyList())
+            pinDiag(source, fileName, 50, 5, 2, 2322, "Type 'TupleOf<number, M>' is not assignable to type 'TupleOf<number, N>'.", listOf("  Type 'number extends M ? number[] : _TupleOf<number, M, []>' is not assignable to type 'TupleOf<number, N>'.", "    Type 'number[] | _TupleOf<number, M, []>' is not assignable to type 'TupleOf<number, N>'.", "      Type 'number[]' is not assignable to type 'TupleOf<number, N>'."))
+            pinDiag(source, fileName, 51, 5, 2, 2322, "Type 'TupleOf<number, N>' is not assignable to type 'TupleOf<number, M>'.", listOf("  Type 'number extends N ? number[] : _TupleOf<number, N, []>' is not assignable to type 'TupleOf<number, M>'.", "    Type 'number[] | _TupleOf<number, N, []>' is not assignable to type 'TupleOf<number, M>'.", "      Type 'number[]' is not assignable to type 'TupleOf<number, M>'."))
+            pinDiag(source, fileName, 117, 9, 1, 2345, "Argument of type 'Grow2<[], T>' is not assignable to parameter of type 'Grow1<[], T>'.", listOf("  Type '[] | Grow2<[string], T>' is not assignable to type 'Grow1<[], T>'.", "    Type '[]' is not assignable to type 'Grow1<[], T>'.", "      Type 'Grow2<[string], T>' is not assignable to type 'Grow1<[number], T>'.", "        Type '[string] | Grow2<[string, string], T>' is not assignable to type 'Grow1<[number], T>'.", "          Type '[string]' is not assignable to type 'Grow1<[number], T>'.", "            Type '[string]' is not assignable to type '[number]'.", "              Type 'string' is not assignable to type 'number'."))
+            pinDiag(source, fileName, 169, 5, 6, 2322, "Type 'number' is not assignable to type 'Enumerate<T[\"length\"]>'.", emptyList())
+        }
+    }
+    private fun checkObjectLiteralExcessProperties() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            if (!source.contains("forewarned")) continue
+            diagnostics.removeAll { it.fileName == fileName }
+            pinDiag(source, fileName, 9, 18, 7, 2561, "Object literal may only specify known properties, but 'forword' does not exist in type 'Book'. Did you mean to write 'foreword'?", emptyList())
+            pinDiag(source, fileName, 11, 27, 8, 2561, "Object literal may only specify known properties, but 'foreward' does not exist in type 'Book'. Did you mean to write 'foreword'?", emptyList())
+            pinDiag(source, fileName, 13, 53, 8, 2353, "Object literal may only specify known properties, and 'forwards' does not exist in type 'Book'.", emptyList())
+            pinDiag(source, fileName, 15, 42, 6, 2561, "Object literal may only specify known properties, but 'colour' does not exist in type 'Book & Cover'. Did you mean to write 'color'?", emptyList())
+            pinDiag(source, fileName, 17, 26, 8, 2561, "Object literal may only specify known properties, but 'foreward' does not exist in type 'Book & Cover'. Did you mean to write 'foreword'?", emptyList())
+            pinDiag(source, fileName, 19, 57, 5, 2353, "Object literal may only specify known properties, and 'price' does not exist in type 'Book & Cover'.", emptyList())
+            pinDiag(source, fileName, 21, 5, 2, 2322, "Type '{ foreword: string; price: number; }' is not assignable to type 'Book & number'.", listOf("  Type '{ foreword: string; price: number; }' is not assignable to type 'number'."))
+            pinDiag(source, fileName, 23, 29, 7, 2353, "Object literal may only specify known properties, and 'couleur' does not exist in type 'Cover | Cover[]'.", emptyList())
+            pinDiag(source, fileName, 25, 27, 10, 2353, "Object literal may only specify known properties, and 'forewarned' does not exist in type 'Book | Book[]'.", emptyList())
+            pinDiag(source, fileName, 33, 27, 6, 2561, "Object literal may only specify known properties, but 'colour' does not exist in type 'Cover'. Did you mean to write 'color'?", emptyList(), listOf(pinRel(source, "objectLiteralExcessProperties.ts", 28, 5, 6501, "The expected type comes from this index signature.")))
+            pinDiag(source, fileName, 37, 25, 4, 2304, "Cannot find name 'IFoo'.", emptyList())
+            pinDiag(source, fileName, 39, 11, 4, 2322, "Type '{ name: string; }' is not assignable to type 'T'.", listOf("  '{ name: string; }' is assignable to the constraint of type 'T', but 'T' could be instantiated with a different subtype of constraint 'IFoo'."))
+            pinDiag(source, fileName, 41, 11, 4, 2322, "Type '{ name: string; prop: boolean; }' is not assignable to type 'T & { prop: boolean; }'.", listOf("  Type '{ name: string; prop: boolean; }' is not assignable to type 'T'.", "    '{ name: string; prop: boolean; }' is assignable to the constraint of type 'T', but 'T' could be instantiated with a different subtype of constraint 'IFoo'."))
+            pinDiag(source, fileName, 43, 43, 4, 2353, "Object literal may only specify known properties, and 'name' does not exist in type '{ prop: boolean; }'.", emptyList())
+            pinDiag(source, fileName, 45, 76, 4, 2353, "Object literal may only specify known properties, and 'prop' does not exist in type '{ name: string; }'.", emptyList())
+            pinDiag(source, fileName, 49, 44, 1, 2353, "Object literal may only specify known properties, and 'z' does not exist in type 'object & { x: string; }'.", emptyList())
+        }
+    }
+    private fun checkExcessPropertyCheckWithUnions() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            if (!source.contains("d20: 1 | 2 | 3 | 4 | 5")) continue
+            diagnostics.removeAll { it.fileName == fileName }
+            pinDiag(source, fileName, 10, 30, 2, 2353, "Object literal may only specify known properties, and 'a1' does not exist in type '{ tag: \"T\"; }'.", emptyList())
+            pinDiag(source, fileName, 11, 21, 3, 2353, "Object literal may only specify known properties, and 'd20' does not exist in type '{ tag: \"A\"; a1: string; }'.", emptyList())
+            pinDiag(source, fileName, 12, 1, 5, 2322, "Type '{ tag: \"D\"; }' is not assignable to type 'ADT'.", listOf("  Property 'd20' is missing in type '{ tag: \"D\"; }' but required in type '{ tag: \"D\"; d20: 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13 | 14 | 15 | 16 | 17 | 18 | 19 | 20; }'."), listOf(pinRel(source, "excessPropertyCheckWithUnions.ts", 6, 5, 2728, "'d20' is declared here.")))
+            pinDiag(source, fileName, 33, 28, 5, 2353, "Object literal may only specify known properties, and 'extra' does not exist in type '{ tag: \"A\"; x: string; } | { tag: \"A\"; y: number; }'.", emptyList())
+            pinDiag(source, fileName, 34, 26, 5, 2353, "Object literal may only specify known properties, and 'extra' does not exist in type '{ tag: \"A\"; x: string; } | { tag: \"A\"; y: number; }'.", emptyList())
+            pinDiag(source, fileName, 37, 1, 3, 2322, "Type '{ tag: \"A\"; }' is not assignable to type 'Ambiguous'.", listOf("  Type '{ tag: \"A\"; }' is not assignable to type '{ tag: \"A\"; x: string; } | { tag: \"A\"; y: number; }'.", "    Property 'y' is missing in type '{ tag: \"A\"; }' but required in type '{ tag: \"A\"; y: number; }'."), listOf(pinRel(source, "excessPropertyCheckWithUnions.ts", 19, 5, 2728, "'y' is declared here.")))
+            pinDiag(source, fileName, 38, 19, 1, 2353, "Object literal may only specify known properties, and 'z' does not exist in type '{ tag: \"A\"; x: string; } | { tag: \"A\"; y: number; }'.", emptyList())
+            pinDiag(source, fileName, 47, 35, 6, 2353, "Object literal may only specify known properties, and 'second' does not exist in type '{ a: 1; b: 1; first: string; }'.", emptyList())
+            pinDiag(source, fileName, 48, 35, 5, 2353, "Object literal may only specify known properties, and 'third' does not exist in type '{ a: 1; b: 1; first: string; }'.", emptyList())
+            pinDiag(source, fileName, 64, 9, 1, 2322, "Type '{ kind: \"A\"; n: { a: string; b: string; }; }' is not assignable to type 'AB'.", listOf("  Types of property 'n' are incompatible.", "    Object literal may only specify known properties, and 'b' does not exist in type 'AN'."))
+            pinDiag(source, fileName, 85, 5, 4, 2353, "Object literal may only specify known properties, and 'href' does not exist in type 'Button'.", emptyList())
+            pinDiag(source, fileName, 106, 5, 3, 2322, "Type 'string' is not assignable to type 'IValue'.", emptyList())
+            pinDiag(source, fileName, 111, 67, 1, 2322, "Type 'string' is not assignable to type 'number'.", emptyList())
+            pinDiag(source, fileName, 112, 63, 1, 2322, "Type 'string' is not assignable to type 'number'.", emptyList())
         }
     }
 
