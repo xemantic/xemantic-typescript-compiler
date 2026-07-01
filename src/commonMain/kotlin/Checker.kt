@@ -3148,7 +3148,20 @@ class Checker(
      * Check if an ambient external module (declare module "X") exports only types.
      * Searches all files for matching `declare module` blocks and checks their exports.
      */
-    private fun isAmbientModuleTypeOnly(moduleName: String): Boolean {
+    /**
+     * Like [isTypeOnlyImportRequire] but for a NAMESPACE import (`import * as y from "X"`).
+     * A body-less `declare module "X";` is an UNTYPED (`any`) runtime module, so its namespace
+     * import must be KEPT (esModuleInteropTslibHelpers: `import * as path from "path"`), whereas
+     * an `export = <type-only>` ambient module is genuinely type-only and elided
+     * (es6ExportEqualsInterop: `import * as y1 from "interface"`).
+     */
+    fun isTypeOnlyNamespaceImportModule(moduleSpecifier: String, sourceFileName: String): Boolean {
+        val targetFile = resolveModuleSpecifier(moduleSpecifier, null)
+        if (targetFile != null) return isTypeOnlyImportRequire(moduleSpecifier, sourceFileName)
+        return isAmbientModuleTypeOnly(moduleSpecifier, emptyModuleIsTypeOnly = false)
+    }
+
+    private fun isAmbientModuleTypeOnly(moduleName: String, emptyModuleIsTypeOnly: Boolean = true): Boolean {
         for (result in binderResults) {
             // Skip files that are themselves modules (have imports/exports).
             // In module files, `declare module "X"` is an augmentation, not a definition.
@@ -3164,8 +3177,10 @@ class Checker(
                     if (body is ModuleBlock) {
                         return isModuleBlockTypeOnly(body)
                     }
-                    // No body — treat as type-only (empty ambient module)
-                    return true
+                    // No body — an empty ambient module. Type-only for import=require elision,
+                    // but a body-less `declare module "X";` is an untyped runtime module for a
+                    // namespace import (see isTypeOnlyNamespaceImportModule).
+                    return emptyModuleIsTypeOnly
                 }
             }
         }

@@ -1489,6 +1489,15 @@ class Transformer(
             it !is ImportDeclaration && it !is ImportEqualsDeclaration
         }
         val valueReferencedNames = collectValueReferences(nonImportOriginalStmts)
+        // A default import can also be referenced by an import-equals ENTITY-NAME module
+        // reference (`import fooBar from "foobar"; import X = fooBar.X`) — those declarations
+        // are excluded from `nonImportOriginalStmts`, so collect their leftmost roots here.
+        // Without this, a default import used only by an import-equals looks unused
+        // (exportDefaultProperty).
+        val importEqualsReferencedNames = originalSourceFile.statements
+            .filterIsInstance<ImportEqualsDeclaration>()
+            .mapNotNull { namespaceAliasRoot(it.moduleReference) }
+            .toSet()
 
         // Pre-scan original source for exported namespace/enum names. Their var declarations
         // have no export modifier in the transformed code (it was stripped during namespace/enum
@@ -2193,6 +2202,21 @@ class Transformer(
                             // esModuleInterop: const bar_1 = __importDefault(require("./b")); d → bar_1.default
                             // no esModuleInterop: const bar_1 = require("./b"); d → bar_1.default
                             val localName = clause.name.text
+                            // An UNUSED default import is elided entirely (tsc: a default binding
+                            // is not a side-effect import). Elide BEFORE allocating the module temp
+                            // so the generated-name counter (`mod_N`) is not consumed by an import
+                            // that never reaches the output — matching tsc's print-time naming
+                            // (es6ExportEqualsInterop: unused `import x1 from "interface"` must not
+                            // push the later `require("interface")` temp from `interface_1` to `_2`).
+                            // Mirrors the default+namespace / default+named branches below, plus the
+                            // import-equals reference set (exportDefaultProperty: `import X = fooBar.X`).
+                            // Under emitDecoratorMetadata a TYPE-position use (`db: database`) becomes
+                            // a runtime `__metadata("design:type", db_1.default)` reference that
+                            // collectValueReferences cannot see, so the import must be kept there
+                            // (decoratorMetadataWithImportDeclarationNameCollision6). Keeping it also
+                            // matches the prior always-emit-then-elide behavior for that mode.
+                            if (!options.emitDecoratorMetadata &&
+                                localName !in valueReferencedNames && localName !in importEqualsReferencedNames) continue
                             val tempName = generateModuleTempName(moduleSpecifier, moduleNameCounter)
                             if (options.esModuleInterop) {
                                 needsImportDefault = true
@@ -2279,8 +2303,18 @@ class Transformer(
                             // NOT under isolatedModules: per-file emit can't prove a module's
                             // exports are type-only there, so tsc keeps the require (the existing
                             // isolatedModules branch below relies on this — isolatedModulesReExportType).
+                            // `isTypeOnlyNamespaceImportModule` additionally covers an
+                            // `export = <type-only>` ambient module (`declare module "interface"
+                            // { interface Foo; export = Foo }`) that `moduleHasOnlyTypeOnlyExports`
+                            // deliberately treats as uncertain — the whole namespace is type-only,
+                            // so tsc elides the require but keeps dangling value uses (`y1.a`).
+                            // es6ExportEqualsInterop. (A body-less `declare module "path";` is an
+                            // untyped runtime module and is NOT elided — esModuleInteropTslibHelpers.)
                             if (!options.isolatedModules &&
-                                (moduleSpecifier as? StringLiteralNode)?.text?.let { checker?.moduleHasOnlyTypeOnlyExports(it, currentFileName) } == true) continue
+                                (moduleSpecifier as? StringLiteralNode)?.text?.let {
+                                    checker?.moduleHasOnlyTypeOnlyExports(it, currentFileName) == true ||
+                                        checker?.isTypeOnlyNamespaceImportModule(it, currentFileName) == true
+                                } == true) continue
                             if (options.esModuleInterop) {
                                 needsImportStar = true
                                 result.add(makeImportHelperConst(localName, "__importStar", moduleSpecifier, stmt.leadingComments, sourcePos = stmt.pos, sourceEnd = stmt.end))
@@ -8255,7 +8289,25 @@ class Transformer(
                     } else result
                 } else result
             }
-            is ImportEqualsDeclaration -> transformImportEqualsDeclaration(statement)
+            is ImportEqualsDeclaration -> {
+                val result = transformImportEqualsDeclaration(statement)
+                // When a type-only `import x = require("mod")` is erased, preserve DETACHED
+                // (blank-line-separated) leading comments — including a file-top
+                // `/// <reference path="…"/>` — exactly the way the ImportDeclaration case does.
+                // A comment DIRECTLY adjacent to the import (no blank line) is dropped with it,
+                // matching tsc (es6ExportEqualsInterop keeps the blank-line-separated reference;
+                // aliasOnMergedModuleInterface drops the adjacent one).
+                if (result.isEmpty()) {
+                    val stmtPos = statement.pos.coerceIn(0, sourceText.length)
+                    val detachedComments = statement.leadingComments?.filter { c ->
+                        c.end in 0..stmtPos &&
+                            sourceText.substring(c.end, stmtPos).count { it == '\n' } >= 2
+                    }
+                    if (!detachedComments.isNullOrEmpty()) {
+                        listOf(NotEmittedStatement(leadingComments = detachedComments, pos = statement.pos, end = statement.pos))
+                    } else result
+                } else result
+            }
             is ExportDeclaration -> transformExportDeclaration(statement)
             is ExportAssignment -> transformExportAssignment(statement)
 
