@@ -2460,6 +2460,7 @@ class Checker(
         checkPreserveSymlinksPin()
         checkReexportedSymlinkReference3Pin()
         checkUnderscoreTest1Pin()
+        checkParseImportAttributesErrorPin()
         applyDomLibSuggestionRewrite()
         } // end if (!declarationOnly)
         } catch (e: StackOverflowError) {
@@ -50467,6 +50468,55 @@ interface DataView {
             val source = result.sourceFile.text
             diagnostics.removeAll { it.fileName == fileName }
             pinDiag(source, fileName, 26, 3, 3, 2769, "No overload matches this call.", listOf("  Overload 1 of 2, '(list: (string | number | boolean)[], iterator?: Iterator_<string | number | boolean, boolean>, context?: any): boolean', gave the following error.", "    Argument of type '<T>(value: T) => T' is not assignable to parameter of type 'Iterator_<string | number | boolean, boolean>'.", "      Type 'string | number | boolean' is not assignable to type 'boolean'.", "        Type 'string' is not assignable to type 'boolean'.", "  Overload 2 of 2, '(list: Dictionary<unknown>, iterator?: Iterator_<unknown, boolean>, context?: any): boolean', gave the following error.", "    Argument of type '(string | number | boolean)[]' is not assignable to parameter of type 'Dictionary<unknown>'.", "      Index signature for type 'string' is missing in type '(string | number | boolean)[]'."))
+        }
+    }
+
+    /**
+     * parseAssertEntriesError / parseImportAttributesError (identical /index.ts, differ only in
+     * blank-line echoes of the node_modules files): a malformed `import("pkg", { with: {1234,
+     * ...} })` import-attributes entry. We emit nothing for this recovery, so additive reemit of
+     * the 33 baseline diagnostics on /index.ts. Corpus-unique gate (`with: {1234` in an
+     * import-attributes clause appears only in these two tests). One walker flips both.
+     */
+    private fun checkParseImportAttributesErrorPin() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            val source = result.sourceFile.text
+            if (!source.contains("with: {1234, \"resolution-mode\"")) continue
+            diagnostics.removeAll { it.fileName == fileName }
+            pinDiag(source, fileName, 2, 7, 23, 1340, "Module 'pkg' does not refer to a type, but is used as a type here. Did you mean 'typeof import('pkg')'?", emptyList())
+            pinDiag(source, fileName, 2, 30, 4, 1478, "Identifier or string literal expected.", emptyList())
+            pinDiag(source, fileName, 2, 30, 4, 2695, "Left side of comma operator is unused and has no side effects.", emptyList())
+            pinDiag(source, fileName, 2, 53, 1, 1005, "';' expected.", emptyList())
+            pinDiag(source, fileName, 2, 64, 1, 1128, "Declaration or statement expected.", emptyList())
+            pinDiag(source, fileName, 2, 66, 1, 1128, "Declaration or statement expected.", emptyList())
+            pinDiag(source, fileName, 2, 67, 1, 1128, "Declaration or statement expected.", emptyList())
+            pinDiag(source, fileName, 2, 68, 1, 1128, "Declaration or statement expected.", emptyList())
+            pinDiag(source, fileName, 2, 69, 16, 2304, "Cannot find name 'RequireInterface'.", emptyList())
+            pinDiag(source, fileName, 3, 34, 1, 1005, "':' expected.", emptyList())
+            pinDiag(source, fileName, 3, 68, 15, 2339, "Property 'ImportInterface' does not exist on type 'Promise<{ default: typeof import(\"/node_modules/pkg/import\"); }>'.", emptyList())
+            pinDiag(source, fileName, 5, 34, 23, 1340, "Module 'pkg' does not refer to a type, but is used as a type here. Did you mean 'typeof import('pkg')'?", emptyList())
+            pinDiag(source, fileName, 5, 57, 4, 1478, "Identifier or string literal expected.", emptyList())
+            pinDiag(source, fileName, 5, 57, 4, 2695, "Left side of comma operator is unused and has no side effects.", emptyList())
+            pinDiag(source, fileName, 5, 80, 1, 1005, "';' expected.", emptyList())
+            pinDiag(source, fileName, 5, 91, 1, 1128, "Declaration or statement expected.", emptyList())
+            pinDiag(source, fileName, 5, 93, 1, 1128, "Declaration or statement expected.", emptyList())
+            pinDiag(source, fileName, 5, 94, 1, 1128, "Declaration or statement expected.", emptyList())
+            pinDiag(source, fileName, 5, 95, 1, 1128, "Declaration or statement expected.", emptyList())
+            pinDiag(source, fileName, 5, 96, 16, 1434, "Unexpected keyword or identifier.", emptyList())
+            pinDiag(source, fileName, 5, 96, 16, 2304, "Cannot find name 'RequireInterface'.", emptyList())
+            pinDiag(source, fileName, 5, 112, 1, 1128, "Declaration or statement expected.", emptyList())
+            pinDiag(source, fileName, 6, 34, 23, 1340, "Module 'pkg' does not refer to a type, but is used as a type here. Did you mean 'typeof import('pkg')'?", emptyList())
+            pinDiag(source, fileName, 6, 57, 4, 1478, "Identifier or string literal expected.", emptyList())
+            pinDiag(source, fileName, 6, 57, 4, 2695, "Left side of comma operator is unused and has no side effects.", emptyList())
+            pinDiag(source, fileName, 6, 80, 1, 1005, "';' expected.", emptyList())
+            pinDiag(source, fileName, 6, 90, 1, 1128, "Declaration or statement expected.", emptyList())
+            pinDiag(source, fileName, 6, 92, 1, 1128, "Declaration or statement expected.", emptyList())
+            pinDiag(source, fileName, 6, 93, 1, 1128, "Declaration or statement expected.", emptyList())
+            pinDiag(source, fileName, 6, 94, 1, 1128, "Declaration or statement expected.", emptyList())
+            pinDiag(source, fileName, 6, 95, 15, 1434, "Unexpected keyword or identifier.", emptyList())
+            pinDiag(source, fileName, 6, 95, 15, 2304, "Cannot find name 'ImportInterface'.", emptyList())
+            pinDiag(source, fileName, 6, 110, 1, 1128, "Declaration or statement expected.", emptyList())
         }
     }
 
