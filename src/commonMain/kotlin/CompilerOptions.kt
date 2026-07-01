@@ -95,6 +95,8 @@ data class CompilerOptions(
     /** True when `// @strict: false` was explicitly set (not just defaulting to false). */
     val strictExplicitlyFalse: Boolean = false,
     val noEmit: Boolean = false,
+    /** Emit a UTF-8 byte order mark at the start of js/d.ts outputs. */
+    val emitBOM: Boolean = false,
     val noEmitHelpers: Boolean = false,
     val declaration: Boolean = false,
     val declarationMap: Boolean = false,
@@ -563,6 +565,7 @@ internal fun applyDirective(options: CompilerOptions, key: String, value: String
 
         "strict" -> options.copy(strict = boolValue, strictExplicitlyFalse = !boolValue)
         "noemit" -> options.copy(noEmit = boolValue)
+        "emitbom" -> options.copy(emitBOM = boolValue)
         "noemithelpers" -> options.copy(noEmitHelpers = boolValue)
         "declaration" -> options.copy(declaration = boolValue)
         "declarationdir" -> options.copy(declarationDir = value.trim())

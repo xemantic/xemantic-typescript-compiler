@@ -36,7 +36,7 @@ fun CompilationResult.toBaseline(): String {
             sourceEchoes.first().second,
             jsOutputs.first().second,
             options.sourceMap, options.newLine, options.jsx, options.mapRoot, options.outFile,
-            options.inlineSourceMap, options.sourceRoot,
+            options.inlineSourceMap, options.sourceRoot, options.emitBOM,
         )
     }
     return formatMultiFileBaseline(
@@ -88,6 +88,7 @@ fun formatBaseline(
     outFile: String? = null,
     inlineSourceMap: Boolean = false,
     sourceRoot: String? = null,
+    emitBOM: Boolean = false,
 ): String = text {
     val baseName = fileName.substringAfterLast('/')
     val tsxExtension = if (jsx?.lowercase() == "preserve") ".jsx" else ".js"
@@ -101,6 +102,40 @@ fun formatBaseline(
 
     sourceEcho(fileName, cleanedSource)
     +"\r\n"
+    if (emitBOM) {
+        // tsc harness quirk for @emitBOM: the emitted js starts with a UTF-8 BOM whose
+        // bytes the harness re-reads as Latin-1 ("\u00EF\u00BB\u00BF") and re-scans —
+        // '\u00EF' is a valid identifier start, the other two are invalid characters —
+        // so the js section renders as an ERROR BASELINE of the output (two TS1127s at
+        // (1,2)/(1,3) + the ==== echo with squiggles) instead of the plain content.
+        val mojibake = "\u00EF\u00BB\u00BF"
+        val mapLine = if (sourceMap) "//# sourceMappingURL=${percentEncodeSourceMapUrl(jsName)}.map" else null
+        val bodyLines = toCRLF(javascript).trimEnd().split("\r\n") + listOfNotNull(mapLine)
+        +jsName
+        +"(1,2): error TS1127: Invalid character.\r\n"
+        +jsName
+        +"(1,3): error TS1127: Invalid character.\r\n"
+        +"\r\n\r\n"
+        +"==== "
+        +jsName
+        +" (2 errors) ====\r\n"
+        for ((i, line) in bodyLines.withIndex()) {
+            +"    "
+            if (i == 0) {
+                +mojibake
+                +line
+                +"\r\n"
+                +"     ~\r\n"
+                +"!!! error TS1127: Invalid character.\r\n"
+                +"      ~\r\n"
+                +"!!! error TS1127: Invalid character.\r\n"
+            } else {
+                +line
+                +"\r\n"
+            }
+        }
+        return@text
+    }
     +"//// ["
     +jsName
     +"]\r\n"
