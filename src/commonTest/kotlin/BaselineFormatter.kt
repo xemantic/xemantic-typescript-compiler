@@ -158,6 +158,15 @@ fun formatMultiFileBaseline(
     }
 
     +"\r\n"
+    // A bundled declaration-only outFile emit (all outputs are `.d.ts`, no `.js`) is separated
+    // from the source echoes by extra blank lines in tsc's baseline (the empty JS-output section
+    // still contributes separators). Only fires when every output is `.d.ts`, so JS tests are
+    // unaffected; the currently-passing sibling outFile-bundle tests have their `.d.ts` stripped
+    // (basename collides with a source) so these extra blanks become trailing and collapse.
+    if (jsOutputs.isNotEmpty() && jsOutputs.all { it.first.endsWith(".d.ts") }) {
+        +"\r\n"
+        +"\r\n"
+    }
 
     for ((index, entry) in jsOutputs.withIndex()) {
         val (jsName, javascript) = entry

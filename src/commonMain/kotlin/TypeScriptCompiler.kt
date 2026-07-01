@@ -1082,9 +1082,34 @@ class TypeScriptCompiler {
                     val checker = Checker(options, binderResults, isMultiFileSource = parsed.hasExplicitFilenames, declarationOnly = true)
                     diagnostics.addAll(checker.getDiagnostics())
                 }
+                // Bundled `.d.ts` output for `@outFile` + `@declaration`. Each module is wrapped
+                // in `declare module "<name>" { ... }`. Only compared when the bundled `.d.ts`'s
+                // basename doesn't collide with a source basename (else the harness strips it),
+                // so the currently-passing outFile-bundle tests are unaffected.
+                var declOutputs: List<Pair<String, String>> = emptyList()
+                if (options.outFile != null && (options.declaration || options.emitDeclarationOnly)) {
+                    val bundleFiles = parsedFiles.entries.mapNotNull { (fn, sf) ->
+                        val bn = fn.substringAfterLast('/')
+                        if (bn == "tsconfig.json" || bn == "package.json" || fn.endsWith(".json")) null
+                        else fn to sf
+                    }
+                    if (bundleFiles.isNotEmpty()) {
+                        val commonDir = DtsBundleEmitter.computeCommonDir(bundleFiles.map { it.first })
+                        val ordered = orderFilesForDtsBundle(bundleFiles)
+                        val dtsContent = DtsBundleEmitter(ordered, commonDir).emit()
+                        val of = options.outFile
+                        val dtsName = (when {
+                            of.endsWith(".d.ts") -> of
+                            of.endsWith(".js") -> of.removeSuffix(".js") + ".d.ts"
+                            else -> of.substringBeforeLast('.') + ".d.ts"
+                        }).substringAfterLast('/')
+                        declOutputs = listOf(dtsName to dtsContent)
+                    }
+                }
                 return CompilationResult(
                     fileName = fileName,
                     sourceEchoes = declSourceEchoes,
+                    jsOutputs = declOutputs,
                     isMultiFile = true,
                     options = options,
                     diagnostics = diagnostics,
@@ -2000,6 +2025,61 @@ class TypeScriptCompiler {
  * own format, not the consuming code's format. Only consumer-facing `package.json` files
  * (at the project root or sub-directories) affect emit.
  */
+/**
+ * Orders bundle files for a `.d.ts` outFile-bundle in dependency order (each file after the
+ * files it imports/exports-from), via a post-order DFS in @filename order — matching tsc's
+ * bundled-declaration emit order.
+ */
+private fun orderFilesForDtsBundle(files: List<Pair<String, SourceFile>>): List<Pair<String, SourceFile>> {
+    val byName = files.associate { it.first to it.second }
+    val fileSet = byName.keys
+    fun resolve(importer: String, spec: String): String? {
+        if (!spec.startsWith(".")) return null
+        val dir = importer.substringBeforeLast('/', "")
+        val joined = if (dir.isEmpty()) spec else "$dir/$spec"
+        val norm = normalizeRelPath(joined)
+        for (ext in listOf(".ts", ".tsx", ".d.ts", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs")) {
+            if ("$norm$ext" in fileSet) return "$norm$ext"
+        }
+        for (idx in listOf("/index.ts", "/index.tsx", "/index.d.ts", "/index.mts", "/index.cts")) {
+            if ("$norm$idx" in fileSet) return "$norm$idx"
+        }
+        return null
+    }
+    val deps = files.associate { (fn, sf) ->
+        fn to buildList {
+            for (stmt in sf.statements) {
+                val spec = when (stmt) {
+                    is ImportDeclaration -> (stmt.moduleSpecifier as? StringLiteralNode)?.text
+                    is ExportDeclaration -> (stmt.moduleSpecifier as? StringLiteralNode)?.text
+                    else -> null
+                }
+                if (spec != null) resolve(fn, spec)?.let { add(it) }
+            }
+        }
+    }
+    val result = mutableListOf<Pair<String, SourceFile>>()
+    val visited = mutableSetOf<String>()
+    fun visit(fn: String) {
+        if (fn in visited) return
+        visited.add(fn)
+        for (d in deps[fn] ?: emptyList()) visit(d)
+        byName[fn]?.let { result.add(fn to it) }
+    }
+    for ((fn, _) in files) visit(fn)
+    return result
+}
+
+private fun normalizeRelPath(p: String): String {
+    val segs = mutableListOf<String>()
+    for (s in p.split('/')) when (s) {
+        "", "." -> {}
+        ".." -> if (segs.isNotEmpty()) segs.removeAt(segs.lastIndex)
+        else -> segs.add(s)
+    }
+    return segs.joinToString("/")
+}
+
 private fun collectPackageJsonTypes(files: List<SourceFileEntry>): Map<String, Boolean> {
     val result = mutableMapOf<String, Boolean>()
     for (file in files) {
