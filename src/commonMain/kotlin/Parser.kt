@@ -37,6 +37,11 @@ class Parser(
     private val diagnostics = mutableListOf<Diagnostic>()
     private var inAsyncContext = topLevelAwait
     private var disallowIn = false
+    // tsc parses a PARENTHESIZED arrow (`(params) => body`) only at the ASSIGNMENT-expression
+    // level, NOT as a binary/relational operand — so `a << (x) => y` is `(a << (x))` + leftover
+    // `=> y`, and `<<T>(x:T) => T>f` (ambiguousGenericAssertion1) doesn't arrow the `(x:T)`.
+    // TRUE at parseAssignmentExpression entry (leftmost operand), FALSE for binary RIGHT operands.
+    private var parenArrowAllowed = true
     // tsc parseDelimitedList(ArrayBindingElements) abort: set by the for-init var-decl-list
     // recovery so a binding pattern started as a mis-recovered subsequent declarator
     // (`for (let of [1,2,3])` → `[]`) ABORTS on the first non-binding-element token
@@ -4816,6 +4821,12 @@ class Parser(
             }
         }
 
+        // Parenthesized arrows are allowed only at this (assignment) level. Binary operands
+        // set parenArrowAllowed=false; nested assignment contexts (args, paren, branches) reset
+        // it here. Save/restore so the caller's context is preserved.
+        val savedParenArrow = parenArrowAllowed
+        parenArrowAllowed = true
+        try {
         val expr = parseConditionalExpression()
 
         if (isAssignmentOperator(token)) {
@@ -4852,6 +4863,9 @@ class Parser(
         }
 
         return expr
+        } finally {
+            parenArrowAllowed = savedParenArrow
+        }
     }
 
     private fun parseConditionalExpression(): Expression {
@@ -4905,7 +4919,12 @@ class Parser(
             val opTrailingComments = scanner.consumeTrailingComments()
             // Right-to-left for ** operator
             val nextMinPrec = if (op == SyntaxKind.AsteriskAsterisk) prec - 1 else prec
+            // A binary right operand is NOT at assignment level → a parenthesized arrow there
+            // (`a << (x) => y`) stays `(a << (x))` + leftover `=> y` (tsc).
+            val savedPAA = parenArrowAllowed
+            parenArrowAllowed = false
             val right = parseBinaryExpression(nextMinPrec)
+            parenArrowAllowed = savedPAA
             left = BinaryExpression(
                 left = left,
                 operator = op,
@@ -6358,7 +6377,7 @@ class Parser(
                 false
             }
         }
-        if (isArrow) return parseArrowFunction(emptySet())
+        if (parenArrowAllowed && isArrow) return parseArrowFunction(emptySet())
 
         // tsc isParenthesizedArrowFunctionExpressionWorker: "(identifier :" (or
         // "(this :") is DEFINITELY an arrow — a type-annotated parameter — even when
@@ -6372,7 +6391,7 @@ class Parser(
             scanner.scan()
             scanner.getToken() == SyntaxKind.Colon
         }
-        if (identColonArrow) return parseArrowFunction(emptySet())
+        if (parenArrowAllowed && identColonArrow) return parseArrowFunction(emptySet())
 
         // tsc tristate: `(...` is DEFINITELY an arrow (rest parameter start) — even
         // with the `=>` missing (`var x4 = (...a: any[]) { }` → "'=>' expected.").
@@ -6380,7 +6399,7 @@ class Parser(
             scanner.scan()
             scanner.getToken() == SyntaxKind.DotDotDot
         }
-        if (restArrow) return parseArrowFunction(emptySet())
+        if (parenArrowAllowed && restArrow) return parseArrowFunction(emptySet())
 
         // tsc tristate FALSE: a first inner token that cannot START a parameter
         // (not identifier/this/'...'/binding-pattern/')') is definitely NOT an
@@ -6487,7 +6506,7 @@ class Parser(
                 }
             } else false
         }
-        if (maybeArrow) return parseArrowFunction(emptySet())
+        if (parenArrowAllowed && maybeArrow) return parseArrowFunction(emptySet())
 
         val pos = getPos()
         parseExpected(SyntaxKind.OpenParen)
@@ -7118,7 +7137,10 @@ class Parser(
             nextToken()
             val opTrailingComments = scanner.consumeTrailingComments()
             val nextMinPrec = if (op == SyntaxKind.AsteriskAsterisk) prec - 1 else prec
+            val savedPAA = parenArrowAllowed
+            parenArrowAllowed = false
             val right = parseBinaryExpression(nextMinPrec)
+            parenArrowAllowed = savedPAA
             result = BinaryExpression(
                 left = result,
                 operator = op,
