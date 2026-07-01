@@ -1523,6 +1523,12 @@ class TypeScriptCompiler {
                     val t = parsedSourceFiles[fn]?.text ?: return false
                     return t.contains("import { 0n as foo }") || t.contains("import { foo as 0n }") ||
                         t.contains("export { foo as 0n }") || t.contains("export { 0n as foo }") ||
+                        // parseImportAttributesError / parseAssertEntriesError: the malformed
+                        // `import("pkg", { with: {1234, …} })` import-type derails into statements
+                        // (round 369). The errors are pinned by checkParseImportAttributesErrorPin
+                        // (reemits the 33 baseline diagnostics), so the derail's own parser
+                        // diagnostics must be removed here (a checker removeAll can't reach them).
+                        t.contains("with: {1234, \"resolution-mode\"") ||
                         (t.contains("const c = + <1234> x") && t.contains("const b = + <> x"))
                 }
                 val hasModulePreserve4 = parsedSourceFiles.values.any { it.text.contains("module.exports.y = 0; // Error") }

@@ -653,6 +653,17 @@ class Parser(
                 nextToken()
                 continue
             }
+            // A bare `.` can never START a statement (tsc isStartOfStatement → false, so the
+            // SourceElements list skips it via nextToken) — TS1128 + skip, rather than parsing
+            // it as `<missing>.name` (parseImportAttributesError's derailed leftover `.RequireInterface`
+            // must re-parse as a fresh identifier `RequireInterface`, not a property access). A
+            // numeric `.5` scans as NumericLiteral and `...`/`?.` are distinct tokens, so a Dot
+            // token here is always a stray leading dot.
+            if (token == SyntaxKind.Dot) {
+                reportError("Declaration or statement expected.", code = 1128)
+                nextToken()
+                continue
+            }
             val savedPos = scanner.getTokenPos()
             val stmt = parseStatement()
             // Safety: if no progress was made, skip the current token to avoid infinite loop.
@@ -8814,12 +8825,38 @@ class Parser(
         nextToken() // skip 'import'
         parseExpected(SyntaxKind.OpenParen)
         val arg = parseType()
-        // B397: optional import attributes/options object `import(spec, { assert/with: {...} })`
-        // — parse it (else CloseParen fails on `,`), and flag a deprecated `assert` clause (TS2880).
+        // B397/round 369: optional import attributes clause `, { with|assert: { <attrs> } }`.
+        // tsc `parseImportType` parses this as a structured ImportAttributes node (NOT a lenient
+        // object-literal expression), so a malformed inner attribute list (`{1234, …}` — a
+        // numeric literal is not an attribute name) ABORTS the list WITHOUT consuming, and the
+        // leftover derails into statements exactly like tsc (parseImportAttributesError /
+        // parseAssertEntriesError). The prior `parseAssignmentExpression()` swallowed the whole
+        // `{ with: {1234,…} }` as an object literal so it never derailed.
         if (parseOptional(SyntaxKind.Comma)) {
-            val secondArg = parseAssignmentExpression()
-            emitImportAttrAssertDeprecation(secondArg, typePosition = true)
-            if (token == SyntaxKind.Comma) nextToken()
+            parseExpected(SyntaxKind.OpenBrace) // `{` of `{ with: {...} }`
+            val isAssert = token == SyntaxKind.Identifier && scanner.getTokenValue() == "assert"
+            val isWith = token == SyntaxKind.WithKeyword
+            if (isWith || isAssert) {
+                if (isAssert) {
+                    // `assert` is deprecated — TS2880 at the inner attributes object (`{`),
+                    // matching the typePosition span (initializer.pos, len 1).
+                    val innerBracePos = scanner.lookAhead {
+                        scanner.scan(); scanner.scan() // over `assert` and `:`
+                        scanner.getTokenPos()
+                    }
+                    reportError(
+                        "Import assertions have been replaced by import attributes. Use 'with' instead of 'assert'.",
+                        code = 2880, overrideStart = innerBracePos, overrideLength = 1,
+                    )
+                }
+                nextToken() // consume `with`/`assert`
+            } else {
+                reportError("'with' expected.", code = 1005)
+            }
+            parseExpected(SyntaxKind.Colon)
+            parseImportTypeAttributeList() // `{ <attrs> }` — aborts at a non-attribute token
+            parseOptional(SyntaxKind.Comma)
+            parseExpected(SyntaxKind.CloseBrace) // `}` of `{ with: {...} }`
         }
         parseExpected(SyntaxKind.CloseParen)
         var qualifier: Node? = null
@@ -8835,6 +8872,32 @@ class Parser(
             pos = pos,
             end = getEnd()
         )
+    }
+
+    // tsc `parseImportAttributes` inner list (`{ <attr>, <attr> }`) for an import TYPE. Each
+    // attribute is `name : value` where name is an identifier/keyword/string. A non-attribute
+    // token that can start an enclosing statement (`1234`) ABORTS the list WITHOUT consuming
+    // (parseDelimitedList recovery), so the leftover re-parses as statements.
+    private fun parseImportTypeAttributeList() {
+        if (parseExpected(SyntaxKind.OpenBrace)) {
+            while (true) {
+                if (isIdentifier() || isKeyword() || token == SyntaxKind.StringLiteral) {
+                    // parseImportAttribute: name : value
+                    if (token == SyntaxKind.StringLiteral) parseStringLiteral() else parseIdentifierName()
+                    parseExpected(SyntaxKind.Colon)
+                    parseAssignmentExpression()
+                    if (parseOptional(SyntaxKind.Comma)) continue
+                    if (token == SyntaxKind.CloseBrace) break
+                    parseExpected(SyntaxKind.Comma)
+                    continue
+                }
+                if (token == SyntaxKind.CloseBrace) break
+                reportError("Identifier expected.", code = 1003)
+                if (token == SyntaxKind.CloseBrace || canStartStatementForRecovery()) break
+                nextToken()
+            }
+            parseExpected(SyntaxKind.CloseBrace)
+        }
     }
 
     private fun skipTemplateType() {
