@@ -23712,6 +23712,26 @@ class Checker(
                 // Check the leftmost part of A.B.C
                 var leftmost: Node = name
                 while (leftmost is QualifiedName) leftmost = leftmost.left
+                // strictModeReservedWord: a strict-reserved word (interface/public/private/…)
+                // can NEVER name a namespace, so a qualified TYPE reference rooted at one is
+                // TS2503 "Cannot find namespace" — plus a TS2728 "declared here" when the word
+                // shadows a declared value (`var public = 10; var b: public.bar`). Placed before
+                // the KEYWORD_IDENTIFIERS/scope.has gates so it catches both a keyword leftmost
+                // (`interface`) and a value-shadowing declaration (`public`) that those gates skip.
+                if (leftmost is Identifier && leftmost.text in STRICT_MODE_RESERVED_WORDS) {
+                    val lm = leftmost
+                    // tsc's TS2503 "Cannot find namespace 'public'" carries NO "declared here"
+                    // related info (that TS2728 is attached to the separate TS2552 spelling
+                    // suggestion `ublic` → 'public', not to this namespace-resolution error).
+                    val (l2503, c2503) = getLineAndCharacterOfPosition(source, lm.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Cannot find namespace '${lm.text}'.",
+                        category = DiagnosticCategory.Error, code = 2503,
+                        fileName = fileName, line = l2503, character = c2503,
+                        start = lm.pos, length = lm.text.length,
+                    ))
+                    return
+                }
                 if (leftmost is Identifier) {
                     val lname = leftmost.text
                     // For qualified type references, the leftmost must be a namespace.
@@ -25239,8 +25259,11 @@ class Checker(
                 state.unresolvedNameReportCount++
                 // Try to find the declaration position of the suggestion for TS2728 related info.
                 // TypeScript omits TS2728 when the suggestion is a pure type alias — `findDeclarationRelatedInfo`
-                // returns null for TypeAliasDeclaration.
+                // returns null for TypeAliasDeclaration. Fall back to a function-body-var/function scan
+                // for a suggestion that is a function-scoped local the binder does not bind
+                // (strictModeReservedWord: `ublic` → 'public' where `var public` is inside a function).
                 val relatedInfo = findDeclarationRelatedInfo(suggestion, fileName, source)
+                    ?: reservedWordDeclaredHere(suggestion, fileName, source)
                 diagnostics.add(Diagnostic(
                     message = "Cannot find name '$name'. Did you mean '$suggestion'?",
                     category = DiagnosticCategory.Error,
@@ -25601,6 +25624,52 @@ class Checker(
             is LabeledStatement -> findBlockScopedDeclPosInStmt(name, stmt.statement)
             else -> null
         }
+    }
+
+    /** strictModeReservedWord: build a TS2728 "'name' is declared here." related diagnostic by
+     *  scanning the file (recursing into function/method bodies) for a var/function declaration
+     *  of [name]. Needed because the reserved words this fires for (e.g. `var public` inside a
+     *  function body) are function-scoped locals the binder does not bind, so
+     *  findDeclarationRelatedInfo (symbol-table based) misses them. */
+    private fun reservedWordDeclaredHere(name: String, fileName: String, source: String): Diagnostic? {
+        val stmts = fileResults[fileName]?.sourceFile?.statements ?: return null
+        val pos = scanReservedWordDeclPos(name, stmts) ?: return null
+        val (line, character) = getLineAndCharacterOfPosition(source, pos)
+        return Diagnostic(
+            message = "'$name' is declared here.",
+            category = DiagnosticCategory.Message, code = 2728,
+            fileName = fileName, line = line, character = character,
+            start = pos, length = name.length,
+        )
+    }
+
+    private fun scanReservedWordDeclPos(name: String, stmts: List<Statement>): Int? {
+        for (stmt in stmts) {
+            val p = scanReservedWordDeclPosInStmt(name, stmt)
+            if (p != null) return p
+        }
+        return null
+    }
+
+    private fun scanReservedWordDeclPosInStmt(name: String, stmt: Statement): Int? = when (stmt) {
+        is VariableStatement -> stmt.declarationList.declarations.firstNotNullOfOrNull { d ->
+            (d.name as? Identifier)?.takeIf { it.text == name }?.pos
+        }
+        is FunctionDeclaration -> stmt.name?.takeIf { it.text == name }?.pos
+            ?: stmt.body?.let { scanReservedWordDeclPos(name, it.statements) }
+        is Block -> scanReservedWordDeclPos(name, stmt.statements)
+        is IfStatement -> scanReservedWordDeclPosInStmt(name, stmt.thenStatement)
+            ?: stmt.elseStatement?.let { scanReservedWordDeclPosInStmt(name, it) }
+        is ForStatement -> scanReservedWordDeclPosInStmt(name, stmt.statement)
+        is ForInStatement -> scanReservedWordDeclPosInStmt(name, stmt.statement)
+        is ForOfStatement -> scanReservedWordDeclPosInStmt(name, stmt.statement)
+        is WhileStatement -> scanReservedWordDeclPosInStmt(name, stmt.statement)
+        is DoStatement -> scanReservedWordDeclPosInStmt(name, stmt.statement)
+        is TryStatement -> scanReservedWordDeclPos(name, stmt.tryBlock.statements)
+            ?: stmt.catchClause?.let { scanReservedWordDeclPos(name, it.block.statements) }
+            ?: stmt.finallyBlock?.let { scanReservedWordDeclPos(name, it.statements) }
+        is LabeledStatement -> scanReservedWordDeclPosInStmt(name, stmt.statement)
+        else -> null
     }
 
     /**
@@ -70501,6 +70570,11 @@ interface DataView {
                         (decl.initializer as? FunctionExpression)?.name?.let {
                             checkIdentForStrictReserved(it, source, fileName, inClass, isModule)
                         }
+                        // strictModeReservedWord: a var TYPE annotation `var b: public.bar`
+                        // fires TS1212 at the leftmost qualifier, and a class-EXPRESSION
+                        // initializer `var c = class package extends public {}` fires TS1213.
+                        checkTypeForStrictReserved(decl.type, source, fileName, inClass, isModule)
+                        (decl.initializer as? ClassExpression)?.let { checkClassExprForStrictReserved(it, source, fileName) }
                     }
                 }
             }
@@ -70508,20 +70582,26 @@ interface DataView {
                 val name = stmt.name
                 if (name != null) checkIdentForStrictReserved(name, source, fileName, inClass, isModule)
                 checkParamsForStrictReserved(stmt.parameters, source, fileName, inClass, isModule)
-                // TYPE-PARAMETER names and bare TYPE-REFERENCE param annotations are
+                // strictModeReservedWord: a reserved-word param name also implicitly has 'any'
+                // (TS7006) even without noImplicitAny (`function bar(private, implements, let)`).
+                emitReservedParamImplicitAny(stmt.parameters, source, fileName)
+                // TYPE-PARAMETER names and TYPE-annotation identifier positions are
                 // identifier positions too — `function f<implements>(i: implements)`
-                // reports TS1212 at both (convertKeywordsYes bigGeneric).
+                // reports TS1212 at both (convertKeywordsYes bigGeneric); a qualified
+                // annotation `x: private.x` fires at the leftmost `private`, an inline
+                // function type `cb: (private) => void` fires at each param.
                 stmt.typeParameters?.forEach { tp ->
                     checkIdentForStrictReserved(tp.name, source, fileName, inClass, isModule)
                 }
                 for (p in stmt.parameters) {
-                    val tr = p.type as? TypeReference ?: continue
-                    val tn = tr.typeName as? Identifier ?: continue
-                    if (tr.typeArguments.isNullOrEmpty()) {
-                        checkIdentForStrictReserved(tn, source, fileName, inClass, isModule)
-                    }
+                    checkTypeForStrictReserved(p.type, source, fileName, inClass, isModule)
                 }
+                // A nested `"use strict"` prologue makes the body REAL-strict (interface/implements
+                // TS1212 fires there — strictModeReservedWord's `foo() { "use strict"; ... }`).
+                val savedRealStrict = strictReservedRealStrict
+                if (stmtsHaveUseStrictPrologue(stmt.body?.statements)) strictReservedRealStrict = true
                 stmt.body?.let { walkForStrictReserved(it.statements, source, fileName, inClass, isStrict, isExpressionStrict, isModule) }
+                strictReservedRealStrict = savedRealStrict
             }
             is ClassDeclaration -> {
                 // Class definitions are AUTOMATICALLY strict (tsc): the class NAME
@@ -70730,8 +70810,99 @@ interface DataView {
                 // in expression position are always errors in strict mode).
                 checkExprForStrictReserved(expr.right, source, fileName, inClass)
             }
+            is CallExpression -> {
+                // strictModeReservedWord: a reserved word as a CALL callee (`static()`) or as
+                // a param name of an arrow/fn-expr ARGUMENT (`barn((private, public) => {})`)
+                // is an identifier position → TS1212. Arrow ARGUMENT params are contextually
+                // typed so they do NOT get TS7006 (only TS1212).
+                checkExprForStrictReserved(expr.expression, source, fileName, inClass)
+                for (arg in expr.arguments) checkExprForStrictReserved(arg, source, fileName, inClass)
+            }
+            is ArrowFunction -> {
+                for (p in expr.parameters) {
+                    (p.name as? Identifier)?.let { checkIdentForStrictReserved(it, source, fileName, inClass) }
+                }
+            }
             else -> {}
         }
+    }
+
+    /** Leftmost identifier of a (possibly qualified) type name: `a.b.c` → `a`. */
+    private fun leftmostTypeName(n: Node): Identifier? = when (n) {
+        is Identifier -> n
+        is QualifiedName -> leftmostTypeName(n.left)
+        else -> null
+    }
+
+    /** Leftmost identifier of a (possibly qualified) heritage/value expression: `a.b.c` → `a`. */
+    private fun leftmostExprName(e: Expression): Identifier? = when (e) {
+        is Identifier -> e
+        is PropertyAccessExpression -> leftmostExprName(e.expression)
+        else -> null
+    }
+
+    /** strictModeReservedWord: check a TYPE annotation for strict-reserved identifiers in the
+     *  positions tsc flags — the leftmost qualifier of a bare (non-generic) type-reference
+     *  (`private.x` → TS1212 at `private`) and the parameter names of an inline function type
+     *  (`(private, public) => void` → TS1212 + TS7006 per param). Conservative: does NOT recurse
+     *  into type arguments/unions/etc. (bounds the FP surface). */
+    private fun checkTypeForStrictReserved(type: TypeNode?, source: String, fileName: String, inClass: Boolean, isModule: Boolean) {
+        when (type) {
+            is TypeReference -> {
+                if (type.typeArguments.isNullOrEmpty()) {
+                    leftmostTypeName(type.typeName)?.let { checkIdentForStrictReserved(it, source, fileName, inClass, isModule) }
+                }
+            }
+            is FunctionType -> {
+                for (p in type.parameters) {
+                    (p.name as? Identifier)?.let { checkIdentForStrictReserved(it, source, fileName, inClass, isModule) }
+                }
+                emitReservedParamImplicitAny(type.parameters, source, fileName)
+                checkTypeForStrictReserved(type.type, source, fileName, inClass, isModule)
+            }
+            else -> {}
+        }
+    }
+
+    /** strictModeReservedWord: a class EXPRESSION in a variable initializer
+     *  (`var c = class package extends public {}`) — its name, type-params, and heritage-base
+     *  leftmost are identifier positions in an auto-strict class context → TS1213. */
+    private fun checkClassExprForStrictReserved(ce: ClassExpression, source: String, fileName: String) {
+        ce.name?.let { checkIdentForStrictReserved(it, source, fileName, inClass = true, isModule = false) }
+        ce.typeParameters?.forEach { checkIdentForStrictReserved(it.name, source, fileName, inClass = true, isModule = false) }
+        ce.heritageClauses?.forEach { clause ->
+            for (t in clause.types) {
+                leftmostExprName(t.expression)?.let { checkIdentForStrictReserved(it, source, fileName, inClass = true, isModule = false) }
+            }
+        }
+    }
+
+    /** strictModeReservedWord: TS7006 for a strict-reserved parameter NAME (unannotated, no
+     *  initializer, not rest). tsc reports implicit-any for these even without `noImplicitAny`
+     *  (the reserved-word-ness triggers it). Gated `!noImplicitAny && !strict` so
+     *  `checkImplicitAnyParameters` owns the noImplicitAny/strict case (no double-emit). Covers
+     *  FunctionDeclaration + inline function-type params; arrow ARGUMENT params are contextually
+     *  typed (excluded) and interface-method params are owned by checkReservedWordInterfaceParams. */
+    private fun emitReservedParamImplicitAny(params: List<Parameter>, source: String, fileName: String) {
+        if (options.noImplicitAny || options.strict) return
+        for (p in params) {
+            val name = p.name as? Identifier ?: continue
+            if (name.text !in STRICT_MODE_RESERVED_WORDS) continue
+            if (p.type != null || p.initializer != null || p.dotDotDotToken) continue
+            val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
+            diagnostics.add(Diagnostic(
+                message = "Parameter '${name.text}' implicitly has an 'any' type.",
+                category = DiagnosticCategory.Error, code = 7006,
+                fileName = fileName, line = line, character = character,
+                start = name.pos, length = name.text.length,
+            ))
+        }
+    }
+
+    /** True when the first statement of a function body is a `"use strict"` prologue directive. */
+    private fun stmtsHaveUseStrictPrologue(stmts: List<Statement>?): Boolean {
+        val first = stmts?.firstOrNull() ?: return false
+        return first is ExpressionStatement && (first.expression as? StringLiteralNode)?.text == "use strict"
     }
 
     private fun checkIdentForStrictReserved(id: Identifier, source: String, fileName: String, inClass: Boolean = false, isModule: Boolean = false) {
@@ -98804,6 +98975,53 @@ interface DataView {
                 }
                 else -> {}
             }
+        }
+
+        // strictModeReservedWord: a class EXPRESSION in a var initializer
+        // (`var c = class package extends public {}`) extending a primitive VALUE →
+        // TS2507; and a reserved-word primitive-value CALL (`static()` where
+        // `var static = "hi"`) → TS2349. Both use this scope's varDecls/funcDecls
+        // (the walker recurses into function bodies, so a function-scoped `var public`
+        // is visible here even though the binder does not bind it). The reserved-word /
+        // primitive-value gate bounds the FP surface (a reserved word or a primitive
+        // value can never legitimately be a constructor or callable).
+        for (stmt in stmts) {
+            if (stmt !is VariableStatement) continue
+            for (decl in stmt.declarationList.declarations) {
+                val ce = decl.initializer as? ClassExpression ?: continue
+                val extClause = ce.heritageClauses?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword } ?: continue
+                val baseExpr = extClause.types.firstOrNull()?.expression as? Identifier ?: continue
+                if (baseExpr.text in classNames) continue
+                val typeName = when {
+                    baseExpr.text in functionNames -> funcDecls[baseExpr.text]?.let { formatFunctionTypeForExtends(it) }
+                    else -> varDecls[baseExpr.text]?.let { inferSimpleVarType(it) }
+                } ?: continue
+                val (line, character) = getLineAndCharacterOfPosition(source, baseExpr.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Type '$typeName' is not a constructor function type.",
+                    category = DiagnosticCategory.Error, code = 2507,
+                    fileName = fileName, line = line, character = character,
+                    start = baseExpr.pos, length = baseExpr.text.length,
+                ))
+            }
+        }
+        for (stmt in stmts) {
+            val callee = ((stmt as? ExpressionStatement)?.expression as? CallExpression)?.expression as? Identifier ?: continue
+            if (callee.text !in STRICT_MODE_RESERVED_WORDS) continue
+            if (callee.text in classNames || callee.text in functionNames) continue
+            val wrapper = varDecls[callee.text]?.let { vd ->
+                when (inferSimpleVarType(vd)) {
+                    "string" -> "String"; "number" -> "Number"; "boolean" -> "Boolean"; else -> null
+                }
+            } ?: continue
+            val (line, character) = getLineAndCharacterOfPosition(source, callee.pos)
+            diagnostics.add(Diagnostic(
+                message = "This expression is not callable.",
+                category = DiagnosticCategory.Error, code = 2349,
+                fileName = fileName, line = line, character = character,
+                start = callee.pos, length = callee.text.length,
+                messageChain = listOf("  Type '$wrapper' has no call signatures."),
+            ))
         }
 
         // Check class extends clauses
