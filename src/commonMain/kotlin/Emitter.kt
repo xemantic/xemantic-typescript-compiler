@@ -98,10 +98,12 @@ class Emitter(
                 is ImportDeclaration -> true
                 is ExportDeclaration -> {
                     // An ExportDeclaration with NamedExports counts as a module statement only if
-                    // at least one specifier is not type-only (i.e., has runtime value).
-                    // `export { type A }` or `export {}` (empty) do NOT count.
+                    // at least one specifier is not type-only AND names a real binding.
+                    // `export { type A }`, `export {}` (empty), or a fully-malformed
+                    // `export { <missing> }` (bigintArbirtraryIdentifier, elided at emit) do NOT count.
                     val clause = stmt.exportClause
-                    if (clause is NamedExports) clause.elements.any { !it.isTypeOnly }
+                    if (clause is NamedExports)
+                        clause.elements.any { !it.isTypeOnly && (it.propertyName ?: it.name).emitText.isNotEmpty() }
                     else true // `export *` or `export * as ns` always count
                 }
                 // In ES module format, `export = X` is not a valid ES module statement
@@ -1502,6 +1504,16 @@ class Emitter(
 
     private fun emitExportDeclaration(node: ExportDeclaration) {
         if (node.isTypeOnly) return
+        // A local `export { … }` (no `from`) whose value specifiers ALL have empty/missing names —
+        // e.g. `export { 0n as foo }` recovered as `export { <missing> }` (bigintArbirtraryIdentifier)
+        // — exports nothing. tsc elides the whole declaration; the file-level `export {}` module
+        // marker is then appended at EOF (see hasTransformedModuleStatements). A `export { foo as <missing> }`
+        // keeps `export { foo as  };` because its LOCAL reference `foo` is a real binding.
+        val ec = node.exportClause
+        if (ec is NamedExports && node.moduleSpecifier == null) {
+            val valueSpecs = ec.elements.filter { !it.isTypeOnly }
+            if (valueSpecs.isNotEmpty() && valueSpecs.none { (it.propertyName ?: it.name).emitText.isNotEmpty() }) return
+        }
         writeIndent()
         beginIeSlots(node.internalComments)
         write("export")

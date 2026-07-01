@@ -3878,6 +3878,29 @@ class Parser(
         val fromOk = parseExpected(SyntaxKind.FromKeyword)
         captureIeSlot() // after `from`, before the module specifier
         if (!fromOk && token != SyntaxKind.StringLiteral) {
+            // tsc parseModuleSpecifier: a non-string module specifier is parsed as an
+            // EXPRESSION for recovery. When the named-imports list aborted on a numeric/
+            // bigint literal (e.g. `import { 0n as foo } from "./foo"` → the list bails on
+            // `0n`, `from` is missing, and `0n as foo` is now at the specifier position),
+            // consume it as the specifier expression so it does NOT re-parse as a leftover
+            // statement (bigintArbirtraryIdentifier). Gated to numeric/bigint literals: an
+            // identifier / reserved keyword (`import * as while from "foo"`) keeps the
+            // missing-node path below so it re-parses as its own statement (reservedWords2).
+            if (token == SyntaxKind.NumericLiteral || token == SyntaxKind.BigIntLiteral) {
+                val expr = parseExpression()
+                val assertClause = parseImportAttributes()
+                val assertClausePos = lastImportAttributesPos
+                parseSemicolon()
+                val trailing = trailingComments()
+                return ImportDeclaration(
+                    importClause = clause,
+                    moduleSpecifier = expr,
+                    modifiers = outerModifiers,
+                    pos = pos, end = getEnd(), leadingComments = comments,
+                    assertClause = assertClause, assertClausePos = assertClausePos,
+                    trailingComments = trailing,
+                )
+            }
             // tsc: with `from` missing and no string follow, the specifier-expression
             // parse fails without consuming (all follow-ups same-start-deduped) — the
             // offending token re-parses as its own statement (`import * as while from
@@ -3992,7 +4015,7 @@ class Parser(
         var bindKwLen = scanner.getTokenText().length
         var bindIsKwNotIdent = isKeyword() && !isIdentifier()
 
-        val first = parseIdentifierName()
+        val first = parseModuleExportNameOrMissing()
         if (token == SyntaxKind.AsKeyword) captureIeSlot() // after propertyName, before `as`
         return if (parseOptional(SyntaxKind.AsKeyword)) {
             captureIeSlot() // after `as`, before the binding name
@@ -4287,13 +4310,13 @@ class Parser(
             isIdentifier()
         }
         if (isTypeOnly) nextToken()
-        val first = parseIdentifierName()
+        val first = parseModuleExportNameOrMissing()
         if (token == SyntaxKind.AsKeyword) captureIeSlot() // after propertyName, before `as`
         return if (parseOptional(SyntaxKind.AsKeyword)) {
             captureIeSlot() // after `as`, before the binding name
             ExportSpecifier(
                 propertyName = first,
-                name = parseIdentifierName(),
+                name = parseModuleExportNameOrMissing(),
                 isTypeOnly = isTypeOnly,
                 pos = pos,
                 end = getEnd()
@@ -8734,6 +8757,24 @@ class Parser(
         }
         nextToken()
         return Identifier(text = value, rawText = rawText, leadingComments = comments, pos = pos, end = getEnd())
+    }
+
+    /**
+     * tsc `parseModuleExportName` → `parseNameWithKeywordCheck` → `parseIdentifierName`, but a
+     * token that is NOT a valid module-export name (identifier / keyword / string literal — e.g.
+     * a numeric or bigint literal) yields a zero-width missing Identifier WITHOUT consuming the
+     * token, so the enclosing named-imports/exports list aborts on it and the offending token
+     * re-parses as its own statement (bigintArbirtraryIdentifier: `import { 0n as foo }` /
+     * `export { 0n as foo }`). A plain `parseIdentifierName` always advances, wrongly swallowing
+     * `0n` into a (nearly-valid, then erased) specifier.
+     */
+    private fun parseModuleExportNameOrMissing(): Identifier {
+        if (!(isIdentifier() || isKeyword() || token == SyntaxKind.StringLiteral)) {
+            val p = getPos()
+            reportError("Identifier expected.", code = 1003)
+            return Identifier(text = "", pos = p, end = p)
+        }
+        return parseIdentifierName()
     }
 
     /**
