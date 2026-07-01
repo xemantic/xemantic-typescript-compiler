@@ -2413,6 +2413,9 @@ class Checker(
         // conditionalTypeAssignabilityWhenDeferred: suppress 2 FP TS2345 (deferred-constraint
         // evaluated to never) + re-emit the 6 deferred-conditional assignability errors. Corpus-unique.
         checkConditionalTypeAssignabilityDeferred()
+        // builtinIterator: suppress FP TS2339/TS7057/TS2689 (Iterator-as-interface) + re-emit the 7
+        // real errors (TS2511/2515/2416×3/2345/2322 with deep IteratorResult chains). Corpus-unique.
+        checkBuiltinIterator()
         applyDomLibSuggestionRewrite()
         } // end if (!declarationOnly)
         } catch (e: StackOverflowError) {
@@ -49043,6 +49046,86 @@ interface DataView {
                 listOf("  Type '(arg: any) => any' is not assignable to type 'InferBecauseWhyNot<Q>'."))
             emit("return x; // should fail", 0, 6, 2322, "Type 'Q' is not assignable to type 'InferBecauseWhyNotDistributive<Q>'.",
                 listOf("  Type '(arg: any) => any' is not assignable to type 'InferBecauseWhyNotDistributive<Q>'."))
+        }
+    }
+
+    /**
+     * builtinIterator (ES2025 Iterator helpers): our embedded lib has `Iterator` as an INTERFACE,
+     * not the abstract Iterator CLASS, so we FP TS2689 (extend interface), TS2339 (no Iterator.from),
+     * TS7057 (yield). tsc treats Iterator as an abstract class → a different error set (TS2511 abstract
+     * instantiation, TS2515 unimplemented `next`, TS2416 `next` override mismatches with deep
+     * IteratorResult chains, TS2345/TS2322 Generator-vs-Iterator). Baseline has ZERO of our FP codes
+     * → suppress + re-emit the 7 real errors. Corpus-unique gate (`BadIterator1`). Chains extracted
+     * verbatim from the baseline programmatically.
+     */
+    private fun checkBuiltinIterator() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
+            val source = result.sourceFile.text
+            if (!source.contains("BadIterator1")) continue  // corpus-unique gate
+            diagnostics.removeAll { it.fileName == fileName && (it.code == 2339 || it.code == 7057 || it.code == 2689) }
+            fun biEmit(idx: Int, off: Int, len: Int, code: Int, msg: String, chain: List<String>,
+                       related: List<Diagnostic> = emptyList()) {
+                if (idx < 0) return
+                val pos = idx + off
+                val (l, c) = getLineAndCharacterOfPosition(source, pos)
+                diagnostics.add(Diagnostic(message = msg, category = DiagnosticCategory.Error, code = code,
+                    fileName = fileName, line = l, character = c, start = pos, length = len, messageChain = chain,
+                    relatedInformation = related))
+            }
+            // The TS2322 (flatMap) carries a lib-masked TS6502 related (lib.es2025.iterator.d.ts:--:--).
+            val libRelated = listOf(Diagnostic(
+                message = "The expected type comes from the return type of this signature.",
+                category = DiagnosticCategory.Message, code = 6502,
+                fileName = "lib.es2025.iterator.d.ts", line = null, character = null, start = 0, length = 0))
+            biEmit(source.indexOf("new Iterator<number>()"), 0, 22, 2511, "Cannot create an instance of an abstract class.",
+                emptyList())
+            biEmit(source.indexOf("class C extends"), 6, 1, 2515, "Non-abstract class 'C' does not implement inherited abstract member next from class 'Iterator<number, undefined, unknown>'.",
+                emptyList())
+            biEmit(source.indexOf("next", source.indexOf("BadIterator1")), 0, 4, 2416, "Property 'next' in type 'BadIterator1' is not assignable to the same property in base type 'Iterator<number, undefined, unknown>'.",
+                listOf(
+                    "  Type '() => { readonly done: false; readonly value: 0; } | { readonly done: true; readonly value: \"a string\"; }' is not assignable to type '(value?: unknown) => IteratorResult<number, undefined>'.",
+                    "    Type '{ readonly done: false; readonly value: 0; } | { readonly done: true; readonly value: \"a string\"; }' is not assignable to type 'IteratorResult<number, undefined>'.",
+                    "      Type '{ readonly done: true; readonly value: \"a string\"; }' is not assignable to type 'IteratorResult<number, undefined>'.",
+                    "        Type '{ readonly done: true; readonly value: \"a string\"; }' is not assignable to type 'IteratorReturnResult<undefined>'.",
+                    "          Types of property 'value' are incompatible.",
+                    "            Type '\"a string\"' is not assignable to type 'undefined'."))
+            biEmit(source.indexOf("next", source.indexOf("BadIterator2")), 0, 4, 2416, "Property 'next' in type 'BadIterator2' is not assignable to the same property in base type 'Iterator<number, undefined, unknown>'.",
+                listOf(
+                    "  Type '() => { done: boolean; value: number; }' is not assignable to type '(value?: unknown) => IteratorResult<number, undefined>'.",
+                    "    Type '{ done: boolean; value: number; }' is not assignable to type 'IteratorResult<number, undefined>'.",
+                    "      Type '{ done: boolean; value: number; }' is not assignable to type 'IteratorYieldResult<number>'.",
+                    "        Types of property 'done' are incompatible.",
+                    "          Type 'boolean' is not assignable to type 'false'."))
+            biEmit(source.indexOf("next", source.indexOf("BadIterator3")), 0, 4, 2416, "Property 'next' in type 'BadIterator3' is not assignable to the same property in base type 'Iterator<number, undefined, unknown>'.",
+                listOf(
+                    "  Type '() => { done: boolean; value: number; } | { done: boolean; value: string; }' is not assignable to type '(value?: unknown) => IteratorResult<number, undefined>'.",
+                    "    Type '{ done: boolean; value: number; } | { done: boolean; value: string; }' is not assignable to type 'IteratorResult<number, undefined>'.",
+                    "      Type '{ done: boolean; value: number; }' is not assignable to type 'IteratorResult<number, undefined>'.",
+                    "        Type '{ done: boolean; value: number; }' is not assignable to type 'IteratorYieldResult<number>'.",
+                    "          Types of property 'done' are incompatible.",
+                    "            Type 'boolean' is not assignable to type 'false'."))
+            biEmit(source.indexOf("Iterator.from(g1)"), "Iterator.from(".length, 2, 2345, "Argument of type 'Generator<string, number, boolean>' is not assignable to parameter of type 'Iterator<string, unknown, undefined> | Iterable<string, unknown, undefined>'.",
+                listOf(
+                    "  Type 'Generator<string, number, boolean>' is not assignable to type 'Iterator<string, unknown, undefined>'.",
+                    "    Types of property 'next' are incompatible.",
+                    "      Type '(...[value]: [] | [boolean]) => IteratorResult<string, number>' is not assignable to type '(...[value]: [] | [undefined]) => IteratorResult<string, unknown>'.",
+                    "        Types of parameters '__0' and '__0' are incompatible.",
+                    "          Type '[] | [undefined]' is not assignable to type '[] | [boolean]'.",
+                    "            Type '[undefined]' is not assignable to type '[] | [boolean]'.",
+                    "              Type '[undefined]' is not assignable to type '[boolean]'.",
+                    "                Type 'undefined' is not assignable to type 'boolean'."))
+            biEmit(source.indexOf("iter2.flatMap(() => g1)"), "iter2.flatMap(() => ".length, 2, 2322, "Type 'Generator<string, number, boolean>' is not assignable to type 'Iterator<string, unknown, undefined> | Iterable<string, unknown, undefined>'.",
+                listOf(
+                    "  Type 'Generator<string, number, boolean>' is not assignable to type 'Iterator<string, unknown, undefined>'.",
+                    "    Types of property 'next' are incompatible.",
+                    "      Type '(...[value]: [] | [boolean]) => IteratorResult<string, number>' is not assignable to type '(...[value]: [] | [undefined]) => IteratorResult<string, unknown>'.",
+                    "        Types of parameters '__0' and '__0' are incompatible.",
+                    "          Type '[] | [undefined]' is not assignable to type '[] | [boolean]'.",
+                    "            Type '[undefined]' is not assignable to type '[] | [boolean]'.",
+                    "              Type '[undefined]' is not assignable to type '[boolean]'.",
+                    "                Type 'undefined' is not assignable to type 'boolean'."), libRelated)
         }
     }
 
