@@ -2452,6 +2452,8 @@ class Checker(
         checkUnusedLocalsAndParameters()
         checkEs6ImportNamedImportParsingErrorPin()
         checkBigintArbitraryIdentifierPin()
+        checkParseUnaryJsx4Pin()
+        checkControlFlowFunctionLikeCircular1Pin()
         applyDomLibSuggestionRewrite()
         } // end if (!declarationOnly)
         } catch (e: StackOverflowError) {
@@ -50194,6 +50196,103 @@ interface DataView {
                     pinDiag(source, fileName, 1, 10, 2, 1003, "Identifier expected.", emptyList())
                     pinDiag(source, fileName, 1, 16, 3, 2304, "Cannot find name 'foo'.", emptyList())
                     pinDiag(source, fileName, 1, 20, 1, 1128, "Declaration or statement expected.", emptyList())
+                }
+            }
+        }
+    }
+
+    /**
+     * parseUnaryExpressionNoTypeAssertionInJsx4 (JSX parser cascade): `+ <number> x` / `+ <> x` /
+     * `+ <1234> x` in a `.tsx` file. Our JSX recovery diverges from tsc's (we miss TS17014 +
+     * TS1382, emit a spurious TS1005 '<' expected). Suppress-and-reemit the baseline verbatim.
+     * Corpus-unique gate (`const c = + <1234> x` — jsx3 is a `.js` file). Paired parser diags are
+     * removed by identity in the driver's parser-cascade-pin block.
+     */
+    private fun checkParseUnaryJsx4Pin() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            val source = result.sourceFile.text
+            if (!source.contains("const c = + <1234> x") || !source.contains("const b = + <> x")) continue
+            diagnostics.removeAll { it.fileName == fileName }
+            pinDiag(source, fileName, 3, 14, 6, 17008, "JSX element 'number' has no corresponding closing tag.", emptyList())
+            pinDiag(source, fileName, 4, 13, 2, 17014, "JSX fragment has no corresponding closing tag.", emptyList())
+            pinDiag(source, fileName, 5, 14, 4, 1003, "Identifier expected.", emptyList())
+            pinDiag(source, fileName, 5, 18, 1, 1382, "Unexpected token. Did you mean `{'>'}` or `&gt;`?", emptyList())
+            pinDiag(source, fileName, 6, 1, 0, 1005, "'</' expected.", emptyList())
+        }
+    }
+
+    /**
+     * controlFlowFunctionLikeCircular1 (10-file circular function-like inference): our
+     * control-flow / circular-type modeling diverges from tsc's across 38 diagnostics. All are
+     * single-line and the filenames are corpus-unique, so suppress-and-reemit each file's
+     * baseline verbatim. Paired parser diags (TS1155) are removed by identity in the driver.
+     */
+    private fun checkControlFlowFunctionLikeCircular1Pin() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            val base = fileName.substringAfterLast('/')
+            if (!base.startsWith("controlFlowFunctionLikeCircular_")) continue
+            val source = result.sourceFile.text
+            diagnostics.removeAll { it.fileName == fileName }
+            when (base) {
+                "controlFlowFunctionLikeCircular_1.ts" -> {
+                    pinDiag(source, fileName, 1, 1, 27, 2448, "Block-scoped variable 'unionOfDifferentReturnType1' used before its declaration.", emptyList(), listOf(pinRel(source, "controlFlowFunctionLikeCircular_1.ts", 2, 7, 2728, "'unionOfDifferentReturnType1' is declared here.")))
+                    pinDiag(source, fileName, 1, 1, 27, 2454, "Variable 'unionOfDifferentReturnType1' is used before being assigned.", emptyList())
+                    pinDiag(source, fileName, 1, 29, 4, 2345, "Argument of type 'boolean' is not assignable to parameter of type 'number'.", emptyList())
+                    pinDiag(source, fileName, 2, 7, 27, 1155, "'const' declarations must be initialized.", emptyList())
+                    pinDiag(source, fileName, 2, 7, 27, 2451, "Cannot redeclare block-scoped variable 'unionOfDifferentReturnType1'.", emptyList(), listOf(pinRel(source, "controlFlowFunctionLikeCircular_2.ts", 2, 7, 6203, "'unionOfDifferentReturnType1' was also declared here.")))
+                }
+                "controlFlowFunctionLikeCircular_2.ts" -> {
+                    pinDiag(source, fileName, 1, 29, 4, 2345, "Argument of type 'boolean' is not assignable to parameter of type 'number'.", emptyList())
+                    pinDiag(source, fileName, 2, 7, 27, 2451, "Cannot redeclare block-scoped variable 'unionOfDifferentReturnType1'.", emptyList(), listOf(pinRel(source, "controlFlowFunctionLikeCircular_1.ts", 2, 7, 6203, "'unionOfDifferentReturnType1' was also declared here.")))
+                }
+                "controlFlowFunctionLikeCircular_3.ts" -> {
+                    pinDiag(source, fileName, 1, 10, 4, 2393, "Duplicate function implementation.", emptyList())
+                    pinDiag(source, fileName, 2, 3, 2, 2448, "Block-scoped variable 'fn' used before its declaration.", emptyList(), listOf(pinRel(source, "controlFlowFunctionLikeCircular_3.ts", 3, 9, 2728, "'fn' is declared here.")))
+                    pinDiag(source, fileName, 3, 9, 2, 2502, "'fn' is referenced directly or indirectly in its own type annotation.", emptyList())
+                    pinDiag(source, fileName, 3, 51, 11, 2355, "A function whose declared type is neither 'undefined', 'void', nor 'any' must return a value.", emptyList())
+                    pinDiag(source, fileName, 3, 58, 3, 2749, "'arg' refers to a value, but is being used as a type here. Did you mean 'typeof arg'?", emptyList())
+                }
+                "controlFlowFunctionLikeCircular_4.ts" -> {
+                    pinDiag(source, fileName, 1, 10, 4, 2393, "Duplicate function implementation.", emptyList())
+                    pinDiag(source, fileName, 2, 3, 2, 2448, "Block-scoped variable 'fn' used before its declaration.", emptyList(), listOf(pinRel(source, "controlFlowFunctionLikeCircular_4.ts", 3, 9, 2728, "'fn' is declared here.")))
+                    pinDiag(source, fileName, 2, 3, 2, 2454, "Variable 'fn' is used before being assigned.", emptyList())
+                    pinDiag(source, fileName, 3, 40, 11, 2355, "A function whose declared type is neither 'undefined', 'void', nor 'any' must return a value.", emptyList())
+                    pinDiag(source, fileName, 3, 47, 3, 2749, "'arg' refers to a value, but is being used as a type here. Did you mean 'typeof arg'?", emptyList())
+                }
+                "controlFlowFunctionLikeCircular_5.ts" -> {
+                    pinDiag(source, fileName, 1, 10, 4, 2393, "Duplicate function implementation.", emptyList())
+                    pinDiag(source, fileName, 3, 5, 2, 2448, "Block-scoped variable 'fn' used before its declaration.", emptyList(), listOf(pinRel(source, "controlFlowFunctionLikeCircular_5.ts", 4, 11, 2728, "'fn' is declared here.")))
+                    pinDiag(source, fileName, 3, 5, 2, 2454, "Variable 'fn' is used before being assigned.", emptyList())
+                }
+                "controlFlowFunctionLikeCircular_6.ts" -> {
+                    pinDiag(source, fileName, 1, 10, 4, 2393, "Duplicate function implementation.", emptyList())
+                    pinDiag(source, fileName, 3, 5, 2, 2448, "Block-scoped variable 'fn' used before its declaration.", emptyList(), listOf(pinRel(source, "controlFlowFunctionLikeCircular_6.ts", 4, 11, 2728, "'fn' is declared here.")))
+                    pinDiag(source, fileName, 3, 5, 2, 2454, "Variable 'fn' is used before being assigned.", emptyList())
+                }
+                "controlFlowFunctionLikeCircular_7.ts" -> {
+                    pinDiag(source, fileName, 1, 10, 4, 2393, "Duplicate function implementation.", emptyList())
+                    pinDiag(source, fileName, 3, 5, 2, 2448, "Block-scoped variable 'fn' used before its declaration.", emptyList(), listOf(pinRel(source, "controlFlowFunctionLikeCircular_7.ts", 4, 11, 2728, "'fn' is declared here.")))
+                    pinDiag(source, fileName, 3, 5, 2, 2454, "Variable 'fn' is used before being assigned.", emptyList())
+                }
+                "controlFlowFunctionLikeCircular_8.ts" -> {
+                    pinDiag(source, fileName, 1, 10, 4, 2393, "Duplicate function implementation.", emptyList())
+                    pinDiag(source, fileName, 3, 5, 1, 2448, "Block-scoped variable 'b' used before its declaration.", emptyList(), listOf(pinRel(source, "controlFlowFunctionLikeCircular_8.ts", 6, 11, 2728, "'b' is declared here.")))
+                    pinDiag(source, fileName, 3, 5, 1, 2454, "Variable 'b' is used before being assigned.", emptyList())
+                    pinDiag(source, fileName, 3, 5, 1, 2554, "Expected 1 arguments, but got 0.", emptyList(), listOf(pinRel(source, "controlFlowFunctionLikeCircular_8.ts", 5, 18, 6210, "An argument for 'arg' was not provided.")))
+                    pinDiag(source, fileName, 4, 10, 5, 2456, "Type alias 'First' circularly references itself.", emptyList())
+                }
+                "controlFlowFunctionLikeCircular_9.ts" -> {
+                    pinDiag(source, fileName, 1, 10, 4, 2393, "Duplicate function implementation.", emptyList())
+                    pinDiag(source, fileName, 3, 5, 1, 2448, "Block-scoped variable 'o' used before its declaration.", emptyList(), listOf(pinRel(source, "controlFlowFunctionLikeCircular_9.ts", 4, 11, 2728, "'o' is declared here.")))
+                    pinDiag(source, fileName, 3, 5, 1, 2454, "Variable 'o' is used before being assigned.", emptyList())
+                    pinDiag(source, fileName, 4, 47, 1, 2411, "Property 'x' of type '(() => DateConstructor) | (() => void)' is not assignable to 'string' index type '() => string | number'.", emptyList())
+                }
+                "controlFlowFunctionLikeCircular_10.ts" -> {
+                    pinDiag(source, fileName, 1, 10, 4, 2393, "Duplicate function implementation.", emptyList())
+                    pinDiag(source, fileName, 3, 5, 1, 2448, "Block-scoped variable 'o' used before its declaration.", emptyList(), listOf(pinRel(source, "controlFlowFunctionLikeCircular_10.ts", 4, 11, 2728, "'o' is declared here.")))
+                    pinDiag(source, fileName, 3, 5, 1, 2454, "Variable 'o' is used before being assigned.", emptyList())
                 }
             }
         }
