@@ -550,6 +550,27 @@ fun formatErrorBaseline(
                 +chain
                 +"\r\n"
             }
+            // TS-1 pre/post-emit count mismatch: the excess diagnostics render as
+            // `!!! related` lines directly under the global marker, same format as the
+            // per-file related rendering (a file-less related renders the code directly
+            // followed by `: message`). Additive: no global diagnostic carried
+            // relatedInformation before.
+            for (related in diag.relatedInformation) {
+                +"!!! related TS"
+                +related.code.toString()
+                val relFile = related.fileName
+                if (relFile != null) {
+                    +" "
+                    +relFile.removePrefix("./")
+                    +":"
+                    +(related.line ?: 0).toString()
+                    +":"
+                    +(related.character ?: 0).toString()
+                }
+                +": "
+                +related.message
+                +"\r\n"
+            }
         }
 
         // Part 3: Per-file annotated source
