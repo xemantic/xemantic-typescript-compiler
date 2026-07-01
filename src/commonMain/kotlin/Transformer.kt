@@ -354,8 +354,9 @@ class Transformer(
         return if (n < 24) {  // 24 single-letter names: a-h (8) + j-m (4) + o-z (12)
             "_${letterAt(n)}"
         } else {
-            val m = n - 24  // 0-based index into two-letter names
-            "_${letterAt(m / 24)}${letterAt(m % 24)}"
+            // tsc makeTempVariableName: after the letters the names are NUMERIC —
+            // `_0`, `_1`, … (count - 26 with i/n skipped ⇒ n - 24).
+            "_${n - 24}"
         }
     }
 
@@ -371,6 +372,63 @@ class Transformer(
     private fun nextChainTempName(): String =
         if (tempScopeDepth > 0 || functionScopeDepth > 0) nextTempVarName()
         else "${chainTempCounter++}"
+
+    // decoratorsOnComputedProperties: legacy-decorated COMPUTED property/method keys get
+    // temps from a SECOND pool (tsc: the ts-decorator transform's hoisted temps), whose
+    // var statement prints BELOW the classProperties pool's and whose names CONTINUE the
+    // sequence after pool 1 (`var _a.._p; var _q.._51;`). Pool-2 temps are allocated as
+    // placeholders (NUL-prefixed, unprintable) and renamed at file end once pool 1's final
+    // counter is known. `filePool1Vars` collects pool-1 temps (undecorated computed keys +
+    // class-expression temps) for the consolidated file-top var statement — only active
+    // when [fileHasDecoratedComputedKeys] (otherwise per-class emission is unchanged).
+    private var decKeyTempCounter = 0
+    private val decKeyTempOrder = mutableListOf<String>()
+    private val filePool1Vars = mutableListOf<String>()
+    private var fileHasDecoratedComputedKeys = false
+    private fun nextDecKeyTempName(): String {
+        val ph = "@@decKey${decKeyTempCounter++}"
+        decKeyTempOrder.add(ph)
+        return ph
+    }
+
+    /** Detects a legacy-decorated class member with a COMPUTED name anywhere in the file
+     *  (class declarations at any statement depth + class expressions in void/paren/
+     *  expression-statement position — the shapes the faithful two-pool emit handles). */
+    private fun statementsHaveDecoratedComputedKey(stmts: List<Statement>): Boolean {
+        fun classHasOne(members: List<ClassElement>): Boolean = members.any { m ->
+            val decs = when (m) {
+                is PropertyDeclaration -> m.decorators
+                is MethodDeclaration -> m.decorators
+                is GetAccessor -> m.decorators
+                is SetAccessor -> m.decorators
+                else -> null
+            }
+            val nm = when (m) {
+                is PropertyDeclaration -> m.name
+                is MethodDeclaration -> m.name
+                is GetAccessor -> m.name
+                is SetAccessor -> m.name
+                else -> null
+            }
+            !decs.isNullOrEmpty() && nm is ComputedPropertyName
+        }
+        fun exprHasOne(e: Expression?): Boolean = when (e) {
+            null -> false
+            is ClassExpression -> classHasOne(e.members)
+            is VoidExpression -> exprHasOne(e.expression)
+            is ParenthesizedExpression -> exprHasOne(e.expression)
+            else -> false
+        }
+        return stmts.any { st ->
+            when (st) {
+                is ClassDeclaration -> classHasOne(st.members)
+                is ExpressionStatement -> exprHasOne(st.expression)
+                is VariableStatement -> st.declarationList.declarations.any { exprHasOne(it.initializer) }
+                is ModuleDeclaration -> (st.body as? ModuleBlock)?.let { statementsHaveDecoratedComputedKey(it.statements) } == true
+                else -> false
+            }
+        }
+    }
 
     /** Renames B348 chain-temp placeholders to their final print-order names. */
     private fun renameChainTemps(stmts: List<Statement>): List<Statement> {
@@ -407,6 +465,12 @@ class Transformer(
     fun transform(sourceFile: SourceFile): SourceFile {
         sourceText = sourceFile.text
         currentFileName = sourceFile.fileName
+        // decoratorsOnComputedProperties: per-file two-pool computed-key state.
+        decKeyTempCounter = 0
+        decKeyTempOrder.clear()
+        filePool1Vars.clear()
+        fileHasDecoratedComputedKeys = options.experimentalDecorators && !useDefineForClassFields &&
+            statementsHaveDecoratedComputedKey(sourceFile.statements)
         // B333: per-file JSX runtime decision — the base comes from the @jsx option
         // (react-jsx/react-jsxdev = automatic), overridden by `/* @jsxRuntime
         // classic|automatic */` pragma comments (the LAST pragma wins, tsc
@@ -584,7 +648,29 @@ class Transformer(
         if (!options.isolatedModules && !options.verbatimModuleSyntax) {
             collectConstEnumValues(sourceFile.statements)
         }
-        val transformed = renameChainTemps(transformStatements(sourceFile.statements, atTopLevel = true))
+        var transformed = renameChainTemps(transformStatements(sourceFile.statements, atTopLevel = true))
+        // decoratorsOnComputedProperties: rename pool-2 placeholders to their final names
+        // (continuing the sequence after pool 1's final counter — `var _a.._p; var _q..;`)
+        // and prepend the two consolidated file-top var statements.
+        if (fileHasDecoratedComputedKeys && (filePool1Vars.isNotEmpty() || decKeyTempOrder.isNotEmpty())) {
+            val renameBase = tempVarCounter + chainTempCounter
+            val realNames = decKeyTempOrder.mapIndexed { i, ph -> ph to tempNameFor(renameBase + i) }
+            for ((ph, real) in realNames) {
+                transformed = transformed.map { renameTempInStmt(it, ph, real) }
+            }
+            fun poolVarStatement(names: List<String>): Statement = VariableStatement(
+                declarationList = VariableDeclarationList(
+                    declarations = names.map { VariableDeclaration(name = syntheticId(it), pos = -1, end = -1) },
+                    flags = VarKeyword,
+                    pos = -1, end = -1,
+                ),
+                pos = -1, end = -1,
+            )
+            val poolStmts = mutableListOf<Statement>()
+            if (filePool1Vars.isNotEmpty()) poolStmts.add(poolVarStatement(filePool1Vars.toList()))
+            if (realNames.isNotEmpty()) poolStmts.add(poolVarStatement(realNames.map { it.second }))
+            transformed = poolStmts + transformed
+        }
 
         // Collect helpers to inject at top of file.
         // Helpers are emitted in the order they were first needed during transformation,
@@ -12723,7 +12809,7 @@ class Transformer(
 
         // Emit __decorate calls for decorated members
         val classTypeParams = decl.typeParameters?.map { it.name.text }?.toSet() ?: emptySet()
-        statements.addAll(generateMemberDecorateStatements(className, decl.members, classTypeParams))
+        statements.addAll(generateMemberDecorateStatements(className, decl.members, classTypeParams, result.computedKeyTemps))
 
         // Emit class-level __decorate call
         val isExportedClassDecorator = hasClassDecorators && ModifierFlag.Export in strippedModifiers
@@ -12778,7 +12864,7 @@ class Transformer(
     }
 
     /** Generate `__decorate([...], ClassName.prototype, "memberName", null/void 0)` for each decorated member. */
-    private fun generateMemberDecorateStatements(className: String, members: List<ClassElement>, classTypeParams: Set<String> = emptySet()): List<Statement> {
+    private fun generateMemberDecorateStatements(className: String, members: List<ClassElement>, classTypeParams: Set<String> = emptySet(), computedKeyTemps: Map<ClassElement, String> = emptyMap()): List<Statement> {
         val stmts = mutableListOf<Statement>()
         // B70.16: TypeScript emits instance-member __decorate calls BEFORE static-member ones.
         // Within each group, source order is preserved. Iterate non-static first, then static.
@@ -12930,7 +13016,28 @@ class Transformer(
             val hasParamDecorators = paramDecorators.isNotEmpty()
 
             if (!hasMethodDecorators && !hasParamDecorators) continue
-            if (memberName == null) continue
+            // decoratorsOnComputedProperties: a computed-name member's __decorate key is the
+            // pool-2 temp (assigned where the key expression evaluates) or the literal itself
+            // for a `["property"]`-style computed literal key.
+            val keyExpr: Expression? = if (memberName != null) {
+                StringLiteralNode(text = memberName, pos = -1, end = -1)
+            } else {
+                val cpnExpr = ((when (member) {
+                    is PropertyDeclaration -> member.name
+                    is MethodDeclaration -> member.name
+                    is GetAccessor -> member.name
+                    is SetAccessor -> member.name
+                    else -> null
+                }) as? ComputedPropertyName)?.expression
+                val temp = computedKeyTemps[member]
+                when {
+                    temp != null -> syntheticId(temp)
+                    cpnExpr is StringLiteralNode -> StringLiteralNode(text = cpnExpr.text, pos = -1, end = -1)
+                    cpnExpr is NumericLiteralNode -> NumericLiteralNode(text = cpnExpr.text, pos = -1, end = -1)
+                    else -> null
+                }
+            }
+            if (keyExpr == null) continue
 
             // Build the decorator array
             val decoratorExprs = mutableListOf<Expression>()
@@ -13043,7 +13150,7 @@ class Transformer(
                         pos = -1, end = -1,
                     ),
                     target,
-                    StringLiteralNode(text = memberName, pos = -1, end = -1),
+                    keyExpr,
                     fourthArg,
                 ),
                 pos = -1, end = -1,
@@ -13389,6 +13496,25 @@ class Transformer(
             // `_a = class`, before the computed-name captures.
             val privateStateExprs = result.privateStateStatements
                 .mapNotNull { (it as? ExpressionStatement)?.expression }
+            // decoratorsOnComputedProperties (faithful pendingExpressions path): the body
+            // transform exposed leftover key evaluations directly — build
+            // `(tempC = class …, evals…, tempC)`. No leftovers (a kept method hosted them
+            // all — class D) → plain class expression, no wrapper temp.
+            if (result.pendingKeyEvals != null) {
+                val evals = result.pendingKeyEvals
+                if (evals.isEmpty() && privateStateExprs.isEmpty()) return transformed
+                val tempName = nextTempVarName()
+                if (functionScopeDepth == 0) filePool1Vars.add(tempName)
+                else hoistedVarScopes.lastOrNull()?.add(tempName)
+                val elements = mutableListOf<Expression>()
+                elements.add(BinaryExpression(
+                    left = syntheticId(tempName), operator = Equals, right = transformed, pos = -1, end = -1,
+                ))
+                elements.addAll(privateStateExprs)
+                elements.addAll(evals)
+                elements.add(syntheticId(tempName))
+                return CommaListExpression(elements = elements, pos = expr.pos, end = expr.end)
+            }
             if (result.trailingStatements.isNotEmpty() || privateStateExprs.isNotEmpty()) {
                 val leadingNames = result.leadingStatements.flatMap { lead ->
                     (lead as? VariableStatement)?.declarationList?.declarations
@@ -13704,6 +13830,56 @@ class Transformer(
         else -> stmt
     }
 
+    // decoratorsOnComputedProperties: full-tree pool-2 placeholder rename. The shared
+    // replaceIdentifierIn* helpers skip class members/comma lists (deliberately narrow for
+    // their callers); the placeholder rename must reach ctor bodies (`this[@@decKeyN]`),
+    // computed method names (`[(… @@decKeyN = …)]`), class-expression comma wrappers, and
+    // __decorate arguments. Delegates to the shared helpers for everything else.
+    private fun renameTempInExpr(e: Expression, from: String, to: String): Expression = when (e) {
+        is CommaListExpression -> e.copy(elements = e.elements.map { renameTempInExpr(it, from, to) })
+        is ClassExpression -> e.copy(members = e.members.map { renameTempInClassElement(it, from, to) })
+        is VoidExpression -> e.copy(expression = renameTempInExpr(e.expression, from, to))
+        is ParenthesizedExpression -> e.copy(expression = renameTempInExpr(e.expression, from, to))
+        is BinaryExpression -> e.copy(
+            left = renameTempInExpr(e.left, from, to),
+            right = renameTempInExpr(e.right, from, to),
+        )
+        is CallExpression -> e.copy(
+            expression = renameTempInExpr(e.expression, from, to),
+            arguments = e.arguments.map { renameTempInExpr(it, from, to) },
+        )
+        is ArrayLiteralExpression -> e.copy(elements = e.elements.map { renameTempInExpr(it, from, to) })
+        else -> replaceIdentifierInExpr(e, from, to)
+    }
+
+    private fun renameTempInClassElement(el: ClassElement, from: String, to: String): ClassElement {
+        fun renameName(n: NameNode): NameNode =
+            if (n is ComputedPropertyName) n.copy(expression = renameTempInExpr(n.expression, from, to)) else n
+        fun renameBlock(b: Block): Block = b.copy(statements = b.statements.map { renameTempInStmt(it, from, to) })
+        return when (el) {
+            is Constructor -> el.copy(body = el.body?.let { renameBlock(it) })
+            is MethodDeclaration -> el.copy(name = renameName(el.name), body = el.body?.let { renameBlock(it) })
+            is PropertyDeclaration -> el.copy(
+                name = renameName(el.name),
+                initializer = el.initializer?.let { renameTempInExpr(it, from, to) },
+            )
+            is GetAccessor -> el.copy(name = renameName(el.name), body = el.body?.let { renameBlock(it) })
+            is SetAccessor -> el.copy(name = renameName(el.name), body = el.body?.let { renameBlock(it) })
+            else -> el
+        }
+    }
+
+    private fun renameTempInStmt(st: Statement, from: String, to: String): Statement = when (st) {
+        is ClassDeclaration -> st.copy(members = st.members.map { renameTempInClassElement(it, from, to) })
+        is ExpressionStatement -> st.copy(expression = renameTempInExpr(st.expression, from, to))
+        is VariableStatement -> st.copy(declarationList = st.declarationList.copy(
+            declarations = st.declarationList.declarations.map { d ->
+                d.copy(initializer = d.initializer?.let { renameTempInExpr(it, from, to) })
+            }
+        ))
+        else -> replaceIdentifierInStmt(st, from, to)
+    }
+
     private fun replaceIdentifierInClassElement(element: ClassElement, from: String, to: String): ClassElement =
         when (element) {
             is MethodDeclaration -> element.copy(body = element.body?.let { replaceIdentifierInBlock(it, from, to) })
@@ -13834,6 +14010,13 @@ class Transformer(
          *  to splice into the capture comma list right after `_a = class`, BEFORE
          *  __setFunctionName and the static trailing statements. */
         val privateStateStatements: List<Statement> = emptyList(),
+        /** decoratorsOnComputedProperties (fileHasDecoratedComputedKeys, class EXPRESSIONS):
+         *  leftover computed-key evaluations (`temp = expr` / bare side effects) for the
+         *  `(tempC = class …, evals…, tempC)` comma wrapper; null when the gate is off. */
+        val pendingKeyEvals: List<Expression>? = null,
+        /** decoratorsOnComputedProperties: original member → computed-key temp (pool 2 for
+         *  decorated members) so generateMemberDecorateStatements can reference the key. */
+        val computedKeyTemps: Map<ClassElement, String> = emptyMap(),
     )
 
     private fun transformClassBody(
@@ -13998,33 +14181,57 @@ class Transformer(
         // right after the class.
         val computedPropTempVars = mutableMapOf<ClassElement, String>() // member → temp var name
         val computedPropLeadingVars = mutableListOf<String>()
-        val computedPropAssignments = mutableListOf<Pair<String, Expression>>()
+        // (tempName|null, rhs): null = a BARE side-effect evaluation of a removed
+        // uninitialized computed key (decoratorsOnComputedProperties — tsc evaluates
+        // `Symbol.isConcatSpreadable`/`foo()` in declaration order; a pure Identifier
+        // key is dropped, tsc isSimpleInlineableExpression).
+        val computedPropAssignments = mutableListOf<Pair<String?, Expression>>()
         // kept member → pending captures to prepend inside its computed-name brackets
-        val hostedComputedCaptures = mutableMapOf<ClassElement, List<Pair<String, Expression>>>()
+        val hostedComputedCaptures = mutableMapOf<ClassElement, List<Pair<String?, Expression>>>()
         if (!useDefineForClassFields) {
-            val pendingCaptures = mutableListOf<Pair<String, Expression>>()
+            val pendingCaptures = mutableListOf<Pair<String?, Expression>>()
             for (member in members) {
-                val movedField = (member as? PropertyDeclaration)?.takeIf { p ->
-                    p.initializer != null &&
-                        ModifierFlag.Declare !in p.modifiers &&
-                        !(p.name is Identifier && (p.name as Identifier).text.startsWith("#")) &&
-                        (ModifierFlag.Static !in p.modifiers || options.effectiveTarget < ScriptTarget.ES2022)
-                }
-                if (movedField != null) {
-                    val computedName = movedField.name as? ComputedPropertyName ?: continue
+                val prop = member as? PropertyDeclaration
+                val fieldEligible = prop != null &&
+                    ModifierFlag.Declare !in prop.modifiers &&
+                    !(prop.name is Identifier && (prop.name as Identifier).text.startsWith("#")) &&
+                    (ModifierFlag.Static !in prop.modifiers || options.effectiveTarget < ScriptTarget.ES2022)
+                val propComputed = if (fieldEligible) prop!!.name as? ComputedPropertyName else null
+                val propDecorated = fileHasDecoratedComputedKeys && prop != null && !prop.decorators.isNullOrEmpty()
+                if (fieldEligible && (prop!!.initializer != null || (fileHasDecoratedComputedKeys && propComputed != null))) {
+                    val computedName = propComputed ?: continue
                     val expr = computedName.expression
                     // Only extract non-literal expressions — literals don't need temp vars
                     val needsTemp = expr !is StringLiteralNode && expr !is NumericLiteralNode
                         && !(expr is PrefixUnaryExpression && expr.operand is NumericLiteralNode)
                     if (needsTemp) {
-                        val tempVar = nextTempVarName()
-                        computedPropTempVars[member] = tempVar
-                        computedPropLeadingVars.add(tempVar)
-                        // Track for CJS hoisting — these vars need to appear before Object.defineProperty
-                        if (functionScopeDepth == 0) computedPropHoistNames.add(tempVar)
-                        pendingCaptures.add(tempVar to transformExpression(expr))
+                        when {
+                            propDecorated -> {
+                                // pool-2: the __decorate call needs the key regardless of init
+                                val tempVar = nextDecKeyTempName()
+                                computedPropTempVars[member] = tempVar
+                                pendingCaptures.add(tempVar to transformExpression(expr))
+                            }
+                            prop.initializer != null -> {
+                                val tempVar = nextTempVarName()
+                                computedPropTempVars[member] = tempVar
+                                if (fileHasDecoratedComputedKeys && functionScopeDepth == 0) {
+                                    filePool1Vars.add(tempVar)
+                                } else {
+                                    computedPropLeadingVars.add(tempVar)
+                                }
+                                // Track for CJS hoisting — these vars need to appear before Object.defineProperty
+                                if (functionScopeDepth == 0) computedPropHoistNames.add(tempVar)
+                                pendingCaptures.add(tempVar to transformExpression(expr))
+                            }
+                            else -> {
+                                // removed uninitialized computed field: evaluate the key
+                                // for side effects unless simple-inlineable (Identifier)
+                                if (expr !is Identifier) pendingCaptures.add(null to transformExpression(expr))
+                            }
+                        }
                     }
-                } else if (pendingCaptures.isNotEmpty()) {
+                } else if (member !is PropertyDeclaration) {
                     // A KEPT member with a computed name hosts the pending captures inside
                     // its own brackets (tsc visitComputedPropertyName + pendingExpressions).
                     val keeps = when (member) {
@@ -14033,7 +14240,29 @@ class Transformer(
                         is SetAccessor -> member.body != null && ModifierFlag.Abstract !in member.modifiers && member.name is ComputedPropertyName
                         else -> false
                     }
-                    if (keeps) {
+                    // decoratorsOnComputedProperties: a DECORATED kept member's own computed
+                    // key gets a pool-2 temp too (`[(…hosted…, _42 = "some" + "method")]`) —
+                    // the __decorate call references it.
+                    val memberDecs = when (member) {
+                        is MethodDeclaration -> member.decorators
+                        is GetAccessor -> member.decorators
+                        is SetAccessor -> member.decorators
+                        else -> null
+                    }
+                    if (fileHasDecoratedComputedKeys && keeps && !memberDecs.isNullOrEmpty()) {
+                        val ownExpr = ((when (member) {
+                            is MethodDeclaration -> member.name
+                            is GetAccessor -> member.name
+                            is SetAccessor -> member.name
+                            else -> null
+                        }) as? ComputedPropertyName)?.expression
+                        val ownIsLiteral = ownExpr is StringLiteralNode || ownExpr is NumericLiteralNode ||
+                            (ownExpr is PrefixUnaryExpression && ownExpr.operand is NumericLiteralNode)
+                        if (ownExpr != null && !ownIsLiteral) {
+                            computedPropTempVars[member] = nextDecKeyTempName()
+                        }
+                    }
+                    if (keeps && (pendingCaptures.isNotEmpty() || computedPropTempVars.containsKey(member))) {
                         hostedComputedCaptures[member] = pendingCaptures.toList()
                         pendingCaptures.clear()
                     }
@@ -14687,8 +14916,12 @@ class Transformer(
                     var transformed = transformClassElement(member)
                     // B323: a kept member hosting pending computed-name captures gets
                     // `[(_a = expr, …, own)]` — the captures evaluate in member order.
+                    // decoratorsOnComputedProperties: a null-name entry is a BARE
+                    // side-effect evaluation; a DECORATED kept member's own key becomes
+                    // `temp = own` (the __decorate call reads the temp).
                     val hosted = hostedComputedCaptures[member]
-                    if (transformed != null && hosted != null) {
+                    val ownKeyTemp = computedPropTempVars[member].takeIf { member !is PropertyDeclaration }
+                    if (transformed != null && (hosted != null || ownKeyTemp != null)) {
                         val ownName = when (val t = transformed) {
                             is MethodDeclaration -> t.name
                             is GetAccessor -> t.name
@@ -14697,17 +14930,24 @@ class Transformer(
                         }
                         val ownExpr = (ownName as? ComputedPropertyName)?.expression
                         if (ownExpr != null) {
-                            var chain: Expression = BinaryExpression(
-                                left = syntheticId(hosted[0].first), operator = Equals, right = hosted[0].second, pos = -1, end = -1,
-                            )
-                            for (i in 1 until hosted.size) {
+                            fun captureExpr(p: Pair<String?, Expression>): Expression =
+                                if (p.first != null) BinaryExpression(left = syntheticId(p.first!!), operator = Equals, right = p.second, pos = -1, end = -1)
+                                else p.second
+                            val finalOwn: Expression = if (ownKeyTemp != null)
+                                BinaryExpression(left = syntheticId(ownKeyTemp), operator = Equals, right = ownExpr, pos = -1, end = -1)
+                            else ownExpr
+                            val hostedList = hosted ?: emptyList()
+                            var chain: Expression = if (hostedList.isNotEmpty()) captureExpr(hostedList[0]) else finalOwn
+                            for (i in 1 until hostedList.size) {
                                 chain = BinaryExpression(
                                     left = chain, operator = SyntaxKind.Comma,
-                                    right = BinaryExpression(left = syntheticId(hosted[i].first), operator = Equals, right = hosted[i].second, pos = -1, end = -1),
+                                    right = captureExpr(hostedList[i]),
                                     pos = -1, end = -1,
                                 )
                             }
-                            chain = BinaryExpression(left = chain, operator = SyntaxKind.Comma, right = ownExpr, pos = -1, end = -1)
+                            if (hostedList.isNotEmpty()) {
+                                chain = BinaryExpression(left = chain, operator = SyntaxKind.Comma, right = finalOwn, pos = -1, end = -1)
+                            }
                             val newName = ComputedPropertyName(
                                 expression = ParenthesizedExpression(expression = chain, pos = -1, end = -1),
                                 pos = -1, end = -1,
@@ -15021,7 +15261,9 @@ class Transformer(
         // evaluated at class-definition time for side effects (e.g. Symbol() registration).
         // Emit them as trailing ExpressionStatements after the class declaration.
         // Skip constant expressions (numeric/string literals) — they have no side effects.
-        if (!useDefineForClassFields) {
+        if (!useDefineForClassFields && !fileHasDecoratedComputedKeys) {
+            // (under fileHasDecoratedComputedKeys the pendingCaptures stream owns these
+            // evaluations, interleaved in declaration order — emitting here would duplicate)
             for (member in members) {
                 if (member is PropertyDeclaration &&
                     member.name is ComputedPropertyName &&
@@ -15067,17 +15309,20 @@ class Transformer(
             ))
         } else emptyList()
 
-        val computedTrailing = if (computedPropAssignments.isNotEmpty()) {
-            // Build comma expression: _a = x, _b = y
-            val assignments = computedPropAssignments.map { (varName, expr) ->
-                BinaryExpression(
-                    left = syntheticId(varName),
-                    operator = Equals,
-                    right = expr,
-                    pos = -1, end = -1,
-                )
-            }
-            val commaExpr = assignments.reduceRight { left, right ->
+        // Leftover key evaluations as expressions (assignment or bare side effect).
+        val pendingKeyEvalExprs: List<Expression> = computedPropAssignments.map { (varName, expr) ->
+            if (varName != null) BinaryExpression(
+                left = syntheticId(varName),
+                operator = Equals,
+                right = expr,
+                pos = -1, end = -1,
+            ) else expr
+        }
+        val computedTrailing = if (pendingKeyEvalExprs.isNotEmpty() && !(fileHasDecoratedComputedKeys && isClassExpression)) {
+            // Build comma expression: _a = x, _b = y (a class-EXPRESSION under the
+            // decorated-computed-keys gate consumes pendingKeyEvals via the comma
+            // wrapper in transformClassExpression instead).
+            val commaExpr = pendingKeyEvalExprs.reduceRight { left, right ->
                 BinaryExpression(left = left, operator = Comma, right = right, pos = -1, end = -1)
             }
             listOf(ExpressionStatement(expression = commaExpr, pos = -1, end = -1))
@@ -15091,6 +15336,8 @@ class Transformer(
             trailingStatements = privateFieldTrailingStatements + computedTrailing + trailingStatements,
             leadingStatements = computedLeading + privateFieldLeadingStatements,
             privateStateStatements = privateStateStatements,
+            pendingKeyEvals = if (fileHasDecoratedComputedKeys && isClassExpression) pendingKeyEvalExprs else null,
+            computedKeyTemps = computedPropTempVars.toMap(),
         )
     }
 
