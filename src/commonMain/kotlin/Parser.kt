@@ -3534,8 +3534,12 @@ class Parser(
 
     private fun isStartOfTypeAlias(): Boolean = scanner.lookAhead {
         scanner.scan() // skip 'type'
-        // If there's a line break between 'type' and the name, ASI applies — not a type alias
-        !scanner.hasPrecedingLineBreak() && isIdentifier() && scanner.getToken() != SyntaxKind.Dot
+        // If there's a line break between 'type' and the name, ASI applies — not a type alias.
+        // Inside scanner.lookAhead the parser's `token` field is NOT updated, so check the
+        // SCANNED token (`isIdentifierToken(scanner.getToken())`) — `isIdentifier()` would check
+        // the still-cached `type` keyword and wrongly accept `type 100 {}` (parseInvalidNames).
+        !scanner.hasPrecedingLineBreak() && isIdentifierToken(scanner.getToken()) &&
+            scanner.getToken() != SyntaxKind.Dot
     }
 
     private fun parseTypeAliasDeclaration(
@@ -4260,10 +4264,23 @@ class Parser(
                 }
                 classDecl
             }
-            InterfaceKeyword -> parseInterfaceDeclaration(modifiers, comments)
-            TypeKeyword -> parseTypeAliasDeclaration(modifiers, comments)
+            // tsc isStartOfDeclaration: a contextual-keyword declaration after `export` still
+            // requires a valid same-line name — `export namespace/interface/type 100 {}` is NOT a
+            // declaration; the export is dropped and the tokens re-parse as expression statements
+            // (parseInvalidNames). Mirror the parseStatement guards so no malformed (erased)
+            // declaration node is created (which would wrongly flip module detection → `export {}`).
+            InterfaceKeyword -> if (lookAhead { nextToken(); !scanner.hasPrecedingLineBreak() && isIdentifier() }) {
+                parseInterfaceDeclaration(modifiers, comments)
+            } else parseExpressionStatement()
+            TypeKeyword -> if (isStartOfTypeAlias()) parseTypeAliasDeclaration(modifiers, comments)
+                else parseExpressionStatement()
             EnumKeyword -> parseEnumDeclaration(modifiers, comments)
-            NamespaceKeyword, ModuleKeyword -> parseModuleDeclaration(modifiers, comments)
+            NamespaceKeyword, ModuleKeyword -> if (lookAhead {
+                    nextToken()
+                    !scanner.hasPrecedingLineBreak() && (isIdentifier() || token == SyntaxKind.StringLiteral)
+                }) {
+                parseModuleDeclaration(modifiers, comments)
+            } else parseExpressionStatement()
             DeclareKeyword -> {
                 val outerPos = pos  // position of the outer `export` keyword
                 val inner = parseDeclareDeclaration(modifiers, comments)
