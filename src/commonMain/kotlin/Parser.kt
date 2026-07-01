@@ -48,6 +48,14 @@ class Parser(
     // (a numeric/string literal is a valid enclosing-context statement start) instead of
     // consuming it. Read+reset at parseArrayBindingPattern entry so nested patterns don't inherit.
     private var bindingPatternAbortMode = false
+
+    /**
+     * tsc NodeFlags.DecoratorContext: true while parsing a decorator EXPRESSION.
+     * In this context `[` is NOT parsed as an element access (it could be the start
+     * of a ComputedPropertyName: `@x ["property"]: any;`). Reset by parseArgumentList
+     * (tsc doOutsideOfContext) so `@dec(arr[0])` parses inner element accesses.
+     */
+    private var inDecoratorContext = false
     private var classBodyDepth = 0
     private var inTypeArgsDepth = 0
     private var inTupleTypeDepth = 0
@@ -4808,7 +4816,14 @@ class Parser(
         while (token == SyntaxKind.At) {
             val pos = getPos()
             nextToken()
-            val expr = parseLeftHandSideExpression()
+            // tsc doInDecoratorContext: while parsing the decorator expression, a `[` is
+            // NOT an element access — it could be the start of a ComputedPropertyName
+            // (`@x ["property"]: any;` — the decorator is `x`, the `[` belongs to the
+            // member name). parseArgumentList resets the flag (tsc doOutsideOfContext),
+            // so `@dec(arr[0])` still parses the inner element access.
+            val savedDecoratorContext = inDecoratorContext
+            inDecoratorContext = true
+            val expr = try { parseLeftHandSideExpression() } finally { inDecoratorContext = savedDecoratorContext }
             val trailing = scanner.getTrailingComments()
             decorators.add(Decorator(expression = expr, pos = pos, end = getEnd(), trailingComments = trailing))
         }
@@ -5790,6 +5805,10 @@ class Parser(
             // arrow node can only arise in error recovery (e.g. the missing-'=>' zero-width
             // body) and belongs to the ENCLOSING context (`((a) => b).c` needs the parens).
             if (result is ArrowFunction && token == Dot) break
+            // tsc parseMemberExpressionRest: in the [Decorator] context a `[` is NOT an
+            // element access — it could be part of a ComputedPropertyName (`@x [Symbol.iterator]:
+            // any;`). `?.[` (QuestionDot token) is unaffected, matching tsc.
+            if (inDecoratorContext && token == OpenBracket) return result
             result = when (token) {
                 Dot -> {
                     val newLineBefore = scanner.hasPrecedingLineBreak()
@@ -7269,6 +7288,19 @@ class Parser(
     private var lastCallInnerComments: List<Comment>? = null
 
     private fun parseArgumentList(): List<Expression> {
+        // tsc doOutsideOfContext(disallowInAndDecoratorContext, parseArgumentOrArrayLiteralElement):
+        // call arguments leave the decorator context, so `@dec(arr[0])` parses the inner
+        // element access normally.
+        val savedDecoratorContext = inDecoratorContext
+        inDecoratorContext = false
+        try {
+            return parseArgumentListWorker()
+        } finally {
+            inDecoratorContext = savedDecoratorContext
+        }
+    }
+
+    private fun parseArgumentListWorker(): List<Expression> {
         lastCallInnerComments = null
         parseExpected(SyntaxKind.OpenParen)
         val args = mutableListOf<Expression>()

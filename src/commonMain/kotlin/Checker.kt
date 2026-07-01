@@ -65590,6 +65590,53 @@ interface DataView {
             }
             is LabeledStatement -> checkComputedPropNameInStmt(stmt.statement, source, fileName)
             is FunctionDeclaration -> stmt.body?.let { for (s in it.statements) checkComputedPropNameInStmt(s, source, fileName) }
+            is ExpressionStatement -> checkComputedPropNameInExpr(stmt.expression, source, fileName)
+            else -> {}
+        }
+    }
+
+    /**
+     * decoratorsOnComputedProperties: CLASS EXPRESSIONS. Under LEGACY decorators
+     * (experimentalDecorators) a class-expression member cannot be decorated (tsc
+     * nodeCanBeDecorated requires a ClassDeclaration parent for PropertyDeclarations)
+     * → TS1206 "Decorators are not valid here." at the `@` (the declaration's first
+     * token, span 1), which SHORT-CIRCUITS the TS1166 computed-name check for that
+     * member (tsc checkGrammarModifiers runs before checkGrammarProperty). Undecorated
+     * members keep the TS1166 check, mirroring the ClassDeclaration branch.
+     */
+    private fun checkComputedPropNameInExpr(expr: Expression, source: String, fileName: String) {
+        when (expr) {
+            is VoidExpression -> checkComputedPropNameInExpr(expr.expression, source, fileName)
+            is ParenthesizedExpression -> checkComputedPropNameInExpr(expr.expression, source, fileName)
+            is ClassExpression -> {
+                for (m in expr.members) {
+                    val decs = when (m) {
+                        is PropertyDeclaration -> m.decorators
+                        is MethodDeclaration -> m.decorators
+                        is GetAccessor -> m.decorators
+                        is SetAccessor -> m.decorators
+                        else -> null
+                    }
+                    if (!decs.isNullOrEmpty() && options.experimentalDecorators == true) {
+                        val d = decs.first()
+                        val (line, character) = getLineAndCharacterOfPosition(source, d.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Decorators are not valid here.",
+                            category = DiagnosticCategory.Error, code = 1206,
+                            fileName = fileName, line = line, character = character,
+                            start = d.pos, length = 1,
+                        ))
+                        continue
+                    }
+                    if (m is PropertyDeclaration) {
+                        val name = m.name
+                        if (name is ComputedPropertyName && !isLiteralLikeExpr(name.expression)) {
+                            emitComputedPropNameNonLiteral(name, source, fileName, 1166,
+                                "A computed property name in a class property declaration must have a simple literal type or a 'unique symbol' type.")
+                        }
+                    }
+                }
+            }
             else -> {}
         }
     }
