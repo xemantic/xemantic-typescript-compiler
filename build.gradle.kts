@@ -375,11 +375,30 @@ val generateTypeScriptTests by tasks.registering {
                 // Kotlin 2.x does not allow dots in JVM method names, even in backtick-quoted identifiers.
                 // Replace every dot in the base name with an underscore for the function identifier.
                 val id = name.replace('.', '_')
-                val jsBaseline = baselinesDir.resolve("$name.js")
+                val source = file.readText()
+                val directives = parseDirectives(source)
 
+                // tsgo-relevance elimination (owner-approved 2026-07-01) — see TSGO-RELEVANCE.md.
+                // tsgo (TS7.0 / "Corsa") removes a set of legacy features; a test whose whole point is
+                // one of them is dropped from generation entirely so it never counts against progress.
+                val deprecatedTargets = setOf("es3", "es5")
+                val deprecatedModules = setOf("amd", "system", "umd")
+                // (a) removed BEHAVIOR options (`keyofStringsOnly`, `noStrictGenericChecks`) — the whole
+                //     test exercises removed behavior → skip EVERY subtest of this file.
+                if (directives.containsKey("keyofstringsonly") || directives.containsKey("nostrictgenericchecks")) {
+                    continue
+                }
+                // (b) removed EMIT targets/modules (ES3/ES5, AMD/System/UMD) — the emitted JS no longer
+                //     exists in tsgo, so the JS-emit subtests are dropped. Error/decl subtests are KEPT
+                //     (relevant — the TS5107/TS5102 deprecation diagnostics and .d.ts shapes still apply).
+                val fixedDeprecatedEmit =
+                    (directives["target"]?.split(',')?.any { it.trim().lowercase() in deprecatedTargets } == true) ||
+                    (directives["module"]?.split(',')?.any { it.trim().lowercase() in deprecatedModules } == true)
+
+                val jsBaseline = baselinesDir.resolve("$name.js")
                 // .d.ts sections in baselines are stripped by TypeScriptTestSupport.stripDtsSection()
                 // so tests with declaration output can be included safely.
-                if (jsBaseline.exists()) {
+                if (jsBaseline.exists() && !fixedDeprecatedEmit) {
                     totalBareTests++
                     sb.appendLine()
                     sb.appendLine("    @Test")
@@ -391,15 +410,7 @@ val generateTypeScriptTests by tasks.registering {
                 }
 
                 // Parameterized test variations
-                val source = file.readText()
-                val directives = parseDirectives(source)
                 val variations = computeVariations(directives)
-
-                // Deprecated targets/modules (removed in TypeScript 7.0/tsgo):
-                // Skip JS emit tests for these since downlevel transforms won't be implemented.
-                // Error baseline tests are still generated (TS5107 deprecation diagnostics matter).
-                val deprecatedTargets = setOf("es3", "es5")
-                val deprecatedModules = setOf("amd", "system", "umd")
 
                 for (config in variations) {
                     val paramName = paramBaselineName(name, config, "js")

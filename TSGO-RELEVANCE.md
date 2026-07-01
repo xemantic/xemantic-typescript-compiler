@@ -13,12 +13,24 @@ This file is the **authoritative, human-curated** half of the relevance layer.
 classifies the current failing subtests so surgical effort focuses only on
 **tsgo-relevant** failures. `find_candidates.py --tsgo` hides irrelevant ones.
 
-> **Scope note:** this is a *reporting/analysis* layer only. It does **not**
-> touch the test-generation pipeline (`build.gradle.kts`) — the full suite still
-> runs every test, so the ground-truth failure count is unchanged and there is
-> zero risk of breaking generation. (Excluding tests at generation time is a
-> CLAUDE.md Guardrail requiring owner approval; this layer deliberately stays on
-> the reporting side.)
+> **Scope note (updated 2026-07-01 — owner approved generation-time elimination):**
+> tsgo-irrelevant tests are now **excluded at generation time** in
+> `build.gradle.kts` (`generateTypeScriptTests`), so they no longer appear in the
+> suite at all:
+> - **Removed EMIT targets/modules** (ES3/ES5 `@target`, AMD/System/UMD `@module`):
+>   the **JS-emit** subtest is dropped (the emitted JS no longer exists in tsgo).
+>   The **error-baseline** subtest is KEPT — the `TS5107`/`TS5102` deprecation
+>   diagnostics still fire and the `.d.ts` shapes are not downlevel-specific.
+> - **Removed BEHAVIOR options** (`@keyofStringsOnly`, `@noStrictGenericChecks`):
+>   the **whole file** is dropped (its baseline reflects removed behavior tsgo
+>   won't reproduce).
+>
+> This removed **246 subtests** (238 deprecated-emit JS + 4 removed-option files ×
+> 2 subtests) — 234 of them were *passing* (we do implement AMD/System/UMD emit),
+> so the headline pass count drops accordingly; only 5 were failing. The
+> `tsgo_relevance.py` classifier is retained as a **safety-net reporter**: it now
+> reports ~0 irrelevant (they're gone), and flags any NEW tsgo-irrelevant test that
+> a future baseline import slips in so it can be added to the generation skip.
 
 ## What tsgo removes / changes (grounded research, 2026-06)
 
