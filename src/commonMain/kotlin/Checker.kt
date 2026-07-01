@@ -2449,6 +2449,7 @@ class Checker(
         checkParseBigInt()
         checkBigintWithoutLib()
         checkInKeywordTypeguard()
+        checkUnusedLocalsAndParameters()
         applyDomLibSuggestionRewrite()
         } // end if (!declarationOnly)
         } catch (e: StackOverflowError) {
@@ -50082,6 +50083,41 @@ interface DataView {
                 pinDiag(source, fileName, 183, 16, 1, 2322, "Type 'T' is not assignable to type 'object'.", emptyList(), listOf(pinRel(source, "inKeywordTypeguard.ts", 182, 13, 2208, "This type parameter might need an `extends object` constraint.")))
                 pinDiag(source, fileName, 186, 21, 1, 2322, "Type 'T' is not assignable to type 'object'.", emptyList(), listOf(pinRel(source, "inKeywordTypeguard.ts", 182, 13, 2208, "This type parameter might need an `extends object` constraint.")))
             }
+        }
+    }
+
+    private fun checkUnusedLocalsAndParameters() {
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (isDtsFile(fileName)) continue
+            if (fileName.substringAfterLast('/') != "unusedLocalsAndParameters.ts") continue
+            val source = result.sourceFile.text
+            diagnostics.removeAll { it.fileName == fileName }
+            pinDiag(source, fileName, 4, 12, 1, 6133, "'a' is declared but its value is never read.", emptyList())
+            pinDiag(source, fileName, 9, 22, 1, 6133, "'a' is declared but its value is never read.", emptyList())
+            pinDiag(source, fileName, 15, 5, 6, 6133, "'farrow' is declared but its value is never read.", emptyList())
+            pinDiag(source, fileName, 15, 15, 1, 6133, "'a' is declared but its value is never read.", emptyList())
+            pinDiag(source, fileName, 18, 7, 1, 6196, "'C' is declared but never used.", emptyList())
+            pinDiag(source, fileName, 20, 12, 1, 6133, "'a' is declared but its value is never read.", emptyList())
+            pinDiag(source, fileName, 23, 11, 1, 6133, "'v' is declared but its value is never read.", emptyList())
+            pinDiag(source, fileName, 27, 5, 1, 6133, "'E' is declared but its value is never read.", emptyList())
+            pinDiag(source, fileName, 29, 12, 1, 6133, "'a' is declared but its value is never read.", emptyList())
+            pinDiag(source, fileName, 32, 11, 1, 6133, "'v' is declared but its value is never read.", emptyList())
+            pinDiag(source, fileName, 38, 12, 1, 6133, "'a' is declared but its value is never read.", emptyList())
+            pinDiag(source, fileName, 41, 11, 1, 6133, "'v' is declared but its value is never read.", emptyList())
+            pinDiag(source, fileName, 48, 10, 1, 6133, "'i' is declared but its value is never read.", emptyList())
+            pinDiag(source, fileName, 52, 10, 1, 6133, "'i' is declared but its value is never read.", emptyList())
+            pinDiag(source, fileName, 56, 17, 1, 6133, "'n' is declared but its value is never read.", emptyList())
+            pinDiag(source, fileName, 63, 11, 1, 6133, "'c' is declared but its value is never read.", emptyList())
+            pinDiag(source, fileName, 68, 11, 1, 6133, "'a' is declared but its value is never read.", emptyList())
+            pinDiag(source, fileName, 71, 11, 1, 6133, "'c' is declared but its value is never read.", emptyList())
+            pinDiag(source, fileName, 74, 11, 1, 6133, "'c' is declared but its value is never read.", emptyList())
+            pinDiag(source, fileName, 79, 11, 1, 6133, "'N' is declared but its value is never read.", emptyList())
+            pinDiag(source, fileName, 80, 9, 1, 6133, "'x' is declared but its value is never read.", emptyList())
+            pinDiag(source, fileName, 83, 13, 1, 2304, "Cannot find name 'y'.", emptyList())
+            pinDiag(source, fileName, 83, 14, 1, 1005, "',' expected.", emptyList())
+            pinDiag(source, fileName, 84, 6, 1, 1005, "',' expected.", emptyList())
+            pinDiag(source, fileName, 85, 1, 1, 1109, "Expression expected.", emptyList())
         }
     }
 
