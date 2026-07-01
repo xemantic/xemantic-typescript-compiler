@@ -121981,6 +121981,36 @@ interface DataView {
             if (leftType === unknownType || rightType === unknownType) return
             if (leftType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return
             if (rightType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return
+            // expr.ts: `==`/`!=` between two operands of DIFFERENT primitive comparability
+            // categories (number ⇎ string ⇎ boolean) → TS2367 "no overlap". Numeric enums
+            // map to the "number" category (a numeric enum vs number does NOT error; enum
+            // vs string/boolean does). comparabilityCategory returns null for
+            // any/bigint/object/heterogeneous-union, so those bail (FN over FP) — the same
+            // firewall the `<`/`>` relational path relies on. Placed before the object/
+            // reference checks below (which never fire for primitives). The DISPLAY uses the
+            // category name for pure number/string/boolean and typeToString for an enum
+            // (baseline shows `'string' and 'E'`, not `'string' and 'number'`).
+            run {
+                val lc = comparabilityCategory(leftType)
+                val rc = comparabilityCategory(rightType)
+                if (lc != null && rc != null && lc != rc) {
+                    val ld = ts2367CategoryDisplay(leftType, lc)
+                    val rd = ts2367CategoryDisplay(rightType, rc)
+                    val start = expr.pos
+                    val length = expressionTrueEnd(expr.right) - start
+                    if (length > 0) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "This comparison appears to be unintentional because the types " +
+                                "'$ld' and '$rd' have no overlap.",
+                            category = DiagnosticCategory.Error, code = 2367,
+                            fileName = fileName, line = line, character = character,
+                            start = start, length = length,
+                        ))
+                    }
+                    return
+                }
+            }
             // B283: bigint and number have no overlap (tsc isTypeEqualityComparableTo
             // fails both directions). Strict kinds only — unions mixing the two, any,
             // and TypeParam operands bail. Displays are the widened bases.
@@ -139621,11 +139651,31 @@ interface DataView {
                     // number) and SKIP null/undefined initializers (they widen to `any`
                     // in non-strict mode — otherwise `var x = null; 3 + x` FP's TS2365).
                     val declName = (decl.name as? Identifier)?.text
-                    val lit = if (declName != null && decl.type == null) {
-                        decl.initializer?.let { literalTypeOfExpression(it) }
-                    } else null
-                    if (lit != null && lit !== nullType && lit !== undefinedType) {
-                        currentLocalTypes[declName!!] = getWidenedLiteralType(lit)
+                    if (declName != null && decl.type != null) {
+                        // expr.ts: record an ANNOTATED function-body local's declared type
+                        // so later arithmetic/comparison checks resolve interface/enum/
+                        // primitive operands (`var i!: I` / `var e!: E`) — the binder does
+                        // not bind function-body vars, so getTypeOfExpression otherwise
+                        // returns `any` for them. Gated to a concrete non-any/error/unknown
+                        // resolution (FN over FP — an unresolvable annotation stays `any` =
+                        // prior behavior). Scoped to currentLocalTypes (the arithmetic pass's
+                        // per-file snapshot), so this does not leak into other checker passes.
+                        val annotType = try { getTypeFromTypeNode(decl.type!!) } catch (_: StackOverflowError) { null }
+                        // Skip UNION types: a `let x: number | undefined` (or any union) is
+                        // routinely flow-NARROWED before an arithmetic/comparison use, and this
+                        // pass has no flow narrowing — recording the un-narrowed union FP's
+                        // (narrowingPastLastAssignment: `let i: number|undefined; i = 0; i + 1`).
+                        if (annotType != null && annotType !== anyType && annotType !== errorType &&
+                            annotType !== unknownType && annotType !is Type.Union) {
+                            currentLocalTypes[declName] = annotType
+                        }
+                    } else {
+                        val lit = if (declName != null && decl.type == null) {
+                            decl.initializer?.let { literalTypeOfExpression(it) }
+                        } else null
+                        if (lit != null && lit !== nullType && lit !== undefinedType) {
+                            currentLocalTypes[declName!!] = getWidenedLiteralType(lit)
+                        }
                     }
                 }
             }
@@ -139658,7 +139708,22 @@ interface DataView {
             }
             is ForInStatement -> {
                 checkArithmeticInExpr(stmt.expression, source, fileName)
-                checkArithmeticInStatement(stmt.statement, source, fileName)
+                // A for-in loop variable is always `string`. Record it (scoped to the loop
+                // body via a snapshot/restore) so this pass does not resolve it via the
+                // block-UNAWARE file-level type map to a same-named numeric var declared
+                // elsewhere in the file (capturedLetConstInLoop6/7: `for (let x in [])
+                // if (x == "1")` where a later `let x = 1` leaks `number` → spurious TS2367).
+                val forInVar = ((stmt.initializer as? VariableDeclarationList)
+                    ?.declarations?.singleOrNull()?.name as? Identifier)?.text
+                if (forInVar != null) {
+                    val savedLoopTypes = currentLocalTypes
+                    currentLocalTypes = currentLocalTypes.toMutableMap()
+                    currentLocalTypes[forInVar] = stringType
+                    try { checkArithmeticInStatement(stmt.statement, source, fileName) }
+                    finally { currentLocalTypes = savedLoopTypes }
+                } else {
+                    checkArithmeticInStatement(stmt.statement, source, fileName)
+                }
             }
             is ForOfStatement -> {
                 checkArithmeticInExpr(stmt.expression, source, fileName)
@@ -140070,9 +140135,17 @@ interface DataView {
             }
         }
 
-        // Skip if either side is anyType or errorType (unresolvable)
-        if (leftType === anyType || leftType === errorType) return
-        if (rightType === anyType || rightType === errorType) return
+        val isStrictArith = isArithmetic || isCompoundArithmetic
+        // errorType always bails (unresolvable — never a real diagnostic).
+        if (leftType === errorType || rightType === errorType) return
+        // An `any` operand: for + / comparison it bails the whole check (any + x is fine).
+        // For STRICT arithmetic (^ - * / % << >> & | ...), an `any` operand is a VALID
+        // operand (isValidArithmeticOperand(any)=true) but must NOT short-circuit the OTHER
+        // operand's per-side check — expr.ts `s^a` still emits TS2362 on the string LHS
+        // (and `a^s` emits TS2363 on the string RHS).
+        if (!isStrictArith) {
+            if (leftType === anyType || rightType === anyType) return
+        }
         // Skip unknown type
         if (leftType === unknownType || rightType === unknownType) return
         // Null/undefined operands: under strictNullChecks, TS18050 fires (checkNullUndefinedUsage)
@@ -140081,14 +140154,18 @@ interface DataView {
             if (leftType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)) return
             if (rightType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)) return
         }
-        // Skip when either side is a non-wrapper Object type (class, interface, etc.)
-        // TypeScript handles these via other checks (TS2629 etc.), not arithmetic checks.
-        // Only wrapper types (Number, Boolean, String) get arithmetic errors.
-        // EXCEPTION: relational comparison (`<`/`>`/`<=`/`>=`) of a non-comparable
-        // object/function/typeof-class operand IS a TS2365 in tsc (e.g. the
-        // `f(g < A, B > 7)` grammar-ambiguity parse where the args are comparisons).
+        // Non-wrapper Object operand (class instance / interface / anonymous object).
+        // EXCEPTION: relational comparison (`<`/`>`/`<=`/`>=`) of a non-comparable object
+        // operand IS a TS2365 (e.g. `f(g < A, B > 7)` grammar-ambiguity args) — kept via
+        // objComparison below. For + and STRICT arithmetic, a NAMED non-wrapper object
+        // (interface/class instance, `symbol != null`) is an INVALID operand → TS2365 (+)
+        // or TS2362/TS2363 (arithmetic): expr.ts `n+i`, `i^n`, `i+i`. An ANONYMOUS object
+        // operand keeps the conservative bail (our synthesized/anonymous object types are
+        // more FP-prone, and tsc-parity there is not needed by any failing test).
         val objComparison = isComparison && (isNonWrapperObjectType(leftType) || isNonWrapperObjectType(rightType))
-        if (!isComparison && (isNonWrapperObjectType(leftType) || isNonWrapperObjectType(rightType))) return
+        if (!isComparison) {
+            if (arithObjectOperandBails(leftType) || arithObjectOperandBails(rightType)) return
+        }
 
         val leftOk = isValidArithmeticOperand(leftType, isPlus || isPlusEquals)
         val rightOk = isValidArithmeticOperand(rightType, isPlus || isPlusEquals)
@@ -140170,6 +140247,7 @@ interface DataView {
                     emitTs2365(expr, op, leftType, rightType, source, fileName)
                 }
             } else if (maybeBig && !arithTypeofSuppressed(expr) &&
+                leftType !== anyType && rightType !== anyType &&
                 !arithOperandUncertain(leftType) && !arithOperandUncertain(rightType)) {
                 // Mixed maybe-bigint pair: TS2365 with literal bases WIDENED (tsc
                 // getBaseTypesIfUnrelated with bothAreBigIntLike — a mixed pair is
@@ -140220,10 +140298,38 @@ interface DataView {
         }
     }
 
+    /** A numeric enum resolves (via getDeclaredTypeOfSymbolWorker) to a `Type.Object`
+     *  carrying the enum symbol — NOT a `Type.Intrinsic` with the Enum flag. For the
+     *  arithmetic/comparison pass such an operand counts as `number` (a numeric enum is a
+     *  valid arithmetic operand and shares the "number" comparability category). A STRING
+     *  enum (any member with a string value) does NOT — it stays unclassified. */
+    private fun isNumericEnumObjectType(type: Type): Boolean {
+        val sym = (type as? Type.Object)?.symbol ?: return false
+        if (!sym.flags.hasAny(SymbolFlags.Enum)) return false
+        val values = enumValues[sym.id] ?: return true // no computed values → all auto-numeric
+        return values.values.none { it is ConstantValue.StringValue }
+    }
+
+    /** For + and STRICT arithmetic, an object operand PROCEEDS to per-operand classification
+     *  only if it is a plain INTERFACE instance (expr.ts `i: I` → TS2362/TS2363/TS2365) or a
+     *  numeric enum (a valid operand). A CLASS value (`class f{}; f += 1` → tsc's TS2629
+     *  "cannot assign to a class", not an arithmetic error), a string enum, an anonymous
+     *  object literal, or any other object type BAILS — our resolution of those is FP-prone
+     *  and tsc routes them through other checks (arithAssignTyping). */
+    private fun arithObjectOperandBails(t: Type): Boolean {
+        if (!isNonWrapperObjectType(t)) return false          // primitive/wrapper: not an object bail
+        if (isNumericEnumObjectType(t)) return false            // numeric enum: valid operand, proceed
+        val sym = (t as? Type.Object)?.symbol
+        // proceed ONLY for a pure interface instance (Interface flag, NOT also Class).
+        if (sym != null && sym.flags.hasAny(SymbolFlags.Interface) && !sym.flags.hasAny(SymbolFlags.Class)) return false
+        return true
+    }
+
     /** Check if a type is valid for arithmetic operations. */
     private fun isValidArithmeticOperand(type: Type, allowString: Boolean): Boolean {
         if (type === anyType) return true
         if (isNumberLikeType(type)) return true
+        if (isNumericEnumObjectType(type)) return true
         if (isBigIntLikeType(type)) return true
         if (type is Type.Intrinsic && type.flags.hasAny(TypeFlags.Enum)) return true
         // Enum literal types
@@ -140247,6 +140353,7 @@ interface DataView {
         if (type.flags.hasAny(TypeFlags.Number or TypeFlags.NumberLiteral)) return true
         if (type.flags.hasAny(TypeFlags.EnumLiteral)) return true
         if (type is Type.Intrinsic && type.flags.hasAny(TypeFlags.Enum)) return true
+        if (isNumericEnumObjectType(type)) return true
         if (type is Type.Union) return type.types.all { isNumberLikeType(it) }
         return false
     }
@@ -140263,6 +140370,7 @@ interface DataView {
     private fun typeAssignableToNumberKind(t: Type): Boolean = when {
         t.flags.hasAny(TypeFlags.Number or TypeFlags.NumberLiteral or TypeFlags.EnumLiteral) -> true
         t is Type.Intrinsic && t.flags.hasAny(TypeFlags.Enum) -> true
+        isNumericEnumObjectType(t) -> true
         t is Type.Union -> t.types.isNotEmpty() && t.types.all { typeAssignableToNumberKind(it) }
         t is Type.TypeParam -> t.constraint?.let { typeAssignableToNumberKind(it) } == true
         else -> false
@@ -140455,10 +140563,18 @@ interface DataView {
         }
         if (type.flags.hasAny(TypeFlags.Number or TypeFlags.NumberLiteral or TypeFlags.EnumLiteral)) return "number"
         if (type is Type.Intrinsic && type.flags.hasAny(TypeFlags.Enum)) return "number"
+        if (isNumericEnumObjectType(type)) return "number"
         if (type.flags.hasAny(TypeFlags.String or TypeFlags.StringLiteral)) return "string"
         if (type.flags.hasAny(TypeFlags.Boolean or TypeFlags.BooleanLiteral)) return "boolean"
         return null
     }
+
+    /** TS2367 (`==`/`!=` no-overlap) display for a primitive operand: an enum renders as
+     *  its NAME (`E`), a pure number/string/boolean renders as its category name (matching
+     *  the widened base tsc shows). */
+    private fun ts2367CategoryDisplay(type: Type, category: String): String =
+        if ((type is Type.Intrinsic && type.flags.hasAny(TypeFlags.Enum)) ||
+            type.flags.hasAny(TypeFlags.EnumLiteral) || isNumericEnumObjectType(type)) typeToString(type) else category
 
     /** For TS2365 "Operator X cannot be applied to types 'A' and 'B'", display the
      *  LITERAL form of literal operands (number `3`, null, undefined) rather than
