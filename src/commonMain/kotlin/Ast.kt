@@ -1248,6 +1248,8 @@ data class GetAccessor(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
+    /** True end of a bodyless accessor (right after `)` / return type / `;`) — tsc's accessor.end for checkGrammarAccessor's TS1005 at end-1. -1 when a body is present. */
+    val bodylessEnd: Int = -1,
 ) : ClassElement {
     override val kind: SyntaxKind = SyntaxKind.GetAccessor
 }
@@ -1263,6 +1265,8 @@ data class SetAccessor(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
+    /** True end of a bodyless accessor (right after `)` / return type / `;`) — tsc's accessor.end for checkGrammarAccessor's TS1005 at end-1. -1 when a body is present. */
+    val bodylessEnd: Int = -1,
 ) : ClassElement {
     override val kind: SyntaxKind = SyntaxKind.SetAccessor
 }

@@ -2925,11 +2925,21 @@ class Parser(
         val name = parsePropertyName()
         val params = parseParameterList()
         val type = if (parseOptional(SyntaxKind.Colon)) parseType() else null
+        // tsc parseFunctionBlockOrSemicolon: a bodyless accessor is ACCEPTED silently when
+        // canParseSemicolon() (ASI / `;` / `}` / EOF) — the '{' expected diagnostic is the
+        // CHECKER's (checkGrammarAccessor grammarErrorAtPos at accessor.end - 1, ambient-gated).
+        // Only a same-line non-`;` follower is a real parse error (tsc parseFunctionBlock →
+        // parseExpected(OpenBrace) at the current token).
+        var bodylessEnd = -1
         val body = if (token == SyntaxKind.OpenBrace) parseBlock() else {
-            // Getter without a body: `get length(): number;` (ambient) or `get pgF()` (error recovery).
-            // Report missing '{' only if the current token is not a semicolon (error recovery case).
-            if (token != SyntaxKind.Semicolon) reportErrorAtPrevTokenEnd("'{' expected.")
-            parseSemicolon()
+            if (canParseSemicolon()) {
+                parseSemicolon()
+                bodylessEnd = scanner.getPrevTokenEnd()
+            } else {
+                // Same-line garbage after the signature — a real parse error (tsc parseFunctionBlock).
+                reportErrorAtPrevTokenEnd("'{' expected.")
+                parseSemicolon()
+            }
             null  // Return null body — Transformer synthesizes empty Block for concrete (non-abstract) classes
         }
         val trailing = trailingComments()
@@ -2944,6 +2954,7 @@ class Parser(
             end = getEnd(),
             leadingComments = comments,
             trailingComments = trailing,
+            bodylessEnd = bodylessEnd,
         )
     }
 
@@ -2971,10 +2982,18 @@ class Parser(
         }
         // Setters cannot have a return type annotation, but parse it for error recovery (preserved in emit).
         val type = if (parseOptional(SyntaxKind.Colon)) parseType() else null
+        // Same tsc parseFunctionBlockOrSemicolon split as parseGetAccessor: bodyless + ASI-able
+        // is accepted silently (checker owns the TS1005 at bodylessEnd - 1); the synthetic
+        // Block(pos=-1,end=-1) keeps the Transformer's `set x(v) { }` emit.
+        var bodylessEnd = -1
         val body = if (token == SyntaxKind.OpenBrace) parseBlock() else {
-            // Error recovery: report missing '{' and create empty body
-            if (token != SyntaxKind.Semicolon) reportErrorAtPrevTokenEnd("'{' expected.")
-            parseSemicolon()
+            if (canParseSemicolon()) {
+                parseSemicolon()
+                bodylessEnd = scanner.getPrevTokenEnd()
+            } else {
+                reportErrorAtPrevTokenEnd("'{' expected.")
+                parseSemicolon()
+            }
             Block(statements = emptyList(), multiLine = false, pos = -1, end = -1)
         }
         val trailing = trailingComments()
@@ -2989,6 +3008,7 @@ class Parser(
             end = getEnd(),
             leadingComments = comments,
             trailingComments = trailing,
+            bodylessEnd = bodylessEnd,
         )
     }
 

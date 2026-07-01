@@ -69983,10 +69983,19 @@ interface DataView {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
-            for (stmt in result.sourceFile.statements) {
-                if (stmt is ModuleDeclaration && ModifierFlag.Declare in stmt.modifiers) {
-                    val body = stmt.body
-                    if (body is ModuleBlock) checkStatementsInAmbient(body.statements, source, fileName)
+            checkAmbientStatementsIn(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    /** Finds `declare namespace` bodies at any namespace-nesting depth (a `declare` module
+     *  may be nested inside a plain namespace — giant's `namespace M { export declare namespace eaM {…} }`). */
+    private fun checkAmbientStatementsIn(stmts: List<Statement>, source: String, fileName: String) {
+        for (stmt in stmts) {
+            if (stmt is ModuleDeclaration) {
+                val body = stmt.body
+                if (body is ModuleBlock) {
+                    if (ModifierFlag.Declare in stmt.modifiers) checkStatementsInAmbient(body.statements, source, fileName)
+                    else checkAmbientStatementsIn(body.statements, source, fileName)
                 }
             }
         }
@@ -104922,11 +104931,11 @@ interface DataView {
         currentCheckFileName = null
     }
 
-    private fun checkPropertyOverrideInStatement(stmt: Statement, source: String, fileName: String, enclosingNs: List<Symbol> = emptyList()) {
+    private fun checkPropertyOverrideInStatement(stmt: Statement, source: String, fileName: String, enclosingNs: List<Symbol> = emptyList(), inAmbient: Boolean = false) {
         when (stmt) {
             is ClassDeclaration -> {
                 checkClassPropertyOverrides(stmt, source, fileName, enclosingNs)
-                checkClassDeclAbstractAndAccessors(stmt, source, fileName)
+                checkClassDeclAbstractAndAccessors(stmt, source, fileName, inAmbient)
                 // Recurse into nested class declarations in member bodies
                 for (member in stmt.members) {
                     when (member) {
@@ -104950,7 +104959,8 @@ interface DataView {
                     } else null
                     val childNs = if (moduleSymbol != null && moduleSymbol.flags.hasAny(SymbolFlags.Module))
                         enclosingNs + moduleSymbol else enclosingNs
-                    for (s in body.statements) checkPropertyOverrideInStatement(s, source, fileName, childNs)
+                    val childAmbient = inAmbient || ModifierFlag.Declare in stmt.modifiers
+                    for (s in body.statements) checkPropertyOverrideInStatement(s, source, fileName, childNs, childAmbient)
                 }
             }
             is FunctionDeclaration -> stmt.body?.let { for (s in it.statements) checkPropertyOverrideInStatement(s, source, fileName, enclosingNs) }
@@ -104998,6 +105008,9 @@ interface DataView {
                 // Easier: walk members and run the same heritage-aware override check.
                 checkClassExprPropertyOverrides(expr, source, fileName)
                 checkClassExprAbstractImpl(expr, source, fileName)
+                // A class expression is never ambient — bodyless accessors get the
+                // checkGrammarAccessor TS1005 unconditionally.
+                checkBodylessAccessors(expr.members, source, fileName)
                 // Recurse into nested member bodies.
                 for (member in expr.members) {
                     when (member) {
@@ -105099,7 +105112,35 @@ interface DataView {
      *    (squiggle each accessor name).
      *  - TS1005: a concrete (non-abstract, non-ambient) accessor with no body.
      */
-    private fun checkClassDeclAbstractAndAccessors(classDecl: ClassDeclaration, source: String, fileName: String) {
+    /**
+     * tsc checkGrammarAccessor: a concrete (non-abstract) accessor with no body in a
+     * NON-ambient class/class-expression → grammarErrorAtPos(accessor.end - 1, 1, "'{' expected.").
+     * The parser accepts a bodyless accessor silently when ASI applies (tsc
+     * parseFunctionBlockOrSemicolon canParseSemicolon) and records the true end in
+     * `bodylessEnd` — a bodyless setter's recovery body is the synthetic Block(pos=-1,end=-1).
+     */
+    private fun checkBodylessAccessors(members: List<ClassElement>, source: String, fileName: String) {
+        for (m in members) {
+            val (bodylessEnd, abstract) = when (m) {
+                is GetAccessor -> Pair(if (m.body == null) m.bodylessEnd else -1, ModifierFlag.Abstract in m.modifiers)
+                is SetAccessor -> Pair(
+                    if (m.body == null || (m.body.pos == -1 && m.body.end == -1)) m.bodylessEnd else -1,
+                    ModifierFlag.Abstract in m.modifiers,
+                )
+                else -> continue
+            }
+            if (bodylessEnd > 0 && !abstract) {
+                val (line, character) = getLineAndCharacterOfPosition(source, bodylessEnd - 1)
+                diagnostics.add(Diagnostic(
+                    message = "'{' expected.",
+                    category = DiagnosticCategory.Error, code = 1005,
+                    fileName = fileName, line = line, character = character, start = bodylessEnd - 1, length = 1,
+                ))
+            }
+        }
+    }
+
+    private fun checkClassDeclAbstractAndAccessors(classDecl: ClassDeclaration, source: String, fileName: String, inAmbientContext: Boolean = false) {
         val isAmbient = ModifierFlag.Declare in classDecl.modifiers
         val isAbstract = ModifierFlag.Abstract in classDecl.modifiers
 
@@ -105131,27 +105172,9 @@ interface DataView {
             }
         }
 
-        // --- TS1005: concrete accessor with no body ---
-        if (!isAmbient) {
-            for (m in classDecl.members) {
-                val (nm, hasBody, abstract) = when (m) {
-                    is GetAccessor -> Triple(m.name, m.body != null, ModifierFlag.Abstract in m.modifiers)
-                    is SetAccessor -> Triple(m.name, m.body != null, ModifierFlag.Abstract in m.modifiers)
-                    else -> continue
-                }
-                if (!hasBody && !abstract) {
-                    val semi = source.indexOf(';', nm.pos).let { if (it in nm.pos until classDecl.end) it else -1 }
-                    if (semi >= 0) {
-                        val (line, character) = getLineAndCharacterOfPosition(source, semi)
-                        diagnostics.add(Diagnostic(
-                            message = "'{' expected.",
-                            category = DiagnosticCategory.Error, code = 1005,
-                            fileName = fileName, line = line, character = character, start = semi, length = 1,
-                        ))
-                    }
-                }
-            }
-        }
+        // --- TS1005: concrete accessor with no body (tsc checkGrammarAccessor →
+        // grammarErrorAtPos(accessor, accessor.end - 1, 1, "'{' expected.")) ---
+        if (!isAmbient && !inAmbientContext) checkBodylessAccessors(classDecl.members, source, fileName)
 
         // --- TS2515 / TS2654: unimplemented inherited abstract members ---
         if (isAbstract || isAmbient) return
