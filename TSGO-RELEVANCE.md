@@ -13,24 +13,48 @@ This file is the **authoritative, human-curated** half of the relevance layer.
 classifies the current failing subtests so surgical effort focuses only on
 **tsgo-relevant** failures. `find_candidates.py --tsgo` hides irrelevant ones.
 
-> **Scope note (updated 2026-07-01 — owner approved generation-time elimination):**
-> tsgo-irrelevant tests are now **excluded at generation time** in
-> `build.gradle.kts` (`generateTypeScriptTests`), so they no longer appear in the
-> suite at all:
-> - **Removed EMIT targets/modules** (ES3/ES5 `@target`, AMD/System/UMD `@module`):
->   the **JS-emit** subtest is dropped (the emitted JS no longer exists in tsgo).
->   The **error-baseline** subtest is KEPT — the `TS5107`/`TS5102` deprecation
->   diagnostics still fire and the `.d.ts` shapes are not downlevel-specific.
-> - **Removed BEHAVIOR options** (`@keyofStringsOnly`, `@noStrictGenericChecks`):
->   the **whole file** is dropped (its baseline reflects removed behavior tsgo
->   won't reproduce).
+> **Scope note (updated 2026-07-01 — owner-directed: mirror tsgo's EXACT harness):**
+> The effective test suite is **C = A − B**, replicating tsgo's own test harness
+> rather than the earlier heuristic.
 >
-> This removed **246 subtests** (238 deprecated-emit JS + 4 removed-option files ×
-> 2 subtests) — 234 of them were *passing* (we do implement AMD/System/UMD emit),
-> so the headline pass count drops accordingly; only 5 were failing. The
-> `tsgo_relevance.py` classifier is retained as a **safety-net reporter**: it now
-> reports ~0 irrelevant (they're gone), and flags any NEW tsgo-irrelevant test that
-> a future baseline import slips in so it can be added to the generation skip.
+> - **Set A (corpus) is PINNED** — `cloneTypeScriptRepo` pins `typescript-repo` to
+>   `typeScriptCommit`, the **pristine mainline tsc commit tsgo tracks** (the
+>   `main`-side parent of the "Merge branch 'main' into tsgo-port" commit that
+>   tsgo's `_submodules/TypeScript` submodule points at). **We pin the pristine
+>   `main` commit, NOT the tsgo-port tip** — the tsgo-port branch *regenerates* its
+>   reference baselines to the Go compiler's **divergent** output (e.g. type-id-based
+>   union-member ordering: tsgo `'boolean' | 'number'` / `Cover[] | Cover` vs pristine
+>   tsc — and us — `'number' | 'boolean'` / `Cover | Cover[]`). We diff char-by-char
+>   against **original tsc**, so the tsgo-port baselines are the wrong target. This
+>   gives tsgo's exact test-CASE set with real tsc baselines. Bump `typeScriptCommit`
+>   to follow tsgo (take the 2nd parent of tsgo's submodule sha).
+> - **Set B (removed features) is skipped at generation time** in
+>   `generateTypeScriptTests`, a **verbatim port of tsgo's two skip mechanisms**:
+>   1. `tsgoSkippedTests` — tsgo's hardcoded whole-file `skippedTests`
+>      (`compiler_runner.go`): files using options tsgo removed so completely they no
+>      longer parse (`verbatimModuleSyntaxCompat*`, `preserveValueImports*`,
+>      `importsNotUsedAsValues*`, `keyofStringsOnly`, `noStrictGenericChecks`,
+>      `moduleNone*`, `noImplicitUseStrict_*`, …) + the `typescript.d.ts`-dependent
+>      `APISample_*` self-hosting tests.
+>   2. `usesUnsupportedOption` — tsgo's `SkipUnsupportedCompilerOptions`
+>      (`harnessutil.go`): a **whole-CONFIG** skip (both the `.errors.txt` AND the
+>      `.js`/`.d.ts` subtest) when a config's directives include a removed feature:
+>      target es3/es5, module amd/umd/system, moduleResolution node/node10/classic,
+>      `outFile`, `baseUrl`, `esModuleInterop:false`, `allowSyntheticDefaultImports:false`,
+>      `alwaysStrict:false`. Faithful because tsgo runs the filter on the harness-PARSED
+>      options (explicit directives only; unset never matches).
+>
+> tsgo's `skippedEmitTests` (8 files skipped only for Go's parallel-emit
+> nondeterminism) is deliberately **NOT** mirrored — a Go-runtime artifact, not a
+> removed feature, and our harness is deterministic.
+>
+> This **supersedes** the earlier heuristic (which dropped only the
+> es3/es5/amd/system/umd **JS-emit** subtest and kept the error baseline; whole-file
+> for keyofStringsOnly/noStrictGenericChecks). The new filter is stricter
+> (whole-config, plus outFile/baseUrl/node-classic-resolution/esModuleInterop:false/…),
+> so the total is lower and more honestly tsgo-scoped. `scripts/tsgo_relevance.py`
+> stays as a **safety-net reporter** (should report ~0 irrelevant — set B is gone from
+> the suite) that flags any NEW tsgo-irrelevant test a future corpus bump slips in.
 
 ## What tsgo removes / changes (grounded research, 2026-06)
 
