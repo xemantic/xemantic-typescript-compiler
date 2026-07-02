@@ -1293,7 +1293,7 @@ class TypeScriptCompiler {
 
                 // Re-emit JSON files when outDir is set (but not tsconfig.json/package.json
                 // and not files from node_modules which TypeScript never re-emits).
-                // Also collect under outFile+resolveJsonModule so AMD/System/UMD outFile bundling
+                // Also collect under outFile+resolveJsonModule so AMD outFile bundling
                 // can wrap them as `define("X", [], { ... })`.
                 val collectForOutFileBundle = file.fileName.endsWith(".json") &&
                         options.outFile != null && options.resolveJsonModule &&
@@ -1620,12 +1620,6 @@ class TypeScriptCompiler {
             // qualify references like `sys.version` → `ts.sys.version`.
             val crossFileNamespaceExports = collectCrossFileNamespaceExports(parsedSourceFiles.values)
 
-            // Shared counter for AMD import-alias temp names across all files in an outFile
-            // bundle (e.g. `a_1`, `a_2` for repeated `import {A} from "./a"`). Null when
-            // not bundling so each file restarts at `_1`.
-            val sharedModuleNameCounter: MutableMap<String, Int>? =
-                if (options.outFile != null) mutableMapOf() else null
-
             // Compute commonSourceDirectory across tsFileNames (excluding .d.ts which are
             // never emitted) AND any `.d.ts` files under the tsconfig project directory.
             // Used to preserve subdirectory structure under outDir+fullEmitPaths.
@@ -1642,26 +1636,8 @@ class TypeScriptCompiler {
                 longestCommonPathPrefix(parentDirs)
             } else null
 
-            // commonSourceDir for AMD/System outFile-bundle module-name derivation:
-            // when bundling, the `define("<name>", ...)` module name is the source file's
-            // path relative to the longest common ancestor of the bundled files. E.g.
-            // `src/datastore_result.ts` + `src/conditional_directive_field.ts` under
-            // `outFile: out/datastore.bundle.js` produces `define("datastore_result", ...)`,
-            // not `define("src/datastore_result", ...)`. Only TS source files (no .d.ts)
-            // contribute. Computed independently of `commonSourceDir` because the latter is
-            // gated on `outDir != null && outFile == null`.
-            val amdBundleCommonSourceDir: String? = if (options.outFile != null && tsFileNames.size > 1) {
-                val parentDirs = tsFileNames.map { it.substringBeforeLast('/', "") }
-                longestCommonPathPrefix(parentDirs).ifEmpty { null }
-            } else null
-
-            // Compute file processing order via topological sort BEFORE the transform loop.
-            // This ensures the shared module-name counter (for AMD/System outFile bundles)
-            // increments in the same order as the final emit, so dependency-driven module
-            // numbering matches TypeScript's behavior. Without this, files would be transformed
-            // in @Filename input order but emitted in topological order, producing mismatched
-            // counter assignments (e.g. `foo_2` in baz where baz is emitted first but a/bar
-            // was transformed first).
+            // Compute file processing order via topological sort BEFORE the transform loop,
+            // so per-file transforms run in the same order as the final emit.
             val depsForTransformSort = when {
                 options.noResolve -> emptyMap()
                 hasCycle(tsFileNames, importDeps) -> importDepsNoRefPath
@@ -1726,10 +1702,7 @@ class TypeScriptCompiler {
                     if (hasModuleStatements) continue
                 }
 
-                val transformer = Transformer(
-                    options, checker, crossFileNamespaceExports, sharedModuleNameCounter,
-                    amdBundleCommonSourceDir = amdBundleCommonSourceDir,
-                )
+                val transformer = Transformer(options, checker, crossFileNamespaceExports)
                 val transformed = transformer.transform(sourceFile)
 
                 val emitter = Emitter(options)
@@ -1956,9 +1929,7 @@ class TypeScriptCompiler {
                 // `define("X", [], JSON_CONTENT);` and prepend to the bundle. TypeScript places
                 // JSON defines BEFORE the file defines that import them. The module name "X" is
                 // the JSON file's basename without the .json extension.
-                val isAmdLike = options.module == ModuleKind.AMD ||
-                        options.module == ModuleKind.System ||
-                        options.module == ModuleKind.UMD
+                val isAmdLike = options.module == ModuleKind.AMD
                 val jsonDefines = if (isAmdLike && options.resolveJsonModule && jsonOutputs.isNotEmpty()) {
                     jsonOutputs.map { (path, content) ->
                         val baseName = path.substringAfterLast('/').removeSuffix(".json")
