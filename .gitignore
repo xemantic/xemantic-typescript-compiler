@@ -57,3 +57,6 @@ bin/
 /STOP-LOOP
 /scripts/__pycache__/
 *.orig
+
+### scripts/bench-compile-tsc.sh results (machine-specific timings) ###
+/bench/
