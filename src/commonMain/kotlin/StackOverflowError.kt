@@ -19,11 +19,13 @@
 package com.xemantic.typescript.compiler
 
 /**
- * The checker guards deep-recursion sites with `catch (e: StackOverflowError)`
- * routed through `reportCheckerStackOverflow` (TS2589). `java.lang.StackOverflowError`
- * is JVM-only, so common code declares it `expect`: the JVM `actual` is a typealias
- * to the real thing, while Kotlin/Native cannot catch stack overflows at all (they
- * are a hard process crash), so its `actual` is a plain never-thrown [Error]
- * subclass and those catch blocks are inert dead code there.
+ * The checker's single init boundary guard catches `StackOverflowError` and
+ * surfaces it via `reportCheckerStackOverflow` (TS2589) — recursion cycles are
+ * otherwise prevented by in-progress sentinels, so the guard never fires on the
+ * test corpus. `java.lang.StackOverflowError` is JVM-only, so common code
+ * declares it `expect`: the JVM `actual` is a typealias to the real thing,
+ * while Kotlin/Native cannot catch stack overflows at all (they are a hard
+ * process crash), so its `actual` is a plain never-thrown [Error] subclass and
+ * the boundary guard is inert dead code there.
  */
 expect open class StackOverflowError : Error
