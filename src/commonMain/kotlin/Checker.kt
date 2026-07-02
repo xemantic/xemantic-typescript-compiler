@@ -932,6 +932,7 @@ class Checker(
     private val ambientCyclicBaseClassNamesByFile: MutableMap<String, MutableSet<String>> = mutableMapOf()
 
     init {
+        try {
         // 0. Merge built-in type declarations into globals (before user files)
         mergeSymbolTable(globals, libGlobals)
         // 0b. Wire globalArrayType from built-in lib (if Array was parsed)
@@ -2472,7 +2473,33 @@ class Checker(
         checkMappedTypeRecursiveInferencePin()
         applyDomLibSuggestionRewrite()
         } // end if (!declarationOnly)
+        } catch (e: StackOverflowError) {
+            // Boundary safety net — the ONLY catch(StackOverflowError) in the checker.
+            // Per-call catches used to live inline (first silently swallowing into the
+            // NONE bucket, later loud); they were physically removed (2026-07-02) once
+            // the cycle/iteration guards made overflow unreachable on the corpus. This
+            // single boundary catches any future/adversarial case that escapes the
+            // guards and SURFACES it as a diagnostic instead of crashing the compile.
+            // Do NOT re-add inline catches — fix the recursion (guard/iterate) instead.
+            reportCheckerStackOverflow(e)
+        }
+    }
 
+    /** Emit a single TS2589 when type checking recursed past the stack limit on a
+     *  construct the depth/cycle guards do not cover. Best-effort position: the start
+     *  of the first checked file. Never fires on the test corpus (0 overflows). */
+    private fun reportCheckerStackOverflow(@Suppress("UNUSED_PARAMETER") e: StackOverflowError) {
+        val firstFile = binderResults.firstOrNull()?.sourceFile
+        diagnostics.add(Diagnostic(
+            message = "Type instantiation is excessively deep and possibly infinite.",
+            category = DiagnosticCategory.Error,
+            code = 2589,
+            fileName = firstFile?.fileName,
+            line = if (firstFile != null) 0 else null,
+            character = if (firstFile != null) 0 else null,
+            start = 0,
+            length = 0,
+        ))
     }
 
     /**
@@ -91817,42 +91844,52 @@ interface DataView {
     }
 
     private fun spreadOverrideExpr(expr: Expression, source: String, fileName: String) {
-        var e: Expression = expr
-        while (true) {
-            when (e) {
-                is BinaryExpression -> { spreadOverrideExpr(e.left, source, fileName); e = e.right }
-                is ParenthesizedExpression -> e = e.expression
-                is AsExpression -> e = e.expression
-                is NonNullExpression -> e = e.expression
-                else -> break
-            }
-        }
-        when (val x = e) {
-            is ObjectLiteralExpression -> {
-                checkOneObjectLiteralSpreadOverride(x, source, fileName)
-                for (p in x.properties) when (p) {
-                    is PropertyAssignment -> spreadOverrideExpr(p.initializer, source, fileName)
-                    is SpreadAssignment -> spreadOverrideExpr(p.expression, source, fileName)
-                    // Recurse into object-literal METHOD/accessor bodies (the arrow/fn-expr cases
-                    // are already reached via PropertyAssignment.initializer). Needed to reach a
-                    // spread-overwrite nested in a method body (thislessFunctionsNotContextSensitive3:
-                    // `Suggestion({ editor, ...this.options.suggestion })` inside addProseMirrorPlugins).
-                    is MethodDeclaration -> p.body?.statements?.forEach { spreadOverrideStmt(it, source, fileName) }
-                    is GetAccessor -> p.body?.statements?.forEach { spreadOverrideStmt(it, source, fileName) }
-                    is SetAccessor -> p.body?.statements?.forEach { spreadOverrideStmt(it, source, fileName) }
-                    else -> {}
+        // BinaryExpression operands are expanded via an explicit worklist, NEVER by
+        // per-operand recursion: binderBinaryExpressionStress's left-associative
+        // a+b+c+… chain is deep on the LEFT, so recursing into e.left overflows the
+        // stack (the checker-walker rule; reference pattern: B98b's ArrayDeque
+        // frontier). Popping from the back after pushing the right operand and
+        // continuing with the left preserves left-to-right source order.
+        val work = ArrayDeque<Expression>()
+        work.addLast(expr)
+        while (work.isNotEmpty()) {
+            var e: Expression = work.removeLast()
+            while (true) {
+                when (e) {
+                    is BinaryExpression -> { work.addLast(e.right); e = e.left }
+                    is ParenthesizedExpression -> e = e.expression
+                    is AsExpression -> e = e.expression
+                    is NonNullExpression -> e = e.expression
+                    else -> break
                 }
             }
-            is ArrayLiteralExpression -> x.elements.forEach { spreadOverrideExpr(it, source, fileName) }
-            is CallExpression -> { spreadOverrideExpr(x.expression, source, fileName); x.arguments.forEach { spreadOverrideExpr(it, source, fileName) } }
-            is NewExpression -> x.arguments?.forEach { spreadOverrideExpr(it, source, fileName) }
-            is ConditionalExpression -> { spreadOverrideExpr(x.whenTrue, source, fileName); spreadOverrideExpr(x.whenFalse, source, fileName) }
-            is PropertyAccessExpression -> spreadOverrideExpr(x.expression, source, fileName)
-            is ElementAccessExpression -> { spreadOverrideExpr(x.expression, source, fileName); spreadOverrideExpr(x.argumentExpression, source, fileName) }
-            is SpreadElement -> spreadOverrideExpr(x.expression, source, fileName)
-            is ArrowFunction -> (x.body as? Block)?.statements?.forEach { spreadOverrideStmt(it, source, fileName) } ?: (x.body as? Expression)?.let { spreadOverrideExpr(it, source, fileName) }
-            is FunctionExpression -> x.body?.statements?.forEach { spreadOverrideStmt(it, source, fileName) }
-            else -> {}
+            when (val x = e) {
+                is ObjectLiteralExpression -> {
+                    checkOneObjectLiteralSpreadOverride(x, source, fileName)
+                    for (p in x.properties) when (p) {
+                        is PropertyAssignment -> spreadOverrideExpr(p.initializer, source, fileName)
+                        is SpreadAssignment -> spreadOverrideExpr(p.expression, source, fileName)
+                        // Recurse into object-literal METHOD/accessor bodies (the arrow/fn-expr cases
+                        // are already reached via PropertyAssignment.initializer). Needed to reach a
+                        // spread-overwrite nested in a method body (thislessFunctionsNotContextSensitive3:
+                        // `Suggestion({ editor, ...this.options.suggestion })` inside addProseMirrorPlugins).
+                        is MethodDeclaration -> p.body?.statements?.forEach { spreadOverrideStmt(it, source, fileName) }
+                        is GetAccessor -> p.body?.statements?.forEach { spreadOverrideStmt(it, source, fileName) }
+                        is SetAccessor -> p.body?.statements?.forEach { spreadOverrideStmt(it, source, fileName) }
+                        else -> {}
+                    }
+                }
+                is ArrayLiteralExpression -> x.elements.forEach { spreadOverrideExpr(it, source, fileName) }
+                is CallExpression -> { spreadOverrideExpr(x.expression, source, fileName); x.arguments.forEach { spreadOverrideExpr(it, source, fileName) } }
+                is NewExpression -> x.arguments?.forEach { spreadOverrideExpr(it, source, fileName) }
+                is ConditionalExpression -> { spreadOverrideExpr(x.whenTrue, source, fileName); spreadOverrideExpr(x.whenFalse, source, fileName) }
+                is PropertyAccessExpression -> spreadOverrideExpr(x.expression, source, fileName)
+                is ElementAccessExpression -> { spreadOverrideExpr(x.expression, source, fileName); spreadOverrideExpr(x.argumentExpression, source, fileName) }
+                is SpreadElement -> spreadOverrideExpr(x.expression, source, fileName)
+                is ArrowFunction -> (x.body as? Block)?.statements?.forEach { spreadOverrideStmt(it, source, fileName) } ?: (x.body as? Expression)?.let { spreadOverrideExpr(it, source, fileName) }
+                is FunctionExpression -> x.body?.statements?.forEach { spreadOverrideStmt(it, source, fileName) }
+                else -> {}
+            }
         }
     }
 
