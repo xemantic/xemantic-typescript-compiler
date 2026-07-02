@@ -153,6 +153,17 @@ class TypeScriptCompiler {
         parsed: ParsedSource,
         baseOptions: CompilerOptions,
         fileName: String = "input.ts",
+    ): CompilationResult = runWithDeepStack { compileParsedCore(parsed, baseOptions, fileName) }
+
+    /**
+     * The pipeline body of [compileParsed] — always entered through [runWithDeepStack],
+     * so parser/checker recursion gets a large stack regardless of the caller's thread
+     * (see DeepStack.kt; pinned end-to-end by DeepExpressionChainTest).
+     */
+    private fun compileParsedCore(
+        parsed: ParsedSource,
+        baseOptions: CompilerOptions,
+        fileName: String,
     ): CompilationResult {
         var options = baseOptions
         // Scan multi-file sources for `package.json` files declaring `"type": "module"` or

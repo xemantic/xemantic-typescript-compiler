@@ -19533,12 +19533,25 @@ class Checker(
         when (e) {
             null -> {}
             is BinaryExpression -> {
-                if (e.operator == SyntaxKind.Equals) {
-                    val pa = e.left as? PropertyAccessExpression
-                    val recv = pa?.expression as? Identifier
-                    if (pa != null && recv != null && recv.text in cands) declared[recv.text]?.add(pa.name.text)
+                // Iterative spine walk — deep a+b+c+… chains must not recurse per
+                // binary node (the checker-walker rule; DeepExpressionChainTest).
+                // The per-NODE expando check runs while flattening; `declared` is a
+                // set-valued map, so visit order does not matter.
+                val work = ArrayDeque<Expression>()
+                var cur: Expression? = e
+                while (cur != null) {
+                    var c: Expression = cur
+                    while (c is BinaryExpression) {
+                        if (c.operator == SyntaxKind.Equals) {
+                            val pa = c.left as? PropertyAccessExpression
+                            val recv = pa?.expression as? Identifier
+                            if (pa != null && recv != null && recv.text in cands) declared[recv.text]?.add(pa.name.text)
+                        }
+                        work.addLast(c.right); c = c.left
+                    }
+                    collectExpandoDeclsExpr(c, cands, declared)
+                    cur = work.removeLastOrNull()
                 }
-                collectExpandoDeclsExpr(e.left, cands, declared); collectExpandoDeclsExpr(e.right, cands, declared)
             }
             is PropertyAccessExpression -> collectExpandoDeclsExpr(e.expression, cands, declared)
             is ElementAccessExpression -> { collectExpandoDeclsExpr(e.expression, cands, declared); collectExpandoDeclsExpr(e.argumentExpression, cands, declared) }
@@ -143447,8 +143460,15 @@ interface DataView {
             }
             is PrefixUnaryExpression -> checkBigIntLiteralsInExpr(expr.operand, source, fileName)
             is BinaryExpression -> {
-                checkBigIntLiteralsInExpr(expr.left, source, fileName)
-                checkBigIntLiteralsInExpr(expr.right, source, fileName)
+                // Iterative spine walk — deep a+b+c+… chains must not recurse per
+                // binary node (the checker-walker rule; DeepExpressionChainTest).
+                val work = ArrayDeque<Expression>()
+                var e: Expression = expr
+                while (true) {
+                    while (e is BinaryExpression) { work.addLast(e.right); e = e.left }
+                    checkBigIntLiteralsInExpr(e, source, fileName)
+                    e = work.removeLastOrNull() ?: break
+                }
             }
             is ParenthesizedExpression -> checkBigIntLiteralsInExpr(expr.expression, source, fileName)
             is CallExpression -> {
