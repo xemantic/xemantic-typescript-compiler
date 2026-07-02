@@ -380,18 +380,6 @@ class TypeScriptCompiler {
         if (options.esModuleInteropExplicitlyFalse)
             addDeprecation("esModuleInterop=false", tsconfigKey = "esmoduleinterop")
 
-        // TS6082: outFile with explicitly-set non-AMD/System module
-        // Only fires when module is explicitly specified (not defaulted) and not emitDeclarationOnly
-        if (options.outFile != null && options.module != null && !options.emitDeclarationOnly) {
-            if (options.module != ModuleKind.AMD && options.module != ModuleKind.System && options.module != ModuleKind.None) {
-                diagnostics.add(Diagnostic(
-                    message = "Only 'amd' and 'system' modules are supported alongside --outFile.",
-                    category = DiagnosticCategory.Error,
-                    code = 6082,
-                ))
-            }
-        }
-
         // TS5069: emitDeclarationOnly without declaration/composite
         if (options.emitDeclarationOnly && !options.declaration) {
             diagnostics.add(Diagnostic(
@@ -838,27 +826,8 @@ class TypeScriptCompiler {
         // TS5056: multiple input files would produce the same output
         if (parsed.hasExplicitFilenames) {
             val inputFileSet = parsed.files.map { it.fileName }.toSet()
-            if (options.outFile != null) {
-                val outJs = options.outFile
-                val outDts = options.outFile.substringBeforeLast('.') + ".d.ts"
-                if (outJs in inputFileSet) {
-                    diagnostics.add(Diagnostic(
-                        message = "Cannot write file '$outJs' because it would overwrite input file.",
-                        category = DiagnosticCategory.Error,
-                        code = 5055,
-                        messageChain = listOf("  Adding a tsconfig.json file will help organize projects that contain both TypeScript and JavaScript files. Learn more at https://aka.ms/tsconfig."),
-                    ))
-                }
-                if (options.declaration && outDts in inputFileSet) {
-                    diagnostics.add(Diagnostic(
-                        message = "Cannot write file '$outDts' because it would overwrite input file.",
-                        category = DiagnosticCategory.Error,
-                        code = 5055,
-                        messageChain = listOf("  Adding a tsconfig.json file will help organize projects that contain both TypeScript and JavaScript files. Learn more at https://aka.ms/tsconfig."),
-                    ))
-                }
-            } else {
-                // No outFile — check per-file output conflicts
+            run {
+                // Check per-file output conflicts (overwrite of an input file)
                 val outputToSources = mutableMapOf<String, MutableList<String>>()
                 val isJsxPreserveMode = options.jsx?.lowercase() == "preserve"
                 for (file in parsed.files) {
@@ -1113,34 +1082,10 @@ class TypeScriptCompiler {
                     val checker = Checker(options, binderResults, isMultiFileSource = parsed.hasExplicitFilenames, declarationOnly = true)
                     diagnostics.addAll(checker.getDiagnostics())
                 }
-                // Bundled `.d.ts` output for `@outFile` + `@declaration`. Each module is wrapped
-                // in `declare module "<name>" { ... }`. Only compared when the bundled `.d.ts`'s
-                // basename doesn't collide with a source basename (else the harness strips it),
-                // so the currently-passing outFile-bundle tests are unaffected.
-                var declOutputs: List<Pair<String, String>> = emptyList()
-                if (options.outFile != null && (options.declaration || options.emitDeclarationOnly)) {
-                    val bundleFiles = parsedFiles.entries.mapNotNull { (fn, sf) ->
-                        val bn = fn.substringAfterLast('/')
-                        if (bn == "tsconfig.json" || bn == "package.json" || fn.endsWith(".json")) null
-                        else fn to sf
-                    }
-                    if (bundleFiles.isNotEmpty()) {
-                        val commonDir = DtsBundleEmitter.computeCommonDir(bundleFiles.map { it.first })
-                        val ordered = orderFilesForDtsBundle(bundleFiles)
-                        val dtsContent = DtsBundleEmitter(ordered, commonDir).emit()
-                        val of = options.outFile
-                        val dtsName = (when {
-                            of.endsWith(".d.ts") -> of
-                            of.endsWith(".js") -> of.removeSuffix(".js") + ".d.ts"
-                            else -> of.substringBeforeLast('.') + ".d.ts"
-                        }).substringAfterLast('/')
-                        declOutputs = listOf(dtsName to dtsContent)
-                    }
-                }
                 return CompilationResult(
                     fileName = fileName,
                     sourceEchoes = declSourceEchoes,
-                    jsOutputs = declOutputs,
+                    jsOutputs = emptyList(),
                     isMultiFile = true,
                     options = options,
                     diagnostics = diagnostics,
@@ -1293,12 +1238,6 @@ class TypeScriptCompiler {
 
                 // Re-emit JSON files when outDir is set (but not tsconfig.json/package.json
                 // and not files from node_modules which TypeScript never re-emits).
-                // Also collect under outFile+resolveJsonModule so AMD outFile bundling
-                // can wrap them as `define("X", [], { ... })`.
-                val collectForOutFileBundle = file.fileName.endsWith(".json") &&
-                        options.outFile != null && options.resolveJsonModule &&
-                        baseName != "tsconfig.json" && baseName != "package.json" &&
-                        !file.fileName.contains("node_modules/")
                 // When @resolveJsonModule is on, only re-emit JSON fixtures that are
                 // explicitly imported (matches TypeScript's behavior — unreferenced JSON
                 // fixtures like b.json in a test where only c.json is imported are NOT
@@ -1318,12 +1257,6 @@ class TypeScriptCompiler {
                         val jsonBaseName = file.fileName.substringAfterLast('/')
                         jsonOutputs.add(jsonBaseName to jsonContent)
                     }
-                    continue
-                }
-                if (collectForOutFileBundle) {
-                    val jsonContent = reformatJson(stripJsonTrailingCommas(file.content)).trimEnd()
-                    val jsonBaseName = file.fileName.substringAfterLast('/')
-                    jsonOutputs.add(jsonBaseName to jsonContent)
                     continue
                 }
 
@@ -1658,30 +1591,6 @@ class TypeScriptCompiler {
                 // `//// [foo.js]` entry in the baseline.
                 if (tsFileName in emptyJsxTsxFixtures) continue
 
-                // TS6131: When outFile is set but module is not AMD/System and a file has exports,
-                // exclude the file from outFile output (TypeScript skips such files silently).
-                // The Checker emits TS6131 for the first such file. Here we just skip the output.
-                if (options.outFile != null && options.module == null && options.out == null) {
-                    val effectiveMod = options.effectiveModule
-                    if (effectiveMod != ModuleKind.AMD && effectiveMod != ModuleKind.System
-                        && effectiveMod != ModuleKind.UMD && effectiveMod != ModuleKind.None) {
-                        val hasExports = sourceFile.statements.any { stmt ->
-                            when (stmt) {
-                                is ExportDeclaration, is ExportAssignment -> true
-                                is ImportEqualsDeclaration -> ModifierFlag.Export in stmt.modifiers
-                                is FunctionDeclaration -> ModifierFlag.Export in stmt.modifiers && stmt.body != null
-                                is ClassDeclaration -> ModifierFlag.Export in stmt.modifiers
-                                is VariableStatement -> ModifierFlag.Export in stmt.modifiers
-                                is EnumDeclaration -> ModifierFlag.Export in stmt.modifiers
-                                is InterfaceDeclaration -> ModifierFlag.Export in stmt.modifiers
-                                is TypeAliasDeclaration -> ModifierFlag.Export in stmt.modifiers
-                                is ModuleDeclaration -> ModifierFlag.Export in stmt.modifiers
-                                else -> false
-                            }
-                        }
-                        if (hasExports) continue
-                    }
-                }
                 // For @module: none + @outFile, auxiliary .js files with module statements
                 // (export/import) are NOT bundled into the outFile output. Only the entry
                 // .ts file is emitted. TypeScript treats `.js` files under module:none as
@@ -1896,59 +1805,7 @@ class TypeScriptCompiler {
                 } else emptySet()
             val jsOutputs = sortedTsFiles.filter { it !in requireOnlyOrphans }.mapNotNull { jsOutputMap[it] }
 
-            // When outFile is set, concatenate all JS outputs into a single file.
-            // Exception: isolatedModules is incompatible with outFile — TypeScript ignores outFile
-            // and produces separate output files for each input file.
-            val finalJsOutputs = if (options.outFile != null && !options.isolatedModules && jsOutputs.isNotEmpty()) {
-                // When fullEmitPaths is set, preserve the full outFile path (e.g. "out/output.js")
-                // rather than stripping to the basename.
-                val outFileName = if (options.fullEmitPaths) options.outFile else options.outFile.substringAfterLast('/')
-                // Concatenate, hoisting a single "use strict"; to the very top.
-                // In outFile bundles, TypeScript places "use strict" at the global scope
-                // before all file content (including AMD define() wrappers).
-                // Strip it from each file's output, then prepend once if any file had it.
-                var anyUseStrict = false
-                var anyShebang: String? = null
-                val parts = jsOutputs.mapIndexed { idx, (_, js) ->
-                    var result = js
-                    // Strip shebang from all files; keep first file's shebang for output
-                    if (result.startsWith("#!")) {
-                        val lineEnd = result.indexOf('\n')
-                        if (lineEnd >= 0) {
-                            if (anyShebang == null) anyShebang = result.substring(0, lineEnd + 1)
-                            result = result.substring(lineEnd + 1)
-                        }
-                    }
-                    if (result.trimStart().startsWith("\"use strict\"")) {
-                        anyUseStrict = true
-                        result = result.replace(Regex("""^\s*"use strict";\n?"""), "")
-                    }
-                    result
-                }
-                // For AMD bundles with resolveJsonModule, wrap each JSON file content as
-                // `define("X", [], JSON_CONTENT);` and prepend to the bundle. TypeScript places
-                // JSON defines BEFORE the file defines that import them. The module name "X" is
-                // the JSON file's basename without the .json extension.
-                val isAmdLike = options.module == ModuleKind.AMD
-                val jsonDefines = if (isAmdLike && options.resolveJsonModule && jsonOutputs.isNotEmpty()) {
-                    jsonOutputs.map { (path, content) ->
-                        val baseName = path.substringAfterLast('/').removeSuffix(".json")
-                        "define(\"$baseName\", [], $content);"
-                    }
-                } else emptyList()
-                val body = (jsonDefines + parts).joinToString("\n")
-                val prefix = buildString {
-                    if (anyShebang != null) append(anyShebang)
-                    if (anyUseStrict) append("\"use strict\";\n")
-                }
-                val concatenated = prefix + body
-                // JSON defines are bundled INTO the outFile; don't ALSO emit them separately.
-                if (jsonDefines.isNotEmpty()) {
-                    listOf(outFileName to concatenated)
-                } else {
-                    listOf(outFileName to concatenated)
-                }
-            } else {
+            val finalJsOutputs = run {
                 // Interleave JSON outputs with JS outputs: each imported JSON appears RIGHT
                 // BEFORE the JS output of the importing TS file. JSON outputs without a
                 // recorded importer fall back to the start of the list (legacy behavior).
@@ -2024,62 +1881,6 @@ class TypeScriptCompiler {
         }
     }
 
-}
-
-/**
- * Scans multi-file sources for `package.json` files. For each `package.json`, extracts the
- * `"type"` field: `"module"` → `true`, `"commonjs"` → `false`, absent/other → not added.
- * Returns a map keyed by the directory containing the `package.json` (no trailing `/`, or
- * `""` for the implicit root). Used to determine ESM vs CJS for plain `.ts`/`.js` files
- * under Node16/Node18/Node20/NodeNext.
- *
- * Files inside `node_modules/` are skipped — their `package.json` describes the package's
- * own format, not the consuming code's format. Only consumer-facing `package.json` files
- * (at the project root or sub-directories) affect emit.
- */
-/**
- * Orders bundle files for a `.d.ts` outFile-bundle in dependency order (each file after the
- * files it imports/exports-from), via a post-order DFS in @filename order — matching tsc's
- * bundled-declaration emit order.
- */
-private fun orderFilesForDtsBundle(files: List<Pair<String, SourceFile>>): List<Pair<String, SourceFile>> {
-    val byName = files.associate { it.first to it.second }
-    val fileSet = byName.keys
-    fun resolve(importer: String, spec: String): String? {
-        if (!spec.startsWith(".")) return null
-        val dir = importer.substringBeforeLast('/', "")
-        val joined = if (dir.isEmpty()) spec else "$dir/$spec"
-        val norm = normalizeRelPath(joined)
-        for (ext in listOf(".ts", ".tsx", ".d.ts", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs")) {
-            if ("$norm$ext" in fileSet) return "$norm$ext"
-        }
-        for (idx in listOf("/index.ts", "/index.tsx", "/index.d.ts", "/index.mts", "/index.cts")) {
-            if ("$norm$idx" in fileSet) return "$norm$idx"
-        }
-        return null
-    }
-    val deps = files.associate { (fn, sf) ->
-        fn to buildList {
-            for (stmt in sf.statements) {
-                val spec = when (stmt) {
-                    is ImportDeclaration -> (stmt.moduleSpecifier as? StringLiteralNode)?.text
-                    is ExportDeclaration -> (stmt.moduleSpecifier as? StringLiteralNode)?.text
-                    else -> null
-                }
-                if (spec != null) resolve(fn, spec)?.let { add(it) }
-            }
-        }
-    }
-    val result = mutableListOf<Pair<String, SourceFile>>()
-    val visited = mutableSetOf<String>()
-    fun visit(fn: String) {
-        if (fn in visited) return
-        visited.add(fn)
-        for (d in deps[fn] ?: emptyList()) visit(d)
-        byName[fn]?.let { result.add(fn to it) }
-    }
-    for ((fn, _) in files) visit(fn)
-    return result
 }
 
 private fun normalizeRelPath(p: String): String {

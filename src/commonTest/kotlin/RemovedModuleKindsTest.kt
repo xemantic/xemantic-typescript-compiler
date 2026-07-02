@@ -33,19 +33,14 @@ import kotlin.test.assertFalse
 /**
  * Pins the compiler's behavior for the module kinds tsgo (TypeScript 7) removed.
  *
- * The UMD and System transforms were deleted (2026-07-02) — no active corpus test
- * reaches them (the test generator skips every `module: umd/system` config, and no
- * tsconfig-in-test sets them). These tests pin the two invariants the corpus cannot:
- *
- * 1. A `module: umd`/`module: system` config must DEGRADE GRACEFULLY — no crash,
- *    output still emitted (module statements passed through untransformed), and the
- *    TS5107 deprecation diagnostic still reported. A dispatch hole that throws, or a
- *    silent emit of a partial wrapper, would pass the corpus suite unnoticed.
- *
- * 2. The AMD transform STAYS — it is corpus-pinned by `tsconfigMapOptionsAreCaseInsensitive`
- *    (a tsconfig-in-test `"module": "AmD"` with real module files that bypasses the
- *    generator's directive-based tsgo skip). A future over-removal must fail here,
- *    with a message pointing at the pinning test, not just in the corpus diff.
+ * The AMD, UMD, and System transforms were deleted (2026-07-02) together with the
+ * outFile bundling machinery — no active corpus test reaches them (the generator
+ * skips every `module: amd/umd/system` / `outFile` config, whether set via
+ * directives or via a tsconfig.json embedded in the test). These tests pin the
+ * invariant the corpus cannot: a removed module kind must DEGRADE GRACEFULLY —
+ * no crash, output still emitted (module statements passed through
+ * untransformed, never a partial wrapper), and the TS5107 deprecation
+ * diagnostic still reported so the user learns the kind is dead.
  */
 class RemovedModuleKindsTest {
 
@@ -54,37 +49,20 @@ class RemovedModuleKindsTest {
         export const answer = helper() + 1;
     """.trimIndent()
 
-    private fun compileWithModule(kind: String): CompilationResult =
-        TypeScriptCompiler().compile("// @module: $kind\n$moduleSource", "input.ts")
-
-    /** Removed kinds fall through the module-transform dispatch: no crash, output emitted. */
-    @Test fun umdAndSystemDegradeGracefullyAfterTransformRemoval() {
-        for (kind in listOf("umd", "system")) {
-            val result = compileWithModule(kind)
+    @Test fun removedModuleKindsDegradeGracefully() {
+        for (kind in listOf("amd", "umd", "system")) {
+            val result = TypeScriptCompiler().compile("// @module: $kind\n$moduleSource", "input.ts")
             val js = assertNotNull(result.javascript, "module: $kind emitted no output")
             assertTrue(js.isNotBlank(), "module: $kind emitted blank output")
             // The transforms are gone — their wrappers must never appear again.
+            assertFalse(js.contains("define("), "module: $kind emitted an AMD define() wrapper")
             assertFalse(js.contains("System.register("), "module: $kind emitted a System wrapper")
-            assertFalse(js.contains("typeof define === \"function\" && define.amd"),
+            assertFalse(js.contains("typeof define === \"function\" && define.amd",),
                 "module: $kind emitted a UMD wrapper")
             // The config-level deprecation (TS5107, deprecated in 6.0 / removed in 7)
-            // must still be reported — it is what tells the user the kind is dead.
+            // is the signal that the kind is unsupported.
             assertTrue(result.diagnostics.any { it.code == 5107 },
                 "module: $kind lost its TS5107 deprecation diagnostic")
         }
-    }
-
-    /** AMD single-file emit is corpus-pinned (tsconfigMapOptionsAreCaseInsensitive) — keep it. */
-    @Test fun amdModuleTransformIsStillPresent() {
-        val js = assertNotNull(
-            compileWithModule("amd").javascript,
-            "module: amd emitted no output",
-        )
-        assertTrue(
-            js.contains("define("),
-            "AMD define() wrapper missing — the AMD transform is corpus-pinned by " +
-                "tsconfigMapOptionsAreCaseInsensitive (tsconfig-in-test \"module\": \"AmD\") " +
-                "and must not be removed while that test is in the suite; got:\n$js",
-        )
     }
 }

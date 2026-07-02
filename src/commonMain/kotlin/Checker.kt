@@ -1584,8 +1584,6 @@ class Checker(
         checkDestructuringWithoutInitializer()
         // 29. Check reserved words in wrong context (TS1359)
         checkReservedWordIdentifiers()
-        // 30. Check outFile with non-AMD/System module (TS6131)
-        checkOutFileModuleConflict()
         // 31. Check for merge conflict markers (TS1185)
         checkConflictMarkers()
         // 32. Check module=none with imports/exports (TS1148)
@@ -2278,10 +2276,6 @@ class Checker(
         // 72d. A class's own name used in a direct member's computed property name is a
         //      TDZ use-before-declaration (TS2449)
         checkClassNameInOwnComputedMemberNames()
-        // 73. Check cross-file duplicate function implementation (TS2393)
-        if (binderResults.size > 1) {
-            checkCrossFileDuplicateFunction()
-        }
         // 73a2. Unified cross-file identifier conflicts mixing class / type-alias with
         //       const/let (and cross-file type-alias conflicts) — hub model TS6203/TS6204.
         //       Runs BEFORE 73b so it can claim block-scoped names that also have a
@@ -2351,10 +2345,6 @@ class Checker(
         checkModuleHiddenByLocal()
         // 75. Check export assignment expressions in ambient contexts (TS2714)
         checkAmbientExportAssignmentExpressions()
-        // 76. Check for multiple AMD module name directives (TS2458)
-        if (options.effectiveModule == ModuleKind.AMD) {
-            checkMultipleAmdModuleNames()
-        }
         // 77. Check class named 'Object' with CJS/AMD/System/UMD module (TS2725)
         checkObjectClassNameConflict()
         // 78. Check indexed access into type parameter whose constraint has private/protected member (TS4105)
@@ -12294,7 +12284,6 @@ class Checker(
         }
     }
 
-
     // -----------------------------------------------------------------------
     // 17.30a: Flow-graph-based definite-assignment supplement (TS2454)
     // -----------------------------------------------------------------------
@@ -13653,7 +13642,6 @@ class Checker(
     private fun isNotNullOrUndefinedRef(expr: Expression): Boolean {
         return !isUndefinedRef(expr) && !isNullRef(expr)
     }
-
 
     // -----------------------------------------------------------------------
     // Property initialization checking (TS2564)
@@ -58915,70 +58903,6 @@ interface DataView {
             start = start,
             length = length,
         ))
-    }
-
-    // TS6131: Cannot compile modules using option 'outFile' unless '--module' is 'amd' or 'system'
-    // Only emitted when module kind is NOT explicitly set (defaulted from target).
-    // When module is explicitly set, TS6082 handles the conflict at the configuration level.
-    private fun checkOutFileModuleConflict() {
-        if (options.outFile == null) return
-        // When 'out' is set (removed option), TS5102 handles it — don't add TS6131
-        if (options.out != null) return
-        // When module is explicitly set, TS6082 handles it (from TypeScriptCompiler.kt)
-        if (options.module != null) return
-        val effectiveModule = options.effectiveModule
-        if (effectiveModule == ModuleKind.AMD || effectiveModule == ModuleKind.System
-            || effectiveModule == ModuleKind.UMD) return
-        if (effectiveModule == ModuleKind.None) return
-
-        // TypeScript emits TS6131 only once per compilation (first eligible file with exports)
-        for (result in binderResults) {
-            if (isDtsFile(result.sourceFile.fileName)) continue
-            val source = result.sourceFile.text
-            val fileName = result.sourceFile.fileName
-            // Find the first export module statement (not import-only)
-            val firstExportStmt = findFirstExportStatement(result.sourceFile.statements)
-                ?: continue
-
-            // Determine diagnostic span based on statement type
-            val (spanStart, spanLength) = getModuleStatementSpan(firstExportStmt, source)
-            val (line, character) = getLineAndCharacterOfPosition(source, spanStart)
-            diagnostics.add(Diagnostic(
-                message = "Cannot compile modules using option 'outFile' unless the '--module' flag is 'amd' or 'system'.",
-                category = DiagnosticCategory.Error,
-                code = 6131,
-                fileName = fileName,
-                line = line,
-                character = character,
-                start = spanStart,
-                length = spanLength,
-            ))
-            break // Only emit once per compilation
-        }
-    }
-
-    /** Find the first export statement (not import-only). Used for TS6131 which fires only on exports. */
-    private fun findFirstExportStatement(statements: List<Statement>): Statement? {
-        for (stmt in statements) {
-            when (stmt) {
-                is ExportDeclaration -> return stmt
-                is ExportAssignment -> return stmt
-                else -> {
-                    val modifiers = when (stmt) {
-                        is FunctionDeclaration -> stmt.modifiers
-                        is ClassDeclaration -> stmt.modifiers
-                        is VariableStatement -> stmt.modifiers
-                        is EnumDeclaration -> stmt.modifiers
-                        is InterfaceDeclaration -> stmt.modifiers
-                        is TypeAliasDeclaration -> stmt.modifiers
-                        is ModuleDeclaration -> stmt.modifiers
-                        else -> emptySet()
-                    }
-                    if (ModifierFlag.Export in modifiers) return stmt
-                }
-            }
-        }
-        return null
     }
 
     private fun findFirstModuleStatement(statements: List<Statement>): Statement? {
@@ -117104,7 +117028,6 @@ interface DataView {
         return voidType
     }
 
-
     /**
      * B200: TS2345 for `test1(0)?.("")` where `test1(a: number | string)` returns — from
      * INSIDE an `if (typeof a === "number")` guard — a function whose param is annotated
@@ -128663,7 +128586,6 @@ interface DataView {
     // exercises). This never fires on a primitive-only source (a false negative,
     // not a false positive) and never on a mis-resolved-to-`any`/error source.
     // -----------------------------------------------------------------------
-
 
     // -----------------------------------------------------------------------
     // TS2698: "Spread types may only be created from object types." — an object
@@ -143716,52 +143638,6 @@ interface DataView {
     // TS2458: Multiple AMD module name directives
     // -----------------------------------------------------------------------
 
-    /**
-     * In AMD modules, at most one `/// <amd-module name='...'/>` directive is allowed.
-     * If a second one is found, emit TS2458.
-     */
-    private fun checkMultipleAmdModuleNames() {
-        val amdModuleRegex = Regex("""<amd-module\s+name=['"][^'"]+['"]""")
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            val lines = source.split('\n')
-            var foundCount = 0
-            var offset = 0
-            for (line in lines) {
-                val trimmed = line.trimStart()
-                if (!trimmed.startsWith("///")) {
-                    offset += line.length + 1
-                    // directives only at top of file, but keep scanning all lines
-                    // Actually TypeScript only scans until the first non-/// line
-                    break
-                }
-                if (amdModuleRegex.containsMatchIn(trimmed)) {
-                    foundCount++
-                    if (foundCount == 2) {
-                        // Emit TS2458 at the start of this line
-                        val lineStart = offset
-                        val lineEnd = offset + line.length
-                        val (lineNum, character) = getLineAndCharacterOfPosition(source, lineStart)
-                        diagnostics.add(Diagnostic(
-                            message = "An AMD module cannot have multiple name assignments.",
-                            category = DiagnosticCategory.Error,
-                            code = 2458,
-                            fileName = fileName,
-                            line = lineNum,
-                            character = character,
-                            start = lineStart,
-                            length = lineEnd - lineStart,
-                        ))
-                        break
-                    }
-                }
-                offset += line.length + 1
-            }
-        }
-    }
-
     // -----------------------------------------------------------------------
     // TS2725: Class name cannot be 'Object' with CJS/AMD/System/UMD module
     // -----------------------------------------------------------------------
@@ -144232,49 +144108,6 @@ interface DataView {
     // -----------------------------------------------------------------------
     // TS2393: Duplicate function implementation (cross-file)
     // -----------------------------------------------------------------------
-
-    private fun checkCrossFileDuplicateFunction() {
-        // Only check when using outFile (bundle mode) — separate module files have their own scope
-        if (options.outFile == null) return
-
-        // Collect top-level function names with bodies across non-module files
-        // Map: function name → list of (fileName, position, nameLength)
-        val funcDecls = mutableMapOf<String, MutableList<Triple<String, Int, Int>>>()
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            // Skip module files — they have their own scope
-            if (isModuleFile(result.sourceFile.statements)) continue
-            for (stmt in result.sourceFile.statements) {
-                if (stmt is FunctionDeclaration && stmt.body != null) {
-                    val name = stmt.name?.text ?: continue
-                    funcDecls.getOrPut(name) { mutableListOf() }.add(
-                        Triple(fileName, stmt.name!!.pos, name.length)
-                    )
-                }
-            }
-        }
-
-        // Emit TS2393 for duplicate implementations
-        for ((name, decls) in funcDecls) {
-            if (decls.size < 2) continue
-            // Emit on all .ts declarations (not .js)
-            for ((fileName, pos, length) in decls) {
-                if (fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
-                val source = binderResults.first { it.sourceFile.fileName == fileName }.sourceFile.text
-                val (line, character) = getLineAndCharacterOfPosition(source, pos)
-                diagnostics.add(Diagnostic(
-                    message = "Duplicate function implementation.",
-                    category = DiagnosticCategory.Error,
-                    code = 2393,
-                    fileName = fileName,
-                    line = line,
-                    character = character,
-                    start = pos,
-                    length = length,
-                ))
-            }
-        }
-    }
 
     // -----------------------------------------------------------------------
     // TS2300 / TS2451 cross-file: unified identifier conflicts (B93)

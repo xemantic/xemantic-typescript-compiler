@@ -239,12 +239,7 @@ class Emitter(
                 (sourceFile.fileName.endsWith(".mts") || sourceFile.fileName.endsWith(".mjs"))
         if (hasModuleStatements(sourceFile) && isESM && !isCommonJSOverride) return
 
-        // AMD format: for module files, "use strict" goes inside the define() factory body.
-        // The AMD transformer handles this by inserting it as the first body statement.
-        // Non-module AMD files get "use strict" at the top level normally.
-        if (effectiveModule == ModuleKind.AMD && hasModuleStatements(sourceFile)) return
-
-        // All non-ESM formats (CommonJS, AMD, None) always get "use strict"
+        // All non-ESM formats (CommonJS, None) always get "use strict"
 
         // Check if the source already has "use strict" as the first statement
         val firstStmt = sourceFile.statements.firstOrNull()
