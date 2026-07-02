@@ -3425,7 +3425,7 @@ class Emitter(
                     // `var string = 0 /  >` then newline) leaves the statement's `;` at
                     // the STATEMENT indent, not the continuation indent (mirrors the
                     // plain-path rightIsEmptyPlaceholder rule).
-                    if (binNode.right is Identifier && (binNode.right as Identifier).text.isEmpty()) {
+                    if (binNode.right is Identifier && binNode.right.text.isEmpty()) {
                         repeat(indentLevel) { sb.append("    ") }
                         isStartOfLine = false
                         continue
@@ -3558,7 +3558,7 @@ class Emitter(
             val lineStartForBlankCheck = sb.lastIndexOf('\n') + 1
             val blankSoFar = sb.length > lineStartForBlankCheck &&
                 (lineStartForBlankCheck until sb.length).all { sb[it] == ' ' }
-            if (blankSoFar && node.left is Identifier && (node.left as Identifier).text.isEmpty()) {
+            if (blankSoFar && node.left is Identifier && node.left.text.isEmpty()) {
                 sb.setLength(lineStartForBlankCheck)
             } else {
                 writeNewLine()
@@ -3617,7 +3617,7 @@ class Emitter(
             // the continuation indent. The empty right would emit nothing and the outer
             // `;` of `emitExpressionStatement` would land at the indented column. Matches
             // TypeScript's baseline for these recovery shapes.
-            val rightIsEmptyPlaceholder = node.right is Identifier && (node.right as Identifier).text.isEmpty()
+            val rightIsEmptyPlaceholder = node.right is Identifier && node.right.text.isEmpty()
             if (rightNewLine) {
                 write(" $op")
                 // Emit trailing comments after operator on same line (e.g. `a && // no error\nb`)
@@ -3720,8 +3720,8 @@ class Emitter(
         // position-derived newline flags are garbage. tsc prints `?` ending its line, `:`
         // alone at the continuation indent, and the statement's `;` at the statement indent
         // (lazy-writer behavior — constructorWithIncompleteTypeAnnotation line 226).
-        val wtEmpty = node.whenTrue is Identifier && (node.whenTrue as Identifier).text.isEmpty()
-        val wfEmpty = node.whenFalse is Identifier && (node.whenFalse as Identifier).text.isEmpty()
+        val wtEmpty = node.whenTrue is Identifier && node.whenTrue.text.isEmpty()
+        val wfEmpty = node.whenFalse is Identifier && node.whenFalse.text.isEmpty()
         if (wtEmpty && wfEmpty && newlineAfterQ) {
             write(" ?")
             writeNewLine()

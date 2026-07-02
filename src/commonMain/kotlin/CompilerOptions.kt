@@ -456,7 +456,7 @@ fun parseMultiFileSource(source: String, testFileName: String): ParsedSource {
                     // node_modules the file is re-registered at each target (see post-flush).
                     val targets = value.split(',').map { it.trim() }.filter { it.isNotEmpty() }
                     if (targets.isNotEmpty()) {
-                        symlinkFileTargets.getOrPut(currentFileName!!) { mutableListOf() }.addAll(targets)
+                        symlinkFileTargets.getOrPut(currentFileName) { mutableListOf() }.addAll(targets)
                     }
                 } else {
                     directives[key] = value
@@ -845,7 +845,6 @@ private fun applyTsconfigOptions(options: CompilerOptions, json: String, tsconfi
                         // Check for empty array (TS5066)
                         val items = mutableListOf<String>()
                         val itemPattern = Regex(""""([^"]*)"""")
-                        val numberPattern = Regex("""(\d+)""")
 
                         for (itemMatch in itemPattern.findAll(arrayContent)) {
                             items.add(itemMatch.groupValues[1])

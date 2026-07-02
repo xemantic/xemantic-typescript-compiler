@@ -21,7 +21,6 @@
  * As a special exception, this file contains Helper Code covered by the
  * xemantic-typescript-compiler Output Exception; additional permissions
  * are granted as described in the file LICENSE-EXCEPTION.
- */u.org/licenses/>.
  */
 
 package com.xemantic.typescript.compiler

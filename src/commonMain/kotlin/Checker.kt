@@ -23,24 +23,6 @@
  * are granted as described in the file LICENSE-EXCEPTION.
  */
 
-/*
- * TypeScript to JavaScript transpiler in Kotlin multiplatform
- * Copyright 2026 Kazimierz Pogoda / Xemantic
- *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Affero General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU Affero General Public License for more details.
- *
- *  You should have received a copy of the GNU Affero General Public License
- *  along with this program.  If not, see <https://www.gnu.org/licenses/>.
- */
-
 package com.xemantic.typescript.compiler
 
 import kotlin.jvm.JvmName
@@ -950,7 +932,6 @@ class Checker(
     private val ambientCyclicBaseClassNamesByFile: MutableMap<String, MutableSet<String>> = mutableMapOf()
 
     init {
-        try {
         // 0. Merge built-in type declarations into globals (before user files)
         mergeSymbolTable(globals, libGlobals)
         // 0b. Wire globalArrayType from built-in lib (if Array was parsed)
@@ -2491,33 +2472,7 @@ class Checker(
         checkMappedTypeRecursiveInferencePin()
         applyDomLibSuggestionRewrite()
         } // end if (!declarationOnly)
-        } catch (e: StackOverflowError) {
-            // Boundary safety net — the ONLY catch(StackOverflowError) in the checker.
-            // Per-call catches used to live inline (first silently swallowing into the
-            // NONE bucket, later loud); they were physically removed (2026-07-02) once
-            // the cycle/iteration guards made overflow unreachable on the corpus. This
-            // single boundary catches any future/adversarial case that escapes the
-            // guards and SURFACES it as a diagnostic instead of crashing the compile.
-            // Do NOT re-add inline catches — fix the recursion (guard/iterate) instead.
-            reportCheckerStackOverflow(e)
-        }
-    }
 
-    /** Emit a single TS2589 when type checking recursed past the stack limit on a
-     *  construct the depth/cycle guards do not cover. Best-effort position: the start
-     *  of the first checked file. Never fires on the test corpus (0 overflows). */
-    private fun reportCheckerStackOverflow(@Suppress("UNUSED_PARAMETER") e: StackOverflowError) {
-        val firstFile = binderResults.firstOrNull()?.sourceFile
-        diagnostics.add(Diagnostic(
-            message = "Type instantiation is excessively deep and possibly infinite.",
-            category = DiagnosticCategory.Error,
-            code = 2589,
-            fileName = firstFile?.fileName,
-            line = if (firstFile != null) 0 else null,
-            character = if (firstFile != null) 0 else null,
-            start = 0,
-            length = 0,
-        ))
     }
 
     /**

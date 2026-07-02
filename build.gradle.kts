@@ -44,7 +44,7 @@ plugins {
 group = "com.xemantic.typescript"
 
 xemantic {
-    description = "TypeScript to JavaScript transpiler in Kotlin Multiplatform"
+    description = "a conformant TypeScript compiler and type checker that runs on JVM, native, and WebAssembly"
     inceptionYear = "2026"
     applyAllConventions()
 }
