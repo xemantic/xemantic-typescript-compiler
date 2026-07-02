@@ -18,6 +18,8 @@
 
 package com.xemantic.typescript.compiler
 
+import kotlin.jvm.JvmInline
+
 // ---------------------------------------------------------------------------
 // TypeFlags — bit field classifying what kind of type a Type represents
 // Values match TypeScript/tsgo exactly for compatibility.

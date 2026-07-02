@@ -73,7 +73,10 @@ kotlin {
         languageVersion = kotlinTarget
         freeCompilerArgs.addAll(
             "-Xcontext-parameters",
-            "-Xcontext-sensitive-resolution"
+            "-Xcontext-sensitive-resolution",
+            // StackOverflowError is expect/actual (JVM typealias interop) — the
+            // sanctioned use case for expect/actual classes.
+            "-Xexpect-actual-classes"
         )
         extraWarnings = true
         progressiveMode = true
@@ -105,11 +108,11 @@ kotlin {
 //    }
 
     // tier 2
-//    linuxX64 {
-//        binaries.executable {
-//            entryPoint = "com.xemantic.typescript.compiler.main"
-//        }
-//    }
+    linuxX64 {
+        binaries.executable {
+            entryPoint = "com.xemantic.typescript.compiler.main"
+        }
+    }
 //    linuxArm64 {
 //        binaries.executable {
 //            entryPoint = "com.xemantic.typescript.compiler.main"

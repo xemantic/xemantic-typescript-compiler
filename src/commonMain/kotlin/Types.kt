@@ -18,6 +18,8 @@
 
 package com.xemantic.typescript.compiler
 
+import kotlin.jvm.JvmInline
+
 // ---------------------------------------------------------------------------
 // Symbol flags — bit field indicating what kind of entity a symbol represents
 // ---------------------------------------------------------------------------

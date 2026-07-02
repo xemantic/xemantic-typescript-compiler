@@ -18,6 +18,7 @@
 
 package com.xemantic.typescript.compiler
 
+import kotlin.jvm.JvmName
 import kotlin.math.pow
 
 /**
@@ -19829,7 +19830,7 @@ class Checker(
      *  namespace/function/block bodies. Used by [checkClassFieldSuperAccessJs]. */
     private fun collectNamedClassDecls(stmts: List<Statement>, out: MutableMap<String, ClassDeclaration>) {
         for (stmt in stmts) when (stmt) {
-            is ClassDeclaration -> { stmt.name?.text?.let { out.putIfAbsent(it, stmt) } }
+            is ClassDeclaration -> { stmt.name?.text?.let { out.getOrPut(it) { stmt } } }
             is FunctionDeclaration -> stmt.body?.let { collectNamedClassDecls(it.statements, out) }
             is Block -> collectNamedClassDecls(stmt.statements, out)
             is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { collectNamedClassDecls(it.statements, out) }
@@ -19862,7 +19863,7 @@ class Checker(
                 // chain) — only INSTANCE fields are own-instance properties.
                 if (ModifierFlag.Static in member.modifiers) continue
                 if (ModifierFlag.Accessor in member.modifiers) protoNames.add(nm)
-                else fields.putIfAbsent(nm, if (member.name is StringLiteralNode) quotedName(member.name as StringLiteralNode) else nm)
+                else fields.getOrPut(nm) { if (member.name is StringLiteralNode) quotedName(member.name as StringLiteralNode) else nm }
             }
             else -> {}
         }
@@ -19885,10 +19886,10 @@ class Checker(
                 }
                 if (recv !is Identifier || recv.text != "this") return@walkAccessesNoFnBoundary
                 when (acc) {
-                    is PropertyAccessExpression -> fields.putIfAbsent(acc.name.text, acc.name.text)
+                    is PropertyAccessExpression -> fields.getOrPut(acc.name.text) { acc.name.text }
                     is ElementAccessExpression -> {
                         val arg = acc.argumentExpression
-                        if (arg is StringLiteralNode) fields.putIfAbsent(arg.text, quotedName(arg))
+                        if (arg is StringLiteralNode) fields.getOrPut(arg.text) { quotedName(arg) }
                     }
                     else -> {}
                 }
@@ -29551,7 +29552,7 @@ class Checker(
             for (vd in vs.declarationList.declarations) {
                 val nm = vd.name as? Identifier ?: continue
                 val refs = ciaCollectTypeofRefs(vd.type)
-                if (refs.isNotEmpty()) { typeofGraph[nm.text] = refs; varNamePos.putIfAbsent(nm.text, nm.pos) }
+                if (refs.isNotEmpty()) { typeofGraph[nm.text] = refs; varNamePos.getOrPut(nm.text) { nm.pos } }
             }
         }
         for ((n, refs) in typeofGraph) {
@@ -30841,7 +30842,7 @@ class Checker(
                     val nonExported = spaceDecls.filter { !isExported(it) }
                     if (exported.isNotEmpty() && nonExported.isNotEmpty()) {
                         for (decl in (exported + nonExported)) {
-                            all2395Decls.putIfAbsent(decl.nameNode.pos, decl)
+                            all2395Decls.getOrPut(decl.nameNode.pos) { decl }
                         }
                     }
                 }
@@ -53930,20 +53931,20 @@ interface DataView {
             for (stmt in result.sourceFile.statements) {
                 if (stmt is VariableStatement && stmt.declarationList.flags == SyntaxKind.ConstKeyword) {
                     for (decl in stmt.declarationList.declarations) {
-                        (decl.name as? Identifier)?.let { sharedConsts.putIfAbsent(it.text, 2588) }
+                        (decl.name as? Identifier)?.let { sharedConsts.getOrPut(it.text) { 2588 } }
                     }
                 }
                 if (stmt is ClassDeclaration && stmt.name != null) {
-                    sharedConsts.putIfAbsent(stmt.name!!.text, 2629)
+                    sharedConsts.getOrPut(stmt.name!!.text) { 2629 }
                 }
                 if (stmt is EnumDeclaration) {
-                    sharedConsts.putIfAbsent(stmt.name.text, 2628)
+                    sharedConsts.getOrPut(stmt.name.text) { 2628 }
                 }
                 if (stmt is FunctionDeclaration && stmt.name != null) {
-                    sharedConsts.putIfAbsent(stmt.name!!.text, 2630)
+                    sharedConsts.getOrPut(stmt.name!!.text) { 2630 }
                 }
                 if (stmt is ModuleDeclaration && stmt.name is Identifier) {
-                    sharedConsts.putIfAbsent((stmt.name as Identifier).text, 2708)
+                    sharedConsts.getOrPut((stmt.name as Identifier).text) { 2708 }
                 }
             }
         }
@@ -56249,7 +56250,7 @@ interface DataView {
         for (stmt in statements) when (stmt) {
             is VariableStatement -> for (d in stmt.declarationList.declarations) {
                 val n = (d.name as? Identifier)?.text ?: continue
-                (d.initializer as? ObjectLiteralExpression)?.let { out.putIfAbsent(n, it) }
+                (d.initializer as? ObjectLiteralExpression)?.let { out.getOrPut(n) { it } }
             }
             is FunctionDeclaration -> stmt.body?.let { collectObjLiteralVars(it.statements, out) }
             is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { collectObjLiteralVars(it.statements, out) }
@@ -99389,7 +99390,7 @@ interface DataView {
     ) {
         for (stmt in statements) {
             when (stmt) {
-                is ClassDeclaration -> stmt.name?.let { out.putIfAbsent(it.text, stmt) }
+                is ClassDeclaration -> stmt.name?.let { out.getOrPut(it.text) { stmt } }
                 is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let {
                     collectTopLevelClassDeclarations(it.statements, out)
                 }
@@ -145337,7 +145338,7 @@ interface DataView {
         val umdToModuleFile = mutableMapOf<String, String>()
         for (result in binderResults) {
             for (m in umdRegex.findAll(result.sourceFile.text)) {
-                m.groups[1]?.value?.let { umdToModuleFile.putIfAbsent(it, result.sourceFile.fileName) }
+                m.groups[1]?.value?.let { umdToModuleFile.getOrPut(it) { result.sourceFile.fileName } }
             }
         }
         if (umdToModuleFile.isNotEmpty()) {
@@ -145606,7 +145607,7 @@ interface DataView {
             for (p in rhs.properties) {
                 if (p !is PropertyAssignment) continue
                 val nameId = p.name as? Identifier ?: continue
-                if (p.initializer is StringLiteralNode) out.putIfAbsent(nameId.text, nameId)
+                if (p.initializer is StringLiteralNode) out.getOrPut(nameId.text) { nameId }
             }
         }
         return out
@@ -146710,12 +146711,12 @@ interface DataView {
             // entirely BELOW providedCount, take its max; for each overload
             // entirely ABOVE providedCount, take its min. Matches TypeScript's
             // wording "either N or M" / "N, M, or P".
-            val brackets = sortedSetOf<Int>()
+            val brackets = mutableSetOf<Int>()
             for (r in perOverloadRanges) {
                 if (r.last < providedCount) brackets.add(r.last)
                 else if (r.first > providedCount) brackets.add(r.first)
             }
-            val list = brackets.toList()
+            val list = brackets.sorted()
             val countListText = when (list.size) {
                 1 -> "${list[0]}"
                 2 -> "either ${list[0]} or ${list[1]}"

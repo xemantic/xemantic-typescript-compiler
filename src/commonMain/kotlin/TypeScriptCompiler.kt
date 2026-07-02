@@ -1219,7 +1219,7 @@ class TypeScriptCompiler {
                     for (match in jsonImportRegex.findAll(file.content)) {
                         val jsonBase = match.groupValues[1].substringAfterLast('/')
                         importedJsonBaseNames.add(jsonBase)
-                        jsonBaseNameToImporter.putIfAbsent(jsonBase, file.fileName)
+                        jsonBaseNameToImporter.getOrPut(jsonBase) { file.fileName }
                     }
                 }
                 // When moduleSuffixes is set, the resolver prefers `<base><suffix>.json` over
