@@ -446,6 +446,33 @@ val generateTypeScriptTests by tasks.registering {
                 isFalse("alwaysstrict")
         }
 
+        // 2b. tsgo's SkipUnsupportedCompilerOptions runs on the harness-PARSED options, so a
+        //     tsconfig.json EMBEDDED in the test (`@filename: .../tsconfig.json`) BYPASSES the
+        //     directive-based filter above — tsgo itself still runs such tests (its compiler then
+        //     rejects the option at config-load), but our baselines are pinned to PRISTINE tsc,
+        //     so keeping them would pin removed-feature behavior.
+        //     DELIBERATELY NARROWER than usesUnsupportedOption (2026-07-02, user-approved): only
+        //     the options whose implementation was physically REMOVED from this compiler are
+        //     checked — `module: amd/umd/system` (the UMD/System/AMD transforms are deleted) and
+        //     `outFile` (the bundling concat is deleted). tsconfig-in-test `target: es5`,
+        //     `moduleResolution: node10`, and `baseUrl` are NOT checked: ~55 active tests use them
+        //     INCIDENTALLY while pinning still-relevant behavior (paths mapping, suffix
+        //     resolution, declaration emit) that this compiler handles gracefully.
+        //     Only a file NAMED exactly tsconfig.json counts (the harness loads it as project
+        //     config); tsconfig1.json etc. are plain source-echo files.
+        fun tsconfigInTestUsesRemovedFeature(source: String): Boolean {
+            val sections = Regex("""(?im)^\s*//\s*@filename:\s*(\S+)\s*$""").findAll(source).toList()
+            for ((i, m) in sections.withIndex()) {
+                if (!m.groupValues[1].substringAfterLast('/').equals("tsconfig.json", ignoreCase = true)) continue
+                val start = m.range.last + 1
+                val end = if (i + 1 < sections.size) sections[i + 1].range.first else source.length
+                val body = source.substring(start, end)
+                if (Regex("""(?i)"module"\s*:\s*"(amd|umd|system)"""").containsMatchIn(body)) return true
+                if (Regex("""(?i)"outFile"\s*:\s*"[^"]+"""").containsMatchIn(body)) return true
+            }
+            return false
+        }
+
         // Group by first character to keep individual files manageable
         val groups = testFiles.groupBy { file ->
             val ch = file.nameWithoutExtension.first()
@@ -481,6 +508,12 @@ val generateTypeScriptTests by tasks.registering {
                 // tsgo set-B (see the tsgoSkippedTests / usesUnsupportedOption definitions above):
                 // (1) whole-file skip for tsgo's hardcoded skippedTests list.
                 if (name in tsgoSkippedTests) continue
+                // (1b) whole-file skip when a tsconfig.json EMBEDDED in the test sets a
+                //      removed-module/outFile option (bypasses the directive-based filter — see
+                //      tsconfigInTestUsesRemovedFeature above). Drops exactly 4 tests as of
+                //      2026-07-02: deprecatedCompilerOptions2/6, tsconfigMapOptionsAreCaseInsensitive,
+                //      outFileIsDeprecated.
+                if (tsconfigInTestUsesRemovedFeature(source)) continue
                 // (2) whole-CONFIG skip (errors AND emit) when the bare config's fixed directives
                 //     resolve to a tsgo-removed option. Unlike the previous heuristic (which dropped
                 //     only the JS-emit subtest and KEPT the error baseline for ES3/ES5/AMD/System/UMD),
