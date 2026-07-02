@@ -1,0 +1,42 @@
+xemantic-typescript-compiler Output Exception, version 1.0
+
+As a special exception, the copyright holder of this Software grants you
+additional permission under section 7 of the GNU Affero General Public
+License, version 3 ("AGPLv3"), as follows:
+
+1. Definitions.
+
+   "Compilation Output" means any artifact produced by running the
+   Software on user-provided input, including without limitation
+   JavaScript files, declaration files, source maps, and diagnostics,
+   and including any Helper Code that the Software copies, adapts, or
+   generates into such artifacts.
+
+   "Helper Code" means the runtime helper functions, code templates,
+   and boilerplate fragments contained in the Software for the purpose
+   of being emitted into Compilation Output (for example, helpers such
+   as __extends, __awaiter, __spreadArray, and similar).
+
+2. Grant.
+
+   You have permission to propagate, convey, use, and license
+   Compilation Output under terms of your choice, and the conditions
+   of AGPLv3 do not apply to Compilation Output, notwithstanding that
+   it may incorporate Helper Code or otherwise be derived from the
+   Software's operation.
+
+3. Scope.
+
+   This exception applies only to Compilation Output. It does not
+   apply to the Software itself, to modified versions of the Software,
+   or to any work that incorporates the Software or portions of it
+   other than as Compilation Output. Nothing in this exception limits
+   or modifies your obligations under AGPLv3 with respect to the
+   Software itself, including when the Software is conveyed or made
+   available for interaction over a network.
+
+4. No weakening of AGPLv3.
+
+   As provided in section 7 of AGPLv3, you may remove this additional
+   permission from copies you convey, but you may not add further
+   restrictions.
