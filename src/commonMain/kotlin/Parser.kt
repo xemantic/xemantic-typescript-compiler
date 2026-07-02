@@ -140,6 +140,16 @@ class Parser(
      *  `=`-skip recovery in parseAssignmentExpression applies only there (tsc's
      *  statement-level TS1128-skip), never in nested expression contexts. */
     private var exprStatementStartPos = -1
+
+    /** True while the CURRENT statement was parsed from a FORCED position (an if/else/
+     *  while/do/for/with/label body — tsc calls parseStatement there unconditionally,
+     *  bypassing the list machinery's isStartOfStatement gate). tsc's statement-level
+     *  `=`-skip / TS1128 recoveries never apply in forced positions — a then-statement
+     *  starting at `^=` binds `<missing> ^= rhs` instead (constructorWithIncompleteTypeAnnotation).
+     *  `inForcedStatementBody` is the hand-off from the body call site; parseStatement's
+     *  dispatch consumes it into `exprStatementForced` so nested statements don't inherit it. */
+    private var inForcedStatementBody = false
+    private var exprStatementForced = false
     private val reportedHashBangs = mutableSetOf<Int>()
 
     /** Identifier texts tsc's parseErrorForMissingSemicolonAfter special-cases away
@@ -241,8 +251,20 @@ class Parser(
             reportError("'#!' can only be used at the start of a file.", code = 18026,
                 overrideStart = hashBang, overrideLength = 2)
         }
+        // An identifier BEGINNING with a unicode escape that decodes to a non-identifier-
+        // start char: tsc reports TS1127 "Invalid character." (0-width) AT SCAN TIME, so
+        // it lands BEFORE any same-position recovery diagnostic (a var-decl list's
+        // ','-expected dedups against it — constructorWithIncompleteTypeAnnotation line 72).
+        val invEsc = scanner.invalidEscapeIdentStartPos
+        if (invEsc >= 0 && invEsc !in reportedInvalidEscapeStarts) {
+            reportedInvalidEscapeStarts.add(invEsc)
+            reportError("Invalid character.", code = 1127,
+                overrideStart = invEsc, overrideLength = 0)
+        }
         return token
     }
+
+    private val reportedInvalidEscapeStarts = mutableSetOf<Int>()
 
     private fun parseExpected(kind: SyntaxKind, eofRelated: Boolean = true): Boolean {
         if (token == kind) {
@@ -335,6 +357,10 @@ class Parser(
         // numeric/bigint literals (e.g. `2n2` scans as `2n` `2`) to avoid noisy
         // regressions in broader error-recovery paths. Covers patterns like
         // `this.foo: any;` (mis-typed class-field declaration inside a body).
+        // Expression STATEMENTS take the tsc parseErrorForMissingSemicolonAfter tail
+        // in parseExpressionStatement instead (broadened for non-Identifier exprs);
+        // tsc-faithful full-width reporting for other statement kinds is opt-in via
+        // parseSemicolonRequired.
         if ((token == SyntaxKind.Colon || token == SyntaxKind.Question ||
                 token == SyntaxKind.EqualsGreaterThan ||
                 token == SyntaxKind.NumericLiteral ||
@@ -346,6 +372,20 @@ class Parser(
             }
             reportError("';' expected.", code = 1005,
                 overrideStart = scanner.getTokenPos(), overrideLength = len)
+        }
+    }
+
+    /** tsc parseSemicolon = tryParseSemicolon || parseExpected(Semicolon): reports TS1005
+     *  "';' expected." at ANY non-ASI token (span = the token text, same-start-deduped),
+     *  without consuming. Used at call sites verified to need the faithful behavior. */
+    private fun parseSemicolonRequired() {
+        if (token == SyntaxKind.Semicolon) {
+            nextToken(); return
+        }
+        if (!canParseSemicolon()) {
+            reportError("';' expected.", code = 1005,
+                overrideStart = scanner.getTokenPos(),
+                overrideLength = scanner.getTokenText().length.coerceAtLeast(1))
         }
     }
 
@@ -709,6 +749,22 @@ class Parser(
                 nextToken()
                 continue
             }
+            // tsc abortParsingListOrMoveToNextToken(BlockStatements): a RESERVED keyword that
+            // cannot start a statement (`case` outside a switch, …) reports TS1128
+            // "Declaration or statement expected." (same-start-deduped); the list ABORTS
+            // unconsumed when an enclosing ClassMembers context claims the token
+            // (`case  = bfs.STATEMENTS(4);` after a derailed try unwinds all the way out and
+            // re-parses as a class PROPERTY — constructorWithIncompleteTypeAnnotation), else
+            // the token is skipped and the list continues.
+            if (isKeyword() && !isIdentifier() && !canStartStatementForRecovery() &&
+                token != SyntaxKind.DefaultKeyword) {
+                // (`default` keeps its own dispatch arm — tsc's SourceElements context error
+                // for it is "'export' expected.", produced there.)
+                reportError("Declaration or statement expected.", code = 1128)
+                if (classBodyDepth > 0 && isClassMemberStartLookahead()) break
+                nextToken()
+                continue
+            }
             val savedPos = scanner.getTokenPos()
             val stmt = parseStatement()
             // Safety: if no progress was made, skip the current token to avoid infinite loop.
@@ -725,7 +781,29 @@ class Parser(
 
     // ── Statements ──────────────────────────────────────────────────────────
 
-    private fun parseStatement(): Statement? = when (token) {
+    /** Parses a statement from a FORCED position (if/else/loop/with/label body) —
+     *  see [inForcedStatementBody]. */
+    private fun parseForcedStatement(): Statement? {
+        val saved = inForcedStatementBody
+        inForcedStatementBody = true
+        try {
+            return parseStatement()
+        } finally {
+            inForcedStatementBody = saved
+        }
+    }
+
+    private fun parseStatement(): Statement? {
+        // Consume the forced-position hand-off: only the statement dispatched RIGHT HERE
+        // is forced; anything nested (block bodies, initializer sub-statements) is not.
+        statementForcedAtDispatch = inForcedStatementBody
+        inForcedStatementBody = false
+        return parseStatementDispatch()
+    }
+
+    private var statementForcedAtDispatch = false
+
+    private fun parseStatementDispatch(): Statement? = when (token) {
         OpenBrace -> parseBlock()
         Semicolon -> parseEmptyStatement()
         VarKeyword -> parseVariableStatement()
@@ -754,6 +832,10 @@ class Parser(
         SwitchKeyword -> parseSwitchStatement()
         ThrowKeyword -> parseThrowStatement()
         TryKeyword -> parseTryStatement()
+        // tsc isStartOfStatement: 'catch' and 'finally' do not actually indicate that the
+        // code is part of a statement, but are claimed so we gracefully parse them and
+        // error ('try' expected.) — parseStatement routes both to parseTryStatement.
+        CatchKeyword, FinallyKeyword -> parseTryStatement()
         DebuggerKeyword -> parseDebuggerStatement()
         ImportKeyword -> {
             // import( = dynamic import call; import. = import.meta — parse as expression
@@ -933,6 +1015,21 @@ class Parser(
         else -> {
             if (isIdentifier() && lookAhead { nextToken(); token == Colon }) {
                 parseLabeledStatement()
+            } else if (token == Colon) {
+                // tsc parseExpressionOrLabeledStatement: the expression parses FIRST — a
+                // bare `:` yields a zero-width missing Identifier (TS1109, usually
+                // same-start-deduped) which the following colon turns into a LABELED
+                // statement with a missing label (`while ( : string, ;` re-parses as
+                // `: string, <missing>;` — constructorWithIncompleteTypeAnnotation).
+                // List contexts never reach here (parseStatements' Colon arm claims them).
+                val mPos = scanner.getTokenPos()
+                reportError("Expression expected.", code = 1109)
+                nextToken() // consume ':'
+                val inner = parseForcedStatement() ?: EmptyStatement()
+                LabeledStatement(
+                    label = Identifier(text = "", pos = mPos, end = mPos),
+                    statement = inner, pos = mPos, end = getEnd(),
+                )
             } else {
                 parseExpressionStatement()
             }
@@ -996,6 +1093,17 @@ class Parser(
             }
             else -> parseExpressionStatement()
         }
+    }
+
+    /** tsc parseBlock's missing-`{` path: report "'{' expected." (same-start-deduped) and
+     *  return an EMPTY zero-width missing Block WITHOUT consuming or parsing statements.
+     *  Used by try/catch/finally recovery (`catch (Exception) ? }` → `catch (Exception) { }`;
+     *  a statement-level `catch`/`finally` gets a missing try block). */
+    private fun parseBlockOrMissing(): Block {
+        if (token == SyntaxKind.OpenBrace) return parseBlock()
+        reportError("'{' expected.", code = 1005)
+        val p = scanner.getTokenPos()
+        return Block(statements = emptyList(), multiLine = false, pos = p, end = p)
     }
 
     private fun parseBlock(): Block {
@@ -1085,6 +1193,16 @@ class Parser(
         // Capture inline comments between keyword and first declaration (e.g. `var /*c*/ x`)
         val keywordTrailingComments = scanner.getTrailingComments()?.filter { !it.hasPrecedingNewLine }
         val decls = mutableListOf<VariableDeclaration>()
+        // tsc parseDelimitedList(VariableDeclarations) skip-recovery BEFORE the first
+        // declarator: an Unknown token (the invalid-escape-start backslash of
+        // `var 1a;`) gets TS1134 "Variable declaration expected." (same-start-deduped
+        // against the scan-time TS1127) and is SKIPPED so the following identifier becomes
+        // the declarator (`var u0031a;` — invalidUnicodeEscapeSequance4).
+        if (token == SyntaxKind.Unknown && !scanner.hasPrecedingLineBreak() &&
+            lookAhead { nextToken(); isIdentifier() }) {
+            reportError("Variable declaration expected.", code = 1134, overrideLength = 1)
+            nextToken()
+        }
         // Only parse declarations if the current token can start one (identifier or binding pattern)
         if (isIdentifier() || token == SyntaxKind.OpenBrace || token == SyntaxKind.OpenBracket) {
             decls.add(parseVariableDeclaration(keywordTrailingComments))
@@ -1092,7 +1210,12 @@ class Parser(
                 if (parseOptional(SyntaxKind.Comma)) {
                     decls.add(parseVariableDeclaration())
                 } else if ((isIdentifier() || token == SyntaxKind.OpenBrace || token == SyntaxKind.OpenBracket)
-                    && decls.last().initializer != null
+                    && (decls.last().initializer != null ||
+                        // A strip-cased invalid-escape-start identifier (`…` after
+                        // `var _풥爄쌖`) re-enters the list even with no initializer on the
+                        // previous declarator — its ','-expected dedups against the
+                        // scan-time TS1127 at the same position (tsc parseDelimitedList).
+                        scanner.getTokenPos() == scanner.invalidEscapeIdentStartPos)
                     && !scanner.hasPrecedingLineBreak()) {
                     // Error recovery: missing comma before next declarator when on same line with
                     // an initializer (e.g. `var x = /re/ i` — regex literal followed by identifier).
@@ -1486,6 +1609,7 @@ class Parser(
         val pos = getPos()
         val comments = leadingComments()
         exprStatementStartPos = scanner.getTokenPos()
+        exprStatementForced = statementForcedAtDispatch
         val expr = parseExpression()
         // Capture same-line trailing comments between expression and `;`
         // (e.g. the `/*3*/` in `new Array /*3*/;`) before parseSemicolon advances past them.
@@ -1615,8 +1739,23 @@ class Parser(
                 reportError("Unexpected keyword or identifier.", code = 1434,
                     overrideStart = expr.pos, overrideLength = expr.text.length.coerceAtLeast(1))
             }
-        } else {
-            parseSemicolon()
+        } else if (token == SyntaxKind.Semicolon) {
+            nextToken()
+        } else if (!canParseSemicolon()) {
+            // tsc parseErrorForMissingSemicolonAfter: a NON-identifier expression falls to
+            // the generic "';' expected." at the current token; a bare-Identifier expression
+            // takes the did-you-mean family (the arms above — the special idents var/let/
+            // const/declare/interface/module/namespace/type are deliberately silent here).
+            // The narrow `:`/`?`/`=>`/numeric/bigint triggers stay active for Identifier
+            // exprs (pre-existing behavior).
+            if (expr !is Identifier ||
+                token == SyntaxKind.Colon || token == SyntaxKind.Question ||
+                token == SyntaxKind.EqualsGreaterThan ||
+                token == SyntaxKind.NumericLiteral || token == SyntaxKind.BigIntLiteral) {
+                reportError("';' expected.", code = 1005,
+                    overrideStart = scanner.getTokenPos(),
+                    overrideLength = scanner.getTokenText().length.coerceAtLeast(1))
+            }
         }
         val trailing = trailingComments()
         return ExpressionStatement(
@@ -1642,7 +1781,7 @@ class Parser(
         // TS1007 related info only when the '(' was actually consumed (see while).
         parseExpectedClosing(SyntaxKind.CloseParen, if (openParenOk) openParenPos else -1)
         val afterCloseParen = trailingComments()
-        val thenStmt = parseStatement() ?: EmptyStatement()
+        val thenStmt = parseForcedStatement() ?: EmptyStatement()
         // 17.176: TS1313 — `if (cond);` (then-body is `;`). Distinguish a real
         // EmptyStatement (parseEmptyStatement set pos to the `;` position) from
         // the `?: EmptyStatement()` fallback above (synthetic, pos=0).
@@ -1672,7 +1811,7 @@ class Parser(
         } else null
         val hasElse = parseOptional(SyntaxKind.ElseKeyword)
         val afterElse = if (hasElse) trailingComments() else null
-        val elseStmt = if (hasElse) parseStatement() else null
+        val elseStmt = if (hasElse) parseForcedStatement() else null
         val trailing = if (elseStmt != null) trailingComments() else thenTrailing
         return IfStatement(
             expression = expr,
@@ -1696,7 +1835,7 @@ class Parser(
         val comments = leadingComments()
         parseExpected(SyntaxKind.DoKeyword)
         val afterDo = trailingComments()
-        val stmt = parseStatement() ?: EmptyStatement()
+        val stmt = parseForcedStatement() ?: EmptyStatement()
         val beforeWhile = trailingComments()
         parseExpected(SyntaxKind.WhileKeyword)
         val afterWhile = trailingComments()
@@ -1734,7 +1873,7 @@ class Parser(
         // (reservedWords2) has no opening paren to point at.
         parseExpectedClosing(SyntaxKind.CloseParen, if (openParenOk) openParenPos else -1)
         val afterCloseParen = trailingComments()
-        val stmt = parseStatement() ?: EmptyStatement()
+        val stmt = parseForcedStatement() ?: EmptyStatement()
         return WhileStatement(
             expression = expr,
             statement = stmt,
@@ -1792,7 +1931,7 @@ class Parser(
         if (forMissingHeader) {
             parseExpected(SyntaxKind.CloseParen)
             val afterCloseParen = trailingComments()
-            val body = parseStatement() ?: EmptyStatement()
+            val body = parseForcedStatement() ?: EmptyStatement()
             return ForStatement(
                 initializer = null,
                 condition = null,
@@ -1819,7 +1958,7 @@ class Parser(
             val beforeCloseParen = trailingComments()
             parseExpected(SyntaxKind.CloseParen)
             val afterCloseParen = trailingComments()
-            val body = parseStatement() ?: EmptyStatement()
+            val body = parseForcedStatement() ?: EmptyStatement()
             return ForInStatement(
                 initializer = initializer ?: Identifier(""),
                 expression = expr,
@@ -1842,7 +1981,7 @@ class Parser(
             val beforeCloseParen = trailingComments()
             parseExpected(SyntaxKind.CloseParen)
             val afterCloseParen = trailingComments()
-            val body = parseStatement() ?: EmptyStatement()
+            val body = parseForcedStatement() ?: EmptyStatement()
             return ForOfStatement(
                 awaitModifier = awaitMod,
                 initializer = initializer ?: Identifier(""),
@@ -1870,7 +2009,7 @@ class Parser(
         val beforeCloseParen = trailingComments()
         parseExpected(SyntaxKind.CloseParen)
         val afterCloseParen = trailingComments()
-        val body = parseStatement() ?: EmptyStatement()
+        val body = parseForcedStatement() ?: EmptyStatement()
         return ForStatement(
             initializer = initializer,
             condition = condition,
@@ -1949,7 +2088,7 @@ class Parser(
         val beforeCloseParen = trailingComments()
         parseExpectedClosing(SyntaxKind.CloseParen, openParenPos)
         val afterCloseParen = trailingComments()
-        val stmt = parseStatement() ?: EmptyStatement()
+        val stmt = parseForcedStatement() ?: EmptyStatement()
         return WithStatement(
             expression = expr, statement = stmt,
             afterKeywordComments = afterKeyword,
@@ -2094,13 +2233,21 @@ class Parser(
         val comments = leadingComments()
         parseExpected(SyntaxKind.TryKeyword)
         val afterTry = trailingComments()
-        val tryBlock = parseBlock()
+        val tryBlock = parseBlockOrMissing()
         val afterTryBlock = scanner.consumeTrailingComments()
         val catchClause = if (token == SyntaxKind.CatchKeyword) parseCatchClause() else null
         val afterCatchBlock = if (catchClause != null) trailingComments() else null
-        val hasFinally = parseOptional(SyntaxKind.FinallyKeyword)
+        // tsc: if we don't have a catch clause, we MUST have a finally clause — try to
+        // parse one no matter what (TS1472 "'catch' or 'finally' expected." reported at
+        // the offending token, usually same-start-deduped in cascades) and give the try a
+        // MISSING finally block. A catch followed by a real `finally` parses it normally.
+        val needsFinally = catchClause == null || token == SyntaxKind.FinallyKeyword
+        val hasFinally = if (needsFinally) {
+            if (token == SyntaxKind.FinallyKeyword) { nextToken(); true }
+            else { reportError("'catch' or 'finally' expected.", code = 1472); true }
+        } else false
         val afterFinally = if (hasFinally) trailingComments() else null
-        val finallyBlock = if (hasFinally) parseBlock() else null
+        val finallyBlock = if (hasFinally) parseBlockOrMissing() else null
         val afterFinallyBlock = if (hasFinally) scanner.consumeTrailingComments() else null
         return TryStatement(
             tryBlock = tryBlock,
@@ -2139,7 +2286,7 @@ class Parser(
             afterCloseParen = trailingComments()
             VariableDeclaration(name = name, type = type, initializer = initializer)
         } else null
-        val block = parseBlock()
+        val block = parseBlockOrMissing()
         return CatchClause(
             variableDeclaration = varDecl, block = block,
             afterCatchComments = afterCatch,
@@ -2174,7 +2321,7 @@ class Parser(
         val afterLabelComments = scanner.consumeTrailingComments()
         parseExpected(SyntaxKind.Colon)
         val afterColonComments = scanner.consumeTrailingComments()
-        val stmt = parseStatement() ?: EmptyStatement()
+        val stmt = parseForcedStatement() ?: EmptyStatement()
         return LabeledStatement(
             label = label, statement = stmt,
             afterLabelComments = afterLabelComments, afterColonComments = afterColonComments,
@@ -2439,6 +2586,19 @@ class Parser(
                 if (token == SyntaxKind.OpenBrace) {
                     reportError("Unexpected token. A constructor, method, accessor, or property was expected.", code = 1068, overrideLength = 1)
                     break
+                }
+                // tsc abortParsingListOrMoveToNextToken(ClassMembers): a token that cannot
+                // start a member — TS1068 (same-start-deduped), then ABORT unconsumed when an
+                // enclosing context claims it (a statement start: the `!= 0;` left after an
+                // aborted `if (retValue` method signature re-parses at the namespace level),
+                // else SKIP it and continue the member list (`case  d = …` → TS1068 at `case`,
+                // then `d = …` parses as a property — constructorWithIncompleteTypeAnnotation).
+                if (!isClassMemberStartLookahead()) {
+                    reportError("Unexpected token. A constructor, method, accessor, or property was expected.",
+                        code = 1068, overrideLength = scanner.getTokenText().length.coerceAtLeast(1))
+                    if (canStartStatementForRecovery()) break
+                    nextToken()
+                    continue
                 }
                 val member = parseClassMember()
                 if (member != null) {
@@ -2877,6 +3037,17 @@ class Parser(
                     code = 2398, overrideStart = nm.pos, overrideLength = nm.text.length,
                 )
             }
+        }
+        // A constructor cannot have a return-type annotation, but tsc PARSES `: <type>`
+        // (the grammar checker owns the error) — `constructor(…)  :  }` consumes the `:`
+        // and the missing type reports TS1110 "Type expected." at the `}` (unconsumed),
+        // after which ASI gives a bodyless ctor signature (constructorWithIncompleteTypeAnnotation).
+        if (token == SyntaxKind.Colon) {
+            nextToken()
+            if (isStartOfType(token)) parseType()
+            else reportError("Type expected.", code = 1110,
+                overrideStart = scanner.getTokenPos(),
+                overrideLength = scanner.getTokenText().length.coerceAtLeast(1))
         }
         val body = if (token == SyntaxKind.OpenBrace) parseBlock() else {
             parseSemicolon(); null
@@ -3984,7 +4155,9 @@ class Parser(
                 reportError("';' expected.", code = 1005,
                     overrideStart = scanner.getTokenPos(), overrideLength = scanner.getTokenText().length)
             }
-            parseSemicolon()
+            // tsc-faithful: `import fs = module("fs")` leaves `(` — TS1005 at the token
+            // and the `("fs")` re-parses as its own statement.
+            parseSemicolonRequired()
             val trailing = trailingComments()
             return ImportEqualsDeclaration(
                 name = name,
@@ -4153,6 +4326,51 @@ class Parser(
     // tsc `isStartOfStatement()` — approximated for error recovery. Covers statement keywords
     // plus `isStartOfExpression()` (with the binary-operator error-tolerance start). Used only
     // to decide whether a malformed list element re-parses as a statement.
+    /** tsc isClassMemberStart (via lookAhead): does the CURRENT token begin a class member?
+     *  Used by the list-recovery machinery — the statement-list abort check (a token inside
+     *  a nested statement list that an enclosing ClassMembers context claims aborts the inner
+     *  lists unconsumed: `case  = bfs.STATEMENTS(4);` after a derailed try re-parses as a
+     *  class PROPERTY) and the class-members skip-vs-abort split. */
+    private fun isClassMemberStartLookahead(): Boolean = lookAhead {
+        var idToken: SyntaxKind? = null
+        if (token == SyntaxKind.At) return@lookAhead true
+        // Eat up all modifiers; a definite class-member modifier decides immediately.
+        while (token == SyntaxKind.PublicKeyword || token == SyntaxKind.PrivateKeyword ||
+            token == SyntaxKind.ProtectedKeyword || token == SyntaxKind.StaticKeyword ||
+            token == SyntaxKind.AccessorKeyword || token == SyntaxKind.OverrideKeyword ||
+            token == SyntaxKind.AbstractKeyword || token == SyntaxKind.AsyncKeyword ||
+            token == SyntaxKind.DeclareKeyword || token == SyntaxKind.ReadonlyKeyword ||
+            token == SyntaxKind.ExportKeyword || token == SyntaxKind.ConstKeyword) {
+            idToken = token
+            when (token) {
+                SyntaxKind.PublicKeyword, SyntaxKind.PrivateKeyword, SyntaxKind.ProtectedKeyword,
+                SyntaxKind.StaticKeyword, SyntaxKind.AccessorKeyword, SyntaxKind.OverrideKeyword ->
+                    return@lookAhead true
+                else -> {}
+            }
+            nextToken()
+        }
+        if (token == SyntaxKind.Asterisk) return@lookAhead true
+        // First property-like token following the modifiers (any literal property name).
+        if (isIdentifier() || isKeyword() || token == SyntaxKind.StringLiteral ||
+            token == SyntaxKind.NumericLiteral || token == SyntaxKind.BigIntLiteral) {
+            idToken = token
+            nextToken()
+        }
+        if (token == SyntaxKind.OpenBracket) return@lookAhead true
+        if (idToken != null) {
+            if (!idToken.name.endsWith("Keyword") || idToken == SyntaxKind.GetKeyword ||
+                idToken == SyntaxKind.SetKeyword) return@lookAhead true
+            // A keyword name is a member start only when what follows makes it one.
+            return@lookAhead when (token) {
+                SyntaxKind.OpenParen, SyntaxKind.LessThan, SyntaxKind.Exclamation,
+                SyntaxKind.Colon, SyntaxKind.Equals, SyntaxKind.Question -> true
+                else -> canParseSemicolon()
+            }
+        }
+        false
+    }
+
     private fun canStartStatementForRecovery(): Boolean = when (token) {
         SyntaxKind.Semicolon, SyntaxKind.At,
         SyntaxKind.VarKeyword, SyntaxKind.LetKeyword, SyntaxKind.UsingKeyword,
@@ -5026,7 +5244,11 @@ class Parser(
             // NESTED expression context the assignment BINDS with the missing LHS
             // (tsc isLeftHandSideExpression accepts Identifier — `while ( = require(""))`
             // keeps `<missing> = require("")` as the condition, reservedWords2).
-            if (expr is Identifier && expr.text.isEmpty() && expr.pos == exprStatementStartPos) {
+            // The skip applies ONLY to list-born statements — a FORCED body (if/while/…)
+            // binds `<missing> ^= rhs` like tsc's unconditional parseStatement does
+            // (constructorWithIncompleteTypeAnnotation line 22).
+            if (expr is Identifier && expr.text.isEmpty() && expr.pos == exprStatementStartPos &&
+                !exprStatementForced) {
                 nextToken() // skip the invalid assignment operator
                 return parseAssignmentExpression()
             }
@@ -6604,8 +6826,18 @@ class Parser(
 
             else -> {
                 // In expression context, report "Expression expected" (TS1109) not "Identifier expected" (TS1003)
-                if (isIdentifier() || isKeyword()) {
+                if (isIdentifier() || token == SyntaxKind.SuperKeyword) {
+                    // (`super` IS a primary expression in tsc — parseSuperExpression; the
+                    // identifier fallback keeps `new super(...)` parsing, superNewCall1.)
                     parseIdentifier()
+                } else if (isKeyword()) {
+                    // tsc parseIdentifier(Expression_expected): a RESERVED word in expression
+                    // position yields a zero-width missing Identifier WITHOUT consuming —
+                    // TS1109 at the token (same-start-deduped); the keyword re-parses in the
+                    // enclosing context (`Number.NEGATIVE_INFINITY - \n var nan = …` keeps
+                    // the var statement; `retVal += catch .Property` re-parses the catch).
+                    reportError("Expression expected.", code = 1109)
+                    Identifier(text = "", pos = pos, end = pos)
                 } else if (token == SyntaxKind.Unknown) {
                     if (scanner.getTokenPos() == scanner.binaryMarkerTokenPos) {
                         // The binary-file marker token (U+FFFD to EOF, tsc's
@@ -6645,12 +6877,12 @@ class Parser(
                                 "Declaration or statement expected. This '=' follows a block of statements, so if you intended to write a destructuring assignment, you might need to wrap the whole assignment in parentheses.",
                                 code = 2809,
                             )
-                        } else if (scanner.getTokenPos() == exprStatementStartPos) {
+                        } else if (scanner.getTokenPos() == exprStatementStartPos && !exprStatementForced) {
                             // tsc: a statement STARTING with `=` (not `}`-preceded) is
                             // TS1128 "Declaration or statement expected." — the orphan
                             // `= [1, 2];` after an aborted binding pattern
                             // (reservedWords2 line 9). Nested `=` positions (a typeof/
-                            // while-condition operand) keep TS1109.
+                            // while-condition operand) and FORCED bodies keep TS1109.
                             reportError("Declaration or statement expected.", code = 1128)
                         } else {
                             reportError("Expression expected.", code = 1109)
@@ -7566,6 +7798,21 @@ class Parser(
             if (token == SyntaxKind.CloseBrace) {
                 reportError("Argument expression expected.", code = 1135)
                 break
+            }
+            // tsc abortParsingListOrMoveToNextToken(ArgumentExpressions): a RESERVED
+            // keyword that cannot start an expression gets the context error TS1135
+            // "Argument expression expected." at the token, then the list ABORTS
+            // unconsumed when an enclosing context claims it (`Overloads( while : …)` —
+            // `while` is a statement start, so the call becomes `Overloads()` and the
+            // while re-parses as a statement; the `)`-expected dedups). Not claimed →
+            // skip and continue.
+            if (isKeyword() && !isIdentifier() && !isStartOfExpression()) {
+                reportError("Argument expression expected.", code = 1135,
+                    overrideStart = scanner.getTokenPos(),
+                    overrideLength = scanner.getTokenText().length.coerceAtLeast(1))
+                if (canStartStatementForRecovery()) break
+                nextToken()
+                continue
             }
             // Capture inline comments before each argument (e.g. /*label*/ before string arg).
             // Comments on the same line as `(` or `,` are classified as trailingComments by the
@@ -9615,6 +9862,9 @@ class Parser(
         GreaterThan -> ">"
         EqualsGreaterThan -> "=>"
         DotDotDot -> "..."
+        TryKeyword -> "try"
+        CatchKeyword -> "catch"
+        FinallyKeyword -> "finally"
         else -> kind.name
     }
 

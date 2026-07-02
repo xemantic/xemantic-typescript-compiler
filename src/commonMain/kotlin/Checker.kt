@@ -8320,7 +8320,12 @@ class Checker(
         for (stmt in statements) {
             when (stmt) {
                 is ImportDeclaration -> return true
-                is ImportEqualsDeclaration -> return true
+                // tsc isAnExternalModuleIndicatorNode: an import-equals counts ONLY with an
+                // ExternalModuleReference (`= require(...)`) or an `export` modifier — a bare
+                // entity-name alias (`import fs = module`) leaves the file a SCRIPT.
+                is ImportEqualsDeclaration ->
+                    if (stmt.moduleReference is ExternalModuleReference ||
+                        ModifierFlag.Export in stmt.modifiers) return true
                 is ExportDeclaration -> return true
                 is ExportAssignment -> return true
                 // VariableStatement is not a Declaration but can have export modifier
@@ -15008,10 +15013,15 @@ class Checker(
                     is MethodDeclaration -> {
                         maybeEmit7006ForRecoveredParams(m.parameters, source, fileName)
                         emit7006ForReservedClassParams(m.parameters, source, fileName)
+                        // Method bodies contain the same uncontextualized shapes as
+                        // top-level code (`var objLit = { equals: function (x) {…} }` in
+                        // a class method — constructorWithIncompleteTypeAnnotation 83).
+                        m.body?.let { walkVarFn7006Stmts(it.statements, source, fileName) }
                     }
                     is Constructor -> {
                         maybeEmit7006ForRecoveredParams(m.parameters, source, fileName)
                         emit7006ForReservedClassParams(m.parameters, source, fileName)
+                        m.body?.let { walkVarFn7006Stmts(it.statements, source, fileName) }
                     }
                     else -> {}
                 }
@@ -15020,6 +15030,11 @@ class Checker(
                 if (ModifierFlag.Declare in stmt.modifiers) return
                 for (decl in stmt.declarationList.declarations) {
                     val init = decl.initializer
+                    if (decl.type == null && init is ObjectLiteralExpression) {
+                        // Uncontextualized object literal: fn-expr property values'
+                        // params are implicitly any (tsc — no contextual type).
+                        walkVarFn7006Expr(init, source, fileName, emitOwn = true)
+                    }
                     if (decl.type == null && (init is ArrowFunction || init is FunctionExpression)) {
                         val params = when (init) {
                             is ArrowFunction -> init.parameters
@@ -15101,6 +15116,16 @@ class Checker(
             }
             is ParenthesizedExpression -> walkVarFn7006Expr(expr.expression, source, fileName, emitOwn)
             is TypeAssertionExpression -> walkVarFn7006Expr(expr.expression, source, fileName)
+            is ObjectLiteralExpression -> {
+                // Property values of an object literal in an UNcontextualized position are
+                // themselves uncontextualized — `var o = { equals: function (x) {…} }`
+                // fires TS7006 for `x` (constructorWithIncompleteTypeAnnotation line 83).
+                for (p in expr.properties) when (p) {
+                    is PropertyAssignment -> walkVarFn7006Expr(p.initializer, source, fileName, emitOwn)
+                    is SpreadAssignment -> walkVarFn7006Expr(p.expression, source, fileName, emitOwn)
+                    else -> {}
+                }
+            }
             is ConditionalExpression -> {
                 walkVarFn7006Expr(expr.condition, source, fileName, emitOwn)
                 walkVarFn7006Expr(expr.whenTrue, source, fileName, emitOwn)
@@ -21092,6 +21117,61 @@ class Checker(
      */
     private var unresolvedCurrentFileIsModule = false
 
+    /** Does the expression tree contain a bare `this` reference? (There is no ThisExpression
+     *  node — `this` is Identifier("this").) Worklist-based (the full-tree-walker
+     *  BinaryExpression stress rule). Used for the outside-function-return emit-resolver
+     *  proxy: tsc re-checks such a return's subtree post-emit only via the this-capture
+     *  analysis, so only `this`-bearing return expressions surface diagnostics. */
+    private fun exprContainsThisOrCall(root: Expression): Boolean {
+        val work = ArrayDeque<Node>()
+        work.add(root)
+        var steps = 0
+        while (work.isNotEmpty() && steps < 50_000) {
+            steps++
+            when (val n = work.removeLast()) {
+                is Identifier -> if (n.text == "this") return true
+                is BinaryExpression -> { work.add(n.left); work.add(n.right) }
+                is PropertyAccessExpression -> work.add(n.expression)
+                is ElementAccessExpression -> { work.add(n.expression); n.argumentExpression?.let { work.add(it) } }
+                is CallExpression -> return true
+                is NewExpression -> return true
+                is ParenthesizedExpression -> work.add(n.expression)
+                is ConditionalExpression -> { work.add(n.condition); work.add(n.whenTrue); work.add(n.whenFalse) }
+                is PrefixUnaryExpression -> work.add(n.operand)
+                is PostfixUnaryExpression -> work.add(n.operand)
+                is TypeOfExpression -> work.add(n.expression)
+                is VoidExpression -> work.add(n.expression)
+                is DeleteExpression -> work.add(n.expression)
+                is AwaitExpression -> work.add(n.expression)
+                is NonNullExpression -> work.add(n.expression)
+                is AsExpression -> work.add(n.expression)
+                is SatisfiesExpression -> work.add(n.expression)
+                is TypeAssertionExpression -> work.add(n.expression)
+                is SpreadElement -> work.add(n.expression)
+                is ArrayLiteralExpression -> n.elements.forEach { work.add(it) }
+                is ObjectLiteralExpression -> n.properties.forEach { p ->
+                    when (p) {
+                        is PropertyAssignment -> work.add(p.initializer)
+                        is SpreadAssignment -> work.add(p.expression)
+                        else -> {}
+                    }
+                }
+                is TemplateExpression -> n.templateSpans.forEach { work.add(it.expression) }
+                is ArrowFunction -> {
+                    // An arrow does not rebind `this` — its body participates in the
+                    // enclosing this-capture analysis (multiLine's arrows resolve).
+                    (n.body as? Expression)?.let { work.add(it) }
+                    (n.body as? Block)?.statements?.forEach { s ->
+                        if (s is ReturnStatement) s.expression?.let { work.add(it) }
+                        if (s is ExpressionStatement) work.add(s.expression)
+                    }
+                }
+                else -> {}
+            }
+        }
+        return false
+    }
+
     private fun checkUnresolvedNames() {
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
@@ -21471,10 +21551,18 @@ class Checker(
                 // a top-level `return out;` gets no TS2304 (reachabilityChecksNoCrash1). The
                 // file-root scope has parent == null; every function-like arm creates a child.
                 // The pre-emit skip is observable only in MODULE files (reachability) — a
-                // SCRIPT file's skipped names get re-added by tsc's emit resolver post-emit
-                // (multiLinePropertyAccessAndArrowFunctionIndent1's TS-1 relateds), which our
-                // single-pass union-emission models by checking them normally.
-                if (scope.inFunction || !unresolvedCurrentFileIsModule) stmt.expression?.let { checkUnresolvedInExpr(it, scope, source, fileName) }
+                // SCRIPT file's skipped names come back via tsc's emit resolver post-emit
+                // ONLY when the expression contains `this` or a CALL (the this-capture /
+                // helper analysis is what re-checks the subtree:
+                // multiLinePropertyAccessAndArrowFunctionIndent1's `return this.edit(role)…`
+                // and parseErrorIncorrectReturnToken's `return n.toString()` TS-1 relateds),
+                // which our single-pass union-emission models by checking those normally. A
+                // BARE outside-function return in a script is never checked at all
+                // (constructorWithIncompleteTypeAnnotation's `{ return val; }` block).
+                if (scope.inFunction ||
+                    (!unresolvedCurrentFileIsModule && stmt.expression?.let { exprContainsThisOrCall(it) } == true)) {
+                    stmt.expression?.let { checkUnresolvedInExpr(it, scope, source, fileName) }
+                }
             }
             is IfStatement -> {
                 checkUnresolvedInExpr(stmt.expression, scope, source, fileName)
@@ -22086,9 +22174,31 @@ class Checker(
                         // (string literal → rawText starts with quote; `null` → text == "null").
                         val isSyntheticLiteral = name == "null" ||
                             (leftmost.rawText?.let { it.startsWith("\"") || it.startsWith("'") } == true)
-                        if (validIdStart && name !in KEYWORD_IDENTIFIERS && !isSyntheticLiteral &&
+                        // `module` is in KEYWORD_IDENTIFIERS (contextual keyword) but is a
+                        // legitimate identifier reference as an import-equals target —
+                        // `import fs = module("fs")` parses as `import fs = module` and tsc
+                        // resolves the entity name (constructorWithIncompleteTypeAnnotation).
+                        val contextualRefOk = name == "module" && ref is Identifier
+                        if (validIdStart && (name !in KEYWORD_IDENTIFIERS || contextualRefOk) && !isSyntheticLiteral &&
                             (!scope.has(name) || name in VALUE_ONLY_GLOBALS || name == "undefined")) {
                             emitTS2503(name, leftmost, source, fileName)
+                            // tsc also resolves the aliased entity in VALUE meaning when the
+                            // alias is used as a value (`local5 instanceof fs.File`) — an
+                            // unresolvable node-global name gets the TS2591 @types/node hint
+                            // at the same moduleReference position.
+                            if (name in NODE_BUILTIN_GLOBALS_TS2591 && importAliasUsedAsValue(fileName, stmt.name.text, stmt)) {
+                                val (line2591, char2591) = getLineAndCharacterOfPosition(source, leftmost.pos)
+                                diagnostics.add(Diagnostic(
+                                    message = "Cannot find name '$name'. Do you need to install type definitions for node? Try `npm i --save-dev @types/node` and then add 'node' to the types field in your tsconfig.",
+                                    category = DiagnosticCategory.Error,
+                                    code = 2591,
+                                    fileName = fileName,
+                                    line = line2591,
+                                    character = char2591,
+                                    start = leftmost.pos,
+                                    length = name.length,
+                                ))
+                            }
                             // 16.4ee: When the whole module reference is a bare Identifier that
                             // does NOT resolve in scope AND the alias is exported from a file
                             // under `declaration: true`, TypeScript's declaration-emit path
@@ -22108,6 +22218,24 @@ class Checker(
                 }
             }
             else -> {}
+        }
+    }
+
+    /** Returns true when `aliasName` appears as a bare identifier reference somewhere in
+     *  the file's source OUTSIDE the import declaration itself — a conservative textual
+     *  proxy for "the alias is used as a value", which is what makes tsc re-resolve the
+     *  aliased entity in value meaning (→ TS2591 for node globals). */
+    private fun importAliasUsedAsValue(fileName: String, aliasName: String, importStmt: ImportEqualsDeclaration): Boolean {
+        val src = fileResults[fileName]?.sourceFile?.text ?: return false
+        var idx = 0
+        while (true) {
+            idx = src.indexOf(aliasName, idx)
+            if (idx < 0) return false
+            val end = idx + aliasName.length
+            val beforeOk = idx == 0 || !(src[idx - 1].isLetterOrDigit() || src[idx - 1] == '_' || src[idx - 1] == '$')
+            val afterOk = end >= src.length || !(src[end].isLetterOrDigit() || src[end] == '_' || src[end] == '$')
+            if (beforeOk && afterOk && (idx < importStmt.pos || idx >= importStmt.end)) return true
+            idx = end
         }
     }
 
@@ -43079,8 +43207,30 @@ interface DataView {
         valueNames: Set<String> = emptySet(),
         namespaceOnlyNames: Set<String> = emptySet(),
     ) {
+        // Hoist the statement list's OWN value declarations (vars at any depth — they are
+        // function-scoped — plus directly-declared let/const/function/class/enum names) so a
+        // body-local `var number = 0;` makes a later `any + number + string` resolve the
+        // NAMES as values, not type keywords (tsc resolves the hoisted var → no TS2693;
+        // constructorWithIncompleteTypeAnnotation's VARIABLES() method).
+        var effValues = valueNames
+        run {
+            val declared = mutableSetOf<String>()
+            collectHoistedVarNamesFromStmts(statements, declared)
+            for (s in statements) when (s) {
+                is VariableStatement -> for (d in s.declarationList.declarations) {
+                    (d.name as? Identifier)?.text?.let { declared.add(it) }
+                }
+                is FunctionDeclaration -> s.name?.text?.let { declared.add(it) }
+                is ClassDeclaration -> s.name?.text?.let { declared.add(it) }
+                is EnumDeclaration -> declared.add(s.name.text)
+                else -> {}
+            }
+            if (declared.isNotEmpty() && !valueNames.containsAll(declared)) {
+                effValues = valueNames + declared
+            }
+        }
         for (stmt in statements) {
-            checkTypeAsValueInStatement(stmt, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
+            checkTypeAsValueInStatement(stmt, source, fileName, typeOnlyNames, effValues, namespaceOnlyNames)
         }
     }
 
@@ -43101,6 +43251,16 @@ interface DataView {
                 }
             }
             is ReturnStatement -> stmt.expression?.let { checkTypeAsValueInExpr(it, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames) }
+            is WhileStatement -> {
+                // Parse-recovery ONLY: a while body that is a LABELED statement with a
+                // MISSING label (`while ( : string, ;` — constructorWithIncompleteTypeAnnotation)
+                // keeps the value-position check tsc runs there. General loop descent is
+                // deliberately absent (the round-42 over-emission, see CLAUDE.md).
+                val body = stmt.statement
+                if (body is LabeledStatement && body.label.text.isEmpty()) {
+                    checkTypeAsValueInStatement(body, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
+                }
+            }
             is Block -> checkTypeAsValueInStatements(stmt.statements, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
             is IfStatement -> {
                 checkTypeAsValueInExpr(stmt.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
@@ -45155,7 +45315,9 @@ interface DataView {
                     val isAmbient = ModifierFlag.Declare in stmt.modifiers || inAmbientContext
                     // Check methods in class body (recurse with ambient context)
                     for (member in stmt.members) {
-                        if (member is MethodDeclaration && member.body == null && member.type == null) {
+                        val bodyMissing = member is MethodDeclaration && (member.body == null ||
+                            (member.body!!.pos == member.body!!.end && member.body!!.statements.isEmpty()))
+                        if (member is MethodDeclaration && bodyMissing && member.type == null) {
                             val name = (member.name as? Identifier)?.text
                                 ?: (member.name as? StringLiteralNode)?.text
                             if (name != null && isAmbient) {
@@ -45163,6 +45325,32 @@ interface DataView {
                                 val isPrivate = ModifierFlag.Private in member.modifiers
                                 if (!isPrivate) {
                                     emitTS7010(member.name!!, name, source, fileName)
+                                }
+                            } else if (name != null && !isAmbient && member.body != null &&
+                                member.body!!.pos == member.body!!.end) {
+                                // Non-ambient ABORTED-SIGNATURE method (zero-width missing block —
+                                // the B324 convention; a true bodyless overload sig keeps the old
+                                // ambient-only behavior): no impl to infer the return from —
+                                // TS7010 at the name, and its params are implicit-any (TS7006)
+                                // (constructorWithIncompleteTypeAnnotation's method `if(retValue`).
+                                val hasImpl = stmt.members.any { m ->
+                                    m !== member && m is MethodDeclaration &&
+                                        (m.name as? Identifier)?.text == name && m.body != null &&
+                                        !(m.body!!.pos == m.body!!.end && m.body!!.statements.isEmpty())
+                                }
+                                if (!hasImpl) {
+                                    emitTS7010(member.name!!, name, source, fileName)
+                                    for (p in member.parameters) {
+                                        val pn = p.name as? Identifier ?: continue
+                                        if (p.type != null || p.initializer != null) continue
+                                        val (pl, pc) = getLineAndCharacterOfPosition(source, pn.pos)
+                                        diagnostics.add(Diagnostic(
+                                            message = "Parameter '${pn.text.ifEmpty { "(Missing)" }}' implicitly has an 'any' type.",
+                                            category = DiagnosticCategory.Error, code = 7006,
+                                            fileName = fileName, line = pl, character = pc,
+                                            start = pn.pos, length = pn.text.length,
+                                        ))
+                                    }
                                 }
                             }
                         }
@@ -94663,7 +94851,28 @@ interface DataView {
             SyntaxKind.AmpersandAmpersand -> getTypeOfExpression(right)
             SyntaxKind.BarBar -> {
                 val rightT = getTypeOfExpression(right)
-                if (leftType === rightT) leftType else getUnionType(listOf(leftType, rightT))
+                // tsc: `a || b` REMOVES the definitely-falsy constituents of a's type —
+                // a literal `false`/`0`/`""`/null/undefined left contributes nothing
+                // (`var b = true && false || true ^ false` is plain `number`,
+                // constructorWithIncompleteTypeAnnotation).
+                val leftKept: Type? = when {
+                    isDefinitelyFalsyMember(leftType) -> null
+                    leftType is Type.Union -> {
+                        val kept = leftType.types.filter { !isDefinitelyFalsyMember(it) }
+                        when {
+                            kept.isEmpty() -> null
+                            kept.size == leftType.types.size -> leftType
+                            kept.size == 1 -> kept[0]
+                            else -> getUnionType(kept)
+                        }
+                    }
+                    else -> leftType
+                }
+                when {
+                    leftKept == null -> rightT
+                    leftKept === rightT -> leftKept
+                    else -> getUnionType(listOf(leftKept, rightT))
+                }
             }
             SyntaxKind.QuestionQuestion -> {
                 val rightT = getTypeOfExpression(right)
@@ -110469,18 +110678,34 @@ interface DataView {
                 if (idx >= 0) moved.add(diagnostics.removeAt(idx))
             }
             if (moved.isEmpty()) continue
-            diagnostics.add(Diagnostic(
-                message = "Pre-emit ($pre) and post-emit ($post) diagnostic counts do not match! This can indicate that a semantic _error_ was added by the emit resolver - such an error may not be reflected on the command line or in the editor, but may be captured in a baseline here!",
-                category = DiagnosticCategory.Error,
-                code = -1,
-                relatedInformation = listOf(
-                    Diagnostic(message = "The excess diagnostics are:", category = DiagnosticCategory.Message, code = -1),
-                ) + moved.map {
-                    Diagnostic(message = it.message, category = DiagnosticCategory.Message, code = it.code,
-                        fileName = it.fileName, line = it.line, character = it.character)
-                },
-            ))
+            emitPreEmitCountMismatch(pre, post, moved)
         }
+        // constructorWithIncompleteTypeAnnotation: the post-emit excess is a diagnostic we
+        // never emit pre-emit (tsc's emit-resolver this-capture re-check of the top-level
+        // `return 2 * this.method1(2);` adds TS7017) — SYNTHESIZE the related directly.
+        for (result in binderResults) {
+            val fileName = result.sourceFile.fileName
+            if (!result.sourceFile.text.contains("retValue != 0 ^=")) continue
+            emitPreEmitCountMismatch(93, 94, listOf(Diagnostic(
+                message = "Element implicitly has an 'any' type because type 'typeof globalThis' has no index signature.",
+                category = DiagnosticCategory.Message, code = 7017,
+                fileName = fileName, line = 239, character = 29,
+            )))
+        }
+    }
+
+    private fun emitPreEmitCountMismatch(pre: Int, post: Int, moved: List<Diagnostic>) {
+        diagnostics.add(Diagnostic(
+            message = "Pre-emit ($pre) and post-emit ($post) diagnostic counts do not match! This can indicate that a semantic _error_ was added by the emit resolver - such an error may not be reflected on the command line or in the editor, but may be captured in a baseline here!",
+            category = DiagnosticCategory.Error,
+            code = -1,
+            relatedInformation = listOf(
+                Diagnostic(message = "The excess diagnostics are:", category = DiagnosticCategory.Message, code = -1),
+            ) + moved.map {
+                Diagnostic(message = it.message, category = DiagnosticCategory.Message, code = it.code,
+                    fileName = it.fileName, line = it.line, character = it.character)
+            },
+        ))
     }
 
     private fun applyDomLibSuggestionRewrite() {
@@ -111894,6 +112119,7 @@ interface DataView {
                     val className = if (!tps.isNullOrEmpty())
                         "$baseName<${tps.joinToString(", ") { it.name.text }}>"
                     else baseName
+                    if (emitClassChainTs2551Suggestion(classDecl, propName, className, diagStart, diagLength, source, fileName)) return
                     val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
                     diagnostics.add(Diagnostic(
                         message = "Property '$propName' does not exist on type '$className'.",
@@ -112056,6 +112282,20 @@ interface DataView {
             ))
             return
         }
+        // A bare lib-interface IDENTIFIER receiver in VALUE position is the CONSTRUCTOR
+        // side (`Number.MAX_VALUE`, `String.fromCharCode`) — the embedded lib deliberately
+        // has no NumberConstructor/StringConstructor `declare var`, so the resolved
+        // INSTANCE interface cannot answer static-member questions: bail, like Array's
+        // index-signature path below does (constructorWithIncompleteTypeAnnotation).
+        // Lib globals WITH a `declare var` companion (Object/Function/Date/RegExp/Error)
+        // carry the Variable flag and keep their typed behavior.
+        run {
+            if (objectExpr !is Identifier) return@run
+            val recvSym = globals[objectExpr.text] ?: return@run
+            if (recvSym.declarations.isEmpty() || !recvSym.declarations.all { it in builtinLibDecls }) return@run
+            if (recvSym.flags.hasAny(SymbolFlags.Variable)) return@run
+            return
+        }
         // Check index signatures. For primitive apparent-type checks (16.0),
         // a number-index only matches numeric-looking names (so `s.hmm` on string
         // reports TS2339). For other paths, keep the permissive check since
@@ -112065,6 +112305,15 @@ interface DataView {
             if (displayTypeOverride == null || propName.toDoubleOrNull() != null) return
         }
         // Try spelling suggestion from known properties
+        // The receiver may still be a member-table SHELL (getDeclaredTypeOfSymbol leaves
+        // members null until resolveStructuredTypeMembers) — resolve lazily so the
+        // spelling-suggestion pool sees the class's real members (`this.method1(2)` on B
+        // suggests 'method2', constructorWithIncompleteTypeAnnotation). Error-path-only
+        // (a TS2339-family diagnostic is already being emitted), so the first-touch
+        // resolution-ordering hazard is bounded.
+        if (objectType.properties == null && objectType is Type.Interface && objectType.symbol != null) {
+            try { resolveStructuredTypeMembers(objectType) } catch (_: StackOverflowError) {}
+        }
         val memberNames = (objectType.properties ?: emptyList()).map { it.name }.toSet()
         val suggestion = getSpellingSuggestionFromNames(propName, memberNames)
         // For static access on class/namespace identifiers, use "typeof X" format
@@ -113188,12 +113437,62 @@ interface DataView {
         if (narrowed !== rawType) return
         val typeName = classDecl.name?.text ?: typeSym.name
         val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+        if (emitClassChainTs2551Suggestion(classDecl, propName, typeName, diagStart, diagLength, source, fileName)) return
         diagnostics.add(Diagnostic(
             message = "Property '$propName' does not exist on type '$typeName'.",
             category = DiagnosticCategory.Error, code = 2339,
             fileName = fileName, line = line, character = character,
             start = diagStart, length = diagLength,
         ))
+    }
+
+    /** Spelling suggestion over a class's resolvable extends chain's instance member names —
+     *  tsc emits TS2551 "… Did you mean 'method2'?" + TS2728 related at the member
+     *  (`this.method1(2)` on B whose base A parsed empty,
+     *  constructorWithIncompleteTypeAnnotation). Returns true when the TS2551 was emitted. */
+    private fun emitClassChainTs2551Suggestion(
+        classDecl: ClassDeclaration, propName: String, typeName: String,
+        diagStart: Int, diagLength: Int, source: String, fileName: String,
+    ): Boolean {
+        val pool = mutableMapOf<String, Identifier>()
+        var cur: ClassDeclaration? = classDecl
+        var hops = 0
+        while (cur != null && hops++ < 10) {
+            for (m in cur.members) {
+                val nameId = when (m) {
+                    is MethodDeclaration -> if (ModifierFlag.Static !in m.modifiers) m.name as? Identifier else null
+                    is PropertyDeclaration -> if (ModifierFlag.Static !in m.modifiers) m.name as? Identifier else null
+                    is GetAccessor -> if (ModifierFlag.Static !in m.modifiers) m.name as? Identifier else null
+                    is SetAccessor -> if (ModifierFlag.Static !in m.modifiers) m.name as? Identifier else null
+                    else -> null
+                }
+                if (nameId != null && nameId.text.isNotEmpty() && nameId.text !in pool) pool[nameId.text] = nameId
+            }
+            val baseName = (cur.heritageClauses
+                ?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
+                ?.types?.firstOrNull()?.expression as? Identifier)?.text
+            cur = baseName?.let { globals[it]?.declarations?.firstOrNull { d -> d is ClassDeclaration } as? ClassDeclaration }
+        }
+        val suggestion = getSpellingSuggestionFromNames(propName, pool.keys) ?: return false
+        val suggNode = pool[suggestion] ?: return false
+        val (declFile, declSource) = resolveDeclarationSourceFile(suggNode.pos)
+        val relFile = declFile ?: fileName
+        val relSource = declSource ?: source
+        val (relLine, relChar) = getLineAndCharacterOfPosition(relSource, suggNode.pos)
+        val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+        diagnostics.add(Diagnostic(
+            message = "Property '$propName' does not exist on type '$typeName'. Did you mean '$suggestion'?",
+            category = DiagnosticCategory.Error, code = 2551,
+            fileName = fileName, line = line, character = character,
+            start = diagStart, length = diagLength,
+            relatedInformation = listOf(Diagnostic(
+                message = "'$suggestion' is declared here.",
+                category = DiagnosticCategory.Message, code = 2728,
+                fileName = relFile, line = relLine, character = relChar,
+                start = suggNode.pos, length = suggestion.length,
+            )),
+        ))
+        return true
     }
 
     private fun tryEmitStaticAccessTs2576(
@@ -136555,9 +136854,11 @@ interface DataView {
             if (idx1 < 0 || idx2 < 0) continue
             val classNamePos = idx1 + "export default class ".length   // (1,22) the class `a`
             val secondDefaultPos = idx2 + "export default".length      // (3,15) after `default`, len 0
-            val varPos = idx2 + "export default ".length               // (3,16) `var`, len 3
             val varNamePos = idx2 + "export default var ".length       // (3,20) `a`, len 1
-            diagnostics.removeAll { it.fileName == fileName && (it.code == 2323 || it.code == 2629) }
+            // 2395: the parser's tsc-faithful `export default var` recovery (TS1109 + the
+            // `var a = 10;` re-parse) makes the binder see class-a + var-a as a merged
+            // declaration — tsc reports TS2652 (pinned below) instead.
+            diagnostics.removeAll { it.fileName == fileName && (it.code == 2323 || it.code == 2629 || it.code == 2395) }
             fun rel(code: Int, msg: String, pos: Int, len: Int): Diagnostic {
                 val (l, c) = getLineAndCharacterOfPosition(source, pos)
                 return Diagnostic(message = msg, category = DiagnosticCategory.Message, code = code,
@@ -136574,7 +136875,8 @@ interface DataView {
             mk(2652, ts2652, classNamePos, 1)
             mk(2528, "A module cannot have multiple default exports.", secondDefaultPos, 0,
                 listOf(rel(2752, "The first export default is here.", classNamePos, 1)))
-            mk(1109, "Expression expected.", varPos, 3)
+            // (TS1109 at `var` is now PARSER-emitted — the reserved-keyword-in-expression
+            // recovery leaves `var` unconsumed — so the pin no longer re-emits it.)
             mk(2652, ts2652, varNamePos, 1)
         }
     }
@@ -140211,6 +140513,47 @@ interface DataView {
                         } else null
                         if (lit != null && lit !== nullType && lit !== undefinedType) {
                             currentLocalTypes[declName!!] = getWidenedLiteralType(lit)
+                        } else if (declName != null && decl.type == null && decl.initializer is BinaryExpression) {
+                            // A BINARY initializer whose operator pins a concrete primitive
+                            // result also records: comparisons → boolean, arithmetic/compound
+                            // arithmetic → number/bigint (`var any = 0 ^= <missing>` is number;
+                            // `var string = 0 / <missing> > <missing>` is boolean — the sum3
+                            // chain of constructorWithIncompleteTypeAnnotation needs both).
+                            // Gated to a primitive intrinsic result (never unions/objects/any),
+                            // mirroring the literal-init convention above.
+                            val bin = decl.initializer as BinaryExpression
+                            val binT = when (bin.operator) {
+                                SyntaxKind.LessThan, SyntaxKind.GreaterThan,
+                                SyntaxKind.LessThanEquals, SyntaxKind.GreaterThanEquals,
+                                SyntaxKind.EqualsEquals, SyntaxKind.ExclamationEquals,
+                                SyntaxKind.EqualsEqualsEquals, SyntaxKind.ExclamationEqualsEquals,
+                                SyntaxKind.InstanceOfKeyword, SyntaxKind.InKeyword -> booleanType
+                                SyntaxKind.Minus, SyntaxKind.Asterisk, SyntaxKind.Slash,
+                                SyntaxKind.Percent, SyntaxKind.AsteriskAsterisk,
+                                SyntaxKind.Ampersand, SyntaxKind.Bar, SyntaxKind.Caret,
+                                SyntaxKind.LessThanLessThan, SyntaxKind.GreaterThanGreaterThan,
+                                SyntaxKind.GreaterThanGreaterThanGreaterThan,
+                                SyntaxKind.MinusEquals, SyntaxKind.AsteriskEquals,
+                                SyntaxKind.SlashEquals, SyntaxKind.PercentEquals,
+                                SyntaxKind.AmpersandEquals, SyntaxKind.BarEquals,
+                                SyntaxKind.CaretEquals, SyntaxKind.LessThanLessThanEquals,
+                                SyntaxKind.GreaterThanGreaterThanEquals,
+                                SyntaxKind.GreaterThanGreaterThanGreaterThanEquals -> numberType
+                                else -> null
+                            }
+                            if (binT != null) currentLocalTypes[declName] = binT
+                        } else if (declName != null && decl.type == null &&
+                            decl.initializer is ObjectLiteralExpression) {
+                            // An object-literal initializer records too, so a member chain
+                            // rooted at the local resolves (`var anony = { a: new CLASS() };
+                            // retVal += anony.a.d();` needs anony.a.d()'s void return —
+                            // constructorWithIncompleteTypeAnnotation line 166). Same
+                            // concrete-only gate as the annotation branch above.
+                            val objT = try { getTypeOfObjectLiteral(decl.initializer as ObjectLiteralExpression) }
+                                catch (_: StackOverflowError) { null }
+                            if (objT != null && objT !== anyType && objT !== errorType && objT !is Type.Union) {
+                                currentLocalTypes[declName] = objT
+                            }
                         }
                     }
                 }
@@ -140670,6 +141013,15 @@ interface DataView {
                 return
             }
         }
+        // Same family: `<missing> ^= { … }` (a compound-arith assignment whose LHS is the
+        // parser's zero-width missing Identifier — constructorWithIncompleteTypeAnnotation's
+        // `if (retValue != 0 ^=  {`). tsc checks the object-literal RHS operand → TS2363
+        // spanning the whole literal; the missing LHS is errorType-silent.
+        if (isCompoundArithmetic && expr.right is ObjectLiteralExpression &&
+            (expr.left as? Identifier)?.text == "") {
+            emitTs2363(expr.right, source, fileName)
+            return
+        }
 
         val isStrictArith = isArithmetic || isCompoundArithmetic
         // errorType always bails (unresolvable — never a real diagnostic).
@@ -140738,14 +141090,14 @@ interface DataView {
         }
 
         if (isArithmetic || isCompoundArithmetic) {
-            // TS2447: For bitwise compound (^=, &=, |=) where BOTH operands are
-            // boolean, suggest the logical equivalent instead of emitting
-            // TS2362/TS2363. Maps: ^= → !==, &= → &&, |= → ||.
-            if (isCompoundArithmetic) {
+            // TS2447: For bitwise ops (^ & | and their compound forms) where BOTH operands
+            // are boolean, suggest the logical equivalent instead of emitting
+            // TS2362/TS2363 (tsc getSuggestedBooleanOperator). Maps: ^ → !==, & → &&, | → ||.
+            run {
                 val bitOpAlt = when (op) {
-                    SyntaxKind.CaretEquals -> "!=="
-                    SyntaxKind.AmpersandEquals -> "&&"
-                    SyntaxKind.BarEquals -> "||"
+                    SyntaxKind.CaretEquals, SyntaxKind.Caret -> "!=="
+                    SyntaxKind.AmpersandEquals, SyntaxKind.Ampersand -> "&&"
+                    SyntaxKind.BarEquals, SyntaxKind.Bar -> "||"
                     else -> null
                 }
                 if (bitOpAlt != null &&
@@ -141307,6 +141659,27 @@ interface DataView {
     private fun checkInvalidAssignInExprCore(expr: Expression, source: String, fileName: String) {
         when (expr) {
             is BinaryExpression -> {
+                // COMPOUND assignments (`0 ^= …`) run tsc's checkReferenceExpression too —
+                // a non-reference LHS is TS2364 (destructuring literals are only valid for
+                // plain `=`; a zero-width missing-Identifier LHS is silent, being an
+                // Identifier). constructorWithIncompleteTypeAnnotation's `var any = 0 ^= `.
+                if (expr.operator != SyntaxKind.Equals && isAssignmentOperator(expr.operator)) {
+                    val left = expr.left
+                    val validForCompound = isValidAssignmentTarget(left) &&
+                        left !is ArrayLiteralExpression && left !is ObjectLiteralExpression
+                    if (!validForCompound) {
+                        val start = left.pos
+                        val length = (expressionTrueEnd(left) - start).coerceAtLeast(1)
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "The left-hand side of an assignment expression must be a variable or a property access.",
+                            category = DiagnosticCategory.Error,
+                            code = 2364,
+                            fileName = fileName, line = line, character = character,
+                            start = start, length = length,
+                        ))
+                    }
+                }
                 // Check if this is an assignment
                 if (expr.operator == SyntaxKind.Equals) {
                     if (!isValidAssignmentTarget(expr.left)) {

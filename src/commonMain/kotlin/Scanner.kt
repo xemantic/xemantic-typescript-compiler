@@ -711,6 +711,22 @@ class Scanner(private val text: String) {
         val start = pos
         // Check if this identifier starts with a \uXXXX escape sequence
         if (pos < end && text[pos] == '\\') {
+            // tsc scan() backslash case: the COOKED first char decides. A syntactically-
+            // valid escape whose decoded char is NOT an identifier start (a lone 4-hex
+            // surrogate `\uD800`, a digit `1`) reports Invalid_character AT SCAN TIME
+            // and yields an Unknown token consuming ONLY the backslash — the hex re-scans
+            // as a separate identifier (unicodeEscapesInNames02's astral-as-pair import →
+            // uD800 + uDEA7). A BRACED astral escape (`\u{1049F}`) cooks to a high
+            // surrogate — a valid identifier start. Syntactically INVALID escapes keep the
+            // legacy consume+flag route (invalidUnicodeEscapeSequance1/2).
+            val cooked = peekEscapeDecodedFirstChar(pos)
+            val bracedStart = pos + 2 < end && text[pos + 2] == '{'
+            if (cooked != null && !isIdentifierStart(cooked) && !(bracedStart && cooked.isHighSurrogate())) {
+                invalidEscapeIdentStartPos = pos
+                pos++ // consume only the backslash
+                tokenValue = "\\"
+                return SyntaxKind.Unknown
+            }
             return scanIdentifierWithEscapes(start)
         }
         // Consume first character — handle surrogate pairs for supplementary Unicode chars
@@ -766,6 +782,23 @@ class Scanner(private val text: String) {
             val ch = text[pos]
             when {
                 ch == '\\' && pos + 1 < end && text[pos + 1] == 'u' -> {
+                    // Mid-identifier: a syntactically-VALID escape decoding to a
+                    // NON-identifier-part char ENDS the identifier BEFORE the escape
+                    // (tsc scanIdentifierParts) — the `\` then re-scans as its own
+                    // token and TS1127 fires at scan time (U+E59F private-use in
+                    // constructorWithIncompleteTypeAnnotation's `_풥…`).
+                    // Syntactically INVALID escapes keep the consume+flag recovery below.
+                    if (prefixLen > 0 || sb.isNotEmpty()) {
+                        val peeked = peekEscapeDecodedFirstChar(pos)
+                        // A BRACED `\u{1049F}` escape decoding to a high surrogate is an
+                        // ASTRAL code point (surrogates aren't letters in isolation) — keep
+                        // consuming. A LONE-surrogate 4-hex `\uD800` is INVALID in tsc
+                        // (isIdentifierPart(cookedChar) false) and ENDS the identifier
+                        // (unicodeEscapesInNames02's `𐊧` → uD800 + uDEA7).
+                        val braced = pos + 2 < end && text[pos + 2] == '{'
+                        if (peeked != null && !isIdentifierPart(peeked) &&
+                            !(braced && peeked.isHighSurrogate())) break
+                    }
                     val escapeStart = pos // position of '\'
                     pos += 2 // skip '\u'
                     val decoded = if (pos < end && text[pos] == '{') {
@@ -819,10 +852,34 @@ class Scanner(private val text: String) {
             // E.g., `\u0031a` (decodes to `1a`, invalid start) should emit as `u0031a`.
             // Store the corrected raw text (source text with leading `\` removed).
             correctedRawText = text.substring(tokenPos + 1, pos)
+            // tsc reports the Invalid_character AT SCAN TIME (scan()'s backslash case:
+            // the cooked char is not an identifier start) — record for the parser's
+            // nextToken flag-flush so the TS1127 lands BEFORE any recovery diagnostic
+            // at the same position (a var-decl list's ','-expected then dedups against it).
+            invalidEscapeIdentStartPos = tokenPos
         }
         tokenValue = sb.toString()
         val keywordKind = KEYWORDS[tokenValue]
         return keywordKind ?: SyntaxKind.Identifier
+    }
+
+    /** Peeks a `\uHHHH` / `\u{…}` escape at [escapePos] (the backslash) and returns the FIRST
+     *  decoded UTF-16 char, or null when the escape is syntactically invalid. Does not move [pos]. */
+    private fun peekEscapeDecodedFirstChar(escapePos: Int): Char? {
+        var p = escapePos + 2 // skip `\u`
+        if (p < end && text[p] == '{') {
+            p++
+            val hexStart = p
+            while (p < end && isHexDigit(text[p])) p++
+            if (p >= end || text[p] != '}' || p == hexStart) return null
+            val cp = text.substring(hexStart, p).toIntOrNull(16) ?: return null
+            if (cp > 0x10FFFF) return null
+            return codePointToString(cp)[0]
+        }
+        var count = 0
+        while (count < 4 && p < end && isHexDigit(text[p])) { p++; count++ }
+        if (count != 4) return null
+        return text.substring(escapePos + 2, p).toInt(16).toChar()
     }
 
     private fun scanNumericLiteral(): SyntaxKind {
@@ -1802,6 +1859,12 @@ class Scanner(private val text: String) {
      *  token; the error span is 2 chars. */
     var hashBangErrorPos: Int = -1
         private set
+
+    /** Token start of the most recent identifier that BEGINS with a unicode escape whose
+     *  decoded char is not a valid identifier start (`…`) — tsc's scan() backslash
+     *  case reports Invalid_character (TS1127, 0-width) AT SCAN TIME; the parser's
+     *  nextToken flag-flush mirrors that (once per position), or -1. */
+    var invalidEscapeIdentStartPos: Int = -1
 
     // -- Character classification utilities -----------------------------------
 

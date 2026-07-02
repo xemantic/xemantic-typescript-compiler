@@ -1017,7 +1017,17 @@ class Emitter(
         writeIndent()
         write("try")
         emitInnerComments(node.afterTryComments)
-        emitBlockBody(node.tryBlock, emitOpenBraceComments = true)
+        // A parse-recovery MISSING try block (zero-width, empty — `catch (e) {` with no
+        // preceding try) prints MULTILINE `{\n<indent>}` in tsc, EXCEPT when the try was
+        // rebuilt by the optional-catch-binding downlevel (a SYNTHETIC `_a` catch var,
+        // pos < 0) — the rebuilt statement prints `try { }` single-line
+        // (constructorWithIncompleteTypeAnnotation lines 46/143 vs 159).
+        val tryBlockMissing = node.tryBlock.statements.isEmpty() &&
+            node.tryBlock.pos >= 0 && node.tryBlock.pos == node.tryBlock.end
+        val syntheticCatchVar = node.catchClause?.variableDeclaration?.name?.pos?.let { it < 0 } == true
+        val tryBlockToEmit = if (tryBlockMissing && !syntheticCatchVar)
+            node.tryBlock.copy(multiLine = true) else node.tryBlock
+        emitBlockBody(tryBlockToEmit, emitOpenBraceComments = true)
         if (!options.removeComments) emitTrailingComments(node.afterTryBlockComments)
         if (node.catchClause != null) {
             writeNewLine()
@@ -1051,7 +1061,12 @@ class Emitter(
             writeIndent()
             write("finally")
             emitInnerComments(node.afterFinallyComments)
-            emitBlockBody(node.finallyBlock, emitOpenBraceComments = true)
+            // Same multiline rule for a parse-recovery MISSING finally block (the try with
+            // neither catch nor finally gets a missing one — `finally {\n}`).
+            val finallyMissing = node.finallyBlock.statements.isEmpty() &&
+                node.finallyBlock.pos >= 0 && node.finallyBlock.pos == node.finallyBlock.end
+            val finallyToEmit = if (finallyMissing) node.finallyBlock.copy(multiLine = true) else node.finallyBlock
+            emitBlockBody(finallyToEmit, emitOpenBraceComments = true)
             if (!options.removeComments) emitTrailingComments(node.afterFinallyBlockComments)
         } else {
             // Emit trailing comments after catch block when there's no finally
@@ -3399,6 +3414,15 @@ class Emitter(
                         binNode.operatorTrailingComments?.forEach { write(" "); write(it.text) }
                     }
                     writeNewLine()
+                    // An empty-placeholder right (parse-recovery missing operand:
+                    // `var string = 0 /  >` then newline) leaves the statement's `;` at
+                    // the STATEMENT indent, not the continuation indent (mirrors the
+                    // plain-path rightIsEmptyPlaceholder rule).
+                    if (binNode.right is Identifier && (binNode.right as Identifier).text.isEmpty()) {
+                        repeat(indentLevel) { sb.append("    ") }
+                        isStartOfLine = false
+                        continue
+                    }
                     indentLevel++
                     repeat(indentLevel) { sb.append("    ") }
                     isStartOfLine = false
@@ -3520,7 +3544,18 @@ class Emitter(
             val opLeading = if (!options.removeComments) node.operatorLeadingComments else null
             val opTrailing = if (!options.removeComments) node.operatorTrailingComments else null
             val indentStr = "    ".repeat(indentLevel + 1)
-            writeNewLine()
+            // A zero-text LEFT (parser missing identifier: `<missing> ^ retValue`) leaves the
+            // current line blank so far — tsc's lazy writer never materializes the pending
+            // indent and its writeLine is a no-op at line start: trim the pending whitespace
+            // instead of stranding a whitespace-only line (constructorWithIncompleteTypeAnnotation).
+            val lineStartForBlankCheck = sb.lastIndexOf('\n') + 1
+            val blankSoFar = sb.length > lineStartForBlankCheck &&
+                (lineStartForBlankCheck until sb.length).all { sb[it] == ' ' }
+            if (blankSoFar && node.left is Identifier && (node.left as Identifier).text.isEmpty()) {
+                sb.setLength(lineStartForBlankCheck)
+            } else {
+                writeNewLine()
+            }
             if (opLeading != null && opLeading.isNotEmpty()) {
                 for (comment in opLeading) {
                     sb.append(indentStr)
@@ -3595,6 +3630,12 @@ class Emitter(
                     isStartOfLine = false
                     emitRight()
                     indentLevel--
+                } else {
+                    // tsc: the statement's terminating `;` after the (empty) wrapped right
+                    // lands at the STATEMENT's own indent (`var inf = 0 -` newline `    ;`,
+                    // `return 1 &&` newline `    ;` — constructorWithIncompleteTypeAnnotation).
+                    repeat(indentLevel) { sb.append("    ") }
+                    isStartOfLine = false
                 }
             } else {
                 write(" $op ")
@@ -3667,6 +3708,24 @@ class Emitter(
         if (isMultiLine) indentLevel++
 
         emitExpression(node.condition)
+        // Parse-recovered `return true ? <missing> : <missing>` (ASI before `else`): both
+        // branches are zero-width missing identifiers and there is no real `:` token, so the
+        // position-derived newline flags are garbage. tsc prints `?` ending its line, `:`
+        // alone at the continuation indent, and the statement's `;` at the statement indent
+        // (lazy-writer behavior — constructorWithIncompleteTypeAnnotation line 226).
+        val wtEmpty = node.whenTrue is Identifier && (node.whenTrue as Identifier).text.isEmpty()
+        val wfEmpty = node.whenFalse is Identifier && (node.whenFalse as Identifier).text.isEmpty()
+        if (wtEmpty && wfEmpty && newlineAfterQ) {
+            write(" ?")
+            writeNewLine()
+            writeIndent()
+            write(":")
+            writeNewLine()
+            if (isMultiLine) indentLevel--
+            repeat(indentLevel) { sb.append("    ") }
+            isStartOfLine = false
+            return
+        }
         if (newlineBeforeQ) {
             writeNewLine()
             writeIndent()

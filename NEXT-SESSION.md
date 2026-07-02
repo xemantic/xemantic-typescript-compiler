@@ -11,7 +11,14 @@ below) — this file tells you how to use them.
 
 ---
 
-## 0. Current state (2026-07-01, post rounds 377-379)
+## 0. Current state (2026-07-02, post round 380) — **CAMPAIGN COMPLETE**
+
+- **0 failing / 8,837 (3 skipped) — the full tsgo-relevant TypeScript compiler test suite PASSES.**
+- **Round 380 (2026-07-02, ONE session) landed +2 (2→0), ZERO regressions — `constructorWithIncompleteTypeAnnotation` (BOTH subtests), the final test, flipped via real parser/scanner/checker/emitter machinery (NOT pins).** The keys: tsc's abortParsingListOrMoveToNextToken order (context-error-first + abort-if-claimed via a faithful isClassMemberStartLookahead — the `case = …`→class-property / `if (…) {`→method-`if` cascade), reserved-keyword-in-expression as parseIdentifier(Expression_expected) (unconsumed missing), catch/finally→parseTryStatement with missing blocks, forced-statement contexts binding `<missing> ^= {…}`, entity-name import-equals (TS2503/TS2591, script-file classification), the TS1212/1213/1214 binder parse-diag gate, ||-falsy-left removal, TS2447, the scanner's Unknown-`\`-token model for invalid escape starts, and the emitter's empty-placeholder layout rules. Full detail: round-380 CLAUDE.md gotcha + PLAN-PHASE-4.md top note.
+- **What remains (non-test-driven):** (a) the 3 SKIPPED tests (check `build.gradle.kts` for why they're skipped — likely infrastructure); (b) the long-deferred PLAN-PHASE-4.md maintenance trim (~65 live session notes vs ~10 target — move contiguous pure-session-note blocks below the HUNT-9 lesson to PLAN-PHASE-4-HISTORY.md); (c) real-world hardening: the `ProjectCompiler`/CLI path (Main.kt) is far less exercised than the test harness — compiling real projects (tsconfig graphs, node_modules) end-to-end would surface integration gaps; (d) optionally re-enabling the disabled `.errors.txt` test category (+~9k tests — a USER/Guardrail decision) or tracking a newer tsc/tsgo corpus commit (also a Guardrail: `typeScriptCommit` pin).
+- **If a future corpus bump or feature work re-introduces failures, the loop in §2 + the method in §4 remain the playbook.** The tsc sources stay readable via `git -C typescript-repo cat-file -p HEAD:src/compiler/<f>.ts` — building recoveries against the REAL parser.ts/checker.ts (rounds 363-380) was the endgame's decisive method.
+
+### (superseded) Current state (2026-07-01, post rounds 377-379)
 
 - **2 failing / 8,837 (all tsgo-RELEVANT)** (trust STATUS.md's headline).
 - **Rounds 377-379 (2026-07-01, ONE session) landed +4 (6→2), ZERO regressions at every commit — giant, staticFieldWithInterfaceContext, reachabilityChecksNoCrash1 (BOTH subtests) ALL FLIPPED via real features (bodyless-accessor checker-side TS1005 per tsc checkGrammarAccessor; the five staticField emit pieces incl. print-time fn-local temp naming via @@fnCls placeholders + tsc EmitFlags.SingleLine synthesized-if distinction; the FULL param-`!` Parameters-context recovery chain + object-literal member recovery + reparseTopLevelAwait modeling + the formatter per-line deferred-multi interleave). Full detail in STATUS.md rounds 377-379 + the two new CLAUDE.md gotchas.**

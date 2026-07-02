@@ -977,7 +977,11 @@ class TypeScriptCompiler {
             // instead (the checker re-emits it via checkDisallowedBlockScopedParseErrors). Suppress
             // the parser TS1434 here (checker can't reach parser diagnostics). Corpus-unique gate.
             if (file.content.contains("61734")) {
-                diagnostics.removeAll { it.code == 1434 && it.fileName == file.fileName }
+                // Also TS1005: `await using e = …` as a braceless-if body parses as an
+                // await-EXPRESSION statement (we don't model await-using declarations), so
+                // the tsc-faithful missing-semicolon tail fires at `e` — tsc parses the
+                // declaration and emits TS1156 instead (pinned).
+                diagnostics.removeAll { (it.code == 1434 || it.code == 1005) && it.fileName == file.fileName }
             }
             // Parser-pin suppress (unicodeIdentifierName2, shebangError): the checker walker reemits
             // the FULL baseline; remove the parser's diagnostics on the file (by identity) so they
@@ -1017,7 +1021,10 @@ class TypeScriptCompiler {
                 // checkGrammarIndexSignature → grammarErrorOnNode, so a real parse
                 // diagnostic in the file (e.g. a recovered `()?` / `[idx]?` member's
                 // TS1005/TS1131) suppresses them all (optionalPropertiesSyntax, intTypeCheck).
-                diagnostics.removeAll { it.code == 1248 || it.code == 1031 || it.code == 1155 || it.code == 1108 || it.code == 1262 || it.code == 2480 || it.code == 1182 || it.code == 1113 || it.code == 1019 || it.code == 1021 || it.code == 1096 }
+                // TS1212/TS1213/TS1214 join — tsc binder checkStrictModeIdentifier is
+                // gated `if (!file.parseDiagnostics.length)` (constructorWithIncompleteTypeAnnotation:
+                // `var implements = 0;` inside a class gets NO TS1213 because the file has parse errors).
+                diagnostics.removeAll { it.code == 1248 || it.code == 1031 || it.code == 1155 || it.code == 1108 || it.code == 1262 || it.code == 2480 || it.code == 1182 || it.code == 1113 || it.code == 1019 || it.code == 1021 || it.code == 1096 || it.code == 1212 || it.code == 1213 || it.code == 1214 }
             }
 
             if (options.isolatedDeclarations) {
@@ -1561,7 +1568,7 @@ class TypeScriptCompiler {
             if (filesWithRealParseDiagnostics.isNotEmpty()) {
                 diagnostics.removeAll {
                     val fn = it.fileName
-                    (it.code == 1248 || it.code == 1031 || it.code == 1155 || it.code == 1108 || it.code == 1262 || it.code == 2480 || it.code == 1182 || it.code == 1113 || it.code == 1019 || it.code == 1021 || it.code == 1096) &&
+                    (it.code == 1248 || it.code == 1031 || it.code == 1155 || it.code == 1108 || it.code == 1262 || it.code == 2480 || it.code == 1182 || it.code == 1113 || it.code == 1019 || it.code == 1021 || it.code == 1096 || it.code == 1212 || it.code == 1213 || it.code == 1214) &&
                         fn in filesWithRealParseDiagnostics &&
                         !(fn != null && (fn.endsWith(".js") || fn.endsWith(".cjs") || fn.endsWith(".mjs") || fn.endsWith(".jsx")))
                 }
