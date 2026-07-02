@@ -44,6 +44,13 @@ interface Vfs {
     fun writeText(path: String, content: String)
     /** Lists immediate child entries of directory [path] as absolute paths (empty if not a dir). */
     fun list(path: String): List<String>
+    /**
+     * [path] made absolute against the implementation's working directory. Identity by
+     * default — in-memory implementations have no CWD and treat their keys as already
+     * absolute. [ProjectCompiler] absolutizes the project path through this so relative
+     * CLI invocations (`xtsc .`) produce the absolute paths glob matching requires.
+     */
+    fun resolveAbsolute(path: String): String = path
 }
 
 /**
@@ -76,6 +83,19 @@ object SystemVfs : Vfs {
         SystemFileSystem.list(Path(path)).map { PathUtil.normalize(it.toString()) }
     } catch (_: Throwable) {
         emptyList()
+    }
+
+    override fun resolveAbsolute(path: String): String {
+        val p = PathUtil.normalize(path)
+        if (p.startsWith("/")) return p
+        // SystemFileSystem.resolve throws for paths that don't exist, so resolve the
+        // CWD (".", always present) and join the relative part onto it instead of
+        // resolving [path] directly.
+        return try {
+            PathUtil.join(PathUtil.normalize(SystemFileSystem.resolve(Path(".")).toString()), p)
+        } catch (_: Throwable) {
+            p
+        }
     }
 }
 

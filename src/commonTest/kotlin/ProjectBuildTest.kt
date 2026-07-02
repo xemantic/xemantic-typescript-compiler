@@ -112,6 +112,61 @@ class ProjectBuildTest {
         assertTrue(written.none { it.contains("/node_modules/") })
     }
 
+    /** Nested source dirs + same-basename files in two directories (output-layout regressions). */
+    private fun nestedProject() = InMemoryVfs(
+        mapOf(
+            "/proj/tsconfig.json" to """
+                {
+                  "compilerOptions": { "module": "commonjs", "rootDir": "./src", "outDir": "./dist" },
+                  "include": ["src/**/*.ts"]
+                }
+            """.trimIndent(),
+            "/proj/src/index.ts" to "export const rootMarker = 1;",
+            "/proj/src/helpers/util.ts" to "export const utilMarker = 2;",
+            "/proj/src/locales/index.ts" to "export const localeMarker = 3;",
+        ),
+    )
+
+    @Test
+    fun preservesSourceSubdirectoriesUnderOutDir() {
+        val vfs = nestedProject()
+        val result = ProjectCompiler(vfs).build("/proj")
+        val written = result.written.map { it.first }.toSet()
+        assertContains(written, "/proj/dist/index.js")
+        assertContains(written, "/proj/dist/helpers/util.js")
+        val utilJs = vfs.readText("/proj/dist/helpers/util.js")
+        assertTrue(utilJs != null && utilJs.contains("utilMarker"), "nested output holds its module: $utilJs")
+        assertNull(vfs.readText("/proj/dist/util.js"), "nested output must not also land flattened at the outDir root")
+    }
+
+    @Test
+    fun sameBasenameFilesInDifferentDirectoriesBothEmit() {
+        val vfs = nestedProject()
+        val result = ProjectCompiler(vfs).build("/proj")
+        assertEquals(3, result.written.size, "all three inputs must emit: ${result.written}")
+        val rootIndex = vfs.readText("/proj/dist/index.js")
+        val localeIndex = vfs.readText("/proj/dist/locales/index.js")
+        assertTrue(rootIndex != null && rootIndex.contains("rootMarker"), "root index.js written: $rootIndex")
+        assertTrue(
+            localeIndex != null && localeIndex.contains("localeMarker"),
+            "locales/index.js written separately, not overwritten by a basename collision: $localeIndex",
+        )
+    }
+
+    @Test
+    fun writtenOutputsEndWithExactlyOneTrailingNewline() {
+        val vfs = nestedProject()
+        val result = ProjectCompiler(vfs).build("/proj")
+        assertTrue(result.written.isNotEmpty())
+        for ((path, _) in result.written) {
+            val text = vfs.readText(path)
+            assertTrue(
+                text != null && text.endsWith("\n") && !text.endsWith("\n\n"),
+                "$path must end with exactly one newline, got tail: ${text?.takeLast(3)}",
+            )
+        }
+    }
+
     @Test
     fun reportsMalformedTsConfig() {
         val vfs = InMemoryVfs(

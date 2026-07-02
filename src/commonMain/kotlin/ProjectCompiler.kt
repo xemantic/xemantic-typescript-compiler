@@ -53,7 +53,10 @@ class ProjectCompiler(private val vfs: Vfs) {
      * @param noEmit when true, type-check only — do not write outputs.
      */
     fun build(projectPath: String, noEmit: Boolean = false): Result {
-        val configPath = resolveConfigPath(projectPath)
+        // Absolutize first: glob regexes, module resolution, and output mapping all
+        // assume absolute paths (a relative `.` would produce `./src/**` patterns that
+        // never match the absolute paths the Vfs walk yields).
+        val configPath = resolveConfigPath(vfs.resolveAbsolute(projectPath))
         val config = TsConfigLoader(vfs).load(configPath)
         val resolver = ModuleResolver(vfs, config.customConditions)
 
@@ -84,12 +87,24 @@ class ProjectCompiler(private val vfs: Vfs) {
             }
         }
 
-        // Feed the gathered file set through the shared compilation core.
+        // Feed the gathered file set through the shared compilation core. The core's
+        // output naming serves baseline comparison: by default it strips names to
+        // basenames (which collide across subdirectories), and its own outDir remap is
+        // keyed on the inputs' common ancestor rather than rootDir. Withhold outDir and
+        // request full input-derived paths instead (`fullEmitPaths` affects naming only);
+        // all outDir/rootDir mapping happens in [writeOutputs] from the input paths.
+        val emitOptions = config.options.copy(outDir = null, fullEmitPaths = true)
         val files = program.map { (name, content) -> SourceFileEntry(name, content) }
-        val parsed = ParsedSource(config.options, files, hasExplicitFilenames = true)
+        val parsed = ParsedSource(emitOptions, files, hasExplicitFilenames = true)
         val result = TypeScriptCompiler().compileParsed(
-            parsed, config.options, rootFiles.firstOrNull() ?: "input.ts",
+            parsed, emitOptions, rootFiles.firstOrNull() ?: "input.ts",
         )
+
+        // With outDir withheld above, the core's same-directory overwrite check (TS5055,
+        // gated on `outDir == null`) can fire even though outputs actually go to outDir.
+        val compilerDiagnostics =
+            if (config.options.outDir != null) result.diagnostics.filter { it.code != 5055 }
+            else result.diagnostics
 
         val written = if (noEmit || config.options.noEmit) emptyList()
         else writeOutputs(result, config, program.keys)
@@ -100,7 +115,7 @@ class ProjectCompiler(private val vfs: Vfs) {
             programFiles = program.keys.toList(),
             // Config-load errors (unreadable/malformed tsconfig, missing `extends`) first,
             // then the compiler's own diagnostics.
-            diagnostics = config.diagnostics + result.diagnostics,
+            diagnostics = config.diagnostics + compilerDiagnostics,
             unresolved = unresolved.distinct(),
             written = written,
         )
@@ -212,21 +227,70 @@ class ProjectCompiler(private val vfs: Vfs) {
     ): List<Pair<String, Int>> {
         val rootDir = config.options.rootDir ?: commonSourceDir(programFiles) ?: config.configDir
         val outDir = config.options.outDir
+        // [build] requested full input-derived output names (see `emitOptions` there); the
+        // core spells them by swapping extensions with String.replace over the whole path.
+        // Reproduce that exact spelling per program input so each output correlates back to
+        // its INPUT path, and derive the on-disk target from the input (rootDir-relative,
+        // extension swapped on the final segment only). Basenames are NOT a usable key —
+        // same-named files in different directories collide.
+        val jsxPreserve = config.options.jsx?.lowercase() == "preserve"
+        val inputByOutputName = programFiles.associateBy { coreOutputName(it, jsxPreserve) }
         val written = mutableListOf<Pair<String, Int>>()
         for ((name, content) in result.jsOutputs) {
             // Only emit outputs for project files (skip anything under node_modules).
             if (name.contains("/node_modules/")) continue
-            val rel = PathUtil.relativeTo(rootDir, name).ifEmpty { PathUtil.basename(name) }
+            val input = inputByOutputName[name]
+            var rel =
+                if (input != null) swapOutputExtension(PathUtil.relativeTo(rootDir, input), jsxPreserve)
+                else PathUtil.relativeTo(rootDir, name) // e.g. an outFile bundle name
+            // Not under rootDir (relativeTo fell back to the path itself): never write
+            // outside outDir — drop to the basename.
+            if (rel.isEmpty() || PathUtil.isAbsolute(rel)) rel = PathUtil.basename(name)
             val target = if (outDir != null) PathUtil.join(outDir, rel) else PathUtil.normalize(name)
-            vfs.writeText(target, content)
-            written.add(target to content.length)
+            // tsc terminates every emitted file with a newline; the shared emitter (whose
+            // output the corpus baselines compare without one) does not, so append it at
+            // the disk-write layer only.
+            val payload = if (content.isEmpty() || content.endsWith("\n")) content else content + "\n"
+            vfs.writeText(target, payload)
+            written.add(target to payload.length)
         }
         return written
     }
 
-    /** The deepest directory that is a prefix of every emittable program file. */
+    /** The output name [TypeScriptCompiler.compileParsed] gives [input] under `fullEmitPaths` (its all-occurrence extension replace). */
+    private fun coreOutputName(input: String, jsxPreserve: Boolean): String {
+        val jsxExt = if (jsxPreserve) ".jsx" else ".js"
+        return input
+            .replace(".tsx", jsxExt)
+            .replace(".jsx", jsxExt)
+            .replace(".mts", ".mjs")
+            .replace(".cts", ".cjs")
+            .replace(".ts", ".js")
+    }
+
+    /** Swaps only a trailing source extension of [path] for its output extension. */
+    private fun swapOutputExtension(path: String, jsxPreserve: Boolean): String {
+        val jsxExt = if (jsxPreserve) ".jsx" else ".js"
+        return when {
+            path.endsWith(".tsx") -> path.removeSuffix(".tsx") + jsxExt
+            path.endsWith(".jsx") -> path.removeSuffix(".jsx") + jsxExt
+            path.endsWith(".mts") -> path.removeSuffix(".mts") + ".mjs"
+            path.endsWith(".cts") -> path.removeSuffix(".cts") + ".cjs"
+            path.endsWith(".ts") -> path.removeSuffix(".ts") + ".js"
+            else -> path
+        }
+    }
+
+    /**
+     * The deepest directory that is a prefix of every emittable program file — the
+     * rootDir fallback, mirroring tsc's commonSourceDirectory (computed over emitted
+     * files only, so declaration and json inputs don't shift it).
+     */
     private fun commonSourceDir(files: Set<String>): String? {
-        val dirs = files.filterNot { it.contains("/node_modules/") }.map { PathUtil.dirname(it) }
+        val dirs = files.filterNot {
+            it.contains("/node_modules/") || it.endsWith(".json") ||
+                it.endsWith(".d.ts") || it.endsWith(".d.mts") || it.endsWith(".d.cts")
+        }.map { PathUtil.dirname(it) }
         if (dirs.isEmpty()) return null
         var common = dirs.first().split('/')
         for (d in dirs.drop(1)) {
