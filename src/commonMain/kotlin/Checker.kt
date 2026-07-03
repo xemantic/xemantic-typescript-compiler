@@ -38714,8 +38714,15 @@ class Checker(
     }
 
     companion object {
-        /** Maximum antecedent walk depth for control-flow narrowing (Phase 17 / Blocker #1 step 2). */
-        private const val NARROW_MAX_DEPTH = 50
+        /** Maximum antecedent walk depth for control-flow narrowing, aligned with tsc's
+         *  `flowDepth === 2000` stack guard (M1.2b, round 386 — was 50). Do NOT lower it
+         *  back "to save time": truncated subtrees are never memo-stored (the clean-only
+         *  store rule), so the 50-cap made deep-CFG walks recompute everything — lifting
+         *  it alone cut the tsc self-compile from 185.8 s to 68.3 s (−63%) and peak RSS
+         *  by 325 MB, with ZERO corpus churn. Largely subsumed by
+         *  [NARROW_GLOBAL_DEPTH_BUDGET] (live depth includes per-walk depth); kept as an
+         *  explicit per-walk horizon. */
+        private const val NARROW_MAX_DEPTH = 2000
 
         /** P0 (services hang): hard cap on LIVE flow-walker recursion depth ACROSS
          *  re-entrant walks (tsc checker.ts `flowDepth === 2000` — a stack guard;
