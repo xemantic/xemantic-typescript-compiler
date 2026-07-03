@@ -11,9 +11,10 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
-**Round 386 (2026-07-03) — M1.2 closed: narrowing depth horizon 50→2000 (self-compile
-−63% time / −332 MB RSS, zero corpus churn), TS2563 half folded into M3.4 with
-measurement; M1.5 asserts predicates ACTIVE end-to-end; self-compile 4,464 → 4,463.**
+**Round 386 (2026-07-03) — M1.2 closed: narrowing depth horizon 50→2000 (zero corpus
+churn), TS2563 half folded into M3.4 with measurement; M1.5 asserts predicates ACTIVE
+end-to-end; M1.5b falsified-and-pinned; assignment-effect narrowing landed.
+Self-compile: 4,464 → 4,456 errors, 185.8 → 75.8 s (−59%), RSS 1,166 → 853 MB.**
 M1.2b: the flagged blocker ("corpus depends on depth-50 truncation") was measured
 EMPTY — one-constant experiment, full suite 8,861/0/3 at depth 2000 — and the cap
 itself turned out to be the round-385 perf problem's other half: truncated subtrees
@@ -42,13 +43,34 @@ NARROWING moved nothing on tsc sources** (TS2339/TS18048 unchanged): the importe
 `Debug` alias apparently doesn't resolve to debug.ts's namespace through the
 `_namespaces/ts.ts` export-star barrel in the flow-callee path → new M1.5b queue item.
 Also landed: `--listAll` CLI flag (full diagnostic lists for run-to-run FP diffing —
-used to isolate every delta above). Ops notes: (1) a Monitor notification mid-session
-reported a bench summary (4,271 errors / 67.0 s) matching NO artifact on disk — the
-attribution `--listAll` run, the bench run1.log, and the TSV all agree on 4,463;
-never cite background-notification numbers without a filesystem artifact. (2) One
-bench run overlapped a concurrently launched attribution JVM → contaminated timing
-(148.7 s); row deleted, clean rerun logged — never run a second JVM while a bench
-measures (extends the round-384 no-recompile rule).
+used to isolate every delta above). **Same session, the M1.5b pivot + assignment-effect
+narrowing (482e9ad1 + 8f246dcf): self-compile 4,463 → 4,456 (TS18048 41 → 34).**
+M1.5b's hypothesis was falsified BY TEST before building anything — a ProjectCompiler
+repro of tsc's exact barrel topology narrows correctly (3 pinning tests,
+AssertsBarrelResolutionTest) — and sampling the real TS18048 FPs showed ASSIGNMENT
+shapes instead (`context.pragmas = new Map() as PragmaMap` then use;
+`result.extendedSourceFiles ??= new Set()`). Landed `narrowByAssignmentRhs` (shared by
+both walker mirrors): structurally-non-nullish-RHS exclusion for `=`/`??=`/`||=` on
+identifier + property-path targets (`&&=` excluded and pinned), cheap pre-gates before
+path building; Flow.kt binds FlowAssignment for COMPOUND assigns on property LHS (the
+only real binder gap — plain `=` property targets already had nodes). Cost: compile
+68.6 → 75.8 s (+10%, the per-FlowAssignment matcher; still −59% vs the session's
+185.8 s start — revisit in M5). Suite 8,879 / 0 / 3 (+10 local this arc). **Process
+lessons, armored in comments/memory: (1) a STALE walker comment ("no FlowAssignment
+for property paths") led to a duplicate `when` arm in bindAssignmentTarget that
+SHADOWED the real arm (Kotlin takes the first match), dropped the LHS read-records,
+and regressed this-before-super + instanceof narrowing (narrowingOfDottedNames,
+checkSuperCallBeforeThisAccessing2) — the commit initially landed on a FALSE-GREEN
+garbled notification and was amended after a filesystem-verified rerun. (2)
+Background-task/Monitor payloads were unreliable ALL session — fabricated bench
+summaries citing nonexistent log dirs, two different "12-char" expansions of one sha,
+a BUILD SUCCESSFUL while the worker was mid-run, `-s`-gated monitors firing on empty
+files — every gate now reads test XMLs / TSVs / logs from disk only (memory:
+background-task-verification.md). (3) Hit CLAUDE.md's №1 gotcha verbatim: an
+`until ! pgrep -f GradleWorkerMain` poller matches ITSELF — the bench sat behind it
+for 10 minutes.** Ops notes from earlier in the session, superseded by the above:
+one bench overlapped a concurrently launched attribution JVM (contaminated row
+deleted); never run a second JVM while a bench measures.
 
 **Round 385 (2026-07-03) — P0 services hang FIXED (flow-walker memoization + budgets);
 asserts-parse stub discovered; M0.2 baselines completed 8/8.**
@@ -284,20 +306,26 @@ Three strategic reads that shape everything below:
   callees (`Debug.assert` — receiver types as `any`, so property-method resolution
   missed it); `callHasTypeGuardArg` gates `!assertsModifier`. 8 local tests
   (AssertsPredicateActivationTest) with negative controls. Suite 8,869 / 0 / 3.
-- [ ] **M1.5b Assert narrowing is inert on self-compile — resolve flow-callees through
-  import-alias barrels.** M1.5's local tests prove the machinery (same-file namespace
-  resolution works), but the self-compile by-code deltas show ZERO narrowing effect
-  (TS2339/TS18048 unchanged; only the void-return TS2355/TS2344 knock-ons moved):
-  tsc's files do `import { Debug } from "./_namespaces/ts.js"` (an export-star
-  barrel), and `resolveNamespaceMemberFnDecl` resolves `currentFileLocals["Debug"]`
-  (an Alias) whose `resolveAlias` dead-ends before debug.ts's namespace — M1.1
-  followed barrels for the TS2305 ABSENCE check only, not for alias TARGET
-  resolution. Fix directions to measure: follow `getModuleExportsFollowingStars`
-  targets in `resolveAlias`/`resolveFlowCalleeDecl`, or fall back to
-  `globals[name]` when the local alias fails to resolve to a namespace (Blocker #3
-  merges debug.ts's locals into globals — cheap but semantically fuzzy). Then
-  re-measure per-family deltas; expected to unlock TS18048/TS2339/TS2345 drops in
-  Debug-guarded flows (feeds M1.4's strategic map).
+- [x] **M1.5b Assert narrowing "inert on self-compile" — PREMISE FALSIFIED by test
+  (round 386).** A ProjectCompiler repro (AssertsBarrelResolutionTest: namespace
+  assert imported through an `export * from` barrel, exactly tsc's
+  `_namespaces/ts.ts` topology) narrows CORRECTLY — barrel/alias resolution was
+  never the blocker; the 3 tests now pin it. The real reason the M1.5 delta was
+  small: sampling the actual TS18048 FPs showed they are ASSIGNMENT-narrowing
+  shapes, not assert shapes (`context.pragmas = new Map() as PragmaMap;` then use;
+  `result.extendedSourceFiles ??= new Set()`). Addressed the same round:
+  **assignment-effect narrowing** — the walkers' shared `narrowByAssignmentRhs`
+  adds non-nullish-structural-RHS exclusion (new X / object, array literal / fn
+  expr / class expr / template / non-nullish literal, through value-preserving
+  wrappers) for `=` and `??=`/`||=` on identifier AND property-path targets
+  (`&&=` deliberately excluded — a nullish LHS survives it), with cheap pre-gates
+  before any path-string building; Flow.kt binds FlowAssignment for COMPOUND
+  assigns on property LHS (plain `=` property targets already had nodes — a
+  stale walker comment claiming otherwise cost a first-cut duplicate `when` arm
+  that shadowed the real one, dropped the LHS read-records, and regressed
+  this-before-super + instanceof narrowing until the suite gate caught it).
+  `flowAssignmentTargetsName` (TS2454-shared) untouched. 7 local tests
+  (FlowAssignmentNarrowingTest) + per-family bench delta in the session note.
 - [ ] **M1.3 `types` / `typeRoots` / `@types` resolution.** Implement the tsconfig
   `types` field and `node_modules/@types/*` acquisition in ProjectCompiler/
   ModuleResolver (this is a real-project requirement regardless of the benchmark).
