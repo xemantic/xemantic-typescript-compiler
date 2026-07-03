@@ -286,6 +286,12 @@ class Checker(
     /** Base-class ctor param info for super() arity checking inside a derived ctor body. */
     private var argCountSuperCtor: FuncParamInfo? = null
 
+    /** M1.11: >0 while the arity walker is inside a function-like BODY. Gates the
+     *  nested-list variable-shadow removal (a body-local `const f = …` shadows an
+     *  outer/file-level `function f` for calls in that body) so TOP-level
+     *  VariableStatement-derived entries (B64.2 var-arrow functions) keep their checks. */
+    private var argCountFnDepth = 0
+
     /** B154: per-importer-file cache of "CJS-default-namespace" call shapes (nodenext,
      *  ESM importer importing a CJS module that uses `export default`). `.first` =
      *  local default-binding name → display base (`a`/`b`/`c`/`d` → "mod"); `.second` =
@@ -46493,22 +46499,7 @@ interface DataView {
             // references and `A extends B extends C` chains). Conservative: a class whose base
             // is unresolvable (imported, mixin-expression base, circular) stays unrecorded → no
             // TS2554, never a false positive.
-            val pendingCtorInherit = mutableMapOf<String, String>()
-            collectInheritedCtorPending(result.sourceFile.statements, classCtorParams, pendingCtorInherit)
-            var inheritChanged = true
-            while (inheritChanged && pendingCtorInherit.isNotEmpty()) {
-                inheritChanged = false
-                val iter = pendingCtorInherit.entries.iterator()
-                while (iter.hasNext()) {
-                    val e = iter.next()
-                    val baseInfo = classCtorParams[e.value]
-                    if (baseInfo != null) {
-                        classCtorParams[e.key] = baseInfo
-                        iter.remove()
-                        inheritChanged = true
-                    }
-                }
-            }
+            resolveInheritedCtorArities(result.sourceFile.statements, classCtorParams)
 
             // Walk statements checking call expressions
             checkArgCountInStatements(result.sourceFile.statements, funcParams, classCtorParams, source, fileName)
@@ -46563,6 +46554,53 @@ interface DataView {
     /** B95c: collect classes that have an `extends` base but no own constructor and are not
      *  already recorded by collectFuncDecls (no-heritage / circular / own-ctor cases). Maps
      *  className → single-Identifier base name for the post-collection inheritance fixpoint. */
+    /** B95c fixpoint (extracted for M1.11's namespace-scoped re-run): resolve the
+     *  inherited constructor arity of `class D extends B {}` (no own ctor) chains,
+     *  handling forward references. Conservative: an unresolvable base stays
+     *  unrecorded → no TS2554, never a false positive. */
+    private fun resolveInheritedCtorArities(
+        statements: List<Statement>,
+        classCtorParams: MutableMap<String, FuncParamInfo>,
+    ) {
+        val pendingCtorInherit = mutableMapOf<String, String>()
+        collectInheritedCtorPending(statements, classCtorParams, pendingCtorInherit)
+        var inheritChanged = true
+        while (inheritChanged && pendingCtorInherit.isNotEmpty()) {
+            inheritChanged = false
+            val iter = pendingCtorInherit.entries.iterator()
+            while (iter.hasNext()) {
+                val e = iter.next()
+                val baseInfo = classCtorParams[e.value]
+                if (baseInfo != null) {
+                    classCtorParams[e.key] = baseInfo
+                    iter.remove()
+                    inheritChanged = true
+                }
+            }
+        }
+    }
+
+    /** M1.11: parameter names (incl. destructured binding-pattern names, and a named
+     *  function expression's own name) lexically SHADOW same-named outer/file-level
+     *  functions inside the body — a call to the name must not be arity-checked
+     *  against the outer signature (sys.ts's destructured `setTimeout` param vs the
+     *  file-level 2-param declare; utilities.ts's fn-typed `writeFile` param vs the
+     *  5-7-param export). Conservative removal: no arity check for the shadowed name
+     *  (FN-safe). Returns [funcParams] unchanged when no name collides. */
+    private fun minusParamShadowedNames(
+        funcParams: Map<String, FuncParamInfo>,
+        parameters: List<Parameter>,
+        ownName: String? = null,
+    ): Map<String, FuncParamInfo> {
+        if (funcParams.isEmpty()) return funcParams
+        val names = mutableSetOf<String>()
+        ownName?.let { names.add(it) }
+        for (p in parameters) collectBindingNames(p.name, names)
+        val shadowed = names.filter { it in funcParams }
+        if (shadowed.isEmpty()) return funcParams
+        return funcParams - shadowed.toSet()
+    }
+
     private fun collectInheritedCtorPending(
         statements: List<Statement>,
         classCtorParams: Map<String, FuncParamInfo>,
@@ -46653,8 +46691,24 @@ interface DataView {
                 }
                 is ClassDeclaration -> {
                     val name = stmt.name?.text ?: continue
-                    val ctor = stmt.members.filterIsInstance<Constructor>().firstOrNull()
-                    if (ctor != null) {
+                    val ctors = stmt.members.filterIsInstance<Constructor>()
+                    val ctor = ctors.firstOrNull()
+                    if (ctors.size > 1) {
+                        // M1.11 (Shape D): OVERLOADED constructor — the callable set is the
+                        // bodyless overload SIGNATURES (the impl is not externally callable).
+                        // Record the arity RANGE + isOverloaded so `new C(...)` within any
+                        // overload's arity is not FP'd against just the FIRST signature
+                        // (semver.ts's `Version(text)` / `Version(major, minor?, …)` pair).
+                        val sigs = ctors.filter { it.body == null }.ifEmpty { ctors }
+                        val infos = sigs.map { paramInfo(it.parameters, isJsFile) }
+                        classCtorParams[name] = FuncParamInfo(
+                            minParams = infos.minOf { it.minParams },
+                            maxParams = infos.maxOf { it.maxParams },
+                            hasRest = infos.any { it.hasRest },
+                            isOverloaded = true,
+                            parameters = infos.first().parameters,
+                        )
+                    } else if (ctor != null) {
                         val info = paramInfo(ctor.parameters, isJsFile)
                         classCtorParams[name] = info
                     } else if (stmt.heritageClauses.isNullOrEmpty()) {
@@ -46669,10 +46723,11 @@ interface DataView {
                     // Skip classes with base class but no explicit constructor —
                     // they inherit the base constructor's param count which we can't resolve
                 }
-                is ModuleDeclaration -> {
-                    val body = stmt.body as? ModuleBlock ?: continue
-                    collectFuncDecls(body.statements, funcParams, classCtorParams, isJsFile, source)
-                }
+                // M1.11: ModuleDeclaration bodies are deliberately NOT flattened here —
+                // namespace-internal functions are visible only inside the namespace body
+                // (flattening leaked e.g. parser.ts's namespace-local 0-param
+                // `isExternalModuleReference` to the file-level call site). The walker's
+                // ModuleDeclaration branch collects them into a body-scoped overlay instead.
                 is VariableStatement -> {
                     // B64.2: const variables initialized with an arrow function or function
                     // expression with NO type annotation (otherwise the annotation's signature
@@ -46787,7 +46842,7 @@ interface DataView {
             .filterIsInstance<FunctionDeclaration>()
             .filter { it.body != null && it.name != null }
             .toList()
-        val effective: Map<String, FuncParamInfo> = if (nestedFuncs.isNotEmpty()) {
+        var effective: Map<String, FuncParamInfo> = if (nestedFuncs.isNotEmpty()) {
             val isJsFile = fileName.endsWith(".js") || fileName.endsWith(".jsx") ||
                     fileName.endsWith(".mjs") || fileName.endsWith(".cjs")
             val overlay = funcParams.toMutableMap()
@@ -46801,6 +46856,27 @@ interface DataView {
             overlay
         } else {
             funcParams
+        }
+        // M1.11: inside a function body, a list-level variable declaration shadows a
+        // same-named outer/file-level function for calls in this list (program.ts's
+        // body-local `const fileOrDirectoryExistsUsingSource = …` vs the enclosing
+        // 2-param function of the same name). Removal-only — no new checks (FN-safe).
+        // Gated to nested lists so TOP-level B64.2 var-arrow entries keep their checks.
+        if (argCountFnDepth > 0) {
+            var shadowed: MutableSet<String>? = null
+            for (s in statements) {
+                if (s !is VariableStatement) continue
+                for (d in s.declarationList.declarations) {
+                    val names = mutableSetOf<String>()
+                    collectBindingNames(d.name, names)
+                    for (n in names) {
+                        if (n in effective) {
+                            (shadowed ?: mutableSetOf<String>().also { shadowed = it }).add(n)
+                        }
+                    }
+                }
+            }
+            shadowed?.let { effective = effective - it }
         }
         for (stmt in statements) {
             checkArgCountInStatement(stmt, effective, classCtorParams, source, fileName)
@@ -46871,7 +46947,11 @@ interface DataView {
             }
             is FunctionDeclaration -> {
                 stmt.body?.let {
-                    checkArgCountInStatements(it.statements, funcParams, classCtorParams, source, fileName)
+                    val inner = minusParamShadowedNames(funcParams, stmt.parameters)
+                    argCountFnDepth++
+                    try {
+                        checkArgCountInStatements(it.statements, inner, classCtorParams, source, fileName)
+                    } finally { argCountFnDepth-- }
                 }
             }
             is ClassDeclaration -> {
@@ -46887,22 +46967,36 @@ interface DataView {
                 for (member in stmt.members) {
                     when (member) {
                         is MethodDeclaration -> member.body?.let {
-                            checkArgCountInStatements(it.statements, funcParams, classCtorParams, source, fileName)
+                            val inner = minusParamShadowedNames(funcParams, member.parameters)
+                            argCountFnDepth++
+                            try {
+                                checkArgCountInStatements(it.statements, inner, classCtorParams, source, fileName)
+                            } finally { argCountFnDepth-- }
                         }
                         is Constructor -> member.body?.let {
                             val prevSuper = argCountSuperCtor
                             argCountSuperCtor = baseCtorInfo
+                            val inner = minusParamShadowedNames(funcParams, member.parameters)
+                            argCountFnDepth++
                             try {
-                                checkArgCountInStatements(it.statements, funcParams, classCtorParams, source, fileName)
+                                checkArgCountInStatements(it.statements, inner, classCtorParams, source, fileName)
                             } finally {
                                 argCountSuperCtor = prevSuper
+                                argCountFnDepth--
                             }
                         }
                         is GetAccessor -> member.body?.let {
-                            checkArgCountInStatements(it.statements, funcParams, classCtorParams, source, fileName)
+                            argCountFnDepth++
+                            try {
+                                checkArgCountInStatements(it.statements, funcParams, classCtorParams, source, fileName)
+                            } finally { argCountFnDepth-- }
                         }
                         is SetAccessor -> member.body?.let {
-                            checkArgCountInStatements(it.statements, funcParams, classCtorParams, source, fileName)
+                            val inner = minusParamShadowedNames(funcParams, member.parameters)
+                            argCountFnDepth++
+                            try {
+                                checkArgCountInStatements(it.statements, inner, classCtorParams, source, fileName)
+                            } finally { argCountFnDepth-- }
                         }
                         is PropertyDeclaration -> member.initializer?.let {
                             checkArgCountInExpr(it, funcParams, classCtorParams, source, fileName)
@@ -46924,7 +47018,17 @@ interface DataView {
             is ThrowStatement -> stmt.expression?.let { checkArgCountInExpr(it, funcParams, classCtorParams, source, fileName) }
             is ExportAssignment -> stmt.expression?.let { checkArgCountInExpr(it, funcParams, classCtorParams, source, fileName) }
             is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let {
-                checkArgCountInStatements(it.statements, funcParams, classCtorParams, source, fileName)
+                // M1.11: namespace-internal functions/classes are visible only within the
+                // namespace body (collectFuncDecls no longer flattens them file-wide).
+                // Collect them into body-scoped overlay copies here, with the same
+                // overload/var-arrow/inherited-ctor logic the file level gets.
+                val isJsFile = fileName.endsWith(".js") || fileName.endsWith(".jsx") ||
+                        fileName.endsWith(".mjs") || fileName.endsWith(".cjs")
+                val nsFuncs = funcParams.toMutableMap()
+                val nsCtors = classCtorParams.toMutableMap()
+                collectFuncDecls(it.statements, nsFuncs, nsCtors, isJsFile, source)
+                resolveInheritedCtorArities(it.statements, nsCtors)
+                checkArgCountInStatements(it.statements, nsFuncs, nsCtors, source, fileName)
             }
             else -> {}
         }
@@ -46958,6 +47062,12 @@ interface DataView {
                 }
                 if (calleeName != null) {
                     val info = if (calleeName == "super") argCountSuperCtor else funcParams[calleeName]
+                    // M1.11 (Shape C): a SPREAD argument's expansion length is unknown, so a
+                    // too-FEW conclusion from counting it as 1 is unsound (`createDiagnostic(
+                    // ...diag)` / `reportRelationError(undefined, ...info)` — tsc accepts a
+                    // tuple-typed spread covering the remaining params). Too-many stands
+                    // (a spread expands to ≥0, so fixed args alone exceeding max still errors).
+                    val hasSpreadArg = expr.arguments.any { it is SpreadElement }
                     if (info != null && !info.isOverloaded) {
                         val argCount = expr.arguments.size
                         if (!info.hasRest && argCount > info.maxParams) {
@@ -46965,7 +47075,7 @@ interface DataView {
                             // TS2556 (owned by checkSpreadNonIterableIntoFixedArity), NOT a TS2554.
                             if ("$fileName|${expr.pos}" in spreadNonIterableHandledCalls) return
                             emitTS2554TooMany(info.minParams, info.maxParams, argCount, expr.arguments, info.maxParams, source, fileName)
-                        } else if (argCount < info.minParams) {
+                        } else if (argCount < info.minParams && !hasSpreadArg) {
                             if (info.hasRest) {
                                 emitTS2555TooFew(info.minParams, argCount, expr.expression, source, fileName, info.parameters)
                             } else {
@@ -47054,7 +47164,7 @@ interface DataView {
                                     ))
                                 }
                             }
-                        } else if (argCount < info.minParams) {
+                        } else if (argCount < info.minParams && spreads.isEmpty()) {
                             emitTS2554TooFew(info.minParams, info.maxParams, argCount, expr.expression, source, fileName, info.parameters, info.declSource, info.declFileName)
                         } else if (!info.hasRest && argCount > info.maxParams) {
                             emitTS2554TooMany(info.minParams, info.maxParams, argCount, expr.arguments, info.maxParams, source, fileName)
@@ -47148,7 +47258,9 @@ interface DataView {
                         if (!info.hasRest && argCount > info.maxParams) {
                             val args = expr.arguments ?: emptyList()
                             emitTS2554TooMany(info.minParams, info.maxParams, argCount, args, info.maxParams, source, fileName)
-                        } else if (argCount < info.minParams) {
+                        } else if (argCount < info.minParams &&
+                            expr.arguments?.any { it is SpreadElement } != true
+                        ) {
                             // B95c (round 82): squiggle the WHOLE `new X(...)` (expr.pos .. after `)`),
                             // not just the class identifier — matches TypeScript. Pass info.parameters
                             // so the TS6210 "argument for 'x' not provided" related info fires (it points
@@ -47181,15 +47293,23 @@ interface DataView {
                 checkArgCountInExpr(expr.whenFalse, funcParams, classCtorParams, source, fileName)
             }
             is ArrowFunction -> {
-                when (val body = expr.body) {
-                    is Block -> checkArgCountInStatements(body.statements, funcParams, classCtorParams, source, fileName)
-                    is Expression -> checkArgCountInExpr(body, funcParams, classCtorParams, source, fileName)
-                    else -> {}
-                }
+                val inner = minusParamShadowedNames(funcParams, expr.parameters)
+                argCountFnDepth++
+                try {
+                    when (val body = expr.body) {
+                        is Block -> checkArgCountInStatements(body.statements, inner, classCtorParams, source, fileName)
+                        is Expression -> checkArgCountInExpr(body, inner, classCtorParams, source, fileName)
+                        else -> {}
+                    }
+                } finally { argCountFnDepth-- }
             }
             is FunctionExpression -> {
                 expr.body?.let {
-                    checkArgCountInStatements(it.statements, funcParams, classCtorParams, source, fileName)
+                    val inner = minusParamShadowedNames(funcParams, expr.parameters, ownName = expr.name?.text)
+                    argCountFnDepth++
+                    try {
+                        checkArgCountInStatements(it.statements, inner, classCtorParams, source, fileName)
+                    } finally { argCountFnDepth-- }
                 }
             }
             is ArrayLiteralExpression -> {
@@ -47204,7 +47324,11 @@ interface DataView {
                         is ShorthandPropertyAssignment -> {}
                         is SpreadAssignment -> checkArgCountInExpr(prop.expression, funcParams, classCtorParams, source, fileName)
                         is MethodDeclaration -> prop.body?.let {
-                            checkArgCountInStatements(it.statements, funcParams, classCtorParams, source, fileName)
+                            val inner = minusParamShadowedNames(funcParams, prop.parameters)
+                            argCountFnDepth++
+                            try {
+                                checkArgCountInStatements(it.statements, inner, classCtorParams, source, fileName)
+                            } finally { argCountFnDepth-- }
                         }
                         else -> {}
                     }
@@ -109879,6 +110003,19 @@ interface DataView {
         }
     }
 
+    /** B516 gate (extracted for M1.11's fn-default branch): a function-shaped type whose
+     *  signature references a Type.TypeParam — calls to a param of such a type are owned
+     *  by `checkFnTypedParamCalls`, so it must NOT be registered in [currentLocalTypes]
+     *  (double-emit; see the inline comment at the annotated-param branch). */
+    private fun isTpReferencingFnType(t: Type): Boolean =
+        t is Type.Object && t !is Type.Interface &&
+            t.properties.isNullOrEmpty() &&
+            !t.callSignatures.isNullOrEmpty() &&
+            t.callSignatures!!.any { sig ->
+                sig.parameters.any { getTypeOfSymbol(it) is Type.TypeParam } ||
+                    sig.resolvedReturnType is Type.TypeParam
+            }
+
     private fun populateParameterLocalTypes(parameters: List<Parameter>) {
         for (param in parameters) {
             val paramName = param.name
@@ -109915,20 +110052,28 @@ interface DataView {
                         // errors). Before the TP-scope push the sig params were errorType
                         // (never Type.TypeParam), so this gate is naturally inert outside
                         // generic function bodies.
-                        val isTpReferencingFnParam = resolvedType is Type.Object &&
-                            resolvedType !is Type.Interface &&
-                            resolvedType.properties.isNullOrEmpty() &&
-                            !resolvedType.callSignatures.isNullOrEmpty() &&
-                            resolvedType.callSignatures!!.any { sig ->
-                                sig.parameters.any { getTypeOfSymbol(it) is Type.TypeParam } ||
-                                    sig.resolvedReturnType is Type.TypeParam
-                            }
-                        if (!isTpReferencingFnParam) {
+                        if (!isTpReferencingFnType(resolvedType)) {
                             currentLocalTypes[paramName.text] = resolvedType
                         }
                     }
                 }
                 finally { if (bridgeNs) inferenceNamespaceStack.removeLast() }
+            } else if (paramType == null && paramName is Identifier &&
+                (param.initializer is ArrowFunction || param.initializer is FunctionExpression)
+            ) {
+                // M1.11: an UN-ANNOTATED parameter with a function-valued DEFAULT
+                // (`getCommonSourceDirectory = (): string => …`) — register the
+                // initializer's inferred fn type so identifier uses inside the body
+                // resolve the PARAM, not a same-named file-level/imported function
+                // (emitter.ts passes such params straight through as call arguments →
+                // FP TS2345 against the outer function's own 5-param signature).
+                // Same B516 TP-referencing gate as the annotated branch.
+                val inferred = try { getTypeOfExpression(param.initializer!!) } catch (_: Throwable) { null }
+                if (inferred != null && inferred !== anyType && inferred !== errorType &&
+                    !isTpReferencingFnType(inferred)
+                ) {
+                    currentLocalTypes[paramName.text] = inferred
+                }
             } else if (paramName is ArrayBindingPattern || paramName is ObjectBindingPattern) {
                 // B83.4i: register destructured-param binding NAMES (e.g. `[x]` / `{x}`)
                 // into the shadow tracker so a same-named file-level `var x = foo(...)`
@@ -114027,6 +114172,29 @@ interface DataView {
         }
     }
 
+    /** M1.11: body-nested named functions are UNBOUND (B83.5), so an identifier
+     *  resolution inside this body that falls through to `currentFileLocals`/`globals`
+     *  lands on a same-named file-level/imported/cross-file declaration — the WRONG
+     *  signature (emitter.ts's nested `writeFile` sibling vs the utilities import →
+     *  FP TS2345 'undefined' ≁ 'string'). Register a conservative anyType bail for
+     *  each nested fn whose name COLLIDES with an outer binding so both callee
+     *  (getCalleeType) and argument (getTypeOfIdentifier) positions bail instead of
+     *  mis-resolving. FN-safe: a NON-colliding nested fn already resolves to anyType
+     *  (unbound → all lookups miss), so only colliding names change — from a wrong
+     *  concrete signature to no check. Mutates the caller's already-COPIED
+     *  [currentLocalTypes] (call only after the fn-body copy). */
+    private fun shadowNestedFunctionNames(statements: List<Statement>) {
+        for (s in statements) {
+            val fd = s as? FunctionDeclaration ?: continue
+            if (fd.body == null) continue
+            val name = fd.name?.text ?: continue
+            if (currentLocalTypes[name] != null) continue
+            if (currentFileLocals?.containsKey(name) == true || globals.containsKey(name)) {
+                currentLocalTypes[name] = anyType
+            }
+        }
+    }
+
     /**
      * B378: if [cond] is a user-defined type-guard call `G(…X…)` — G's return type is a
      * non-asserts `p is U` predicate and the call argument at the narrowed parameter's
@@ -114239,6 +114407,7 @@ interface DataView {
                     }
                     try {
                         populateParameterLocalTypes(stmt.parameters)
+                        shadowNestedFunctionNames(body.statements)
                         checkCallTypesInStatements(body.statements, source, fileName)
                     } finally {
                         currentLocalTypes = savedLocalTypes
