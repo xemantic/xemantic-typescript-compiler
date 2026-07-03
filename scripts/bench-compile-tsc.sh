@@ -156,8 +156,13 @@ project_dirs() {
 }
 
 results_tsv_for() { # historical name for the compiler profile, per-project otherwise
-    if [[ "$1" == compiler ]]; then echo "$RESULTS_DIR/self-compile-tsc.tsv"
-    else echo "$RESULTS_DIR/self-compile-$1.tsv"; fi
+    case "$1" in
+        compiler) echo "$RESULTS_DIR/self-compile-tsc.tsv" ;;
+        # The src/tsc CLI profile must NOT collide with the compiler profile's
+        # historical file name above.
+        tsc)      echo "$RESULTS_DIR/self-compile-tsc-cli.tsv" ;;
+        *)        echo "$RESULTS_DIR/self-compile-$1.tsv" ;;
+    esac
 }
 
 proj_dir_for() {
