@@ -89,6 +89,26 @@ Three strategic reads that shape everything below:
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
+- [ ] **P0 — services-profile compile hang: exponential narrowing re-entry.** Found by
+  the first M0.2 all-run (round 384): the services profile (compiler+jsTyping+services,
+  251 files) burned 30+ CPU-minutes frozen inside ONE statement's
+  `checkVarDeclAssignability` (bottom stack frames unchanged over 60 s; the compiler
+  profile alone finishes in 5 min). Captured stack shape: `getNarrowedTypeForReference`
+  → `narrowByAssertCall` → `resolvePropertyMethodDecl` → `getTypeOfExpression`
+  (property-access/call) → `computeRawTypeOfPropertyAccess` → `getNarrowedTypeForReference`
+  RE-ENTRY — a fresh flow walk per assert-call flow node with no memoization across the
+  re-entry, stacked ~96 `narrowTypeFromFlow` frames deep. tsc's services sources are
+  dense with `Debug.assert(...)` calls, so every flow-walk step over an assert re-resolves
+  callee/arg types, which re-walk the flow below → superlinear-to-exponential. Fix
+  direction (shares mechanism with M1.2): per-walk shared-flow-node memoization + a walk
+  budget — tsc caches `sharedFlowNodes` per `getFlowTypeOfReference` invocation AND bails
+  at `flowDepth === 2000` with container-scoped `flowAnalysisDisabled` (see the M1.2
+  recon in the round-384 session note); also consider memoizing `narrowByAssertCall`'s
+  callee resolution. Repro: `scripts/bench-compile-tsc.sh --project services` (hangs);
+  minimize into a local test (N sequential assert-style calls + property accesses)
+  asserting near-linear scaling. server/harness M0.2 baselines are blocked behind this
+  (both include the services sources).
+
 **M0 — Real-world measurement rig**
 
 - [x] **M0.1 Project-corpus runner.** DONE (9b5bcd78): `--project` profiles in
@@ -97,10 +117,15 @@ Three strategic reads that shape everything below:
   flattened) or `all`/comma-list; per-project TSVs (`self-compile-<name>.tsv`,
   compiler keeps the historical `self-compile-tsc.tsv`); per-project log subdirs +
   multi-project overview table.
-- [ ] **M0.2 Crash/robustness gate.** IN PROGRESS — `--project all` baseline run
-  launched post-M0.3. Any exception, hang, or OOM becomes a P0 queue item with a
-  minimized repro. (Expected: none — the deep-stack thread + init boundary guard held
-  for src/compiler.)
+- [x] **M0.2 Crash/robustness gate.** DONE (round 384) — the gate ran and did its job:
+  5/8 profiles green with tightly-clustered baselines (compiler 13,245 err / 298 s;
+  tsc-cli 13,247 / 297 s; jsTyping 13,301 / 304 s; deprecatedCompat 13,256 / 296 s;
+  typingsInstallerCore 13,348 / 292 s — TS2305 dominates every profile at 8,752–8,837,
+  then TS7006 ~1,555; rows in bench/*.tsv), zero exceptions/OOMs; **services HUNG → the
+  P0 at the top of this queue** (killed after 30+ CPU-min frozen in one statement);
+  server/harness baselines deferred behind the P0. Also caught an M0.1 bug: the src/tsc
+  profile logged into the compiler profile's historical TSV — fixed (fabca29d,
+  self-compile-tsc-cli.tsv).
 - [x] **M0.3 Fix ProjectCompiler dynamic-import specifier extraction.** DONE
   (f85cc438): the parser records specifiers at the real parse sites into
   `SourceFile.moduleSpecifiers` (tsc's `SourceFile.imports`) — static import/export-from,
