@@ -119,6 +119,7 @@ class Parser(
     fun parse(): SourceFile {
         // 16.0: Check triple-slash reference path directives for self-reference (TS1006).
         checkTripleSlashSelfReference()
+        recordLeadingReferenceDirectives()
         nextToken()
         val statements = parseStatements(topLevel = true)
         // Capture any trailing comments at the end of the file (between last statement and EOF)
@@ -133,10 +134,69 @@ class Parser(
             statements = finalStatements,
             text = source,
             end = source.length,
+            moduleSpecifiers = moduleSpecifiers.toList(),
         )
     }
 
     fun getDiagnostics(): List<Diagnostic> = diagnostics.toList()
+
+    // ── Module-specifier recording (tsc SourceFile.imports) ─────────────────
+
+    /**
+     * Module specifiers recorded during the parse — see [SourceFile.moduleSpecifiers].
+     * Populated at the parse sites themselves (import/export declarations, dynamic
+     * `import()` / `require()` calls, `import("...")` types, triple-slash reference
+     * directives) so consumers get a lexically exact set without a tree walk.
+     * A speculative (lookAhead/tryScan) parse may record — harmless over-collection:
+     * the same text re-parses on the real path, so the specifier is real either way.
+     */
+    private val moduleSpecifiers = LinkedHashSet<String>()
+
+    private fun recordModuleSpecifier(node: Node?) {
+        val text = (node as? StringLiteralNode)?.text ?: return
+        if (text.isNotEmpty()) moduleSpecifiers.add(text)
+    }
+
+    /** Records `require("x")` (CJS) — dynamic `import("x")` is recorded at its dedicated parse site. */
+    private fun recordCallModuleSpecifier(callee: Expression, args: List<Expression>) {
+        if ((callee as? Identifier)?.text == "require") recordModuleSpecifier(args.firstOrNull())
+    }
+
+    /**
+     * Records `/// <reference path|types="...">` directive specifiers from the file's
+     * LEADING TRIVIA — blank lines, `//` lines, and `/* */` block comments before the
+     * first code token (tsc honors directives after e.g. a block-comment copyright
+     * header). Bounded to pre-code lines, so a string literal containing directive
+     * text can never contribute. A `///` line inside a block comment is part of that
+     * comment, not a directive. Kept separate from [checkTripleSlashSelfReference],
+     * whose narrower leading-`///`-block scan is corpus-pinned for TS1084/TS1006.
+     */
+    private fun recordLeadingReferenceDirectives() {
+        val directive = Regex("""^///\s*<reference\s+(?:path|types)\s*=\s*["']([^"']+)["']""")
+        var inBlockComment = false
+        for (rawLine in source.lineSequence()) {
+            var line = rawLine.trimStart()
+            if (inBlockComment) {
+                val close = line.indexOf("*/")
+                if (close < 0) continue
+                line = line.substring(close + 2).trimStart()
+                inBlockComment = false
+            }
+            // Consume any number of complete `/* ... */` comments on the line.
+            while (line.startsWith("/*")) {
+                val close = line.indexOf("*/", 2)
+                if (close < 0) { inBlockComment = true; break }
+                line = line.substring(close + 2).trimStart()
+            }
+            if (inBlockComment || line.isEmpty()) continue
+            if (line.startsWith("//")) {
+                directive.find(line)?.groupValues?.get(1)
+                    ?.takeIf { it.isNotEmpty() }?.let { moduleSpecifiers.add(it) }
+                continue
+            }
+            break // first code token — directives past this point are plain comments
+        }
+    }
 
     // ── Infrastructure ──────────────────────────────────────────────────────
 
@@ -4124,6 +4184,7 @@ class Parser(
                     parseExpected(SyntaxKind.OpenParen)
                     val expr = parseExpression()
                     parseExpected(SyntaxKind.CloseParen)
+                    recordModuleSpecifier(expr)
                     ExternalModuleReference(expression = expr, pos = pos, end = getEnd())
                 } else {
                     // Emit parser diagnostics for invalid RHS literals (TypeScript parses
@@ -4181,6 +4242,7 @@ class Parser(
         // import "module" (side-effect import)
         if (token == SyntaxKind.StringLiteral) {
             val spec = parseStringLiteral()
+            recordModuleSpecifier(spec)
             parseImportAttributes()
             parseSemicolon()
             val trailing = trailingComments()
@@ -4237,6 +4299,7 @@ class Parser(
             )
         }
         val moduleSpec = parseStringLiteral()
+        recordModuleSpecifier(moduleSpec)
         val assertClause = parseImportAttributes()
         val assertClausePos = lastImportAttributesPos
         parseSemicolon()
@@ -4581,6 +4644,7 @@ class Parser(
                 reportError("String literal expected.", code = 1141)
             }
             val spec = parseStringLiteral()
+            recordModuleSpecifier(spec)
             val assertClauseNs = parseImportAttributes()
             val assertClauseNsPos = lastImportAttributesPos
             parseSemicolon()
@@ -4608,7 +4672,7 @@ class Parser(
                 if (token != SyntaxKind.StringLiteral) {
                     reportError("String literal expected.", code = 1141)
                 }
-                parseStringLiteral()
+                parseStringLiteral().also { recordModuleSpecifier(it) }
             } else null
             val assertClauseNamed = if (moduleSpec != null) parseImportAttributes() else null
             val assertClauseNamedPos = if (moduleSpec != null) lastImportAttributesPos else -1
@@ -6173,6 +6237,7 @@ class Parser(
                         }
                     }
                     parseExpected(CloseParen)
+                    recordModuleSpecifier(callArgs.firstOrNull())
                     CallExpression(
                         expression = Identifier("import", pos = pos),
                         arguments = callArgs,
@@ -6328,6 +6393,7 @@ class Parser(
                 OpenParen -> {
                     val args = parseArgumentList()
                     val innerComments = lastCallInnerComments
+                    recordCallModuleSpecifier(result, args)
                     // Only capture trailing comments on the call when the chain continues
                     // (next token is `.` or `[`). Otherwise leave them for the enclosing
                     // statement to capture as preSemicolonComments / trailingComments.
@@ -6350,6 +6416,7 @@ class Parser(
                         when {
                             typeArgs != null && token == SyntaxKind.OpenParen -> {
                                 val args = parseArgumentList()
+                                recordCallModuleSpecifier(result, args)
                                 CallExpression(
                                     expression = result,
                                     typeArguments = typeArgs,
@@ -9467,6 +9534,7 @@ class Parser(
             parseExpected(SyntaxKind.CloseBrace) // `}` of `{ with: {...} }`
         }
         parseExpected(SyntaxKind.CloseParen)
+        recordModuleSpecifier((arg as? LiteralType)?.literal)
         var qualifier: Node? = null
         if (parseOptional(SyntaxKind.Dot)) {
             qualifier = parseQualifiedName()

@@ -80,7 +80,7 @@ class ProjectCompiler(private val vfs: Vfs) {
         while (queue.isNotEmpty()) {
             val file = queue.removeFirst()
             val content = program[file] ?: continue
-            for (spec in extractSpecifiers(content)) {
+            for (spec in extractSpecifiers(file, content)) {
                 val resolved = resolver.resolve(spec, file)
                 if (resolved == null) {
                     if (PathUtil.isBare(spec) || PathUtil.isRelative(spec)) unresolved.add(file to spec)
@@ -206,23 +206,19 @@ class ProjectCompiler(private val vfs: Vfs) {
 
     // --- import-specifier extraction --------------------------------------------
 
-    private val specifierRegexes = listOf(
-        Regex("""\bfrom\s*["']([^"']+)["']"""),
-        Regex("""\bimport\s*["']([^"']+)["']"""),
-        Regex("""\bimport\s*\(\s*["']([^"']+)["']\s*\)"""),
-        Regex("""\brequire\s*\(\s*["']([^"']+)["']\s*\)"""),
-        Regex("""<reference\s+(?:path|types)\s*=\s*["']([^"']+)["']"""),
-    )
-
-    /** Extracts every module specifier referenced by [source] (over-collection is harmless). */
-    private fun extractSpecifiers(source: String): Set<String> {
-        val out = LinkedHashSet<String>()
-        for (re in specifierRegexes) {
-            for (m in re.findAll(source)) {
-                m.groupValues.getOrNull(1)?.takeIf { it.isNotEmpty() }?.let { out.add(it) }
-            }
-        }
-        return out
+    /**
+     * Extracts every module specifier referenced by [source] by PARSING it (the parser
+     * records specifiers as it parses — [SourceFile.moduleSpecifiers], tsc's
+     * `SourceFile.imports`). A text scan is not usable here: real-world sources (e.g.
+     * tsc's own) contain `import ... from "..."` shapes inside string literals,
+     * comments, and regex literals, which a regex extraction reports as garbage
+     * unresolved imports and can even pull junk files into the program.
+     * The extraction parse's diagnostics are discarded — the compilation core
+     * re-parses program files and owns diagnostics.
+     */
+    private fun extractSpecifiers(fileName: String, source: String): Set<String> {
+        if (fileName.endsWith(".json")) return emptySet()
+        return Parser(source, fileName).parse().moduleSpecifiers.toSet()
     }
 
     // --- output emission --------------------------------------------------------

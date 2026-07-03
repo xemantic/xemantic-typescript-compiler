@@ -83,6 +83,15 @@ data class SourceFile(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
+    /**
+     * Every module specifier referenced by this file, recorded by the parser as it
+     * parses (tsc's `SourceFile.imports` equivalent): static `import`/`export ... from`,
+     * `import x = require(...)`, dynamic `import(...)` and `require(...)` calls with a
+     * string-literal argument at any nesting depth, `import("...")` type positions, and
+     * `/// <reference path|types>` directives. Lexically exact — string literals,
+     * comments, and regex literals can never contribute (unlike a text scan).
+     */
+    val moduleSpecifiers: List<String> = emptyList(),
 ) : Node {
     override val kind: SyntaxKind = SyntaxKind.SourceFile
 }
