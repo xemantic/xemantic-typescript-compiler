@@ -48,7 +48,17 @@ narrowing still applies through the memoized path. NEW: M1.5 queued (activate as
 predicates end-to-end — parser + tsc condition-arg narrowing; the arg-path pre-check
 must WIDEN to path-containment, never be deleted). M1.2 updated: its tsc-flowDepth
 mechanism now exists as these budget fields; what remains is the TS2563
-emission/suppression semantics. Full suite 8,859 / 0 / 3 (+3 local tests).
+emission/suppression semantics. **Same session, M1.2a landed (3c4cb60b): B399 records
+`cfaTooLargeFiles` and an end-of-init filter removes every TS2454 in them (tsc's
+flowAnalysisDisabled emits TS2563 OR TS2454, never both; real tsc emits neither on
+its own sources) — self-compile 4,484 → 4,464 (−20, exactly the predicted knock-ons),
+compile time unchanged; CfaTooLargeBailTest pins both directions (small CFG: same
+never-assigned-read shape MUST fire TS2454; too-large CFG: TS2563 present, TS2454
+suppressed). The M1.2 remainder (TS2563 per-container semantics) is re-scoped in the
+queue item — it is gated on NARROW_MAX_DEPTH removal (largeControlFlowGraph's
+baseline REQUIRES TS2563, but faithful walk-exhaustion semantics need walks to reach
+depth 2000, which the 50-cap prevents) and overlaps M3.4.** Full suite 8,861 / 0 / 3
+(+5 local tests this round).
 
 **Round 384 (continued) — M0.2 findings + M1.1 landed: self-compile 13,245 → 4,484 (−66%).**
 M0.2 (`--project all`): 5/8 profiles green in ~5 min each with tightly clustered
@@ -208,16 +218,20 @@ Three strategic reads that shape everything below:
   TS2613's upgrade; `export * as ns` contributes its name; re-export branch gained the
   import branch's `.js`→`.ts` fallback; `getModuleAllExports` deleted. 8 local tests.
   Suite 8,856 / 0 / 3, zero regressions.
-- [ ] **M1.2 TS2563 per-container CFA rule (−27, plus −20 TS2454 knock-ons).** Replace
-  the per-FILE >2000-flow-node heuristic (B399, Checker init) with tsc's per-container
-  flow-depth rule (or the closest faithful approximation), and make definite-assignment
-  analysis respect the CFA-disabled bail (the TS2454s fire today AFTER the "too large"
-  bail — tsc emits neither). Re-run the corpus node-count probe documented in the B399
-  CLAUDE.md gotcha before changing threshold semantics (`largeControlFlowGraph` must
-  still fire). NOTE (round 385): the P0 fix already landed the tsc-flowDepth-shaped
-  budget fields (`narrowLiveDepth`/`NARROW_GLOBAL_DEPTH_BUDGET`/`narrowVisitsLeft` in
-  the flow walkers) — they bail SILENTLY today; M1.2 is the TS2563 emission/suppression
-  semantics on top of that mechanism.
+- [ ] **M1.2 TS2563 per-container CFA rule (−27 TS2563 remaining).** Replace the
+  per-FILE >2000-flow-node heuristic (B399, Checker init) with tsc's per-container
+  flow-depth rule. **The TS2454 half is DONE (M1.2a, round 385): B399 records
+  `cfaTooLargeFiles` and an end-of-init filter removes every TS2454 in them (tsc's
+  flowAnalysisDisabled emits TS2563 OR TS2454, never both) — CfaTooLargeBailTest pins
+  it both ways.** The TS2563 half is HARDER than the recon suggested: faithful
+  per-walk-exhaustion semantics require the walk to actually REACH depth 2000, but
+  NARROW_MAX_DEPTH=50 silently truncates far earlier — so `largeControlFlowGraph`
+  (whose baseline REQUIRES TS2563) would stop firing under a naive swap. The real
+  scope is NARROW_MAX_DEPTH removal (deeper narrowing corpus-wide, baseline churn
+  likely) + tsc-shaped budget consumption (linear steps free) + TS2563 on genuine
+  walk exhaustion — the round-385 budget fields (`narrowLiveDepth`/
+  `NARROW_GLOBAL_DEPTH_BUDGET`/`narrowVisitsLeft`) are the mechanism to build on.
+  Overlaps M3.4; consider folding into it.
 - [ ] **M1.5 Activate `asserts` predicates end-to-end (found by the P0, round 385).**
   `parseType()`'s AssertsKeyword branch is a STUB that erases `asserts x is T` to bare
   `T` and `asserts x` to void — `TypePredicate.assertsModifier` is never constructed, so
