@@ -43,10 +43,12 @@ import kotlin.time.measureTimedValue
 fun main(args: Array<String>) {
     var project = "."
     var noEmit = false
+    var listAll = false
     var i = 0
     while (i < args.size) {
         when (val a = args[i]) {
             "--noEmit", "--noemit" -> noEmit = true
+            "--listAll", "--listall" -> listAll = true
             "--project", "-p" -> { i++; if (i < args.size) project = args[i] }
             "--help", "-h" -> { printUsage(); return }
             else -> if (!a.startsWith("-")) project = a
@@ -70,12 +72,12 @@ fun main(args: Array<String>) {
     }
     if (!noEmit) println("emitted: ${result.written.size} output file(s)")
 
-    printDiagnostics(result.diagnostics)
+    printDiagnostics(result.diagnostics, listAll)
     println("time:    ${duration.inWholeMilliseconds} ms")
     println(if (result.errorCount == 0) "OK — 0 errors" else "FAILED — ${result.errorCount} error(s)")
 }
 
-private fun printDiagnostics(diagnostics: List<Diagnostic>) {
+private fun printDiagnostics(diagnostics: List<Diagnostic>, listAll: Boolean = false) {
     val errors = diagnostics.filter { it.category == DiagnosticCategory.Error }
     val warnings = diagnostics.filter { it.category == DiagnosticCategory.Warning }
     println("diagnostics: ${errors.size} error(s), ${warnings.size} warning(s)")
@@ -85,8 +87,8 @@ private fun printDiagnostics(diagnostics: List<Diagnostic>) {
     val byCode = diagnostics.groupingBy { it.code }.eachCount().entries.sortedByDescending { it.value }
     println("  by code: " + byCode.joinToString(", ") { "TS${it.key}×${it.value}" })
 
-    // Show the first errors in detail.
-    val shown = errors.take(30)
+    // Show the first errors in detail (--listAll: every error, for run-to-run FP diffing).
+    val shown = if (listAll) errors else errors.take(30)
     for (d in shown) {
         val loc = if (d.fileName != null && d.line != null) "${d.fileName}:${d.line}:${d.character ?: 1}" else (d.fileName ?: "")
         println("  $loc - error TS${d.code}: ${d.message}")
@@ -101,6 +103,7 @@ private fun printUsage() {
 
           path / --project   directory containing tsconfig.json, or a tsconfig path (default: .)
           --noEmit           type-check only; do not write outputs
+          --listAll          print every error (default: first 30) — for run-to-run FP diffing
           --help, -h         show this help
         """.trimIndent()
     )
