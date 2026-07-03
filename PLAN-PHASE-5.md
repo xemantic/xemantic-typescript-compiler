@@ -11,6 +11,45 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 386 (2026-07-03) — M1.2 closed: narrowing depth horizon 50→2000 (self-compile
+−63% time / −332 MB RSS, zero corpus churn), TS2563 half folded into M3.4 with
+measurement; M1.5 asserts predicates ACTIVE end-to-end; self-compile 4,464 → 4,463.**
+M1.2b: the flagged blocker ("corpus depends on depth-50 truncation") was measured
+EMPTY — one-constant experiment, full suite 8,861/0/3 at depth 2000 — and the cap
+itself turned out to be the round-385 perf problem's other half: truncated subtrees
+are never memo-stored (clean-only rule), so the 50-cap forced deep-CFG walks to
+recompute everything; lifting it alone took the compiler profile 185.8 → 68.3 s and
+RSS 1,166 → 841 MB at byte-identical diagnostics EXCEPT +2 TS2345
+(utilities.ts:11604/11859 — deeper walks now COMPLETE two narrowings whose results an
+arg-check consumer turns into FPs; the depth-50 truncation had been hiding them;
+tracked under M1.4). TS2563-emission folded into M3.4 after reading
+largeControlFlowGraph: it is 10k sequential `data[0] = 0` statements — tsc's TS2563
+fires because USE-SITE reference typing walks the evolving array's flow at every
+mutation check (flow-based identifier typing = M3.4's exact capability); none of our
+four narrowing consumers ever walks that file deep, so a faithful walk-exhaustion
+emitter is unreachable until then and B399's per-file heuristic (+ its 27 self-compile
+TS2563 FPs) stays. **M1.5 (eaa27a90)**: parser builds `TypePredicate(assertsModifier=
+true)`; asserts returns are void (return-less bodied assert fns draw no TS2355/2366/
+7030); `narrowByAssertCall` live — `is T` targets, `is NonNullable<T>` as nullish
+exclusion, bare `asserts cond` by CONDITION via `applyConditionNarrowing` (the
+`Debug.assert(x !== undefined)` shape); the round-385 pre-check widened to
+path-containment (`argMentionsReferencePath` — iterative, bails open; the firewall
+stays); `resolveFlowCalleeDecl` gains namespace-member callee resolution
+(`resolveNamespaceMemberFnDecl`); `callHasTypeGuardArg` gates `!assertsModifier`.
+8 local tests with negative controls (AssertsPredicateActivationTest); suite
+8,869/0/3. **Self-compile M1.5 delta is only TS2344 −2 + TS2355 −1 — the assert
+NARROWING moved nothing on tsc sources** (TS2339/TS18048 unchanged): the imported
+`Debug` alias apparently doesn't resolve to debug.ts's namespace through the
+`_namespaces/ts.ts` export-star barrel in the flow-callee path → new M1.5b queue item.
+Also landed: `--listAll` CLI flag (full diagnostic lists for run-to-run FP diffing —
+used to isolate every delta above). Ops notes: (1) a Monitor notification mid-session
+reported a bench summary (4,271 errors / 67.0 s) matching NO artifact on disk — the
+attribution `--listAll` run, the bench run1.log, and the TSV all agree on 4,463;
+never cite background-notification numbers without a filesystem artifact. (2) One
+bench run overlapped a concurrently launched attribution JVM → contaminated timing
+(148.7 s); row deleted, clean rerun logged — never run a second JVM while a bench
+measures (extends the round-384 no-recompile rule).
+
 **Round 385 (2026-07-03) — P0 services hang FIXED (flow-walker memoization + budgets);
 asserts-parse stub discovered; M0.2 baselines completed 8/8.**
 The hang was the predicted exponential re-entry with a twist: `narrowByAssertCall`
@@ -218,31 +257,47 @@ Three strategic reads that shape everything below:
   TS2613's upgrade; `export * as ns` contributes its name; re-export branch gained the
   import branch's `.js`→`.ts` fallback; `getModuleAllExports` deleted. 8 local tests.
   Suite 8,856 / 0 / 3, zero regressions.
-- [ ] **M1.2 TS2563 per-container CFA rule (−27 TS2563 remaining).** Replace the
-  per-FILE >2000-flow-node heuristic (B399, Checker init) with tsc's per-container
-  flow-depth rule. **The TS2454 half is DONE (M1.2a, round 385): B399 records
-  `cfaTooLargeFiles` and an end-of-init filter removes every TS2454 in them (tsc's
-  flowAnalysisDisabled emits TS2563 OR TS2454, never both) — CfaTooLargeBailTest pins
-  it both ways.** The TS2563 half is HARDER than the recon suggested: faithful
-  per-walk-exhaustion semantics require the walk to actually REACH depth 2000, but
-  NARROW_MAX_DEPTH=50 silently truncates far earlier — so `largeControlFlowGraph`
-  (whose baseline REQUIRES TS2563) would stop firing under a naive swap. The real
-  scope is NARROW_MAX_DEPTH removal (deeper narrowing corpus-wide, baseline churn
-  likely) + tsc-shaped budget consumption (linear steps free) + TS2563 on genuine
-  walk exhaustion — the round-385 budget fields (`narrowLiveDepth`/
-  `NARROW_GLOBAL_DEPTH_BUDGET`/`narrowVisitsLeft`) are the mechanism to build on.
-  Overlaps M3.4; consider folding into it.
-- [ ] **M1.5 Activate `asserts` predicates end-to-end (found by the P0, round 385).**
-  `parseType()`'s AssertsKeyword branch is a STUB that erases `asserts x is T` to bare
-  `T` and `asserts x` to void — `TypePredicate.assertsModifier` is never constructed, so
-  `narrowByAssertCall` (and every assertsModifier consumer) is dead code, and tsc-style
-  `Debug.assertIsDefined(x)` guards narrow nothing (a real-world FP source: code after
-  the assert keeps `T | undefined`). Work: parser `TypePredicate(assertsModifier=true)`
-  (audit the ~5 consumer sites incl. the `"asserts "` display at Checker.kt ~127892;
-  corpus assert-family tests may shift), then extend `narrowByAssertCall` beyond
-  direct-arg matching to tsc's condition-arg narrowing (`Debug.assert(x !== undefined)`
-  narrows by the CONDITION) — which requires WIDENING the round-385 arg-path pre-check
-  to path-containment, never deleting it (the services-perf firewall gotcha).
+- [x] **M1.2 TS2563 per-container CFA rule.** RESOLVED in three parts. **M1.2a
+  (round 385, 3c4cb60b)**: TS2454 respects the CFA bail (`cfaTooLargeFiles` +
+  end-of-init filter; CfaTooLargeBailTest). **M1.2b (round 386)**: NARROW_MAX_DEPTH
+  50→2000, aligned with tsc's `flowDepth` guard — the decision experiment measured
+  ZERO corpus churn (8,861/0/3) and a **−63% self-compile time** (185.8→68.3 s, RSS
+  −325 MB): the 50-cap truncated most deep walks, and truncated subtrees are never
+  memo-stored, so the cap itself caused the recomputation storm. Deeper walks also
+  complete 2 more narrowings that an arg-check consumer turns into TS2345 FPs
+  (utilities.ts:11604/11859 — tracked under M1.4). **The TS2563-EMISSION half is
+  FOLDED into M3.4** (measured, not assumed): tsc fires TS2563 on largeControlFlowGraph
+  because checking each `data[0] = 0` statement walks the evolving array's flow AT THE
+  USE SITE — flow-based reference typing, exactly the M3.4 capability; none of our four
+  narrowing consumers ever walks that file deep, so faithful walk-exhaustion emission
+  is impossible until then. Until M3.4, B399's per-file node-count heuristic stays
+  (its 27 self-compile TS2563 FPs remain on the dashboard).
+- [x] **M1.5 Activate `asserts` predicates end-to-end.** DONE (round 386, eaa27a90):
+  parser builds `TypePredicate(assertsModifier=true)` (`asserts x [is T]` /
+  `asserts this`); asserts returns resolve to VOID (getTypeFromTypeNode /
+  getTypeNodeName / resolveSimpleTypeName — a return-less bodied assert fn draws no
+  TS2355/TS2366/TS7030); `narrowByAssertCall` live for the first time — `is T` target
+  narrowing, `is NonNullable<T>` as nullish exclusion, bare `asserts cond` via
+  `applyConditionNarrowing` (the `Debug.assert(x !== undefined)` shape); the round-385
+  pre-check widened to path-containment (`argMentionsReferencePath`, iterative,
+  bails open) per the firewall gotcha; `resolveFlowCalleeDecl` resolves namespace-member
+  callees (`Debug.assert` — receiver types as `any`, so property-method resolution
+  missed it); `callHasTypeGuardArg` gates `!assertsModifier`. 8 local tests
+  (AssertsPredicateActivationTest) with negative controls. Suite 8,869 / 0 / 3.
+- [ ] **M1.5b Assert narrowing is inert on self-compile — resolve flow-callees through
+  import-alias barrels.** M1.5's local tests prove the machinery (same-file namespace
+  resolution works), but the self-compile by-code deltas show ZERO narrowing effect
+  (TS2339/TS18048 unchanged; only the void-return TS2355/TS2344 knock-ons moved):
+  tsc's files do `import { Debug } from "./_namespaces/ts.js"` (an export-star
+  barrel), and `resolveNamespaceMemberFnDecl` resolves `currentFileLocals["Debug"]`
+  (an Alias) whose `resolveAlias` dead-ends before debug.ts's namespace — M1.1
+  followed barrels for the TS2305 ABSENCE check only, not for alias TARGET
+  resolution. Fix directions to measure: follow `getModuleExportsFollowingStars`
+  targets in `resolveAlias`/`resolveFlowCalleeDecl`, or fall back to
+  `globals[name]` when the local alias fails to resolve to a namespace (Blocker #3
+  merges debug.ts's locals into globals — cheap but semantically fuzzy). Then
+  re-measure per-family deltas; expected to unlock TS18048/TS2339/TS2345 drops in
+  Debug-guarded flows (feeds M1.4's strategic map).
 - [ ] **M1.3 `types` / `typeRoots` / `@types` resolution.** Implement the tsconfig
   `types` field and `node_modules/@types/*` acquisition in ProjectCompiler/
   ModuleResolver (this is a real-project requirement regardless of the benchmark).
@@ -291,7 +346,15 @@ blockers" for accumulated detail before starting)**
 - [ ] **M3.3 Mapped / conditional / template-literal / indexed-access evaluation**
   (replace the AST-shape walkers; delete the superseded dedicated walkers and pins).
 - [ ] **M3.4 Flow narrowing unified into identifier typing** (`getTypeOfIdentifier`
-  consults the flow graph; retire the per-consumer narrowing carve-outs).
+  consults the flow graph; retire the per-consumer narrowing carve-outs). **Absorbed
+  from M1.2 (round 386): faithful TS2563 walk-exhaustion emission** — tsc fires it
+  when USE-SITE reference typing walks a >2000-relevant-node flow (largeControlFlowGraph
+  = 10k evolving-array mutations, each `data[0] = 0` check walks `data`'s flow), which
+  requires exactly this item's flow-based identifier typing; then delete B399's
+  per-file node-count heuristic + its `cfaTooLargeFiles` TS2454 filter pairing and the
+  27 self-compile TS2563 FPs. tsc-shaped budget consumption (linear single-antecedent
+  steps free via the iterative `while(true)` loop; only branch/condition recursion
+  consumes `flowDepth`) belongs to the same rebuild.
 - [ ] **M3.5 Per-file scopes** (Blocker #3: stop merging all file locals into
   `globals`; per-file scope construction with explicit import visibility).
 
