@@ -400,6 +400,17 @@ class Checker(
      */
     private var currentShadowedNames: MutableSet<String> = mutableSetOf()
 
+    /**
+     * M1.9: DECLARED (pre-narrowing) types for names the assignability walk narrowed via
+     * an if-condition (`if (x !== undefined)` overwrites `currentLocalTypes[x]` for the
+     * then-branch so READS see the narrowed type). An assignment TARGET must be checked
+     * against the DECLARED type instead (tsc checks writes against the declared type —
+     * `start = undefined;` inside the guard is legal when `start: number | undefined`).
+     * Saved/restored alongside the `currentLocalTypes` overwrite at both dispatcher
+     * IfStatement arms.
+     */
+    private var narrowedDeclaredTypes: MutableMap<String, Type> = mutableMapOf()
+
     /** B263: names declared ONLY in typeRoot package files that did NOT resolve from the
      *  `types` compiler option — stripped from the unresolved-name scope so uses of them
      *  correctly fire TS2304/TS2552. Populated by [checkTypeLibraryEntryPoints]
@@ -78843,11 +78854,17 @@ interface DataView {
                     if (narrowedNN != null) {
                         val savedLocalTypesNN = currentLocalTypes
                         currentLocalTypes = currentLocalTypes.toMutableMap()
+                        // M1.9: record the DECLARED type so assignment TARGETS inside the
+                        // then-branch check against it, not the narrowed read type.
+                        val savedDeclaredNN = narrowedDeclaredTypes
+                        narrowedDeclaredTypes = narrowedDeclaredTypes.toMutableMap()
+                        currentLocalTypes[narrowedNN.first]?.let { narrowedDeclaredTypes[narrowedNN.first] = it }
                         currentLocalTypes[narrowedNN.first] = narrowedNN.second
                         try {
                             checkTypeAssignabilityInStmt(stmt.thenStatement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
                         } finally {
                             currentLocalTypes = savedLocalTypesNN
+                            narrowedDeclaredTypes = savedDeclaredNN
                         }
                     } else {
                         checkTypeAssignabilityInStmt(stmt.thenStatement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
@@ -80414,11 +80431,17 @@ interface DataView {
                     val savedLocalTypes = currentLocalTypes
                     currentLocalTypes = currentLocalTypes.toMutableMap()
                     val (varName, narrowedType) = narrowed
+                    // M1.9: record the DECLARED type so assignment TARGETS inside the
+                    // then-branch check against it, not the narrowed read type.
+                    val savedDeclared = narrowedDeclaredTypes
+                    narrowedDeclaredTypes = narrowedDeclaredTypes.toMutableMap()
+                    currentLocalTypes[varName]?.let { narrowedDeclaredTypes[varName] = it }
                     currentLocalTypes[varName] = narrowedType
                     try {
                         checkTypeAssignabilityInStmt(stmt.thenStatement, source, fileName, varTypes, returnType, typeParams)
                     } finally {
                         currentLocalTypes = savedLocalTypes
+                        narrowedDeclaredTypes = savedDeclared
                     }
                 } else {
                     checkTypeAssignabilityInStmt(stmt.thenStatement, source, fileName, varTypes, returnType, typeParams)
@@ -84519,7 +84542,17 @@ interface DataView {
                     return
                 }
             }
-            if (canUseTypeEngine(sourceType, targetType) && !checkTypeRelatedTo(sourceType, targetType, assignableRelation)) {
+            val canUseForReturn = canUseTypeEngine(sourceType, targetType)
+            // M1.9: the engine CONFIRMED the return assignable and the source is a
+            // fully-resolved nullish type — the string fallback below cannot resolve a
+            // union-ALIAS annotation (`type Mode = 1 | 2 | undefined` renders as "Mode")
+            // and would FP `return undefined`. Mirrors B325's engine-confirmed early
+            // return on the var-decl/assignment paths, gated to nullish sources.
+            if (canUseForReturn && sourceType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) &&
+                checkTypeRelatedTo(sourceType, targetType, assignableRelation)) {
+                return
+            }
+            if (canUseForReturn && !checkTypeRelatedTo(sourceType, targetType, assignableRelation)) {
                 // Async-function returns: declared `Promise<T>` accepts `T` directly.
                 // The returned value is implicitly wrapped in a Promise at runtime,
                 // so the assignability check must compare against `T` (the awaited
@@ -84682,11 +84715,39 @@ interface DataView {
         } else {
             "undefined"
         }
+        // M1.9: a nullish `return undefined`/`return null` against a TypeReference
+        // annotation whose ALIAS body syntactically CONTAINS that nullish keyword in a
+        // top-level union is legal — but the alias may resolve to anyType in the engine
+        // (enum-member unions: `type ResolutionMode = ModuleKind.ESNext |
+        // ModuleKind.CommonJS | undefined`), so canUseTypeEngine bails and this string
+        // fallback would FP on the unexpanded alias name. AST-gated: skips ONLY when
+        // the alias body really carries the keyword, so an alias EXCLUDING it still errors.
+        if ((exprType == "undefined" || exprType == "null") &&
+            aliasUnionContainsNullishKeyword(returnTypeNode, exprType)) return
         if (!isAssignableTo(exprType, returnType, typeParams)) {
             val returnKeywordLength = 6
             val isLiteral = expr == null || isSimpleLiteral(expr)
             emitTS2322(stmt.pos, returnKeywordLength, exprType, returnType, source, fileName, hasElaboration = !isLiteral, typeParams = typeParams)
         }
+    }
+
+    /**
+     * M1.9: does [typeNode] reference a type ALIAS whose body is a top-level union
+     * syntactically containing the `undefined`/`null` KEYWORD ([nullishName])? Used to
+     * suppress the string-based return fallback for nullish returns against aliases the
+     * engine could not resolve (e.g. enum-member unions collapsing to anyType). Bounded
+     * to a direct single-identifier reference + a direct UnionType body — anything else
+     * returns false (keeps the fallback's rejections for aliases that exclude the keyword).
+     */
+    private fun aliasUnionContainsNullishKeyword(typeNode: TypeNode?, nullishName: String): Boolean {
+        val ref = typeNode as? TypeReference ?: return false
+        val name = (ref.typeName as? Identifier)?.text ?: return false
+        val sym = currentFileLocals?.get(name) ?: globals[name] ?: return false
+        val aliasDecl = sym.declarations.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration
+            ?: return false
+        val body = aliasDecl.type as? UnionType ?: return false
+        val kind = if (nullishName == "undefined") SyntaxKind.UndefinedKeyword else SyntaxKind.NullKeyword
+        return body.types.any { it is KeywordTypeNode && it.kind == kind }
     }
 
     private fun checkAssignmentExpression(expr: Expression, source: String, fileName: String, varTypes: MutableMap<String, String>, typeParams: Set<String>) {
@@ -85026,9 +85087,12 @@ interface DataView {
                         }
                     }
                 }
-                // Also check local type scope for function-local variables
+                // Also check local type scope for function-local variables.
+                // M1.9: an assignment TARGET checks against the DECLARED type — when the
+                // walk narrowed this name for the enclosing then-branch (reads see the
+                // narrowed currentLocalTypes entry), prefer the recorded declared type.
                 if (targetType == null || targetType === anyType || targetType === errorType) {
-                    currentLocalTypes[target.text]?.let { localType ->
+                    (narrowedDeclaredTypes[target.text] ?: currentLocalTypes[target.text])?.let { localType ->
                         if (localType !== anyType && localType !== errorType) {
                             targetType = localType
                         }
@@ -119665,6 +119729,18 @@ interface DataView {
         return false
     }
 
+    /**
+     * M1.7a/M1.9: an explicit `undefined` argument is LEGAL for an OPTIONAL parameter
+     * (questionToken or initializer) — absent and undefined are interchangeable for
+     * parameters (B176's overload-path rule, applied on the single-signature paths).
+     * `null` is NOT interchangeable with absence and stays checked.
+     */
+    private fun isUndefinedArgForOptionalParam(argType: Type, paramSym: Symbol): Boolean {
+        if (!argType.flags.hasAny(TypeFlags.Undefined) || argType.flags.hasAny(TypeFlags.Null)) return false
+        val decl = paramSym.valueDeclaration as? Parameter ?: return false
+        return decl.questionToken || decl.initializer != null
+    }
+
     private fun checkArgumentsAgainstSignature(
         args: List<Expression>,
         sigIn: Signature,
@@ -120400,8 +120476,15 @@ interface DataView {
             // Constrained TypeParams are handled by the 16.4i branch below (which uses the
             // constraint as the displayed param type, matching TypeScript's baseline for
             // `fn<T extends string>(n:T)` called with `fn(null)`).
+            // M1.9: SKIP when the TP is one of THIS signature's OWN (still-uninstantiated)
+            // type params — tsc INFERS it from the argument (`g<T>(state: T)` called
+            // `g(undefined)` → T = undefined, legal). The error is only right when the TP
+            // came from elsewhere (an enclosing generic's TP substituted by explicit type
+            // args — those sigs arrive instantiated, typeParameters = null, so the gate is
+            // inert for them). Name-compare per the TypeParam per-AST-position interning rule.
             if (!isRestParam && argType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) &&
-                paramType is Type.TypeParam && paramType.constraint == null) {
+                paramType is Type.TypeParam && paramType.constraint == null &&
+                sig.typeParameters?.any { it.symbol?.name != null && it.symbol?.name == paramType.symbol?.name } != true) {
                 val tpName = paramType.symbol?.name ?: "T"
                 val argTypeStr = typeToString(argType)
                 val start = arg.pos
@@ -120859,6 +120942,10 @@ interface DataView {
                         pSig.resolvedReturnType!!.flags.hasAny(TypeFlags.Undefined) &&
                         !pSig.resolvedReturnType!!.flags.hasAny(TypeFlags.Void)
                 }
+            // M1.9: explicit `undefined` to an OPTIONAL parameter is legal on the main
+            // simple-checkable path too (covers primitive-typed `b?: string` params —
+            // the M1.7a gates below only reached the Reference/anon-fn branches).
+            if (isUndefinedArgForOptionalParam(argType, params[i])) continue
             if (forceVoidUndefinedFail || !checkTypeRelatedTo(argType, paramType, assignableRelation)) {
                 // B291: a MIXED bigint/number literal-union argument is the
                 // typeof-discrimination idiom (`0 | 1n` narrowed by
