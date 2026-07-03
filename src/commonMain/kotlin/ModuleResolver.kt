@@ -198,6 +198,26 @@ class ModuleResolver(
         }
     }
 
+    // --- type-root packages (tsconfig `types` / `typeRoots`) ---------------------
+
+    /**
+     * Resolves a type-library package DIRECTORY (a `typeRoots` / `node_modules/@types`
+     * entry) to its declaration entry file: package.json `types`/`typings`, else
+     * `index.d.ts` — tsc's type-reference-directive resolution over one candidate
+     * directory. Deliberately narrower than [resolveAsDirectory]: a type package's
+     * entry is always a declaration file, so `main` and runtime `index.*` never apply.
+     */
+    fun resolveTypeRootPackage(pkgDir: String): String? {
+        if (!vfs.isDirectory(pkgDir)) return null
+        readPackageJson("$pkgDir/package.json")?.let { pkg ->
+            (pkg["types"]?.stringValue ?: pkg["typings"]?.stringValue)?.let { t ->
+                resolveAsFile(PathUtil.join(pkgDir, t))?.let { return it }
+            }
+        }
+        val index = "$pkgDir/index.d.ts"
+        return if (vfs.exists(index)) index else null
+    }
+
     // --- package.json "exports" -------------------------------------------------
 
     /** Resolves an export [key] (".", "./sub") against the package's `exports` [value]. */

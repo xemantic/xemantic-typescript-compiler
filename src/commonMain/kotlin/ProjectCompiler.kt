@@ -72,11 +72,18 @@ class ProjectCompiler(private val vfs: Vfs) {
 
         val rootFiles = collectRootFiles(config, supportedExt)
 
+        // Automatic type-library inclusion (tsconfig `types` / `typeRoots`): the
+        // resolved entries join the graph walk as additional seeds so their own
+        // imports and `/// <reference types>` directives are followed too.
+        val typeDiagnostics = mutableListOf<Diagnostic>()
+        val typeEntries = collectTypeRootEntries(config, resolver, typeDiagnostics)
+
         // Walk the import graph from the roots, reading and resolving as we go.
         val program = LinkedHashMap<String, String>() // path -> content
         val unresolved = mutableListOf<Pair<String, String>>()
-        val queue = ArrayDeque(rootFiles)
-        for (f in rootFiles) program[f] = vfs.readText(f) ?: ""
+        val seeds = rootFiles + typeEntries.filter { it !in rootFiles }
+        val queue = ArrayDeque(seeds)
+        for (f in seeds) program[f] = vfs.readText(f) ?: ""
         while (queue.isNotEmpty()) {
             val file = queue.removeFirst()
             val content = program[file] ?: continue
@@ -121,8 +128,8 @@ class ProjectCompiler(private val vfs: Vfs) {
             rootFiles = rootFiles,
             programFiles = program.keys.toList(),
             // Config-load errors (unreadable/malformed tsconfig, missing `extends`) first,
-            // then the compiler's own diagnostics.
-            diagnostics = config.diagnostics + compilerDiagnostics,
+            // then type-acquisition errors (TS2688), then the compiler's own diagnostics.
+            diagnostics = config.diagnostics + typeDiagnostics + compilerDiagnostics,
             unresolved = unresolved.distinct(),
             written = written,
         )
@@ -154,6 +161,92 @@ class ProjectCompiler(private val vfs: Vfs) {
 
     private fun matchedExtension(path: String, supportedExt: List<String>): String? =
         supportedExt.firstOrNull { path.endsWith(it) }
+
+    // --- @types acquisition (tsconfig `types` / `typeRoots`) ---------------------
+
+    /**
+     * Resolves the automatic type-library inclusions, mirroring tsc: the included
+     * package set is `types` when specified (an EMPTY list disables inclusion
+     * entirely), else every package discovered in the effective type roots. Each
+     * package resolves to its declaration entry via
+     * [ModuleResolver.resolveTypeRootPackage]; a name explicitly listed in `types`
+     * that resolves in no type root reports TS2688 (auto-discovery includes only
+     * what exists, so it never does).
+     */
+    private fun collectTypeRootEntries(
+        config: LoadedTsConfig,
+        resolver: ModuleResolver,
+        diagnostics: MutableList<Diagnostic>,
+    ): List<String> {
+        val requested = config.options.types
+        if (requested != null && requested.isEmpty()) return emptyList()
+        val typeRoots = effectiveTypeRoots(config)
+        val entries = LinkedHashSet<String>()
+        if (requested != null) {
+            for (name in requested) {
+                val entry = typeRoots.firstNotNullOfOrNull { resolveTypePackageInRoot(it, name, resolver) }
+                if (entry != null) entries.add(entry)
+                else diagnostics.add(
+                    Diagnostic(
+                        message = "Cannot find type definition file for '$name'.",
+                        category = DiagnosticCategory.Error,
+                        code = 2688,
+                    )
+                )
+            }
+        } else {
+            for (root in typeRoots) {
+                for (child in vfs.list(root).sorted()) { // sorted: deterministic program order
+                    if (!vfs.isDirectory(child)) continue
+                    val base = PathUtil.basename(child)
+                    if (base.startsWith(".")) continue
+                    if (base.startsWith("@")) {
+                        // A scope directory inside a type root contributes its subdirectories.
+                        for (scoped in vfs.list(child).sorted()) {
+                            if (!vfs.isDirectory(scoped) || PathUtil.basename(scoped).startsWith(".")) continue
+                            resolver.resolveTypeRootPackage(scoped)?.let { entries.add(it) }
+                        }
+                    } else {
+                        resolver.resolveTypeRootPackage(child)?.let { entries.add(it) }
+                    }
+                }
+            }
+        }
+        return entries.toList()
+    }
+
+    /**
+     * The directories scanned for type packages: `typeRoots` (resolved against the
+     * config dir) when specified, else every `<ancestor>/node_modules/@types`
+     * walking up from the config dir (tsc's default).
+     */
+    private fun effectiveTypeRoots(config: LoadedTsConfig): List<String> {
+        config.options.typeRoots?.let { roots ->
+            return roots.map {
+                if (PathUtil.isAbsolute(it)) PathUtil.normalize(it) else PathUtil.join(config.configDir, it)
+            }.filter { vfs.isDirectory(it) }
+        }
+        val result = mutableListOf<String>()
+        var dir = config.configDir
+        while (true) {
+            val candidate = "$dir/node_modules/@types"
+            if (vfs.isDirectory(candidate)) result.add(candidate)
+            val parent = PathUtil.dirname(dir)
+            if (parent == dir || parent.isEmpty()) break
+            dir = parent
+        }
+        return result
+    }
+
+    /** Probes `root/<name>`, plus the DefinitelyTyped `scope__name` mangling for a scoped [name]. */
+    private fun resolveTypePackageInRoot(root: String, name: String, resolver: ModuleResolver): String? {
+        resolver.resolveTypeRootPackage(PathUtil.join(root, name))?.let { return it }
+        if (name.startsWith("@") && name.contains('/')) {
+            val mangled = name.substring(1).replace("/", "__")
+            resolver.resolveTypeRootPackage(PathUtil.join(root, mangled))?.let { return it }
+        }
+        return null
+    }
 
     /** Recursively walks [dir], invoking [onFile] for each file; prunes obvious heavy dirs. */
     private fun walk(dir: String, onFile: (String) -> Unit) {
