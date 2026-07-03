@@ -11,6 +11,45 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 385 (2026-07-03) — P0 services hang FIXED (flow-walker memoization + budgets);
+asserts-parse stub discovered; M0.2 baselines completed 8/8.**
+The hang was the predicted exponential re-entry with a twist: `narrowByAssertCall`
+resolved every visited FlowCall's callee (PropertyAccess receiver typing →
+`getNarrowedTypeForReference` re-entry per call, no memoization anywhere) — and
+because `parseType()`'s AssertsKeyword branch ERASES `asserts x is T` to bare `T`
+(`TypePredicate.assertsModifier` is never constructed), ALL of that exponential work
+was spent discovering "not a predicate" every time; assert narrowing has been inert
+since round 43 built it. Fix (349dc97b) mirrors tsc checker.ts, four pieces:
+(1) arg-path pre-check in `narrowByAssertCall`/`narrowByCallPredicate` — bail before
+any callee resolution unless some argument's reference path IS the walked name;
+(2) per-outermost-request callee-decl memo (`narrowWalkDeclCache`, tsc
+`links.effectsSignature` — request-scoped for cross-pass safety); (3) per-invocation
+flow-node memo (tsc `sharedFlowNodes`) with the depth-conditional serve rule
+`depth <= cachedDepth` + clean-subtree-only stores that keep narrowing byte-identical
+under the NARROW_MAX_DEPTH truncation; (4) live-depth (2000, tsc `flowDepth`) +
+cumulative-visit budgets shared across re-entries via the `narrowLiveDepth` FIELD
+(== 0 ⇔ outermost request = reset point). **Budget sizing lesson (40d33b58): near the
+NARROW_MAX_DEPTH horizon subtree results are inherently entry-depth-dependent — no
+identity-preserving memo can serve them — so depth-skewed diamond chains in giant tsc
+functions legitimately need 6-figure visit counts; the first 50k budget truncated one
+such walk and GREW the dashboard (TS18048 41→42 → compiler profile 4,485). The final
+1M budget (probes: 50k → 4,485/101.8 s, 200k → 4,485/139.1 s, 1M → 4,484/187.1 s)
+recovers exact pre-fix diagnostics.** Benches: compiler pre-fix 289.9 s → 187.1 s
+(−35.5% at exact 4,484; the memo win is larger at looser compliance points — 101.8 s
+at the 50k budget); services HUNG (killed after 30+ CPU-min frozen in one statement)
+→ 563.4 s / 7,173 errors / 1,226 MB (7,174→7,173: the 1M budget recovers one narrowing
+there too); server FIRST baseline 627.4 s / 7,634 errors / 1,139 MB (274 files);
+harness FIRST baseline 592.7 s / 8,164 errors / 1,920 MB (312 files) — **M0.2 crash
+gate 8/8 profiles green, zero crashes/OOMs anywhere.** Local
+AssertNarrowingScalingTest pins the invariant: the exact services shape (N=120
+property-chain assert-style calls whose args mention both walked paths, ≈2^120 walker
+visits pre-fix) → 0.125 s, plus negative/positive controls proving `x is T` predicate
+narrowing still applies through the memoized path. NEW: M1.5 queued (activate asserts
+predicates end-to-end — parser + tsc condition-arg narrowing; the arg-path pre-check
+must WIDEN to path-containment, never be deleted). M1.2 updated: its tsc-flowDepth
+mechanism now exists as these budget fields; what remains is the TS2563
+emission/suppression semantics. Full suite 8,859 / 0 / 3 (+3 local tests).
+
 **Round 384 (continued) — M0.2 findings + M1.1 landed: self-compile 13,245 → 4,484 (−66%).**
 M0.2 (`--project all`): 5/8 profiles green in ~5 min each with tightly clustered
 baselines (compiler 13,245; tsc-cli 13,247; jsTyping 13,301; deprecatedCompat 13,256;
@@ -112,25 +151,23 @@ Three strategic reads that shape everything below:
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
-- [ ] **P0 — services-profile compile hang: exponential narrowing re-entry.** Found by
-  the first M0.2 all-run (round 384): the services profile (compiler+jsTyping+services,
-  251 files) burned 30+ CPU-minutes frozen inside ONE statement's
-  `checkVarDeclAssignability` (bottom stack frames unchanged over 60 s; the compiler
-  profile alone finishes in 5 min). Captured stack shape: `getNarrowedTypeForReference`
-  → `narrowByAssertCall` → `resolvePropertyMethodDecl` → `getTypeOfExpression`
-  (property-access/call) → `computeRawTypeOfPropertyAccess` → `getNarrowedTypeForReference`
-  RE-ENTRY — a fresh flow walk per assert-call flow node with no memoization across the
-  re-entry, stacked ~96 `narrowTypeFromFlow` frames deep. tsc's services sources are
-  dense with `Debug.assert(...)` calls, so every flow-walk step over an assert re-resolves
-  callee/arg types, which re-walk the flow below → superlinear-to-exponential. Fix
-  direction (shares mechanism with M1.2): per-walk shared-flow-node memoization + a walk
-  budget — tsc caches `sharedFlowNodes` per `getFlowTypeOfReference` invocation AND bails
-  at `flowDepth === 2000` with container-scoped `flowAnalysisDisabled` (see the M1.2
-  recon in the round-384 session note); also consider memoizing `narrowByAssertCall`'s
-  callee resolution. Repro: `scripts/bench-compile-tsc.sh --project services` (hangs);
-  minimize into a local test (N sequential assert-style calls + property accesses)
-  asserting near-linear scaling. server/harness M0.2 baselines are blocked behind this
-  (both include the services sources).
+- [x] **P0 — services-profile compile hang: exponential narrowing re-entry.** DONE
+  (round 385, 349dc97b + 40d33b58): the predicted re-entry exponential, with a twist —
+  `parseType()`'s AssertsKeyword branch ERASES `asserts x is T` to bare `T`
+  (`TypePredicate.assertsModifier` is never constructed), so ALL the exponential
+  callee-resolution work concluded "not a predicate" every time (assert narrowing has
+  been inert since round 43 → M1.5). Fix mirrors tsc checker.ts: arg-path pre-check
+  before any callee resolution; per-outermost-request callee-decl memo
+  (`narrowWalkDeclCache`, tsc `links.effectsSignature`); per-invocation flow-node memo
+  (tsc `sharedFlowNodes`) with the `depth <= cachedDepth` serve rule + clean-only
+  stores (byte-identical to pre-fix truncation semantics); live-depth (2000, tsc
+  `flowDepth`) + 1M cumulative-visit budgets shared across re-entries via the
+  `narrowLiveDepth` field. services: hang → 563 s / 7,173 errors; compiler profile
+  byte-identical 4,484 at −35.8% compile time; server + harness first baselines landed
+  (M0.2 now 8/8). AssertNarrowingScalingTest pins the invariant (N=120 of the exact
+  re-entry shape ≈2^120 visits pre-fix → 0.125 s; controls prove `x is T` narrowing
+  still applies). See the round-385 session note + CLAUDE.md gotchas for the budget
+  sizing lesson (50k truncated a legitimate walk and grew the dashboard by one FP).
 
 **M0 — Real-world measurement rig**
 
@@ -140,15 +177,18 @@ Three strategic reads that shape everything below:
   flattened) or `all`/comma-list; per-project TSVs (`self-compile-<name>.tsv`,
   compiler keeps the historical `self-compile-tsc.tsv`); per-project log subdirs +
   multi-project overview table.
-- [x] **M0.2 Crash/robustness gate.** DONE (round 384) — the gate ran and did its job:
-  5/8 profiles green with tightly-clustered baselines (compiler 13,245 err / 298 s;
-  tsc-cli 13,247 / 297 s; jsTyping 13,301 / 304 s; deprecatedCompat 13,256 / 296 s;
-  typingsInstallerCore 13,348 / 292 s — TS2305 dominates every profile at 8,752–8,837,
-  then TS7006 ~1,555; rows in bench/*.tsv), zero exceptions/OOMs; **services HUNG → the
-  P0 at the top of this queue** (killed after 30+ CPU-min frozen in one statement);
-  server/harness baselines deferred behind the P0. Also caught an M0.1 bug: the src/tsc
-  profile logged into the compiler profile's historical TSV — fixed (fabca29d,
-  self-compile-tsc-cli.tsv).
+- [x] **M0.2 Crash/robustness gate.** DONE (round 384; completed 8/8 in round 385) —
+  the gate ran and did its job: round 384 got 5/8 profiles green with tightly-clustered
+  baselines (compiler 13,245 err / 298 s; tsc-cli 13,247 / 297 s; jsTyping 13,301 /
+  304 s; deprecatedCompat 13,256 / 296 s; typingsInstallerCore 13,348 / 292 s — TS2305
+  dominating pre-M1.1; rows in bench/*.tsv), zero exceptions/OOMs; **services HUNG →
+  became the P0** (killed after 30+ CPU-min frozen in one statement). Round 385 (P0
+  fixed) completed the remaining baselines: services 563 s / 7,173 err / 1,226 MB;
+  server 627 s / 7,634 err / 1,139 MB; harness 593 s / 8,164 err / 1,920 MB — all
+  files emitted, zero crashes anywhere; same FP families across profiles
+  (TS2339/TS7006/TS2345/TS2322 ≈ 85% of every profile's count). Also caught an M0.1
+  bug: the src/tsc profile logged into the compiler profile's historical TSV — fixed
+  (fabca29d, self-compile-tsc-cli.tsv).
 - [x] **M0.3 Fix ProjectCompiler dynamic-import specifier extraction.** DONE
   (f85cc438): the parser records specifiers at the real parse sites into
   `SourceFile.moduleSpecifiers` (tsc's `SourceFile.imports`) — static import/export-from,
@@ -174,7 +214,21 @@ Three strategic reads that shape everything below:
   analysis respect the CFA-disabled bail (the TS2454s fire today AFTER the "too large"
   bail — tsc emits neither). Re-run the corpus node-count probe documented in the B399
   CLAUDE.md gotcha before changing threshold semantics (`largeControlFlowGraph` must
-  still fire).
+  still fire). NOTE (round 385): the P0 fix already landed the tsc-flowDepth-shaped
+  budget fields (`narrowLiveDepth`/`NARROW_GLOBAL_DEPTH_BUDGET`/`narrowVisitsLeft` in
+  the flow walkers) — they bail SILENTLY today; M1.2 is the TS2563 emission/suppression
+  semantics on top of that mechanism.
+- [ ] **M1.5 Activate `asserts` predicates end-to-end (found by the P0, round 385).**
+  `parseType()`'s AssertsKeyword branch is a STUB that erases `asserts x is T` to bare
+  `T` and `asserts x` to void — `TypePredicate.assertsModifier` is never constructed, so
+  `narrowByAssertCall` (and every assertsModifier consumer) is dead code, and tsc-style
+  `Debug.assertIsDefined(x)` guards narrow nothing (a real-world FP source: code after
+  the assert keeps `T | undefined`). Work: parser `TypePredicate(assertsModifier=true)`
+  (audit the ~5 consumer sites incl. the `"asserts "` display at Checker.kt ~127892;
+  corpus assert-family tests may shift), then extend `narrowByAssertCall` beyond
+  direct-arg matching to tsc's condition-arg narrowing (`Debug.assert(x !== undefined)`
+  narrows by the CONDITION) — which requires WIDENING the round-385 arg-path pre-check
+  to path-containment, never deleting it (the services-perf firewall gotcha).
 - [ ] **M1.3 `types` / `typeRoots` / `@types` resolution.** Implement the tsconfig
   `types` field and `node_modules/@types/*` acquisition in ProjectCompiler/
   ModuleResolver (this is a real-project requirement regardless of the benchmark).
