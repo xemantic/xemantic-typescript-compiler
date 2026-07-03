@@ -74,6 +74,9 @@
 #   --warmup N       unmeasured warm-up runs before measuring (default 0)
 #   --heap SIZE      JVM -Xmx for the compiler process (default 4g)
 #   --no-emit        type-check only (skip JS emit)
+#   --node-stub      materialize a minimal @types/node stub (all `any`) and set
+#                    tsconfig `types: ["node"]` — see the note above; the row's
+#                    label is tagged "+node-stub" so TSV history stays comparable
 #   --fresh          re-extract + regenerate the benchmark project even if a
 #                    cached copy exists
 #   --label TEXT     free-text note stored in the results log
@@ -90,9 +93,13 @@
 #     a build artifact, not checked in — tsc's source does not parse without it)
 #   - a merged tsconfig.json (their tsconfig-base minus composite /
 #     emitDeclarationOnly / declaration / sourceMap, plus outDir=dist).
-#     `types` is emptied for every profile: no node_modules/@types is
-#     materialized, so node/mocha/chai-typed code (server, harness) reports
-#     env-legit diagnostics until M1.3 lands @types resolution.
+#     `types` is emptied by default: no real node_modules/@types is available
+#     offline, so node/mocha/chai-typed code (server, harness) reports env-legit
+#     diagnostics. Pass --node-stub to materialize a minimal any-typed
+#     node_modules/@types/node stub + `types: ["node"]` (M1.3): it suppresses
+#     the env-legit family (TS2591 require/process/Buffer + NodeJS.*) without
+#     being able to add typed diagnostics. The no-stub run stays the honest
+#     dashboard default until network provides the real @types/node.
 #
 # Prerequisite: typescript-repo cloned (the script runs
 # `./gradlew cloneTypeScriptRepo` automatically when it is missing).
@@ -107,6 +114,7 @@ ITERATIONS=1
 WARMUP=0
 HEAP=4g
 NO_EMIT=0
+NODE_STUB=0
 FRESH=0
 LABEL=""
 DO_LOG=1
@@ -118,6 +126,7 @@ while [[ $# -gt 0 ]]; do
         --warmup)     WARMUP="$2"; shift 2 ;;
         --heap)       HEAP="$2"; shift 2 ;;
         --no-emit)    NO_EMIT=1; shift ;;
+        --node-stub)  NODE_STUB=1; shift ;;
         --fresh)      FRESH=1; shift ;;
         --label)      LABEL="$2"; shift 2 ;;
         --no-log)     DO_LOG=0; shift ;;
@@ -125,6 +134,10 @@ while [[ $# -gt 0 ]]; do
         *) echo "unknown option: $1 (see --help)" >&2; exit 2 ;;
     esac
 done
+
+# Keep TSV history self-describing: stub rows are tagged so a stub run is never
+# mistaken for a no-stub compliance improvement.
+[[ $NODE_STUB -eq 1 ]] && LABEL="${LABEL:+$LABEL }+node-stub"
 
 command -v java >/dev/null || { echo "error: java not found on PATH" >&2; exit 1; }
 command -v python3 >/dev/null || { echo "error: python3 not found on PATH" >&2; exit 1; }
@@ -199,7 +212,14 @@ materialize_project() { # $1 = project name; sets PROJ_DIR
     if [[ $FRESH -eq 1 ]]; then
         rm -rf "$PROJ_DIR"
     fi
-    [[ -f "$PROJ_DIR/tsconfig.json" ]] && return 0
+    # The generated diagnostics map marks a completed extraction (it is the last
+    # artifact the expensive phase writes). tsconfig.json and the optional
+    # @types/node stub are rewritten on EVERY invocation below, so --node-stub
+    # can be toggled without --fresh.
+    if [[ -f "$PROJ_DIR/src/compiler/diagnosticInformationMap.generated.ts" ]]; then
+        write_project_config
+        return 0
+    fi
 
     local dirs paths=()
     dirs="$(project_dirs "$project")"
@@ -278,12 +298,85 @@ with open(out, "w", encoding="utf-8", newline="\n") as f:
 print(f"  generated diagnosticInformationMap.generated.ts ({len(table)} diagnostics)")
 PYEOF
 
+    write_project_config
+}
+
+# Writes the merged tsconfig.json (+ the optional @types/node stub) into
+# PROJ_DIR. Runs on every invocation — cheap, and it is what lets --node-stub
+# toggle without re-extracting.
+write_project_config() {
+    local types_json='[]'
+    if [[ $NODE_STUB -eq 1 ]]; then
+        types_json='["node"]'
+        mkdir -p "$PROJ_DIR/node_modules/@types/node"
+        cat > "$PROJ_DIR/node_modules/@types/node/package.json" <<'PKGEOF'
+{ "name": "@types/node", "version": "0.0.0-xtsc-stub", "types": "index.d.ts" }
+PKGEOF
+        # Minimal @types/node STUB — not the real package (offline environment):
+        # just enough ambient surface for tsc's own sources, every type `any`, so
+        # it can suppress the env-legit diagnostic family (TS2591 require/process/
+        # Buffer/module + NodeJS.*) but never ADD a typed diagnostic. Body-less
+        # `declare module "x";` makes each node builtin an UNTYPED runtime module
+        # (imports type as `any`). Replace with the real @types/node when network
+        # access is available.
+        cat > "$PROJ_DIR/node_modules/@types/node/index.d.ts" <<'DTSEOF'
+declare var process: any;
+declare var global: any;
+// Buffer is used in TYPE position too (sys.ts `let buffer: Buffer;`, harness
+// `Buffer<ArrayBuffer>`), so it needs the lib wrapper-type shape — a var for the
+// value side MERGED with a generic-tolerant interface for the type side.
+interface Buffer<T = any> { [index: string]: any; }
+declare var Buffer: any;
+declare var require: any;
+declare var module: any;
+declare var exports: any;
+declare var setImmediate: any;
+declare var clearImmediate: any;
+declare var __filename: any;
+declare var __dirname: any;
+declare namespace NodeJS {
+    type ErrnoException = any;
+    type Timeout = any;
+    type Timer = any;
+    type ReadableStream = any;
+    type WritableStream = any;
+    type ProcessEnv = any;
+    type Process = any;
+}
+declare module "assert";
+declare module "buffer";
+declare module "child_process";
+declare module "crypto";
+declare module "events";
+declare module "fs";
+declare module "http";
+declare module "https";
+declare module "inspector";
+declare module "module";
+declare module "net";
+declare module "os";
+declare module "path";
+declare module "perf_hooks";
+declare module "readline";
+declare module "stream";
+declare module "string_decoder";
+declare module "tty";
+declare module "url";
+declare module "util";
+declare module "vm";
+declare module "worker_threads";
+declare module "zlib";
+DTSEOF
+    else
+        rm -rf "$PROJ_DIR/node_modules/@types/node"
+    fi
+
     # Merged tsconfig: typescript-repo/src/tsconfig-base.json + the subproject
     # tsconfig.json, minus the project-reference/declaration-only machinery
     # (composite, emitDeclarationOnly, declaration*, sourceMap,
-    # isolatedDeclarations) so a plain JS emit is exercised; types [] because
-    # no node_modules/@types is materialized (see header note).
-    cat > "$PROJ_DIR/tsconfig.json" <<'JSONEOF'
+    # isolatedDeclarations) so a plain JS emit is exercised; `types` is [] unless
+    # --node-stub materialized the stub above (see header note).
+    cat > "$PROJ_DIR/tsconfig.json" <<JSONEOF
 {
     "compilerOptions": {
         "rootDir": "src",
@@ -306,7 +399,7 @@ PYEOF
         "preserveConstEnums": true,
         "newLine": "lf",
 
-        "types": []
+        "types": $types_json
     },
     "include": ["src/**/*"]
 }
@@ -436,7 +529,7 @@ bench_project() { # $1 = project name
 
     echo
     echo "=== bench-compile-tsc summary ($project) ==="
-    echo "xtsc:        $XTSC_REV  (heap $HEAP$( ((NO_EMIT)) && echo ", noEmit" ))"
+    echo "xtsc:        $XTSC_REV  (heap $HEAP$( ((NO_EMIT)) && echo ", noEmit" )$( ((NODE_STUB)) && echo ", node-stub" ))"
     echo "input:       tsc $project profile @ $TS_COMMIT8 — $PROGRAM_FILES files in program, $ts_loc LOC"
     echo "compile:     ${SELF_MED} ms self-reported (median of $ITERATIONS), ${WALL_MED} ms wall"
     (( SELF_MED > 0 )) && echo "throughput:  $(( ts_loc * 1000 / SELF_MED )) LOC/s"
