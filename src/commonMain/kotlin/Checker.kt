@@ -963,6 +963,13 @@ class Checker(
      *  to no declaration" — test membership with containsKey. */
     private val narrowWalkDeclCache: MutableMap<Long, Node?> = mutableMapOf()
 
+    /** M1.2a: files where the B399 "control-flow graph too large" bail fired (TS2563).
+     *  tsc's `flowAnalysisDisabled` suppresses definite-assignment analysis in the same
+     *  container — it emits TS2563 OR TS2454, never both — so every TS2454 in these
+     *  files is removed at the end of init. Declared before `init` (init populates and
+     *  consumes it). */
+    private val cfaTooLargeFiles: MutableSet<String> = mutableSetOf()
+
     init {
         try {
         // 0. Merge built-in type declarations into globals (before user files)
@@ -1080,6 +1087,9 @@ class Checker(
                 category = DiagnosticCategory.Error, code = 2563,
                 fileName = fn, line = line, character = ch, start = start, length = len,
             ))
+            // M1.2a: record the file so definite-assignment analysis respects the bail
+            // (see the end-of-init TS2454 filter).
+            cfaTooLargeFiles.add(fn)
         }
         // Suppressed when strict is explicitly false OR strictNullChecks is explicitly false.
         val shouldCheckDefiniteAssignment = !options.strictExplicitlyFalse && !options.strictNullChecksExplicitlyFalse
@@ -2494,6 +2504,18 @@ class Checker(
         checkPreEmitCountMismatchPins()
         checkMappedTypeRecursiveInferencePin()
         applyDomLibSuggestionRewrite()
+        // M1.2a: definite-assignment analysis respects the CFA too-large bail — tsc's
+        // flowAnalysisDisabled makes getFlowTypeOfReference return errorType in the
+        // affected container, so it reports TS2563 OR TS2454, never both (real tsc
+        // emits NEITHER on its own sources; our per-file B399 proxy emits TS2563 and,
+        // without this filter, the TS2454 walkers still ran and stacked FPs on top —
+        // 20 of them on the self-compile compiler profile). Applied at the END of init
+        // so every TS2454 emitter (checkDefiniteAssignment* and the flow-walk sites)
+        // is covered. Corpus-safe by construction: the only corpus file over the B399
+        // threshold is largeControlFlowGraph, whose baseline has no TS2454.
+        if (cfaTooLargeFiles.isNotEmpty()) {
+            diagnostics.removeAll { it.code == 2454 && it.fileName in cfaTooLargeFiles }
+        }
         } // end if (!declarationOnly)
         } catch (e: StackOverflowError) {
             // Boundary safety net — the ONLY catch(StackOverflowError) in the checker.
