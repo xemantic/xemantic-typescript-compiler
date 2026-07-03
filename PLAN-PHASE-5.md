@@ -615,6 +615,19 @@ Three strategic reads that shape everything below:
   es2019 + es2020.* pieces), as a process-wide immutable snapshot parsed ONCE and
   shared across programs (this snapshot is deliberately the seed of M5's incremental
   infra). Behind a CompilerOptions flag so corpus A/B comparison is possible.
+  **Decomposition (round-389 scoping; work as separate commits):**
+  (a) *Ship the lib text*: a Gradle codegen step (guardrail-approved as part of M2)
+  extracting `src/lib/*.d.ts` from the typescript-repo object DB into generated
+  Kotlin — **TRAP: a JVM class-file string constant caps at 65,535 UTF-8 bytes;
+  es5.d.ts is 218 KB and dom.generated.d.ts 2.3 MB, so the generator must emit
+  ≤60 KB chunks concatenated at first use** (today's `BUILTIN_LIB_SOURCE`-in-one-
+  literal pattern cannot carry them). Start with the non-DOM ES libs (~50 files,
+  DOM is M2.4). (b) *DAG resolver*: name → file map + reference-DAG expansion
+  (`lib.es2020` → es2019 + es2020.* pieces; tsc's `libMap` in commandLineParser.ts
+  is the reference), dedup in tsc's emission order, local tests against the real
+  headers. (c) *Snapshot*: parse+bind the selected set once per (target, lib)
+  key behind `CompilerOptions.useRealLibs`, immutable + shared. (d) wire into
+  Checker init as an alternative to `builtinLibDecls` and A/B one corpus run.
 - [ ] **M2.2 Corpus A/B and default flip.** Run the corpus with real libs; burn down
   the diff (baselines were produced by real-lib tsc, so divergence generally means one
   of our compensating hardcodes — fix by deletion). Flip the default when green.
