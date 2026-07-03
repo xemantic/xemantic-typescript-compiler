@@ -938,6 +938,31 @@ class Checker(
      *  trap would leave a post-init field null during checking). */
     private val moduleStarExportsCache: MutableMap<String, Set<String>?> = mutableMapOf()
 
+    /** P0 (services hang): LIVE recursion depth across BOTH flow walkers INCLUDING
+     *  re-entrant walks — [narrowByAssertCall]/[narrowByCallPredicate] resolve the
+     *  callee, which types a PropertyAccess receiver, which narrows it at its own
+     *  flow position ([getNarrowedTypeForReference] re-entry). Because this is a
+     *  field (not a per-walk parameter), `narrowLiveDepth == 0` identifies an
+     *  OUTERMOST narrowing request — the reset point for [narrowVisitsLeft] and
+     *  [narrowWalkDeclCache]. Declared before `init` (init runs the check pipeline). */
+    private var narrowLiveDepth = 0
+
+    /** Remaining walker-invocation budget for the current outermost narrowing request. */
+    private var narrowVisitsLeft = 0
+
+    /** True when the current walker subtree hit a depth cap / cycle-break / budget
+     *  exhaustion — such results are entry-context-dependent and must NOT be memoized. */
+    private var narrowWalkTruncated = false
+
+    /** P0 (services hang): per-outermost-request memo of flow-call `nodeKey` → resolved
+     *  callee declaration (tsc caches the same thing persistently as
+     *  `links.effectsSignature`; ours is scoped to one request because resolution reads
+     *  pass-dependent context like `currentLocalTypes`). Cleared at every outermost
+     *  walker entry and only written while a walk is live (`narrowLiveDepth > 0`), so a
+     *  stale cross-file nodeKey collision is impossible. A stored null means "resolved
+     *  to no declaration" — test membership with containsKey. */
+    private val narrowWalkDeclCache: MutableMap<Long, Node?> = mutableMapOf()
+
     init {
         try {
         // 0. Merge built-in type declarations into globals (before user files)
@@ -38669,6 +38694,19 @@ class Checker(
     companion object {
         /** Maximum antecedent walk depth for control-flow narrowing (Phase 17 / Blocker #1 step 2). */
         private const val NARROW_MAX_DEPTH = 50
+
+        /** P0 (services hang): hard cap on LIVE flow-walker recursion depth ACROSS
+         *  re-entrant walks (tsc checker.ts `flowDepth === 2000` — a stack guard;
+         *  re-entries share the budget because [narrowLiveDepth] is a checker field,
+         *  matching tsc's module-global flowDepth). Exhaustion bails to declared type. */
+        private const val NARROW_GLOBAL_DEPTH_BUDGET = 2000
+
+        /** P0 (services hang): cumulative walker-invocation budget per OUTERMOST
+         *  narrowing request, spanning all nested re-entrant walks — the WORK bound
+         *  that keeps adversarial CFGs (assert-dense code, depth-skewed diamond
+         *  chains) from going superlinear even where the memos are conservative.
+         *  Exhaustion bails to declared type (FN-safe: less narrowing only). */
+        private const val NARROW_VISIT_BUDGET = 50_000
 
         // dissallowSymbolAsWeakType: weak-collection ctor names whose key position rejects `symbol`
         // under es2022. In the companion object (init-order gotcha — used during the init pipeline).
@@ -90311,35 +90349,64 @@ interface DataView {
     private fun narrowTypeFromFlow(
         declaredType: Type, flowNode: FlowNode, name: String,
         seen: MutableSet<Int>, depth: Int,
+        memo: MutableMap<Int, Pair<Int, Type>> = mutableMapOf(),
     ): Type {
-        if (depth >= NARROW_MAX_DEPTH) return declaredType
-        if (!seen.add(flowNode.id)) return declaredType
-        return when (flowNode) {
+        // P0 (services hang): reset the per-request budget + callee-decl cache at an
+        // OUTERMOST entry (narrowLiveDepth == 0 ⇔ not inside any walk, including
+        // re-entrant walks triggered by callee resolution below).
+        if (narrowLiveDepth == 0) {
+            narrowVisitsLeft = NARROW_VISIT_BUDGET
+            narrowWalkDeclCache.clear()
+        }
+        if (depth >= NARROW_MAX_DEPTH ||
+            narrowLiveDepth >= NARROW_GLOBAL_DEPTH_BUDGET ||
+            --narrowVisitsLeft < 0
+        ) {
+            narrowWalkTruncated = true
+            return declaredType
+        }
+        // Per-invocation flow-node memo (tsc's sharedFlowNodes): serve only entries
+        // computed at a same-or-deeper entry depth — a clean completion there proves a
+        // shallower(-or-equal)-entry revisit would recompute the identical value
+        // (more remaining NARROW_MAX_DEPTH budget can only explore at least as far).
+        // Serving a SHALLOW-computed entry to a DEEPER revisit could over-narrow vs
+        // the depth-capped recomputation today's code would do.
+        memo[flowNode.id]?.let { (cachedDepth, cached) -> if (depth <= cachedDepth) return cached }
+        if (!seen.add(flowNode.id)) {
+            narrowWalkTruncated = true
+            return declaredType
+        }
+        val savedTruncated = narrowWalkTruncated
+        narrowWalkTruncated = false
+        narrowLiveDepth++
+        val result = try {
+            when (flowNode) {
             is FlowStart -> {
                 // B464: flow outer narrowing into a closure for a captured const-like
                 // variable (see [outerFlowForCapturedName] / FlowStart doc).
                 val outer = outerFlowForCapturedName(flowNode, name)
-                if (outer != null) narrowTypeFromFlow(declaredType, outer, name, seen, depth + 1)
+                if (outer != null) narrowTypeFromFlow(declaredType, outer, name, seen, depth + 1, memo)
                 else declaredType
             }
             is FlowUnreachable -> neverType
             is FlowCondition -> {
-                val antecedent = narrowTypeFromFlow(declaredType, flowNode.antecedent, name, seen, depth + 1)
+                val antecedent = narrowTypeFromFlow(declaredType, flowNode.antecedent, name, seen, depth + 1, memo)
                 applyConditionNarrowing(antecedent, flowNode.expression, flowNode.isTrue, name)
             }
             is FlowBranchLabel -> {
-                if (flowNode.antecedents.isEmpty()) return neverType
-                val branchTypes = flowNode.antecedents.map {
-                    narrowTypeFromFlow(declaredType, it, name, mutableSetOf<Int>().apply { addAll(seen) }, depth + 1)
+                if (flowNode.antecedents.isEmpty()) neverType
+                else {
+                    val branchTypes = flowNode.antecedents.map {
+                        narrowTypeFromFlow(declaredType, it, name, mutableSetOf<Int>().apply { addAll(seen) }, depth + 1, memo)
+                    }
+                    getUnionType(branchTypes)
                 }
-                getUnionType(branchTypes)
             }
             // Loop / assignment / call / switch / array mutation: pass-through for now.
             // Loop back-edge handling would require widening to declared on cycle —
             // for the current scope, recursing into the antecedent is safe because
             // the FlowGraphBuilder doesn't create unbounded antecedent chains.
             is FlowLoopLabel -> {
-                if (flowNode.antecedents.isEmpty()) return declaredType
                 // Conservative: fall back to declared type at loop joins to avoid
                 // back-edge widening complexity.
                 declaredType
@@ -90351,14 +90418,14 @@ interface DataView {
                 // literal AST shapes (via [literalTypeOfExpression]) avoids recursion
                 // through getTypeOfExpression on identifier/call RHSes during
                 // narrowing — purely structural lookup.
-                val antecedent = narrowTypeFromFlow(declaredType, flowNode.antecedent, name, seen, depth + 1)
+                val antecedent = narrowTypeFromFlow(declaredType, flowNode.antecedent, name, seen, depth + 1, memo)
                 val rhsLiteralType = if (flowAssignmentTargetsName(flowNode.node, name))
                     getLiteralRhsTypeForAssignment(flowNode.node) else null
                 if (rhsLiteralType != null) narrowUnionByRhsAssignment(antecedent, rhsLiteralType)
                 else antecedent
             }
             is FlowCall -> {
-                val antecedent = narrowTypeFromFlow(declaredType, flowNode.antecedent, name, seen, depth + 1)
+                val antecedent = narrowTypeFromFlow(declaredType, flowNode.antecedent, name, seen, depth + 1, memo)
                 // round 43 iter3: assert-function narrowing — when the call's callee is
                 // `function assertX(x): asserts x is T`, after the call returns, x is
                 // narrowed to T. Pass-through (no narrowing) when the callee isn't an
@@ -90366,14 +90433,23 @@ interface DataView {
                 narrowByAssertCall(antecedent, flowNode.node, name) ?: antecedent
             }
             is FlowSwitchClause -> {
-                val antecedent = narrowTypeFromFlow(declaredType, flowNode.antecedent, name, seen, depth + 1)
+                val antecedent = narrowTypeFromFlow(declaredType, flowNode.antecedent, name, seen, depth + 1, memo)
                 // round 43 iter5: switch-case discriminant narrowing. When `switch (X) { case <lit>: ... }`
                 // and X's reference path matches [name], narrow [antecedent] (a union)
                 // by filtering to members assignable from the case literal.
                 narrowBySwitchClause(antecedent, flowNode, name) ?: antecedent
             }
-            is FlowArrayMutation -> narrowTypeFromFlow(declaredType, flowNode.antecedent, name, seen, depth + 1)
+            is FlowArrayMutation -> narrowTypeFromFlow(declaredType, flowNode.antecedent, name, seen, depth + 1, memo)
+            }
+        } finally {
+            narrowLiveDepth--
         }
+        if (!narrowWalkTruncated) {
+            val prev = memo[flowNode.id]
+            if (prev == null || prev.first < depth) memo[flowNode.id] = depth to result
+        }
+        narrowWalkTruncated = narrowWalkTruncated || savedTruncated
+        return result
     }
 
     /**
@@ -90760,6 +90836,15 @@ interface DataView {
      * null when callee isn't an assert function or arg doesn't match.
      */
     private fun narrowByAssertCall(t: Type, expr: CallExpression, name: String): Type? {
+        // P0 (services hang) fast path: an assert call can only narrow [name] when some
+        // argument's reference path IS [name] (the predicate-parameter arg must match it
+        // below, so "no arg matches" already implies the null return today). Checking
+        // BEFORE any callee resolution is load-bearing: resolving a PropertyAccess
+        // callee types its receiver, which re-enters the flow walker at the receiver's
+        // own flow position — on assert-dense real code (tsc's services sources) that
+        // re-entry per visited FlowCall was the exponential blowup. Args that don't
+        // mention [name] now exit for free.
+        if (expr.arguments.none { getReferencePath(it) == name }) return null
         // Unwrap value-preserving wrappers around the callee.
         var callee: Expression = expr.expression
         while (true) {
@@ -90774,14 +90859,7 @@ interface DataView {
         }
         // round 43 iter8: PropertyAccess callee — `obj.assertMethod(x)` where
         // `obj`'s type has a method `assertMethod` with `asserts x is T` return.
-        val decl: Node? = when (callee) {
-            is Identifier -> {
-                val symbol = currentFileLocals?.get(callee.text) ?: globals[callee.text] ?: return null
-                symbol.valueDeclaration ?: symbol.declarations.firstOrNull()
-            }
-            is PropertyAccessExpression -> resolvePropertyMethodDecl(callee)
-            else -> return null
-        } ?: return null
+        val decl: Node? = resolveFlowCalleeDecl(expr, callee) ?: return null
         val (params, returnTypeNode) = when (decl) {
             is FunctionDeclaration -> decl.parameters to decl.type
             is MethodDeclaration -> decl.parameters to decl.type
@@ -90822,9 +90900,42 @@ interface DataView {
         return if (matches) t else targetType
     }
 
+    /**
+     * P0 (services hang): resolve a flow-call / call-predicate callee to its
+     * declaration, memoized per outermost narrowing request in [narrowWalkDeclCache]
+     * (tsc caches the same resolution persistently as `links.effectsSignature`; ours
+     * is request-scoped because the resolution reads pass-dependent context such as
+     * `currentLocalTypes`). Resolving a PropertyAccess callee types its receiver,
+     * which re-enters the flow walker — without this memo, every (nested) walk
+     * re-resolved every visited FlowCall, which is exponential on assert-dense code.
+     * Only caches while a walk is live ([narrowLiveDepth] > 0): the cache is cleared
+     * at each outermost walker entry, so entries never leak across files/requests
+     * (nodeKey is only unique within one file).
+     */
+    private fun resolveFlowCalleeDecl(expr: CallExpression, callee: Expression): Node? {
+        val useCache = narrowLiveDepth > 0
+        val key = nodeKey(expr)
+        if (useCache && narrowWalkDeclCache.containsKey(key)) return narrowWalkDeclCache[key]
+        val decl: Node? = when (callee) {
+            is Identifier -> {
+                val symbol = currentFileLocals?.get(callee.text) ?: globals[callee.text]
+                symbol?.let { it.valueDeclaration ?: it.declarations.firstOrNull() }
+            }
+            is PropertyAccessExpression -> resolvePropertyMethodDecl(callee)
+            else -> null
+        }
+        if (useCache) narrowWalkDeclCache[key] = decl
+        return decl
+    }
+
     private fun narrowByCallPredicate(
         t: Type, expr: CallExpression, isMatch: Boolean, name: String,
     ): Type {
+        // P0 (services hang) fast path — mirrors [narrowByAssertCall]'s pre-check: the
+        // predicate can only narrow [name] when some argument's reference path IS
+        // [name], and checking that before callee resolution avoids the re-entrant
+        // receiver-typing walk for the overwhelmingly common non-matching call.
+        if (expr.arguments.none { getReferencePath(it) == name }) return t
         // Unwrap value-preserving wrappers around the callee so `(isFoo)(x)`,
         // `isFoo!(x)`, `(isFoo as F)(x)` narrow identically to `isFoo(x)`.
         var callee: Expression = expr.expression
@@ -90840,14 +90951,7 @@ interface DataView {
         }
         // round 43 iter9: PropertyAccess callee — `obj.isMethod(x)` where
         // `obj`'s type has a method `isMethod` with `x is T` return type.
-        val decl: Node? = when (callee) {
-            is Identifier -> {
-                val symbol = currentFileLocals?.get(callee.text) ?: globals[callee.text] ?: return t
-                symbol.valueDeclaration ?: symbol.declarations.firstOrNull()
-            }
-            is PropertyAccessExpression -> resolvePropertyMethodDecl(callee)
-            else -> return t
-        } ?: return t
+        val decl: Node? = resolveFlowCalleeDecl(expr, callee) ?: return t
         val (params, returnTypeNode, typeParams) = when (decl) {
             is FunctionDeclaration -> Triple(decl.parameters, decl.type, decl.typeParameters)
             is MethodDeclaration -> Triple(decl.parameters, decl.type, decl.typeParameters)
@@ -110059,31 +110163,54 @@ interface DataView {
     private fun narrowTypeFromFlowFollowLoopEntry(
         declaredType: Type, flowNode: FlowNode, name: String,
         seen: MutableSet<Int>, depth: Int,
+        memo: MutableMap<Int, Pair<Int, Type>> = mutableMapOf(),
     ): Type {
-        if (depth >= NARROW_MAX_DEPTH) return declaredType
-        if (!seen.add(flowNode.id)) return declaredType
-        return when (flowNode) {
+        // P0 (services hang): budgets + memo mirror [narrowTypeFromFlow] — see the
+        // commentary there (kept in sync per the CLAUDE.md walker-mirror invariant).
+        if (narrowLiveDepth == 0) {
+            narrowVisitsLeft = NARROW_VISIT_BUDGET
+            narrowWalkDeclCache.clear()
+        }
+        if (depth >= NARROW_MAX_DEPTH ||
+            narrowLiveDepth >= NARROW_GLOBAL_DEPTH_BUDGET ||
+            --narrowVisitsLeft < 0
+        ) {
+            narrowWalkTruncated = true
+            return declaredType
+        }
+        memo[flowNode.id]?.let { (cachedDepth, cached) -> if (depth <= cachedDepth) return cached }
+        if (!seen.add(flowNode.id)) {
+            narrowWalkTruncated = true
+            return declaredType
+        }
+        val savedTruncated = narrowWalkTruncated
+        narrowWalkTruncated = false
+        narrowLiveDepth++
+        val result = try {
+            when (flowNode) {
             is FlowStart -> {
                 val outer = outerFlowForCapturedName(flowNode, name)
-                if (outer != null) narrowTypeFromFlowFollowLoopEntry(declaredType, outer, name, seen, depth + 1)
+                if (outer != null) narrowTypeFromFlowFollowLoopEntry(declaredType, outer, name, seen, depth + 1, memo)
                 else declaredType
             }
             is FlowUnreachable -> neverType
             is FlowCondition -> {
                 val antecedent = narrowTypeFromFlowFollowLoopEntry(
-                    declaredType, flowNode.antecedent, name, seen, depth + 1,
+                    declaredType, flowNode.antecedent, name, seen, depth + 1, memo,
                 )
                 applyConditionNarrowing(antecedent, flowNode.expression, flowNode.isTrue, name)
             }
             is FlowBranchLabel -> {
-                if (flowNode.antecedents.isEmpty()) return neverType
-                val branchTypes = flowNode.antecedents.map {
-                    narrowTypeFromFlowFollowLoopEntry(
-                        declaredType, it, name,
-                        mutableSetOf<Int>().apply { addAll(seen) }, depth + 1,
-                    )
+                if (flowNode.antecedents.isEmpty()) neverType
+                else {
+                    val branchTypes = flowNode.antecedents.map {
+                        narrowTypeFromFlowFollowLoopEntry(
+                            declaredType, it, name,
+                            mutableSetOf<Int>().apply { addAll(seen) }, depth + 1, memo,
+                        )
+                    }
+                    getUnionType(branchTypes)
                 }
-                getUnionType(branchTypes)
             }
             is FlowLoopLabel -> {
                 // Follow the loop-entry antecedent (index 0). Back-edges are
@@ -110091,12 +110218,13 @@ interface DataView {
                 // narrowed entry type holds at each iteration unless the path
                 // is reassigned — and we have no FlowAssignment for property
                 // paths in our flow graph today.
-                val entry = flowNode.antecedents.firstOrNull() ?: return declaredType
-                narrowTypeFromFlowFollowLoopEntry(declaredType, entry, name, seen, depth + 1)
+                val entry = flowNode.antecedents.firstOrNull()
+                if (entry == null) declaredType
+                else narrowTypeFromFlowFollowLoopEntry(declaredType, entry, name, seen, depth + 1, memo)
             }
             is FlowAssignment -> {
                 val antecedent = narrowTypeFromFlowFollowLoopEntry(
-                    declaredType, flowNode.antecedent, name, seen, depth + 1,
+                    declaredType, flowNode.antecedent, name, seen, depth + 1, memo,
                 )
                 val rhsLiteralType = if (flowAssignmentTargetsName(flowNode.node, name))
                     getLiteralRhsTypeForAssignment(flowNode.node) else null
@@ -110105,7 +110233,7 @@ interface DataView {
             }
             is FlowCall -> {
                 val antecedent = narrowTypeFromFlowFollowLoopEntry(
-                    declaredType, flowNode.antecedent, name, seen, depth + 1,
+                    declaredType, flowNode.antecedent, name, seen, depth + 1, memo,
                 )
                 // round 43 iter4: assert-function narrowing mirror (see iter3 in
                 // narrowTypeFromFlow's FlowCall branch). Loop-entry variant gets
@@ -110114,16 +110242,25 @@ interface DataView {
             }
             is FlowSwitchClause -> {
                 val antecedent = narrowTypeFromFlowFollowLoopEntry(
-                    declaredType, flowNode.antecedent, name, seen, depth + 1,
+                    declaredType, flowNode.antecedent, name, seen, depth + 1, memo,
                 )
                 // round 43 iter6: mirror iter5's switch-discriminant narrowing into
                 // the loop-aware variant.
                 narrowBySwitchClause(antecedent, flowNode, name) ?: antecedent
             }
             is FlowArrayMutation -> narrowTypeFromFlowFollowLoopEntry(
-                declaredType, flowNode.antecedent, name, seen, depth + 1,
+                declaredType, flowNode.antecedent, name, seen, depth + 1, memo,
             )
+            }
+        } finally {
+            narrowLiveDepth--
         }
+        if (!narrowWalkTruncated) {
+            val prev = memo[flowNode.id]
+            if (prev == null || prev.first < depth) memo[flowNode.id] = depth to result
+        }
+        narrowWalkTruncated = narrowWalkTruncated || savedTruncated
+        return result
     }
 
     /**
