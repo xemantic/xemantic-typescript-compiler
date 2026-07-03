@@ -11,6 +11,25 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 384 (2026-07-03) — M0.1 + M0.3 landed; M0.2 baseline running.**
+M0.1 (9b5bcd78): `--project` profiles + per-project TSVs in the bench script (see QUEUE
+entry). M0.3 (f85cc438): parse-based specifier extraction — the parser now records
+`SourceFile.moduleSpecifiers` at the real parse sites (static/dynamic/require/import-type
+plus a new bounded leading-trivia scan for `/// <reference>` that honors directives after
+a block-comment header, which `checkTripleSlashSelfReference`'s corpus-pinned scan does
+not); `ProjectCompiler.extractSpecifiers` parses instead of regex-scanning, so
+string-literal/comment/regex-literal text can no longer fabricate unresolved imports or
+pull junk files into the program. 6 local tests pin the invariant (garbage never
+extracted; deep-nested dynamic imports found; string-literal mention neither reaches
+`unresolved` nor joins the program). Suite 8,848 / 0 / 3 (+6 local). Session ops notes:
+a leftover bench run from round 383 was still executing at session start (its TSV row
+landed at 23:08 — labels tell them apart); my first services verification run was killed
+as polluted (its gradle step compiled pre-M0.3 code, then the M0.3 recompile swapped
+class files under the running JVM — don't recompile while a bench JVM is up). M0.2
+`--project all` relaunched clean on f85cc438; expected effect on compiler profile:
+errors stay exactly 13,245 (extraction doesn't affect checking), unresolved drops from
+120 to just node-builtin bare specifiers (env-legit until M1.3).
+
 ### Mission & strategy
 
 Three strategic reads that shape everything below:
@@ -72,22 +91,24 @@ Three strategic reads that shape everything below:
 
 **M0 — Real-world measurement rig**
 
-- [ ] **M0.1 Project-corpus runner.** Generalize `scripts/bench-compile-tsc.sh` (a
-  `--project` profile or a sibling `bench-projects.sh`) to materialize + compile more
-  tsc-repo subprojects: `src/services`, `src/server`, `src/tsc`, `src/harness` (each
-  needs `src/compiler` + whichever sibling dirs its `_namespaces/ts.ts` re-exports —
-  check imports; `src/jsTyping`/`src/deprecatedCompat` are likely needed by services).
-  Same materialization approach (git archive from the object DB + generated
-  `diagnosticInformationMap.generated.ts` + merged tsconfig). Log one TSV row per
-  (project, run) — add a `project` column or per-project TSVs under `bench/`.
-- [ ] **M0.2 Crash/robustness gate.** Run the full project corpus; any exception,
-  hang, or OOM becomes a P0 queue item with a minimized repro. (Expected: none — the
-  deep-stack thread + init boundary guard held for src/compiler.)
-- [ ] **M0.3 Fix ProjectCompiler dynamic-import specifier extraction.** The
-  self-compile run reports "unresolved imports: 120" with garbage specifiers (code
-  fragments from string literals inside tsc source) — the dynamic-import scan picks up
-  non-import text. Fix the extraction (parse-based, not regex-over-source), local test
-  with a string-literal-containing fixture.
+- [x] **M0.1 Project-corpus runner.** DONE (9b5bcd78): `--project` profiles in
+  `bench-compile-tsc.sh` — compiler/tsc/jsTyping/deprecatedCompat/typingsInstallerCore/
+  services/server/harness (each = named dir + transitive tsconfig-references closure,
+  flattened) or `all`/comma-list; per-project TSVs (`self-compile-<name>.tsv`,
+  compiler keeps the historical `self-compile-tsc.tsv`); per-project log subdirs +
+  multi-project overview table.
+- [ ] **M0.2 Crash/robustness gate.** IN PROGRESS — `--project all` baseline run
+  launched post-M0.3. Any exception, hang, or OOM becomes a P0 queue item with a
+  minimized repro. (Expected: none — the deep-stack thread + init boundary guard held
+  for src/compiler.)
+- [x] **M0.3 Fix ProjectCompiler dynamic-import specifier extraction.** DONE
+  (f85cc438): the parser records specifiers at the real parse sites into
+  `SourceFile.moduleSpecifiers` (tsc's `SourceFile.imports`) — static import/export-from,
+  import-equals require, dynamic `import()`/`require()` string-literal calls at any
+  depth, `import("...")` types, triple-slash path/types from leading trivia;
+  `extractSpecifiers` parses instead of regex-scanning. 6 local tests
+  (ModuleSpecifierExtractionTest). Known FN: JSDoc `@type {import("x")}` in .js (no
+  structural JSDoc model) — revisit with M4.
 
 **M1 — Kill the systematic FP families**
 
