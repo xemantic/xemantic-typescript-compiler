@@ -11,6 +11,31 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 387 (2026-07-03) — M1.3 landed: tsconfig `types`/`typeRoots`/@types acquisition
++ bench `--node-stub`. Self-compile: no-stub control EXACTLY 4,456 (acquisition inert
+under `types: []`); stub run 4,456 → 4,411 (−45 env-legit, zero new codes). Suite
+8,888 / 0 / 3 (+9 local).** Mechanics: `ProjectCompiler.collectTypeRootEntries` +
+`effectiveTypeRoots` (explicit roots REPLACE the walk-up `node_modules/@types`
+default) + `ModuleResolver.resolveTypeRootPackage` (package.json `types`/`typings`,
+else `index.d.ts` — deliberately narrower than directory resolution: no `main`, no
+runtime `index.*`); entries seed the graph walk so their imports and
+`/// <reference types>` directives follow; TS2688 for explicitly-requested-but-missing
+names only. TypesAcquisitionTest pins the sharp both-ways invariant with
+ambient-global-only packages (only acquisition can reach them → inclusion = global
+resolves + entry in programFiles; exclusion = TS2304). Two findings worth keeping:
+(1) the first stub cut declared `Buffer` value-only and sys.ts's `let buffer: Buffer;`
+drew TS2749 — a node global that doubles as a type needs the lib wrapper-type shape
+(generic-tolerant `interface Buffer<T = any>` MERGED with the var via canMerge
+Variable+Interface; harness even writes `Buffer<ArrayBuffer>`, hence the defaulted
+type param). (2) Resolving the 46 env-legit names FREED the global 10-lookup TS2552
+suggestion budget: the 5 `SetIterator`/`MapIterator` sites (es2024 collection-iterator
+types missing from the embedded lib — an M2 lib-gap marker; 4×TS2552 + 1×TS2304 in the
+control) all became TS2552 — diagnostics SHAPES can shift when unrelated names start
+resolving, so compare by-code diffs against the freed-budget effect before calling a
++1 a regression. Ops: two mid-session cwd drifts (a `cd` into the bench dir made
+relative-path XML reads report 0 files — a false "no tests ran" scare; absolute paths
+resolved it).
+
 **Round 386 (2026-07-03) — M1.2 closed: narrowing depth horizon 50→2000 (zero corpus
 churn), TS2563 half folded into M3.4 with measurement; M1.5 asserts predicates ACTIVE
 end-to-end; M1.5b falsified-and-pinned; assignment-effect narrowing landed.
@@ -214,7 +239,7 @@ Three strategic reads that shape everything below:
 | Metric | Source | Phase 17 target |
 |---|---|---|
 | Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 8,856 with local tests as of round 384) |
-| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**4,484 after M1.1**; 43 are env-legit until M1.3) |
+| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**4,456 after rounds 385–386; 4,411 with `--node-stub`** — M1.3 resolved the env-legit family; no-stub stays the honest default) |
 | Project corpus FPs (services/server/…) | `bench/` TSVs (M0.1) | 0 |
 | Conformance adoption | generated-test counts per category | all tsgo-relevant categories green |
 | Crashes on any input | bench runs | 0 |
@@ -326,13 +351,26 @@ Three strategic reads that shape everything below:
   this-before-super + instanceof narrowing until the suite gate caught it).
   `flowAssignmentTargetsName` (TS2454-shared) untouched. 7 local tests
   (FlowAssignmentNarrowingTest) + per-family bench delta in the session note.
-- [ ] **M1.3 `types` / `typeRoots` / `@types` resolution.** Implement the tsconfig
-  `types` field and `node_modules/@types/*` acquisition in ProjectCompiler/
-  ModuleResolver (this is a real-project requirement regardless of the benchmark).
-  Offline caveat: real `@types/node` is not on disk — add an optional `--node-stub`
-  flag to the bench script materializing a minimal ambient stub (`require`, `process`,
-  `fs`/`path`/`perf_hooks`/`inspector` modules) so the self-compile count can reach 0;
-  keep the no-stub run as the honest default until network provides real `@types/node`.
+- [x] **M1.3 `types` / `typeRoots` / `@types` resolution.** DONE (round 387,
+  473cc0d0 + eed2b73c): ProjectCompiler acquires type libraries like tsc — effective
+  roots = `typeRoots` (config-dir-relative) when specified, else every
+  `<ancestor>/node_modules/@types` walking up from the config dir; included set =
+  `types` when specified (an EMPTY list disables acquisition — the null-vs-empty
+  distinction is load-bearing, see the new CLAUDE.md gotcha), else auto-discovery of
+  existing packages (scope dirs expand to their subdirectories, dot-dirs skipped);
+  entries resolve package.json `types`/`typings` → `index.d.ts`
+  (`ModuleResolver.resolveTypeRootPackage`, DefinitelyTyped `scope__name` mangling
+  probed for scoped requests) and SEED the import-graph walk (their own imports +
+  `/// <reference types>` directives follow); an explicitly requested name that
+  resolves nowhere reports TS2688 (byte-exact tsc message). 9 local tests
+  (TypesAcquisitionTest) pin inclusion AND exclusion via ambient-global-only packages
+  (reachable only through acquisition). Bench gained `--node-stub` (minimal any-typed
+  @types/node; toggles without --fresh; rows auto-labeled "+node-stub"). Self-compile:
+  no-stub control EXACTLY 4,456 (acquisition inert under `types: []`); with stub
+  4,456 → 4,411 (TS2591 43→0, TS2304 3→0, TS2552 4→5 — the 46 resolved names free the
+  global 10-lookup suggestion budget so all 5 SetIterator/MapIterator sites carry
+  suggestions; ZERO new codes). No-stub stays the honest dashboard default until
+  network provides real @types/node.
 - [ ] **M1.4 Re-measure + strategic map.** Full project-corpus bench run; record the
   new per-family FP baseline in a session note; re-rank the remaining families (the
   ~3,100 TS7006/TS2339/TS2322/TS2345 checker-modeling tail) and insert the top 2–3 as
