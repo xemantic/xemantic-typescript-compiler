@@ -77145,6 +77145,24 @@ interface DataView {
     }
 
     /**
+     * M1.8: does the return-type ANNOTATION accept `undefined` — tsc's
+     * `isTypeAssignableTo(undefinedType, type)` gate on TS2366
+     * (checkAllCodePathsInNonVoidFunctionReturnOrThrow branch 3)? True when the
+     * annotation RESOLVES to a concrete type undefined is assignable to, or when it
+     * references an alias whose union body syntactically carries the `undefined`
+     * keyword (covers enum-member unions like `ResolutionMode` whose engine
+     * resolution collapses to anyType). False for unresolvable/any/error resolutions
+     * without the syntactic proof — those keep the syntactic classifier's verdict.
+     */
+    private fun returnAnnotationAcceptsUndefined(retType: TypeNode?): Boolean {
+        if (retType == null) return false
+        val resolved = getTypeFromTypeNodeSafe(retType)
+        if (resolved != null && resolved !== anyType && resolved !== errorType &&
+            checkTypeRelatedTo(undefinedType, resolved, assignableRelation)) return true
+        return aliasUnionContainsNullishKeyword(retType, "undefined")
+    }
+
+    /**
      * Check a function body for TS7030 / TS2355 (not all code paths return a value).
      *
      * TypeScript's rules:
@@ -77230,8 +77248,14 @@ interface DataView {
         // If the function always returns/throws on all paths, check for problematic empty returns
         val alwaysReturns = bodyAlwaysReturns(body.statements)
         if (alwaysReturns) {
-            // Case 1: explicit non-void return type + body always returns via empty returns → TS7030 at each empty return
-            if (retTypeClass == "non-void" && retType != null) {
+            // Case 1: explicit non-void return type + body always returns via empty returns → TS7030 at each empty return.
+            // M1.8: tsc's checkReturnStatement fires this ONLY under noImplicitReturns
+            // AND only on the non-strict path — under strictNullChecks an empty
+            // `return;` routes through checkReturnExpression instead (our
+            // checkReturnAssignability already emits the TS2322 there when undefined
+            // is not assignable to the return type, and nothing when it is).
+            if (retTypeClass == "non-void" && retType != null &&
+                options.noImplicitReturns && !strictNullChecks) {
                 reportEmptyReturnsInBody(body.statements, source, fileName)
             }
             // Case 2: no explicit return type, but some paths return values and some do empty returns → TS7030 at empty returns
@@ -77292,7 +77316,14 @@ interface DataView {
                 // "Function lacks ending return statement and return type does not include 'undefined'."
                 // Under strictNullChecks, undefined is NOT assignable to non-nullable types,
                 // so implicit return (returning undefined) is a type error.
-                isDefinitelyNonNullable && hasAnyReturn && strictNullChecks -> {
+                // M1.8: tsc's exact gate is `!isTypeAssignableTo(undefinedType, type)` on the
+                // RESOLVED type (checkAllCodePathsInNonVoidFunctionReturnOrThrow branch 3) —
+                // the syntactic classifier calls an ALIAS-of-union-with-undefined "non-void"
+                // (`VisitResult<Node | undefined>`), so suppress when the resolution (or the
+                // alias body's syntactic `| undefined`) proves undefined-assignability.
+                // Unresolvable (null/error/any) annotations keep the classifier verdict.
+                isDefinitelyNonNullable && hasAnyReturn && strictNullChecks &&
+                    !returnAnnotationAcceptsUndefined(retType) -> {
                     diagnostics.add(Diagnostic(
                         message = "Function lacks ending return statement and return type does not include 'undefined'.",
                         category = DiagnosticCategory.Error,
@@ -77304,10 +77335,11 @@ interface DataView {
                         length = spanLen,
                     ))
                 }
-                hasAnyReturn && (strictNullChecks || options.noImplicitReturns) -> {
-                    // TS7030: some paths return with a value, some don't (for nullable/unknown return types)
-                    // Only fires when strictNullChecks is on (undefined not assignable) or noImplicitReturns is set.
-                    // Without either, implicit return of undefined is always valid.
+                hasAnyReturn && options.noImplicitReturns -> {
+                    // TS7030: some paths return with a value, some don't (for nullable/unknown return types).
+                    // M1.8: fires ONLY under noImplicitReturns (tsc branch 4) — under
+                    // strict-only, an undefined-ACCEPTING return type draws nothing on
+                    // implicit fall-through, and a non-accepting one is TS2366 (above).
                     diagnostics.add(Diagnostic(
                         message = "Not all code paths return a value.",
                         category = DiagnosticCategory.Error,
