@@ -11,6 +11,51 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 388 (2026-07-03) — M1.9 + M1.6(a)+(b) + M1.8 all landed: self-compile
+4,376 → 2,858 (−1,518, −34.7%), four commits, zero corpus regressions
+(suite 8,931 / 0 / 3, +35 local tests).** Per-item deltas (each bench-isolated):
+**M1.9 (b4c15a22, −133)** — the "undefined lost against union targets" item
+over-delivered because the union member was never lost in the RELATION; five
+distinct emitters were at fault (return-path string fallback running after the
+engine CONFIRMED assignability — B325's early return had never reached the
+return path; enum-member union aliases resolving to anyType → the syntactic
+`aliasUnionContainsNullishKeyword` skip; assignment TARGETS checked against the
+guard-NARROWED type instead of the declared one → `narrowedDeclaredTypes` at
+both dispatcher arms; the main arg path missing M1.7a's undefined-to-optional
+rule for primitive/namespace-nested params; 17.20 firing on the sig's OWN
+inferable bare TPs). TS2345-undefined 100 → 2, TS2322-undefined 70 → 0.
+**M1.6(b) (0e38be5a, −446; TS7006 1554 → 1111)** — `contextualCallableArity`:
+a plain callable contextual slot suppresses TS7006 up to its arity (rest =
+unbounded; beyond-arity keeps firing per B224) in the arrow/fn-expr/
+object-literal-METHOD branches + return-annotation threading
+(`returnCtxAnnotation`, lazy resolution at the ReturnStatement). The real
+checker.ts factory is a VAR-DECL annotation (`const checker: TypeChecker =
+{...}`), not the return shape the map predicted — the plumbing existed, only
+union-with-primitive slots suppressed. The suite gate caught the ONE corpus
+pin: members reached through a union-with-non-object literal context must NOT
+suppress (`ctxViaUnionWithPrimitive`;
+contextualOverloadListFromUnionWithPrimitiveNoImplicitAny). **M1.8 (d31be6be)
++ M1.6(a) (4e048750), combined row −939 (TS7006 1111 → 301 = exactly
+visitorPublic's ×810; TS7030 122 → 0; TS2366 57 → 50; TS7019 7 → 4)** — M1.8
+aligned `checkBodyForImplicitReturn` with tsc's
+checkAllCodePathsInNonVoidFunctionReturnOrThrow read from the offline sources
+(TS7030 = noImplicitReturns-ONLY; TS2366 gated on resolved
+undefined-assignability via `returnAnnotationAcceptsUndefined`; per-empty-return
+TS7030 additionally `!strictNullChecks` — under strict an empty `return;` is
+the TS2322 return-expression path); the queue's "audit which corpus baselines
+pin the current disjunct" came back EMPTY (first-try green). M1.6(a):
+`mappedAnnotationValueFnArity` derives the computed-enum-key mapped-table
+members' contextual arity from the AST (annotation → alias → MappedType →
+value alias → FunctionType), threaded as `ctxAnnotation` — no mapped-type
+engine work needed. Two process notes: (1) **same-position masking** — M1.9's
+TS2322 removal at empty `return;` sites SURFACED 8 pre-existing TS7030 FPs at
+identical positions (a +N in an unrelated code after an FP fix: check position
+overlap before calling it a regression); it became M1.8's repro. (2) The
+M1.8+M1.6a bench row is marked +dirty from uncommitted DOCS edits only — the
+compiled code is exactly 4e048750. New top families: TS2339×836 (the M3.4
+union-receiver narrowing bucket), TS2322×777, TS2345×424, TS7006×301 (residue:
+call-arg/uncontextualized shapes), TS2769×77, TS2540×64.**
+
 **Round 387 (2026-07-03) — M1.3 landed: tsconfig `types`/`typeRoots`/@types acquisition
 + bench `--node-stub`. Self-compile: no-stub control EXACTLY 4,456 (acquisition inert
 under `types: []`); stub run 4,456 → 4,411 (−45 env-legit, zero new codes). Suite
@@ -272,8 +317,8 @@ Three strategic reads that shape everything below:
 
 | Metric | Source | Phase 17 target |
 |---|---|---|
-| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 8,856 with local tests as of round 384) |
-| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**4,456 after rounds 385–386; 4,411 with `--node-stub`** — M1.3 resolved the env-legit family; no-stub stays the honest default) |
+| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 8,931 with local tests as of round 388) |
+| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**2,858 after round 388** — M1.9 + M1.6 + M1.8; no-stub stays the honest default) |
 | Project corpus FPs (services/server/…) | `bench/` TSVs (M0.1) | 0 |
 | Conformance adoption | generated-test counts per category | all tsgo-relevant categories green |
 | Crashes on any input | bench runs | 0 |
@@ -412,20 +457,25 @@ Three strategic reads that shape everything below:
   families are M1.6–M1.8 below (plus two absorbed observations: the
   TS2339-on-union-receiver predicate-narrowing family ~460 sites → noted in M3.4;
   `SetIterator`/`MapIterator`/`RegExp`-replace-overload lib gaps → M2 markers).
-- [ ] **M1.6 Contextual typing of object-literal fn-valued members (the TS7006
-  kill: ~1,285 of 1,554 = 29% of ALL remaining).** A fn-expr/arrow VALUE of an
-  object-literal member must get its param types (and TS7006 suppression) from the
-  literal's CONTEXTUAL type's matching member fn-type. The contextual type comes
-  from (a) a var-decl annotation — `const table: VisitEachChildTable = {...}`,
-  visitorPublic.ts ×810, whose keys are COMPUTED `[SyntaxKind.X]` enum keys against
-  a MAPPED-type table (needs computed-key member lookup + mapped-member fn-type
-  resolution); (b) the enclosing function's RETURN annotation — the factory pattern
-  `function createX(): TypeChecker { return { isUndefinedSymbol: symbol => … } }`,
-  checker.ts ×318 + program.ts ×94 + tsbuildPublic.ts ×63; (c) a call-arg's param
-  type (partially exists). Infra to build on: `applyContextualParamTypesForArrow`,
-  `lookupPropertyTypeForCtx` (B475), `walkObjectLiteralMemberBody`'s ctx plumbing.
-  This is the first M3.2 increment, pulled into M1 because it is HALF the remaining
-  count; stage it (b)-first (interface member lookup only), then (a) (mapped tables).
+- [x] **M1.6 Contextual typing of object-literal fn-valued members (the TS7006
+  kill).** DONE (round 388, 0e38be5a + the M1.6(a) commit): (b) landed first —
+  `contextualCallableArity` suppresses TS7006 up to a plain callable contextual
+  slot's arity (rest = unbounded; beyond-arity keeps firing per B224) in the
+  implicit-any walker's arrow/fn-expr/object-literal-METHOD branches; the real
+  factory shape turned out to be the VAR-DECL annotation (`const checker:
+  TypeChecker = {...}` — the plumbing existed, only union-with-primitive slots
+  suppressed before), plus NEW return-annotation threading
+  (`returnCtxAnnotation` through `checkImplicitAnyInStatements`, reset per
+  function boundary, resolved lazily at the ReturnStatement). FP firewall found
+  by the suite gate: members reached through a union-with-non-object literal
+  context get NO arity suppression (`ctxViaUnionWithPrimitive` —
+  contextualOverloadListFromUnionWithPrimitiveNoImplicitAny pins it). (a) the
+  computed-enum-key mapped table (visitorPublic ×810): AST-side
+  `mappedAnnotationValueFnArity` (annotation → alias → MappedType → value alias →
+  FunctionType arity) drives computed-key members via the threaded
+  `ctxAnnotation` node — no mapped-type engine work needed. 13 local tests
+  (ContextualFnMemberParamsTest). Self-compile: (b) 4,243 → 3,797 (TS7006
+  1554 → 1111); (a)+M1.8 delta in the round-388 note.
 - [x] **M1.7 Two bounded engine bugs, 3-digit combined count.** DONE (round 387):
   (a) the TS2345 ×65 turned out to be a missing OPTIONALITY rule, not a lost union
   member — the ` | undefined` in the display was our own B51.7 optional-param
@@ -440,27 +490,42 @@ Three strategic reads that shape everything below:
   (`new Map<string, number>()` → `Map<string, number>`), bare sig return as the
   arity-mismatch fallback. 8 local tests (OptionalParamAndCtorInterfaceTest) with
   negative controls. Suite 8,896 / 0 / 3; self-compile delta in the session note.
-- [ ] **M1.9 `undefined` lost against explicitly-undefined-including UNION targets
-  (~75: TS2345 residue ~40 + TS2322 ~35).** The M1.7 bench isolated it: TS2345
-  dropped only −25 of the 65 because tsc's factory has BOTH param styles —
-  `questionToken?: QuestionToken` (optional; fixed by M1.7a) and `questionToken:
-  QuestionToken | undefined` (REQUIRED, union-annotated; still FPs — the union's
-  undefined member is lost somewhere before/inside the relation, and the emitter is
-  NOT the 17.11c Reference branch since the param resolves to Type.Union). Same
-  root for the TS2322 sibling: `VisitResult<Node | undefined>` = alias
-  `T | readonly Node[]` with `T = Node | undefined` must include undefined in
-  RETURN/assignment position (suspect: the `readonly Node[]` TypeOperator member or
-  the alias substitution poisoning the union). Small, concrete, de-noises M1.6's
-  measurement.
-- [ ] **M1.8 TS7030/TS2366 gate audit vs tsc's exact rule (TS7030 ×114).** tsc
-  (`checkAllCodePathsInNonVoidFunctionReturnOrThrow`): TS7030 fires ONLY under
-  `noImplicitReturns`; TS2366 under `strictNullChecks` when the declared return
-  type does NOT include undefined; a return type INCLUDING undefined draws NOTHING
-  on implicit fall-through. Our gate (`strictNullChecks || noImplicitReturns` with
-  the "nullable" classification) over-fires on `T | undefined` returns under
-  strict-only (the bench tsconfig sets strict but not noImplicitReturns —
-  emitter.ts:453 `): T | undefined {` is a representative FP). Corpus-gated: audit
-  which corpus baselines actually pin the current disjunct before aligning.
+- [x] **M1.9 `undefined` lost against explicitly-undefined-including UNION targets.**
+  DONE (round 388, b4c15a22) — over-delivered: −133 (predicted ~75); the
+  undefined family is essentially dead (TS2345-undefined 100 → 2, both the
+  separate nested-fn-shadowing callee-resolution family; TS2322-undefined
+  70 → 0). The item text's hypotheses were both WRONG in instructive ways: the
+  union's undefined member was never lost in the relation — FIVE distinct
+  emitters were at fault: (1) the RETURN path's legacy string fallback ran even
+  after the ENGINE confirmed assignability (B325's engine-confirmed early
+  return had never been applied to returns; alias names like `Mode` are opaque
+  to the string system); (2) enum-member union aliases (`ResolutionMode`)
+  resolve to anyType (any-absorbing union) → engine bails → string fallback —
+  fixed by the syntactic `aliasUnionContainsNullishKeyword` skip; (3)
+  assignment TARGETS inside `if (x !== undefined)` guards checked against the
+  NARROWED type (`narrowedDeclaredTypes` now records the declared type at both
+  dispatcher narrowing arms); (4) the main simple-checkable arg path missed
+  M1.7a's undefined-to-optional rule (primitive + namespace-nested-fn params);
+  (5) the 17.20 bare-TypeParam nullish-arg branch fired for the sig's OWN
+  inferable TPs (tsc infers T = undefined). 13 local tests
+  (UndefinedVsUnionTargetsTest). Side effect: removing the TS2322s at empty
+  `return;` statements SURFACED 8 same-position-masked TS7030 FPs → M1.8.
+- [x] **M1.8 TS7030/TS2366 gate audit vs tsc's exact rule.** DONE (round 388,
+  d31be6be): read tsc's checkAllCodePathsInNonVoidFunctionReturnOrThrow +
+  checkReturnStatement from the offline sources and aligned all three arms of
+  `checkBodyForImplicitReturn` — (1) the mixed-return TS7030 arm is
+  noImplicitReturns-ONLY (strictNullChecks disjunct dropped); (2) TS2366
+  additionally requires `!returnAnnotationAcceptsUndefined` (engine relation on
+  a concrete resolution OR the M1.9 syntactic alias-union proof — the
+  classifier calls `VisitResult<Node | undefined>` "non-void"); (3) the
+  per-empty-return TS7030 (Case 1) is `noImplicitReturns && !strictNullChecks`
+  (under strict, an empty `return;` routes through return-expression
+  assignability = TS2322, which checkReturnAssignability already owns). The
+  "corpus-gated audit" came back EMPTY — zero corpus tests pinned the old
+  disjuncts (suite 8,928/0/3 on the first try). Writing the local tests
+  (ImplicitReturnGatesTest ×9) surfaced that under strict+noImplicitReturns
+  tsc's TS2366 branch wins over TS7030. Self-compile delta in the round-388
+  note (combined row with M1.6a).
 
 **M2 — Real-lib migration (staged; decompose further at start)**
 
