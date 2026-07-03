@@ -11,6 +11,29 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 384 (continued) — M0.2 findings + M1.1 landed: self-compile 13,245 → 4,484 (−66%).**
+M0.2 (`--project all`): 5/8 profiles green in ~5 min each with tightly clustered
+baselines (compiler 13,245; tsc-cli 13,247; jsTyping 13,301; deprecatedCompat 13,256;
+typingsInstallerCore 13,348 — TS2305 dominating each at 8,752–8,837), zero
+exceptions/OOMs; **services HUNG → the P0 now at the queue top** (30+ CPU-min frozen in
+one `checkVarDeclAssignability`; stack: `narrowByAssertCall` → callee/arg type
+resolution → `getNarrowedTypeForReference` re-entry per assert-call flow node, no
+memoization — tsc's services code is `Debug.assert`-dense); server/harness deferred.
+Also caught: the src/tsc profile's TSV name collided with the compiler profile's
+historical file (fixed, `self-compile-tsc-cli.tsv`). **M1.1** (8a4ba245): export-star
+barrel following — measured **13,245 → 4,484 (−8,761)**, TS2305 eliminated from the
+top codes, compile −2.7%; remaining top families now TS7006×1554 (contextual-typing
+gaps → M3.2), TS2339×886, TS2322×827, TS2345×543, TS7030×114, TS2769×77. **M1.2 recon**
+(for the P0 + M1.2 implementer): tsc's mechanism confirmed at checker.ts:29037 —
+`flowDepth === 2000` counts recursive `getTypeAtFlowNode` invocations per
+`getFlowTypeOfReference` walk (linear single-antecedent steps are the iterative
+`while(true)` loop and don't consume budget; `sharedFlowNodes` memoizes shared nodes
+per walk), `flowAnalysisDisabled` is checker-global but save/restored around each
+function-or-module block in `checkBlock` (= container-scoped), and
+`reportFlowControlError` anchors at `findAncestor(reference, isFunctionOrModuleBlock)
+.statements.pos` token span. Our B399 per-file node-count heuristic must be replaced by
+that walk-budget + per-walk memoization — which is ALSO the P0 fix.
+
 **Round 384 (2026-07-03) — M0.1 + M0.3 landed; M0.2 baseline running.**
 M0.1 (9b5bcd78): `--project` profiles + per-project TSVs in the bench script (see QUEUE
 entry). M0.3 (f85cc438): parse-based specifier extraction — the parser now records
@@ -80,8 +103,8 @@ Three strategic reads that shape everything below:
 
 | Metric | Source | Phase 17 target |
 |---|---|---|
-| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start) |
-| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (43 are env-legit until M1.3) |
+| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 8,856 with local tests as of round 384) |
+| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**4,484 after M1.1**; 43 are env-legit until M1.3) |
 | Project corpus FPs (services/server/…) | `bench/` TSVs (M0.1) | 0 |
 | Conformance adoption | generated-test counts per category | all tsgo-relevant categories green |
 | Crashes on any input | bench runs | 0 |
@@ -137,14 +160,14 @@ Three strategic reads that shape everything below:
 
 **M1 — Kill the systematic FP families**
 
-- [ ] **M1.1 TS2305 export-star barrel following (−8,752; 66% of self-compile).** The
-  named-import-vs-module-exports check does not follow `export * from` chains — every
-  tsc file imports through the `_namespaces/ts.ts` pure re-export barrel. Find the
-  TS2305 emit site(s) (grep `2305` in Checker.kt; CLAUDE.md documents several gated
-  variants), add cycle-guarded, depth-bounded `export *` chain traversal to the
-  export-name collection. FN-safe direction: if any `export *` target is unresolvable,
-  treat the import as resolvable (emit nothing). Full-suite gate — the corpus has many
-  TS2305 baselines with deliberate gates.
+- [x] **M1.1 TS2305 export-star barrel following.** DONE (8a4ba245): measured
+  **13,245 → 4,484 self-compile errors (−8,761, −66%)**, TS2305 gone from the top-codes
+  list, compile −2.7% for free. `getModuleExportsFollowingStars` (cycle-guarded,
+  depth-bounded, memoized per top-level file; NULL = unknowable → callers skip absence
+  emission for non-default names — FN-safe) wired into TS2305/2459/2460/2614/2724 +
+  TS2613's upgrade; `export * as ns` contributes its name; re-export branch gained the
+  import branch's `.js`→`.ts` fallback; `getModuleAllExports` deleted. 8 local tests.
+  Suite 8,856 / 0 / 3, zero regressions.
 - [ ] **M1.2 TS2563 per-container CFA rule (−27, plus −20 TS2454 knock-ons).** Replace
   the per-FILE >2000-flow-node heuristic (B399, Checker init) with tsc's per-container
   flow-depth rule (or the closest faithful approximation), and make definite-assignment
