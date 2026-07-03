@@ -599,6 +599,15 @@ class Checker(
      *  non-null during the check pipeline. */
     private val mappedReadonlyMemberIds = mutableSetOf<Int>()
 
+    /** M1.10: the INVERSE of [mappedReadonlyMemberIds] — ids of members synthesized by a
+     *  `-readonly` mapped type (`Mutable<T> = { -readonly [K in keyof T]: T[K] }`). A
+     *  homomorphic mapped member carries its SOURCE property's declaration (for
+     *  "declared here" related info), so the declaration-modifier scan in
+     *  [isReadonlySymbol]/[isReadonlyAccessOrModifier] would see the source's `readonly`
+     *  — this set marks the member WRITABLE first (`(x as Mutable<SourceFile>).flags |=`
+     *  is legal). Declared before `init` per the init-order rule. */
+    private val mappedMutableMemberIds = mutableSetOf<Int>()
+
     /** B435: ids of `Object.freeze(objLit)` result Type.Objects. `widenType` returns these
      *  AS-IS (no member-widening rebuild) so the readonly marking + literal member types
      *  survive the `getTypeOfSymbol` → `inferTypeFromInitializer` → `widenType` path that a
@@ -55560,6 +55569,9 @@ interface DataView {
 
     /** Check if a symbol is declared readonly. */
     private fun isReadonlySymbol(symbol: Symbol): Boolean {
+        // M1.10: a `-readonly` mapped member is writable regardless of the carried
+        // source declaration's modifier (the mapped type STRIPS readonly).
+        if (symbol.id in mappedMutableMemberIds) return false
         // B100: a member synthesized by `Readonly<T>` materialization carries no
         // `readonly` MODIFIER on its (copied) declaration — the readonly-ness comes
         // from the utility wrapper, recorded in the side-channel by Symbol id.
@@ -55578,6 +55590,8 @@ interface DataView {
      * no setter is read-only; a `readonly` field/property is read-only; a plain field is writable.
      */
     private fun isReadonlyAccessOrModifier(symbol: Symbol): Boolean {
+        // M1.10: `-readonly` mapped members are writable (see isReadonlySymbol).
+        if (symbol.id in mappedMutableMemberIds) return false
         val decls = symbol.declarations
         if (decls.any { it is SetAccessor }) return false
         if (decls.any { it is GetAccessor }) return true
@@ -127566,6 +127580,12 @@ interface DataView {
                 homomorphicSourceType?.let { srcT ->
                     getPropertyOfType(srcT, key)?.declarations?.firstOrNull()?.let { sym.declarations.add(it) }
                 }
+                // M1.10: `-readonly` STRIPS readonly — the carried source declaration
+                // may have the modifier, so mark the member writable via the side-channel.
+                // The plain `readonly` TOKEN (`{ readonly [K in keyof T]: T[K] }`) ADDS
+                // readonly-ness the same way the Readonly<T> utility materializer does.
+                if (node.readonlyMinus) mappedMutableMemberIds.add(sym.id)
+                else if (node.readonlyToken) mappedReadonlyMemberIds.add(sym.id)
                 members[key] = sym
                 properties.add(sym)
                 symbolTypes[sym.id] = propType

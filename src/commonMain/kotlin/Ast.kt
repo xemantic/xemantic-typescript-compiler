@@ -1451,6 +1451,10 @@ data class MappedType(
     val type: TypeNode? = null,
     val questionToken: Boolean = false,
     val readonlyToken: Boolean = false,
+    /** M1.10: true for the `-readonly` modifier form (`{ -readonly [K in keyof T]: … }`,
+     *  the `Mutable<T>` idiom) — the mapped type STRIPS readonly from the source
+     *  members. [readonlyToken] is also true in that case (the keyword is present). */
+    val readonlyMinus: Boolean = false,
     override val pos: Int = 0,
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,

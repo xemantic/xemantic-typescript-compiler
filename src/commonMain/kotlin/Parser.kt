@@ -9434,13 +9434,19 @@ class Parser(
     private fun parseMappedType(pos: Int): TypeNode {
         // Optional readonly modifier (with optional +/- prefix)
         var readonlyToken = false
+        var readonlyMinus = false
         if (token == SyntaxKind.Plus || token == SyntaxKind.Minus) {
-            // +readonly / -readonly: consume modifier sign, then readonly
+            // +readonly / -readonly: consume modifier sign, then readonly.
+            // M1.10: the MINUS form STRIPS readonly (the `Mutable<T>` idiom) —
+            // record it so the checker's mapped-member synthesis can mark the
+            // members writable.
+            val isMinus = token == SyntaxKind.Minus
             nextToken()
             if (token == SyntaxKind.ReadonlyKeyword ||
                 (isIdentifier() && scanner.getTokenValue() == "readonly")
             ) {
                 readonlyToken = true
+                readonlyMinus = isMinus
                 nextToken()
             }
         } else if (token == SyntaxKind.ReadonlyKeyword ||
@@ -9496,6 +9502,7 @@ class Parser(
             type = valueType,
             questionToken = questionToken,
             readonlyToken = readonlyToken,
+            readonlyMinus = readonlyMinus,
             pos = pos,
             end = getEnd(),
         )
