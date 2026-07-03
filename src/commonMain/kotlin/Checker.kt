@@ -38705,8 +38705,14 @@ class Checker(
          *  narrowing request, spanning all nested re-entrant walks — the WORK bound
          *  that keeps adversarial CFGs (assert-dense code, depth-skewed diamond
          *  chains) from going superlinear even where the memos are conservative.
-         *  Exhaustion bails to declared type (FN-safe: less narrowing only). */
-        private const val NARROW_VISIT_BUDGET = 50_000
+         *  Exhaustion bails to declared type (FN-safe: less narrowing only).
+         *  Sized so real code never hits it: near the NARROW_MAX_DEPTH horizon,
+         *  subtree results are inherently entry-depth-dependent (the memo cannot
+         *  serve them without changing pre-memo truncation semantics), so
+         *  depth-skewed diamond chains in giant functions (tsc checker.ts-sized)
+         *  legitimately need ~100k+ visits — 50k truncated one such walk and cost
+         *  a narrowing on the self-compile bench (TS18048 41→42). */
+        private const val NARROW_VISIT_BUDGET = 1_000_000
 
         // dissallowSymbolAsWeakType: weak-collection ctor names whose key position rejects `symbol`
         // under es2022. In the companion object (init-order gotcha — used during the init pipeline).
