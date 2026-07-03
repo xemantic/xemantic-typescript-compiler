@@ -55,6 +55,20 @@ merged AST unions → absorbed into M3.4's item text. `SetIterator`/`MapIterator
 (es2024) and String.replace's RegExp-arg overload (TS2345 `'RegExp'`→`'string'` ×19)
 → M2 markers. On services/server/harness, TS2339 (1,741–1,904) overtakes TS7006 as
 the #1 family — the M3.4 narrowing bucket dominates the bigger profiles.**
+**Third arc, same round — M1.7 landed: self-compile 4,456 → 4,376 (−80, zero new
+codes; TS2339 −50, TS2345 −25, TS2322 −5). (a) Explicit `undefined` is legal for an
+OPTIONAL parameter on the single-signature arg path (B176's overload rule applied to
+the 17.11c Reference branch + the 17.40 anonymous-fn sibling; `null` stays checked,
+required params still reject). The ` | undefined` in the FP display was our OWN
+B51.7 optional-display append — reading it as "union containing undefined" was the
+wrong first hypothesis; the bench isolated the real split: only the `?:`-style
+factory params were this bug, the `: X | undefined`-annotated style is a genuinely
+lost union member → re-scoped into M1.9 (~75 sites with the TS2322 sibling).
+(b) `getReturnTypeOfNewExpression` re-instantiates a constructor-interface's
+construct-sig return target with the explicit type args (`new Map<string, number>()`
+→ `Map<string, number>`, was MapConstructor → 44 TS2339 + 6 knock-ons). 8 local
+tests (OptionalParamAndCtorInterfaceTest) with negative controls (null rejected,
+required-param undefined rejected, no-type-args path intact). Suite 8,896 / 0 / 3.**
 
 **Round 386 (2026-07-03) — M1.2 closed: narrowing depth horizon 50→2000 (zero corpus
 churn), TS2563 half folded into M3.4 with measurement; M1.5 asserts predicates ACTIVE
@@ -412,17 +426,32 @@ Three strategic reads that shape everything below:
   `lookupPropertyTypeForCtx` (B475), `walkObjectLiteralMemberBody`'s ctx plumbing.
   This is the first M3.2 increment, pulled into M1 because it is HALF the remaining
   count; stage it (b)-first (interface member lookup only), then (a) (mapped tables).
-- [ ] **M1.7 Two bounded engine bugs, 3-digit combined count.** (a) `undefined`
-  FAILS assignability to a union CONTAINING undefined: `Argument of type 'undefined'
-  is not assignable to parameter of type 'PunctuationToken<any> | undefined'` —
-  TS2345 ×65 (factory `/*questionToken*/ undefined` args) + the same shape as
-  TS2322 ×~35 (`undefined` → `VisitResult<Node | undefined>`); find where the
-  union's undefined member is lost (likely generic-member resolution poisoning the
-  union before the relation). (b) `const m = new Map<K, V>()` types the local as
-  the CONSTRUCTOR interface, so every `m.get/set` is TS2339 "does not exist on type
-  'MapConstructor'" (×44, e.g. performance.ts module-scope consts) —
-  `getReturnTypeOfNewExpression` must instantiate the lib INSTANCE interface for an
-  explicit-type-arg lib `new`.
+- [x] **M1.7 Two bounded engine bugs, 3-digit combined count.** DONE (round 387):
+  (a) the TS2345 ×65 turned out to be a missing OPTIONALITY rule, not a lost union
+  member — the ` | undefined` in the display was our own B51.7 optional-param
+  append; the 17.11c Type.Reference nullish-arg branch (and the 17.40 anonymous-fn
+  sibling) rejected an explicit `undefined` against an OPTIONAL parameter. Fixed by
+  applying B176's rule (absent and undefined are interchangeable for parameters —
+  questionToken OR initializer) on the single-signature path; `null` stays checked,
+  required params still reject undefined. (b) `getReturnTypeOfNewExpression`:
+  EXPLICIT type args on a CONSTRUCTOR-INTERFACE callee (`declare var Map:
+  MapConstructor` — no interface-own type params; the generics live on the
+  construct sig's return) re-instantiate the sig return's Reference target
+  (`new Map<string, number>()` → `Map<string, number>`), bare sig return as the
+  arity-mismatch fallback. 8 local tests (OptionalParamAndCtorInterfaceTest) with
+  negative controls. Suite 8,896 / 0 / 3; self-compile delta in the session note.
+- [ ] **M1.9 `undefined` lost against explicitly-undefined-including UNION targets
+  (~75: TS2345 residue ~40 + TS2322 ~35).** The M1.7 bench isolated it: TS2345
+  dropped only −25 of the 65 because tsc's factory has BOTH param styles —
+  `questionToken?: QuestionToken` (optional; fixed by M1.7a) and `questionToken:
+  QuestionToken | undefined` (REQUIRED, union-annotated; still FPs — the union's
+  undefined member is lost somewhere before/inside the relation, and the emitter is
+  NOT the 17.11c Reference branch since the param resolves to Type.Union). Same
+  root for the TS2322 sibling: `VisitResult<Node | undefined>` = alias
+  `T | readonly Node[]` with `T = Node | undefined` must include undefined in
+  RETURN/assignment position (suspect: the `readonly Node[]` TypeOperator member or
+  the alias substitution poisoning the union). Small, concrete, de-noises M1.6's
+  measurement.
 - [ ] **M1.8 TS7030/TS2366 gate audit vs tsc's exact rule (TS7030 ×114).** tsc
   (`checkAllCodePathsInNonVoidFunctionReturnOrThrow`): TS7030 fires ONLY under
   `noImplicitReturns`; TS2366 under `strictNullChecks` when the declared return
