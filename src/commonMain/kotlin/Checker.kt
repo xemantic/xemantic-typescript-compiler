@@ -77602,6 +77602,11 @@ interface DataView {
                 }
             }
             is FunctionType -> "function-type"  // definitively non-void (a function type is always an object)
+            // An asserts predicate is void-like (an assertion signature returns void —
+            // no TS2355/TS2366/TS7030 for a return-less body); a `x is T` predicate is a
+            // boolean-valued return → non-void classification (same as the previous
+            // fall-through-to-null behavior, made explicit — M1.5).
+            is TypePredicate -> if (node.assertsModifier) "void" else "boolean"
             else -> null
         }
     }
@@ -87644,7 +87649,10 @@ interface DataView {
             is TypeQuery -> getTypeFromTypeQuery(node)
             is ParenthesizedType -> getTypeFromTypeNode(node.type)
             is ThisType -> anyType // TODO: proper this-type resolution
-            is TypePredicate -> booleanType
+            // A non-asserts predicate (`x is T`) is a boolean-valued return; an asserts
+            // predicate (`asserts x [is T]`) returns void (tsc: assertion signatures
+            // have a void return type — M1.5).
+            is TypePredicate -> if (node.assertsModifier) voidType else booleanType
             is TypeLiteral -> getTypeFromTypeLiteral(node)
             is TypeOperator -> getTypeFromTypeOperator(node)
             is IndexedAccessType -> getTypeFromIndexedAccess(node)
@@ -90350,6 +90358,49 @@ interface DataView {
     }
 
     /**
+     * M1.5 pre-check for [narrowByAssertCall]: does [argIn] MENTION the reference path
+     * [name] anywhere — as the whole expression, a receiver prefix of it, or an
+     * extension of it? Purely syntactic (no callee or type resolution — this is the
+     * services-perf firewall that must run before any resolution work) and ITERATIVE
+     * (worklist; a deep binary condition chain must not recurse — the checker-walker
+     * rule). The scan covers the expression shapes [applyConditionNarrowing]
+     * understands, including nested call ARGUMENTS (`assert(isFoo(x))`) but never
+     * callees. Pathologically large args bail OPEN (true → the memoized resolver
+     * decides), preserving correctness at a bounded cost.
+     */
+    private fun argMentionsReferencePath(argIn: Expression, name: String): Boolean {
+        val work = ArrayDeque<Expression>()
+        work.addLast(argIn)
+        var visits = 0
+        while (work.isNotEmpty()) {
+            if (++visits > 512) return true
+            val expr = work.removeLast()
+            val path = getReferencePath(expr)
+            if (path != null &&
+                (path == name || path.startsWith("$name.") || name.startsWith("$path."))
+            ) return true
+            when (expr) {
+                is BinaryExpression -> { work.addLast(expr.left); work.addLast(expr.right) }
+                is PrefixUnaryExpression -> work.addLast(expr.operand)
+                is ParenthesizedExpression -> work.addLast(expr.expression)
+                is AsExpression -> work.addLast(expr.expression)
+                is TypeAssertionExpression -> work.addLast(expr.expression)
+                is SatisfiesExpression -> work.addLast(expr.expression)
+                is NonNullExpression -> work.addLast(expr.expression)
+                is TypeOfExpression -> work.addLast(expr.expression)
+                is CallExpression -> expr.arguments.forEach { work.addLast(it) }
+                is PropertyAccessExpression -> work.addLast(expr.expression)
+                is ElementAccessExpression -> {
+                    work.addLast(expr.expression)
+                    work.addLast(expr.argumentExpression)
+                }
+                else -> {}
+            }
+        }
+        return false
+    }
+
+    /**
      * B464: decide whether a captured reference's narrowing should flow from the
      * closure's [FlowStart] into the enclosing function's flow ([FlowStart.outerFlow]).
      * Returns the outer flow node to continue from, or null to stop at the
@@ -90865,14 +90916,17 @@ interface DataView {
      */
     private fun narrowByAssertCall(t: Type, expr: CallExpression, name: String): Type? {
         // P0 (services hang) fast path: an assert call can only narrow [name] when some
-        // argument's reference path IS [name] (the predicate-parameter arg must match it
-        // below, so "no arg matches" already implies the null return today). Checking
-        // BEFORE any callee resolution is load-bearing: resolving a PropertyAccess
-        // callee types its receiver, which re-enters the flow walker at the receiver's
-        // own flow position — on assert-dense real code (tsc's services sources) that
-        // re-entry per visited FlowCall was the exponential blowup. Args that don't
-        // mention [name] now exit for free.
-        if (expr.arguments.none { getReferencePath(it) == name }) return null
+        // argument MENTIONS [name]'s reference path. Checking BEFORE any callee
+        // resolution is load-bearing: resolving a PropertyAccess callee types its
+        // receiver, which re-enters the flow walker at the receiver's own flow position
+        // — on assert-dense real code (tsc's services sources) that re-entry per
+        // visited FlowCall was the exponential blowup. Args that don't mention [name]
+        // exit for free. M1.5 widened the check from exact-path equality to path
+        // CONTAINMENT (a bare `asserts cond` predicate narrows by the asserted
+        // CONDITION expression — `Debug.assert(x !== undefined)` must reach the
+        // narrowing below even though no argument IS `x`); the pre-check itself must
+        // never be deleted (the services-perf firewall).
+        if (expr.arguments.none { argMentionsReferencePath(it, name) }) return null
         // Unwrap value-preserving wrappers around the callee.
         var callee: Expression = expr.expression
         while (true) {
@@ -90903,15 +90957,24 @@ interface DataView {
         val paramIdx = params.indexOfFirst { (it.name as? Identifier)?.text == predicateParamName }
         if (paramIdx < 0) return null
         val arg = expr.arguments.getOrNull(paramIdx) ?: return null
+        // `asserts x` without an `is T` clause — after the call returns, the asserted
+        // ARGUMENT EXPRESSION is known truthy; narrow [name] by it as a condition
+        // (tsc narrowTypeByAssertion: `Debug.assert(x !== undefined)` narrows by the
+        // condition, `assert(x)` by truthiness — M1.5). The argument need not BE the
+        // walked reference for this form.
+        val targetTypeNode = predicate.type
+        if (targetTypeNode == null) {
+            val narrowed = applyConditionNarrowing(t, arg, isTrue = true, name)
+            return if (narrowed === t) null else narrowed
+        }
+        // `asserts x is T` — the predicate-position argument must BE the walked reference.
         if (getReferencePath(arg) != name) return null
-        // `asserts x` without `is T` clause — narrow by excluding null/undefined.
-        val targetTypeNode = predicate.type ?: return run {
-            if (t is Type.Union) {
-                val filtered = t.types.filter { !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) }
-                if (filtered.isEmpty()) neverType
-                else if (filtered.size == 1) filtered[0]
-                else getUnionType(filtered)
-            } else t
+        // `asserts value is NonNullable<T>` (tsc's Debug.assertIsDefined shape): the
+        // NonNullable utility is not modeled generally (resolves to errorType below),
+        // but the assertion's effect is exactly null/undefined exclusion — M1.5.
+        if ((targetTypeNode as? TypeReference)?.let { (it.typeName as? Identifier)?.text } == "NonNullable") {
+            val narrowed = narrowByExcludingNullUndefined(t)
+            return if (narrowed === t) null else narrowed
         }
         val targetType = getTypeFromTypeNode(targetTypeNode)
         if (targetType === errorType || targetType === anyType) return null
@@ -90949,11 +91012,32 @@ interface DataView {
                 val symbol = currentFileLocals?.get(callee.text) ?: globals[callee.text]
                 symbol?.let { it.valueDeclaration ?: it.declarations.firstOrNull() }
             }
-            is PropertyAccessExpression -> resolvePropertyMethodDecl(callee)
+            is PropertyAccessExpression ->
+                resolvePropertyMethodDecl(callee) ?: resolveNamespaceMemberFnDecl(callee)
             else -> null
         }
         if (useCache) narrowWalkDeclCache[key] = decl
         return decl
+    }
+
+    /**
+     * M1.5: resolve `Ns.fn` where `Ns` is a namespace (possibly through an import
+     * alias) to the member FunctionDeclaration — `Debug.assert(x)` in tsc's own
+     * sources is exactly this shape, and [resolvePropertyMethodDecl] misses it
+     * because a namespace receiver's `getTypeOfExpression` is typically `any`.
+     * Symbol-table only (no type resolution) → cheap under the callee-decl memo.
+     */
+    private fun resolveNamespaceMemberFnDecl(callee: PropertyAccessExpression): Node? {
+        val recvIdent = callee.expression as? Identifier ?: return null
+        val recvSym = currentFileLocals?.get(recvIdent.text) ?: globals[recvIdent.text] ?: return null
+        val resolved = if (recvSym.flags.hasAny(SymbolFlags.Alias)) resolveAlias(recvSym) else recvSym
+        if (!resolved.flags.hasAny(
+                SymbolFlags.Module or SymbolFlags.NamespaceModule or SymbolFlags.ValueModule
+            )
+        ) return null
+        val member = resolved.exports?.get(callee.name.text) ?: return null
+        return member.valueDeclaration as? FunctionDeclaration
+            ?: member.declarations.firstOrNull { it is FunctionDeclaration }
     }
 
     private fun narrowByCallPredicate(
@@ -92784,7 +92868,10 @@ interface DataView {
                 is FunctionExpression -> a.type
                 else -> null
             }
-            if (retType is TypePredicate) return true
+            // Only a `x is T` type GUARD selects the predicate overload — an asserts
+            // predicate is not a guard (and pre-M1.5 parsed as a bare type here, so the
+            // gate also preserves prior behavior).
+            if (retType is TypePredicate && !retType.assertsModifier) return true
         }
         return false
     }
@@ -127540,7 +127627,7 @@ interface DataView {
                 // Use "|" prefix to mark as union type for assignability checking
                 "|${memberTypes.joinToString(" | ")}"
             }
-            is TypePredicate -> "boolean" // Type predicates return boolean
+            is TypePredicate -> if (typeNode.assertsModifier) "void" else "boolean" // asserts → void; `x is T` → boolean
             else -> null
         }
     }

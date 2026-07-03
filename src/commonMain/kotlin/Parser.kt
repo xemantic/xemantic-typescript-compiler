@@ -8821,15 +8821,32 @@ class Parser(
 
     private fun parseType(): TypeNode {
         val pos = getPos()
-        // Assertion predicate: asserts x [is T]
+        // Assertion predicate: `asserts x [is T]` / `asserts this [is T]` (M1.5).
+        // Builds a real TypePredicate(assertsModifier=true) — the parameter name is a
+        // bare Identifier (`this` becomes Identifier("this"), matching the no-ThisExpression
+        // convention). A bare `asserts` with no name keeps the old void-keyword recovery.
         if (token == SyntaxKind.AssertsKeyword) {
             nextToken()  // consume 'asserts'
+            var paramName: Identifier? = null
             if (isIdentifier() || token == SyntaxKind.ThisKeyword) {
+                val namePos = getPos()
+                val nameText = if (token == SyntaxKind.ThisKeyword) "this" else scanner.getTokenValue()
                 nextToken()  // consume the parameter/this name
+                paramName = Identifier(text = nameText, pos = namePos, end = getEnd())
             }
-            if (token == SyntaxKind.IsKeyword) {
-                nextToken()  // consume 'is'
-                return parseType()
+            if (paramName != null) {
+                var target: TypeNode? = null
+                if (token == SyntaxKind.IsKeyword) {
+                    nextToken()  // consume 'is'
+                    target = parseType()
+                }
+                return TypePredicate(
+                    parameterName = paramName,
+                    type = target,
+                    assertsModifier = true,
+                    pos = pos,
+                    end = getEnd(),
+                )
             }
             return KeywordTypeNode(kind = SyntaxKind.VoidKeyword, pos = pos, end = getEnd())
         }
