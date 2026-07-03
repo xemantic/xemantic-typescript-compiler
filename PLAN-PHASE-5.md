@@ -1,15 +1,38 @@
-# PLAN-PHASE-5 — Real-world compilation, then performance
+# PLAN-PHASE-5 — Self-compile the TypeScript compiler, then performance
 
-Owner directive (2026-07-02): *"I want this compiler to be able to fully compile any
-TypeScript project. Then I want to also optimize the performance."*
+Owner directive (2026-07-03, re-scoping the 2026-07-02 *"fully compile any TypeScript
+project"*): **fully compile the TypeScript compiler itself, then optimize
+performance.** "Any TypeScript project" is the post-v1 horizon.
+
+**v1 definition of done:** all 8 tsc-source profiles (compiler / tsc-cli / jsTyping /
+deprecatedCompat / typingsInstallerCore / services / server / harness) at **zero false
+positives**, all files emitted, zero crashes/hangs/OOMs — verifiable fully offline.
+Byte-correct emit diffing against real tsc is the network-gated follow-up (needs
+node + typescript installed). Then M5 (performance) completes the directive. Items
+that do not block v1 (M2.4, M3.0, M3.5, all of M4) are parked in § "Post-v1 backlog"
+near the bottom of this file — the top-to-bottom loop skips them until v1 lands.
 
 This file is the **live queue** for Phase 17. `PLAN-PHASE-4.md` (Phase 16 and earlier)
 is archived state — its "Known architectural blockers" section remains the reference
 material for the M3 items below; do not work its queue.
 
-## Phase 17 — Real-world compilation (M0–M5)
+## Phase 17 — Self-compile the TypeScript compiler (M0–M5)
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
+
+**Re-scope (2026-07-03, owner): the Phase 17 target narrowed from "any TypeScript
+project" to the TypeScript compiler itself.** Rationale: "any project" is asymptotic,
+while the tsc-source profiles are already the dashboard — v1 becomes a measurable
+burn-down (compiler 2,726 / services ~7,145 / server ~7,606 / harness ~8,135 FPs,
+same ~4 families ≈85% of every profile). Queue consequences: M2.4 (DOM — tsc sources
+don't reference it), M3.0 (conformance adoption — optional extra regression net, not
+needed for the burn-down), M3.5 (per-file scopes — revisit only if dashboard FPs trace
+to cross-file conflation on tsc sources), and all of M4 (nodenext `exports` maps, decl
+emitter, JSX, external sourcemaps, project references — none block self-compiling tsc)
+moved to the new § "Post-v1 backlog". M3.1–M3.4 stay live but re-scoped from
+completeness campaigns to dashboard-driven burn-down: the acceptance bar is the shapes
+tsc's source uses, with the corpus suite as the regression net. M5 unchanged —
+performance is the directive's second half and starts at v1 compliance.
 
 **Round 389 (2026-07-03) — M1.11 landed: self-compile 2,794 → 2,726 (−68;
 TS2554 45 → 0, TS2345 424 → 411, TS2769 77 → 67, zero new codes) — M1 is
@@ -364,10 +387,10 @@ Three strategic reads that shape everything below:
 
 | Metric | Source | Phase 17 target |
 |---|---|---|
-| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 8,935 with local tests as of round 388) |
-| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**2,794 after round 388** — M1.9 + M1.6 + M1.8 + M1.10; no-stub stays the honest default) |
-| Project corpus FPs (services/server/…) | `bench/` TSVs (M0.1) | 0 |
-| Conformance adoption | generated-test counts per category | all tsgo-relevant categories green |
+| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 8,948 with local tests as of round 389) |
+| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**2,726 after round 389** — M1 complete; no-stub stays the honest default) |
+| Project corpus FPs (services/server/…) | `bench/` TSVs (M0.1) | 0 — **the v1 exit** (all 8 profiles) |
+| Conformance adoption | generated-test counts per category | POST-V1 (re-scope 2026-07-03 — see § "Post-v1 backlog", M3.0) |
 | Crashes on any input | bench runs | 0 |
 | Throughput (self-compile) | `bench/self-compile-tsc.tsv` | ≥ corpus-shaped ~26 kLOC/s (M5: numeric targets vs tsc/tsgo) |
 
@@ -636,21 +659,19 @@ Three strategic reads that shape everything below:
   the loaded libs), the hardcoded Date TS2740 message, hardcoded "and N more" counts,
   hardcoded overload chains copied from baselines (`WEAKSET_2769_CHAIN` etc.),
   `libFeatureAvailable`. Delete `BUILTIN_LIB_SOURCE` last.
-- [ ] **M2.4 DOM libs as an opt-in set** (dom.generated.d.ts is 1 MB+ — measure the
-  parse/bind cost; ties into the shared-snapshot design).
+**M3 — Type-engine completion, dashboard-driven (the long pole; re-scope 2026-07-03:
+the acceptance bar per item is the self-compile burn-down — handle the shapes tsc's
+source uses with the corpus suite as the regression net, NOT conformance completeness;
+each item still decomposes into a multi-session campaign — read PLAN-PHASE-4.md §
+"Known architectural blockers" for accumulated detail before starting)**
 
-**M3 — Type-engine completion, conformance-driven (the long pole; each item
-decomposes into a multi-session campaign — read PLAN-PHASE-4.md § "Known architectural
-blockers" for accumulated detail before starting)**
-
-- [ ] **M3.0 Conformance generator extension.** Extend `generateTypeScriptTests` with
-  a per-category allowlist for `tests/cases/conformance/` (5,907 files; keep all tsgo
-  set-B filters). Start with the categories matching M3.1 (types/typeParameters,
-  types/typeRelationships, expressions/functions). Each category lands only when its
-  failures are triaged into queue items — never leave a category half-red without notes.
 - [ ] **M3.1 Generic instantiation + call-site inference** (remove the
   `hasUnresolvedTypeParams` relation bail; real type-argument inference incl.
-  contextual return positions). This is the documented #1 engine blocker.
+  contextual return positions). This is the documented #1 engine blocker. V1 bar
+  (re-scope 2026-07-03): burn down the compiler profile's TS2322×777 (top shape
+  `Type 'T[]'` ×174), TS7006×301 (call-arg contexts whose callee doesn't resolve),
+  and the TS2345 share — tsc-source shapes only; full conformance generality is
+  post-v1.
 - [ ] **M3.2 Contextual typing engine** (parameters, returns, object/array literals,
   generic-context propagation — replaces `applyContextualParamTypesForArrow`-era
   special cases).
@@ -672,24 +693,7 @@ blockers" for accumulated detail before starting)**
   `HasModifiers`; `isGenericTupleType(type) && type.target.…`) — the narrowing
   consumers exist, but predicate-filtering 40-member merged-interface unions (and
   ternary-position narrowing) under-resolves; measure per-consumer before rebuilding.**
-- [ ] **M3.5 Per-file scopes** (Blocker #3: stop merging all file locals into
-  `globals`; per-file scope construction with explicit import visibility).
-
-**M4 — Ecosystem completeness (interleaves with late M3)**
-
-- [ ] **M4.1 Full nodenext resolution**: package.json `exports`/`imports` maps,
-  symlink/realpath (pnpm layouts), `typesVersions`, package self-references.
-- [ ] **M4.2 Real declaration emitter.** `.d.ts` output for arbitrary code (the corpus
-  strips most `.d.ts` sections, so almost none exists today; `declaration: true` is
-  table stakes for "any project"). Test bed: conformance decl baselines + self-compile
-  d.ts diffing.
-- [ ] **M4.3 JSX end-to-end** (`jsx: react-jsx`/`react`/`preserve` transforms on real
-  React-shaped code).
-- [ ] **M4.4 External sourcemaps** (`.js.map` files; inline maps exist).
-- [ ] **M4.5 Decision point**: project references / composite / incremental scope
-  (tsgo supports them; needed for large monorepos — decide build vs defer with owner).
-
-**M5 — Performance (starts only when the project corpus compiles clean)**
+**M5 — Performance (starts at v1 compliance — the 8 tsc-source profiles compile clean)**
 
 - [ ] **M5.1 Profiling grid**: JFR/async-profiler over the project corpus (cold CLI,
   warm in-process via BenchMain, RSS); publish flamegraph findings in a session note
@@ -708,6 +712,40 @@ blockers" for accumulated detail before starting)**
 - [ ] **M5.7 Numeric targets** (proposed; confirm with owner at M5 start): warm ≥ tsc
   throughput on 500k-LOC real code; cold CLI ≤ 1.5× tsc on medium projects; RSS ≤ tsc;
   stretch: approach tsgo on native.
+
+### Post-v1 backlog — the "any TypeScript project" horizon (parked 2026-07-03)
+
+The top-to-bottom loop SKIPS this section until v1 (the 8 tsc-source profiles at zero
+FPs) lands. None of these block self-compiling tsc. Each returns to the live queue
+when v1 lands — or earlier if a live item genuinely needs one (promote per protocol,
+with a session note saying why). Item IDs are stable; session notes reference them.
+
+- [ ] **M2.4 DOM libs as an opt-in set** (dom.generated.d.ts is 1 MB+ — measure the
+  parse/bind cost; ties into the shared-snapshot design). tsc's sources don't
+  reference DOM — post-v1.
+- [ ] **M3.0 Conformance generator extension.** Extend `generateTypeScriptTests` with
+  a per-category allowlist for `tests/cases/conformance/` (5,907 files; keep all tsgo
+  set-B filters). Start with the categories matching M3.1 (types/typeParameters,
+  types/typeRelationships, expressions/functions). Each category lands only when its
+  failures are triaged into queue items — never leave a category half-red without
+  notes. Owner approval (2026-07-02) stands; optionally pull in early as an extra
+  regression net if an M3 campaign wants the coverage.
+- [ ] **M3.5 Per-file scopes** (Blocker #3: stop merging all file locals into
+  `globals`; per-file scope construction with explicit import visibility). Revisit
+  before v1 ONLY if dashboard FPs trace to cross-file scope conflation on tsc sources.
+- [ ] **M4.1 Full nodenext resolution**: package.json `exports`/`imports` maps,
+  symlink/realpath (pnpm layouts), `typesVersions`, package self-references. (The tsc
+  repo itself uses relative imports + @types — unused for v1.)
+- [ ] **M4.2 Real declaration emitter.** `.d.ts` output for arbitrary code (the corpus
+  strips most `.d.ts` sections, so almost none exists today; `declaration: true` is
+  table stakes for "any project"). Test bed: conformance decl baselines + self-compile
+  d.ts diffing. Pull into v1 only if the owner defines "fully compile tsc" to include
+  declaration output.
+- [ ] **M4.3 JSX end-to-end** (`jsx: react-jsx`/`react`/`preserve` transforms on real
+  React-shaped code).
+- [ ] **M4.4 External sourcemaps** (`.js.map` files; inline maps exist).
+- [ ] **M4.5 Decision point**: project references / composite / incremental scope
+  (tsgo supports them; needed for large monorepos — decide build vs defer with owner).
 
 ### Offline asset inventory (verified 2026-07-02)
 

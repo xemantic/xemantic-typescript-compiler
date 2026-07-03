@@ -1,7 +1,8 @@
 # Session starter
 
 Copy the block below into a new Claude Code session to work Phase 17
-(real-world compilation, then performance). The block is self-contained —
+(self-compile the TypeScript compiler, then performance — re-scoped
+2026-07-03; "any TypeScript project" is post-v1). The block is self-contained —
 it points the agent at `CLAUDE.md` for the execution protocol and at
 `PLAN-PHASE-5.md` for the live queue and dashboard.
 
