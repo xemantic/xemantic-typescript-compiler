@@ -94628,6 +94628,31 @@ interface DataView {
                     val ret = sigs[0].resolvedReturnType
                     if (ret != null && ret !== errorType) return ret
                 }
+            } else if (typeParams.isNullOrEmpty()) {
+                // M1.7b: EXPLICIT type args on a constructor-interface callee.
+                // `declare var Map: MapConstructor` — the interface itself has no
+                // type params (the instance generics live on the construct sig's
+                // RETURN, `new(): Map<any, any>`), so the 16.0 branch above never
+                // applies and `new Map<string, number>()` fell through to `return
+                // calleeType` = the CONSTRUCTOR interface — making every `m.get`/
+                // `m.set` a TS2339 "does not exist on type 'MapConstructor'".
+                // Re-instantiate the sig return's Reference target with the
+                // explicit args when the arity matches; otherwise the bare sig
+                // return still beats the constructor interface.
+                resolveStructuredTypeMembers(calleeType)
+                val sigs = calleeType.constructSignatures
+                if (!sigs.isNullOrEmpty()) {
+                    val ret = sigs[0].resolvedReturnType
+                    val retTarget = (ret as? Type.Reference)?.target
+                    val targetTps = retTarget?.typeParameters
+                    if (retTarget != null && !targetTps.isNullOrEmpty() && targetTps.size == typeArgs.size) {
+                        val resolvedArgs = typeArgs.map { getTypeFromTypeNode(it) }
+                        if (resolvedArgs.none { it === errorType }) {
+                            return getOrInternReference(retTarget, resolvedArgs)
+                        }
+                    }
+                    if (ret != null && ret !== errorType) return ret
+                }
             }
             return calleeType
         }
@@ -120270,7 +120295,17 @@ interface DataView {
                 val refArgs = paramType.resolvedTypeArguments
                 val hasSigTp = !sigTps.isNullOrEmpty() && refArgs != null &&
                     refArgs.any { sourceContainsTypeParam(it, sigTps) }
-                if (!checkTypeRelatedTo(argType, paramType, assignableRelation)) {
+                // M1.7a: an explicit `undefined` argument is LEGAL for an OPTIONAL
+                // parameter (B176's rule, applied to the single-signature path too:
+                // absent and undefined are interchangeable for parameters), so
+                // `factory.createX(..., /*questionToken*/ undefined, ...)` draws
+                // nothing. `null` stays checked — it is not interchangeable with
+                // absence.
+                val optDecl = params[i].valueDeclaration as? Parameter
+                val undefinedToOptionalParam = !argType.flags.hasAny(TypeFlags.Null) &&
+                    (optDecl?.questionToken == true || optDecl?.initializer != null)
+                if (!undefinedToOptionalParam &&
+                    !checkTypeRelatedTo(argType, paramType, assignableRelation)) {
                     val displayParamBase = if (hasSigTp) {
                         val mapper = TypeMapper { tp -> if (sigTps!!.contains(tp)) unknownType else null }
                         typeToStringWithMapper(paramType, mapper)
@@ -120324,7 +120359,13 @@ interface DataView {
                     callSigs?.any { sigMentionsAnyTp(it, sigTps) } == true ||
                     ctorSigs?.any { sigMentionsAnyTp(it, sigTps) } == true
                 )
-                if (mentionsSigTp && !checkTypeRelatedTo(argType, paramType, assignableRelation)) {
+                // M1.7a: explicit `undefined` for an OPTIONAL parameter is legal
+                // (same rule as the Type.Reference branch above).
+                val fnOptDecl = params[i].valueDeclaration as? Parameter
+                val undefinedToOptionalFnParam = !argType.flags.hasAny(TypeFlags.Null) &&
+                    (fnOptDecl?.questionToken == true || fnOptDecl?.initializer != null)
+                if (!undefinedToOptionalFnParam && mentionsSigTp &&
+                    !checkTypeRelatedTo(argType, paramType, assignableRelation)) {
                     val mapper = TypeMapper { tp -> if (sigTps!!.contains(tp)) unknownType else null }
                     // Build a display-only Type.Object with substituted callSigs/ctorSigs.
                     val displayObj = Type.Object().also {
