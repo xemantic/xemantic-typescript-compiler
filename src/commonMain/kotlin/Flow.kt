@@ -989,6 +989,14 @@ class FlowGraphBuilder {
                     currentFlow = newAssignment(declarationNode, currentFlow)
                 }
             }
+            // NOTE (round 386): property-path `=` targets are handled by the
+            // PropertyAccessExpression arm FURTHER DOWN (bindExpression(target) — the
+            // receiver-chain READ records — then newAssignment). A duplicate arm here
+            // (without the bindExpression) shadowed it and silently dropped the LHS
+            // read records: `this`-before-super and instanceof narrowing lost their
+            // flow positions (narrowingOfDottedNames / checkSuperCallBeforeThisAccessing2
+            // regressions). Kotlin `when` takes the FIRST matching arm — never add a
+            // second arm for a kind that already has one below.
             // Destructuring default-value form `{a: x = 1}` or `[x = 1]` — the
             // PropertyAssignment.initializer / ArrayLiteralExpression element is
             // a BinaryExpression(=) where left is the actual target and right
@@ -1270,7 +1278,10 @@ class FlowGraphBuilder {
             SyntaxKind.QuestionQuestionEquals -> {
                 bindExpression(expr.left)
                 bindExpression(expr.right)
-                if (expr.left is Identifier && isReachable()) {
+                // M1.4-prep: compound assignments to PROPERTY paths are flow events too
+                // (`result.cache ??= new Map()` — the ??=/||= post-state narrowing in
+                // narrowByAssignmentRhs needs the node). Identifier LHS was already bound.
+                if ((expr.left is Identifier || expr.left is PropertyAccessExpression) && isReachable()) {
                     currentFlow = newAssignment(expr, currentFlow)
                 }
             }

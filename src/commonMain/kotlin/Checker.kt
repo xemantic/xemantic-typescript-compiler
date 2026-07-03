@@ -90498,17 +90498,12 @@ interface DataView {
                 declaredType
             }
             is FlowAssignment -> {
-                // 17.30b: When the assignment binds [name] AND the RHS is a literal
-                // (string/number/bigint/template/true/false/null/undefined), narrow
-                // [declaredType] using the RHS's literal type. Conservative gate on
-                // literal AST shapes (via [literalTypeOfExpression]) avoids recursion
-                // through getTypeOfExpression on identifier/call RHSes during
-                // narrowing — purely structural lookup.
+                // 17.30b + M1.4-prep: assignment-effect narrowing (literal-RHS union
+                // filtering for identifier targets; non-nullish-RHS exclusion for
+                // identifier AND property-path targets, incl. ??=/||=) — shared with
+                // the FollowLoopEntry mirror via [narrowByAssignmentRhs].
                 val antecedent = narrowTypeFromFlow(declaredType, flowNode.antecedent, name, seen, depth + 1, memo)
-                val rhsLiteralType = if (flowAssignmentTargetsName(flowNode.node, name))
-                    getLiteralRhsTypeForAssignment(flowNode.node) else null
-                if (rhsLiteralType != null) narrowUnionByRhsAssignment(antecedent, rhsLiteralType)
-                else antecedent
+                narrowByAssignmentRhs(flowNode.node, name, antecedent)
             }
             is FlowCall -> {
                 val antecedent = narrowTypeFromFlow(declaredType, flowNode.antecedent, name, seen, depth + 1, memo)
@@ -90558,6 +90553,87 @@ interface DataView {
             else -> null
         }
         return rhs?.let { literalTypeOfExpression(it) }
+    }
+
+    /**
+     * M1.4-prep (round 386): the full assignment-effect narrowing applied at a
+     * [FlowAssignment] node, shared by BOTH walker mirrors. Two layers:
+     *
+     * 1. The pre-existing literal-RHS union filter — identifier targets only (gated
+     *    by [flowAssignmentTargetsName], which TS2454 shares; semantics unchanged).
+     * 2. Non-nullish-RHS exclusion for identifier AND property-path targets: after
+     *    `c.p = new Map()` / `x = {...}` / `` c.p = `t${v}` `` the reference is not
+     *    null/undefined (tsc assigns the reference the ASSIGNED type). Applies to
+     *    `=`, and to `??=`/`||=` whose post-state is non-nullish whenever the RHS is
+     *    (the old non-nullish value survives, or the RHS was just assigned). `&&=` is
+     *    deliberately EXCLUDED — it assigns only when the LHS was truthy, so a
+     *    nullish LHS stays nullish. RHS classification is purely structural
+     *    ([rhsIsDefinitelyNonNullish]) — no type resolution inside the walker.
+     */
+    private fun narrowByAssignmentRhs(node: Node, name: String, antecedent: Type): Type {
+        if (flowAssignmentTargetsName(node, name)) {
+            getLiteralRhsTypeForAssignment(node)?.let { return narrowUnionByRhsAssignment(antecedent, it) }
+        }
+        val rhs: Expression? = when (node) {
+            is VariableDeclaration ->
+                if ((node.name as? Identifier)?.text == name) node.initializer else null
+            is BinaryExpression -> {
+                val op = node.operator
+                val opOk = op == SyntaxKind.Equals ||
+                    op == SyntaxKind.QuestionQuestionEquals ||
+                    op == SyntaxKind.BarBarEquals
+                if (!opOk) null else when (val left = node.left) {
+                    // Cheap pre-gates before any path-string building — this helper
+                    // runs at EVERY FlowAssignment visit of every walk (perf-relevant
+                    // on assignment-dense real code).
+                    is Identifier -> if (left.text == name) node.right else null
+                    is PropertyAccessExpression -> {
+                        val last = left.name.text
+                        val matches = name.length > last.length &&
+                            name.endsWith(last) &&
+                            name[name.length - last.length - 1] == '.' &&
+                            getReferencePath(left) == name
+                        if (matches) node.right else null
+                    }
+                    else -> null
+                }
+            }
+            else -> null
+        }
+        if (rhs != null && rhsIsDefinitelyNonNullish(rhs)) {
+            return narrowByExcludingNullUndefined(antecedent)
+        }
+        return antecedent
+    }
+
+    /**
+     * Structurally non-nullish RHS shapes: `new X(...)`, object/array literals,
+     * function expressions/arrows, class expressions, template literals, and
+     * non-nullish primitive literals — through value-preserving wrappers
+     * (`v as T` / `<T>v` / `v satisfies T` / `v!` / parens keep the runtime value).
+     * Calls and identifiers are deliberately NOT classified (their value may be
+     * nullish) — bail to no-narrowing.
+     */
+    private fun rhsIsDefinitelyNonNullish(rhsIn: Expression): Boolean {
+        var rhs = rhsIn
+        while (true) {
+            rhs = when (rhs) {
+                is ParenthesizedExpression -> rhs.expression
+                is AsExpression -> rhs.expression
+                is TypeAssertionExpression -> rhs.expression
+                is SatisfiesExpression -> rhs.expression
+                is NonNullExpression -> rhs.expression
+                else -> break
+            }
+        }
+        return when (rhs) {
+            is NewExpression, is ObjectLiteralExpression, is ArrayLiteralExpression,
+            is ArrowFunction, is FunctionExpression, is ClassExpression,
+            is TemplateExpression -> true
+            else -> literalTypeOfExpression(rhs)?.let {
+                !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)
+            } ?: false
+        }
     }
 
     /**
@@ -110335,11 +110411,13 @@ interface DataView {
                 }
             }
             is FlowLoopLabel -> {
-                // Follow the loop-entry antecedent (index 0). Back-edges are
-                // ignored: for property-path narrowing inside a loop body, the
-                // narrowed entry type holds at each iteration unless the path
-                // is reassigned — and we have no FlowAssignment for property
-                // paths in our flow graph today.
+                // Follow the loop-entry antecedent (index 0); back-edges are ignored
+                // (the narrowed entry type is assumed to hold per iteration).
+                // NOTE (round 386): property-path assignments DO have FlowAssignment
+                // nodes (bindAssignmentTarget's PropertyAccess/ElementAccess arms —
+                // an older claim here that they didn't cost a mis-diagnosis), but
+                // they sit on the ignored back-edge path, so the entry-type
+                // assumption stands unchanged.
                 val entry = flowNode.antecedents.firstOrNull()
                 if (entry == null) declaredType
                 else narrowTypeFromFlowFollowLoopEntry(declaredType, entry, name, seen, depth + 1, memo)
@@ -110348,10 +110426,7 @@ interface DataView {
                 val antecedent = narrowTypeFromFlowFollowLoopEntry(
                     declaredType, flowNode.antecedent, name, seen, depth + 1, memo,
                 )
-                val rhsLiteralType = if (flowAssignmentTargetsName(flowNode.node, name))
-                    getLiteralRhsTypeForAssignment(flowNode.node) else null
-                if (rhsLiteralType != null) narrowUnionByRhsAssignment(antecedent, rhsLiteralType)
-                else antecedent
+                narrowByAssignmentRhs(flowNode.node, name, antecedent)
             }
             is FlowCall -> {
                 val antecedent = narrowTypeFromFlowFollowLoopEntry(
