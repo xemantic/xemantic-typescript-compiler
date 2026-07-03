@@ -34,7 +34,27 @@ control) all became TS2552 — diagnostics SHAPES can shift when unrelated names
 resolving, so compare by-code diffs against the freed-budget effect before calling a
 +1 a regression. Ops: two mid-session cwd drifts (a `cd` into the bench dir made
 relative-path XML reads report 0 files — a false "no tests ran" scare; absolute paths
-resolved it).
+resolved it). **Same session, M1.4 (re-measure + strategic map): fresh no-stub rows at
+2254d13c — services 7,173 → 7,145 err / 563 → 393 s (−30%); server 7,634 → 7,606 /
+627 → 383 s (−39%); harness 8,164 → 8,135 / 593 → 392 s (−34%, RSS 1,920 → 1,192 MB).
+The ~−28 error deltas are round 386's narrowing work; the time/RSS drop is the
+depth-2000 memo effect; each profile also gains M1.2b's +2 completed-narrowing TS2345
+(same shape as utilities.ts:11604/11859). Family map from the 4,411-site compiler
+`--listAll`: TS7006×1554 is 52% ONE FILE (visitorPublic.ts ×810 — the
+`VisitEachChildTable` computed-enum-key mapped-type table) plus the factory pattern
+(checker.ts ×318 `return { isUndefinedSymbol: symbol => … }` ← return-annotation
+member fn types; program.ts ×94; tsbuildPublic.ts ×63) → M1.6. TS2345×65 + TS2322×~35
+are ONE relation bug (`undefined` ≁ union CONTAINING undefined:
+`PunctuationToken<any> | undefined`, `VisitResult<Node | undefined>`) and TS2339×44 is
+`new Map<K, V>()` typing the local as MapConstructor → M1.7. TS7030×114 are
+`T | undefined`-returning functions drawing our strict-only TS7030 where tsc requires
+noImplicitReturns → M1.8. TS2339's dominant bucket (461 union receivers + the named
+`Type`/tuple sites — `isTypeParameterDeclaration(node) ? node.name…`,
+`isGenericTupleType(type) && type.target…`) is user-type-guard narrowing on the big
+merged AST unions → absorbed into M3.4's item text. `SetIterator`/`MapIterator`
+(es2024) and String.replace's RegExp-arg overload (TS2345 `'RegExp'`→`'string'` ×19)
+→ M2 markers. On services/server/harness, TS2339 (1,741–1,904) overtakes TS7006 as
+the #1 family — the M3.4 narrowing bucket dominates the bigger profiles.**
 
 **Round 386 (2026-07-03) — M1.2 closed: narrowing depth horizon 50→2000 (zero corpus
 churn), TS2563 half folded into M3.4 with measurement; M1.5 asserts predicates ACTIVE
@@ -371,10 +391,47 @@ Three strategic reads that shape everything below:
   global 10-lookup suggestion budget so all 5 SetIterator/MapIterator sites carry
   suggestions; ZERO new codes). No-stub stays the honest dashboard default until
   network provides real @types/node.
-- [ ] **M1.4 Re-measure + strategic map.** Full project-corpus bench run; record the
-  new per-family FP baseline in a session note; re-rank the remaining families (the
-  ~3,100 TS7006/TS2339/TS2322/TS2345 checker-modeling tail) and insert the top 2–3 as
-  concrete queue items here.
+- [x] **M1.4 Re-measure + strategic map.** DONE (round 387) — full `--listAll`
+  family analysis of the compiler profile (4,411 sites bucketed by code × file ×
+  message shape × source line) + fresh services/server/harness rows; the map and
+  per-family numbers are in the round-387 session note; the top-3 re-ranked
+  families are M1.6–M1.8 below (plus two absorbed observations: the
+  TS2339-on-union-receiver predicate-narrowing family ~460 sites → noted in M3.4;
+  `SetIterator`/`MapIterator`/`RegExp`-replace-overload lib gaps → M2 markers).
+- [ ] **M1.6 Contextual typing of object-literal fn-valued members (the TS7006
+  kill: ~1,285 of 1,554 = 29% of ALL remaining).** A fn-expr/arrow VALUE of an
+  object-literal member must get its param types (and TS7006 suppression) from the
+  literal's CONTEXTUAL type's matching member fn-type. The contextual type comes
+  from (a) a var-decl annotation — `const table: VisitEachChildTable = {...}`,
+  visitorPublic.ts ×810, whose keys are COMPUTED `[SyntaxKind.X]` enum keys against
+  a MAPPED-type table (needs computed-key member lookup + mapped-member fn-type
+  resolution); (b) the enclosing function's RETURN annotation — the factory pattern
+  `function createX(): TypeChecker { return { isUndefinedSymbol: symbol => … } }`,
+  checker.ts ×318 + program.ts ×94 + tsbuildPublic.ts ×63; (c) a call-arg's param
+  type (partially exists). Infra to build on: `applyContextualParamTypesForArrow`,
+  `lookupPropertyTypeForCtx` (B475), `walkObjectLiteralMemberBody`'s ctx plumbing.
+  This is the first M3.2 increment, pulled into M1 because it is HALF the remaining
+  count; stage it (b)-first (interface member lookup only), then (a) (mapped tables).
+- [ ] **M1.7 Two bounded engine bugs, 3-digit combined count.** (a) `undefined`
+  FAILS assignability to a union CONTAINING undefined: `Argument of type 'undefined'
+  is not assignable to parameter of type 'PunctuationToken<any> | undefined'` —
+  TS2345 ×65 (factory `/*questionToken*/ undefined` args) + the same shape as
+  TS2322 ×~35 (`undefined` → `VisitResult<Node | undefined>`); find where the
+  union's undefined member is lost (likely generic-member resolution poisoning the
+  union before the relation). (b) `const m = new Map<K, V>()` types the local as
+  the CONSTRUCTOR interface, so every `m.get/set` is TS2339 "does not exist on type
+  'MapConstructor'" (×44, e.g. performance.ts module-scope consts) —
+  `getReturnTypeOfNewExpression` must instantiate the lib INSTANCE interface for an
+  explicit-type-arg lib `new`.
+- [ ] **M1.8 TS7030/TS2366 gate audit vs tsc's exact rule (TS7030 ×114).** tsc
+  (`checkAllCodePathsInNonVoidFunctionReturnOrThrow`): TS7030 fires ONLY under
+  `noImplicitReturns`; TS2366 under `strictNullChecks` when the declared return
+  type does NOT include undefined; a return type INCLUDING undefined draws NOTHING
+  on implicit fall-through. Our gate (`strictNullChecks || noImplicitReturns` with
+  the "nullable" classification) over-fires on `T | undefined` returns under
+  strict-only (the bench tsconfig sets strict but not noImplicitReturns —
+  emitter.ts:453 `): T | undefined {` is a representative FP). Corpus-gated: audit
+  which corpus baselines actually pin the current disjunct before aligning.
 
 **M2 — Real-lib migration (staged; decompose further at start)**
 
@@ -420,7 +477,13 @@ blockers" for accumulated detail before starting)**
   per-file node-count heuristic + its `cfaTooLargeFiles` TS2454 filter pairing and the
   27 self-compile TS2563 FPs. tsc-shaped budget consumption (linear single-antecedent
   steps free via the iterative `while(true)` loop; only branch/condition recursion
-  consumes `flowDepth`) belongs to the same rebuild.
+  consumes `flowDepth`) belongs to the same rebuild. **Absorbed from M1.4 (round 387):
+  the self-compile TS2339 family's dominant bucket (461 union-receiver sites + the
+  named `Type`/tuple ones) is user-type-guard narrowing feeding MEMBER ACCESS on tsc's
+  big AST-node unions (`isTypeParameterDeclaration(node) ? …node.name… : …` on
+  `HasModifiers`; `isGenericTupleType(type) && type.target.…`) — the narrowing
+  consumers exist, but predicate-filtering 40-member merged-interface unions (and
+  ternary-position narrowing) under-resolves; measure per-consumer before rebuilding.**
 - [ ] **M3.5 Per-file scopes** (Blocker #3: stop merging all file locals into
   `globals`; per-file scope construction with explicit import visibility).
 
