@@ -931,6 +931,13 @@ class Checker(
      *  `checkCircularBaseClasses` (populates) and the UBD walker (reads). */
     private val ambientCyclicBaseClassNamesByFile: MutableMap<String, MutableSet<String>> = mutableMapOf()
 
+    /** Per-file memo for [getModuleExportsFollowingStars]; a stored NULL means
+     *  "unknowable" (some `export *` target unresolvable), so membership is tested
+     *  with containsKey, not getOrPut. Declared before `init` (the init block runs
+     *  the import-existence walkers that populate it — the documented init-order
+     *  trap would leave a post-init field null during checking). */
+    private val moduleStarExportsCache: MutableMap<String, Set<String>?> = mutableMapOf()
+
     init {
         try {
         // 0. Merge built-in type declarations into globals (before user files)
@@ -35463,9 +35470,12 @@ class Checker(
                         ))
                     } else {
                         // TS2613: Module has no default export. Did you mean to use named import?
-                        // Fires when the default binding name matches a named export of the module.
+                        // Fires when the default binding name matches a named export of the module
+                        // (star-following, M1.1 — a name provided via `export *` upgrades the
+                        // message; an unknowable set falls back to direct exports, keeping TS1192).
                         val importName = defaultBinding.text
-                        val moduleNamedExports = getModuleNamedExports(targetFile)
+                        val moduleNamedExports = getModuleExportsFollowingStars(targetFile)
+                            ?: getModuleNamedExports(targetFile)
                         if (importName in moduleNamedExports) {
                             diagnostics.add(Diagnostic(
                                 message = "Module '\"$displayName\"' has no default export. Did you mean to use 'import { $importName } from \"$displayName\"' instead?",
@@ -35497,8 +35507,10 @@ class Checker(
                 // Only fires when module HAS a default export (otherwise TS1192 is enough).
                 if (hasDefaultExport) {
                     val namedBindings = importClause.namedBindings
-                    if (namedBindings is NamedImports) {
-                        val moduleNamedExports = getModuleNamedExports(targetFile)
+                    // TS2614 is an ABSENCE diagnostic — star-following applies, and an
+                    // unknowable export set (null) suppresses it entirely (M1.1 FN-safe).
+                    val moduleNamedExports = getModuleExportsFollowingStars(targetFile)
+                    if (namedBindings is NamedImports && moduleNamedExports != null) {
                         for (importSpecifier in namedBindings.elements) {
                             if (importSpecifier.isTypeOnly) continue
                             // The "property name" is what's imported; the "name" is the local binding
@@ -36200,9 +36212,18 @@ class Checker(
 
                         // If target has export=, it cannot be named-imported
                         val hasExportEquals = targetFile.statements.any { it is ExportAssignment && it.isExportEquals }
-                        // Get all available exports (named + default)
-                        val allExports = getModuleAllExports(targetFile)
+                        // Get all available exports (named + default), following `export *`
+                        // chains (M1.1). An UNKNOWABLE set (null — some star target didn't
+                        // resolve) means non-default absence can't be proven → those specs
+                        // are skipped below. The `default` spec stays decidable from the
+                        // DIRECT file: `export *` never forwards a default export.
+                        val starExports = getModuleExportsFollowingStars(targetFile)
                         val hasDefaultExport = moduleHasDefaultExport(targetFile)
+                        val allExports = when {
+                            starExports == null -> null
+                            hasDefaultExport -> starExports + "default"
+                            else -> starExports
+                        }
 
                         for (specEl in namedBindings.elements) {
                             if (specEl.isTypeOnly) continue
@@ -36228,7 +36249,10 @@ class Checker(
                             // Skip TS2305 for export= modules — we'd need to check namespace members
                             // and type members of the exported value, which requires full type resolution
                             if (hasExportEquals) continue
-                            if (importedName !in allExports) {
+                            // Unknowable export set (unresolvable `export *` target) — absence
+                            // of a non-default name can't be proven (M1.1 FN-safe).
+                            val knownExports = allExports ?: continue
+                            if (importedName !in knownExports) {
                                 val nameNode = specEl.propertyName ?: specEl.name
                                 // Check if name is declared locally but not exported → TS2459
                                 // or declared locally but exported under a different name → TS2460
@@ -36315,7 +36339,7 @@ class Checker(
                                     else -> {
                                         // TS2724 (spelling) when a close exported-member name exists,
                                         // else plain TS2305.
-                                        val suggestion = getSpellingSuggestionFromNames(importedName, allExports)
+                                        val suggestion = getSpellingSuggestionFromNames(importedName, knownExports)
                                         if (suggestion != null) {
                                             val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
                                             // Related TS2728 "'suggestion' is declared here." at the
@@ -36362,12 +36386,25 @@ class Checker(
                         if (stmt.isTypeOnly) continue
                         val clause = stmt.exportClause as? NamedExports ?: continue
 
-                        val resolvedFile = resolveModuleSpecifierRelative(moduleName, fileName) ?: continue
+                        // Same `.js`/`.jsx`→`.ts` fallback as the import branch: nodenext
+                        // sources (tsc's own) write re-exports with the emitted extension.
+                        val resolvedFile = resolveModuleSpecifierRelative(moduleName, fileName)
+                            ?: ((if (moduleName.endsWith(".js")) resolveModuleSpecifierRelative(moduleName.removeSuffix(".js"), fileName) else null)
+                                ?: (if (moduleName.endsWith(".jsx")) resolveModuleSpecifierRelative(moduleName.removeSuffix(".jsx"), fileName) else null))
+                            ?: continue
                         val targetResult = fileResults[resolvedFile] ?: continue
                         val targetFile = targetResult.sourceFile
 
-                        val allExports = getModuleAllExports(targetFile)
+                        // Same star-following as the import branch (M1.1): the `default`
+                        // re-export stays decidable from the DIRECT file; non-default specs
+                        // are skipped when the star set is unknowable.
+                        val starExports = getModuleExportsFollowingStars(targetFile)
                         val hasDefaultExport = moduleHasDefaultExport(targetFile)
+                        val allExports = when {
+                            starExports == null -> null
+                            hasDefaultExport -> starExports + "default"
+                            else -> starExports
+                        }
                         val hasExportEqualsInTarget = targetFile.statements.any { it is ExportAssignment && it.isExportEquals }
 
                         for (specEl in clause.elements) {
@@ -36384,7 +36421,8 @@ class Checker(
                             }
                             // Skip named member checks for export= modules (requires type resolution)
                             if (hasExportEqualsInTarget) continue
-                            if (sourceName !in allExports) {
+                            val knownExports = allExports ?: continue
+                            if (sourceName !in knownExports) {
                                 // Only emit if TS2614 wouldn't cover this case
                                 // (TS2614 fires for named imports where module has default)
                                 // For re-exports, TS2305 always fires for missing names
@@ -36508,18 +36546,6 @@ class Checker(
     }
 
     /**
-     * Returns ALL exports from a source file including 'default'.
-     * Used for TS2305 checking.
-     */
-    private fun getModuleAllExports(file: SourceFile): Set<String> {
-        val exports = getModuleNamedExports(file).toMutableSet()
-        if (moduleHasDefaultExport(file)) {
-            exports.add("default")
-        }
-        return exports
-    }
-
-    /**
      * Returns all locally-declared names in the source file (exported or not).
      * Used to distinguish TS2459 (declared but not exported) from TS2305 (not declared).
      */
@@ -36618,6 +36644,56 @@ class Checker(
     }
 
     /**
+     * M1.1: the named-export set of [file] with `export * from` chains FOLLOWED —
+     * tsc semantics: a star re-export contributes every named export of its target
+     * except 'default' (real-world code imports through pure re-export barrels like
+     * tsc's own `_namespaces/ts.ts`, which the direct-only [getModuleNamedExports]
+     * sees as exporting nothing → a TS2305 for every named import through it).
+     *
+     * Returns NULL when the set is UNKNOWABLE — a star target is a bare specifier,
+     * does not resolve, is not in the program, or is an `export =` module — so
+     * callers must not emit absence diagnostics (TS2305/TS2459/TS2460/TS2614/TS2724);
+     * the FN-safe direction. Cycle-guarded (a star back-edge contributes nothing new:
+     * the outer walk already carries that file's direct exports) and depth-bounded.
+     * Memoized per top-level file only — a cycle member's sub-result computed during
+     * another file's walk would be incomplete for the member itself.
+     */
+    private fun getModuleExportsFollowingStars(file: SourceFile): Set<String>? {
+        val key = file.fileName
+        if (moduleStarExportsCache.containsKey(key)) return moduleStarExportsCache[key]
+        val result = collectExportsFollowingStars(file, mutableSetOf(), 0)
+        moduleStarExportsCache[key] = result
+        return result
+    }
+
+    private fun collectExportsFollowingStars(
+        file: SourceFile, visited: MutableSet<String>, depth: Int,
+    ): Set<String>? {
+        if (!visited.add(file.fileName)) return emptySet() // cycle back-edge
+        if (depth > 64) return null // defensive bound → unknowable
+        val out = getModuleNamedExports(file).toMutableSet()
+        for (stmt in file.statements) {
+            if (stmt !is ExportDeclaration) continue
+            // Only the bare star form re-exports the target's names wholesale;
+            // `export { x } from` / `export * as ns from` contribute DIRECT names
+            // (collected by getModuleNamedExports above). `export type * from`
+            // contributes type-only names — still names, so name-presence keeps them.
+            if (stmt.exportClause != null) continue
+            val spec = (stmt.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+            if (!spec.startsWith("./") && !spec.startsWith("../")) return null
+            val resolved = resolveModuleSpecifierRelative(spec, file.fileName)
+                ?: (if (spec.endsWith(".js")) resolveModuleSpecifierRelative(spec.removeSuffix(".js"), file.fileName) else null)
+                ?: (if (spec.endsWith(".jsx")) resolveModuleSpecifierRelative(spec.removeSuffix(".jsx"), file.fileName) else null)
+                ?: return null
+            val target = fileResults[resolved]?.sourceFile ?: return null
+            if (target.statements.any { it is ExportAssignment && it.isExportEquals }) return null
+            val sub = collectExportsFollowingStars(target, visited, depth + 1) ?: return null
+            out.addAll(sub)
+        }
+        return out
+    }
+
+    /**
      * Returns the set of named exports from a source file (excluding 'default').
      * Used by TS2614 checking to determine if named imports exist in the module.
      */
@@ -36672,6 +36748,10 @@ class Checker(
                             val exportedName = specifier.name.text
                             if (exportedName != "default") exports.add(exportedName)
                         }
+                    } else if (clause is NamespaceExport) {
+                        // `export * as ns from "..."` — the NAME `ns` is a direct named
+                        // export regardless of whether the target resolves.
+                        exports.add(clause.name.text)
                     }
                 }
                 else -> {}
