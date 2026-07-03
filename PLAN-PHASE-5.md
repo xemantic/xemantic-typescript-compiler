@@ -11,9 +11,19 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
-**Round 388 (2026-07-03) — M1.9 + M1.6(a)+(b) + M1.8 all landed: self-compile
-4,376 → 2,858 (−1,518, −34.7%), four commits, zero corpus regressions
-(suite 8,931 / 0 / 3, +35 local tests).** Per-item deltas (each bench-isolated):
+**Round 388 (2026-07-03) — M1.9 + M1.6(a)+(b) + M1.8 + M1.10 all landed:
+self-compile 4,376 → 2,794 (−1,582, −36.2%), five code commits, zero corpus
+regressions (suite 8,935 / 0 / 3, +39 local tests). M1 is COMPLETE except the
+newly-filed M1.11.** Fifth item, M1.10 (fe65a3cc, −64 exactly — TS2540 GONE):
+the parser consumed `-readonly` in a mapped type without recording the sign,
+and homomorphic mapped members carry their SOURCE declaration, so writes
+through tsc's `Mutable<T>` idiom FP'd; `MappedType.readonlyMinus` +
+`mappedMutableMemberIds` (inverse side-channel, checked first) + the
+symmetric plain-`readonly`-token registration. Residue intel from the fresh
+listAll: TS7006×301 = call-arg contexts whose callee doesn't resolve
+(`makeFunctionTypeMapper(t => …)` — M1.6(c) territory); TS2322's top shape is
+`Type 'T[]'` ×174 (generic call-site inference, M3.1); TS2554×45 is
+nested-function shadowing → filed as M1.11. Per-item deltas (each bench-isolated):
 **M1.9 (b4c15a22, −133)** — the "undefined lost against union targets" item
 over-delivered because the union member was never lost in the RELATION; five
 distinct emitters were at fault (return-path string fallback running after the
@@ -317,8 +327,8 @@ Three strategic reads that shape everything below:
 
 | Metric | Source | Phase 17 target |
 |---|---|---|
-| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 8,931 with local tests as of round 388) |
-| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**2,858 after round 388** — M1.9 + M1.6 + M1.8; no-stub stays the honest default) |
+| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 8,935 with local tests as of round 388) |
+| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**2,794 after round 388** — M1.9 + M1.6 + M1.8 + M1.10; no-stub stays the honest default) |
 | Project corpus FPs (services/server/…) | `bench/` TSVs (M0.1) | 0 |
 | Conformance adoption | generated-test counts per category | all tsgo-relevant categories green |
 | Crashes on any input | bench runs | 0 |
@@ -526,6 +536,27 @@ Three strategic reads that shape everything below:
   (ImplicitReturnGatesTest ×9) surfaced that under strict+noImplicitReturns
   tsc's TS2366 branch wins over TS7030. Self-compile delta in the round-388
   note (combined row with M1.6a).
+- [x] **M1.10 Model the `-readonly` mapped modifier (TS2540 ×64 → 0).** DONE
+  (round 388, fe65a3cc): the parser consumed `-readonly` without recording the
+  sign, and a homomorphic mapped member carries its SOURCE declaration — so
+  every write through tsc's `Mutable<T>` idiom
+  (`(newSourceFile as Mutable<SourceFile>).flags |= …`) FP'd TS2540.
+  `MappedType.readonlyMinus` → `mappedMutableMemberIds` (the inverse of
+  `mappedReadonlyMemberIds`), consulted FIRST by the readonly predicates;
+  symmetrically the plain `readonly` TOKEN now registers
+  `mappedReadonlyMemberIds` (was a silent FN — corpus pinned nothing either
+  way). 4 local tests (MutableMappedTypeTest). Self-compile 2,858 → 2,794
+  (−64 exactly, zero new codes).
+- [ ] **M1.11 Nested-function shadowing in call resolution (TS2554 ×45 +
+  TS2345 ×2).** A call to a name declared as a FUNCTION-BODY-NESTED function
+  (`function writeFile(…)` nested in sys.ts/emitter.ts initializers) resolves
+  against the same-named CROSS-FILE/file-level function — body-nested fns are
+  unbound (B83.5), so the `crossFileFuncs`/file-level overlay wrongly applies
+  and arity/type checks run against the wrong signature. Fix direction: the
+  call-checkers treat a lexically-enclosing same-named function-like
+  declaration (walk enclosing bodies) as shadowing the overlay — conservative
+  bail, FN-safe. Sampled: sys.ts:770/918, utilities.ts:6740/6744,
+  emitter.ts:1331 (`'undefined' → 'string'`).
 
 **M2 — Real-lib migration (staged; decompose further at start)**
 
