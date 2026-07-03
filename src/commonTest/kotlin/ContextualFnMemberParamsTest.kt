@@ -182,4 +182,51 @@ class ContextualFnMemberParamsTest {
             "a rest-param contextual signature covers every positional param",
         )
     }
+
+    // -- M1.6(a): computed-key members of a mapped-table annotation ----------
+
+    private val mappedTable = """
+        enum SK { A = 1, B = 2 }
+        interface Node { kind: SK; }
+        type VisitFn<T extends Node> = (node: T, extra: number) => T;
+        type Table = { [TKind in SK]?: VisitFn<Node> };
+    """.trimIndent()
+
+    @Test fun computedEnumKeyMappedTableFnValues() {
+        assertNo7006(
+            "$mappedTable\nconst table: Table = {\n" +
+                "    [SK.A]: function (node, extra) { return node; },\n" +
+                "    [SK.B]: (node, extra) => node,\n" +
+                "};\n",
+            "computed-enum-key fn values of a mapped-table literal",
+        )
+    }
+
+    @Test fun computedKeyExcessParamBeyondMappedArityStillFires() {
+        val r = compile(
+            "$mappedTable\nconst table: Table = {\n" +
+                "    [SK.A]: function (node, extra, oops) { return node; },\n" +
+                "};\n",
+        )
+        assertTrue(
+            r.diagnostics.any { it.code == 7006 && it.message.contains("'oops'") } &&
+                r.diagnostics.none { it.code == 7006 && it.message.contains("'node'") },
+            "a param beyond the mapped value's arity fires; covered params do not: " +
+                r.diagnostics.joinToString { "TS${it.code} ${it.message}" },
+        )
+    }
+
+    @Test fun computedKeyWithoutMappedAnnotationStillFires() {
+        val r = compile(
+            "enum SK { A = 1 }\n" +
+                "const table = {\n" +
+                "    [SK.A]: function (node) { return node; },\n" +
+                "};\n",
+        )
+        assertTrue(
+            r.diagnostics.any { it.code == 7006 },
+            "computed-key fn values without a mapped annotation stay implicitly any: " +
+                r.diagnostics.joinToString { "TS${it.code} ${it.message}" },
+        )
+    }
 }

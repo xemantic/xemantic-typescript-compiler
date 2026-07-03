@@ -20352,7 +20352,8 @@ class Checker(
                                 emitTs7006BeyondCtxArity(initParams, ctxArity, source, fileName)
                             }
                             declInit?.let {
-                                checkImplicitAnyInExpr(it, source, fileName, contextuallyTyped = ctxFn, contextualType = annotatedType)
+                                checkImplicitAnyInExpr(it, source, fileName, contextuallyTyped = ctxFn, contextualType = annotatedType,
+                                    ctxAnnotation = decl.type)
                             }
                         }
                     }
@@ -20386,7 +20387,8 @@ class Checker(
                                 retExpr is FunctionExpression || retExpr is ParenthesizedExpression ||
                                 retExpr is ConditionalExpression))
                             getTypeFromTypeNodeSafe(returnCtxAnnotation) else null
-                        checkImplicitAnyInExpr(retExpr, source, fileName, contextualType = retCtx)
+                        checkImplicitAnyInExpr(retExpr, source, fileName, contextualType = retCtx,
+                            ctxAnnotation = returnCtxAnnotation)
                     }
                 }
                 else -> {}
@@ -20675,6 +20677,36 @@ class Checker(
     }
 
     /**
+     * M1.6(a): the ARITY of a mapped-type annotation's fn-typed VALUE, derived from
+     * the AST — `const table: VisitEachChildTable = { [SyntaxKind.X]: function (node,
+     * visitor, …) {…} }` where `VisitEachChildTable = { [TNode in … as …]: Fn<TNode> }`
+     * and `Fn` unaliases to a FunctionType. The engine cannot resolve such mapped
+     * types' member sets (the `as`-clause/indexed-access key space), so computed-key
+     * member fn values get their contextual arity from the mapped VALUE node instead.
+     * Null when the annotation isn't that shape; Int.MAX_VALUE for a rest-param value.
+     */
+    private fun mappedAnnotationValueFnArity(annotation: TypeNode?): Int? {
+        fun unalias(node: TypeNode): TypeNode {
+            var t = node
+            repeat(2) {
+                val ref = t as? TypeReference ?: return t
+                val name = (ref.typeName as? Identifier)?.text ?: return t
+                val sym = currentFileLocals?.get(name) ?: globals[name] ?: return t
+                val decl = sym.declarations.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration
+                    ?: return t
+                t = decl.type
+            }
+            return t
+        }
+        val mapped = unalias(annotation ?: return null) as? MappedType ?: return null
+        val value = unalias(mapped.type ?: return null) as? FunctionType ?: return null
+        if (value.parameters.any { it.dotDotDotToken }) return Int.MAX_VALUE
+        return value.parameters.count {
+            !it.isCommentPlaceholder && (it.name as? Identifier)?.text != "this"
+        }
+    }
+
+    /**
      * M1.6(b): the parameter arity a CALLABLE contextual type provides for an
      * arrow/function-expression value, or null when [type] provides no contextual
      * signature. Int.MAX_VALUE when any call signature carries a REST param (it
@@ -20713,6 +20745,12 @@ class Checker(
         // union-with-primitive overload-list rule (unionHasFunctionAndPrimitive)
         // still does.
         ctxViaUnionWithPrimitive: Boolean = false,
+        // M1.6(a): the contextual type's ANNOTATION node (the var-decl annotation or
+        // the enclosing return annotation) — consulted only for COMPUTED-key members
+        // of an object literal whose annotation unaliases to a mapped type with a
+        // fn-typed value (`{ [SyntaxKind.X]: function (node, …) {…} }` against
+        // `VisitEachChildTable`); the engine cannot resolve those member sets.
+        ctxAnnotation: TypeNode? = null,
     ) {
         when (expr) {
             is ArrowFunction -> {
@@ -20755,6 +20793,18 @@ class Checker(
                 // context get NO callable-arity suppression (see the param doc).
                 val viaUnionWithPrimitive = contextualType is Type.Union &&
                     contextualType.types.any { it !is Type.Object }
+                // M1.6(a): computed-key members against a mapped-table annotation get
+                // their contextual arity from the mapped VALUE's fn-type node (lazy —
+                // resolved on the first computed-key member only).
+                var mappedValueArity: Int? = null
+                var mappedValueArityComputed = false
+                fun computedKeyCtxArity(): Int? {
+                    if (!mappedValueArityComputed) {
+                        mappedValueArityComputed = true
+                        mappedValueArity = if (ctxAnnotation != null) mappedAnnotationValueFnArity(ctxAnnotation) else null
+                    }
+                    return mappedValueArity
+                }
                 for (prop in expr.properties) {
                     when (prop) {
                         is MethodDeclaration -> {
@@ -20765,7 +20815,9 @@ class Checker(
                                 val mType = if (mName != null && contextualType != null) {
                                     lookupPropertyTypeForCtx(contextualType, mName)
                                 } else null
-                                val mArity = if (viaUnionWithPrimitive) null else contextualCallableArity(mType)
+                                val mArity = if (viaUnionWithPrimitive) null else
+                                    contextualCallableArity(mType)
+                                        ?: (if (prop.name is ComputedPropertyName) computedKeyCtxArity() else null)
                                 if (mArity != null) {
                                     emitTs7006BeyondCtxArity(prop.parameters, mArity, source, fileName)
                                 } else {
@@ -20783,6 +20835,25 @@ class Checker(
                             val propType = if (propName != null && contextualType != null) {
                                 lookupPropertyTypeForCtx(contextualType, propName)
                             } else null
+                            // M1.6(a): a COMPUTED-key fn-expr/arrow value of a mapped-table
+                            // literal — emit only beyond the mapped value's arity, then walk
+                            // the fn body with its own params marked contextually typed.
+                            val initExpr = prop.initializer
+                            if (propName == null && prop.name is ComputedPropertyName &&
+                                !contextuallyTyped && !viaUnionWithPrimitive &&
+                                (initExpr is ArrowFunction || initExpr is FunctionExpression)) {
+                                val cArity = computedKeyCtxArity()
+                                if (cArity != null) {
+                                    val ps = when (initExpr) {
+                                        is ArrowFunction -> initExpr.parameters
+                                        is FunctionExpression -> initExpr.parameters
+                                        else -> emptyList()
+                                    }
+                                    emitTs7006BeyondCtxArity(ps, cArity, source, fileName)
+                                    checkImplicitAnyInExpr(initExpr, source, fileName, contextuallyTyped = true)
+                                    continue
+                                }
+                            }
                             checkImplicitAnyInExpr(prop.initializer, source, fileName, contextuallyTyped, propType,
                                 ctxViaUnionWithPrimitive = viaUnionWithPrimitive)
                         }
