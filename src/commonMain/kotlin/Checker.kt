@@ -20151,6 +20151,14 @@ class Checker(
         source: String,
         fileName: String,
         inAmbientContext: Boolean = false,
+        // M1.6(b): the ENCLOSING function's return-type ANNOTATION, threaded so
+        // `return { member: arrow }` contextually types the arrow's params from the
+        // annotation's matching member fn type (the factory idiom `function createX():
+        // TypeChecker { return { isUndefinedSymbol: symbol => … } }`). Reset at every
+        // function boundary to that function's own annotation; resolved LAZILY at the
+        // ReturnStatement (only for expr shapes that can consume a contextual type) so
+        // first-touch type-resolution order stays unchanged for other functions.
+        returnCtxAnnotation: TypeNode? = null,
     ) {
         for (stmt in statements) {
             when (stmt) {
@@ -20158,7 +20166,7 @@ class Checker(
                     // Check params for TS7006 for ALL function declarations (both regular and declare)
                     // TypeScript emits TS7006 for untyped parameters in declare functions too
                     checkParamsForImplicitAny(stmt.parameters, source, fileName)
-                    stmt.body?.let { checkImplicitAnyInStatements(it.statements, source, fileName) }
+                    stmt.body?.let { checkImplicitAnyInStatements(it.statements, source, fileName, returnCtxAnnotation = stmt.type) }
                     // TS7010 for bodyless functions is now in checkBodylessFunctionReturnTypes (unconditional)
                 }
                 is ClassDeclaration -> {
@@ -20360,16 +20368,26 @@ class Checker(
                         else -> {}
                     }
                 }
-                is Block -> checkImplicitAnyInStatements(stmt.statements, source, fileName)
+                is Block -> checkImplicitAnyInStatements(stmt.statements, source, fileName, returnCtxAnnotation = returnCtxAnnotation)
                 is IfStatement -> {
-                    checkImplicitAnyInStatements(listOf(stmt.thenStatement), source, fileName)
-                    stmt.elseStatement?.let { checkImplicitAnyInStatements(listOf(it), source, fileName) }
+                    checkImplicitAnyInStatements(listOf(stmt.thenStatement), source, fileName, returnCtxAnnotation = returnCtxAnnotation)
+                    stmt.elseStatement?.let { checkImplicitAnyInStatements(listOf(it), source, fileName, returnCtxAnnotation = returnCtxAnnotation) }
                 }
                 is ForStatement -> {
-                    checkImplicitAnyInStatements(listOf(stmt.statement), source, fileName)
+                    checkImplicitAnyInStatements(listOf(stmt.statement), source, fileName, returnCtxAnnotation = returnCtxAnnotation)
                 }
                 is ReturnStatement -> {
-                    stmt.expression?.let { checkImplicitAnyInExpr(it, source, fileName) }
+                    stmt.expression?.let { retExpr ->
+                        // M1.6(b): resolve the enclosing return annotation only for expr
+                        // shapes that can consume a contextual type (bounds first-touch
+                        // resolution-order changes to functions that return such shapes).
+                        val retCtx = if (returnCtxAnnotation != null && (
+                                retExpr is ObjectLiteralExpression || retExpr is ArrowFunction ||
+                                retExpr is FunctionExpression || retExpr is ParenthesizedExpression ||
+                                retExpr is ConditionalExpression))
+                            getTypeFromTypeNodeSafe(returnCtxAnnotation) else null
+                        checkImplicitAnyInExpr(retExpr, source, fileName, contextualType = retCtx)
+                    }
                 }
                 else -> {}
             }
@@ -20449,14 +20467,14 @@ class Checker(
         when (element) {
             is MethodDeclaration -> {
                 checkParamsForImplicitAny(element.parameters, source, fileName)
-                element.body?.let { checkImplicitAnyInStatements(it.statements, source, fileName) }
+                element.body?.let { checkImplicitAnyInStatements(it.statements, source, fileName, returnCtxAnnotation = element.type) }
             }
             is Constructor -> {
                 checkParamsForImplicitAny(element.parameters, source, fileName)
                 element.body?.let { checkImplicitAnyInStatements(it.statements, source, fileName) }
             }
             is GetAccessor -> {
-                element.body?.let { checkImplicitAnyInStatements(it.statements, source, fileName) }
+                element.body?.let { checkImplicitAnyInStatements(it.statements, source, fileName, returnCtxAnnotation = element.type) }
             }
             is SetAccessor -> {
                 // Setter value parameters are contextually typed from a sibling getter
@@ -20656,21 +20674,61 @@ class Checker(
         return true
     }
 
+    /**
+     * M1.6(b): the parameter arity a CALLABLE contextual type provides for an
+     * arrow/function-expression value, or null when [type] provides no contextual
+     * signature. Int.MAX_VALUE when any call signature carries a REST param (it
+     * contextually types every positional param). An arrow whose contextual slot is a
+     * plain function type gets its params from that signature (tsc never emits TS7006
+     * for them) — TS7006 stays only for params BEYOND the contextual arity (B224's
+     * rule). This is what types the factory idiom
+     * `const checker: TypeChecker = { isUndefinedSymbol: symbol => … }`.
+     */
+    private fun contextualCallableArity(type: Type?): Int? {
+        val obj = type as? Type.Object ?: return null
+        resolveStructuredTypeMembers(obj)
+        val sigs = obj.callSignatures
+        if (sigs.isNullOrEmpty()) return null
+        var max = 0
+        for (s in sigs) {
+            val hasRest = (s.parameters.lastOrNull()?.valueDeclaration as? Parameter)?.dotDotDotToken == true
+            if (hasRest) return Int.MAX_VALUE
+            if (s.parameters.size > max) max = s.parameters.size
+        }
+        return max
+    }
+
     private fun checkImplicitAnyInExpr(
         expr: Expression,
         source: String,
         fileName: String,
         contextuallyTyped: Boolean = false,
         contextualType: Type? = null,
+        // M1.6(b): true when [contextualType] is a member type reached THROUGH an
+        // object literal whose own contextual type was a UNION containing a
+        // non-object constituent — tsc does not discriminate such unions for member
+        // contextual typing (contextualOverloadListFromUnionWithPrimitiveNoImplicitAny
+        // pins TS7006 on `normalize: match => …` under `Rule = string | FullRule`),
+        // so the callable-arity suppression must not apply; the pre-existing
+        // union-with-primitive overload-list rule (unionHasFunctionAndPrimitive)
+        // still does.
+        ctxViaUnionWithPrimitive: Boolean = false,
     ) {
         when (expr) {
             is ArrowFunction -> {
                 val unionSuppress = contextualType != null && unionHasFunctionAndPrimitive(contextualType)
                 if (!contextuallyTyped && !unionSuppress) {
-                    checkParamsForImplicitAny(expr.parameters, source, fileName)
+                    // M1.6(b): a callable contextual type supplies param types up to
+                    // its arity — TS7006 only beyond it.
+                    val ctxArity = if (ctxViaUnionWithPrimitive) null else contextualCallableArity(contextualType)
+                    if (ctxArity != null) {
+                        emitTs7006BeyondCtxArity(expr.parameters, ctxArity, source, fileName)
+                    } else {
+                        checkParamsForImplicitAny(expr.parameters, source, fileName)
+                    }
                 }
                 when (val body = expr.body) {
-                    is Block -> checkImplicitAnyInStatements(body.statements, source, fileName)
+                    is Block -> checkImplicitAnyInStatements(body.statements, source, fileName, returnCtxAnnotation = expr.type)
                     is Expression -> checkImplicitAnyInExpr(body, source, fileName)
                     else -> {}
                 }
@@ -20678,9 +20736,14 @@ class Checker(
             is FunctionExpression -> {
                 val unionSuppress = contextualType != null && unionHasFunctionAndPrimitive(contextualType)
                 if (!contextuallyTyped && !unionSuppress) {
-                    checkParamsForImplicitAny(expr.parameters, source, fileName)
+                    val ctxArity = if (ctxViaUnionWithPrimitive) null else contextualCallableArity(contextualType)
+                    if (ctxArity != null) {
+                        emitTs7006BeyondCtxArity(expr.parameters, ctxArity, source, fileName)
+                    } else {
+                        checkParamsForImplicitAny(expr.parameters, source, fileName)
+                    }
                 }
-                checkImplicitAnyInStatements(expr.body.statements, source, fileName)
+                checkImplicitAnyInStatements(expr.body.statements, source, fileName, returnCtxAnnotation = expr.type)
             }
             is ClassExpression -> {
                 for (member in expr.members) {
@@ -20688,13 +20751,28 @@ class Checker(
                 }
             }
             is ObjectLiteralExpression -> {
+                // M1.6(b): members looked up through a union-with-non-object literal
+                // context get NO callable-arity suppression (see the param doc).
+                val viaUnionWithPrimitive = contextualType is Type.Union &&
+                    contextualType.types.any { it !is Type.Object }
                 for (prop in expr.properties) {
                     when (prop) {
                         is MethodDeclaration -> {
                             if (!contextuallyTyped) {
-                                checkParamsForImplicitAny(prop.parameters, source, fileName)
+                                // M1.6(b): an object-literal METHOD is contextually typed
+                                // by the matching member's fn type, same as an arrow value.
+                                val mName = (prop.name as? Identifier)?.text
+                                val mType = if (mName != null && contextualType != null) {
+                                    lookupPropertyTypeForCtx(contextualType, mName)
+                                } else null
+                                val mArity = if (viaUnionWithPrimitive) null else contextualCallableArity(mType)
+                                if (mArity != null) {
+                                    emitTs7006BeyondCtxArity(prop.parameters, mArity, source, fileName)
+                                } else {
+                                    checkParamsForImplicitAny(prop.parameters, source, fileName)
+                                }
                             }
-                            prop.body?.let { checkImplicitAnyInStatements(it.statements, source, fileName) }
+                            prop.body?.let { checkImplicitAnyInStatements(it.statements, source, fileName, returnCtxAnnotation = prop.type) }
                         }
                         is PropertyAssignment -> {
                             // Propagate contextual typing to property initializers.
@@ -20705,7 +20783,8 @@ class Checker(
                             val propType = if (propName != null && contextualType != null) {
                                 lookupPropertyTypeForCtx(contextualType, propName)
                             } else null
-                            checkImplicitAnyInExpr(prop.initializer, source, fileName, contextuallyTyped, propType)
+                            checkImplicitAnyInExpr(prop.initializer, source, fileName, contextuallyTyped, propType,
+                                ctxViaUnionWithPrimitive = viaUnionWithPrimitive)
                         }
                         else -> {}
                     }
@@ -20749,10 +20828,10 @@ class Checker(
                 }
                 checkImplicitAnyInExpr(current, source, fileName)
             }
-            is ParenthesizedExpression -> checkImplicitAnyInExpr(expr.expression, source, fileName, contextuallyTyped, contextualType)
+            is ParenthesizedExpression -> checkImplicitAnyInExpr(expr.expression, source, fileName, contextuallyTyped, contextualType, ctxViaUnionWithPrimitive)
             is ConditionalExpression -> {
-                checkImplicitAnyInExpr(expr.whenTrue, source, fileName, contextuallyTyped, contextualType)
-                checkImplicitAnyInExpr(expr.whenFalse, source, fileName, contextuallyTyped, contextualType)
+                checkImplicitAnyInExpr(expr.whenTrue, source, fileName, contextuallyTyped, contextualType, ctxViaUnionWithPrimitive)
+                checkImplicitAnyInExpr(expr.whenFalse, source, fileName, contextuallyTyped, contextualType, ctxViaUnionWithPrimitive)
             }
             is ArrayLiteralExpression -> {
                 // Propagate contextual typing through arrays ONLY for non-arrow elements
