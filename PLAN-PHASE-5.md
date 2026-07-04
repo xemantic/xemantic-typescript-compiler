@@ -65,6 +65,11 @@ unshipped DOM references surface via `Resolution.unknownNames`/`.unavailable`.
 One expectation fixed mid-test: `esnext.bigint` alone expands to THREE libs
 (es2020.bigint's own directives pull es2020.intl → es2018.intl). 6 local tests
 against the real headers. Suite 8,957 / 0 / 3.
+**And M2.1(c): `RealLibSnapshots`** — parse-once shared ASTs (dist file
+names), fresh binds per consumer (mergeSymbolTable mutates merged-in symbols
+→ shared bound tables would cross-pollute programs), `useRealLibs` flag
+(default off). The real es5.d.ts parses + binds cleanly on the first try.
+4 local tests. Suite 8,961 / 0 / 3.
 
 **Round 389 (2026-07-03) — M1.11 landed: self-compile 2,794 → 2,726 (−68;
 TS2554 45 → 0, TS2345 424 → 411, TS2769 77 → 67, zero new codes) — M1 is
@@ -419,7 +424,7 @@ Three strategic reads that shape everything below:
 
 | Metric | Source | Phase 17 target |
 |---|---|---|
-| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 8,957 with local tests as of round 390) |
+| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 8,961 with local tests as of round 390) |
 | Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**2,726 after round 389** — M1 complete; no-stub stays the honest default) |
 | Project corpus FPs (services/server/…) | `bench/` TSVs (M0.1) | 0 — **the v1 exit** (all 8 profiles) |
 | Conformance adoption | generated-test counts per category | POST-V1 (re-scope 2026-07-03 — see § "Post-v1 backlog", M3.0) |
@@ -696,8 +701,18 @@ Three strategic reads that shape everything below:
     DOM/host references and unknown names are returned in `Resolution` side
     channels, not silently dropped. 6 local tests (RealLibResolverTest) against
     the real shipped headers.
-  - [ ] (c) *Snapshot*: parse+bind the selected set once per (target, lib)
-    key behind `CompilerOptions.useRealLibs`, immutable + shared.
+  - [x] (c) *Snapshot* — DONE (round 390): `RealLibSnapshots` caches the PARSE
+    per lib file process-wide (immutable shared ASTs; fileName = the DISTRIBUTED
+    name `lib.es5.d.ts`/`lib.d.ts` that baselines render); BINDING is
+    deliberately per-consumer (`bindLibFiles` returns fresh BinderResults) —
+    `mergeSymbolTable` MUTATES merged-in symbols (the merge-pollution gotcha),
+    so a shared bound table would leak one program's user-declaration merges
+    into the next program's lib; revisit bind-sharing at M5.4/M5.5. Not
+    thread-safe yet (single-threaded checking today; M5.4 adds sync).
+    `CompilerOptions.useRealLibs` (default false) added. The real es5.d.ts
+    (218 KB) parses + binds cleanly (Array/Object/Promise/parseInt all bound).
+    4 local tests (RealLibSnapshotTest) pin parse-once identity, fresh-bind
+    non-identity, and dist naming.
   - [ ] (d) wire into Checker init as an alternative to `builtinLibDecls` and A/B
     one corpus run.
 - [ ] **M2.2 Corpus A/B and default flip.** Run the corpus with real libs; burn down

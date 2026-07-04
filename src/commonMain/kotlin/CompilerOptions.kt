@@ -135,6 +135,10 @@ data class CompilerOptions(
     val jsxFragmentFactory: String? = null,
     val reactNamespace: String? = null,
     val lib: List<String> = emptyList(),
+    /** M2.1(c): resolve the default library from the REAL TypeScript lib .d.ts set
+     *  ([RealLibFiles] via [RealLibSnapshots]) instead of the embedded simplified
+     *  BUILTIN_LIB_SOURCE. Off by default until the M2.2 corpus A/B flips it. */
+    val useRealLibs: Boolean = false,
     val outDir: String? = null,
     val rootDir: String? = null,
     val rootDirs: List<String>? = null,

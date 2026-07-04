@@ -282,4 +282,62 @@ object RealLibResolver {
     /** The `/// <reference lib="…" />` directive names in [content], in source order. */
     fun referencedLibNames(content: String): List<String> =
         libReferenceRegex.findAll(content).map { it.groupValues[1] }.toList()
+
+    /** Inverse of [distFileNameToKey]: [RealLibFiles.files] key -> distributed file name. */
+    fun keyToDistFileName(key: String): String = when (key) {
+        "es5.full" -> "lib.d.ts"
+        "es2015.full" -> "lib.es6.d.ts"
+        else -> "lib.$key.d.ts"
+    }
+}
+
+/**
+ * M2.1(c): process-wide cache of PARSED real lib files.
+ *
+ * Parsing is the shareable half of "parse + bind once": a [SourceFile] AST is
+ * immutable under checking (Binder/Checker state lives in side tables — the
+ * LinkStore pattern), so one parse per lib file serves every program forever.
+ * BINDING is deliberately per-consumer: [bindLibFiles] returns FRESH
+ * [BinderResult]s because the checker's `mergeSymbolTable(globals, locals)`
+ * MUTATES the merged-in symbols (flags |= / declarations.addAll — the documented
+ * merge-pollution gotcha), so a shared bound symbol table would leak one
+ * program's user-declaration merges into the next program's lib. Revisit
+ * bind-sharing with M5.4/M5.5 once symbol merging stops mutating its inputs.
+ *
+ * Not thread-safe (plain cache map): today all checking is single-threaded
+ * (CheckerPool is unused); M5.4 parallel checking must add synchronization here.
+ */
+object RealLibSnapshots {
+
+    private val parseCache = HashMap<String, SourceFile>()
+
+    /**
+     * The shared, immutable parse of one lib file, keyed by [RealLibFiles.files]
+     * key. The [SourceFile.fileName] is the DISTRIBUTED name (`lib.es5.d.ts`,
+     * `lib.d.ts`) — what tsc baselines render in lib-file positions.
+     */
+    fun parsedLibFile(key: String): SourceFile = parseCache.getOrPut(key) {
+        val content = RealLibFiles.files[key]
+            ?: error("Unknown real-lib key '$key' (not shipped in RealLibFiles)")
+        Parser(content, keyToDistFileName(key)).parse()
+    }
+
+    private fun keyToDistFileName(key: String) = RealLibResolver.keyToDistFileName(key)
+
+    /**
+     * The ordered parsed lib set for a program: `libNames` (null = unset -> the
+     * [target] default lib) resolved through [RealLibResolver.resolve], each file
+     * parsed once process-wide.
+     */
+    fun parsedLibFiles(libNames: List<String>?, target: ScriptTarget): List<SourceFile> =
+        RealLibResolver.resolve(libNames, target).orderedKeys.map { parsedLibFile(it) }
+
+    /**
+     * Fresh per-program binder results for the selected lib set (see the class
+     * KDoc for why binding is not shared). Bound in inclusion order — the caller
+     * merges `locals` in this order so later libs' interface declarations merge
+     * onto earlier ones exactly like tsc's concatenated default libs.
+     */
+    fun bindLibFiles(libNames: List<String>?, target: ScriptTarget, options: CompilerOptions): List<BinderResult> =
+        parsedLibFiles(libNames, target).map { Binder(options).bind(it) }
 }
