@@ -34,6 +34,40 @@ completeness campaigns to dashboard-driven burn-down: the acceptance bar is the 
 tsc's source uses, with the corpus suite as the regression net. M5 unchanged —
 performance is the directive's second half and starts at v1 compliance.
 
+**Round 394 (2026-07-04) — M2.2 burn-down #4: `delete x.<Object.prototype member>`
+now fires TS2790 under real libs. Real-lib A/B recount 29 → 28
+(keywordExpressionInternalComments fixed), zero corpus regressions, suite 8,983 / 0 / 3
+(+6 local).** Root cause (a genuine correctness gap the richer lib EXPOSED, not a
+compensating hardcode): `getApparentType` does NOT fold `Object.prototype`'s members
+(`toString`/`valueOf`/`hasOwnProperty`/…) into an object type's apparent members — it only
+maps type-params → constraints and primitives → wrapper interfaces; a
+`Type.Object`/`Interface`/`Reference` passes through unchanged. Under the embedded lib
+`Array` (value position) resolves to the `Array<any>` INSTANCE, which declares its OWN
+`toString`, so `getPropertyOfType` finds the member and TS2790 fires; under real libs
+`Array` → `ArrayConstructor`, which has NO own `toString` (inherited from
+`Object.prototype`), so the member was missed and no error fired (round 393 had flagged
+this as "we emit NOTHING under real libs — the getApparentType-Object.prototype gap →
+M3"). Fix: an Object.prototype fallback in the TS2790 delete check (Checker.kt ~54234) —
+when the receiver is object-like (`objType is Type.Object`), the member name ∈
+`OBJECT_PROTOTYPE_PROPERTIES`, and the type has no own declaration of it (`propSym ==
+null`), emit TS2790. FP-safe BY CONSTRUCTION: `delete x.<objProtoMember>` is ALWAYS
+TS2790 under strictNullChecks (those members are non-optional and present on every
+object — matches tsc), the fallback is scoped to the 7 Object.prototype names, and a user
+type that declares the name OPTIONALLY still routes through the own-member branch
+(`propSym != null` → optional → no emit). Folding Object.prototype into `getApparentType`
+generally is the broad M3 change (touches every relation) — deliberately NOT done; the
+narrow delete-local fallback closes the one shape the corpus needs and a latent embedded
+FN (`delete x.constructor` etc. where the receiver lacks an own decl). 6 local tests
+(DeleteObjectPrototypeTs2790Test): real-libs positive (toString, valueOf), embedded
+regression control (own-member branch unchanged), own-optional-member negative,
+index-signature-non-prototype-name negative, strictNullChecks-off negative. No
+self-compile dashboard delta (corpus-A/B fix; default stays off). New CLAUDE.md gotcha on
+the getApparentType Object.prototype gap. **This is the round-317-324 META-LESSON again:
+a read-only-triage "ENGINE / M3" verdict is about the GENERAL fix — a corpus-unique,
+FP-safe, narrow fallback can still flip a test the triage rated engine-gated. Re-check
+"ENGINE" sub-verdicts against corpus-uniqueness + a tightly-gated local fix before
+trusting them.**
+
 **Round 393 (2026-07-04) — M2.2 burn-down #3: the lib-declared utility-alias
 modifier cluster + the redefineArray construct-sig double-emit. Real-lib A/B recount
 34 → 29 corpus failures (omitTypeHelperModifiers01, omitTypeTestErrors01,
@@ -557,7 +591,7 @@ Three strategic reads that shape everything below:
 
 | Metric | Source | Phase 17 target |
 |---|---|---|
-| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 8,977 with local tests as of round 393) |
+| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 8,983 with local tests as of round 394) |
 | Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**2,726 after round 389** — M1 complete; no-stub stays the honest default) |
 | Project corpus FPs (services/server/…) | `bench/` TSVs (M0.1) | 0 — **the v1 exit** (all 8 profiles) |
 | Conformance adoption | generated-test counts per category | POST-V1 (re-scope 2026-07-03 — see § "Post-v1 backlog", M3.0) |
@@ -868,7 +902,9 @@ Three strategic reads that shape everything below:
   Round 393 fixed the lib-declared utility-alias modifier cluster (omitTypeHelperModifiers01,
   omitTypeTestErrors01, intersectionsAndOptionalProperties, parameterListAsTupleType via
   `isBuiltinUtilityAlias` materializer routing) + redefineArray (construct-sig double-emit
-  guard). A/B RECOUNT (round 393): 29 corpus failing testcases remaining
+  guard). Round 394 fixed keywordExpressionInternalComments (Object.prototype-member
+  fallback in the TS2790 delete check — `delete Array.toString` under real libs).
+  A/B RECOUNT (round 394): 28 corpus failing testcases remaining
   (`.errors.txt` subtests):** arrayBufferIsViewNarrowsType, builtinIterator,
   consistentAliasVsNonAliasRecordBehavior, correctOrderOfPromiseMethod,
   deleteExpressionMustBeOptional_exactOptionalPropertyTypes (×2 variants),
@@ -877,7 +913,7 @@ Three strategic reads that shape everything below:
   genericIndexedAccessVarianceComparisonResultCorrect, implementArrayInterface,
   interfaceAssignmentCompat, isArray,
   jsExportMemberMergedWithModuleAugmentation2, keyRemappingKeyofResult,
-  keywordExpressionInternalComments, mappedTypeGenericWithKnownKeys,
+  mappedTypeGenericWithKnownKeys,
   mappedTypeIndexedAccessConstraint, mergedClassNamespaceRecordCast,
   narrowingPastLastAssignment, requiredMappedTypeModifierTrumpsVariance,
   specialIntersectionsInMappedTypes, stringMappingAssignability,

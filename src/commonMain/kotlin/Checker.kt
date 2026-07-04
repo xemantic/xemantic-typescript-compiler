@@ -54231,6 +54231,23 @@ interface DataView {
                     if (objType !== anyType && objType !== errorType) {
                         val apparent = getApparentType(objType)
                         val propSym = getPropertyOfType(apparent, inner.name.text)
+                        val emit2790 = {
+                            val start = inner.pos
+                            val length = expressionTrueEnd(inner) - start
+                            if (length > 0) {
+                                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                                diagnostics.add(Diagnostic(
+                                    message = "The operand of a 'delete' operator must be optional.",
+                                    category = DiagnosticCategory.Error,
+                                    code = 2790,
+                                    fileName = fileName,
+                                    line = line,
+                                    character = character,
+                                    start = start,
+                                    length = length,
+                                ))
+                            }
+                        }
                         if (propSym != null && !isOptionalProperty(propSym)) {
                             val propType = getTypeOfSymbol(propSym)
                             // Under exactOptionalPropertyTypes, a required property with
@@ -54241,22 +54258,20 @@ interface DataView {
                             if (propType !== anyType && propType !== errorType &&
                                 !propType.flags.hasAny(TypeFlags.Any or TypeFlags.Unknown or TypeFlags.Never) &&
                                 (!skipOnUndefinedInType || !typeIncludesUndefinedOrTop(propType))) {
-                                val start = inner.pos
-                                val length = expressionTrueEnd(inner) - start
-                                if (length > 0) {
-                                    val (line, character) = getLineAndCharacterOfPosition(source, start)
-                                    diagnostics.add(Diagnostic(
-                                        message = "The operand of a 'delete' operator must be optional.",
-                                        category = DiagnosticCategory.Error,
-                                        code = 2790,
-                                        fileName = fileName,
-                                        line = line,
-                                        character = character,
-                                        start = start,
-                                        length = length,
-                                    ))
-                                }
+                                emit2790()
                             }
+                        } else if (propSym == null && objType is Type.Object &&
+                            inner.name.text in OBJECT_PROTOTYPE_PROPERTIES) {
+                            // `getApparentType` does NOT fold Object.prototype's members into
+                            // an object type's apparent members (a real-lib `ArrayConstructor`
+                            // has no OWN `toString`; it inherits it from `Object.prototype`).
+                            // Object.prototype members (toString/valueOf/hasOwnProperty/…) are
+                            // non-optional and present on EVERY object, so `delete x.<member>`
+                            // is always TS2790 under strictNullChecks — matches tsc. Gated to an
+                            // object-like receiver whose own type genuinely lacks the member
+                            // (propSym == null) so a user type that declares it optionally still
+                            // routes through the branch above.
+                            emit2790()
                         }
                     }
                 }
