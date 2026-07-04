@@ -57,6 +57,14 @@ a deliberate EOF syntax error still building → the content can't be what's
 compiling → comment-depth scan found the imbalance. (A raw NUL byte from a
 tool-input NUL-char literal was a red herring fixed first.) CLAUDE.md's
 block-comments-NEST gotcha gained the silent-dead-region variant.
+**Same round, M2.1(b): `RealLibResolver` landed** — tsc's `libMap` (110 entries,
+aliases + back-compat fallbacks), `targetToLibMap` defaults, the reference-lib
+closure, and the priority ORDER (`getDefaultLibFilePriority` = libEntries index,
+not DFS — es5 pulls in decorators, which still sorts last). Unknown names and
+unshipped DOM references surface via `Resolution.unknownNames`/`.unavailable`.
+One expectation fixed mid-test: `esnext.bigint` alone expands to THREE libs
+(es2020.bigint's own directives pull es2020.intl → es2018.intl). 6 local tests
+against the real headers. Suite 8,957 / 0 / 3.
 
 **Round 389 (2026-07-03) — M1.11 landed: self-compile 2,794 → 2,726 (−68;
 TS2554 45 → 0, TS2345 424 → 411, TS2769 77 → 67, zero new codes) — M1 is
@@ -411,7 +419,7 @@ Three strategic reads that shape everything below:
 
 | Metric | Source | Phase 17 target |
 |---|---|---|
-| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 8,951 with local tests as of round 390) |
+| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 8,957 with local tests as of round 390) |
 | Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**2,726 after round 389** — M1 complete; no-stub stays the honest default) |
 | Project corpus FPs (services/server/…) | `bench/` TSVs (M0.1) | 0 — **the v1 exit** (all 8 profiles) |
 | Conformance adoption | generated-test counts per category | POST-V1 (re-scope 2026-07-03 — see § "Post-v1 backlog", M3.0) |
@@ -676,10 +684,18 @@ Three strategic reads that shape everything below:
     Keys are bare lib names (`es5`, `es2015.core`); content byte-faithful (CRLF
     preserved). 3 local tests (RealLibFilesTest) pin multi-chunk reassembly +
     the reference directives (b) will consume.
-  - [ ] (b) *DAG resolver*: name → file map + reference-DAG expansion
-    (`lib.es2020` → es2019 + es2020.* pieces; tsc's `libMap` in commandLineParser.ts
-    is the reference), dedup in tsc's emission order, local tests against the real
-    headers.
+  - [x] (b) *DAG resolver* — DONE (round 390): `RealLibResolver` (RealLibs.kt)
+    ports tsc's `libEntries`/`libMap` verbatim (110 entries incl. the `es6`/`es7`
+    aliases + the `esnext.bigint`-style back-compat fallbacks),
+    `targetToLibMap`/`getDefaultLibFileName` (target default = the `.full`
+    variant; ES2015 → `lib.es6.d.ts`, ES5/ES3 → `lib.d.ts`), the
+    `/// <reference lib>` closure (program.ts `processLibReferenceDirectives`),
+    and — the non-obvious part — tsc's FINAL order = `getDefaultLibFilePriority`
+    (libEntries index; `lib.d.ts`/`lib.es6.d.ts` first), NOT the DFS discovery
+    order (es5 references decorators, which still sorts near the END). Unshipped
+    DOM/host references and unknown names are returned in `Resolution` side
+    channels, not silently dropped. 6 local tests (RealLibResolverTest) against
+    the real shipped headers.
   - [ ] (c) *Snapshot*: parse+bind the selected set once per (target, lib)
     key behind `CompilerOptions.useRealLibs`, immutable + shared.
   - [ ] (d) wire into Checker init as an alternative to `builtinLibDecls` and A/B
