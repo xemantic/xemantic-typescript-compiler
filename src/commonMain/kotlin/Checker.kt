@@ -40980,6 +40980,15 @@ interface DataView {
                 if (leftName != null && leftName.isNotEmpty() &&
                     (leftName[0] in 'A'..'Z' || leftName[0] in 'a'..'z' || leftName[0] == '_' || leftName[0] == '$') &&
                     leftName !in KEYWORD_IDENTIFIERS && !scope.has(leftName)) return
+                // `SyntaxKind.ThisType` / `TypeMapKind.Array` — the RIGHT segment of an
+                // ENUM-qualified name is an enum MEMBER (a numeric-literal type), NOT the
+                // same-named generic lib type (`ThisType<T>` / `Array<T>`). Skip the arity
+                // check (FP-safe: an enum member is never a generic type constructor).
+                val directLeft = (typeName.left as? Identifier)?.text
+                if (directLeft != null) {
+                    val leftSym = currentFileLocals?.get(directLeft) ?: globals[directLeft]
+                    if (leftSym?.declarations?.any { it is EnumDeclaration } == true) return
+                }
             }
             else -> return
         }
