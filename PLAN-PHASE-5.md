@@ -944,11 +944,13 @@ Three strategic reads that shape everything below:
   — the 3rd param has NO `extends` so it should carry NO constraint; likely a
   variance-annotation-parse or unconstrained-→-`{}`-default artifact), and a UNION arg
   `TIn | undefined` vs `Node | undefined` (needs per-member constraint resolution); (b)
-  **TS2693×7** `'symbol' only refers to a type`
-  (binder.ts `const { symbol } = node; symbol.foo` — a destructured function-body local named
-  `symbol` shadowing the type keyword; the TS2693 walker misses the local binding — a
-  function-body scope-tracking gap, more involved than a-shape). Re-bucket after each fix; the
-  self-compile 2,700 still has TS2591×43 (node globals, env-legit — `--node-stub`), TS2563×27
+  **TS2693×1 remaining** — round 398 fixed the `symbol`-destructuring shape (×6:
+  `checkTypeAsValueInStatements`'s value-name hoisting now extracts binding-pattern element
+  names, not just simple Identifier decl names); the 1 left is a different
+  `BinaryExpressionState` clodule-namespace-as-value shape (factory/utilities.ts:1477). Next
+  bounded buckets not yet triaged: TS2739×7, TS2551×5, TS2588×4, TS2304×3, TS2314×3, TS2741×3,
+  TS7053×3, TS2722×3, TS2367×2, TS2430/TS2394/TS2709 ×1. Re-bucket after each fix; the
+  self-compile 2,694 still has TS2591×43 (node globals, env-legit — `--node-stub`), TS2563×27
   (B399 heuristic → M3.4), and the M3 cores (TS2339×838, TS2322×794, TS2345×405, TS7006×301).
 
 **M2 — Real-lib migration (staged; decompose further at start)**
