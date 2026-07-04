@@ -950,15 +950,22 @@ Three strategic reads that shape everything below:
   `BinaryExpressionState` clodule-namespace-as-value shape (factory/utilities.ts:1477); (c)
   **TS2314×3 → 0 (round 399)** — `checkTypeArgCount` now skips the arity check when a qualified
   name's qualifier resolves to an enum (`SyntaxKind.ThisType`/`TypeMapKind.Array` are enum
-  MEMBERS, not the same-named generic lib types). Next bounded buckets not yet triaged (all
-  from the round-399 histogram at 2,691): TS2739×7, TS2551×5 (lib gap — `Object.setPrototypeOf`
-  missing from the embedded ObjectConstructor → M2.3, NOT a bounded bug), TS2588×4 (block-scope
-  const-reassignment — checker.ts's `let c` in a nested block mis-detected as const; a
-  block-scope-aware const walker, more involved), TS2304×3, TS2741×3, TS7053×3, TS2722×3,
-  TS2367×2, TS2430/TS2394/TS2709 ×1 (the last is the same `BinaryExpressionState` clodule as
-  the TS2693 residue). Re-bucket after each fix; the
-  self-compile 2,691 still has TS2591×43 (node globals, env-legit — `--node-stub`), TS2563×27
-  (B399 heuristic → M3.4), and the M3 cores (TS2339×838, TS2322×794, TS2345×405, TS7006×301).
+  MEMBERS, not the same-named generic lib types); (d) **TS2588×4 → 0 (round 400)** — a nested
+  `let`/`var` shadowing an enclosing `const` now REMOVES the name from the inherited const set
+  (checker.ts's `compareTypes`); (e) **TS2709×1 + TS2693×1 → 0 (round 401)** — the
+  `BinaryExpressionState` `type X` + `namespace X` clodule now resolves as both a type (TS2709
+  suppressed via `currentTypeProvidingNames`) and a value (an instantiated namespace added to the
+  value set via `isNamespaceInstantiated`); (f) **TS2551×5 → 0 (round 402)** — `Object.setPrototypeOf`
+  added to the embedded ObjectConstructor (zero corpus baseline shifts). **The bounded pool is now
+  genuinely thinning — remaining buckets are M3-family, not bounded bugs:** TS2739×7 (brand-property
+  structural comparison `Node`→`QualifiedName` / `Expression`→`LeftHandSideExpression` — needs
+  narrowing/cast handling → M3.4), TS2722×3 (`typeof x === "function"` + `Debug.assertIsDefined`
+  property-path narrowing → M3.4/M1.5), TS2741×3 + TS2430×1 (brand-property structural comparison →
+  M3), TS7053×3 (index-sig/implicit-any → M3), TS2367×2 (string-enum-vs-string nested-array relation
+  → M3/B425), TS2304×3 (node `global` + es2024 `MapIterator` — env/lib), TS2394×1. Re-bucket after
+  each fix; the self-compile 2,680 still has TS2591×43 (node globals, env-legit — `--node-stub`),
+  TS2563×27 (B399 heuristic → M3.4), and the M3 cores (TS2339×838, TS2322×794, TS2345×405,
+  TS7006×301) — the next real progress is a decomposed M3.1/M3.4 sub-step.
 
 **M2 — Real-lib migration (staged; decompose further at start)**
 
