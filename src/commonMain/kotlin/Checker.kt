@@ -43511,6 +43511,12 @@ interface DataView {
             // never removes it). Tightening the gate prevents FP TS2708 when
             // the per-decl walk treats hybrid M as a runtime-erased namespace.
             val moduleHasValues = mutableMapOf<String, Boolean>()
+            // Names whose namespace is GENUINELY instantiated (has a runtime value, recursing
+            // into nested namespaces) — stricter than `moduleHasValues` (which counts any nested
+            // ModuleDeclaration). Only these are added to valueNames (a `type X` + instantiated
+            // `namespace X` clodule provides a value); a namespace holding only an uninstantiated
+            // nested namespace (`Mod { namespace Nested { interface I } }`) must NOT become a value.
+            val moduleInstantiated = mutableSetOf<String>()
             for (stmt in result.sourceFile.statements) {
                 when (stmt) {
                     is InterfaceDeclaration -> {
@@ -43540,14 +43546,19 @@ interface DataView {
                             }
                             // OR-merge across all declarations of the same name
                             moduleHasValues[n] = (moduleHasValues[n] ?: false) || hasValues
+                            if (isNamespaceInstantiated(stmt)) moduleInstantiated.add(n)
                         }
                     }
                     else -> {}
                 }
             }
-            // Finalize: only names with NO value-bearing declarations are namespace-only
+            // Finalize: a namespace with NO value-bearing declarations is namespace-only; a
+            // namespace WITH value members provides a VALUE, so a `type X` + `namespace X`
+            // clodule (e.g. factory/utilities.ts's `type BinaryExpressionState = <fn type>` +
+            // `namespace BinaryExpressionState { … }`) can be used as a value (`X.enter`) — add
+            // it to valueNames so the TS2693 check (gated `name !in valueNames`) does not fire.
             for ((n, hasValues) in moduleHasValues) {
-                if (!hasValues) namespaceOnlyNames.add(n)
+                if (!hasValues) namespaceOnlyNames.add(n) else if (n in moduleInstantiated) valueNames.add(n)
             }
             // B87.3 (round 73): under a dotted-only `@lib` (no full es-lib), the
             // base-lib VALUE `declare var Array: ArrayConstructor` (lib.es5.d.ts)
@@ -142749,12 +142760,22 @@ interface DataView {
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
             currentCheckLocals = result.locals
+            currentTypeProvidingNames = result.sourceFile.statements.mapNotNullTo(mutableSetOf()) { s ->
+                when (s) {
+                    is TypeAliasDeclaration -> s.name.text
+                    is InterfaceDeclaration -> s.name.text
+                    is ClassDeclaration -> s.name?.text
+                    is EnumDeclaration -> s.name.text
+                    else -> null
+                }
+            }
 
             for (stmt in result.sourceFile.statements) {
                 checkNamespaceAsTypeInStmt(stmt, source, fileName)
             }
         }
         currentCheckLocals = null
+        currentTypeProvidingNames = emptySet()
     }
 
     /**
@@ -143272,6 +143293,12 @@ interface DataView {
     }
 
     private var currentCheckLocals: SymbolTable? = null
+    /** Names with a TYPE-providing declaration (type alias / interface / class / enum) in the
+     *  file being scanned by [checkNamespaceUsedAsType]. A `type X` + `namespace X` clodule's
+     *  symbol is last-wins in our binder (the namespace overwrites the type alias, dropping the
+     *  TypeAlias flag), so the symbol-flag guard in [checkTypeRefForNamespace] misses it — this
+     *  AST-derived set suppresses the TS2709 FP for such a name used as a type. */
+    private var currentTypeProvidingNames: Set<String> = emptySet()
 
     /**
      * 16.4cx: Heritage-clause variant — emit TS2709 when an interface `extends X`
@@ -143365,6 +143392,10 @@ interface DataView {
         // Check if symbol is ONLY a namespace (no Class, Interface, TypeAlias, Enum)
         if (!symbol.flags.hasAny(SymbolFlags.Module)) return
         if (symbol.flags.hasAny(SymbolFlags.Class or SymbolFlags.Interface or SymbolFlags.TypeAlias or SymbolFlags.Enum)) return
+        // A `type X` + `namespace X` clodule merges last-wins in our binder (the namespace
+        // overwrites the type alias, so the symbol lacks the TypeAlias flag above) — but the
+        // type alias makes X usable as a type, so suppress TS2709.
+        if (name in currentTypeProvidingNames) return
         val (line, character) = getLineAndCharacterOfPosition(source, typeNode.typeName.pos)
         diagnostics.add(Diagnostic(
             message = "Cannot use namespace '$name' as a type.",
