@@ -41814,9 +41814,20 @@ interface DataView {
                         } catch (_: Throwable) { null }
                         else -> null
                     }
+                    // A local var/const/let ALWAYS shadows an outer binding of the
+                    // same name — so TS2774 must bail rather than resolve the operand
+                    // to an outer `function <name>` — REGARDLESS of whether we can type
+                    // the initializer. tsc's own emitter.ts trips this:
+                    //   const emitComments = state.stack[i] = shouldEmitComments(node);
+                    //   if (emitComments) ...
+                    // the initializer (an element-access assignment) types to `any`, so
+                    // `resolved` is null; without registering the shadow, `emitComments`
+                    // fell through to the outer `function emitComments` and FP'd
+                    // "always defined, did you mean to call it". Register the shadow
+                    // unconditionally; only feed `typed` when we could resolve a type.
+                    shadowed.add(vName)
                     if (resolved != null) {
                         into[vName] = resolved
-                        shadowed.add(vName)
                     }
                 }
                 else -> {}
