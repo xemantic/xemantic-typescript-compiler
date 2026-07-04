@@ -54464,14 +54464,17 @@ interface DataView {
         constNames: MutableMap<String, Int>,
     ) {
         for (stmt in statements) {
-            // Collect const declarations
+            // Collect const declarations; a `let`/`var` of the same name SHADOWS an enclosing
+            // `const` within this block, so it must be REMOVED from the inherited const set —
+            // otherwise reassigning the inner `let c` (which shadows an outer `const c`) FP's
+            // TS2588 (checker.ts's `compareTypes`: `const c = compareSymbols(...)` enclosing a
+            // nested `else { let c = compareNodes(...); c = compareTypeMappers(...); }`).
             if (stmt is VariableStatement) {
-                if (stmt.declarationList.flags == SyntaxKind.ConstKeyword) {
-                    for (decl in stmt.declarationList.declarations) {
-                        val name = decl.name
-                        if (name is Identifier) {
-                            constNames[name.text] = 2588
-                        }
+                val isConst = stmt.declarationList.flags == SyntaxKind.ConstKeyword
+                for (decl in stmt.declarationList.declarations) {
+                    val name = decl.name
+                    if (name is Identifier) {
+                        if (isConst) constNames[name.text] = 2588 else constNames.remove(name.text)
                     }
                 }
             }
