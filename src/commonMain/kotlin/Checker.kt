@@ -43592,7 +43592,14 @@ interface DataView {
             collectHoistedVarNamesFromStmts(statements, declared)
             for (s in statements) when (s) {
                 is VariableStatement -> for (d in s.declarationList.declarations) {
-                    (d.name as? Identifier)?.text?.let { declared.add(it) }
+                    // A destructuring declaration (`const { symbol } = node`) binds its element
+                    // names as VALUES — so a later `symbol.foo` resolves to the binding, not the
+                    // `symbol` type keyword (binder.ts's constEnumOnlyModule shape). Simple
+                    // Identifier names + binding-pattern element names both count.
+                    when (val nm = d.name) {
+                        is Identifier -> declared.add(nm.text)
+                        else -> addParamBindingNamesToValues(nm, declared, declared)
+                    }
                 }
                 is FunctionDeclaration -> s.name?.text?.let { declared.add(it) }
                 is ClassDeclaration -> s.name?.text?.let { declared.add(it) }
