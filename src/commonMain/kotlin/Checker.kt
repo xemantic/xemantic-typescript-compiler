@@ -25749,6 +25749,22 @@ class Checker(
                 if (hasType) typeEligibleLocalNames.add(symName)
             }
         }
+        // A VALUE-position name must never be spelled-corrected to a TYPE-only name.
+        // The current-file binder-locals loop above catches own-file interfaces/aliases,
+        // but the value-position candidate pool (below) also draws from [perFileScope]:
+        // lib globals plus cross-file script locals. Classify those the same way — a
+        // symbol carrying only a Type flag (e.g. the real lib's `interface IArguments`,
+        // which has no `declare var` companion) must be filtered. The embedded lib lacked
+        // IArguments, so this bug only surfaced under `useRealLibs`; tsc's
+        // getSuggestedSymbolForNonexistentSymbol applies the Value-meaning filter here.
+        val fileScopeForTypeOnly = perFileScope[fileName]
+        if (fileScopeForTypeOnly != null) {
+            for ((symName, sym) in fileScopeForTypeOnly) {
+                if (!sym.flags.hasAny(SymbolFlags.Value or SymbolFlags.Module)) {
+                    typeOnlyNames.add(symName)
+                }
+            }
+        }
 
         // Collect candidate names. In value position, use the broad set (KNOWN_GLOBALS + scope chain).
         // In type position, restrict to type-eligible sources: KNOWN_GLOBALS (most lib entries are

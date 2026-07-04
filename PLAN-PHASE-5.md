@@ -34,6 +34,40 @@ completeness campaigns to dashboard-driven burn-down: the acceptance bar is the 
 tsc's source uses, with the corpus suite as the regression net. M5 unchanged —
 performance is the directive's second half and starts at v1 compliance.
 
+**Round 391 (2026-07-04) — M2.2 first burn-down: the real-lib A/B failing set
+drops 40 → 38 (arguments + unaryOperatorsInStrictMode), zero corpus regressions,
+suite 8,968 / 0 / 3 (+3 local).** Method: temp-flipped the `useRealLibs` default
+to true, ran a diverse 8-test slice of the 40, extracted the actual diffs from the
+result XMLs, and triaged them into distinct failure modes (recorded in the M2.2
+item below for the next burn-down session). The cleanest first fix — a genuine
+correctness bug the richer lib EXPOSED, not a compensating hardcode to gate: under
+`useRealLibs` the real lib's `interface IArguments` (type-only, no `declare var`
+companion) leaked into the VALUE-position spelling-suggestion candidate pool, so an
+unresolved value-position `arguments` drew "Did you mean 'IArguments'?" (TS2552)
+where tsc emits a plain TS2304. The embedded lib had no `IArguments` at all, which
+is exactly why only the real-lib A/B surfaced it. Fix (Checker `getSpellingSuggestion`):
+classify type-only symbols (Type flag, no Value/Module) from `perFileScope[fileName]`
+— lib globals + cross-file script locals, the SAME source the value-position pool
+draws from — into `typeOnlyNames`, not just the current file's binder locals. The
+type-position branch never consults `typeOnlyNames`, so the fix is structurally
+value-position-only; noted a symmetric latent FN (the type-position pool won't
+suggest a type-only LIB global for a mistyped TYPE — no corpus test exercises it).
+Lib-agnostic (embedded stays green; the fix only removes wrong suggestions that
+depended on the richer lib being present). 3 local tests (SpellingSuggestionTypeOnlyTest)
++ two controls (`Object` still suggested in value position; a user interface still
+suggested in type position). No self-compile dashboard delta (a corpus-A/B fix;
+default stays off). **Triage of the other 7 sampled failures (for the next
+session):** redefineArray = construct-sig TS2322 double-emitting alongside TS2739
+(tsc reports only missing-props; our B112 pre-gate fires because real ArrayConstructor
+HAS a construct sig — embedded didn't); libMembers = TS2728 "declared here" related
+points at the wrong file/pos (`libMembers.ts:15:…` vs `lib.es2015.core.d.ts:--:--`)
+because `resolveDeclarationSourceFile`/`isLibFileName` only know the FIRST real-lib
+file (M2.1d's acknowledged multi-lib-file position ambiguity); isArray = `Array.isArray`
+type-guard narrowing not applied under real libs → extra TS2339 (M3.4);
+dissallowSymbolAsWeakType = extra TS2345 `null` ≁ `T` (generic inference, walker+engine
+interaction); truthinessCallExpressionCoercion2 = one MISSING TS2774; implementArrayInterface
+= extra TS2420 (9 missing es2015 Array methods) + TS2416-some (B537 semantics, implements-vs-array).
+
 **Round 390 (2026-07-04) — M2.1(a) landed: the real TypeScript lib sources ship
 as generated Kotlin (`RealLibFiles.kt`, 100 non-DOM lib files / 565,732 bytes,
 keyed by bare lib name, byte-faithful incl. CRLF).** `generateRealLibSources`
@@ -431,7 +465,7 @@ Three strategic reads that shape everything below:
 
 | Metric | Source | Phase 17 target |
 |---|---|---|
-| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 8,965 with local tests as of round 390) |
+| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 8,968 with local tests as of round 391) |
 | Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**2,726 after round 389** — M1 complete; no-stub stays the honest default) |
 | Project corpus FPs (services/server/…) | `bench/` TSVs (M0.1) | 0 — **the v1 exit** (all 8 profiles) |
 | Conformance adoption | generated-test counts per category | POST-V1 (re-scope 2026-07-03 — see § "Post-v1 backlog", M3.0) |
@@ -735,8 +769,10 @@ Three strategic reads that shape everything below:
     compensating-hardcode collisions — the M2.2 burn-down list (below).**
 - [ ] **M2.2 Corpus A/B and default flip.** Burn down the round-390 A/B diff
   (baselines were produced by real-lib tsc, so divergence generally means one of our
-  compensating hardcodes — fix by deletion). Flip the default when green. **The 40
-  failing tests (round-390 A/B, all `.errors.txt` subtests):** arguments,
+  compensating hardcodes — fix by deletion). Flip the default when green. **Round 391
+  fixed 2 (arguments + unaryOperatorsInStrictMode — value-position spelling suggestions
+  no longer propose type-only lib names; see the round-391 note for the triage of the
+  other sampled failures). 38 REMAINING (round-390 A/B, all `.errors.txt` subtests):**
   arrayBufferIsViewNarrowsType, builtinIterator, consistentAliasVsNonAliasRecordBehavior,
   correctOrderOfPromiseMethod, deleteExpressionMustBeOptional_exactOptionalPropertyTypes
   (×2 variants), dissallowSymbolAsWeakType, divergentAccessorsTypes6/8,
@@ -752,7 +788,7 @@ Three strategic reads that shape everything below:
   redefineArray, requiredMappedTypeModifierTrumpsVariance,
   specialIntersectionsInMappedTypes, stringMappingAssignability,
   templateStringsArrayTypeRedefinedInES6Mode, truthinessCallExpressionCoercion2,
-  typedArraysCrossAssignability01, unaryOperatorsInStrictMode,
+  typedArraysCrossAssignability01,
   uncalledFunctionChecksInConditional2. Most are documented lib-divergence pins
   (typed-array chains, Date/Array hardcoded counts, LIB_MIN_TARGET) — M2.3's
   unwind list overlaps heavily; work them together. Also measure/mitigate the
