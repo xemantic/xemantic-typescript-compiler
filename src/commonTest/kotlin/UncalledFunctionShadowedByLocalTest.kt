@@ -83,6 +83,35 @@ class UncalledFunctionShadowedByLocalTest {
     }
 
     @Test
+    fun `a local shadowing a NESTED outer function - no TS2774 even with an any-typed initializer`() {
+        // The remaining tsc emitter.ts shape: the shadowed `shouldEmit` is a NESTED function
+        // (collected into the enclosing function's typed-locals scope as a callable), and the
+        // shadowing `const shouldEmit` in a deeper block types to `any`. Before the follow-up
+        // fix, `lookupUncalledTypedLocal` fell through the inner (shadowed-but-untyped) scope to
+        // the outer scope's callable entry and FP'd. `if (shouldEmit)` must resolve to the local.
+        val d = diags(
+            """
+            declare function trampoline(cb: (n: number, s: any) => void): number;
+            function outer(): number {
+                function shouldEmit(n: number): boolean { return n > 0; }
+                return trampoline(onExit);
+                function onExit(node: number, state: any): void {
+                    if (state.idx > 0) {
+                        const shouldEmit = state.flags[state.idx];
+                        if (shouldEmit) {}
+                    }
+                }
+            }
+            """,
+        )
+        assertTrue(
+            d.none { it.code == 2774 },
+            "a local shadowing a nested outer function must NOT draw TS2774; got: " +
+                d.joinToString { "TS${it.code}: ${it.message}" },
+        )
+    }
+
+    @Test
     fun `an unshadowed always-defined function still fires TS2774 (negative control)`() {
         val d = diags(
             """

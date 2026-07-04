@@ -41768,8 +41768,18 @@ interface DataView {
     }
 
     private fun lookupUncalledTypedLocal(name: String): Type? {
+        // `uncalledShadowedScopes` and `uncalledTypedLocalsStack` are parallel (pushed
+        // and popped together), so index i refers to the same scope in both.
         for (i in uncalledTypedLocalsStack.indices.reversed()) {
             uncalledTypedLocalsStack[i][name]?.let { return it }
+            // If an INNER scope SHADOWS the name (declared it locally) but we could not
+            // type its initializer, STOP — the name refers to THIS binding, not an OUTER
+            // scope's same-named (callable) declaration. Falling through returns the outer
+            // NESTED `function <name>`'s callable type and FP's TS2774. Returning null here
+            // makes the caller's `isUncalledShadowed(name)` bail (the name is shadowed).
+            // e.g. tsc's emitter.ts onExit: `const shouldEmitComments = state.stack[i]`
+            // (any-typed) shadows the printer-nested `function shouldEmitComments`.
+            if (name in uncalledShadowedScopes[i]) return null
         }
         return null
     }
