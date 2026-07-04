@@ -34,6 +34,52 @@ completeness campaigns to dashboard-driven burn-down: the acceptance bar is the 
 tsc's source uses, with the corpus suite as the regression net. M5 unchanged —
 performance is the directive's second half and starts at v1 compliance.
 
+**Round 403 (2026-07-04) — self-compile burn-down (THREE more bounded bugs, one a
+genuine multi-file checker bug) + a codebase-wide code-quality sweep the owner
+requested mid-session. Self-compile (compiler profile) 2,680 → 2,667 (−13); suite
+9,017 → 9,025 (+8 local); 4 commits.** By-shape histogram of the full `--listAll`
+again (the M1.12 method): **(1) TS2344 6 → 3 — a genuine MULTI-FILE cross-file bug, not
+a lib gap.** `checkConstraintsForTypeArgs` interns each generic's type params as SHARED
+`Type.TypeParam` via `typeParamInternCache`, keyed by the parameter's absolute AST `pos`
+— which COLLIDES across files (each file's positions start at 0). An UNCONSTRAINED param
+(`LexicalEnvironment<in out TEnvData, TPrivateEnvData, TPrivateEntry>`'s 3rd param) got
+back the very instance a pos-colliding `<X extends {}>` param in another file left with a
+stale `.constraint`, and line 108601 only SET a constraint (never CLEARED one), so the
+`{}` leaked in → spurious TS2344. Fix: always (re)set `.constraint`/`.default` from the
+current node (clear to null for an unconstrained param). Single-file positions never
+collide → corpus byte-identical. Validated with a 2-file repro that FAILS on pre-fix code
+(TypeParamConstraintCrossFileCollisionTest, 3 tests). This is the FIRST bounded bug in the
+session that was a cross-file/multi-file checker defect (the corpus is single-file so it
+never surfaced there). **(2) SetIterator/MapIterator lib gap — TS2552 4 → 0, TS2304 3 →
+2.** `SetIterator<T>`/`MapIterator<T>`/`ArrayIterator<T>` live in `lib.es2015.iterable.d.ts`
+(available at es2020, tsc's own base), so tsc's `core.ts`/`transformers/utilities.ts` use
+them with 0 errors; the embedded lib lacked them → FP TS2552/TS2304. Added as arity-1
+empty interfaces; corpus-neutral (0 generated baselines reference them; the sole corpus
+user `iterableTReturnTNext` isn't in the generated set). 2 local tests. **(3) TS2774 9 → 4
+— local-var-shadows-outer-function.** The uncalled-function check registered a local's
+shadow only when the local's initializer TYPE resolved, so `const emitComments =
+state.stack[i] = shouldEmitComments(node)` (element-access-assignment initializer → `any`)
+left `emitComments` unshadowed and FP'd against the outer `function emitComments`. Fix:
+register the shadow UNCONDITIONALLY (a local decl always shadows regardless of type). The
+remaining 4 (emitter.ts:2911/2912 else-block, checker.ts:24702/29602) are a nested-scope
+variant the block-scope walk doesn't reach — FOLLOW-UP. 3 local tests, repros validated to
+fire on pre-fix code. **(4) OWNER-REQUESTED code-quality sweep: narrow all 135 defensive
+`catch (_: Throwable)` → `catch (_: Exception)`** (130 Checker.kt, 3 Vfs.kt, 2 Parser.kt).
+`Throwable` swallows `Error` subtypes — most importantly `StackOverflowError`, which must
+reach the `init` boundary guard (→ TS2589) rather than be absorbed into a silently-wrong
+default; this was the exact anti-pattern the 2026-07-02 SoE cleanup removed. `Exception`
+still catches the genuine recoverable cases (NPE/ClassCast/IllegalState ⊆ RuntimeException
+⊆ Exception), so the narrowing is behavior-preserving: full suite byte-identical, self-compile
+byte-identical (2,667, no new codes, no crash) EXCEPT Errors now propagate. Validated by
+the full suite (exercises all 135 catch paths) + self-compile parity + DeepExpressionChainTest
+(pins SoE→TS2589). CLAUDE.md gained a guardrail. Removing the defensive Exception-catching
+ENTIRELY (to surface NPEs from incomplete modeling as crashes) is a separate per-site
+root-cause effort — NOT attempted blind. **META: the cross-file `typeParamInternCache`
+pos-collision (#1) is a class of bug the single-file corpus structurally cannot catch —
+worth grepping other `getOrPut(tp.pos)` / pos-keyed caches for the same hazard (20 intern
+sites share the cache; the fix mitigated the one READ site, others may still read a
+stale-constraint shared instance).**
+
 **Round 396 (2026-07-04) — self-compile burn-down, the SECOND bounded bucket from round
 395's by-shape histogram: TS2440 (type-only import merges with a value-only local).
 Self-compile (compiler profile) 2,712 → 2,702 (TS2440 10 → 0), zero corpus regressions,
@@ -685,8 +731,8 @@ Three strategic reads that shape everything below:
 
 | Metric | Source | Phase 17 target |
 |---|---|---|
-| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 8,984 with local tests as of round 394) |
-| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**2,728 measured at round 394**; M1 complete at 2,726/round 389, +2 from an intervening non-round-394 commit; round 394 changes are self-compile-inert; no-stub stays the honest default) |
+| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 9,025 with local tests as of round 403) |
+| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**2,667 measured at round 403**; M1 complete at 2,726/round 389; rounds 395–403 burned bounded histogram-tail buckets down to 2,667; no-stub stays the honest default) |
 | Project corpus FPs (services/server/…) | `bench/` TSVs (M0.1) | 0 — **the v1 exit** (all 8 profiles) |
 | Conformance adoption | generated-test counts per category | POST-V1 (re-scope 2026-07-03 — see § "Post-v1 backlog", M3.0) |
 | Crashes on any input | bench runs | 0 |
@@ -935,15 +981,20 @@ Three strategic reads that shape everything below:
   (multi-base-generic heritage misparse, parser), round 396 fixed TS2440×10 (type-only
   barrel import + value-only local, checker), and round 397 fixed TS2344×2 of 8 (the
   `createNodeArray<T>()` call-path constraint-chain skip) this way (2,726 → 2,700).
-  **Remaining candidates triaged but not done:** (a) **TS2344×6 remaining** — the CALL path is
-  fixed (`checkCallTypeArgConstraints` now mirrors `checkConstraintsForTypeArgs`'s
-  TypeParam-constraint-chain skip); the 6 left are OTHER sub-shapes: `Token<TKind>` where
-  `TKind extends JSDocSyntaxKind` vs `SyntaxKind` (enum-subset relation gap — a union of enum
-  members ≤ the enum; risky, B425 nominal-enum territory), an UNCONSTRAINED `TPrivateEntry` vs
-  an implicit-`{}` constraint (`interface LexicalEnvironment<in out TEnvData, …, TPrivateEntry>`
-  — the 3rd param has NO `extends` so it should carry NO constraint; likely a
-  variance-annotation-parse or unconstrained-→-`{}`-default artifact), and a UNION arg
-  `TIn | undefined` vs `Node | undefined` (needs per-member constraint resolution); (b)
+  Round 403 fixed **TS2344×3 more (6 → 3)**, the **SetIterator/MapIterator lib gap
+  (TS2552 4→0 + TS2304 3→2)**, and **TS2774×5 (9 → 4)** — self-compile 2,680 → 2,667.
+  **Remaining candidates triaged but not done:** (a) **TS2344×3 remaining** — the
+  `TPrivateEntry`-vs-`{}` sub-shape (round 403) turned out to be a genuine MULTI-FILE bug:
+  `typeParamInternCache` is keyed by absolute AST `pos`, which COLLIDES across files, so an
+  unconstrained param inherited a pos-colliding `<X extends {}>` param's stale `{}`
+  constraint — fixed by always clearing `.constraint`/`.default` from the current node
+  (`checkConstraintsForTypeArgs`; single-file positions never collide → corpus-neutral). The
+  3 left are OTHER sub-shapes: `Token<TKind>` where `TKind extends JSDocSyntaxKind` vs
+  `SyntaxKind` (enum-subset relation gap — a union of enum members ≤ the enum; risky, B425
+  nominal-enum territory) and a UNION arg `TIn | undefined` vs `Node | undefined` (needs
+  per-member constraint resolution). **NOTE: the pos-collision class of bug is structurally
+  invisible to the single-file corpus — grep the other 20 `getOrPut(tp.pos)` intern sites for
+  readers of a stale-constraint shared instance.** (b)
   **TS2693×1 remaining** — round 398 fixed the `symbol`-destructuring shape (×6:
   `checkTypeAsValueInStatements`'s value-name hoisting now extracts binding-pattern element
   names, not just simple Identifier decl names); the 1 left is a different
@@ -956,16 +1007,21 @@ Three strategic reads that shape everything below:
   `BinaryExpressionState` `type X` + `namespace X` clodule now resolves as both a type (TS2709
   suppressed via `currentTypeProvidingNames`) and a value (an instantiated namespace added to the
   value set via `isNamespaceInstantiated`); (f) **TS2551×5 → 0 (round 402)** — `Object.setPrototypeOf`
-  added to the embedded ObjectConstructor (zero corpus baseline shifts). **The bounded pool is now
-  genuinely thinning — remaining buckets are M3-family, not bounded bugs:** TS2739×7 (brand-property
-  structural comparison `Node`→`QualifiedName` / `Expression`→`LeftHandSideExpression` — needs
-  narrowing/cast handling → M3.4), TS2722×3 (`typeof x === "function"` + `Debug.assertIsDefined`
-  property-path narrowing → M3.4/M1.5), TS2741×3 + TS2430×1 (brand-property structural comparison →
-  M3), TS7053×3 (index-sig/implicit-any → M3), TS2367×2 (string-enum-vs-string nested-array relation
-  → M3/B425), TS2304×3 (node `global` + es2024 `MapIterator` — env/lib), TS2394×1. Re-bucket after
-  each fix; the self-compile 2,680 still has TS2591×43 (node globals, env-legit — `--node-stub`),
-  TS2563×27 (B399 heuristic → M3.4), and the M3 cores (TS2339×838, TS2322×794, TS2345×405,
-  TS7006×301) — the next real progress is a decomposed M3.1/M3.4 sub-step.
+  added to the embedded ObjectConstructor (zero corpus baseline shifts). **The bounded pool is
+  genuinely thin now — remaining bounded candidates + M3-family (self-compile at 2,667 after round
+  403):** TS2774×4 (nested-scope variant of round 403's shadowing fix — emitter.ts:2911/2912
+  else-block + checker.ts:24702/29602; the block-scope walk in `collectUncalledTypedLocalsFromBody`
+  isn't reaching the const declarations there — a bounded FOLLOW-UP), TS2740×1 (the tsc `createSet()`
+  Set shim FP: our embedded Set carries the es2024 set-methods `union`/`intersection`/… that es2020
+  shouldn't have — gating them behind `LIB_MIN_TARGET` es2024 is risky per the "and N more"
+  count-shift gotcha + the `setMethods` corpus test depends on them; DEFERRED), TS7019×4 (rest
+  param `...args` on a contextually-typed assignment-RHS arrow — M1.6 contextual-typing territory),
+  TS2739×7 (brand-property structural comparison → M3.4), TS2722×3 (property-path narrowing →
+  M3.4/M1.5), TS2741×3 + TS2430×1 (brand-property → M3), TS7053×3 (index-sig/implicit-any → M3),
+  TS2367×2 (string-enum-vs-string nested-array → M3/B425), TS2394×1. Env-legit: TS2591×43 (node
+  globals — `--node-stub`), TS2304×2 (node `global`), TS2563×27 (B399 heuristic → M3.4). M3 cores:
+  TS2339×838, TS2322×794, TS2345×405, TS7006×301 — the next real progress is a decomposed
+  M3.1/M3.4 sub-step.
 
 **M2 — Real-lib migration (staged; decompose further at start)**
 
