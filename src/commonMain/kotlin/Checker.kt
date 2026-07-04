@@ -41825,10 +41825,26 @@ interface DataView {
                 is VariableStatement -> for (d in stmt.declarationList.declarations) {
                     val vName = (d.name as? Identifier)?.text ?: continue
                     val annotated = d.type?.let { try { getTypeFromTypeNode(it) } catch (_: Exception) { null } }
+                    val init = d.initializer
                     val resolved: Type? = when {
                         annotated != null && annotated !== errorType && annotated !== anyType -> annotated
-                        d.initializer != null -> try {
-                            val t = getTypeOfExpression(d.initializer)
+                        // M1.12: a bare-identifier initializer referencing a binding that a
+                        // uncalled-scope already knows takes THAT binding's collected type, NOT
+                        // getTypeOfExpression — which resolves in file/global scope (this pass
+                        // sets up no local param scope) and finds an OUTER binding, mis-typing
+                        // `let shouldElaborateErrors = reportErrors` (a boolean param) as a
+                        // callable → spurious TS2774. Two cases: the binding is in THIS scope
+                        // being collected (an enclosing param / earlier local → `shadowed`/`into`,
+                        // not yet on the stack), or in an ENCLOSING scope already pushed
+                        // (`isUncalledShadowed`/`lookupUncalledTypedLocal` — a `let X = param` in
+                        // a nested block of the fn). The type is boolean for a typed param, or
+                        // null (→ shadow-only bail) for an untyped one; a same-scope local
+                        // FUNCTION is recorded as callable, so a genuine `let f = localFn; if (f)`
+                        // keeps firing.
+                        init is Identifier && init.text in shadowed -> into[init.text]
+                        init is Identifier && isUncalledShadowed(init.text) -> lookupUncalledTypedLocal(init.text)
+                        init != null -> try {
+                            val t = getTypeOfExpression(init)
                             if (t === anyType || t === errorType) null else t
                         } catch (_: Exception) { null }
                         else -> null

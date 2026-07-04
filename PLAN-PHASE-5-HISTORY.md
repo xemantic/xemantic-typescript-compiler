@@ -2,6 +2,43 @@
 
 Archived Phase-17 session notes trimmed from PLAN-PHASE-5.md (most recent first). See PLAN-PHASE-5.md for the live queue + the ~10 most-recent notes.
 
+**Round 389 (2026-07-03) — M1.11 landed: self-compile 2,794 → 2,726 (−68;
+TS2554 45 → 0, TS2345 424 → 411, TS2769 77 → 67, zero new codes) — M1 is
+COMPLETE.** The "nested-function shadowing" item decomposed into five shapes
+once each of the 45 TS2554 sites was traced to its declaration (the item's
+own three samples were all different shapes): parameter shadowing (identifier
++ destructured + fn-typed params), body-local variable shadowing, the
+namespace-flattening leak (`collectFuncDecls` recursed into ModuleDeclaration
+bodies, making parser.ts's namespace-local 0-param `isExternalModuleReference`
+hijack the file-level call site — now a body-scoped overlay collected at the
+walker's ModuleDeclaration branch, with the inherited-ctor fixpoint extracted
+and re-run per namespace), constructor-overload arity (only the FIRST ctor
+signature was recorded — semver.ts's `Version(text)`/`Version(major,…)` pair
+now records an isOverloaded RANGE), and spread-argument too-few unsoundness
+(a spread counts as 1 arg but expands to ≥0, so `argCount < min` is unprovable
+— too-many stands since spreads only add). Arity fixes are all
+removal/bail-shaped (`minusParamShadowedNames` at every fn-body descent +
+the `argCountFnDepth`-gated list-level var removal — the depth gate keeps
+top-level B64.2 var-arrow entries checked). Type path: two mechanisms —
+`populateParameterLocalTypes` now registers an UN-annotated param whose
+DEFAULT is an arrow/fn-expr with the initializer's inferred type (emitter.ts
+passes such params straight through as args: 5 FP TS2345 showing the outer
+5-param signature vs `() => string`), and `shadowNestedFunctionNames`
+(call-types walker, after the fn-body map copy) registers an anyType BAIL for
+each body-nested fn whose name collides with an outer binding — B83.5 leaves
+them unbound, so `getCalleeType`/`getTypeOfIdentifier` fell through to the
+merged globals and found the utilities `writeFile` import (the
+'undefined' ≁ 'string' FP at emitter.ts:1331). The −10 TS2769 were unbudgeted:
+declarations.ts's nested fns colliding with overloaded imports fed the
+overload path the same wrong signatures. 13 local tests
+(NestedFnShadowingTest), every suppression paired with a negative control
+proving the unshadowed check still fires. Residue intel: the last
+TS2345-'undefined' (debug.ts:599) is NOT this family — it's assignment
+narrowing through an `as`-cast RHS (`nodeArrayProto = Object.create(…) as
+NodeArray<Node>` inside `if (!nodeArrayProto)`) → M3.4/narrowByAssignmentRhs
+territory. Next by family: TS2339×836 (M3.4), TS2322×777 (M3.1 top shape),
+TS2345×411, TS7006×301 (M1.6(c) call-arg contexts — callee doesn't resolve).**
+
 **Round 388 (2026-07-03) — M1.9 + M1.6(a)+(b) + M1.8 + M1.10 all landed:
 self-compile 4,376 → 2,794 (−1,582, −36.2%), five code commits, zero corpus
 regressions (suite 8,935 / 0 / 3, +39 local tests). M1 is COMPLETE except the

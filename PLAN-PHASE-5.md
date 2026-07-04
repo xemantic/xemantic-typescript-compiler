@@ -34,6 +34,41 @@ completeness campaigns to dashboard-driven burn-down: the acceptance bar is the 
 tsc's source uses, with the corpus suite as the regression net. M5 unchanged —
 performance is the directive's second half and starts at v1 compliance.
 
+**Round 405 (2026-07-04) — M1.12 continued: TS2774×1 fixed (self-compile 2,664 → 2,663);
+TS7019×4 investigated and RECLASSIFIED to M3.2-gated. Suite 9,031 → 9,034 (+3 local); 1 commit.**
+Same session as round 404, second sub-step. Method: ran a full `--listAll` on the compiler
+profile, bucketed the tail, and worked the two remaining "bounded" candidates. **TS2774×1
+(checker.ts:24702 `if (shouldElaborateErrors)` where `let shouldElaborateErrors = reportErrors`):**
+`reportErrors` is a boolean PARAM of the enclosing `signaturesRelatedTo`, but the uncalled-function
+check's syntactic pass establishes no local param scope, so its
+`getTypeOfExpression(reportErrors)` resolved in file/global scope and found the sibling
+`function reportErrors` (a callable) → mis-typed `shouldElaborateErrors` as a function → FP TS2774.
+Round 403 had fixed the shadow-registration + lookup-stop; this last one was the initializer-type
+resolution. Fix (`collectUncalledTypedLocalsFromBody`): type a bare-identifier initializer from
+the uncalled check's OWN scope knowledge — `shadowed`/`into` for a binding in THIS scope being
+collected (an enclosing param / earlier local, not yet on the stack), or
+`isUncalledShadowed`/`lookupUncalledTypedLocal` for an ENCLOSING scope already pushed (a `let X =
+param` in a nested block) — instead of the unreliable global `getTypeOfExpression`. A boolean param
+→ boolean (no TS2774); a same-scope local FUNCTION is still recorded callable, so a genuine
+`let f = localFn; if (f)` keeps firing (the negative-control test). listAll diff = exactly one line
+removed, nothing added. 3 local tests (UncalledFunctionParamTypeTest). **TS7019×4 (arrow rest
+params `compilerHost.getSourceFile = (...args) =>`, `host.writeFile = (…, ...rest) =>`, and a
+callback-arg): reclassified from "M1.6 territory" to M3.2-gated.** These arrows receive a contextual
+function type from the assignment LHS member (or callee param), so tsc doesn't emit TS7019. A first
+attempt propagated the LHS type into the implicit-any `BinaryExpression` case (gated to rest-param
+RHS, suppression-only), but it was a NO-OP (self-compile unchanged) — root cause:
+`getTypeOfExpression(compilerHost.getSourceFile)` returns `any` because the implicit-any pass sets
+up NO enclosing-function param scope (`compilerHost` is a param, absent from `currentFileLocals`),
+so the LHS type never resolves to a function. Reverted the dead code cleanly (working tree = HEAD).
+The fix needs param scopes threaded into the implicit-any pass (or a real contextual-typing pass) —
+M3.2, not a bounded fix. **META: BOTH remaining "bounded" candidates were gated on the SAME
+underlying gap — the specialized syntactic passes (implicit-any, uncalled-function) resolve
+identifier/property types WITHOUT the enclosing function's param scope, so a bare identifier
+resolves to the wrong outer/global binding. TS2774 was fixable because the uncalled check ALREADY
+tracks a scope stack I could consult; TS7019 is not, because the implicit-any pass tracks none. This
+confirms the M1.12 note: the bounded pool is exhausted and remaining self-compile progress is
+M3-gated (M3.2 contextual typing / M3.4 flow-into-identifier-typing).**
+
 **Round 404 (2026-07-04) — M1.13 DONE: `typeParamInternCache` is now keyed file-aware
 `(internSalt, pos)` instead of bare `pos`. Corpus 9,026 → 9,031 (+5 local, 0 regressions);
 self-compile compiler profile 2,664 → 2,664 (by-code map UNCHANGED); 1 commit.** The proper
@@ -456,43 +491,6 @@ burn-down list is seeded in the queue item.** Wall time +70% under real libs
 (fresh per-program binds of ~240KB+ of lib source) — noted as an M2.2
 pre-flip task. Suite (default off) 8,965 / 0 / 3. M2.1 is COMPLETE.
 
-**Round 389 (2026-07-03) — M1.11 landed: self-compile 2,794 → 2,726 (−68;
-TS2554 45 → 0, TS2345 424 → 411, TS2769 77 → 67, zero new codes) — M1 is
-COMPLETE.** The "nested-function shadowing" item decomposed into five shapes
-once each of the 45 TS2554 sites was traced to its declaration (the item's
-own three samples were all different shapes): parameter shadowing (identifier
-+ destructured + fn-typed params), body-local variable shadowing, the
-namespace-flattening leak (`collectFuncDecls` recursed into ModuleDeclaration
-bodies, making parser.ts's namespace-local 0-param `isExternalModuleReference`
-hijack the file-level call site — now a body-scoped overlay collected at the
-walker's ModuleDeclaration branch, with the inherited-ctor fixpoint extracted
-and re-run per namespace), constructor-overload arity (only the FIRST ctor
-signature was recorded — semver.ts's `Version(text)`/`Version(major,…)` pair
-now records an isOverloaded RANGE), and spread-argument too-few unsoundness
-(a spread counts as 1 arg but expands to ≥0, so `argCount < min` is unprovable
-— too-many stands since spreads only add). Arity fixes are all
-removal/bail-shaped (`minusParamShadowedNames` at every fn-body descent +
-the `argCountFnDepth`-gated list-level var removal — the depth gate keeps
-top-level B64.2 var-arrow entries checked). Type path: two mechanisms —
-`populateParameterLocalTypes` now registers an UN-annotated param whose
-DEFAULT is an arrow/fn-expr with the initializer's inferred type (emitter.ts
-passes such params straight through as args: 5 FP TS2345 showing the outer
-5-param signature vs `() => string`), and `shadowNestedFunctionNames`
-(call-types walker, after the fn-body map copy) registers an anyType BAIL for
-each body-nested fn whose name collides with an outer binding — B83.5 leaves
-them unbound, so `getCalleeType`/`getTypeOfIdentifier` fell through to the
-merged globals and found the utilities `writeFile` import (the
-'undefined' ≁ 'string' FP at emitter.ts:1331). The −10 TS2769 were unbudgeted:
-declarations.ts's nested fns colliding with overloaded imports fed the
-overload path the same wrong signatures. 13 local tests
-(NestedFnShadowingTest), every suppression paired with a negative control
-proving the unshadowed check still fires. Residue intel: the last
-TS2345-'undefined' (debug.ts:599) is NOT this family — it's assignment
-narrowing through an `as`-cast RHS (`nodeArrayProto = Object.create(…) as
-NodeArray<Node>` inside `if (!nodeArrayProto)`) → M3.4/narrowByAssignmentRhs
-territory. Next by family: TS2339×836 (M3.4), TS2322×777 (M3.1 top shape),
-TS2345×411, TS7006×301 (M1.6(c) call-arg contexts — callee doesn't resolve).**
-
 ### Mission & strategy
 
 Three strategic reads that shape everything below:
@@ -543,8 +541,8 @@ Three strategic reads that shape everything below:
 
 | Metric | Source | Phase 17 target |
 |---|---|---|
-| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 9,031 with local tests as of round 404) |
-| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**2,664 measured at round 403, held at round 404**; M1 complete at 2,726/round 389; rounds 395–403 burned bounded histogram-tail buckets down to 2,664; M1.13/round 404 file-aware intern key was self-compile-neutral; no-stub stays the honest default) |
+| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 9,034 with local tests as of round 405) |
+| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**2,663 measured at round 405**; M1 complete at 2,726/round 389; rounds 395–405 burned bounded histogram-tail buckets 2,726 → 2,663; M1.13/round 404 file-aware intern key was self-compile-neutral, round 405 TS2774 −1; remaining bounded pool exhausted → M3-gated; no-stub stays the honest default) |
 | Project corpus FPs (services/server/…) | `bench/` TSVs (M0.1) | 0 — **the v1 exit** (all 8 profiles) |
 | Conformance adoption | generated-test counts per category | POST-V1 (re-scope 2026-07-03 — see § "Post-v1 backlog", M3.0) |
 | Crashes on any input | bench runs | 0 |
@@ -841,15 +839,28 @@ Three strategic reads that shape everything below:
   `BinaryExpressionState` `type X` + `namespace X` clodule now resolves as both a type (TS2709
   suppressed via `currentTypeProvidingNames`) and a value (an instantiated namespace added to the
   value set via `isNamespaceInstantiated`); (f) **TS2551×5 → 0 (round 402)** — `Object.setPrototypeOf`
-  added to the embedded ObjectConstructor (zero corpus baseline shifts). **The bounded pool is
-  genuinely thin now — remaining bounded candidates + M3-family (self-compile at 2,667 after round
-  403):** TS2774×1 (checker.ts:24702 `let shouldElaborateErrors = reportErrors` — the initializer
-  identifier misresolves to a callable during the nested-scope collection; the shadowing +
-  lookup-stop fixes landed round 403, this last one is a `getTypeOfExpression` nested-scope gap), TS2740×1 (the tsc `createSet()`
+  added to the embedded ObjectConstructor (zero corpus baseline shifts). **Round 405 fixed
+  TS2774×1 (2,664 → 2,663): `let shouldElaborateErrors = reportErrors` in checker.ts —
+  `reportErrors` is a boolean PARAM, but the uncalled-function check's syntactic pass sets up no
+  local param scope, so `getTypeOfExpression(reportErrors)` resolved in file/global scope and
+  found the outer `function reportErrors` (a callable) → FP TS2774 on `if (shouldElaborateErrors)`.
+  Fix: `collectUncalledTypedLocalsFromBody` types a bare-identifier initializer from the
+  uncalled-scope's OWN knowledge of the binding (`shadowed`/`into` for the same scope,
+  `isUncalledShadowed`/`lookupUncalledTypedLocal` for an enclosing scope on the stack) rather
+  than the unreliable global resolution — a boolean param → boolean (no TS2774), a same-scope
+  local FUNCTION → still callable (genuine `let f = localFn; if (f)` keeps firing). 3 local tests
+  (UncalledFunctionParamTypeTest).** **The bounded pool is genuinely thin now — remaining
+  candidates + M3-family (self-compile at 2,663 after round 405):** TS2740×1 (the tsc `createSet()`
   Set shim FP: our embedded Set carries the es2024 set-methods `union`/`intersection`/… that es2020
   shouldn't have — gating them behind `LIB_MIN_TARGET` es2024 is risky per the "and N more"
-  count-shift gotcha + the `setMethods` corpus test depends on them; DEFERRED), TS7019×4 (rest
-  param `...args` on a contextually-typed assignment-RHS arrow — M1.6 contextual-typing territory),
+  count-shift gotcha + the `setMethods` corpus test depends on them; DEFERRED), **TS7019×4
+  (RECLASSIFIED round 405 from "M1.6 territory" to M3.2-gated):** all four are arrow REST params
+  that receive a contextual function type — from an assignment LHS member (`compilerHost.getSourceFile
+  = (...args) =>`, `host.writeFile = (…, ...rest) =>`) or a callback-arg param. A round-405 attempt
+  to propagate the LHS type into the implicit-any `BinaryExpression` case was a NO-OP and reverted:
+  `getTypeOfExpression(compilerHost.getSourceFile)` returns `any` because the implicit-any pass sets
+  up NO enclosing-function param scope (`compilerHost` is a param, not in `currentFileLocals`). So the
+  fix needs param scopes in that pass (or a real contextual-typing pass) — M3.2, not bounded.
   TS2739×7 (brand-property structural comparison → M3.4), TS2722×3 (property-path narrowing →
   M3.4/M1.5), TS2741×3 + TS2430×1 (brand-property → M3), TS7053×3 (index-sig/implicit-any → M3),
   TS2367×2 (string-enum-vs-string nested-array → M3/B425), TS2394×1. Env-legit: TS2591×43 (node
