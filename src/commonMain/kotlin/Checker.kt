@@ -85562,7 +85562,16 @@ interface DataView {
                         sourceType is Type.Object &&
                         (!sourceType.callSignatures.isNullOrEmpty() ||
                             (!isClassOrInterfaceInstanceType(sourceType) && !sourceType.properties.isNullOrEmpty())) &&
-                        sourceType.constructSignatures.isNullOrEmpty()) {
+                        sourceType.constructSignatures.isNullOrEmpty() &&
+                        // M2.2 (round 393): tsc reports a structural failure ONCE — when the
+                        // source is ALSO missing required target properties, the missing-property
+                        // path (TS2739/TS2740; here the B444 `Array = fn` walker) owns the
+                        // diagnostic and the construct-sig-mismatch TS2322 is NOT additionally
+                        // reported. Under the embedded lib `ArrayConstructor` had no construct
+                        // sig so this branch never fired for `redefineArray`; under real libs it
+                        // does, double-emitting. Defer to missing-props. (collectMissingProperties
+                        // bails on a null-members function source, so use the null-tolerant check.)
+                        !targetHasRequiredPropAbsentFromSource(sourceType, tt)) {
                         val srcCtorElab = getNonConstructibleElaboration(sourceType, tt)
                         if (srcCtorElab != null) {
                             val displaySource = typeToString(sourceType)
@@ -85935,6 +85944,20 @@ interface DataView {
                         // so the name-presence missing-property path FPs a TS2740 here — suppress.
                         if ((sourceType as? Type.Interface)?.symbol?.name in TYPED_ARRAY_NAMES &&
                             (tt as? Type.Interface)?.symbol?.name in TYPED_ARRAY_NAMES) {
+                            return
+                        }
+                        // M2.2 (round 393): a bare-function source missing required named
+                        // properties of a construct-signature target — tsc reports the
+                        // missing-property error (TS2739/TS2740; here B444's `Array = fn`
+                        // walker under real libs, whose ArrayConstructor now carries a
+                        // construct sig) and does NOT additionally report the construct/
+                        // call-sig mismatch. Defer to the missing-property path. Fires ONLY
+                        // when properties are genuinely missing, so a source that satisfies
+                        // all named props (and fails only on the signature) still reports the
+                        // coarse TS2322 (redefineArray).
+                        if (sourceType is Type.Object && !sourceType.callSignatures.isNullOrEmpty() &&
+                            tt is Type.Object && !tt.constructSignatures.isNullOrEmpty() &&
+                            targetHasRequiredPropAbsentFromSource(sourceType, tt)) {
                             return
                         }
                         // B69.5: Widen literal source for display when target type
@@ -88387,6 +88410,22 @@ interface DataView {
      * [getDeclaredTypeOfSymbolWorker] registers the alias name for the resulting Object
      * automatically (e.g. `type Bar = Omit<Foo,"c">` displays as `Bar`).
      */
+    /**
+     * M2.2 (round 393): is [name] one of the modifier-preserving library utility
+     * aliases (Pick/Omit/Readonly/Parameters/…) AND is [symbol] a purely lib-declared
+     * alias (every declaration in [builtinLibDecls], not a user shadow)? Used to route
+     * a real-lib utility reference through the materialize* helpers instead of the
+     * generic alias-substitution path, so the resolved type preserves optional/readonly
+     * modifiers the way the embedded-lib (symbol==null) path already does. A user
+     * `type Omit<…>` shadow adds a non-lib declaration → returns false → user def wins.
+     */
+    private fun isBuiltinUtilityAlias(name: String, symbol: Symbol): Boolean {
+        if (name != "Omit" && name != "Pick" && name != "Readonly" &&
+            name != "Parameters" && name != "ConstructorParameters" && name != "ReturnType"
+        ) return false
+        return symbol.declarations.isNotEmpty() && symbol.declarations.all { it in builtinLibDecls }
+    }
+
     private fun materializeMemberSetUtility(name: String, typeArgs: List<TypeNode>?): Type? {
         val args = typeArgs ?: return null
         if (args.size != 2) return null
@@ -88568,6 +88607,29 @@ interface DataView {
             ?: (node.typeName as? Identifier)?.let { lookupTypeSymbolInInferenceNamespace(it.text) }
             ?: globals[name]
         if (symbol != null) {
+            // M2.2 (round 393): under real libs, Pick/Omit/Readonly/Parameters/…
+            // resolve to a LIB TypeAlias symbol, so the generic alias-substitution path
+            // below expands the real definition — `Omit<T,K> = Pick<T, Exclude<keyof T,K>>`
+            // → the NON-homomorphic mapped type `{ [P in K]: T[P] }` — and DROPS the
+            // optional/readonly modifiers (getTypeFromMappedType doesn't yet treat
+            // `[P in K extends keyof T]` as homomorphic → M3.3). The embedded lib does not
+            // declare these names, so under it they hit the materialize* dispatch further
+            // down (symbol==null) which PRESERVES modifiers by reusing the source property
+            // Symbols. Converge the two paths: when the name is one of these utilities AND
+            // the symbol is lib-only (no user shadow), materialize here too. Purely
+            // additive — the materializers return null for any shape they can't model
+            // precisely (generic instantiation, index sigs, non-literal keys), falling
+            // through to the alias-substitution path exactly as before.
+            if (isBuiltinUtilityAlias(name, symbol)) {
+                when (name) {
+                    "Omit", "Pick" ->
+                        materializeMemberSetUtility(name, node.typeArguments)?.let { return it }
+                    "Readonly" ->
+                        materializeModifierUtility(name, node.typeArguments)?.let { return it }
+                    "Parameters", "ConstructorParameters", "ReturnType" ->
+                        materializeSignatureUtility(name, node.typeArguments)?.let { return it }
+                }
+            }
             // B50.1: Generic type alias instantiation. When the symbol is a TypeAlias
             // and the reference supplies type args matching the alias's arity, re-resolve
             // the alias body in a context that maps alias type-parameter names to the
@@ -122826,6 +122888,32 @@ interface DataView {
             }
         }
         return names
+    }
+
+    /**
+     * M2.2 (round 393): does [target] have ≥1 REQUIRED named property (non-static,
+     * non-prototype) that is absent from [source]'s members? Unlike
+     * [collectMissingProperties] / [getMissingRequiredPropertySymbol] this does NOT bail
+     * when `source.members` is null — a bare-function source (`callSignatures` only,
+     * `members == null`) is treated as "has no named members", so every required target
+     * property is missing. Used to defer the construct-sig / call-sig mismatch TS2322
+     * (17.111 / 17.112) to the missing-property path (TS2739/TS2740) when the source is
+     * ALSO missing target properties, matching tsc's report-a-structural-failure-once rule
+     * (`redefineArray`: a plain function assigned to `ArrayConstructor` reports only the
+     * TS2739, not the additional `new (...)` mismatch).
+     */
+    private fun targetHasRequiredPropAbsentFromSource(source: Type.Object, target: Type.Object): Boolean {
+        resolveStructuredTypeMembers(source)
+        resolveStructuredTypeMembers(target)
+        val targetProps = target.properties ?: return false
+        val srcMembers = source.members
+        val targetStatics = getStaticMembersOfType(target)
+        return targetProps.any { p ->
+            !isOptionalProperty(p) &&
+                p.name !in OBJECT_PROTOTYPE_PROPERTIES &&
+                (targetStatics == null || !targetStatics.containsKey(p.name)) &&
+                (srcMembers == null || p.name !in srcMembers)
+        }
     }
 
     private fun collectMissingProperties(sourceType: Type, targetType: Type): List<String> {
