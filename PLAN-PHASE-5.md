@@ -976,6 +976,25 @@ Three strategic reads that shape everything below:
   anyType-bails body-nested fns colliding with an outer binding (emitter.ts:1331's
   sibling `writeFile` vs the utilities import). 13 local tests
   (NestedFnShadowingTest), every suppression paired with a negative control.
+- [ ] **M1.13 `typeParamInternCache` cross-file pos-collision (architectural — a bug class
+  the single-file corpus is structurally blind to).** The cache is keyed by absolute AST
+  `pos`, which COLLIDES across files in a multi-file program (each file's positions start at
+  0), so two different type parameters in different files share ONE `Type.TypeParam` instance
+  — and its mutable `.constraint`/`.default` get stomped. Round 403 fixed the one OBSERVED FP
+  (TS2344 in `checkConstraintsForTypeArgs`, which now always clears+sets the constraint from
+  the current node). Two OTHER intern sites (`Checker.kt` ~92997 and ~107330, the function-type
+  builders) set `.constraint`/`.default` INSIDE the `getOrPut` factory — which runs only on the
+  FIRST insert, so on a cache hit they read the colliding file's stale constraint; these have
+  NOT been observed to FP but are latent. The ~18 remaining `getOrPut(tp.pos)` sites set the
+  constraint in a `newOnes`-style loop AFTER interning (need audit for the same conditional-set
+  hazard). The PROPER fix is a file-aware cache key (or globally-unique positions) — but the
+  intern intent is "same AST node → same instance for TypeMapper identity", and a `data class`
+  node has structural equality (two `<T>` at the same relative pos in different files compare
+  EQUAL), so neither pos nor node-identity is a safe multiplatform key without a per-file
+  discriminator. RISK: some M3-bucket FPs (TS2322/TS2345 via wrong TypeParam apparent types)
+  MIGHT be stale-constraint artifacts — worth measuring after the proper fix. Do NOT
+  speculatively re-set constraints outside the factory at the two hot-path sites (re-resolving
+  `getTypeFromTypeNode` on every call is a perf regression); fix the KEY instead.
 - [ ] **M1.12 Remaining bounded self-compile buckets (the by-shape histogram tail M1
   didn't reach).** After M1, bucket the FULL compiler-profile `--listAll` output by
   NORMALIZED message shape (`re.sub(r"'[^']*'", "'X'", msg)`) — NOT the 30-line log tail —
