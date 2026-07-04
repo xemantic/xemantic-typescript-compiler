@@ -34,6 +34,30 @@ completeness campaigns to dashboard-driven burn-down: the acceptance bar is the 
 tsc's source uses, with the corpus suite as the regression net. M5 unchanged —
 performance is the directive's second half and starts at v1 compliance.
 
+**Round 390 (2026-07-04) — M2.1(a) landed: the real TypeScript lib sources ship
+as generated Kotlin (`RealLibFiles.kt`, 100 non-DOM lib files / 565,732 bytes,
+keyed by bare lib name, byte-faithful incl. CRLF).** `generateRealLibSources`
+(build.gradle.kts) reads the pinned commit's object DB directly (`git ls-tree`
++ `git show` — offline; the sparse working tree never materializes `src/lib`)
+and emits ≤ 60,000-modified-UTF-8-byte `sb.append` chunks per string literal
+(the 64 KB class-file constant cap; es5.d.ts = 4 chunks), wired as a commonMain
+srcDir with every Kotlin compile task depending on it (first compile in a fresh
+clone now needs typescript-repo, same as tests always did). 3 local tests
+(RealLibFilesTest) pin multi-chunk reassembly (es5 > 65,535 chars with
+first/middle/last-chunk anchors) and the `/// <reference lib>` directives
+M2.1(b)'s DAG resolver will consume. No dashboard delta (no runtime behavior
+change — the checker doesn't read RealLibFiles yet). **Debugging saga worth the
+note: the first cut's KDoc contained the path glob `src/lib/*.d.ts` — the `/*`
+in it opened a NESTED Kotlin block comment that the NEXT declaration's KDoc
+`*/` re-balanced, so build.gradle.kts COMPILED with a silently-dead region:
+tasks registered after the comment were "not found", top-level probe statements
+never executed, and even an appended `this is a syntax error!!!` line "BUILT
+SUCCESSFULLY" (it sat inside the swallowed region).** The tell that cracked it:
+a deliberate EOF syntax error still building → the content can't be what's
+compiling → comment-depth scan found the imbalance. (A raw NUL byte from a
+tool-input NUL-char literal was a red herring fixed first.) CLAUDE.md's
+block-comments-NEST gotcha gained the silent-dead-region variant.
+
 **Round 389 (2026-07-03) — M1.11 landed: self-compile 2,794 → 2,726 (−68;
 TS2554 45 → 0, TS2345 424 → 411, TS2769 77 → 67, zero new codes) — M1 is
 COMPLETE.** The "nested-function shadowing" item decomposed into five shapes
@@ -387,7 +411,7 @@ Three strategic reads that shape everything below:
 
 | Metric | Source | Phase 17 target |
 |---|---|---|
-| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 8,948 with local tests as of round 389) |
+| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 8,951 with local tests as of round 390) |
 | Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**2,726 after round 389** — M1 complete; no-stub stays the honest default) |
 | Project corpus FPs (services/server/…) | `bench/` TSVs (M0.1) | 0 — **the v1 exit** (all 8 profiles) |
 | Conformance adoption | generated-test counts per category | POST-V1 (re-scope 2026-07-03 — see § "Post-v1 backlog", M3.0) |
@@ -639,18 +663,27 @@ Three strategic reads that shape everything below:
   shared across programs (this snapshot is deliberately the seed of M5's incremental
   infra). Behind a CompilerOptions flag so corpus A/B comparison is possible.
   **Decomposition (round-389 scoping; work as separate commits):**
-  (a) *Ship the lib text*: a Gradle codegen step (guardrail-approved as part of M2)
-  extracting `src/lib/*.d.ts` from the typescript-repo object DB into generated
-  Kotlin — **TRAP: a JVM class-file string constant caps at 65,535 UTF-8 bytes;
-  es5.d.ts is 218 KB and dom.generated.d.ts 2.3 MB, so the generator must emit
-  ≤60 KB chunks concatenated at first use** (today's `BUILTIN_LIB_SOURCE`-in-one-
-  literal pattern cannot carry them). Start with the non-DOM ES libs (~50 files,
-  DOM is M2.4). (b) *DAG resolver*: name → file map + reference-DAG expansion
-  (`lib.es2020` → es2019 + es2020.* pieces; tsc's `libMap` in commandLineParser.ts
-  is the reference), dedup in tsc's emission order, local tests against the real
-  headers. (c) *Snapshot*: parse+bind the selected set once per (target, lib)
-  key behind `CompilerOptions.useRealLibs`, immutable + shared. (d) wire into
-  Checker init as an alternative to `builtinLibDecls` and A/B one corpus run.
+  - [x] (a) *Ship the lib text* — DONE (round 390): `generateRealLibSources`
+    Gradle codegen (guardrail-approved as part of M2) extracts the non-DOM ES set
+    (100 files, 565,732 bytes) from the typescript-repo object DB (`git ls-tree` +
+    `git show` at the pin — works offline, the sparse working tree never
+    materializes `src/lib`) into `build/generated/real-lib/RealLibFiles.kt`
+    (commonMain srcDir; every Kotlin compile task depends on it). The 64 KB
+    class-file string-constant TRAP is dodged by chunking each file into
+    `sb.append("…")` literals of ≤ 60,000 modified-UTF-8 value bytes split at
+    line boundaries (es5 = 4 chunks), reassembled at runtime — never fold chunks
+    into one literal / `const val` concat (constant-folds back over the cap).
+    Keys are bare lib names (`es5`, `es2015.core`); content byte-faithful (CRLF
+    preserved). 3 local tests (RealLibFilesTest) pin multi-chunk reassembly +
+    the reference directives (b) will consume.
+  - [ ] (b) *DAG resolver*: name → file map + reference-DAG expansion
+    (`lib.es2020` → es2019 + es2020.* pieces; tsc's `libMap` in commandLineParser.ts
+    is the reference), dedup in tsc's emission order, local tests against the real
+    headers.
+  - [ ] (c) *Snapshot*: parse+bind the selected set once per (target, lib)
+    key behind `CompilerOptions.useRealLibs`, immutable + shared.
+  - [ ] (d) wire into Checker init as an alternative to `builtinLibDecls` and A/B
+    one corpus run.
 - [ ] **M2.2 Corpus A/B and default flip.** Run the corpus with real libs; burn down
   the diff (baselines were produced by real-lib tsc, so divergence generally means one
   of our compensating hardcodes — fix by deletion). Flip the default when green.
