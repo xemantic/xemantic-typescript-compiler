@@ -39953,6 +39953,7 @@ interface ObjectConstructor {
     (value?: any): any;
     readonly prototype: Object;
     getPrototypeOf(o: any): any;
+    setPrototypeOf(o: any, proto: object | null): any;
     getOwnPropertyNames(o: any): string[];
     create(o: any, properties?: any): any;
     defineProperty(o: any, p: string, attributes: PropertyDescriptor & ThisType<any>): any;
