@@ -76,6 +76,17 @@ class Parser(
      * Set by the unary operand sites, CONSUMED at parseUnaryExpression entry.
      */
     private var jsxMustBeUnary = false
+    /**
+     * True while parsing a heritage-clause base expression (`extends A<T>, B`). In this
+     * context a `Foo<T>` followed by a comma/colon/`&`/`|` (any `canFollowTypeArgumentsInExpression`
+     * token) must NOT be converted into a value-position instantiation expression (which drops
+     * the type arguments — the documented multi-base-generic misparse). Instead the postfix
+     * `<` branch bails so `parseExpressionWithTypeArguments` re-parses the type args as heritage
+     * type arguments, matching tsc (whose `parseLeftHandSideExpressionOrHigher` produces an
+     * ExpressionWithTypeArguments that heritage returns verbatim). Reset by parseArgumentList so
+     * a nested `extends foo(bar<T>)` call argument parses instantiation exprs normally.
+     */
+    private var parsingHeritageBase = false
     private var classBodyDepth = 0
     private var inTypeArgsDepth = 0
     private var inTupleTypeDepth = 0
@@ -2618,7 +2629,12 @@ class Parser(
 
     private fun parseExpressionWithTypeArguments(): ExpressionWithTypeArguments {
         val pos = getPos()
-        val expr = parseLeftHandSideExpression()
+        // Suppress value-position instantiation-expr conversion for the base SPINE so a
+        // non-last generic base (`extends ReadonlyArray<T>, TextRange`) keeps its type
+        // arguments (they are re-parsed by parseTypeArgumentsOpt below). See parsingHeritageBase.
+        val savedHeritage = parsingHeritageBase
+        parsingHeritageBase = true
+        val expr = try { parseLeftHandSideExpression() } finally { parsingHeritageBase = savedHeritage }
         val typeArgs = parseTypeArgumentsOpt()
         return ExpressionWithTypeArguments(expression = expr, typeArguments = typeArgs, pos = pos, end = getEnd())
     }
@@ -6434,6 +6450,14 @@ class Parser(
                                     end = getEnd()
                                 )
                             }
+                            // Heritage base spine (`extends Foo<T>, Bar`): do NOT collapse
+                            // `Foo<T>` into a value-position instantiation expr (which drops the
+                            // type args). Bail so tryScan restores the scanner and
+                            // parseExpressionWithTypeArguments re-reads `<T>` as heritage type
+                            // arguments. Gated to the instantiation case (a `(`/template already
+                            // produced a Call/TaggedTemplate above, so a genuine heritage call
+                            // `extends mixin<T>()` is unaffected).
+                            typeArgs != null && parsingHeritageBase -> null
                             // Instantiation expression: expr<Type> followed by a token that
                             // cannot start a binary expression (so it's type args, not comparison).
                             // Type arguments are dropped. Wrap in parens (TypeScript emits (expr))
@@ -7846,10 +7870,15 @@ class Parser(
         // element access normally.
         val savedDecoratorContext = inDecoratorContext
         inDecoratorContext = false
+        // A call argument leaves the heritage-base spine, so `extends foo(bar<T>)` parses the
+        // inner instantiation expression normally (see parsingHeritageBase).
+        val savedHeritageBase = parsingHeritageBase
+        parsingHeritageBase = false
         try {
             return parseArgumentListWorker()
         } finally {
             inDecoratorContext = savedDecoratorContext
+            parsingHeritageBase = savedHeritageBase
         }
     }
 
