@@ -60,13 +60,38 @@ narrow delete-local fallback closes the one shape the corpus needs and a latent 
 FN (`delete x.constructor` etc. where the receiver lacks an own decl). 6 local tests
 (DeleteObjectPrototypeTs2790Test): real-libs positive (toString, valueOf), embedded
 regression control (own-member branch unchanged), own-optional-member negative,
-index-signature-non-prototype-name negative, strictNullChecks-off negative. No
-self-compile dashboard delta (corpus-A/B fix; default stays off). New CLAUDE.md gotcha on
-the getApparentType Object.prototype gap. **This is the round-317-324 META-LESSON again:
-a read-only-triage "ENGINE / M3" verdict is about the GENERAL fix — a corpus-unique,
-FP-safe, narrow fallback can still flip a test the triage rated engine-gated. Re-check
-"ENGINE" sub-verdicts against corpus-uniqueness + a tightly-gated local fix before
-trusting them.**
+index-signature-non-prototype-name negative, strictNullChecks-off negative. New CLAUDE.md
+gotcha on the getApparentType Object.prototype gap. **SECOND clean win, same session
+(jsExportMemberMergedWithModuleAugmentation2, A/B 28 → 27): the B553 CJS-string-import
+spelling-suggestion TS2728 now attributes lib-first.** The `emitCjsStringImportMethodAccess`
+walker (`name.<method>()` where `name` is a `string`-typed CJS import → TS2551 "did you mean
+'<sugg>'?" + a TS2728 "declared here") built its related-info via the position-based
+`resolveDeclarationSourceFile`, so under multi-file real libs the suggestion `fixed` (a
+DEPRECATED HTML helper on the real `String` interface) false-matched the large `/index.ts`
+(`/index.ts:8:18528`) instead of `lib.es2015.core.d.ts:--:--`. This is the SAME lib-file
+attribution bug round 392 fixed at three TS2728 builders (`findDeclarationRelatedInfo`, the
+property-suggestion site, `createPropertyDeclaredHereRelatedInfo`) — the B553 walker was
+simply an unwired 4th path. Fix: consult `libFileOfDecl(decl)` (node-first `realLibDeclFile`
+map) BEFORE the position path; the map is empty under the embedded lib so the embedded path
+is byte-identical (guaranteed). The `DEPRECATED_STRING_HTML_HELPERS` override
+(`fixed`/`sub`/`sup`/… → `lib.es2015.core.d.ts`) still fires on top of the node-first
+attribution. 1 local test (RealLibsTs2728FileTest, the multi-file CJS shape). A preventive
+audit of all TS2728 sites found ~7 others still on the position path — all emit at user-decl
+"declared here" positions (duplicate-identifier / user re-decl) that never target a lib
+member, so speculatively wiring them is scope creep; flag them only if a future A/B test
+exercises a spelling-suggestion / missing-lib-member on those paths. **Both fixes are the
+round-317-324 META-LESSON again: a read-only-triage "ENGINE / M3" verdict is about the
+GENERAL fix — a corpus-unique, FP-safe, narrow fallback can still flip a test the triage
+rated engine-gated. Re-check "ENGINE" sub-verdicts against corpus-uniqueness + a
+tightly-gated local fix before trusting them.** Batch A/B run this session also confirmed
+the OTHER five sampled candidates ARE genuinely engine-gated (data, not guessing):
+typedArraysCrossAssignability01 (B496 pin double-emits alongside the real generic
+typed-array relation → M2.3 unwind), narrowingPastLastAssignment (`[]`=`any[]` B87.6 vs
+`number[]` concat-return relation FP), correctOrderOfPromiseMethod (`Promise.all` const-tuple
+inference → M3.1), dissallowSymbolAsWeakType (`new FinalizationRegistry(() => {})` leaves the
+generic `T` unresolved → `f.register(s, null)` FP TS2345 `null ≁ T` → M3.1),
+interfaceAssignmentCompat / mergedClassNamespaceRecordCast (Record materialization / dedicated
+walkers under real libs → M3.3).
 
 **Round 393 (2026-07-04) — M2.2 burn-down #3: the lib-declared utility-alias
 modifier cluster + the redefineArray construct-sig double-emit. Real-lib A/B recount
@@ -591,7 +616,7 @@ Three strategic reads that shape everything below:
 
 | Metric | Source | Phase 17 target |
 |---|---|---|
-| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 8,983 with local tests as of round 394) |
+| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 8,984 with local tests as of round 394) |
 | Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**2,726 after round 389** — M1 complete; no-stub stays the honest default) |
 | Project corpus FPs (services/server/…) | `bench/` TSVs (M0.1) | 0 — **the v1 exit** (all 8 profiles) |
 | Conformance adoption | generated-test counts per category | POST-V1 (re-scope 2026-07-03 — see § "Post-v1 backlog", M3.0) |
@@ -904,7 +929,10 @@ Three strategic reads that shape everything below:
   `isBuiltinUtilityAlias` materializer routing) + redefineArray (construct-sig double-emit
   guard). Round 394 fixed keywordExpressionInternalComments (Object.prototype-member
   fallback in the TS2790 delete check — `delete Array.toString` under real libs).
-  A/B RECOUNT (round 394): 28 corpus failing testcases remaining
+  Round 394 ALSO fixed jsExportMemberMergedWithModuleAugmentation2 (node-first
+  `libFileOfDecl` in the B553 CJS-string-import TS2728 builder, the unwired 4th of
+  round 392's attribution sites).
+  A/B RECOUNT (round 394): 27 corpus failing testcases remaining
   (`.errors.txt` subtests):** arrayBufferIsViewNarrowsType, builtinIterator,
   consistentAliasVsNonAliasRecordBehavior, correctOrderOfPromiseMethod,
   deleteExpressionMustBeOptional_exactOptionalPropertyTypes (×2 variants),
@@ -912,7 +940,7 @@ Three strategic reads that shape everything below:
   doYouNeedToChangeYourTargetLibraryES2016Plus, flatArrayNoExcessiveStackDepth,
   genericIndexedAccessVarianceComparisonResultCorrect, implementArrayInterface,
   interfaceAssignmentCompat, isArray,
-  jsExportMemberMergedWithModuleAugmentation2, keyRemappingKeyofResult,
+  keyRemappingKeyofResult,
   mappedTypeGenericWithKnownKeys,
   mappedTypeIndexedAccessConstraint, mergedClassNamespaceRecordCast,
   narrowingPastLastAssignment, requiredMappedTypeModifierTrumpsVariance,

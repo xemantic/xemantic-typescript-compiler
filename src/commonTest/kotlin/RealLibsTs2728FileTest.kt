@@ -107,4 +107,52 @@ class RealLibsTs2728FileTest {
                 rel.joinToString { "${it.fileName}:${it.line}:${it.character}" },
         )
     }
+
+    @Test
+    fun `TS2728 from the CJS string-import spelling suggestion attributes to the lib, not the user file`() {
+        // Round 394: the B553 emitCjsStringImportMethodAccess walker built its TS2728 with
+        // the position-based resolveDeclarationSourceFile, so under real libs `fixed` (on the
+        // real String interface, a DEPRECATED HTML helper) false-matched the large /index.ts
+        // (/index.ts:8:18528). This is the jsExportMemberMergedWithModuleAugmentation2 shape:
+        // a checkJs CJS `module.exports = { a: "ok" }` (typed string) + a `declare module`
+        // augmentation, then `a.toFixed()` → TS2551 "did you mean 'fixed'?" + TS2728.
+        val diags = TypeScriptCompiler().compile(
+            """
+            // @useRealLibs: true
+            // @target: es2015
+            // @allowJs: true
+            // @checkJs: true
+            // @noEmit: true
+
+            // @Filename: /test.js
+            module.exports = {
+              a: "ok"
+            };
+
+            // @Filename: /index.ts
+            import { a } from "./test";
+
+            declare module "./test" {
+              export const a: number;
+            }
+
+            a.toFixed();
+            """.trimIndent(),
+            "index.ts",
+        ).diagnostics
+        val ts2551 = diags.firstOrNull { it.code == 2551 && it.message.contains("toFixed") }
+        assertTrue(ts2551 != null, "expected TS2551 for a.toFixed(); got: " +
+            diags.joinToString { "TS${it.code}" })
+        val rel = ts2551.relatedInformation.filter { it.code == 2728 }
+        assertTrue(
+            rel.any { it.fileName == "lib.es2015.core.d.ts" && it.line == null && it.character == null },
+            "the 'fixed' TS2728 must be masked to lib.es2015.core.d.ts:--:--, got: " +
+                rel.joinToString { "${it.fileName}:${it.line}:${it.character}" },
+        )
+        assertTrue(
+            rel.none { (it.fileName ?: "").endsWith("index.ts") },
+            "the TS2728 must NOT be attributed to the user file /index.ts, got: " +
+                rel.joinToString { "${it.fileName}:${it.line}:${it.character}" },
+        )
+    }
 }

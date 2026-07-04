@@ -146151,9 +146151,15 @@ interface DataView {
                     is Identifier -> dn.pos
                     else -> decl?.pos ?: 0
                 }
-                val (declFile, _) = resolveDeclarationSourceFile(declPos)
+                // M2.2 (round 394): node-first lib attribution (see libFileOfDecl) — under
+                // multi-file real libs a lib member's position false-matches a large user
+                // file (`fixed` on the real String interface → /index.ts:8:18528). The map
+                // is empty under the embedded lib, so this is byte-identical there.
+                val libMapped = libFileOfDecl(decl)
+                val (declFile, _) = if (libMapped != null) Pair(libMapped, null)
+                    else resolveDeclarationSourceFile(declPos)
                 val resolvedFile = declFile ?: file
-                val isLib = isLibFileName(resolvedFile)
+                val isLib = libMapped != null || isLibFileName(resolvedFile)
                 val baselineFile = if (isLib && suggestion in DEPRECATED_STRING_HTML_HELPERS)
                     "lib.es2015.core.d.ts" else resolvedFile
                 listOf(Diagnostic(
