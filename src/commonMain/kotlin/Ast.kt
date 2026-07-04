@@ -1696,6 +1696,20 @@ data class TypeParameter(
     override val trailingComments: List<Comment>? = null,
 ) : Node {
     override val kind: SyntaxKind = SyntaxKind.TypeParameter
+
+    /**
+     * M1.13: a per-FILE discriminator (the parse's `fileName.hashCode()`, stamped by the
+     * parser) used ONLY as part of `Checker.typeParamInternCache`'s key. The intern cache
+     * was keyed by the absolute AST `pos` alone, which COLLIDES across files in a
+     * multi-file program (each file's positions start at 0) — so two unrelated type
+     * parameters in different files shared ONE `Type.TypeParam` instance and stomped its
+     * mutable `.constraint`/`.default` (a spurious TS2344 in tsc's own sources). Combining
+     * the salt with `pos` in the key eliminates the cross-file collision. Body property
+     * (NOT a constructor param) so it stays out of data-class `equals`/`hashCode`/`copy`;
+     * a single-file compile stamps every param with the SAME salt, so the key reduces to a
+     * bijection with `pos` and interning behaves exactly as before (corpus byte-identical).
+     */
+    var internSalt: Int = 0
 }
 
 data class QualifiedName(

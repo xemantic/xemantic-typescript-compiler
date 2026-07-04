@@ -39,6 +39,11 @@ class Parser(
 ) {
 
     private val scanner = Scanner(source)
+    // M1.13: per-file salt stamped onto every TypeParameter this parser creates, so the
+    // checker's `typeParamInternCache` key can be made file-aware (see TypeParameter.internSalt).
+    // Distinct fileNames → distinct salts → no cross-file pos collision; an empty fileName
+    // (JSDoc sub-parses) salts to 0, which is fail-safe (same as the pre-fix pos-only key).
+    private val typeParamFileSalt: Int = fileName.hashCode()
     private var token: SyntaxKind = SyntaxKind.Unknown
     private var prevToken: SyntaxKind = SyntaxKind.Unknown
     private val diagnostics = mutableListOf<Diagnostic>()
@@ -8328,7 +8333,7 @@ class Parser(
             modifiers = modifiers,
             pos = pos,
             end = getEnd()
-        )
+        ).also { it.internSalt = typeParamFileSalt }
     }
 
     private fun parseTypeArgumentsOpt(): List<TypeNode>? {

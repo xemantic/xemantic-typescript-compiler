@@ -370,8 +370,17 @@ class Checker(
 
     /** B59.1: intern Type.TypeParam instances by the TypeParameter AST node's position
      *  so the same source-level `<U>` always returns the same instance across multiple
-     *  function-signature resolutions. Stabilizes downstream caches keyed by Type id. */
-    private val typeParamInternCache: MutableMap<Int, Type.TypeParam> = mutableMapOf()
+     *  function-signature resolutions. Stabilizes downstream caches keyed by Type id.
+     *  M1.13: the key is `(internSalt, pos)` packed into a Long (NOT `pos` alone) — the
+     *  bare AST `pos` COLLIDES across files in a multi-file program (each file starts at
+     *  0), so two unrelated params in different files shared one instance and stomped its
+     *  `.constraint`/`.default`. A single-file compile stamps every param with the same
+     *  salt, so the key is a bijection with `pos` and interning is byte-identical there. */
+    private val typeParamInternCache: MutableMap<Long, Type.TypeParam> = mutableMapOf()
+
+    /** M1.13: file-aware intern-cache key. See [typeParamInternCache] / TypeParameter.internSalt. */
+    private fun internKey(tp: TypeParameter): Long =
+        (tp.internSalt.toLong() shl 32) or (tp.pos.toLong() and 0xFFFFFFFFL)
 
     /** B60.12: AST TypeParameter nodes by name, used by `checkTypeParamTypedOps` walker
      *  to emit TS2208 related info pointing at the correct source position. */
@@ -68387,7 +68396,7 @@ interface DataView {
                         val scope = (currentTypeParamScope?.toMutableMap() ?: mutableMapOf())
                         val newOnes = mutableListOf<Pair<TypeParameter, Type.TypeParam>>()
                         for (tp in tps) {
-                            val typeParam = typeParamInternCache.getOrPut(tp.pos) {
+                            val typeParam = typeParamInternCache.getOrPut(internKey(tp)) {
                                 val p = Type.TypeParam()
                                 p.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
                                 p
@@ -68418,7 +68427,7 @@ interface DataView {
                         val astScope = currentTypeParamAstForOps?.toMutableMap() ?: mutableMapOf()
                         val newOnes = mutableListOf<Pair<TypeParameter, Type.TypeParam>>()
                         for (tp in classTps) {
-                            val typeParam = typeParamInternCache.getOrPut(tp.pos) {
+                            val typeParam = typeParamInternCache.getOrPut(internKey(tp)) {
                                 val p = Type.TypeParam()
                                 p.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
                                 p
@@ -68450,7 +68459,7 @@ interface DataView {
                                     val astScope = currentTypeParamAstForOps?.toMutableMap() ?: mutableMapOf()
                                     val newOnes = mutableListOf<Pair<TypeParameter, Type.TypeParam>>()
                                     for (tp in tps) {
-                                        val typeParam = typeParamInternCache.getOrPut(tp.pos) {
+                                        val typeParam = typeParamInternCache.getOrPut(internKey(tp)) {
                                             val p = Type.TypeParam()
                                             p.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
                                             p
@@ -68918,7 +68927,7 @@ interface DataView {
                     val astScope = currentTypeParamAstForOps?.toMutableMap() ?: mutableMapOf()
                     val newOnes = mutableListOf<Pair<TypeParameter, Type.TypeParam>>()
                     for (tp in tps) {
-                        val typeParam = typeParamInternCache.getOrPut(tp.pos) {
+                        val typeParam = typeParamInternCache.getOrPut(internKey(tp)) {
                             val p = Type.TypeParam()
                             p.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
                             p
@@ -69068,7 +69077,7 @@ interface DataView {
             val astScope = currentTypeParamAstForOps?.toMutableMap() ?: mutableMapOf()
             val newOnes = mutableListOf<Pair<TypeParameter, Type.TypeParam>>()
             for (tp in ownTps) {
-                val typeParam = typeParamInternCache.getOrPut(tp.pos) {
+                val typeParam = typeParamInternCache.getOrPut(internKey(tp)) {
                     val p = Type.TypeParam()
                     p.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
                     p
@@ -80460,7 +80469,7 @@ interface DataView {
                 // (2) resolve constraint/default with scope active.
                 val newTps = mutableListOf<Pair<TypeParameter, Type.TypeParam>>()
                 for (tp in funcTypeParams) {
-                    val typeParam = typeParamInternCache.getOrPut(tp.pos) {
+                    val typeParam = typeParamInternCache.getOrPut(internKey(tp)) {
                         val p = Type.TypeParam()
                         p.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
                         p
@@ -88970,7 +88979,7 @@ interface DataView {
                 // (`substitutionResultCache`, `referenceCache`) miss across calls.
                 val tpDecl = symbol.declarations.firstOrNull { it is TypeParameter } as? TypeParameter
                 if (tpDecl != null) {
-                    typeParamInternCache.getOrPut(tpDecl.pos) {
+                    typeParamInternCache.getOrPut(internKey(tpDecl)) {
                         val tp = Type.TypeParam()
                         tp.symbol = symbol
                         tp
@@ -89427,7 +89436,7 @@ interface DataView {
             // same function get distinct TypeParam instances because their TypeParameter
             // AST nodes have distinct source positions.
             val typeParams = decl.typeParameters?.map { tp ->
-                typeParamInternCache.getOrPut(tp.pos) {
+                typeParamInternCache.getOrPut(internKey(tp)) {
                     val param = Type.TypeParam()
                     param.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
                     param
@@ -92994,7 +93003,7 @@ interface DataView {
             // resolved in the current scope — top-level constraints (`A extends ObjA`)
             // resolve fine; constraints referencing sibling params stay best-effort.
             typeParameters = expr.typeParameters?.map { tp ->
-                typeParamInternCache.getOrPut(tp.pos) {
+                typeParamInternCache.getOrPut(internKey(tp)) {
                     val p = Type.TypeParam()
                     p.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
                     tp.constraint?.let { p.constraint = getTypeFromTypeNode(it) }
@@ -93023,7 +93032,7 @@ interface DataView {
         // lookup → errorType → display `(a: error) => any`).
         val sigTypeParams = expr.typeParameters?.map { tpDecl ->
             // B59.1 extension: intern by TypeParameter AST position.
-            typeParamInternCache.getOrPut(tpDecl.pos) {
+            typeParamInternCache.getOrPut(internKey(tpDecl)) {
                 Type.TypeParam().also { tp ->
                     tp.symbol = Symbol(SymbolFlags.TypeParameter, tpDecl.name.text)
                 }
@@ -107327,7 +107336,7 @@ interface DataView {
         val typeParameters = typeParams?.map { tp ->
             // B59.1: intern by TypeParameter node position. Same source-level <U>
             // returns the same Type.TypeParam instance across multiple sig resolutions.
-            typeParamInternCache.getOrPut(tp.pos) {
+            typeParamInternCache.getOrPut(internKey(tp)) {
                 val param = Type.TypeParam()
                 param.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
                 tp.constraint?.let { param.constraint = getTypeFromTypeNode(it) }
@@ -108054,7 +108063,7 @@ interface DataView {
         val savedScope = currentTypeParamScope
         val scope = (savedScope?.toMutableMap() ?: mutableMapOf())
         for (tp in tps) {
-            val typeParam = typeParamInternCache.getOrPut(tp.pos) {
+            val typeParam = typeParamInternCache.getOrPut(internKey(tp)) {
                 val p = Type.TypeParam()
                 p.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
                 p
@@ -108194,7 +108203,7 @@ interface DataView {
                         val scope = (savedScope?.toMutableMap() ?: mutableMapOf())
                         stmt.typeParameters?.forEach { tp ->
                             val name = tp.name.text
-                            val typeParam = typeParamInternCache.getOrPut(tp.pos) {
+                            val typeParam = typeParamInternCache.getOrPut(internKey(tp)) {
                                 val p = Type.TypeParam()
                                 p.symbol = Symbol(SymbolFlags.TypeParameter, name)
                                 p
@@ -108275,7 +108284,7 @@ interface DataView {
                             val scope = (savedTpScope?.toMutableMap() ?: mutableMapOf())
                             val decls = savedTpDecls.toMutableMap()
                             for (tp in tps) {
-                                val p = typeParamInternCache.getOrPut(tp.pos) {
+                                val p = typeParamInternCache.getOrPut(internKey(tp)) {
                                     Type.TypeParam().also { it.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text) }
                                 }
                                 tp.constraint?.let { p.constraint = getTypeFromTypeNode(it) }
@@ -108610,7 +108619,7 @@ interface DataView {
         if (typeParamNodes.isEmpty()) return
         val typeParams = typeParamNodes.map { tp ->
             // B59.1 extension: intern by TypeParameter AST position.
-            typeParamInternCache.getOrPut(tp.pos) {
+            typeParamInternCache.getOrPut(internKey(tp)) {
                 val p = Type.TypeParam()
                 p.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
                 p
@@ -108622,17 +108631,16 @@ interface DataView {
             typeParamNodes.forEachIndexed { i, tp -> scope[tp.name.text] = typeParams[i] }
             currentTypeParamScope = scope
             typeParamNodes.forEachIndexed { i, tp ->
-                // The interned TypeParam instances are SHARED across files via
-                // typeParamInternCache, which is keyed by AST `pos` — an absolute
-                // source position that COLLIDES across files in a multi-file program
-                // (each file's positions start at 0). So the instance we get back for
-                // an unconstrained param may carry a stale `.constraint`/`.default`
-                // left by a pos-colliding, constrained param in ANOTHER file. Always
-                // (re)set both fields from THIS node — clearing to null for an
-                // unconstrained param is exactly what stops a foreign `{}` constraint
-                // from leaking in and producing a spurious TS2344. Single-file compiles
-                // never collide (positions are unique within a file), so a null AST
-                // constraint clears a field that was already null — a no-op there.
+                // Resolve constraints/defaults in the scope that now includes the SIBLING
+                // params (108631) so a constraint referencing another param (`U extends
+                // { a: T }`) resolves — this is WHY the resolution is a separate loop and
+                // not folded into the intern factory (which runs before the scope is set).
+                // M1.13: the cross-file `.constraint`/`.default` stomping this used to
+                // guard against is now prevented at the KEY (internKey packs the per-file
+                // `internSalt` with `pos`, so a pos-colliding param in another file gets a
+                // DISTINCT cache entry). Re-setting both fields from THIS node here is now
+                // belt-and-suspenders (correct-value → correct-value), kept because this
+                // site legitimately sets the constraint OUTSIDE the factory anyway.
                 typeParams[i].constraint = tp.constraint?.let { getTypeFromTypeNode(it) }
                 typeParams[i].default = tp.default?.let { getTypeFromTypeNode(it) }
             }
@@ -108849,7 +108857,7 @@ interface DataView {
                 // Callers of getTypeParametersOfSymbol only check emptiness, not identity,
                 // so identity is invariant for the existing TS2315 consumers — but shared
                 // identity reduces churn for any future identity-sensitive consumer.
-                val param = typeParamInternCache.getOrPut(tp.pos) {
+                val param = typeParamInternCache.getOrPut(internKey(tp)) {
                     val p = Type.TypeParam()
                     p.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
                     p
@@ -114534,7 +114542,7 @@ interface DataView {
                         val newAst = currentTypeParamAstForOps?.toMutableMap() ?: mutableMapOf()
                         val fresh = mutableListOf<Pair<TypeParameter, Type.TypeParam>>()
                         for (tp in fnTps) {
-                            val typeParam = typeParamInternCache.getOrPut(tp.pos) {
+                            val typeParam = typeParamInternCache.getOrPut(internKey(tp)) {
                                 val p = Type.TypeParam()
                                 p.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
                                 p
@@ -127559,7 +127567,7 @@ interface DataView {
             // (e.g. substitutionResultCache) actually hit. Constraints/defaults are
             // re-resolved per call below (no null guard) to preserve original
             // per-call constraint-scope semantics — a 'null guard' regressed -1.
-            typeParamInternCache.getOrPut(tpDecl.pos) {
+            typeParamInternCache.getOrPut(internKey(tpDecl)) {
                 Type.TypeParam().also { tp ->
                     tp.symbol = Symbol(SymbolFlags.TypeParameter, tpDecl.name.text)
                 }
@@ -127654,7 +127662,7 @@ interface DataView {
                     // per call below (no null guard) — matching B59.5's note that the
                     // null guard regressed there.
                     val sigTypeParams = member.typeParameters?.map { tpDecl ->
-                        typeParamInternCache.getOrPut(tpDecl.pos) {
+                        typeParamInternCache.getOrPut(internKey(tpDecl)) {
                             Type.TypeParam().also { tp ->
                                 tp.symbol = Symbol(SymbolFlags.TypeParameter, tpDecl.name.text)
                             }
@@ -129799,7 +129807,7 @@ interface DataView {
             val scope = currentTypeParamScope?.toMutableMap() ?: mutableMapOf()
             val newOnes = mutableListOf<Pair<TypeParameter, Type.TypeParam>>()
             for (tp in tps) {
-                val typeParam = typeParamInternCache.getOrPut(tp.pos) {
+                val typeParam = typeParamInternCache.getOrPut(internKey(tp)) {
                     val p = Type.TypeParam()
                     p.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
                     p
