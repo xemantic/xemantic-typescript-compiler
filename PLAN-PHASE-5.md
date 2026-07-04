@@ -79,7 +79,15 @@ genericIndexedAccessVarianceComparisonResultCorrect), intrinsic string-mapping
 truthinessCallExpressionCoercion2 → post-v1/M2.4); **M2.3 pin-unwind**
 (typedArraysCrossAssignability01's generic `Uint8Array<ArrayBuffer>` needs the B496 pin
 retired + the real typed-array structural relation; templateStringsArrayTypeRedefinedInES6Mode
-= B533 double-emit); **apparent-type Object.prototype gap** (keywordExpressionInternalComments
+is NOT a simple B533 gate — verified the actual real-lib diff: the empty `class
+TemplateStringsArray {}` merges with the real `interface TemplateStringsArray extends
+ReadonlyArray<string>`, and the GENERAL arg-check missing-prop path fires a SECOND TS2345
+whose message is INHERITED-FIRST + wrong (`length, concat, join, slice, and 17 more` +
+a spurious TS2728 `'length' is declared here`) — tsc lists the OWN merged member `raw`
+FIRST (`raw, length, concat, join, and 17 more`) with NO TS2728 for a ≥2-missing set.
+B533's HARDCODED message is the correct one, so the fix is to suppress the GENERAL path
+here (own-member-first ordering under class+interface merge + multi-missing TS2728
+suppression), NOT to gate B533); **apparent-type Object.prototype gap** (keywordExpressionInternalComments
 `delete Array.toString` — `getApparentType(interface)` must include Object.prototype's
 `toString` for the TS2790 delete check to resolve the member → M3); **checkJs augmentation**
 (jsExportMemberMergedWithModuleAugmentation2). None are clean-win-shaped like Omit/redefine.
