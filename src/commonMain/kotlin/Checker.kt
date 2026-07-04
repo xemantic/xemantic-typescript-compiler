@@ -1022,6 +1022,11 @@ class Checker(
      *  trap would leave a post-init field null during checking). */
     private val moduleStarExportsCache: MutableMap<String, Set<String>?> = mutableMapOf()
 
+    /** TS2440 barrel firewall memo (keyed "<barrelTargetFile> <name>" → is-type-only).
+     *  Declared before `init` for the same reason as [moduleStarExportsCache] —
+     *  `checkImportConflictsWithLocal` runs during init and would otherwise see it null. */
+    private val barrelTypeOnlyMemo = HashMap<String, Boolean>()
+
     /** P0 (services hang): LIVE recursion depth across BOTH flow walkers INCLUDING
      *  re-entrant walks — [narrowByAssertCall]/[narrowByCallPredicate] resolve the
      *  callee, which types a PropertyAccess receiver, which narrows it at its own
@@ -147660,6 +147665,109 @@ interface DataView {
     }
 
     /**
+     * TS2440 barrel firewall: is [name] exported from [moduleSpecifier] ONLY as a TYPE
+     * (interface / type-alias / uninstantiated namespace / type-only re-export), following
+     * `export *` barrels — unlike [isExportedNameTypeOnly], which inspects only the DIRECT
+     * exports of the resolved file? A type-only import declaration-merges with a local
+     * VALUE-only declaration (function / value const) of the same name (the import provides
+     * the type, the local provides the value), so no TS2440 — tsc's own `src/compiler` does
+     * exactly this (`import { Node } from "./_namespaces/ts.js"` where the barrel re-exports
+     * `export interface Node` from types.ts, plus a local `function Node`).
+     *
+     * FN-safe (conservative): returns true ONLY when the closure resolves fully and the name
+     * is found solely as a type; ANY uncertainty (unresolvable star target, `export =`, a
+     * local `export { X }` re-export whose kind we can't resolve, depth blow-out, or the name
+     * having a value meaning anywhere) yields false → the caller keeps its existing behavior.
+     */
+    private fun importedNameIsTypeOnlyThroughBarrel(name: String, moduleSpecifier: String, fromFile: String): Boolean {
+        // The import specifier is typically `./_namespaces/ts.js` — resolveModuleSpecifier does
+        // NOT strip `.js` (documented), so use the barrel-star resolver's `.js`/`.jsx` fallback.
+        val target = if (moduleSpecifier.startsWith("./") || moduleSpecifier.startsWith("../")) {
+            resolveBarrelStarTarget(moduleSpecifier, fromFile)
+        } else {
+            resolveModuleSpecifier(moduleSpecifier, null)?.let { fileResults[it]?.sourceFile }
+        } ?: return false
+        // Memoize per (barrel target, name): the export-kind closure of a barrel is huge
+        // (`export * from` the whole compiler), so an un-memoized per-specifier walk times out.
+        val key = "${target.fileName} $name"
+        barrelTypeOnlyMemo[key]?.let { return it }
+        val acc = BarrelExportKind()
+        accumulateBarrelExportKind(name, target, acc, mutableSetOf(), 0, forceType = false)
+        val result = acc.resolvable && acc.hasType && !acc.hasValue
+        barrelTypeOnlyMemo[key] = result
+        return result
+    }
+
+    private class BarrelExportKind {
+        var hasValue = false
+        var hasType = false
+        var resolvable = true
+    }
+
+    private fun accumulateBarrelExportKind(
+        name: String, file: SourceFile, acc: BarrelExportKind,
+        visited: MutableSet<String>, depth: Int, forceType: Boolean,
+    ) {
+        if (depth > 64) { acc.resolvable = false; return }
+        if (!visited.add(file.fileName)) return // cycle back-edge: its exports were already counted
+        for (stmt in file.statements) {
+            when (stmt) {
+                is InterfaceDeclaration ->
+                    if (stmt.name.text == name && ModifierFlag.Export in stmt.modifiers) acc.hasType = true
+                is TypeAliasDeclaration ->
+                    if (stmt.name.text == name && ModifierFlag.Export in stmt.modifiers) acc.hasType = true
+                is ClassDeclaration ->
+                    if (stmt.name?.text == name && ModifierFlag.Export in stmt.modifiers) { if (forceType) acc.hasType = true else acc.hasValue = true }
+                is FunctionDeclaration ->
+                    if (stmt.name?.text == name && ModifierFlag.Export in stmt.modifiers) { if (forceType) acc.hasType = true else acc.hasValue = true }
+                is EnumDeclaration ->
+                    if (stmt.name.text == name && ModifierFlag.Export in stmt.modifiers) { if (forceType) acc.hasType = true else acc.hasValue = true }
+                is VariableStatement ->
+                    if (ModifierFlag.Export in stmt.modifiers &&
+                        stmt.declarationList.declarations.any { (it.name as? Identifier)?.text == name }) { if (forceType) acc.hasType = true else acc.hasValue = true }
+                is ModuleDeclaration ->
+                    if ((stmt.name as? Identifier)?.text == name && ModifierFlag.Export in stmt.modifiers) {
+                        if (isNamespaceInstantiated(stmt) && !forceType) acc.hasValue = true else acc.hasType = true
+                    }
+                is ExportDeclaration -> {
+                    val clause = stmt.exportClause
+                    val fromSpec = (stmt.moduleSpecifier as? StringLiteralNode)?.text
+                    if (clause == null) {
+                        // `export * from "sub"` (or `export type * from "sub"`) — recurse with the
+                        // SHARED visited set (a re-visited file's exports were already counted) so
+                        // the closure is walked once, not re-walked per re-export path.
+                        if (fromSpec == null) { acc.resolvable = false; continue }
+                        val sub = resolveBarrelStarTarget(fromSpec, file.fileName)
+                        if (sub == null) { acc.resolvable = false; continue }
+                        accumulateBarrelExportKind(name, sub, acc, visited, depth + 1, forceType || stmt.isTypeOnly)
+                    } else if (clause is NamedExports) {
+                        for (spec in clause.elements) {
+                            if (spec.name.text != name) continue
+                            // A type-only named re-export contributes only a type; any other
+                            // named re-export (`export { X } from sub` / local `export { X }`)
+                            // has an uncertain source kind → be conservative (don't suppress).
+                            if (forceType || stmt.isTypeOnly || spec.isTypeOnly) acc.hasType = true
+                            else acc.resolvable = false
+                        }
+                    }
+                }
+                else -> {}
+            }
+        }
+    }
+
+    /** Resolve a relative `export *`/`export ... from` specifier (with the `.js`/`.jsx`
+     *  fallback used across the star-following helpers) to a bound source-file name. */
+    private fun resolveBarrelStarTarget(spec: String, fromFile: String): SourceFile? {
+        if (!spec.startsWith("./") && !spec.startsWith("../")) return null
+        val resolved = resolveModuleSpecifierRelative(spec, fromFile)
+            ?: (if (spec.endsWith(".js")) resolveModuleSpecifierRelative(spec.removeSuffix(".js"), fromFile) else null)
+            ?: (if (spec.endsWith(".jsx")) resolveModuleSpecifierRelative(spec.removeSuffix(".jsx"), fromFile) else null)
+            ?: return null
+        return fileResults[resolved]?.sourceFile
+    }
+
+    /**
      * Is the module referenced by `require("specifier")` type-only — i.e. its `export = X`
      * target `X` is declared in the module ONLY as a type (alias/interface) and not as a value?
      * Used by the isolatedModules TS1269 check for the `export import T = require(...)` form.
@@ -148043,6 +148151,12 @@ interface DataView {
             // distinct from `mergeableNames`, which exists to AVOID conflicting with an
             // import-equals INTERNAL alias.)
             val namedImportConflictNames = mutableSetOf<String>()
+            // VALUE-only local declaration names (functions + value vars) and names carrying a
+            // TYPE side (class/interface/enum/typealias/namespace). A type-only import merges
+            // with a value-only local of the same name (no TS2440) — see
+            // importedNameIsTypeOnlyThroughBarrel.
+            val functionNames = mutableSetOf<String>()
+            val typeSideNames = mutableSetOf<String>()
             for (stmt in stmts) {
                 when (stmt) {
                     is VariableStatement -> {
@@ -148051,19 +148165,22 @@ interface DataView {
                             varNames.add(name)
                         }
                     }
-                    is FunctionDeclaration -> stmt.name?.let { mergeableNames.add(it.text); namedImportConflictNames.add(it.text) }
-                    is ClassDeclaration -> stmt.name?.let { mergeableNames.add(it.text); namedImportConflictNames.add(it.text) }
-                    is EnumDeclaration -> { mergeableNames.add(stmt.name.text); namedImportConflictNames.add(stmt.name.text) }
-                    is ModuleDeclaration -> (stmt.name as? Identifier)?.let { namedImportConflictNames.add(it.text) }
+                    is FunctionDeclaration -> stmt.name?.let { mergeableNames.add(it.text); namedImportConflictNames.add(it.text); functionNames.add(it.text) }
+                    is ClassDeclaration -> stmt.name?.let { mergeableNames.add(it.text); namedImportConflictNames.add(it.text); typeSideNames.add(it.text) }
+                    is EnumDeclaration -> { mergeableNames.add(stmt.name.text); namedImportConflictNames.add(stmt.name.text); typeSideNames.add(stmt.name.text) }
+                    is ModuleDeclaration -> (stmt.name as? Identifier)?.let { namedImportConflictNames.add(it.text); typeSideNames.add(it.text) }
                     is TypeAliasDeclaration -> {
                         typeOnlyNames.add(stmt.name.text)
                         typeAliasNames.add(stmt.name.text)
+                        typeSideNames.add(stmt.name.text)
                     }
-                    is InterfaceDeclaration -> typeOnlyNames.add(stmt.name.text)
+                    is InterfaceDeclaration -> { typeOnlyNames.add(stmt.name.text); typeSideNames.add(stmt.name.text) }
                     else -> {}
                 }
             }
             val localNames = varNames + mergeableNames
+            // A local declared solely as a value (function or value var), never with a type side.
+            val valueOnlyLocalNames = (functionNames + varNames) - typeSideNames
 
             // B129: TS2395 — a name declared by BOTH an internal import-equals alias AND
             // a type-alias (a merged declaration) with MIXED export status (one exported,
@@ -148216,6 +148333,23 @@ interface DataView {
                                 if (element.isTypeOnly) continue
                                 val localAlias = element.name.text
                                 val sourceNameForElt = (element.propertyName ?: element.name).text
+                                // A type-only import (the source exports the name ONLY as a type,
+                                // possibly through an `export *` barrel) declaration-merges with a
+                                // local VALUE-only declaration (function / value const) of the same
+                                // name — the import provides the type, the local provides the value —
+                                // so NO TS2440 (tsc's own src/compiler `import { Node }` + local
+                                // `function Node`). Gated to value-only locals (a class/enum/
+                                // interface/namespace local has a type side that DOES conflict) and
+                                // to a definitively type-only barrel resolution (FN-safe). ONLY under
+                                // NEITHER isolatedModules NOR verbatimModuleSyntax — those modes DO
+                                // error on the merge (TS2865 / TS1484 / TS2440), just via the paths
+                                // below (isolatedModulesSketchyAliasLocalMerge / …ExportDeclarationType).
+                                if (!options.isolatedModules && !options.verbatimModuleSyntax &&
+                                    localAlias in valueOnlyLocalNames &&
+                                    moduleSpecifierText != null &&
+                                    importedNameIsTypeOnlyThroughBarrel(sourceNameForElt, moduleSpecifierText, fileName)) {
+                                    continue
+                                }
                                 // Type-only-vs-type-only conflict: `import { T }` (where T is a type-only
                                 // export in source) + local `type T` / `interface T` declaration. Both
                                 // declare T as a type, so they collide. Emit TS2440 (NOT TS2865 — local
