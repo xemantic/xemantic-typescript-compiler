@@ -932,17 +932,23 @@ Three strategic reads that shape everything below:
   didn't reach).** After M1, bucket the FULL compiler-profile `--listAll` output by
   NORMALIZED message shape (`re.sub(r"'[^']*'", "'X'", msg)`) — NOT the 30-line log tail —
   to surface bounded non-M3 bugs the code-path triage misses. Round 395 fixed TS2499×16
-  (multi-base-generic heritage misparse, parser) and round 396 fixed TS2440×10 (type-only
-  barrel import + value-only local, checker) this way (2,726 → 2,702). **Remaining candidates
-  triaged but not done:** (a) **TS2344×8** `Type 'T' does not satisfy the constraint 'Node'`
-  (parser.ts `createNodeArray<T>()` where `createNodeArray<U extends Node>` and `T extends
-  Node` — T's constraint SATISFIES the target constraint; the type-arg constraint check
-  doesn't follow the constraint chain for a TypeParam arg — likely bounded, mirrors the
-  B498/B214 default-vs-constraint skip); (b) **TS2693×7** `'symbol' only refers to a type`
+  (multi-base-generic heritage misparse, parser), round 396 fixed TS2440×10 (type-only
+  barrel import + value-only local, checker), and round 397 fixed TS2344×2 of 8 (the
+  `createNodeArray<T>()` call-path constraint-chain skip) this way (2,726 → 2,700).
+  **Remaining candidates triaged but not done:** (a) **TS2344×6 remaining** — the CALL path is
+  fixed (`checkCallTypeArgConstraints` now mirrors `checkConstraintsForTypeArgs`'s
+  TypeParam-constraint-chain skip); the 6 left are OTHER sub-shapes: `Token<TKind>` where
+  `TKind extends JSDocSyntaxKind` vs `SyntaxKind` (enum-subset relation gap — a union of enum
+  members ≤ the enum; risky, B425 nominal-enum territory), an UNCONSTRAINED `TPrivateEntry` vs
+  an implicit-`{}` constraint (`interface LexicalEnvironment<in out TEnvData, …, TPrivateEntry>`
+  — the 3rd param has NO `extends` so it should carry NO constraint; likely a
+  variance-annotation-parse or unconstrained-→-`{}`-default artifact), and a UNION arg
+  `TIn | undefined` vs `Node | undefined` (needs per-member constraint resolution); (b)
+  **TS2693×7** `'symbol' only refers to a type`
   (binder.ts `const { symbol } = node; symbol.foo` — a destructured function-body local named
   `symbol` shadowing the type keyword; the TS2693 walker misses the local binding — a
   function-body scope-tracking gap, more involved than a-shape). Re-bucket after each fix; the
-  self-compile 2,702 still has TS2591×43 (node globals, env-legit — `--node-stub`), TS2563×27
+  self-compile 2,700 still has TS2591×43 (node globals, env-legit — `--node-stub`), TS2563×27
   (B399 heuristic → M3.4), and the M3 cores (TS2339×838, TS2322×794, TS2345×405, TS7006×301).
 
 **M2 — Real-lib migration (staged; decompose further at start)**
