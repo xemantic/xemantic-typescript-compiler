@@ -34,6 +34,40 @@ completeness campaigns to dashboard-driven burn-down: the acceptance bar is the 
 tsc's source uses, with the corpus suite as the regression net. M5 unchanged —
 performance is the directive's second half and starts at v1 compliance.
 
+**Round 392 (2026-07-04) — M2.2 burn-down #2: the TS2728 lib-file-attribution
+cluster. Real-lib A/B recount 38 → 34 corpus failures (libMembers + externModule +
+errorMessageOnObjectLiteralType fixed, initializedDestructuringAssignmentTypes also
+cleared), zero corpus regressions, suite 8,971 / 0 / 3 (+3 local).** Sampled a fresh
+12-test slice of the 38; three (externModule, errorMessageOnObjectLiteralType, plus
+last session's libMembers) shared ONE root cause: under `useRealLibs` the default
+library is SPLIT across many files (`lib.es5.d.ts`, `lib.es2015.core.d.ts`, …), each
+parsed independently so positions OVERLAP (every file's nodes start at 0). The TS2728
+"declared here" related-info builders resolved the declaring file by POSITION
+(`resolveDeclarationSourceFile`), which under multi-file libs cannot disambiguate AND
+false-matches a large USER file whose text happens to span the lib position (a lib
+`sub` decl's position landed on `subby` in libMembers.ts → `libMembers.ts:15:19748`
+instead of `lib.es2015.core.d.ts:--:--`). Fix: NODE-first attribution — `bindRealLibs`
+populates `realLibDeclFile: Map<Node, String>` (every lib statement / interface-class
+member / inner var-decl node → its DIST fileName), and the three TS2728 builders
+(`findDeclarationRelatedInfo`, the property-suggestion site, `createPropertyDeclaredHereRelatedInfo`)
+consult `libFileOfDecl(decl)` BEFORE the position path. Real-libs-scoped by
+construction: the map is EMPTY under the embedded lib (single file) → embedded path
+byte-identical (guaranteed, verified by the full embedded gate). The existing
+`DEPRECATED_STRING_HTML_HELPERS` override (sub/sup/… → `lib.es2015.core.d.ts`) still
+fires on top — it only needs `isLib` true, which the map now guarantees. 3 local tests
+(RealLibsTs2728FileTest): non-es5 member → its real lib file (not es5), es5 member →
+`lib.es5.d.ts`, and a USER member control (still the user file with a real position —
+proving the map is lib-only). No self-compile dashboard delta (corpus-A/B fix; default
+stays off). **Round-392 triage of the other 9 sampled failures (for the burn-down):**
+correctOrderOfPromiseMethod/narrowingPastLastAssignment/keyRemappingKeyofResult = extra
+TS2322 from richer lib generics (Promise.all const-tuple, evolving-array concat, mapped
+key-remap → M3 engine); omitTypeHelperModifiers01 = SWAP TS2540↔TS2322 (Omit modifier +
+readonly); mergedClassNamespaceRecordCast/interfaceAssignmentCompat/divergentAccessorsTypes6
+= MISSING (Record-cast overlap + documented walkers under-fire); builtinIterator =
+duplicate TS2515 (short vs full `Iterator<…>` display); doYouNeedToChange… = `Promise<T>`
+vs `Promise<unknown>` display; keywordExpressionInternalComments = we emit NOTHING under
+real libs (investigate — possible exception, unusual).
+
 **Round 391 (2026-07-04) — M2.2 first burn-down: the real-lib A/B failing set
 drops 40 → 38 (arguments + unaryOperatorsInStrictMode), zero corpus regressions,
 suite 8,968 / 0 / 3 (+3 local).** Method: temp-flipped the `useRealLibs` default
@@ -465,7 +499,7 @@ Three strategic reads that shape everything below:
 
 | Metric | Source | Phase 17 target |
 |---|---|---|
-| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 8,968 with local tests as of round 391) |
+| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 8,971 with local tests as of round 392) |
 | Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**2,726 after round 389** — M1 complete; no-stub stays the honest default) |
 | Project corpus FPs (services/server/…) | `bench/` TSVs (M0.1) | 0 — **the v1 exit** (all 8 profiles) |
 | Conformance adoption | generated-test counts per category | POST-V1 (re-scope 2026-07-03 — see § "Post-v1 backlog", M3.0) |
@@ -770,30 +804,36 @@ Three strategic reads that shape everything below:
 - [ ] **M2.2 Corpus A/B and default flip.** Burn down the round-390 A/B diff
   (baselines were produced by real-lib tsc, so divergence generally means one of our
   compensating hardcodes — fix by deletion). Flip the default when green. **Round 391
-  fixed 2 (arguments + unaryOperatorsInStrictMode — value-position spelling suggestions
-  no longer propose type-only lib names; see the round-391 note for the triage of the
-  other sampled failures). 38 REMAINING (round-390 A/B, all `.errors.txt` subtests):**
-  arrayBufferIsViewNarrowsType, builtinIterator, consistentAliasVsNonAliasRecordBehavior,
-  correctOrderOfPromiseMethod, deleteExpressionMustBeOptional_exactOptionalPropertyTypes
-  (×2 variants), dissallowSymbolAsWeakType, divergentAccessorsTypes6/8,
-  doYouNeedToChangeYourTargetLibraryES2016Plus, errorMessageOnObjectLiteralType,
-  externModule, flatArrayNoExcessiveStackDepth,
+  fixed 2 (arguments + unaryOperatorsInStrictMode — value-position spelling suggestions).
+  Round 392 fixed the TS2728 lib-file-attribution cluster (libMembers + externModule +
+  errorMessageOnObjectLiteralType; initializedDestructuringAssignmentTypes also cleared).
+  A/B RECOUNT (round 392, full real-libs suite): 34 corpus failing testcases remaining
+  (`.errors.txt` subtests):** arrayBufferIsViewNarrowsType, builtinIterator,
+  consistentAliasVsNonAliasRecordBehavior, correctOrderOfPromiseMethod,
+  deleteExpressionMustBeOptional_exactOptionalPropertyTypes (×2 variants),
+  dissallowSymbolAsWeakType, divergentAccessorsTypes6/8,
+  doYouNeedToChangeYourTargetLibraryES2016Plus, flatArrayNoExcessiveStackDepth,
   genericIndexedAccessVarianceComparisonResultCorrect, implementArrayInterface,
-  initializedDestructuringAssignmentTypes, interfaceAssignmentCompat,
-  intersectionsAndOptionalProperties, isArray, jsExportMemberMergedWithModuleAugmentation2,
-  keyRemappingKeyofResult, keywordExpressionInternalComments, libMembers,
-  mappedTypeGenericWithKnownKeys, mappedTypeIndexedAccessConstraint,
-  mergedClassNamespaceRecordCast, narrowingPastLastAssignment,
-  omitTypeHelperModifiers01, omitTypeTestErrors01, parameterListAsTupleType,
-  redefineArray, requiredMappedTypeModifierTrumpsVariance,
+  interfaceAssignmentCompat, intersectionsAndOptionalProperties, isArray,
+  jsExportMemberMergedWithModuleAugmentation2, keyRemappingKeyofResult,
+  keywordExpressionInternalComments, mappedTypeGenericWithKnownKeys,
+  mappedTypeIndexedAccessConstraint, mergedClassNamespaceRecordCast,
+  narrowingPastLastAssignment, omitTypeHelperModifiers01, omitTypeTestErrors01,
+  parameterListAsTupleType, redefineArray, requiredMappedTypeModifierTrumpsVariance,
   specialIntersectionsInMappedTypes, stringMappingAssignability,
   templateStringsArrayTypeRedefinedInES6Mode, truthinessCallExpressionCoercion2,
-  typedArraysCrossAssignability01,
-  uncalledFunctionChecksInConditional2. Most are documented lib-divergence pins
-  (typed-array chains, Date/Array hardcoded counts, LIB_MIN_TARGET) — M2.3's
-  unwind list overlaps heavily; work them together. Also measure/mitigate the
-  +70% suite wall time before flipping (per-key bound-lib reuse within a run,
-  or M5-style sharing).
+  typedArraysCrossAssignability01, uncalledFunctionChecksInConditional2. Most are
+  documented lib-divergence pins (typed-array chains, Date/Array hardcoded counts,
+  LIB_MIN_TARGET) — M2.3's unwind list overlaps heavily; work them together. Also
+  measure/mitigate the +70% suite wall time before flipping (per-key bound-lib reuse
+  within a run, or M5-style sharing). **Triaged failure MODES (round 392 sampling; see
+  the round-392 note): TS2322-from-richer-lib-types (correctOrderOfPromiseMethod
+  Promise.all tuple, narrowingPastLastAssignment evolving-array concat, keyRemappingKeyofResult
+  → engine/M3); SWAP (omitTypeHelperModifiers01 TS2540↔TS2322 — Omit modifier/readonly);
+  MISSING (mergedClassNamespaceRecordCast/interfaceAssignmentCompat/divergentAccessorsTypes6 —
+  Record cast + documented walkers); double-emit/display (builtinIterator TS2515 dup,
+  doYouNeedToChange... `Promise<T>` vs `Promise<unknown>`); keywordExpressionInternalComments
+  = we emit NOTHING under real libs (investigate — possible exception).**
 - [ ] **M2.3 Unwind lib-divergence pins.** Grep anchors: `LIB_MIN_TARGET`,
   `LIB_MIN_TARGET_SOFT`, `BUILTIN_LIB_VALUE_INTERFACES`, `KNOWN_GLOBALS` (derive from
   the loaded libs), the hardcoded Date TS2740 message, hardcoded "and N more" counts,

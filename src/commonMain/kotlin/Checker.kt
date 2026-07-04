@@ -877,6 +877,20 @@ class Checker(
     private val builtinLibMemberDecls: MutableSet<Node> = mutableSetOf()
 
     /**
+     * M2.2 (round 391): under [CompilerOptions.useRealLibs] the default library is
+     * SPLIT across many files (`lib.es5.d.ts`, `lib.es2015.core.d.ts`, …), each parsed
+     * independently so positions OVERLAP (every file's nodes start at 0). Position-based
+     * [resolveDeclarationSourceFile] therefore cannot attribute a lib declaration to its
+     * file, and worse, a lib decl's position coincidentally fits inside a large USER file's
+     * text → the TS2728 "declared here" related info points at the wrong file with a bogus
+     * offset (externModule/errorMessageOnObjectLiteralType/libMembers). This map keys each
+     * real-lib declaration NODE (top-level statement, interface/class member, or inner var
+     * declaration) to its DISTRIBUTED file name so the TS2728 builders can resolve
+     * lib-declared names directly, node-first, and render `<distName>:--:--`. Empty under
+     * the embedded lib (single file) → the embedded path is unchanged. */
+    private val realLibDeclFile: MutableMap<Node, String> = mutableMapOf()
+
+    /**
      * Parse and bind the built-in type declarations, returning the symbol table.
      * These are merged into globals BEFORE user files so that user declarations
      * can augment/override them (matching TypeScript's behavior).
@@ -931,13 +945,21 @@ class Checker(
         val merged: SymbolTable = symbolTable()
         for (result in results) {
             val ast = result.sourceFile
+            val distFile = ast.fileName
             if (builtinLibSourceFile == null) builtinLibSourceFile = ast
             ast.statements.forEach { stmt ->
                 builtinLibDecls.add(stmt)
+                realLibDeclFile[stmt] = distFile
                 when (stmt) {
-                    is InterfaceDeclaration -> stmt.members.forEach { builtinLibMemberDecls.add(it) }
-                    is ClassDeclaration -> stmt.members.forEach { builtinLibMemberDecls.add(it) }
-                    is VariableStatement -> stmt.declarationList.declarations.forEach { builtinLibDecls.add(it) }
+                    is InterfaceDeclaration -> stmt.members.forEach {
+                        builtinLibMemberDecls.add(it); realLibDeclFile[it] = distFile
+                    }
+                    is ClassDeclaration -> stmt.members.forEach {
+                        builtinLibMemberDecls.add(it); realLibDeclFile[it] = distFile
+                    }
+                    is VariableStatement -> stmt.declarationList.declarations.forEach {
+                        builtinLibDecls.add(it); realLibDeclFile[it] = distFile
+                    }
                     else -> {}
                 }
             }
@@ -25890,8 +25912,10 @@ class Checker(
         // that TS2552 "did you mean 'Function'" suggestions also get the TS2728 related info.
         // The lib path is rendered as `lib.es5.d.ts:--:--` per the BaselineFormatter convention.
         val symbol = localSym ?: globals[name]
+        var declNode: Node? = null
         val declPos = if (symbol != null) {
             val decl = symbol.declarations.firstOrNull() ?: symbol.valueDeclaration ?: return null
+            declNode = decl
             when (decl) {
                 is VariableDeclaration -> (decl.name as? Identifier)?.pos ?: decl.pos
                 is FunctionDeclaration -> decl.name?.pos ?: decl.pos
@@ -25938,10 +25962,14 @@ class Checker(
             if (result == null) return null
             findBlockScopedDeclPos(name, result.sourceFile.statements) ?: return null
         }
-        val (resolvedFile, resolvedSource) = resolveDeclarationSourceFile(declPos)
+        // M2.2: node-first lib attribution — under real libs a lib decl's position can
+        // false-match a large user file in resolveDeclarationSourceFile.
+        val libMapped = libFileOfDecl(declNode)
+        val (resolvedFile, resolvedSource) = if (libMapped != null) Pair(libMapped, null)
+            else resolveDeclarationSourceFile(declPos)
         val declFile = resolvedFile ?: fileName
         val declSource = resolvedSource ?: source
-        val isLib = isLibFileName(declFile)
+        val isLib = libMapped != null || isLibFileName(declFile)
         val (declLine, declChar) = if (isLib) {
             Pair(null as Int?, null as Int?)
         } else {
@@ -112841,10 +112869,14 @@ interface DataView {
                         else -> decl.pos
                     }
                     val declLength = suggestion.length
-                    val (declFile, declSource) = resolveDeclarationSourceFile(declPos)
+                    // M2.2: node-first lib attribution (see libFileOfDecl) — under real libs
+                    // a lib member's position can false-match a large user file.
+                    val libMapped = libFileOfDecl(decl)
+                    val (declFile, declSource) = if (libMapped != null) Pair(libMapped, null)
+                        else resolveDeclarationSourceFile(declPos)
                     val resolvedFile = declFile ?: fileName
                     val resolvedSource = declSource ?: source
-                    val isLib = isLibFileName(resolvedFile)
+                    val isLib = libMapped != null || isLibFileName(resolvedFile)
                     val (declLine, declChar) = if (isLib) {
                         Pair(null as Int?, null as Int?)
                     } else {
@@ -129277,6 +129309,21 @@ interface DataView {
             else -> decl.pos
         }
         if (declPos < 0) return null
+        // M2.2: a real-lib member declaration is attributed NODE-first — under multi-file
+        // real libs its position can false-match the B217 name scan below (e.g. a lib
+        // `sub` decl's position lands on `subby` in the user file). Render `<distName>:--:--`.
+        libFileOfDecl(decl)?.let { libFile ->
+            return Diagnostic(
+                message = "'${formatPropertyDisplayName(propSymbol)}' is declared here.",
+                category = DiagnosticCategory.Message,
+                code = 2728,
+                fileName = libFile,
+                line = null,
+                character = null,
+                start = declPos,
+                length = propSymbol.name.length,
+            )
+        }
         // B217: position-only attribution mis-fires in multi-file tests when the
         // pos fits inside several files' text — prefer the file whose text actually
         // carries the property NAME at declPos, then fall back to position-fit.
@@ -129329,6 +129376,15 @@ interface DataView {
      * first, then falls back to the built-in lib source file. Returns `(fileName, text)`
      * of the matching source, or `(null, null)` if not found.
      */
+    /**
+     * M2.2: the distributed lib file name that [decl] came from, when it is a real-lib
+     * declaration node (see [realLibDeclFile]) — else null (embedded lib or a user node).
+     * TS2728 builders consult this NODE-first, because under multi-file real libs the
+     * position-based [resolveDeclarationSourceFile] can't disambiguate overlapping lib
+     * positions and can false-match a large user file.
+     */
+    private fun libFileOfDecl(decl: Node?): String? = decl?.let { realLibDeclFile[it] }
+
     private fun resolveDeclarationSourceFile(declPos: Int): Pair<String?, String?> {
         if (declPos < 0) return Pair(null, null)
         for (result in binderResults) {
