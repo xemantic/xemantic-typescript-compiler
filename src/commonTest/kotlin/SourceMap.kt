@@ -178,7 +178,7 @@ internal fun generateMappings(
             info.text, info.lineStartOffset, sourceTexts[info.fileIndex]
         )
 
-        for ((srcOffset, srcCol) in linePositions) {
+        for ((_, srcCol) in linePositions) {
             entries.add(MappingEntry(
                 outputLine = outputLineIdx,
                 outputCol = srcCol,
@@ -278,7 +278,7 @@ private fun collectLineMappingPositions(
 
 private fun encodeVLQMappings(entries: List<MappingEntry>): String {
     val sb = StringBuilder()
-    var prevOutputCol = 0
+    var prevOutputCol: Int
     var prevSourceFileIndex = 0
     var prevSourceLine = 0
     var prevSourceCol = 0

@@ -864,7 +864,7 @@ class TypeScriptCompiler {
                 // TS5055: output JS overwrites an input file
                 // Skip when outDir is set (output goes elsewhere), noEmit, or emitDeclarationOnly
                 if (options.outDir == null && !options.noEmit && !options.emitDeclarationOnly) {
-                    for ((jsOutput, sources) in outputToSources) {
+                    for ((jsOutput, _) in outputToSources) {
                         if (jsOutput in inputFileSet) {
                             diagnostics.add(Diagnostic(
                                 message = "Cannot write file '$jsOutput' because it would overwrite input file.",
@@ -1998,7 +1998,7 @@ private fun checkAmbiguousSelfNameExportRoot(files: List<SourceFileEntry>, optio
             (fn.endsWith(".ts") || fn.endsWith(".tsx") || fn.endsWith(".mts") || fn.endsWith(".cts"))
     }
     if (srcFiles.size != 1) return diags  // single source file → ambiguous common source dir
-    val outDirNorm = options.outDir!!.trimStart('.', '/').trimEnd('/')
+    val outDirNorm = options.outDir.trimStart('.', '/').trimEnd('/')
     if (outDirNorm.isEmpty()) return diags
     for (f in files) {
         val base = f.fileName.substringAfterLast('/')
@@ -2463,7 +2463,7 @@ private fun resolveRelativePath(dir: String, specifier: String): String {
 private fun hasCycle(fileNames: List<String>, deps: Map<String, List<String>>): Boolean {
     if (fileNames.size <= 1) return false
     val fileSet = fileNames.toSet()
-    val WHITE = 0; val GRAY = 1; val BLACK = 2
+    val GRAY = 1; val BLACK = 2
     val color = mutableMapOf<String, Int>()
     var found = false
     fun visit(f: String) {
@@ -2665,7 +2665,6 @@ private fun reformatJson(content: String): String {
         val sbSingle = StringBuilder()
         var k = 0
         val tl = trimmed.length
-        var lastWasOperator = false
         while (k < tl) {
             val ch = trimmed[k]
             when (ch) {
@@ -2679,13 +2678,13 @@ private fun reformatJson(content: String): String {
                             else -> k++
                         }
                     }
-                    sbSingle.append(trimmed, s, k); lastWasOperator = false
+                    sbSingle.append(trimmed, s, k)
                 }
-                ',' -> { sbSingle.append(", "); k++; while (k < tl && trimmed[k].isWhitespace()) k++; lastWasOperator = true }
-                ':' -> { sbSingle.append(": "); k++; while (k < tl && trimmed[k].isWhitespace()) k++; lastWasOperator = true }
+                ',' -> { sbSingle.append(", "); k++; while (k < tl && trimmed[k].isWhitespace()) k++ }
+                ':' -> { sbSingle.append(": "); k++; while (k < tl && trimmed[k].isWhitespace()) k++ }
                 else -> {
                     if (ch.isWhitespace()) { k++ }
-                    else { sbSingle.append(ch); k++; lastWasOperator = false }
+                    else { sbSingle.append(ch); k++ }
                 }
             }
         }
@@ -2925,7 +2924,6 @@ private fun emitIsolatedDeclarationsDiagnostics(
                 val isFunc = recvName in funcDecls || recvName in funcVarDecls
                 if (!isFunc) continue
                 val propName = lhs.name
-                if (propName !is Identifier) continue
                 expandoNames.add(recvName)
                 val key = recvName to propName.text
                 if (!seenExpandoPairs.add(key)) continue
@@ -3900,7 +3898,6 @@ private fun emitIsolatedDeclEnumChecks(
                     val rawLen = n.rawText?.length ?: n.text.length
                     n.pos to (rawLen + (if (n.isUnterminated) 1 else 2))
                 }
-                else -> continue
             }
             val (line, character) = positionToLineCharacter(source, start)
             results.add(Diagnostic(
@@ -3953,7 +3950,7 @@ private fun isEnumInitializerComputable(
     is PropertyAccessExpression -> {
         val recv = expr.expression
         val nm = expr.name
-        if (recv is Identifier && recv.text == enumName && nm is Identifier) {
+        if (recv is Identifier && recv.text == enumName) {
             computable[nm.text] == true
         } else false
     }
@@ -5221,7 +5218,7 @@ private fun isolatedDeclExprTrueEnd(expr: Expression): Int = when (expr) {
     is BinaryExpression -> isolatedDeclExprTrueEnd(expr.right)
     is PropertyAccessExpression -> {
         val n = expr.name
-        if (n is Identifier) n.pos + n.text.length else expr.end
+        n.pos + n.text.length
     }
     is ElementAccessExpression -> isolatedDeclExprTrueEnd(expr.argumentExpression) + 1
     is CallExpression -> {

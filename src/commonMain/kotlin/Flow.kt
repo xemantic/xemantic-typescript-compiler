@@ -600,7 +600,7 @@ class FlowGraphBuilder {
                     val clauseEntry = newSwitchClause(stmt, i, i + 1, preSwitch)
                     val mergedEntry = if (fallthroughFlow != null) {
                         val merge = newBranchLabel()
-                        joinAntecedent(merge, fallthroughFlow!!)
+                        joinAntecedent(merge, fallthroughFlow)
                         joinAntecedent(merge, clauseEntry)
                         finishBranchLabel(merge)
                     } else clauseEntry
@@ -613,7 +613,7 @@ class FlowGraphBuilder {
                     val clauseEntry = newSwitchClause(stmt, i, i + 1, preSwitch)
                     val mergedEntry = if (fallthroughFlow != null) {
                         val merge = newBranchLabel()
-                        joinAntecedent(merge, fallthroughFlow!!)
+                        joinAntecedent(merge, fallthroughFlow)
                         joinAntecedent(merge, clauseEntry)
                         finishBranchLabel(merge)
                     } else clauseEntry

@@ -492,15 +492,15 @@ fun formatErrorBaseline(
                     +"\r\n"
                     // Source context line with squiggle
                     val lines = sourceLinesByFile[diag.fileName]
-                    if (lines != null && diag.line!! >= 1 && diag.line!! <= lines.size) {
-                        val lineIdx = diag.line!! - 1
+                    if (lines != null && diag.line >= 1 && diag.line <= lines.size) {
+                        val lineIdx = diag.line - 1
                         val sourceLine = lines[lineIdx].trimEnd('\r')
                         // Pretty format: replace tabs with spaces for display
                         val displayLine = sourceLine.replace("\t", " ")
                         +"\u001b[7m${diag.line}\u001b[0m $displayLine\r\n"
                         // Squiggle line: gutter uses reverse video for spaces
                         val gutterSpaces = " ".repeat(diag.line.toString().length)
-                        val squiggleStart = diag.character!! - 1
+                        val squiggleStart = diag.character - 1
                         val squiggleLen = diag.length ?: 0
                         val indent = " ".repeat(squiggleStart)
                         val squiggle = "~".repeat(squiggleLen)
@@ -514,11 +514,11 @@ fun formatErrorBaseline(
                         if (related.fileName != null && related.line != null && related.character != null) {
                             +"  \u001b[96m${related.fileName}\u001b[0m:\u001b[93m${related.line}\u001b[0m:\u001b[93m${related.character}\u001b[0m\r\n"
                             val relLines = sourceLinesByFile[related.fileName]
-                            if (relLines != null && related.line!! >= 1 && related.line!! <= relLines.size) {
-                                val relLine = relLines[related.line!! - 1].trimEnd('\r')
+                            if (relLines != null && related.line >= 1 && related.line <= relLines.size) {
+                                val relLine = relLines[related.line - 1].trimEnd('\r')
                                 +"    \u001b[7m${related.line}\u001b[0m $relLine\r\n"
                                 val relGutter = " ".repeat(related.line.toString().length)
-                                val relStart = related.character!! - 1
+                                val relStart = related.character - 1
                                 val relLen = maxOf(1, related.length ?: 1)
                                 val relIndent = buildString {
                                     for (i in 0 until minOf(relStart, relLine.length)) {

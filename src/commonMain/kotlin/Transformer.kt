@@ -1696,7 +1696,7 @@ class Transformer(
         val directExportClauseAliases = mutableMapOf<String, MutableList<String>>()
         for (stmt in originalSourceFile.statements) {
             if (stmt is ExportDeclaration && stmt.moduleSpecifier == null && stmt.exportClause is NamedExports) {
-                for (spec in (stmt.exportClause as NamedExports).elements) {
+                for (spec in (stmt.exportClause).elements) {
                     if (spec.isTypeOnly) continue
                     val exportName = spec.name.text
                     val localName = (spec.propertyName ?: spec.name).text
@@ -1726,11 +1726,11 @@ class Transformer(
             if (stmt is RawStatement) {
                 true // keep helper raw statements, don't set pastPrologue
             } else if (!pastPrologue && stmt is ExpressionStatement && stmt.expression is StringLiteralNode) {
-                val text = (stmt.expression as StringLiteralNode).text
+                val text = (stmt.expression).text
                 if (text == "use strict") {
                     hasUseStrictPrologue = true
                     // Preserve the source directive's quote style (tsc keeps 'use strict' vs "use strict").
-                    useStrictSingleQuote = (stmt.expression as StringLiteralNode).singleQuote
+                    useStrictSingleQuote = (stmt.expression).singleQuote
                     false // strip from body
                 } else {
                     otherPrologueDirectives.add(stmt)
@@ -1938,7 +1938,6 @@ class Transformer(
                                 if (flattenPairs != null && flattenPairs.all { it != null }) {
                                     // All decls can be flattened — emit exports.prop = expr.prop directly
                                     var isFirst = true
-                                    var emittedAny = false
                                     for ((pairIdx, pairs) in flattenPairs.withIndex()) {
                                         for ((localName, valueExpr, elemComments) in pairs!!) {
                                             directExportedVarNames.add(localName)
@@ -1960,12 +1959,11 @@ class Transformer(
                                                 pos = -1, end = -1,
                                             ))
                                             isFirst = false
-                                            emittedAny = true
                                         }
                                         // Handle empty binding pattern with initializer (side effect):
                                         // `export const {} = expr` or `export const [] = expr` with no bound names
                                         // TypeScript emits: `var _a; _a = expr;`
-                                        if (pairs!!.isEmpty() && pairIdx < stmt.declarationList.declarations.size) {
+                                        if (pairs.isEmpty() && pairIdx < stmt.declarationList.declarations.size) {
                                             val decl = stmt.declarationList.declarations[pairIdx]
                                             if (decl.initializer != null) {
                                                 val tempName = nextTempVarName()
@@ -1981,7 +1979,6 @@ class Transformer(
                                                     pos = -1, end = -1,
                                                 ))
                                                 isFirst = false
-                                                emittedAny = true
                                             }
                                         }
                                     }
@@ -4341,7 +4338,7 @@ class Transformer(
             is NewExpression -> {
                 val callee = cjsUnaryRewriteExpr(expr.expression, st, active, discarded = false)
                 val args = expr.arguments?.map { cjsUnaryRewriteExpr(it, st, active, discarded = false) }
-                if (callee === expr.expression && (args == null || args.indices.all { args[it] === expr.arguments!![it] })) expr
+                if (callee === expr.expression && (args == null || args.indices.all { args[it] === expr.arguments[it] })) expr
                 else expr.copy(expression = callee, arguments = args)
             }
             is PropertyAccessExpression -> {
@@ -5839,7 +5836,7 @@ class Transformer(
             when (val e = work.removeLast()) {
                 is BinaryExpression -> {
                     if (e.operator == SyntaxKind.Equals && e.left is ObjectLiteralExpression &&
-                        (e.left as ObjectLiteralExpression).properties.any { it is SpreadAssignment }
+                        (e.left).properties.any { it is SpreadAssignment }
                     ) return true
                     work.add(e.left); work.add(e.right)
                 }
@@ -5938,7 +5935,7 @@ class Transformer(
                     pn is Identifier -> pn.text
                     pn is StringLiteralNode -> pn.text
                     pn is NumericLiteralNode -> pn.text
-                    elem.name is Identifier -> (elem.name as Identifier).text
+                    elem.name is Identifier -> (elem.name).text
                     else -> null
                 }
                 keyName?.let {
@@ -5957,7 +5954,7 @@ class Transformer(
                     val keyTemp = nextChainTempName()
                     newDecls.add(VariableDeclaration(
                         name = syntheticId(keyTemp),
-                        initializer = transformExpression((pn as ComputedPropertyName).expression),
+                        initializer = transformExpression((pn).expression),
                         pos = -1, end = -1,
                     ))
                     exclusions.add(typeofSymbolConditional(keyTemp))
@@ -5977,7 +5974,7 @@ class Transformer(
                     pos = -1, end = -1,
                 )
                 elem.name is Identifier -> PropertyAccessExpression(
-                    expression = value, name = syntheticId((elem.name as Identifier).text), pos = -1, end = -1,
+                    expression = value, name = syntheticId((elem.name).text), pos = -1, end = -1,
                 )
                 else -> value
             }
@@ -5986,16 +5983,16 @@ class Transformer(
                 newDecls.add(VariableDeclaration(name = syntheticId(readTemp), initializer = rhs, pos = -1, end = -1))
                 // A default that is itself an object-rest destructuring assignment transforms
                 // in VALUE position (captures its RHS and yields it as the result).
-                val defaultRaw = elem.initializer!!
+                val defaultRaw = elem.initializer
                 val defaultExpr: Expression = if (
                     defaultRaw is BinaryExpression && defaultRaw.operator == SyntaxKind.Equals &&
                     defaultRaw.left is ObjectLiteralExpression &&
-                    (defaultRaw.left as ObjectLiteralExpression).properties.any { it is SpreadAssignment } &&
+                    (defaultRaw.left).properties.any { it is SpreadAssignment } &&
                     options.effectiveTarget < ScriptTarget.ES2018
                 ) {
                     ParenthesizedExpression(
                         expression = transformObjectRestDestructuringAssignment(
-                            defaultRaw, defaultRaw.left as ObjectLiteralExpression, needsValue = true,
+                            defaultRaw, defaultRaw.left, needsValue = true,
                         ),
                         pos = -1, end = -1,
                     )
@@ -6126,7 +6123,7 @@ class Transformer(
                 // assigns the BINDING name — __setFunctionName(_e, "c4") in the capture list.
                 if (it is ClassExpression && it.name == null && element.name is Identifier) {
                     val saved = pendingClassExprBindingName
-                    pendingClassExprBindingName = (element.name as Identifier).text
+                    pendingClassExprBindingName = (element.name).text
                     try { transformExpression(it) } finally { pendingClassExprBindingName = saved }
                 } else transformExpression(it)
             },
@@ -6224,7 +6221,7 @@ class Transformer(
             val readExpr = ElementAccessExpression(
                 expression = sourceExpr, argumentExpression = syntheticId(keyTemp), pos = -1, end = -1,
             )
-            val valueExpr = (prop as PropertyAssignment).initializer
+            val valueExpr = (prop).initializer
             if (valueExpr is BinaryExpression && valueExpr.operator == Equals) {
                 // `[key]: target = default` — read temp + default check.
                 val readTemp = nextTempVarName()
@@ -6389,7 +6386,7 @@ class Transformer(
         // — the receiver captures into a ctor-local hoisted temp, the target becomes a
         // one-setter object's `.value`. Only direct PropertyAssignment values are handled.
         if (root.operator == Equals && root.left is ObjectLiteralExpression && privateFieldEnvStack.isNotEmpty()) {
-            val objLit = root.left as ObjectLiteralExpression
+            val objLit = root.left
             fun privateTargetVar(p: Node): String? {
                 val v = (p as? PropertyAssignment)?.initializer as? PropertyAccessExpression ?: return null
                 if (!v.name.text.startsWith("#")) return null
@@ -6459,7 +6456,7 @@ class Transformer(
         // Only plain `=` writes; compound assigns / ++ / -- stay unrewritten (no consumer yet).
         if (root.operator == Equals) {
             val lhs = root.left as? PropertyAccessExpression
-            val pname = (lhs?.name as? Identifier)?.text
+            val pname = (lhs?.name)?.text
             if (lhs != null && pname != null && pname.startsWith("#")) {
                 val wmVar = lookupPrivateFieldVar(pname)
                 if (wmVar != null) {
@@ -7800,7 +7797,7 @@ class Transformer(
                     val init = node.initializer
                     if (init is ClassExpression && init.name == null && node.name is Identifier) {
                         val saved = pendingClassExprBindingName
-                        pendingClassExprBindingName = (node.name as Identifier).text
+                        pendingClassExprBindingName = (node.name).text
                         try { transformExpression(init) } finally { pendingClassExprBindingName = saved }
                     } else transformExpression(init)
                 },
@@ -8665,7 +8662,7 @@ class Transformer(
         if (isRequire && isESModuleFormat(options, currentFileName)
             && options.effectiveModule.isNodeNext
         ) {
-            val specExpr = (ref as ExternalModuleReference).expression
+            val specExpr = (ref).expression
             needsCreateRequireHelper = true
             return listOf(
                 VariableStatement(
@@ -8697,7 +8694,7 @@ class Transformer(
         // neither `import x = require("mod")` nor `export import x = require("mod")` produce JS.
         // If the module itself is type-only (no value exports at all), always erase — even if
         // the imported name appears in value positions (those are type errors, not value uses).
-        if (isRequire && ref is ExternalModuleReference) {
+            if (isRequire) {
             val specText = (ref.expression as? StringLiteralNode)?.text
             if (specText != null && checker?.isTypeOnlyImportRequire(specText, currentFileName) == true) {
                 return emptyList()
@@ -8831,7 +8828,7 @@ class Transformer(
                     name = null,
                     namedBindings = NamespaceImport(name = Identifier(text = tempName)),
                 ),
-                moduleSpecifier = decl.moduleSpecifier!!,
+                moduleSpecifier = decl.moduleSpecifier,
                 pos = decl.pos,
                 end = decl.end,
                 leadingComments = decl.leadingComments,
@@ -9405,7 +9402,7 @@ class Transformer(
         if (init.members.isEmpty()) return false
         return init.members.all { m ->
             m is PropertyDeclaration && !m.decorators.isNullOrEmpty() && m.name is Identifier &&
-                !(m.name as Identifier).text.startsWith("#")
+                !(m.name).text.startsWith("#")
         }
     }
 
@@ -9785,7 +9782,6 @@ class Transformer(
             modifiers = stripTypeScriptModifiers(decl.modifiers) - ModifierFlag.Abstract,
             decorators = null,
         )) + result.trailingStatements
-        val syntheticName = if (decl.name == null) syntheticId(className) else null
 
         val strippedModifiers = stripTypeScriptModifiers(decl.modifiers) - ModifierFlag.Abstract
 
@@ -10116,7 +10112,6 @@ class Transformer(
                     is MethodDeclaration -> member.name
                     is GetAccessor -> member.name
                     is SetAccessor -> member.name
-                    else -> null
                 }) as? ComputedPropertyName)?.expression
                 val temp = computedKeyTemps[member]
                 when {
@@ -10740,7 +10735,7 @@ class Transformer(
                 flattenCommaChain(e, flat)
                 if (flat.all { x ->
                         (x as? BinaryExpression)?.operator == Equals &&
-                            ((x as BinaryExpression).left as? Identifier)?.text in captureLeadingNames
+                            ((x).left as? Identifier)?.text in captureLeadingNames
                     }) {
                     elements.addAll(flat)
                     continue
@@ -11179,7 +11174,7 @@ class Transformer(
                         it.decorators.isNullOrEmpty()
                 }?.name as? Identifier
                 if (accName != null && !accName.text.startsWith("#")) {
-                    val prop = member as PropertyDeclaration
+                    val prop = member
                     val storageName = "#${accName.text}_accessor_storage"
                     fun storageAccess() = PropertyAccessExpression(
                         expression = syntheticId("this"),
@@ -11320,11 +11315,11 @@ class Transformer(
                 val prop = member as? PropertyDeclaration
                 val fieldEligible = prop != null &&
                     ModifierFlag.Declare !in prop.modifiers &&
-                    !(prop.name is Identifier && (prop.name as Identifier).text.startsWith("#")) &&
+                    !(prop.name is Identifier && (prop.name).text.startsWith("#")) &&
                     (ModifierFlag.Static !in prop.modifiers || options.effectiveTarget < ScriptTarget.ES2022)
-                val propComputed = if (fieldEligible) prop!!.name as? ComputedPropertyName else null
+                val propComputed = if (fieldEligible) prop.name as? ComputedPropertyName else null
                 val propDecorated = fileHasDecoratedComputedKeys && prop != null && !prop.decorators.isNullOrEmpty()
-                if (fieldEligible && (prop!!.initializer != null || (fileHasDecoratedComputedKeys && propComputed != null))) {
+                if (fieldEligible && (prop.initializer != null || (fileHasDecoratedComputedKeys && propComputed != null))) {
                     val computedName = propComputed ?: continue
                     val expr = computedName.expression
                     // Only extract non-literal expressions — literals don't need temp vars
@@ -11504,7 +11499,7 @@ class Transformer(
                 when {
                     m is PropertyDeclaration && (m.name as? Identifier)?.text?.startsWith("#") == true &&
                         ModifierFlag.Declare !in m.modifiers -> {
-                        val fieldName = (m.name as Identifier).text.removePrefix("#")
+                        val fieldName = (m.name).text.removePrefix("#")
                         val sv = stateVarName(fieldName)
                         hoistedVarScopes.lastOrNull()?.add(sv)
                         if (functionScopeDepth == 0) computedPropHoistNames.add(sv)
@@ -12189,7 +12184,7 @@ class Transformer(
                 if (functionScopeDepth == 0) computedPropHoistNames.add(ht)
                 heritageTempVar = ht
                 val ewta = extendsTypes[0]
-                finalHeritage = listOf(finalHeritage!![0].copy(types = listOf(ewta.copy(
+                finalHeritage = listOf(finalHeritage[0].copy(types = listOf(ewta.copy(
                     expression = ParenthesizedExpression(
                         expression = BinaryExpression(
                             left = syntheticId(ht),
@@ -12223,7 +12218,7 @@ class Transformer(
                     if (functionScopeDepth == 0) computedPropHoistNames.add(sv)
                 }
                 aliasAndPrivate.add(BinaryExpression(
-                    left = syntheticId(brandVar!!),
+                    left = syntheticId(brandVar),
                     operator = Equals,
                     right = NewExpression(expression = syntheticId("WeakSet"), arguments = emptyList(), pos = -1, end = -1),
                     pos = -1, end = -1,
@@ -12350,7 +12345,7 @@ class Transformer(
                     }
                     if (lhs != null) {
                         val transformedInit = transformExpression(prop.initializer)
-                        var finalInit = if (classTempVar != null) replaceThisInExpr(transformedInit, classTempVar!!)
+                        var finalInit = if (classTempVar != null) replaceThisInExpr(transformedInit, classTempVar)
                                         else transformedInit
                         // B341: class-name references inside static initializers also route
                         // through the alias (declarations only — class expressions replace
@@ -12362,7 +12357,7 @@ class Transformer(
                         // B556: rewrite `super.X` reads in the static field initializer to
                         // Reflect.get(heritageTemp, "X", classAlias) (superAccess2).
                         if (heritageTempVar != null && classTempVar != null) {
-                            finalInit = replaceSuperReadsInExpr(finalInit, heritageTempVar!!, classTempVar!!)
+                            finalInit = replaceSuperReadsInExpr(finalInit, heritageTempVar, classTempVar)
                         }
                         trailingStatements.add(
                             ExpressionStatement(
@@ -14175,13 +14170,13 @@ class Transformer(
                                 is ObjectBindingPattern -> {
                                     if (decl.initializer != null) {
                                         val init = qualifyNamespaceRefs(nsName, exportedVarOnlyNames, transformExpression(decl.initializer))
-                                        val sole = nameNode.elements.singleOrNull() as? BindingElement
+                                        val sole = nameNode.elements.singleOrNull()
                                         if (sole != null && !sole.dotDotDotToken && sole.initializer == null &&
                                             sole.name is Identifier &&
                                             (sole.propertyName == null || sole.propertyName is Identifier)) {
                                             // Single element: inline `Ns.local = init.prop` (init used once → no temp).
-                                            val localName = (sole.name as Identifier).text
-                                            val propName = (sole.propertyName as? Identifier)?.text ?: localName
+                                            val localName = (sole.name).text
+                                            val propName = (sole.propertyName)?.text ?: localName
                                             assignments.add(BinaryExpression(
                                                 left = PropertyAccessExpression(expression = Identifier(nsName), name = Identifier(localName)),
                                                 operator = Equals,
@@ -14197,7 +14192,6 @@ class Transformer(
                                         assignments.add(tempAssign)
                                         // nsName.p = _a.p for each binding element
                                         for (element in nameNode.elements) {
-                                            if (element !is BindingElement) continue
                                             val propName = (element.propertyName as? Identifier)?.text ?: (element.name as? Identifier)?.text ?: continue
                                             val localName = (element.name as? Identifier)?.text ?: continue
                                             assignments.add(
@@ -14225,7 +14219,7 @@ class Transformer(
                                         if (sole != null && !sole.dotDotDotToken && sole.initializer == null &&
                                             sole.name is Identifier) {
                                             // Single element: inline `Ns.local = init[0]` (init used once → no temp).
-                                            val localName = (sole.name as Identifier).text
+                                            val localName = (sole.name).text
                                             assignments.add(BinaryExpression(
                                                 left = PropertyAccessExpression(expression = Identifier(nsName), name = Identifier(localName)),
                                                 operator = Equals,
@@ -15268,8 +15262,8 @@ class Transformer(
                 node.parameters.forEach { param ->
                     collectRefsFromNode(param.initializer, refs)
                     if (param.name is ComputedPropertyName) collectRefsFromNode(param.name, refs)
-                    if (param.name is ObjectBindingPattern) collectBindingPatternRefs(param.name as ObjectBindingPattern, refs)
-                    if (param.name is ArrayBindingPattern) collectArrayBindingPatternRefs(param.name as ArrayBindingPattern, refs)
+                    if (param.name is ObjectBindingPattern) collectBindingPatternRefs(param.name, refs)
+                    if (param.name is ArrayBindingPattern) collectArrayBindingPatternRefs(param.name, refs)
                 }
                 node.body?.statements?.forEach { collectRefsFromNode(it, refs) }
             }
@@ -15379,15 +15373,13 @@ class Transformer(
 
     private fun collectBindingPatternRefs(pattern: ObjectBindingPattern, refs: MutableSet<String>) {
         for (element in pattern.elements) {
-            if (element is BindingElement) {
-                if (element.propertyName is ComputedPropertyName)
-                    collectRefsFromNode(element.propertyName, refs)
-                collectRefsFromNode(element.initializer, refs)
-                when (val name = element.name) {
-                    is ObjectBindingPattern -> collectBindingPatternRefs(name, refs)
-                    is ArrayBindingPattern -> collectArrayBindingPatternRefs(name, refs)
-                    else -> {}
-                }
+            if (element.propertyName is ComputedPropertyName)
+                collectRefsFromNode(element.propertyName, refs)
+            collectRefsFromNode(element.initializer, refs)
+            when (val name = element.name) {
+                is ObjectBindingPattern -> collectBindingPatternRefs(name, refs)
+                is ArrayBindingPattern -> collectArrayBindingPatternRefs(name, refs)
+                else -> {}
             }
         }
     }
@@ -15577,17 +15569,14 @@ class Transformer(
     private fun rewriteIdInBindingName(name: Expression, map: Map<String, Expression>, wrapCallsWithZero: Boolean): Expression = when (name) {
         is ObjectBindingPattern -> name.copy(
             elements = name.elements.map { elem ->
-                when (elem) {
-                    is BindingElement -> elem.copy(
-                        propertyName = when (val pn = elem.propertyName) {
-                            is ComputedPropertyName -> pn.copy(expression = rewriteId(pn.expression, map, wrapCallsWithZero))
-                            else -> pn
-                        },
-                        name = rewriteIdInBindingName(elem.name, map, wrapCallsWithZero),
-                        initializer = elem.initializer?.let { rewriteId(it, map, wrapCallsWithZero) },
-                    )
-                    else -> elem
-                }
+                elem.copy(
+                    propertyName = when (val pn = elem.propertyName) {
+                        is ComputedPropertyName -> pn.copy(expression = rewriteId(pn.expression, map, wrapCallsWithZero))
+                        else -> pn
+                    },
+                    name = rewriteIdInBindingName(elem.name, map, wrapCallsWithZero),
+                    initializer = elem.initializer?.let { rewriteId(it, map, wrapCallsWithZero) },
+                )
             }
         )
         is ArrayBindingPattern -> name.copy(

@@ -1052,7 +1052,7 @@ class Checker(
         globals["ReadonlyArray"]?.let { roArraySym ->
             if (roArraySym.flags.hasAny(SymbolFlags.Interface)) {
                 val roType = getDeclaredTypeOfClassOrInterface(roArraySym)
-                globalReadonlyArrayType = roType
+                if (roType is Type.Interface) globalReadonlyArrayType = roType
             }
         }
         // 1. Merge file-level symbols into globals
@@ -2836,7 +2836,7 @@ class Checker(
         val sig = Signature(
             parameters = sigParams,
             resolvedReturnType = returnType,
-            minArgumentCount = fnDecl.parameters.count { (!it.questionToken && it.initializer == null && !it.dotDotDotToken) },
+            minArgumentCount = fnDecl.parameters.count { (it.questionToken == null && it.initializer == null && it.dotDotDotToken == null) },
         )
         val obj = Type.Object()
         obj.callSignatures = listOf(sig)
@@ -2932,7 +2932,7 @@ class Checker(
      * (interfaces, type aliases, non-instantiated namespaces).
      */
     fun isValueExport(name: String, moduleSpecifier: String, sourceFileName: String): Boolean {
-        fileResults[sourceFileName] ?: return true
+        val result = fileResults[sourceFileName] ?: return true
         val targetFile = resolveModuleSpecifier(moduleSpecifier, null) ?: return true
         val targetResult = fileResults[targetFile] ?: return true
         val symbol = targetResult.locals[name] ?: return true // safe default: keep
@@ -7445,6 +7445,7 @@ class Checker(
                         when (m) {
                             is MethodDeclaration -> (m.name as? Identifier)?.text
                             is PropertyDeclaration -> (m.name as? Identifier)?.text
+                            else -> null
                         }
                     }.sorted()
                     if (privs.isNotEmpty()) mixinMembers[nm] = privs
@@ -7464,6 +7465,7 @@ class Checker(
                 when (m) {
                     is MethodDeclaration -> (m.name as? Identifier)?.text
                     is PropertyDeclaration -> (m.name as? Identifier)?.text
+                    else -> null
                 }
             }.sorted()
             val ctorAliases = statements.filterIsInstance<TypeAliasDeclaration>()
@@ -8503,6 +8505,7 @@ class Checker(
                         val modifiers = when (stmt) {
                             is FunctionDeclaration -> stmt.modifiers
                             is ClassDeclaration -> stmt.modifiers
+                            is VariableStatement -> stmt.modifiers
                             is EnumDeclaration -> stmt.modifiers
                             is InterfaceDeclaration -> stmt.modifiers
                             is TypeAliasDeclaration -> stmt.modifiers
@@ -9435,7 +9438,8 @@ class Checker(
                             }
                         }
                         is OmittedExpression -> {} // skip holes
-                        else -> collectWriteTargetRefs(element, scope)
+                        is Expression -> collectWriteTargetRefs(element, scope)
+                        else -> {}
                     }
                 }
             }
@@ -10102,6 +10106,7 @@ class Checker(
         unusedComputedKeys = computedKeys
 
         // Collect property access names per member (for self-reference detection)
+        val privateMemberNames = privateMembers.map { it.name }.toSet()
         data class MemberRefs(val memberName: String?, val refs: MutableSet<String>)
         val refsPerMember = mutableListOf<MemberRefs>()
         for (member in members) {
@@ -10920,7 +10925,10 @@ class Checker(
             is KeywordTypeNode -> {} // any, number, string, etc. — no references
             is ArrayType -> collectTypeRefs(type.elementType, scope)
             is TupleType -> type.elements.forEach {
-                collectTypeRefs(it, scope)
+                when (it) {
+                    is TypeNode -> collectTypeRefs(it, scope)
+                    else -> {}
+                }
             }
             is UnionType -> type.types.forEach { collectTypeRefs(it, scope) }
             is IntersectionType -> type.types.forEach { collectTypeRefs(it, scope) }
@@ -11004,7 +11012,7 @@ class Checker(
             }
             is ArrayType -> collectTypeQueryValueRefs(type.elementType, scope)
             is TupleType -> type.elements.forEach {
-                collectTypeQueryValueRefs(it, scope)
+                if (it is TypeNode) collectTypeQueryValueRefs(it, scope)
             }
             is UnionType -> type.types.forEach { collectTypeQueryValueRefs(it, scope) }
             is IntersectionType -> type.types.forEach { collectTypeQueryValueRefs(it, scope) }
@@ -12941,14 +12949,16 @@ class Checker(
                 val head = when (stmt) {
                     is ForInStatement -> stmt.expression
                     is ForOfStatement -> stmt.expression
+                    else -> null
                 }
-                head.let { scanNullableUnionRefsExpr(it, scan) }
+                head?.let { scanNullableUnionRefsExpr(it, scan) }
                 val inner = when (stmt) {
                     is ForInStatement -> stmt.statement
                     is ForOfStatement -> stmt.statement
+                    else -> null
                 }
                 scan.inLoop++
-                inner.let { scanNullableUnionRefsStmt(it, scan) }
+                inner?.let { scanNullableUnionRefsStmt(it, scan) }
                 scan.inLoop--
             }
             is ReturnStatement -> stmt.expression?.let { scanNullableUnionRefsExpr(it, scan) }
@@ -14918,14 +14928,16 @@ class Checker(
                 // Function expression body — walk it
                 // Local var declarations inside the body shadow outer constructor params — exclude them.
                 val bodyBlock = expr.body
-                val localVars = mutableSetOf<String>()
-                collectVarDeclaredNamesInBlock(bodyBlock.statements, localVars)
-                // Also collect parameter names
-                for (param in expr.parameters) collectParamDeclaredNames(param.name, localVars)
-                val innerCtorNames = if (localVars.isEmpty()) ctorNames else ctorNames - localVars
-                val innerParamProps = if (localVars.isEmpty()) ctorParamPropertyNames else ctorParamPropertyNames - localVars
-                bodyBlock.statements.forEach { stmt ->
-                    checkExprForCtorParamRefsInStmt(stmt, memberName, innerCtorNames, innerParamProps, source, fileName)
+                if (bodyBlock != null) {
+                    val localVars = mutableSetOf<String>()
+                    collectVarDeclaredNamesInBlock(bodyBlock.statements, localVars)
+                    // Also collect parameter names
+                    for (param in expr.parameters) collectParamDeclaredNames(param.name, localVars)
+                    val innerCtorNames = if (localVars.isEmpty()) ctorNames else ctorNames - localVars
+                    val innerParamProps = if (localVars.isEmpty()) ctorParamPropertyNames else ctorParamPropertyNames - localVars
+                    bodyBlock.statements.forEach { stmt ->
+                        checkExprForCtorParamRefsInStmt(stmt, memberName, innerCtorNames, innerParamProps, source, fileName)
+                    }
                 }
             }
             is TemplateExpression ->
@@ -15134,6 +15146,7 @@ class Checker(
                         val params = when (init) {
                             is ArrowFunction -> init.parameters
                             is FunctionExpression -> init.parameters
+                            else -> emptyList()
                         }
                         emitVarFn7006Params(params, source, fileName)
                     } else if (decl.type == null && init is TypeAssertionExpression) {
@@ -18185,7 +18198,7 @@ class Checker(
                     val cons = tpConstraints[nm]
                     if (cons == null) { failingTpName = nm; break }
                     val consType = getTypeFromTypeNode(cons)
-                    if (consType !== errorType &&
+                    if (consType != null && consType !== errorType &&
                         getPropertyOfType(consType, propName) == null) {
                         failingTpName = nm; break
                     }
@@ -18233,6 +18246,7 @@ class Checker(
                     if (expr.operator != SyntaxKind.Equals) return
                     val pa = expr.left as? PropertyAccessExpression ?: return
                     if ((pa.expression as? Identifier)?.text != "this") return
+                    if (pa.name !is Identifier) return
                     // RHS `this.<id>` reads are deliberately NOT scanned (conservative FN).
                 }
                 is PropertyAccessExpression -> {
@@ -20361,6 +20375,7 @@ class Checker(
                                 val ip = when (declInit) {
                                     is ArrowFunction -> declInit.parameters
                                     is FunctionExpression -> declInit.parameters
+                                    else -> emptyList()
                                 }
                                 if (ip.isEmpty()) return@run false
                                 val documented = jsDocDocumentedParamNames(stmt.leadingComments) +
@@ -20381,6 +20396,7 @@ class Checker(
                                 val initParams = when (declInit) {
                                     is ArrowFunction -> declInit.parameters
                                     is FunctionExpression -> declInit.parameters
+                                    else -> emptyList()
                                 }
                                 emitTs7006BeyondCtxArity(initParams, ctxArity, source, fileName)
                             }
@@ -20639,7 +20655,7 @@ class Checker(
                 if (target is PropertyAccessExpression
                     && target.expression is Identifier
                     && (target.expression).text == "this"
-
+                    && target.name is Identifier
                     && (target.name).text == propName) {
                     return true
                 }
@@ -20880,6 +20896,7 @@ class Checker(
                                     val ps = when (initExpr) {
                                         is ArrowFunction -> initExpr.parameters
                                         is FunctionExpression -> initExpr.parameters
+                                        else -> emptyList()
                                     }
                                     emitTs7006BeyondCtxArity(ps, cArity, source, fileName)
                                     checkImplicitAnyInExpr(initExpr, source, fileName, contextuallyTyped = true)
@@ -20908,6 +20925,7 @@ class Checker(
                             val argParams = when (arg) {
                                 is ArrowFunction -> arg.parameters
                                 is FunctionExpression -> arg.parameters
+                                else -> emptyList()
                             }
                             emitTs7006BeyondCtxArity(argParams, ctxArity, source, fileName)
                         }
@@ -21102,7 +21120,7 @@ class Checker(
             // parameter position, reachabilityChecksNoCrash1's `!`/`<`) gets TS7006 with
             // the '(Missing)' display; other empty-name recovery shapes stay skipped.
             if (name is Identifier && name.text.isEmpty() && !param.dotDotDotToken) {
-                if (name.pos >= 0 && name.pos == name.end) {
+                if (name.pos >= 0 && name.pos == name.end && param.type == null && param.initializer == null) {
                     val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
                     diagnostics.add(Diagnostic(
                         message = "Parameter '(Missing)' implicitly has an 'any' type.",
@@ -21168,10 +21186,10 @@ class Checker(
                     continue
                 }
                 // TS7019: Rest parameter implicitly has an 'any[]' type
-                val displayName = if (name.text.isEmpty()) "(Missing)" else (name).text
+                val displayName = if (name is Identifier && name.text.isEmpty()) "(Missing)" else (name).text
                 // Span covers `...name` (3 chars for `...` + name length)
                 val start = name.pos - 3 // position of `...`
-                val length = 3 + (name.text.length)
+                val length = 3 + (if (name is Identifier) name.text.length else 0)
                 val (line, character) = getLineAndCharacterOfPosition(source, start)
                 diagnostics.add(Diagnostic(
                     message = "Rest parameter '$displayName' implicitly has an 'any[]' type.",
@@ -23453,6 +23471,7 @@ class Checker(
             is JsxSelfClosingElement -> (jsxNode.tagName as? Identifier)?.text?.length
                 ?: ((jsxNode.tagName.end - tagStart).coerceAtLeast(1))
             is JsxFragment -> 2 // `<>`
+            else -> 1
         }
         val (line, character) = getLineAndCharacterOfPosition(source, tagStart)
         if (factoryExplicit != null) {
@@ -25211,7 +25230,7 @@ class Checker(
                     // For cross-block visibility (merged namespace blocks), only truly exported
                     // names should be visible. Non-exported members remain visible within their
                     // own block via collectDeclaredNames on the block statements.
-                    if (!isNameExportedFromNamespace(symbol, exportName)) return@forEach
+                    if (symbol != null && !isNameExportedFromNamespace(symbol, exportName)) return@forEach
                     nsScope.names.add(exportName)
                     if (exportSym.flags.hasAny(SymbolFlags.Type)) nsScope.typeNames.add(exportName)
                 }
@@ -28782,13 +28801,15 @@ class Checker(
             return if (a.value == b.value) Ts2403Cmp.IDENTICAL else Ts2403Cmp.DIFFERENT
         }
         // One side intrinsic/literal, other is a structured object/ref → DIFFERENT.
-        if ((a is Type.Object) != (b is Type.Object)) return Ts2403Cmp.DIFFERENT
-        if (a !is Type.Object || b !is Type.Object) {
+        val aStruct = a is Type.Object
+        val bStruct = b is Type.Object
+        if (aStruct != bStruct) return Ts2403Cmp.DIFFERENT
+        if (!aStruct) {
             // Unions / intersections / typeparams already handled, or unhandled kind:
             // be conservative.
             return Ts2403Cmp.UNKNOWN
         }
-        // a and b are both Type.Object here (smart-cast).
+        a; b as Type.Object
         // Function-shaped objects (call signatures) — compare signatures structurally.
         // Blocker #3 workaround: a member symbol of a lib-merged user interface (e.g.
         // `Promise.then`) carries BOTH the user signature AND the lib signature, so its
@@ -29354,13 +29375,14 @@ class Checker(
         for (p in lit.properties) {
             val nameId: Identifier
             val body: Block
+            val isAccessor: Boolean
             when {
                 p is MethodDeclaration && p.type == null && p.body != null && p.name is Identifier &&
                     ModifierFlag.Async !in p.modifiers && !p.asteriskToken -> {
-                    nameId = p.name; body = p.body
+                    nameId = p.name; body = p.body; isAccessor = false
                 }
                 p is GetAccessor && p.type == null && p.body != null && p.name is Identifier -> {
-                    nameId = p.name; body = p.body
+                    nameId = p.name; body = p.body; isAccessor = true
                 }
                 else -> continue
             }
@@ -32176,6 +32198,7 @@ class Checker(
                     start = startPos, length = len,
                 ))
             }
+            else -> {}
         }
     }
 
@@ -37204,11 +37227,12 @@ class Checker(
                 for (d in s.declarationList.declarations) {
                     val nm = (d.name as? Identifier)?.text ?: continue
                     val tq = d.type as? TypeQuery ?: continue
-                    leftmostEntityIdent(tq.exprName) ?: continue
+                    val leftmost = leftmostEntityIdent(tq.exprName) ?: continue
                     // `typeof <ns>` where the whole exprName is a single namespace ref.
                     val ns = resolveValueToNamespace(tq.exprName, top, aliases) ?: continue
                     if (tq.exprName !is Identifier) continue // only `typeof N` (not `typeof N.member`) is a namespace-typeof target
                     varTypeofNs[nm] = ns to "typeof ${(ns.name as? Identifier)?.text ?: nm}"
+                    leftmost // silence unused
                 }
             }
             // TS2708: `typeof <alias-to-uninstantiated-namespace>` in var annotations.
@@ -40579,7 +40603,7 @@ interface DataView {
             // as `'C<T>' requires 1 type argument(s)` (baseline uses the resolved name).
             if (symbol.flags.hasAny(SymbolFlags.Alias)) {
                 val resolved = resolveAlias(symbol)
-                if (resolved !== symbol) {
+                if (resolved != null && resolved !== symbol) {
                     val aliasInfo = getTypeParamInfoFromSymbol(resolved, forTypePosition)
                     if (aliasInfo != null) return aliasInfo
                 }
@@ -40961,7 +40985,7 @@ interface DataView {
         // Compute the full span by summing right.text.length + (right.pos - typeName.pos).
         val nameSpan: Int = if (typeName is QualifiedName) {
             val right = typeName.right
-            right.pos + right.text.length - typeName.pos
+            if (right is Identifier) right.pos + right.text.length - typeName.pos else name.length
         } else {
             name.length
         }
@@ -41007,7 +41031,7 @@ interface DataView {
         val providedCount = typeRef.typeArguments?.size ?: 0
         val nameSpan: Int = if (typeName is QualifiedName) {
             val right = typeName.right
-            right.pos + right.text.length - typeName.pos
+            if (right is Identifier) right.pos + right.text.length - typeName.pos else name.length
         } else name.length
         val start = typeName.pos
         val length: Int = when {
@@ -43761,7 +43785,7 @@ interface DataView {
     ): Pair<Identifier, String>? {
         // Walk the property-access chain leftward, collecting names.
         val names = mutableListOf<String>()
-        val leftmost: Identifier?
+        var leftmost: Identifier? = null
         var current: Expression = expr
         while (true) {
             when (current) {
@@ -43777,7 +43801,7 @@ interface DataView {
                 else -> return null
             }
         }
-        if (leftmost.text in valueNames) return null
+        if (leftmost == null || leftmost.text in valueNames) return null
         // B51.1: skip built-in lib types that are ALSO values (e.g. `Array`,
         // `Object`, `Function`) — TypeScript's full lib.d.ts has both
         // `interface X { ... }` AND `declare const X: XConstructor`, making
@@ -51482,7 +51506,7 @@ interface DataView {
         when (target) {
             is PropertyAccessExpression -> {
                 val recvType = try { getTypeOfExpression(target.expression) } catch (_: Throwable) { return }
-                if (recvType !is Type.Object || recvType is Type.Reference) return
+                if (recvType !is Type.Object || recvType is Type.Union || recvType is Type.Reference) return
                 resolveStructuredTypeMembers(recvType)
                 if (recvType.tupleElementTypes != null) return
                 if (recvType.stringIndexInfo == null) return
@@ -51501,7 +51525,7 @@ interface DataView {
             }
             is ElementAccessExpression -> {
                 val recvType = try { getTypeOfExpression(target.expression) } catch (_: Throwable) { return }
-                if (recvType !is Type.Object || recvType is Type.Reference) return
+                if (recvType !is Type.Object || recvType is Type.Union || recvType is Type.Reference) return
                 resolveStructuredTypeMembers(recvType)
                 if (recvType.tupleElementTypes != null) return
                 if (recvType.stringIndexInfo == null && recvType.numberIndexInfo == null) return
@@ -51910,7 +51934,7 @@ interface DataView {
                         (!options.strictExplicitlyFalse && !options.noImplicitAnyExplicitlyFalse))
                 ) {
                     val nm = expr.name
-                    if (nm.text !in KNOWN_GLOBALS && globals[nm.text] == null) {
+                    if (nm != null && nm.text !in KNOWN_GLOBALS && globals[nm.text] == null) {
                         val (l, c) = getLineAndCharacterOfPosition(source, nm.pos)
                         diagnostics.add(Diagnostic(
                             message = "Element implicitly has an 'any' type because type 'typeof globalThis' has no index signature.",
@@ -52175,7 +52199,7 @@ interface DataView {
                     val declProp = retTypeLit?.members?.firstNotNullOfOrNull { m ->
                         (m as? PropertyDeclaration)?.takeIf { (it.name as? Identifier)?.text == ipName }
                     }
-                    if (declProp != null) {
+                    if (declProp != null && retTypeLit != null) {
                         val declNamePos = (declProp.name as Identifier).pos
                         val (rl, rc) = getLineAndCharacterOfPosition(source, declNamePos)
                         val typeDisplay = formatTypeForDisplay(retTypeLit) ?: typeToString(r)
@@ -53961,6 +53985,7 @@ interface DataView {
                     if (ants.isEmpty()) return false
                     f = ants[0]
                 }
+                else -> return false
             }
         }
     }
@@ -54224,6 +54249,7 @@ interface DataView {
                 if (!isPropertyRef) {
                     // TS2703: operand must be property reference
                     val start = inner.pos
+                    val length = inner.end - inner.pos
                     val (line, character) = getLineAndCharacterOfPosition(source, start)
                     if (isStrict && inner is Identifier) {
                         // TS1102: delete on identifier in strict mode
@@ -55639,8 +55665,10 @@ interface DataView {
                     val classSym = globals[clsName] ?: (if (fileName != null) fileResults[fileName]?.locals?.get(clsName) else null)
                     if (classSym != null && classSym.flags.hasAny(SymbolFlags.Class)) {
                         val classType = getDeclaredTypeOfSymbol(classSym)
-                        val prop = getPropertyOfType(classType, propName)
-                        if (prop != null && isReadonlySymbol(prop)) return true
+                        if (classType != null) {
+                            val prop = getPropertyOfType(classType, propName)
+                            if (prop != null && isReadonlySymbol(prop)) return true
+                        }
                     }
                 }
             }
@@ -56796,6 +56824,7 @@ interface DataView {
         val keyName = when (arg) {
             is StringLiteralNode -> arg.text
             is NumericLiteralNode -> arg.text
+            else -> return
         }
         if (getPropertyOfType(objType, keyName) != null) return
         val stringIdx = when (objType) {
@@ -59090,6 +59119,7 @@ interface DataView {
         val elements: List<BindingElement> = when (name) {
             is ArrayBindingPattern -> name.elements.filterIsInstance<BindingElement>()
             is ObjectBindingPattern -> name.elements
+            else -> emptyList()
         }
         for (elt in elements) {
             if (elt.initializer != null) continue
@@ -61269,12 +61299,12 @@ interface DataView {
                 is MethodDeclaration, is GetAccessor, is SetAccessor -> {
                     val mods = when (m) {
                         is MethodDeclaration -> m.modifiers; is GetAccessor -> m.modifiers
-                        is SetAccessor -> m.modifiers
+                        is SetAccessor -> m.modifiers; else -> emptySet()
                     }
                     if (ModifierFlag.Static in mods) continue
                     val mn = when (m) {
                         is MethodDeclaration -> m.name; is GetAccessor -> m.name
-                        is SetAccessor -> m.name
+                        is SetAccessor -> m.name; else -> null
                     }
                     val pn = nameOf(mn) ?: return
                     if (ModifierFlag.Private in mods || ModifierFlag.Protected in mods) privateProtected.add(pn)
@@ -61348,7 +61378,7 @@ interface DataView {
                     val recv = e.expression
                     if (recv is Identifier && recv.text == restName) {
                         val nm = e.name
-                        if (nm.text in excluded) hits.add(nm.text to nm.pos)
+                        if (nm != null && nm.text in excluded) hits.add(nm.text to nm.pos)
                     } else push(recv)
                 }
                 is BinaryExpression -> {
@@ -66356,7 +66386,7 @@ interface DataView {
                                 is PropertyAssignment -> {
                                     val pn = (p.name as? Identifier)?.text
                                     val pi = p.initializer
-                                    if (pn == null) { analyzable = false; break }
+                                    if (pn == null || pi == null) { analyzable = false; break }
                                     val t = widenType(getTypeOfExpression(pi))
                                     entries.add(pn to t)
                                 }
@@ -67373,7 +67403,7 @@ interface DataView {
         when (binding) {
             is Identifier -> out.getOrPut(binding.text) { mutableListOf() }.add(binding)
             is ObjectBindingPattern -> for (el in binding.elements) {
-                collectVarBindingNameNodes(el.name, out)
+                if (el is BindingElement) collectVarBindingNameNodes(el.name, out)
             }
             is ArrayBindingPattern -> for (el in binding.elements) {
                 if (el is BindingElement) collectVarBindingNameNodes(el.name, out)
@@ -67849,7 +67879,7 @@ interface DataView {
         if (!calleeSym.flags.hasAny(SymbolFlags.Class)) return
         if (calleeSym.declarations.any { it in builtinLibDecls }) return
         val tgt = try { getTypeFromTypeNode(tref) } catch (_: Throwable) { return }
-        if (tgt !is Type.Interface) return
+        if (tgt !is Type.Interface || tgt is Type.Reference) return
         val tsym = tgt.symbol ?: return
         if (!tsym.flags.hasAny(SymbolFlags.Interface) || tsym.flags.hasAny(SymbolFlags.Class)) return
         if (tsym.declarations.any { it in builtinLibDecls }) return
@@ -67902,7 +67932,7 @@ interface DataView {
         while (op is ParenthesizedExpression) op = op.expression
         val ol = op as? ObjectLiteralExpression ?: return
         val tgt = try { getTypeFromTypeNode(tref) } catch (_: Throwable) { return }
-        if (tgt !is Type.Interface) return
+        if (tgt !is Type.Interface || tgt is Type.Reference) return
         resolveStructuredTypeMembers(tgt)
         val tgtProps = tgt.properties ?: return
         if (tgtProps.isEmpty()) return
@@ -69357,6 +69387,7 @@ interface DataView {
         val innerBlock: Block? = when (inner) {
             is FunctionExpression -> inner.body
             is ArrowFunction -> inner.body as? Block
+            else -> null
         }
         val endPos = if (innerBlock != null && innerBlock.closeBracePos >= 0) {
             innerBlock.closeBracePos + 1 + parenLayers
@@ -76053,7 +76084,7 @@ interface DataView {
         when (binding) {
             is ObjectBindingPattern -> {
                 for (element in binding.elements) {
-                    if (element.dotDotDotToken) {
+                    if (element is BindingElement && element.dotDotDotToken) {
                         // { ...x } → needs __rest
                         if ("__rest" !in tslibExports) {
                             // Span: position of the identifier 'x' (1 char for simple names)
@@ -76520,6 +76551,7 @@ interface DataView {
                 val clauseStart = when (clause) {
                     is CaseClause -> clause.pos
                     is DefaultClause -> clause.pos
+                    else -> continue
                 }
                 val (line, character) = getLineAndCharacterOfPosition(source, clauseStart)
                 // Span covers "case X:" or "default:" header
@@ -77799,7 +77831,7 @@ interface DataView {
     private fun stmtHasReturnWithValueOutsideTry(stmt: Statement): Boolean {
         return when (stmt) {
             is ReturnStatement -> {
-                stmt.expression ?: return false
+                val expr = stmt.expression ?: return false
                 // anyExpr=true: any return with expression counts (we only call with retType!=null)
                 true
             }
@@ -78140,6 +78172,13 @@ interface DataView {
     private fun switchAlwaysReturns(clauses: List<Node>): Boolean {
         // Each clause either terminates or falls through to a clause that terminates
         // Simple: check that there's a path through all clauses that always returns
+        val clauseTerminates = clauses.map { clause ->
+            when (clause) {
+                is CaseClause -> bodyAlwaysReturns(clause.statements)
+                is DefaultClause -> bodyAlwaysReturns(clause.statements)
+                else -> false
+            }
+        }
         // Find the last clause — it must terminate (or the one before that falls through to it)
         // Actually: switches always return if every "fall-through chain" ends in a return
         // Simple heuristic: if every non-empty clause terminates, it always returns
@@ -78282,7 +78321,7 @@ interface DataView {
         when (binding) {
             is Identifier -> out.add(binding.text)
             is ObjectBindingPattern -> for (el in binding.elements) {
-                collectVarBindingNames(el.name, out)
+                if (el is BindingElement) collectVarBindingNames(el.name, out)
             }
             is ArrayBindingPattern -> for (el in binding.elements) {
                 if (el is BindingElement) collectVarBindingNames(el.name, out)
@@ -78519,7 +78558,7 @@ interface DataView {
                 }
             }
             is ObjectBindingPattern -> for (el in binding.elements) {
-                checkVarDeclForShadowing(el.name, source, fileName, outerScopes, extraScope, bodyTop)
+                if (el is BindingElement) checkVarDeclForShadowing(el.name, source, fileName, outerScopes, extraScope, bodyTop)
             }
             is ArrayBindingPattern -> for (el in binding.elements) {
                 if (el is BindingElement) checkVarDeclForShadowing(el.name, source, fileName, outerScopes, extraScope, bodyTop)
@@ -78917,7 +78956,7 @@ interface DataView {
             is VariableStatement -> for (decl in stmt.declarationList.declarations) {
                 (decl.initializer as? FunctionExpression)?.let { fe ->
                     val body = fe.body
-                    if (fe.asteriskToken) {
+                    if (fe.asteriskToken && body != null) {
                         generatorPrimitiveYieldType(fe.type)?.let { scanBareYieldsInStatements(body.statements, it, source, fileName) }
                     }
                     body.let { scanGeneratorsInStatements(it.statements, source, fileName) }
@@ -80035,6 +80074,7 @@ interface DataView {
         return when (init) {
             is FunctionExpression -> init.copy(parameters = newParams)
             is ArrowFunction -> init.copy(parameters = newParams)
+            else -> null
         }
     }
 
@@ -81475,7 +81515,7 @@ interface DataView {
         fun aliasDeclOf(nm: String): TypeAliasDeclaration? =
             ((currentFileLocals?.get(nm) ?: globals[nm])?.declarations?.singleOrNull()) as? TypeAliasDeclaration
         // Normalize the annotation to (mappedAliasName, concreteArgNode, displayAsWritten?)
-        val indexed: IndexedAccessType?
+        var indexed: IndexedAccessType? = null
         var aliasDisplay: String? = null
         var aliasArgMap: Map<String, TypeNode>? = null // alias TP name -> concrete node
         if (ann0 is IndexedAccessType) {
@@ -81645,6 +81685,7 @@ interface DataView {
             val srcParams = when (init) {
                 is ArrowFunction -> init.parameters
                 is FunctionExpression -> init.parameters
+                else -> return false
             }
             val srcParam = srcParams.firstOrNull() ?: return false
             val srcParamName = (srcParam.name as? Identifier)?.text ?: return false
@@ -83209,7 +83250,7 @@ interface DataView {
         //     TS2696 hint line). FP-safe by construction: tsc ALWAYS errors on these
         //     shapes (a signature-less source can't satisfy a signature-bearing target).
         run {
-            if (targetType !is Type.Interface) return@run
+            if (targetType !is Type.Interface || targetType is Type.Reference) return@run
             val tsym = targetType.symbol ?: return@run
             if (!tsym.flags.hasAny(SymbolFlags.Interface) || tsym.flags.hasAny(SymbolFlags.Class)) return@run
             if (tsym.declarations.any { it in builtinLibDecls }) return@run
@@ -84072,6 +84113,7 @@ interface DataView {
         }
         val display = ordered.joinToString(" | ") { typeToString(it) }
         for (el in pattern.elements) {
+            if (el !is BindingElement) continue
             if (el.dotDotDotToken) continue
             val propNode = el.propertyName ?: el.name
             val propName = when (propNode) {
@@ -84083,6 +84125,7 @@ interface DataView {
             val squiggleLen = when (propNode) {
                 is Identifier -> propNode.text.length
                 is StringLiteralNode -> (propNode.rawText?.length ?: propNode.text.length) + 2
+                else -> continue
             }
             val (line, character) = getLineAndCharacterOfPosition(source, squiggleStart)
             diagnostics.add(Diagnostic(
@@ -84133,6 +84176,7 @@ interface DataView {
         }
         val display = "(" + paramDisplays.joinToString(", ") + ") => " + retDisplay
         for (el in pattern.elements) {
+            if (el !is BindingElement) continue
             if (el.dotDotDotToken) continue
             val propNode = el.propertyName ?: el.name
             val propName = when (propNode) {
@@ -84146,6 +84190,7 @@ interface DataView {
             val len = when (propNode) {
                 is Identifier -> propNode.text.length
                 is StringLiteralNode -> (propNode.rawText?.length ?: propNode.text.length) + 2
+                else -> continue
             }
             val (line, character) = getLineAndCharacterOfPosition(source, propNode.pos)
             diagnostics.add(Diagnostic(
@@ -84185,7 +84230,7 @@ interface DataView {
         val displays = constituents.map { structuralSpreadDisplay(it) ?: return }
         val display = displays.joinToString(" | ")
         for (el in pattern.elements) {
-            if (el.dotDotDotToken) continue
+            if (el !is BindingElement || el.dotDotDotToken) continue
             val propNode = el.propertyName ?: el.name
             val propName = when (propNode) {
                 is Identifier -> propNode.text
@@ -84200,6 +84245,7 @@ interface DataView {
             val squiggleLen = when (propNode) {
                 is Identifier -> propNode.text.length
                 is StringLiteralNode -> (propNode.rawText?.length ?: propNode.text.length) + 2
+                else -> continue
             }
             val (line, character) = getLineAndCharacterOfPosition(source, squiggleStart)
             diagnostics.add(Diagnostic(
@@ -84783,7 +84829,11 @@ interface DataView {
                 val missing = collectMissingProperties(sourceType, targetType)
                 if (missing.isNotEmpty()) {
                     val displaySource = typeToString(sourceType)
-                    val displayTarget = formatTypeForDisplay(returnTypeNode) ?: typeToString(targetType)
+                    val displayTarget = if (returnTypeNode is TypeQuery && targetType is Type.Object &&
+                        targetType !is Type.Interface && !targetType.callSignatures.isNullOrEmpty() &&
+                        targetType.symbol?.flags?.hasAny(SymbolFlags.Function) == true)
+                        typeToString(targetType) // B198: tsc unfolds `typeof <fn>` to its signature form
+                    else formatTypeForDisplay(returnTypeNode) ?: typeToString(targetType)
                     val (line, character) = getLineAndCharacterOfPosition(source, stmt.pos)
                     if (missing.size >= 2) {
                         diagnostics.add(Diagnostic(
@@ -84825,7 +84875,7 @@ interface DataView {
                 val srcCtorElab = getNonConstructibleElaboration(sourceType, targetType)
                 if (srcCtorElab != null) {
                     val displaySource = typeToString(sourceType)
-                    val displayTarget = if (returnTypeNode is TypeQuery &&
+                    val displayTarget = if (returnTypeNode is TypeQuery && targetType is Type.Object &&
                         targetType !is Type.Interface && !targetType.callSignatures.isNullOrEmpty() &&
                         targetType.symbol?.flags?.hasAny(SymbolFlags.Function) == true)
                         typeToString(targetType) // B198: tsc unfolds `typeof <fn>` to its signature form
@@ -85130,7 +85180,7 @@ interface DataView {
                                     // treat the return as undefinedType for comparison purposes.
                                     val inferredSrcReturn = (expr.right as? FunctionExpression)?.let { fe ->
                                         val stmts = fe.body.statements
-                                        if (stmts.size == 1) {
+                                        if (stmts != null && stmts.size == 1) {
                                             val only = stmts[0]
                                             if (only is ReturnStatement && only.expression is Identifier &&
                                                 (only.expression).text == "undefined") {
@@ -85592,7 +85642,7 @@ interface DataView {
                     // standard path.
                     if (expr.right is ObjectLiteralExpression &&
                         (expr.right).properties.isEmpty() &&
-                        tt is Type.Interface
+                        tt is Type.Interface && tt !is Type.Reference
                     ) {
                         val targetName = tt.symbol?.name
                         if (targetName in WRAPPER_INTERFACE_NAMES) {
@@ -86344,7 +86394,7 @@ interface DataView {
         val elem = recvType.resolvedTypeArguments?.singleOrNull()
         if (elem != null && elem !== anyType && elem !== errorType) {
             val rhs = getTypeOfExpression(value)
-            if (rhs !== anyType && rhs !== errorType &&
+            if (rhs != null && rhs !== anyType && rhs !== errorType &&
                 !rhs.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)
             ) {
                 val widened = getWidenedLiteralType(rhs)
@@ -87326,7 +87376,7 @@ interface DataView {
             // to substitute the base's type args into the property's type. Mirrors
             // the pattern from getTypeOfPropertyAccess (Checker.kt:~54400).
             // Gate: prop.parent must differ from objType.symbol (only inherited members).
-            val inheritedResolved: Type? = if (objType is Type.Interface) {
+            val inheritedResolved: Type? = if (objType is Type.Interface && objType !is Type.Reference) {
                 val propParent = propSym.parent
                 if (propParent != null && propParent !== objType.symbol) {
                     findInheritedBaseRef(objType, propParent)?.let { baseRef ->
@@ -88189,6 +88239,7 @@ interface DataView {
                             else -> null
                         }
                         is FunctionExpression -> init.body.statements.firstNotNullOfOrNull { (it as? ReturnStatement)?.expression }
+                        else -> null
                     }
                     val ft = try { getTypeOfExpression(init) } catch (_: Throwable) { return false }
                     PropInfo(n, ft, re, init, -1, 0)
@@ -89982,7 +90033,7 @@ interface DataView {
         if (type is Type.Union) {
             // Property exists on a union if it exists on every constituent
             for (constituent in type.types) {
-                getPropertyOfType(constituent, name) ?: return null
+                val prop = getPropertyOfType(constituent, name) ?: return null
             }
             // TODO: return merged property symbol
             return type.types.firstNotNullOfOrNull { getPropertyOfType(it, name) }
@@ -91899,7 +91950,7 @@ interface DataView {
         val unwrapped = unwrapParensExpr(expr)
         if (unwrapped !is PropertyAccessExpression) return false
         // 17.34b: path-based comparison so `A._a.kind === ...` matches when name="A._a".
-        return getReferencePath(unwrapped.expression) == name
+        return getReferencePath(unwrapped.expression) == name && unwrapped.name is Identifier
     }
 
     private fun isLiteralKindForDiscriminant(t: Type): Boolean =
@@ -91960,7 +92011,7 @@ interface DataView {
             is PropertyAccessExpression -> {
                 obj = unwrapped.expression
                 val propName = unwrapped.name
-                isProp = propName.text == "constructor"
+                isProp = propName is Identifier && propName.text == "constructor"
             }
             is ElementAccessExpression -> {
                 obj = unwrapped.expression
@@ -92799,7 +92850,8 @@ interface DataView {
                         ?: anyType
                     // Widen concise-body `=> undefined` literal to `any` (mirrors variable-initializer widening).
                     body is Identifier && body.text == "undefined" -> anyType
-                    else -> getTypeOfExpression(body as Expression) // concise body: () => expr
+                    body != null -> getTypeOfExpression(body as Expression) // concise body: () => expr
+                    else -> anyType
                 }
             } finally {
                 currentLocalTypes = savedLocalTypes
@@ -92877,6 +92929,7 @@ interface DataView {
             }
             returnType = expr.type?.let { getTypeFromTypeNode(it) }
                 ?: when {
+                    expr.body == null -> anyType
                     !hasReturnWithExpression(expr.body) -> voidType
                     else -> inferReturnTypeFromFunctionExpressionBody(expr, params) ?: anyType
                 }
@@ -93235,7 +93288,7 @@ interface DataView {
             }
             mappedTypeCircularInfo = savedMappedInfo
             deepInstantiationBailed = savedBail
-            if (resolvedTypeArgs.none { it === errorType }) {
+            if (resolvedTypeArgs != null && resolvedTypeArgs.none { it === errorType }) {
                 // Find a signature with matching type parameter count
                 val matchingSig = sigs.firstOrNull { sig ->
                     val tp = sig.typeParameters
@@ -93803,7 +93856,7 @@ interface DataView {
                                         } finally {
                                             currentLocalTypes = savedLocalTypes
                                         }
-                                        if (bodyType !== anyType && bodyType !== errorType &&
+                                        if (bodyType != null && bodyType !== anyType && bodyType !== errorType &&
                                             !bodyType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) {
                                             val widened = widenType(bodyType)
                                             if (isNamedLikeAtom(widened) ||
@@ -93910,7 +93963,7 @@ interface DataView {
                                             currentLocalTypes = savedLocalTypes
                                             currentInferenceMapper = savedMapper
                                         }
-                                        if (bodyType !== anyType && bodyType !== errorType &&
+                                        if (bodyType != null && bodyType !== anyType && bodyType !== errorType &&
                                             !bodyType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) {
                                             val widened = widenType(bodyType)
                                             if (isNamedLikeAtom(widened) ||
@@ -93992,7 +94045,7 @@ interface DataView {
                                         currentLocalTypes = savedLocalTypes
                                         currentInferenceMapper = savedMapper
                                     }
-                                    if (bodyType !== anyType && bodyType !== errorType &&
+                                    if (bodyType != null && bodyType !== anyType && bodyType !== errorType &&
                                         !bodyType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) {
                                         val widened = widenType(bodyType)
                                         if (isNamedLikeAtom(widened) ||
@@ -94127,6 +94180,7 @@ interface DataView {
                                     else -> null
                                 }
                                 is FunctionExpression -> arg.body.statements.firstNotNullOfOrNull { (it as? ReturnStatement)?.expression }
+                                else -> null
                             }
                             if (retExpr != null) {
                                 val rStart = retExpr.pos
@@ -94184,7 +94238,7 @@ interface DataView {
                         // gated to the multi-literal-anchor shape so that excluded case stays out.
                         val unionForDisplay = getUnionType(effectiveCandidates.map { it.literalType!! })
                         val tpMapper = TypeMapper { t ->
-                            if (t === tp || (t.symbol != null && t.symbol === tp.symbol))
+                            if (t === tp || (t is Type.TypeParam && t.symbol != null && t.symbol === tp.symbol))
                                 unionForDisplay else null
                         }
                         val substituted = instantiateType(constraint, tpMapper)
@@ -94297,6 +94351,7 @@ interface DataView {
         if (tps.isEmpty()) return null
         val params = sig.parameters
         if (params.isEmpty() || args.isEmpty()) return null
+        val tpsSet = tps.toSet()
         fun isNamedLikeAtom(t: Type): Boolean =
             t is Type.Interface || t is Type.Reference || t is Type.Intrinsic ||
                 t.flags.hasAny(
@@ -94764,7 +94819,7 @@ interface DataView {
                         getTypeOfSymbol(it)
                     }
                     val srcType = symbolTypes[sym.id] ?: getTypeOfSymbol(sym)
-                    if (targetPropType != null &&
+                    if (targetPropType != null && srcType != null &&
                         propTypeContainsLiteral(targetPropType) &&
                         literalWidensTo(literal, srcType)
                     ) {
@@ -95178,7 +95233,7 @@ interface DataView {
                 // resolveGenericPropertyType which already handles substitution.
                 // Gate: prop.parent must differ from apparentType.symbol (only fires
                 // for inherited members, not own members).
-                if (apparentType is Type.Interface) {
+                if (apparentType is Type.Interface && apparentType !is Type.Reference) {
                     val propParent = prop.parent
                     if (propParent != null && propParent !== apparentType.symbol) {
                         findInheritedBaseRef(apparentType, propParent)?.let { baseRef ->
@@ -98000,7 +98055,7 @@ interface DataView {
             }
         }
 
-        for ((_, decls) in funcGroups) {
+        for ((name, decls) in funcGroups) {
             val impl = decls.firstOrNull { it.body != null } ?: continue
             val overloads = decls.filter { it.body == null }
             if (overloads.isEmpty()) continue
@@ -98656,7 +98711,7 @@ interface DataView {
             }
         }
 
-        for ((_, decls) in methodGroups) {
+        for ((name, decls) in methodGroups) {
             // 17.177: TS2385 — overload signatures must agree on access
             // modifier (public/private/protected). Compute the access flag
             // for each declaration; treat absence as "public" (the implicit
@@ -102774,17 +102829,18 @@ interface DataView {
                     if (member !is PropertyDeclaration) continue
                     val nameNode = member.name
                     val isNumeric: Boolean
+                    val propName: String
                     val displayName: String
                     val nameLen: Int
                     when (nameNode) {
                         is Identifier -> {
                             if (nameNode.text.startsWith("#")) continue
-                            isNumeric = false; displayName = nameNode.text; nameLen = nameNode.text.length
+                            isNumeric = false; propName = nameNode.text; displayName = nameNode.text; nameLen = nameNode.text.length
                         }
-                        is NumericLiteralNode -> { isNumeric = true; displayName = nameNode.text; nameLen = nameNode.text.length }
+                        is NumericLiteralNode -> { isNumeric = true; propName = nameNode.text; displayName = nameNode.text; nameLen = nameNode.text.length }
                         is StringLiteralNode -> {
                             isNumeric = isCanonicalNumericPropertyName(nameNode.text)
-                            displayName = "\"${nameNode.text}\""; nameLen = nameNode.text.length + 2
+                            propName = nameNode.text; displayName = "\"${nameNode.text}\""; nameLen = nameNode.text.length + 2
                         }
                         else -> continue
                     }
@@ -102931,6 +102987,7 @@ interface DataView {
                 is InterfaceDeclaration -> stmt.heritageClauses
                     ?.filter { it.token == SyntaxKind.ExtendsKeyword }
                     ?.flatMap { it.types }?.mapNotNull { (it.expression as? Identifier)?.text } ?: emptyList()
+                else -> emptyList()
             }
             for (baseName in baseNames) {
                 val baseSymbol = globals[baseName] ?: continue
@@ -102960,6 +103017,7 @@ interface DataView {
             val typeName: Identifier? = when (stmt) {
                 is ClassDeclaration -> stmt.name
                 is InterfaceDeclaration -> stmt.name
+                else -> null
             }
             var effNumberSig = numberIndexSig
             val effStringSig = stringIndexSig
@@ -102971,6 +103029,7 @@ interface DataView {
                     is InterfaceDeclaration -> stmt.heritageClauses
                         ?.filter { it.token == SyntaxKind.ExtendsKeyword }
                         ?.flatMap { it.types }?.mapNotNull { (it.expression as? Identifier)?.text } ?: emptyList()
+                    else -> emptyList()
                 }
                 for (baseName in baseNames) {
                     val baseSymbol = globals[baseName] ?: continue
@@ -103029,7 +103088,7 @@ interface DataView {
         // sig (so a merged `interface E {[s]:B}` + `interface E {[n]:A}` fires once, at
         // the number sig). Disjoint from the anonymous path (both values must be
         // Type.Interface), so it cannot double-emit or regress `inheritedString…2` (B98.r20).
-        if (stmt is InterfaceDeclaration) {
+        if (stmt is InterfaceDeclaration && stmt.name != null) {
             val tn = stmt.name
             val isNum = { s: IndexSignature -> s.parameters.firstOrNull()?.type?.let { it is KeywordTypeNode && it.kind == SyntaxKind.NumberKeyword } == true }
             val isStr = { s: IndexSignature -> s.parameters.firstOrNull()?.type?.let { it is KeywordTypeNode && it.kind == SyntaxKind.StringKeyword } == true }
@@ -103169,6 +103228,7 @@ interface DataView {
                 val baseNames: List<String> = when (stmt) {
                     is ClassDeclaration -> stmt.heritageClauses
                     is InterfaceDeclaration -> stmt.heritageClauses
+                    else -> null
                 }?.filter { it.token == SyntaxKind.ExtendsKeyword }
                     ?.flatMap { it.types }?.mapNotNull { (it.expression as? Identifier)?.text } ?: emptyList()
                 for (baseName in baseNames) {
@@ -103350,6 +103410,7 @@ interface DataView {
                     is Identifier -> { start = nameNode.pos; length = nameNode.text.length }
                     is StringLiteralNode -> { start = nameNode.pos; length = nameNode.text.length + 2 }
                     is NumericLiteralNode -> { start = nameNode.pos; length = nameNode.text.length }
+                    else -> continue
                 }
                 // String literal property names include quotes in the display
                 val displayName = if (nameNode is StringLiteralNode) "\"$propName\"" else propName
@@ -104216,7 +104277,7 @@ interface DataView {
                             // class's own private and the interface's inherited private have
                             // DIFFERENT types, suppress TS2420 (TS2416 type-mismatch fires
                             // separately and is the correct primary diagnostic).
-                            if (isPrivate && ifacePropIsPrivate && classMember != null) {
+                            if (isPrivate && ifacePropIsPrivate && classMember != null && ifacePropDecl != null) {
                                 val derivedT = getTypeOfMemberDecl(classMember)
                                 val baseT = getTypeOfMemberDecl(ifacePropDecl)
                                 if (derivedT != null && baseT != null &&
@@ -106082,7 +106143,7 @@ interface DataView {
                 // masking TS2416 mismatches in concrete generic implementations.
                 val baseType: Type.Object = run {
                     val args = typeExpr.typeArguments
-                    if (baseTypeRaw is Type.Interface &&
+                    if (baseTypeRaw is Type.Interface && baseTypeRaw !is Type.Reference &&
                         !args.isNullOrEmpty()) {
                         val tparams = baseTypeRaw.typeParameters
                         if (!tparams.isNullOrEmpty() && tparams.size == args.size) {
@@ -106384,12 +106445,12 @@ interface DataView {
 
                     val baseDisplayForChain = when {
                         isGenericConstraintMismatch && baseMethodDecl != null -> genericMethodSig(baseMethodDecl)
-                        isPredicateMismatch -> methodSigDisplay(baseMethodDecl)
+                        isPredicateMismatch && baseMethodDecl != null -> methodSigDisplay(baseMethodDecl)
                         else -> typeToString(basePropType)
                     }
                     val derivedDisplayForChain = when {
                         isGenericConstraintMismatch && derivedMethodDecl != null -> genericMethodSig(derivedMethodDecl)
-                        isPredicateMismatch -> methodSigDisplayWithBodyReturn(derivedMethodDecl)
+                        isPredicateMismatch && derivedMethodDecl != null -> methodSigDisplayWithBodyReturn(derivedMethodDecl)
                         else -> typeToString(derivedType)
                     }
 
@@ -106422,11 +106483,11 @@ interface DataView {
                             chain.addAll(missingForm)
                         } else {
                             chain.add("  Type '$derivedDisplayForChain' is not assignable to type '$baseDisplayForChain'.")
-                            if (isGenericConstraintMismatch) {
+                            if (isGenericConstraintMismatch && genericConstraintInfo != null) {
                                 val (dConDisp, bTpName) = genericConstraintInfo
                                 chain.add("    Type '$dConDisp' is not assignable to type '$bTpName'.")
                                 chain.add("      '$bTpName' could be instantiated with an arbitrary type which could be unrelated to '$dConDisp'.")
-                            } else if (isPredicateMismatch) {
+                            } else if (isPredicateMismatch && derivedMethodDecl != null) {
                                 val sigColon = methodSigColonDisplay(derivedMethodDecl)
                                 chain.add("    Signature '$sigColon' must be a type predicate.")
                             } else {
@@ -107342,7 +107403,7 @@ interface DataView {
                         val clsSym = thisClassSymbolForReturnInference
                         val memberName = (expr.name).text
                         if (clsSym != null && recv is Identifier && recv.text == "this" &&
-                            strictNullChecks) {
+                            memberName != null && strictNullChecks) {
                             try {
                                 val clsType = getDeclaredTypeOfSymbol(clsSym)
                                 val propSym = getPropertyOfType(clsType, memberName)
@@ -107634,6 +107695,7 @@ interface DataView {
                     emitAt(startPos, len, 2571, "Object is of type 'unknown'.")
                 }
             }
+            else -> {}
         }
     }
 
@@ -109219,7 +109281,7 @@ interface DataView {
                         (cur.left is ArrayLiteralExpression || cur.left is ObjectLiteralExpression)
                     ) {
                         val rhsT = getTypeOfExpression(cur.right)
-                        checkDestructuringAssignmentPrivate(cur.left, rhsT, source, fileName)
+                        if (rhsT != null) checkDestructuringAssignmentPrivate(cur.left, rhsT, source, fileName)
                     }
                     rightStack.addLast(cur.right)
                     cur = cur.left
@@ -109818,6 +109880,7 @@ interface DataView {
                     val memberName = when (member) {
                         is PropertyDeclaration -> (member.name as? Identifier)?.text ?: continue
                         is MethodDeclaration -> (member.name as? Identifier)?.text ?: continue
+                        else -> continue
                     }
                     if (memberName != propName) continue
                     // Ambient `declare` properties don't have class-field semantics → skip.
@@ -109825,6 +109888,7 @@ interface DataView {
                     val memberIsStatic = when (member) {
                         is PropertyDeclaration -> ModifierFlag.Static in member.modifiers
                         is MethodDeclaration -> ModifierFlag.Static in member.modifiers
+                        else -> false
                     }
                     // B50.9: skip same-side member (handled by emitTs2339ForMissingSuperMember
                     // falling through to TS2339), keep only cross-side mismatch checks.
@@ -110443,6 +110507,7 @@ interface DataView {
                 val q = if (arg.singleQuote) "'" else "\""
                 "$basePath[$q${arg.text}$q]"
             }
+            else -> return
         }
         val length = info.spanEnd - info.spanStart
         if (length <= 0) return
@@ -110586,7 +110651,7 @@ interface DataView {
             is ArrayType ->
                 walkTypeNodeForUndefinedTypeQueryChain(type.elementType, source, fileName, atNode)
             is TupleType -> type.elements.forEach {
-                walkTypeNodeForUndefinedTypeQueryChain(it, source, fileName, atNode)
+                if (it is TypeNode) walkTypeNodeForUndefinedTypeQueryChain(it, source, fileName, atNode)
             }
             is RestType ->
                 walkTypeNodeForUndefinedTypeQueryChain(type.type, source, fileName, atNode)
@@ -111784,7 +111849,7 @@ interface DataView {
                 if ((castInner is AsExpression || castInner is TypeAssertionExpression) &&
                     propName.isNotEmpty() && propName !in RUNTIME_PROPERTIES && propName[0] !in '0'..'9') {
                     val castType = getTypeOfExpression(objectExpr)
-                    if (castType is Type.Interface && castType.symbol != null &&
+                    if (castType is Type.Interface && castType !is Type.Reference && castType.symbol != null &&
                         castType.baseTypes.isNullOrEmpty() &&
                         castType.callSignatures.isNullOrEmpty() &&
                         castType.constructSignatures.isNullOrEmpty() &&
@@ -111862,7 +111927,7 @@ interface DataView {
                 // suggestions from the union's COMMON properties.
                 val wellResolvedUnionMember = { m: Type ->
                     m is Type.StringLiteral || m is Type.NumberLiteral ||
-                        (m is Type.Interface &&
+                        (m is Type.Interface && m !is Type.Reference &&
                             (m.symbol?.declarations?.singleOrNull() as? InterfaceDeclaration)
                                 ?.let { it.heritageClauses.isNullOrEmpty() && it !in builtinLibDecls } == true)
                 }
@@ -113061,7 +113126,7 @@ interface DataView {
         // Resolve member names + the get/set member check per receiver kind.
         val memberNames: Set<String>
         val isNamedReceiver: Boolean // interface/reference → TS7052-only (member model incomplete for TS7053)
-        val methodChecker: ((String) -> Boolean)?
+        var methodChecker: ((String) -> Boolean)? = null
         when {
             rt is Type.Reference || rt is Type.Interface -> {
                 val target = (rt as? Type.Reference)?.target ?: rt as Type.Interface
@@ -113602,6 +113667,7 @@ interface DataView {
             val keyEnd = when (arg) {
                 is StringLiteralNode -> arg.pos + (arg.rawText?.length ?: arg.text.length) + 2
                 is NumericLiteralNode -> arg.pos + arg.text.length
+                else -> return@run ".$propName"
             }
             // Find opening `[` by scanning backwards from arg.pos.
             var openBracket = arg.pos - 1
@@ -115324,26 +115390,28 @@ interface DataView {
         if (strictNullChecks && !expr.questionDotToken && calleeExpr is PropertyAccessExpression &&
             !calleeExpr.questionDotToken) {
             val memberName = (calleeExpr.name).text
-            val recvType = try { getTypeOfExpression(calleeExpr.expression) } catch (_: Throwable) { null }
-            if (recvType != null && recvType !== anyType && recvType !== errorType) {
-                val propSym = getPropertyOfType(recvType, memberName)
-                if (propSym != null && isOptionalProperty(propSym)) {
-                    val propType = try { getTypeOfSymbol(propSym) } catch (_: Throwable) { anyType }
-                    // Member must be callable (else a different error owns it) and not
-                    // narrowed to drop undefined.
-                    if (getCallSignaturesOfType(propType).isNotEmpty() &&
-                        !propertyAccessNarrowedNonNull(calleeExpr, propType)) {
-                        val start = calleeExpr.pos
-                        val length = expressionTrueEnd(calleeExpr) - start
-                        if (length > 0) {
-                            val (line, character) = getLineAndCharacterOfPosition(source, start)
-                            diagnostics.add(Diagnostic(
-                                message = "Cannot invoke an object which is possibly 'undefined'.",
-                                category = DiagnosticCategory.Error, code = 2722,
-                                fileName = fileName, line = line, character = character,
-                                start = start, length = length,
-                            ))
-                            return
+            if (memberName != null) {
+                val recvType = try { getTypeOfExpression(calleeExpr.expression) } catch (_: Throwable) { null }
+                if (recvType != null && recvType !== anyType && recvType !== errorType) {
+                    val propSym = getPropertyOfType(recvType, memberName)
+                    if (propSym != null && isOptionalProperty(propSym)) {
+                        val propType = try { getTypeOfSymbol(propSym) } catch (_: Throwable) { anyType }
+                        // Member must be callable (else a different error owns it) and not
+                        // narrowed to drop undefined.
+                        if (getCallSignaturesOfType(propType).isNotEmpty() &&
+                            !propertyAccessNarrowedNonNull(calleeExpr, propType)) {
+                            val start = calleeExpr.pos
+                            val length = expressionTrueEnd(calleeExpr) - start
+                            if (length > 0) {
+                                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                                diagnostics.add(Diagnostic(
+                                    message = "Cannot invoke an object which is possibly 'undefined'.",
+                                    category = DiagnosticCategory.Error, code = 2722,
+                                    fileName = fileName, line = line, character = character,
+                                    start = start, length = length,
+                                ))
+                                return
+                            }
                         }
                     }
                 }
@@ -115867,7 +115935,7 @@ interface DataView {
                 return
             }
             val resolvedTypeArgs = typeArgs.map { getTypeFromTypeNode(it) }
-            if (resolvedTypeArgs.none { it === errorType }) {
+            if (resolvedTypeArgs != null && resolvedTypeArgs.none { it === errorType }) {
                 // Find a generic signature whose type-param count accommodates the supplied
                 // type args. Exact-arity matches; ADDITIONALLY accept FEWER args than params
                 // when the trailing params have defaults — the supplied count must be within
@@ -116066,7 +116134,7 @@ interface DataView {
             val missingSym = params[argCount]
             val missingParam = missingSym.valueDeclaration as? Parameter
             val pname = missingParam?.name as? Identifier
-            if (pname != null) {
+            if (pname != null && missingParam.name !is ObjectBindingPattern && missingParam.name !is ArrayBindingPattern) {
                 val (rLine, rChar) = getLineAndCharacterOfPosition(source, pname.pos)
                 relatedInfo.add(Diagnostic(
                     message = "An argument for '${pname.text}' was not provided.",
@@ -117079,7 +117147,7 @@ interface DataView {
             val pos: Pair<Int, Int>? = if (reported.size == 1 && reported !== overloadErrors) {
                 // B418 collapse: anchor at the best overload's failing (element) position.
                 getFirstFailingArgPosition(args, reported[0].second)
-            } else if (anyFnFnMismatch && (!allSamePos || hasNonFnFnFailing)) {
+            } else if (anyFnFnMismatch && callee != null && (!allSamePos || hasNonFnFnFailing)) {
                 Pair(callee.pos, expressionTrueEnd(callee) - callee.pos)
             } else if (callee is PropertyAccessExpression && !allSamePos) {
                 // B280: a METHOD call whose overloads fail at DIFFERENT arg positions
@@ -117605,7 +117673,7 @@ interface DataView {
         val direct = if (i < params.size) params[i] else null
         // Determine the governing param: the i-th, or — when i is past the param list —
         // the last param IF it is rest (extra args bind to the trailing rest).
-        val governing = direct ?: params.last().takeIf { _ ->
+        val governing = direct ?: params.last().takeIf { lastIsRest ->
             params.last().declarations.any { it is Parameter && it.dotDotDotToken }
         }
         if (governing == null) return null
@@ -120520,13 +120588,13 @@ interface DataView {
                                         missing = collectMissingProperties(effectiveSrc, targetPropType)
                                         missingSym = getMissingRequiredPropertySymbol(effectiveSrc, targetPropType)
                                     }
-                                    if (newHelps && missing.isNotEmpty()) {
+                                    if (newHelps && missing.isNotEmpty() && valueNode != null) {
                                         val vStart = valueNode.pos
                                         val vLen = (expressionTrueEnd(valueNode) - vStart).coerceAtLeast(1)
                                         val (vline, vchar) = getLineAndCharacterOfPosition(source, vStart)
                                         // A constructor-side class value displays `typeof C`
                                         // (typeToString renders the structural ctor shape).
-                                        val srcDisplay = if (ctorValueSrc != null)
+                                        val srcDisplay = if (ctorValueSrc != null && valueNode is Identifier)
                                             "typeof ${valueNode.text}" else typeToString(effectiveSrc)
                                         val tgtDisplay = typeToString(targetPropType)
                                         val related = mutableListOf<Diagnostic>()
@@ -120709,7 +120777,8 @@ interface DataView {
                     // (`a?:string`) do NOT get the `| undefined` widening in
                     // TS2345 messages — matches TypeScript's display convention.
                     val paramIsOptional = (params[i].valueDeclaration as? Parameter)?.questionToken == true
-                    val displayParam = if (paramIsOptional && strictNullChecks) {
+                    val displayParam = if (paramIsOptional && strictNullChecks &&
+                        paramType is Type.Reference) {
                         "$displayParamBase | undefined"
                     } else displayParamBase
                     val argTypeStr = typeToString(argType)
@@ -121198,6 +121267,7 @@ interface DataView {
                             else -> null
                         }
                         is FunctionExpression -> arg.body.statements.firstNotNullOfOrNull { (it as? ReturnStatement)?.expression }
+                        else -> null
                     }
                     if (retExpr != null && argReturn != null && paramReturn != null) {
                         val rStart = retExpr.pos
@@ -121826,8 +121896,8 @@ interface DataView {
         // StackOverflowError propagates out of structuredTypeRelatedTo — without
         // this, the init boundary guard catches the SOE but the stacks stay
         // corrupted (stale pair keys suppress every later comparison of the same pair).
-        val result: Boolean
-        val usedCycle: Boolean
+        var result = false
+        var usedCycle = false
         try {
             result = structuredTypeRelatedTo(source, target, relation)
             usedCycle = relationUsedCycleBreak
@@ -121963,21 +122033,23 @@ interface DataView {
                     }
                 } else {
                     val srcInterface = source.target
-                    if (srcInterface.baseTypes == null) resolveBaseTypesLazy(srcInterface)
-                    val srcBaseTypes = srcInterface.baseTypes
-                    val srcTypeParams = srcInterface.typeParameters ?: emptyList()
-                    val srcInstArgs = source.resolvedTypeArguments ?: emptyList()
-                    if (srcBaseTypes != null && srcTypeParams.size == srcInstArgs.size) {
-                        val mapper = createTypeMapper(srcTypeParams, srcInstArgs)
-                        for (baseType in srcBaseTypes) {
-                            val baseRef = baseType as? Type.Reference ?: continue
-                            if (baseRef.target !== globalArrayType &&
-                                baseRef.target !== globalReadonlyArrayType) continue
-                            val baseArgs = baseRef.resolvedTypeArguments ?: continue
-                            if (baseArgs.size != 1) continue
-                            val instElt = instantiateType(baseArgs[0], mapper)
-                            if (checkTypeRelatedTo(instElt, targetArgs[0], relation)) {
-                                return true
+                    if (srcInterface != null) {
+                        if (srcInterface.baseTypes == null) resolveBaseTypesLazy(srcInterface)
+                        val srcBaseTypes = srcInterface.baseTypes
+                        val srcTypeParams = srcInterface.typeParameters ?: emptyList()
+                        val srcInstArgs = source.resolvedTypeArguments ?: emptyList()
+                        if (srcBaseTypes != null && srcTypeParams.size == srcInstArgs.size) {
+                            val mapper = createTypeMapper(srcTypeParams, srcInstArgs)
+                            for (baseType in srcBaseTypes) {
+                                val baseRef = baseType as? Type.Reference ?: continue
+                                if (baseRef.target !== globalArrayType &&
+                                    baseRef.target !== globalReadonlyArrayType) continue
+                                val baseArgs = baseRef.resolvedTypeArguments ?: continue
+                                if (baseArgs.size != 1) continue
+                                val instElt = instantiateType(baseArgs[0], mapper)
+                                if (checkTypeRelatedTo(instElt, targetArgs[0], relation)) {
+                                    return true
+                                }
                             }
                         }
                     }
@@ -121998,7 +122070,7 @@ interface DataView {
         // an async function returning `1` should compare via Awaited unwrapping,
         // not via Number-wrapper-extends-Object). Also skip wrapper interfaces
         // themselves so TS2322 keeps firing for primitive→mismatched-wrapper.
-        if (target is Type.Interface &&
+        if (target is Type.Interface && target !is Type.Reference &&
             (source is Type.Intrinsic || source is Type.StringLiteral ||
                 source is Type.NumberLiteral || source is Type.BigIntLiteral)) {
             val targetName = target.symbol?.name
@@ -122269,7 +122341,7 @@ interface DataView {
     private fun findParentClassOrInterface(node: Node): Node? {
         // The parent isn't stored on the AST; look up via the property symbol's parent's
         // declarations to find the enclosing class.
-        when (node) {
+        val propName = when (node) {
             is PropertyDeclaration -> (node.name as? Identifier)?.text
             is MethodDeclaration -> (node.name as? Identifier)?.text
             is GetAccessor -> (node.name as? Identifier)?.text
@@ -124692,7 +124764,7 @@ interface DataView {
         // (tsc's method-param rule) so legitimate contravariant cases stay legal.
         val sourceLastParam = sourceParams.lastOrNull()
         val sourceLastIsRest = (sourceLastParam?.valueDeclaration as? Parameter)?.dotDotDotToken == true
-        val sourceRestElement: Type? = if (sourceLastIsRest && !targetLastIsRest) {
+        val sourceRestElement: Type? = if (sourceLastIsRest && !targetLastIsRest && sourceLastParam != null) {
             val raw = getTypeOfSymbol(sourceLastParam)
             if (raw is Type.Reference && raw.target.symbol?.name in setOf("Array", "ReadonlyArray"))
                 raw.resolvedTypeArguments?.firstOrNull()?.takeIf {
@@ -125103,8 +125175,8 @@ interface DataView {
                             val tgtMapper = refMapper2(target)
                             val tgtCons = if (tgtMapper != null) instantiateType(rawTgtCons, tgtMapper) else rawTgtCons
                             val srcCons = if (srcMapper != null) instantiateType(rawSrcCons, srcMapper) else rawSrcCons
-                            if (srcCons is Type.Object &&
-                                tgtCons is Type.Object
+                            if (srcCons is Type.Object && srcCons !is Type.TypeParam &&
+                                tgtCons is Type.Object && tgtCons !is Type.TypeParam
                             ) {
                                 val deeper = getPropertyElaborationChain(tgtCons, srcCons)
                                 if (deeper != null) {
@@ -127597,7 +127669,7 @@ interface DataView {
      */
     private fun elementAccessIndexSigValueType(expr: ElementAccessExpression): Type? {
         val recvType = getTypeOfExpression(expr.expression)
-        if (recvType !is Type.Object) return null
+        if (recvType !is Type.Object || recvType is Type.Union) return null
         resolveStructuredTypeMembers(recvType)
         if (recvType.tupleElementTypes != null) return null
         var arg: Expression = expr.argumentExpression
@@ -134238,9 +134310,9 @@ interface DataView {
                 if (srcArgs.size != 1) continue
                 val srcArg = formatTypeForDisplay(srcArgs[0]) ?: continue
                 if (srcArg == tgtArg) continue
-                val innerClass: String?
-                val srcDisplay: String?
-                val tgtDisplay: String?
+                var innerClass: String? = null
+                var srcDisplay: String? = null
+                var tgtDisplay: String? = null
                 when (val body = aliasDecl.type) {
                     is TypeQuery -> {  // shape A: typeof Const<U>
                         if (body.typeArguments == null) continue
@@ -136559,6 +136631,7 @@ interface DataView {
         val vNonNullName = (vNonNull.typeName as? Identifier)?.text ?: return
         // V's non-null constituent must be a NAMED interface (so a primitive index value
         // is never assignable to it).
+        val vIface = fileStmts.filterIsInstance<InterfaceDeclaration>().firstOrNull { it.name.text == vNonNullName } ?: return
         // Find `return <ident>;` and the matching `const <ident> = …`.
         val retStmt = body.statements.filterIsInstance<ReturnStatement>().firstOrNull() ?: return
         val retIdent = retStmt.expression as? Identifier ?: return
@@ -139575,7 +139648,7 @@ interface DataView {
                 val firstElem = (cc.arguments.firstOrNull() as? ArrayLiteralExpression)?.elements?.firstOrNull()
                 if (firstElem != null && firstElem !is SpreadElement) {
                     val elemType = widenType(getTypeOfExpression(firstElem))
-                    if (elemType !== anyType && elemType !== errorType) {
+                    if (elemType != null && elemType !== anyType && elemType !== errorType) {
                         val disp = typeToString(elemType)
                         val (ln, ch) = getLineAndCharacterOfPosition(source, firstElem.pos)
                         diagnostics.add(Diagnostic(
@@ -140930,7 +141003,7 @@ interface DataView {
                         // routinely flow-NARROWED before an arithmetic/comparison use, and this
                         // pass has no flow narrowing — recording the un-narrowed union FP's
                         // (narrowingPastLastAssignment: `let i: number|undefined; i = 0; i + 1`).
-                        if (annotType !== anyType && annotType !== errorType &&
+                        if (annotType != null && annotType !== anyType && annotType !== errorType &&
                             annotType !== unknownType && annotType !is Type.Union) {
                             currentLocalTypes[declName] = annotType
                         }
@@ -140977,7 +141050,7 @@ interface DataView {
                             // constructorWithIncompleteTypeAnnotation line 166). Same
                             // concrete-only gate as the annotation branch above.
                             val objT = getTypeOfObjectLiteral(decl.initializer)
-                            if (objT !== anyType && objT !== errorType && objT !is Type.Union) {
+                            if (objT != null && objT !== anyType && objT !== errorType && objT !is Type.Union) {
                                 currentLocalTypes[declName] = objT
                             }
                         }
@@ -144011,7 +144084,7 @@ interface DataView {
                 var i = 0
                 while (i < raw.length) {
                     val d = raw.indexOf("\${", i)
-                    if (d < 0) { rx.append(Regex.escape(raw.substring(i))); break }
+                    if (d < 0) { rx.append(Regex.escape(raw.substring(i))); i = raw.length; break }
                     rx.append(Regex.escape(raw.substring(i, d)))
                     val e = raw.indexOf('}', d)
                     if (e < 0) return null
@@ -145139,6 +145212,7 @@ interface DataView {
             if (isDtsFile(fileName)) continue
             // Skip module files — they have their own scope
             if (isModuleFile(result.sourceFile.statements)) continue
+            val source = result.sourceFile.text
             for (stmt in result.sourceFile.statements) {
                 if (stmt !is VariableStatement) continue
                 val isBlockScoped = stmt.declarationList.flags == SyntaxKind.LetKeyword ||
@@ -146241,6 +146315,7 @@ interface DataView {
                             is FunctionDeclaration -> member.name
                             is EnumDeclaration -> member.name
                             is ModuleDeclaration -> member.name as? Identifier
+                            else -> null
                         } ?: continue
                         memberMap.getOrPut(memberName) { mutableListOf() }
                             .add(GlobalNsMemberDecl(isTypeAlias, idNode, fileName, source))
@@ -147938,7 +148013,7 @@ interface DataView {
                             // Error on entire import statement
                             val stmtStart = stmt.pos
                             // Find end of statement including semicolon
-                            val stmtEnd = stmt.end
+                            var stmtEnd = stmt.end
                             // Approximate length: scan source for semicolon or newline after pos
                             val endIdx = source.indexOf(';', stmtStart)
                             val stmtLen = if (endIdx >= 0) endIdx - stmtStart + 1
@@ -148798,7 +148873,7 @@ interface DataView {
                 val hasImplements = stmt.heritageClauses?.any { it.token == SyntaxKind.ImplementsKeyword } == true
                 if (hasImplements) {
                     // Find "implements" keyword position — use name pos + length (not name.end which overshoots)
-                    val nameEnd = stmt.name?.let { it.pos + ((it).text.length) } ?: stmt.pos
+                    val nameEnd = stmt.name?.let { it.pos + ((it).text.length ?: 1) } ?: stmt.pos
                     val implIdx = source.indexOf("implements", nameEnd)
                     if (implIdx >= 0) {
                         // Span covers "implements <types>" — find the end of the implements clause

@@ -480,8 +480,8 @@ class Parser(
             if (p !is PropertyAssignment) continue
             val nameNode = p.name as? Identifier ?: continue
             if (nameNode.text != "assert") continue
-            val (start, len) = if (typePosition && p.initializer != null) {
-                p.initializer!!.pos to 1
+            val (start, len) = if (typePosition) {
+                p.initializer.pos to 1
             } else {
                 nameNode.pos to 6
             }
@@ -1065,7 +1065,7 @@ class Parser(
             val stmt = parseExpressionStatement()
             // When inside a class body and the modifier was followed by a bare identifier assignment
             // (e.g. `public p1 = 0;`), add `this.` prefix to match TypeScript's output.
-            if (hasModifier && classBodyDepth > 0 && stmt != null) {
+            if (hasModifier && classBodyDepth > 0) {
                 val expr = stmt.expression
                 if (expr is BinaryExpression && expr.operator == SyntaxKind.Equals &&
                     expr.left is Identifier
@@ -1734,7 +1734,7 @@ class Parser(
             // suggestion first — TS1435 "Unknown keyword or identifier. Did you mean
             // '{0}'?" (`asynd` → 'async', `declareconst` → 'declare const') — and fall
             // back to TS1434 only when no keyword is close (commonMissingSemicolons).
-            val identExpr = expr as Identifier
+            val identExpr = expr
             val suggestion = getKeywordSpellingSuggestion(identExpr.text)
                 ?: getSpaceSuggestion(identExpr.text)
             if (suggestion != null) {
@@ -3241,7 +3241,7 @@ class Parser(
         if (params.size == 1) {
             val p = params[0]
             if (p.questionToken && p.name is Identifier) {
-                val nm = p.name as Identifier
+                val nm = p.name
                 val searchStart = nm.pos + nm.text.length
                 var i = searchStart
                 while (i < source.length && source[i] != '?' && source[i] != ':' && source[i] != ')' && source[i] != '=') i++
@@ -3759,7 +3759,6 @@ class Parser(
             params.add(Parameter(name = paramName, type = paramType))
             // Parse any additional parameters (invalid — TS1096 for multi-param index signature)
             var hasExtraParams = false
-            var hasTrailingComma = false
             while (token == SyntaxKind.Comma) {
                 val commaPos = getPos()
                 nextToken() // consume ,
@@ -3767,7 +3766,6 @@ class Parser(
                     // TS1025: An index signature cannot have a trailing comma.
                     reportError("An index signature cannot have a trailing comma.", code = 1025,
                         overrideStart = commaPos, overrideLength = 1)
-                    hasTrailingComma = true
                     break
                 }
                 params.add(parseParameter())
@@ -5688,7 +5686,7 @@ class Parser(
         val pos = getPos()
         nextToken() // skip <
         val type = parseType()
-        val hadGreaterThan = parseExpected(SyntaxKind.GreaterThan)
+        parseExpected(SyntaxKind.GreaterThan)
         // If `>` was consumed, `getPrevTokenEnd` points just after it; otherwise the type text
         // ended at the previous token's end (before the missing `>`).
         val headerEnd = scanner.getPrevTokenEnd()
@@ -8539,7 +8537,7 @@ class Parser(
                     val elemKind = primitiveKeywordKindFor(elemText)
                     if (elemKind != null) {
                         if (map == null) map = mutableMapOf()
-                        if (name !in map!!) {
+                        if (name !in map) {
                             map[name] = ArrayType(
                                 elementType = KeywordTypeNode(kind = elemKind, pos = -1, end = -1),
                                 pos = -1, end = -1,
@@ -8552,7 +8550,7 @@ class Parser(
                 val kind = primitiveKeywordKindFor(typeText)
                 if (kind != null) {
                     if (map == null) map = mutableMapOf()
-                    if (name !in map!!) {
+                    if (name !in map) {
                         map[name] = KeywordTypeNode(kind = kind, pos = -1, end = -1)
                     }
                     continue
@@ -8581,7 +8579,7 @@ class Parser(
                                 end = absEnd,
                             )
                             if (map == null) map = mutableMapOf()
-                            if (name !in map!!) {
+                            if (name !in map) {
                                 map[name] = typeRef
                             }
                         }
@@ -8590,7 +8588,7 @@ class Parser(
             }
         }
         if (map == null) return null
-        return JsDocParamTypeMap(map!!, restNames)
+        return JsDocParamTypeMap(map, restNames)
     }
 
     /** Apply JSDoc `@param {primitive} name` types to params whose `type` is null,

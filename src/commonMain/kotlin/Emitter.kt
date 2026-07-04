@@ -692,7 +692,7 @@ class Emitter(
         val hasLineCommentBeforeCloseParen = blockOpenBraceComments?.any { it.text.startsWith("//") } == true
         if (hasLineCommentBeforeCloseParen) {
             // Emit the comment inline (e.g. ` // error`), then newline + indent for the ")"
-            for (comment in blockOpenBraceComments!!) {
+            for (comment in blockOpenBraceComments) {
                 write(" ")
                 write(comment.text)
             }
@@ -1467,8 +1467,6 @@ class Emitter(
                     write(" }")
                 }
 
-                else -> { /* should not happen */
-                }
             }
         }
     }
@@ -1483,7 +1481,7 @@ class Emitter(
             write("import ")
             write(node.name.emitText)
             write(" = require(")
-            emitExpression((node.moduleReference as ExternalModuleReference).expression)
+            emitExpression((node.moduleReference).expression)
             write(");")
             writeNewLine()
             return

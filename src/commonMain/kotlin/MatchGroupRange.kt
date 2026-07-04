@@ -33,6 +33,7 @@ import kotlin.text.MatchGroup
  * cannot resolve it. This expect extension fills the gap for common analysis;
  * in platform compilations the stdlib member always wins resolution, so the
  * platform actuals are effectively dead-but-required declarations delegating
- * to that member.
+ * to that member (which is why the actuals suppress the shadowing warning too).
  */
+@Suppress("EXTENSION_SHADOWED_BY_MEMBER")
 internal expect val MatchGroup.range: IntRange
