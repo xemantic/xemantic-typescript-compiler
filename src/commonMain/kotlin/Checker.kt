@@ -108598,8 +108598,19 @@ interface DataView {
             typeParamNodes.forEachIndexed { i, tp -> scope[tp.name.text] = typeParams[i] }
             currentTypeParamScope = scope
             typeParamNodes.forEachIndexed { i, tp ->
-                tp.constraint?.let { typeParams[i].constraint = getTypeFromTypeNode(it) }
-                tp.default?.let { typeParams[i].default = getTypeFromTypeNode(it) }
+                // The interned TypeParam instances are SHARED across files via
+                // typeParamInternCache, which is keyed by AST `pos` — an absolute
+                // source position that COLLIDES across files in a multi-file program
+                // (each file's positions start at 0). So the instance we get back for
+                // an unconstrained param may carry a stale `.constraint`/`.default`
+                // left by a pos-colliding, constrained param in ANOTHER file. Always
+                // (re)set both fields from THIS node — clearing to null for an
+                // unconstrained param is exactly what stops a foreign `{}` constraint
+                // from leaking in and producing a spurious TS2344. Single-file compiles
+                // never collide (positions are unique within a file), so a null AST
+                // constraint clears a field that was already null — a no-op there.
+                typeParams[i].constraint = tp.constraint?.let { getTypeFromTypeNode(it) }
+                typeParams[i].default = tp.default?.let { getTypeFromTypeNode(it) }
             }
         } finally {
             currentTypeParamScope = savedScope
