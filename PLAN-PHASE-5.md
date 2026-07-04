@@ -34,6 +34,53 @@ completeness campaigns to dashboard-driven burn-down: the acceptance bar is the 
 tsc's source uses, with the corpus suite as the regression net. M5 unchanged —
 performance is the directive's second half and starts at v1 compliance.
 
+**Round 395 (2026-07-04) — self-compile burn-down via a bounded PARSER bug the round-394
+"pool picked over" triage missed: the multi-base-generic heritage misparse. Self-compile
+(compiler profile) 2,726 → 2,712 (−14), TS2499 16 → 0, zero corpus regressions, suite
+8,990 / 0 / 3 (+6 local).** Method that found it: bucketed the full `--listAll` output (all
+2,726 error lines, not the 30-line log tail) by normalized message shape. Two bounded
+non-M3 buckets popped that the round-394 code-path triage had not surfaced — TS2499×16
+("An interface can only extend an identifier/qualified-name…") and TS2440×10 ("Import
+declaration conflicts with local declaration"). TS2499 was the documented (CLAUDE.md)
+multi-base-generic-before-comma misparse, marked "NOT yet fixed / parser fix risk-bearing,
+deferred": `interface NodeArray<T> extends ReadonlyArray<T>, TextRange` collapsed the
+non-last generic base `ReadonlyArray<T>` into a value-position instantiation expression
+(synthetic `ParenthesizedExpression`) that DROPPED its `<T>` type args, so `resolveBaseSym`
+returned null AND the checker FP-emitted TS2499. Root cause: `parseExpressionWithTypeArguments`
+uses the general `parseLeftHandSideExpression`, whose postfix `<` branch converts `Foo<T>,`
+into an instantiation expr because `,` is in `canFollowTypeArgumentsInExpression()`; the LAST
+base always worked because `{`/`implements` are NOT in that set. Fix (NOT risk-bearing after
+all — heritage-scoped): a `parsingHeritageBase` flag set around the base spine in
+`parseExpressionWithTypeArguments`, RESET inside `parseArgumentList` (so a nested
+`extends foo(bar<T>)` call arg still parses instantiation exprs); in that context the postfix
+`<` branch bails (`typeArgs != null && parsingHeritageBase -> null`, placed BEFORE the
+instantiation `canFollowTypeArgumentsInExpression()` branch), `tryScan` restores, and the
+type args are re-read as heritage type arguments — matching tsc's
+`parseLeftHandSideExpressionOrHigher` (which yields an ExpressionWithTypeArguments verbatim).
+A genuine heritage call `extends mixin<T>()` (the `(` produces a CallExpression above the
+guard) and a real non-entity-name base (`extends foo()` / `extends (typeof A)`, a
+primary-paren/call not an instantiation collapse) still fire correctly. **Delta breakdown
+(the honest part): −40 removed FPs (16 TS2499 + 8 TS2769 + 7 TS2345 + 3 TS2322 + 2 TS2339
++ 2 TS2430 + 1 TS2740 + 1 TS2353) vs +26 added (20 TS2322 + 4 TS2339 + 1 TS2345 + 1 TS2769)
+= net −14.** ALL 20 added TS2322 are `NodeArray<T>` — the M3.1 generic-inference gap now
+VISIBLE because the correctly-resolved base means the comparison runs (previously
+`hasUnresolvedTypeParams` bailed on the unresolved `ReadonlyArray<T>` base and suppressed it);
+the 4 added TS2339 are `AssignmentPattern`/`PropertyName` union-narrowing (M3.4). So the fix
+un-MASKED latent M3.1/M3.4 FPs (honest attribution, not new wrong behavior — corpus green
+guarantees it) AND restored non-last-generic-base member inheritance. CLAUDE.md's multi-base
+gotcha updated (misparse → FIXED; the B521 `checkMultiBaseInStatement` source-scan workaround
+is now redundant-but-harmless). 6 local tests (MultiBaseGenericHeritageTest): sharp
+member-inheritance signal (`Sub<number>` inheriting `Container<T>.value` → TS2322 on string
+assign, and NOT TS2339), a `extends foo()` TS2499 negative control, a `class implements A<T>, B`
+case, and a single-last-base regression control. **TS2440×10 (utilities.ts/checker.ts local
+`function Node`/`function Identifier` + imported type-only `Node`/`Identifier` interfaces
+through the `_namespaces/ts` barrel — a legal type+value declaration-space merge) is the next
+bounded bucket, but it needs a barrel-following (`export *`) type-only resolver
+(`isExportedNameTypeOnly` only walks DIRECT exports); queued as a follow-up.** META-LESSON
+reinforced: a read-only "pool picked over / M3-gated" verdict is about the code-path triage —
+always bucket the ACTUAL full FP output by message shape; bounded parser/checker bugs hide in
+the histogram tail even when the top families are all M3.
+
 **Round 394 (2026-07-04) — M2.2 burn-down #4: `delete x.<Object.prototype member>`
 now fires TS2790 under real libs. Real-lib A/B recount 29 → 28
 (keywordExpressionInternalComments fixed), zero corpus regressions, suite 8,983 / 0 / 3
