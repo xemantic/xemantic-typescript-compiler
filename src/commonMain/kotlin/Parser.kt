@@ -8802,7 +8802,7 @@ class Parser(
         return try {
             val sub = Parser(text, fileName)
             sub.runParseTypeFromExternal()
-        } catch (e: Throwable) {
+        } catch (_: Exception) {
             null
         }
     }
@@ -8812,7 +8812,7 @@ class Parser(
             nextToken()
             val parsed = parseType()
             if (token != SyntaxKind.EndOfFile) null else parsed
-        } catch (e: Throwable) {
+        } catch (_: Exception) {
             null
         }
     }

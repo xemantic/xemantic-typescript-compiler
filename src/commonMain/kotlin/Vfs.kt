@@ -74,7 +74,7 @@ object SystemVfs : Vfs {
 
     override fun readText(path: String): String? = try {
         SystemFileSystem.source(Path(path)).buffered().use { it.readString() }
-    } catch (_: Throwable) {
+    } catch (_: Exception) {
         null
     }
 
@@ -88,7 +88,7 @@ object SystemVfs : Vfs {
 
     override fun list(path: String): List<String> = try {
         SystemFileSystem.list(Path(path)).map { PathUtil.normalize(it.toString()) }
-    } catch (_: Throwable) {
+    } catch (_: Exception) {
         emptyList()
     }
 
@@ -100,7 +100,7 @@ object SystemVfs : Vfs {
         // resolving [path] directly.
         return try {
             PathUtil.join(PathUtil.normalize(SystemFileSystem.resolve(Path(".")).toString()), p)
-        } catch (_: Throwable) {
+        } catch (_: Exception) {
             p
         }
     }
