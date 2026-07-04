@@ -34,6 +34,53 @@ completeness campaigns to dashboard-driven burn-down: the acceptance bar is the 
 tsc's source uses, with the corpus suite as the regression net. M5 unchanged —
 performance is the directive's second half and starts at v1 compliance.
 
+**Round 396 (2026-07-04) — self-compile burn-down, the SECOND bounded bucket from round
+395's by-shape histogram: TS2440 (type-only import merges with a value-only local).
+Self-compile (compiler profile) 2,712 → 2,702 (TS2440 10 → 0), zero corpus regressions,
+suite 8,995 / 0 / 3 (+5 local).** tsc's own `src/compiler` imports the type interfaces
+`Node`/`Identifier`/`Signature`/`Symbol`/`Type`/`Token`/`SourceMapSource`/`NodeLinks`/
+`SymbolLinks` from the `_namespaces/ts.js` `export *` barrel AND declares local
+`function Node`/… (AST/object-allocator helpers) + `const SymbolLinks = class`. The
+import binds the TYPE, the local binds the VALUE (disjoint declaration spaces), so tsc
+reports no error; we FP-emitted TS2440. Fix: `checkImportConflictsWithLocal`'s
+named-specifier loop skips the conflict when `importedNameIsTypeOnlyThroughBarrel(sourceName)`
+(a NEW conservative `export *`-following resolver — `isExportedNameTypeOnly` inspects only
+DIRECT exports, missing barrel-re-exported names; the `.js` specifier needs
+`resolveBarrelStarTarget` since `resolveModuleSpecifier` won't strip `.js`) AND the local
+is `valueOnlyLocalNames` (function + value-var, MINUS class/enum/interface/typealias/
+namespace which have a conflicting type side). **Two LOAD-BEARING gates, both learned the
+hard way: (1) `!options.isolatedModules && !options.verbatimModuleSyntax` — a first cut
+`continue`d unconditionally and the suite gate caught 3 regressions
+(isolatedModulesSketchyAliasLocalMerge ×2, isolatedModulesExportDeclarationType): those
+modes DO error on the merge (TS2865 / TS1484 / TS2440) via the var-conflict + case-3
+emitters BELOW my guard, so the guard must not pre-empt them; the self-compile sets
+neither option so its suppression still fires. (2) the barrel closure is the WHOLE program
+(a barrel `export *`s everything), so the per-(barrel,name) result is memoized
+(`barrelTypeOnlyMemo`, declared BEFORE init per the init-order gotcha) and the recursion
+shares ONE `visited` set — never fresh-per-re-export.** FN-safe: any uncertainty
+(unresolvable star, `export { } from`, `export =`, a value found anywhere) → keeps firing.
+5 local tests (ImportTypeOnlyBarrelMergeTest, ProjectCompiler multi-file): barrel +
+multi-hop type-only-merge positives, a value-import negative control, a local-class
+type-side-conflict negative control. **DEBUGGING SAGA (2 rounds lost, now armored in the
+benchmark memory + a CLAUDE.md gotcha): the fix "hung" the self-compile at the 2-min tool
+timeout — it was MEMORY PRESSURE, not the barrel walk. A manual `-Xmx4g` self-compile atop
+the Gradle daemon (~1.8 GB) + KotlinCompileDaemon (~2.7 GB) exceeds the 7.7 GB box → swap.
+The tell: a helper STUBBED to return false immediately STILL timed out. Fix:
+`./gradlew --stop && pkill -9 -f KotlinCompileDaemon`, verify `free -m` ≥ 5 GB free, then
+run (clean self-compile ~62–74 s / ~850 MB RSS). The bench script sidesteps this (fresh
+JVM); the manual `--listAll` is only for full-FP-list diffing.** This session (rounds 395
++ 396) took the compiler profile 2,726 → 2,702 (−24) on TWO bounded buckets — validating
+the META-LESSON that a "pool picked over / M3-gated" read-only triage is about the
+code-path analysis; bucketing the ACTUAL full `--listAll` output by normalized message
+shape surfaces bounded parser/checker bugs hiding in the histogram tail. **Next bounded
+buckets identified but not yet done (queued for the next session): TS2344×8 (`Type 'T'
+does not satisfy the constraint 'Node'` — a type-param arg `T extends Node` passed to a
+generic `<U extends Node>`; T's constraint SATISFIES the target constraint but we don't
+check the constraint chain in the type-arg path — likely bounded, generic-constraint
+satisfaction) and TS2693×7 (`'symbol' only refers to a type` — a `const { symbol } = node`
+destructured local variable named `symbol` shadowing the type keyword; a function-body
+scope-tracking gap, more involved).**
+
 **Round 395 (2026-07-04) — self-compile burn-down via a bounded PARSER bug the round-394
 "pool picked over" triage missed: the multi-base-generic heritage misparse. Self-compile
 (compiler profile) 2,726 → 2,712 (−14), TS2499 16 → 0, zero corpus regressions, suite
@@ -881,6 +928,22 @@ Three strategic reads that shape everything below:
   anyType-bails body-nested fns colliding with an outer binding (emitter.ts:1331's
   sibling `writeFile` vs the utilities import). 13 local tests
   (NestedFnShadowingTest), every suppression paired with a negative control.
+- [ ] **M1.12 Remaining bounded self-compile buckets (the by-shape histogram tail M1
+  didn't reach).** After M1, bucket the FULL compiler-profile `--listAll` output by
+  NORMALIZED message shape (`re.sub(r"'[^']*'", "'X'", msg)`) — NOT the 30-line log tail —
+  to surface bounded non-M3 bugs the code-path triage misses. Round 395 fixed TS2499×16
+  (multi-base-generic heritage misparse, parser) and round 396 fixed TS2440×10 (type-only
+  barrel import + value-only local, checker) this way (2,726 → 2,702). **Remaining candidates
+  triaged but not done:** (a) **TS2344×8** `Type 'T' does not satisfy the constraint 'Node'`
+  (parser.ts `createNodeArray<T>()` where `createNodeArray<U extends Node>` and `T extends
+  Node` — T's constraint SATISFIES the target constraint; the type-arg constraint check
+  doesn't follow the constraint chain for a TypeParam arg — likely bounded, mirrors the
+  B498/B214 default-vs-constraint skip); (b) **TS2693×7** `'symbol' only refers to a type`
+  (binder.ts `const { symbol } = node; symbol.foo` — a destructured function-body local named
+  `symbol` shadowing the type keyword; the TS2693 walker misses the local binding — a
+  function-body scope-tracking gap, more involved than a-shape). Re-bucket after each fix; the
+  self-compile 2,702 still has TS2591×43 (node globals, env-legit — `--node-stub`), TS2563×27
+  (B399 heuristic → M3.4), and the M3 cores (TS2339×838, TS2322×794, TS2345×405, TS7006×301).
 
 **M2 — Real-lib migration (staged; decompose further at start)**
 
