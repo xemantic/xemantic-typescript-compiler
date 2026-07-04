@@ -121710,6 +121710,20 @@ interface DataView {
             lastMissingPropertyName = null
             lastMissingPropertySymbol = null
             if (!checkTypeRelatedTo(argType, instantiatedConstraint, assignableRelation)) {
+                // A TypeParam arg satisfies the target constraint when its OWN constraint does
+                // (`createNodeArray<T>()` calling `createNodeArray<U extends Node>` with `T
+                // extends Node` — T's constraint Node ≤ Node → satisfies). Our relation engine's
+                // TypeParam-source path under-resolves, so check the constraint chain explicitly
+                // (mirrors the TypeReference path's skip in checkConstraintsForTypeArgs). Only
+                // fires when the arg HAS a constraint (an unconstrained T → apparent `{}` → would
+                // over-skip and lose genuine TS2344 cases).
+                if (argType is Type.TypeParam && argType.constraint != null) {
+                    val cnst = argType.constraint!!
+                    if (cnst !== anyType && cnst !== errorType &&
+                        checkTypeRelatedTo(cnst, instantiatedConstraint, assignableRelation)) {
+                        continue
+                    }
+                }
                 val argNode = typeArgNodes[i]
                 val argDisplay = formatTypeForDisplay(argNode) ?: typeToString(argType)
                 // 16.4gb: For anonymous Type.Object constraints where instantiateType
