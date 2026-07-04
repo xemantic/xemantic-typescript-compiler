@@ -36,8 +36,8 @@ performance is the directive's second half and starts at v1 compliance.
 
 **Round 403 (2026-07-04) — self-compile burn-down (THREE more bounded bugs, one a
 genuine multi-file checker bug) + a codebase-wide code-quality sweep the owner
-requested mid-session. Self-compile (compiler profile) 2,680 → 2,667 (−13); suite
-9,017 → 9,025 (+8 local); 4 commits.** By-shape histogram of the full `--listAll`
+requested mid-session. Self-compile (compiler profile) 2,680 → 2,664 (−16); suite
+9,017 → 9,026 (+9 local); 5 commits.** By-shape histogram of the full `--listAll`
 again (the M1.12 method): **(1) TS2344 6 → 3 — a genuine MULTI-FILE cross-file bug, not
 a lib gap.** `checkConstraintsForTypeArgs` interns each generic's type params as SHARED
 `Type.TypeParam` via `typeParamInternCache`, keyed by the parameter's absolute AST `pos`
@@ -60,10 +60,12 @@ user `iterableTReturnTNext` isn't in the generated set). 2 local tests. **(3) TS
 shadow only when the local's initializer TYPE resolved, so `const emitComments =
 state.stack[i] = shouldEmitComments(node)` (element-access-assignment initializer → `any`)
 left `emitComments` unshadowed and FP'd against the outer `function emitComments`. Fix:
-register the shadow UNCONDITIONALLY (a local decl always shadows regardless of type). The
-remaining 4 (emitter.ts:2911/2912 else-block, checker.ts:24702/29602) are a nested-scope
-variant the block-scope walk doesn't reach — FOLLOW-UP. 3 local tests, repros validated to
-fire on pre-fix code. **(4) OWNER-REQUESTED code-quality sweep: narrow all 135 defensive
+register the shadow UNCONDITIONALLY (a local decl always shadows regardless of type) AND
+make `lookupUncalledTypedLocal` STOP at an inner shadowed-but-untyped scope rather than fall
+through to an OUTER nested `function`'s callable entry (the emitter.ts:2911/2912 else-block +
+one checker.ts case). The last 1 (checker.ts:24702, `let x = reportErrors`) is a nested-scope
+initializer misresolution — separate follow-up. 4 local tests, repros validated to fire on
+pre-fix code. **(4) OWNER-REQUESTED code-quality sweep: narrow all 135 defensive
 `catch (_: Throwable)` → `catch (_: Exception)`** (130 Checker.kt, 3 Vfs.kt, 2 Parser.kt).
 `Throwable` swallows `Error` subtypes — most importantly `StackOverflowError`, which must
 reach the `init` boundary guard (→ TS2589) rather than be absorbed into a silently-wrong
@@ -731,8 +733,8 @@ Three strategic reads that shape everything below:
 
 | Metric | Source | Phase 17 target |
 |---|---|---|
-| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 9,025 with local tests as of round 403) |
-| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**2,667 measured at round 403**; M1 complete at 2,726/round 389; rounds 395–403 burned bounded histogram-tail buckets down to 2,667; no-stub stays the honest default) |
+| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 9,026 with local tests as of round 403) |
+| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**2,664 measured at round 403**; M1 complete at 2,726/round 389; rounds 395–403 burned bounded histogram-tail buckets down to 2,664; no-stub stays the honest default) |
 | Project corpus FPs (services/server/…) | `bench/` TSVs (M0.1) | 0 — **the v1 exit** (all 8 profiles) |
 | Conformance adoption | generated-test counts per category | POST-V1 (re-scope 2026-07-03 — see § "Post-v1 backlog", M3.0) |
 | Crashes on any input | bench runs | 0 |
@@ -1009,9 +1011,9 @@ Three strategic reads that shape everything below:
   value set via `isNamespaceInstantiated`); (f) **TS2551×5 → 0 (round 402)** — `Object.setPrototypeOf`
   added to the embedded ObjectConstructor (zero corpus baseline shifts). **The bounded pool is
   genuinely thin now — remaining bounded candidates + M3-family (self-compile at 2,667 after round
-  403):** TS2774×4 (nested-scope variant of round 403's shadowing fix — emitter.ts:2911/2912
-  else-block + checker.ts:24702/29602; the block-scope walk in `collectUncalledTypedLocalsFromBody`
-  isn't reaching the const declarations there — a bounded FOLLOW-UP), TS2740×1 (the tsc `createSet()`
+  403):** TS2774×1 (checker.ts:24702 `let shouldElaborateErrors = reportErrors` — the initializer
+  identifier misresolves to a callable during the nested-scope collection; the shadowing +
+  lookup-stop fixes landed round 403, this last one is a `getTypeOfExpression` nested-scope gap), TS2740×1 (the tsc `createSet()`
   Set shim FP: our embedded Set carries the es2024 set-methods `union`/`intersection`/… that es2020
   shouldn't have — gating them behind `LIB_MIN_TARGET` es2024 is risky per the "and N more"
   count-shift gotcha + the `setMethods` corpus test depends on them; DEFERRED), TS7019×4 (rest
