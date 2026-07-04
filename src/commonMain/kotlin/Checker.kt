@@ -40412,6 +40412,9 @@ interface Iterator<T> {
     throw?(e?: any): any;
 }
 interface IterableIterator<T> { }
+interface ArrayIterator<T> { }
+interface MapIterator<T> { }
+interface SetIterator<T> { }
 interface AsyncIterable<T> { }
 interface ThisType<T> { }
 interface PropertyDescriptor {
