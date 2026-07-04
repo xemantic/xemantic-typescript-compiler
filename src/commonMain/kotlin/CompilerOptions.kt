@@ -578,6 +578,9 @@ internal fun applyDirective(options: CompilerOptions, key: String, value: String
         "noemit" -> options.copy(noEmit = boolValue)
         "emitbom" -> options.copy(emitBOM = boolValue)
         "noemithelpers" -> options.copy(noEmitHelpers = boolValue)
+        // M2.1(d): opt into the real TypeScript lib set (RealLibSnapshots) instead of
+        // the embedded simplified lib. Test/bench-only until the M2.2 default flip.
+        "usereallibs" -> options.copy(useRealLibs = boolValue)
         "declaration" -> options.copy(declaration = boolValue)
         "declarationdir" -> options.copy(declarationDir = value.trim())
         "declarationmap" -> options.copy(declarationMap = boolValue)

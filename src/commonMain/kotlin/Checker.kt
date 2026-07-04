@@ -882,6 +882,7 @@ class Checker(
      * can augment/override them (matching TypeScript's behavior).
      */
     private fun parseBuiltinLib(): SymbolTable {
+        if (options.useRealLibs) return bindRealLibs()
         val source = BUILTIN_LIB_SOURCE
         val ast = Parser(source, "lib.es5.d.ts").parse()
         builtinLibSourceFile = ast
@@ -908,6 +909,41 @@ class Checker(
             }
         }
         return Binder(options).bind(ast).locals
+    }
+
+    /**
+     * M2.1(d): the real-lib alternative to the embedded [BUILTIN_LIB_SOURCE] path,
+     * gated by [CompilerOptions.useRealLibs]. Resolves the lib set from
+     * `options.lib`/`options.target` via [RealLibSnapshots] (shared parses, FRESH
+     * binds — the [mergeSymbolTable] mutation below is exactly why bound tables
+     * are per-program), merges each file's locals in inclusion order (so
+     * es2015.core's `interface Array<T>` merges onto es5's, like tsc's
+     * concatenated default libs), and populates the same [builtinLibDecls]/
+     * [builtinLibMemberDecls] identity sets the embedded path does.
+     * [builtinLibSourceFile] keeps the FIRST file (es5-layer) — position-based
+     * lib lookups are inherently ambiguous across multiple lib files (positions
+     * overlap); lib diagnostics render `:--:--` so only the display name is
+     * affected.
+     */
+    private fun bindRealLibs(): SymbolTable {
+        val libNames = options.lib.ifEmpty { null }
+        val results = RealLibSnapshots.bindLibFiles(libNames, options.target, options)
+        val merged: SymbolTable = symbolTable()
+        for (result in results) {
+            val ast = result.sourceFile
+            if (builtinLibSourceFile == null) builtinLibSourceFile = ast
+            ast.statements.forEach { stmt ->
+                builtinLibDecls.add(stmt)
+                when (stmt) {
+                    is InterfaceDeclaration -> stmt.members.forEach { builtinLibMemberDecls.add(it) }
+                    is ClassDeclaration -> stmt.members.forEach { builtinLibMemberDecls.add(it) }
+                    is VariableStatement -> stmt.declarationList.declarations.forEach { builtinLibDecls.add(it) }
+                    else -> {}
+                }
+            }
+            mergeSymbolTable(merged, result.locals)
+        }
+        return merged
     }
 
     /**

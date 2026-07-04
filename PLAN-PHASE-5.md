@@ -70,6 +70,13 @@ names), fresh binds per consumer (mergeSymbolTable mutates merged-in symbols
 → shared bound tables would cross-pollute programs), `useRealLibs` flag
 (default off). The real es5.d.ts parses + binds cleanly on the first try.
 4 local tests. Suite 8,961 / 0 / 3.
+**And M2.1(d): checker wiring + the corpus A/B.** `bindRealLibs()` behind
+`useRealLibs` (+ directive); cross-lib-file interface merging proven by
+`[1,2,3].includes(2)` under `@lib: es2016`. A/B with the default temporarily
+flipped: **40 / 8,961 failures, all error-baseline, zero js-emit — the M2.2
+burn-down list is seeded in the queue item.** Wall time +70% under real libs
+(fresh per-program binds of ~240KB+ of lib source) — noted as an M2.2
+pre-flip task. Suite (default off) 8,965 / 0 / 3. M2.1 is COMPLETE.
 
 **Round 389 (2026-07-03) — M1.11 landed: self-compile 2,794 → 2,726 (−68;
 TS2554 45 → 0, TS2345 424 → 411, TS2769 77 → 67, zero new codes) — M1 is
@@ -424,7 +431,7 @@ Three strategic reads that shape everything below:
 
 | Metric | Source | Phase 17 target |
 |---|---|---|
-| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 8,961 with local tests as of round 390) |
+| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 8,965 with local tests as of round 390) |
 | Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**2,726 after round 389** — M1 complete; no-stub stays the honest default) |
 | Project corpus FPs (services/server/…) | `bench/` TSVs (M0.1) | 0 — **the v1 exit** (all 8 profiles) |
 | Conformance adoption | generated-test counts per category | POST-V1 (re-scope 2026-07-03 — see § "Post-v1 backlog", M3.0) |
@@ -670,7 +677,7 @@ Three strategic reads that shape everything below:
 
 **M2 — Real-lib migration (staged; decompose further at start)**
 
-- [ ] **M2.1 Lib graph loader.** Parse + bind the real `typescript-repo/src/lib/*.d.ts`
+- [x] **M2.1 Lib graph loader.** COMPLETE (round 390, all four sub-steps below). Parse + bind the real `typescript-repo/src/lib/*.d.ts`
   selected per `target`/`lib` (the `/// <reference lib="…" />` DAG: lib.es2020 →
   es2019 + es2020.* pieces), as a process-wide immutable snapshot parsed ONCE and
   shared across programs (this snapshot is deliberately the seed of M5's incremental
@@ -713,11 +720,44 @@ Three strategic reads that shape everything below:
     (218 KB) parses + binds cleanly (Array/Object/Promise/parseInt all bound).
     4 local tests (RealLibSnapshotTest) pin parse-once identity, fresh-bind
     non-identity, and dist naming.
-  - [ ] (d) wire into Checker init as an alternative to `builtinLibDecls` and A/B
-    one corpus run.
-- [ ] **M2.2 Corpus A/B and default flip.** Run the corpus with real libs; burn down
-  the diff (baselines were produced by real-lib tsc, so divergence generally means one
-  of our compensating hardcodes — fix by deletion). Flip the default when green.
+  - [x] (d) *Checker wiring + A/B* — DONE (round 390): `bindRealLibs()` in
+    Checker (gated `options.useRealLibs`; `// @useRealLibs` directive added)
+    resolves `options.lib`/`target` through `RealLibSnapshots`, merges each
+    file's locals in inclusion order (es2016.array.include's `Array<T>` merges
+    onto es5's — verified end-to-end by `[1,2,3].includes(2)` type-checking
+    clean), and populates the same `builtinLibDecls`/`builtinLibMemberDecls`
+    identity sets; `builtinLibSourceFile` keeps the first (es5-layer) file
+    (multi-file position lookups are inherently ambiguous; lib diagnostics
+    render `:--:--` so only the display name is affected). 4 local smoke tests
+    (RealLibsInCheckerTest). **A/B (default temporarily flipped true, full
+    corpus): 40 failures out of 8,961 — ALL error-baseline subtests, ZERO
+    js-emit regressions, +70% wall time (1:54 → 3:14). The 40 are the predicted
+    compensating-hardcode collisions — the M2.2 burn-down list (below).**
+- [ ] **M2.2 Corpus A/B and default flip.** Burn down the round-390 A/B diff
+  (baselines were produced by real-lib tsc, so divergence generally means one of our
+  compensating hardcodes — fix by deletion). Flip the default when green. **The 40
+  failing tests (round-390 A/B, all `.errors.txt` subtests):** arguments,
+  arrayBufferIsViewNarrowsType, builtinIterator, consistentAliasVsNonAliasRecordBehavior,
+  correctOrderOfPromiseMethod, deleteExpressionMustBeOptional_exactOptionalPropertyTypes
+  (×2 variants), dissallowSymbolAsWeakType, divergentAccessorsTypes6/8,
+  doYouNeedToChangeYourTargetLibraryES2016Plus, errorMessageOnObjectLiteralType,
+  externModule, flatArrayNoExcessiveStackDepth,
+  genericIndexedAccessVarianceComparisonResultCorrect, implementArrayInterface,
+  initializedDestructuringAssignmentTypes, interfaceAssignmentCompat,
+  intersectionsAndOptionalProperties, isArray, jsExportMemberMergedWithModuleAugmentation2,
+  keyRemappingKeyofResult, keywordExpressionInternalComments, libMembers,
+  mappedTypeGenericWithKnownKeys, mappedTypeIndexedAccessConstraint,
+  mergedClassNamespaceRecordCast, narrowingPastLastAssignment,
+  omitTypeHelperModifiers01, omitTypeTestErrors01, parameterListAsTupleType,
+  redefineArray, requiredMappedTypeModifierTrumpsVariance,
+  specialIntersectionsInMappedTypes, stringMappingAssignability,
+  templateStringsArrayTypeRedefinedInES6Mode, truthinessCallExpressionCoercion2,
+  typedArraysCrossAssignability01, unaryOperatorsInStrictMode,
+  uncalledFunctionChecksInConditional2. Most are documented lib-divergence pins
+  (typed-array chains, Date/Array hardcoded counts, LIB_MIN_TARGET) — M2.3's
+  unwind list overlaps heavily; work them together. Also measure/mitigate the
+  +70% suite wall time before flipping (per-key bound-lib reuse within a run,
+  or M5-style sharing).
 - [ ] **M2.3 Unwind lib-divergence pins.** Grep anchors: `LIB_MIN_TARGET`,
   `LIB_MIN_TARGET_SOFT`, `BUILTIN_LIB_VALUE_INTERFACES`, `KNOWN_GLOBALS` (derive from
   the loaded libs), the hardcoded Date TS2740 message, hardcoded "and N more" counts,
