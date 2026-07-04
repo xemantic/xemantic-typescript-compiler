@@ -91,7 +91,24 @@ typed-array relation → M2.3 unwind), narrowingPastLastAssignment (`[]`=`any[]`
 inference → M3.1), dissallowSymbolAsWeakType (`new FinalizationRegistry(() => {})` leaves the
 generic `T` unresolved → `f.register(s, null)` FP TS2345 `null ≁ T` → M3.1),
 interfaceAssignmentCompat / mergedClassNamespaceRecordCast (Record materialization / dedicated
-walkers under real libs → M3.3).
+walkers under real libs → M3.3). **Self-compile map refreshed this session (compiler profile,
+`MainKt --noEmit --listAll`, current HEAD): 2,728 errors — round 394's checker changes are
+INERT (delete-TS2790 count 0, confirmed both by a grep of tsc's source finding zero
+`delete x.<objProtoMember>` shapes and by the listAll; TS2728 is related-info-only). The +2
+vs round-389's 2,726 predates this session (intervening commits 390–393 + the warning
+cleanup — most likely the warning-cleanup's `minArgumentCount` correctness fix, which is a
+tsc-more-accurate change, not a regression). The M1.4 family map is STABLE: TS2339×836
+(M3.4 union-receiver narrowing), TS2322×777 (M3.1 generic call-site inference, top shape
+`Type 'T[]'`), TS2345×411, TS7006×303, TS2769×67, TS2366×50, TS18048×34, TS2349×25,
+TS2365/TS2362 (~40 arithmetic), TS2563×27 (B399 heuristic FPs → M3.4). ~70 of the 2,728
+are env-legit: TS2591×43 (`process`/`require`/`Buffer` node globals — resolved by
+`--node-stub`/real @types/node) + TS2563×27 (B399). The rest are the M3 cores — no new
+narrow non-M3 slice remains (M1 peeled them all). Next-session guidance: the M2.2
+narrow-fallback pool is largely picked over (this session's two wins were the last of the
+lib-attribution / apparent-type-gap category); further M2.2 progress is gated on the M3
+engine items these failures share — prefer advancing M2.3 (typed-array/lib-pin unwind, which
+overlaps the M2.2 typedArrays/templateStringsArray/builtinIterator failures) or a decomposed
+M3.1/M3.3/M3.4 sub-step (which unblocks both M2.2 AND the self-compile dashboard).**
 
 **Round 393 (2026-07-04) — M2.2 burn-down #3: the lib-declared utility-alias
 modifier cluster + the redefineArray construct-sig double-emit. Real-lib A/B recount
@@ -617,7 +634,7 @@ Three strategic reads that shape everything below:
 | Metric | Source | Phase 17 target |
 |---|---|---|
 | Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 8,984 with local tests as of round 394) |
-| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**2,726 after round 389** — M1 complete; no-stub stays the honest default) |
+| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**2,728 measured at round 394**; M1 complete at 2,726/round 389, +2 from an intervening non-round-394 commit; round 394 changes are self-compile-inert; no-stub stays the honest default) |
 | Project corpus FPs (services/server/…) | `bench/` TSVs (M0.1) | 0 — **the v1 exit** (all 8 profiles) |
 | Conformance adoption | generated-test counts per category | POST-V1 (re-scope 2026-07-03 — see § "Post-v1 backlog", M3.0) |
 | Crashes on any input | bench runs | 0 |
