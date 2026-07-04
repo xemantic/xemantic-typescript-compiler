@@ -947,10 +947,17 @@ Three strategic reads that shape everything below:
   **TS2693×1 remaining** — round 398 fixed the `symbol`-destructuring shape (×6:
   `checkTypeAsValueInStatements`'s value-name hoisting now extracts binding-pattern element
   names, not just simple Identifier decl names); the 1 left is a different
-  `BinaryExpressionState` clodule-namespace-as-value shape (factory/utilities.ts:1477). Next
-  bounded buckets not yet triaged: TS2739×7, TS2551×5, TS2588×4, TS2304×3, TS2314×3, TS2741×3,
-  TS7053×3, TS2722×3, TS2367×2, TS2430/TS2394/TS2709 ×1. Re-bucket after each fix; the
-  self-compile 2,694 still has TS2591×43 (node globals, env-legit — `--node-stub`), TS2563×27
+  `BinaryExpressionState` clodule-namespace-as-value shape (factory/utilities.ts:1477); (c)
+  **TS2314×3 → 0 (round 399)** — `checkTypeArgCount` now skips the arity check when a qualified
+  name's qualifier resolves to an enum (`SyntaxKind.ThisType`/`TypeMapKind.Array` are enum
+  MEMBERS, not the same-named generic lib types). Next bounded buckets not yet triaged (all
+  from the round-399 histogram at 2,691): TS2739×7, TS2551×5 (lib gap — `Object.setPrototypeOf`
+  missing from the embedded ObjectConstructor → M2.3, NOT a bounded bug), TS2588×4 (block-scope
+  const-reassignment — checker.ts's `let c` in a nested block mis-detected as const; a
+  block-scope-aware const walker, more involved), TS2304×3, TS2741×3, TS7053×3, TS2722×3,
+  TS2367×2, TS2430/TS2394/TS2709 ×1 (the last is the same `BinaryExpressionState` clodule as
+  the TS2693 residue). Re-bucket after each fix; the
+  self-compile 2,691 still has TS2591×43 (node globals, env-legit — `--node-stub`), TS2563×27
   (B399 heuristic → M3.4), and the M3 cores (TS2339×838, TS2322×794, TS2345×405, TS7006×301).
 
 **M2 — Real-lib migration (staged; decompose further at start)**
