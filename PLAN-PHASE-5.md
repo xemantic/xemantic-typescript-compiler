@@ -34,10 +34,9 @@ completeness campaigns to dashboard-driven burn-down: the acceptance bar is the 
 tsc's source uses, with the corpus suite as the regression net. M5 unchanged —
 performance is the directive's second half and starts at v1 compliance.
 
-**Round 416 (2026-07-05) — M1.12/M3.4: TWO clean bounded arithmetic-pass narrowing fixes from
-bucketing the fresh full `--listAll`, both FP-safe / suppression-only. Self-compile (compiler
-profile) 1,922 → 1,910 (−12); suite 9,145 → 9,154 (+9 local, 0 regressions); 2 commits
-(3b216114, f0a3c81f).** The M3 cores still dominate the histogram (TS2322×785 / TS2345×396 /
+**Round 416 (2026-07-05) — M1.12/M3.4: THREE clean bounded FP-safe / suppression-only fixes from
+bucketing the fresh full `--listAll`. Self-compile (compiler profile) 1,922 → 1,906 (−16); suite
+9,145 → 9,157 (+12 local, 0 regressions); 3 commits (3b216114, f0a3c81f, 77daebc5).** The M3 cores still dominate the histogram (TS2322×785 / TS2345×396 /
 TS7006×301 / TS2339×237, engine-gated) but two contained arithmetic-pass families were genuine
 bugs. **(1) let/var local shadowing an outer function (TS2365 7 → 5):** round 407 recorded an
 un-annotated `const X` whose name SHADOWS an outer same-named FUNCTION so a later bare-identifier
@@ -81,7 +80,29 @@ call-return inference, M3.1); **TS2365×1** — utilities.ts:6314 `lineCount + T
 sub-classify a family by the SYNTACTIC shape at each site (`&&`/ternary vs reassignment vs generic)
 — 9 of the 12 arithmetic residuals were the two syntactic-narrowing shapes, the rest genuinely
 engine-gated. Perf unmeasured beyond the bench row (an operand strip + a `&&`/ternary walk — no
-relation-engine work).
+relation-engine work). **(3) closure-captured-var loop narrowing (TS18048 16 → 12):** re-bucketing
+the fresh TS18048×16 by reference and reproducing one with a minimal test found a genuine bounded
+flow-narrowing bug: `emitTs18048ForClosureCapturedUndefinedReceiver` (B464) used the non-loop-following
+`getNarrowedTypeForReference`, which washes a reference back to its DECLARED type at a loop's
+FlowLoopLabel (the deliberate back-edge-safety wash-out). So a captured variable narrowed by a
+closure-LOCAL guard BEFORE a loop and read INSIDE it FP'd TS18048 — tsc's own checker.ts:8207
+(`expandedParams: readonly Symbol[] | undefined` guarded `if (!expandedParams) return;` then read in
+`for (…; pIndex < expandedParams.length; …)`), builder.ts:1551 (`array` guarded at the outer function,
+read in a NESTED-closure for-loop — the B464 flow-into-closures brings the outer narrowing in, this
+makes it survive the inner loop), and checker.ts:47176/47178 (`baseTypeNode`). Switched to
+`getNarrowedTypeForReferenceFollowLoopEntry` — the loop-ENTRY-following variant the sibling
+`emitTs18048ForOptionalPropertyAccessReceiver` already uses (B81.1c) — which follows antecedent[0] so a
+read inside the loop sees the pre-loop narrowing. FP-safe: it only ever narrows MORE (suppresses a
+TS18048), never adds one, and behaves identically outside loops. The remaining 12 TS18048 are OTHER
+gaps: assignment-in-guard property paths (`if (!state.X) { state.X = new Map() } state.X.set(…)`,
+es2015.ts/builder.ts), `X?.kind === lit && X.parent…` optional-chain discriminants (checker.ts:8061/8062),
+and deep single-use property-path narrowing (options.types / node.name / symbol.valueDeclaration) — each
+a distinct M3.4 sub-cause, not a single bounded slice. 3 local tests (ClosureCapturedLoopNarrowTest)
+with an un-guarded negative control (an un-guarded captured possibly-undefined var in a loop STILL
+fires). META: the productive move was to reproduce a scattered-family member with a minimal test
+(gradle suppresses stdout → assert, don't println), which turned "16 scattered property-path gaps"
+into one crisp loop-wash-out bug the corpus could never surface (single-file, no captured-var-in-loop
+shapes).
 
 **Round 415 (2026-07-05) — M1.12: TWO clean bounded self-compile fixes from bucketing the fresh
 full `--listAll` by normalized message shape, both FP-safe. Self-compile (compiler profile)
@@ -630,8 +651,8 @@ Three strategic reads that shape everything below:
 
 | Metric | Source | Phase 17 target |
 |---|---|---|
-| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 9,154 with local tests as of round 416) |
-| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**1,910 measured at round 416**; M1 complete at 2,726/round 389; rounds 395–415 burned bounded histogram-tail buckets + M3.4 flow-narrowing slices 2,726 → 1,922; round 409 `export *`-barrel / ESM-`.js` imported-guard FLOW narrowing (M3.4) −175 (TS2339 838 → 672); round 411 enum-member discriminant narrowing + type-guard-narrows-member-DOWN −59; round 412 single-type type-guard narrow-DOWN + TS18048 receiver-narrowing −1; round 413 the `export *` LEAF-EXPORT gate −407 (TS2339 614 → 237): the pre-413 star resolver returned non-exported IMPORT aliases, so barrel-imported `Debug.assert` (& every barrel guard) never resolved — the TRUE builder.ts blocker, NOT the round-412 depth red herring (an instrumented run showed ZERO walk truncations) — plus a dashboard-neutral tsc-faithful linear flow-walk iteration + a return-path narrowing consumer (−1); **round 414 the TS2366 "lacks ending return" family −35 (50 → 15): three CFA fall-through patterns in `statementAlwaysReturns`/`switchAlwaysReturns` — infinite-loop-with-return, trailing never-call (`Debug.fail`), switch fall-through — all FP-safe syntactic/barrel-resolution fixes; the remaining 15 are Pattern C2 (exhaustive switch w/o default → M3.4 discriminant-exhaustiveness)**; remaining bounded pool M3.4/M3-gated (a general-`resolveAlias` `.js`/star fix was measured net +297 via a TS2315 flood, reverted; NonNull-strip −17 but unmasks M3, reverted; const-string-enum→`string` relation deferred M3.3/B425); no-stub stays the honest default) |
+| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 9,157 with local tests as of round 416) |
+| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**1,906 measured at round 416**; M1 complete at 2,726/round 389; rounds 395–415 burned bounded histogram-tail buckets + M3.4 flow-narrowing slices 2,726 → 1,922; round 409 `export *`-barrel / ESM-`.js` imported-guard FLOW narrowing (M3.4) −175 (TS2339 838 → 672); round 411 enum-member discriminant narrowing + type-guard-narrows-member-DOWN −59; round 412 single-type type-guard narrow-DOWN + TS18048 receiver-narrowing −1; round 413 the `export *` LEAF-EXPORT gate −407 (TS2339 614 → 237): the pre-413 star resolver returned non-exported IMPORT aliases, so barrel-imported `Debug.assert` (& every barrel guard) never resolved — the TRUE builder.ts blocker, NOT the round-412 depth red herring (an instrumented run showed ZERO walk truncations) — plus a dashboard-neutral tsc-faithful linear flow-walk iteration + a return-path narrowing consumer (−1); **round 414 the TS2366 "lacks ending return" family −35 (50 → 15): three CFA fall-through patterns in `statementAlwaysReturns`/`switchAlwaysReturns` — infinite-loop-with-return, trailing never-call (`Debug.fail`), switch fall-through — all FP-safe syntactic/barrel-resolution fixes; the remaining 15 are Pattern C2 (exhaustive switch w/o default → M3.4 discriminant-exhaustiveness)**; remaining bounded pool M3.4/M3-gated (a general-`resolveAlias` `.js`/star fix was measured net +297 via a TS2315 flood, reverted; NonNull-strip −17 but unmasks M3, reverted; const-string-enum→`string` relation deferred M3.3/B425); no-stub stays the honest default) |
 | Project corpus FPs (services/server/…) | `bench/` TSVs (M0.1) | 0 — **the v1 exit** (all 8 profiles) |
 | Conformance adoption | generated-test counts per category | POST-V1 (re-scope 2026-07-03 — see § "Post-v1 backlog", M3.0) |
 | Crashes on any input | bench runs | 0 |
@@ -1012,16 +1033,21 @@ Three strategic reads that shape everything below:
   numbered props as required (the resolved tuple `Type` loses the AST `questionToken`/`OptionalType`
   optionality); the clean fix needs a `SymbolFlags.Optional` bit threaded through tuple building + read
   by `isOptionalProperty`, a broad regression surface (many callers) for 1 instance.**
-  **Round 416 killed TWO more arithmetic-pass families (1,922 → 1,910): (1) TS2365 7 → 5 — a `let`/`var`
+  **Round 416 killed THREE bounded families (1,922 → 1,906): (1) TS2365 7 → 5 — a `let`/`var`
   local shadowing an outer function (`let min = Number.POSITIVE_INFINITY` shadows `function min` →
   `min < args.length` FP'd `{ <T>(…) } < number`); extended round 407's `const`-only shadow-recording
   to `let`/`var` (records `anyType`, reassignment-proof; the shadow gate is the firewall). (2)
   TS2362 10 → 4 + TS2365 5 → 1 — &&/ternary truthy-narrowing (`checkMode && checkMode & X`,
   `X !== undefined && X > 0`, `X === undefined ? … : start! + X`): new `arithTruthyNarrowedNames`
   strips nullish from an operand narrowed by an enclosing `&&`/ternary guard (a `Type.Union` carries
-  no Undefined flag on itself, so the classifier otherwise rejects the undefined member). FP-safe /
-  suppression-only. Residual: TS2362×4 (reassignment `flags = flags || None` + generic reduceLeft/
-  checkDefined returns) + TS2365×1 (generic `lineCount + T`) are M3.4/M3.**
+  no Undefined flag on itself, so the classifier otherwise rejects the undefined member). (3)
+  TS18048 16 → 12 — a captured var narrowed by a closure-LOCAL guard before a loop and read INSIDE
+  it (checker.ts:8207 `if (!expandedParams) return; for (…expandedParams.length…)`): the
+  closure-capture TS18048 emitter now uses the loop-entry-following narrowing variant so the
+  pre-loop narrowing survives the FlowLoopLabel (M3.4). All FP-safe / suppression-only. Residual:
+  TS2362×4 (reassignment `flags = flags || None` + generic reduceLeft/checkDefined returns) +
+  TS2365×1 (generic `lineCount + T`) + the remaining TS18048×12 (assignment-in-guard property paths,
+  optional-chain discriminants) are M3.4/M3.**
 
 **M2 — Real-lib migration (staged; decompose further at start)**
 
