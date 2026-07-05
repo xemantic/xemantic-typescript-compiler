@@ -551,7 +551,7 @@ Three strategic reads that shape everything below:
 
 | Metric | Source | Phase 17 target |
 |---|---|---|
-| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 9,074 with local tests as of round 409) |
+| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 9,076 with local tests as of round 409) |
 | Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**2,443 measured at round 409**; M1 complete at 2,726/round 389; rounds 395–409 burned bounded histogram-tail buckets 2,726 → 2,443; round 408 the TS2349 "not callable" family −21; round 409 `export *`-barrel / ESM-`.js` imported-guard FLOW narrowing (M3.4) −175 (TS2339 838 → 672); remaining bounded pool M3.4/M3-gated (a general-`resolveAlias` `.js`/star fix was measured net +297 via a TS2315 flood, reverted; NonNull-strip −17 but unmasks M3, reverted); no-stub stays the honest default) |
 | Project corpus FPs (services/server/…) | `bench/` TSVs (M0.1) | 0 — **the v1 exit** (all 8 profiles) |
 | Conformance adoption | generated-test counts per category | POST-V1 (re-scope 2026-07-03 — see § "Post-v1 backlog", M3.0) |
@@ -1047,15 +1047,23 @@ each item still decomposes into a multi-session campaign — read PLAN-PHASE-4.m
   **Deliberately NOT in the general `resolveAlias` — a first cut there measured a self-compile
   REGRESSION 2,618 → 2,915 (TS2315×466 flood from resolving barrel-imported TYPES, an M3 gap),
   reverted.** Self-compile 2,618 → 2,443 (TS2339 838 → 672); services hang-check clean.
-  **STILL OPEN (the next high-yield M3.4/cross-file sub-step): the barrel-imported NAMESPACE-member
-  assert case** (`Debug.assertIsDefined(machine.onLeft)` — the round-408 unreproducible ×3).
-  `resolveNamespaceMemberFnDecl` (the PropertyAccess-callee path) resolves the receiver `Debug`
-  via the general `resolveAlias`, which stays byte-identical (does NOT follow `.js`/`export *`),
-  so the barrel-imported `Debug` namespace still doesn't resolve → the assert never narrows. A
-  flow-only namespace-resolution variant (resolve the receiver alias through `.js`/star to the
-  namespace symbol WITHOUT touching the general resolveAlias cache, mirroring
-  `resolveImportedFunctionLikeDecl`) would flip those. Also pervasive: `some(x)`/`isDefined(x)`
-  Identifier guards across the TS18048/TS2339/TS2722 families are now narrowed.
+  **ALSO DONE (same session, 4d0192ad): the barrel-imported NAMESPACE-member case**
+  (`Debug.assertIsDefined(x)` / `Debug.isString(x)`). `resolveNamespaceMemberFnDecl` resolved the
+  receiver `Debug` via the general (byte-identical) `resolveAlias`, so a barrel-imported namespace
+  didn't resolve → the member guard/assert never narrowed. Added the flow-only
+  `resolveImportedNamespaceSymbol` (the namespace-receiver sibling of
+  `resolveImportedFunctionLikeDecl`; memoized in `importedNamespaceSymCache`, never touches the
+  resolveAlias cache), consulted only when the general resolveAlias fails to yield a module symbol.
+  2 load-bearing tests (both verified to FAIL without it). **DASHBOARD-NEUTRAL on the compiler
+  profile (2,443 → 2,443) — the round-408 `Debug.assertIsDefined(machine.onLeft)` cases were
+  flagged "unreproducible" (a deeper cause than resolution), so resolving the barrel `Debug` alone
+  doesn't flip a compiler-profile FP; landed as a principled capability extension (cf. round-404's
+  neutral M1.13) for the other 7 profiles / real projects where barrel-imported namespace guards
+  are ubiquitous.** Also pervasive: `some(x)`/`isDefined(x)` Identifier guards across the
+  TS18048/TS2339/TS2722 families are now narrowed. **REMAINING M3.4 investigation: the round-408
+  `Debug.assertIsDefined` FPs (×3) have a root cause OTHER than resolution — worth a fresh repro
+  (generic-class param-property assert + the `asserts x is NonNullable<T>` path through a real-code
+  interaction) now that the barrel resolution is no longer a confound.**
 **M5 — Performance (starts at v1 compliance — the 8 tsc-source profiles compile clean)**
 
 - [ ] **M5.1 Profiling grid**: JFR/async-profiler over the project corpus (cold CLI,
