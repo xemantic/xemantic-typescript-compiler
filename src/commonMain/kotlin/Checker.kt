@@ -84957,7 +84957,7 @@ interface DataView {
             // mirrors 17.66 (var-decl init) / 17.67 (call arg). When return type
             // contains literal types and the return expression is a literal,
             // preserve the literal instead of widening to the primitive.
-            val sourceType = try {
+            val sourceTypeRaw = try {
                 if (expr != null) {
                     val widened = getTypeOfExpression(expr)
                     if (propTypeContainsLiteral(targetType)) {
@@ -84967,6 +84967,23 @@ interface DataView {
             } finally {
                 if (useCtx) contextualType = savedContextual
             }
+            // M3.4 (round 413): the return-assignability path is now a flow-narrowing
+            // consumer (it was NOT — the CLAUDE.md consumer list omitted it). A returned
+            // Identifier/PropertyAccess narrowed by a preceding user guard/assert
+            // (`Debug.assert(isDefinedProgram(state)); return state;` — builder.ts's
+            // toBuilderProgramStateWithDefinedProgram) resolves to its wider DECLARED
+            // type and FP'd a missing-property error. Suppression-only + FP-safe by
+            // monotonicity (mirrors the round-410 assignment-RHS narrowing): substitute
+            // the narrowed type only when it is a STRICT improvement that makes the
+            // return relate; a genuine mismatch keeps the raw type and still fires. Gated
+            // to a named object target — the shape where a redefined-required-member
+            // subtype matters.
+            val sourceType = if ((expr is Identifier || expr is PropertyAccessExpression) &&
+                (targetType is Type.Interface || targetType is Type.Reference || targetType is Type.Object)) {
+                val narrowed = getNarrowedTypeForReference(sourceTypeRaw, expr)
+                if (narrowed !== sourceTypeRaw && checkTypeRelatedTo(narrowed, targetType, assignableRelation)) narrowed
+                else sourceTypeRaw
+            } else sourceTypeRaw
             // B87.1 (round 73): async-generic-return — `async function f<T>(...):
             // Promise<T>` returning a value whose (awaited) type is a UNION that
             // includes the bare unconstrained type parameter T PLUS other (non-
