@@ -85772,11 +85772,30 @@ interface DataView {
                     // target is a literal-containing type and RHS is a literal expression,
                     // preserve the literal instead of widening to the primitive (matches
                     // TypeScript's bidirectional contextual-typing rule).
-                    val sourceType = if (propTypeContainsLiteral(tt)) {
+                    val sourceTypeRaw = if (propTypeContainsLiteral(tt)) {
                         literalTypeOfExpression(expr.right) ?: getTypeOfExpression(expr.right)
                     } else {
                         getTypeOfExpression(expr.right)
                     }
+                    // M3.4: narrow a reference RHS via the flow graph before the missing-property /
+                    // relation checks below. A preceding user type-guard can narrow the RHS to a
+                    // SUBTYPE of the target (tsc's own `node = parent` inside
+                    // `if (isParenthesizedExpression(parent))`, `target = callee` inside
+                    // `if (isSuperProperty(callee))`). Unlike the var-decl assignability path,
+                    // `checkAssignmentExpression` was not a narrowing consumer, so the RHS resolved
+                    // to its wider declared type and FP'd the missing-brand-property error.
+                    // Suppression-only + FP-safe by construction: substitute the narrowed type only
+                    // when it is a STRICT improvement (`!==` raw) that makes the assignment relate
+                    // (`checkTypeRelatedTo(narrowed, tt)` passes) — so a genuine widening assignment
+                    // (no narrowing, or narrowed still not assignable) keeps the raw type and still
+                    // fires. Gated to a named object target (Interface/Reference), the shape the
+                    // var-decl path deliberately defers.
+                    val sourceType = if ((expr.right is Identifier || expr.right is PropertyAccessExpression) &&
+                        (tt is Type.Interface || tt is Type.Reference)) {
+                        val narrowed = getNarrowedTypeForReference(sourceTypeRaw, expr.right)
+                        if (narrowed !== sourceTypeRaw && checkTypeRelatedTo(narrowed, tt, assignableRelation)) narrowed
+                        else sourceTypeRaw
+                    } else sourceTypeRaw
                     contextualType = savedContextual
                     lastMissingPropertyName = null
                     lastMissingIndexSigKind = null
