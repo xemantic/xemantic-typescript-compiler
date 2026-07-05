@@ -91528,7 +91528,7 @@ interface DataView {
                 // the FollowLoopEntry mirror via [narrowByAssignmentRhs]. Reached only
                 // when [flowAssignmentMightNarrow] gated the fast-forward loop above.
                 val antecedent = narrowTypeFromFlow(declaredType, node.antecedent, name, seen, depth + 1, memo)
-                narrowByAssignmentRhs(node.node, name, antecedent)
+                narrowByAssignmentRhs(node.node, name, antecedent, declaredType)
             }
             is FlowCall -> {
                 val antecedent = narrowTypeFromFlow(declaredType, node.antecedent, name, seen, depth + 1, memo)
@@ -91596,7 +91596,7 @@ interface DataView {
      *    nullish LHS stays nullish. RHS classification is purely structural
      *    ([rhsIsDefinitelyNonNullish]) — no type resolution inside the walker.
      */
-    private fun narrowByAssignmentRhs(node: Node, name: String, antecedent: Type): Type {
+    private fun narrowByAssignmentRhs(node: Node, name: String, antecedent: Type, declaredType: Type): Type {
         if (flowAssignmentTargetsName(node, name)) {
             getLiteralRhsTypeForAssignment(node)?.let { return narrowUnionByRhsAssignment(antecedent, it) }
         }
@@ -91627,7 +91627,15 @@ interface DataView {
             else -> null
         }
         if (rhs != null && rhsIsDefinitelyNonNullish(rhs)) {
-            return narrowByExcludingNullUndefined(antecedent)
+            // Round 416: an assignment OVERWRITES the reference, so its post-state is the
+            // DECLARED type with nullish excluded (tsc `getAssignmentReducedType(declared,
+            // rhsType)`), NOT `narrowByExcludingNullUndefined(antecedent)`. Using the
+            // pre-assignment narrowed antecedent is wrong when a branch already narrowed the
+            // reference to bare `undefined` (`if (!state.m) { state.m = new Map() }`): excluding
+            // nullish from the non-union `undefined` returns `undefined` unchanged (the branch's
+            // then-arm then re-adds undefined at the join → FP TS18048). Straight-line assignments
+            // are unaffected (antecedent == declaredType there).
+            return narrowByExcludingNullUndefined(declaredType)
         }
         return antecedent
     }
@@ -111903,7 +111911,7 @@ interface DataView {
                 val antecedent = narrowTypeFromFlowFollowLoopEntry(
                     declaredType, node.antecedent, name, seen, depth + 1, memo,
                 )
-                narrowByAssignmentRhs(node.node, name, antecedent)
+                narrowByAssignmentRhs(node.node, name, antecedent, declaredType)
             }
             is FlowCall -> {
                 val antecedent = narrowTypeFromFlowFollowLoopEntry(
