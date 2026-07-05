@@ -99389,8 +99389,16 @@ interface DataView {
             return false
         }
 
-        // Return type check: compare keyword types
-        if (overloadReturnType != null && implReturnType != null) {
+        // Return type check: compare keyword types.
+        // tsc isImplementationCompatibleWithOverload: `targetReturnType === voidType || …` — a
+        // `void` OVERLOAD (target) return is compatible with ANY implementation return, because a
+        // caller of the overload ignores the returned value. tsc's own emitter.ts overloads
+        // `writeTokenText(…): void;` / `writeTokenText(…): number;` with a `: number` impl rely on
+        // this. Skip the return check entirely for a `void` overload return (never both `void →
+        // number` nor the class-return covariance below).
+        val overloadReturnsVoid = overloadReturnType is KeywordTypeNode &&
+            overloadReturnType.kind == SyntaxKind.VoidKeyword
+        if (overloadReturnType != null && implReturnType != null && !overloadReturnsVoid) {
             if (!isTypeNodeCompatible(overloadReturnType, implReturnType)) {
                 return false
             }
