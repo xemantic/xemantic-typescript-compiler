@@ -34,6 +34,36 @@ completeness campaigns to dashboard-driven burn-down: the acceptance bar is the 
 tsc's source uses, with the corpus suite as the regression net. M5 unchanged —
 performance is the directive's second half and starts at v1 compliance.
 
+**Round 407 (2026-07-05, same session as 406) — M1.12: the arithmetic-pass family yields TWO
+more bounded buckets (self-compile 2,659 → 2,641, −18). Suite 9,043 → 9,050 (+7 local, 0
+regressions); 2 commits.** Round 405/406 marked the arithmetic family "M3-gated", but two
+sub-patterns are bounded. **(1) local-const-shadows-outer-function (TS2365 21 → 7, −14):** the
+arithmetic/comparison pass types a bare-identifier operand via `getTypeOfExpression`, which falls
+back to file/global scope for an un-recorded function-body local — so `const length =
+arr.length` (a number) that SHADOWS tsc's own imported `function length(): number` resolved to
+the FUNCTION, and `i < length` FP'd TS2365 `number < (…) => number` (~14 sites; core.ts also
+exports `function min/max`). Fix: record an un-annotated `const` whose name shadows an outer
+FUNCTION (concrete primitive when determinable, else `anyType`). **The SHADOW gate is
+load-bearing — a first cut recorded EVERY primitive-typed const, which UNMASKED pre-existing
+narrowing FPs on the OTHER operand: `const numStatements = source.length` (number) exposed
+`statementOffset < numStatements` (statementOffset an un-narrowed `number | undefined` param),
+and `const max = length(sig.tp)` exposed `min < max`. Gating to "the name resolves to an outer
+FUNCTION" targets exactly the shadow-suppression case; the `any` fallback for a genuine shadow
+only bails the bogus check and never unmasks (+5/−6 messy swap → clean −14).** **(2)
+branded-number arithmetic (TS2362 19 → 15, −4):** a branded number `type
+IncrementalBuildInfoFileId = number & { __brand }` is assignable to `number` (an intersection is
+a subtype of each member), so `fileId - 1` is valid — but the operand classifiers
+(`isNumberLikeType`/`isBigIntLikeType`/`isStringLikeType` + the B283 `typeAssignableTo*Kind`)
+handled Union/TypeParam, not `Type.Intersection`. Fix: an intersection is number-/bigint-/
+string-like iff ANY constituent is. 7 local tests (ArithmeticShadowedFunctionLocalTest ×3,
+BrandedNumberArithmeticTest ×4) with negative controls (non-shadowed `5 < g` still fires;
+object-intersection `x - 1` still fires). **The residual arithmetic FPs ARE M3.4/M3-gated: the
+remaining ~15 TS2362 are `<enumFlags> & <enumMember>` where the LHS is `Enum | undefined`
+un-narrowed via a `&&`/`!` guard (narrowing gap) or a NonNull-of-enum-union that doesn't strip
+undefined; the remaining 7 TS2365 are the `min/max` overload type and `number | undefined`
+comparisons — all narrowing/M3.** Session total (406+407): self-compile 2,663 → 2,641 (−22) on
+FOUR bounded buckets, all from bucketing the full `--listAll`.
+
 **Round 406 (2026-07-05) — M1.12 continued: TWO more bounded self-compile FPs killed by
 bucketing the fresh full `--listAll` output (self-compile 2,663 → 2,659, −4). Suite 9,034 →
 9,043 (+9 local, 0 regressions); 2 commits.** Re-ran the compiler-profile `--listAll` (68 s,
@@ -574,8 +604,8 @@ Three strategic reads that shape everything below:
 
 | Metric | Source | Phase 17 target |
 |---|---|---|
-| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 9,043 with local tests as of round 406) |
-| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**2,659 measured at round 406**; M1 complete at 2,726/round 389; rounds 395–406 burned bounded histogram-tail buckets 2,726 → 2,659; M1.13/round 404 file-aware intern key was self-compile-neutral, round 405 TS2774 −1, round 406 TS1100+TS7023 −4; remaining bounded pool M3-gated; no-stub stays the honest default) |
+| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 9,050 with local tests as of round 407) |
+| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**2,641 measured at round 407**; M1 complete at 2,726/round 389; rounds 395–407 burned bounded histogram-tail buckets 2,726 → 2,641; round 406 TS1100+TS7023 −4, round 407 length-shadow + branded-number arithmetic −18; remaining bounded pool M3-gated; no-stub stays the honest default) |
 | Project corpus FPs (services/server/…) | `bench/` TSVs (M0.1) | 0 — **the v1 exit** (all 8 profiles) |
 | Conformance adoption | generated-test counts per category | POST-V1 (re-scope 2026-07-03 — see § "Post-v1 backlog", M3.0) |
 | Crashes on any input | bench runs | 0 |
@@ -887,8 +917,14 @@ Three strategic reads that shape everything below:
   branch checked the property NAME; a property/method name is never binding-name-restricted) and
   TS7023×2 (`return cond ? mapType(t, self) : concrete` — self as a callback ARG receives a
   contextual param type and breaks the inference cycle; `selfRefsOnlyAsCallbackArgs` gate). Self-compile
-  2,663 → 2,659.** **The bounded pool is genuinely thin now — remaining
-  candidates + M3-family (self-compile at 2,659 after round 406):** TS2740×1 (the tsc `createSet()`
+  2,663 → 2,659.** **Round 407 (same session) killed TWO arithmetic-pass buckets: (1) TS2365
+  21→7 — a local `const length = arr.length` SHADOWING an outer `function length` was typed as the
+  function (`i < length` → `number < (…)=>number`); record a const that shadows an outer FUNCTION
+  (SHADOW gate load-bearing — recording every primitive const unmasks narrowing FPs on the other
+  operand). (2) TS2362 19→15 — a branded number `number & {__brand}` is number-like (intersection
+  ⊆ number member); added `Type.Intersection` to the operand classifiers. Self-compile 2,659 →
+  2,641.** **The bounded pool is genuinely thin now — remaining
+  candidates + M3-family (self-compile at 2,641 after round 407):** TS2740×1 (the tsc `createSet()`
   Set shim FP: our embedded Set carries the es2024 set-methods `union`/`intersection`/… that es2020
   shouldn't have — gating them behind `LIB_MIN_TARGET` es2024 is risky per the "and N more"
   count-shift gotcha + the `setMethods` corpus test depends on them; DEFERRED), **TS7019×4
