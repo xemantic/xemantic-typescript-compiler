@@ -61,8 +61,24 @@ object-intersection `x - 1` still fires). **The residual arithmetic FPs ARE M3.4
 remaining ~15 TS2362 are `<enumFlags> & <enumMember>` where the LHS is `Enum | undefined`
 un-narrowed via a `&&`/`!` guard (narrowing gap) or a NonNull-of-enum-union that doesn't strip
 undefined; the remaining 7 TS2365 are the `min/max` overload type and `number | undefined`
-comparisons — all narrowing/M3.** Session total (406+407): self-compile 2,663 → 2,641 (−22) on
-FOUR bounded buckets, all from bucketing the full `--listAll`.
+comparisons — all narrowing/M3.** **(3, same session) enum reverse-mapping TS7053 (3 → 1, −2):**
+`NumericEnum[key]` is a valid reverse mapping (number → member name), so tsc emits no TS7053 —
+but a numeric enum in value position resolves to an empty `Type.Object` here and matched the
+empty-object branch of the noImplicitAny element-access check (an any/string key on a
+no-members/no-index object). tsc's own `moduleNameResolver.ts` does
+`ModuleResolutionKind[moduleResolution]` twice. Fix: exclude an enum-object receiver from that
+branch (mirrors the enum exclusion the sibling `tryEmitNoImplicitAnyIndexAccess` already had).
+3 local tests (EnumReverseMappingIndexTest) with an empty-`{}` still-fires control. **ATTEMPTED
++ REVERTED — nullish-strip in the `NonNullExpression` case of `getTypeOfExpression` (`(T |
+undefined)!` → `T`, the deferred "broader change"):** measured net −17 (2,639 → 2,622, removing
+9 TS2322 + 8 TS2345 + 5 TS2362 + 1 TS2365) BUT it UNMASKED 6 M3 gaps — huge object-literal-vs-
+interface FPs (`const program: Program = {…}` at program.ts:1876, transformer.ts:271, whose
+incomplete structural comparison now rejects a member whose `x!` type became precise), a
+generic-inference TS2345, and a new arithmetic TS2365. Correct + tsc-faithful, but it violates
+the clean-no-swap discipline and the 6 exposed gaps are M3 (object-literal-vs-interface / generic
+inference) — better landed WITH those M3 fixes so the dashboard stays clean. Reverted; noted for
+M3.1/M3.3. Session total (406+407): self-compile 2,663 → 2,639 (−24) on FIVE clean bounded
+buckets, all from bucketing the full `--listAll`.
 
 **Round 406 (2026-07-05) — M1.12 continued: TWO more bounded self-compile FPs killed by
 bucketing the fresh full `--listAll` output (self-compile 2,663 → 2,659, −4). Suite 9,034 →
@@ -604,8 +620,8 @@ Three strategic reads that shape everything below:
 
 | Metric | Source | Phase 17 target |
 |---|---|---|
-| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 9,050 with local tests as of round 407) |
-| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**2,641 measured at round 407**; M1 complete at 2,726/round 389; rounds 395–407 burned bounded histogram-tail buckets 2,726 → 2,641; round 406 TS1100+TS7023 −4, round 407 length-shadow + branded-number arithmetic −18; remaining bounded pool M3-gated; no-stub stays the honest default) |
+| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 9,053 with local tests as of round 407) |
+| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**2,639 measured at round 407**; M1 complete at 2,726/round 389; rounds 395–407 burned bounded histogram-tail buckets 2,726 → 2,639; round 406 TS1100+TS7023 −4, round 407 length-shadow + branded-number + enum-reverse-mapping −22; remaining bounded pool M3-gated (NonNull-strip attempted −17 but unmasks M3 object-literal/generic gaps, reverted); no-stub stays the honest default) |
 | Project corpus FPs (services/server/…) | `bench/` TSVs (M0.1) | 0 — **the v1 exit** (all 8 profiles) |
 | Conformance adoption | generated-test counts per category | POST-V1 (re-scope 2026-07-03 — see § "Post-v1 backlog", M3.0) |
 | Crashes on any input | bench runs | 0 |
@@ -922,9 +938,13 @@ Three strategic reads that shape everything below:
   function (`i < length` → `number < (…)=>number`); record a const that shadows an outer FUNCTION
   (SHADOW gate load-bearing — recording every primitive const unmasks narrowing FPs on the other
   operand). (2) TS2362 19→15 — a branded number `number & {__brand}` is number-like (intersection
-  ⊆ number member); added `Type.Intersection` to the operand classifiers. Self-compile 2,659 →
-  2,641.** **The bounded pool is genuinely thin now — remaining
-  candidates + M3-family (self-compile at 2,641 after round 407):** TS2740×1 (the tsc `createSet()`
+  ⊆ number member); added `Type.Intersection` to the operand classifiers. (3) TS7053 3→1 — an
+  enum reverse-mapping `NumericEnum[key]` is valid; excluded the enum-object receiver from the
+  empty-object noImplicitAny element-access branch. Self-compile 2,659 → 2,639. A nullish-strip
+  in the `NonNullExpression` case (`(T|undefined)! → T`) measured net −17 but UNMASKS M3
+  object-literal-vs-interface + generic-inference gaps (program.ts/transformer.ts) → reverted,
+  deferred to M3.** **The bounded pool is genuinely thin now — remaining
+  candidates + M3-family (self-compile at 2,639 after round 407):** TS2740×1 (the tsc `createSet()`
   Set shim FP: our embedded Set carries the es2024 set-methods `union`/`intersection`/… that es2020
   shouldn't have — gating them behind `LIB_MIN_TARGET` es2024 is risky per the "and N more"
   count-shift gotcha + the `setMethods` corpus test depends on them; DEFERRED), **TS7019×4
