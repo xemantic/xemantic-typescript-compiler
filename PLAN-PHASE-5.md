@@ -95,9 +95,20 @@ makes it survive the inner loop), and checker.ts:47176/47178 (`baseTypeNode`). S
 read inside the loop sees the pre-loop narrowing. FP-safe: it only ever narrows MORE (suppresses a
 TS18048), never adds one, and behaves identically outside loops. The remaining 12 TS18048 are OTHER
 gaps: assignment-in-guard property paths (`if (!state.X) { state.X = new Map() } state.X.set(…)`,
-es2015.ts/builder.ts), `X?.kind === lit && X.parent…` optional-chain discriminants (checker.ts:8061/8062),
-and deep single-use property-path narrowing (options.types / node.name / symbol.valueDeclaration) — each
-a distinct M3.4 sub-cause, not a single bounded slice. 3 local tests (ClosureCapturedLoopNarrowTest)
+es2015.ts/builder.ts — round 416 fix 4 closed the `if (!x.y){x.y=new Map()}` subset, but a
+`state.referencedMap`/`oldState` variant with a NESTED assignment target or deeper join remains),
+`X?.kind === lit && X.parent…` optional-chain discriminants (checker.ts:8061/8062), and deep
+single-use property-path narrowing (options.types / node.name / symbol.valueDeclaration) — each
+a distinct M3.4 sub-cause, not a single bounded slice. **DEAD-END NOTED for the optional-chain case
+(next agent, don't repeat): adding `X?.prop === lit → exclude nullish from X` to `narrowByEquality`
+did NOT flip checker.ts:8061/8062 — the optional-property TS18048 emitter
+(`emitTs18048ForOptionalPropertyAccessReceiver`) narrows the receiver via a path that does not route
+the `&&`-left condition through `narrowByEquality` for the receiver reference (reverted, unverified).
+The real fix needs (a) tracing WHERE that emitter's receiver narrowing consults the flow condition,
+and (b) accepting an ENUM-MEMBER RHS (`SyntaxKind.X`) — `literalTypeOfExpression` returns null for
+enum members, so a literal-only gate misses every real site; use a "RHS is definitely non-nullish"
+check (a possibly-undefined RHS is unsafe: `undefined?.p === undefinedRHS` can be true when X is
+undefined).** 3 local tests (ClosureCapturedLoopNarrowTest)
 with an un-guarded negative control (an un-guarded captured possibly-undefined var in a loop STILL
 fires). META: the productive move was to reproduce a scattered-family member with a minimal test
 (gradle suppresses stdout → assert, don't println), which turned "16 scattered property-path gaps"
