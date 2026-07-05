@@ -34,6 +34,63 @@ completeness campaigns to dashboard-driven burn-down: the acceptance bar is the 
 tsc's source uses, with the corpus suite as the regression net. M5 unchanged —
 performance is the directive's second half and starts at v1 compliance.
 
+**Round 413 (2026-07-05) — M3.4: the builder.ts `Debug.assert(isDefined(state))` TS18048
+blocker (round-412's "highest-value next M3.4 target") is FIXED — and the round-412 depth
+diagnosis was a RED HERRING. Self-compile (compiler profile) 2,373 → 1,966 (−407, TS2339
+614 → 237, TS18048 29 → 16, TS2722 2 → 1); suite 9,105 → 9,113 (+8 local, 0 regressions);
+2 commits (68da80da, c4c8850c).** Started on round-412's flagged target (the walk hits
+`NARROW_MAX_DEPTH` on builder.ts's 3290-node flow graph) and implemented the documented
+M3.4 "tsc-shaped budget consumption" fix (**Item A**, 68da80da): both narrowing walkers
+now follow LINEAR pass-through antecedents — array mutations, and assignments/calls that
+don't narrow the walked reference — ITERATIVELY (tsc's `getTypeAtFlowNode` `while(true)`
+loop) WITHOUT consuming `NARROW_MAX_DEPTH`; only branch/condition/switch/assertion recursion
+consumes depth (tsc's `flowDepth`). The `flowAssignmentMightNarrow`/`flowCallMightNarrow`
+gates over-approximate "narrows" (a too-lax gate would iterate past a real narrowing and
+silently drop it); budget/memo/seen/truncation semantics are unchanged. **BUT Item A was
+DASHBOARD-NEUTRAL (2,373 → 2,373) — an instrumented run (a debug print at every truncation
+point, gated on an env var) showed ZERO narrowing-walk truncations across the whole
+compiler-profile compile, yet the builder.ts FPs PERSISTED. The round-412 "walk hits the
+depth cap" claim was inferred from the file's 3290-node count, NOT measured at the
+truncation — the assert and use are actually CO-LOCATED in `emitBuildInfo` (a short chain),
+so depth was never the issue.** Traced the chain further (`narrowByAssertCall` →
+`resolveFlowCalleeDecl` → `resolveNamespaceMemberFnDecl`) and found the REAL cause:
+`Debug.assert` never RESOLVED (`declResolved=false` ×37). **Item B (c4c8850c, the −407 win):**
+`computeExportedSymbolThroughStars`'s leaf lookup returned ANY local named X — including a
+non-re-exported IMPORT alias. tsc's `_namespaces/ts.ts` does `export * from "../core.js"`
+(core.ts merely IMPORTS `Debug`) BEFORE `export * from "../debug.js"` (debug.ts DECLARES
+`export namespace Debug`), so the star search for `Debug` stopped at core.ts's import alias
+(flags=Alias, no `.exports`) and never reached debug.ts's namespace → `Debug.assert` never
+resolved → `resolveNamespaceMemberFnDecl` returned null → its bare-assert narrowing never
+fired. (This is why round 409's `isDefined` worked — core.ts genuinely declares+exports it —
+but `Debug` didn't.) Fix: gate the leaf on the local being genuinely EXPORTED
+(`name in getModuleNamedExports(file)`, which covers every ESM export form tsc's source
+uses; memoized per file in `moduleNamedExportsCache`). FP-safe: `resolveExportedSymbolThroughStars`
+is consulted ONLY by the round-409+ flow-only resolvers (function/namespace/enum), where
+narrowing only removes union constituents. Barrel-imported `Debug.*` + every barrel guard
+now resolves → TS2339 614 → 237 (−377), the single biggest slice. 8 local tests
+(LinearFlowDepthNarrowingTest ×5: a 3000-node linear chain > `NARROW_MAX_DEPTH` still
+narrows past asserts/conditions/calls + negative/trivial controls; BarrelExportLeafGateTest
+×3: the exact importer-alias-before-declaration collision + non-vacuity + not-over-restrictive
+controls). **Perf: compiler self-compile 72 → 92 s (no-emit) / +42% (emit) — the extra
+narrowing work (many more guards resolve → more relation checks; round 409 saw the same
++16% for the direct-guard case). Correctness-first; perf is M5. Services P0 hang-check
+CLEAN — no hang/crash, all 252 files emitted, 400 s (round 385 baseline was 563 s), and
+services ALSO improved 4,301 → 3,643 (−658, TS2339 1,464 → 863; the barrel-guard fix is
+even bigger on the larger profile) with time essentially FLAT (394 → 400 s, +1.5%) — so
+the +42% on the SMALL compiler profile is single-run/emit noise + a constant, NOT
+algorithmic (exactly round 409's O(n²)-falsifying observation).** **META (the session's hard lesson): an instrumented "does the walk truncate?"
+probe FALSIFIED a documented depth hypothesis and redirected to the real resolution gap.
+Verify a "walk hits the cap" claim by instrumenting the truncation directly, NOT by
+inferring it from a file's node count. Two process gotchas re-confirmed: `pkill -f
+KotlinCompileDaemon` SELF-MATCHES a shell command whose own cmdline contains the pattern
+(exit 144, kills itself) — put the kill in a script file so the running process's cmdline
+is `bash /tmp/x.sh`; and freeing the KotlinCompileDaemon (NOT `gradle --stop`, which wipes
+`build/classes`) is what lets the `-Xmx3g` self-compile fit alongside the gradle daemon.**
+Next M3.4 (deferred): the residual TS2339×237 / TS18048×16 / TS2722×1 — closure-capture
+narrowing, generic-alias resolution, loop-stable narrowing of un-reassigned property paths
+(the round-411-flagged `never`/`Type`/TS2722 residuals); the M3.1 cores (TS2322×785,
+TS7006×301, TS2345×396) remain the long pole.
+
 **Round 412 (2026-07-05) — M3.4: a user type-guard narrows a SINGLE (non-union) type
 DOWN to the guard's declared subtype. Self-compile (compiler profile) 2,374 → 2,373
 (TS18048 30 → 29); suite 9,100 → 9,105 (+5 local, 0 regressions); 1 commit (69284a77).**
@@ -555,7 +612,7 @@ Three strategic reads that shape everything below:
 | Metric | Source | Phase 17 target |
 |---|---|---|
 | Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 9,100 with local tests as of round 411) |
-| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**2,374 measured at round 411**; M1 complete at 2,726/round 389; rounds 395–411 burned bounded histogram-tail buckets + M3.4 flow-narrowing slices 2,726 → 2,374; round 408 the TS2349 "not callable" family −21; round 409 `export *`-barrel / ESM-`.js` imported-guard FLOW narrowing (M3.4) −175 (TS2339 838 → 672); round 410 TS2862 constraint-index-sig gate + assign-RHS type-guard narrowing + void-overload-return −10; round 411 M3.4 enum-member discriminant narrowing (barrel-import-resolved, UpToDateStatus/TypeMapper/PrivateIdentifierInfo) + type-guard-narrows-member-DOWN −59 (TS2339 672 → 614); remaining bounded pool M3.4/M3-gated (a general-`resolveAlias` `.js`/star fix was measured net +297 via a TS2315 flood, reverted; NonNull-strip −17 but unmasks M3, reverted; const-string-enum→`string` relation deferred M3.3/B425); no-stub stays the honest default) |
+| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**1,966 measured at round 413**; M1 complete at 2,726/round 389; rounds 395–413 burned bounded histogram-tail buckets + M3.4 flow-narrowing slices 2,726 → 1,966; round 409 `export *`-barrel / ESM-`.js` imported-guard FLOW narrowing (M3.4) −175 (TS2339 838 → 672); round 411 enum-member discriminant narrowing + type-guard-narrows-member-DOWN −59; round 412 single-type type-guard narrow-DOWN + TS18048 receiver-narrowing −1; **round 413 the `export *` LEAF-EXPORT gate −407 (TS2339 614 → 237): the pre-413 star resolver returned non-exported IMPORT aliases, so barrel-imported `Debug.assert` (& every barrel guard) never resolved — the TRUE builder.ts blocker, NOT the round-412 depth red herring (an instrumented run showed ZERO walk truncations) — plus a dashboard-neutral tsc-faithful linear flow-walk iteration**; remaining bounded pool M3.4/M3-gated (a general-`resolveAlias` `.js`/star fix was measured net +297 via a TS2315 flood, reverted; NonNull-strip −17 but unmasks M3, reverted; const-string-enum→`string` relation deferred M3.3/B425); no-stub stays the honest default) |
 | Project corpus FPs (services/server/…) | `bench/` TSVs (M0.1) | 0 — **the v1 exit** (all 8 profiles) |
 | Conformance adoption | generated-test counts per category | POST-V1 (re-scope 2026-07-03 — see § "Post-v1 backlog", M3.0) |
 | Crashes on any input | bench runs | 0 |
@@ -1095,6 +1152,21 @@ each item still decomposes into a multi-session campaign — read PLAN-PHASE-4.m
   narrowing of un-reassigned property paths / object-literal-method flow) are the next M3.4
   sub-steps — each needs narrowing to survive a FlowLoopLabel / flow into closures + object-literal
   methods, not a bounded slice.**
+  **ALSO DONE (round 413, c4c8850c + 68da80da) — the builder.ts `Debug.assert(isDefined(state))`
+  TS18048 family (round-412's flagged "highest-value M3.4 target") is FIXED, −407 (TS2339 614 →
+  237). The round-412 "walk hits `NARROW_MAX_DEPTH`" diagnosis was a RED HERRING (an instrumented
+  run showed ZERO narrowing-walk truncations; the assert and use are co-located). The real cause:
+  `computeExportedSymbolThroughStars`'s leaf lookup returned a non-re-exported IMPORT alias, so the
+  `export *` search for `Debug` stopped at `core.ts` (which merely IMPORTS `Debug`) before reaching
+  `debug.ts`'s `export namespace Debug` — `Debug.assert` never resolved → its bare-assert narrowing
+  never fired. Gated the leaf on genuine export (`name in getModuleNamedExports(file)`, memoized;
+  flow-only, FP-safe). Barrel-imported `Debug.*` + every barrel guard now resolves. Companion
+  (68da80da, dashboard-neutral): the documented "tsc-shaped budget consumption" sub-item — both
+  narrowing walkers follow LINEAR pass-through antecedents iteratively (tsc's `getTypeAtFlowNode`
+  `while(true)` loop) WITHOUT consuming `NARROW_MAX_DEPTH`; eliminates all depth truncation but
+  the compiler profile never hit it (co-located asserts). Perf: self-compile 72 → 92 s (extra
+  narrowing; M5). LESSON: verify a "walk hits the cap" claim by instrumenting the truncation, NOT
+  by inferring from a file's node count.**
 **M5 — Performance (starts at v1 compliance — the 8 tsc-source profiles compile clean)**
 
 - [ ] **M5.1 Profiling grid**: JFR/async-profiler over the project corpus (cold CLI,
