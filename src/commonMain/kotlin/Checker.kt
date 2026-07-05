@@ -115984,10 +115984,11 @@ interface DataView {
             if ((calleeExpr is Identifier || calleeExpr is PropertyAccessExpression) &&
                 calleeType.types.any { getCallSignaturesOfType(it).isEmpty() }) {
                 var eff: Type = calleeType
-                if (expr.questionDotToken && eff is Type.Union) {
-                    val kept = eff.types.filter { !isNullishConstituent(it) }
+                if (expr.questionDotToken) {
+                    // `calleeType` is smart-cast to Type.Union above (its `.types` was read).
+                    val kept = calleeType.types.filter { !isNullishConstituent(it) }
                     eff = when {
-                        kept.isEmpty() -> eff
+                        kept.isEmpty() -> calleeType
                         kept.size == 1 -> kept[0]
                         else -> getUnionType(kept)
                     }
@@ -132254,8 +132255,32 @@ interface DataView {
         return if (name in tparams) name else null
     }
 
+    // TS2862 fires only for an index-WRITE whose receiver type would otherwise fall
+    // back to a STRING/symbol index signature (tsc checker.ts ~19294:
+    // `accessFlags & NoIndexSignatures && indexInfo.keyType !== numberType`). A bare
+    // `T extends object` (or any constraint WITHOUT a string/symbol index signature)
+    // has no such `indexInfo`, so tsc emits NOTHING — `assign<T extends object>(t: T){ t[p]=… }`
+    // compiles clean. So a type param is TS2862-eligible only when its CONSTRAINT bears a
+    // string/symbol index signature (inline `{ [s: string]: V }`, or `Record<K, V>` with a
+    // string/symbol-like key K, or an intersection containing either). A user `TypeReference`
+    // to an interface with an index signature is a false negative (harmless — we just don't
+    // emit; the corpus tests use `Record`/inline literals, which this covers).
+    private fun typeNodeIsStringOrSymbolKeyLike(t: TypeNode?): Boolean = when (t) {
+        is KeywordTypeNode -> t.kind == SyntaxKind.StringKeyword || t.kind == SyntaxKind.SymbolKeyword
+        is UnionType -> t.types.any { typeNodeIsStringOrSymbolKeyLike(it) }
+        is TypeReference -> (t.typeName as? Identifier)?.text == "PropertyKey" // string | number | symbol
+        else -> false
+    }
+
+    private fun constraintHasStringIndexSignature(c: TypeNode?): Boolean = when (c) {
+        is TypeLiteral -> c.members.any { it is IndexSignature && typeNodeIsStringOrSymbolKeyLike(it.parameters.firstOrNull()?.type) }
+        is IntersectionType -> c.types.any { constraintHasStringIndexSignature(it) }
+        is TypeReference -> (c.typeName as? Identifier)?.text == "Record" && typeNodeIsStringOrSymbolKeyLike(c.typeArguments?.firstOrNull())
+        else -> false
+    }
+
     private fun constrainedTpNames(tps: List<TypeParameter>?): Set<String> =
-        tps?.filter { it.constraint != null }?.map { it.name.text }?.toSet() ?: emptySet()
+        tps?.filter { it.constraint != null && constraintHasStringIndexSignature(it.constraint) }?.map { it.name.text }?.toSet() ?: emptySet()
 
     private fun collectParamTpRefs(params: List<Parameter>, tparams: Set<String>): Map<String, String> {
         val m = mutableMapOf<String, String>()
