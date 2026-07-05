@@ -1,3 +1,177 @@
+# PLAN-PHASE-5 — session-note history
+
+Older Phase 17 session notes trimmed from PLAN-PHASE-5.md (most recent first).
+
+**Round 396 (2026-07-04) — self-compile burn-down, the SECOND bounded bucket from round
+395's by-shape histogram: TS2440 (type-only import merges with a value-only local).
+Self-compile (compiler profile) 2,712 → 2,702 (TS2440 10 → 0), zero corpus regressions,
+suite 8,995 / 0 / 3 (+5 local).** tsc's own `src/compiler` imports the type interfaces
+`Node`/`Identifier`/`Signature`/`Symbol`/`Type`/`Token`/`SourceMapSource`/`NodeLinks`/
+`SymbolLinks` from the `_namespaces/ts.js` `export *` barrel AND declares local
+`function Node`/… (AST/object-allocator helpers) + `const SymbolLinks = class`. The
+import binds the TYPE, the local binds the VALUE (disjoint declaration spaces), so tsc
+reports no error; we FP-emitted TS2440. Fix: `checkImportConflictsWithLocal`'s
+named-specifier loop skips the conflict when `importedNameIsTypeOnlyThroughBarrel(sourceName)`
+(a NEW conservative `export *`-following resolver — `isExportedNameTypeOnly` inspects only
+DIRECT exports, missing barrel-re-exported names; the `.js` specifier needs
+`resolveBarrelStarTarget` since `resolveModuleSpecifier` won't strip `.js`) AND the local
+is `valueOnlyLocalNames` (function + value-var, MINUS class/enum/interface/typealias/
+namespace which have a conflicting type side). **Two LOAD-BEARING gates, both learned the
+hard way: (1) `!options.isolatedModules && !options.verbatimModuleSyntax` — a first cut
+`continue`d unconditionally and the suite gate caught 3 regressions
+(isolatedModulesSketchyAliasLocalMerge ×2, isolatedModulesExportDeclarationType): those
+modes DO error on the merge (TS2865 / TS1484 / TS2440) via the var-conflict + case-3
+emitters BELOW my guard, so the guard must not pre-empt them; the self-compile sets
+neither option so its suppression still fires. (2) the barrel closure is the WHOLE program
+(a barrel `export *`s everything), so the per-(barrel,name) result is memoized
+(`barrelTypeOnlyMemo`, declared BEFORE init per the init-order gotcha) and the recursion
+shares ONE `visited` set — never fresh-per-re-export.** FN-safe: any uncertainty
+(unresolvable star, `export { } from`, `export =`, a value found anywhere) → keeps firing.
+5 local tests (ImportTypeOnlyBarrelMergeTest, ProjectCompiler multi-file): barrel +
+multi-hop type-only-merge positives, a value-import negative control, a local-class
+type-side-conflict negative control. **DEBUGGING SAGA (2 rounds lost, now armored in the
+benchmark memory + a CLAUDE.md gotcha): the fix "hung" the self-compile at the 2-min tool
+timeout — it was MEMORY PRESSURE, not the barrel walk. A manual `-Xmx4g` self-compile atop
+the Gradle daemon (~1.8 GB) + KotlinCompileDaemon (~2.7 GB) exceeds the 7.7 GB box → swap.
+The tell: a helper STUBBED to return false immediately STILL timed out. Fix:
+`./gradlew --stop && pkill -9 -f KotlinCompileDaemon`, verify `free -m` ≥ 5 GB free, then
+run (clean self-compile ~62–74 s / ~850 MB RSS). The bench script sidesteps this (fresh
+JVM); the manual `--listAll` is only for full-FP-list diffing.** This session (rounds 395
++ 396) took the compiler profile 2,726 → 2,702 (−24) on TWO bounded buckets — validating
+the META-LESSON that a "pool picked over / M3-gated" read-only triage is about the
+code-path analysis; bucketing the ACTUAL full `--listAll` output by normalized message
+shape surfaces bounded parser/checker bugs hiding in the histogram tail. **Next bounded
+buckets identified but not yet done (queued for the next session): TS2344×8 (`Type 'T'
+does not satisfy the constraint 'Node'` — a type-param arg `T extends Node` passed to a
+generic `<U extends Node>`; T's constraint SATISFIES the target constraint but we don't
+check the constraint chain in the type-arg path — likely bounded, generic-constraint
+satisfaction) and TS2693×7 (`'symbol' only refers to a type` — a `const { symbol } = node`
+destructured local variable named `symbol` shadowing the type keyword; a function-body
+scope-tracking gap, more involved).**
+
+**Round 395 (2026-07-04) — self-compile burn-down via a bounded PARSER bug the round-394
+"pool picked over" triage missed: the multi-base-generic heritage misparse. Self-compile
+(compiler profile) 2,726 → 2,712 (−14), TS2499 16 → 0, zero corpus regressions, suite
+8,990 / 0 / 3 (+6 local).** Method that found it: bucketed the full `--listAll` output (all
+2,726 error lines, not the 30-line log tail) by normalized message shape. Two bounded
+non-M3 buckets popped that the round-394 code-path triage had not surfaced — TS2499×16
+("An interface can only extend an identifier/qualified-name…") and TS2440×10 ("Import
+declaration conflicts with local declaration"). TS2499 was the documented (CLAUDE.md)
+multi-base-generic-before-comma misparse, marked "NOT yet fixed / parser fix risk-bearing,
+deferred": `interface NodeArray<T> extends ReadonlyArray<T>, TextRange` collapsed the
+non-last generic base `ReadonlyArray<T>` into a value-position instantiation expression
+(synthetic `ParenthesizedExpression`) that DROPPED its `<T>` type args, so `resolveBaseSym`
+returned null AND the checker FP-emitted TS2499. Root cause: `parseExpressionWithTypeArguments`
+uses the general `parseLeftHandSideExpression`, whose postfix `<` branch converts `Foo<T>,`
+into an instantiation expr because `,` is in `canFollowTypeArgumentsInExpression()`; the LAST
+base always worked because `{`/`implements` are NOT in that set. Fix (NOT risk-bearing after
+all — heritage-scoped): a `parsingHeritageBase` flag set around the base spine in
+`parseExpressionWithTypeArguments`, RESET inside `parseArgumentList` (so a nested
+`extends foo(bar<T>)` call arg still parses instantiation exprs); in that context the postfix
+`<` branch bails (`typeArgs != null && parsingHeritageBase -> null`, placed BEFORE the
+instantiation `canFollowTypeArgumentsInExpression()` branch), `tryScan` restores, and the
+type args are re-read as heritage type arguments — matching tsc's
+`parseLeftHandSideExpressionOrHigher` (which yields an ExpressionWithTypeArguments verbatim).
+A genuine heritage call `extends mixin<T>()` (the `(` produces a CallExpression above the
+guard) and a real non-entity-name base (`extends foo()` / `extends (typeof A)`, a
+primary-paren/call not an instantiation collapse) still fire correctly. **Delta breakdown
+(the honest part): −40 removed FPs (16 TS2499 + 8 TS2769 + 7 TS2345 + 3 TS2322 + 2 TS2339
++ 2 TS2430 + 1 TS2740 + 1 TS2353) vs +26 added (20 TS2322 + 4 TS2339 + 1 TS2345 + 1 TS2769)
+= net −14.** ALL 20 added TS2322 are `NodeArray<T>` — the M3.1 generic-inference gap now
+VISIBLE because the correctly-resolved base means the comparison runs (previously
+`hasUnresolvedTypeParams` bailed on the unresolved `ReadonlyArray<T>` base and suppressed it);
+the 4 added TS2339 are `AssignmentPattern`/`PropertyName` union-narrowing (M3.4). So the fix
+un-MASKED latent M3.1/M3.4 FPs (honest attribution, not new wrong behavior — corpus green
+guarantees it) AND restored non-last-generic-base member inheritance. CLAUDE.md's multi-base
+gotcha updated (misparse → FIXED; the B521 `checkMultiBaseInStatement` source-scan workaround
+is now redundant-but-harmless). 6 local tests (MultiBaseGenericHeritageTest): sharp
+member-inheritance signal (`Sub<number>` inheriting `Container<T>.value` → TS2322 on string
+assign, and NOT TS2339), a `extends foo()` TS2499 negative control, a `class implements A<T>, B`
+case, and a single-last-base regression control. **TS2440×10 (utilities.ts/checker.ts local
+`function Node`/`function Identifier` + imported type-only `Node`/`Identifier` interfaces
+through the `_namespaces/ts` barrel — a legal type+value declaration-space merge) is the next
+bounded bucket, but it needs a barrel-following (`export *`) type-only resolver
+(`isExportedNameTypeOnly` only walks DIRECT exports); queued as a follow-up.** META-LESSON
+reinforced: a read-only "pool picked over / M3-gated" verdict is about the code-path triage —
+always bucket the ACTUAL full FP output by message shape; bounded parser/checker bugs hide in
+the histogram tail even when the top families are all M3.
+
+**Round 394 (2026-07-04) — M2.2 burn-down #4: `delete x.<Object.prototype member>`
+now fires TS2790 under real libs. Real-lib A/B recount 29 → 28
+(keywordExpressionInternalComments fixed), zero corpus regressions, suite 8,983 / 0 / 3
+(+6 local).** Root cause (a genuine correctness gap the richer lib EXPOSED, not a
+compensating hardcode): `getApparentType` does NOT fold `Object.prototype`'s members
+(`toString`/`valueOf`/`hasOwnProperty`/…) into an object type's apparent members — it only
+maps type-params → constraints and primitives → wrapper interfaces; a
+`Type.Object`/`Interface`/`Reference` passes through unchanged. Under the embedded lib
+`Array` (value position) resolves to the `Array<any>` INSTANCE, which declares its OWN
+`toString`, so `getPropertyOfType` finds the member and TS2790 fires; under real libs
+`Array` → `ArrayConstructor`, which has NO own `toString` (inherited from
+`Object.prototype`), so the member was missed and no error fired (round 393 had flagged
+this as "we emit NOTHING under real libs — the getApparentType-Object.prototype gap →
+M3"). Fix: an Object.prototype fallback in the TS2790 delete check (Checker.kt ~54234) —
+when the receiver is object-like (`objType is Type.Object`), the member name ∈
+`OBJECT_PROTOTYPE_PROPERTIES`, and the type has no own declaration of it (`propSym ==
+null`), emit TS2790. FP-safe BY CONSTRUCTION: `delete x.<objProtoMember>` is ALWAYS
+TS2790 under strictNullChecks (those members are non-optional and present on every
+object — matches tsc), the fallback is scoped to the 7 Object.prototype names, and a user
+type that declares the name OPTIONALLY still routes through the own-member branch
+(`propSym != null` → optional → no emit). Folding Object.prototype into `getApparentType`
+generally is the broad M3 change (touches every relation) — deliberately NOT done; the
+narrow delete-local fallback closes the one shape the corpus needs and a latent embedded
+FN (`delete x.constructor` etc. where the receiver lacks an own decl). 6 local tests
+(DeleteObjectPrototypeTs2790Test): real-libs positive (toString, valueOf), embedded
+regression control (own-member branch unchanged), own-optional-member negative,
+index-signature-non-prototype-name negative, strictNullChecks-off negative. New CLAUDE.md
+gotcha on the getApparentType Object.prototype gap. **SECOND clean win, same session
+(jsExportMemberMergedWithModuleAugmentation2, A/B 28 → 27): the B553 CJS-string-import
+spelling-suggestion TS2728 now attributes lib-first.** The `emitCjsStringImportMethodAccess`
+walker (`name.<method>()` where `name` is a `string`-typed CJS import → TS2551 "did you mean
+'<sugg>'?" + a TS2728 "declared here") built its related-info via the position-based
+`resolveDeclarationSourceFile`, so under multi-file real libs the suggestion `fixed` (a
+DEPRECATED HTML helper on the real `String` interface) false-matched the large `/index.ts`
+(`/index.ts:8:18528`) instead of `lib.es2015.core.d.ts:--:--`. This is the SAME lib-file
+attribution bug round 392 fixed at three TS2728 builders (`findDeclarationRelatedInfo`, the
+property-suggestion site, `createPropertyDeclaredHereRelatedInfo`) — the B553 walker was
+simply an unwired 4th path. Fix: consult `libFileOfDecl(decl)` (node-first `realLibDeclFile`
+map) BEFORE the position path; the map is empty under the embedded lib so the embedded path
+is byte-identical (guaranteed). The `DEPRECATED_STRING_HTML_HELPERS` override
+(`fixed`/`sub`/`sup`/… → `lib.es2015.core.d.ts`) still fires on top of the node-first
+attribution. 1 local test (RealLibsTs2728FileTest, the multi-file CJS shape). A preventive
+audit of all TS2728 sites found ~7 others still on the position path — all emit at user-decl
+"declared here" positions (duplicate-identifier / user re-decl) that never target a lib
+member, so speculatively wiring them is scope creep; flag them only if a future A/B test
+exercises a spelling-suggestion / missing-lib-member on those paths. **Both fixes are the
+round-317-324 META-LESSON again: a read-only-triage "ENGINE / M3" verdict is about the
+GENERAL fix — a corpus-unique, FP-safe, narrow fallback can still flip a test the triage
+rated engine-gated. Re-check "ENGINE" sub-verdicts against corpus-uniqueness + a
+tightly-gated local fix before trusting them.** Batch A/B run this session also confirmed
+the OTHER five sampled candidates ARE genuinely engine-gated (data, not guessing):
+typedArraysCrossAssignability01 (B496 pin double-emits alongside the real generic
+typed-array relation → M2.3 unwind), narrowingPastLastAssignment (`[]`=`any[]` B87.6 vs
+`number[]` concat-return relation FP), correctOrderOfPromiseMethod (`Promise.all` const-tuple
+inference → M3.1), dissallowSymbolAsWeakType (`new FinalizationRegistry(() => {})` leaves the
+generic `T` unresolved → `f.register(s, null)` FP TS2345 `null ≁ T` → M3.1),
+interfaceAssignmentCompat / mergedClassNamespaceRecordCast (Record materialization / dedicated
+walkers under real libs → M3.3). **Self-compile map refreshed this session (compiler profile,
+`MainKt --noEmit --listAll`, current HEAD): 2,728 errors — round 394's checker changes are
+INERT (delete-TS2790 count 0, confirmed both by a grep of tsc's source finding zero
+`delete x.<objProtoMember>` shapes and by the listAll; TS2728 is related-info-only). The +2
+vs round-389's 2,726 predates this session (intervening commits 390–393 + the warning
+cleanup — most likely the warning-cleanup's `minArgumentCount` correctness fix, which is a
+tsc-more-accurate change, not a regression). The M1.4 family map is STABLE: TS2339×836
+(M3.4 union-receiver narrowing), TS2322×777 (M3.1 generic call-site inference, top shape
+`Type 'T[]'`), TS2345×411, TS7006×303, TS2769×67, TS2366×50, TS18048×34, TS2349×25,
+TS2365/TS2362 (~40 arithmetic), TS2563×27 (B399 heuristic FPs → M3.4). ~70 of the 2,728
+are env-legit: TS2591×43 (`process`/`require`/`Buffer` node globals — resolved by
+`--node-stub`/real @types/node) + TS2563×27 (B399). The rest are the M3 cores — no new
+narrow non-M3 slice remains (M1 peeled them all). Next-session guidance: the M2.2
+narrow-fallback pool is largely picked over (this session's two wins were the last of the
+lib-attribution / apparent-type-gap category); further M2.2 progress is gated on the M3
+engine items these failures share — prefer advancing M2.3 (typed-array/lib-pin unwind, which
+overlaps the M2.2 typedArrays/templateStringsArray/builtinIterator failures) or a decomposed
+M3.1/M3.3/M3.4 sub-step (which unblocks both M2.2 AND the self-compile dashboard).**
+
 **Round 393 (2026-07-04) — M2.2 burn-down #3: the lib-declared utility-alias
 modifier cluster + the redefineArray construct-sig double-emit. Real-lib A/B recount
 34 → 29 corpus failures (omitTypeHelperModifiers01, omitTypeTestErrors01,
