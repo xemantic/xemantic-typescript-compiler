@@ -92103,12 +92103,26 @@ interface DataView {
             }
             return getUnionType(t.types.filter { !checkTypeRelatedTo(it, targetType, assignableRelation) })
         }
-        val matches = checkTypeRelatedTo(t, targetType, assignableRelation)
-        return when {
-            matches == isMatch -> t
-            isMatch -> targetType
-            else -> neverType
+        // Single (non-union) type. Mirror tsc `getNarrowedType`(assumeTrue), which maps
+        // `candidate <: t ? candidate : t <: candidate ? t : t&candidate` — the `candidate <: t`
+        // check comes FIRST so a guard that narrows DOWN to a declared subtype (`state is
+        // StateWithProgram` where StateWithProgram extends State, redefining an optional
+        // `program?` as a required `program`) yields the subtype. The old order checked
+        // `t <: candidate` first and kept the WIDE `t` when true, which our relation engine
+        // over-accepts (an optional source property `program?: T | undefined` satisfies a
+        // required target property `program: T`, so BOTH relations hold) → the narrowed
+        // receiver stayed the wide type and its redefined member stayed possibly-undefined.
+        // Suppression-only: the positive branch only ever narrows to the guard's declared
+        // type; the negative branch is unchanged (`t <: candidate` ⇒ guard always true ⇒
+        // false branch is `never`).
+        if (isMatch) {
+            return when {
+                checkTypeRelatedTo(targetType, t, assignableRelation) -> targetType
+                checkTypeRelatedTo(t, targetType, assignableRelation) -> t
+                else -> targetType
+            }
         }
+        return if (checkTypeRelatedTo(t, targetType, assignableRelation)) neverType else t
     }
 
     /**
@@ -111178,6 +111192,30 @@ interface DataView {
         val apparent = getApparentType(recvOfRecvType)
         val propSym = getPropertyOfType(apparent, info.propName) ?: return
         if (!isOptionalProperty(propSym)) return
+        // Round 412 (M3.4): a user type-guard on the RECEIVER (`Debug.assert(isDefinedProgram(state))`,
+        // `if (isDefinedX(state))`) narrows `state` to a subtype that REDEFINES this optional
+        // property as required non-undefined — but the reference-path narrowing below keys on
+        // `state.program`, and the guard narrows `state` (a DIFFERENT path), so it never applies.
+        // Narrow the RECEIVER PATH instead and re-resolve the property: if the narrowed receiver's
+        // property is present, non-optional, and excludes undefined, the access is safe → suppress.
+        // The flow node is taken from the PROPERTY-ACCESS position (`state.program`, always
+        // recordFlow'd) rather than the bare receiver Identifier (`state`, which the binder does
+        // not always record a flow node for — a captured variable at a nested-function use site),
+        // so the walk reaches the guard/assert on the receiver. FP-safe (narrowing only removes
+        // possibilities); needs the `narrowByCallPredicate` single-type reorder above to actually
+        // narrow DOWN to the guard's declared subtype.
+        val recvPath = getReferencePath(info.recvOfRecv)
+        val recvFlow = getFlowAt(info.recvOfRecv) ?: getFlowAt(info.narrowExpr)
+        if (recvPath != null && recvFlow != null) {
+            val recvNarrowed = narrowTypeFromFlowFollowLoopEntry(recvOfRecvType, recvFlow, recvPath, mutableSetOf(), 0)
+            if (recvNarrowed !== recvOfRecvType) {
+                val np = getPropertyOfType(getApparentType(recvNarrowed), info.propName)
+                if (np != null && !isOptionalProperty(np)) {
+                    val npType = getTypeOfSymbol(np)
+                    if (npType !== anyType && npType !== errorType && !typeIncludesExplicitUndefined(npType)) return
+                }
+            }
+        }
         // Compute the receiver's declared type as `propType | undefined`, then
         // consult loop-aware flow narrowing. If undefined survives narrowing,
         // emit the diagnostic.
