@@ -1045,6 +1045,12 @@ class Checker(
      *  init-order trap would leave a post-init field null during checking. */
     private val starExportSymbolCache = HashMap<String, Symbol?>()
 
+    /** M3.4 (round 413): per-file memo of [getModuleNamedExports] (fileName →
+     *  exported-name set) so [computeExportedSymbolThroughStars]'s leaf gate is
+     *  cheap under the barrel star-chain recursion (a big barrel re-scans dozens of
+     *  files per name otherwise). Declared before `init` per the init-order trap. */
+    private val moduleNamedExportsCache = HashMap<String, Set<String>>()
+
     /** M3.4 (round 409): process-wide memo for [resolveImportedFunctionLikeDecl]
      *  (alias symbol id → target Fn/Method decl, or null). The resolution walks all
      *  binderResults to find the enclosing import + follows the `export *` chain, so
@@ -37063,7 +37069,16 @@ class Checker(
         if (!visited.add(file.fileName)) return null // cycle back-edge
         if (depth > 64) return null // defensive bound → unknowable
         // Direct declaration of the exported name in this file (the leaf of the chain).
-        fileResults[file.fileName]?.locals?.get(name)?.let { return it }
+        // M3.4 (round 413): the local must actually be EXPORTED — `export *` re-exports
+        // only a module's exports, NEVER a non-re-exported IMPORT alias. Without this gate
+        // the star search for `Debug` stops at the FIRST starred file that merely IMPORTS
+        // it (tsc's `core.ts` does `import { Debug } … ; Debug.assert(...)`) — an Alias
+        // local — and never reaches `debug.ts`'s real `export namespace Debug`, so
+        // `Debug.assert` never resolves and its bare-assert narrowing never fires (the true
+        // cause of the builder.ts `state.program` TS18048 family — NOT depth truncation).
+        fileResults[file.fileName]?.locals?.get(name)?.let {
+            if (name in moduleNamedExportsOf(file)) return it
+        }
         for (stmt in file.statements) {
             if (stmt !is ExportDeclaration) continue
             val spec = (stmt.moduleSpecifier as? StringLiteralNode)?.text ?: continue
@@ -37090,6 +37105,10 @@ class Checker(
      * Returns the set of named exports from a source file (excluding 'default').
      * Used by TS2614 checking to determine if named imports exist in the module.
      */
+    /** M3.4 (round 413): memoized [getModuleNamedExports] for the star-chain leaf gate. */
+    private fun moduleNamedExportsOf(file: SourceFile): Set<String> =
+        moduleNamedExportsCache.getOrPut(file.fileName) { getModuleNamedExports(file) }
+
     private fun getModuleNamedExports(file: SourceFile): Set<String> {
         val exports = mutableSetOf<String>()
         for (stmt in file.statements) {
