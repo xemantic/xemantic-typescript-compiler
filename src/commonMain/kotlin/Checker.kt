@@ -92276,6 +92276,24 @@ interface DataView {
      * tags fall back to `t` unchanged (can't be filtered by flags alone).
      */
     private fun narrowByTypeOfGuard(t: Type, guard: String, isMatch: Boolean): Type {
+        // round 408: `typeof x === "function"` cannot be identified by TypeFlags (a
+        // function type carries none — the old code returned `t` unchanged via the
+        // `TypeFlags.None` bail below), but a function value is exactly one with call
+        // OR construct signatures. Filter a union by callability so an optional
+        // callback `F | undefined` narrows to `F` after a `typeof f === "function"`
+        // guard. Conservative: any/unknown/error members are kept on BOTH branches
+        // (they could be a function), and if the filter keeps nothing or removes
+        // nothing, `t` is returned unchanged (never narrow to `never` on this tag).
+        if (guard == "function") {
+            if (t !is Type.Union) return t
+            fun couldBeFn(m: Type): Boolean =
+                m === anyType || m === unknownType || m === errorType ||
+                    getCallSignaturesOfType(m).isNotEmpty() ||
+                    getConstructSignaturesOfType(m).isNotEmpty()
+            val filtered = if (isMatch) t.types.filter { couldBeFn(it) }
+                else t.types.filter { !couldBeFn(it) || it === anyType || it === unknownType || it === errorType }
+            return if (filtered.isEmpty() || filtered.size == t.types.size) t else getUnionType(filtered)
+        }
         val flags = typeofTypeGuardFlags(guard) ?: return t
         if (flags == TypeFlags.None) return t
         if (t is Type.Union) {

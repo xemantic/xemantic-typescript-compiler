@@ -75,6 +75,37 @@ class CalleeNarrowingNotCallableTest {
         )
     }
 
+    /** `typeof fn === "function"` then call — the positive typeof-function guard
+     *  narrows an optional callback to the callable (round 408, narrowByTypeOfGuard). */
+    @Test fun typeofFunctionGuard() {
+        assertNo2349(
+            """
+            // @strict: true
+            let onEvent: ((s: string) => void) | undefined;
+            function fire(s: string) {
+                if (typeof onEvent === "function") {
+                    onEvent(s);
+                }
+            }
+            """.trimIndent() + "\n",
+        )
+    }
+
+    /** `typeof x !== "function"` else-branch: the else keeps only the function member. */
+    @Test fun typeofFunctionNegatedElse() {
+        assertNo2349(
+            """
+            // @strict: true
+            function run(fn: string | (() => void)) {
+                if (typeof fn !== "function") {
+                    return;
+                }
+                fn();
+            }
+            """.trimIndent() + "\n",
+        )
+    }
+
     /** `typeof x === "string" ? x : x()` — the false branch narrows to the callable. */
     @Test fun typeofStringTernaryFalseBranch() {
         assertNo2349(
