@@ -92083,12 +92083,25 @@ interface DataView {
         }
         if (targetType === errorType || targetType === anyType) return t
         if (t is Type.Union) {
-            val filtered = if (isMatch) {
-                t.types.filter { checkTypeRelatedTo(it, targetType, assignableRelation) }
-            } else {
-                t.types.filter { !checkTypeRelatedTo(it, targetType, assignableRelation) }
+            if (isMatch) {
+                // Positive branch — tsc `getNarrowedType` (assumeTrue): for each constituent
+                // `m` vs the guard target `c`, keep `m` when `m <: c` (already more specific),
+                // NARROW DOWN to `c` when `c <: m` (the constituent is a supertype of the
+                // guard's type, e.g. `Expression` narrowed by `is TaggedTemplateExpression`),
+                // else drop it. The old code kept ONLY `m <: c`, so a union whose members are
+                // all supertypes of the target collapsed to `never` (→ FP TS2339 on the
+                // narrowed value). FP-safe: this only ever KEEPS more (never removes a member
+                // the old filter kept), so it can only suppress a false positive.
+                val narrowed = t.types.mapNotNull { member ->
+                    when {
+                        checkTypeRelatedTo(member, targetType, assignableRelation) -> member
+                        checkTypeRelatedTo(targetType, member, assignableRelation) -> targetType
+                        else -> null
+                    }
+                }
+                return getUnionType(narrowed)
             }
-            return getUnionType(filtered)
+            return getUnionType(t.types.filter { !checkTypeRelatedTo(it, targetType, assignableRelation) })
         }
         val matches = checkTypeRelatedTo(t, targetType, assignableRelation)
         return when {
