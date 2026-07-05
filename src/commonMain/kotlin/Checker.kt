@@ -111134,7 +111134,12 @@ interface DataView {
                 if (t != null && t !== errorType) raw = t
             }
         }
-        val narrowed = try { getNarrowedTypeForReference(raw, recv) } catch (_: Exception) { return false }
+        // Round 416: use the loop-ENTRY-following narrowing variant (like the sibling
+        // emitTs18048ForOptionalPropertyAccessReceiver, B81.1c) so a captured var narrowed by a
+        // closure-LOCAL guard BEFORE a loop (`if (!x) return; for (…) x.length`) is not washed out
+        // to its declared type at the loop's FlowLoopLabel — checker.ts:8207 `expandedParams` FP.
+        // FP-safe: it only ever narrows MORE (suppresses), never adds a TS18048.
+        val narrowed = try { getNarrowedTypeForReferenceFollowLoopEntry(raw, recv) } catch (_: Exception) { return false }
         if (narrowed !is Type.Union) return false
         if (narrowed.types.none { it === undefinedType }) return false
         // Require a meaningful non-nullish constituent so this isn't a pure
