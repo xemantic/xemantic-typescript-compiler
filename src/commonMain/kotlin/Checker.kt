@@ -78295,17 +78295,18 @@ interface DataView {
                 thenRet && elseBranch != null && statementAlwaysReturns(elseBranch)
             }
             is WhileStatement -> {
-                // while(true) with no break always terminates (infinite loop or always throws/returns)
-                isAlwaysTrue(stmt.expression) && !containsBreakOrReturn(stmt.statement)
+                // while(true) with no break always terminates (infinite loop, or every
+                // exit is a return/throw — control never reaches after the loop)
+                isAlwaysTrue(stmt.expression) && !infiniteLoopFallsThrough(stmt.statement)
             }
             is ForStatement -> {
                 // for(;;) with no break always terminates
-                stmt.condition == null && !containsBreakOrReturn(stmt.statement)
+                stmt.condition == null && !infiniteLoopFallsThrough(stmt.statement)
             }
             is DoStatement -> {
                 // do {} while (false) - body must always return
                 statementAlwaysReturns(stmt.statement) ||
-                    (isAlwaysTrue(stmt.expression) && !containsBreakOrReturn(stmt.statement))
+                    (isAlwaysTrue(stmt.expression) && !infiniteLoopFallsThrough(stmt.statement))
             }
             is SwitchStatement -> {
                 // Switch always returns if it has a default clause and all clauses return
@@ -78336,6 +78337,10 @@ interface DataView {
                 // IIFE or function call that always throws — check for iife pattern
                 when (val expr = stmt.expression) {
                     is CallExpression -> {
+                        // A call to a function/method whose declared return type is `never`
+                        // diverges (`Debug.fail("...")`, `assertNever(x)`), so control never
+                        // continues past it — the endpoint after it is unreachable.
+                        if (callHasNeverReturnAnnotation(expr)) return true
                         val func = expr.expression
                         when (func) {
                             is FunctionExpression -> {
@@ -78472,56 +78477,94 @@ interface DataView {
         }
     }
 
-    private fun containsBreakOrReturn(stmt: Statement): Boolean {
+    /**
+     * TS2366/TS7030/TS2355 helper: does the body of an INFINITE loop (`while(true)`,
+     * `for(;;)`, `do..while(true)`) contain a `break` that would exit THIS loop — i.e.
+     * let control fall through to the statement AFTER the loop?
+     *
+     * A plain `return`/`throw` inside the loop is deliberately NOT counted (this is the
+     * one difference from the earlier `containsBreakOrReturn`): a return exits the
+     * enclosing FUNCTION, so control never reaches after the loop and the loop's
+     * endpoint stays unreachable — `while (true) { return x; }` is a terminating
+     * statement, exactly as tsc's reachability analysis models it. Counting the return
+     * was ~17 self-compile TS2366 false positives on infinite-loop helpers
+     * (unwrapInnermostStatementOfLabel, skipTrivia, the scanner's char loops, …).
+     *
+     * A LABELED break in a NESTED loop still counts (it escapes THIS loop too —
+     * reachabilityChecks5/6 f11: `do { do { break test; } while(true); } while(true)`,
+     * where the inner do's `break test` also escapes the outer do), so nested loops are
+     * scanned for labeled breaks via [containsLabeledBreakEscaping].
+     */
+    private fun infiniteLoopFallsThrough(stmt: Statement): Boolean {
         return when (stmt) {
-            is BreakStatement -> true
-            is ReturnStatement -> true
-            is Block -> stmt.statements.any { containsBreakOrReturn(it) }
-            is IfStatement -> containsBreakOrReturn(stmt.thenStatement) ||
-                (stmt.elseStatement?.let { containsBreakOrReturn(it) } ?: false)
-            is LabeledStatement -> containsBreakOrReturn(stmt.statement)
-            // Recurse into nested loops/switches looking for LABELED breaks
-            // (unlabeled break exits the inner loop only — doesn't affect outer)
-            // or return statements (those exit the enclosing function entirely).
-            // Required for reachabilityChecks5/6 f11: `do { do { break test; } while(true) } while(true)`
-            // — the inner do's `break test` escapes the outer do too, so the outer
-            // do is NOT a truly-infinite loop and the function does NOT always return.
-            is WhileStatement -> containsLabeledBreakOrReturn(stmt.statement)
-            is DoStatement -> containsLabeledBreakOrReturn(stmt.statement)
-            is ForStatement -> containsLabeledBreakOrReturn(stmt.statement)
-            is ForInStatement -> containsLabeledBreakOrReturn(stmt.statement)
-            is ForOfStatement -> containsLabeledBreakOrReturn(stmt.statement)
+            is BreakStatement -> true  // any break at THIS level exits this loop
+            is Block -> stmt.statements.any { infiniteLoopFallsThrough(it) }
+            is IfStatement -> infiniteLoopFallsThrough(stmt.thenStatement) ||
+                (stmt.elseStatement?.let { infiniteLoopFallsThrough(it) } ?: false)
+            is LabeledStatement -> infiniteLoopFallsThrough(stmt.statement)
+            // A nested loop only lets control escape THIS loop via a LABELED break
+            // (an unlabeled break exits the inner loop only).
+            is WhileStatement -> containsLabeledBreakEscaping(stmt.statement)
+            is DoStatement -> containsLabeledBreakEscaping(stmt.statement)
+            is ForStatement -> containsLabeledBreakEscaping(stmt.statement)
+            is ForInStatement -> containsLabeledBreakEscaping(stmt.statement)
+            is ForOfStatement -> containsLabeledBreakEscaping(stmt.statement)
             else -> false
         }
     }
 
     /**
-     * Like [containsBreakOrReturn] but unlabeled breaks are NOT counted — only
-     * labeled breaks (which escape further than the immediately-enclosing loop)
-     * and return statements. Used by [containsBreakOrReturn] when recursing into
-     * nested loops to ask "would something inside this nested loop ALSO exit the
-     * outer loop?".
+     * Like [infiniteLoopFallsThrough] but only LABELED breaks are counted (an
+     * unlabeled break exits the immediately-enclosing loop/switch only, so it does
+     * not escape the OUTER loop this helper is recursing into). Plain `return`/`throw`
+     * is excluded for the same reason as in [infiniteLoopFallsThrough] — it exits the
+     * function, not the loop.
      */
-    private fun containsLabeledBreakOrReturn(stmt: Statement): Boolean {
+    private fun containsLabeledBreakEscaping(stmt: Statement): Boolean {
         return when (stmt) {
             is BreakStatement -> stmt.label != null  // only LABELED breaks escape further
-            is ReturnStatement -> true
-            is Block -> stmt.statements.any { containsLabeledBreakOrReturn(it) }
-            is IfStatement -> containsLabeledBreakOrReturn(stmt.thenStatement) ||
-                (stmt.elseStatement?.let { containsLabeledBreakOrReturn(it) } ?: false)
-            is LabeledStatement -> containsLabeledBreakOrReturn(stmt.statement)
-            is WhileStatement -> containsLabeledBreakOrReturn(stmt.statement)
-            is DoStatement -> containsLabeledBreakOrReturn(stmt.statement)
-            is ForStatement -> containsLabeledBreakOrReturn(stmt.statement)
-            is ForInStatement -> containsLabeledBreakOrReturn(stmt.statement)
-            is ForOfStatement -> containsLabeledBreakOrReturn(stmt.statement)
+            is Block -> stmt.statements.any { containsLabeledBreakEscaping(it) }
+            is IfStatement -> containsLabeledBreakEscaping(stmt.thenStatement) ||
+                (stmt.elseStatement?.let { containsLabeledBreakEscaping(it) } ?: false)
+            is LabeledStatement -> containsLabeledBreakEscaping(stmt.statement)
+            is WhileStatement -> containsLabeledBreakEscaping(stmt.statement)
+            is DoStatement -> containsLabeledBreakEscaping(stmt.statement)
+            is ForStatement -> containsLabeledBreakEscaping(stmt.statement)
+            is ForInStatement -> containsLabeledBreakEscaping(stmt.statement)
+            is ForOfStatement -> containsLabeledBreakEscaping(stmt.statement)
             is TryStatement -> {
-                stmt.tryBlock.statements.any { containsLabeledBreakOrReturn(it) } ||
-                (stmt.catchClause?.block?.statements?.any { containsLabeledBreakOrReturn(it) } ?: false) ||
-                (stmt.finallyBlock?.statements?.any { containsLabeledBreakOrReturn(it) } ?: false)
+                stmt.tryBlock.statements.any { containsLabeledBreakEscaping(it) } ||
+                (stmt.catchClause?.block?.statements?.any { containsLabeledBreakEscaping(it) } ?: false) ||
+                (stmt.finallyBlock?.statements?.any { containsLabeledBreakEscaping(it) } ?: false)
             }
             else -> false
         }
+    }
+
+    /**
+     * TS2366/TS7030/TS2355 helper (round 414): does [call] invoke a function or method
+     * whose declared return type is `never`? Such a call diverges (`Debug.fail("...")`,
+     * `assertNever(x)`, `Debug.failBadSyntaxKind(...)`), so a trailing
+     * `Debug.fail("...");` expression statement makes the enclosing function's endpoint
+     * unreachable — no implicit-return diagnostic should fire (tsc's own `firstIterator`,
+     * `sys.ts`'s hosts, the parser's error helpers were ~11 self-compile false positives).
+     *
+     * The callee is resolved via [resolveFlowCalleeDecl], which follows import aliases
+     * and `export *` barrels (tsc's `Debug` is barrel-imported through
+     * `_namespaces/ts.js`) and handles BOTH an Identifier callee (`assertNever(x)`) and a
+     * namespace-member PropertyAccess callee (`Debug.fail(...)`) — the earlier
+     * [isNeverReturningExpression] handled only the direct-Identifier/globals case.
+     * FP-safe: an explicit `: never` return annotation is authoritative — the call
+     * provably cannot return normally.
+     */
+    private fun callHasNeverReturnAnnotation(call: CallExpression): Boolean {
+        val callee = unwrapParensExpr(call.expression)
+        val retType = when (val decl = resolveFlowCalleeDecl(call, callee)) {
+            is FunctionDeclaration -> decl.type
+            is MethodDeclaration -> decl.type
+            else -> null
+        } ?: return false
+        return retType is KeywordTypeNode && retType.kind == SyntaxKind.NeverKeyword
     }
 
     // -----------------------------------------------------------------------
