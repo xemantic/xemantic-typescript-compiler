@@ -34,6 +34,39 @@ completeness campaigns to dashboard-driven burn-down: the acceptance bar is the 
 tsc's source uses, with the corpus suite as the regression net. M5 unchanged —
 performance is the directive's second half and starts at v1 compliance.
 
+**Round 406 (2026-07-05) — M1.12 continued: TWO more bounded self-compile FPs killed by
+bucketing the fresh full `--listAll` output (self-compile 2,663 → 2,659, −4). Suite 9,034 →
+9,043 (+9 local, 0 regressions); 2 commits.** Re-ran the compiler-profile `--listAll` (68 s,
+2,663 confirmed) and bucketed all 2,663 lines by normalized message shape — the M1.12 method.
+Two clean bounded buckets popped that round 405 hadn't reached (round 405 only worked the
+30-line log tail's TS2774/TS7019). **(1) TS1100×2 (`types.ts:3030`/`:3117` `interface
+CallExpression { readonly arguments: NodeArray<Expression>; }` / `interface NewExpression {
+readonly arguments?: … }`):** the `InterfaceDeclaration` branch of `checkStrictModeInStatement`
+checked the property NAME itself via `checkStrictModeName`, FP-ing TS1100. tsc's
+`checkStrictModeEvalOrArguments` fires ONLY for binding names (variable/parameter/function names
++ assignment LHS) — a property/method NAME is never restricted (`interface I { arguments: T }`
+is legal). Fix: removed the `PropertyDeclaration` name-check arm; kept the method/index PARAM
+checks. **(2) TS7023×2 (`checker.ts:35924` `getMutableArrayOrTupleType`, `:43622`
+`unwrapAwaitedType`):** both are `return t.flags & Union ? mapType(t, self) : concreteBranch;` —
+the self-reference appears ONLY as a callback ARGUMENT to `mapType`, where it receives a
+contextual parameter type from `mapType`'s signature, so self's own return type is never needed
+to type the call, and the other branches supply a concrete type. tsc emits no TS7023.
+`checkIndirectSelfReferenceReturn`'s crude `anyIndirect` heuristic (anything that isn't a
+top-level direct self-call/ref) caught it. Fix: new `selfRefsOnlyAsCallbackArgs(expr, name)`
+walker — a self-reference is safe iff EVERY occurrence is a direct `CallExpression` argument;
+array/object element, element-access base, property receiver, operand, and callee positions stay
+stuck → TS7023 still fires (`[self][0]()`, `{ next: self }`). Both fixes FP-safe by
+construction with negative-control local tests (a strict-mode `var arguments` still fires
+TS1100; `[self][0]()` / object-literal-value still fire TS7023). Diff = exactly the 4 lines
+removed, nothing added. 9 local tests (StrictModeInterfacePropertyTest ×5,
+CircularReturnCallbackArgTest ×4). **META: round 405's "bounded pool exhausted" was about the
+LOG TAIL — bucketing the FULL 2,663-line listAll surfaced two more, exactly the M1.12 method's
+promise. After these, the residual bounded pool IS genuinely M3-gated (verified by triaging the
+whole ≤30-count histogram): TS2349×25 = `typeof x === "function"` / `??=` callee narrowing
+(M3.4); the arithmetic ~42, TS2739/TS2741/TS2740 brand-property, TS2722/TS7053, TS2344 enum-subset
+(B425-risky) all M3; TS2591×43/TS2304×2/TS2563×27 env-legit. Next real progress is M2.2 (real-lib
+A/B, next queue item, 27 documented corpus failures) or a decomposed M3.4 slice.**
+
 **Round 405 (2026-07-04) — M1.12 continued: TS2774×1 fixed (self-compile 2,664 → 2,663);
 TS7019×4 investigated and RECLASSIFIED to M3.2-gated. Suite 9,031 → 9,034 (+3 local); 1 commit.**
 Same session as round 404, second sub-step. Method: ran a full `--listAll` on the compiler
@@ -541,8 +574,8 @@ Three strategic reads that shape everything below:
 
 | Metric | Source | Phase 17 target |
 |---|---|---|
-| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 9,034 with local tests as of round 405) |
-| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**2,663 measured at round 405**; M1 complete at 2,726/round 389; rounds 395–405 burned bounded histogram-tail buckets 2,726 → 2,663; M1.13/round 404 file-aware intern key was self-compile-neutral, round 405 TS2774 −1; remaining bounded pool exhausted → M3-gated; no-stub stays the honest default) |
+| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 9,043 with local tests as of round 406) |
+| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**2,659 measured at round 406**; M1 complete at 2,726/round 389; rounds 395–406 burned bounded histogram-tail buckets 2,726 → 2,659; M1.13/round 404 file-aware intern key was self-compile-neutral, round 405 TS2774 −1, round 406 TS1100+TS7023 −4; remaining bounded pool M3-gated; no-stub stays the honest default) |
 | Project corpus FPs (services/server/…) | `bench/` TSVs (M0.1) | 0 — **the v1 exit** (all 8 profiles) |
 | Conformance adoption | generated-test counts per category | POST-V1 (re-scope 2026-07-03 — see § "Post-v1 backlog", M3.0) |
 | Crashes on any input | bench runs | 0 |
@@ -849,8 +882,13 @@ Three strategic reads that shape everything below:
   `isUncalledShadowed`/`lookupUncalledTypedLocal` for an enclosing scope on the stack) rather
   than the unreliable global resolution — a boolean param → boolean (no TS2774), a same-scope
   local FUNCTION → still callable (genuine `let f = localFn; if (f)` keeps firing). 3 local tests
-  (UncalledFunctionParamTypeTest).** **The bounded pool is genuinely thin now — remaining
-  candidates + M3-family (self-compile at 2,663 after round 405):** TS2740×1 (the tsc `createSet()`
+  (UncalledFunctionParamTypeTest).** **Round 406 killed TWO more by bucketing the FULL 2,663-line
+  `--listAll` (not the log tail): TS1100×2 (`interface { arguments: … }` — the InterfaceDeclaration
+  branch checked the property NAME; a property/method name is never binding-name-restricted) and
+  TS7023×2 (`return cond ? mapType(t, self) : concrete` — self as a callback ARG receives a
+  contextual param type and breaks the inference cycle; `selfRefsOnlyAsCallbackArgs` gate). Self-compile
+  2,663 → 2,659.** **The bounded pool is genuinely thin now — remaining
+  candidates + M3-family (self-compile at 2,659 after round 406):** TS2740×1 (the tsc `createSet()`
   Set shim FP: our embedded Set carries the es2024 set-methods `union`/`intersection`/… that es2020
   shouldn't have — gating them behind `LIB_MIN_TARGET` es2024 is risky per the "and N more"
   count-shift gotcha + the `setMethods` corpus test depends on them; DEFERRED), **TS7019×4
