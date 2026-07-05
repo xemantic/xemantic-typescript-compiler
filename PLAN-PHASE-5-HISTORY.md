@@ -1,3 +1,61 @@
+**Round 393 (2026-07-04) — M2.2 burn-down #3: the lib-declared utility-alias
+modifier cluster + the redefineArray construct-sig double-emit. Real-lib A/B recount
+34 → 29 corpus failures (omitTypeHelperModifiers01, omitTypeTestErrors01,
+intersectionsAndOptionalProperties, parameterListAsTupleType, redefineArray fixed),
+zero corpus regressions, suite 8,977 / 0 / 3 (+6 local).** Two fixes, both "fix by
+convergence" (make the real-lib path behave like the embedded path that already passes
+the corpus): (1) **Utility-alias materializer routing.** Under `useRealLibs` the lib's
+`Pick`/`Omit`/`Readonly`/`Parameters`/`ConstructorParameters`/`ReturnType` resolve to a
+real `TypeAlias` symbol, so `getTypeFromTypeReference`'s generic alias-substitution path
+expands their real definitions — `Omit<T,K> = Pick<T, Exclude<keyof T,K>>` → the
+non-homomorphic mapped type `{ [P in K]: T[P] }` — and DROPS the optional/readonly
+modifiers (our `getTypeFromMappedType` doesn't yet treat `[P in K extends keyof T]` as
+homomorphic → M3.3). The embedded lib does NOT declare these names, so under it they hit
+the modifier-preserving `materialize*` dispatch (symbol==null). New
+`isBuiltinUtilityAlias(name, symbol)` (name ∈ the six utilities +
+`symbol.declarations.all { it in builtinLibDecls }`) routes a lib-only utility symbol
+through the same materializers so both paths agree — the materializers REUSE the source
+property Symbols, so `readonly`/`?` survive. Fixed 4 (Omit modifier-preservation +
+key-removal; Parameters/ConstructorParameters signature utilities). Real-libs-only in
+practice (embedded resolves these to null → byte-identical); a user `type Omit<…>` shadow
+keeps a non-lib declaration → gate false → user def wins (negative-control test).
+(2) **redefineArray construct-sig double-emit.** Under real libs `ArrayConstructor`
+carries a construct signature, so `Array = fn` fired BOTH B444's TS2739 (missing
+isArray/from/of/[Symbol.species]) AND a construct-/call-sig mismatch TS2322 — tsc reports
+a structural relation failure ONCE (the missing-property error). Guarded the assignment
+path's 17.111 construct-sig branch AND the general `canUse && !isAssignable` block with
+`!targetHasRequiredPropAbsentFromSource(source, tt)`. **LANDMINE:
+`collectMissingProperties`/`getMissingRequiredPropertySymbol` BAIL (return empty/null)
+when `source.members` is null — a bare-function source (`callSignatures` only) has null
+members — so a new null-tolerant helper was required.** The guard fires ONLY when props
+are genuinely missing, so a source satisfying all named props but failing only the
+signature still reports the coarse TS2322 (positive control: a construct-only interface
+`{new():X}` with no named props → no missing → TS2322 stands). 6 local tests
+(RealLibsUtilityModifiersTest ×4, RealLibsCtorAssignTest ×2). No self-compile dashboard
+delta (corpus-A/B fixes; default stays off). **Triage of the remaining 29 (for the next
+burn-down): mostly M3 engine** — mapped/conditional/indexed-access/variance
+(requiredMappedTypeModifierTrumpsVariance keeps the `Required<>` wrapper in display +
+Required's modifier flip; mappedTypeGenericWithKnownKeys wants TS2862 generic-Record;
+mappedTypeIndexedAccessConstraint, specialIntersectionsInMappedTypes, keyRemappingKeyofResult,
+genericIndexedAccessVarianceComparisonResultCorrect), intrinsic string-mapping
+(stringMappingAssignability `Uppercase<string>`), Iterator abstract inheritance
+(builtinIterator); **DOM-dependent** (`@lib: dom` — divergentAccessorsTypes6/8,
+truthinessCallExpressionCoercion2 → post-v1/M2.4); **M2.3 pin-unwind**
+(typedArraysCrossAssignability01's generic `Uint8Array<ArrayBuffer>` needs the B496 pin
+retired + the real typed-array structural relation; templateStringsArrayTypeRedefinedInES6Mode
+is NOT a simple B533 gate — verified the actual real-lib diff: the empty `class
+TemplateStringsArray {}` merges with the real `interface TemplateStringsArray extends
+ReadonlyArray<string>`, and the GENERAL arg-check missing-prop path fires a SECOND TS2345
+whose message is INHERITED-FIRST + wrong (`length, concat, join, slice, and 17 more` +
+a spurious TS2728 `'length' is declared here`) — tsc lists the OWN merged member `raw`
+FIRST (`raw, length, concat, join, and 17 more`) with NO TS2728 for a ≥2-missing set.
+B533's HARDCODED message is the correct one, so the fix is to suppress the GENERAL path
+here (own-member-first ordering under class+interface merge + multi-missing TS2728
+suppression), NOT to gate B533); **apparent-type Object.prototype gap** (keywordExpressionInternalComments
+`delete Array.toString` — `getApparentType(interface)` must include Object.prototype's
+`toString` for the TS2790 delete check to resolve the member → M3); **checkJs augmentation**
+(jsExportMemberMergedWithModuleAugmentation2). None are clean-win-shaped like Omit/redefine.
+
 # PLAN-PHASE-5 session-note history
 
 **Round 392 (2026-07-04) — M2.2 burn-down #2: the TS2728 lib-file-attribution

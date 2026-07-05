@@ -34,6 +34,53 @@ completeness campaigns to dashboard-driven burn-down: the acceptance bar is the 
 tsc's source uses, with the corpus suite as the regression net. M5 unchanged —
 performance is the directive's second half and starts at v1 compliance.
 
+**Round 409 (2026-07-05) — M3.4: user type-guards/asserts imported through `export *` barrels
+(and ESM `.js` specifiers) now NARROW — the round-408-flagged "next high-yield M3.4/cross-file
+sub-step". Self-compile (compiler profile) 2,618 → 2,443 (−175, TS2339 838 → 672); suite
+9,066 → 9,074 (+8 local, 0 regressions); 1 commit (8f22d126).** tsc's own sources import
+everything via `import { some, isDefined, Debug, … } from "./_namespaces/ts.js"` where the barrel
+is `export * from "../core.js"; …`, so an imported guard/assert never narrowed — the pervasive
+root cause behind a large TS18048/TS2339/TS2722/TS2349 slice. **TWO independent gaps blocked
+resolution (round 408's naive "wire resolveAlias into resolveFlowCalleeDecl" was inert because of
+the FIRST, undiscovered until this session):** (1) `resolveModuleSpecifier` deliberately won't
+strip the ESM `.js`/.jsx/.mjs/.cjs extension (CLAUDE.md TS2459 FP-avoidance) → `resolveAlias`
+could not resolve ANY `.js`-suffixed import (tsc uses `.js` specifiers everywhere), so even a
+DIRECT imported guard failed; (2) even resolved, `targetFile.locals[name]` misses through an
+`export *` re-export barrel. **CRITICAL SCOPING LESSON (measured, not assumed): the fix is
+deliberately FLOW-ONLY.** A first cut added the `.js`+`export *`-star fallback to the GENERAL
+`resolveAlias` (the clean, general fix the round-408 note's phrasing suggested) — the corpus stayed
+green (0 corpus tests use `.js`/`export *` imports) BUT the compiler-profile self-compile REGRESSED
+2,618 → 2,915 (+297) with a TS2315×466 flood: resolving barrel-imported TYPE references generally
+exposed our generic-arity / type-resolution gaps (M3). Reverted the resolveAlias change to
+byte-identical and scoped resolution to the flow walkers via a dedicated
+`resolveImportedFunctionLikeDecl` (memoized process-wide in `importedGuardDeclCache` — the
+services-hang firewall) that finds the ImportSpecifier's module (`.js`-tolerant
+`resolveAliasJsModuleSpecifier`) + follows `export *` via the new `resolveExportedSymbolThroughStars`
+(the SYMBOL-resolving companion to M1.1's `getModuleExportsFollowingStars`, which only followed
+stars for NAME existence). FP-safe: flow narrowing only REMOVES union constituents → can suppress a
+false positive, never add one. **ALSO fixed the generic guard `isDefined<T>(x: T | undefined): x is
+T` (tsc's own `isDefined`, pervasive): `collectPredicateTpBindings`' UnionType branch now binds a
+SINGLE naked type-param member to the actual constituents no concrete member covers (tsc's
+naked-type-parameter union inference) — before, bare-TP union members were skipped as ambiguous, so
+T never bound and the guard didn't narrow.** 8 local tests (BarrelImportedGuardNarrowingTest):
+type-guard then/else, generic `isDefined`, `asserts x is T`, multi-hop `export *` chain, renamed
+re-export specifier, + 2 negative controls (a non-guard call and a pre-guard call both still fire
+TS2345). **Perf: compiler profile ~61 s → ~71 s (+16%) — the additional narrowing work itself (the
+memo doesn't change it; more imported guards resolve → more relation checks); correctness-first,
+perf is M5. Services hang-check (round-408 P0 firewall requirement): CLEAN — no hang, no crash, all
+252 files emitted, lowest FP count ever (4,301), and time FLAT (+0.3%) despite services being the
+BIGGER input (260k LOC) while the smaller compiler profile was +16% — the OPPOSITE of what an O(n²)
+blowup would show, confirming the +16% is single-run noise + a small constant, not algorithmic.**
+META (re-confirms rounds 407/408): a read-only "M3-gated" verdict is about the GENERAL fix; a
+decomposed, tightly-scoped FP-safe slice (here: flow-only narrowing resolution) flips a whole
+cross-file family even while the general resolveAlias / M3 engine stays as-is — and "the clean
+general fix" can be a dashboard REGRESSION that only the self-compile (not the corpus) reveals, so
+measure the profile before trusting generality. Next high-yield M3.4 sub-steps: the barrel-imported
+NAMESPACE-member assert case (`Debug.assertIsDefined` — `resolveNamespaceMemberFnDecl` still routes
+through the general `resolveAlias`, which stays byte-identical, so it does NOT resolve the
+barrel-imported `Debug` namespace; a flow-only namespace-resolution variant would flip the round-408
+unreproducible ×3 assert cases) and the TS2322×793 / TS7006×301 M3.1 cores.
+
 **Round 408 (2026-07-05) — a decomposed M3.4 slice: the TS2349 "not callable" family (the
 biggest bounded bucket a FRESH full `--listAll` bucketing surfaced INSIDE the round-407
 "M3-gated" tail). Self-compile (compiler profile) 2,639 → 2,618 (−21, TS2349 25 → 5); suite
@@ -454,64 +501,6 @@ engine items these failures share — prefer advancing M2.3 (typed-array/lib-pin
 overlaps the M2.2 typedArrays/templateStringsArray/builtinIterator failures) or a decomposed
 M3.1/M3.3/M3.4 sub-step (which unblocks both M2.2 AND the self-compile dashboard).**
 
-**Round 393 (2026-07-04) — M2.2 burn-down #3: the lib-declared utility-alias
-modifier cluster + the redefineArray construct-sig double-emit. Real-lib A/B recount
-34 → 29 corpus failures (omitTypeHelperModifiers01, omitTypeTestErrors01,
-intersectionsAndOptionalProperties, parameterListAsTupleType, redefineArray fixed),
-zero corpus regressions, suite 8,977 / 0 / 3 (+6 local).** Two fixes, both "fix by
-convergence" (make the real-lib path behave like the embedded path that already passes
-the corpus): (1) **Utility-alias materializer routing.** Under `useRealLibs` the lib's
-`Pick`/`Omit`/`Readonly`/`Parameters`/`ConstructorParameters`/`ReturnType` resolve to a
-real `TypeAlias` symbol, so `getTypeFromTypeReference`'s generic alias-substitution path
-expands their real definitions — `Omit<T,K> = Pick<T, Exclude<keyof T,K>>` → the
-non-homomorphic mapped type `{ [P in K]: T[P] }` — and DROPS the optional/readonly
-modifiers (our `getTypeFromMappedType` doesn't yet treat `[P in K extends keyof T]` as
-homomorphic → M3.3). The embedded lib does NOT declare these names, so under it they hit
-the modifier-preserving `materialize*` dispatch (symbol==null). New
-`isBuiltinUtilityAlias(name, symbol)` (name ∈ the six utilities +
-`symbol.declarations.all { it in builtinLibDecls }`) routes a lib-only utility symbol
-through the same materializers so both paths agree — the materializers REUSE the source
-property Symbols, so `readonly`/`?` survive. Fixed 4 (Omit modifier-preservation +
-key-removal; Parameters/ConstructorParameters signature utilities). Real-libs-only in
-practice (embedded resolves these to null → byte-identical); a user `type Omit<…>` shadow
-keeps a non-lib declaration → gate false → user def wins (negative-control test).
-(2) **redefineArray construct-sig double-emit.** Under real libs `ArrayConstructor`
-carries a construct signature, so `Array = fn` fired BOTH B444's TS2739 (missing
-isArray/from/of/[Symbol.species]) AND a construct-/call-sig mismatch TS2322 — tsc reports
-a structural relation failure ONCE (the missing-property error). Guarded the assignment
-path's 17.111 construct-sig branch AND the general `canUse && !isAssignable` block with
-`!targetHasRequiredPropAbsentFromSource(source, tt)`. **LANDMINE:
-`collectMissingProperties`/`getMissingRequiredPropertySymbol` BAIL (return empty/null)
-when `source.members` is null — a bare-function source (`callSignatures` only) has null
-members — so a new null-tolerant helper was required.** The guard fires ONLY when props
-are genuinely missing, so a source satisfying all named props but failing only the
-signature still reports the coarse TS2322 (positive control: a construct-only interface
-`{new():X}` with no named props → no missing → TS2322 stands). 6 local tests
-(RealLibsUtilityModifiersTest ×4, RealLibsCtorAssignTest ×2). No self-compile dashboard
-delta (corpus-A/B fixes; default stays off). **Triage of the remaining 29 (for the next
-burn-down): mostly M3 engine** — mapped/conditional/indexed-access/variance
-(requiredMappedTypeModifierTrumpsVariance keeps the `Required<>` wrapper in display +
-Required's modifier flip; mappedTypeGenericWithKnownKeys wants TS2862 generic-Record;
-mappedTypeIndexedAccessConstraint, specialIntersectionsInMappedTypes, keyRemappingKeyofResult,
-genericIndexedAccessVarianceComparisonResultCorrect), intrinsic string-mapping
-(stringMappingAssignability `Uppercase<string>`), Iterator abstract inheritance
-(builtinIterator); **DOM-dependent** (`@lib: dom` — divergentAccessorsTypes6/8,
-truthinessCallExpressionCoercion2 → post-v1/M2.4); **M2.3 pin-unwind**
-(typedArraysCrossAssignability01's generic `Uint8Array<ArrayBuffer>` needs the B496 pin
-retired + the real typed-array structural relation; templateStringsArrayTypeRedefinedInES6Mode
-is NOT a simple B533 gate — verified the actual real-lib diff: the empty `class
-TemplateStringsArray {}` merges with the real `interface TemplateStringsArray extends
-ReadonlyArray<string>`, and the GENERAL arg-check missing-prop path fires a SECOND TS2345
-whose message is INHERITED-FIRST + wrong (`length, concat, join, slice, and 17 more` +
-a spurious TS2728 `'length' is declared here`) — tsc lists the OWN merged member `raw`
-FIRST (`raw, length, concat, join, and 17 more`) with NO TS2728 for a ≥2-missing set.
-B533's HARDCODED message is the correct one, so the fix is to suppress the GENERAL path
-here (own-member-first ordering under class+interface merge + multi-missing TS2728
-suppression), NOT to gate B533); **apparent-type Object.prototype gap** (keywordExpressionInternalComments
-`delete Array.toString` — `getApparentType(interface)` must include Object.prototype's
-`toString` for the TS2790 delete check to resolve the member → M3); **checkJs augmentation**
-(jsExportMemberMergedWithModuleAugmentation2). None are clean-win-shaped like Omit/redefine.
-
 ### Mission & strategy
 
 Three strategic reads that shape everything below:
@@ -562,8 +551,8 @@ Three strategic reads that shape everything below:
 
 | Metric | Source | Phase 17 target |
 |---|---|---|
-| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 9,066 with local tests as of round 408) |
-| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**2,618 measured at round 408**; M1 complete at 2,726/round 389; rounds 395–408 burned bounded histogram-tail buckets 2,726 → 2,618; round 407 length-shadow + branded-number + enum-reverse-mapping −22, round 408 the TS2349 "not callable" family (callee flow-narrowing + typeof-function + empty-array-assign) −21; remaining bounded pool M3.4/M3-gated (NonNull-strip attempted −17 but unmasks M3 object-literal/generic gaps, reverted); no-stub stays the honest default) |
+| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 9,074 with local tests as of round 409) |
+| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**2,443 measured at round 409**; M1 complete at 2,726/round 389; rounds 395–409 burned bounded histogram-tail buckets 2,726 → 2,443; round 408 the TS2349 "not callable" family −21; round 409 `export *`-barrel / ESM-`.js` imported-guard FLOW narrowing (M3.4) −175 (TS2339 838 → 672); remaining bounded pool M3.4/M3-gated (a general-`resolveAlias` `.js`/star fix was measured net +297 via a TS2315 flood, reverted; NonNull-strip −17 but unmasks M3, reverted); no-stub stays the honest default) |
 | Project corpus FPs (services/server/…) | `bench/` TSVs (M0.1) | 0 — **the v1 exit** (all 8 profiles) |
 | Conformance adoption | generated-test counts per category | POST-V1 (re-scope 2026-07-03 — see § "Post-v1 backlog", M3.0) |
 | Crashes on any input | bench runs | 0 |
@@ -1047,27 +1036,26 @@ each item still decomposes into a multi-session campaign — read PLAN-PHASE-4.m
   `HasModifiers`; `isGenericTupleType(type) && type.target.…`) — the narrowing
   consumers exist, but predicate-filtering 40-member merged-interface unions (and
   ternary-position narrowing) under-resolves; measure per-consumer before rebuilding.**
-  **NEW (round 408 finding — a well-characterized, HIGH-VALUE shared root cause, NOT yet
-  fixed): a user type-guard / assert imported through an `export *` re-export barrel does
-  NOT narrow, because `resolveAlias` does not follow `export *` for a NAMED import.** tsc's
-  own source imports everything via `import { some, isDefined, Debug, … } from
-  "./_namespaces/ts.js"` where the barrel is `export * from "../core.js"; export * from
-  "../debug.js"; …`. So `resolveFlowCalleeDecl`'s Identifier branch resolves `some`/`isDefined`
-  to the ImportSpecifier alias, and following it via `resolveAlias` STILL fails (the named
-  import through `export *` resolves to null / the ImportSpecifier, not the target
-  `FunctionDeclaration`) → `narrowByCallPredicate`/`narrowByAssertCall` bail → NO narrowing.
-  This is the shared cause behind the round-408 unreproducible assert cases (`Debug.assertIsDefined(machine.onLeft)`
-  — the LOCAL-namespace probe narrowed fine; only the barrel-imported `Debug` failed) AND a
-  large slice of the TS18048/TS2339/TS2722 families (`some(x)` / `isDefined(x)` guards are
-  pervasive). **The M1.1 `getModuleExportsFollowingStars` already follows `export *` for
-  member EXISTENCE (TS2305) — the missing piece is `resolveAlias` returning the target
-  DECLARATION through the same star chain for a named import.** Verified with a ProjectCompiler
-  repro (barrel-imported `isDefined(x)` then `takesString(x)` still FP-fires TS2345 in the
-  then-branch, proving the narrowing is dropped). A naive 2-line "wire resolveAlias into the
-  Identifier branch of resolveFlowCalleeDecl" is INERT (round 408 attempted + reverted —
-  resolveAlias itself doesn't follow the star chain for named imports; it also touches the P0
-  services-hang firewall so the deeper fix needs a services-profile perf check). This is the
-  next high-yield M3.4/cross-file sub-step.
+  **DONE (round 409, 8f22d126) for the Identifier-callee case — a user type-guard / assert
+  imported through an `export *` barrel now NARROWS.** Two independent gaps blocked it (round
+  408's naive "wire resolveAlias into resolveFlowCalleeDecl" was inert because of the FIRST,
+  found only this session): (1) `resolveModuleSpecifier` won't strip the ESM `.js` extension
+  (TS2459 FP-avoidance) → `resolveAlias` couldn't resolve ANY `.js` import (tsc uses `.js`
+  everywhere), so even a DIRECT imported guard failed; (2) `targetFile.locals[name]` misses
+  through an `export *` barrel. Fixed FLOW-ONLY via `resolveImportedFunctionLikeDecl` (memoized;
+  finds the module `.js`-tolerantly + follows `export *` via `resolveExportedSymbolThroughStars`).
+  **Deliberately NOT in the general `resolveAlias` — a first cut there measured a self-compile
+  REGRESSION 2,618 → 2,915 (TS2315×466 flood from resolving barrel-imported TYPES, an M3 gap),
+  reverted.** Self-compile 2,618 → 2,443 (TS2339 838 → 672); services hang-check clean.
+  **STILL OPEN (the next high-yield M3.4/cross-file sub-step): the barrel-imported NAMESPACE-member
+  assert case** (`Debug.assertIsDefined(machine.onLeft)` — the round-408 unreproducible ×3).
+  `resolveNamespaceMemberFnDecl` (the PropertyAccess-callee path) resolves the receiver `Debug`
+  via the general `resolveAlias`, which stays byte-identical (does NOT follow `.js`/`export *`),
+  so the barrel-imported `Debug` namespace still doesn't resolve → the assert never narrows. A
+  flow-only namespace-resolution variant (resolve the receiver alias through `.js`/star to the
+  namespace symbol WITHOUT touching the general resolveAlias cache, mirroring
+  `resolveImportedFunctionLikeDecl`) would flip those. Also pervasive: `some(x)`/`isDefined(x)`
+  Identifier guards across the TS18048/TS2339/TS2722 families are now narrowed.
 **M5 — Performance (starts at v1 compliance — the 8 tsc-source profiles compile clean)**
 
 - [ ] **M5.1 Profiling grid**: JFR/async-profiler over the project corpus (cold CLI,
