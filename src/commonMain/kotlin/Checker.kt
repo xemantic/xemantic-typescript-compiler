@@ -95610,6 +95610,26 @@ interface DataView {
         return acc
     }
 
+    /**
+     * round 408: type of an assignment's RHS, contextually. A fresh EMPTY array
+     * literal `x = []` is contextually typed by the assignment target, so `(x = [])`
+     * has x's array type — NOT the `any[]` we default a bare `[]` to (B87.6). Without
+     * this, the `x || (x = [])` / `x ??= []` default-init idiom types the receiver as
+     * `T[] | any[]`, whose `.push` mis-resolves to a UNION of two differing call
+     * signatures → spurious TS2349. FP-safe: `[]` is assignable to any array type, so
+     * taking the target's type only makes the result more precise (tsc gets `T[]`).
+     * Gated to an Array/ReadonlyArray target Reference; every other RHS keeps the
+     * plain `getTypeOfExpression`.
+     */
+    private fun contextualAssignmentRhsType(leftType: Type, right: Expression): Type {
+        if (right is ArrayLiteralExpression && right.elements.isEmpty() &&
+            leftType is Type.Reference &&
+            leftType.target.symbol?.name.let { it == "Array" || it == "ReadonlyArray" }) {
+            return leftType
+        }
+        return getTypeOfExpression(right)
+    }
+
     /** Result type of `<leftType> <operator> <right>` — the per-operator rules
      *  from [getTypeOfBinaryExpression], extracted so a chain can be folded
      *  iteratively. [leftType] is the already-resolved type of the left operand;
@@ -95648,7 +95668,7 @@ interface DataView {
             SyntaxKind.InstanceOfKeyword, SyntaxKind.InKeyword -> booleanType
 
             // Assignment → type of left
-            SyntaxKind.Equals -> getTypeOfExpression(right)
+            SyntaxKind.Equals -> contextualAssignmentRhsType(leftType, right)
             SyntaxKind.PlusEquals, SyntaxKind.MinusEquals,
             SyntaxKind.AsteriskEquals, SyntaxKind.SlashEquals,
             SyntaxKind.PercentEquals, SyntaxKind.AsteriskAsteriskEquals,
@@ -95658,7 +95678,7 @@ interface DataView {
             // Logical assignment ops — type is the union of LHS (kept) and RHS (assigned).
             SyntaxKind.AmpersandAmpersandEquals, SyntaxKind.BarBarEquals,
             SyntaxKind.QuestionQuestionEquals -> {
-                val rightT = getTypeOfExpression(right)
+                val rightT = contextualAssignmentRhsType(leftType, right)
                 if (leftType === rightT) leftType else getUnionType(listOf(leftType, rightT))
             }
 
