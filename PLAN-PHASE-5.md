@@ -102,7 +102,27 @@ with an un-guarded negative control (an un-guarded captured possibly-undefined v
 fires). META: the productive move was to reproduce a scattered-family member with a minimal test
 (gradle suppresses stdout → assert, don't println), which turned "16 scattered property-path gaps"
 into one crisp loop-wash-out bug the corpus could never surface (single-file, no captured-var-in-loop
-shapes).
+shapes). **(4) assignment-effect narrowing based on the DECLARED type (TS18048 12 → 10):**
+reproducing the es2015.ts `state.labeledNonLocalBreaks` FP found the tsc idiom
+`if (!x.y) { x.y = new Map() } x.y.method()` FPs TS18048 for a PROPERTY-PATH target — but the
+identifier form (`if (!m) { m = new Map() } m.set()`), the straight-line form (`x.y = new Map();
+x.y.m()`), and the guard-return form (`if (!x.y) return; x.y.m()`) all worked. Isolation bisection
+pinned it to a TWO-antecedent branch-join where one antecedent narrows via a property-path
+FlowAssignment: `narrowByAssignmentRhs`'s non-nullish-RHS branch returned
+`narrowByExcludingNullUndefined(antecedent)`, and the then-branch antecedent is `x.y` already
+narrowed to bare `undefined` by the `!x.y` guard — `narrowByExcludingNullUndefined` returns a
+NON-union `undefined` UNCHANGED (nothing to filter), so the then-arm re-adds undefined at the join.
+An assignment OVERWRITES the reference (tsc `getAssignmentReducedType(declared, rhsType)`), so its
+post-state is the DECLARED type minus nullish, independent of the pre-assignment flow narrowing.
+Fixed by threading `declaredType` into `narrowByAssignmentRhs` and basing the exclusion on it
+(straight-line is unaffected — antecedent equals declaredType there; a possibly-undefined RHS still
+doesn't narrow). This is a SHARED narrowing path (TS2454/TS18048/TS2339/TS2345) yet the full suite
+stayed green with ZERO regressions — a principled, tsc-faithful correctness improvement, not a
+scoped emitter tweak. 4 local tests (AssignmentInGuardNarrowTest) incl. a negative control
+(assigning a possibly-undefined value STILL fires). META: the isolation-bisection method (vary ONE
+axis at a time — identifier vs property-path, braces vs none, assign vs return, straight vs
+conditional — until the failing combination is a single cell) turned a vague "property-path
+narrowing gap" into an exact root cause in `narrowByExcludingNullUndefined`'s non-union early-return.
 
 **Round 415 (2026-07-05) — M1.12: TWO clean bounded self-compile fixes from bucketing the fresh
 full `--listAll` by normalized message shape, both FP-safe. Self-compile (compiler profile)
@@ -1033,7 +1053,7 @@ Three strategic reads that shape everything below:
   numbered props as required (the resolved tuple `Type` loses the AST `questionToken`/`OptionalType`
   optionality); the clean fix needs a `SymbolFlags.Optional` bit threaded through tuple building + read
   by `isOptionalProperty`, a broad regression surface (many callers) for 1 instance.**
-  **Round 416 killed THREE bounded families (1,922 → 1,906): (1) TS2365 7 → 5 — a `let`/`var`
+  **Round 416 killed FOUR bounded families (1,922 → 1,904): (1) TS2365 7 → 5 — a `let`/`var`
   local shadowing an outer function (`let min = Number.POSITIVE_INFINITY` shadows `function min` →
   `min < args.length` FP'd `{ <T>(…) } < number`); extended round 407's `const`-only shadow-recording
   to `let`/`var` (records `anyType`, reassignment-proof; the shadow gate is the firewall). (2)
@@ -1044,10 +1064,15 @@ Three strategic reads that shape everything below:
   TS18048 16 → 12 — a captured var narrowed by a closure-LOCAL guard before a loop and read INSIDE
   it (checker.ts:8207 `if (!expandedParams) return; for (…expandedParams.length…)`): the
   closure-capture TS18048 emitter now uses the loop-entry-following narrowing variant so the
-  pre-loop narrowing survives the FlowLoopLabel (M3.4). All FP-safe / suppression-only. Residual:
-  TS2362×4 (reassignment `flags = flags || None` + generic reduceLeft/checkDefined returns) +
-  TS2365×1 (generic `lineCount + T`) + the remaining TS18048×12 (assignment-in-guard property paths,
-  optional-chain discriminants) are M3.4/M3.**
+  pre-loop narrowing survives the FlowLoopLabel (M3.4). (4) TS18048 12 → 10 — assignment-effect
+  narrowing based on the DECLARED type: `if (!x.y) { x.y = new Map() } x.y.method()` FP'd for a
+  property-path target because `narrowByAssignmentRhs` excluded nullish from the pre-assignment
+  narrowed antecedent (bare `undefined`, a no-op) instead of the declared type (an assignment
+  overwrites — tsc `getAssignmentReducedType`). All FP-safe / suppression-only; a shared narrowing
+  path yet zero regressions. Residual: TS2362×4 (reassignment `flags = flags || None` + generic
+  reduceLeft/checkDefined returns) + TS2365×1 (generic `lineCount + T`) + the remaining TS18048×10
+  (further assignment-in-guard cases, optional-chain `X?.kind === lit &&` discriminants, deep
+  single-use property paths) are M3.4/M3.**
 
 **M2 — Real-lib migration (staged; decompose further at start)**
 
