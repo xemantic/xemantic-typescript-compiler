@@ -142195,19 +142195,17 @@ interface DataView {
                                 currentLocalTypes[declName] = objT
                             }
                         } else if (declName != null && decl.type == null &&
-                            stmt.declarationList.flags == SyntaxKind.ConstKeyword &&
                             declName !in currentLocalTypes &&
                             (decl.initializer is PropertyAccessExpression ||
                                 decl.initializer is ElementAccessExpression ||
                                 decl.initializer is CallExpression ||
                                 decl.initializer is NonNullExpression)) {
-                            // An un-annotated `const` whose name SHADOWS an outer same-named
-                            // FUNCTION and whose initializer types to a concrete PRIMITIVE
-                            // records so a later bare-identifier operand resolves to the
+                            // A function-body local whose name SHADOWS an outer same-named
+                            // FUNCTION records so a later bare-identifier operand resolves to the
                             // shadowing local, not past it to the outer function. tsc's own
                             // core.ts exports `function length/min/max(...): number`, which a
-                            // local `const length = arr.length` / `const max = length(sig.tp)`
-                            // shadows — without this, `i < length` / `min < max` types the
+                            // local `const length = arr.length` / `let min = Number.POSITIVE_INFINITY`
+                            // shadows — without this, `i < length` / `min < args.length` types the
                             // operand as the imported function → FP TS2365.
                             //
                             // The SHADOW gate is load-bearing: a non-shadowing local like
@@ -142216,20 +142214,26 @@ interface DataView {
                             // (`statementOffset < numStatements` where statementOffset is an
                             // un-narrowed `number | undefined` param — this pass has no flow
                             // narrowing). Leaving non-shadowing locals as `any` keeps the pass's
-                            // default suppression. Gated to `const` (stable type) + a bare
-                            // primitive intrinsic result (never union/any/object/function).
+                            // default suppression. Gated to a bare property-access/element-access/
+                            // call/non-null initializer (never union/any/object/function).
                             val outerT = getTypeOfExpression(decl.name)
                             if (outerT is Type.Object && outerT.callSignatures?.isNotEmpty() == true) {
-                                // Record the concrete primitive when determinable, else `anyType`.
-                                // Because the name shadows a FUNCTION (gate above), an `any`
-                                // fallback only SUPPRESSES the bogus `<operand> op <thisLocal>`
-                                // check (an `any` operand bails) — it cannot unmask anything, and
-                                // it catches the cases where the initializer (`outer.length` on a
-                                // narrowed-union receiver this pass can't resolve) types to `any`.
+                                // A `const` (stable type) records the concrete primitive when
+                                // determinable so a later comparison can still catch a real error
+                                // on the OTHER operand; a `let`/`var` (round 416: checker.ts's
+                                // `let min = Number.POSITIVE_INFINITY` shadowing `function min`)
+                                // records `anyType` — the shadow is what kills the FP, and `any`
+                                // is reassignment-proof (a `let` may be reassigned to a different
+                                // primitive, so recording its INITIAL type could FP a later
+                                // comparison; `any` only ever SUPPRESSES the bogus operand check).
+                                // The `any` fallback for a const also catches an initializer
+                                // (`outer.length` on a narrowed-union receiver this pass can't
+                                // resolve) that types to `any`.
+                                val isConst = stmt.declarationList.flags == SyntaxKind.ConstKeyword
                                 val initT = getTypeOfExpression(decl.initializer)
                                 currentLocalTypes[declName] =
-                                    if (initT === numberType || initT === stringType ||
-                                        initT === booleanType || initT === bigintType) initT
+                                    if (isConst && (initT === numberType || initT === stringType ||
+                                        initT === booleanType || initT === bigintType)) initT
                                     else anyType
                             }
                         }

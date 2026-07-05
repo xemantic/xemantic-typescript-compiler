@@ -110,4 +110,30 @@ class ArithmeticShadowedFunctionLocalTest {
                 d.joinToString { "TS${it.code}: ${it.message}" },
         )
     }
+
+    @Test
+    fun `local LET shadowing an outer function used in a comparison - no TS2365`() {
+        // Round 416: checker.ts's `let min = Number.POSITIVE_INFINITY` shadows the imported
+        // `function min<T>(...)`, and `if (min < args.length && args.length < max)` FP'd TS2365
+        // "Operator '<' cannot be applied to types '{ <T>(...) }' and 'number'." The round-407
+        // recording was gated to `const`; extend to `let`/`var` (recording `anyType`, which is
+        // reassignment-proof — the shadow is what kills the FP).
+        val d = diags(
+            """
+            export function min(items: readonly number[]): number { return items[0]; }
+            export function max(items: readonly number[]): number { return items[0]; }
+            export function f(args: readonly number[]): void {
+                let min = Number.POSITIVE_INFINITY;
+                let max = Number.NEGATIVE_INFINITY;
+                for (const n of args) { if (n < min) min = n; max = Math.max(max, n); }
+                if (min < args.length && args.length < max) { return; }
+            }
+            """,
+        )
+        assertTrue(
+            d.none { it.code == 2365 },
+            "`let min`/`let max` shadowing the outer functions → `min < args.length` is number<number, no TS2365; got: " +
+                d.joinToString { "TS${it.code}: ${it.message}" },
+        )
+    }
 }
