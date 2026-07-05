@@ -34,6 +34,70 @@ completeness campaigns to dashboard-driven burn-down: the acceptance bar is the 
 tsc's source uses, with the corpus suite as the regression net. M5 unchanged —
 performance is the directive's second half and starts at v1 compliance.
 
+**Round 415 (2026-07-05) — M1.12: TWO clean bounded self-compile fixes from bucketing the fresh
+full `--listAll` by normalized message shape, both FP-safe. Self-compile (compiler profile)
+1,930 → 1,922 (−8); suite 9,134 → 9,145 (+11 local, 0 regressions); 2 commits (4c768bb7, a647aa74).**
+Method (the M1.12 note): re-ran `--listAll` at HEAD (1,930, 100 s), bucketed all lines by
+normalized shape — the M3 cores dominate (TS2322×785 / TS2345×396 / TS7006×301 / TS2339×237, all
+engine-gated) but two bounded tail buckets were genuine bugs. **(1) NonNull arithmetic operand
+(TS2362 15 → 10, −5):** a `x!` (NonNullExpression) arithmetic/comparison operand whose base type is
+`T | undefined` now uses the NON-NULL type — tsc types `x!` as `NonNullable<typeof x>` and does
+arithmetic on THAT. `getTypeOfExpression` deliberately keeps the union for `(T | undefined)!`
+(round 407: a GLOBAL nullish-strip in that case unmasks M3 object-literal/generic gaps → reverted),
+but the arithmetic pass classifies operands and a `Type.Union`'s own `.flags` carry neither the
+Undefined bit nor the numeric-enum bit, so `TokenFlags | undefined` fails every operand test →
+spurious TS2362/TS2363. New `arithOperandType` strips nullish LOCALLY (only for a syntactic `!`),
+reproducing tsc's own source: `templateFlags! & TokenFlags.TemplateLiteralLikeFlags` (nodeFactory
+×2), `contextFlags! & ContextFlags.X` (checker ×2), `state.affectedFilesIndex! - 1` (builder).
+FP-safe by construction: only fires on an explicit `!`, only ever REMOVES nullish members (a
+`(string | undefined)!` still fails, still errors), and is local to the pass (no touch to global
+expression typing — the round-407 blast radius). The residual 10 TS2362 (+2 TS2363) are
+`&&`/`||`/reassignment flow-narrowing cases (checker.ts `checkMode && checkMode & X`, `flags =
+flags || None`) — M3.4. **(2) exhaustive enum switch (TS2366 15 → 12, −3):** round 414 deferred
+Pattern C2 — a `switch` with NO `default` that EXHAUSTIVELY covers its discriminant's enum is
+terminating (tsc narrows the discriminant to `never` after all cases, so the endpoint is
+unreachable). This lands the FP-SAFE SUBSET: an ENUM / enum-member-union / call-return-enum
+discriminant (the value set is a precise enum). `isExhaustiveEnumSwitch` claims exhaustive ONLY
+when it can PROVE every enum member is covered — every case an `Enum.Member`/`undefined`/`null`,
+and the discriminant resolving to a precise enum (or `enum | undefined/null`) via a simple param's
+type ANNOTATION (`enumSwitchKeysFromTypeNode`: a bare enum name → all members; a type alias =
+union of enum members → recurse — `CompoundAssignmentOperator` = union of `SyntaxKind.X`; an
+`Enum.Member` ref → that one) OR the resolved expression type (`enumSwitchKeysFromType`: a pure
+enum object → all members, a `enum | undefined` union → members + nullish marker). Any uncertainty
+(a non-enum-member case, a discriminant that doesn't resolve to a clean enum, a missing member)
+returns null/false → the TS2366 STANDS, so it never suppresses a genuinely non-exhaustive switch's
+diagnostic (no false negative). Reuses the round-411 enum helpers
+(`resolveEnumSymbolForDiscriminant`/`enumMemberKeyOfExpr`/`enumValues`, barrel-aware). Fixed tsc's
+own `getCategoryFormat(category: DiagnosticCategory)`,
+`getNonAssignmentOperatorForCompoundAssignment(kind: CompoundAssignmentOperator)`,
+`getSetExternalModuleIndicator` over `getEmitModuleDetectionKind(options): ModuleDetectionKind`.
+The remaining 12 are `.kind` discriminated-union switches (`mapper.kind`, `node.kind` ×5,
+`target.kind`, `name.kind`, `LiteralToken["kind"]` indexed-access, `options.newLine` property
+access) — the discriminant is a property of a union of interfaces/TypeLiterals, needing type-alias-
+chain + intersection + inherited/TypeLiteral-`.kind` flattening, with a real false-negative risk
+(`.errors.txt` disabled = weak gate) — the documented larger M3.4 slice, which correctly BAILS
+here. **This analysis feeds ONLY `checkBodyForImplicitReturn` (TS2366/TS7030/TS2355); TS7027
+unreachable-code uses the separate `isDefinitelyTerminating`, so a wrong claim here cannot
+spuriously report post-switch code as unreachable — the change is a pure suppress-when-provable.**
+11 local tests (NonNullArithmeticOperandTest ×5, ExhaustiveEnumSwitchTerminationTest ×6) with
+negative controls (a `(string|undefined)! - 1` still fires TS2362; a bare `flags & X` with no `!`/
+guard still fires; a switch MISSING an enum member, an `enum|undefined` WITHOUT `case undefined`,
+and a `break`-ing case body all STILL fire TS2366 — the FP-safety firewall, since the corpus is a
+weak gate for TS2366 with `.errors.txt` disabled). **DEFERRED (bounded but broad/risky): the
+empty-tuple-vs-all-optional-tuple TS2739** (moduleSpecifiers.ts:344 `return emptyArray as []`
+against `readonly [kind?, specifiers?, moduleFile?, modulePaths?, cache?]`) — `[]` is assignable to
+a tuple whose elements are ALL optional, but `buildTupleFromTypes` builds all numbered props as
+required (`SymbolFlags.Property`, no Optional flag) since the resolved tuple `Type` loses the AST
+`NamedTupleMember.questionToken`/`OptionalType` optionality (the documented no-minLength-tracking
+gotcha). The clean fix needs a new `SymbolFlags.Optional` bit threaded through tuple building +
+`isOptionalProperty` reading it — broad regression surface (many `isOptionalProperty` callers on
+tuple props) for 1 self-compile instance; not worth the risk this session. **META: re-confirms the
+M1.12 method — bucket the FULL `--listAll`, not the log tail. Also re-confirms round 414's finding
+that `.errors.txt` being disabled makes the whole termination analysis (TS2366/TS7030/TS2355) gated
+ONLY by the full suite + local tests → strong negative controls are mandatory for any
+suppress-a-diagnostic change there.** Perf unmeasured beyond the bench row (an operand-strip + a
+syntactic enum-switch — no relation-engine work; the enum resolution reuses round-411's memos).
+
 **Round 414 (2026-07-05) — M1.12: the TS2366 "Function lacks ending return statement" family
 (50 self-compile FPs; tsc reports 0 on its own source) is THREE CFA fall-through patterns — TWO+
 landed. Self-compile (compiler profile) 1,965 → 1,930 (−35, TS2366 50 → 15); suite 9,117 → 9,134
@@ -500,123 +564,6 @@ whole ≤30-count histogram): TS2349×25 = `typeof x === "function"` / `??=` cal
 (B425-risky) all M3; TS2591×43/TS2304×2/TS2563×27 env-legit. Next real progress is M2.2 (real-lib
 A/B, next queue item, 27 documented corpus failures) or a decomposed M3.4 slice.**
 
-**Round 405 (2026-07-04) — M1.12 continued: TS2774×1 fixed (self-compile 2,664 → 2,663);
-TS7019×4 investigated and RECLASSIFIED to M3.2-gated. Suite 9,031 → 9,034 (+3 local); 1 commit.**
-Same session as round 404, second sub-step. Method: ran a full `--listAll` on the compiler
-profile, bucketed the tail, and worked the two remaining "bounded" candidates. **TS2774×1
-(checker.ts:24702 `if (shouldElaborateErrors)` where `let shouldElaborateErrors = reportErrors`):**
-`reportErrors` is a boolean PARAM of the enclosing `signaturesRelatedTo`, but the uncalled-function
-check's syntactic pass establishes no local param scope, so its
-`getTypeOfExpression(reportErrors)` resolved in file/global scope and found the sibling
-`function reportErrors` (a callable) → mis-typed `shouldElaborateErrors` as a function → FP TS2774.
-Round 403 had fixed the shadow-registration + lookup-stop; this last one was the initializer-type
-resolution. Fix (`collectUncalledTypedLocalsFromBody`): type a bare-identifier initializer from
-the uncalled check's OWN scope knowledge — `shadowed`/`into` for a binding in THIS scope being
-collected (an enclosing param / earlier local, not yet on the stack), or
-`isUncalledShadowed`/`lookupUncalledTypedLocal` for an ENCLOSING scope already pushed (a `let X =
-param` in a nested block) — instead of the unreliable global `getTypeOfExpression`. A boolean param
-→ boolean (no TS2774); a same-scope local FUNCTION is still recorded callable, so a genuine
-`let f = localFn; if (f)` keeps firing (the negative-control test). listAll diff = exactly one line
-removed, nothing added. 3 local tests (UncalledFunctionParamTypeTest). **TS7019×4 (arrow rest
-params `compilerHost.getSourceFile = (...args) =>`, `host.writeFile = (…, ...rest) =>`, and a
-callback-arg): reclassified from "M1.6 territory" to M3.2-gated.** These arrows receive a contextual
-function type from the assignment LHS member (or callee param), so tsc doesn't emit TS7019. A first
-attempt propagated the LHS type into the implicit-any `BinaryExpression` case (gated to rest-param
-RHS, suppression-only), but it was a NO-OP (self-compile unchanged) — root cause:
-`getTypeOfExpression(compilerHost.getSourceFile)` returns `any` because the implicit-any pass sets
-up NO enclosing-function param scope (`compilerHost` is a param, absent from `currentFileLocals`),
-so the LHS type never resolves to a function. Reverted the dead code cleanly (working tree = HEAD).
-The fix needs param scopes threaded into the implicit-any pass (or a real contextual-typing pass) —
-M3.2, not a bounded fix. **META: BOTH remaining "bounded" candidates were gated on the SAME
-underlying gap — the specialized syntactic passes (implicit-any, uncalled-function) resolve
-identifier/property types WITHOUT the enclosing function's param scope, so a bare identifier
-resolves to the wrong outer/global binding. TS2774 was fixable because the uncalled check ALREADY
-tracks a scope stack I could consult; TS7019 is not, because the implicit-any pass tracks none. This
-confirms the M1.12 note: the bounded pool is exhausted and remaining self-compile progress is
-M3-gated (M3.2 contextual typing / M3.4 flow-into-identifier-typing).**
-
-**Round 404 (2026-07-04) — M1.13 DONE: `typeParamInternCache` is now keyed file-aware
-`(internSalt, pos)` instead of bare `pos`. Corpus 9,026 → 9,031 (+5 local, 0 regressions);
-self-compile compiler profile 2,664 → 2,664 (by-code map UNCHANGED); 1 commit.** The proper
-"fix the KEY" the item mandated: the bare AST `pos` COLLIDES across files in a multi-file
-program (each file starts at 0), so two unrelated params in different files shared ONE
-`Type.TypeParam` and stomped its mutable `.constraint`/`.default`. Round 403 had fixed only
-the one OBSERVED FP (a read-site re-set in `checkConstraintsForTypeArgs`); the two hot-path
-factory builders (`getTypeOfFunctionExpression`/`buildMethodType`, which set the constraint
-INSIDE the `getOrPut` factory → stale on a cache hit) and ~16 loop sites were still latent.
-Fix: (1) a `TypeParameter.internSalt` BODY property (excluded from data-class
-`equals`/`hashCode`/`copy` — TypeParameter is never copied), stamped by the parser as
-`fileName.hashCode()` (one `.also{}` in `parseTypeParameter` + a `typeParamFileSalt` field);
-(2) a `Checker.internKey(tp)` = `(salt.toLong() shl 32) or (pos and 0xFFFFFFFF)` (injective
-over `(salt,pos)`); (3) all 20 intern sites switched from `getOrPut(tp.pos)` to
-`getOrPut(internKey(tp))`; cache type `Map<Int,…>` → `Map<Long,…>`. **Corpus byte-identical
-by construction: a single-file compile stamps every param with the same salt so the key is a
-bijection with `pos` — interning is unchanged; a multi-file program gets distinct salts per
-file so the collision (and the factory-site stomping the read-site fix never covered) vanishes
-at the KEY.** No walk, no node-identity map (structural equality would re-collide), no
-threading through parser constructors — the parser already has `fileName`. **The item's
-explicit "measure after the proper fix" MEASURED: self-compile unchanged, by-code map identical
-(TS2339×838, TS2322×794, TS2345×405, TS7006×301…). The identity-separation hypothesis — that
-some M3-bucket TS2322/TS2345 FPs were stale-constraint artifacts — is FALSIFIED for the
-self-compile.** Still worth keeping: it resolves the item with the mandated principled fix,
-removes a real latent bug class, and de-risks the belt-and-suspenders per-call re-resolution at
-the read site (now no longer the ONLY safety). 5 local tests (TypeParamInternKeyTest):
-reverse-order collision, generic-function collision, 3-file cross-contamination, single-file
-corpus-safety, genuine-violation negative control. New CLAUDE.md gotcha flags the OTHER
-pos-keyed caches that store per-decl mutable state across files (grep `getOrPut(...pos)`) as
-carrying the same latent hazard. **META: a bug class the single-file corpus is structurally
-blind to and the self-compile dashboard doesn't surface either — validated only by a
-purpose-built multi-file ProjectCompiler repro. When the observed symptom is already patched at
-a read site, the generalized KEY fix is dashboard-neutral but still closes the latent surface.**
-
-**Round 403 (2026-07-04) — self-compile burn-down (THREE more bounded bugs, one a
-genuine multi-file checker bug) + a codebase-wide code-quality sweep the owner
-requested mid-session. Self-compile (compiler profile) 2,680 → 2,664 (−16); suite
-9,017 → 9,026 (+9 local); 5 commits.** By-shape histogram of the full `--listAll`
-again (the M1.12 method): **(1) TS2344 6 → 3 — a genuine MULTI-FILE cross-file bug, not
-a lib gap.** `checkConstraintsForTypeArgs` interns each generic's type params as SHARED
-`Type.TypeParam` via `typeParamInternCache`, keyed by the parameter's absolute AST `pos`
-— which COLLIDES across files (each file's positions start at 0). An UNCONSTRAINED param
-(`LexicalEnvironment<in out TEnvData, TPrivateEnvData, TPrivateEntry>`'s 3rd param) got
-back the very instance a pos-colliding `<X extends {}>` param in another file left with a
-stale `.constraint`, and line 108601 only SET a constraint (never CLEARED one), so the
-`{}` leaked in → spurious TS2344. Fix: always (re)set `.constraint`/`.default` from the
-current node (clear to null for an unconstrained param). Single-file positions never
-collide → corpus byte-identical. Validated with a 2-file repro that FAILS on pre-fix code
-(TypeParamConstraintCrossFileCollisionTest, 3 tests). This is the FIRST bounded bug in the
-session that was a cross-file/multi-file checker defect (the corpus is single-file so it
-never surfaced there). **(2) SetIterator/MapIterator lib gap — TS2552 4 → 0, TS2304 3 →
-2.** `SetIterator<T>`/`MapIterator<T>`/`ArrayIterator<T>` live in `lib.es2015.iterable.d.ts`
-(available at es2020, tsc's own base), so tsc's `core.ts`/`transformers/utilities.ts` use
-them with 0 errors; the embedded lib lacked them → FP TS2552/TS2304. Added as arity-1
-empty interfaces; corpus-neutral (0 generated baselines reference them; the sole corpus
-user `iterableTReturnTNext` isn't in the generated set). 2 local tests. **(3) TS2774 9 → 4
-— local-var-shadows-outer-function.** The uncalled-function check registered a local's
-shadow only when the local's initializer TYPE resolved, so `const emitComments =
-state.stack[i] = shouldEmitComments(node)` (element-access-assignment initializer → `any`)
-left `emitComments` unshadowed and FP'd against the outer `function emitComments`. Fix:
-register the shadow UNCONDITIONALLY (a local decl always shadows regardless of type) AND
-make `lookupUncalledTypedLocal` STOP at an inner shadowed-but-untyped scope rather than fall
-through to an OUTER nested `function`'s callable entry (the emitter.ts:2911/2912 else-block +
-one checker.ts case). The last 1 (checker.ts:24702, `let x = reportErrors`) is a nested-scope
-initializer misresolution — separate follow-up. 4 local tests, repros validated to fire on
-pre-fix code. **(4) OWNER-REQUESTED code-quality sweep: narrow all 135 defensive
-`catch (_: Throwable)` → `catch (_: Exception)`** (130 Checker.kt, 3 Vfs.kt, 2 Parser.kt).
-`Throwable` swallows `Error` subtypes — most importantly `StackOverflowError`, which must
-reach the `init` boundary guard (→ TS2589) rather than be absorbed into a silently-wrong
-default; this was the exact anti-pattern the 2026-07-02 SoE cleanup removed. `Exception`
-still catches the genuine recoverable cases (NPE/ClassCast/IllegalState ⊆ RuntimeException
-⊆ Exception), so the narrowing is behavior-preserving: full suite byte-identical, self-compile
-byte-identical (2,667, no new codes, no crash) EXCEPT Errors now propagate. Validated by
-the full suite (exercises all 135 catch paths) + self-compile parity + DeepExpressionChainTest
-(pins SoE→TS2589). CLAUDE.md gained a guardrail. Removing the defensive Exception-catching
-ENTIRELY (to surface NPEs from incomplete modeling as crashes) is a separate per-site
-root-cause effort — NOT attempted blind. **META: the cross-file `typeParamInternCache`
-pos-collision (#1) is a class of bug the single-file corpus structurally cannot catch —
-worth grepping other `getOrPut(tp.pos)` / pos-keyed caches for the same hazard (20 intern
-sites share the cache; the fix mitigated the one READ site, others may still read a
-stale-constraint shared instance).**
-
 ### Mission & strategy
 
 Three strategic reads that shape everything below:
@@ -667,8 +614,8 @@ Three strategic reads that shape everything below:
 
 | Metric | Source | Phase 17 target |
 |---|---|---|
-| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 9,134 with local tests as of round 414) |
-| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**1,930 measured at round 414**; M1 complete at 2,726/round 389; rounds 395–414 burned bounded histogram-tail buckets + M3.4 flow-narrowing slices 2,726 → 1,930; round 409 `export *`-barrel / ESM-`.js` imported-guard FLOW narrowing (M3.4) −175 (TS2339 838 → 672); round 411 enum-member discriminant narrowing + type-guard-narrows-member-DOWN −59; round 412 single-type type-guard narrow-DOWN + TS18048 receiver-narrowing −1; round 413 the `export *` LEAF-EXPORT gate −407 (TS2339 614 → 237): the pre-413 star resolver returned non-exported IMPORT aliases, so barrel-imported `Debug.assert` (& every barrel guard) never resolved — the TRUE builder.ts blocker, NOT the round-412 depth red herring (an instrumented run showed ZERO walk truncations) — plus a dashboard-neutral tsc-faithful linear flow-walk iteration + a return-path narrowing consumer (−1); **round 414 the TS2366 "lacks ending return" family −35 (50 → 15): three CFA fall-through patterns in `statementAlwaysReturns`/`switchAlwaysReturns` — infinite-loop-with-return, trailing never-call (`Debug.fail`), switch fall-through — all FP-safe syntactic/barrel-resolution fixes; the remaining 15 are Pattern C2 (exhaustive switch w/o default → M3.4 discriminant-exhaustiveness)**; remaining bounded pool M3.4/M3-gated (a general-`resolveAlias` `.js`/star fix was measured net +297 via a TS2315 flood, reverted; NonNull-strip −17 but unmasks M3, reverted; const-string-enum→`string` relation deferred M3.3/B425); no-stub stays the honest default) |
+| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 9,145 with local tests as of round 415) |
+| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**1,922 measured at round 415**; M1 complete at 2,726/round 389; rounds 395–415 burned bounded histogram-tail buckets + M3.4 flow-narrowing slices 2,726 → 1,922; round 409 `export *`-barrel / ESM-`.js` imported-guard FLOW narrowing (M3.4) −175 (TS2339 838 → 672); round 411 enum-member discriminant narrowing + type-guard-narrows-member-DOWN −59; round 412 single-type type-guard narrow-DOWN + TS18048 receiver-narrowing −1; round 413 the `export *` LEAF-EXPORT gate −407 (TS2339 614 → 237): the pre-413 star resolver returned non-exported IMPORT aliases, so barrel-imported `Debug.assert` (& every barrel guard) never resolved — the TRUE builder.ts blocker, NOT the round-412 depth red herring (an instrumented run showed ZERO walk truncations) — plus a dashboard-neutral tsc-faithful linear flow-walk iteration + a return-path narrowing consumer (−1); **round 414 the TS2366 "lacks ending return" family −35 (50 → 15): three CFA fall-through patterns in `statementAlwaysReturns`/`switchAlwaysReturns` — infinite-loop-with-return, trailing never-call (`Debug.fail`), switch fall-through — all FP-safe syntactic/barrel-resolution fixes; the remaining 15 are Pattern C2 (exhaustive switch w/o default → M3.4 discriminant-exhaustiveness)**; remaining bounded pool M3.4/M3-gated (a general-`resolveAlias` `.js`/star fix was measured net +297 via a TS2315 flood, reverted; NonNull-strip −17 but unmasks M3, reverted; const-string-enum→`string` relation deferred M3.3/B425); no-stub stays the honest default) |
 | Project corpus FPs (services/server/…) | `bench/` TSVs (M0.1) | 0 — **the v1 exit** (all 8 profiles) |
 | Conformance adoption | generated-test counts per category | POST-V1 (re-scope 2026-07-03 — see § "Post-v1 backlog", M3.0) |
 | Crashes on any input | bench runs | 0 |
@@ -1036,6 +983,19 @@ Three strategic reads that shape everything below:
   `.kind` — needs type-level discriminant exhaustiveness (the discriminant narrows to `never` after all
   cases), an M3.4 slice.** `.errors.txt` tests are disabled so this whole reachability analysis is
   gated only by the full suite — which is why the 50-FP bucket was invisible on the dashboard.**
+  **Round 415 killed TWO more (1,930 → 1,922): (1) TS2362 15 → 10 — a `x!` NonNull arithmetic operand
+  now uses the non-null type (`arithOperandType` strips nullish LOCALLY for a syntactic `!`, avoiding
+  the round-407 global-strip blast radius); the residual 10 are `&&`/`||`/reassignment flow-narrowing
+  (M3.4). (2) TS2366 15 → 12 — the FP-safe subset of Pattern C2: an exhaustive ENUM /
+  enum-member-union / call-return-enum switch is terminating (`isExhaustiveEnumSwitch` claims
+  exhaustive ONLY when every enum member is provably covered — any uncertainty bails, so no false
+  negative; the round-411 barrel-aware enum helpers do the resolution). The remaining 12 TS2366 are
+  `.kind` discriminated-union switches (union-of-interfaces/TypeLiterals with per-member `.kind` — the
+  larger M3.4 slice, correctly bails). DEFERRED (bounded but broad/risky): the empty-tuple-vs-
+  all-optional-tuple TS2739 (moduleSpecifiers `return emptyArray as []`) — `buildTupleFromTypes` builds
+  numbered props as required (the resolved tuple `Type` loses the AST `questionToken`/`OptionalType`
+  optionality); the clean fix needs a `SymbolFlags.Optional` bit threaded through tuple building + read
+  by `isOptionalProperty`, a broad regression surface (many callers) for 1 instance.**
 
 **M2 — Real-lib migration (staged; decompose further at start)**
 

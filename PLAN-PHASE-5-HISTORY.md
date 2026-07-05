@@ -1,3 +1,120 @@
+**Round 405 (2026-07-04) — M1.12 continued: TS2774×1 fixed (self-compile 2,664 → 2,663);
+TS7019×4 investigated and RECLASSIFIED to M3.2-gated. Suite 9,031 → 9,034 (+3 local); 1 commit.**
+Same session as round 404, second sub-step. Method: ran a full `--listAll` on the compiler
+profile, bucketed the tail, and worked the two remaining "bounded" candidates. **TS2774×1
+(checker.ts:24702 `if (shouldElaborateErrors)` where `let shouldElaborateErrors = reportErrors`):**
+`reportErrors` is a boolean PARAM of the enclosing `signaturesRelatedTo`, but the uncalled-function
+check's syntactic pass establishes no local param scope, so its
+`getTypeOfExpression(reportErrors)` resolved in file/global scope and found the sibling
+`function reportErrors` (a callable) → mis-typed `shouldElaborateErrors` as a function → FP TS2774.
+Round 403 had fixed the shadow-registration + lookup-stop; this last one was the initializer-type
+resolution. Fix (`collectUncalledTypedLocalsFromBody`): type a bare-identifier initializer from
+the uncalled check's OWN scope knowledge — `shadowed`/`into` for a binding in THIS scope being
+collected (an enclosing param / earlier local, not yet on the stack), or
+`isUncalledShadowed`/`lookupUncalledTypedLocal` for an ENCLOSING scope already pushed (a `let X =
+param` in a nested block) — instead of the unreliable global `getTypeOfExpression`. A boolean param
+→ boolean (no TS2774); a same-scope local FUNCTION is still recorded callable, so a genuine
+`let f = localFn; if (f)` keeps firing (the negative-control test). listAll diff = exactly one line
+removed, nothing added. 3 local tests (UncalledFunctionParamTypeTest). **TS7019×4 (arrow rest
+params `compilerHost.getSourceFile = (...args) =>`, `host.writeFile = (…, ...rest) =>`, and a
+callback-arg): reclassified from "M1.6 territory" to M3.2-gated.** These arrows receive a contextual
+function type from the assignment LHS member (or callee param), so tsc doesn't emit TS7019. A first
+attempt propagated the LHS type into the implicit-any `BinaryExpression` case (gated to rest-param
+RHS, suppression-only), but it was a NO-OP (self-compile unchanged) — root cause:
+`getTypeOfExpression(compilerHost.getSourceFile)` returns `any` because the implicit-any pass sets
+up NO enclosing-function param scope (`compilerHost` is a param, absent from `currentFileLocals`),
+so the LHS type never resolves to a function. Reverted the dead code cleanly (working tree = HEAD).
+The fix needs param scopes threaded into the implicit-any pass (or a real contextual-typing pass) —
+M3.2, not a bounded fix. **META: BOTH remaining "bounded" candidates were gated on the SAME
+underlying gap — the specialized syntactic passes (implicit-any, uncalled-function) resolve
+identifier/property types WITHOUT the enclosing function's param scope, so a bare identifier
+resolves to the wrong outer/global binding. TS2774 was fixable because the uncalled check ALREADY
+tracks a scope stack I could consult; TS7019 is not, because the implicit-any pass tracks none. This
+confirms the M1.12 note: the bounded pool is exhausted and remaining self-compile progress is
+M3-gated (M3.2 contextual typing / M3.4 flow-into-identifier-typing).**
+
+**Round 404 (2026-07-04) — M1.13 DONE: `typeParamInternCache` is now keyed file-aware
+`(internSalt, pos)` instead of bare `pos`. Corpus 9,026 → 9,031 (+5 local, 0 regressions);
+self-compile compiler profile 2,664 → 2,664 (by-code map UNCHANGED); 1 commit.** The proper
+"fix the KEY" the item mandated: the bare AST `pos` COLLIDES across files in a multi-file
+program (each file starts at 0), so two unrelated params in different files shared ONE
+`Type.TypeParam` and stomped its mutable `.constraint`/`.default`. Round 403 had fixed only
+the one OBSERVED FP (a read-site re-set in `checkConstraintsForTypeArgs`); the two hot-path
+factory builders (`getTypeOfFunctionExpression`/`buildMethodType`, which set the constraint
+INSIDE the `getOrPut` factory → stale on a cache hit) and ~16 loop sites were still latent.
+Fix: (1) a `TypeParameter.internSalt` BODY property (excluded from data-class
+`equals`/`hashCode`/`copy` — TypeParameter is never copied), stamped by the parser as
+`fileName.hashCode()` (one `.also{}` in `parseTypeParameter` + a `typeParamFileSalt` field);
+(2) a `Checker.internKey(tp)` = `(salt.toLong() shl 32) or (pos and 0xFFFFFFFF)` (injective
+over `(salt,pos)`); (3) all 20 intern sites switched from `getOrPut(tp.pos)` to
+`getOrPut(internKey(tp))`; cache type `Map<Int,…>` → `Map<Long,…>`. **Corpus byte-identical
+by construction: a single-file compile stamps every param with the same salt so the key is a
+bijection with `pos` — interning is unchanged; a multi-file program gets distinct salts per
+file so the collision (and the factory-site stomping the read-site fix never covered) vanishes
+at the KEY.** No walk, no node-identity map (structural equality would re-collide), no
+threading through parser constructors — the parser already has `fileName`. **The item's
+explicit "measure after the proper fix" MEASURED: self-compile unchanged, by-code map identical
+(TS2339×838, TS2322×794, TS2345×405, TS7006×301…). The identity-separation hypothesis — that
+some M3-bucket TS2322/TS2345 FPs were stale-constraint artifacts — is FALSIFIED for the
+self-compile.** Still worth keeping: it resolves the item with the mandated principled fix,
+removes a real latent bug class, and de-risks the belt-and-suspenders per-call re-resolution at
+the read site (now no longer the ONLY safety). 5 local tests (TypeParamInternKeyTest):
+reverse-order collision, generic-function collision, 3-file cross-contamination, single-file
+corpus-safety, genuine-violation negative control. New CLAUDE.md gotcha flags the OTHER
+pos-keyed caches that store per-decl mutable state across files (grep `getOrPut(...pos)`) as
+carrying the same latent hazard. **META: a bug class the single-file corpus is structurally
+blind to and the self-compile dashboard doesn't surface either — validated only by a
+purpose-built multi-file ProjectCompiler repro. When the observed symptom is already patched at
+a read site, the generalized KEY fix is dashboard-neutral but still closes the latent surface.**
+
+**Round 403 (2026-07-04) — self-compile burn-down (THREE more bounded bugs, one a
+genuine multi-file checker bug) + a codebase-wide code-quality sweep the owner
+requested mid-session. Self-compile (compiler profile) 2,680 → 2,664 (−16); suite
+9,017 → 9,026 (+9 local); 5 commits.** By-shape histogram of the full `--listAll`
+again (the M1.12 method): **(1) TS2344 6 → 3 — a genuine MULTI-FILE cross-file bug, not
+a lib gap.** `checkConstraintsForTypeArgs` interns each generic's type params as SHARED
+`Type.TypeParam` via `typeParamInternCache`, keyed by the parameter's absolute AST `pos`
+— which COLLIDES across files (each file's positions start at 0). An UNCONSTRAINED param
+(`LexicalEnvironment<in out TEnvData, TPrivateEnvData, TPrivateEntry>`'s 3rd param) got
+back the very instance a pos-colliding `<X extends {}>` param in another file left with a
+stale `.constraint`, and line 108601 only SET a constraint (never CLEARED one), so the
+`{}` leaked in → spurious TS2344. Fix: always (re)set `.constraint`/`.default` from the
+current node (clear to null for an unconstrained param). Single-file positions never
+collide → corpus byte-identical. Validated with a 2-file repro that FAILS on pre-fix code
+(TypeParamConstraintCrossFileCollisionTest, 3 tests). This is the FIRST bounded bug in the
+session that was a cross-file/multi-file checker defect (the corpus is single-file so it
+never surfaced there). **(2) SetIterator/MapIterator lib gap — TS2552 4 → 0, TS2304 3 →
+2.** `SetIterator<T>`/`MapIterator<T>`/`ArrayIterator<T>` live in `lib.es2015.iterable.d.ts`
+(available at es2020, tsc's own base), so tsc's `core.ts`/`transformers/utilities.ts` use
+them with 0 errors; the embedded lib lacked them → FP TS2552/TS2304. Added as arity-1
+empty interfaces; corpus-neutral (0 generated baselines reference them; the sole corpus
+user `iterableTReturnTNext` isn't in the generated set). 2 local tests. **(3) TS2774 9 → 4
+— local-var-shadows-outer-function.** The uncalled-function check registered a local's
+shadow only when the local's initializer TYPE resolved, so `const emitComments =
+state.stack[i] = shouldEmitComments(node)` (element-access-assignment initializer → `any`)
+left `emitComments` unshadowed and FP'd against the outer `function emitComments`. Fix:
+register the shadow UNCONDITIONALLY (a local decl always shadows regardless of type) AND
+make `lookupUncalledTypedLocal` STOP at an inner shadowed-but-untyped scope rather than fall
+through to an OUTER nested `function`'s callable entry (the emitter.ts:2911/2912 else-block +
+one checker.ts case). The last 1 (checker.ts:24702, `let x = reportErrors`) is a nested-scope
+initializer misresolution — separate follow-up. 4 local tests, repros validated to fire on
+pre-fix code. **(4) OWNER-REQUESTED code-quality sweep: narrow all 135 defensive
+`catch (_: Throwable)` → `catch (_: Exception)`** (130 Checker.kt, 3 Vfs.kt, 2 Parser.kt).
+`Throwable` swallows `Error` subtypes — most importantly `StackOverflowError`, which must
+reach the `init` boundary guard (→ TS2589) rather than be absorbed into a silently-wrong
+default; this was the exact anti-pattern the 2026-07-02 SoE cleanup removed. `Exception`
+still catches the genuine recoverable cases (NPE/ClassCast/IllegalState ⊆ RuntimeException
+⊆ Exception), so the narrowing is behavior-preserving: full suite byte-identical, self-compile
+byte-identical (2,667, no new codes, no crash) EXCEPT Errors now propagate. Validated by
+the full suite (exercises all 135 catch paths) + self-compile parity + DeepExpressionChainTest
+(pins SoE→TS2589). CLAUDE.md gained a guardrail. Removing the defensive Exception-catching
+ENTIRELY (to surface NPEs from incomplete modeling as crashes) is a separate per-site
+root-cause effort — NOT attempted blind. **META: the cross-file `typeParamInternCache`
+pos-collision (#1) is a class of bug the single-file corpus structurally cannot catch —
+worth grepping other `getOrPut(tp.pos)` / pos-keyed caches for the same hazard (20 intern
+sites share the cache; the fix mitigated the one READ site, others may still read a
+stale-constraint shared instance).**
+
 # PLAN-PHASE-5 — session-note history
 
 Older Phase 17 session notes trimmed from PLAN-PHASE-5.md (most recent first).
