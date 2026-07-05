@@ -142046,6 +142046,11 @@ interface DataView {
         if (type is Type.Intrinsic && type.flags.hasAny(TypeFlags.Enum)) return true
         if (isNumericEnumObjectType(type)) return true
         if (type is Type.Union) return type.types.all { isNumberLikeType(it) }
+        // A BRANDED number `number & { __brand }` is assignable to `number` (an intersection
+        // is a subtype of each of its members), so it is a valid number-like operand — tsc's
+        // own IncrementalBuildInfoFileId = number & {…} does arithmetic (`fileId - 1`). ANY
+        // member being number-like suffices.
+        if (type is Type.Intersection) return type.types.any { isNumberLikeType(it) }
         return false
     }
 
@@ -142053,6 +142058,7 @@ interface DataView {
     private fun isBigIntLikeType(type: Type): Boolean {
         if (type.flags.hasAny(TypeFlags.BigInt or TypeFlags.BigIntLiteral)) return true
         if (type is Type.Union) return type.types.all { isBigIntLikeType(it) }
+        if (type is Type.Intersection) return type.types.any { isBigIntLikeType(it) }
         return false
     }
 
@@ -142064,6 +142070,8 @@ interface DataView {
         isNumericEnumObjectType(t) -> true
         t is Type.Union -> t.types.isNotEmpty() && t.types.all { typeAssignableToNumberKind(it) }
         t is Type.TypeParam -> t.constraint?.let { typeAssignableToNumberKind(it) } == true
+        // A branded number `number & {…}` is assignable to number (ANY member suffices).
+        t is Type.Intersection -> t.types.any { typeAssignableToNumberKind(it) }
         else -> false
     }
 
@@ -142072,6 +142080,7 @@ interface DataView {
         t.flags.hasAny(TypeFlags.BigInt or TypeFlags.BigIntLiteral) -> true
         t is Type.Union -> t.types.isNotEmpty() && t.types.all { typeAssignableToBigIntKind(it) }
         t is Type.TypeParam -> t.constraint?.let { typeAssignableToBigIntKind(it) } == true
+        t is Type.Intersection -> t.types.any { typeAssignableToBigIntKind(it) }
         else -> false
     }
 
@@ -142080,6 +142089,7 @@ interface DataView {
         t.flags.hasAny(TypeFlags.String or TypeFlags.StringLiteral) -> true
         t is Type.Union -> t.types.isNotEmpty() && t.types.all { typeAssignableToStringKind(it) }
         t is Type.TypeParam -> t.constraint?.let { typeAssignableToStringKind(it) } == true
+        t is Type.Intersection -> t.types.any { typeAssignableToStringKind(it) }
         else -> false
     }
 
@@ -142203,6 +142213,7 @@ interface DataView {
     private fun isStringLikeType(type: Type): Boolean {
         if (type.flags.hasAny(TypeFlags.String or TypeFlags.StringLiteral)) return true
         if (type is Type.Union) return type.types.any { isStringLikeType(it) }
+        if (type is Type.Intersection) return type.types.any { isStringLikeType(it) }
         return false
     }
 
