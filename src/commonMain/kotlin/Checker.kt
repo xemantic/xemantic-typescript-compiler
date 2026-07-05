@@ -1036,6 +1036,22 @@ class Checker(
      *  `checkImportConflictsWithLocal` runs during init and would otherwise see it null. */
     private val barrelTypeOnlyMemo = HashMap<String, Boolean>()
 
+    /** M3.4 (round 409): memo for [resolveExportedSymbolThroughStars] (keyed
+     *  "<barrelFile> <name>" → target Symbol, a stored null means "not found /
+     *  unresolvable"). The missing half of M1.1: [getModuleExportsFollowingStars]
+     *  follows `export *` barrels for NAME existence (TS2305); this returns the
+     *  target DECLARATION so the FLOW-ONLY [resolveImportedFunctionLikeDecl] can
+     *  narrow a barrel-imported guard/assert. Declared before `init` — the
+     *  init-order trap would leave a post-init field null during checking. */
+    private val starExportSymbolCache = HashMap<String, Symbol?>()
+
+    /** M3.4 (round 409): process-wide memo for [resolveImportedFunctionLikeDecl]
+     *  (alias symbol id → target Fn/Method decl, or null). The resolution walks all
+     *  binderResults to find the enclosing import + follows the `export *` chain, so
+     *  memoizing across flow walks is the services-profile perf firewall (round 408's
+     *  documented P0). Declared before `init` per the init-order trap. */
+    private val importedGuardDeclCache = HashMap<Int, Node?>()
+
     /** P0 (services hang): LIVE recursion depth across BOTH flow walkers INCLUDING
      *  re-entrant walks — [narrowByAssertCall]/[narrowByCallPredicate] resolve the
      *  callee, which types a PropertyAccess receiver, which narrows it at its own
@@ -5724,6 +5740,26 @@ class Checker(
             if (symbol != null) return symbol
         }
         return globals[name]
+    }
+
+    /**
+     * M3.4 (round 409): ESM `.js`-tolerant module resolution for the FLOW-ONLY
+     * [resolveImportedFunctionLikeDecl]. tsc's own sources (and any nodenext
+     * project) import via `.js`/`.jsx`/`.mjs`/`.cjs` specifiers that point at
+     * `.ts`/`.tsx` sources; [resolveModuleSpecifier] deliberately will NOT strip
+     * those (CLAUDE.md — TS2459 FP-avoidance), so a barrel-imported guard's module
+     * could not be resolved at all (the reason round 408's guard-narrowing wire was
+     * inert). Retry with the extension stripped — directory-relative to
+     * [contextFile] first (nested layouts), then globally (flat corpus layouts).
+     */
+    private fun resolveAliasJsModuleSpecifier(specifier: String, contextFile: String?): String? {
+        for (ext in listOf(".js", ".jsx", ".mjs", ".cjs")) {
+            if (!specifier.endsWith(ext)) continue
+            val stripped = specifier.removeSuffix(ext)
+            if (contextFile != null) resolveModuleSpecifierRelative(stripped, contextFile)?.let { return it }
+            resolveModuleSpecifier(stripped)?.let { return it }
+        }
+        return null
     }
 
     private fun resolveAlias(symbol: Symbol, visited: MutableSet<Int> = mutableSetOf()): Symbol {
@@ -36983,6 +37019,59 @@ class Checker(
             out.addAll(sub)
         }
         return out
+    }
+
+    /**
+     * M3.4 (round 409): the SYMBOL-resolving companion to
+     * [getModuleExportsFollowingStars]. Resolve a named export [name] from [file],
+     * following bare `export * from "..."` barrels (tsc's `_namespaces/ts.ts`
+     * topology) and `export { orig as name } from "..."` re-exports, to the Symbol
+     * that actually declares it. Returns null if not found / unresolvable.
+     * Cycle- and depth-guarded exactly like [collectExportsFollowingStars];
+     * memoized process-wide via [starExportSymbolCache].
+     *
+     * This closes the gap round 408 identified: a named import through an
+     * `export *` barrel (`import { isDefined } from "./_namespaces/ts.js"`) could
+     * not find the target because the direct `locals` lookup misses. Used ONLY by
+     * the flow-only [resolveImportedFunctionLikeDecl] — deliberately NOT wired into
+     * the general `resolveAlias` (that regressed the self-compile with a TS2315
+     * flood, round 409); the general path stays byte-identical.
+     */
+    private fun resolveExportedSymbolThroughStars(file: SourceFile, name: String): Symbol? {
+        val cacheKey = "${file.fileName} $name"
+        if (starExportSymbolCache.containsKey(cacheKey)) return starExportSymbolCache[cacheKey]
+        val result = computeExportedSymbolThroughStars(file, name, mutableSetOf(), 0)
+        starExportSymbolCache[cacheKey] = result
+        return result
+    }
+
+    private fun computeExportedSymbolThroughStars(
+        file: SourceFile, name: String, visited: MutableSet<String>, depth: Int,
+    ): Symbol? {
+        if (!visited.add(file.fileName)) return null // cycle back-edge
+        if (depth > 64) return null // defensive bound → unknowable
+        // Direct declaration of the exported name in this file (the leaf of the chain).
+        fileResults[file.fileName]?.locals?.get(name)?.let { return it }
+        for (stmt in file.statements) {
+            if (stmt !is ExportDeclaration) continue
+            val spec = (stmt.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+            when (val clause = stmt.exportClause) {
+                null -> {
+                    // bare `export * from "..."` — search the starred target.
+                    val target = resolveBarrelStarTarget(spec, file.fileName) ?: continue
+                    computeExportedSymbolThroughStars(target, name, visited, depth + 1)?.let { return it }
+                }
+                is NamedExports -> {
+                    // `export { orig as name } from "..."` — [name] maps to [orig] in the target.
+                    val match = clause.elements.find { it.name.text == name } ?: continue
+                    val orig = match.propertyName?.text ?: name
+                    val target = resolveBarrelStarTarget(spec, file.fileName) ?: continue
+                    computeExportedSymbolThroughStars(target, orig, visited, depth + 1)?.let { return it }
+                }
+                else -> {} // `export * as ns from` exposes only `ns` (a direct local), not target names
+            }
+        }
+        return null
     }
 
     /**
@@ -91716,7 +91805,21 @@ interface DataView {
         val decl: Node? = when (callee) {
             is Identifier -> {
                 val symbol = currentFileLocals?.get(callee.text) ?: globals[callee.text]
-                symbol?.let { it.valueDeclaration ?: it.declarations.firstOrNull() }
+                val direct = symbol?.let { it.valueDeclaration ?: it.declarations.firstOrNull() }
+                // M3.4 (round 409): an IMPORTED guard/assert (`import { isDefined }
+                // from "./_namespaces/ts.js"`) resolves to its ImportSpecifier, not a
+                // FunctionDeclaration, so the guard never narrowed. Resolve the import
+                // to the real function declaration — following ESM `.js` specifiers and
+                // `export *` barrels — via a FLOW-ONLY resolver that leaves the general
+                // `resolveAlias` and its symbol-target cache untouched (resolving
+                // barrel-imported TYPES through the general path unmasked a TS2315
+                // flood, round 409 measurement). FP-safe: only the flow walkers consult
+                // this, where a resolved narrowing can only REMOVE union constituents.
+                if (symbol != null && symbol.flags.hasAny(SymbolFlags.Alias) &&
+                    direct !is FunctionDeclaration && direct !is MethodDeclaration
+                ) {
+                    resolveImportedFunctionLikeDecl(symbol, mutableSetOf()) ?: direct
+                } else direct
             }
             is PropertyAccessExpression ->
                 resolvePropertyMethodDecl(callee) ?: resolveNamespaceMemberFnDecl(callee)
@@ -91744,6 +91847,71 @@ interface DataView {
         val member = resolved.exports?.get(callee.name.text) ?: return null
         return member.valueDeclaration as? FunctionDeclaration
             ?: member.declarations.firstOrNull { it is FunctionDeclaration }
+    }
+
+    /**
+     * M3.4 (round 409): FLOW-ONLY resolution of an imported guard/assert alias
+     * [aliasSymbol] to its target FunctionDeclaration / MethodDeclaration, following
+     * ESM `.js` specifiers (which the general [resolveModuleSpecifier] deliberately
+     * won't strip) and `export *` re-export barrels (tsc's `_namespaces/ts.ts`
+     * topology, via [resolveExportedSymbolThroughStars]). Deliberately does NOT
+     * touch the symbol-target cache or the general [resolveAlias] — resolving
+     * barrel-imported TYPES through the general path unmasked a TS2315 flood
+     * (round 409). Only the flow walkers consult this → FP-safe (narrowing removes
+     * union constituents). [visited] guards a re-import/re-export alias cycle.
+     */
+    private fun resolveImportedFunctionLikeDecl(aliasSymbol: Symbol, visited: MutableSet<Int>): Node? {
+        // Memoize at the entry (fresh walk): the enclosing-import search + star chain
+        // repeats identically across flow walks otherwise (services-perf firewall).
+        val topLevel = visited.isEmpty()
+        if (topLevel && importedGuardDeclCache.containsKey(aliasSymbol.id)) {
+            return importedGuardDeclCache[aliasSymbol.id]
+        }
+        val result = computeImportedFunctionLikeDecl(aliasSymbol, visited)
+        if (topLevel) importedGuardDeclCache[aliasSymbol.id] = result
+        return result
+    }
+
+    private fun computeImportedFunctionLikeDecl(aliasSymbol: Symbol, visited: MutableSet<Int>): Node? {
+        if (!visited.add(aliasSymbol.id)) return null
+        for (decl in aliasSymbol.declarations) {
+            if (decl !is ImportSpecifier) continue
+            val originalName = decl.propertyName?.text ?: decl.name.text
+            val (contextFile, importDecl) = findEnclosingImport(decl) ?: continue
+            val spec = (importDecl.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+            val targetFile = resolveModuleSpecifier(spec, importDecl)
+                ?: resolveAliasJsModuleSpecifier(spec, contextFile)
+                ?: continue
+            val tr = fileResults[targetFile] ?: continue
+            val sym = tr.locals[originalName]
+                ?: resolveExportedSymbolThroughStars(tr.sourceFile, originalName)
+                ?: continue
+            val d = sym.valueDeclaration
+                ?: sym.declarations.firstOrNull { it is FunctionDeclaration || it is MethodDeclaration }
+                ?: sym.declarations.firstOrNull()
+            if (d is FunctionDeclaration || d is MethodDeclaration) return d
+            // The target may itself be a re-import + re-export alias — one more hop.
+            if (sym.flags.hasAny(SymbolFlags.Alias)) {
+                resolveImportedFunctionLikeDecl(sym, visited)?.let { return it }
+            }
+        }
+        return null
+    }
+
+    /** Find the ImportDeclaration containing [spec] plus its file (no parent
+     *  pointers), for [resolveImportedFunctionLikeDecl]. */
+    private fun findEnclosingImport(spec: ImportSpecifier): Pair<String, ImportDeclaration>? {
+        for (result in binderResults) {
+            for (stmt in result.sourceFile.statements) {
+                if (stmt is ImportDeclaration) {
+                    val bindings = stmt.importClause?.namedBindings
+                    if (bindings is NamedImports && spec in bindings.elements) {
+                        return result.sourceFile.fileName to stmt
+                    }
+                }
+            }
+        }
+        return null
     }
 
     private fun narrowByCallPredicate(
@@ -91871,17 +92039,36 @@ interface DataView {
                 }
             }
             is UnionType -> {
-                // For each NON-bare-TP annotation member, recurse against every actual
-                // constituent; the structural getPropertyOfType lookups skip the ones
-                // that don't fit, so the binding lands from the matching constituent.
                 val actuals = if (actual is Type.Union) actual.types else listOf(actual)
+                // Partition members: bare type-params vs concrete.
+                val bareTps = mutableListOf<String>()
+                val concrete = mutableListOf<TypeNode>()
                 for (mem in annotation.types) {
                     val unwrapped = (mem as? ParenthesizedType)?.type ?: mem
-                    val isBareTp = unwrapped is TypeReference &&
-                        (unwrapped.typeName as? Identifier)?.text in tps &&
-                        unwrapped.typeArguments.isNullOrEmpty()
-                    if (isBareTp) continue
-                    for (a in actuals) collectPredicateTpBindings(unwrapped, a, tps, out)
+                    val tpName = (unwrapped as? TypeReference)
+                        ?.takeIf { it.typeArguments.isNullOrEmpty() }
+                        ?.let { (it.typeName as? Identifier)?.text }
+                        ?.takeIf { it in tps }
+                    if (tpName != null) bareTps.add(tpName) else concrete.add(unwrapped)
+                }
+                // Concrete members: recurse against every actual constituent (the
+                // structural getPropertyOfType lookups skip the ones that don't fit,
+                // so a binding lands from the matching constituent).
+                for (mem in concrete) for (a in actuals) collectPredicateTpBindings(mem, a, tps, out)
+                // A SINGLE naked type-param member (`T | undefined`, tsc's own
+                // `isDefined<T>(x: T | undefined): x is T`) binds to the actual
+                // constituents that NO concrete member covers — tsc's naked-type-
+                // parameter union inference. FP-safe (narrowing only removes members).
+                if (bareTps.size == 1 && bareTps[0] !in out) {
+                    val concreteTypes = concrete.mapNotNull { node ->
+                        getTypeFromTypeNode(node).takeIf { it !== errorType && it !== anyType }
+                    }
+                    val remaining = actuals.filter { a ->
+                        concreteTypes.none { ct -> checkTypeRelatedTo(a, ct, assignableRelation) }
+                    }
+                    if (remaining.isNotEmpty() && remaining.size < actuals.size) {
+                        out[bareTps[0]] = getUnionType(remaining)
+                    }
                 }
             }
             else -> {}
