@@ -34,6 +34,60 @@ completeness campaigns to dashboard-driven burn-down: the acceptance bar is the 
 tsc's source uses, with the corpus suite as the regression net. M5 unchanged —
 performance is the directive's second half and starts at v1 compliance.
 
+**Round 408 (2026-07-05) — a decomposed M3.4 slice: the TS2349 "not callable" family (the
+biggest bounded bucket a FRESH full `--listAll` bucketing surfaced INSIDE the round-407
+"M3-gated" tail). Self-compile (compiler profile) 2,639 → 2,618 (−21, TS2349 25 → 5); suite
+9,053 → 9,066 (+13 local, 0 regressions); 3 commits.** Method (re-confirms the M1.12 note):
+round 407 called the bounded pool "M3-gated", but that verdict was about the 30-line LOG TAIL —
+re-running `--listAll` and bucketing all 2,639 lines by normalized message shape put TS2349×25
+at the top of the bounded tail. Reading the 25 sites showed ONE root theme: a callee reference
+typed `F | undefined` that a guard should have narrowed to the callable `F`, but the callee-type
+resolution never consults flow narrowing (`getCalleeType` resolves an Identifier via
+`currentLocalTypes` = the DECLARED type; the CLAUDE.md flow-narrowing gotcha confirms
+`getTypeOfIdentifier` deliberately doesn't narrow). THREE FP-safe fixes, each "narrowing/typing
+only REMOVES constituents → can suppress a false positive but never add one" (the corpus suite is
+the gate): **(1) callee flow-narrowing (−13, commit dabd5557):** before the union callability
+verdict in `checkSingleCallExpressionTypes`, re-narrow an Identifier/PropertyAccess callee via the
+proven `getNarrowedTypeForReference`, and — under an optional call `f?.()` — drop the nullish
+constituents the `?.` short-circuits. Gated to a callee that ORIGINALLY had a non-callable member
+(so the case-(c) all-callable structural-mismatch path is untouched). Fixed `if (fn) fn()`,
+`fn?.()`, `typeof v === "string" ? v : v()`, `&&`-chain guards, `getCustomTransformers?.()`, etc.
+**(2) `typeof x === "function"` narrowing (−2, commit b2e2b8da):** `narrowByTypeOfGuard` returned
+the union unchanged for the "function" tag ("can't identify function types by flags"), so
+`typeof f === "function"` then `f()` FP-fired TS2349 (and a possibly-undefined callee FP-fired
+TS2722 — the −1 bonus). A function value is exactly one with call OR construct signatures; the
+tag now filters a union by callability (any/unknown/error kept on BOTH branches; never narrows to
+`never`; "object" tag untouched). Broader typeof-narrowing change → full-suite-verified zero
+regressions. **(3) empty-array contextual assignment (−6, commit 952cb715):** the tsc default-init
+idiom `(x || (x = [])).push(v)` / `(x ??= []).push(v)` typed the receiver `T[] | any[]` because
+`x = []` types the bare `[]` as `any[]` (B87.6) instead of contextually as the target's `T[]`;
+`.push` on `T[] | any[]` then resolves to a UNION of two differing call signatures →
+`getUnionType` of two sigs → the union-callee "not callable" verdict. `contextualAssignmentRhsType`
+returns the target's type for an empty `[]` RHS when the target is an Array/ReadonlyArray Reference
+(exactly tsc's contextual typing; `[]` is assignable to any array type so the result is only more
+precise), wired into `combineBinaryTypes`' `SyntaxKind.Equals` + the logical-assign ops. Removed
+all six `.push` default-init sites. 13 local tests (CalleeNarrowingNotCallableTest ×8,
+EmptyArrayAssignmentTypeTest ×5) with negative controls (unguarded possibly-undefined callee still
+fires; narrowed-to-non-callable still fires; non-empty array not retyped). **DEBUGGING SAGA (the
+assert case, deferred): six minimal probes could NOT reproduce the `Debug.assertIsDefined(machine.onLeft)`
+then `machine.onLeft()` FP (×3 remaining) — a custom `assertIsDefined<T>(): asserts value is
+NonNullable<T>` narrows correctly for identifier paths, property paths, namespace-member callees,
+generic receivers, intervening element-access assignments, AND generic-class constructor-parameter
+properties. The real factory/utilities.ts case is a deeper interaction of several real-code
+specifics I could not cheaply isolate; deferred.** Remaining 5 TS2349 = 3 sub-problems: the assert
+cases (×3, unreproducible), a `??=`-with-call-RHS (core.ts:2135 — assignment-narrowing gap for a
+call RHS, tsc narrows `x ??= foo()` to non-undefined regardless), and a `FlowNode[] | undefined`
+union-LHS default-init (binder.ts:1375 — the bare member types as a union `FlowNode | FlowNode[]`,
+likely a cross-interface-merge member-typing issue, so the empty-array fix's Array-Reference gate
+doesn't apply). All M3.4/M3-gated. **Other bounded families this session (investigated, deferred):
+TS2367×2 (`readonly string[][]` vs `readonly Extension[][]` — the array no-overlap check's
+`checkTypeRelatedTo(ReadonlyArray<ReadonlyArray<Extension>>, ReadonlyArray<ReadonlyArray<string>>)`
+returns false: a string-enum→string covariance gap through nested readonly-array = relation engine,
+M3).** META (re-confirms rounds 305-307/317-324 + round 395): a read-only "M3-gated / pool
+exhausted" verdict is about the GENERAL fix and the LOG TAIL — always re-bucket the ACTUAL full
+`--listAll` by message shape; a decomposed M3.4 slice (flow narrowing into the callee position) with
+tight FP-safe gates flips a whole family even while the M3.4 rebuild remains unbuilt.
+
 **Round 407 (2026-07-05, same session as 406) — M1.12: the arithmetic-pass family yields TWO
 more bounded buckets (self-compile 2,659 → 2,641, −18). Suite 9,043 → 9,050 (+7 local, 0
 regressions); 2 commits.** Round 405/406 marked the arithmetic family "M3-gated", but two
@@ -458,118 +512,6 @@ suppression), NOT to gate B533); **apparent-type Object.prototype gap** (keyword
 `toString` for the TS2790 delete check to resolve the member → M3); **checkJs augmentation**
 (jsExportMemberMergedWithModuleAugmentation2). None are clean-win-shaped like Omit/redefine.
 
-**Round 392 (2026-07-04) — M2.2 burn-down #2: the TS2728 lib-file-attribution
-cluster. Real-lib A/B recount 38 → 34 corpus failures (libMembers + externModule +
-errorMessageOnObjectLiteralType fixed, initializedDestructuringAssignmentTypes also
-cleared), zero corpus regressions, suite 8,971 / 0 / 3 (+3 local).** Sampled a fresh
-12-test slice of the 38; three (externModule, errorMessageOnObjectLiteralType, plus
-last session's libMembers) shared ONE root cause: under `useRealLibs` the default
-library is SPLIT across many files (`lib.es5.d.ts`, `lib.es2015.core.d.ts`, …), each
-parsed independently so positions OVERLAP (every file's nodes start at 0). The TS2728
-"declared here" related-info builders resolved the declaring file by POSITION
-(`resolveDeclarationSourceFile`), which under multi-file libs cannot disambiguate AND
-false-matches a large USER file whose text happens to span the lib position (a lib
-`sub` decl's position landed on `subby` in libMembers.ts → `libMembers.ts:15:19748`
-instead of `lib.es2015.core.d.ts:--:--`). Fix: NODE-first attribution — `bindRealLibs`
-populates `realLibDeclFile: Map<Node, String>` (every lib statement / interface-class
-member / inner var-decl node → its DIST fileName), and the three TS2728 builders
-(`findDeclarationRelatedInfo`, the property-suggestion site, `createPropertyDeclaredHereRelatedInfo`)
-consult `libFileOfDecl(decl)` BEFORE the position path. Real-libs-scoped by
-construction: the map is EMPTY under the embedded lib (single file) → embedded path
-byte-identical (guaranteed, verified by the full embedded gate). The existing
-`DEPRECATED_STRING_HTML_HELPERS` override (sub/sup/… → `lib.es2015.core.d.ts`) still
-fires on top — it only needs `isLib` true, which the map now guarantees. 3 local tests
-(RealLibsTs2728FileTest): non-es5 member → its real lib file (not es5), es5 member →
-`lib.es5.d.ts`, and a USER member control (still the user file with a real position —
-proving the map is lib-only). No self-compile dashboard delta (corpus-A/B fix; default
-stays off). **Round-392 triage of the other 9 sampled failures (for the burn-down):**
-correctOrderOfPromiseMethod/narrowingPastLastAssignment/keyRemappingKeyofResult = extra
-TS2322 from richer lib generics (Promise.all const-tuple, evolving-array concat, mapped
-key-remap → M3 engine); omitTypeHelperModifiers01 = SWAP TS2540↔TS2322 (Omit modifier +
-readonly); mergedClassNamespaceRecordCast/interfaceAssignmentCompat/divergentAccessorsTypes6
-= MISSING (Record-cast overlap + documented walkers under-fire); builtinIterator =
-duplicate TS2515 (short vs full `Iterator<…>` display); doYouNeedToChange… = `Promise<T>`
-vs `Promise<unknown>` display; keywordExpressionInternalComments = we emit NOTHING under
-real libs (investigate — possible exception, unusual).
-
-**Round 391 (2026-07-04) — M2.2 first burn-down: the real-lib A/B failing set
-drops 40 → 38 (arguments + unaryOperatorsInStrictMode), zero corpus regressions,
-suite 8,968 / 0 / 3 (+3 local).** Method: temp-flipped the `useRealLibs` default
-to true, ran a diverse 8-test slice of the 40, extracted the actual diffs from the
-result XMLs, and triaged them into distinct failure modes (recorded in the M2.2
-item below for the next burn-down session). The cleanest first fix — a genuine
-correctness bug the richer lib EXPOSED, not a compensating hardcode to gate: under
-`useRealLibs` the real lib's `interface IArguments` (type-only, no `declare var`
-companion) leaked into the VALUE-position spelling-suggestion candidate pool, so an
-unresolved value-position `arguments` drew "Did you mean 'IArguments'?" (TS2552)
-where tsc emits a plain TS2304. The embedded lib had no `IArguments` at all, which
-is exactly why only the real-lib A/B surfaced it. Fix (Checker `getSpellingSuggestion`):
-classify type-only symbols (Type flag, no Value/Module) from `perFileScope[fileName]`
-— lib globals + cross-file script locals, the SAME source the value-position pool
-draws from — into `typeOnlyNames`, not just the current file's binder locals. The
-type-position branch never consults `typeOnlyNames`, so the fix is structurally
-value-position-only; noted a symmetric latent FN (the type-position pool won't
-suggest a type-only LIB global for a mistyped TYPE — no corpus test exercises it).
-Lib-agnostic (embedded stays green; the fix only removes wrong suggestions that
-depended on the richer lib being present). 3 local tests (SpellingSuggestionTypeOnlyTest)
-+ two controls (`Object` still suggested in value position; a user interface still
-suggested in type position). No self-compile dashboard delta (a corpus-A/B fix;
-default stays off). **Triage of the other 7 sampled failures (for the next
-session):** redefineArray = construct-sig TS2322 double-emitting alongside TS2739
-(tsc reports only missing-props; our B112 pre-gate fires because real ArrayConstructor
-HAS a construct sig — embedded didn't); libMembers = TS2728 "declared here" related
-points at the wrong file/pos (`libMembers.ts:15:…` vs `lib.es2015.core.d.ts:--:--`)
-because `resolveDeclarationSourceFile`/`isLibFileName` only know the FIRST real-lib
-file (M2.1d's acknowledged multi-lib-file position ambiguity); isArray = `Array.isArray`
-type-guard narrowing not applied under real libs → extra TS2339 (M3.4);
-dissallowSymbolAsWeakType = extra TS2345 `null` ≁ `T` (generic inference, walker+engine
-interaction); truthinessCallExpressionCoercion2 = one MISSING TS2774; implementArrayInterface
-= extra TS2420 (9 missing es2015 Array methods) + TS2416-some (B537 semantics, implements-vs-array).
-
-**Round 390 (2026-07-04) — M2.1(a) landed: the real TypeScript lib sources ship
-as generated Kotlin (`RealLibFiles.kt`, 100 non-DOM lib files / 565,732 bytes,
-keyed by bare lib name, byte-faithful incl. CRLF).** `generateRealLibSources`
-(build.gradle.kts) reads the pinned commit's object DB directly (`git ls-tree`
-+ `git show` — offline; the sparse working tree never materializes `src/lib`)
-and emits ≤ 60,000-modified-UTF-8-byte `sb.append` chunks per string literal
-(the 64 KB class-file constant cap; es5.d.ts = 4 chunks), wired as a commonMain
-srcDir with every Kotlin compile task depending on it (first compile in a fresh
-clone now needs typescript-repo, same as tests always did). 3 local tests
-(RealLibFilesTest) pin multi-chunk reassembly (es5 > 65,535 chars with
-first/middle/last-chunk anchors) and the `/// <reference lib>` directives
-M2.1(b)'s DAG resolver will consume. No dashboard delta (no runtime behavior
-change — the checker doesn't read RealLibFiles yet). **Debugging saga worth the
-note: the first cut's KDoc contained the path glob `src/lib/*.d.ts` — the `/*`
-in it opened a NESTED Kotlin block comment that the NEXT declaration's KDoc
-`*/` re-balanced, so build.gradle.kts COMPILED with a silently-dead region:
-tasks registered after the comment were "not found", top-level probe statements
-never executed, and even an appended `this is a syntax error!!!` line "BUILT
-SUCCESSFULLY" (it sat inside the swallowed region).** The tell that cracked it:
-a deliberate EOF syntax error still building → the content can't be what's
-compiling → comment-depth scan found the imbalance. (A raw NUL byte from a
-tool-input NUL-char literal was a red herring fixed first.) CLAUDE.md's
-block-comments-NEST gotcha gained the silent-dead-region variant.
-**Same round, M2.1(b): `RealLibResolver` landed** — tsc's `libMap` (110 entries,
-aliases + back-compat fallbacks), `targetToLibMap` defaults, the reference-lib
-closure, and the priority ORDER (`getDefaultLibFilePriority` = libEntries index,
-not DFS — es5 pulls in decorators, which still sorts last). Unknown names and
-unshipped DOM references surface via `Resolution.unknownNames`/`.unavailable`.
-One expectation fixed mid-test: `esnext.bigint` alone expands to THREE libs
-(es2020.bigint's own directives pull es2020.intl → es2018.intl). 6 local tests
-against the real headers. Suite 8,957 / 0 / 3.
-**And M2.1(c): `RealLibSnapshots`** — parse-once shared ASTs (dist file
-names), fresh binds per consumer (mergeSymbolTable mutates merged-in symbols
-→ shared bound tables would cross-pollute programs), `useRealLibs` flag
-(default off). The real es5.d.ts parses + binds cleanly on the first try.
-4 local tests. Suite 8,961 / 0 / 3.
-**And M2.1(d): checker wiring + the corpus A/B.** `bindRealLibs()` behind
-`useRealLibs` (+ directive); cross-lib-file interface merging proven by
-`[1,2,3].includes(2)` under `@lib: es2016`. A/B with the default temporarily
-flipped: **40 / 8,961 failures, all error-baseline, zero js-emit — the M2.2
-burn-down list is seeded in the queue item.** Wall time +70% under real libs
-(fresh per-program binds of ~240KB+ of lib source) — noted as an M2.2
-pre-flip task. Suite (default off) 8,965 / 0 / 3. M2.1 is COMPLETE.
-
 ### Mission & strategy
 
 Three strategic reads that shape everything below:
@@ -620,8 +562,8 @@ Three strategic reads that shape everything below:
 
 | Metric | Source | Phase 17 target |
 |---|---|---|
-| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 9,053 with local tests as of round 407) |
-| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**2,639 measured at round 407**; M1 complete at 2,726/round 389; rounds 395–407 burned bounded histogram-tail buckets 2,726 → 2,639; round 406 TS1100+TS7023 −4, round 407 length-shadow + branded-number + enum-reverse-mapping −22; remaining bounded pool M3-gated (NonNull-strip attempted −17 but unmasks M3 object-literal/generic gaps, reverted); no-stub stays the honest default) |
+| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 9,066 with local tests as of round 408) |
+| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**2,618 measured at round 408**; M1 complete at 2,726/round 389; rounds 395–408 burned bounded histogram-tail buckets 2,726 → 2,618; round 407 length-shadow + branded-number + enum-reverse-mapping −22, round 408 the TS2349 "not callable" family (callee flow-narrowing + typeof-function + empty-array-assign) −21; remaining bounded pool M3.4/M3-gated (NonNull-strip attempted −17 but unmasks M3 object-literal/generic gaps, reverted); no-stub stays the honest default) |
 | Project corpus FPs (services/server/…) | `bench/` TSVs (M0.1) | 0 — **the v1 exit** (all 8 profiles) |
 | Conformance adoption | generated-test counts per category | POST-V1 (re-scope 2026-07-03 — see § "Post-v1 backlog", M3.0) |
 | Crashes on any input | bench runs | 0 |
@@ -960,7 +902,13 @@ Three strategic reads that shape everything below:
   TS2367×2 (string-enum-vs-string nested-array → M3/B425), TS2394×1. Env-legit: TS2591×43 (node
   globals — `--node-stub`), TS2304×2 (node `global`), TS2563×27 (B399 heuristic → M3.4). M3 cores:
   TS2339×838, TS2322×794, TS2345×405, TS7006×301 — the next real progress is a decomposed
-  M3.1/M3.4 sub-step.
+  M3.1/M3.4 sub-step. **Round 408 took exactly such a decomposed M3.4 slice: re-bucketing the
+  FULL `--listAll` (not the log tail) put TS2349×25 at the top of the bounded tail, and it fell
+  to a callee-position flow-narrowing family — callee flow-narrowing (−13) + `typeof x ===
+  "function"` callability filtering (−2) + empty-array contextual assignment (−6), self-compile
+  2,639 → 2,618 (TS2349 25 → 5). The 5 remaining TS2349 are M3.4/M3 (unreproducible generic-class
+  assert-narrowing ×3, `??=`-call-RHS ×1, union-LHS default-init ×1). Re-confirms: the M1.12
+  "M3-gated" verdict is about the LOG TAIL — bucket the full output.**
 
 **M2 — Real-lib migration (staged; decompose further at start)**
 

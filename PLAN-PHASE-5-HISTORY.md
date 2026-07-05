@@ -1,5 +1,117 @@
 # PLAN-PHASE-5 session-note history
 
+**Round 392 (2026-07-04) — M2.2 burn-down #2: the TS2728 lib-file-attribution
+cluster. Real-lib A/B recount 38 → 34 corpus failures (libMembers + externModule +
+errorMessageOnObjectLiteralType fixed, initializedDestructuringAssignmentTypes also
+cleared), zero corpus regressions, suite 8,971 / 0 / 3 (+3 local).** Sampled a fresh
+12-test slice of the 38; three (externModule, errorMessageOnObjectLiteralType, plus
+last session's libMembers) shared ONE root cause: under `useRealLibs` the default
+library is SPLIT across many files (`lib.es5.d.ts`, `lib.es2015.core.d.ts`, …), each
+parsed independently so positions OVERLAP (every file's nodes start at 0). The TS2728
+"declared here" related-info builders resolved the declaring file by POSITION
+(`resolveDeclarationSourceFile`), which under multi-file libs cannot disambiguate AND
+false-matches a large USER file whose text happens to span the lib position (a lib
+`sub` decl's position landed on `subby` in libMembers.ts → `libMembers.ts:15:19748`
+instead of `lib.es2015.core.d.ts:--:--`). Fix: NODE-first attribution — `bindRealLibs`
+populates `realLibDeclFile: Map<Node, String>` (every lib statement / interface-class
+member / inner var-decl node → its DIST fileName), and the three TS2728 builders
+(`findDeclarationRelatedInfo`, the property-suggestion site, `createPropertyDeclaredHereRelatedInfo`)
+consult `libFileOfDecl(decl)` BEFORE the position path. Real-libs-scoped by
+construction: the map is EMPTY under the embedded lib (single file) → embedded path
+byte-identical (guaranteed, verified by the full embedded gate). The existing
+`DEPRECATED_STRING_HTML_HELPERS` override (sub/sup/… → `lib.es2015.core.d.ts`) still
+fires on top — it only needs `isLib` true, which the map now guarantees. 3 local tests
+(RealLibsTs2728FileTest): non-es5 member → its real lib file (not es5), es5 member →
+`lib.es5.d.ts`, and a USER member control (still the user file with a real position —
+proving the map is lib-only). No self-compile dashboard delta (corpus-A/B fix; default
+stays off). **Round-392 triage of the other 9 sampled failures (for the burn-down):**
+correctOrderOfPromiseMethod/narrowingPastLastAssignment/keyRemappingKeyofResult = extra
+TS2322 from richer lib generics (Promise.all const-tuple, evolving-array concat, mapped
+key-remap → M3 engine); omitTypeHelperModifiers01 = SWAP TS2540↔TS2322 (Omit modifier +
+readonly); mergedClassNamespaceRecordCast/interfaceAssignmentCompat/divergentAccessorsTypes6
+= MISSING (Record-cast overlap + documented walkers under-fire); builtinIterator =
+duplicate TS2515 (short vs full `Iterator<…>` display); doYouNeedToChange… = `Promise<T>`
+vs `Promise<unknown>` display; keywordExpressionInternalComments = we emit NOTHING under
+real libs (investigate — possible exception, unusual).
+
+**Round 391 (2026-07-04) — M2.2 first burn-down: the real-lib A/B failing set
+drops 40 → 38 (arguments + unaryOperatorsInStrictMode), zero corpus regressions,
+suite 8,968 / 0 / 3 (+3 local).** Method: temp-flipped the `useRealLibs` default
+to true, ran a diverse 8-test slice of the 40, extracted the actual diffs from the
+result XMLs, and triaged them into distinct failure modes (recorded in the M2.2
+item below for the next burn-down session). The cleanest first fix — a genuine
+correctness bug the richer lib EXPOSED, not a compensating hardcode to gate: under
+`useRealLibs` the real lib's `interface IArguments` (type-only, no `declare var`
+companion) leaked into the VALUE-position spelling-suggestion candidate pool, so an
+unresolved value-position `arguments` drew "Did you mean 'IArguments'?" (TS2552)
+where tsc emits a plain TS2304. The embedded lib had no `IArguments` at all, which
+is exactly why only the real-lib A/B surfaced it. Fix (Checker `getSpellingSuggestion`):
+classify type-only symbols (Type flag, no Value/Module) from `perFileScope[fileName]`
+— lib globals + cross-file script locals, the SAME source the value-position pool
+draws from — into `typeOnlyNames`, not just the current file's binder locals. The
+type-position branch never consults `typeOnlyNames`, so the fix is structurally
+value-position-only; noted a symmetric latent FN (the type-position pool won't
+suggest a type-only LIB global for a mistyped TYPE — no corpus test exercises it).
+Lib-agnostic (embedded stays green; the fix only removes wrong suggestions that
+depended on the richer lib being present). 3 local tests (SpellingSuggestionTypeOnlyTest)
++ two controls (`Object` still suggested in value position; a user interface still
+suggested in type position). No self-compile dashboard delta (a corpus-A/B fix;
+default stays off). **Triage of the other 7 sampled failures (for the next
+session):** redefineArray = construct-sig TS2322 double-emitting alongside TS2739
+(tsc reports only missing-props; our B112 pre-gate fires because real ArrayConstructor
+HAS a construct sig — embedded didn't); libMembers = TS2728 "declared here" related
+points at the wrong file/pos (`libMembers.ts:15:…` vs `lib.es2015.core.d.ts:--:--`)
+because `resolveDeclarationSourceFile`/`isLibFileName` only know the FIRST real-lib
+file (M2.1d's acknowledged multi-lib-file position ambiguity); isArray = `Array.isArray`
+type-guard narrowing not applied under real libs → extra TS2339 (M3.4);
+dissallowSymbolAsWeakType = extra TS2345 `null` ≁ `T` (generic inference, walker+engine
+interaction); truthinessCallExpressionCoercion2 = one MISSING TS2774; implementArrayInterface
+= extra TS2420 (9 missing es2015 Array methods) + TS2416-some (B537 semantics, implements-vs-array).
+
+**Round 390 (2026-07-04) — M2.1(a) landed: the real TypeScript lib sources ship
+as generated Kotlin (`RealLibFiles.kt`, 100 non-DOM lib files / 565,732 bytes,
+keyed by bare lib name, byte-faithful incl. CRLF).** `generateRealLibSources`
+(build.gradle.kts) reads the pinned commit's object DB directly (`git ls-tree`
++ `git show` — offline; the sparse working tree never materializes `src/lib`)
+and emits ≤ 60,000-modified-UTF-8-byte `sb.append` chunks per string literal
+(the 64 KB class-file constant cap; es5.d.ts = 4 chunks), wired as a commonMain
+srcDir with every Kotlin compile task depending on it (first compile in a fresh
+clone now needs typescript-repo, same as tests always did). 3 local tests
+(RealLibFilesTest) pin multi-chunk reassembly (es5 > 65,535 chars with
+first/middle/last-chunk anchors) and the `/// <reference lib>` directives
+M2.1(b)'s DAG resolver will consume. No dashboard delta (no runtime behavior
+change — the checker doesn't read RealLibFiles yet). **Debugging saga worth the
+note: the first cut's KDoc contained the path glob `src/lib/*.d.ts` — the `/*`
+in it opened a NESTED Kotlin block comment that the NEXT declaration's KDoc
+`*/` re-balanced, so build.gradle.kts COMPILED with a silently-dead region:
+tasks registered after the comment were "not found", top-level probe statements
+never executed, and even an appended `this is a syntax error!!!` line "BUILT
+SUCCESSFULLY" (it sat inside the swallowed region).** The tell that cracked it:
+a deliberate EOF syntax error still building → the content can't be what's
+compiling → comment-depth scan found the imbalance. (A raw NUL byte from a
+tool-input NUL-char literal was a red herring fixed first.) CLAUDE.md's
+block-comments-NEST gotcha gained the silent-dead-region variant.
+**Same round, M2.1(b): `RealLibResolver` landed** — tsc's `libMap` (110 entries,
+aliases + back-compat fallbacks), `targetToLibMap` defaults, the reference-lib
+closure, and the priority ORDER (`getDefaultLibFilePriority` = libEntries index,
+not DFS — es5 pulls in decorators, which still sorts last). Unknown names and
+unshipped DOM references surface via `Resolution.unknownNames`/`.unavailable`.
+One expectation fixed mid-test: `esnext.bigint` alone expands to THREE libs
+(es2020.bigint's own directives pull es2020.intl → es2018.intl). 6 local tests
+against the real headers. Suite 8,957 / 0 / 3.
+**And M2.1(c): `RealLibSnapshots`** — parse-once shared ASTs (dist file
+names), fresh binds per consumer (mergeSymbolTable mutates merged-in symbols
+→ shared bound tables would cross-pollute programs), `useRealLibs` flag
+(default off). The real es5.d.ts parses + binds cleanly on the first try.
+4 local tests. Suite 8,961 / 0 / 3.
+**And M2.1(d): checker wiring + the corpus A/B.** `bindRealLibs()` behind
+`useRealLibs` (+ directive); cross-lib-file interface merging proven by
+`[1,2,3].includes(2)` under `@lib: es2016`. A/B with the default temporarily
+flipped: **40 / 8,961 failures, all error-baseline, zero js-emit — the M2.2
+burn-down list is seeded in the queue item.** Wall time +70% under real libs
+(fresh per-program binds of ~240KB+ of lib source) — noted as an M2.2
+pre-flip task. Suite (default off) 8,965 / 0 / 3. M2.1 is COMPLETE.
+
 Archived Phase-17 session notes trimmed from PLAN-PHASE-5.md (most recent first). See PLAN-PHASE-5.md for the live queue + the ~10 most-recent notes.
 
 **Round 389 (2026-07-03) — M1.11 landed: self-compile 2,794 → 2,726 (−68;
