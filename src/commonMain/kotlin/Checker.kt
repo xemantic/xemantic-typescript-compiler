@@ -141319,6 +141319,44 @@ interface DataView {
                             if (objT !== anyType && objT !== errorType && objT !is Type.Union) {
                                 currentLocalTypes[declName] = objT
                             }
+                        } else if (declName != null && decl.type == null &&
+                            stmt.declarationList.flags == SyntaxKind.ConstKeyword &&
+                            declName !in currentLocalTypes &&
+                            (decl.initializer is PropertyAccessExpression ||
+                                decl.initializer is ElementAccessExpression ||
+                                decl.initializer is CallExpression ||
+                                decl.initializer is NonNullExpression)) {
+                            // An un-annotated `const` whose name SHADOWS an outer same-named
+                            // FUNCTION and whose initializer types to a concrete PRIMITIVE
+                            // records so a later bare-identifier operand resolves to the
+                            // shadowing local, not past it to the outer function. tsc's own
+                            // core.ts exports `function length/min/max(...): number`, which a
+                            // local `const length = arr.length` / `const max = length(sig.tp)`
+                            // shadows — without this, `i < length` / `min < max` types the
+                            // operand as the imported function → FP TS2365.
+                            //
+                            // The SHADOW gate is load-bearing: a non-shadowing local like
+                            // `const numStatements = source.length` must NOT record `number`,
+                            // or it UNMASKS a pre-existing narrowing FP on the OTHER operand
+                            // (`statementOffset < numStatements` where statementOffset is an
+                            // un-narrowed `number | undefined` param — this pass has no flow
+                            // narrowing). Leaving non-shadowing locals as `any` keeps the pass's
+                            // default suppression. Gated to `const` (stable type) + a bare
+                            // primitive intrinsic result (never union/any/object/function).
+                            val outerT = getTypeOfExpression(decl.name)
+                            if (outerT is Type.Object && outerT.callSignatures?.isNotEmpty() == true) {
+                                // Record the concrete primitive when determinable, else `anyType`.
+                                // Because the name shadows a FUNCTION (gate above), an `any`
+                                // fallback only SUPPRESSES the bogus `<operand> op <thisLocal>`
+                                // check (an `any` operand bails) — it cannot unmask anything, and
+                                // it catches the cases where the initializer (`outer.length` on a
+                                // narrowed-union receiver this pass can't resolve) types to `any`.
+                                val initT = getTypeOfExpression(decl.initializer)
+                                currentLocalTypes[declName] =
+                                    if (initT === numberType || initT === stringType ||
+                                        initT === booleanType || initT === bigintType) initT
+                                    else anyType
+                            }
                         }
                     }
                 }
