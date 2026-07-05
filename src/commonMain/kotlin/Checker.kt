@@ -1058,6 +1058,12 @@ class Checker(
      *  `init` per the init-order trap. */
     private val importedNamespaceSymCache = HashMap<Int, Symbol?>()
 
+    /** M3.4 (round 411): process-wide memo for [resolveImportedEnumSymbol] (alias symbol
+     *  id → enum Symbol, or null) — the enum-flavored sibling of [importedNamespaceSymCache],
+     *  for discriminated-union narrowing keyed on a barrel-imported enum member
+     *  (`s.type === UpToDateStatusType.X`). Declared before `init` per the init-order trap. */
+    private val importedEnumSymCache = HashMap<Int, Symbol?>()
+
     /** P0 (services hang): LIVE recursion depth across BOTH flow walkers INCLUDING
      *  re-entrant walks — [narrowByAssertCall]/[narrowByCallPredicate] resolve the
      *  callee, which types a PropertyAccess receiver, which narrows it at its own
@@ -91647,15 +91653,21 @@ interface DataView {
             }
             else -> return null
         }
-        // Collect literal types from cases in the [clauseStart, clauseEnd) range.
+        // Collect literal types (and enum-member keys, M3.4) from cases in the
+        // [clauseStart, clauseEnd) range.
         val literalTypes = mutableListOf<Type>()
+        val caseEnumKeys = mutableSetOf<String>()
         val clauses = flowNode.switchStatement.caseBlock
         var idx = 0
         for (clause in clauses) {
             if (idx >= flowNode.clauseEnd) break
             if (idx >= flowNode.clauseStart) {
                 when (clause) {
-                    is CaseClause -> literalTypeOfExpression(clause.expression)?.let { literalTypes.add(it) }
+                    is CaseClause -> {
+                        val lit = literalTypeOfExpression(clause.expression)
+                        if (lit != null) literalTypes.add(lit)
+                        else enumMemberKeyOfExpr(clause.expression)?.let { caseEnumKeys.add(it) }
+                    }
                     is DefaultClause -> {
                         // Default clause — no narrowing possible from this clause alone.
                         return null
@@ -91665,8 +91677,22 @@ interface DataView {
             }
             idx++
         }
-        if (literalTypes.isEmpty()) return null
+        if (literalTypes.isEmpty() && caseEnumKeys.isEmpty()) return null
         if (t !is Type.Union) return null
+        // Enum-member discriminant switch (e.g. `switch (s.type) { case Kind.B: }` where the
+        // member declares `type: Kind.B`): the enum-member types resolve to `anyType`, so the
+        // literal path can't match them — narrow on the AST-read enum key instead.
+        if (literalTypes.isEmpty() && caseEnumKeys.isNotEmpty() && !matchesDirectly) {
+            val discriminant = discriminantName ?: return null
+            val filteredE = filterUnionByEnumDiscriminant(t.types, discriminant, caseEnumKeys, keep = true)
+            return when {
+                filteredE == null || filteredE.isEmpty() -> null
+                filteredE.size == 1 -> filteredE[0]
+                filteredE.size == t.types.size -> null
+                else -> getUnionType(filteredE)
+            }
+        }
+        if (literalTypes.isEmpty()) return null
         val filtered = if (matchesDirectly) {
             // Direct path: filter by member-assignable-from-literal.
             t.types.filter { member ->
@@ -92386,6 +92412,21 @@ interface DataView {
         }
         val propName = (propAccess.name).text
         if (propName.isEmpty()) return null
+
+        // Enum-member discriminant path (e.g. `s.type === Kind.A` where the member declares
+        // `type: Kind.A`). Enum-member types resolve to `anyType` in our engine (they aren't
+        // modeled as literals), so the plain-literal path below never fires for them. Match on
+        // the enum member's canonical key read from the AST instead. Returns before the literal
+        // path when a genuine enum discriminant is found.
+        enumMemberKeyOfExpr(literalSide)?.let { rhsKey ->
+            filterUnionByEnumDiscriminant(members, propName, setOf(rhsKey), keep = equal)?.let { filtered ->
+                return when (t) {
+                    is Type.Union -> getUnionType(filtered)
+                    else -> if (filtered.isEmpty()) neverType else t
+                }
+            }
+        }
+
         val literalType = literalTypeOfExpression(literalSide) ?: return null
         // For the single-member case, only narrow-to-never when the member GENUINELY
         // carried the discriminant as a literal — otherwise fall through (return null)
@@ -92432,6 +92473,133 @@ interface DataView {
         a === trueType && b === trueType -> true
         a === falseType && b === falseType -> true
         else -> false
+    }
+
+    // --- Enum-member discriminant narrowing (M3.4) ------------------------------------------
+    // Enum-member types (`type: Kind.A`) resolve to `anyType` in our engine — they are not
+    // modeled as literals — so discriminated unions keyed on an enum member (tsc's own
+    // `UpToDateStatus`, keyed on `type: UpToDateStatusType.X`) never narrow through the
+    // literal path. These helpers match on the enum member's canonical identity read from the
+    // AST, without changing the general type representation (which would be nominal-enum
+    // territory / B425-risky). FP-safe by construction: a member without a resolvable
+    // enum-member discriminant annotation is always KEPT (we cannot prove its exclusion), and
+    // narrowing only ever removes union members.
+
+    /** Resolve `enumIdent` (an enum reference by simple name) in the narrowing scope to its
+     *  canonical enum symbol, or null if it isn't an enum in scope. */
+    private fun resolveEnumSymbolForDiscriminant(enumIdent: String): Symbol? {
+        val sym = currentFileLocals?.get(enumIdent) ?: globals[enumIdent] ?: return null
+        val target = resolveAlias(sym)
+        if (target.flags.hasAny(SymbolFlags.Enum)) return target
+        // Barrel-imported enum (tsc's `import { UpToDateStatusType } from "./_namespaces/ts.js"`):
+        // the general resolveAlias can't follow the ESM `.js` specifier + `export *` barrel
+        // (round 409), so it returns the Alias itself. Resolve it FLOW-ONLY, mirroring the
+        // barrel-imported-guard resolution — a resolveAlias `.js`/star fallback regressed the
+        // self-compile via a TS2315 flood (round 409), so this stays confined to narrowing.
+        if (target.flags.hasAny(SymbolFlags.Alias)) {
+            resolveImportedEnumSymbol(target, mutableSetOf())?.let { return it }
+        }
+        return null
+    }
+
+    /** FLOW-ONLY resolution of a barrel-imported enum alias to its target enum Symbol,
+     *  following ESM `.js` specifiers + `export *` barrels. The enum-flavored sibling of
+     *  [resolveImportedNamespaceSymbol]; memoized in [importedEnumSymCache], never touches the
+     *  general resolveAlias cache. Only the flow-narrowing discriminant paths consult it →
+     *  FP-safe (narrowing removes union constituents). */
+    private fun resolveImportedEnumSymbol(aliasSymbol: Symbol, visited: MutableSet<Int>): Symbol? {
+        val topLevel = visited.isEmpty()
+        if (topLevel && importedEnumSymCache.containsKey(aliasSymbol.id)) {
+            return importedEnumSymCache[aliasSymbol.id]
+        }
+        val result = computeImportedEnumSymbol(aliasSymbol, visited)
+        if (topLevel) importedEnumSymCache[aliasSymbol.id] = result
+        return result
+    }
+
+    private fun computeImportedEnumSymbol(aliasSymbol: Symbol, visited: MutableSet<Int>): Symbol? {
+        if (!visited.add(aliasSymbol.id)) return null
+        for (decl in aliasSymbol.declarations) {
+            if (decl !is ImportSpecifier) continue
+            val originalName = decl.propertyName?.text ?: decl.name.text
+            val (contextFile, importDecl) = findEnclosingImport(decl) ?: continue
+            val spec = (importDecl.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+            val targetFile = resolveModuleSpecifier(spec, importDecl)
+                ?: resolveAliasJsModuleSpecifier(spec, contextFile)
+                ?: continue
+            val tr = fileResults[targetFile] ?: continue
+            val sym = tr.locals[originalName]
+                ?: resolveExportedSymbolThroughStars(tr.sourceFile, originalName)
+                ?: continue
+            if (sym.flags.hasAny(SymbolFlags.Enum)) return sym
+            if (sym.flags.hasAny(SymbolFlags.Alias)) computeImportedEnumSymbol(sym, visited)?.let { return it }
+        }
+        return null
+    }
+
+    /** An enum-member EXPRESSION `Enum.Member` (through parens) → `"symId#Member"`, else null.
+     *  The member must actually exist on the resolved enum (guards against a non-enum `A.B`). */
+    private fun enumMemberKeyOfExpr(expr: Expression): String? {
+        val pa = unwrapParensExpr(expr) as? PropertyAccessExpression ?: return null
+        val enumIdent = (pa.expression as? Identifier)?.text ?: return null
+        val member = pa.name.text
+        if (member.isEmpty()) return null
+        val sym = resolveEnumSymbolForDiscriminant(enumIdent) ?: return null
+        if (enumValues[sym.id]?.containsKey(member) != true) return null
+        return "${sym.id}#$member"
+    }
+
+    /** An enum-member TYPE annotation `Enum.Member`, or a `UnionType` of such, → the set of
+     *  `"symId#Member"` keys; null if [node] isn't (entirely) enum-member type references. */
+    private fun enumMemberKeysOfTypeNode(node: TypeNode?): Set<String>? {
+        when (node) {
+            is UnionType -> {
+                val keys = mutableSetOf<String>()
+                for (m in node.types) keys.addAll(enumMemberKeysOfTypeNode(m) ?: return null)
+                return keys.ifEmpty { null }
+            }
+            is TypeReference -> {
+                val qn = node.typeName as? QualifiedName ?: return null
+                val enumIdent = (qn.left as? Identifier)?.text ?: return null
+                val member = qn.right.text
+                if (member.isEmpty()) return null
+                val sym = resolveEnumSymbolForDiscriminant(enumIdent) ?: return null
+                if (enumValues[sym.id]?.containsKey(member) != true) return null
+                return setOf("${sym.id}#$member")
+            }
+            else -> return null
+        }
+    }
+
+    /** The declared TypeNode of union [member]'s discriminant property [propName] (from its
+     *  declaration), since the resolved property type is `anyType` for an enum-member. */
+    private fun discriminantPropAnnotation(member: Type, propName: String): TypeNode? {
+        val apparent = getApparentType(member) as? Type.Object ?: return null
+        val propSym = getPropertyOfType(apparent, propName) ?: return null
+        for (decl in propSym.declarations) {
+            val ann = (decl as? PropertyDeclaration)?.type
+            if (ann != null) return ann
+        }
+        return null
+    }
+
+    /** Filter union [members] by an enum-member discriminant [propName] against [caseKeys]
+     *  (the enum keys being tested). Positive branch ([keep] = true): keep a member whose
+     *  discriminant can be one of [caseKeys]. Negative branch: keep a member that can still be
+     *  some value OUTSIDE [caseKeys] (so a multi-valued discriminant survives a single `!==`).
+     *  Returns null when NO member carried a resolvable enum-member discriminant (so callers
+     *  fall through to the plain-literal path). */
+    private fun filterUnionByEnumDiscriminant(
+        members: List<Type>, propName: String, caseKeys: Set<String>, keep: Boolean,
+    ): List<Type>? {
+        var anyMatched = false
+        val filtered = members.filter { member ->
+            val keys = discriminantPropAnnotation(member, propName)?.let { enumMemberKeysOfTypeNode(it) }
+                ?: return@filter true
+            anyMatched = true
+            if (keep) keys.any { it in caseKeys } else keys.any { it !in caseKeys }
+        }
+        return if (anyMatched) filtered else null
     }
 
     /**

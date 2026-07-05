@@ -101,6 +101,44 @@ class AssignmentRhsNarrowingTest {
     }
 
     @Test
+    fun `while-loop param reassignment with deep multi-base chain - no error`() {
+        // EXACT shape of utilities.ts expressionResultIsUnused: a `while (true)` loop reassigns the
+        // PARAMETER `node` to a type-guard-narrowed `const parent`, where the narrowed type is a
+        // deep (6-level) multi-base subtype.
+        val d = diags(
+            """
+            interface Node { kind: number; parent: Node; }
+            interface Expression extends Node { _expressionBrand: any; }
+            interface UnaryExpression extends Expression { _unaryExpressionBrand: any; }
+            interface UpdateExpression extends UnaryExpression { _updateExpressionBrand: any; }
+            interface LeftHandSideExpression extends UpdateExpression { _leftHandSideExpressionBrand: any; }
+            interface MemberExpression extends LeftHandSideExpression { _memberExpressionBrand: any; }
+            interface PrimaryExpression extends MemberExpression { _primaryExpressionBrand: any; }
+            interface JSDocContainer { _jsdocContainerBrand: any; }
+            interface ParenthesizedExpression extends PrimaryExpression, JSDocContainer { _parenBrand: any; }
+            declare function isParenthesizedExpression(n: Node): n is ParenthesizedExpression;
+
+            export function walk(node: Expression): boolean {
+                while (true) {
+                    const parent: Node = node.parent;
+                    if (isParenthesizedExpression(parent)) {
+                        node = parent; // parent : ParenthesizedExpression <: Expression — OK
+                        continue;
+                    }
+                    return false;
+                }
+            }
+            """,
+        )
+        assertTrue(
+            d.none { it.code == 2741 || it.code == 2322 || it.code == 2739 },
+            "assigning a deep-chain guard-narrowed `parent` to an `Expression` parameter inside a " +
+                "while-loop must not fire a missing-property error; got: " +
+                d.joinToString { "TS${it.code}: ${it.message}" },
+        )
+    }
+
+    @Test
     fun `genuine widening assignment still fires - negative control`() {
         // No guard: assigning a bare `Node` to an `Expression` local IS an error.
         val d = diags(
