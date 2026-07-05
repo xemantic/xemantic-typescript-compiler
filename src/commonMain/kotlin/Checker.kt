@@ -38567,7 +38567,10 @@ class Checker(
                 }
             }
             is InterfaceDeclaration -> {
-                // Check interface method/property parameter names for restricted identifiers
+                // Check interface method/index parameter names for restricted identifiers.
+                // A property/method NAME is never restricted (tsc's checkStrictModeEvalOrArguments
+                // only fires for binding names — variables, parameters, function names, assignment
+                // LHS — never a property/method name), so `interface I { arguments: T }` is legal.
                 for (member in stmt.members) {
                     when (member) {
                         is MethodDeclaration -> {
@@ -38584,10 +38587,6 @@ class Checker(
                             for (param in member.parameters) {
                                 checkStrictModeBindingName(param.name, source, fileName, restricted)
                             }
-                        }
-                        is PropertyDeclaration -> {
-                            val name = member.name
-                            if (name is Identifier) checkStrictModeName(name, source, fileName, restricted)
                         }
                         else -> {}
                     }
