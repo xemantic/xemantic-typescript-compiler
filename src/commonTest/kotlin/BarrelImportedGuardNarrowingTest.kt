@@ -201,6 +201,65 @@ class BarrelImportedGuardNarrowingTest {
         assertEquals(emptyList(), ts2345(result), "a renamed re-export specifier must narrow too")
     }
 
+    // A leaf module wrapping the guards in a namespace + a barrel re-exporting it —
+    // tsc's `Debug.assertIsDefined` / `Debug.assert` shape (round 409 follow-up).
+    private val nsGuardsLeaf =
+        """
+        export namespace Guard {
+            export function isString(x: string | number): x is string {
+                return typeof x === "string";
+            }
+            export function assertString(x: string | number): asserts x is string {}
+        }
+        """.trimIndent()
+
+    @Test
+    fun namespaceMemberAssertImportedThroughABarrelNarrows() {
+        val result = build(
+            mapOf(
+                "/proj/src/guard.ts" to nsGuardsLeaf,
+                "/proj/src/barrel.ts" to """export * from "./guard.js";""",
+                "/proj/src/index.ts" to """
+                    import { Guard } from "./barrel.js";
+                    declare function takesString(s: string): void;
+                    export function f(x: string | number): void {
+                        Guard.assertString(x);
+                        takesString(x);
+                    }
+                """.trimIndent(),
+            )
+        )
+        assertEquals(
+            emptyList(),
+            ts2345(result),
+            "a namespace-member `asserts` imported through a barrel must narrow",
+        )
+    }
+
+    @Test
+    fun namespaceMemberGuardImportedThroughABarrelNarrows() {
+        val result = build(
+            mapOf(
+                "/proj/src/guard.ts" to nsGuardsLeaf,
+                "/proj/src/barrel.ts" to """export * from "./guard.js";""",
+                "/proj/src/index.ts" to """
+                    import { Guard } from "./barrel.js";
+                    declare function takesString(s: string): void;
+                    export function f(x: string | number): void {
+                        if (Guard.isString(x)) {
+                            takesString(x);
+                        }
+                    }
+                """.trimIndent(),
+            )
+        )
+        assertEquals(
+            emptyList(),
+            ts2345(result),
+            "a namespace-member type guard imported through a barrel must narrow",
+        )
+    }
+
     @Test
     fun negativeControlNonGuardCallDoesNotNarrow() {
         // `plain` returns a plain boolean, NOT a type predicate — the guard machinery

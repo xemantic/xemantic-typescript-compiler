@@ -1052,6 +1052,12 @@ class Checker(
      *  documented P0). Declared before `init` per the init-order trap. */
     private val importedGuardDeclCache = HashMap<Int, Node?>()
 
+    /** M3.4 (round 409): process-wide memo for [resolveImportedNamespaceSymbol]
+     *  (alias symbol id → namespace Symbol, or null) — the namespace-receiver sibling
+     *  of [importedGuardDeclCache] for `Debug.assertIsDefined(x)`. Declared before
+     *  `init` per the init-order trap. */
+    private val importedNamespaceSymCache = HashMap<Int, Symbol?>()
+
     /** P0 (services hang): LIVE recursion depth across BOTH flow walkers INCLUDING
      *  re-entrant walks — [narrowByAssertCall]/[narrowByCallPredicate] resolve the
      *  callee, which types a PropertyAccess receiver, which narrows it at its own
@@ -91839,14 +91845,60 @@ interface DataView {
     private fun resolveNamespaceMemberFnDecl(callee: PropertyAccessExpression): Node? {
         val recvIdent = callee.expression as? Identifier ?: return null
         val recvSym = currentFileLocals?.get(recvIdent.text) ?: globals[recvIdent.text] ?: return null
-        val resolved = if (recvSym.flags.hasAny(SymbolFlags.Alias)) resolveAlias(recvSym) else recvSym
-        if (!resolved.flags.hasAny(
-                SymbolFlags.Module or SymbolFlags.NamespaceModule or SymbolFlags.ValueModule
-            )
-        ) return null
+        val moduleFlags = SymbolFlags.Module or SymbolFlags.NamespaceModule or SymbolFlags.ValueModule
+        val resolved = if (recvSym.flags.hasAny(SymbolFlags.Alias)) {
+            val viaGeneral = resolveAlias(recvSym)
+            // M3.4 (round 409): the general resolveAlias stays byte-identical (does NOT
+            // follow ESM `.js` / `export *` barrels), so a barrel-imported namespace
+            // (`import { Debug } from "./_namespaces/ts.js"`) doesn't resolve — fall back
+            // to the FLOW-ONLY resolver so `Debug.assertIsDefined(x)` narrows.
+            if (viaGeneral.flags.hasAny(moduleFlags)) viaGeneral
+            else resolveImportedNamespaceSymbol(recvSym, mutableSetOf()) ?: viaGeneral
+        } else recvSym
+        if (!resolved.flags.hasAny(moduleFlags)) return null
         val member = resolved.exports?.get(callee.name.text) ?: return null
         return member.valueDeclaration as? FunctionDeclaration
             ?: member.declarations.firstOrNull { it is FunctionDeclaration }
+    }
+
+    /**
+     * M3.4 (round 409): FLOW-ONLY resolution of an imported namespace alias
+     * [aliasSymbol] (`import { Debug } from "./_namespaces/ts.js"`) to its namespace
+     * Symbol, following ESM `.js` specifiers + `export *` barrels — so
+     * `Debug.assertIsDefined(x)` narrows. The namespace-receiver sibling of
+     * [resolveImportedFunctionLikeDecl]; memoized in [importedNamespaceSymCache],
+     * NEVER touches the general resolveAlias cache. Only the flow walkers consult it
+     * → FP-safe (narrowing removes union constituents). [visited] guards a cycle.
+     */
+    private fun resolveImportedNamespaceSymbol(aliasSymbol: Symbol, visited: MutableSet<Int>): Symbol? {
+        val topLevel = visited.isEmpty()
+        if (topLevel && importedNamespaceSymCache.containsKey(aliasSymbol.id)) {
+            return importedNamespaceSymCache[aliasSymbol.id]
+        }
+        val result = computeImportedNamespaceSymbol(aliasSymbol, visited)
+        if (topLevel) importedNamespaceSymCache[aliasSymbol.id] = result
+        return result
+    }
+
+    private fun computeImportedNamespaceSymbol(aliasSymbol: Symbol, visited: MutableSet<Int>): Symbol? {
+        if (!visited.add(aliasSymbol.id)) return null
+        val moduleFlags = SymbolFlags.Module or SymbolFlags.NamespaceModule or SymbolFlags.ValueModule
+        for (decl in aliasSymbol.declarations) {
+            if (decl !is ImportSpecifier) continue
+            val originalName = decl.propertyName?.text ?: decl.name.text
+            val (contextFile, importDecl) = findEnclosingImport(decl) ?: continue
+            val spec = (importDecl.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+            val targetFile = resolveModuleSpecifier(spec, importDecl)
+                ?: resolveAliasJsModuleSpecifier(spec, contextFile)
+                ?: continue
+            val tr = fileResults[targetFile] ?: continue
+            val sym = tr.locals[originalName]
+                ?: resolveExportedSymbolThroughStars(tr.sourceFile, originalName)
+                ?: continue
+            if (sym.flags.hasAny(moduleFlags)) return sym
+            if (sym.flags.hasAny(SymbolFlags.Alias)) computeImportedNamespaceSymbol(sym, visited)?.let { return it }
+        }
+        return null
     }
 
     /**
