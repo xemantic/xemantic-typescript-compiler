@@ -783,6 +783,17 @@ class Checker(
     // branch). MUST be declared before init {} (init-order).
     private var arithTypeofNarrowedNames: Set<String> = emptySet()
 
+    // Round 416: identifier names TRUTHY-narrowed by an enclosing `&&` in the
+    // arithmetic pass — a `checkMode && checkMode & X` (checkMode a `CheckMode |
+    // undefined` param) narrows checkMode to non-nullish on the right of `&&`, but
+    // this pass has no flow narrowing, so the un-narrowed union FP's TS2362/TS2363
+    // (a `Type.Union` carries no Undefined flag on itself → the operand-classifier
+    // sees the undefined member and rejects). Names here have their nullish members
+    // stripped in [arithOperandType]. FP-safe: a truthy operand genuinely has no
+    // nullish members, so stripping only ever suppresses a wrong error.
+    // MUST be declared before init {} (init-order).
+    private var arithTruthyNarrowedNames: Set<String> = emptySet()
+
     // Built-in generic type names — skip TS2315/TS2344 checks for these
     // MUST be declared before init {} to avoid Kotlin property initialization order issue
     private val BUILTIN_GENERICS = setOf("Array", "ReadonlyArray", "Promise", "Map", "Set",
@@ -142402,6 +142413,21 @@ interface DataView {
                     finally { contextualType = saved }
                     return
                 }
+                // Round 416: a `&&` truthy-narrows its LEFT operand within its RIGHT.
+                // Handle it explicitly (the left-spine flatten below would lose the
+                // narrowing scope). `checkBinaryOperatorTypes` does nothing for `&&`
+                // itself (not an arithmetic/comparison op), so no per-node emit is lost.
+                // The narrowing set is live while walking the RIGHT, which is exactly
+                // when `checkBinaryOperatorTypes` runs for any `&`/arith node inside it.
+                if (expr.operator == SyntaxKind.AmpersandAmpersand) {
+                    checkArithmeticInExpr(expr.left, source, fileName)
+                    val truthy = collectArithTruthyNarrowableNames(expr.left)
+                    val savedTruthy = arithTruthyNarrowedNames
+                    if (truthy.isNotEmpty()) arithTruthyNarrowedNames = savedTruthy + truthy
+                    try { checkArithmeticInExpr(expr.right, source, fileName) }
+                    finally { arithTruthyNarrowedNames = savedTruthy }
+                    return
+                }
                 // B64.4-style iterative left-spine flatten. Run `checkBinaryOperatorTypes`
                 // for each BinaryExpression on the spine — preserves the per-node
                 // diagnostic emission while avoiding StackOverflow on deep chains.
@@ -142422,8 +142448,20 @@ interface DataView {
             is ParenthesizedExpression -> checkArithmeticInExpr(expr.expression, source, fileName)
             is ConditionalExpression -> {
                 checkArithmeticInExpr(expr.condition, source, fileName)
-                checkArithmeticInExpr(expr.whenTrue, source, fileName)
-                checkArithmeticInExpr(expr.whenFalse, source, fileName)
+                // Round 416: the condition narrows operands in both branches — truthy names in
+                // whenTrue (`x ? x + 1 : 0`), and non-nullish names in whenFalse when the
+                // condition is a nullish test (`length === undefined ? 0 : start! + length`,
+                // scanner.ts:3995). Same FP-safety as the `&&` narrowing.
+                val trueNames = collectArithTruthyNarrowableNames(expr.condition)
+                val savedT = arithTruthyNarrowedNames
+                if (trueNames.isNotEmpty()) arithTruthyNarrowedNames = savedT + trueNames
+                try { checkArithmeticInExpr(expr.whenTrue, source, fileName) }
+                finally { arithTruthyNarrowedNames = savedT }
+                val falseNames = collectArithFalsyNonNullNames(expr.condition)
+                val savedF = arithTruthyNarrowedNames
+                if (falseNames.isNotEmpty()) arithTruthyNarrowedNames = savedF + falseNames
+                try { checkArithmeticInExpr(expr.whenFalse, source, fileName) }
+                finally { arithTruthyNarrowedNames = savedF }
             }
             is CallExpression -> {
                 checkArithmeticInExpr(expr.expression, source, fileName)
@@ -142904,9 +142942,77 @@ interface DataView {
      */
     private fun arithOperandType(e: Expression): Type {
         val t = getTypeOfExpression(e)
-        if (e !is NonNullExpression || t !is Type.Union) return t
+        if (t !is Type.Union) return t
+        // Strip nullish members from (a) an explicit NonNull `x!` operand (tsc types
+        // `x!` as `NonNullable<typeof x>`), or (b) a bare identifier truthy-narrowed by
+        // an enclosing `&&` (round 416, arithTruthyNarrowedNames). Both are FP-safe: the
+        // operand provably has no nullish value at this point.
+        var inner: Expression = e
+        while (inner is ParenthesizedExpression) inner = inner.expression
+        val stripNullish = e is NonNullExpression ||
+            (inner is Identifier && inner.text in arithTruthyNarrowedNames)
+        if (!stripNullish) return t
         val kept = t.types.filter { !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) }
         return if (kept.isEmpty() || kept.size == t.types.size) t else getUnionType(kept)
+    }
+
+    /** Round 416: names that are TRUTHY-narrowed (guaranteed non-nullish) whenever [cond]
+     *  holds — used to narrow `&&`-guarded operands in the arithmetic pass. A bare
+     *  identifier is truthy ⟹ non-nullish; `A && B` narrows the union of both sides;
+     *  `X !== undefined`/`X != null` narrows X. Conservative: any other shape → empty. */
+    private fun collectArithTruthyNarrowableNames(cond: Expression): Set<String> {
+        var c: Expression = cond
+        while (c is ParenthesizedExpression) c = c.expression
+        return when (c) {
+            is Identifier -> setOf(c.text)
+            is BinaryExpression -> when (c.operator) {
+                SyntaxKind.AmpersandAmpersand ->
+                    collectArithTruthyNarrowableNames(c.left) + collectArithTruthyNarrowableNames(c.right)
+                SyntaxKind.ExclamationEquals, SyntaxKind.ExclamationEqualsEquals -> {
+                    val l = c.left; val r = c.right
+                    val lit = { e: Expression -> (e as? Identifier)?.text == "undefined" ||
+                        (e as? Identifier)?.text == "null" }
+                    when {
+                        lit(r) && l is Identifier -> setOf(l.text)
+                        lit(l) && r is Identifier -> setOf(r.text)
+                        else -> emptySet()
+                    }
+                }
+                else -> emptySet()
+            }
+            else -> emptySet()
+        }
+    }
+
+    /** Round 416: names guaranteed non-nullish when [cond] is FALSE — used to narrow the
+     *  whenFalse branch of a ternary. `X === undefined`/`X === null` (false ⟹ X non-nullish),
+     *  `!X` (false ⟹ X truthy), `A || B` (false ⟹ both A and B false → union). */
+    private fun collectArithFalsyNonNullNames(cond: Expression): Set<String> {
+        var c: Expression = cond
+        while (c is ParenthesizedExpression) c = c.expression
+        return when (c) {
+            is PrefixUnaryExpression -> if (c.operator == SyntaxKind.Exclamation) {
+                var op: Expression = c.operand
+                while (op is ParenthesizedExpression) op = op.expression
+                if (op is Identifier) setOf(op.text) else emptySet()
+            } else emptySet()
+            is BinaryExpression -> when (c.operator) {
+                SyntaxKind.EqualsEquals, SyntaxKind.EqualsEqualsEquals -> {
+                    val l = c.left; val r = c.right
+                    val isNullish = { e: Expression -> (e as? Identifier)?.text == "undefined" ||
+                        (e as? Identifier)?.text == "null" }
+                    when {
+                        isNullish(r) && l is Identifier -> setOf(l.text)
+                        isNullish(l) && r is Identifier -> setOf(r.text)
+                        else -> emptySet()
+                    }
+                }
+                SyntaxKind.BarBar ->
+                    collectArithFalsyNonNullNames(c.left) + collectArithFalsyNonNullNames(c.right)
+                else -> emptySet()
+            }
+            else -> emptySet()
+        }
     }
 
     private fun arithObjectOperandBails(t: Type): Boolean {
