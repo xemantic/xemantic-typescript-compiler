@@ -60,15 +60,17 @@ FP-safe / suppression-only. **CLEARED the local-namespace-guard receiver shape (
 `state.program` sites (7+) do NOT clear:** the exact shape (assert-then-use, captured const,
 optional prop, multi-level + multiple inheritance, barrel-imported `Debug.assert(localGuard(state))`)
 clears in EVERY isolation repro I built (single-file, closure, barrel with sibling `export *`s,
-multi-inherit) — but in the real `createBuilderProgram` the flow graph is > 2000 nodes, and an
-instrumented run proved `narrowByAssertCall`/`narrowByCallPredicate` are NEVER called for
-`state`: the walk from a deep use back to the top-of-function assert FlowCall does not reach it
-(depth / captured-var-outer-flow / huge-function flow structure). This is the genuine M3.4-hard
-residual (huge-function flow depth, NOT resolution — the barrel `Debug` resolves fine in
-isolation) that the round-411 note flagged as "not a bounded slice"; it needs the flow walk to
-reach a top-of-function assert across a >2000-node graph (raise/reshape the walk budget for the
-receiver-narrowing case, or bind a per-function flow entry the captured-var walk can short-circuit
-to). 5 local tests (TypeGuardNarrowDownSingleTest). **PROCESS lessons (hard-won, cost ~2 rebuild
+multi-inherit) — but in the real `createBuilderProgram` an instrumented run gives the PRECISE diagnosis: the
+flow nodes ARE present (`getFlowAt(state.program)` = FlowCondition/FlowAssignment, non-null), but
+builder.ts is `cfaTooLarge` (flow graph = **3290 nodes** > 2000), so the narrowing walk hits
+`NARROW_MAX_DEPTH` (2000) before reaching the top-of-function assert FlowCall —
+`narrowByAssertCall`/`narrowByCallPredicate` NEVER fire for `state`. NOT resolution (the barrel
+`Debug` resolves fine in isolation) and NOT a binder flow-node gap. This is the genuine M3.4-hard
+residual the round-411 note flagged; the fix is a smarter/deeper walk for too-large files, but
+raising `NARROW_MAX_DEPTH` is the round-385 services-HANG P0 risk (a naive bump re-opens the
+exponential), so it needs the tsc-shaped budget rebuild (M3.4 "faithful budget consumption"). This
+one blocker gates ~15 builder.ts/es2015.ts/module.ts TS18048 + the 2 TS2722 sites — the highest-value
+next M3.4 target once the budget rebuild is designed. 5 local tests (TypeGuardNarrowDownSingleTest). **PROCESS lessons (hard-won, cost ~2 rebuild
 cycles): (1) `./gradlew --stop` mid-session WIPED the freshly-built `build/classes/kotlin/jvm/main`
 (gradle daemon-shutdown stale-output cleanup, aggravated by `pkill -9 KotlinCompileDaemon`) → the
 self-compile then failed "Could not find or load main class MainKt"; recover with a source `touch`
