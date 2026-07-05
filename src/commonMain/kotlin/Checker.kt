@@ -78321,6 +78321,10 @@ interface DataView {
                     }
                     // No default: check for exhaustive switch on a string/boolean literal type parameter
                     if (isExhaustiveLiteralSwitch(stmt)) return true
+                    // No default: an exhaustive ENUM / enum-member-union switch (every member of
+                    // the discriminant's enum covered, all cases return) is terminating — tsc
+                    // narrows the discriminant to `never` after all cases (round 414 Pattern C2).
+                    if (isExhaustiveEnumSwitch(stmt)) return true
                     return false
                 }
                 // Check that every clause either falls through to one that returns or returns itself
@@ -78459,6 +78463,115 @@ interface DataView {
             }
             else -> emptySet()
         }
+    }
+
+    /**
+     * TS2366/TS7030/TS2355: a `switch` with NO default clause is still TERMINATING when it
+     * EXHAUSTIVELY covers the discriminant's enum — tsc narrows the discriminant to `never`
+     * after all cases, so the statement after the switch is unreachable and the function
+     * cannot fall off the end. tsc's own source relies on this pervasively (round 414's
+     * "Pattern C2"): `getCategoryFormat(category: DiagnosticCategory)`,
+     * `getNonAssignmentOperatorForCompoundAssignment(kind: CompoundAssignmentOperator)`,
+     * `getSetExternalModuleIndicator` over `getEmitModuleDetectionKind(options)`,
+     * `getNewLineCharacter` over `options.newLine: NewLineKind | undefined`.
+     *
+     * FP-SAFE BY CONSTRUCTION: it claims exhaustive ONLY when it can prove the discriminant's
+     * full value set is covered — every case must be an `Enum.Member` / `undefined` / `null`,
+     * and the discriminant must resolve to a precise enum (or `enum | undefined/null`) whose
+     * every member is matched. Any uncertainty (a non-enum-member case, a discriminant that
+     * doesn't resolve to a clean enum, a missing member) returns false → the TS2366 stands, so
+     * it NEVER suppresses a genuinely non-exhaustive switch's diagnostic (no false negative).
+     * A `.kind` discriminated-union switch (the discriminant is a property of a union of
+     * interfaces, not an enum) falls outside this and correctly bails — a larger M3.4 slice.
+     * (This analysis feeds only [checkBodyForImplicitReturn]; TS7027 unreachable-code uses the
+     * separate [isDefinitelyTerminating], so a wrong claim here cannot spuriously report
+     * post-switch code as unreachable.)
+     */
+    private fun isExhaustiveEnumSwitch(stmt: SwitchStatement): Boolean {
+        if (!switchAlwaysReturns(stmt.caseBlock)) return false
+        // COVERED: the enum-member keys ("<symId>#<Member>") + nullish markers the cases select.
+        val covered = mutableSetOf<String>()
+        for (clause in stmt.caseBlock.filterIsInstance<CaseClause>()) {
+            val e = unwrapParensExpr(clause.expression)
+            when {
+                e is Identifier && e.text == "undefined" -> covered.add("@undefined")
+                e is Identifier && e.text == "null" -> covered.add("@null")
+                else -> covered.add(enumMemberKeyOfExpr(e) ?: return false)
+            }
+        }
+        // REQUIRED: the discriminant's full value set.
+        val required = requiredEnumSwitchKeys(stmt.expression) ?: return false
+        return covered.containsAll(required)
+    }
+
+    /** The exhaustive value set of a switch discriminant, or null if it doesn't resolve to a
+     *  precise enum (or `enum | undefined/null`). Prefers a simple parameter's declared type
+     *  ANNOTATION (avoids the fuzzy resolved type for a discriminated-union member); otherwise
+     *  the resolved expression type (a call/property whose type is a clean enum). */
+    private fun requiredEnumSwitchKeys(expr: Expression): Set<String>? {
+        if (expr is Identifier) {
+            val p = currentFunctionParams.firstOrNull { (it.name as? Identifier)?.text == expr.text }
+            p?.type?.let { return enumSwitchKeysFromTypeNode(it) }
+        }
+        return enumSwitchKeysFromType(getTypeOfExpression(expr))
+    }
+
+    /** Enum-member keys of a discriminant TYPE ANNOTATION: a bare enum name → all members; a
+     *  type alias → its definition (`CompoundAssignmentOperator` = union of `SyntaxKind` members);
+     *  an `Enum.Member` reference → that one member; a union → the union of the above; the
+     *  `undefined`/`null` members → nullish markers. Null on any non-enum constituent. */
+    private fun enumSwitchKeysFromTypeNode(node: TypeNode): Set<String>? {
+        when (node) {
+            is UnionType -> {
+                val keys = mutableSetOf<String>()
+                for (m in node.types) keys.addAll(enumSwitchKeysFromTypeNode(m) ?: return null)
+                return keys.ifEmpty { null }
+            }
+            is KeywordTypeNode -> return when (node.kind) {
+                SyntaxKind.UndefinedKeyword -> setOf("@undefined")
+                SyntaxKind.NullKeyword -> setOf("@null")
+                else -> null
+            }
+            is LiteralType -> {
+                val lit = node.literal
+                return if (lit is Identifier && lit.text == "null") setOf("@null") else null
+            }
+            is TypeReference -> {
+                val tn = node.typeName
+                if (tn is QualifiedName) return enumMemberKeysOfTypeNode(node)  // Enum.Member
+                if (tn is Identifier) {
+                    resolveEnumSymbolForDiscriminant(tn.text)?.let { esym ->
+                        val vals = enumValues[esym.id] ?: return null
+                        return vals.keys.map { "${esym.id}#$it" }.toSet()
+                    }
+                    val alias = (currentFileLocals?.get(tn.text) ?: globals[tn.text])
+                        ?.declarations?.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration
+                    if (alias != null) return enumSwitchKeysFromTypeNode(alias.type)
+                }
+                return null
+            }
+            else -> return null
+        }
+    }
+
+    /** Enum-member keys of a RESOLVED discriminant type: a pure enum object → all members; a
+     *  union of enum + undefined/null → members + nullish markers. Null on any other member. */
+    private fun enumSwitchKeysFromType(t: Type): Set<String>? {
+        val members = if (t is Type.Union) t.types else listOf(t)
+        val keys = mutableSetOf<String>()
+        for (m in members) {
+            when {
+                m.flags.hasAny(TypeFlags.Undefined) -> keys.add("@undefined")
+                m.flags.hasAny(TypeFlags.Null) -> keys.add("@null")
+                else -> {
+                    val sym = (m as? Type.Object)?.symbol
+                    if (sym == null || !sym.flags.hasAny(SymbolFlags.Enum)) return null
+                    val vals = enumValues[sym.id] ?: return null
+                    vals.keys.forEach { keys.add("${sym.id}#$it") }
+                }
+            }
+        }
+        return keys.ifEmpty { null }
     }
 
     private fun switchAlwaysReturns(clauses: List<Node>): Boolean {
