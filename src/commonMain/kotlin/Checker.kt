@@ -115690,6 +115690,39 @@ interface DataView {
         //   (b) some constituents non-callable → "Not all constituents ... are callable." + missing display
         //   (c) all constituents callable but sigs differ structurally → "Each member ... has signatures, but none ... compatible..."
         if (calleeType is Type.Union) {
+            // (M3.4 slice, round 408) Two FP suppressions before the "not callable"
+            // verdict — BOTH only REMOVE constituents, so they can suppress a false
+            // positive but never add one (the corpus suite is the regression gate):
+            //   1. An OPTIONAL-CALL `f?.(...)` short-circuits on a nullish callee, so a
+            //      `null`/`undefined` constituent is legal (tsc drops nullish from the
+            //      apparent callee type). getCalleeType keeps them.
+            //   2. A narrowable-reference callee (Identifier / property path) may have had
+            //      its `undefined` (non-callable) member removed by a truthiness / typeof /
+            //      `??=` / `||`-assign / assert guard — but getCalleeType resolves an
+            //      Identifier callee via currentLocalTypes (the DECLARED type) WITHOUT
+            //      applying flow narrowing (getTypeOfIdentifier deliberately does not; see
+            //      the flow-narrowing gotcha). Re-narrow the callee reference here.
+            // Gated to the case that WOULD have errored (a non-callable constituent), so
+            // the case-(c) all-callable structural-mismatch path below is untouched.
+            if ((calleeExpr is Identifier || calleeExpr is PropertyAccessExpression) &&
+                calleeType.types.any { getCallSignaturesOfType(it).isEmpty() }) {
+                var eff: Type = calleeType
+                if (expr.questionDotToken && eff is Type.Union) {
+                    val kept = eff.types.filter { !isNullishConstituent(it) }
+                    eff = when {
+                        kept.isEmpty() -> eff
+                        kept.size == 1 -> kept[0]
+                        else -> getUnionType(kept)
+                    }
+                }
+                if (eff is Type.Union) eff = getNarrowedTypeForReference(eff, calleeExpr)
+                fun allCallable(t: Type): Boolean = when {
+                    t === anyType || t === errorType -> true
+                    t is Type.Union -> t.types.all { allCallable(it) }
+                    else -> getCallSignaturesOfType(t).isNotEmpty()
+                }
+                if (allCallable(eff)) return
+            }
             val constituents = calleeType.types
             val nonCallable = constituents.filter { getCallSignaturesOfType(it).isEmpty() }
             val unionDisplay = typeToString(calleeType)
