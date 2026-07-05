@@ -113707,7 +113707,16 @@ interface DataView {
             }
             if (argDisplay != null) {
                 val recvType = getTypeOfExpression(expr.expression)
-                if (recvType is Type.Object && recvType !is Type.Reference && recvType !is Type.Interface) {
+                // Exclude an ENUM-object receiver: `NumericEnum[key]` is a valid reverse
+                // mapping (tsc emits no TS7053), but a numeric enum in value position resolves
+                // to an empty `Type.Object` here, which would otherwise match the
+                // noProps/noIndex/noCalls gate below. Mirrors the enum exclusion in
+                // tryEmitNoImplicitAnyIndexAccess (Checker.kt ~113333). tsc's own
+                // moduleNameResolver.ts does `ModuleResolutionKind[moduleResolution]`.
+                val recvIsEnum = (recvType as? Type.Object)?.symbol?.flags?.hasAny(SymbolFlags.Enum) == true ||
+                    (expr.expression as? Identifier)?.let { currentFileLocals?.get(it.text) ?: globals[it.text] }
+                        ?.flags?.hasAny(SymbolFlags.Enum) == true
+                if (!recvIsEnum && recvType is Type.Object && recvType !is Type.Reference && recvType !is Type.Interface) {
                     resolveStructuredTypeMembers(recvType)
                     val noProps = recvType.properties.isNullOrEmpty()
                     val noIndex = recvType.stringIndexInfo == null && recvType.numberIndexInfo == null
