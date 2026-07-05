@@ -1047,6 +1047,27 @@ each item still decomposes into a multi-session campaign — read PLAN-PHASE-4.m
   `HasModifiers`; `isGenericTupleType(type) && type.target.…`) — the narrowing
   consumers exist, but predicate-filtering 40-member merged-interface unions (and
   ternary-position narrowing) under-resolves; measure per-consumer before rebuilding.**
+  **NEW (round 408 finding — a well-characterized, HIGH-VALUE shared root cause, NOT yet
+  fixed): a user type-guard / assert imported through an `export *` re-export barrel does
+  NOT narrow, because `resolveAlias` does not follow `export *` for a NAMED import.** tsc's
+  own source imports everything via `import { some, isDefined, Debug, … } from
+  "./_namespaces/ts.js"` where the barrel is `export * from "../core.js"; export * from
+  "../debug.js"; …`. So `resolveFlowCalleeDecl`'s Identifier branch resolves `some`/`isDefined`
+  to the ImportSpecifier alias, and following it via `resolveAlias` STILL fails (the named
+  import through `export *` resolves to null / the ImportSpecifier, not the target
+  `FunctionDeclaration`) → `narrowByCallPredicate`/`narrowByAssertCall` bail → NO narrowing.
+  This is the shared cause behind the round-408 unreproducible assert cases (`Debug.assertIsDefined(machine.onLeft)`
+  — the LOCAL-namespace probe narrowed fine; only the barrel-imported `Debug` failed) AND a
+  large slice of the TS18048/TS2339/TS2722 families (`some(x)` / `isDefined(x)` guards are
+  pervasive). **The M1.1 `getModuleExportsFollowingStars` already follows `export *` for
+  member EXISTENCE (TS2305) — the missing piece is `resolveAlias` returning the target
+  DECLARATION through the same star chain for a named import.** Verified with a ProjectCompiler
+  repro (barrel-imported `isDefined(x)` then `takesString(x)` still FP-fires TS2345 in the
+  then-branch, proving the narrowing is dropped). A naive 2-line "wire resolveAlias into the
+  Identifier branch of resolveFlowCalleeDecl" is INERT (round 408 attempted + reverted —
+  resolveAlias itself doesn't follow the star chain for named imports; it also touches the P0
+  services-hang firewall so the deeper fix needs a services-profile perf check). This is the
+  next high-yield M3.4/cross-file sub-step.
 **M5 — Performance (starts at v1 compliance — the 8 tsc-source profiles compile clean)**
 
 - [ ] **M5.1 Profiling grid**: JFR/async-profiler over the project corpus (cold CLI,
