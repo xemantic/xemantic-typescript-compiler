@@ -34,6 +34,54 @@ completeness campaigns to dashboard-driven burn-down: the acceptance bar is the 
 tsc's source uses, with the corpus suite as the regression net. M5 unchanged —
 performance is the directive's second half and starts at v1 compliance.
 
+**Round 414 (2026-07-05) — M1.12: the TS2366 "Function lacks ending return statement" family
+(50 self-compile FPs; tsc reports 0 on its own source) is THREE CFA fall-through patterns — TWO+
+landed. Self-compile (compiler profile) 1,965 → 1,930 (−35, TS2366 50 → 15); suite 9,117 → 9,134
+(+17 local, 0 regressions); 2 commits (a8871148, c756292c).** Method (the M1.12 note): a fresh full
+`--listAll` bucketed by normalized message shape put TS2366×50 as the biggest BOUNDED family (the M3
+cores TS2322×785 / TS2345×396 / TS7006×301 / TS2339×237 dominate but stay engine-gated). Classifying
+the 50 sites showed three purely-syntactic (or barrel-resolution) CFA gaps in
+`statementAlwaysReturns`/`switchAlwaysReturns` — the "does the function body always return/terminate"
+analysis behind TS2366/TS7030/TS2355: **(A) infinite loop (~17):** `while(true)`/`for(;;)`/`do..while(true)`
+used `!containsBreakOrReturn(body)`, which counted a `return` INSIDE the loop as a fall-through exit —
+but a return exits the FUNCTION, not the loop, so the endpoint stays unreachable (`while (true) {
+return x; }` is terminating, exactly as tsc's reachability models it). Replaced with
+`infiniteLoopFallsThrough` (a plain return/throw excluded; the labeled-break-in-a-nested-loop
+detection KEPT via `containsLabeledBreakEscaping`, so reachabilityChecks5/6 f11 — `do { do { break
+test; } while(true); } while(true)` — still resolves, since its `break test` has no plain return
+inside the loops). tsc's own `unwrapInnermostStatementOfLabel`/`skipTrivia`/scanner char loops.
+**(B) trailing never-call (~11):** a `Debug.fail("...")` / `assertNever(x)` bare ExpressionStatement
+diverges (returns `never`), so the endpoint after it is unreachable — but `statementAlwaysReturns`
+never checked call return types. New `callHasNeverReturnAnnotation` resolves the callee via round-413's
+barrel-aware `resolveFlowCalleeDecl` (handles an Identifier callee AND a namespace-member `Debug.fail`
+PropertyAccess, following import aliases + `export *` — tsc's `Debug` is barrel-imported through
+`_namespaces/ts.js`; the existing `isNeverReturningExpression` was Identifier+globals-only) and checks
+the explicit `: never` return annotation. FP-safe: an explicit `: never` is authoritative — the call
+provably cannot return normally. (`return Debug.fail(...)` was already handled by the `ReturnStatement`
+arm; only the bare-statement form needed this.) **(C1) switch fall-through (~10):** `switchAlwaysReturns`
+checked each clause in ISOLATION (`clauses.all { stmts.isEmpty() || bodyAlwaysReturns(stmts) }`), so a
+NON-empty clause that completes normally and falls through to a returning clause was missed — tsc's own
+`parseSimpleUnaryExpression`: `case AwaitKeyword: if (isAwaitExpression()) return parseAwaitExpression();
+/* falls through */ default: return parseUpdateExpression();`. Rewrote as a fall-through-aware REVERSE
+walk: a clause guarantees a return if its body always-returns; else, if it completes normally with no
+`break` out of the switch (checked FIRST — a reachable break escapes even after a later return), it
+inherits the NEXT clause's guarantee; a break-out or the last clause completing normally escapes.
++17 local tests (InfiniteLoopTerminationTest ×11, SwitchFallThroughTerminationTest ×6), each with
+negative controls (an escapable loop / a labeled break escaping a nested loop / a non-never void call /
+a break-out case / a no-default non-exhaustive switch / a last-clause-that-falls-through all still fire
+the diagnostic). **DEFERRED — Pattern C2 (~15 remaining): an EXHAUSTIVE `switch` with NO `default`
+over an enum (`ModuleDetectionKind`, `DiagnosticCategory`) or a discriminated-union `.kind` (`node.kind`
+on `PropertyAccessExpression | QualifiedName | ImportTypeNode`; `mapper.kind` on the `TypeMapper`
+union) — tsc treats these as exhaustive because the discriminant narrows to `never` after all cases.
+That needs type-level discriminant-exhaustiveness (resolve the discriminant type, enumerate its
+enum-members / union-`kind` literals, check coverage) — an M3.4 discriminant-narrowing slice with real
+FP surface (the corpus has exhaustive-switch tests), not a bounded syntactic fix. Fold into M3.4.**
+META: `.errors.txt` tests are DISABLED in the corpus (CLAUDE.md), so this whole reachability analysis
+(TS2366/TS7030/TS2355/TS7027) is gated ONLY by the full suite + local `*TerminationTest.kt` — which is
+exactly why a 50-FP bucket sat invisible on the self-compile dashboard until `--listAll` bucketing
+surfaced it. Perf unmeasured (a syntactic CFA refinement — no relation-engine work; the never-call
+resolution reuses round-413's process-wide memo).
+
 **Round 413 (2026-07-05) — M3.4: the builder.ts `Debug.assert(isDefined(state))` TS18048
 blocker (round-412's "highest-value next M3.4 target") is FIXED — and the round-412 depth
 diagnosis was a RED HERRING. Self-compile (compiler profile) 2,373 → 1,966 (−407, TS2339
@@ -619,8 +667,8 @@ Three strategic reads that shape everything below:
 
 | Metric | Source | Phase 17 target |
 |---|---|---|
-| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 9,100 with local tests as of round 411) |
-| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**1,965 measured at round 413**; M1 complete at 2,726/round 389; rounds 395–413 burned bounded histogram-tail buckets + M3.4 flow-narrowing slices 2,726 → 1,966; round 409 `export *`-barrel / ESM-`.js` imported-guard FLOW narrowing (M3.4) −175 (TS2339 838 → 672); round 411 enum-member discriminant narrowing + type-guard-narrows-member-DOWN −59; round 412 single-type type-guard narrow-DOWN + TS18048 receiver-narrowing −1; **round 413 the `export *` LEAF-EXPORT gate −407 (TS2339 614 → 237): the pre-413 star resolver returned non-exported IMPORT aliases, so barrel-imported `Debug.assert` (& every barrel guard) never resolved — the TRUE builder.ts blocker, NOT the round-412 depth red herring (an instrumented run showed ZERO walk truncations) — plus a dashboard-neutral tsc-faithful linear flow-walk iteration + a return-path narrowing consumer (−1)**; remaining bounded pool M3.4/M3-gated (a general-`resolveAlias` `.js`/star fix was measured net +297 via a TS2315 flood, reverted; NonNull-strip −17 but unmasks M3, reverted; const-string-enum→`string` relation deferred M3.3/B425); no-stub stays the honest default) |
+| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 9,134 with local tests as of round 414) |
+| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**1,930 measured at round 414**; M1 complete at 2,726/round 389; rounds 395–414 burned bounded histogram-tail buckets + M3.4 flow-narrowing slices 2,726 → 1,930; round 409 `export *`-barrel / ESM-`.js` imported-guard FLOW narrowing (M3.4) −175 (TS2339 838 → 672); round 411 enum-member discriminant narrowing + type-guard-narrows-member-DOWN −59; round 412 single-type type-guard narrow-DOWN + TS18048 receiver-narrowing −1; round 413 the `export *` LEAF-EXPORT gate −407 (TS2339 614 → 237): the pre-413 star resolver returned non-exported IMPORT aliases, so barrel-imported `Debug.assert` (& every barrel guard) never resolved — the TRUE builder.ts blocker, NOT the round-412 depth red herring (an instrumented run showed ZERO walk truncations) — plus a dashboard-neutral tsc-faithful linear flow-walk iteration + a return-path narrowing consumer (−1); **round 414 the TS2366 "lacks ending return" family −35 (50 → 15): three CFA fall-through patterns in `statementAlwaysReturns`/`switchAlwaysReturns` — infinite-loop-with-return, trailing never-call (`Debug.fail`), switch fall-through — all FP-safe syntactic/barrel-resolution fixes; the remaining 15 are Pattern C2 (exhaustive switch w/o default → M3.4 discriminant-exhaustiveness)**; remaining bounded pool M3.4/M3-gated (a general-`resolveAlias` `.js`/star fix was measured net +297 via a TS2315 flood, reverted; NonNull-strip −17 but unmasks M3, reverted; const-string-enum→`string` relation deferred M3.3/B425); no-stub stays the honest default) |
 | Project corpus FPs (services/server/…) | `bench/` TSVs (M0.1) | 0 — **the v1 exit** (all 8 profiles) |
 | Conformance adoption | generated-test counts per category | POST-V1 (re-scope 2026-07-03 — see § "Post-v1 backlog", M3.0) |
 | Crashes on any input | bench runs | 0 |
@@ -976,7 +1024,18 @@ Three strategic reads that shape everything below:
   were hiding under M3-labeled families (TS2394 under "overload", the narrowing under the brand-property
   bucket). **DEFERRED M3.3/B425: a const STRING enum is not assignable to `string` in our engine (even
   scalar `const y: string = x`, x: E) → the `Extension[][]`/`string[][]` TS2367×2 + TS2322×2 cluster;
-  needs string-valued-enum-as-string-like in the relation engine + comparabilityCategory.**
+  needs string-valued-enum-as-string-like in the relation engine + comparabilityCategory.** **Round 414
+  killed the TS2366 "Function lacks ending return statement" family (50 → 15, self-compile 1,965 → 1,930)
+  — the biggest bounded bucket, three CFA fall-through patterns in
+  `statementAlwaysReturns`/`switchAlwaysReturns`: (A) an infinite loop whose only exits are return/throw
+  never falls through (`infiniteLoopFallsThrough` — the old `containsBreakOrReturn` wrongly counted the
+  return); (B) a trailing `Debug.fail(...)`/`assertNever(x)` never-call diverges
+  (`callHasNeverReturnAnnotation` via round-413's barrel-aware `resolveFlowCalleeDecl`); (C1) switch
+  fall-through (a non-empty case completing normally inherits the next clause's guarantee). **DEFERRED —
+  Pattern C2 (~15 remaining): an EXHAUSTIVE `switch` with NO `default` over an enum / discriminated-union
+  `.kind` — needs type-level discriminant exhaustiveness (the discriminant narrows to `never` after all
+  cases), an M3.4 slice.** `.errors.txt` tests are disabled so this whole reachability analysis is
+  gated only by the full suite — which is why the 50-FP bucket was invisible on the dashboard.**
 
 **M2 — Real-lib migration (staged; decompose further at start)**
 
