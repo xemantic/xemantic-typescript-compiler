@@ -765,3 +765,36 @@ class files under the running JVM — don't recompile while a bench JVM is up). 
 `--project all` relaunched clean on f85cc438; expected effect on compiler profile:
 errors stay exactly 13,245 (extraction doesn't affect checking), unresolved drops from
 120 to just node-builtin bare specifiers (env-legit until M1.3).
+
+**Round 406 (2026-07-05) — M1.12 continued: TWO more bounded self-compile FPs killed by
+bucketing the fresh full `--listAll` output (self-compile 2,663 → 2,659, −4). Suite 9,034 →
+9,043 (+9 local, 0 regressions); 2 commits.** Re-ran the compiler-profile `--listAll` (68 s,
+2,663 confirmed) and bucketed all 2,663 lines by normalized message shape — the M1.12 method.
+Two clean bounded buckets popped that round 405 hadn't reached (round 405 only worked the
+30-line log tail's TS2774/TS7019). **(1) TS1100×2 (`types.ts:3030`/`:3117` `interface
+CallExpression { readonly arguments: NodeArray<Expression>; }` / `interface NewExpression {
+readonly arguments?: … }`):** the `InterfaceDeclaration` branch of `checkStrictModeInStatement`
+checked the property NAME itself via `checkStrictModeName`, FP-ing TS1100. tsc's
+`checkStrictModeEvalOrArguments` fires ONLY for binding names (variable/parameter/function names
++ assignment LHS) — a property/method NAME is never restricted (`interface I { arguments: T }`
+is legal). Fix: removed the `PropertyDeclaration` name-check arm; kept the method/index PARAM
+checks. **(2) TS7023×2 (`checker.ts:35924` `getMutableArrayOrTupleType`, `:43622`
+`unwrapAwaitedType`):** both are `return t.flags & Union ? mapType(t, self) : concreteBranch;` —
+the self-reference appears ONLY as a callback ARGUMENT to `mapType`, where it receives a
+contextual parameter type from `mapType`'s signature, so self's own return type is never needed
+to type the call, and the other branches supply a concrete type. tsc emits no TS7023.
+`checkIndirectSelfReferenceReturn`'s crude `anyIndirect` heuristic (anything that isn't a
+top-level direct self-call/ref) caught it. Fix: new `selfRefsOnlyAsCallbackArgs(expr, name)`
+walker — a self-reference is safe iff EVERY occurrence is a direct `CallExpression` argument;
+array/object element, element-access base, property receiver, operand, and callee positions stay
+stuck → TS7023 still fires (`[self][0]()`, `{ next: self }`). Both fixes FP-safe by
+construction with negative-control local tests (a strict-mode `var arguments` still fires
+TS1100; `[self][0]()` / object-literal-value still fire TS7023). Diff = exactly the 4 lines
+removed, nothing added. 9 local tests (StrictModeInterfacePropertyTest ×5,
+CircularReturnCallbackArgTest ×4). **META: round 405's "bounded pool exhausted" was about the
+LOG TAIL — bucketing the FULL 2,663-line listAll surfaced two more, exactly the M1.12 method's
+promise. After these, the residual bounded pool IS genuinely M3-gated (verified by triaging the
+whole ≤30-count histogram): TS2349×25 = `typeof x === "function"` / `??=` callee narrowing
+(M3.4); the arithmetic ~42, TS2739/TS2741/TS2740 brand-property, TS2722/TS7053, TS2344 enum-subset
+(B425-risky) all M3; TS2591×43/TS2304×2/TS2563×27 env-legit. Next real progress is M2.2 (real-lib
+A/B, next queue item, 27 documented corpus failures) or a decomposed M3.4 slice.**

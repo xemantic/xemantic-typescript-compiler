@@ -34,6 +34,55 @@ completeness campaigns to dashboard-driven burn-down: the acceptance bar is the 
 tsc's source uses, with the corpus suite as the regression net. M5 unchanged —
 performance is the directive's second half and starts at v1 compliance.
 
+**Round 416 (2026-07-05) — M1.12/M3.4: TWO clean bounded arithmetic-pass narrowing fixes from
+bucketing the fresh full `--listAll`, both FP-safe / suppression-only. Self-compile (compiler
+profile) 1,922 → 1,910 (−12); suite 9,145 → 9,154 (+9 local, 0 regressions); 2 commits
+(3b216114, f0a3c81f).** The M3 cores still dominate the histogram (TS2322×785 / TS2345×396 /
+TS7006×301 / TS2339×237, engine-gated) but two contained arithmetic-pass families were genuine
+bugs. **(1) let/var local shadowing an outer function (TS2365 7 → 5):** round 407 recorded an
+un-annotated `const X` whose name SHADOWS an outer same-named FUNCTION so a later bare-identifier
+arithmetic/comparison operand resolves to the shadowing local, not past it to the function — the
+gate was `const`-only. tsc's own checker.ts uses `let min = Number.POSITIVE_INFINITY` / `let max =
+Number.NEGATIVE_INFINITY` (shadowing the imported `function min`/`function max`), so `if (min <
+args.length && args.length < max)` FP'd TS2365 "Operator '<' cannot be applied to types '{ <T>(…) }'
+and 'number'" (checker.ts:36449/36458). Extended the branch to `let`/`var`, recording `anyType`
+(reassignment-proof — a `let` may be reassigned to a different primitive, so recording its INITIAL
+primitive could FP a later comparison; `any` only ever SUPPRESSES the bogus operand check); `const`
+keeps its concrete-primitive recording. The SHADOW gate (the name resolves to an outer FUNCTION) is
+the firewall. **(2) &&/ternary truthy-narrowing (TS2362 10 → 4, TS2365 5 → 1):** the arithmetic pass
+has no flow narrowing, so an `Enum | undefined` operand narrowed by an enclosing `&&` or a ternary
+condition FP'd TS2362/TS2363/TS2365 — a `Type.Union` carries no Undefined flag on ITSELF, so the
+`strictNullChecks` bail in `checkBinaryOperatorTypes` never fires and the operand classifier
+(`isValidArithmeticOperand`) sees the undefined union member and rejects. New field
+`arithTruthyNarrowedNames`: while walking the RIGHT of a `&&` (a dedicated branch in
+`checkArithmeticInExpr` that scopes the narrowing set via try/finally, run BEFORE the left-spine
+flatten so it isn't lost) and the whenTrue/whenFalse of a ternary, the guard's non-nullish
+identifiers have their nullish members stripped in `arithOperandType` (generalizing the existing
+NonNull `x!` strip). `collectArithTruthyNarrowableNames` handles `X` (truthy), `A && B` (union),
+`X !== undefined`/`X != null`; `collectArithFalsyNonNullNames` handles the ternary whenFalse `X ===
+undefined`/`X === null`/`!X`/`A || B` (De Morgan). Fixed checker.ts `checkMode && checkMode &
+CheckMode.Inferential` (×2) + `contextFlags && contextFlags & ContextFlags.NoConstraints` + two
+`checkMode && checkMode & ~CheckMode.SkipGenericFunctions` + a `checkMode && checkMode &
+CheckMode.RestBindingElement` (6 TS2362), sourcemap.ts `sourceLine !== undefined && … pendingSourceLine
+> sourceLine` (×2), generators.ts `label !== undefined && label > 0`, and scanner.ts `length ===
+undefined ? text.length : start! + length` (the ternary false-branch). FP-safe BY CONSTRUCTION: a
+truthy operand provably has no nullish value at that point, so stripping only ever suppresses a
+wrong error, never adds one. The `&&` branch is safe because `checkBinaryOperatorTypes` does nothing
+for `&&` itself, and a `&&` is never on the left-spine of an arithmetic operator (it is the
+lowest-precedence binary except `||`/`??`/assignment), so the dedicated branch always intercepts it.
++9 local tests (ArithmeticShadowedFunctionLocalTest +1, ArithmeticAmpAmpNarrowingTest ×8) with
+strong negative controls: a bare un-narrowed enum-union operand, a `||`-right operand, and a ternary
+false-branch of a NON-nullish test all STILL fire. **Residual (M3.4/M3-gated): TS2362×4** —
+checker.ts:6639 `flags = flags || None; … flags & X` (reassignment narrowing, cross-statement — a
+different, harder pattern, 1 site not worth the scope-tracking mechanism + its FP surface for one
+FP), programDiagnostics.ts/checker.ts `Debug.checkDefined(x) - y` / `reduceLeft(…) & X` (generic
+call-return inference, M3.1); **TS2365×1** — utilities.ts:6314 `lineCount + T` (generic). META
+(re-confirms the M1.12 method): bucket the FULL `--listAll` by normalized message shape, then
+sub-classify a family by the SYNTACTIC shape at each site (`&&`/ternary vs reassignment vs generic)
+— 9 of the 12 arithmetic residuals were the two syntactic-narrowing shapes, the rest genuinely
+engine-gated. Perf unmeasured beyond the bench row (an operand strip + a `&&`/ternary walk — no
+relation-engine work).
+
 **Round 415 (2026-07-05) — M1.12: TWO clean bounded self-compile fixes from bucketing the fresh
 full `--listAll` by normalized message shape, both FP-safe. Self-compile (compiler profile)
 1,930 → 1,922 (−8); suite 9,134 → 9,145 (+11 local, 0 regressions); 2 commits (4c768bb7, a647aa74).**
@@ -531,39 +580,6 @@ inference) — better landed WITH those M3 fixes so the dashboard stays clean. R
 M3.1/M3.3. Session total (406+407): self-compile 2,663 → 2,639 (−24) on FIVE clean bounded
 buckets, all from bucketing the full `--listAll`.
 
-**Round 406 (2026-07-05) — M1.12 continued: TWO more bounded self-compile FPs killed by
-bucketing the fresh full `--listAll` output (self-compile 2,663 → 2,659, −4). Suite 9,034 →
-9,043 (+9 local, 0 regressions); 2 commits.** Re-ran the compiler-profile `--listAll` (68 s,
-2,663 confirmed) and bucketed all 2,663 lines by normalized message shape — the M1.12 method.
-Two clean bounded buckets popped that round 405 hadn't reached (round 405 only worked the
-30-line log tail's TS2774/TS7019). **(1) TS1100×2 (`types.ts:3030`/`:3117` `interface
-CallExpression { readonly arguments: NodeArray<Expression>; }` / `interface NewExpression {
-readonly arguments?: … }`):** the `InterfaceDeclaration` branch of `checkStrictModeInStatement`
-checked the property NAME itself via `checkStrictModeName`, FP-ing TS1100. tsc's
-`checkStrictModeEvalOrArguments` fires ONLY for binding names (variable/parameter/function names
-+ assignment LHS) — a property/method NAME is never restricted (`interface I { arguments: T }`
-is legal). Fix: removed the `PropertyDeclaration` name-check arm; kept the method/index PARAM
-checks. **(2) TS7023×2 (`checker.ts:35924` `getMutableArrayOrTupleType`, `:43622`
-`unwrapAwaitedType`):** both are `return t.flags & Union ? mapType(t, self) : concreteBranch;` —
-the self-reference appears ONLY as a callback ARGUMENT to `mapType`, where it receives a
-contextual parameter type from `mapType`'s signature, so self's own return type is never needed
-to type the call, and the other branches supply a concrete type. tsc emits no TS7023.
-`checkIndirectSelfReferenceReturn`'s crude `anyIndirect` heuristic (anything that isn't a
-top-level direct self-call/ref) caught it. Fix: new `selfRefsOnlyAsCallbackArgs(expr, name)`
-walker — a self-reference is safe iff EVERY occurrence is a direct `CallExpression` argument;
-array/object element, element-access base, property receiver, operand, and callee positions stay
-stuck → TS7023 still fires (`[self][0]()`, `{ next: self }`). Both fixes FP-safe by
-construction with negative-control local tests (a strict-mode `var arguments` still fires
-TS1100; `[self][0]()` / object-literal-value still fire TS7023). Diff = exactly the 4 lines
-removed, nothing added. 9 local tests (StrictModeInterfacePropertyTest ×5,
-CircularReturnCallbackArgTest ×4). **META: round 405's "bounded pool exhausted" was about the
-LOG TAIL — bucketing the FULL 2,663-line listAll surfaced two more, exactly the M1.12 method's
-promise. After these, the residual bounded pool IS genuinely M3-gated (verified by triaging the
-whole ≤30-count histogram): TS2349×25 = `typeof x === "function"` / `??=` callee narrowing
-(M3.4); the arithmetic ~42, TS2739/TS2741/TS2740 brand-property, TS2722/TS7053, TS2344 enum-subset
-(B425-risky) all M3; TS2591×43/TS2304×2/TS2563×27 env-legit. Next real progress is M2.2 (real-lib
-A/B, next queue item, 27 documented corpus failures) or a decomposed M3.4 slice.**
-
 ### Mission & strategy
 
 Three strategic reads that shape everything below:
@@ -614,8 +630,8 @@ Three strategic reads that shape everything below:
 
 | Metric | Source | Phase 17 target |
 |---|---|---|
-| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 9,145 with local tests as of round 415) |
-| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**1,922 measured at round 415**; M1 complete at 2,726/round 389; rounds 395–415 burned bounded histogram-tail buckets + M3.4 flow-narrowing slices 2,726 → 1,922; round 409 `export *`-barrel / ESM-`.js` imported-guard FLOW narrowing (M3.4) −175 (TS2339 838 → 672); round 411 enum-member discriminant narrowing + type-guard-narrows-member-DOWN −59; round 412 single-type type-guard narrow-DOWN + TS18048 receiver-narrowing −1; round 413 the `export *` LEAF-EXPORT gate −407 (TS2339 614 → 237): the pre-413 star resolver returned non-exported IMPORT aliases, so barrel-imported `Debug.assert` (& every barrel guard) never resolved — the TRUE builder.ts blocker, NOT the round-412 depth red herring (an instrumented run showed ZERO walk truncations) — plus a dashboard-neutral tsc-faithful linear flow-walk iteration + a return-path narrowing consumer (−1); **round 414 the TS2366 "lacks ending return" family −35 (50 → 15): three CFA fall-through patterns in `statementAlwaysReturns`/`switchAlwaysReturns` — infinite-loop-with-return, trailing never-call (`Debug.fail`), switch fall-through — all FP-safe syntactic/barrel-resolution fixes; the remaining 15 are Pattern C2 (exhaustive switch w/o default → M3.4 discriminant-exhaustiveness)**; remaining bounded pool M3.4/M3-gated (a general-`resolveAlias` `.js`/star fix was measured net +297 via a TS2315 flood, reverted; NonNull-strip −17 but unmasks M3, reverted; const-string-enum→`string` relation deferred M3.3/B425); no-stub stays the honest default) |
+| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 9,154 with local tests as of round 416) |
+| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**1,910 measured at round 416**; M1 complete at 2,726/round 389; rounds 395–415 burned bounded histogram-tail buckets + M3.4 flow-narrowing slices 2,726 → 1,922; round 409 `export *`-barrel / ESM-`.js` imported-guard FLOW narrowing (M3.4) −175 (TS2339 838 → 672); round 411 enum-member discriminant narrowing + type-guard-narrows-member-DOWN −59; round 412 single-type type-guard narrow-DOWN + TS18048 receiver-narrowing −1; round 413 the `export *` LEAF-EXPORT gate −407 (TS2339 614 → 237): the pre-413 star resolver returned non-exported IMPORT aliases, so barrel-imported `Debug.assert` (& every barrel guard) never resolved — the TRUE builder.ts blocker, NOT the round-412 depth red herring (an instrumented run showed ZERO walk truncations) — plus a dashboard-neutral tsc-faithful linear flow-walk iteration + a return-path narrowing consumer (−1); **round 414 the TS2366 "lacks ending return" family −35 (50 → 15): three CFA fall-through patterns in `statementAlwaysReturns`/`switchAlwaysReturns` — infinite-loop-with-return, trailing never-call (`Debug.fail`), switch fall-through — all FP-safe syntactic/barrel-resolution fixes; the remaining 15 are Pattern C2 (exhaustive switch w/o default → M3.4 discriminant-exhaustiveness)**; remaining bounded pool M3.4/M3-gated (a general-`resolveAlias` `.js`/star fix was measured net +297 via a TS2315 flood, reverted; NonNull-strip −17 but unmasks M3, reverted; const-string-enum→`string` relation deferred M3.3/B425); no-stub stays the honest default) |
 | Project corpus FPs (services/server/…) | `bench/` TSVs (M0.1) | 0 — **the v1 exit** (all 8 profiles) |
 | Conformance adoption | generated-test counts per category | POST-V1 (re-scope 2026-07-03 — see § "Post-v1 backlog", M3.0) |
 | Crashes on any input | bench runs | 0 |
@@ -996,6 +1012,16 @@ Three strategic reads that shape everything below:
   numbered props as required (the resolved tuple `Type` loses the AST `questionToken`/`OptionalType`
   optionality); the clean fix needs a `SymbolFlags.Optional` bit threaded through tuple building + read
   by `isOptionalProperty`, a broad regression surface (many callers) for 1 instance.**
+  **Round 416 killed TWO more arithmetic-pass families (1,922 → 1,910): (1) TS2365 7 → 5 — a `let`/`var`
+  local shadowing an outer function (`let min = Number.POSITIVE_INFINITY` shadows `function min` →
+  `min < args.length` FP'd `{ <T>(…) } < number`); extended round 407's `const`-only shadow-recording
+  to `let`/`var` (records `anyType`, reassignment-proof; the shadow gate is the firewall). (2)
+  TS2362 10 → 4 + TS2365 5 → 1 — &&/ternary truthy-narrowing (`checkMode && checkMode & X`,
+  `X !== undefined && X > 0`, `X === undefined ? … : start! + X`): new `arithTruthyNarrowedNames`
+  strips nullish from an operand narrowed by an enclosing `&&`/ternary guard (a `Type.Union` carries
+  no Undefined flag on itself, so the classifier otherwise rejects the undefined member). FP-safe /
+  suppression-only. Residual: TS2362×4 (reassignment `flags = flags || None` + generic reduceLeft/
+  checkDefined returns) + TS2365×1 (generic `lineCount + T`) are M3.4/M3.**
 
 **M2 — Real-lib migration (staged; decompose further at start)**
 
