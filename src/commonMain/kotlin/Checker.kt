@@ -77082,7 +77082,8 @@ interface DataView {
                 allHaveSelfRef = false
                 break
             }
-            if (!isDirectSelfCall(expr, name) && !isDirectSelfRef(expr, name)) {
+            if (!isDirectSelfCall(expr, name) && !isDirectSelfRef(expr, name) &&
+                !selfRefsOnlyAsCallbackArgs(expr, name)) {
                 anyIndirect = true
             }
         }
@@ -77134,6 +77135,61 @@ interface DataView {
             }
             else -> {} // do NOT recurse into nested FunctionDeclaration / ClassDeclaration / etc.
         }
+    }
+
+    /**
+     * True when [name] occurs in [expr] and EVERY occurrence is a direct ARGUMENT of a
+     * CallExpression — i.e. the self-reference is only ever passed as a callback. In that
+     * position it receives a contextual parameter type from the callee's signature, which
+     * breaks the return-type inference cycle, so tsc does NOT emit TS7023 (e.g. tsc's own
+     * `getMutableArrayOrTupleType` / `unwrapAwaitedType`:
+     * `return t.flags & Union ? mapType(t, self) : concreteBranch;`). Returns false if the
+     * name does not occur, or occurs anywhere else (array/object element, element-access base,
+     * property receiver, operand, callee) — those genuinely force self's return-type resolution
+     * and stay TS7023 (`return [self][0]();`, `return {x: self};`). Does not descend into nested
+     * function/class bodies (separate scopes).
+     */
+    private fun selfRefsOnlyAsCallbackArgs(expr: Expression, name: String): Boolean {
+        var sawName = false
+        var sawUnsafe = false
+        fun visit(e: Expression?, argSafe: Boolean) {
+            when (e) {
+                null -> {}
+                is Identifier -> if (e.text == name) { sawName = true; if (!argSafe) sawUnsafe = true }
+                is CallExpression -> {
+                    visit(e.expression, false)
+                    for (a in e.arguments) visit(a, true)
+                }
+                is NewExpression -> {
+                    // `new` provides no callback-contextual break — be conservative.
+                    visit(e.expression, false)
+                    e.arguments?.forEach { visit(it, false) }
+                }
+                is ParenthesizedExpression -> visit(e.expression, argSafe)
+                is AsExpression -> visit(e.expression, argSafe)
+                is TypeAssertionExpression -> visit(e.expression, argSafe)
+                is NonNullExpression -> visit(e.expression, argSafe)
+                is BinaryExpression -> { visit(e.left, false); visit(e.right, false) }
+                is ConditionalExpression -> { visit(e.condition, false); visit(e.whenTrue, false); visit(e.whenFalse, false) }
+                is PropertyAccessExpression -> visit(e.expression, false)
+                is ElementAccessExpression -> { visit(e.expression, false); visit(e.argumentExpression, false) }
+                is PrefixUnaryExpression -> visit(e.operand, false)
+                is PostfixUnaryExpression -> visit(e.operand, false)
+                is SpreadElement -> visit(e.expression, false)
+                is ArrayLiteralExpression -> e.elements.forEach { visit(it, false) }
+                is ObjectLiteralExpression -> e.properties.forEach { prop ->
+                    when (prop) {
+                        is PropertyAssignment -> visit(prop.initializer, false)
+                        is ShorthandPropertyAssignment -> if (prop.name.text == name) { sawName = true; sawUnsafe = true }
+                        is SpreadAssignment -> visit(prop.expression, false)
+                        else -> {}
+                    }
+                }
+                else -> {}
+            }
+        }
+        visit(expr, false)
+        return sawName && !sawUnsafe
     }
 
     /** Direct self-call: `self(...)` at the top level of the return expression. */
