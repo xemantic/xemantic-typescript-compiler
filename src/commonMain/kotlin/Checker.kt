@@ -142556,8 +142556,8 @@ interface DataView {
 
         if (!isArithmetic && !isCompoundArithmetic && !isPlus && !isPlusEquals && !isComparison) return
 
-        val leftType = getTypeOfExpression(expr.left)
-        val rightType = getTypeOfExpression(expr.right)
+        val leftType = arithOperandType(expr.left)
+        val rightType = arithOperandType(expr.right)
 
         // interfaceNaming1: `interface & { }` — a bare type-only keyword (`interface`/
         // `implements`) used as a value (it gets TS2693) resolves to error/any, which makes
@@ -142769,6 +142769,29 @@ interface DataView {
      *  "cannot assign to a class", not an arithmetic error), a string enum, an anonymous
      *  object literal, or any other object type BAILS — our resolution of those is FP-prone
      *  and tsc routes them through other checks (arithAssignTyping). */
+    /**
+     * The type of an arithmetic/comparison operand, stripping nullish from a
+     * syntactic `x!` (NonNullExpression). `getTypeOfExpression` deliberately keeps
+     * the union for `(T | undefined)!` (round 407: a GLOBAL nullish-strip in the
+     * NonNull case unmasks M3 object-literal/generic gaps → reverted), but the
+     * arithmetic pass classifies operands (isValidArithmeticOperand /
+     * typeAssignableToNumberKind), and a lingering `| undefined` on a union
+     * defeats them (a `Type.Union`'s own `.flags` carry neither Undefined nor the
+     * numeric-enum bit, so `TokenFlags | undefined` fails every operand test →
+     * spurious TS2362/TS2363). A `x!` operand PROVABLY asserts non-null (tsc types
+     * it `NonNullable<typeof x>` and does arithmetic on THAT), so stripping the
+     * nullish members is exactly tsc's behavior. FP-safe by construction: it only
+     * fires on an explicit `!`, only ever REMOVES nullish members (so a genuinely
+     * non-numeric `x!` — e.g. `(string | undefined)!` — still fails and still
+     * errors), and it is local to this pass (no touch to global expression typing).
+     */
+    private fun arithOperandType(e: Expression): Type {
+        val t = getTypeOfExpression(e)
+        if (e !is NonNullExpression || t !is Type.Union) return t
+        val kept = t.types.filter { !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) }
+        return if (kept.isEmpty() || kept.size == t.types.size) t else getUnionType(kept)
+    }
+
     private fun arithObjectOperandBails(t: Type): Boolean {
         if (!isNonWrapperObjectType(t)) return false          // primitive/wrapper: not an object bail
         if (isNumericEnumObjectType(t)) return false            // numeric enum: valid operand, proceed
