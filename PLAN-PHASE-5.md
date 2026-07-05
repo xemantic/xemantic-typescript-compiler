@@ -67,11 +67,19 @@ but `Debug` didn't.) Fix: gate the leaf on the local being genuinely EXPORTED
 uses; memoized per file in `moduleNamedExportsCache`). FP-safe: `resolveExportedSymbolThroughStars`
 is consulted ONLY by the round-409+ flow-only resolvers (function/namespace/enum), where
 narrowing only removes union constituents. Barrel-imported `Debug.*` + every barrel guard
-now resolves → TS2339 614 → 237 (−377), the single biggest slice. 8 local tests
+now resolves → TS2339 614 → 237 (−377), the single biggest slice. **Item C (a41f0ee2, −1, principled): the RETURN-assignability path is now a flow-narrowing
+consumer** — `checkReturnAssignability` used the returned reference's wider DECLARED type, so
+`return state` after `Debug.assert(isDefined(state))` (builder.ts's
+`toBuilderProgramStateWithDefinedProgram`) FP'd a missing-property TS2739; narrow the returned
+Identifier/PropertyAccess and substitute only when it strictly relates (mirrors round 410's
+assignment-RHS narrowing; the return path was absent from the CLAUDE.md consumer list).
+FP-safe by monotonicity. 12 local tests
 (LinearFlowDepthNarrowingTest ×5: a 3000-node linear chain > `NARROW_MAX_DEPTH` still
 narrows past asserts/conditions/calls + negative/trivial controls; BarrelExportLeafGateTest
 ×3: the exact importer-alias-before-declaration collision + non-vacuity + not-over-restrictive
-controls). **Perf: compiler self-compile 72 → 92 s (no-emit) / +42% (emit) — the extra
+controls; ReturnPathNarrowingTest ×4: type-literal guard/assert narrowed returns + two
+negative controls — the type-literal shape is load-bearing since the return-path TS2739 emit
+is gated to a `Type.Object` source/target, not a named interface). **Perf: compiler self-compile 72 → 92 s (no-emit) / +42% (emit) — the extra
 narrowing work (many more guards resolve → more relation checks; round 409 saw the same
 +16% for the direct-guard case). Correctness-first; perf is M5. Services P0 hang-check
 CLEAN — no hang/crash, all 252 files emitted, 400 s (round 385 baseline was 563 s), and
@@ -612,7 +620,7 @@ Three strategic reads that shape everything below:
 | Metric | Source | Phase 17 target |
 |---|---|---|
 | Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 9,100 with local tests as of round 411) |
-| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**1,966 measured at round 413**; M1 complete at 2,726/round 389; rounds 395–413 burned bounded histogram-tail buckets + M3.4 flow-narrowing slices 2,726 → 1,966; round 409 `export *`-barrel / ESM-`.js` imported-guard FLOW narrowing (M3.4) −175 (TS2339 838 → 672); round 411 enum-member discriminant narrowing + type-guard-narrows-member-DOWN −59; round 412 single-type type-guard narrow-DOWN + TS18048 receiver-narrowing −1; **round 413 the `export *` LEAF-EXPORT gate −407 (TS2339 614 → 237): the pre-413 star resolver returned non-exported IMPORT aliases, so barrel-imported `Debug.assert` (& every barrel guard) never resolved — the TRUE builder.ts blocker, NOT the round-412 depth red herring (an instrumented run showed ZERO walk truncations) — plus a dashboard-neutral tsc-faithful linear flow-walk iteration**; remaining bounded pool M3.4/M3-gated (a general-`resolveAlias` `.js`/star fix was measured net +297 via a TS2315 flood, reverted; NonNull-strip −17 but unmasks M3, reverted; const-string-enum→`string` relation deferred M3.3/B425); no-stub stays the honest default) |
+| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**1,965 measured at round 413**; M1 complete at 2,726/round 389; rounds 395–413 burned bounded histogram-tail buckets + M3.4 flow-narrowing slices 2,726 → 1,966; round 409 `export *`-barrel / ESM-`.js` imported-guard FLOW narrowing (M3.4) −175 (TS2339 838 → 672); round 411 enum-member discriminant narrowing + type-guard-narrows-member-DOWN −59; round 412 single-type type-guard narrow-DOWN + TS18048 receiver-narrowing −1; **round 413 the `export *` LEAF-EXPORT gate −407 (TS2339 614 → 237): the pre-413 star resolver returned non-exported IMPORT aliases, so barrel-imported `Debug.assert` (& every barrel guard) never resolved — the TRUE builder.ts blocker, NOT the round-412 depth red herring (an instrumented run showed ZERO walk truncations) — plus a dashboard-neutral tsc-faithful linear flow-walk iteration + a return-path narrowing consumer (−1)**; remaining bounded pool M3.4/M3-gated (a general-`resolveAlias` `.js`/star fix was measured net +297 via a TS2315 flood, reverted; NonNull-strip −17 but unmasks M3, reverted; const-string-enum→`string` relation deferred M3.3/B425); no-stub stays the honest default) |
 | Project corpus FPs (services/server/…) | `bench/` TSVs (M0.1) | 0 — **the v1 exit** (all 8 profiles) |
 | Conformance adoption | generated-test counts per category | POST-V1 (re-scope 2026-07-03 — see § "Post-v1 backlog", M3.0) |
 | Crashes on any input | bench runs | 0 |
