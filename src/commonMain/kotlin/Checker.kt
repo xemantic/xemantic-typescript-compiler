@@ -78462,19 +78462,41 @@ interface DataView {
     }
 
     private fun switchAlwaysReturns(clauses: List<Node>): Boolean {
-        // Each clause either terminates or falls through to a clause that terminates
-        // Simple: check that there's a path through all clauses that always returns
-        // Find the last clause — it must terminate (or the one before that falls through to it)
-        // Actually: switches always return if every "fall-through chain" ends in a return
-        // Simple heuristic: if every non-empty clause terminates, it always returns
-        return clauses.all { clause ->
+        // Every clause is an entry point (the discriminant selects one), so the switch
+        // "always returns" iff EACH clause — following FALL-THROUGH — reaches a
+        // return/throw before control escapes the switch. Round 414: the prior
+        // `clauses.all { stmts.isEmpty() || bodyAlwaysReturns(stmts) }` checked each
+        // clause in isolation, so a NON-empty clause that completes normally and falls
+        // through to a returning clause was missed — ~6 self-compile TS2366 FPs on
+        // tsc's own source (`parseSimpleUnaryExpression`'s `case AwaitKeyword: if (…)
+        // return …; /* falls through */ default: return …`, and similar).
+        //
+        // Reverse-walk: a clause guarantees a return if its body always-returns; else,
+        // if the body completes normally (falls through) with no `break` out of the
+        // switch, it inherits the NEXT clause's guarantee; a body that breaks out of the
+        // switch — or the LAST clause completing normally — escapes to after the switch.
+        if (clauses.isEmpty()) return false
+        var nextGuarantees = false  // past the last clause ⇒ fall through past the switch
+        for (clause in clauses.asReversed()) {
             val stmts = when (clause) {
                 is CaseClause -> clause.statements
                 is DefaultClause -> clause.statements
                 else -> emptyList()
             }
-            stmts.isEmpty() || bodyAlwaysReturns(stmts)
+            val guarantees = when {
+                // An unlabeled `break` inside the clause exits THIS switch (containsBreak
+                // counts only unlabeled breaks at this level, not those of a nested
+                // loop/switch), so control can reach the statement after the switch —
+                // checked FIRST, since a reachable break escapes even when a later
+                // statement returns (`if (c) break; return y;`).
+                stmts.any { containsBreak(it) } -> false
+                bodyAlwaysReturns(stmts) -> true
+                else -> nextGuarantees  // completes normally ⇒ fall through to next clause
+            }
+            if (!guarantees) return false
+            nextGuarantees = guarantees
         }
+        return true
     }
 
     /**
