@@ -117747,11 +117747,23 @@ interface DataView {
                 // reaches argument checking (mirrors the class-method handling above).
                 val objLitType = getTypeOfObjectLiteral(expr)
                 val objThisType = if (objLitType !== anyType && objLitType !== errorType) objLitType else null
-                fun withObjThis(body: Block) {
-                    if (objThisType == null) { checkCallTypesInStatements(body.statements, source, fileName); return }
+                // M3.1 (round 428b): an EXPLICIT `this` PARAMETER annotation WINS over
+                // the object-literal contextual this — tsc debug.ts's
+                // `__tsDebuggerDisplay: { value(this: Node) { isIdentifier(this) … } }`
+                // inside Object.defineProperties typed `this` as the objlit and FP'd
+                // TS2345 ×36. An unresolvable annotation binds anyType (= unbound).
+                fun withObjThis(body: Block, params: List<Parameter>) {
+                    val thisParam = params.firstOrNull()
+                        ?.takeIf { (it.name as? Identifier)?.text == "this" }
+                    val effThis = if (thisParam != null) {
+                        thisParam.type?.let { tn ->
+                            getTypeFromTypeNode(tn).takeIf { it !== errorType }
+                        }
+                    } else objThisType
+                    if (effThis == null) { checkCallTypesInStatements(body.statements, source, fileName); return }
                     val saved = currentLocalTypes
                     currentLocalTypes = currentLocalTypes.toMutableMap()
-                    currentLocalTypes["this"] = objThisType
+                    currentLocalTypes["this"] = effThis
                     try { checkCallTypesInStatements(body.statements, source, fileName) }
                     finally { currentLocalTypes = saved }
                 }
@@ -117760,9 +117772,9 @@ interface DataView {
                         is PropertyAssignment -> checkCallTypesInExpr(prop.initializer, source, fileName)
                         is ShorthandPropertyAssignment -> prop.objectAssignmentInitializer?.let { checkCallTypesInExpr(it, source, fileName) }
                         is SpreadAssignment -> checkCallTypesInExpr(prop.expression, source, fileName)
-                        is MethodDeclaration -> prop.body?.let { withObjThis(it) }
-                        is GetAccessor -> prop.body?.let { withObjThis(it) }
-                        is SetAccessor -> prop.body?.let { withObjThis(it) }
+                        is MethodDeclaration -> prop.body?.let { withObjThis(it, prop.parameters) }
+                        is GetAccessor -> prop.body?.let { withObjThis(it, prop.parameters) }
+                        is SetAccessor -> prop.body?.let { withObjThis(it, prop.parameters) }
                         else -> {}
                     }
                 }
@@ -122799,6 +122811,11 @@ interface DataView {
         if (!checkTypeRelatedTo(propType, paramType, assignableRelation)) return false
         val srcUnion = getUnionType(listOf(propType, undefinedType))
         if (checkTypeRelatedTo(srcUnion, paramType, assignableRelation)) return false
+        // M3.4 (round 428c): a truthy/guard-narrowed access is NOT undefined at the
+        // call site — `if (source.valueDeclaration) setValueDeclaration(target,
+        // source.valueDeclaration)` (tsc checker.ts mergeSymbol, ×24 self-compile).
+        // Same suppression the TS2722 optional-member-invoke path uses.
+        if (propertyAccessNarrowedNonNull(arg, propType)) return false
         val tgtDisp = typeToString(paramType)
         val srcDisp = "${typeToString(propType)} | undefined"
         val start = arg.pos
@@ -123327,6 +123344,15 @@ interface DataView {
                 // them explicitly here. Only Union types can be refined.
                 if ((arg is Identifier || arg is PropertyAccessExpression) && ctxApplied is Type.Union) {
                     getNarrowedTypeForReference(ctxApplied, arg)
+                } else if (arg is Identifier && arg.text == "this" && ctxApplied is Type.Interface) {
+                    // M3.4 (round 428b): a this-param-typed `this` arg narrowed DOWN by
+                    // a guard (`isIdentifier(this) ? idText(this) : …` — tsc debug.ts's
+                    // __tsDebuggerDisplay). Relation-gated: substitute only a genuine
+                    // refinement, so this can only suppress. Bounded to `this` — the
+                    // reference the round-428b this-param binding newly types.
+                    val n = getNarrowedTypeForReference(ctxApplied, arg)
+                    if (n !== ctxApplied && n !== neverType &&
+                        checkTypeRelatedTo(n, ctxApplied, assignableRelation)) n else ctxApplied
                 } else ctxApplied
             } finally {
                 if (useCtx) contextualType = savedContextual
@@ -124934,6 +124960,10 @@ interface DataView {
         // number → enum type (TypeScript allows number → enum)
         if (sf.hasAny(TypeFlags.NumberLike) && target is Type.Object && target.symbol != null &&
             target.symbol!!.flags.hasAny(SymbolFlags.Enum)) return true
+        // M3.1 (round 428b): numeric-enum → number (a numeric enum's values ARE
+        // numbers — tsc debug.ts `formatEnum(this.flags, …)` where flags: FlowFlags
+        // vs a `number` param). String-valued enums excluded by the classifier.
+        if (tf.hasAny(TypeFlags.Number) && isNumericEnumObjectType(source)) return true
         // object type (non-primitive) — primitives are NOT assignable to object
         if (tf.hasAny(TypeFlags.NonPrimitive)) {
             return !sf.hasAny(TypeFlags.Primitive or TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)
