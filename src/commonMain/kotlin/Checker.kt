@@ -117342,6 +117342,25 @@ interface DataView {
                             currentLocalTypes[nm.text] = t
                         }
                     }
+                    // M3.1 (round 428d): a body-local declaration whose name SHADOWS an
+                    // outer/imported FUNCTION would resolve through the merged globals to
+                    // that function in arg positions (`const symbolName = sym.name;
+                    // canUse(symbolName)` — tsc checker.ts body-locals shadowing
+                    // utilitiesPublic's `function symbolName` / moduleNameResolver's
+                    // `function useCaseSensitiveFileNames`, ×~40 self-compile). Register
+                    // an anyType shadow — suppression-only, mirroring M1.11's
+                    // shadowNestedFunctionNames and round 416's arithmetic-pass rule.
+                    // AST-only gate (no type resolution): the colliding outer symbol
+                    // must declare a FUNCTION.
+                    if (nm != null && currentLocalTypes[nm.text] == null) {
+                        val shadowsCallable = listOfNotNull(
+                            currentFileLocals?.get(nm.text), globals[nm.text]
+                        ).any { s ->
+                            s.flags.hasAny(SymbolFlags.Function) ||
+                                s.declarations.any { it is FunctionDeclaration }
+                        }
+                        if (shadowsCallable) currentLocalTypes[nm.text] = anyType
+                    }
                 }
             }
             is ReturnStatement -> stmt.expression?.let { checkCallTypesInExpr(it, source, fileName) }
