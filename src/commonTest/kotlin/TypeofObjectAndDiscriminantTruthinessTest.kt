@@ -167,6 +167,38 @@ class TypeofObjectAndDiscriminantTruthinessTest {
     }
 
     /**
+     * Round 425: `instanceof` narrows a SUPERTYPE union member DOWN to the class
+     * (tsc getNarrowedType checkDerived maps `m → isDerived(m,c) ? m :
+     * isDerived(c,m)/related ? c : drop`) — the old subtype-only filter dropped
+     * every member of `SymbolTracker | undefined` on `tracker instanceof
+     * SymbolTrackerImpl` (the class implements the interface) → `never` (tsc
+     * checker.ts's SymbolTrackerImpl constructor while-loop).
+     */
+    @Test
+    fun `instanceof narrows a supertype union member down to the class`() {
+        val d = diags(
+            """
+            interface SymbolTracker {
+                trackSymbol?(sym: object): boolean;
+            }
+            class SymbolTrackerImpl implements SymbolTracker {
+                readonly inner: SymbolTracker | undefined = undefined;
+                canTrack: boolean;
+                constructor(tracker: SymbolTracker | undefined) {
+                    while (tracker instanceof SymbolTrackerImpl) {
+                        tracker = tracker.inner;
+                    }
+                    this.inner = tracker;
+                    this.canTrack = !!this.inner?.trackSymbol;
+                }
+                trackSymbol(sym: object): boolean { return false; }
+            }
+            """
+        )
+        assertTrue(d.none { it.code == 2339 }, "instanceof narrow-down must not collapse to never, got: $d")
+    }
+
+    /**
      * Round 425: the round-418 single-type narrow-DOWN suppression retries with
      * the loop-entry-following walk — a guard BEFORE a loop narrows a read
      * INSIDE it (the plain walk washes at the FlowLoopLabel).

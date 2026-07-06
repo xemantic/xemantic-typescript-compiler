@@ -93597,7 +93597,20 @@ interface DataView {
         val classType = resolveInstanceOfRhsType(expr.right) ?: return t
         if (t is Type.Union) {
             val filtered = if (isMatch) {
-                t.types.filter { isInstanceOfClass(it, classType) }
+                // Round 425: the positive branch needs BOTH directions (tsc getNarrowedType
+                // checkDerived: `isTypeDerivedFrom(m, c) ? m : isTypeDerivedFrom(c, m) ? c :
+                // never`) — a member that is a SUPERTYPE of the class narrows DOWN to the
+                // class (`tracker: SymbolTracker | undefined` with `tracker instanceof
+                // SymbolTrackerImpl` where the class implements the interface — the old
+                // subtype-only filter dropped every member → `never`, tsc checker.ts's
+                // SymbolTrackerImpl constructor). Suppression-only: strictly more-keeping.
+                t.types.mapNotNull { m ->
+                    when {
+                        isInstanceOfClass(m, classType) -> m
+                        checkTypeRelatedTo(classType, m, assignableRelation) -> classType
+                        else -> null
+                    }
+                }
             } else {
                 t.types.filter { !isInstanceOfClass(it, classType) }
             }
