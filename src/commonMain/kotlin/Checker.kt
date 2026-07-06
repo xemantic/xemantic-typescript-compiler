@@ -92681,8 +92681,62 @@ interface DataView {
             val narrowed = narrowByExcludingNullUndefined(t)
             return if (narrowed === t) null else narrowed
         }
-        val targetType = getTypeFromTypeNode(targetTypeNode)
-        if (targetType === errorType || targetType === anyType) return null
+        var targetType = getTypeFromTypeNode(targetTypeNode)
+        if (targetType === errorType || targetType === anyType) {
+            // M1.12 (round 424): `asserts node is U` where U is the callee's own
+            // INFERRED type param (tsc `Debug.assertNode<T extends Node, U extends
+            // T>(node: T | undefined, test: (node: T) => node is U): asserts node
+            // is U`) — U is unresolvable at the call site (→ errorType). Two
+            // recoveries, precise first:
+            // (a) infer U from a type-guard TEST argument: another parameter is
+            //     annotated `(…) => <name> is U` and the actual argument resolves
+            //     to a guard whose predicate target resolves — `Debug.assertNode(
+            //     node.name, isIdentifier)` binds U := Identifier and narrows
+            //     precisely (the minimal claim alone would trade the TS18048 for a
+            //     TS2339 on the surviving non-Identifier union members);
+            // (b) fall back to the constraint CHAIN: chase U → T → Node; when a
+            //     link's constraint classifies provably non-nullish, exclude
+            //     nullish from the walked path (drop-nullish only, suppression-
+            //     safe). Any unresolvable link bails.
+            val tps = when (decl) {
+                is FunctionDeclaration -> decl.typeParameters
+                is MethodDeclaration -> decl.typeParameters
+                else -> null
+            }
+            val tpName = (targetTypeNode as? TypeReference)
+                ?.let { (it.typeName as? Identifier)?.text }
+            var inferred: Type? = null
+            if (tps != null && tpName != null && tps.any { it.name.text == tpName }) {
+                for ((i, p) in params.withIndex()) {
+                    if (i == paramIdx) continue
+                    val ft = p.type as? FunctionType ?: continue
+                    val pred = ft.type as? TypePredicate ?: continue
+                    if (pred.assertsModifier) continue
+                    if (((pred.type as? TypeReference)?.typeName as? Identifier)?.text != tpName) continue
+                    val testArg = expr.arguments.getOrNull(i) ?: continue
+                    inferred = predicateTargetTypeOfGuardExpr(testArg)
+                    if (inferred != null) break
+                }
+            }
+            if (inferred == null) {
+                if (tps != null) {
+                    val tpByName = tps.associateBy { it.name.text }
+                    var refName = tpName
+                    var hops = 0
+                    while (refName != null && hops++ < 8) {
+                        val tp = tpByName[refName] ?: break
+                        val c = tp.constraint ?: break
+                        if (typeNodeDefinitelyNonNullish(c, tpByName.keys, depth = 0)) {
+                            val narrowed = narrowByExcludingNullUndefined(t)
+                            return if (narrowed === t) null else narrowed
+                        }
+                        refName = (c as? TypeReference)?.let { (it.typeName as? Identifier)?.text }
+                    }
+                }
+                return null
+            }
+            targetType = inferred
+        }
         // After assertion succeeds, narrow to target type.
         if (t is Type.Union) {
             val filtered = t.types.filter { checkTypeRelatedTo(it, targetType, assignableRelation) }
@@ -92694,6 +92748,54 @@ interface DataView {
         }
         val matches = checkTypeRelatedTo(t, targetType, assignableRelation)
         return if (matches) t else targetType
+    }
+
+    /**
+     * M1.12 (round 424): resolve a type-guard FUNCTION VALUE expression (a bare
+     * `isIdentifier` / `ns.isFoo` passed as an assert's `test` argument — NOT a
+     * call) to its predicate TARGET type. Mirrors [resolveFlowCalleeDecl]'s
+     * resolution paths (imports, nested uniques, namespace members) but keys no
+     * memo (the callee-memo is keyed by the enclosing CallExpression, which here
+     * is the ASSERT call — reusing it would collide with the assert callee's own
+     * entry). Returns null for anything unresolvable or non-guard — callers bail
+     * to their conservative fallback.
+     */
+    private fun predicateTargetTypeOfGuardExpr(eIn: Expression): Type? {
+        var e = eIn
+        while (true) {
+            e = when (e) {
+                is ParenthesizedExpression -> e.expression
+                is NonNullExpression -> e.expression
+                is AsExpression -> e.expression
+                is TypeAssertionExpression -> e.expression
+                is SatisfiesExpression -> e.expression
+                else -> break
+            }
+        }
+        val decl: Node? = when (e) {
+            is Identifier -> {
+                val symbol = currentFileLocals?.get(e.text) ?: globals[e.text]
+                val direct = symbol?.let { it.valueDeclaration ?: it.declarations.firstOrNull() }
+                if (symbol != null && symbol.flags.hasAny(SymbolFlags.Alias) &&
+                    direct !is FunctionDeclaration && direct !is MethodDeclaration
+                ) {
+                    resolveImportedFunctionLikeDecl(symbol, mutableSetOf()) ?: direct
+                } else direct ?: uniqueFunctionDeclByName(e.text)
+            }
+            is PropertyAccessExpression ->
+                resolvePropertyMethodDecl(e) ?: resolveNamespaceMemberFnDecl(e)
+            else -> null
+        }
+        val ret = when (decl) {
+            is FunctionDeclaration -> decl.type
+            is MethodDeclaration -> decl.type
+            else -> null
+        }
+        val pred = ret as? TypePredicate ?: return null
+        if (pred.assertsModifier) return null
+        val tt = pred.type ?: return null
+        val resolved = getTypeFromTypeNode(tt)
+        return if (resolved === errorType || resolved === anyType) null else resolved
     }
 
     /**
@@ -92841,8 +92943,17 @@ interface DataView {
         } else recvSym
         if (!resolved.flags.hasAny(moduleFlags)) return null
         val member = resolved.exports?.get(callee.name.text) ?: return null
-        return member.valueDeclaration as? FunctionDeclaration
-            ?: member.declarations.firstOrNull { it is FunctionDeclaration }
+        // M1.12 (round 424): an OVERLOADED assert/guard (`Debug.assertNode` — two
+        // overload sigs + an annotation-less impl) binds valueDeclaration to the
+        // IMPL, whose missing return annotation made the assert/predicate consumers
+        // bail before any narrowing. Prefer a declaration bearing a TypePredicate
+        // return — flow-only consumers (narrowing) are the only callers, and a
+        // call that would actually select a non-predicate overload merely gains a
+        // suppression (never a diagnostic), so this is FP-safe.
+        val fnDecls = member.declarations.filterIsInstance<FunctionDeclaration>()
+        return fnDecls.firstOrNull { it.type is TypePredicate }
+            ?: member.valueDeclaration as? FunctionDeclaration
+            ?: fnDecls.firstOrNull()
     }
 
     /**
