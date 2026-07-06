@@ -34,6 +34,71 @@ completeness campaigns to dashboard-driven burn-down: the acceptance bar is the 
 tsc's source uses, with the corpus suite as the regression net. M5 unchanged —
 performance is the directive's second half and starts at v1 compliance.
 
+**Round 428 (2026-07-06) — M3.1 (first real slice of the TS2322/TS2345 cores): generic
+call-site inference for tsc's `append` idiom + the TS2345 histogram top + the array-literal
+string-layer union rule. Self-compile (compiler profile) 1,577 → 1,385 → 1,266 → 1,213
+(−364, −23%; TS2322 751 → 501, TS2345 394 → 280, TS2769 45 → 44, TS2339 6 → 7); suite
+9,291 → 9,312 (+21 local, 0 regressions); 3 fix commits (67efa224, 14e9d566, 1791e87a).**
+- **Fix 1 (67efa224, −192): nullable-union generic params + overloaded generic callees.**
+  The single biggest TS2322 shape (`Type 'T[]' is not assignable to type 'Statement[]'`
+  ×130+ + siblings) is tsc core.ts's `x = append(x, item)` — every `append` overload is
+  GENERIC (single TP each) with `T[] | undefined` / `T | undefined` union params. Four
+  coupled mechanisms: (a) `tryInferSingleTypeParamFromArgs` accepts a nullable-union-of-tp
+  param (`nullableUnionOfTpMode`) and strips nullish members from a UNION arg (purely
+  nullish arg → soft-skip, T still anchors from the other arg); (b) an `anyType` arg (an
+  unmodeled local — for-of loop var) contributes NO candidate at the RETURN-TYPE site
+  instead of killing the inference (`forReturnType`-gated; the arg-vs-param site keeps the
+  hard bail — its consumers EMIT); (c) `getReturnTypeOfCallExpression`'s multi-sig path
+  runs single-TP inference for overloaded all-generic callees (chosen sig first, then
+  arity-matching sigs; first full mapper wins) — gated on NO named-type-guard Identifier
+  arg (`argIsNamedTypeGuardIdentifier`: `filter(arr, isFoo)` selects tsc's guard overload
+  whose S binds from the PREDICATE, which we don't model — and the gate is deliberately
+  NOT folded into `callHasTypeGuardArg`, whose B136 concrete-overload swap must keep
+  firing for named guards); (d) the string-layer `isAssignableTo` treats an array-literal
+  source vs `T[]` (T an enclosing fn's TP) as unknowable. By-site: 201 removed, 8
+  position-identical message transformations (builder.ts tuple-vs-anon-object — the B526
+  representation gap now visible where 'T[]' was), 1 new FP at factory/utilities.ts:713 —
+  **tsc 5.5 INFERRED TYPE PREDICATES: `filter(helpers, helper => !helper.scoped)` gets an
+  inferred `helper is UnscopedEmitHelper` in tsc, selecting the guard overload; we take
+  the boolean overload → EmitHelper keeps the ScopedEmitHelper member → TS2339 on
+  `.importName` (catalogued M3.4; needs predicate inference from arrow bodies).**
+- **Fix 2 (14e9d566, −119): the TS2345 histogram top — three mechanisms.** (a) explicit
+  `this`-PARAM annotation wins over the objlit contextual `this` in the call-types walker
+  (`withObjThis` now resolves `value(this: Node)` — debug.ts's Object.defineProperties
+  `__tsDebuggerDisplay` FP'd ×36 at every `isFoo(this)` arg). (b)
+  `tryEmitOptionalMemberArgVsRequiredNamedTs2345` (the optional-member arg emitter that
+  synthesizes `T | undefined` locally) consults `propertyAccessNarrowedNonNull` — a
+  truthy-guarded access is not undefined (`if (source.valueDeclaration)
+  setValueDeclaration(target, source.valueDeclaration)`, checker.ts mergeSymbol ×24+;
+  unguarded + wrong-polarity controls pinned). (c) two exposure companions the by-site
+  diff caught: numeric-enum → `number` in `isSimpleTypeRelatedTo` (FlowFlags/Comparison/
+  TypeFlags ×8), and a this-typed arg narrowed DOWN by a guard substitutes the refined
+  type (relation-gated suppression-only; `isIdentifier(this) ? idText(this) : …`).
+- **Fix 3 (1791e87a, −53): 'array' vs union-with-array-member at the string layer.** An
+  array-literal source against a union member that is array-ish (`[]`-suffix, tuple,
+  `Array<X>`/`ReadonlyArray<X>`) is unknowable at the string layer → permissive
+  (`sourcesContent = []` vs `(string | null)[] | undefined`, `return []`); a union WITHOUT
+  an array member still fires (pinned).
+- **META:** the ~450 ms scratch-CLI repro loop + temporary `println` tracing (the CLI shows
+  stdout, unlike gradle) found both root causes fast; the XDBG probe DISPROVED the assumed
+  emitter for fix 2b (checkArgumentsAgainstSignature's B469 narrowing never ran — the
+  emitter was the dedicated optional-member walker).
+- **Residual triage (next-agent):** TS2345×280 — top family is now the
+  CROSS-FILE-FUNCTION-SHADOWS-LOCAL conflation ×~40 (`(state: ModuleResolutionState) =>
+  any` vs boolean ×14, `TypeCheckerHost` ×14, `(symbol: Symbol) => string` ×4:
+  watch.ts's `useCaseSensitiveFileNames` PARAM and checker.ts's body-local
+  `const symbolName`/`const host` shadow same-named barrel-imported FUNCTIONS; the
+  call-types pass tracks callable/annotated locals only, so the bare-identifier arg falls
+  to the merged globals — needs body-local/param shadow registration in that pass,
+  mirroring round 416's arithmetic-pass rule); `Declaration | undefined`-family leftovers
+  (deeper guard shapes). TS2322×501 — `string | string` ×24 (interface-override literal
+  props: `TsConfigOnlyOption.type: "object"` — per-prop resolution through the narrowed
+  redeclaration, M3), `undefined | VisitResult<Node | undefined>` ×12 (generic alias
+  unions), residual `T[]` shapes ×~30 (inference gate misses: rest-params, multi-TP),
+  `SearchResult<T>` ×10 (un-inferred generic Reference returns — the multi-sig loop needs
+  the SearchResult-shaped param gate), builder.ts tuple-vs-anon-object ×8 (B526).
+  TS7006×301 (M3.2 contextual typing) untouched.**
+
 **Round 427 (2026-07-06) — M3.4: the TS2454 bucket round 426 unmasked — three tsc-faithful
 `assumeInitialized`/definiteness rules. Self-compile (compiler profile) 1,593 → 1,577
 (−16; TS2454 20 → 4, all else byte-identical); suite 9,282 → 9,291 (+9 local, 0
@@ -599,58 +664,6 @@ branch (deliberately — "modifying it is broad", CLAUDE.md) and `typeHasOwnProp
   union (the TS2366 `.kind` exhaustive-switch family); the M3 cores TS2322×784 / TS2345×396 /
   TS7006×301 dominate.
 
-**Round 418 (2026-07-06) — M1.12: resolve NESTED type-guard functions so their narrowing fires.
-Self-compile (compiler profile) 1,902 → 1,854 (−48, TS2339 237 → 189); suite 9,168 → 9,173
-(+5 local, 0 regressions); 1 fix commit (7a806360).** Bucketing the fresh full `--listAll` by
-receiver-type (round-411 method, `s/does not exist on type '\([^']*\)'/\1/`) put **TS2339 "on type
-'Type' ×46** as the single biggest TS2339 sub-family — all `isTupleType(x)`/`isGenericTupleType(x)`
-user-type-guard narrowing DOWN to `TupleTypeReference` then accessing `.target`. A minimal repro
-isolated the root cause (NOT the giant-flow-graph depth the display suggested): tsc's guards are
-declared as NESTED functions inside `createTypeChecker`, which the binder does NOT bind (B83.5), so
-`resolveFlowCalleeDecl` (`currentFileLocals?.get ?: globals`) returned null → `narrowByCallPredicate`
-bailed → the guard never narrowed. A faithful single-file repro with the guard as a NESTED function
-reproduced it exactly (0 errors when top-level, TS2339 when nested). **THREE coupled pieces (the
-resolver exposes the other two):**
-- **(1) the resolver** — `resolveFlowCalleeDecl`'s Identifier branch falls back to
-  `uniqueFunctionDeclByName` (a program-wide map name → the UNIQUELY-named FunctionDeclaration at any
-  nesting depth, or null when ≥2 share the name; built once by `buildNestedFunctionMap`, an iterative
-  worklist over statement containers / function-method-accessor bodies / namespace bodies / class
-  members / arrow-and-function-expr initializers). FP-safe: a colliding name → null → no narrowing
-  (conservative), and narrowing only refines / removes union members.
-- **(2) the narrow-DOWN consumer** — the receiver-narrowing consumers (`computeRawTypeOfPropertyAccess`,
-  the narrowed-to-never TS2339 branch) are ALL gated on `rawObjectType is Type.Union`, so a NON-union
-  narrow-DOWN (`Type` → `TupleTypeReference`) never reached the property access. `checkMemberAccessMissing`
-  gains a top-of-function suppression: for a pure Identifier/PropertyAccess receiver, if flow
-  narrowing yields a strict subtype (`narrowed <: raw`, non-union, non-never) that HAS the property,
-  suppress. FP-safe / suppression-only (`narrowed <: raw` ⇒ the subtype carries at least the declared
-  members).
-- **(3) the intersection-target collapse** — `narrowByCallPredicate`'s POSITIVE union branch drops a
-  constituent when it relates to the guard target in NEITHER direction; for an INTERSECTION target
-  `X & {p}` (declarations.ts's `shouldPrintWithInitializer(node): node is CanHaveLiteralInitializer &
-  { initializer: Expression }`) EVERY member drops → collapse to `never` → FP TS2339 on `.initializer`.
-  Fall back to the antecedent union, narrowly gated `narrowed.isEmpty() && targetType is Type.Intersection`.
-- **THE REGRESSION THAT SHAPED THE FINAL FORM (1 corpus fail on the first full-suite run):
-  `instanceofWithStructurallyIdenticalTypes` EXPECTS `TS2339: Property 'item' does not exist on type
-  'never'` at `x.item` — a GENUINE never** (union `C1 | C2 | C3` where C1≡C2≡C3 structurally, so
-  `else if (isC3(x))` after `!isC1 && !isC2` narrows to `never` via the NEGATIVE branch, and tsc
-  reports there). A blanket never-fix (any positive-empty → union) and a "raw declared type exposes
-  the property → suppress" guard BOTH over-suppressed it. The distinguisher is **positive-collapse
-  (a bug) vs negative-exhaustion (correct)**: piece (3) is gated to the POSITIVE branch + an
-  INTERSECTION target, and piece (2)'s narrow-DOWN excludes `narrowed === never`, so the
-  negative-exhaustion never is untouched. Landed at **0 NEW self-compile FPs (clean burn-down, no
-  swaps)**; the 8 binder/nodeFactory intersection-arm-union FPs that a broader guard (a) exposed were
-  avoided by keeping the fix to these three narrow gates.
-- **Perf: self-compile 104 → 122 s (+17%)** — the nested guards now resolve, so many more narrowing
-  walks SUCCEED (do the full relation work instead of bailing at `resolveFlowCalleeDecl`);
-  correctness-first, perf is M5. Corpus suite time flat (2m 1s). +5 local tests
-  (NestedTypeGuardNarrowingTest: nested-guard if / `&&`-RHS / union narrow + FP-safety missing-prop
-  still fires + ambiguous-name-does-not-resolve). **META (re-confirms round 411): re-bucket a big M3
-  family by its INNER type — TS2339-by-receiver surfaced a bounded, general, FP-safe engine fix
-  (nested-guard resolution) hiding inside the "M3.4 narrowing" bucket; and reproduce a scattered
-  family with a minimal test (top-level vs nested guard) to pin the ONE mechanism before touching the
-  hot path.** DEFERRED (residual, M3): TS2739×1 empty-tuple (round 415), TS2740 Set-shim lib, the
-  arithmetic reassignment TS2362 (cross-statement narrowing), TS2367 const-string-enum (M3.3/B425),
-  the M3 cores TS2322×784 / TS2345×395 / TS7006×301.
 
 ### Mission & strategy
 
@@ -703,7 +716,7 @@ Three strategic reads that shape everything below:
 | Metric | Source | Phase 17 target |
 |---|---|---|
 | Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 9,251 with local tests as of round 424) |
-| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**1,662 measured at round 424**; M1 complete at 2,726/round 389; rounds 395–424 burned bounded histogram-tail buckets + M3.4 flow-narrowing slices 2,726 → 1,662; round 424 seven flow-narrowing fixes −45 (loop-entry union suppression w/ STRUCTURAL wash gate, call-RHS return-annotation narrowing, closure/join/call-crossing aliased conditions, prefix-path receiver guards, asserts-with-inferred-TP test-arg inference, assignment-overwrite reset to the declaration/call-RHS resolved type, DebugTypeMapper this-narrowing — every step by-site strictly removals); rounds 422–423 −92 (overload-arg flow narrowing, optional-chain discriminants, union-target guards end-to-end, exhaustive-switch receiver narrowing → TS2366 ZERO, aliased conditions); round 420 TYPE-ALIAS enum-member discriminant narrowing (M1.12) −9 (a `.kind: <alias>` member survived a `switch (x.kind)` because `enumMemberKeysOfTypeNode` handled only a direct `Enum.Member`; 0 new FPs); round 419 INTERSECTION union-member property resolution (M1.12) −46 (TS2339 189 → 143: `getPropertyOfType`/`typeHasOwnProperty` bail on a `Type.Intersection` member — fold the constituents in property resolution + discriminant-narrowing; 0 new FPs, self-compile time −17%); round 418 NESTED type-guard resolution (M1.12) −48 (TS2339 237 → 189: tsc's `isTupleType`/… guards are nested in `createTypeChecker` so the binder skips them and `resolveFlowCalleeDecl` missed them — program-wide unique-name fallback + a `Type.Union`-gate-bypassing narrow-DOWN suppression + an intersection-target positive-collapse fallback; 0 new FPs; the negative-exhaustion never of `instanceofWithStructurallyIdenticalTypes` stays intact); round 417 namespace-local `extends`-base resolution −2 (coordinated across `getTypeFromBaseTypeExpression` + `lookupInstanceMemberInResolvableChain`, FP-safe); round 409 `export *`-barrel / ESM-`.js` imported-guard FLOW narrowing (M3.4) −175 (TS2339 838 → 672); round 411 enum-member discriminant narrowing + type-guard-narrows-member-DOWN −59; round 412 single-type type-guard narrow-DOWN + TS18048 receiver-narrowing −1; round 413 the `export *` LEAF-EXPORT gate −407 (TS2339 614 → 237): the pre-413 star resolver returned non-exported IMPORT aliases, so barrel-imported `Debug.assert` (& every barrel guard) never resolved — the TRUE builder.ts blocker, NOT the round-412 depth red herring (an instrumented run showed ZERO walk truncations) — plus a dashboard-neutral tsc-faithful linear flow-walk iteration + a return-path narrowing consumer (−1); **round 414 the TS2366 "lacks ending return" family −35 (50 → 15): three CFA fall-through patterns in `statementAlwaysReturns`/`switchAlwaysReturns` — infinite-loop-with-return, trailing never-call (`Debug.fail`), switch fall-through — all FP-safe syntactic/barrel-resolution fixes; the remaining 15 are Pattern C2 (exhaustive switch w/o default → M3.4 discriminant-exhaustiveness)**; remaining bounded pool M3.4/M3-gated (a general-`resolveAlias` `.js`/star fix was measured net +297 via a TS2315 flood, reverted; NonNull-strip −17 but unmasks M3, reverted; const-string-enum→`string` relation deferred M3.3/B425); no-stub stays the honest default) |
+| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**1,213 measured at round 428**; M1 complete at 2,726/round 389; rounds 395–427 burned bounded histogram-tail buckets + M3.4 flow-narrowing slices 2,726 → 1,577; round 428 opened the M3.1 core burn-down −364 (nullable-union generic param inference + overloaded generic callees for the `append` idiom, TS2322 751 → 501; this-param binding + guarded optional-member args + enum→number, TS2345 394 → 280; array-vs-union-member string layer); round 424 seven flow-narrowing fixes −45 (loop-entry union suppression w/ STRUCTURAL wash gate, call-RHS return-annotation narrowing, closure/join/call-crossing aliased conditions, prefix-path receiver guards, asserts-with-inferred-TP test-arg inference, assignment-overwrite reset to the declaration/call-RHS resolved type, DebugTypeMapper this-narrowing — every step by-site strictly removals); rounds 422–423 −92 (overload-arg flow narrowing, optional-chain discriminants, union-target guards end-to-end, exhaustive-switch receiver narrowing → TS2366 ZERO, aliased conditions); round 420 TYPE-ALIAS enum-member discriminant narrowing (M1.12) −9 (a `.kind: <alias>` member survived a `switch (x.kind)` because `enumMemberKeysOfTypeNode` handled only a direct `Enum.Member`; 0 new FPs); round 419 INTERSECTION union-member property resolution (M1.12) −46 (TS2339 189 → 143: `getPropertyOfType`/`typeHasOwnProperty` bail on a `Type.Intersection` member — fold the constituents in property resolution + discriminant-narrowing; 0 new FPs, self-compile time −17%); round 418 NESTED type-guard resolution (M1.12) −48 (TS2339 237 → 189: tsc's `isTupleType`/… guards are nested in `createTypeChecker` so the binder skips them and `resolveFlowCalleeDecl` missed them — program-wide unique-name fallback + a `Type.Union`-gate-bypassing narrow-DOWN suppression + an intersection-target positive-collapse fallback; 0 new FPs; the negative-exhaustion never of `instanceofWithStructurallyIdenticalTypes` stays intact); round 417 namespace-local `extends`-base resolution −2 (coordinated across `getTypeFromBaseTypeExpression` + `lookupInstanceMemberInResolvableChain`, FP-safe); round 409 `export *`-barrel / ESM-`.js` imported-guard FLOW narrowing (M3.4) −175 (TS2339 838 → 672); round 411 enum-member discriminant narrowing + type-guard-narrows-member-DOWN −59; round 412 single-type type-guard narrow-DOWN + TS18048 receiver-narrowing −1; round 413 the `export *` LEAF-EXPORT gate −407 (TS2339 614 → 237): the pre-413 star resolver returned non-exported IMPORT aliases, so barrel-imported `Debug.assert` (& every barrel guard) never resolved — the TRUE builder.ts blocker, NOT the round-412 depth red herring (an instrumented run showed ZERO walk truncations) — plus a dashboard-neutral tsc-faithful linear flow-walk iteration + a return-path narrowing consumer (−1); **round 414 the TS2366 "lacks ending return" family −35 (50 → 15): three CFA fall-through patterns in `statementAlwaysReturns`/`switchAlwaysReturns` — infinite-loop-with-return, trailing never-call (`Debug.fail`), switch fall-through — all FP-safe syntactic/barrel-resolution fixes; the remaining 15 are Pattern C2 (exhaustive switch w/o default → M3.4 discriminant-exhaustiveness)**; remaining bounded pool M3.4/M3-gated (a general-`resolveAlias` `.js`/star fix was measured net +297 via a TS2315 flood, reverted; NonNull-strip −17 but unmasks M3, reverted; const-string-enum→`string` relation deferred M3.3/B425); no-stub stays the honest default) |
 | Project corpus FPs (services/server/…) | `bench/` TSVs (M0.1) | 0 — **the v1 exit** (all 8 profiles) |
 | Conformance adoption | generated-test counts per category | POST-V1 (re-scope 2026-07-03 — see § "Post-v1 backlog", M3.0) |
 | Crashes on any input | bench runs | 0 |
@@ -1291,7 +1304,16 @@ each item still decomposes into a multi-session campaign — read PLAN-PHASE-4.m
   (re-scope 2026-07-03): burn down the compiler profile's TS2322×777 (top shape
   `Type 'T[]'` ×174), TS7006×301 (call-arg contexts whose callee doesn't resolve),
   and the TS2345 share — tsc-source shapes only; full conformance generality is
-  post-v1.
+  post-v1. **STARTED (round 428, −364: 1,577 → 1,213):** nullable-union generic
+  param inference (`nullableUnionOfTpMode`) + overloaded all-generic callee
+  inference in `getReturnTypeOfCallExpression` killed the `T[]`-return family
+  (TS2322 751 → 501); the TS2345 histogram top (this-param binding, guarded
+  optional-member args, enum→number) took 394 → 280. Next sub-slices (triaged in
+  the round-428 session note): the cross-file-function-shadows-local conflation
+  ×~40 (body-local/param shadow registration in the call-types pass), residual
+  `T[]` inference-gate misses ×~30, `SearchResult<T>` un-inferred generic
+  Reference returns ×10, `string | string` interface-override literal props ×24
+  (M3), inferred type predicates (tsc 5.5 — `helper => !helper.scoped`, M3.4).
 - [ ] **M3.2 Contextual typing engine** (parameters, returns, object/array literals,
   generic-context propagation — replaces `applyContextualParamTypesForArrow`-era
   special cases).

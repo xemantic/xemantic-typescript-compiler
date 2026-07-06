@@ -1,3 +1,55 @@
+**Round 418 (2026-07-06) — M1.12: resolve NESTED type-guard functions so their narrowing fires.
+Self-compile (compiler profile) 1,902 → 1,854 (−48, TS2339 237 → 189); suite 9,168 → 9,173
+(+5 local, 0 regressions); 1 fix commit (7a806360).** Bucketing the fresh full `--listAll` by
+receiver-type (round-411 method, `s/does not exist on type '\([^']*\)'/\1/`) put **TS2339 "on type
+'Type' ×46** as the single biggest TS2339 sub-family — all `isTupleType(x)`/`isGenericTupleType(x)`
+user-type-guard narrowing DOWN to `TupleTypeReference` then accessing `.target`. A minimal repro
+isolated the root cause (NOT the giant-flow-graph depth the display suggested): tsc's guards are
+declared as NESTED functions inside `createTypeChecker`, which the binder does NOT bind (B83.5), so
+`resolveFlowCalleeDecl` (`currentFileLocals?.get ?: globals`) returned null → `narrowByCallPredicate`
+bailed → the guard never narrowed. A faithful single-file repro with the guard as a NESTED function
+reproduced it exactly (0 errors when top-level, TS2339 when nested). **THREE coupled pieces (the
+resolver exposes the other two):**
+- **(1) the resolver** — `resolveFlowCalleeDecl`'s Identifier branch falls back to
+  `uniqueFunctionDeclByName` (a program-wide map name → the UNIQUELY-named FunctionDeclaration at any
+  nesting depth, or null when ≥2 share the name; built once by `buildNestedFunctionMap`, an iterative
+  worklist over statement containers / function-method-accessor bodies / namespace bodies / class
+  members / arrow-and-function-expr initializers). FP-safe: a colliding name → null → no narrowing
+  (conservative), and narrowing only refines / removes union members.
+- **(2) the narrow-DOWN consumer** — the receiver-narrowing consumers (`computeRawTypeOfPropertyAccess`,
+  the narrowed-to-never TS2339 branch) are ALL gated on `rawObjectType is Type.Union`, so a NON-union
+  narrow-DOWN (`Type` → `TupleTypeReference`) never reached the property access. `checkMemberAccessMissing`
+  gains a top-of-function suppression: for a pure Identifier/PropertyAccess receiver, if flow
+  narrowing yields a strict subtype (`narrowed <: raw`, non-union, non-never) that HAS the property,
+  suppress. FP-safe / suppression-only (`narrowed <: raw` ⇒ the subtype carries at least the declared
+  members).
+- **(3) the intersection-target collapse** — `narrowByCallPredicate`'s POSITIVE union branch drops a
+  constituent when it relates to the guard target in NEITHER direction; for an INTERSECTION target
+  `X & {p}` (declarations.ts's `shouldPrintWithInitializer(node): node is CanHaveLiteralInitializer &
+  { initializer: Expression }`) EVERY member drops → collapse to `never` → FP TS2339 on `.initializer`.
+  Fall back to the antecedent union, narrowly gated `narrowed.isEmpty() && targetType is Type.Intersection`.
+- **THE REGRESSION THAT SHAPED THE FINAL FORM (1 corpus fail on the first full-suite run):
+  `instanceofWithStructurallyIdenticalTypes` EXPECTS `TS2339: Property 'item' does not exist on type
+  'never'` at `x.item` — a GENUINE never** (union `C1 | C2 | C3` where C1≡C2≡C3 structurally, so
+  `else if (isC3(x))` after `!isC1 && !isC2` narrows to `never` via the NEGATIVE branch, and tsc
+  reports there). A blanket never-fix (any positive-empty → union) and a "raw declared type exposes
+  the property → suppress" guard BOTH over-suppressed it. The distinguisher is **positive-collapse
+  (a bug) vs negative-exhaustion (correct)**: piece (3) is gated to the POSITIVE branch + an
+  INTERSECTION target, and piece (2)'s narrow-DOWN excludes `narrowed === never`, so the
+  negative-exhaustion never is untouched. Landed at **0 NEW self-compile FPs (clean burn-down, no
+  swaps)**; the 8 binder/nodeFactory intersection-arm-union FPs that a broader guard (a) exposed were
+  avoided by keeping the fix to these three narrow gates.
+- **Perf: self-compile 104 → 122 s (+17%)** — the nested guards now resolve, so many more narrowing
+  walks SUCCEED (do the full relation work instead of bailing at `resolveFlowCalleeDecl`);
+  correctness-first, perf is M5. Corpus suite time flat (2m 1s). +5 local tests
+  (NestedTypeGuardNarrowingTest: nested-guard if / `&&`-RHS / union narrow + FP-safety missing-prop
+  still fires + ambiguous-name-does-not-resolve). **META (re-confirms round 411): re-bucket a big M3
+  family by its INNER type — TS2339-by-receiver surfaced a bounded, general, FP-safe engine fix
+  (nested-guard resolution) hiding inside the "M3.4 narrowing" bucket; and reproduce a scattered
+  family with a minimal test (top-level vs nested guard) to pin the ONE mechanism before touching the
+  hot path.** DEFERRED (residual, M3): TS2739×1 empty-tuple (round 415), TS2740 Set-shim lib, the
+  arithmetic reassignment TS2362 (cross-statement narrowing), TS2367 const-string-enum (M3.3/B425),
+  the M3 cores TS2322×784 / TS2345×395 / TS7006×301.
 **Round 417 (2026-07-06) — M1.12: resolve NAMESPACE-LOCAL interface/class `extends` bases.
 Self-compile (compiler profile) 1,904 → 1,902 (−2); suite 9,161 → 9,168 (+7 local, 0 regressions);
 1 commit (2a05b3ea).** Investigating the TS2353×3 excess-property bucket, a minimal repro confirmed
