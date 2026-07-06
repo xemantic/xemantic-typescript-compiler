@@ -8890,13 +8890,17 @@ class Parser(
         if (hadLeadingBar) reportUnparenthesizedFnTypeInUnionOrIntersection(type, firstUnionMemberStart, inUnion = true)
         // Type predicate: X is T (valid as function return type annotations)
         // After parsing X as a type reference, if the next token is `is`, consume it
-        // and parse the actual predicate type. Since we erase all types, the exact
-        // node returned doesn't matter as long as we consume the right tokens.
+        // and parse the actual predicate type. Round 423: the predicate target is the
+        // WHOLE remaining type — `node is CallExpression | NewExpression` predicates
+        // on the union (tsc parseTypePredicate → parseType). The old
+        // parseIntersectionOrHigherType truncated the target at the first member and
+        // the union-continuation below then wrapped the PREDICATE as a union member
+        // (`(node is A) | B`), so a union-target guard silently never narrowed.
         if (token == SyntaxKind.IsKeyword) {
             val paramName = type  // The type parsed so far is actually the parameter name
             nextToken()  // consume 'is'
-            val predicateType = parseIntersectionOrHigherType()
-            type = TypePredicate(
+            val predicateType = parseType()
+            return TypePredicate(
                 parameterName = paramName,
                 type = predicateType,
                 pos = pos,

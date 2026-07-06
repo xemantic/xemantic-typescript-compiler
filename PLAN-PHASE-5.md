@@ -34,6 +34,58 @@ completeness campaigns to dashboard-driven burn-down: the acceptance bar is the 
 tsc's source uses, with the corpus suite as the regression net. M5 unchanged —
 performance is the directive's second half and starts at v1 compliance.
 
+**Round 423 (2026-07-06) — M3.4: exhaustive-switch receiver narrowing (TS2366 → 0) + union-target
+type guards + aliased conditions. Self-compile (compiler profile) 1,756 → 1,752 → 1,708 (−48 total);
+suite 9,202 → 9,221 (+19 local, 0 regressions); 2 fix commits.**
+- **Fix 1 (50297e6a): the four round-422 residual TS2366 sites — TS2366 is now ZERO on the compiler
+  profile.** Four mechanisms in `requiredUnionDiscriminantKeys`/`enumSwitchKeysFromTypeNode`, exactly
+  the round-422 next-agent note's plan: (a) the discriminant RECEIVER is guard-narrowed via the
+  pass-dedicated `implicitReturnFlowGraph` (lifted into `currentFlowGraph` only around the walk —
+  the arithmetic-pass landmine pattern), so `if (!target) return;` drops `undefined` and
+  `if (!isNamedEvaluationSource(node)) return false;` narrows a `Node` param down to the union
+  (`getAssignmentTargetKind`, `isNamedEvaluation`); (b) a body-local `const target = call()` receiver
+  types from the callee's return annotation (`localConstCallInitType`; single-decl + non-overloaded
+  gates); (c) an OPTIONAL enum discriminant contributes a required `@undefined` key instead of
+  bailing (`getNewLineCharacter` + `case undefined:`); (d) `LiteralToken["kind"]` — an
+  IndexedAccessType branch reuses the union-member walk (`createLiteralLikeNode`), depth-guarded.
+  10 local tests (GuardNarrowedSwitchReceiverTest) incl. per-mechanism negative controls; one
+  first-cut control was WRONG against tsc semantics (a reassigned-`let` receiver: tsc computes
+  exhaustiveness on the non-nullish part and flags the ACCESS, so TS2366 stays quiet) — flipped
+  with a comment.
+- **Fix 2: union-target type guards + aliased conditions (TS2339 117 → 104, TS2322 784 → 756,
+  TS2345 −2, TS18048 −1).** THREE coupled pieces: (a) PARSER — `x is A | B` predicates on the
+  UNION (tsc parseTypePredicate → parseType); the old `parseIntersectionOrHigherType` truncated
+  the target at `A` and the union-continuation wrapped the PREDICATE (`(x is A) | B`) — the return
+  annotation wasn't a TypePredicate at all, so every union-target guard (`isCallOrNewExpression`,
+  `isPropertyNameLiteral`, `isOptionalChain`) silently never narrowed; (b) ALIASED CONDITIONS
+  (tsc `narrowType` inlineLevel): `const isJsxOpenFragment = isJsxOpeningFragment(node);
+  if (!isJsxOpenFragment) { node.tagName }` (the JsxCallLike ×12 family) — the alias initializer
+  is recovered by a memoized value-preserving flow BACK-WALK that bails on branch/loop/call/start
+  nodes and on reassignment of the alias or the walked root (the const-ness proof); the UNCACHED
+  first cut ran the self-compile 4×+ slower — killed and memoized (`aliasedConditionInitCache`,
+  keyed by start-FlowNode identity, immune to the cross-file nodeKey collision); (c) the predicate
+  union filters consult the round-411 `.kind` key space — PROVABLY DISJOINT keys beat the
+  too-lenient relation (enum-member kinds resolve to `any`, so `!isJsxOpeningFragment` collapsed
+  JsxCallLike to `never`); plus the round-418 narrow-DOWN suppression accepts a narrowed UNION when
+  every member resolves the property. 9 local tests (AliasedConditionAndUnionPredicateTest).
+- **Measured dead-ends (2 extra self-compile A/Bs, reverted):** a key-SUBSET ⇒ matched verdict
+  (1,708 → 1,720 — brand-intersection targets like `CallChain = CallExpression &
+  {_optionalChainBrand}` share the kind without being matched by it); the same rule gated to
+  plain-object targets + a tsc-faithful positive-empty → `declared & candidate` fallback
+  (1,708 → 1,710 — fixed 4 nevers, surfaced a 12-site checker.ts alias-resolution cluster);
+  same-SYMBOL union membership (exact no-op — the real-tsc member/target instances are not
+  symbol-identical, so the relation failure is deeper).
+- **Residual (by-site diff −68/+24 for fix 2 — the +24 catalogued in the session listalls):**
+  never×10 (checker.ts 35055/35094/52738/52739 `isAccessExpression`-family positive collapses,
+  factory/utilities 1747/1750, classFields 2689, utilities 5445/6840/6843),
+  `Identifier | ComputedPropertyName` ×8 (esDecorators/namedEvaluation — the negative branch
+  cannot prove `Identifier <: PropertyNameLiteral` on the real types; same-symbol identity ALSO
+  fails, so the member instances differ — an M3 relation/instance question), partial narrowings ×5,
+  TS2322×1. All are the SAME M3-relation-gap family newly EXPOSED because union-target guards now
+  narrow at all — each was previously invisible behind the parse truncation. Next targets:
+  TS2339 never×27 remaining, DebugTypeMapper×10 (`asserts value is T` + `this`-path narrowing),
+  `string | Diagnostic`×6 (commandLineParser), TS18048×6.
+
 **Round 422 (2026-07-06) — M1.12/M3.4: FIVE bounded FP-safe fixes from a fresh full `--listAll`
 bucketing — overload-arg flow narrowing, optional-chain discriminants, mixed enum/literal
 discriminant keys, boolean-literal overload narrowing, and union-`.kind` exhaustive switches.

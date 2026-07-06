@@ -556,6 +556,30 @@ class Checker(
      *  (`X["kind"]` inside a member's own `kind` annotation), so bound the nesting. */
     private var unionDiscriminantKeyDepth = 0
 
+    /** Round 423: aliased-condition inlining depth (tsc `inlineLevel`, capped at 5) —
+     *  a condition Identifier resolving to a `const x = <cond>` alias recurses
+     *  [applyConditionNarrowing] into the initializer; chained aliases bound here. */
+    private var aliasedConditionInlineLevel = 0
+
+    /** Round 423: memo for [aliasedConditionInitializer] — the narrowing walkers
+     *  visit the SAME FlowCondition hundreds of times across queries (linear
+     *  pass-through iteration), so the flow back-walk must not repeat per visit
+     *  (an uncached first cut ran the self-compile 4×+ slower). Keyed by the
+     *  identifier's START flow node (per-graph object identity — immune to the
+     *  cross-file `nodeKey` pos collision), the alias name, and the walked
+     *  reference's root (the reassigned-reference bail depends on it). */
+    private val aliasedConditionInitCache = HashMap<AliasedCondKey, Expression?>()
+
+    private data class AliasedCondKey(
+        val startFlow: FlowNode,
+        val aliasName: String,
+        val rootOfName: String,
+    )
+
+    /** Round 423: memo for [discriminantKindKeys] by Type.id — empty set encodes
+     *  "unreadable" (the function's public contract returns null for it). */
+    private val discriminantKindKeysCache = HashMap<Int, Set<String>>()
+
     /** Pre-built per-file type maps: fileName → (name → Type). Built once during init,
      *  contains types for all file-level annotated declarations. Used by getTypeOfIdentifier
      *  to resolve file-level identifiers across all checker passes. */
@@ -92039,7 +92063,25 @@ interface DataView {
                 }
                 narrowByCallPredicate(t, expr, isMatch = isTrue, name)
             }
-            is Identifier -> if (expr.text == name) narrowByTruthiness(t, truthy = isTrue) else t
+            is Identifier -> if (expr.text == name) {
+                narrowByTruthiness(t, truthy = isTrue)
+            } else {
+                // Round 423 (tsc `narrowType`, aliased conditions): a bare-Identifier
+                // condition may be a local ALIAS of a narrowing expression —
+                // `const isFrag = isJsxOpeningFragment(node); if (!isFrag) { node.tagName }`
+                // narrows `node` exactly as if the guard call were inline (tsc gates on
+                // isConstantVariable + inlineLevel < 5; our flow back-walk in
+                // [aliasedConditionInitializer] is the equivalent const-ness proof).
+                val init = if (aliasedConditionInlineLevel < 5) aliasedConditionInitializer(expr, name) else null
+                if (init != null) {
+                    aliasedConditionInlineLevel++
+                    try {
+                        applyConditionNarrowing(t, init, isTrue, name)
+                    } finally {
+                        aliasedConditionInlineLevel--
+                    }
+                } else t
+            }
             // 17.34: PropertyAccess truthiness narrowing — `if (A._a) { ... A._a ... }`
             // narrows `A._a` from `T | undefined | null` to `T` on the truthy side.
             // Path comparison gates by structural identity of the dotted reference path.
@@ -92073,6 +92115,66 @@ interface DataView {
             }
             else -> t
         }
+    }
+
+    /**
+     * Round 423 (tsc checker `narrowType`, aliased conditions): resolve a
+     * CONDITION-position bare Identifier to the initializer of its
+     * `const x = <narrowing-expr>` declaration by walking the flow BACKWARD from
+     * the identifier through VALUE-PRESERVING nodes only (assignments to OTHER
+     * names, prior conditions). Bails (null → no narrowing, suppression-safe) at
+     * any branch/loop/call/start node, on a reassignment of the alias itself, on
+     * a reassignment or (re)declaration of the WALKED reference's root between
+     * the test and the alias declaration (the alias captured the OLD value —
+     * tsc gates the whole feature on isConstantVariable + isConstantReference;
+     * this path-local scan is the flow-graph equivalent), or past 200 steps.
+     */
+    private fun aliasedConditionInitializer(expr: Identifier, name: String): Expression? {
+        val start = currentFlowGraph?.nodeToFlow?.get(nodeKey(expr)) ?: return null
+        val aliasName = expr.text
+        val rootOfName = name.substringBefore('.')
+        val key = AliasedCondKey(start, aliasName, rootOfName)
+        aliasedConditionInitCache[key]?.let { return it }
+        if (key in aliasedConditionInitCache) return null // memoized negative
+        val result = computeAliasedConditionInitializer(start, aliasName, rootOfName)
+        aliasedConditionInitCache[key] = result
+        return result
+    }
+
+    private fun computeAliasedConditionInitializer(
+        start: FlowNode, aliasName: String, rootOfName: String,
+    ): Expression? {
+        var flow = start
+        var steps = 0
+        while (steps++ < 200) {
+            when (flow) {
+                is FlowAssignment -> {
+                    val n = flow.node
+                    if (n is VariableDeclaration && (n.name as? Identifier)?.text == aliasName) {
+                        // The alias's own declaration — an initializer-less `let x;`
+                        // (later assigned) is NOT a const alias → null.
+                        return n.initializer
+                    }
+                    val targetRoot = flowAssignmentRootName(n) ?: return null
+                    if (targetRoot == aliasName || targetRoot == rootOfName) return null
+                    flow = flow.antecedent
+                }
+                is FlowCondition -> flow = flow.antecedent
+                else -> return null
+            }
+        }
+        return null
+    }
+
+    /** The root binding name a [FlowAssignment.node] targets, or null when unknown
+     *  (element access / computed destructuring) — callers bail conservatively. */
+    private fun flowAssignmentRootName(n: Node): String? = when (n) {
+        is Identifier -> n.text
+        is PropertyAccessExpression -> getReferencePath(n)?.substringBefore('.')
+        is VariableDeclaration -> (n.name as? Identifier)?.text
+        is Parameter -> (n.name as? Identifier)?.text
+        is BindingElement -> (n.name as? Identifier)?.text
+        else -> null
     }
 
     /**
@@ -92754,6 +92856,18 @@ interface DataView {
                 // the old filter kept), so it can only suppress a false positive.
                 val narrowed = t.types.mapNotNull { member ->
                     when {
+                        // Round 423: PROVABLY disjoint `.kind` discriminant keys mean the
+                        // member cannot match the guard, whatever the (too-lenient,
+                        // enum-member-kinds-resolve-to-any) structural relation says —
+                        // `isJsxOpeningFragment` must drop JsxSelfClosingElement on the
+                        // positive branch even though it structurally subsumes the
+                        // property-poorer fragment. (A key-SUBSET ⇒ keep/drop rule and a
+                        // tsc-faithful positive-empty → `declared & candidate` fallback
+                        // were BOTH measured net-negative — round-423 session note:
+                        // 1,708 → 1,720/1,710, new never-collapses via brand-intersection
+                        // targets like CallChain and downstream chain shifts — do not
+                        // re-add without a per-site diff.)
+                        typeGuardMemberDisjoint(member, targetType) -> null
                         checkTypeRelatedTo(member, targetType, assignableRelation) -> member
                         checkTypeRelatedTo(targetType, member, assignableRelation) -> targetType
                         else -> null
@@ -92772,7 +92886,16 @@ interface DataView {
                 if (narrowed.isEmpty() && targetType is Type.Intersection) return t
                 return getUnionType(narrowed)
             }
-            return getUnionType(t.types.filter { !checkTypeRelatedTo(it, targetType, assignableRelation) })
+            // Negative branch — keep members NOT assignable to the target. Round 423:
+            // a member whose `.kind` discriminant keys are PROVABLY disjoint from the
+            // target's is definitely not a subtype and must be KEPT, even when the
+            // structural relation over-accepts it (enum-member kinds resolve to `any`,
+            // so every AST-node member looked assignable to the property-poorest one —
+            // `!isJsxOpeningFragment(node)` collapsed JsxCallLike to `never`).
+            return getUnionType(t.types.filter {
+                typeGuardMemberDisjoint(it, targetType) ||
+                    !checkTypeRelatedTo(it, targetType, assignableRelation)
+            })
         }
         // Single (non-union) type. Mirror tsc `getNarrowedType`(assumeTrue), which maps
         // `candidate <: t ? candidate : t <: candidate ? t : t&candidate` — the `candidate <: t`
@@ -92794,6 +92917,49 @@ interface DataView {
             }
         }
         return if (checkTypeRelatedTo(t, targetType, assignableRelation)) neverType else t
+    }
+
+    /**
+     * Round 423: true when [member] and a type-guard's [target] carry PROVABLY
+     * DISJOINT `.kind` discriminant key sets (the round-411 key space:
+     * enum-member and `lit:s:` string-literal keys read from the DECLARED
+     * annotations — enum-member property TYPES resolve to `any`, so the
+     * structural relation cannot see this distinction and over-accepts, e.g.
+     * every Jsx node member looked assignable to the property-poorest
+     * JsxOpeningFragment). Disjoint keys ⇒ definitely not a subtype in either
+     * direction (sound even against brand-intersection targets). False on ANY
+     * unreadable side — callers fall back to the structural relation
+     * (`instanceofWithStructurallyIdenticalTypes`'s kind-less classes keep
+     * their negative-exhaustion `never`). A key-SUBSET ⇒ matched verdict was
+     * tried and measured NET-NEGATIVE (round-423 session note) — brand-refined
+     * targets (`CallChain = CallExpression & {_optionalChainBrand}`) share the
+     * kind without being matched, and even plain-target gating shifted
+     * downstream narrowing chains for the worse.
+     */
+    private fun typeGuardMemberDisjoint(member: Type, target: Type): Boolean {
+        val mk = discriminantKindKeys(member) ?: return false
+        val tk = discriminantKindKeys(target) ?: return false
+        return mk.none { it in tk }
+    }
+
+    /** The `.kind` discriminant keys of [t] (union → all members', each required
+     *  readable), via the declared annotations. Null when any part is unreadable.
+     *  Memoized by Type.id — consulted per union member per predicate query. */
+    private fun discriminantKindKeys(t: Type): Set<String>? {
+        discriminantKindKeysCache[t.id]?.let { return it.ifEmpty { null } }
+        val members = if (t is Type.Union) t.types else listOf(t)
+        val keys = mutableSetOf<String>()
+        var failed = false
+        for (m in members) {
+            val ann = discriminantPropAnnotation(m, "kind")
+            val k = ann?.let { enumMemberKeysOfTypeNode(it) }
+            if (k == null) { failed = true; break }
+            keys.addAll(k)
+        }
+        // Encode "unreadable" as an empty cached set (the public contract returns null).
+        val result = if (failed) emptySet() else keys
+        discriminantKindKeysCache[t.id] = result
+        return result.ifEmpty { null }
     }
 
     /**
@@ -112894,11 +113060,23 @@ interface DataView {
             val raw = getTypeOfExpression(objectExpr)
             if (raw !is Type.Union && raw !== anyType && raw !== errorType && raw !== neverType) {
                 val narrowed = getNarrowedTypeForReference(raw, objectExpr)
-                if (narrowed !== raw && narrowed !== neverType && narrowed !is Type.Union &&
+                if (narrowed !== raw && narrowed !== neverType &&
                     checkTypeRelatedTo(narrowed, raw, assignableRelation)
                 ) {
-                    val app = try { getApparentType(narrowed) } catch (_: Exception) { null }
-                    if (app != null && getPropertyOfType(app, propName) != null) return
+                    // Round 423: a union-TARGET guard (`x is CallExpression | NewExpression`)
+                    // narrows a single-type receiver to a UNION — the access is safe iff
+                    // EVERY member resolves the property (intersection members fold via
+                    // resolveMemberPropertyType, the round-419 rule). The declared-UNION
+                    // receiver case is excluded by the outer `raw !is Type.Union` gate, so
+                    // the negative-exhaustion `never` corpus pin is untouched.
+                    val present = if (narrowed is Type.Union) {
+                        narrowed.types.isNotEmpty() &&
+                            narrowed.types.all { m -> resolveMemberPropertyType(m, propName) != null }
+                    } else {
+                        val app = try { getApparentType(narrowed) } catch (_: Exception) { null }
+                        app != null && getPropertyOfType(app, propName) != null
+                    }
+                    if (present) return
                 }
             }
         }
