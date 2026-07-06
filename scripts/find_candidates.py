@@ -72,7 +72,7 @@ XML_GLOB = os.path.join(
     "TEST-com.xemantic.typescript.compiler.TypeScriptCompilerTests_*.xml",
 )
 PLAN = os.path.join(REPO_ROOT, "PLAN-PHASE-4.md")
-PLAN_HISTORY = os.path.join(REPO_ROOT, "PLAN-PHASE-4-HISTORY.md")
+PLAN_HISTORY = os.path.join(REPO_ROOT, "docs", "history", "PLAN-PHASE-4-HISTORY.md")
 REF_DIR = os.path.join(REPO_ROOT, "typescript-repo", "tests", "baselines", "reference")
 
 ERR_LINE_RE = re.compile(r"(.+?)\((\d+),(\d+)\): error (TS\d+): (.+)$")
@@ -97,7 +97,7 @@ def _base_key(name: str) -> str:
 def _skip_tokens_from(path: str) -> set[str]:
     """Extract skip tokens from one file's 'Explored-but-skipped' section.
     The ``\\Z`` alternative terminates the region at EOF when the section is
-    the last one in the file (the archived location in PLAN-PHASE-4-HISTORY.md)."""
+    the last one in the file (the archived location in docs/history/PLAN-PHASE-4-HISTORY.md)."""
     if not os.path.isfile(path):
         return set()
     with open(path) as f:
@@ -121,7 +121,7 @@ def _skip_tokens_from(path: str) -> set[str]:
 
 def load_skipped_tests() -> set[str]:
     """Extract test-basename tokens from the 'Explored-but-skipped' section,
-    looked up in BOTH PLAN-PHASE-4.md and PLAN-PHASE-4-HISTORY.md (the live
+    looked up in BOTH PLAN-PHASE-4.md and docs/history/PLAN-PHASE-4-HISTORY.md (the live
     skip log was archived to the history file 2026-06-10; per-file extraction
     + union keeps behavior identical wherever the section lives). Matches
     occurrences like ``testname_ts`` or ``testname_ts__suffix__`` inside

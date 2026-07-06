@@ -2,7 +2,7 @@
 """Round-138 miner: rank ALL failing errors-tests by raw expected-vs-actual diff size
 from the test-result XMLs — INDEPENDENT of find_candidates.py's <=3-code window, so it
 sees multi-code diffs the bucket view hides. Excludes any base name mentioned anywhere
-in PLAN-PHASE-4.md OR PLAN-PHASE-4-HISTORY.md (one mention = previously triaged; session
+in PLAN-PHASE-4.md OR docs/history/PLAN-PHASE-4-HISTORY.md (one mention = previously triaged; session
 notes and the skip log were archived to the history file 2026-06-10, so both must be
 consulted; check the plan/history before re-investigating a shown candidate anyway —
 variant suffixes can slip the filter).
@@ -38,7 +38,7 @@ import glob, re, html, sys
 N = int(sys.argv[1]) if len(sys.argv) > 1 else 25
 plan = open('PLAN-PHASE-4.md', encoding='utf-8').read()
 try:
-    plan += open('PLAN-PHASE-4-HISTORY.md', encoding='utf-8').read()
+    plan += open('docs/history/PLAN-PHASE-4-HISTORY.md', encoding='utf-8').read()
 except OSError:
     pass
 rows = []
