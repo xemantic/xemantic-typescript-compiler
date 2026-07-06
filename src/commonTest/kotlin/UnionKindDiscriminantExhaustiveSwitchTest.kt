@@ -142,7 +142,14 @@ class UnionKindDiscriminantExhaustiveSwitchTest {
     }
 
     @Test
-    fun `possibly-undefined receiver keeps TS2366 firing`() {
+    fun `possibly-undefined receiver does not fail exhaustiveness`() {
+        // Round 424 DELIBERATE flip of the round-422 conservative pin: tsc
+        // computes switch exhaustiveness over the NON-NULLISH part of the
+        // receiver and reports the possibly-undefined ACCESS separately
+        // (TS18048 at `mapper.kind`) — it emits NO TS2366 here. Our TS18048
+        // emitter for this shape is a known M3.4 gap, but the exhaustiveness
+        // verdict must match tsc (the round-423 reassigned-let pin requires
+        // the same receiver-nullish drop).
         val d = diags(
             """
             $mapperDecls
@@ -156,9 +163,9 @@ class UnionKindDiscriminantExhaustiveSwitchTest {
             """,
         )
         assertTrue(
-            d.any { it.code == 2366 },
-            "a `TypeMapper | undefined` receiver has no readable kind on the undefined member " +
-                "— TS2366 must stand; got: " + d.joinToString { "TS${it.code}: ${it.message}" },
+            d.none { it.code == 2366 || it.code == 7030 },
+            "exhaustiveness is computed over the non-nullish receiver part (tsc emits only " +
+                "TS18048 here); got: " + d.joinToString { "TS${it.code}: ${it.message}" },
         )
     }
 

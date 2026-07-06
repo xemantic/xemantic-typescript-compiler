@@ -78673,6 +78673,19 @@ interface DataView {
                 currentFlowGraph = savedFg
             }
         }
+        // Round 424: tsc computes exhaustiveness over the NON-NULLISH part of the
+        // RECEIVER — a possibly-undefined receiver is an ACCESS error (TS18048),
+        // never an exhaustiveness failure (`let target = getTarget(n); if (!target)
+        // return; target = getTarget(n); switch (target.kind) …` draws no TS2366 in
+        // tsc — the reassigned-let pin). Drop nullish RECEIVER members before the
+        // key walk; the optional-PROPERTY `@undefined` key (the `kind?:` mechanism)
+        // is separate and unaffected (it lives in the member walk).
+        if (recvType is Type.Union) {
+            val nonNullish = recvType.types.filterNot { isNullishConstituent(it) }
+            if (nonNullish.isNotEmpty() && nonNullish.size < recvType.types.size) {
+                recvType = if (nonNullish.size == 1) nonNullish[0] else getUnionType(nonNullish)
+            }
+        }
         val apparent = try { getApparentType(recvType) } catch (_: Exception) { return null }
         return unionDiscriminantKeysOfType(apparent, propName)
     }
@@ -91936,8 +91949,67 @@ interface DataView {
             // are unaffected (antecedent == declaredType there).
             return narrowByExcludingNullUndefined(declaredType)
         }
+        if (rhs != null) {
+            // M1.12 (round 424): an overwrite of the walked name with an
+            // unclassifiable-but-RESOLVABLE initializer/RHS RESETS the walk to
+            // the PRECISE overwritten type — never to the reader's flat-map
+            // [declaredType], which is block-UNAWARE/first-decl-wins and may
+            // belong to an OUTER shadowed binding (a blanket declaredType reset
+            // was measured to inject the outer type: 3 new FPs at
+            // builder.ts:1814 / destructuring.ts:114 / moduleNameResolver:1950).
+            // Two precise cases:
+            // - a DECLARATION resets to its own annotation, else its
+            //   initializer-call's return annotation (the flow-nearest
+            //   declaration IS the binding the read lexically refers to) —
+            //   without it, a shadowing redeclaration after an outer falsy
+            //   guard collapsed to `never` (tsc moduleNameResolver:1924/1931);
+            // - a plain `=` assignment resets to its call-RHS's return
+            //   annotation (`r = tryLoad(…); if (r) r.path` — the stale falsy
+            //   narrowing otherwise survives the overwrite and the truthy
+            //   guard collapses to `never`).
+            // `??=`/`||=` and anything unresolvable keep the conservative
+            // antecedent pass-through (for `??=` the antecedent IS the correct
+            // base — the assignment only fires on the nullish part).
+            if (node is VariableDeclaration) {
+                node.type?.let { tn ->
+                    val t = try { getTypeFromTypeNode(tn) } catch (_: Exception) { null }
+                    if (t != null && t !== errorType) return t
+                }
+                (node.initializer as? CallExpression)?.let { call ->
+                    resolvedCallReturnTypeForFlow(call)?.let { return it }
+                }
+            }
+            if (node is BinaryExpression && node.operator == SyntaxKind.Equals) {
+                (rhs as? CallExpression)?.let { call ->
+                    resolvedCallReturnTypeForFlow(call)?.let { return it }
+                }
+            }
+        }
         return antecedent
     }
+
+    /** M1.12 (round 424): resolve a call's return type for the flow-walk
+     *  overwrite reset — the callee's return annotation, null when it mentions
+     *  the callee's own type parameters (no inference here) or on anything
+     *  unresolvable/`any`. */
+    private fun resolvedCallReturnTypeForFlow(call: CallExpression): Type? {
+        if (call.questionDotToken) return null
+        val decl = resolveFlowCalleeDecl(call, call.expression) ?: return null
+        val (ret, tps) = when (decl) {
+            is FunctionDeclaration -> decl.type to decl.typeParameters
+            is MethodDeclaration -> decl.type to decl.typeParameters
+            else -> return null
+        }
+        if (ret == null) return null
+        if (!tps.isNullOrEmpty()) {
+            val names = mutableSetOf<String>()
+            collectTypeReferenceNames(ret, names)
+            if (tps.any { it.name.text in names }) return null
+        }
+        val t = try { getTypeFromTypeNode(ret) } catch (_: Exception) { null }
+        return if (t != null && t !== errorType && t !== anyType) t else null
+    }
+
 
     /**
      * Structurally non-nullish RHS shapes: `new X(...)`, object/array literals,
