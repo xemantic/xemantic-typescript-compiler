@@ -166,6 +166,32 @@ class TypeofObjectAndDiscriminantTruthinessTest {
         assertTrue(d.none { it.code == 2339 }, "guarded destructuring must not report nullable-union, got: $d")
     }
 
+    /**
+     * Round 425: the round-418 single-type narrow-DOWN suppression retries with
+     * the loop-entry-following walk — a guard BEFORE a loop narrows a read
+     * INSIDE it (the plain walk washes at the FlowLoopLabel).
+     */
+    @Test
+    fun `pre-loop guard narrowing survives a read inside the loop`() {
+        val d = diags(
+            """
+            interface Type { flags: number; }
+            interface TupleTypeReference extends Type { target: { fixedLength: number }; }
+            declare function isTupleType(t: Type): t is TupleTypeReference;
+            export function f(constraint: Type, n: number): number {
+                let acc = 0;
+                if (isTupleType(constraint)) {
+                    for (let i = 0; i < n; i++) {
+                        acc += constraint.target.fixedLength;
+                    }
+                }
+                return acc;
+            }
+            """
+        )
+        assertTrue(d.none { it.code == 2339 }, "pre-loop guard must survive the loop wash, got: $d")
+    }
+
     @Test
     fun `unguarded nullable destructuring still fires`() {
         val d = diags(

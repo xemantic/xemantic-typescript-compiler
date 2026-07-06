@@ -113710,25 +113710,32 @@ interface DataView {
         ) {
             val raw = getTypeOfExpression(objectExpr)
             if (raw !is Type.Union && raw !== anyType && raw !== errorType && raw !== neverType) {
-                val narrowed = getNarrowedTypeForReference(raw, objectExpr)
-                if (narrowed !== raw && narrowed !== neverType &&
-                    checkTypeRelatedTo(narrowed, raw, assignableRelation)
-                ) {
-                    // Round 423: a union-TARGET guard (`x is CallExpression | NewExpression`)
-                    // narrows a single-type receiver to a UNION — the access is safe iff
-                    // EVERY member resolves the property (intersection members fold via
-                    // resolveMemberPropertyType, the round-419 rule). The declared-UNION
-                    // receiver case is excluded by the outer `raw !is Type.Union` gate, so
-                    // the negative-exhaustion `never` corpus pin is untouched.
-                    val present = if (narrowed is Type.Union) {
+                // Round 423: a union-TARGET guard (`x is CallExpression | NewExpression`)
+                // narrows a single-type receiver to a UNION — the access is safe iff
+                // EVERY member resolves the property (intersection members fold via
+                // resolveMemberPropertyType, the round-419 rule). The declared-UNION
+                // receiver case is excluded by the outer `raw !is Type.Union` gate, so
+                // the negative-exhaustion `never` corpus pin is untouched.
+                fun suppresses(narrowed: Type): Boolean {
+                    if (narrowed === raw || narrowed === neverType ||
+                        !checkTypeRelatedTo(narrowed, raw, assignableRelation)
+                    ) return false
+                    return if (narrowed is Type.Union) {
                         narrowed.types.isNotEmpty() &&
                             narrowed.types.all { m -> resolveMemberPropertyType(m, propName) != null }
                     } else {
                         val app = try { getApparentType(narrowed) } catch (_: Exception) { null }
                         app != null && getPropertyOfType(app, propName) != null
                     }
-                    if (present) return
                 }
+                if (suppresses(getNarrowedTypeForReference(raw, objectExpr))) return
+                // Round 425: a guard BEFORE a loop narrows a read INSIDE it, but the
+                // plain walk washes back to the declared type at the FlowLoopLabel —
+                // retry with the loop-entry-following variant (the single-type sibling
+                // of round-424 fix 1's union retry; `constraint.target` inside tuple
+                // inference loops after `isTupleType(constraint)`, checker.ts).
+                // Suppression-only, so following antecedent[0] is safe here.
+                if (suppresses(getNarrowedTypeForReferenceFollowLoopEntry(raw, objectExpr))) return
             }
         }
 
