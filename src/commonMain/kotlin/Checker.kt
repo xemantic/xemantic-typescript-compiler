@@ -92841,13 +92841,31 @@ interface DataView {
         val propName = (propAccess.name).text
         if (propName.isEmpty()) return null
 
+        // Round 422 (M3.4): an OPTIONAL discriminant access proves the receiver non-nullish on
+        // the TRUE branch — `x?.kind === RHS` can only hold when `x` is non-nullish, because
+        // `undefined?.kind` evaluates to `undefined`, which never equals a definitely-non-nullish
+        // RHS (an enum member or a string/number/boolean literal). tsc's
+        // `optionalChainContainsReference` rule; tsc's own checker.ts:8061
+        // (`signature.declaration?.kind === SyntaxKind.JSDocSignature && signature.declaration.parent…`).
+        // The drop must survive even when the per-member discriminant filters below bail
+        // (members without a readable literal `kind` annotation are otherwise KEPT — including
+        // the nullish intrinsics). NOT applied on the negative branch (`x?.kind !== RHS` is
+        // true when x IS undefined) nor for a possibly-nullish RHS (`undefined?.p === undefinedRHS`
+        // can hold with x undefined).
+        val dropNullish = propAccess.questionDotToken && equal &&
+            rhsDefinitelyNonNullishForDiscriminant(literalSide)
+        val effMembers = if (dropNullish) members.filter {
+            !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)
+        } else members
+        val nullishWasDropped = effMembers.size != members.size
+
         // Enum-member discriminant path (e.g. `s.type === Kind.A` where the member declares
         // `type: Kind.A`). Enum-member types resolve to `anyType` in our engine (they aren't
         // modeled as literals), so the plain-literal path below never fires for them. Match on
         // the enum member's canonical key read from the AST instead. Returns before the literal
         // path when a genuine enum discriminant is found.
         enumMemberKeyOfExpr(literalSide)?.let { rhsKey ->
-            filterUnionByEnumDiscriminant(members, propName, setOf(rhsKey), keep = equal)?.let { filtered ->
+            filterUnionByEnumDiscriminant(effMembers, propName, setOf(rhsKey), keep = equal)?.let { filtered ->
                 return when (t) {
                     is Type.Union -> getUnionType(filtered)
                     else -> if (filtered.isEmpty()) neverType else t
@@ -92855,13 +92873,18 @@ interface DataView {
             }
         }
 
-        val literalType = literalTypeOfExpression(literalSide) ?: return null
+        val literalType = literalTypeOfExpression(literalSide)
+        if (literalType == null) {
+            // No literal/enum member-filtering possible — but the optional-chain receiver
+            // proof above still narrows (drops nullish) on its own.
+            return if (nullishWasDropped) getUnionType(effMembers) else null
+        }
         // For the single-member case, only narrow-to-never when the member GENUINELY
         // carried the discriminant as a literal — otherwise fall through (return null)
         // so we don't short-circuit narrowByEquality's direct-literal path or invent
         // narrowing on objects that don't model the discriminant.
         var singleHadDiscriminant = false
-        val filtered = members.filter { member ->
+        val filtered = effMembers.filter { member ->
             val apparent = getApparentType(member)
             if (apparent !is Type.Object) return@filter true
             val propSym = getPropertyOfType(apparent, propName)
@@ -92876,11 +92899,25 @@ interface DataView {
         return when (t) {
             is Type.Union -> getUnionType(filtered)
             else -> when {
-                !singleHadDiscriminant -> null
+                // Round 422: the optional-chain receiver proof stands even when no member
+                // carried a readable literal discriminant.
+                !singleHadDiscriminant -> if (nullishWasDropped) getUnionType(filtered) else null
                 filtered.isEmpty() -> neverType
                 else -> t
             }
         }
+    }
+
+    /**
+     * Round 422 (M3.4): is the RHS of an optional-discriminant comparison
+     * (`x?.kind === RHS`) provably non-nullish? An enum MEMBER reference always is
+     * (enum values are numbers/strings); a literal is unless it is the `null`/`undefined`
+     * keyword itself. Conservative: an unresolvable shape returns false → no narrowing.
+     */
+    private fun rhsDefinitelyNonNullishForDiscriminant(e: Expression): Boolean {
+        if (enumMemberKeyOfExpr(e) != null) return true
+        val lit = literalTypeOfExpression(e) ?: return false
+        return !lit.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)
     }
 
     private fun isDiscriminantAccessOf(expr: Expression, name: String): Boolean {
