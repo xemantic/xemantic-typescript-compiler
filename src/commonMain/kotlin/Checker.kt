@@ -91963,9 +91963,97 @@ interface DataView {
             is NewExpression, is ObjectLiteralExpression, is ArrayLiteralExpression,
             is ArrowFunction, is FunctionExpression, is ClassExpression,
             is TemplateExpression -> true
+            // M1.12 (round 424): a CALL whose resolved callee declares a provably
+            // non-nullish return ANNOTATION (`type.restrictiveInstantiation =
+            // instantiateType(type, mapper);` — tsc checker.ts, `instantiateType(...):
+            // Type`) proves the assigned reference non-nullish. Conservative: any
+            // uncertainty returns false → no narrowing.
+            is CallExpression -> callRhsHasNonNullishReturnAnnotation(rhs)
             else -> literalTypeOfExpression(rhs)?.let {
                 !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)
             } ?: false
+        }
+    }
+
+    /**
+     * M1.12 (round 424): does [call] resolve to a callee whose declared return
+     * annotation is provably non-nullish? Purely SYNTACTIC over the callee's
+     * return TypeNode (no type resolution inside the flow walker — the
+     * services-perf discipline; the callee resolves through the memoized
+     * flow-only [resolveFlowCalleeDecl], the same resolver the assert/guard
+     * narrowing already uses at FlowCall visits). An optional-chained call or
+     * receiver (`x?.m()`) short-circuits to `undefined` → false. A reference to
+     * the callee's OWN type parameter (`function f<T>(x: T): T`) is NOT
+     * non-nullish (T may be instantiated nullish) → false.
+     */
+    private fun callRhsHasNonNullishReturnAnnotation(call: CallExpression): Boolean {
+        if (call.questionDotToken) return false
+        var c: Expression = call.expression
+        while (true) {
+            c = when (c) {
+                is ParenthesizedExpression -> c.expression
+                is PropertyAccessExpression -> {
+                    if (c.questionDotToken) return false
+                    c.expression
+                }
+                else -> break
+            }
+        }
+        val decl = resolveFlowCalleeDecl(call, call.expression) ?: return false
+        val (ret, tps) = when (decl) {
+            is FunctionDeclaration -> decl.type to decl.typeParameters
+            is MethodDeclaration -> decl.type to decl.typeParameters
+            is VariableDeclaration -> when (val init = decl.initializer) {
+                is ArrowFunction -> init.type to init.typeParameters
+                is FunctionExpression -> init.type to init.typeParameters
+                else -> return false
+            }
+            else -> return false
+        }
+        if (ret == null) return false
+        val tpNames = tps?.map { it.name.text }?.toSet() ?: emptySet()
+        return typeNodeDefinitelyNonNullish(ret, tpNames, depth = 0)
+    }
+
+    /**
+     * Syntactic (no type resolution) classifier: is [t] provably non-nullish?
+     * Bails FALSE on anything uncertain — unresolvable names, the enclosing
+     * callee's own type parameters ([tpNames]), alias recursion past depth 8,
+     * `any`/`unknown`/`void`/`undefined`/`null`/`never` keywords, conditional /
+     * mapped / indexed-access shapes. A type-alias reference recurses into the
+     * alias body; interface / class / enum declarations are non-nullish values.
+     */
+    private fun typeNodeDefinitelyNonNullish(t: TypeNode, tpNames: Set<String>, depth: Int): Boolean {
+        if (depth > 8) return false
+        return when (t) {
+            is KeywordTypeNode -> when (t.kind) {
+                SyntaxKind.StringKeyword, SyntaxKind.NumberKeyword,
+                SyntaxKind.BooleanKeyword, SyntaxKind.ObjectKeyword,
+                SyntaxKind.SymbolKeyword, SyntaxKind.BigIntKeyword -> true
+                else -> false
+            }
+            is LiteralType -> literalTypeOfExpression(t.literal)?.let {
+                !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)
+            } ?: false
+            is ArrayType, is TupleType, is FunctionType, is ConstructorType,
+            is TypeLiteral, is TemplateLiteralType -> true
+            is TypePredicate -> !t.assertsModifier
+            is ParenthesizedType -> typeNodeDefinitelyNonNullish(t.type, tpNames, depth + 1)
+            is UnionType -> t.types.isNotEmpty() &&
+                t.types.all { typeNodeDefinitelyNonNullish(it, tpNames, depth + 1) }
+            is IntersectionType -> t.types.any { typeNodeDefinitelyNonNullish(it, tpNames, depth + 1) }
+            is TypeReference -> {
+                val name = (t.typeName as? Identifier)?.text ?: return false
+                if (name in tpNames) return false
+                val sym = currentFileLocals?.get(name) ?: globals[name] ?: return false
+                val d = sym.declarations.firstOrNull() ?: return false
+                when (d) {
+                    is InterfaceDeclaration, is ClassDeclaration, is EnumDeclaration -> true
+                    is TypeAliasDeclaration -> typeNodeDefinitelyNonNullish(d.type, tpNames, depth + 1)
+                    else -> false
+                }
+            }
+            else -> false
         }
     }
 
