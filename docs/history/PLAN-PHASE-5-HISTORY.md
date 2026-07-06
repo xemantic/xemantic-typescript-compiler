@@ -1,3 +1,116 @@
+**Round 414 (2026-07-05) — M1.12: the TS2366 "Function lacks ending return statement" family
+(50 self-compile FPs; tsc reports 0 on its own source) is THREE CFA fall-through patterns — TWO+
+landed. Self-compile (compiler profile) 1,965 → 1,930 (−35, TS2366 50 → 15); suite 9,117 → 9,134
+(+17 local, 0 regressions); 2 commits (a8871148, c756292c).** Method (the M1.12 note): a fresh full
+`--listAll` bucketed by normalized message shape put TS2366×50 as the biggest BOUNDED family (the M3
+cores TS2322×785 / TS2345×396 / TS7006×301 / TS2339×237 dominate but stay engine-gated). Classifying
+the 50 sites showed three purely-syntactic (or barrel-resolution) CFA gaps in
+`statementAlwaysReturns`/`switchAlwaysReturns` — the "does the function body always return/terminate"
+analysis behind TS2366/TS7030/TS2355: **(A) infinite loop (~17):** `while(true)`/`for(;;)`/`do..while(true)`
+used `!containsBreakOrReturn(body)`, which counted a `return` INSIDE the loop as a fall-through exit —
+but a return exits the FUNCTION, not the loop, so the endpoint stays unreachable (`while (true) {
+return x; }` is terminating, exactly as tsc's reachability models it). Replaced with
+`infiniteLoopFallsThrough` (a plain return/throw excluded; the labeled-break-in-a-nested-loop
+detection KEPT via `containsLabeledBreakEscaping`, so reachabilityChecks5/6 f11 — `do { do { break
+test; } while(true); } while(true)` — still resolves, since its `break test` has no plain return
+inside the loops). tsc's own `unwrapInnermostStatementOfLabel`/`skipTrivia`/scanner char loops.
+**(B) trailing never-call (~11):** a `Debug.fail("...")` / `assertNever(x)` bare ExpressionStatement
+diverges (returns `never`), so the endpoint after it is unreachable — but `statementAlwaysReturns`
+never checked call return types. New `callHasNeverReturnAnnotation` resolves the callee via round-413's
+barrel-aware `resolveFlowCalleeDecl` (handles an Identifier callee AND a namespace-member `Debug.fail`
+PropertyAccess, following import aliases + `export *` — tsc's `Debug` is barrel-imported through
+`_namespaces/ts.js`; the existing `isNeverReturningExpression` was Identifier+globals-only) and checks
+the explicit `: never` return annotation. FP-safe: an explicit `: never` is authoritative — the call
+provably cannot return normally. (`return Debug.fail(...)` was already handled by the `ReturnStatement`
+arm; only the bare-statement form needed this.) **(C1) switch fall-through (~10):** `switchAlwaysReturns`
+checked each clause in ISOLATION (`clauses.all { stmts.isEmpty() || bodyAlwaysReturns(stmts) }`), so a
+NON-empty clause that completes normally and falls through to a returning clause was missed — tsc's own
+`parseSimpleUnaryExpression`: `case AwaitKeyword: if (isAwaitExpression()) return parseAwaitExpression();
+/* falls through */ default: return parseUpdateExpression();`. Rewrote as a fall-through-aware REVERSE
+walk: a clause guarantees a return if its body always-returns; else, if it completes normally with no
+`break` out of the switch (checked FIRST — a reachable break escapes even after a later return), it
+inherits the NEXT clause's guarantee; a break-out or the last clause completing normally escapes.
++17 local tests (InfiniteLoopTerminationTest ×11, SwitchFallThroughTerminationTest ×6), each with
+negative controls (an escapable loop / a labeled break escaping a nested loop / a non-never void call /
+a break-out case / a no-default non-exhaustive switch / a last-clause-that-falls-through all still fire
+the diagnostic). **DEFERRED — Pattern C2 (~15 remaining): an EXHAUSTIVE `switch` with NO `default`
+over an enum (`ModuleDetectionKind`, `DiagnosticCategory`) or a discriminated-union `.kind` (`node.kind`
+on `PropertyAccessExpression | QualifiedName | ImportTypeNode`; `mapper.kind` on the `TypeMapper`
+union) — tsc treats these as exhaustive because the discriminant narrows to `never` after all cases.
+That needs type-level discriminant-exhaustiveness (resolve the discriminant type, enumerate its
+enum-members / union-`kind` literals, check coverage) — an M3.4 discriminant-narrowing slice with real
+FP surface (the corpus has exhaustive-switch tests), not a bounded syntactic fix. Fold into M3.4.**
+META: `.errors.txt` tests are DISABLED in the corpus (CLAUDE.md), so this whole reachability analysis
+(TS2366/TS7030/TS2355/TS7027) is gated ONLY by the full suite + local `*TerminationTest.kt` — which is
+exactly why a 50-FP bucket sat invisible on the self-compile dashboard until `--listAll` bucketing
+surfaced it. Perf unmeasured (a syntactic CFA refinement — no relation-engine work; the never-call
+resolution reuses round-413's process-wide memo).
+
+**Round 413 (2026-07-05) — M3.4: the builder.ts `Debug.assert(isDefined(state))` TS18048
+blocker (round-412's "highest-value next M3.4 target") is FIXED — and the round-412 depth
+diagnosis was a RED HERRING. Self-compile (compiler profile) 2,373 → 1,966 (−407, TS2339
+614 → 237, TS18048 29 → 16, TS2722 2 → 1); suite 9,105 → 9,113 (+8 local, 0 regressions);
+2 commits (68da80da, c4c8850c).** Started on round-412's flagged target (the walk hits
+`NARROW_MAX_DEPTH` on builder.ts's 3290-node flow graph) and implemented the documented
+M3.4 "tsc-shaped budget consumption" fix (**Item A**, 68da80da): both narrowing walkers
+now follow LINEAR pass-through antecedents — array mutations, and assignments/calls that
+don't narrow the walked reference — ITERATIVELY (tsc's `getTypeAtFlowNode` `while(true)`
+loop) WITHOUT consuming `NARROW_MAX_DEPTH`; only branch/condition/switch/assertion recursion
+consumes depth (tsc's `flowDepth`). The `flowAssignmentMightNarrow`/`flowCallMightNarrow`
+gates over-approximate "narrows" (a too-lax gate would iterate past a real narrowing and
+silently drop it); budget/memo/seen/truncation semantics are unchanged. **BUT Item A was
+DASHBOARD-NEUTRAL (2,373 → 2,373) — an instrumented run (a debug print at every truncation
+point, gated on an env var) showed ZERO narrowing-walk truncations across the whole
+compiler-profile compile, yet the builder.ts FPs PERSISTED. The round-412 "walk hits the
+depth cap" claim was inferred from the file's 3290-node count, NOT measured at the
+truncation — the assert and use are actually CO-LOCATED in `emitBuildInfo` (a short chain),
+so depth was never the issue.** Traced the chain further (`narrowByAssertCall` →
+`resolveFlowCalleeDecl` → `resolveNamespaceMemberFnDecl`) and found the REAL cause:
+`Debug.assert` never RESOLVED (`declResolved=false` ×37). **Item B (c4c8850c, the −407 win):**
+`computeExportedSymbolThroughStars`'s leaf lookup returned ANY local named X — including a
+non-re-exported IMPORT alias. tsc's `_namespaces/ts.ts` does `export * from "../core.js"`
+(core.ts merely IMPORTS `Debug`) BEFORE `export * from "../debug.js"` (debug.ts DECLARES
+`export namespace Debug`), so the star search for `Debug` stopped at core.ts's import alias
+(flags=Alias, no `.exports`) and never reached debug.ts's namespace → `Debug.assert` never
+resolved → `resolveNamespaceMemberFnDecl` returned null → its bare-assert narrowing never
+fired. (This is why round 409's `isDefined` worked — core.ts genuinely declares+exports it —
+but `Debug` didn't.) Fix: gate the leaf on the local being genuinely EXPORTED
+(`name in getModuleNamedExports(file)`, which covers every ESM export form tsc's source
+uses; memoized per file in `moduleNamedExportsCache`). FP-safe: `resolveExportedSymbolThroughStars`
+is consulted ONLY by the round-409+ flow-only resolvers (function/namespace/enum), where
+narrowing only removes union constituents. Barrel-imported `Debug.*` + every barrel guard
+now resolves → TS2339 614 → 237 (−377), the single biggest slice. **Item C (a41f0ee2, −1, principled): the RETURN-assignability path is now a flow-narrowing
+consumer** — `checkReturnAssignability` used the returned reference's wider DECLARED type, so
+`return state` after `Debug.assert(isDefined(state))` (builder.ts's
+`toBuilderProgramStateWithDefinedProgram`) FP'd a missing-property TS2739; narrow the returned
+Identifier/PropertyAccess and substitute only when it strictly relates (mirrors round 410's
+assignment-RHS narrowing; the return path was absent from the CLAUDE.md consumer list).
+FP-safe by monotonicity. 12 local tests
+(LinearFlowDepthNarrowingTest ×5: a 3000-node linear chain > `NARROW_MAX_DEPTH` still
+narrows past asserts/conditions/calls + negative/trivial controls; BarrelExportLeafGateTest
+×3: the exact importer-alias-before-declaration collision + non-vacuity + not-over-restrictive
+controls; ReturnPathNarrowingTest ×4: type-literal guard/assert narrowed returns + two
+negative controls — the type-literal shape is load-bearing since the return-path TS2739 emit
+is gated to a `Type.Object` source/target, not a named interface). **Perf: compiler self-compile 72 → 92 s (no-emit) / +42% (emit) — the extra
+narrowing work (many more guards resolve → more relation checks; round 409 saw the same
++16% for the direct-guard case). Correctness-first; perf is M5. Services P0 hang-check
+CLEAN — no hang/crash, all 252 files emitted, 400 s (round 385 baseline was 563 s), and
+services ALSO improved 4,301 → 3,643 (−658, TS2339 1,464 → 863; the barrel-guard fix is
+even bigger on the larger profile) with time essentially FLAT (394 → 400 s, +1.5%) — so
+the +42% on the SMALL compiler profile is single-run/emit noise + a constant, NOT
+algorithmic (exactly round 409's O(n²)-falsifying observation).** **META (the session's hard lesson): an instrumented "does the walk truncate?"
+probe FALSIFIED a documented depth hypothesis and redirected to the real resolution gap.
+Verify a "walk hits the cap" claim by instrumenting the truncation directly, NOT by
+inferring it from a file's node count. Two process gotchas re-confirmed: `pkill -f
+KotlinCompileDaemon` SELF-MATCHES a shell command whose own cmdline contains the pattern
+(exit 144, kills itself) — put the kill in a script file so the running process's cmdline
+is `bash /tmp/x.sh`; and freeing the KotlinCompileDaemon (NOT `gradle --stop`, which wipes
+`build/classes`) is what lets the `-Xmx3g` self-compile fit alongside the gradle daemon.**
+Next M3.4 (deferred): the residual TS2339×237 / TS18048×16 / TS2722×1 — closure-capture
+narrowing, generic-alias resolution, loop-stable narrowing of un-reassigned property paths
+(the round-411-flagged `never`/`Type`/TS2722 residuals); the M3.1 cores (TS2322×785,
+TS7006×301, TS2345×396) remain the long pole.
+
 **Round 408 (2026-07-05) — a decomposed M3.4 slice: the TS2349 "not callable" family (the
 
 **Round 412 (2026-07-05) — M3.4: a user type-guard narrows a SINGLE (non-union) type
