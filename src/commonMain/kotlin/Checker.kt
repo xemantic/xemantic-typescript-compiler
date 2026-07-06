@@ -534,6 +534,28 @@ class Checker(
      */
     private var currentArithmeticFlowGraph: FlowGraph? = null
 
+    /**
+     * Round 423: the current file's flow graph during the implicit-return pass
+     * (TS2355/TS2366/TS7030). Same discipline as [currentArithmeticFlowGraph]:
+     * a DEDICATED field, lifted into [currentFlowGraph] ONLY around the
+     * switch-discriminant receiver narrowing in [requiredUnionDiscriminantKeys]
+     * — a pass-wide [currentFlowGraph] is the arithmetic-pass 78-test landmine.
+     */
+    private var implicitReturnFlowGraph: FlowGraph? = null
+
+    /**
+     * Round 423: the function body [checkBodyForImplicitReturn] is currently
+     * analyzing — lets [requiredUnionDiscriminantKeys] type a
+     * `const target = getAssignmentTarget(node)` switch receiver from the
+     * callee's return annotation (this pass has no local variable scope).
+     */
+    private var currentImplicitReturnBody: Block? = null
+
+    /** Round 423: recursion depth of [unionDiscriminantKeysOfType] — it is mutually
+     *  recursive with [enumSwitchKeysFromTypeNode] via the IndexedAccessType branch
+     *  (`X["kind"]` inside a member's own `kind` annotation), so bound the nesting. */
+    private var unionDiscriminantKeyDepth = 0
+
     /** Pre-built per-file type maps: fileName → (name → Type). Built once during init,
      *  contains types for all file-level annotated declarations. Used by getTypeOfIdentifier
      *  to resolve file-level identifiers across all checker passes. */
@@ -76842,7 +76864,17 @@ interface DataView {
             // Skip JS files — return type checks (TS2355/TS7030/TS2366) don't apply
             if (!options.checkJs && (fileName.endsWith(".js") || fileName.endsWith(".jsx"))) continue
             val source = result.sourceFile.text
-            walkForImplicitReturns(result.sourceFile.statements, source, fileName)
+            // Round 423: expose the file's flow graph via the pass-dedicated field so the
+            // exhaustive-switch analysis can guard-narrow a discriminant RECEIVER
+            // (`if (!target) return;` / an early-return type guard) — see
+            // [requiredUnionDiscriminantKeys], which lifts it into [currentFlowGraph]
+            // only around its own narrowing walk.
+            implicitReturnFlowGraph = result.flowGraph
+            try {
+                walkForImplicitReturns(result.sourceFile.statements, source, fileName)
+            } finally {
+                implicitReturnFlowGraph = null
+            }
         }
     }
 
@@ -77725,6 +77757,26 @@ interface DataView {
         source: String,
         fileName: String,
     ) {
+        // Round 423: track the body under analysis so the exhaustive-switch
+        // receiver typing ([requiredUnionDiscriminantKeys]) can find a
+        // `const target = call()` declaration — this pass has no local scope.
+        val savedBody = currentImplicitReturnBody
+        currentImplicitReturnBody = body
+        try {
+            checkBodyForImplicitReturnCore(body, retType, isAsync, funcNameRef, source, fileName)
+        } finally {
+            currentImplicitReturnBody = savedBody
+        }
+    }
+
+    private fun checkBodyForImplicitReturnCore(
+        body: Block,
+        retType: TypeNode?,
+        isAsync: Boolean,
+        funcNameRef: FuncRef?,
+        source: String,
+        fileName: String,
+    ) {
         // Check if the return type annotation is present and classify it:
         // - "truly-void": void/any/never (and unions containing them) → suppress all checks
         // - "pure-undefined": exactly `undefined` keyword (not a union) → suppress all checks
@@ -78555,23 +78607,70 @@ interface DataView {
     /**
      * Round 422: the exhaustive value set of a property discriminant over a UNION receiver.
      * Returns non-null ONLY when EVERY union member contributes a complete key set from a
-     * REQUIRED (non-optional) declared annotation — enum-member references and/or string
-     * literals (`lit:s:` keys). Any gap — a non-union receiver, a member without the
-     * property, an optional `kind?:`, an unreadable/numeric-literal annotation, a nullish
-     * member — returns null, so the caller's TS2366 STANDS (the FP-safety contract; the
-     * corpus is a weak gate for this analysis with `.errors.txt` disabled).
+     * declared annotation — enum-member references, bare enums, and/or string literals
+     * (`lit:s:` keys); an OPTIONAL property contributes an additional required
+     * `@undefined` key (round 423 — the switch must then cover `case undefined:`, so the
+     * optionality only ever ADDS a required key, the FP-safe direction). Any other gap —
+     * a non-union receiver, a member without the property, an unreadable/numeric-literal
+     * annotation, a nullish member surviving narrowing — returns null, so the caller's
+     * TS2366 STANDS (the FP-safety contract; the corpus is a weak gate for this analysis
+     * with `.errors.txt` disabled).
+     *
+     * Round 423: the receiver is GUARD-NARROWED before the union walk — tsc computes
+     * switch exhaustiveness over the discriminant's narrowed type, so
+     * `const target = getAssignmentTarget(node); if (!target) return;` (the guard drops
+     * `undefined`) and `if (!isNamedEvaluationSource(node)) return false;` (an
+     * early-return type guard narrows a `Node` param DOWN to the union) both make the
+     * following switch exhaustive. The flow graph comes from the pass-dedicated
+     * [implicitReturnFlowGraph], lifted into [currentFlowGraph] only around the walk.
      */
     private fun requiredUnionDiscriminantKeys(recv: Expression, propName: String): Set<String>? {
         // An Identifier receiver is usually a PARAMETER (`switch (mapper.kind)` in a fn
         // taking `mapper: TypeMapper`) — this pass has no param scope in getTypeOfExpression,
         // so resolve the declared annotation first (same reason requiredEnumSwitchKeys does).
-        val recvType = (recv as? Identifier)?.let { id ->
+        // Round 423: a body-local `const target = getAssignmentTarget(node)` receiver types
+        // from the callee's declared return annotation (second branch).
+        var recvType = (recv as? Identifier)?.let { id ->
             currentFunctionParams.firstOrNull { (it.name as? Identifier)?.text == id.text }
                 ?.type?.let { getTypeFromTypeNode(it) }
+                ?: localConstCallInitType(id.text)
         } ?: getTypeOfExpression(recv)
         if (recvType === anyType || recvType === errorType) return null
+        // Round 423: guard-narrow the receiver at the discriminant's flow position. A
+        // nullish member that SURVIVES narrowing fails the union walk below (not an
+        // object) → bail → TS2366 stands, so an unproven guard cannot suppress.
+        val graph = implicitReturnFlowGraph
+        if (graph != null) {
+            val savedFg = currentFlowGraph
+            currentFlowGraph = graph
+            try {
+                recvType = getNarrowedTypeForReference(recvType, recv)
+            } finally {
+                currentFlowGraph = savedFg
+            }
+        }
         val apparent = try { getApparentType(recvType) } catch (_: Exception) { return null }
+        return unionDiscriminantKeysOfType(apparent, propName)
+    }
+
+    /**
+     * The union-member walk of [requiredUnionDiscriminantKeys], shared with the
+     * indexed-access branch of [enumSwitchKeysFromTypeNode] (`LiteralToken["kind"]`,
+     * round 423). Null unless EVERY member of [apparent] (a union) contributes a
+     * complete key set from its [propName] declared annotation.
+     */
+    private fun unionDiscriminantKeysOfType(apparent: Type, propName: String): Set<String>? {
         if (apparent !is Type.Union) return null
+        if (unionDiscriminantKeyDepth > 8) return null
+        unionDiscriminantKeyDepth++
+        try {
+            return unionDiscriminantKeysOfTypeCore(apparent, propName)
+        } finally {
+            unionDiscriminantKeyDepth--
+        }
+    }
+
+    private fun unionDiscriminantKeysOfTypeCore(apparent: Type.Union, propName: String): Set<String>? {
         val keys = mutableSetOf<String>()
         for (member in apparent.types) {
             val memberApparent = try { getApparentType(member) } catch (_: Exception) { return null }
@@ -78584,18 +78683,100 @@ interface DataView {
                 else -> return null
             }
             var ann: TypeNode? = null
+            var optional = false
             for (obj in objects) {
-                val propSym = getPropertyOfType(obj, propName) ?: continue
+                // A generic-instantiation Reference's members can resolve lazily/not at
+                // all — fall back to its TARGET interface (the property lives on the
+                // declaration, e.g. `AssignmentExpression<T>` inheriting BinaryExpression's
+                // `kind`), round 423.
+                val propSym = getPropertyOfType(obj, propName)
+                    ?: (obj as? Type.Reference)?.target?.let { getPropertyOfType(it, propName) }
+                    ?: continue
                 for (decl in propSym.declarations) {
                     val pd = decl as? PropertyDeclaration ?: continue
-                    if (pd.questionToken) return null // optional → value set includes undefined
-                    if (pd.type != null) { ann = pd.type; break }
+                    if (pd.type != null) {
+                        ann = pd.type
+                        optional = pd.questionToken
+                        break
+                    }
                 }
                 if (ann != null) break
             }
-            keys.addAll(enumMemberKeysOfTypeNode(ann ?: return null) ?: return null)
+            // Round 423: an optional discriminant's precise value set is
+            // `annotation ∪ {undefined}` — an extra REQUIRED key, never a bail.
+            if (optional) keys.add("@undefined")
+            // enumSwitchKeysFromTypeNode covers bare enums / explicit `| undefined`;
+            // enumMemberKeysOfTypeNode covers `Enum.Member` refs and `lit:s:` string
+            // literals — try both readers (disjoint gaps, identical shared results).
+            val a = ann ?: return null
+            keys.addAll(enumSwitchKeysFromTypeNode(a) ?: enumMemberKeysOfTypeNode(a) ?: return null)
         }
         return keys.ifEmpty { null }
+    }
+
+    /**
+     * Round 423: the declared type of a body-local `const NAME = <call>(…)` — the
+     * callee's declared return annotation (`const target = getAssignmentTarget(node)`
+     * → `AssignmentTarget | undefined`). Conservative: exactly ONE declaration of
+     * [name] in the current body, a call to a bare-identifier callee resolving to a
+     * NON-overloaded FunctionDeclaration with a return annotation — anything else null.
+     */
+    private fun localConstCallInitType(name: String): Type? {
+        val body = currentImplicitReturnBody ?: return null
+        val decls = mutableListOf<VariableDeclaration>()
+        collectLocalVarDecls(body.statements, name, decls)
+        val decl = decls.singleOrNull() ?: return null
+        if (decl.type != null) return getTypeFromTypeNode(decl.type)
+        val call = decl.initializer as? CallExpression ?: return null
+        val calleeName = (call.expression as? Identifier)?.text ?: return null
+        val bound = (currentFileLocals?.get(calleeName) ?: globals[calleeName])
+            ?.declarations?.filterIsInstance<FunctionDeclaration>()
+        val fn = when {
+            bound == null || bound.isEmpty() ->
+                uniqueFunctionDeclByName(calleeName) // nested fn, B83.5-unbound
+            bound.size == 1 -> bound[0]
+            else -> null // overloaded → the selected signature is ambiguous
+        } ?: return null
+        val ret = fn.type ?: return null
+        if (ret is TypePredicate) return null
+        return getTypeFromTypeNode(ret)
+    }
+
+    /** Collect every VariableDeclaration of [name] in [stmts], NOT descending into
+     *  nested function-likes (their locals are a different scope). */
+    private fun collectLocalVarDecls(stmts: List<Statement>, name: String, out: MutableList<VariableDeclaration>) {
+        for (stmt in stmts) {
+            when (stmt) {
+                is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                    if ((d.name as? Identifier)?.text == name) out.add(d)
+                }
+                is Block -> collectLocalVarDecls(stmt.statements, name, out)
+                is IfStatement -> {
+                    collectLocalVarDecls(listOf(stmt.thenStatement), name, out)
+                    stmt.elseStatement?.let { collectLocalVarDecls(listOf(it), name, out) }
+                }
+                is WhileStatement -> collectLocalVarDecls(listOf(stmt.statement), name, out)
+                is DoStatement -> collectLocalVarDecls(listOf(stmt.statement), name, out)
+                is ForStatement -> collectLocalVarDecls(listOf(stmt.statement), name, out)
+                is ForInStatement -> collectLocalVarDecls(listOf(stmt.statement), name, out)
+                is ForOfStatement -> collectLocalVarDecls(listOf(stmt.statement), name, out)
+                is SwitchStatement -> for (clause in stmt.caseBlock) {
+                    val inner = when (clause) {
+                        is CaseClause -> clause.statements
+                        is DefaultClause -> clause.statements
+                        else -> emptyList()
+                    }
+                    collectLocalVarDecls(inner, name, out)
+                }
+                is TryStatement -> {
+                    collectLocalVarDecls(stmt.tryBlock.statements, name, out)
+                    stmt.catchClause?.let { collectLocalVarDecls(it.block.statements, name, out) }
+                    stmt.finallyBlock?.let { collectLocalVarDecls(it.statements, name, out) }
+                }
+                is LabeledStatement -> collectLocalVarDecls(listOf(stmt.statement), name, out)
+                else -> {}
+            }
+        }
     }
 
     /** Enum-member keys of a discriminant TYPE ANNOTATION: a bare enum name → all members; a
@@ -78631,6 +78812,19 @@ interface DataView {
                     if (alias != null) return enumSwitchKeysFromTypeNode(alias.type)
                 }
                 return null
+            }
+            is IndexedAccessType -> {
+                // Round 423: `LiteralToken["kind"]` — an indexed access over a
+                // union-of-interfaces alias is the union of the members' discriminant
+                // keys (nodeFactory's createLiteralLikeNode param annotation). Reuses
+                // the round-422 union-member walk; any gap bails (null → TS2366 stands).
+                val idxLit = ((node.indexType as? LiteralType)?.literal as? StringLiteralNode)
+                    ?.text ?: return null
+                if (idxLit.isEmpty()) return null
+                val objType = try { getTypeFromTypeNode(node.objectType) } catch (_: Exception) { return null }
+                if (objType === anyType || objType === errorType) return null
+                val apparent = try { getApparentType(objType) } catch (_: Exception) { return null }
+                return unionDiscriminantKeysOfType(apparent, idxLit)
             }
             else -> return null
         }
