@@ -1075,6 +1075,15 @@ class Checker(
      *  `init` per the init-order trap. */
     private val importedNamespaceSymCache = HashMap<Int, Symbol?>()
 
+    /** M1.12 (round 418): program-wide map name → the UNIQUELY-named FunctionDeclaration
+     *  (any nesting depth), or `null` when the name is ambiguous (declared in ≥2 places).
+     *  tsc's giant closures (`createTypeChecker`, …) declare their type guards
+     *  (`isTupleType`, `isArrayOrTupleType`, …) as NESTED functions which the binder does
+     *  not bind (B83.5) — [resolveFlowCalleeDecl] misses them, so the guard never narrows.
+     *  Built once, lazily (see [uniqueFunctionDeclByName]); declared before `init` per the
+     *  init-order trap (the narrowing walk runs during checking). */
+    private var nestedFunctionByNameCache: MutableMap<String, FunctionDeclaration?>? = null
+
     /** M3.4 (round 411): process-wide memo for [resolveImportedEnumSymbol] (alias symbol
      *  id → enum Symbol, or null) — the enum-flavored sibling of [importedNamespaceSymCache],
      *  for discriminated-union narrowing keyed on a barrel-imported enum member
@@ -92171,7 +92180,15 @@ interface DataView {
                     direct !is FunctionDeclaration && direct !is MethodDeclaration
                 ) {
                     resolveImportedFunctionLikeDecl(symbol, mutableSetOf()) ?: direct
-                } else direct
+                }
+                // M1.12 (round 418): NESTED type-guard function. A guard declared inside
+                // another function (`function isTupleType(...)` inside `createTypeChecker`)
+                // is not bound (B83.5), so `symbol` is null → `direct` is null. Fall back to
+                // the program-wide UNIQUE-name map so the guard narrows. FP-safe: a colliding
+                // name resolves to null (→ no narrowing, conservative), and narrowing only
+                // ever refines/removes union members / narrows a single type to a strict
+                // subtype — it cannot manufacture a wrong diagnostic from a mis-resolved guard.
+                else direct ?: uniqueFunctionDeclByName(callee.text)
             }
             is PropertyAccessExpression ->
                 resolvePropertyMethodDecl(callee) ?: resolveNamespaceMemberFnDecl(callee)
@@ -92179,6 +92196,78 @@ interface DataView {
         }
         if (useCache) narrowWalkDeclCache[key] = decl
         return decl
+    }
+
+    /** M1.12 (round 418): resolve a callee NAME to the UNIQUE FunctionDeclaration anywhere
+     *  in the program (nested guards the binder skips, B83.5), or null when ambiguous. */
+    private fun uniqueFunctionDeclByName(name: String): FunctionDeclaration? {
+        val cache = nestedFunctionByNameCache ?: buildNestedFunctionMap().also {
+            nestedFunctionByNameCache = it
+        }
+        return cache[name]
+    }
+
+    /** Program-wide walk collecting every FunctionDeclaration (any nesting depth) into a
+     *  name → decl map; a name seen ≥2 times maps to null (ambiguous). Iterative worklist
+     *  (deep nesting-safe). Descends statement containers, function/method/accessor bodies,
+     *  namespace bodies, class members, and arrow/function-expression variable initializers
+     *  — the places a `function NAME(...)` statement can appear. */
+    private fun buildNestedFunctionMap(): MutableMap<String, FunctionDeclaration?> {
+        val out = HashMap<String, FunctionDeclaration?>()
+        val work = ArrayDeque<List<Node>>()
+        for (result in binderResults) work.addLast(result.sourceFile.statements)
+        while (work.isNotEmpty()) {
+            for (node in work.removeLast()) collectFnDeclNode(node, out, work)
+        }
+        return out
+    }
+
+    private fun collectFnDeclNode(
+        node: Node, out: MutableMap<String, FunctionDeclaration?>, work: ArrayDeque<List<Node>>,
+    ) {
+        when (node) {
+            is FunctionDeclaration -> {
+                node.name?.text?.let { nm -> if (out.containsKey(nm)) out[nm] = null else out[nm] = node }
+                node.body?.let { work.addLast(it.statements) }
+            }
+            is MethodDeclaration -> node.body?.let { work.addLast(it.statements) }
+            is Constructor -> node.body?.let { work.addLast(it.statements) }
+            is GetAccessor -> node.body?.let { work.addLast(it.statements) }
+            is SetAccessor -> node.body?.let { work.addLast(it.statements) }
+            is Block -> work.addLast(node.statements)
+            is IfStatement -> {
+                work.addLast(listOf(node.thenStatement))
+                node.elseStatement?.let { work.addLast(listOf(it)) }
+            }
+            is DoStatement -> work.addLast(listOf(node.statement))
+            is WhileStatement -> work.addLast(listOf(node.statement))
+            is ForStatement -> work.addLast(listOf(node.statement))
+            is ForInStatement -> work.addLast(listOf(node.statement))
+            is ForOfStatement -> work.addLast(listOf(node.statement))
+            is LabeledStatement -> work.addLast(listOf(node.statement))
+            is SwitchStatement -> work.addLast(node.caseBlock)
+            is CaseClause -> work.addLast(node.statements)
+            is DefaultClause -> work.addLast(node.statements)
+            is TryStatement -> {
+                work.addLast(node.tryBlock.statements)
+                node.catchClause?.block?.let { work.addLast(it.statements) }
+                node.finallyBlock?.let { work.addLast(it.statements) }
+            }
+            is ModuleDeclaration -> when (val b = node.body) {
+                is ModuleBlock -> work.addLast(b.statements)
+                is ModuleDeclaration -> work.addLast(listOf(b))
+                else -> {}
+            }
+            is ClassDeclaration -> work.addLast(node.members)
+            is VariableStatement -> for (d in node.declarationList.declarations) {
+                when (val init = d.initializer) {
+                    is ArrowFunction -> (init.body as? Block)?.let { work.addLast(it.statements) }
+                    is FunctionExpression -> work.addLast(init.body.statements)
+                    else -> {}
+                }
+            }
+            else -> {}
+        }
     }
 
     /**
@@ -92400,6 +92489,17 @@ interface DataView {
                         else -> null
                     }
                 }
+                // A positive guard against an INTERSECTION target `X & { p: T }` that our relation
+                // engine relates to no single union member in either direction drops EVERY member
+                // (tsc narrows each to `member & target`), collapsing to `never` and FP'ing TS2339
+                // (declarations.ts's `shouldPrintWithInitializer(node): node is
+                // CanHaveLiteralInitializer & { initializer: Expression }`). Fall back to the
+                // antecedent union — the suppression-safe choice (the property access then resolves
+                // on the wide union). NARROWLY gated to `targetType is Type.Intersection` + an
+                // empty result: a plain-target guard, or a partial narrow, is unaffected, and a
+                // NEGATIVE-branch exhaustion to `never` (`instanceofWithStructurallyIdenticalTypes`)
+                // uses the branch below, so tsc's TS2339-on-`never` stays intact there.
+                if (narrowed.isEmpty() && targetType is Type.Intersection) return t
                 return getUnionType(narrowed)
             }
             return getUnionType(t.types.filter { !checkTypeRelatedTo(it, targetType, assignableRelation) })
@@ -112387,6 +112487,38 @@ interface DataView {
             if (localType != null && localType !== anyType && localType !== errorType) {
                 val app = try { getApparentType(localType) } catch (_: Exception) { null }
                 if (app != null && getPropertyOfType(app, propName) != null) return
+            }
+        }
+
+        // M1.12 (round 418): single-type narrow-DOWN suppression. Now that [resolveFlowCalleeDecl]
+        // resolves NESTED type-guard functions (`isTupleType`, `isGenericTupleType`, … — nested
+        // in `createTypeChecker`, so the binder skips them, B83.5), the flow walk NARROWS a
+        // NON-UNION receiver `x` from its wide declared type DOWN to a strict subtype (`Type` →
+        // `TupleTypeReference`). But the property-resolution + emission paths below type `x` via
+        // its declared type (`getTypeOfExpression` deliberately does NOT consult narrowing —
+        // CLAUDE.md) and the dedicated narrowing consumers (`computeRawTypeOfPropertyAccess`, the
+        // narrowed-to-never branch) are all gated on `Type.Union`, so a member that exists only
+        // on the subtype FP's TS2339 (`target.target`, checker.ts — the biggest single TS2339
+        // sub-family). If the narrowed strict subtype (`narrowed <: raw`) HAS the property,
+        // suppress. FP-safe / suppression-only: `narrowed <: raw` guarantees the subtype carries
+        // at least the declared members (so it can only ADD resolvable ones); the negative /
+        // unrelated-guard cases (`narrowByCallPredicate`'s `else -> targetType`) fail the relation
+        // gate and keep the diagnostic. Union receivers keep their existing narrowing paths; a
+        // narrowed `never` (genuine negative-exhaustion, `instanceofWithStructurallyIdenticalTypes`)
+        // is excluded so tsc's TS2339-on-`never` is preserved.
+        if (currentFlowGraph != null && !isThisAccess &&
+            (objectExpr is Identifier ||
+                (objectExpr is PropertyAccessExpression && getReferencePath(objectExpr) != null))
+        ) {
+            val raw = getTypeOfExpression(objectExpr)
+            if (raw !is Type.Union && raw !== anyType && raw !== errorType && raw !== neverType) {
+                val narrowed = getNarrowedTypeForReference(raw, objectExpr)
+                if (narrowed !== raw && narrowed !== neverType && narrowed !is Type.Union &&
+                    checkTypeRelatedTo(narrowed, raw, assignableRelation)
+                ) {
+                    val app = try { getApparentType(narrowed) } catch (_: Exception) { null }
+                    if (app != null && getPropertyOfType(app, propName) != null) return
+                }
             }
         }
 
