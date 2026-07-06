@@ -1,3 +1,44 @@
+**Round 417 (2026-07-06) — M1.12: resolve NAMESPACE-LOCAL interface/class `extends` bases.
+Self-compile (compiler profile) 1,904 → 1,902 (−2); suite 9,161 → 9,168 (+7 local, 0 regressions);
+1 commit (2a05b3ea).** Investigating the TS2353×3 excess-property bucket, a minimal repro confirmed
+that `getTypeFromBaseTypeExpression` resolved a bare-Identifier `extends` base via `globals` ONLY,
+so a namespace-local base (`namespace M { interface Base {}; interface Derived extends Base {} }`)
+was never inherited — the inherited members were invisible, FP'ing TS2353 (an inherited member in an
+object literal looked "excess") on tsc's own `builderState.ts`
+(`ManyToManyPathMap extends ReadonlyManyToManyPathMap`, both inside `namespace BuilderState`). **The
+fix is COORDINATED across the two base-resolution sites — the FIRST cut (only
+`getTypeFromBaseTypeExpression`) REGRESSED `genericRecursiveImplicitConstructorErrors3`:** (1)
+`getTypeFromBaseTypeExpression` resolves the base through the enclosing namespace
+(`lookupTypeSymbolInInferenceNamespace`, which `resolveInterfaceMembers` has already pushed onto
+`inferenceNamespaceStack`) before `globals` — a strict superset (empty stack → globals, module-level
+bases unaffected). (2) `lookupInstanceMemberInResolvableChain` gains a threaded `enclosingNs` (default
+null → the 4 non-`this` callers are byte-identical) so the `this.X` TS2339 check can resolve a
+namespace-local base chain. **The second site is LOAD-BEARING: once base resolution populates
+`type.baseTypes` for a namespace-local base, the conservative "class has base types" branch of the
+this-member TS2339 check runs, and a globals-only base lookup there returns `null` (uncertain → bail),
+SWALLOWING a genuinely-missing-member TS2339 — `genericRecursiveImplicitConstructorErrors3`'s
+`this.isArray()` on `PullTypeSymbol extends PullSymbol` (both in `namespace TypeScript`; `isArray` is
+declared NOWHERE, so tsc emits TS2339).** FP-safe BY CONSTRUCTION: `lookupInstanceMemberInResolvableChain`
+returns `false` (→ emit) ONLY when the chain is FULLY resolvable and the member is absent everywhere;
+any uncertainty (sibling interface, index sig, `declare`, unresolvable base) propagates `null`. Cleared
+builderState:126 (TS2353 getKeys) + builderState:339 (a downstream TS2322); builderState:168 only
+MORPHED TS2739→TS2740 (the same pre-existing FP: `const map: ManyToManyPathMap` mis-resolves as the
+merged `interface BuilderState`; the missing-member count just grew as inheritance now works —
+orthogonal interface+namespace-merge M3 issue, NOT a new FP). +7 local tests
+(NamespaceLocalBaseInheritanceTest: excess/nested/module-level + the this-member TS2339 present/absent
+pair, both edges as negative controls). **META (hard-won, ~4 suite runs): the FIRST cut looked exactly
+like B451 id-drift — genericClasses0 "passed in isolation, failed in the full suite", and the process-
+static `Type.nextTypeId`/`Symbol.nextId` counters (never reset) plus id-ordered output made id-drift
+the obvious hypothesis. It was WRONG: a naive JUnit-XML regex (self-closing-tag-fragile, per the
+CLAUDE.md gotcha) had MISATTRIBUTED the failure to the passing `genericClasses0` — the REAL failing
+test was `genericRecursiveImplicitConstructorErrors3`, and the mechanism was a REAL semantic
+interaction (the this-member "has base types" heuristic), not id-drift. Always parse JUnit XML with an
+actual parser, and get the ACTUAL diff before theorizing.** DEFERRED: the builderState:168
+interface+namespace-merge FP (`const map: ManyToManyPathMap` resolving as `BuilderState`) is a
+separate M3 issue; the namespace-local class+interface-merge FP hole in `classNamesWithSiblingInterfaces`
+(top-level-only) is not exercised by the corpus (suite green) and closing it precisely would need
+namespace-context-keyed name tracking (deferred).
+
 **Round 416 (2026-07-05) — M1.12/M3.4: THREE clean bounded FP-safe / suppression-only fixes from
 bucketing the fresh full `--listAll`. Self-compile (compiler profile) 1,922 → 1,906 (−16); suite
 9,145 → 9,157 (+12 local, 0 regressions); 3 commits (3b216114, f0a3c81f, 77daebc5).** The M3 cores still dominate the histogram (TS2322×785 / TS2345×396 /

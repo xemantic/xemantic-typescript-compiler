@@ -34,6 +34,55 @@ completeness campaigns to dashboard-driven burn-down: the acceptance bar is the 
 tsc's source uses, with the corpus suite as the regression net. M5 unchanged —
 performance is the directive's second half and starts at v1 compliance.
 
+**Round 427 (2026-07-06) — M3.4: the TS2454 bucket round 426 unmasked — three tsc-faithful
+`assumeInitialized`/definiteness rules. Self-compile (compiler profile) 1,593 → 1,577
+(−16; TS2454 20 → 4, all else byte-identical); suite 9,282 → 9,291 (+9 local, 0
+regressions); 1 fix commit (7b2e3807).**
+- **(1) Logical assignments are DEFINITE (tsc `getAssignmentTargetKind`):** `??=`/`||=`/
+  `&&=` classify `AssignmentKind.Definite` (same as plain `=`), so
+  `isSymbolAssignedDefinitely` → `isNeverInitialized` false → a CAPTURED (cross-closure)
+  read of an outer `let` assumes initialized when any definite assignment exists
+  ANYWHERE, nested closures included (tsc checker.ts:31196 `assumeInitialized =
+  … (isOuterVariable && !isNeverInitialized) …`). Our B78.2 anywhere-scan
+  (`collectAssignmentsInExpr`) recognized only `=` — tsc's own
+  `(sourceStack ??= []).push(source)` / `(trackedSymbols ??= []).push(…)` closures FP'd
+  ×13. Compound assignments (`|=`, `+=`, `++`) stay NON-definite
+  (`AssignmentKind.Compound`) — the negative control matches unusedLocalsInMethod4's
+  `enabledSubstitutions |= …` baseline expectation.
+- **(2) A `!`-asserted read assumes initialized:** the literal `node.parent.kind ===
+  SyntaxKind.NonNullExpression` disjunct — tsc's own core.ts `return lastResult!`.
+  Applied in BOTH read walkers (`findUninitializedRefs` + `walkExprForFlowTS2454`): a
+  bare Identifier DIRECTLY under `!` is exempt (covers `x!` and `x!.prop`);
+  `(obj.foo)!` still walks the receiver `obj`.
+- **(3) The comma-nested definite assignment (`(!memberName ? (memberName = X, true) :
+  …)`, checker.ts getSignaturesOfType) needed TWO coupled fixes, both caught by the
+  bench by-site diff:** (a) the anywhere-scan's iterative left-spine walk applied the
+  assignment-target rule only to the OUTERMOST BinaryExpression — a COMMA expression
+  nests the assignment on the LEFT spine, silently skipped; per spine node now (tsc
+  `markNodeAssignments` is a full forEachChild walk). (b) The FLOW-based walker's
+  expression-bodied-arrow branch (B86.1a) checks the arrow body against the OUTER
+  uninit set when reached via a flagged position (a NESTED if's condition is walked
+  `inUncheckedBody=true` — which is why the real site only fired inside the enclosing
+  `if (kind === SignatureKind.Call …)` block and a top-level repro was clean); it now
+  masks out names with a definite assignment inside the arrow body (the captured-read
+  exemption), via the same anywhere-scan expression walker.
+- **Residual TS2454×4 (triaged, none bounded):** scanner.ts `resultingToken` ×2
+  (assigned inside a `while (true)` body before every exit — `isAssignedAtFlow` follows
+  only the loop-ENTRY antecedent at FlowLoopLabel, the deliberate back-edge bound; needs
+  loop-aware assignment evidence); checker.ts:14106 `indexInfos` (same-container flow
+  precision: `x = concatenate(x, …)` self-read in a for-of after conditional seeding);
+  generators.ts:1681 (`for (const variable of …)` SHADOWS the outer `let variable` — the
+  name-based block-unaware `uninitialized` set resolves the read to the outer decl;
+  needs block-scoped shadow tracking).
+- 9 local tests (Ts2454AssumeInitializedTest) with negative controls (compound `|=`
+  still fires; never-assigned captured read still fires; plain un-asserted read still
+  fires; a plain same-container read after an in-arrow assignment still fires — the
+  arrow's assignment is invisible to the outer control flow, which is why the real tsc
+  source uses `memberName!` for those reads).
+- **Perf note:** bench self-time 126.6 → 112.2 s — likely band movement (three
+  consecutive runs trended 149 → 127 → 112 s); treat the M5 single-run baseline as
+  ~110–150 s until an iterations run.
+
 **Round 426 (2026-07-06) — M3.4 (absorbs M1.2's TS2563 item): faithful TS2563 — flow-walk
 DEPTH-TRIP semantics with per-container disable, replacing the B399 per-file node-count
 proxy. Self-compile (compiler profile) 1,600 → 1,594 → 1,593 (−7; TS2563 27 → 1 → 0,
@@ -602,47 +651,6 @@ resolver exposes the other two):**
   hot path.** DEFERRED (residual, M3): TS2739×1 empty-tuple (round 415), TS2740 Set-shim lib, the
   arithmetic reassignment TS2362 (cross-statement narrowing), TS2367 const-string-enum (M3.3/B425),
   the M3 cores TS2322×784 / TS2345×395 / TS7006×301.
-
-**Round 417 (2026-07-06) — M1.12: resolve NAMESPACE-LOCAL interface/class `extends` bases.
-Self-compile (compiler profile) 1,904 → 1,902 (−2); suite 9,161 → 9,168 (+7 local, 0 regressions);
-1 commit (2a05b3ea).** Investigating the TS2353×3 excess-property bucket, a minimal repro confirmed
-that `getTypeFromBaseTypeExpression` resolved a bare-Identifier `extends` base via `globals` ONLY,
-so a namespace-local base (`namespace M { interface Base {}; interface Derived extends Base {} }`)
-was never inherited — the inherited members were invisible, FP'ing TS2353 (an inherited member in an
-object literal looked "excess") on tsc's own `builderState.ts`
-(`ManyToManyPathMap extends ReadonlyManyToManyPathMap`, both inside `namespace BuilderState`). **The
-fix is COORDINATED across the two base-resolution sites — the FIRST cut (only
-`getTypeFromBaseTypeExpression`) REGRESSED `genericRecursiveImplicitConstructorErrors3`:** (1)
-`getTypeFromBaseTypeExpression` resolves the base through the enclosing namespace
-(`lookupTypeSymbolInInferenceNamespace`, which `resolveInterfaceMembers` has already pushed onto
-`inferenceNamespaceStack`) before `globals` — a strict superset (empty stack → globals, module-level
-bases unaffected). (2) `lookupInstanceMemberInResolvableChain` gains a threaded `enclosingNs` (default
-null → the 4 non-`this` callers are byte-identical) so the `this.X` TS2339 check can resolve a
-namespace-local base chain. **The second site is LOAD-BEARING: once base resolution populates
-`type.baseTypes` for a namespace-local base, the conservative "class has base types" branch of the
-this-member TS2339 check runs, and a globals-only base lookup there returns `null` (uncertain → bail),
-SWALLOWING a genuinely-missing-member TS2339 — `genericRecursiveImplicitConstructorErrors3`'s
-`this.isArray()` on `PullTypeSymbol extends PullSymbol` (both in `namespace TypeScript`; `isArray` is
-declared NOWHERE, so tsc emits TS2339).** FP-safe BY CONSTRUCTION: `lookupInstanceMemberInResolvableChain`
-returns `false` (→ emit) ONLY when the chain is FULLY resolvable and the member is absent everywhere;
-any uncertainty (sibling interface, index sig, `declare`, unresolvable base) propagates `null`. Cleared
-builderState:126 (TS2353 getKeys) + builderState:339 (a downstream TS2322); builderState:168 only
-MORPHED TS2739→TS2740 (the same pre-existing FP: `const map: ManyToManyPathMap` mis-resolves as the
-merged `interface BuilderState`; the missing-member count just grew as inheritance now works —
-orthogonal interface+namespace-merge M3 issue, NOT a new FP). +7 local tests
-(NamespaceLocalBaseInheritanceTest: excess/nested/module-level + the this-member TS2339 present/absent
-pair, both edges as negative controls). **META (hard-won, ~4 suite runs): the FIRST cut looked exactly
-like B451 id-drift — genericClasses0 "passed in isolation, failed in the full suite", and the process-
-static `Type.nextTypeId`/`Symbol.nextId` counters (never reset) plus id-ordered output made id-drift
-the obvious hypothesis. It was WRONG: a naive JUnit-XML regex (self-closing-tag-fragile, per the
-CLAUDE.md gotcha) had MISATTRIBUTED the failure to the passing `genericClasses0` — the REAL failing
-test was `genericRecursiveImplicitConstructorErrors3`, and the mechanism was a REAL semantic
-interaction (the this-member "has base types" heuristic), not id-drift. Always parse JUnit XML with an
-actual parser, and get the ACTUAL diff before theorizing.** DEFERRED: the builderState:168
-interface+namespace-merge FP (`const map: ManyToManyPathMap` resolving as `BuilderState`) is a
-separate M3 issue; the namespace-local class+interface-merge FP hole in `classNamesWithSiblingInterfaces`
-(top-level-only) is not exercised by the corpus (suite green) and closing it precisely would need
-namespace-context-keyed name tracking (deferred).
 
 ### Mission & strategy
 
