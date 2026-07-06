@@ -36,9 +36,10 @@ performance is the directive's second half and starts at v1 compliance.
 
 **Round 428 (2026-07-06) — M3.1 (first real slice of the TS2322/TS2345 cores): generic
 call-site inference for tsc's `append` idiom + the TS2345 histogram top + the array-literal
-string-layer union rule. Self-compile (compiler profile) 1,577 → 1,385 → 1,266 → 1,213
-(−364, −23%; TS2322 751 → 501, TS2345 394 → 280, TS2769 45 → 44, TS2339 6 → 7); suite
-9,291 → 9,312 (+21 local, 0 regressions); 3 fix commits (67efa224, 14e9d566, 1791e87a).**
+string-layer union rule + the body-local-shadows-function conflation. Self-compile
+(compiler profile) 1,577 → 1,385 → 1,266 → 1,213 → 1,186 (−391, −25%; TS2322 751 → 501,
+TS2345 394 → 261, TS2769 45 → 36, TS2339 6 → 7); suite 9,291 → 9,315 (+24 local, 0
+regressions); 4 fix commits (67efa224, 14e9d566, 1791e87a, fbda155d).**
 - **Fix 1 (67efa224, −192): nullable-union generic params + overloaded generic callees.**
   The single biggest TS2322 shape (`Type 'T[]' is not assignable to type 'Statement[]'`
   ×130+ + siblings) is tsc core.ts's `x = append(x, item)` — every `append` overload is
@@ -79,25 +80,32 @@ string-layer union rule. Self-compile (compiler profile) 1,577 → 1,385 → 1,2
   `Array<X>`/`ReadonlyArray<X>`) is unknowable at the string layer → permissive
   (`sourcesContent = []` vs `(string | null)[] | undefined`, `return []`); a union WITHOUT
   an array member still fires (pinned).
+- **Fix 4 (fbda155d, −27): the body-local-shadows-function half of the conflation
+  family.** A body-local `const symbolName = …` colliding with an outer/imported FUNCTION
+  resolved through the merged globals to the function in bare-identifier ARG positions
+  (checker.ts's `canUsePropertyAccess(symbolName, …)` → TS2345
+  `(symbol: Symbol) => string` vs `string` ×15 + TS2769 ×8). The call-types walker's
+  VariableStatement branch registers an anyType shadow when the colliding outer symbol
+  declares a FUNCTION (AST-only gate) — mirrors M1.11's `shadowNestedFunctionNames`.
+  First-cut negative control was WRONG about baseline capability (non-callable body
+  locals aren't typed by this pass at all — the suite gate caught it); replaced with a
+  param-based control.
 - **META:** the ~450 ms scratch-CLI repro loop + temporary `println` tracing (the CLI shows
-  stdout, unlike gradle) found both root causes fast; the XDBG probe DISPROVED the assumed
+  stdout, unlike gradle) found the root causes fast; the XDBG probe DISPROVED the assumed
   emitter for fix 2b (checkArgumentsAgainstSignature's B469 narrowing never ran — the
   emitter was the dedicated optional-member walker).
-- **Residual triage (next-agent):** TS2345×280 — top family is now the
-  CROSS-FILE-FUNCTION-SHADOWS-LOCAL conflation ×~40 (`(state: ModuleResolutionState) =>
-  any` vs boolean ×14, `TypeCheckerHost` ×14, `(symbol: Symbol) => string` ×4:
-  watch.ts's `useCaseSensitiveFileNames` PARAM and checker.ts's body-local
-  `const symbolName`/`const host` shadow same-named barrel-imported FUNCTIONS; the
-  call-types pass tracks callable/annotated locals only, so the bare-identifier arg falls
-  to the merged globals — needs body-local/param shadow registration in that pass,
-  mirroring round 416's arithmetic-pass rule); `Declaration | undefined`-family leftovers
-  (deeper guard shapes). TS2322×501 — `string | string` ×24 (interface-override literal
+- **Residual triage (next-agent):** TS2345×261 — the PARAM-shadow half of the conflation
+  remains (`(state: ModuleResolutionState) => any` vs boolean ×14, `TypeCheckerHost` ×14:
+  watch.ts's `useCaseSensitiveFileNames` / checker.ts's `host` are enclosing-fn PARAMS
+  shadowing barrel-imported functions, read inside NESTED arrows — the mini-repro of the
+  same shape does NOT reproduce, so the real blocker is in how the pass enters those
+  specific nestings; probe with a marker before theorizing); `Declaration | undefined`
+  guard-shape leftovers. TS2322×501 — `string | string` ×24 (interface-override literal
   props: `TsConfigOnlyOption.type: "object"` — per-prop resolution through the narrowed
   redeclaration, M3), `undefined | VisitResult<Node | undefined>` ×12 (generic alias
   unions), residual `T[]` shapes ×~30 (inference gate misses: rest-params, multi-TP),
-  `SearchResult<T>` ×10 (un-inferred generic Reference returns — the multi-sig loop needs
-  the SearchResult-shaped param gate), builder.ts tuple-vs-anon-object ×8 (B526).
-  TS7006×301 (M3.2 contextual typing) untouched.**
+  `SearchResult<T>` ×10 (un-inferred generic Reference returns), builder.ts
+  tuple-vs-anon-object ×8 (B526). TS7006×301 (M3.2 contextual typing) untouched.**
 
 **Round 427 (2026-07-06) — M3.4: the TS2454 bucket round 426 unmasked — three tsc-faithful
 `assumeInitialized`/definiteness rules. Self-compile (compiler profile) 1,593 → 1,577
@@ -716,7 +724,7 @@ Three strategic reads that shape everything below:
 | Metric | Source | Phase 17 target |
 |---|---|---|
 | Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 9,251 with local tests as of round 424) |
-| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**1,213 measured at round 428**; M1 complete at 2,726/round 389; rounds 395–427 burned bounded histogram-tail buckets + M3.4 flow-narrowing slices 2,726 → 1,577; round 428 opened the M3.1 core burn-down −364 (nullable-union generic param inference + overloaded generic callees for the `append` idiom, TS2322 751 → 501; this-param binding + guarded optional-member args + enum→number, TS2345 394 → 280; array-vs-union-member string layer); round 424 seven flow-narrowing fixes −45 (loop-entry union suppression w/ STRUCTURAL wash gate, call-RHS return-annotation narrowing, closure/join/call-crossing aliased conditions, prefix-path receiver guards, asserts-with-inferred-TP test-arg inference, assignment-overwrite reset to the declaration/call-RHS resolved type, DebugTypeMapper this-narrowing — every step by-site strictly removals); rounds 422–423 −92 (overload-arg flow narrowing, optional-chain discriminants, union-target guards end-to-end, exhaustive-switch receiver narrowing → TS2366 ZERO, aliased conditions); round 420 TYPE-ALIAS enum-member discriminant narrowing (M1.12) −9 (a `.kind: <alias>` member survived a `switch (x.kind)` because `enumMemberKeysOfTypeNode` handled only a direct `Enum.Member`; 0 new FPs); round 419 INTERSECTION union-member property resolution (M1.12) −46 (TS2339 189 → 143: `getPropertyOfType`/`typeHasOwnProperty` bail on a `Type.Intersection` member — fold the constituents in property resolution + discriminant-narrowing; 0 new FPs, self-compile time −17%); round 418 NESTED type-guard resolution (M1.12) −48 (TS2339 237 → 189: tsc's `isTupleType`/… guards are nested in `createTypeChecker` so the binder skips them and `resolveFlowCalleeDecl` missed them — program-wide unique-name fallback + a `Type.Union`-gate-bypassing narrow-DOWN suppression + an intersection-target positive-collapse fallback; 0 new FPs; the negative-exhaustion never of `instanceofWithStructurallyIdenticalTypes` stays intact); round 417 namespace-local `extends`-base resolution −2 (coordinated across `getTypeFromBaseTypeExpression` + `lookupInstanceMemberInResolvableChain`, FP-safe); round 409 `export *`-barrel / ESM-`.js` imported-guard FLOW narrowing (M3.4) −175 (TS2339 838 → 672); round 411 enum-member discriminant narrowing + type-guard-narrows-member-DOWN −59; round 412 single-type type-guard narrow-DOWN + TS18048 receiver-narrowing −1; round 413 the `export *` LEAF-EXPORT gate −407 (TS2339 614 → 237): the pre-413 star resolver returned non-exported IMPORT aliases, so barrel-imported `Debug.assert` (& every barrel guard) never resolved — the TRUE builder.ts blocker, NOT the round-412 depth red herring (an instrumented run showed ZERO walk truncations) — plus a dashboard-neutral tsc-faithful linear flow-walk iteration + a return-path narrowing consumer (−1); **round 414 the TS2366 "lacks ending return" family −35 (50 → 15): three CFA fall-through patterns in `statementAlwaysReturns`/`switchAlwaysReturns` — infinite-loop-with-return, trailing never-call (`Debug.fail`), switch fall-through — all FP-safe syntactic/barrel-resolution fixes; the remaining 15 are Pattern C2 (exhaustive switch w/o default → M3.4 discriminant-exhaustiveness)**; remaining bounded pool M3.4/M3-gated (a general-`resolveAlias` `.js`/star fix was measured net +297 via a TS2315 flood, reverted; NonNull-strip −17 but unmasks M3, reverted; const-string-enum→`string` relation deferred M3.3/B425); no-stub stays the honest default) |
+| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**1,186 measured at round 428**; M1 complete at 2,726/round 389; rounds 395–427 burned bounded histogram-tail buckets + M3.4 flow-narrowing slices 2,726 → 1,577; round 428 opened the M3.1 core burn-down −391 (nullable-union generic param inference + overloaded generic callees for the `append` idiom, TS2322 751 → 501; this-param binding + guarded optional-member args + enum→number + body-local-shadows-function, TS2345 394 → 261; array-vs-union-member string layer); round 424 seven flow-narrowing fixes −45 (loop-entry union suppression w/ STRUCTURAL wash gate, call-RHS return-annotation narrowing, closure/join/call-crossing aliased conditions, prefix-path receiver guards, asserts-with-inferred-TP test-arg inference, assignment-overwrite reset to the declaration/call-RHS resolved type, DebugTypeMapper this-narrowing — every step by-site strictly removals); rounds 422–423 −92 (overload-arg flow narrowing, optional-chain discriminants, union-target guards end-to-end, exhaustive-switch receiver narrowing → TS2366 ZERO, aliased conditions); round 420 TYPE-ALIAS enum-member discriminant narrowing (M1.12) −9 (a `.kind: <alias>` member survived a `switch (x.kind)` because `enumMemberKeysOfTypeNode` handled only a direct `Enum.Member`; 0 new FPs); round 419 INTERSECTION union-member property resolution (M1.12) −46 (TS2339 189 → 143: `getPropertyOfType`/`typeHasOwnProperty` bail on a `Type.Intersection` member — fold the constituents in property resolution + discriminant-narrowing; 0 new FPs, self-compile time −17%); round 418 NESTED type-guard resolution (M1.12) −48 (TS2339 237 → 189: tsc's `isTupleType`/… guards are nested in `createTypeChecker` so the binder skips them and `resolveFlowCalleeDecl` missed them — program-wide unique-name fallback + a `Type.Union`-gate-bypassing narrow-DOWN suppression + an intersection-target positive-collapse fallback; 0 new FPs; the negative-exhaustion never of `instanceofWithStructurallyIdenticalTypes` stays intact); round 417 namespace-local `extends`-base resolution −2 (coordinated across `getTypeFromBaseTypeExpression` + `lookupInstanceMemberInResolvableChain`, FP-safe); round 409 `export *`-barrel / ESM-`.js` imported-guard FLOW narrowing (M3.4) −175 (TS2339 838 → 672); round 411 enum-member discriminant narrowing + type-guard-narrows-member-DOWN −59; round 412 single-type type-guard narrow-DOWN + TS18048 receiver-narrowing −1; round 413 the `export *` LEAF-EXPORT gate −407 (TS2339 614 → 237): the pre-413 star resolver returned non-exported IMPORT aliases, so barrel-imported `Debug.assert` (& every barrel guard) never resolved — the TRUE builder.ts blocker, NOT the round-412 depth red herring (an instrumented run showed ZERO walk truncations) — plus a dashboard-neutral tsc-faithful linear flow-walk iteration + a return-path narrowing consumer (−1); **round 414 the TS2366 "lacks ending return" family −35 (50 → 15): three CFA fall-through patterns in `statementAlwaysReturns`/`switchAlwaysReturns` — infinite-loop-with-return, trailing never-call (`Debug.fail`), switch fall-through — all FP-safe syntactic/barrel-resolution fixes; the remaining 15 are Pattern C2 (exhaustive switch w/o default → M3.4 discriminant-exhaustiveness)**; remaining bounded pool M3.4/M3-gated (a general-`resolveAlias` `.js`/star fix was measured net +297 via a TS2315 flood, reverted; NonNull-strip −17 but unmasks M3, reverted; const-string-enum→`string` relation deferred M3.3/B425); no-stub stays the honest default) |
 | Project corpus FPs (services/server/…) | `bench/` TSVs (M0.1) | 0 — **the v1 exit** (all 8 profiles) |
 | Conformance adoption | generated-test counts per category | POST-V1 (re-scope 2026-07-03 — see § "Post-v1 backlog", M3.0) |
 | Crashes on any input | bench runs | 0 |
@@ -1304,13 +1312,14 @@ each item still decomposes into a multi-session campaign — read PLAN-PHASE-4.m
   (re-scope 2026-07-03): burn down the compiler profile's TS2322×777 (top shape
   `Type 'T[]'` ×174), TS7006×301 (call-arg contexts whose callee doesn't resolve),
   and the TS2345 share — tsc-source shapes only; full conformance generality is
-  post-v1. **STARTED (round 428, −364: 1,577 → 1,213):** nullable-union generic
+  post-v1. **STARTED (round 428, −391: 1,577 → 1,186):** nullable-union generic
   param inference (`nullableUnionOfTpMode`) + overloaded all-generic callee
   inference in `getReturnTypeOfCallExpression` killed the `T[]`-return family
   (TS2322 751 → 501); the TS2345 histogram top (this-param binding, guarded
-  optional-member args, enum→number) took 394 → 280. Next sub-slices (triaged in
-  the round-428 session note): the cross-file-function-shadows-local conflation
-  ×~40 (body-local/param shadow registration in the call-types pass), residual
+  optional-member args, enum→number) + the body-local-shadows-function anyType
+  registration took 394 → 261 (TS2769 45 → 36). Next sub-slices (triaged in
+  the round-428 session note): the PARAM-shadow half of the conflation ×~28
+  (mini-repro does not reproduce — probe the pass's nesting entry), residual
   `T[]` inference-gate misses ×~30, `SearchResult<T>` un-inferred generic
   Reference returns ×10, `string | string` interface-override literal props ×24
   (M3), inferred type predicates (tsc 5.5 — `helper => !helper.scoped`, M3.4).
