@@ -84888,8 +84888,19 @@ interface DataView {
         fileName: String,
     ) {
         val init = initializer ?: return
-        val initType = getTypeOfExpression(init)
+        var initType = getTypeOfExpression(init)
         if (initType !is Type.Union) return
+        // Round 425 (M3.4): a DESTRUCTURING read consults flow narrowing like any other
+        // read — `if (!result) return; const { version, paths } = result;` (tsc's own
+        // moduleNameResolver `getPackageJsonInfo` result unwrap). Suppression-only: the
+        // narrowed type can only REMOVE nullish members, so this never adds a diagnostic.
+        if (init is Identifier || init is PropertyAccessExpression) {
+            val narrowed = getNarrowedTypeForReference(initType, init)
+            if (narrowed !== initType) {
+                if (narrowed !is Type.Union) return
+                initType = narrowed
+            }
+        }
         val hasNullOrUndefined = initType.types.any {
             it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)
         }
@@ -92281,12 +92292,21 @@ interface DataView {
             // Path comparison gates by structural identity of the dotted reference path.
             is PropertyAccessExpression -> {
                 if (getReferencePath(expr) == name) narrowByTruthiness(t, truthy = isTrue)
-                // round 43 iter11: optional-chain receiver narrowing —
-                // `if (obj?.x) { ... obj ... }` narrows obj to non-null/undefined on
-                // the truthy side. The `?.` short-circuits when obj is null/undefined,
-                // so for the condition to be truthy, obj must NOT be null/undefined.
-                else if (expr.questionDotToken && isTrue && getReferencePath(expr.expression) == name) {
-                    narrowByExcludingNullUndefined(t)
+                // round 43 iter11 + round 425: single-level property access on the walked
+                // reference. A `?.` access proves the receiver non-nullish on the truthy
+                // side (the chain short-circuits to undefined — falsy — when nullish),
+                // and a BOOLEAN-LITERAL discriminant property filters the union on BOTH
+                // branches — `info.isStatic ? info.variableName : …` where one member
+                // declares `isStatic: false` and another `isStatic: true` (tsc
+                // classFields' PrivateIdentifier field infos). Sound with `?.` too: a
+                // nullish receiver takes the falsy branch, where only literal-TRUE
+                // members are dropped (the nullish members themselves are kept).
+                else if (getReferencePath(expr.expression) == name) {
+                    var narrowed = if (expr.name.text.isNotEmpty())
+                        narrowByBooleanDiscriminantTruthiness(t, expr.name.text, truthy = isTrue)
+                    else t
+                    if (expr.questionDotToken && isTrue) narrowed = narrowByExcludingNullUndefined(narrowed)
+                    narrowed
                 }
                 // round 44 iter5: multi-level optional-chain — `if (obj?.x?.y)` truthy
                 // implies the WHOLE chain didn't short-circuit, so any intermediate path
@@ -93849,6 +93869,38 @@ interface DataView {
                 ?: return@filter true
             val propType = getTypeOfSymbol(propSym)
             if (propType === anyType || propType === errorType || propType === unknownType) return@filter true
+            // Round 425: the two rules below reason about what a RESOLVED property type
+            // can equal — but property OPTIONALITY is a symbol attribute NOT folded into
+            // the type (`body?: FunctionBody` resolves to bare `FunctionBody`), so a
+            // nullish tested literal (`x.body === undefined`) proves nothing about the
+            // member and must fall through (the first cut dropped SourceFile on
+            // `file.checkJsDirective === undefined` → never). Only definite VALUE
+            // literals (string/number/bigint/true/false) discriminate.
+            val literalIsDefiniteValue = isLiteralKindForDiscriminant(literalType)
+            // A UNION-of-literals discriminant (`type: "list" | "listOrElement"`,
+            // tsc's CommandLineOptionOfListType) matches a positive comparison when ANY
+            // constituent equals the tested literal, and survives a single negative
+            // comparison when ANY constituent differs (mirrors the enum path's
+            // multi-valued-discriminant rule).
+            if (literalIsDefiniteValue && propType is Type.Union &&
+                propType.types.all { isLiteralKindForDiscriminant(it) }
+            ) {
+                singleHadDiscriminant = true
+                return@filter if (equal) propType.types.any { literalsEqualForDiscriminant(it, literalType) }
+                else propType.types.any { !literalsEqualForDiscriminant(it, literalType) }
+            }
+            // An OBJECT-typed discriminant (`type: Map<string, string | number>`,
+            // tsc's CommandLineOptionOfCustomType) can never strictly-equal a primitive
+            // VALUE literal — `===` between an object reference and a string/number/
+            // boolean literal is always false, so the POSITIVE branch drops the member.
+            // Enum-flavored objects are excluded (a string-enum VALUE can equal a string
+            // at runtime); the negative branch keeps the member (nothing proven).
+            if (literalIsDefiniteValue && propType is Type.Object &&
+                propType.symbol?.flags?.hasAny(SymbolFlags.Enum) != true
+            ) {
+                singleHadDiscriminant = true
+                return@filter !equal
+            }
             if (!isLiteralKindForDiscriminant(propType)) return@filter true
             singleHadDiscriminant = true
             val matches = literalsEqualForDiscriminant(propType, literalType)
@@ -93883,6 +93935,30 @@ interface DataView {
         if (unwrapped !is PropertyAccessExpression) return false
         // 17.34b: path-based comparison so `A._a.kind === ...` matches when name="A._a".
         return getReferencePath(unwrapped.expression) == name
+    }
+
+    /**
+     * Round 425: truthiness of a BOOLEAN-LITERAL discriminant property narrows the
+     * receiver union — `info.isStatic ? info.variableName : …` where one member
+     * declares `isStatic: false` and another `isStatic: true` (tsc classFields'
+     * PrivateIdentifier field infos). Only members whose RESOLVED discriminant is the
+     * literal `true`/`false` type are filtered; anything else (plain `boolean`, any,
+     * unreadable) keeps the member — FP-safe, and keep-nothing/remove-nothing returns
+     * [t] unchanged.
+     */
+    private fun narrowByBooleanDiscriminantTruthiness(t: Type, propName: String, truthy: Boolean): Type {
+        if (t !is Type.Union) return t
+        val filtered = t.types.filter { member ->
+            val apparent = try { getApparentType(member) } catch (_: Exception) { return@filter true }
+            if (apparent !is Type.Object) return@filter true
+            val propSym = getPropertyOfType(apparent, propName) ?: return@filter true
+            when (getTypeOfSymbol(propSym)) {
+                trueType -> truthy
+                falseType -> !truthy
+                else -> true
+            }
+        }
+        return if (filtered.isEmpty() || filtered.size == t.types.size) t else getUnionType(filtered)
     }
 
     private fun isLiteralKindForDiscriminant(t: Type): Boolean =
@@ -94214,6 +94290,33 @@ interface DataView {
                     getConstructSignaturesOfType(m).isNotEmpty()
             val filtered = if (isMatch) t.types.filter { couldBeFn(it) }
                 else t.types.filter { !couldBeFn(it) || it === anyType || it === unknownType || it === errorType }
+            return if (filtered.isEmpty() || filtered.size == t.types.size) t else getUnionType(filtered)
+        }
+        // Round 425: `typeof x === "object"` filters a union by a three-way verdict —
+        // definitely-object (object-like with no call/construct sigs, plus `null`:
+        // `typeof null === "object"`), definitely-NOT-object (string/number/boolean/
+        // bigint/symbol primitives + literals, `undefined`, and CALLABLE values, which
+        // report "function"), or unknown (any/unknown/error/TypeParam/…, kept on BOTH
+        // branches). tsc's `formatGeneratedNamePart` (`typeof part === "object" ?
+        // part.prefix : …` on `string | GeneratedNamePart | undefined`). Same
+        // conservative contract as the "function" branch above: keep-nothing or
+        // remove-nothing returns `t` unchanged.
+        if (guard == "object") {
+            if (t !is Type.Union) return t
+            fun verdict(m: Type): Boolean? = when {
+                m === anyType || m === unknownType || m === errorType -> null
+                m.flags.hasAny(TypeFlags.Null) -> true
+                m.flags.hasAny(TypeFlags.Undefined or TypeFlags.Void) -> false
+                m.flags.hasAny(
+                    TypeFlags.StringLike or TypeFlags.NumberLike or TypeFlags.BooleanLike or
+                        TypeFlags.BigIntLike or TypeFlags.ESSymbol or TypeFlags.UniqueESSymbol
+                ) -> false
+                m is Type.Object ->
+                    if (getCallSignaturesOfType(m).isNotEmpty() || getConstructSignaturesOfType(m).isNotEmpty()) false
+                    else true
+                else -> null
+            }
+            val filtered = t.types.filter { m -> verdict(m)?.let { it == isMatch } ?: true }
             return if (filtered.isEmpty() || filtered.size == t.types.size) t else getUnionType(filtered)
         }
         val flags = typeofTypeGuardFlags(guard) ?: return t
