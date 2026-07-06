@@ -78659,7 +78659,12 @@ interface DataView {
                 ?.type?.let { getTypeFromTypeNode(it) }
                 ?: localConstCallInitType(id.text)
         } ?: getTypeOfExpression(recv)
-        if (recvType === anyType || recvType === errorType) return null
+        // Round 424b: an anyType receiver is no longer an immediate bail — a `this`
+        // receiver (deliberately anyType, B101) re-types through an `asserts value
+        // is T` call in the narrowing walk below (tsc DebugTypeMapper:
+        // `type<TypeMapper>(this); switch (this.kind) …`); still-any after
+        // narrowing bails.
+        if (recvType === errorType) return null
         // Round 423: guard-narrow the receiver at the discriminant's flow position. A
         // nullish member that SURVIVES narrowing fails the union walk below (not an
         // object) → bail → TS2366 stands, so an unproven guard cannot suppress.
@@ -78673,6 +78678,7 @@ interface DataView {
                 currentFlowGraph = savedFg
             }
         }
+        if (recvType === anyType) return null
         // Round 424: tsc computes exhaustiveness over the NON-NULLISH part of the
         // RECEIVER — a possibly-undefined receiver is an ACCESS error (TS18048),
         // never an exhaustiveness failure (`let target = getTarget(n); if (!target)
@@ -92778,7 +92784,22 @@ interface DataView {
             val tpName = (targetTypeNode as? TypeReference)
                 ?.let { (it.typeName as? Identifier)?.text }
             var inferred: Type? = null
-            if (tps != null && tpName != null && tps.any { it.name.text == tpName }) {
+            // Round 424b: EXPLICIT type arguments bind the asserted TP directly —
+            // `Debug.type<TypeMapper>(this)` (tsc debug.ts `type<T>(value: unknown):
+            // asserts value is T`) re-types `this` to TypeMapper. Positional bind of
+            // the TP index against the call's typeArguments; resolution failure falls
+            // through to the other recoveries.
+            if (tps != null && tpName != null) {
+                val tpIdx = tps.indexOfFirst { it.name.text == tpName }
+                val explicitArg = expr.typeArguments?.getOrNull(tpIdx)
+                if (tpIdx >= 0 && explicitArg != null) {
+                    val resolved = try { getTypeFromTypeNode(explicitArg) } catch (_: Exception) { null }
+                    if (resolved != null && resolved !== errorType && resolved !== anyType) {
+                        inferred = resolved
+                    }
+                }
+            }
+            if (inferred == null && tps != null && tpName != null && tps.any { it.name.text == tpName }) {
                 for ((i, p) in params.withIndex()) {
                     if (i == paramIdx) continue
                     val ft = p.type as? FunctionType ?: continue
@@ -92818,6 +92839,11 @@ interface DataView {
                 else -> getUnionType(filtered)
             }
         }
+        // Round 424b: an assertion on an `any`-typed reference RE-TYPES it to the
+        // asserted target (tsc: `asserts value is T` on `unknown`/`any` yields T) —
+        // the relation check below would trivially pass (`any` relates to
+        // everything) and keep the useless `any`.
+        if (t === anyType || t === unknownType) return targetType
         val matches = checkTypeRelatedTo(t, targetType, assignableRelation)
         return if (matches) t else targetType
     }
@@ -92936,21 +92962,34 @@ interface DataView {
      *  namespace bodies, class members, and arrow/function-expression variable initializers
      *  — the places a `function NAME(...)` statement can appear. */
     private fun buildNestedFunctionMap(): MutableMap<String, FunctionDeclaration?> {
-        val out = HashMap<String, FunctionDeclaration?>()
+        val collected = HashMap<String, MutableList<FunctionDeclaration>>()
         val work = ArrayDeque<List<Node>>()
         for (result in binderResults) work.addLast(result.sourceFile.statements)
         while (work.isNotEmpty()) {
-            for (node in work.removeLast()) collectFnDeclNode(node, out, work)
+            for (node in work.removeLast()) collectFnDeclNode(node, collected, work)
+        }
+        // Round 424b: a name COLLISION resolves to the unique TypePredicate-bearing
+        // declaration when there is exactly one (an OVERLOAD cluster like Debug's
+        // `type<T>(value: unknown): asserts value is T;` + its annotation-less impl
+        // — the plain "≥2 → ambiguous" rule made the guard invisible to every
+        // narrowing consumer); zero or several predicate-bearing decls stay
+        // ambiguous → null (conservative, no narrowing).
+        val out = HashMap<String, FunctionDeclaration?>()
+        for ((nm, decls) in collected) {
+            out[nm] = when {
+                decls.size == 1 -> decls[0]
+                else -> decls.singleOrNull { it.type is TypePredicate }
+            }
         }
         return out
     }
 
     private fun collectFnDeclNode(
-        node: Node, out: MutableMap<String, FunctionDeclaration?>, work: ArrayDeque<List<Node>>,
+        node: Node, out: MutableMap<String, MutableList<FunctionDeclaration>>, work: ArrayDeque<List<Node>>,
     ) {
         when (node) {
             is FunctionDeclaration -> {
-                node.name?.text?.let { nm -> if (out.containsKey(nm)) out[nm] = null else out[nm] = node }
+                node.name?.text?.let { nm -> out.getOrPut(nm) { mutableListOf() }.add(node) }
                 node.body?.let { work.addLast(it.statements) }
             }
             is MethodDeclaration -> node.body?.let { work.addLast(it.statements) }
@@ -113517,6 +113556,31 @@ interface DataView {
                     }
                     if (present) return
                 }
+            }
+        }
+
+        // M1.12 (round 424b): `this`-receiver narrowing suppression (tsc debug.ts
+        // DebugTypeMapper: `type<TypeMapper>(this); switch (this.kind) { case …:
+        // this.source }`). `getTypeOfExpression(this)` is deliberately anyType
+        // (B101 — never wire the enclosing class into general value resolution),
+        // so the round-418 suppression above never applies to this-accesses; an
+        // `asserts value is T` call RE-TYPES `this` (the any-replacement rule in
+        // narrowByAssertCall) and a `switch (this.kind)` clause then narrows the
+        // asserted union — when the FULLY narrowed type resolves the property on
+        // every non-nullish member, suppress. Suppression-only: no narrowing, or
+        // narrowing back to any/never, leaves every emission below untouched.
+        if (isThisAccess && currentFlowGraph != null) {
+            val rawThis = getTypeOfExpression(objectExpr)
+            val narrowedThis = getNarrowedTypeForReference(rawThis, objectExpr)
+            if (narrowedThis !== rawThis && narrowedThis !== neverType &&
+                narrowedThis !== anyType && narrowedThis !== errorType
+            ) {
+                val members = if (narrowedThis is Type.Union)
+                    narrowedThis.types.filterNot { isNullishConstituent(it) }
+                else listOf(narrowedThis)
+                if (members.isNotEmpty() &&
+                    members.all { m -> m === anyType || resolveMemberPropertyType(m, propName) != null }
+                ) return
             }
         }
 
