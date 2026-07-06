@@ -92626,6 +92626,51 @@ interface DataView {
                 } else return null
             }
         }
+        // Round 425: a DEFAULT clause (alone in the flow range) narrows NEGATIVELY by
+        // every case literal/enum key of the WHOLE switch — reaching the default means
+        // no case matched (tsc executeCommandLine's `switch (option.type) { …
+        // default: option.type.forEach }`: the six literal cases exclude every
+        // literal-typed member, leaving the Map-typed CommandLineOptionOfCustomType).
+        // Conservative: any case expression that is neither a literal nor an
+        // enum-member bails; a range mixing case+default (fallthrough) bails; only
+        // LITERAL-typed members are dropped on the direct path (a wide `string`
+        // member can hold other values and is kept).
+        run {
+            val all = flowNode.switchStatement.caseBlock
+            val range = all.filterIndexed { i, _ -> i >= flowNode.clauseStart && i < flowNode.clauseEnd }
+            if (range.size != 1 || range[0] !is DefaultClause) return@run
+            if (t !is Type.Union) return null
+            val litTypes = mutableListOf<Type>()
+            val enumKeys = mutableSetOf<String>()
+            for (clause in all) {
+                if (clause !is CaseClause) continue
+                val lit = literalTypeOfExpression(clause.expression)
+                if (lit != null) litTypes.add(lit)
+                else enumKeys.add(enumMemberKeyOfExpr(clause.expression) ?: return null)
+            }
+            if (litTypes.isEmpty() && enumKeys.isEmpty()) return null
+            if (matchesDirectly) {
+                val filtered = t.types.filter { m ->
+                    !(isLiteralKindForDiscriminant(m) &&
+                        litTypes.any { lit -> literalsEqualForDiscriminant(m, lit) })
+                }
+                return when {
+                    filtered.isEmpty() || filtered.size == t.types.size -> null
+                    filtered.size == 1 -> filtered[0]
+                    else -> getUnionType(filtered)
+                }
+            }
+            val discriminant = discriminantName ?: return null
+            val litKeys = litTypes.mapNotNull { literalDiscriminantKeyOfType(it) }
+            if (litKeys.size != litTypes.size) return null
+            val filtered = filterUnionByEnumDiscriminant(
+                t.types, discriminant, enumKeys + litKeys, keep = false) ?: return null
+            return when {
+                filtered.isEmpty() || filtered.size == t.types.size -> null
+                filtered.size == 1 -> filtered[0]
+                else -> getUnionType(filtered)
+            }
+        }
         // Collect literal types (and enum-member keys, M3.4) from cases in the
         // [clauseStart, clauseEnd) range.
         val literalTypes = mutableListOf<Type>()
@@ -93827,7 +93872,31 @@ interface DataView {
                 propAccess = unwrapParensExpr(expr.right) as PropertyAccessExpression
                 literalSide = expr.left
             }
-            else -> return null
+            else -> {
+                // Round 425 (tsc aliased discriminants, the `===` sibling of the
+                // aliased-switch rule): `const optType = opt.type; if (optType ===
+                // "listOrElement") { opt.element }` (tsc commandLineParser
+                // convertJsonOption). A bare-Identifier side resolves through the
+                // round-423 flow back-walk (the const-ness proof — bails on
+                // reassignment of the alias or the walked root) to its initializer;
+                // when THAT is a discriminant access of [name], narrow as if the
+                // comparison were inline.
+                fun aliasedDiscriminant(side: Expression): PropertyAccessExpression? {
+                    val ident = unwrapParensExpr(side) as? Identifier ?: return null
+                    if (ident.text == name || aliasedConditionInlineLevel >= 5) return null
+                    val init = aliasedConditionInitializer(ident, name) ?: return null
+                    return if (isDiscriminantAccessOf(init, name))
+                        unwrapParensExpr(init) as PropertyAccessExpression else null
+                }
+                val fromLeft = aliasedDiscriminant(expr.left)
+                if (fromLeft != null) {
+                    propAccess = fromLeft
+                    literalSide = expr.right
+                } else {
+                    propAccess = aliasedDiscriminant(expr.right) ?: return null
+                    literalSide = expr.left
+                }
+            }
         }
         val propName = (propAccess.name).text
         if (propName.isEmpty()) return null
