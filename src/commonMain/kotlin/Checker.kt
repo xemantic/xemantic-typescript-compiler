@@ -92248,9 +92248,33 @@ interface DataView {
     private fun computeAliasedConditionInitializer(
         start: FlowNode, aliasName: String, rootOfName: String,
     ): Expression? {
-        var flow = start
-        var steps = 0
-        while (steps++ < 200) {
+        // Shared step budget across branch fan-out (the walked region is a DAG —
+        // loop labels bail below, so back-edges are never followed) plus a
+        // per-call memo: a `||`-chain condition on the path fans out into a
+        // diamond per term, and without memoization the shared upstream segment
+        // re-walks once per path (exponential in the term count — tsc builder.ts's
+        // 6-term change-detection condition exhausted the budget).
+        val budget = intArrayOf(400)
+        return walkAliasedConditionInit(start, aliasName, rootOfName, budget, HashMap())
+    }
+
+    private fun walkAliasedConditionInit(
+        startIn: FlowNode, aliasName: String, rootOfName: String, budget: IntArray,
+        memo: MutableMap<Int, Expression?>,
+    ): Expression? {
+        memo[startIn.id]?.let { return it }
+        if (startIn.id in memo) return null
+        val result = walkAliasedConditionInitUncached(startIn, aliasName, rootOfName, budget, memo)
+        memo[startIn.id] = result
+        return result
+    }
+
+    private fun walkAliasedConditionInitUncached(
+        startIn: FlowNode, aliasName: String, rootOfName: String, budget: IntArray,
+        memo: MutableMap<Int, Expression?>,
+    ): Expression? {
+        var flow = startIn
+        while (budget[0]-- > 0) {
             when (flow) {
                 is FlowAssignment -> {
                     val n = flow.node
@@ -92264,6 +92288,45 @@ interface DataView {
                     flow = flow.antecedent
                 }
                 is FlowCondition -> flow = flow.antecedent
+                // M1.12 (round 424): a call cannot rebind an enclosing let/const
+                // binding directly (only via a closure — which tsc's const-alias
+                // narrowing likewise ignores, gating on isConstantVariable), so a
+                // FlowCall / array mutation is value-preserving for the back-walk.
+                is FlowCall -> flow = flow.antecedent
+                is FlowArrayMutation -> flow = flow.antecedent
+                // M1.12 (round 424): the alias may be declared OUTSIDE the closure
+                // the condition sits in (`const canCopyEmitSignatures =
+                // compilerOptions.composite && oldState?.emitSignatures && …;
+                // map.forEach(() => { if (canCopyEmitSignatures) {
+                // oldState.emitSignatures.get(…) } })` — tsc builder.ts). Follow the
+                // closure's outer flow, gated by the B464 captured-name rules for
+                // BOTH the alias name AND the walked reference's root: each must be
+                // a captured let/const/param that is not closure-local, not
+                // reassigned at/after the closure, and not a hoisted `var` —
+                // otherwise the captured alias value may not describe the binding
+                // the condition tests.
+                is FlowStart -> {
+                    val outer = outerFlowForCapturedName(flow, aliasName) ?: return null
+                    if (outerFlowForCapturedName(flow, rootOfName) == null) return null
+                    flow = outer
+                }
+                // M1.12 (round 424): an if/else JOIN between the condition and the
+                // alias declaration. The declaration dominates the condition, so
+                // every REACHABLE path must independently prove value preservation
+                // and land on the SAME declaration; an unreachable antecedent (a
+                // then-branch ending in return/throw) contributes nothing.
+                is FlowBranchLabel -> {
+                    var found: Expression? = null
+                    var contributions = 0
+                    for (a in flow.antecedents) {
+                        if (a is FlowUnreachable) continue
+                        val r = walkAliasedConditionInit(a, aliasName, rootOfName, budget, memo)
+                            ?: return null
+                        contributions++
+                        if (found == null) found = r else if (found !== r) return null
+                    }
+                    return if (contributions > 0) found else null
+                }
                 else -> return null
             }
         }
@@ -92271,13 +92334,23 @@ interface DataView {
     }
 
     /** The root binding name a [FlowAssignment.node] targets, or null when unknown
-     *  (element access / computed destructuring) — callers bail conservatively. */
+     *  (element access / computed destructuring) — callers bail conservatively.
+     *  An assignment EXPRESSION records the whole BinaryExpression as the flow
+     *  node (Flow.kt `bindAssignmentTarget(expr.left, expr)`), so the target
+     *  root comes from its LHS — without that arm the back-walk bailed at the
+     *  first assignment-in-condition (`!(oldInfo = oldState!.fileInfos.get(…))`,
+     *  tsc builder.ts). */
     private fun flowAssignmentRootName(n: Node): String? = when (n) {
         is Identifier -> n.text
         is PropertyAccessExpression -> getReferencePath(n)?.substringBefore('.')
         is VariableDeclaration -> (n.name as? Identifier)?.text
         is Parameter -> (n.name as? Identifier)?.text
         is BindingElement -> (n.name as? Identifier)?.text
+        is BinaryExpression -> when (val l = n.left) {
+            is Identifier -> l.text
+            is PropertyAccessExpression -> getReferencePath(l)?.substringBefore('.')
+            else -> null
+        }
         else -> null
     }
 

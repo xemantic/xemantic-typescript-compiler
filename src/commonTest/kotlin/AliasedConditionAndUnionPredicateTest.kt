@@ -275,7 +275,7 @@ class AliasedConditionAndUnionPredicateTest {
     }
 
     @Test
-    fun `intervening call between alias and test bails conservatively`() {
+    fun `intervening call between alias and test still narrows`() {
         val d = diags(
             """
             $decls
@@ -290,10 +290,12 @@ class AliasedConditionAndUnionPredicateTest {
             }
             """,
         )
-        // A FlowCall between declaration and test bails the back-walk (a closure
-        // could reassign a captured alias) → no narrowing → TS2339 stands. This
-        // pins OUR conservative choice, not tsc's (tsc narrows here — the alias
-        // is a const); relaxing it later should flip this assertion deliberately.
-        assertFires2339(d, "call between alias declaration and test (conservative bail)")
+        // Round 424 DELIBERATE flip of the round-423 conservative pin (its note
+        // said "relaxing it later should flip this assertion deliberately"):
+        // the back-walk now treats a FlowCall as value-preserving — a call
+        // cannot rebind an enclosing let/const binding directly, matching tsc,
+        // which narrows here (the alias is a const; tsc's isConstantVariable
+        // gate likewise ignores closure-mediated rebinding).
+        assertNo2339(d, "call between alias declaration and test (value-preserving)")
     }
 }
