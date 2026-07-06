@@ -1,4 +1,52 @@
 **Round 408 (2026-07-05) — a decomposed M3.4 slice: the TS2349 "not callable" family (the
+
+**Round 409 (2026-07-05) — M3.4: user type-guards/asserts imported through `export *` barrels
+(and ESM `.js` specifiers) now NARROW — the round-408-flagged "next high-yield M3.4/cross-file
+sub-step". Self-compile (compiler profile) 2,618 → 2,443 (−175, TS2339 838 → 672); suite
+9,066 → 9,074 (+8 local, 0 regressions); 1 commit (8f22d126).** tsc's own sources import
+everything via `import { some, isDefined, Debug, … } from "./_namespaces/ts.js"` where the barrel
+is `export * from "../core.js"; …`, so an imported guard/assert never narrowed — the pervasive
+root cause behind a large TS18048/TS2339/TS2722/TS2349 slice. **TWO independent gaps blocked
+resolution (round 408's naive "wire resolveAlias into resolveFlowCalleeDecl" was inert because of
+the FIRST, undiscovered until this session):** (1) `resolveModuleSpecifier` deliberately won't
+strip the ESM `.js`/.jsx/.mjs/.cjs extension (CLAUDE.md TS2459 FP-avoidance) → `resolveAlias`
+could not resolve ANY `.js`-suffixed import (tsc uses `.js` specifiers everywhere), so even a
+DIRECT imported guard failed; (2) even resolved, `targetFile.locals[name]` misses through an
+`export *` re-export barrel. **CRITICAL SCOPING LESSON (measured, not assumed): the fix is
+deliberately FLOW-ONLY.** A first cut added the `.js`+`export *`-star fallback to the GENERAL
+`resolveAlias` (the clean, general fix the round-408 note's phrasing suggested) — the corpus stayed
+green (0 corpus tests use `.js`/`export *` imports) BUT the compiler-profile self-compile REGRESSED
+2,618 → 2,915 (+297) with a TS2315×466 flood: resolving barrel-imported TYPE references generally
+exposed our generic-arity / type-resolution gaps (M3). Reverted the resolveAlias change to
+byte-identical and scoped resolution to the flow walkers via a dedicated
+`resolveImportedFunctionLikeDecl` (memoized process-wide in `importedGuardDeclCache` — the
+services-hang firewall) that finds the ImportSpecifier's module (`.js`-tolerant
+`resolveAliasJsModuleSpecifier`) + follows `export *` via the new `resolveExportedSymbolThroughStars`
+(the SYMBOL-resolving companion to M1.1's `getModuleExportsFollowingStars`, which only followed
+stars for NAME existence). FP-safe: flow narrowing only REMOVES union constituents → can suppress a
+false positive, never add one. **ALSO fixed the generic guard `isDefined<T>(x: T | undefined): x is
+T` (tsc's own `isDefined`, pervasive): `collectPredicateTpBindings`' UnionType branch now binds a
+SINGLE naked type-param member to the actual constituents no concrete member covers (tsc's
+naked-type-parameter union inference) — before, bare-TP union members were skipped as ambiguous, so
+T never bound and the guard didn't narrow.** 8 local tests (BarrelImportedGuardNarrowingTest):
+type-guard then/else, generic `isDefined`, `asserts x is T`, multi-hop `export *` chain, renamed
+re-export specifier, + 2 negative controls (a non-guard call and a pre-guard call both still fire
+TS2345). **Perf: compiler profile ~61 s → ~71 s (+16%) — the additional narrowing work itself (the
+memo doesn't change it; more imported guards resolve → more relation checks); correctness-first,
+perf is M5. Services hang-check (round-408 P0 firewall requirement): CLEAN — no hang, no crash, all
+252 files emitted, lowest FP count ever (4,301), and time FLAT (+0.3%) despite services being the
+BIGGER input (260k LOC) while the smaller compiler profile was +16% — the OPPOSITE of what an O(n²)
+blowup would show, confirming the +16% is single-run noise + a small constant, not algorithmic.**
+META (re-confirms rounds 407/408): a read-only "M3-gated" verdict is about the GENERAL fix; a
+decomposed, tightly-scoped FP-safe slice (here: flow-only narrowing resolution) flips a whole
+cross-file family even while the general resolveAlias / M3 engine stays as-is — and "the clean
+general fix" can be a dashboard REGRESSION that only the self-compile (not the corpus) reveals, so
+measure the profile before trusting generality. Next high-yield M3.4 sub-steps: the barrel-imported
+NAMESPACE-member assert case (`Debug.assertIsDefined` — `resolveNamespaceMemberFnDecl` still routes
+through the general `resolveAlias`, which stays byte-identical, so it does NOT resolve the
+barrel-imported `Debug` namespace; a flow-only namespace-resolution variant would flip the round-408
+unreproducible ×3 assert cases) and the TS2322×793 / TS7006×301 M3.1 cores.
+
 biggest bounded bucket a FRESH full `--listAll` bucketing surfaced INSIDE the round-407
 "M3-gated" tail). Self-compile (compiler profile) 2,639 → 2,618 (−21, TS2349 25 → 5); suite
 9,053 → 9,066 (+13 local, 0 regressions); 3 commits.** Method (re-confirms the M1.12 note):
