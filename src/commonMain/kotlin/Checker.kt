@@ -89561,7 +89561,17 @@ interface DataView {
             }
         }
         val symbol = when (baseExpr) {
-            is Identifier -> globals[baseExpr.text]
+            // A namespace-local base interface/class (`namespace M { interface Base {};
+            // interface Derived extends Base {} }`) is NOT in `globals` — resolve it through
+            // the enclosing-namespace scope first (resolveInterfaceMembers pushes the namespace
+            // via pushInferenceNamespaceFor before this runs), falling back to `globals`. The
+            // lookup returns null when the stack is empty, so this is a strict superset of the
+            // prior globals-only behavior (module-level bases stay in globals per the
+            // file-locals-merged-into-globals model). Companion: the this-member TS2339 helper
+            // `lookupInstanceMemberInResolvableChain` is likewise made namespace-aware so a
+            // now-resolvable base does not push the class into the conservative "has base types"
+            // skip and swallow a genuinely-missing-member TS2339 (genericRecursiveImplicitConstructorErrors3).
+            is Identifier -> lookupTypeSymbolInInferenceNamespace(baseExpr.text) ?: globals[baseExpr.text]
             is PropertyAccessExpression -> resolveHeritageBaseSymbol(baseExpr)
             else -> return errorType
         } ?: return errorType
@@ -113692,7 +113702,12 @@ interface DataView {
             && propName !in RUNTIME_PROPERTIES
         ) {
             val classDecl = objectType.symbol?.declarations?.firstOrNull() as? ClassDeclaration
-            if (classDecl != null && lookupInstanceMemberInResolvableChain(classDecl, propName) == false
+            // Thread the class's enclosing namespace so a namespace-local base in the extends
+            // chain resolves (else the chain returns `null` and the missing-member TS2339 is
+            // swallowed — genericRecursiveImplicitConstructorErrors3's `this.isArray()` on
+            // `PullTypeSymbol extends PullSymbol`, both in `namespace TypeScript`).
+            val thisEnclosingNs = objectType.symbol?.parent?.takeIf { it.flags.hasAny(SymbolFlags.Module) }
+            if (classDecl != null && lookupInstanceMemberInResolvableChain(classDecl, propName, enclosingNs = thisEnclosingNs) == false
                 && !isStaticMemberOfClass(classDecl, propName)
             ) {
                 val baseName = classDecl.name?.text ?: objectType.symbol?.name
@@ -114890,6 +114905,7 @@ interface DataView {
 
     private fun lookupInstanceMemberInResolvableChain(
         classDecl: ClassDeclaration, propName: String, visited: MutableSet<String>? = null,
+        enclosingNs: Symbol? = null,
     ): Boolean? {
         val v = visited ?: mutableSetOf()
         val className = classDecl.name?.text ?: return null
@@ -114924,9 +114940,19 @@ interface DataView {
             ?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
             ?.types?.firstOrNull()?.expression ?: return false
         if (baseExpr !is Identifier) return null
-        val baseSym = globals[baseExpr.text] ?: return null
+        // Resolve the base via the enclosing namespace's exports first (a namespace-local
+        // base is not in `globals`), falling back to `globals`. Without this a namespace-local
+        // base returns `null` (uncertain → the caller bails), which — now that
+        // getTypeFromBaseTypeExpression populates baseTypes for namespace-local bases — would
+        // swallow a genuinely-missing-member TS2339. `false` still propagates ONLY through a
+        // fully-resolvable chain, so this stays FP-safe (uncertainty → null → bail). `enclosingNs`
+        // is null for the non-`this` callers → globals-only (unchanged).
+        val baseSym = enclosingNs?.exports?.get(baseExpr.text) ?: globals[baseExpr.text] ?: return null
         val baseDecl = baseSym.declarations.firstOrNull() as? ClassDeclaration ?: return null
-        return lookupInstanceMemberInResolvableChain(baseDecl, propName, v)
+        // Recurse in the base's OWN namespace (a sibling class shares this one; a base pulled
+        // from globals resets to null).
+        val baseNs = baseSym.parent?.takeIf { it.flags.hasAny(SymbolFlags.Module) } ?: enclosingNs
+        return lookupInstanceMemberInResolvableChain(baseDecl, propName, v, baseNs)
     }
 
     private fun hasInstanceMemberNamed(classDecl: ClassDeclaration, name: String, visited: MutableSet<String>? = null): Boolean {
