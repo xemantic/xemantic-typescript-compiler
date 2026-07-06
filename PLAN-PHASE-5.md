@@ -34,6 +34,47 @@ completeness campaigns to dashboard-driven burn-down: the acceptance bar is the 
 tsc's source uses, with the corpus suite as the regression net. M5 unchanged —
 performance is the directive's second half and starts at v1 compliance.
 
+**Round 417 (2026-07-06) — M1.12: resolve NAMESPACE-LOCAL interface/class `extends` bases.
+Self-compile (compiler profile) 1,904 → 1,902 (−2); suite 9,161 → 9,168 (+7 local, 0 regressions);
+1 commit (2a05b3ea).** Investigating the TS2353×3 excess-property bucket, a minimal repro confirmed
+that `getTypeFromBaseTypeExpression` resolved a bare-Identifier `extends` base via `globals` ONLY,
+so a namespace-local base (`namespace M { interface Base {}; interface Derived extends Base {} }`)
+was never inherited — the inherited members were invisible, FP'ing TS2353 (an inherited member in an
+object literal looked "excess") on tsc's own `builderState.ts`
+(`ManyToManyPathMap extends ReadonlyManyToManyPathMap`, both inside `namespace BuilderState`). **The
+fix is COORDINATED across the two base-resolution sites — the FIRST cut (only
+`getTypeFromBaseTypeExpression`) REGRESSED `genericRecursiveImplicitConstructorErrors3`:** (1)
+`getTypeFromBaseTypeExpression` resolves the base through the enclosing namespace
+(`lookupTypeSymbolInInferenceNamespace`, which `resolveInterfaceMembers` has already pushed onto
+`inferenceNamespaceStack`) before `globals` — a strict superset (empty stack → globals, module-level
+bases unaffected). (2) `lookupInstanceMemberInResolvableChain` gains a threaded `enclosingNs` (default
+null → the 4 non-`this` callers are byte-identical) so the `this.X` TS2339 check can resolve a
+namespace-local base chain. **The second site is LOAD-BEARING: once base resolution populates
+`type.baseTypes` for a namespace-local base, the conservative "class has base types" branch of the
+this-member TS2339 check runs, and a globals-only base lookup there returns `null` (uncertain → bail),
+SWALLOWING a genuinely-missing-member TS2339 — `genericRecursiveImplicitConstructorErrors3`'s
+`this.isArray()` on `PullTypeSymbol extends PullSymbol` (both in `namespace TypeScript`; `isArray` is
+declared NOWHERE, so tsc emits TS2339).** FP-safe BY CONSTRUCTION: `lookupInstanceMemberInResolvableChain`
+returns `false` (→ emit) ONLY when the chain is FULLY resolvable and the member is absent everywhere;
+any uncertainty (sibling interface, index sig, `declare`, unresolvable base) propagates `null`. Cleared
+builderState:126 (TS2353 getKeys) + builderState:339 (a downstream TS2322); builderState:168 only
+MORPHED TS2739→TS2740 (the same pre-existing FP: `const map: ManyToManyPathMap` mis-resolves as the
+merged `interface BuilderState`; the missing-member count just grew as inheritance now works —
+orthogonal interface+namespace-merge M3 issue, NOT a new FP). +7 local tests
+(NamespaceLocalBaseInheritanceTest: excess/nested/module-level + the this-member TS2339 present/absent
+pair, both edges as negative controls). **META (hard-won, ~4 suite runs): the FIRST cut looked exactly
+like B451 id-drift — genericClasses0 "passed in isolation, failed in the full suite", and the process-
+static `Type.nextTypeId`/`Symbol.nextId` counters (never reset) plus id-ordered output made id-drift
+the obvious hypothesis. It was WRONG: a naive JUnit-XML regex (self-closing-tag-fragile, per the
+CLAUDE.md gotcha) had MISATTRIBUTED the failure to the passing `genericClasses0` — the REAL failing
+test was `genericRecursiveImplicitConstructorErrors3`, and the mechanism was a REAL semantic
+interaction (the this-member "has base types" heuristic), not id-drift. Always parse JUnit XML with an
+actual parser, and get the ACTUAL diff before theorizing.** DEFERRED: the builderState:168
+interface+namespace-merge FP (`const map: ManyToManyPathMap` resolving as `BuilderState`) is a
+separate M3 issue; the namespace-local class+interface-merge FP hole in `classNamesWithSiblingInterfaces`
+(top-level-only) is not exercised by the corpus (suite green) and closing it precisely would need
+namespace-context-keyed name tracking (deferred).
+
 **Round 416 (2026-07-05) — M1.12/M3.4: THREE clean bounded FP-safe / suppression-only fixes from
 bucketing the fresh full `--listAll`. Self-compile (compiler profile) 1,922 → 1,906 (−16); suite
 9,145 → 9,157 (+12 local, 0 regressions); 3 commits (3b216114, f0a3c81f, 77daebc5).** The M3 cores still dominate the histogram (TS2322×785 / TS2345×396 /
@@ -532,106 +573,6 @@ through the general `resolveAlias`, which stays byte-identical, so it does NOT r
 barrel-imported `Debug` namespace; a flow-only namespace-resolution variant would flip the round-408
 unreproducible ×3 assert cases) and the TS2322×793 / TS7006×301 M3.1 cores.
 
-**Round 408 (2026-07-05) — a decomposed M3.4 slice: the TS2349 "not callable" family (the
-biggest bounded bucket a FRESH full `--listAll` bucketing surfaced INSIDE the round-407
-"M3-gated" tail). Self-compile (compiler profile) 2,639 → 2,618 (−21, TS2349 25 → 5); suite
-9,053 → 9,066 (+13 local, 0 regressions); 3 commits.** Method (re-confirms the M1.12 note):
-round 407 called the bounded pool "M3-gated", but that verdict was about the 30-line LOG TAIL —
-re-running `--listAll` and bucketing all 2,639 lines by normalized message shape put TS2349×25
-at the top of the bounded tail. Reading the 25 sites showed ONE root theme: a callee reference
-typed `F | undefined` that a guard should have narrowed to the callable `F`, but the callee-type
-resolution never consults flow narrowing (`getCalleeType` resolves an Identifier via
-`currentLocalTypes` = the DECLARED type; the CLAUDE.md flow-narrowing gotcha confirms
-`getTypeOfIdentifier` deliberately doesn't narrow). THREE FP-safe fixes, each "narrowing/typing
-only REMOVES constituents → can suppress a false positive but never add one" (the corpus suite is
-the gate): **(1) callee flow-narrowing (−13, commit dabd5557):** before the union callability
-verdict in `checkSingleCallExpressionTypes`, re-narrow an Identifier/PropertyAccess callee via the
-proven `getNarrowedTypeForReference`, and — under an optional call `f?.()` — drop the nullish
-constituents the `?.` short-circuits. Gated to a callee that ORIGINALLY had a non-callable member
-(so the case-(c) all-callable structural-mismatch path is untouched). Fixed `if (fn) fn()`,
-`fn?.()`, `typeof v === "string" ? v : v()`, `&&`-chain guards, `getCustomTransformers?.()`, etc.
-**(2) `typeof x === "function"` narrowing (−2, commit b2e2b8da):** `narrowByTypeOfGuard` returned
-the union unchanged for the "function" tag ("can't identify function types by flags"), so
-`typeof f === "function"` then `f()` FP-fired TS2349 (and a possibly-undefined callee FP-fired
-TS2722 — the −1 bonus). A function value is exactly one with call OR construct signatures; the
-tag now filters a union by callability (any/unknown/error kept on BOTH branches; never narrows to
-`never`; "object" tag untouched). Broader typeof-narrowing change → full-suite-verified zero
-regressions. **(3) empty-array contextual assignment (−6, commit 952cb715):** the tsc default-init
-idiom `(x || (x = [])).push(v)` / `(x ??= []).push(v)` typed the receiver `T[] | any[]` because
-`x = []` types the bare `[]` as `any[]` (B87.6) instead of contextually as the target's `T[]`;
-`.push` on `T[] | any[]` then resolves to a UNION of two differing call signatures →
-`getUnionType` of two sigs → the union-callee "not callable" verdict. `contextualAssignmentRhsType`
-returns the target's type for an empty `[]` RHS when the target is an Array/ReadonlyArray Reference
-(exactly tsc's contextual typing; `[]` is assignable to any array type so the result is only more
-precise), wired into `combineBinaryTypes`' `SyntaxKind.Equals` + the logical-assign ops. Removed
-all six `.push` default-init sites. 13 local tests (CalleeNarrowingNotCallableTest ×8,
-EmptyArrayAssignmentTypeTest ×5) with negative controls (unguarded possibly-undefined callee still
-fires; narrowed-to-non-callable still fires; non-empty array not retyped). **DEBUGGING SAGA (the
-assert case, deferred): six minimal probes could NOT reproduce the `Debug.assertIsDefined(machine.onLeft)`
-then `machine.onLeft()` FP (×3 remaining) — a custom `assertIsDefined<T>(): asserts value is
-NonNullable<T>` narrows correctly for identifier paths, property paths, namespace-member callees,
-generic receivers, intervening element-access assignments, AND generic-class constructor-parameter
-properties. The real factory/utilities.ts case is a deeper interaction of several real-code
-specifics I could not cheaply isolate; deferred.** Remaining 5 TS2349 = 3 sub-problems: the assert
-cases (×3, unreproducible), a `??=`-with-call-RHS (core.ts:2135 — assignment-narrowing gap for a
-call RHS, tsc narrows `x ??= foo()` to non-undefined regardless), and a `FlowNode[] | undefined`
-union-LHS default-init (binder.ts:1375 — the bare member types as a union `FlowNode | FlowNode[]`,
-likely a cross-interface-merge member-typing issue, so the empty-array fix's Array-Reference gate
-doesn't apply). All M3.4/M3-gated. **Other bounded families this session (investigated, deferred):
-TS2367×2 (`readonly string[][]` vs `readonly Extension[][]` — the array no-overlap check's
-`checkTypeRelatedTo(ReadonlyArray<ReadonlyArray<Extension>>, ReadonlyArray<ReadonlyArray<string>>)`
-returns false: a string-enum→string covariance gap through nested readonly-array = relation engine,
-M3).** META (re-confirms rounds 305-307/317-324 + round 395): a read-only "M3-gated / pool
-exhausted" verdict is about the GENERAL fix and the LOG TAIL — always re-bucket the ACTUAL full
-`--listAll` by message shape; a decomposed M3.4 slice (flow narrowing into the callee position) with
-tight FP-safe gates flips a whole family even while the M3.4 rebuild remains unbuilt.
-
-**Round 407 (2026-07-05, same session as 406) — M1.12: the arithmetic-pass family yields TWO
-more bounded buckets (self-compile 2,659 → 2,641, −18). Suite 9,043 → 9,050 (+7 local, 0
-regressions); 2 commits.** Round 405/406 marked the arithmetic family "M3-gated", but two
-sub-patterns are bounded. **(1) local-const-shadows-outer-function (TS2365 21 → 7, −14):** the
-arithmetic/comparison pass types a bare-identifier operand via `getTypeOfExpression`, which falls
-back to file/global scope for an un-recorded function-body local — so `const length =
-arr.length` (a number) that SHADOWS tsc's own imported `function length(): number` resolved to
-the FUNCTION, and `i < length` FP'd TS2365 `number < (…) => number` (~14 sites; core.ts also
-exports `function min/max`). Fix: record an un-annotated `const` whose name shadows an outer
-FUNCTION (concrete primitive when determinable, else `anyType`). **The SHADOW gate is
-load-bearing — a first cut recorded EVERY primitive-typed const, which UNMASKED pre-existing
-narrowing FPs on the OTHER operand: `const numStatements = source.length` (number) exposed
-`statementOffset < numStatements` (statementOffset an un-narrowed `number | undefined` param),
-and `const max = length(sig.tp)` exposed `min < max`. Gating to "the name resolves to an outer
-FUNCTION" targets exactly the shadow-suppression case; the `any` fallback for a genuine shadow
-only bails the bogus check and never unmasks (+5/−6 messy swap → clean −14).** **(2)
-branded-number arithmetic (TS2362 19 → 15, −4):** a branded number `type
-IncrementalBuildInfoFileId = number & { __brand }` is assignable to `number` (an intersection is
-a subtype of each member), so `fileId - 1` is valid — but the operand classifiers
-(`isNumberLikeType`/`isBigIntLikeType`/`isStringLikeType` + the B283 `typeAssignableTo*Kind`)
-handled Union/TypeParam, not `Type.Intersection`. Fix: an intersection is number-/bigint-/
-string-like iff ANY constituent is. 7 local tests (ArithmeticShadowedFunctionLocalTest ×3,
-BrandedNumberArithmeticTest ×4) with negative controls (non-shadowed `5 < g` still fires;
-object-intersection `x - 1` still fires). **The residual arithmetic FPs ARE M3.4/M3-gated: the
-remaining ~15 TS2362 are `<enumFlags> & <enumMember>` where the LHS is `Enum | undefined`
-un-narrowed via a `&&`/`!` guard (narrowing gap) or a NonNull-of-enum-union that doesn't strip
-undefined; the remaining 7 TS2365 are the `min/max` overload type and `number | undefined`
-comparisons — all narrowing/M3.** **(3, same session) enum reverse-mapping TS7053 (3 → 1, −2):**
-`NumericEnum[key]` is a valid reverse mapping (number → member name), so tsc emits no TS7053 —
-but a numeric enum in value position resolves to an empty `Type.Object` here and matched the
-empty-object branch of the noImplicitAny element-access check (an any/string key on a
-no-members/no-index object). tsc's own `moduleNameResolver.ts` does
-`ModuleResolutionKind[moduleResolution]` twice. Fix: exclude an enum-object receiver from that
-branch (mirrors the enum exclusion the sibling `tryEmitNoImplicitAnyIndexAccess` already had).
-3 local tests (EnumReverseMappingIndexTest) with an empty-`{}` still-fires control. **ATTEMPTED
-+ REVERTED — nullish-strip in the `NonNullExpression` case of `getTypeOfExpression` (`(T |
-undefined)!` → `T`, the deferred "broader change"):** measured net −17 (2,639 → 2,622, removing
-9 TS2322 + 8 TS2345 + 5 TS2362 + 1 TS2365) BUT it UNMASKED 6 M3 gaps — huge object-literal-vs-
-interface FPs (`const program: Program = {…}` at program.ts:1876, transformer.ts:271, whose
-incomplete structural comparison now rejects a member whose `x!` type became precise), a
-generic-inference TS2345, and a new arithmetic TS2365. Correct + tsc-faithful, but it violates
-the clean-no-swap discipline and the 6 exposed gaps are M3 (object-literal-vs-interface / generic
-inference) — better landed WITH those M3 fixes so the dashboard stays clean. Reverted; noted for
-M3.1/M3.3. Session total (406+407): self-compile 2,663 → 2,639 (−24) on FIVE clean bounded
-buckets, all from bucketing the full `--listAll`.
-
 ### Mission & strategy
 
 Three strategic reads that shape everything below:
@@ -682,8 +623,8 @@ Three strategic reads that shape everything below:
 
 | Metric | Source | Phase 17 target |
 |---|---|---|
-| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 9,161 with local tests as of round 416) |
-| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**1,906 measured at round 416**; M1 complete at 2,726/round 389; rounds 395–415 burned bounded histogram-tail buckets + M3.4 flow-narrowing slices 2,726 → 1,922; round 409 `export *`-barrel / ESM-`.js` imported-guard FLOW narrowing (M3.4) −175 (TS2339 838 → 672); round 411 enum-member discriminant narrowing + type-guard-narrows-member-DOWN −59; round 412 single-type type-guard narrow-DOWN + TS18048 receiver-narrowing −1; round 413 the `export *` LEAF-EXPORT gate −407 (TS2339 614 → 237): the pre-413 star resolver returned non-exported IMPORT aliases, so barrel-imported `Debug.assert` (& every barrel guard) never resolved — the TRUE builder.ts blocker, NOT the round-412 depth red herring (an instrumented run showed ZERO walk truncations) — plus a dashboard-neutral tsc-faithful linear flow-walk iteration + a return-path narrowing consumer (−1); **round 414 the TS2366 "lacks ending return" family −35 (50 → 15): three CFA fall-through patterns in `statementAlwaysReturns`/`switchAlwaysReturns` — infinite-loop-with-return, trailing never-call (`Debug.fail`), switch fall-through — all FP-safe syntactic/barrel-resolution fixes; the remaining 15 are Pattern C2 (exhaustive switch w/o default → M3.4 discriminant-exhaustiveness)**; remaining bounded pool M3.4/M3-gated (a general-`resolveAlias` `.js`/star fix was measured net +297 via a TS2315 flood, reverted; NonNull-strip −17 but unmasks M3, reverted; const-string-enum→`string` relation deferred M3.3/B425); no-stub stays the honest default) |
+| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 9,168 with local tests as of round 417) |
+| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**1,902 measured at round 417**; M1 complete at 2,726/round 389; rounds 395–417 burned bounded histogram-tail buckets + M3.4 flow-narrowing slices 2,726 → 1,902; round 417 namespace-local `extends`-base resolution −2 (coordinated across `getTypeFromBaseTypeExpression` + `lookupInstanceMemberInResolvableChain`, FP-safe); round 409 `export *`-barrel / ESM-`.js` imported-guard FLOW narrowing (M3.4) −175 (TS2339 838 → 672); round 411 enum-member discriminant narrowing + type-guard-narrows-member-DOWN −59; round 412 single-type type-guard narrow-DOWN + TS18048 receiver-narrowing −1; round 413 the `export *` LEAF-EXPORT gate −407 (TS2339 614 → 237): the pre-413 star resolver returned non-exported IMPORT aliases, so barrel-imported `Debug.assert` (& every barrel guard) never resolved — the TRUE builder.ts blocker, NOT the round-412 depth red herring (an instrumented run showed ZERO walk truncations) — plus a dashboard-neutral tsc-faithful linear flow-walk iteration + a return-path narrowing consumer (−1); **round 414 the TS2366 "lacks ending return" family −35 (50 → 15): three CFA fall-through patterns in `statementAlwaysReturns`/`switchAlwaysReturns` — infinite-loop-with-return, trailing never-call (`Debug.fail`), switch fall-through — all FP-safe syntactic/barrel-resolution fixes; the remaining 15 are Pattern C2 (exhaustive switch w/o default → M3.4 discriminant-exhaustiveness)**; remaining bounded pool M3.4/M3-gated (a general-`resolveAlias` `.js`/star fix was measured net +297 via a TS2315 flood, reverted; NonNull-strip −17 but unmasks M3, reverted; const-string-enum→`string` relation deferred M3.3/B425); no-stub stays the honest default) |
 | Project corpus FPs (services/server/…) | `bench/` TSVs (M0.1) | 0 — **the v1 exit** (all 8 profiles) |
 | Conformance adoption | generated-test counts per category | POST-V1 (re-scope 2026-07-03 — see § "Post-v1 backlog", M3.0) |
 | Crashes on any input | bench runs | 0 |
@@ -1084,6 +1025,21 @@ Three strategic reads that shape everything below:
   reduceLeft/checkDefined returns) + TS2365×1 (generic `lineCount + T`) + the remaining TS18048×10
   (further assignment-in-guard cases, optional-chain `X?.kind === lit &&` discriminants, deep
   single-use property paths) are M3.4/M3.**
+  **Round 417 resolved namespace-local `extends` bases (self-compile 1,904 → 1,902):
+  `getTypeFromBaseTypeExpression` (+ `lookupInstanceMemberInResolvableChain`, coordinated) resolve a
+  bare-Identifier base through the enclosing namespace before `globals` — a namespace-local base
+  (`namespace M { interface Base {}; interface Derived extends Base {} }`) was never inherited, FP'ing
+  TS2353 on builderState.ts. FP-safe (strict superset; the this-member chain returns `false` only when
+  fully resolvable). The FIRST cut (only the base-expression site) REGRESSED
+  genericRecursiveImplicitConstructorErrors3 — once baseTypes is populated the conservative
+  "class has base types" this-member TS2339 branch runs and a globals-only base lookup bails on `null`,
+  swallowing the expected TS2339; the second site fixes that. DEFERRED: the reassignment-narrowing
+  residual (TS2362 `length = end - start` in parser.ts + `flags = flags || None`) is genuinely M3.4
+  cross-statement narrowing — the arithmetic pass has no statement-order flow tracking, and a naive
+  same-scope reassignment recording has a branch/loop-leak FP surface. TS2740×1 (Set-shim lib),
+  TS2416/TS2430/TS7053/TS7031 (M3 assignability/contextual), TS2344 (enum-subset/union-constraint),
+  TS2591/TS2304/TS2584 (env-legit node/dom globals), TS2366×12 (`.kind` discriminated-union
+  exhaustive-switch, FP-risky with `.errors.txt` disabled) remain the bounded/M3-gated pool.**
 
 **M2 — Real-lib migration (staged; decompose further at start)**
 

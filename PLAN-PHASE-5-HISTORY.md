@@ -1,3 +1,103 @@
+**Round 408 (2026-07-05) — a decomposed M3.4 slice: the TS2349 "not callable" family (the
+biggest bounded bucket a FRESH full `--listAll` bucketing surfaced INSIDE the round-407
+"M3-gated" tail). Self-compile (compiler profile) 2,639 → 2,618 (−21, TS2349 25 → 5); suite
+9,053 → 9,066 (+13 local, 0 regressions); 3 commits.** Method (re-confirms the M1.12 note):
+round 407 called the bounded pool "M3-gated", but that verdict was about the 30-line LOG TAIL —
+re-running `--listAll` and bucketing all 2,639 lines by normalized message shape put TS2349×25
+at the top of the bounded tail. Reading the 25 sites showed ONE root theme: a callee reference
+typed `F | undefined` that a guard should have narrowed to the callable `F`, but the callee-type
+resolution never consults flow narrowing (`getCalleeType` resolves an Identifier via
+`currentLocalTypes` = the DECLARED type; the CLAUDE.md flow-narrowing gotcha confirms
+`getTypeOfIdentifier` deliberately doesn't narrow). THREE FP-safe fixes, each "narrowing/typing
+only REMOVES constituents → can suppress a false positive but never add one" (the corpus suite is
+the gate): **(1) callee flow-narrowing (−13, commit dabd5557):** before the union callability
+verdict in `checkSingleCallExpressionTypes`, re-narrow an Identifier/PropertyAccess callee via the
+proven `getNarrowedTypeForReference`, and — under an optional call `f?.()` — drop the nullish
+constituents the `?.` short-circuits. Gated to a callee that ORIGINALLY had a non-callable member
+(so the case-(c) all-callable structural-mismatch path is untouched). Fixed `if (fn) fn()`,
+`fn?.()`, `typeof v === "string" ? v : v()`, `&&`-chain guards, `getCustomTransformers?.()`, etc.
+**(2) `typeof x === "function"` narrowing (−2, commit b2e2b8da):** `narrowByTypeOfGuard` returned
+the union unchanged for the "function" tag ("can't identify function types by flags"), so
+`typeof f === "function"` then `f()` FP-fired TS2349 (and a possibly-undefined callee FP-fired
+TS2722 — the −1 bonus). A function value is exactly one with call OR construct signatures; the
+tag now filters a union by callability (any/unknown/error kept on BOTH branches; never narrows to
+`never`; "object" tag untouched). Broader typeof-narrowing change → full-suite-verified zero
+regressions. **(3) empty-array contextual assignment (−6, commit 952cb715):** the tsc default-init
+idiom `(x || (x = [])).push(v)` / `(x ??= []).push(v)` typed the receiver `T[] | any[]` because
+`x = []` types the bare `[]` as `any[]` (B87.6) instead of contextually as the target's `T[]`;
+`.push` on `T[] | any[]` then resolves to a UNION of two differing call signatures →
+`getUnionType` of two sigs → the union-callee "not callable" verdict. `contextualAssignmentRhsType`
+returns the target's type for an empty `[]` RHS when the target is an Array/ReadonlyArray Reference
+(exactly tsc's contextual typing; `[]` is assignable to any array type so the result is only more
+precise), wired into `combineBinaryTypes`' `SyntaxKind.Equals` + the logical-assign ops. Removed
+all six `.push` default-init sites. 13 local tests (CalleeNarrowingNotCallableTest ×8,
+EmptyArrayAssignmentTypeTest ×5) with negative controls (unguarded possibly-undefined callee still
+fires; narrowed-to-non-callable still fires; non-empty array not retyped). **DEBUGGING SAGA (the
+assert case, deferred): six minimal probes could NOT reproduce the `Debug.assertIsDefined(machine.onLeft)`
+then `machine.onLeft()` FP (×3 remaining) — a custom `assertIsDefined<T>(): asserts value is
+NonNullable<T>` narrows correctly for identifier paths, property paths, namespace-member callees,
+generic receivers, intervening element-access assignments, AND generic-class constructor-parameter
+properties. The real factory/utilities.ts case is a deeper interaction of several real-code
+specifics I could not cheaply isolate; deferred.** Remaining 5 TS2349 = 3 sub-problems: the assert
+cases (×3, unreproducible), a `??=`-with-call-RHS (core.ts:2135 — assignment-narrowing gap for a
+call RHS, tsc narrows `x ??= foo()` to non-undefined regardless), and a `FlowNode[] | undefined`
+union-LHS default-init (binder.ts:1375 — the bare member types as a union `FlowNode | FlowNode[]`,
+likely a cross-interface-merge member-typing issue, so the empty-array fix's Array-Reference gate
+doesn't apply). All M3.4/M3-gated. **Other bounded families this session (investigated, deferred):
+TS2367×2 (`readonly string[][]` vs `readonly Extension[][]` — the array no-overlap check's
+`checkTypeRelatedTo(ReadonlyArray<ReadonlyArray<Extension>>, ReadonlyArray<ReadonlyArray<string>>)`
+returns false: a string-enum→string covariance gap through nested readonly-array = relation engine,
+M3).** META (re-confirms rounds 305-307/317-324 + round 395): a read-only "M3-gated / pool
+exhausted" verdict is about the GENERAL fix and the LOG TAIL — always re-bucket the ACTUAL full
+`--listAll` by message shape; a decomposed M3.4 slice (flow narrowing into the callee position) with
+tight FP-safe gates flips a whole family even while the M3.4 rebuild remains unbuilt.
+
+**Round 407 (2026-07-05, same session as 406) — M1.12: the arithmetic-pass family yields TWO
+more bounded buckets (self-compile 2,659 → 2,641, −18). Suite 9,043 → 9,050 (+7 local, 0
+regressions); 2 commits.** Round 405/406 marked the arithmetic family "M3-gated", but two
+sub-patterns are bounded. **(1) local-const-shadows-outer-function (TS2365 21 → 7, −14):** the
+arithmetic/comparison pass types a bare-identifier operand via `getTypeOfExpression`, which falls
+back to file/global scope for an un-recorded function-body local — so `const length =
+arr.length` (a number) that SHADOWS tsc's own imported `function length(): number` resolved to
+the FUNCTION, and `i < length` FP'd TS2365 `number < (…) => number` (~14 sites; core.ts also
+exports `function min/max`). Fix: record an un-annotated `const` whose name shadows an outer
+FUNCTION (concrete primitive when determinable, else `anyType`). **The SHADOW gate is
+load-bearing — a first cut recorded EVERY primitive-typed const, which UNMASKED pre-existing
+narrowing FPs on the OTHER operand: `const numStatements = source.length` (number) exposed
+`statementOffset < numStatements` (statementOffset an un-narrowed `number | undefined` param),
+and `const max = length(sig.tp)` exposed `min < max`. Gating to "the name resolves to an outer
+FUNCTION" targets exactly the shadow-suppression case; the `any` fallback for a genuine shadow
+only bails the bogus check and never unmasks (+5/−6 messy swap → clean −14).** **(2)
+branded-number arithmetic (TS2362 19 → 15, −4):** a branded number `type
+IncrementalBuildInfoFileId = number & { __brand }` is assignable to `number` (an intersection is
+a subtype of each member), so `fileId - 1` is valid — but the operand classifiers
+(`isNumberLikeType`/`isBigIntLikeType`/`isStringLikeType` + the B283 `typeAssignableTo*Kind`)
+handled Union/TypeParam, not `Type.Intersection`. Fix: an intersection is number-/bigint-/
+string-like iff ANY constituent is. 7 local tests (ArithmeticShadowedFunctionLocalTest ×3,
+BrandedNumberArithmeticTest ×4) with negative controls (non-shadowed `5 < g` still fires;
+object-intersection `x - 1` still fires). **The residual arithmetic FPs ARE M3.4/M3-gated: the
+remaining ~15 TS2362 are `<enumFlags> & <enumMember>` where the LHS is `Enum | undefined`
+un-narrowed via a `&&`/`!` guard (narrowing gap) or a NonNull-of-enum-union that doesn't strip
+undefined; the remaining 7 TS2365 are the `min/max` overload type and `number | undefined`
+comparisons — all narrowing/M3.** **(3, same session) enum reverse-mapping TS7053 (3 → 1, −2):**
+`NumericEnum[key]` is a valid reverse mapping (number → member name), so tsc emits no TS7053 —
+but a numeric enum in value position resolves to an empty `Type.Object` here and matched the
+empty-object branch of the noImplicitAny element-access check (an any/string key on a
+no-members/no-index object). tsc's own `moduleNameResolver.ts` does
+`ModuleResolutionKind[moduleResolution]` twice. Fix: exclude an enum-object receiver from that
+branch (mirrors the enum exclusion the sibling `tryEmitNoImplicitAnyIndexAccess` already had).
+3 local tests (EnumReverseMappingIndexTest) with an empty-`{}` still-fires control. **ATTEMPTED
++ REVERTED — nullish-strip in the `NonNullExpression` case of `getTypeOfExpression` (`(T |
+undefined)!` → `T`, the deferred "broader change"):** measured net −17 (2,639 → 2,622, removing
+9 TS2322 + 8 TS2345 + 5 TS2362 + 1 TS2365) BUT it UNMASKED 6 M3 gaps — huge object-literal-vs-
+interface FPs (`const program: Program = {…}` at program.ts:1876, transformer.ts:271, whose
+incomplete structural comparison now rejects a member whose `x!` type became precise), a
+generic-inference TS2345, and a new arithmetic TS2365. Correct + tsc-faithful, but it violates
+the clean-no-swap discipline and the 6 exposed gaps are M3 (object-literal-vs-interface / generic
+inference) — better landed WITH those M3 fixes so the dashboard stays clean. Reverted; noted for
+M3.1/M3.3. Session total (406+407): self-compile 2,663 → 2,639 (−24) on FIVE clean bounded
+buckets, all from bucketing the full `--listAll`.
+
 **Round 405 (2026-07-04) — M1.12 continued: TS2774×1 fixed (self-compile 2,664 → 2,663);
 TS7019×4 investigated and RECLASSIFIED to M3.2-gated. Suite 9,031 → 9,034 (+3 local); 1 commit.**
 Same session as round 404, second sub-step. Method: ran a full `--listAll` on the compiler
