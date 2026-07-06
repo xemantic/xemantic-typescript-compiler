@@ -118614,8 +118614,8 @@ interface DataView {
             if (arg is SpreadElement) continue
             val paramType = restAwareParamType(params, i) ?: continue
             if (paramType === anyType || paramType === errorType) continue
-            val argType = if (propTypeContainsLiteral(paramType))
-                (literalTypeOfExpression(arg) ?: getTypeOfExpression(arg)) else getTypeOfExpression(arg)
+            val argType = overloadNarrowedArgType(arg, if (propTypeContainsLiteral(paramType))
+                (literalTypeOfExpression(arg) ?: getTypeOfExpression(arg)) else getTypeOfExpression(arg))
             if (argType === anyType || argType === errorType) continue
             if (!checkTypeRelatedTo(argType, paramType, assignableRelation)) {
                 // For object literal args, try to find the specific mismatched property
@@ -118647,8 +118647,8 @@ interface DataView {
             if (arg is SpreadElement) continue
             val paramType = restAwareParamType(params, i) ?: continue
             if (paramType === anyType || paramType === errorType) continue
-            val argType = if (propTypeContainsLiteral(paramType))
-                (literalTypeOfExpression(arg) ?: getTypeOfExpression(arg)) else getTypeOfExpression(arg)
+            val argType = overloadNarrowedArgType(arg, if (propTypeContainsLiteral(paramType))
+                (literalTypeOfExpression(arg) ?: getTypeOfExpression(arg)) else getTypeOfExpression(arg))
             if (argType === anyType || argType === errorType) continue
             if (!checkTypeRelatedTo(argType, paramType, assignableRelation)) {
                 if (arg is ArrayLiteralExpression && paramType is Type.Reference &&
@@ -118689,7 +118689,7 @@ interface DataView {
             if (arg is SpreadElement) continue
             val paramType = restAwareParamType(params, i) ?: continue
             if (paramType === anyType || paramType === errorType) continue
-            val argType = getTypeOfExpression(arg)
+            val argType = overloadNarrowedArgType(arg, getTypeOfExpression(arg))
             if (argType === anyType || argType === errorType) continue
             if (!checkTypeRelatedTo(argType, paramType, assignableRelation)) {
                 if (argType is Type.Union && paramType is Type.Intrinsic) {
@@ -118829,7 +118829,7 @@ interface DataView {
             if (arg is SpreadElement) continue
             val paramType = restAwareParamType(params, i) ?: continue
             if (paramType === anyType || paramType === errorType) continue
-            val argType = getTypeOfExpression(arg)
+            val argType = overloadNarrowedArgType(arg, getTypeOfExpression(arg))
             if (argType === anyType || argType === errorType) continue
             if (!checkTypeRelatedTo(argType, paramType, assignableRelation)) {
                 // For object/array literals, find the inner mismatched expression
@@ -118986,6 +118986,24 @@ interface DataView {
         return t
     }
 
+    /**
+     * Round 422 (M3.4): flow-narrow a reference argument for the overload arg-check helpers.
+     * Mirrors B469's single-signature rule (checkArgumentsAgainstSignature): a bare
+     * Identifier/PropertyAccess argument whose declared type is a Union is refined via the
+     * flow graph — `containingFile ? getDirectoryPath(containingFile) : undefined`,
+     * `if (typeof version === "string") version = new Version(version)` — so an overload
+     * the NARROWED type matches is not spuriously rejected. Narrowing only REMOVES union
+     * members, so matching can only get MORE permissive (TS2769 suppression-only); an
+     * un-narrowed union arg still fails every overload and TS2769 stands. All five overload
+     * arg-check helpers (allArgumentsMatch / getFirstArgumentError / countFailingArgDiagnostics /
+     * getFirstFailingArgPosition / getUnionMemberFailureSubline) must route through this —
+     * a helper left on the raw type disagrees with the match verdict.
+     */
+    private fun overloadNarrowedArgType(arg: Expression, raw: Type): Type =
+        if ((arg is Identifier || arg is PropertyAccessExpression) && raw is Type.Union)
+            getNarrowedTypeForReference(raw, arg)
+        else raw
+
     private fun allArgumentsMatch(
         args: List<Expression>,
         sig: Signature,
@@ -119019,8 +119037,8 @@ interface DataView {
             // type — `getTypeOfExpression` widens a string/number literal (`"hi"`→string), which
             // would FP-reject a valid `foo("hi")` against an overload param `"hi"`. Gated to
             // literal params so non-literal overloads are byte-identical.
-            val argType = if (propTypeContainsLiteral(paramType))
-                (literalTypeOfExpression(arg) ?: getTypeOfExpression(arg)) else getTypeOfExpression(arg)
+            val argType = overloadNarrowedArgType(arg, if (propTypeContainsLiteral(paramType))
+                (literalTypeOfExpression(arg) ?: getTypeOfExpression(arg)) else getTypeOfExpression(arg))
             if (argType === anyType || argType === errorType) continue
             // B176: an explicit `undefined` arg is LEGAL for an OPTIONAL parameter (absent
             // and undefined are interchangeable for params unless exactOptionalPropertyTypes).
