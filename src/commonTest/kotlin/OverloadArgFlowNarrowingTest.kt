@@ -130,6 +130,49 @@ class OverloadArgFlowNarrowingTest {
     }
 
     @Test
+    fun `negation guard narrows a boolean arg to false so a literal overload matches`() {
+        // `boolean` is not modeled as `true | false`, so the union-gated narrowing can't
+        // refine it — the synthetic-literal-union path must. tsc's own
+        // parseParametersWorker(flags, allowAmbiguity: true/false) overload pair.
+        val d = diags(
+            """
+            declare function worker(flags: number, allowAmbiguity: true): string;
+            declare function worker(flags: number, allowAmbiguity: false): string | undefined;
+            export function parse(flags: number, allowAmbiguity: boolean): string | undefined {
+                if (!allowAmbiguity) {
+                    return worker(flags, allowAmbiguity);
+                }
+                return worker(flags, allowAmbiguity);
+            }
+            """,
+        )
+        assertTrue(
+            d.none { it.code == 2769 || it.code == 2345 },
+            "`!allowAmbiguity` must narrow boolean to `false` (and the else-continuation to " +
+                "`true`) so the literal overloads match; got: " +
+                d.joinToString { "TS${it.code}: ${it.message}" },
+        )
+    }
+
+    @Test
+    fun `un-narrowed boolean arg still fails literal-only overloads - TS2769 stands`() {
+        val d = diags(
+            """
+            declare function worker(flags: number, allowAmbiguity: true): string;
+            declare function worker(flags: number, allowAmbiguity: false): string | undefined;
+            export function parse(flags: number, allowAmbiguity: boolean): string | undefined {
+                return worker(flags, allowAmbiguity);
+            }
+            """,
+        )
+        assertTrue(
+            d.any { it.code == 2769 },
+            "an un-narrowed `boolean` matches neither literal overload (tsc errors here too); " +
+                "got: " + d.joinToString { "TS${it.code}: ${it.message}" },
+        )
+    }
+
+    @Test
     fun `un-narrowed union arg still fails every overload - TS2769 stands`() {
         val d = diags(
             """

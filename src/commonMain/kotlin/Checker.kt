@@ -119068,10 +119068,20 @@ interface DataView {
      * getFirstFailingArgPosition / getUnionMemberFailureSubline) must route through this —
      * a helper left on the raw type disagrees with the match verdict.
      */
-    private fun overloadNarrowedArgType(arg: Expression, raw: Type): Type =
-        if ((arg is Identifier || arg is PropertyAccessExpression) && raw is Type.Union)
-            getNarrowedTypeForReference(raw, arg)
-        else raw
+    private fun overloadNarrowedArgType(arg: Expression, raw: Type): Type {
+        if (arg !is Identifier && arg !is PropertyAccessExpression) return raw
+        if (raw is Type.Union) return getNarrowedTypeForReference(raw, arg)
+        // `boolean` is not modeled as `true | false`, so a guard-narrowed boolean
+        // (`if (!allowAmbiguity) … parseParametersWorker(flags, allowAmbiguity)` against
+        // overloads on literal `true`/`false` params — tsc's own parser.ts) can't refine
+        // through the union path. Narrow the synthetic literal union instead and accept
+        // only a definitive single-literal result.
+        if (raw === booleanType) {
+            val narrowed = getNarrowedTypeForReference(getUnionType(listOf(trueType, falseType)), arg)
+            if (narrowed === trueType || narrowed === falseType) return narrowed
+        }
+        return raw
+    }
 
     private fun allArgumentsMatch(
         args: List<Expression>,
