@@ -137,6 +137,100 @@ class CfaTooLargeBailTest {
         )
     }
 
+    /** Round 426b: a >2000-chain of NON-assert calls that merely MENTION the walked
+     *  reference must NOT consume depth — tsc resolves the callee's effects signature
+     *  (none) and follows the call in the while(true) loop. The pre-426b gate
+     *  (path-containment only) recursed per call and tripped TS2563 on tsc's own
+     *  diagnosticInformationMap.generated.ts (~2,100 `diag(…, DiagnosticCategory.Error,
+     *  …)` statements). The union-receiver property access at the end forces a
+     *  narrowing walk back through the whole chain. */
+    @Test fun nonAssertCallChainDoesNotConsumeDepth() {
+        val source = buildString {
+            append("// @strict: true\n")
+            append("declare function noop(v: unknown): void;\n")
+            append("interface A { p: number }\n")
+            append("interface B { q: number }\n")
+            append("declare const ab: A | B;\n")
+            append("let x: A | B = ab;\n")
+            repeat(2500) { append("noop(x);\n") }
+            append("x.p;\n")
+        }
+        val result = TypeScriptCompiler().compile(source, "nonassert.ts")
+        assertTrue(
+            result.diagnostics.none { it.code == 2563 },
+            "a non-assert call chain must not consume walk depth (tsc getEffectsSignature " +
+                "is undefined for 'noop' -> the while loop iterates), got: " +
+                result.diagnostics.filter { it.code == 2563 }.joinToString { "${it.line}:${it.character}" }
+        )
+        assertTrue(
+            result.diagnostics.any { it.code == 2339 },
+            "control broken: the un-narrowed union access x.p must still report TS2339"
+        )
+    }
+
+    /** Positive control for the round-426b gate: an ASSERTS-annotated callee DOES
+     *  consume a depth level per call (tsc getTypeAtFlowCall recurses through an
+     *  effects signature), so the same-length chain trips exactly one TS2563 —
+     *  guards against a too-lax gate that iterates past real assertion narrowing
+     *  (the round-413 landmine). */
+    @Test fun assertCallChainConsumesDepth() {
+        val source = buildString {
+            append("// @strict: true\n")
+            append("declare function check(v: unknown): asserts v;\n")
+            append("interface A { p: number }\n")
+            append("interface B { q: number }\n")
+            append("declare const ab: A | B;\n")
+            append("let x: A | B = ab;\n")
+            repeat(2500) { append("check(x);\n") }
+            append("x.p;\n")
+        }
+        val result = TypeScriptCompiler().compile(source, "assertchain.ts")
+        assertEquals(
+            1, result.diagnostics.count { it.code == 2563 },
+            "an asserts-callee chain must trip the depth limit exactly once, got: " +
+                result.diagnostics.map { "TS${it.code}" }.distinct().joinToString()
+        )
+    }
+
+    /** The corpus-motivated shape (largeControlFlowGraph, whose generated test is
+     *  JS-emit-only and so pins NO diagnostic): an AUTO-typed array (`const data = []`,
+     *  no annotation) mutated by thousands of top-level `data[0] = 0` writes. tsc types
+     *  each write's receiver via getFlowTypeOfReference and every mutation RELEVANT to
+     *  the evolving array recurses (getTypeAtFlowAssignment/getTypeAtFlowArrayMutation),
+     *  so the >2000-write chain trips TS2563 — ours via the dedicated
+     *  `evolvingArrayWalkTrips` init walk. Reported once, at the first statement. */
+    @Test fun evolvingArrayWriteChainTrips() {
+        val source = buildString {
+            append("// @strict: true\n")
+            append("const data = [];\n")
+            repeat(3000) { append("data[0] = 0;\n") }
+        }
+        val result = TypeScriptCompiler().compile(source, "evolving.ts")
+        assertEquals(
+            1, result.diagnostics.count { it.code == 2563 },
+            "a 3000-write evolving-array chain must trip exactly one TS2563, got: " +
+                result.diagnostics.map { "TS${it.code}" }.distinct().joinToString()
+        )
+        assertEquals(
+            1, result.diagnostics.first { it.code == 2563 }.line,
+            "TS2563 must anchor at the module's first statement (const data, line 1 after the directive)"
+        )
+    }
+
+    /** Control: a small evolving-array chain stays under the trip — no TS2563. */
+    @Test fun smallEvolvingArrayDoesNotTrip() {
+        val source = buildString {
+            append("// @strict: true\n")
+            append("const data = [];\n")
+            repeat(100) { append("data[0] = 0;\n") }
+        }
+        val result = TypeScriptCompiler().compile(source, "evolvingsmall.ts")
+        assertTrue(
+            result.diagnostics.none { it.code == 2563 },
+            "100 evolving-array writes must stay under the 2000-depth trip"
+        )
+    }
+
     /** Negative control: a straight-line chain of the SAME length does NOT trip —
      *  linear pass-through antecedents are followed iteratively without consuming
      *  depth (tsc getTypeAtFlowNode's while(true) loop) — and the TS2454 fires. */

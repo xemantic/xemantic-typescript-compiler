@@ -91982,9 +91982,68 @@ interface DataView {
      * path. When no argument does, the flow walker follows the antecedent WITHOUT
      * consuming [NARROW_MAX_DEPTH] AND without resolving the callee (tsc
      * `getTypeAtFlowCall` returns undefined ⇒ the `while` loop iterates).
+     *
+     * Round 426b: an arg mentioning the path is not enough — the CALLEE must also bear
+     * an `asserts` predicate, or [narrowByAssertCall] returns null and the recursion
+     * was pure depth cost. tsc resolves the callee's effects signature BEFORE deciding
+     * (`getEffectsSignature`, cached per node): a non-assert call is followed in the
+     * `while` loop, consuming NO `flowDepth`. Without this, a >2000-chain of calls that
+     * merely MENTION the reference trips TS2563 — tsc's own
+     * diagnosticInformationMap.generated.ts (~2,100 `diag(…, DiagnosticCategory.Error,
+     * …)` statements) tripped any walk for a `DiagnosticCategory` reference.
+     * [flowCalleeMayHaveAssertEffects] is EXACT for Identifier callees (map-lookup
+     * resolution — cheap at gate time) and conservative-true for PropertyAccess
+     * callees (resolving those types the RECEIVER, the round-385 services-perf
+     * hazard — they keep the old consume-depth behavior).
      */
     private fun flowCallMightNarrow(node: CallExpression, name: String): Boolean =
-        node.arguments.any { argMentionsReferencePath(it, name) }
+        node.arguments.any { argMentionsReferencePath(it, name) } &&
+            flowCalleeMayHaveAssertEffects(node)
+
+    /**
+     * Round 426b: could [narrowByAssertCall] possibly narrow through this call — i.e.
+     * does the callee resolve to a declaration with an `asserts` [TypePredicate]
+     * return (tsc `getEffectsSignature(node) !== undefined`)? Exact verdicts only
+     * where they are CHEAP and provably match [narrowByAssertCall]'s own bails:
+     *  - Identifier callee → resolve via [resolveFlowCalleeDecl] (map lookups plus the
+     *    persistently-memoized import/nested-fn fallbacks; never types a receiver) and
+     *    test the declaration's return annotation — the same decl and the same
+     *    predicate test narrowByAssertCall applies, so iterating past a `false` is
+     *    EQUIVALENT, not just safe.
+     *  - PropertyAccess callee (`Debug.assert(x)`) → conservative TRUE: resolving it
+     *    types the receiver, which re-enters the flow walker (the round-385
+     *    exponential-blowup hazard) — keep the pre-426b consume-depth behavior.
+     *  - Any other callee shape → FALSE (narrowByAssertCall's resolver yields null
+     *    for those, so it could never narrow).
+     */
+    private fun flowCalleeMayHaveAssertEffects(expr: CallExpression): Boolean {
+        var callee: Expression = expr.expression
+        while (true) {
+            callee = when (callee) {
+                is ParenthesizedExpression ->
+                    if (callee.instantiationEnd == null) callee.expression
+                    else return false // narrowByAssertCall bails on instantiation expressions
+                is NonNullExpression -> callee.expression
+                is AsExpression -> callee.expression
+                is TypeAssertionExpression -> callee.expression
+                is SatisfiesExpression -> callee.expression
+                else -> break
+            }
+        }
+        return when (callee) {
+            is Identifier -> {
+                val decl = resolveFlowCalleeDecl(expr, callee)
+                val returnTypeNode = when (decl) {
+                    is FunctionDeclaration -> decl.type
+                    is MethodDeclaration -> decl.type
+                    else -> null
+                }
+                (returnTypeNode as? TypePredicate)?.assertsModifier == true
+            }
+            is PropertyAccessExpression -> true
+            else -> false
+        }
+    }
 
     private fun narrowTypeFromFlow(
         declaredType: Type, flowNodeIn: FlowNode, name: String,
