@@ -96016,6 +96016,28 @@ interface DataView {
                     s.resolvedReturnType != null && !typeContainsUnresolvedTypeParam(s.resolvedReturnType!!)
             }
             if (concrete != null) return concrete.resolvedReturnType ?: anyType
+            // M3.1 (round 428): overloaded GENERIC callee (tsc core.ts `append` —
+            // every overload generic, single TP each) — no concrete overload exists
+            // and the chosen return still carries an un-inferred TP. Mirror the
+            // single-sig 17.31a path: run single-TP inference against the chosen
+            // sig first, then the other arity-matching generic sigs; the first
+            // full mapper wins and instantiates THAT sig's return.
+            // A NAMED type-guard passed as an Identifier arg (`filter(arr, isFoo)`)
+            // selects tsc's guard overload whose S binds from the PREDICATE — an
+            // inference this path doesn't model; skip (keeps the site's previous
+            // outcome). Inline arrow guards are excluded by callHasTypeGuardArg above.
+            if (typeArgs.isNullOrEmpty() && expr.arguments.none { argIsNamedTypeGuardIdentifier(it) }) {
+                val inferCandidates = listOf(chosen) + sigs.filter { s ->
+                    s !== chosen && !s.typeParameters.isNullOrEmpty() &&
+                        argCount >= s.minArgumentCount && argCount <= s.parameters.size
+                }
+                for (s in inferCandidates) {
+                    if (s.typeParameters.isNullOrEmpty()) continue
+                    val rt = s.resolvedReturnType ?: continue
+                    val mapper = tryInferSingleTypeParamFromArgs(s, expr.arguments, forReturnType = true)
+                    if (mapper != null) return instantiateType(rt, mapper)
+                }
+            }
         }
         return chosenRt
     }
@@ -96031,6 +96053,21 @@ interface DataView {
             is Type.Intersection -> type.types.any { typeContainsUnresolvedTypeParam(it, depth + 1) }
             else -> false
         }
+    }
+
+    /** M3.1 (round 428): is [arg] an Identifier resolving to a fn declaration whose
+     *  return annotation is a `x is T` type GUARD (`filter(arr, isIdentifier)`)?
+     *  Deliberately NOT folded into [callHasTypeGuardArg] — B136's concrete-overload
+     *  swap must keep firing for named-guard args (the swap's wider concrete return
+     *  is the established approximation there). */
+    private fun argIsNamedTypeGuardIdentifier(arg: Expression): Boolean {
+        val id = arg as? Identifier ?: return false
+        val sym = currentFileLocals?.get(id.text) ?: globals[id.text]
+        val decl = (sym?.valueDeclaration as? FunctionDeclaration)
+            ?: (sym?.declarations?.firstOrNull { it is FunctionDeclaration } as? FunctionDeclaration)
+            ?: uniqueFunctionDeclByName(id.text)
+        val ret = decl?.type as? TypePredicate ?: return false
+        return !ret.assertsModifier
     }
 
     /** Is any argument of [call] a type-guard predicate callback (arrow/function
@@ -96229,6 +96266,9 @@ interface DataView {
             // pass-2's B83.4i branch (re-types the un-annotated lambda body). Accept the
             // sig here so we don't bail at gate (c).
             if (!isRest && fnTypedParamConcreteParamsBareReturnTp(pt, tpsSet) != null) continue
+            // (i) M3.1 (round 428): nullable union of a single tp anchor —
+            // `T | undefined` / `T[] | undefined` (tsc core.ts append/concatenate).
+            if (!isRest && tps.any { nullableUnionOfTpMode(pt, it) != 0 }) continue
             // (c) fully concrete — must not mention ANY of our TPs
             if (tps.any { typeMentionsTypeParam(pt, it) }) return null
         }
@@ -96268,7 +96308,13 @@ interface DataView {
                 val isObjLitOfT = !isRest && !isBareT && !isRestT && !isArrayT &&
                     isAnonymousObjectWithTypeParamMembers(pt, tpsSet)
                 val isFnTypedOfT = false  // B83.4a: pass-1 skips fn-typed (handled in pass-2)
-                if (!isBareT && !isRestT && !isArrayT && !isObjLitOfT && !isFnTypedOfT) continue
+                // (i) M3.1 (round 428): `T | undefined` (mode 1) / `T[] | undefined`
+                // (mode 2) union params contribute candidates with the arg's nullish
+                // members stripped; a purely-nullish arg contributes NOTHING (soft
+                // skip — `append(undefined, x)` still infers from `x`).
+                val unionMode = if (!isRest && !isBareT && !isRestT && !isArrayT && !isObjLitOfT)
+                    nullableUnionOfTpMode(pt, tp) else 0
+                if (!isBareT && !isRestT && !isArrayT && !isObjLitOfT && !isFnTypedOfT && unionMode == 0) continue
                 fun isNamedLikeAtom(t: Type): Boolean =
                     t is Type.Interface || t is Type.Reference || t is Type.Intrinsic ||
                         t.flags.hasAny(
@@ -96345,23 +96391,50 @@ interface DataView {
                     // type), but TypeScript's spec-mandated behavior here is to fall back to never
                     // for inference — the array contains no elements that could constrain the
                     // element type. Skip the standard rawArgType anyType bail in this narrow case.
-                    if (isArrayT && arg is ArrayLiteralExpression && arg.elements.isEmpty()) {
+                    if ((isArrayT || unionMode == 2) && arg is ArrayLiteralExpression && arg.elements.isEmpty()) {
                         candidates.add(Candidate(ai, neverType, null))
                         continue
                     }
-                    val rawArgType = getTypeOfExpression(arg)
-                    if (rawArgType === anyType || rawArgType === errorType) return null
-                    if (rawArgType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return null
+                    val rawArgType0 = getTypeOfExpression(arg)
+                    // M3.1 (round 428): a UNION arg in an Array<tp> / union-of-tp param
+                    // position contributes its single non-nullish member (`Statement[] |
+                    // undefined` → `Statement[]` — tsc's `x = append(x, item)` idiom).
+                    // Multiple non-nullish members stay unhandled: soft-skip for
+                    // union-mode params, hard bail preserved for the legacy shapes.
+                    val rawArgType = if ((isArrayT || unionMode != 0) && rawArgType0 is Type.Union) {
+                        val nonNullish = rawArgType0.types.filter {
+                            !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)
+                        }
+                        if (nonNullish.size == 1) nonNullish[0] else rawArgType0
+                    } else rawArgType0
+                    if (rawArgType === anyType || rawArgType === errorType) {
+                        // M3.1 (round 428): at the RETURN-TYPE call site an untypeable
+                        // arg (an unmodeled local — e.g. a for-of loop var — resolves to
+                        // anyType) contributes NO candidate instead of killing the whole
+                        // inference: `x = append(x, item)` still anchors T from `x`.
+                        // The arg-vs-param call site keeps the hard bail (its consumers
+                        // CHECK args against the substituted params — a wrong partial
+                        // inference there could emit, not just suppress).
+                        if (forReturnType && rawArgType === anyType) continue
+                        return null
+                    }
+                    if (rawArgType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) {
+                        // A purely-nullish arg for a NULLABLE union param contributes no
+                        // candidate (`append(undefined, x)` — tp comes from `x`).
+                        if (unionMode != 0) continue
+                        return null
+                    }
                     // 17.31e: for `Array<tp>` param, the inference candidate is the
                     // arg's element type (extracted from same-target `Array<X>` ref).
                     // Bail when arg isn't a same-target Array Reference (e.g. plain
                     // `Type.Object` or `Type.Reference Set<X>`) — too many edge cases
-                    // for this conservative substep.
-                    val argType = if (isArrayT) {
-                        if (rawArgType !is Type.Reference) return null
-                        if (rawArgType.target.symbol?.name != "Array") return null
-                        val refArgs = rawArgType.resolvedTypeArguments ?: return null
-                        if (refArgs.size != 1) return null
+                    // for this conservative substep. (Union-mode params soft-skip
+                    // instead — the shape is a new capability, never a new bail.)
+                    val argType = if (isArrayT || unionMode == 2) {
+                        if (rawArgType !is Type.Reference) { if (unionMode == 2) continue else return null }
+                        if (rawArgType.target.symbol?.name != "Array") { if (unionMode == 2) continue else return null }
+                        val refArgs = rawArgType.resolvedTypeArguments
+                        if (refArgs == null || refArgs.size != 1) { if (unionMode == 2) continue else return null }
                         val element = refArgs[0]
                         // 17.31f: widen Union constituents (`widenType` falls through on Union),
                         // so `Array<undefined | "def">` infers T = `string | undefined` rather
@@ -96384,7 +96457,7 @@ interface DataView {
                         // members in heterogeneous-array elements (e.g. `[{a:1}, "def"]` →
                         // `Array<{a:1} | "def">`) are still rejected because `{a:1}` widens to
                         // an anonymous Type.Object that fails this check.
-                        (isArrayT && argType is Type.Union && argType.types.all { isNamedLikeAtom(it) })
+                        ((isArrayT || unionMode != 0) && argType is Type.Union && argType.types.all { isNamedLikeAtom(it) })
                     // 17.41: at the return-type call site, allow anonymous Type.Object
                     // arg types (substitute T into the return type for downstream display).
                     // Arg-vs-param call site keeps the bail (forReturnType=false default) so
@@ -96394,7 +96467,7 @@ interface DataView {
                     if (!isNamedLike && !forReturnType) return null
                     // 17.31e: for Array<tp> path the literal type is null (we don't have
                     // a single literal to attach to the array's element type).
-                    val literal = if (isArrayT) null else literalTypeOfExpression(arg)
+                    val literal = if (isArrayT || unionMode == 2) null else literalTypeOfExpression(arg)
                     candidates.add(Candidate(ai, argType, literal))
                 }
             }
@@ -97225,6 +97298,27 @@ interface DataView {
         if (type.target.symbol?.name != "Array") return false
         val args0 = type.resolvedTypeArguments ?: return false
         return args0.size == 1 && args0[0] === tp
+    }
+
+    /**
+     * M3.1 (round 428): classify a parameter type that is a UNION of exactly one
+     * tp-anchored member plus only nullish members — tsc core.ts's `append<T>(to:
+     * T[] | undefined, value: T | undefined)` idiom. Returns 1 for a bare-`tp`
+     * union (`T | undefined`), 2 for an `Array<tp>` union (`T[] | undefined | null`),
+     * 0 when the union has any other member shape (or isn't a union).
+     */
+    private fun nullableUnionOfTpMode(pt: Type, tp: Type.TypeParam): Int {
+        val u = pt as? Type.Union ?: return 0
+        var mode = 0
+        for (m in u.types) {
+            when {
+                m.flags.hasAny(TypeFlags.Undefined or TypeFlags.Null) -> {}
+                m === tp -> { if (mode != 0) return 0; mode = 1 }
+                isArrayOfTypeParam(m, tp) -> { if (mode != 0) return 0; mode = 2 }
+                else -> return 0
+            }
+        }
+        return mode
     }
 
     /**
@@ -131796,8 +131890,17 @@ interface DataView {
                     return tpConstraintNodeAssignableToTpUnion(c, members)
                 }
             }
-            // For other source types, assignable if it matches any member
-            return members.any { isAssignableTo(sourceType, it) }
+            // For other source types, assignable if it matches any member.
+            // M3.1 (round 428): an array-literal source is unknowable against a
+            // `T[]` member where T is an enclosing fn's type param (`return
+            // [value]` inside `append<T>` vs `T[] | undefined`) — permissive.
+            // typeParams is deliberately NOT threaded into the recursion: the
+            // TP-aware rules inside (B60.6/B60.7/B212b) were tuned for
+            // non-union targets and would flip union members to rejections.
+            return members.any {
+                isAssignableTo(sourceType, it) ||
+                    (sourceType == "array" && it.endsWith("[]") && it.removeSuffix("[]") in typeParams)
+            }
         }
         // For named types (TypeReference, prefixed with "@"), we can only confidently say
         // that null/undefined are NOT assignable. Other source types might actually be
@@ -131904,6 +132007,13 @@ interface DataView {
         // number literal subtypes
         if (sourceType == "number" && targetType == "object") return false
         if (sourceType == "string" && targetType == "object") return false
+        // M3.1 (round 428): an array-literal source vs a bare `T[]` target where T
+        // is an enclosing fn's type param — the element type is unknowable at the
+        // string layer (`return [value]` inside a generic fn returning `T[]`).
+        // Permissive; a non-array source vs `T[]` is still a kind mismatch and
+        // keeps firing.
+        if (sourceType == "array" && targetType.endsWith("[]") &&
+            targetType.removeSuffix("[]") in typeParams) return true
         // Otherwise, different primitive types are not assignable
         return false
     }
