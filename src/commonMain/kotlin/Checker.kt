@@ -113646,6 +113646,40 @@ interface DataView {
             val rawForNarrowing = getTypeOfExpression(objectExpr)
             if (rawForNarrowing is Type.Union) {
                 val narrowed = getNarrowedTypeForReference(rawForNarrowing, objectExpr)
+                // M1.12 (round 424): a read inside a LOOP body walks back through a
+                // FlowLoopLabel, where the plain variant washes back to the declared
+                // union (back-edge safety), so a PRE-loop guard (`if (!isString(text))
+                // return; … while (…) text.charCodeAt(…)` — tsc's own parseResponseFile)
+                // never suppressed the union TS2339. Retry with the loop-entry-following
+                // variant, SUPPRESSION-ONLY (every non-nullish loop-narrowed member
+                // resolves the property → return, no diagnostic): the emission paths
+                // below keep the PLAIN result, so a loop back-edge can never mint a new
+                // narrowed-to-never / partial-coverage emission (the B78.2 soundness
+                // concern — back-edge reassignment is not tracked — only ever costs a
+                // false negative here, never a new FP). The "plain walk did not
+                // narrow" gate is STRUCTURAL, not identity: a 2-antecedent
+                // FlowBranchLabel (any `&&`/`||` condition on the path) unions
+                // [declared, declared] and `getUnionType` MINTS a fresh Type.Union
+                // (it does not intern — CLAUDE.md), so identity `===` misses the
+                // wash whenever the path crosses a branch join.
+                val plainWalkWashed = narrowed === rawForNarrowing ||
+                    (narrowed is Type.Union &&
+                        narrowed.types.map { it.id }.toSet() ==
+                        rawForNarrowing.types.map { it.id }.toSet())
+                if (plainWalkWashed) {
+                    val loopNarrowed = getNarrowedTypeForReferenceFollowLoopEntry(rawForNarrowing, objectExpr)
+                    if (loopNarrowed !== rawForNarrowing && loopNarrowed !== neverType) {
+                        val lnMembers = if (loopNarrowed is Type.Union)
+                            loopNarrowed.types.filterNot { isNullishConstituent(it) }
+                        else listOf(loopNarrowed)
+                        if (lnMembers.isNotEmpty() &&
+                            lnMembers.all { m ->
+                                m === anyType || m === errorType || m === unknownType ||
+                                    resolveMemberPropertyType(m, propName) != null
+                            }
+                        ) return
+                    }
+                }
                 if (narrowed === neverType) {
                     val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
                     diagnostics.add(Diagnostic(
