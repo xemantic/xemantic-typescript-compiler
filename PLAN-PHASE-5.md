@@ -107,7 +107,16 @@ test cycle.** Residual: TS2769×~45 (generic call-site inference — createNodeA
 createImportAttributes chains, `Program | T` generic-union callees, lib includes() chains →
 M3.1), TS2339×117 (never×29 via alias-collapse, JsxCallLike×12 alias-of-alias unions,
 DebugTypeMapper×10 `this`-narrowing, `string | Diagnostic`×6 → M3/M3.4), TS18048×7
-(assignment-in-guard variants, deep property paths), TS2366×4 (utilities.ts/nodeFactory.ts receivers whose unions don't resolve), and the M3 cores TS2322×784 / TS2345×396 / TS7006×301.
+(assignment-in-guard variants, deep property paths), TS2366×4 (utilities.ts/nodeFactory.ts —
+DIAGNOSED, next-agent note: these need the switch RECEIVER guard-narrowed before
+`requiredUnionDiscriminantKeys` reads it — `isNamedEvaluation`'s `node` is a bare `Node` param
+narrowed only by the `isNamedEvaluationSource(node)` early-return, and `getAssignmentTargetKind`'s
+`target` is a call-initialized LOCAL (`const target = getAssignmentTarget(node)`) invisible to this
+pass, narrowed by `if (!target) return`. The fix needs (a) a DEDICATED flow-graph field set in
+`checkImplicitReturns`' per-file loop and lifted only around the narrowing call — NOT
+`currentFlowGraph` for the whole pass, the arithmetic-pass 78-test landmine — and (b) for the
+local-const case, initializer typing from the callee's return annotation), and the M3 cores
+TS2322×784 / TS2345×396 / TS7006×301.
 
 **Round 421 (2026-07-06) — maintenance (owner-requested): CLAUDE.md trim + root history reorg.
 No code changes; suite re-verified green; 3 commits (c3c9c8c1, 396ce8ae, + docs).** The owner asked
