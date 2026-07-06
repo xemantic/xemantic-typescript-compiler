@@ -175,4 +175,34 @@ class EnumDiscriminantNarrowingTest {
                 d.joinToString { "TS${it.code}: ${it.message}" },
         )
     }
+
+    @Test
+    fun `round 420 - a member whose discriminant is a TYPE-ALIAS union of enum members is filtered`() {
+        // tsc's `ProjectReferenceFile { kind: ProjectReferenceFileKind }` where
+        // `ProjectReferenceFileKind = FileIncludeKind.A | FileIncludeKind.B`. The switch case
+        // `case Kind.AutoType` must drop ProjectRefFile even though its `.kind` is an ALIAS.
+        val d = diags(
+            """
+            enum Kind { Root, Source, Output, AutoType }
+            type ProjectRefKind = Kind.Source | Kind.Output;
+            interface RootFile { kind: Kind.Root; }
+            interface ProjectRefFile { kind: ProjectRefKind; index: number; }
+            interface AutoTypeFile { kind: Kind.AutoType; typeReference: string; }
+            type Reason = RootFile | ProjectRefFile | AutoTypeFile;
+
+            export function f(reason: Reason): string | undefined {
+                switch (reason.kind) {
+                    case Kind.AutoType:
+                        return reason.typeReference; // ProjectRefFile filtered via its alias-kind
+                }
+                return undefined;
+            }
+            """,
+        )
+        assertTrue(
+            d.none { it.code == 2339 },
+            "a `.kind: <type-alias-of-enum-members>` member must be filtered from a non-matching " +
+                "case; got: " + d.joinToString { "TS${it.code}: ${it.message}" },
+        )
+    }
 }

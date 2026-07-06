@@ -92979,21 +92979,36 @@ interface DataView {
 
     /** An enum-member TYPE annotation `Enum.Member`, or a `UnionType` of such, → the set of
      *  `"symId#Member"` keys; null if [node] isn't (entirely) enum-member type references. */
-    private fun enumMemberKeysOfTypeNode(node: TypeNode?): Set<String>? {
+    private fun enumMemberKeysOfTypeNode(node: TypeNode?, depth: Int = 0): Set<String>? {
+        if (depth > 8) return null
         when (node) {
             is UnionType -> {
                 val keys = mutableSetOf<String>()
-                for (m in node.types) keys.addAll(enumMemberKeysOfTypeNode(m) ?: return null)
+                for (m in node.types) keys.addAll(enumMemberKeysOfTypeNode(m, depth + 1) ?: return null)
                 return keys.ifEmpty { null }
             }
             is TypeReference -> {
-                val qn = node.typeName as? QualifiedName ?: return null
-                val enumIdent = (qn.left as? Identifier)?.text ?: return null
-                val member = qn.right.text
-                if (member.isEmpty()) return null
-                val sym = resolveEnumSymbolForDiscriminant(enumIdent) ?: return null
-                if (enumValues[sym.id]?.containsKey(member) != true) return null
-                return setOf("${sym.id}#$member")
+                val qn = node.typeName as? QualifiedName
+                if (qn != null) {
+                    val enumIdent = (qn.left as? Identifier)?.text ?: return null
+                    val member = qn.right.text
+                    if (member.isEmpty()) return null
+                    val sym = resolveEnumSymbolForDiscriminant(enumIdent) ?: return null
+                    if (enumValues[sym.id]?.containsKey(member) != true) return null
+                    return setOf("${sym.id}#$member")
+                }
+                // round 420: a bare-Identifier TypeReference may be a TYPE ALIAS whose body is a
+                // union of enum members (`type ProjectReferenceFileKind = FileIncludeKind.A |
+                // FileIncludeKind.B`). Resolve + recurse so a `.kind: <alias>` discriminant filters
+                // correctly under a `switch (x.kind) { case … }` — else the member SURVIVES the
+                // narrowing (its `.kind` reads as unknown) and the over-wide union FP's TS2339 on
+                // a case-body property (`ProjectReferenceFile` kept alongside
+                // `AutomaticTypeDirectiveFile`, watch.ts `reason.typeReference`).
+                val aliasName = (node.typeName as? Identifier)?.text ?: return null
+                val alias = (currentFileLocals?.get(aliasName) ?: globals[aliasName])
+                    ?.declarations?.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration
+                    ?: return null
+                return enumMemberKeysOfTypeNode(alias.type, depth + 1)
             }
             else -> return null
         }
