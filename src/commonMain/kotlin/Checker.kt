@@ -1169,12 +1169,28 @@ class Checker(
      *  to no declaration" — test membership with containsKey. */
     private val narrowWalkDeclCache: MutableMap<Long, Node?> = mutableMapOf()
 
-    /** M1.2a: files where the B399 "control-flow graph too large" bail fired (TS2563).
-     *  tsc's `flowAnalysisDisabled` suppresses definite-assignment analysis in the same
-     *  container — it emits TS2563 OR TS2454, never both — so every TS2454 in these
-     *  files is removed at the end of init. Declared before `init` (init populates and
-     *  consumes it). */
-    private val cfaTooLargeFiles: MutableSet<String> = mutableSetOf()
+    /** Round 426 (faithful TS2563, replacing the B399 per-file node-count proxy):
+     *  per-file container RANGES where a flow walk tripped the 2000-recursion depth
+     *  limit (tsc checker.ts `getTypeAtFlowNode`: `flowDepth === 2000` → set
+     *  `flowAnalysisDisabled` + `reportFlowControlError(reference)`). tsc save/restores
+     *  the flag around each function-or-module block (`checkBlock`), making the disable
+     *  effectively per-container; our multi-pass architecture approximates that with the
+     *  container's body-block source range. TS2563 is reported ONCE per container (at
+     *  the first tripping walk); subsequent walks whose reference lies in a disabled
+     *  range bail without walking (tsc `if (flowAnalysisDisabled) return errorType`),
+     *  and every TS2454 whose position falls in a disabled range is removed at the end
+     *  of init (tsc emits TS2563 OR TS2454, never both — flow analysis returning
+     *  errorType is what suppresses the definite-assignment report there). Declared
+     *  before `init` (init populates and consumes it). */
+    private val flowDisabledRanges: MutableMap<String, MutableList<IntRange>> = mutableMapOf()
+
+    /** Round 426: set by a flow walker frame that hits the 2000-recursion depth trip
+     *  (tsc `flowDepth === 2000`); consumed by [flowWalkWithTripCheck] at the walk's
+     *  entry point, which knows the REFERENCE node the walk was for (the recursive
+     *  frames don't) and reports TS2563 for its containing container. Our OWN budgets
+     *  (visit budget, global re-entry depth, cycle bail) still truncate SILENTLY —
+     *  only the per-walk depth limit is tsc's TS2563 semantic. */
+    private var flowDepthTripped = false
 
     init {
         try {
@@ -1269,33 +1285,44 @@ class Checker(
         }
         // 5. Check for variables used before assignment (TS2454)
         // Requires strictNullChecks (either via strict: true or strictNullChecks: true).
-        // B399 (TS2563): a function/module body whose control-flow graph is too large for
-        // flow analysis. tsc disables flow analysis when a single container's flow walk
-        // exceeds its budget (flowDepth 2000) and reports once at the container. We
-        // approximate per-FILE via the flow-node count: an instrumented full-suite probe
-        // showed the ONLY file exceeding 2000 is a single 10000-deep top-level assignment
-        // chain (largeControlFlowGraph, ~20000 flow nodes); the next-largest valid file is
-        // ~1372, so a 2000 threshold is FP-safe by a wide margin. Reported at the first
-        // top-level statement's first token (matches tsc's report span — `const`, len 5).
+        // Round 426: TS2563 is no longer a per-file node-count proxy (B399, removed) —
+        // it fires faithfully when a flow WALK trips the 2000-recursion depth limit
+        // (see [flowDisabledRanges] / [flowWalkWithTripCheck] / [reportFlowControlError]).
+        // The evolving-array use-site walk below supplies the one depth consumer our
+        // narrowing model lacks: tsc checks each `x[i] = v` write on an AUTO-typed
+        // array (`const x = []`, no annotation) by walking x's mutation chain at the
+        // use site (getTypeAtFlowAssignment/getTypeAtFlowArrayMutation recursion, one
+        // level per RELEVANT mutation) — a >2000-mutation chain trips TS2563
+        // (largeControlFlowGraph's baseline pin). Top-level statements only (the
+        // corpus shape; our consumers never walk these references otherwise). After
+        // the first trip the container is disabled, so the whole file costs ONE
+        // 2000-step walk (the wrapper's pre-check skips the rest).
         for (res in binderResults) {
-            val fn = res.sourceFile.fileName
-            if (isDtsFile(fn)) continue
-            if (res.flowGraph.nodeToFlow.size <= 2000) continue
-            val firstStmt = res.sourceFile.statements.firstOrNull() ?: continue
-            val src = res.sourceFile.text
-            val start = firstStmt.pos
-            var len = 0
-            while (start + len < src.length && !src[start + len].isWhitespace()) len++
-            if (len <= 0) continue
-            val (line, ch) = getLineAndCharacterOfPosition(src, start)
-            diagnostics.add(Diagnostic(
-                message = "The containing function or module body is too large for control flow analysis.",
-                category = DiagnosticCategory.Error, code = 2563,
-                fileName = fn, line = line, character = ch, start = start, length = len,
-            ))
-            // M1.2a: record the file so definite-assignment analysis respects the bail
-            // (see the end-of-init TS2454 filter).
-            cfaTooLargeFiles.add(fn)
+            if (isDtsFile(res.sourceFile.fileName)) continue
+            val autoArrayNames = res.sourceFile.statements
+                .filterIsInstance<VariableStatement>()
+                .flatMap { it.declarationList.declarations }
+                .filter {
+                    it.type == null &&
+                        (it.initializer as? ArrayLiteralExpression)?.elements?.isEmpty() == true
+                }
+                .mapNotNull { (it.name as? Identifier)?.text }
+                .toSet()
+            if (autoArrayNames.isEmpty()) continue
+            currentFlowGraph = res.flowGraph
+            try {
+                for (stmt in res.sourceFile.statements) {
+                    val es = stmt as? ExpressionStatement ?: continue
+                    val be = es.expression as? BinaryExpression ?: continue
+                    if (be.operator != SyntaxKind.Equals) continue
+                    val base = ((be.left as? ElementAccessExpression)?.expression as? Identifier) ?: continue
+                    if (base.text !in autoArrayNames) continue
+                    val flow = getFlowAt(base) ?: getFlowAt(es) ?: continue
+                    flowWalkWithTripCheck(base) { evolvingArrayWalkTrips(flow, base.text) }
+                }
+            } finally {
+                currentFlowGraph = null
+            }
         }
         // Suppressed when strict is explicitly false OR strictNullChecks is explicitly false.
         val shouldCheckDefiniteAssignment = !options.strictExplicitlyFalse && !options.strictNullChecksExplicitlyFalse
@@ -2710,17 +2737,20 @@ class Checker(
         checkPreEmitCountMismatchPins()
         checkMappedTypeRecursiveInferencePin()
         applyDomLibSuggestionRewrite()
-        // M1.2a: definite-assignment analysis respects the CFA too-large bail — tsc's
-        // flowAnalysisDisabled makes getFlowTypeOfReference return errorType in the
-        // affected container, so it reports TS2563 OR TS2454, never both (real tsc
-        // emits NEITHER on its own sources; our per-file B399 proxy emits TS2563 and,
-        // without this filter, the TS2454 walkers still ran and stacked FPs on top —
-        // 20 of them on the self-compile compiler profile). Applied at the END of init
-        // so every TS2454 emitter (checkDefiniteAssignment* and the flow-walk sites)
-        // is covered. Corpus-safe by construction: the only corpus file over the B399
-        // threshold is largeControlFlowGraph, whose baseline has no TS2454.
-        if (cfaTooLargeFiles.isNotEmpty()) {
-            diagnostics.removeAll { it.code == 2454 && it.fileName in cfaTooLargeFiles }
+        // Round 426 (faithful TS2563): definite-assignment analysis respects a flow-walk
+        // depth trip — tsc's flowAnalysisDisabled makes getFlowTypeOfReference return
+        // errorType in the tripped container, so it reports TS2563 OR TS2454, never both.
+        // Our multi-pass architecture can't consult the disabled set inside the AST-based
+        // TS2454 emitters at emission time (and a trip in a LATER pass postdates them),
+        // so the filter runs at the END of init over the tripped containers' ranges.
+        // Approximation vs tsc: tsc keeps a TS2454 reported BEFORE the trip point within
+        // the same container (single in-order pass); we drop those too — observable only
+        // on synthetic deep-CFG files (zero trips on the corpus and tsc's own sources).
+        if (flowDisabledRanges.isNotEmpty()) {
+            diagnostics.removeAll { d ->
+                d.code == 2454 && d.start != null &&
+                    flowDisabledRanges[d.fileName]?.any { r -> d.start in r } == true
+            }
         }
         } // end if (!declarationOnly)
         } catch (e: StackOverflowError) {
@@ -13034,7 +13064,9 @@ class Checker(
             }
             val unionDisplay = formatTypeForDisplay(decl.type!!) ?: "$primText | undefined"
             for (arg in scan.gatedLoopArgs) {
-                if (isAssignedAtFlow(getFlowAt(arg), name, mutableSetOf())) continue
+                if (flowWalkWithTripCheck(arg) {
+                        isAssignedAtFlow(getFlowAt(arg), name, mutableSetOf())
+                    } != false) continue
                 val (line, character) = getLineAndCharacterOfPosition(source, arg.pos)
                 diagnostics.add(Diagnostic(
                     message = "Argument of type '$unionDisplay' is not assignable to parameter of type '$primText'.",
@@ -13534,22 +13566,28 @@ class Checker(
             is Identifier -> {
                 if (inUncheckedBody && expr.text in uninitialized) {
                     val pos = expr.pos
-                    if (pos !in emitted) {
-                        val flow = getFlowAt(expr)
-                        if (!isAssignedAtFlow(flow, expr.text, mutableSetOf())) {
-                            val (line, character) = getLineAndCharacterOfPosition(source, pos)
-                            diagnostics.add(Diagnostic(
-                                message = "Variable '${expr.text}' is used before being assigned.",
-                                category = DiagnosticCategory.Error,
-                                code = 2454,
-                                fileName = fileName,
-                                line = line,
-                                character = character,
-                                start = pos,
-                                length = expr.text.length,
-                            ))
-                            emitted.add(pos)
-                        }
+                    // Round 426 (faithful TS2563): the flow walk runs even for positions
+                    // the AST-based emitter already reported — tsc walks EVERY read of a
+                    // maybe-unassigned var, and a 2000-deep walk here is what trips
+                    // TS2563 (the end-of-init range filter then retracts the TS2454).
+                    // A disabled container (null) is treated as assigned (tsc errorType).
+                    val flow = getFlowAt(expr)
+                    val assigned = flowWalkWithTripCheck(expr) {
+                        isAssignedAtFlow(flow, expr.text, mutableSetOf())
+                    } ?: true
+                    if (pos !in emitted && !assigned) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Variable '${expr.text}' is used before being assigned.",
+                            category = DiagnosticCategory.Error,
+                            code = 2454,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = pos,
+                            length = expr.text.length,
+                        ))
+                        emitted.add(pos)
                     }
                 }
             }
@@ -13701,37 +13739,59 @@ class Checker(
      * [FlowUnreachable] without finding evidence.
      */
     private fun isAssignedAtFlow(
-        flow: FlowNode?, varName: String, visited: MutableSet<Int>,
+        flowIn: FlowNode?, varName: String, visited: MutableSet<Int>, depth: Int = 0,
     ): Boolean {
-        if (flow == null) return false
-        if (!visited.add(flow.id)) return false
-        return when (flow) {
-            is FlowStart -> false
-            is FlowUnreachable -> false
-            is FlowAssignment -> {
-                if (flowAssignmentTargetsName(flow.node, varName)) true
-                else isAssignedAtFlow(flow.antecedent, varName, visited)
+        var flow = flowIn ?: return false
+        while (true) {
+            if (depth >= NARROW_MAX_DEPTH) {
+                // Round 426 (faithful TS2563): the definite-assignment query IS a flow
+                // walk in tsc (getFlowTypeOfReference with the auto initial type), so a
+                // 2000-deep recursion trips the same `flowDepth === 2000` limit —
+                // TS2563 fires (reported at the entry point via [flowWalkWithTripCheck])
+                // and the reference is treated as assigned (tsc returns errorType,
+                // which suppresses the TS2454 report).
+                flowDepthTripped = true
+                return true
             }
-            is FlowBranchLabel -> flow.antecedents.any { isAssignedAtFlow(it, varName, visited) }
-            // FlowLoopLabel back-edges are pointers to post-iteration flow that
-            // can include type-guard true-branches (`typeof a === 'string'`) from
-            // an inner conditional. Walking them naively makes a read inside the
-            // loop body reach those guards through the back-edge cycle, FP-asserting
-            // assignment. Only follow antecedents[0], the pre-loop entry — same
-            // conservative bound `narrowTypeFromFlow` uses (returns declaredType
-            // at loop joins to avoid back-edge widening). Continue/end-of-body
-            // back-edges are antecedents[1+].
-            is FlowLoopLabel -> if (flow.antecedents.isEmpty()) false
-                                else isAssignedAtFlow(flow.antecedents[0], varName, visited)
-            is FlowCondition -> {
-                val implies = if (flow.isTrue) conditionImpliesAssignedTrue(flow.expression, varName)
-                              else conditionImpliesAssignedFalse(flow.expression, varName)
-                if (implies) true
-                else isAssignedAtFlow(flow.antecedent, varName, visited)
+            if (!visited.add(flow.id)) return false
+            // Linear pass-through antecedents follow ITERATIVELY without consuming
+            // depth (tsc getTypeAtFlowNode's `while(true)` loop — same accounting as
+            // narrowTypeFromFlow's round-413 fast-forward); only branch/loop-join and
+            // condition recursion consumes depth (tsc's `flowDepth`).
+            when (val f = flow) {
+                is FlowStart -> return false
+                is FlowUnreachable -> return false
+                is FlowAssignment -> {
+                    if (flowAssignmentTargetsName(f.node, varName)) return true
+                    flow = f.antecedent
+                }
+                is FlowBranchLabel -> {
+                    // tsc: a single-antecedent label is followed in the loop (no depth).
+                    if (f.antecedents.size == 1) flow = f.antecedents[0]
+                    else return f.antecedents.any { isAssignedAtFlow(it, varName, visited, depth + 1) }
+                }
+                // FlowLoopLabel back-edges are pointers to post-iteration flow that
+                // can include type-guard true-branches (`typeof a === 'string'`) from
+                // an inner conditional. Walking them naively makes a read inside the
+                // loop body reach those guards through the back-edge cycle, FP-asserting
+                // assignment. Only follow antecedents[0], the pre-loop entry — same
+                // conservative bound `narrowTypeFromFlow` uses (returns declaredType
+                // at loop joins to avoid back-edge widening). Continue/end-of-body
+                // back-edges are antecedents[1+].
+                is FlowLoopLabel -> {
+                    if (f.antecedents.isEmpty()) return false
+                    return isAssignedAtFlow(f.antecedents[0], varName, visited, depth + 1)
+                }
+                is FlowCondition -> {
+                    val implies = if (f.isTrue) conditionImpliesAssignedTrue(f.expression, varName)
+                                  else conditionImpliesAssignedFalse(f.expression, varName)
+                    if (implies) return true
+                    return isAssignedAtFlow(f.antecedent, varName, visited, depth + 1)
+                }
+                is FlowCall -> flow = f.antecedent
+                is FlowSwitchClause -> flow = f.antecedent
+                is FlowArrayMutation -> flow = f.antecedent
             }
-            is FlowCall -> isAssignedAtFlow(flow.antecedent, varName, visited)
-            is FlowSwitchClause -> isAssignedAtFlow(flow.antecedent, varName, visited)
-            is FlowArrayMutation -> isAssignedAtFlow(flow.antecedent, varName, visited)
         }
     }
 
@@ -91603,6 +91663,144 @@ interface DataView {
     }
 
     /**
+     * Round 426 (faithful TS2563): run [walk] as ONE flow-analysis request for
+     * [reference] (tsc `getFlowTypeOfReference`). Returns null WITHOUT walking when
+     * the reference's containing container is already flow-disabled (tsc
+     * `if (flowAnalysisDisabled) return errorType` — callers substitute their
+     * conservative default). If the walk trips the 2000-recursion depth limit
+     * ([flowDepthTripped] set by a walker frame), reports TS2563 once for the
+     * containing function-or-module block and marks its range disabled.
+     *
+     * Every depth-0 caller of [narrowTypeFromFlow] / [narrowTypeFromFlowFollowLoopEntry] /
+     * [isAssignedAtFlow] must route through this wrapper — an unwrapped entry would
+     * leave a stale [flowDepthTripped] for the NEXT wrapped walk to mis-attribute.
+     */
+    private inline fun <T> flowWalkWithTripCheck(reference: Node, walk: () -> T): T? {
+        if (isFlowAnalysisDisabledAt(reference.pos)) return null
+        val saved = flowDepthTripped
+        flowDepthTripped = false
+        try {
+            val result = walk()
+            if (flowDepthTripped) reportFlowControlError(reference)
+            return result
+        } finally {
+            flowDepthTripped = saved
+        }
+    }
+
+    /** Round 426: is flow analysis disabled for a reference at [pos] in the
+     *  [currentFlowGraph]'s file? O(1) when nothing has tripped (the ~universal case). */
+    private fun isFlowAnalysisDisabledAt(pos: Int): Boolean {
+        if (flowDisabledRanges.isEmpty()) return false
+        val fileName = currentFlowGraph?.sourceFile?.fileName ?: return false
+        val ranges = flowDisabledRanges[fileName] ?: return false
+        return ranges.any { pos in it }
+    }
+
+    /** The body [Block] of a function-like node, or null (expression-bodied arrows,
+     *  bodyless overload signatures — tsc's findAncestor skips past those). */
+    private fun functionLikeBodyBlock(node: Node): Block? = when (node) {
+        is FunctionDeclaration -> node.body
+        is FunctionExpression -> node.body
+        is ArrowFunction -> node.body as? Block
+        is MethodDeclaration -> node.body
+        is Constructor -> node.body
+        is GetAccessor -> node.body
+        is SetAccessor -> node.body
+        is ClassStaticBlockDeclaration -> node.body
+        else -> null
+    }
+
+    /**
+     * Round 426: tsc checker.ts `reportFlowControlError(node)` — report TS2563 at the
+     * span of the token at the containing function-or-module block's `statements.pos`,
+     * and mark that container's range flow-disabled (one-shot per container).
+     *
+     * Container resolution mirrors `findAncestor(reference, isFunctionOrModuleBlock)`:
+     * the innermost function-like BODY block (from the flow graph's containerStarts)
+     * whose range contains the reference, else the SourceFile. A ModuleBlock (namespace
+     * body) container is approximated by the SourceFile — namespace-statement-level
+     * trips are corpus-nonexistent; only the report position would differ.
+     */
+    private fun reportFlowControlError(reference: Node) {
+        val graph = currentFlowGraph ?: return
+        val sf = graph.sourceFile ?: return
+        var bestBlock: Block? = null
+        for (start in graph.containerStarts) {
+            val fn = start.container ?: continue
+            val body = functionLikeBodyBlock(fn) ?: continue
+            if (reference.pos < body.pos || reference.pos >= body.end) continue
+            if (bestBlock == null || (body.end - body.pos) < (bestBlock.end - bestBlock.pos)) bestBlock = body
+        }
+        val containerRange = bestBlock?.let { it.pos..it.end } ?: (0..sf.text.length)
+        val ranges = flowDisabledRanges.getOrPut(sf.fileName) { mutableListOf() }
+        if (ranges.any { it.first == containerRange.first && it.last == containerRange.last }) return
+        ranges.add(containerRange)
+        // Span of the token at `statements.pos` ≈ the first statement's first token
+        // (same scan the B399 proxy used, verified against largeControlFlowGraph's
+        // `const`, len 5); an empty container can't have tripped a walk.
+        val stmts = bestBlock?.statements ?: sf.statements
+        val firstStmt = stmts.firstOrNull() ?: return
+        val src = sf.text
+        var start = firstStmt.pos
+        while (start < src.length && src[start].isWhitespace()) start++
+        var len = 0
+        while (start + len < src.length && !src[start + len].isWhitespace()) len++
+        if (len <= 0) return
+        val (line, ch) = getLineAndCharacterOfPosition(src, start)
+        diagnostics.add(Diagnostic(
+            message = "The containing function or module body is too large for control flow analysis.",
+            category = DiagnosticCategory.Error, code = 2563,
+            fileName = sf.fileName, line = line, character = ch, start = start, length = len,
+        ))
+    }
+
+    /**
+     * Round 426: depth-counting walk for an evolving-array USE SITE (`x[i] = v` where
+     * `x` is an auto-typed array `const x = []`). tsc types the write's receiver via
+     * `getFlowTypeOfReference`, and every mutation RELEVANT to the evolving array
+     * (getTypeAtFlowAssignment / getTypeAtFlowArrayMutation) recurses — one `flowDepth`
+     * level each — so a >2000-mutation chain trips TS2563 (largeControlFlowGraph).
+     * Branch/loop/condition recursion also consumes depth (following the first
+     * antecedent only — the corpus shape is straight-line; deeper modeling belongs to
+     * M3.4's evolving-array support). Computes NO type — its only output is
+     * [flowDepthTripped], consumed by [flowWalkWithTripCheck].
+     */
+    private fun evolvingArrayWalkTrips(flowIn: FlowNode, name: String) {
+        var flow = flowIn
+        var depth = 0
+        val visited = mutableSetOf<Int>()
+        while (true) {
+            if (depth >= NARROW_MAX_DEPTH) {
+                flowDepthTripped = true
+                return
+            }
+            if (!visited.add(flow.id)) return
+            flow = when (val f = flow) {
+                is FlowAssignment -> {
+                    val node = f.node
+                    val relevant = when (node) {
+                        is BinaryExpression ->
+                            ((node.left as? ElementAccessExpression)?.expression as? Identifier)?.text == name
+                        is VariableDeclaration -> (node.name as? Identifier)?.text == name
+                        else -> false
+                    }
+                    if (relevant) depth++
+                    f.antecedent
+                }
+                is FlowArrayMutation -> { depth++; f.antecedent }
+                is FlowCondition -> { depth++; f.antecedent }
+                is FlowBranchLabel -> { depth++; f.antecedents.firstOrNull() ?: return }
+                is FlowLoopLabel -> { depth++; f.antecedents.firstOrNull() ?: return }
+                is FlowCall -> f.antecedent
+                is FlowSwitchClause -> f.antecedent
+                is FlowStart -> return
+                is FlowUnreachable -> return
+            }
+        }
+    }
+
+    /**
      * Compute the narrowed type for an identifier reference at [expr], starting
      * from its [declaredType]. Only attempts narrowing if a flow node exists;
      * returns [declaredType] unchanged when narrowing isn't applicable.
@@ -91621,7 +91819,9 @@ interface DataView {
         val path = getReferencePath(expr) ?: return declaredType
         val flow = getFlowAt(expr) ?: return declaredType
         val seen = mutableSetOf<Int>()
-        return narrowTypeFromFlow(declaredType, flow, path, seen, depth = 0)
+        return flowWalkWithTripCheck(expr) {
+            narrowTypeFromFlow(declaredType, flow, path, seen, depth = 0)
+        } ?: declaredType
     }
 
     /**
@@ -91646,7 +91846,9 @@ interface DataView {
         val path = getReferencePath(expr) ?: return declaredType
         val flow = getFlowAt(expr) ?: return declaredType
         val seen = mutableSetOf<Int>()
-        return narrowTypeFromFlowFollowLoopEntry(declaredType, flow, path, seen, depth = 0)
+        return flowWalkWithTripCheck(expr) {
+            narrowTypeFromFlowFollowLoopEntry(declaredType, flow, path, seen, depth = 0)
+        } ?: declaredType
     }
 
     /**
@@ -91807,10 +92009,19 @@ interface DataView {
         // — only the pass-through recursion is replaced by iteration.
         var flowNode = flowNodeIn
         while (true) {
-            if (depth >= NARROW_MAX_DEPTH ||
-                narrowLiveDepth >= NARROW_GLOBAL_DEPTH_BUDGET ||
+            if (depth >= NARROW_MAX_DEPTH) {
+                // Round 426 (faithful TS2563): tsc `getTypeAtFlowNode`'s
+                // `flowDepth === 2000` trip — the entry point (which knows the
+                // reference) reports TS2563 + disables the container.
+                narrowWalkTruncated = true
+                flowDepthTripped = true
+                return declaredType
+            }
+            if (narrowLiveDepth >= NARROW_GLOBAL_DEPTH_BUDGET ||
                 --narrowVisitsLeft < 0
             ) {
+                // Our OWN re-entry/visit budgets (services-perf firewalls, not tsc
+                // semantics) — truncate SILENTLY, never TS2563.
                 narrowWalkTruncated = true
                 return declaredType
             }
@@ -112923,7 +113134,9 @@ interface DataView {
         val recvPath = getReferencePath(info.recvOfRecv)
         val recvFlow = getFlowAt(info.recvOfRecv) ?: getFlowAt(info.narrowExpr)
         if (recvPath != null && recvFlow != null) {
-            val recvNarrowed = narrowTypeFromFlowFollowLoopEntry(recvOfRecvType, recvFlow, recvPath, mutableSetOf(), 0)
+            val recvNarrowed = flowWalkWithTripCheck(info.recvOfRecv) {
+                narrowTypeFromFlowFollowLoopEntry(recvOfRecvType, recvFlow, recvPath, mutableSetOf(), 0)
+            } ?: recvOfRecvType
             if (recvNarrowed !== recvOfRecvType) {
                 val np = getPropertyOfType(getApparentType(recvNarrowed), info.propName)
                 if (np != null && !isOptionalProperty(np)) {
@@ -113171,7 +113384,9 @@ interface DataView {
         if (receiverType === anyType || receiverType === errorType) return
         var path: String = leftmost.text
         if (receiverType is Type.Union) {
-            receiverType = narrowTypeFromFlowFollowLoopEntry(receiverType, flow, path, mutableSetOf(), 0)
+            receiverType = flowWalkWithTripCheck(leftmost) {
+                narrowTypeFromFlowFollowLoopEntry(receiverType, flow, path, mutableSetOf(), 0)
+            } ?: receiverType
         }
 
         // Walk each segment in order. At each step, we're about to access
@@ -113212,7 +113427,9 @@ interface DataView {
             }
             path = newPath
             receiverType = if (propType is Type.Union) {
-                narrowTypeFromFlowFollowLoopEntry(propType, flow, path, mutableSetOf(), 0)
+                flowWalkWithTripCheck(segment) {
+                    narrowTypeFromFlowFollowLoopEntry(propType, flow, path, mutableSetOf(), 0)
+                } ?: propType
             } else propType
         }
     }
@@ -113265,8 +113482,14 @@ interface DataView {
         }
         var flowNode = flowNodeIn
         while (true) {
-            if (depth >= NARROW_MAX_DEPTH ||
-                narrowLiveDepth >= NARROW_GLOBAL_DEPTH_BUDGET ||
+            if (depth >= NARROW_MAX_DEPTH) {
+                // Round 426 (faithful TS2563): tsc's `flowDepth === 2000` trip —
+                // reported at the entry point (see the narrowTypeFromFlow mirror).
+                narrowWalkTruncated = true
+                flowDepthTripped = true
+                return declaredType
+            }
+            if (narrowLiveDepth >= NARROW_GLOBAL_DEPTH_BUDGET ||
                 --narrowVisitsLeft < 0
             ) {
                 narrowWalkTruncated = true
@@ -125115,7 +125338,9 @@ interface DataView {
         if (declaredVar !is Type.Union) return false
         val flow = getFlowAt(flowAnchor) ?: return false
         val narrowed = try {
-            narrowTypeFromFlow(declaredVar, flow, varName, mutableSetOf(), 0)
+            flowWalkWithTripCheck(flowAnchor) {
+                narrowTypeFromFlow(declaredVar, flow, varName, mutableSetOf(), 0)
+            } ?: return false
         } catch (_: Exception) { return false }
         if (narrowed === declaredVar || !isSimpleCheckableType(narrowed)) return false
         var emitted = false
@@ -125710,7 +125935,11 @@ interface DataView {
                 narrowUnknownToEmptyObject = true
                 val narrowed = try {
                     val flow = getFlowAt(rhs)
-                    if (flow != null) narrowTypeFromFlow(unknownType, flow, path, mutableSetOf(), 0) else unknownType
+                    if (flow != null) {
+                        flowWalkWithTripCheck(rhs) {
+                            narrowTypeFromFlow(unknownType, flow, path, mutableSetOf(), 0)
+                        } ?: unknownType
+                    } else unknownType
                 } finally {
                     currentFlowGraph = savedGraph
                     narrowUnknownToEmptyObject = savedFlag

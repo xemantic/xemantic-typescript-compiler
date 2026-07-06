@@ -160,6 +160,15 @@ class FlowGraph(
     val nodeToFlow: Map<Long, FlowNode>,
     /** B464: closure (Arrow/FunctionExpression) [FlowStart]s carrying [FlowStart.outerFlow]. */
     val closureStarts: List<FlowStart> = emptyList(),
+    /** Round 426 (faithful TS2563): the file this graph was built from — lets the
+     *  checker attribute a depth-tripped flow walk to its containing
+     *  function-or-module block (tsc `reportFlowControlError`). */
+    val sourceFile: SourceFile? = null,
+    /** Round 426 (faithful TS2563): EVERY function-like body's [FlowStart] (superset
+     *  of [closureStarts]) — the innermost `container` whose body block contains a
+     *  reference position is tsc's `findAncestor(reference, isFunctionOrModuleBlock)`
+     *  answer (the SourceFile when none contains it). */
+    val containerStarts: List<FlowStart> = emptyList(),
 )
 
 // ---------------------------------------------------------------------------
@@ -214,6 +223,9 @@ class FlowGraphBuilder {
     /** B464: closure [FlowStart]s collected during the walk (those with outerFlow). */
     private val closureStarts: MutableList<FlowStart> = mutableListOf()
 
+    /** Round 426 (faithful TS2563): every function-like body's [FlowStart]. */
+    private val containerStarts: MutableList<FlowStart> = mutableListOf()
+
     /**
      * Stack of break-target labels for unlabeled `break` statements.
      * Pushed when entering a loop or switch, popped when leaving.
@@ -236,7 +248,7 @@ class FlowGraphBuilder {
         sourceText = sourceFile.text
         currentFlow = newStart(sourceFile)
         bindEachStatement(sourceFile.statements)
-        return FlowGraph(nodeToFlow, closureStarts.toList())
+        return FlowGraph(nodeToFlow, closureStarts.toList(), sourceFile, containerStarts.toList())
     }
 
     // ---- factories -------------------------------------------------------
@@ -768,6 +780,9 @@ class FlowGraphBuilder {
             } else {
                 newStart(container)
             }
+        // Round 426 (faithful TS2563): record every function-like body's start for
+        // containing-container attribution (tsc findAncestor(isFunctionOrModuleBlock)).
+        (currentFlow as? FlowStart)?.let { containerStarts.add(it) }
 
         functionLikeStack.addLast(container)
 

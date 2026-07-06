@@ -26,49 +26,56 @@
 package com.xemantic.typescript.compiler
 
 import kotlin.test.Test
+import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * Local corner-case tests for M1.2a (round 385): definite-assignment analysis
- * respects the "control-flow graph too large" bail.
+ * Local corner-case tests for the faithful TS2563 depth-trip semantics
+ * (round 426, replacing the round-385/B399 per-file flow-node-count proxy).
  *
- * tsc disables flow analysis for a container whose flow walk exceeds its budget
- * (`flowAnalysisDisabled`) and reports TS2563 there — after which
- * `getFlowTypeOfReference` returns errorType, so definite-assignment produces NO
- * TS2454 in the same container. tsc emits TS2563 OR TS2454, never both (and on its
- * own sources, neither). Our per-file B399 proxy emitted TS2563 but left the
- * TS2454 walkers running — stacking contradictory FPs on giant real-world files
- * (20 of them on the self-compile compiler profile).
+ * tsc (checker.ts `getTypeAtFlowNode`) reports TS2563 ONLY when a flow WALK
+ * recurses 2000 levels deep (`flowDepth === 2000`): it sets
+ * `flowAnalysisDisabled`, reports once at the containing function-or-module
+ * block's first token, and returns errorType for the rest of that container's
+ * flow queries — so definite-assignment analysis there yields NO TS2454
+ * (TS2563 OR TS2454, never both, PER CONTAINER). Linear pass-through
+ * antecedents are followed iteratively (the `while(true)` loop) without
+ * consuming depth, so a straight-line statement chain of ANY length never
+ * trips — only recursion through branch joins / conditions does.
  *
- * Sharp signals: the small control proves the TS2454 emitter fires on this exact
- * shape (so the big test's absence is the SUPPRESSION working, not a vacuous
- * never-fired), and the big test requires TS2563 to actually be present (so the
- * suppression is gated on the bail having fired, not blanket TS2454 removal).
+ * Sharp signals pinned here, each with a control proving the emitter fires on
+ * the same shape when small:
+ *  - a deep BRANCH chain trips: exactly ONE TS2563, zero TS2454 in the
+ *    tripped container;
+ *  - the disable is PER-CONTAINER, not per-file: a sibling function's TS2454
+ *    survives a trip in the big function (the old per-file proxy killed it);
+ *  - a same-length STRAIGHT-LINE chain does NOT trip (fast-forward consumes
+ *    no depth): no TS2563, and the TS2454 still fires.
  */
 class CfaTooLargeBailTest {
 
     /**
-     * `let v: number` never assigned, then read — a TS2454 "used before being
-     * assigned" shape our definite-assignment walkers fire on — padded with [ifs]
-     * conditional assignments to an UNRELATED var to scale the flow-node count
-     * (each `if` contributes several flow nodes; 100 stays far under the B399
-     * threshold of 2,000 nodes, 3,000 sails past it).
+     * `let v: number` never assigned, read inside a conditional body — a TS2454
+     * shape — behind [ifs] conditional assignments to an UNRELATED var. Each
+     * `if` adds a 2-antecedent branch join, and joins consume walk depth
+     * (tsc `flowDepth`): 100 stays far under the 2000-recursion trip,
+     * 3000 sails past it.
      */
-    private fun conditionalAssignSource(ifs: Int): String = buildString {
+    private fun branchChainSource(ifs: Int): String = buildString {
         append("// @strict: true\n")
         append("declare const b: boolean;\n")
         append("let p: number;\n")
         append("let v: number;\n")
         repeat(ifs) { append("if (b) { p = 1; }\n") }
-        append("const w: number = v;\n")
+        append("if (b) { const w: number = v; }\n")
     }
 
     /** Control: small CFG — no TS2563, and the TS2454 emitter DOES fire. */
     @Test fun smallCfgKeepsDefiniteAssignmentAnalysis() {
-        val result = TypeScriptCompiler().compile(conditionalAssignSource(ifs = 100), "small.ts")
+        val result = TypeScriptCompiler().compile(branchChainSource(ifs = 100), "small.ts")
         assertTrue(
             result.diagnostics.none { it.code == 2563 },
-            "control broken: 100 ifs should stay under the too-large threshold"
+            "control broken: 100 branch joins must stay under the 2000-recursion trip"
         )
         assertTrue(
             result.diagnostics.any { it.code == 2454 },
@@ -77,17 +84,79 @@ class CfaTooLargeBailTest {
         )
     }
 
-    /** Too-large CFG: TS2563 fires and suppresses every TS2454 in the file (tsc emits neither, but our per-file proxy reports the bail). */
-    @Test fun tooLargeCfgBailsOutOfDefiniteAssignment() {
-        val result = TypeScriptCompiler().compile(conditionalAssignSource(ifs = 3000), "big.ts")
-        assertTrue(
-            result.diagnostics.any { it.code == 2563 },
-            "expected the too-large bail (TS2563) on a ~9000-flow-node file, got: " +
-                result.diagnostics.map { "TS${it.code}" }.distinct().joinToString()
+    /** A 3000-join walk trips the depth limit: exactly ONE TS2563 (one-shot per
+     *  container), and every TS2454 in the tripped container is suppressed
+     *  (tsc's flow analysis returns errorType there). */
+    @Test fun deepBranchChainTripsDepthLimit() {
+        val result = TypeScriptCompiler().compile(branchChainSource(ifs = 3000), "big.ts")
+        assertEquals(
+            1, result.diagnostics.count { it.code == 2563 },
+            "expected exactly ONE TS2563 for the tripped module container, got: " +
+                result.diagnostics.filter { it.code == 2563 }.joinToString { "${it.line}:${it.character}" }
         )
         assertTrue(
             result.diagnostics.none { it.code == 2454 },
-            "TS2454 must be suppressed after the too-large bail (tsc emits TS2563 OR TS2454, never both)"
+            "TS2454 must be suppressed in the tripped container (tsc emits TS2563 OR TS2454, never both)"
+        )
+        // tsc reports at the containing block's first token — module container ⇒ the
+        // first statement (line 1; line 0 is the directive comment).
+        assertEquals(1, result.diagnostics.first { it.code == 2563 }.line, "TS2563 must anchor at the file's first statement")
+    }
+
+    /** The disable is PER-CONTAINER: a trip inside `big()` reports TS2563 at ITS
+     *  body's first statement and suppresses only ITS TS2454 — the sibling
+     *  function's TS2454 still fires (the old per-file proxy suppressed it). */
+    @Test fun tripIsPerContainerNotPerFile() {
+        val source = buildString {
+            append("// @strict: true\n")
+            append("declare const b: boolean;\n")
+            append("function big() {\n")
+            append("  let p: number;\n")
+            append("  let v: number;\n")
+            repeat(3000) { append("  if (b) { p = 1; }\n") }
+            append("  if (b) { const w: number = v; }\n")
+            append("}\n")
+            append("function small() {\n")
+            append("  let q: number;\n")
+            append("  if (b) { const r: number = q; }\n")
+            append("}\n")
+        }
+        val result = TypeScriptCompiler().compile(source, "percontainer.ts")
+        assertEquals(1, result.diagnostics.count { it.code == 2563 }, "one trip, one TS2563")
+        val ts2563 = result.diagnostics.first { it.code == 2563 }
+        assertEquals(3, ts2563.line, "TS2563 anchors at big()'s first statement (let p), not the file top")
+        val ts2454s = result.diagnostics.filter { it.code == 2454 }
+        assertEquals(
+            1, ts2454s.size,
+            "the sibling function's TS2454 must SURVIVE the trip in big(), got: " +
+                result.diagnostics.joinToString { "TS${it.code}@${it.line}" }
+        )
+        assertTrue(
+            ts2454s.single().message.contains("'q'"),
+            "the surviving TS2454 must be small()'s 'q', got: ${ts2454s.single().message}"
+        )
+    }
+
+    /** Negative control: a straight-line chain of the SAME length does NOT trip —
+     *  linear pass-through antecedents are followed iteratively without consuming
+     *  depth (tsc getTypeAtFlowNode's while(true) loop) — and the TS2454 fires. */
+    @Test fun straightLineChainDoesNotTrip() {
+        val source = buildString {
+            append("// @strict: true\n")
+            append("declare const b: boolean;\n")
+            append("let p: number;\n")
+            append("let v: number;\n")
+            repeat(3000) { append("p = 1;\n") }
+            append("if (b) { const w: number = v; }\n")
+        }
+        val result = TypeScriptCompiler().compile(source, "straight.ts")
+        assertTrue(
+            result.diagnostics.none { it.code == 2563 },
+            "a straight-line chain must NOT trip the depth limit (fast-forward consumes no depth)"
+        )
+        assertTrue(
+            result.diagnostics.any { it.code == 2454 },
+            "the TS2454 must still fire when nothing tripped"
         )
     }
 }
