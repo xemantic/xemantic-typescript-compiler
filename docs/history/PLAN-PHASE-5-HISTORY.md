@@ -1,5 +1,51 @@
 **Round 408 (2026-07-05) — a decomposed M3.4 slice: the TS2349 "not callable" family (the
 
+**Round 412 (2026-07-05) — M3.4: a user type-guard narrows a SINGLE (non-union) type
+DOWN to the guard's declared subtype. Self-compile (compiler profile) 2,374 → 2,373
+(TS18048 30 → 29); suite 9,100 → 9,105 (+5 local, 0 regressions); 1 commit (69284a77).**
+Method: bucketed the round-411 HEAD `--listAll` TS18048×30 by reference-path shape and
+bisected the dominant `state.program`/property-receiver sub-pattern (builder.ts) to a
+minimal repro. **Root cause (found by isolation bisection, not code reading):**
+`narrowByCallPredicate`'s single-type (non-union) path checked `t <: candidate` FIRST and
+returned the WIDE `t` when true — but our relation engine over-accepts `t <: candidate`
+when `t` has an OPTIONAL property `program?: T | undefined` and `candidate` (`t`'s declared
+subtype via `extends`) redefines it as REQUIRED `program: T` (an optional source prop
+satisfies a required non-undefined target prop, so BOTH `t <: candidate` and `candidate <: t`
+hold). So a guard `state is StateWithProgram` that narrows DOWN kept the wide `state`, and
+`state.program` stayed possibly-undefined. Reordered to tsc's `getNarrowedType`(assumeTrue):
+`candidate <: t ? candidate : t <: candidate ? t : candidate` — `candidate <: t` first (the
+round-411 UNION path already did this; the single-type path was the un-fixed sibling).
+**SECOND coupled fix:** the FP fired only via `emitTs18048ForOptionalPropertyAccessReceiver`
+(optional-property-specific — that's why the required-union variant was always clean), which
+narrowed the reference path `state.program`; but the guard narrows `state` (a DIFFERENT
+path). Added receiver-PATH narrowing there: narrow `state` via the property-access node's
+flow (always recordFlow'd — the bare receiver Identifier for a captured var often has NO flow
+node) and suppress if the narrowed receiver's property is non-optional + non-undefined. Both
+FP-safe / suppression-only. **CLEARED the local-namespace-guard receiver shape (utilities.ts
+`name.emitNode`). DEEP-DIVE, DOCUMENTED FOR THE NEXT AGENT — the builder.ts barrel-`Debug`
+`state.program` sites (7+) do NOT clear:** the exact shape (assert-then-use, captured const,
+optional prop, multi-level + multiple inheritance, barrel-imported `Debug.assert(localGuard(state))`)
+clears in EVERY isolation repro I built (single-file, closure, barrel with sibling `export *`s,
+multi-inherit) — but in the real `createBuilderProgram` an instrumented run gives the PRECISE diagnosis: the
+flow nodes ARE present (`getFlowAt(state.program)` = FlowCondition/FlowAssignment, non-null), but
+builder.ts is `cfaTooLarge` (flow graph = **3290 nodes** > 2000), so the narrowing walk hits
+`NARROW_MAX_DEPTH` (2000) before reaching the top-of-function assert FlowCall —
+`narrowByAssertCall`/`narrowByCallPredicate` NEVER fire for `state`. NOT resolution (the barrel
+`Debug` resolves fine in isolation) and NOT a binder flow-node gap. This is the genuine M3.4-hard
+residual the round-411 note flagged; the fix is a smarter/deeper walk for too-large files, but
+raising `NARROW_MAX_DEPTH` is the round-385 services-HANG P0 risk (a naive bump re-opens the
+exponential), so it needs the tsc-shaped budget rebuild (M3.4 "faithful budget consumption"). This
+one blocker gates ~15 builder.ts/es2015.ts/module.ts TS18048 + the 2 TS2722 sites — the highest-value
+next M3.4 target once the budget rebuild is designed. 5 local tests (TypeGuardNarrowDownSingleTest). **PROCESS lessons (hard-won, cost ~2 rebuild
+cycles): (1) `./gradlew --stop` mid-session WIPED the freshly-built `build/classes/kotlin/jvm/main`
+(gradle daemon-shutdown stale-output cleanup, aggravated by `pkill -9 KotlinCompileDaemon`) → the
+self-compile then failed "Could not find or load main class MainKt"; recover with a source `touch`
++ clean rebuild, and thereafter LEAVE the daemon up (run the `-Xmx3g` self-compile alongside it —
+memory was fine at ~4.5 GB free). (2) foreground `sleep N` is BLOCKED in this environment (use a
+`python3 -c "import time;time.sleep(N)"` poll). (3) build ~60s + self-compile ~60s > the 120s Bash
+timeout — run them as SEPARATE commands, never chained.**
+
+
 **Round 411 (2026-07-05) — M3.4: TWO clean bounded FLOW-NARROWING slices from the
 TS2339 union-receiver family (the second-biggest self-compile family). Self-compile
 (compiler profile) 2,433 → 2,374 (−59, TS2339 672 → 614); suite 9,087 → 9,100 (+13 local,
