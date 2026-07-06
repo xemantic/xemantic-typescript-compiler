@@ -11619,20 +11619,36 @@ class Checker(
     ) {
         when (expr) {
             is BinaryExpression -> {
-                // Only PURE assignments (`=`) suppress the leak — compound assignments
-                // (`+=`, `|=`, etc.) are read-modify-write, so the read still hits the
-                // uninitialized value and TypeScript still emits TS2454. Pre/post inc/dec
-                // are similarly read-modify-write and do NOT count as "first assignment".
-                if (expr.operator == SyntaxKind.Equals) {
-                    val l = expr.left
-                    if (l is Identifier && l.text in candidates) found.add(l.text)
-                    else if (l is ObjectLiteralExpression || l is ArrayLiteralExpression) {
-                        collectDestructuringAssignTargets(l, candidates, found)
-                    }
-                }
-                // Iterative left-spine walk
+                // Only DEFINITE assignments suppress the leak: plain `=` AND the logical
+                // assignments `??=`/`||=`/`&&=` (tsc getAssignmentTargetKind returns
+                // AssignmentKind.Definite for EqualsToken and every
+                // isLogicalOrCoalescingAssignmentOperator — checker.ts
+                // isSymbolAssignedDefinitely feeds isNeverInitialized, round 427; tsc's
+                // own `(sourceStack ??= []).push(source)` in a nested closure suppresses
+                // the captured-read TS2454). Compound assignments (`+=`, `|=`, etc.) are
+                // read-modify-write — AssignmentKind.Compound, NOT definite — so the read
+                // still hits the uninitialized value and TypeScript still emits TS2454
+                // (unusedLocalsInMethod4's `enabledSubstitutions |= …` pins this).
+                // Pre/post inc/dec are similarly Compound and do NOT count.
+                // Iterative left-spine walk. The definite-assignment target rule is
+                // applied PER SPINE NODE, not just the outermost expression — a comma
+                // expression nests an assignment on the LEFT spine (tsc's own
+                // `(!memberName ? (memberName = t.symbol.escapedName, true) : …)`,
+                // checker.ts getSignaturesOfType), and an outer-only check silently
+                // skipped it (tsc markNodeAssignments is a full forEachChild walk).
                 var cur: Expression = expr
                 while (cur is BinaryExpression) {
+                    if (cur.operator == SyntaxKind.Equals ||
+                        cur.operator == SyntaxKind.QuestionQuestionEquals ||
+                        cur.operator == SyntaxKind.BarBarEquals ||
+                        cur.operator == SyntaxKind.AmpersandAmpersandEquals
+                    ) {
+                        val l = cur.left
+                        if (l is Identifier && l.text in candidates) found.add(l.text)
+                        else if (l is ObjectLiteralExpression || l is ArrayLiteralExpression) {
+                            collectDestructuringAssignTargets(l, candidates, found)
+                        }
+                    }
                     collectAssignmentsInExpr(cur.right, candidates, found)
                     cur = cur.left
                 }
@@ -12115,7 +12131,19 @@ class Checker(
             is AwaitExpression -> findUninitializedRefs(expr.expression, uninitialized, source, fileName)
             is YieldExpression -> expr.expression?.let { findUninitializedRefs(it, uninitialized, source, fileName) }
             is AsExpression -> findUninitializedRefs(expr.expression, uninitialized, source, fileName)
-            is NonNullExpression -> findUninitializedRefs(expr.expression, uninitialized, source, fileName)
+            is NonNullExpression -> {
+                // Round 427: a read wrapped DIRECTLY in a non-null assertion assumes
+                // initialized (tsc checkIdentifier's assumeInitialized disjunction has
+                // a literal `node.parent.kind === SyntaxKind.NonNullExpression` — tsc's
+                // own core.ts `return lastResult!` never draws TS2454). Only a bare
+                // Identifier DIRECTLY under the `!` is exempt (covers `x!` and
+                // `x!.prop` — the identifier's parent is the NonNullExpression in
+                // both); `(obj.foo)!` still walks the receiver `obj` (its parent is
+                // the PropertyAccess, not the assertion).
+                if (expr.expression !is Identifier) {
+                    findUninitializedRefs(expr.expression, uninitialized, source, fileName)
+                }
+            }
             is TypeOfExpression -> findUninitializedRefs(expr.expression, uninitialized, source, fileName)
             is DeleteExpression -> findUninitializedRefs(expr.expression, uninitialized, source, fileName)
             is VoidExpression -> findUninitializedRefs(expr.expression, uninitialized, source, fileName)
@@ -13663,7 +13691,12 @@ class Checker(
             is AwaitExpression -> walkExprForFlowTS2454(expr.expression, uninitialized, source, fileName, emitted, inUncheckedBody)
             is YieldExpression -> expr.expression?.let { walkExprForFlowTS2454(it, uninitialized, source, fileName, emitted, inUncheckedBody) }
             is AsExpression -> walkExprForFlowTS2454(expr.expression, uninitialized, source, fileName, emitted, inUncheckedBody)
-            is NonNullExpression -> walkExprForFlowTS2454(expr.expression, uninitialized, source, fileName, emitted, inUncheckedBody)
+            // Round 427: a bare-Identifier read wrapped DIRECTLY in `!` assumes
+            // initialized (tsc assumeInitialized: `node.parent.kind ===
+            // SyntaxKind.NonNullExpression`) — mirror of the findUninitializedRefs case.
+            is NonNullExpression -> if (expr.expression !is Identifier) {
+                walkExprForFlowTS2454(expr.expression, uninitialized, source, fileName, emitted, inUncheckedBody)
+            }
             is TypeOfExpression -> walkExprForFlowTS2454(expr.expression, uninitialized, source, fileName, emitted, inUncheckedBody)
             is DeleteExpression -> walkExprForFlowTS2454(expr.expression, uninitialized, source, fileName, emitted, inUncheckedBody)
             is VoidExpression -> walkExprForFlowTS2454(expr.expression, uninitialized, source, fileName, emitted, inUncheckedBody)
@@ -13690,8 +13723,21 @@ class Checker(
                     val innerPreInit = collectParamNames(expr.parameters)
                     // If any uninit name is shadowed by an inner param, mask it out
                     // for the body recursion (the inner param is the binding in scope).
-                    val maskedUninit = if (innerPreInit.isEmpty()) uninitialized
+                    var maskedUninit = if (innerPreInit.isEmpty()) uninitialized
                         else uninitialized - innerPreInit
+                    // Round 427: a read inside the arrow is a CAPTURED read (a
+                    // different flow container) — tsc assumes it initialized unless
+                    // the symbol is NEVER definitely assigned anywhere
+                    // (isNeverInitialized/isSymbolAssignedDefinitely). A definite
+                    // assignment (`=`/`??=`/`||=`/`&&=`) within this very arrow body
+                    // is the common shape (tsc checker.ts getSignaturesOfType's
+                    // `t => … && (!memberName ? (memberName = X, true) : …)`) — mask
+                    // those names out via the anywhere-scan's expression walker.
+                    if (maskedUninit.isNotEmpty()) {
+                        val definitelyAssigned = mutableSetOf<String>()
+                        collectAssignmentsInExpr(body, maskedUninit, definitelyAssigned)
+                        if (definitelyAssigned.isNotEmpty()) maskedUninit = maskedUninit - definitelyAssigned
+                    }
                     if (maskedUninit.isNotEmpty()) {
                         walkExprForFlowTS2454(body, maskedUninit, source, fileName, emitted, inUncheckedBody)
                     } else {
