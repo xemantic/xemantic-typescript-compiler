@@ -93471,6 +93471,32 @@ interface DataView {
                 // NEGATIVE-branch exhaustion to `never` (`instanceofWithStructurallyIdenticalTypes`)
                 // uses the branch below, so tsc's TS2339-on-`never` stays intact there.
                 if (narrowed.isEmpty() && targetType is Type.Intersection) return t
+                // Round 425: tsc's positive-empty INTERSECTION fallback (`getNarrowedType`:
+                // "no constituents are directly related → create intersections") — a
+                // guard target unrelated to every member in BOTH directions intersects
+                // instead of dropping (`hasDynamicName(accessor): accessor is
+                // DynamicNamedDeclaration | …` on `GetAccessorDeclaration |
+                // SetAccessorDeclaration` — nothing relates, tsc yields
+                // `GetAccessorDeclaration & DynamicNamedDeclaration`, whose `.kind`
+                // resolves via the round-419 constituent fold). Object-capable members
+                // and candidates only; nullish/primitive members map to nothing.
+                // RE-MEASURED post-canonical-keys: the round-423 net-negative verdict
+                // (1,708 → 1,710) was caused by the enum-key SPLIT feeding wrong
+                // disjointness verdicts into this path — with canonical keys the
+                // by-site diff is strictly removals.
+                if (narrowed.isEmpty()) {
+                    fun objectCapable(x: Type): Boolean =
+                        x is Type.Object || x is Type.Intersection || x is Type.TypeParam
+                    for (member in t.types) {
+                        if (!objectCapable(member)) continue
+                        if (typeGuardMemberDisjoint(member, targetType)) continue
+                        for (c in candidates) {
+                            if (!objectCapable(c)) continue
+                            if (candidates.size > 1 && typeGuardMemberDisjoint(member, c)) continue
+                            narrowed.add(getIntersectionType(listOf(member, c)))
+                        }
+                    }
+                }
                 return getUnionType(narrowed)
             }
             // Negative branch — keep members NOT assignable to the target. Round 423:
@@ -94393,6 +94419,10 @@ interface DataView {
                     TypeFlags.StringLike or TypeFlags.NumberLike or TypeFlags.BooleanLike or
                         TypeFlags.BigIntLike or TypeFlags.ESSymbol or TypeFlags.UniqueESSymbol
                 ) -> false
+                // An ENUM resolves to a Type.Object with the enum symbol, but its VALUES
+                // are numbers/strings at runtime — never typeof "object" (tsc
+                // watchPublic's `ScriptTarget | CreateSourceFileOptions`).
+                (m as? Type.Object)?.symbol?.flags?.hasAny(SymbolFlags.Enum) == true -> false
                 m is Type.Object ->
                     if (getCallSignaturesOfType(m).isNotEmpty() || getConstructSignaturesOfType(m).isNotEmpty()) false
                     else true
