@@ -1,5 +1,76 @@
 **Round 408 (2026-07-05) — a decomposed M3.4 slice: the TS2349 "not callable" family (the
 
+**Round 411 (2026-07-05) — M3.4: TWO clean bounded FLOW-NARROWING slices from the
+TS2339 union-receiver family (the second-biggest self-compile family). Self-compile
+(compiler profile) 2,433 → 2,374 (−59, TS2339 672 → 614); suite 9,087 → 9,100 (+13 local,
+0 regressions); 2 code commits (aba1dcb6, 7a771a77) + 1 docs commit.** Method: bucketed the
+round-410 HEAD `--listAll` TS2339 sites by RECEIVER-type shape (`s/does not exist on type
+'([^']*)'/\1/`), which surfaced two dominant narrowing sub-patterns hiding inside the "M3.4
+union-receiver" bucket. **(1) ENUM-MEMBER DISCRIMINANT narrowing (−42, TS2339 672 → 631):** a
+discriminated union keyed on an enum-member discriminant (`type: Kind.A`) never narrowed in
+EITHER the `if (s.type === Kind.A)` equality path (`narrowByDiscriminantProperty`) OR the
+`switch (s.type) { case Kind.B }` path (`narrowBySwitchClause`) — a member access in the
+narrowed branch FP'd TS2339 on the whole union. Root cause: enum-member types resolve to
+`anyType` in our engine (they are NOT modeled as literals — modeling them generally is
+nominal-enum / B425-risky), so `literalTypeOfExpression(Kind.A)` returns null (a
+`PropertyAccessExpression`) AND each union member's discriminant property `type: Kind.A`
+resolves to `any` (confirmed by debug-instrumenting `narrowByDiscriminantProperty`:
+`literalType=null`, `propType=Intrinsic:any`). tsc's own source has THREE such families:
+`UpToDateStatus` (tsbuildPublic.ts, keyed on `type: UpToDateStatusType.X`, 23→1), `TypeMapper`
+(checker.ts, `switch (mapper.kind) { case TypeMapKind.Simple }`, anonymous-object-literal
+members, 16→6), `PrivateIdentifierInfo` (classFields.ts, `kind: PrivateIdentifierKind.X`,
+extends-a-base members, 13→0). Fixed TARGETED + AST-based: new helpers
+`enumMemberKeyOfExpr`/`enumMemberKeysOfTypeNode`/`discriminantPropAnnotation`/
+`filterUnionByEnumDiscriminant` match the union member's DECLARED `type: Enum.Member` annotation
+(read from the property's `PropertyDeclaration.type`) against the `Enum.Member` on the
+comparison / case, keyed by `"${enumSymId}#member"`. FP-safe by construction: a member without
+a resolvable enum-member discriminant is KEPT (can't prove exclusion), a multi-valued
+discriminant (`type: Kind.A | Kind.B`) survives a single `!==` (keep iff `keys.any { !in
+caseKeys }`), and narrowing only removes union members. **THE KEY FINDING (measured, not
+assumed): the FIRST cut was only −4 — all three real families use BARREL-IMPORTED enums
+(`import { UpToDateStatusType } from "./_namespaces/ts.js"`), and `resolveEnumSymbolForDiscriminant`
+resolved them to an `Alias` symbol (flags=4096) that the general `resolveAlias` can't follow
+through the ESM `.js` specifier + `export *` barrel (the round-409 issue). Debug-instrumenting
+showed the narrowing was REACHED but `rhsKey=null` + `isEnum=false`.** Added
+`resolveImportedEnumSymbol` (FLOW-ONLY, memoized in `importedEnumSymCache`, the enum sibling of
+round 409's `resolveImportedNamespaceSymbol` — mirrors `computeImportedNamespaceSymbol` but
+gated on `SymbolFlags.Enum`), consulted only when `resolveAlias` yields an Alias. That unlocked
+the full −42. Deliberately NOT in the general resolveAlias (round 409 measured a self-compile
+REGRESSION +297 via a TS2315 flood there). 8 local tests (EnumDiscriminantNarrowingTest: if/
+switch/negative-else/multi-value-positive/multi-value-survives-single-negative + two negative
+controls + a MULTI-FILE ProjectCompiler barrel case). **(2) TYPE-GUARD narrows a union member
+DOWN to the guard type (−17, TS2339 631 → 614, the `never`-receiver sites 39 → 20):**
+`narrowByCallPredicate`'s positive union branch kept ONLY constituents `m <: c` (assignable TO
+the guard target `c`), so a union whose members are all SUPERTYPES of `c` collapsed to `never`
+— a member access in the narrowed branch then FP'd TS2339 on `never`. tsc's `getNarrowedType`
+(assumeTrue) does `m <: c ? m : c <: m ? c : never` PER CONSTITUENT: when the guard target `c`
+is a subtype of a union member `m` (the common case — a broad member like `Expression`
+narrowed by `is TaggedTemplateExpression`), narrow the member DOWN to `c` instead of dropping
+it. tsc's own `parser.ts` (`isTaggedTemplateExpression(node)` on `Expression | PropertyName`,
+FIXED — was `never`) and `checker.ts` (`isAutoAccessorPropertyDeclaration(node)`) rely on it.
+FP-safe: the new mapping only ever KEEPS more than the old `m <: c` filter (it adds the
+`c <: m` → narrow-to-`c` case), so it can only suppress an FP, never remove a member the old
+filter kept; the negative branch and the single-type (non-union) branch are unchanged (the
+single-type path already narrowed to the target). 4 local tests (TypeGuardUnionNarrowNoNeverTest:
+subtype-of-a-member, deep-6-level chain, member-already-subtype-kept, + an unrelated-target
+negative control). Both fixes' by-code sets are IDENTICAL to round-410 HEAD (no new codes = no
+regression). **DEFERRED (deeper M3.4/M3, triaged but not bounded): the residual `never`×20 are
+scattered (generic-alias resolution `SearchResult<T>` collapsing to never under truthiness,
+closure-capture); `Type`×46 is closure-capture + `&&`-narrowing (`isGenericTupleType(type) &&
+findIndex(getElementTypes(type), (t,i) => type.target.elementFlags[i])` — the narrowed `type`
+must flow into the `findIndex` callback); TS2722×2 (moduleNameResolver.ts `if (host.directoryExists
+&& …) { for (…) if (host.directoryExists(root)) }` — loop-stable narrowing of an un-reassigned
+property path; program.ts `Debug.assertIsDefined(dsh.readDirectory)` in an object-literal method
+body — flow into an object-literal method; both need the flow narrower to survive a FlowLoopLabel
+/ be set in object-literal method bodies); TS2740/2739/2741 brand-property + the core.ts Set-shim
+lib-min-target FP; TS2589 `WrappedExpression<T>` legal recursive-type depth-bail (M3.3).** META
+(re-confirms round 409): the cross-file union-narrowing families are unlocked by the
+barrel-import FLOW-ONLY resolution pattern, which the single-file corpus structurally cannot
+surface — so measure the self-compile before/after every cut, and when a fix under-delivers,
+debug-instrument to distinguish a RESOLUTION gap (rhsKey=null → the barrel resolver) from a
+LOGIC gap.
+
+
 **Round 410 (2026-07-05) — M1.12 + M3.4: THREE clean bounded self-compile fixes, all
 FP-safe / suppression-only, found by bucketing the FULL compiler-profile `--listAll` (2,443
 lines) by normalized message shape. Self-compile (compiler profile) 2,443 → 2,433 (−10); suite
