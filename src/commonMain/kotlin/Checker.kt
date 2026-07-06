@@ -91604,6 +91604,14 @@ interface DataView {
             else -> {
                 // Check local scope first (populated during TS2322 checking walk)
                 currentLocalTypes[id.text]?.let { return it }
+                // M3.1 (round 429): a destructured-param BINDING name (recorded into the
+                // side set by populateParameterLocalTypes — see the
+                // currentParamBindingNames gotcha) shadows every outer binding. Falling
+                // through here resolved sys.ts's `useCaseSensitiveFileNames` (a
+                // destructured param) to moduleNameResolver's same-named FUNCTION via the
+                // merged globals → FP TS2345 ×9 self-compile. The binding's member type
+                // is unmodeled → anyType (suppression-only).
+                if (id.text in currentParamBindingNames) return anyType
                 // Check pre-built file-level type map (covers annotated file-level declarations)
                 currentCheckFileName?.let { fn ->
                     fileLocalTypeMaps[fn]?.get(id.text)?.let { return it }
@@ -112929,6 +112937,16 @@ interface DataView {
                 // return x.a }` + `var x = foo(...)`). Records into a side set rather than
                 // currentLocalTypes to avoid changing identifier type resolution.
                 collectBindingNames(paramName, currentParamBindingNames)
+                // M3.1 (round 429): a binding name that COLLIDES with an inherited
+                // `currentLocalTypes` entry (an enclosing function's param/local) must
+                // SHADOW it — override with anyType so identifier resolution inside this
+                // body doesn't type the local binding as the outer declaration.
+                // Suppression-only; every caller copies currentLocalTypes first.
+                val bindingNames = mutableSetOf<String>()
+                collectBindingNames(paramName, bindingNames)
+                for (n in bindingNames) {
+                    if (currentLocalTypes.containsKey(n)) currentLocalTypes[n] = anyType
+                }
             }
         }
     }
@@ -117236,6 +117254,73 @@ interface DataView {
         }
     }
 
+    /** M3.1 (round 429): body-local declarations SHADOW an INHERITED binding for the
+     *  call-types pass. `createTypeChecker(host: TypeCheckerHost)` registers `host`
+     *  into [currentLocalTypes]; a NESTED function's body-local `let host = node.parent`
+     *  is un-annotated/non-callable, so the VariableStatement branch never overrides the
+     *  inherited entry — a bare-identifier ARG `host` then types as TypeCheckerHost
+     *  (tsc checker.ts getAliasSymbolForTypeNode, ×14 self-compile). Pre-scan the body
+     *  (statement-level recursion, NOT descending into nested function-likes — those get
+     *  their own scope copy when the walker reaches them) and overwrite each colliding
+     *  local-decl name with anyType. Suppression-only (never a concrete type). A name
+     *  matching THIS function's OWN param is a REDECLARATION (param wins, TS2403), not a
+     *  shadow — excluded via the param-name set (mirrors [applyBodyLocalShadowing]). */
+    private fun applyCallTypesBodyLocalShadowing(statements: List<Statement>, parameters: List<Parameter>) {
+        if (currentLocalTypes.isEmpty()) return
+        val paramNames = mutableSetOf<String>()
+        for (p in parameters) collectBindingNames(p.name, paramNames)
+        for (s in statements) shadowCallTypesLocalDecls(s, paramNames)
+    }
+
+    private fun shadowCallTypesDeclList(declarations: List<VariableDeclaration>, paramNames: Set<String>) {
+        for (d in declarations) {
+            val nm = (d.name as? Identifier)?.text ?: continue
+            if (nm in paramNames) continue
+            if (currentLocalTypes.containsKey(nm)) currentLocalTypes[nm] = anyType
+        }
+    }
+
+    private fun shadowCallTypesLocalDecls(s: Statement?, paramNames: Set<String>) {
+        when (s) {
+            null -> {}
+            is VariableStatement -> shadowCallTypesDeclList(s.declarationList.declarations, paramNames)
+            is Block -> for (st in s.statements) shadowCallTypesLocalDecls(st, paramNames)
+            is IfStatement -> {
+                shadowCallTypesLocalDecls(s.thenStatement, paramNames)
+                shadowCallTypesLocalDecls(s.elseStatement, paramNames)
+            }
+            is ForStatement -> {
+                (s.initializer as? VariableDeclarationList)?.let { shadowCallTypesDeclList(it.declarations, paramNames) }
+                shadowCallTypesLocalDecls(s.statement, paramNames)
+            }
+            is ForInStatement -> {
+                (s.initializer as? VariableDeclarationList)?.let { shadowCallTypesDeclList(it.declarations, paramNames) }
+                shadowCallTypesLocalDecls(s.statement, paramNames)
+            }
+            is ForOfStatement -> {
+                (s.initializer as? VariableDeclarationList)?.let { shadowCallTypesDeclList(it.declarations, paramNames) }
+                shadowCallTypesLocalDecls(s.statement, paramNames)
+            }
+            is WhileStatement -> shadowCallTypesLocalDecls(s.statement, paramNames)
+            is DoStatement -> shadowCallTypesLocalDecls(s.statement, paramNames)
+            is LabeledStatement -> shadowCallTypesLocalDecls(s.statement, paramNames)
+            is TryStatement -> {
+                for (st in s.tryBlock.statements) shadowCallTypesLocalDecls(st, paramNames)
+                s.catchClause?.block?.statements?.forEach { shadowCallTypesLocalDecls(it, paramNames) }
+                s.finallyBlock?.statements?.forEach { shadowCallTypesLocalDecls(it, paramNames) }
+            }
+            is SwitchStatement -> for (c in s.caseBlock) {
+                val stmts = when (c) {
+                    is CaseClause -> c.statements
+                    is DefaultClause -> c.statements
+                    else -> emptyList()
+                }
+                for (st in stmts) shadowCallTypesLocalDecls(st, paramNames)
+            }
+            else -> {}
+        }
+    }
+
     /**
      * B378: if [cond] is a user-defined type-guard call `G(…X…)` — G's return type is a
      * non-asserts `p is U` predicate and the call argument at the narrowed parameter's
@@ -117431,7 +117516,9 @@ interface DataView {
                 }
                 stmt.body?.let { body ->
                     val savedLocalTypes = currentLocalTypes
+                    val savedParamBindings = currentParamBindingNames
                     currentLocalTypes = currentLocalTypes.toMutableMap()
+                    currentParamBindingNames = currentParamBindingNames.toMutableSet()
                     // B516: push the function's OWN type parameters onto currentTypeParamScope
                     // (mirroring the ClassDeclaration branch below) so a generic function body's
                     // param/var annotations referencing `T` resolve to a TypeParam-with-constraint
@@ -117467,10 +117554,12 @@ interface DataView {
                     }
                     try {
                         populateParameterLocalTypes(stmt.parameters)
+                        applyCallTypesBodyLocalShadowing(body.statements, stmt.parameters)
                         shadowNestedFunctionNames(body.statements)
                         checkCallTypesInStatements(body.statements, source, fileName)
                     } finally {
                         currentLocalTypes = savedLocalTypes
+                        currentParamBindingNames = savedParamBindings
                         currentTypeParamScope = savedFnScope
                         currentTypeParamAstForOps = savedFnAst
                     }
@@ -117543,8 +117632,10 @@ interface DataView {
                                 }
                                 member.body?.let { body ->
                                     val savedLocalTypes = currentLocalTypes
+                                    val savedParamBindings = currentParamBindingNames
                                     val savedSuperBaseType = currentSuperBaseType
                                     currentLocalTypes = currentLocalTypes.toMutableMap()
+                                    currentParamBindingNames = currentParamBindingNames.toMutableSet()
                                     currentSuperBaseType = baseInstanceType
                                     // 17.21: Static methods don't see class TypeParams (TypeScript
                                     // emits TS2302 for any reference). Pop the class scope while
@@ -117576,6 +117667,7 @@ interface DataView {
                                     }
                                     try {
                                         populateParameterLocalTypes(member.parameters)
+                                        applyCallTypesBodyLocalShadowing(body.statements, member.parameters)
                                         // trailingCommaInHeterogenousArrayLiteral1: type `this` as
                                         // the class instance so `this.method(args)` calls in a
                                         // non-static method body reach argument-type checking
@@ -117590,6 +117682,7 @@ interface DataView {
                                         checkCallTypesInStatements(body.statements, source, fileName)
                                     } finally {
                                         currentLocalTypes = savedLocalTypes
+                                        currentParamBindingNames = savedParamBindings
                                         currentSuperBaseType = savedSuperBaseType
                                         currentTypeParamScope = savedMethodScope
                                     }
@@ -117601,16 +117694,20 @@ interface DataView {
                                 }
                                 member.body?.let { body ->
                                     val savedLocalTypes = currentLocalTypes
+                                    val savedParamBindings = currentParamBindingNames
                                     val savedSuperBaseSig = currentSuperBaseSig
                                     val savedSuperBaseType = currentSuperBaseType
                                     currentLocalTypes = currentLocalTypes.toMutableMap()
+                                    currentParamBindingNames = currentParamBindingNames.toMutableSet()
                                     currentSuperBaseSig = baseSig
                                     currentSuperBaseType = baseInstanceType
                                     try {
                                         populateParameterLocalTypes(member.parameters)
+                                        applyCallTypesBodyLocalShadowing(body.statements, member.parameters)
                                         checkCallTypesInStatements(body.statements, source, fileName)
                                     } finally {
                                         currentLocalTypes = savedLocalTypes
+                                        currentParamBindingNames = savedParamBindings
                                         currentSuperBaseSig = savedSuperBaseSig
                                         currentSuperBaseType = savedSuperBaseType
                                     }
@@ -117692,7 +117789,9 @@ interface DataView {
             param.initializer?.let { checkCallTypesInExpr(it, source, fileName) }
         }
         val savedLocalTypes = currentLocalTypes
+        val savedParamBindings = currentParamBindingNames
         currentLocalTypes = currentLocalTypes.toMutableMap()
+        currentParamBindingNames = currentParamBindingNames.toMutableSet()
         try {
             populateParameterLocalTypes(params)
             for ((i, p) in params.withIndex()) {
@@ -117713,12 +117812,16 @@ interface DataView {
                 currentLocalTypes[nm] = t
             }
             when (body) {
-                is Block -> checkCallTypesInStatements(body.statements, source, fileName)
+                is Block -> {
+                    applyCallTypesBodyLocalShadowing(body.statements, params)
+                    checkCallTypesInStatements(body.statements, source, fileName)
+                }
                 is Expression -> checkCallTypesInExpr(body, source, fileName)
                 else -> {}
             }
         } finally {
             currentLocalTypes = savedLocalTypes
+            currentParamBindingNames = savedParamBindings
         }
     }
 
@@ -117802,19 +117905,56 @@ interface DataView {
                 for (param in expr.parameters) {
                     param.initializer?.let { checkCallTypesInExpr(it, source, fileName) }
                 }
-                expr.body.let { body ->
-                    when (body) {
-                        is Block -> checkCallTypesInStatements(body.statements, source, fileName)
+                // M3.1 (round 429): scope the arrow body — its OWN params and body-locals
+                // SHADOW inherited bindings. This walker deliberately does NOT type arrow
+                // params (positive checking would be a new FP surface), so a param name
+                // colliding with an enclosing binding previously resolved to the ENCLOSING
+                // type / a merged-global decl in bare-identifier arg positions → FP TS2345.
+                // Register anyType for every own param name (suppression-only: a
+                // non-colliding param already resolved to anyType via the scope-miss path).
+                val savedLocals = currentLocalTypes
+                val savedBindings = currentParamBindingNames
+                currentLocalTypes = currentLocalTypes.toMutableMap()
+                currentParamBindingNames = currentParamBindingNames.toMutableSet()
+                val ownNames = mutableSetOf<String>()
+                for (p in expr.parameters) collectBindingNames(p.name, ownNames)
+                for (n in ownNames) currentLocalTypes[n] = anyType
+                try {
+                    when (val body = expr.body) {
+                        is Block -> {
+                            applyCallTypesBodyLocalShadowing(body.statements, expr.parameters)
+                            checkCallTypesInStatements(body.statements, source, fileName)
+                        }
                         is Expression -> checkCallTypesInExpr(body, source, fileName)
                         else -> {}
                     }
+                } finally {
+                    currentLocalTypes = savedLocals
+                    currentParamBindingNames = savedBindings
                 }
             }
             is FunctionExpression -> {
                 for (param in expr.parameters) {
                     param.initializer?.let { checkCallTypesInExpr(it, source, fileName) }
                 }
-                expr.body.let { checkCallTypesInStatements(it.statements, source, fileName) }
+                // M3.1 (round 429): same own-param/body-local shadowing as the ArrowFunction
+                // branch above.
+                val savedLocals = currentLocalTypes
+                val savedBindings = currentParamBindingNames
+                currentLocalTypes = currentLocalTypes.toMutableMap()
+                currentParamBindingNames = currentParamBindingNames.toMutableSet()
+                val ownNames = mutableSetOf<String>()
+                for (p in expr.parameters) collectBindingNames(p.name, ownNames)
+                for (n in ownNames) currentLocalTypes[n] = anyType
+                try {
+                    expr.body.let { body ->
+                        applyCallTypesBodyLocalShadowing(body.statements, expr.parameters)
+                        checkCallTypesInStatements(body.statements, source, fileName)
+                    }
+                } finally {
+                    currentLocalTypes = savedLocals
+                    currentParamBindingNames = savedBindings
+                }
             }
             is ClassExpression -> for (m in expr.members) {
                 when (m) {
