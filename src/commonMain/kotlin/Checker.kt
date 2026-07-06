@@ -1136,6 +1136,14 @@ class Checker(
      *  (`s.type === UpToDateStatusType.X`). Declared before `init` per the init-order trap. */
     private val importedEnumSymCache = HashMap<Int, Symbol?>()
 
+    /** Round 425: memo for [canonicalEnumSymbol] — an enum reaches the discriminant-key
+     *  builders by several resolution paths (the program-global merged instance vs a
+     *  file-LOCAL instance reached via `currentFileLocals`/the barrel resolver), and the
+     *  canonical `"symId#member"` key space SPLITS when the two instances have different
+     *  ids (the whole SyntaxKind key space looked pairwise disjoint on the self-compile).
+     *  Declared before `init` per the init-order trap. */
+    private val canonicalEnumSymCache = HashMap<Int, Symbol>()
+
     /** P0 (services hang): LIVE recursion depth across BOTH flow walkers INCLUDING
      *  re-entrant walks — [narrowByAssertCall]/[narrowByCallPredicate] resolve the
      *  callee, which types a PropertyAccess receiver, which narrows it at its own
@@ -78883,8 +78891,12 @@ interface DataView {
                 m.flags.hasAny(TypeFlags.Undefined) -> keys.add("@undefined")
                 m.flags.hasAny(TypeFlags.Null) -> keys.add("@null")
                 else -> {
-                    val sym = (m as? Type.Object)?.symbol
-                    if (sym == null || !sym.flags.hasAny(SymbolFlags.Enum)) return null
+                    val raw = (m as? Type.Object)?.symbol
+                    if (raw == null || !raw.flags.hasAny(SymbolFlags.Enum)) return null
+                    // Round 425: same canonical id as every other key builder — a resolved
+                    // enum object's symbol may be the file-LOCAL instance while the AST-side
+                    // builders resolved the global merged one (the key-space split).
+                    val sym = canonicalEnumSymbol(raw)
                     val vals = enumValues[sym.id] ?: return null
                     vals.keys.forEach { keys.add("${sym.id}#$it") }
                 }
@@ -93332,7 +93344,19 @@ interface DataView {
                 // all supertypes of the target collapsed to `never` (→ FP TS2339 on the
                 // narrowed value). FP-safe: this only ever KEEPS more (never removes a member
                 // the old filter kept), so it can only suppress a false positive.
-                val narrowed = t.types.mapNotNull { member ->
+                // Round 425: tsc's getNarrowedType DISTRIBUTES over the candidate
+                // union (`mapType(candidate, c => ...)`) — the narrow-down direction
+                // must be tested PER CANDIDATE, not against the whole union (which
+                // requires EVERY candidate assignable to the member and never holds),
+                // or `isPrivateIdentifierClassElementDeclaration(node)` — target a
+                // 5-member union of subtype interfaces — drops every member of
+                // `MethodDeclaration | AccessorDeclaration` → `never` (classFields.ts).
+                // Strictly more-keeping than the whole-union test: when ALL candidates
+                // relate the result is the same union; when only SOME do, the old code
+                // dropped the member entirely.
+                val candidates = if (targetType is Type.Union) targetType.types else listOf(targetType)
+                val narrowed = mutableListOf<Type>()
+                for (member in t.types) {
                     when {
                         // Round 423: PROVABLY disjoint `.kind` discriminant keys mean the
                         // member cannot match the guard, whatever the (too-lenient,
@@ -93345,10 +93369,12 @@ interface DataView {
                         // 1,708 → 1,720/1,710, new never-collapses via brand-intersection
                         // targets like CallChain and downstream chain shifts — do not
                         // re-add without a per-site diff.)
-                        typeGuardMemberDisjoint(member, targetType) -> null
-                        checkTypeRelatedTo(member, targetType, assignableRelation) -> member
-                        checkTypeRelatedTo(targetType, member, assignableRelation) -> targetType
-                        else -> null
+                        typeGuardMemberDisjoint(member, targetType) -> {}
+                        checkTypeRelatedTo(member, targetType, assignableRelation) -> narrowed.add(member)
+                        else -> for (c in candidates) {
+                            if (candidates.size > 1 && typeGuardMemberDisjoint(member, c)) continue
+                            if (checkTypeRelatedTo(c, member, assignableRelation)) narrowed.add(c)
+                        }
                     }
                 }
                 // A positive guard against an INTERSECTION target `X & { p: T }` that our relation
@@ -93869,16 +93895,42 @@ interface DataView {
     private fun resolveEnumSymbolForDiscriminant(enumIdent: String): Symbol? {
         val sym = currentFileLocals?.get(enumIdent) ?: globals[enumIdent] ?: return null
         val target = resolveAlias(sym)
-        if (target.flags.hasAny(SymbolFlags.Enum)) return target
+        if (target.flags.hasAny(SymbolFlags.Enum)) return canonicalEnumSymbol(target)
         // Barrel-imported enum (tsc's `import { UpToDateStatusType } from "./_namespaces/ts.js"`):
         // the general resolveAlias can't follow the ESM `.js` specifier + `export *` barrel
         // (round 409), so it returns the Alias itself. Resolve it FLOW-ONLY, mirroring the
         // barrel-imported-guard resolution — a resolveAlias `.js`/star fallback regressed the
         // self-compile via a TS2315 flood (round 409), so this stays confined to narrowing.
         if (target.flags.hasAny(SymbolFlags.Alias)) {
-            resolveImportedEnumSymbol(target, mutableSetOf())?.let { return it }
+            resolveImportedEnumSymbol(target, mutableSetOf())?.let { return canonicalEnumSymbol(it) }
         }
         return null
+    }
+
+    /**
+     * Round 425: canonicalize an enum [sym] for the `"symId#member"` discriminant-key space.
+     * The SAME enum reaches the key builders as DIFFERENT Symbol instances depending on the
+     * resolution path and which file was being checked at first touch: the program-global
+     * MERGED symbol (whose instance is the FIRST file that contributed the name — often an
+     * importer's alias symbol, polluted per the mergeSymbolTable gotcha) vs the declaring
+     * file's LOCAL symbol (reached via `currentFileLocals` or the barrel resolver's
+     * `tr.locals`). Keys built from different ids look pairwise DISJOINT, which flipped
+     * `typeGuardMemberDisjoint` catastrophically wrong on the self-compile (the whole
+     * SyntaxKind key space: `MethodDeclaration` vs `PrivateIdentifierMethodDeclaration`
+     * read as disjoint → every guard-narrowed member dropped → `never`). Canonical rule:
+     * prefer the global merged symbol when it is enum-flavored, has computed [enumValues],
+     * and shares an EnumDeclaration NODE (identity compare — never data-class equality)
+     * with [sym]; else keep [sym]. Deterministic across paths because both end at symbols
+     * carrying the declaring file's EnumDeclaration instances.
+     */
+    private fun canonicalEnumSymbol(sym: Symbol): Symbol = canonicalEnumSymCache.getOrPut(sym.id) {
+        val global = globals[sym.name] ?: return@getOrPut sym
+        if (global === sym || !global.flags.hasAny(SymbolFlags.Enum)) return@getOrPut sym
+        if (enumValues[global.id] == null) return@getOrPut sym
+        val shared = sym.declarations.any { d ->
+            d is EnumDeclaration && global.declarations.any { it === d }
+        }
+        if (shared) global else sym
     }
 
     /** FLOW-ONLY resolution of a barrel-imported enum alias to its target enum Symbol,
