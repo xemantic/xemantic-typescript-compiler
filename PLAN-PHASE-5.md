@@ -34,6 +34,78 @@ completeness campaigns to dashboard-driven burn-down: the acceptance bar is the 
 tsc's source uses, with the corpus suite as the regression net. M5 unchanged —
 performance is the directive's second half and starts at v1 compliance.
 
+**Round 426 (2026-07-06) — M3.4 (absorbs M1.2's TS2563 item): faithful TS2563 — flow-walk
+DEPTH-TRIP semantics with per-container disable, replacing the B399 per-file node-count
+proxy. Self-compile (compiler profile) 1,600 → 1,594 → 1,593 (−7; TS2563 27 → 1 → 0,
+TS2454 0 → 20 — pre-existing walker FPs the proxy's blanket per-file filter had masked,
+now honestly visible; all else byte-identical by-code); suite 9,276 → 9,282 (+6 local,
+0 regressions); 2 fix commits (4d23738f + db69fe59). (The implementing session was OOM-killed
+mid-verification with the work complete-but-uncommitted; this session verified, measured,
+landed it, and root-caused + fixed the one residual trip.)**
+- **Mechanics (4d23738f):** tsc reports TS2563 ONLY when a flow walk recurses 2000 deep
+  (checker.ts `getTypeAtFlowNode` `flowDepth === 2000` → `flowAnalysisDisabled` +
+  `reportFlowControlError(reference)` at the containing function-or-module block +
+  errorType for that container's flow queries thereafter — so TS2454 is suppressed per
+  CONTAINER, tsc's OR-rule). All three flow walkers (`narrowTypeFromFlow` + the
+  FollowLoopEntry mirror + `isAssignedAtFlow` — the last rewritten ITERATIVE with the
+  round-413 accounting: linear pass-through antecedents free, only branch-join /
+  condition / loop-entry recursion consumes depth) set `flowDepthTripped` at the trip;
+  every depth-0 entry (11 sites) routes through `flowWalkWithTripCheck(reference)` —
+  pre-checks `flowDisabledRanges` (disabled → conservative default WITHOUT walking),
+  one-shot TS2563 per container via the flow graph's new `containerStarts` (innermost
+  containing function-like body block, else the file); the end-of-init TS2454 filter is
+  per-container-RANGE (was per-file `cfaTooLargeFiles`, deleted). The dedicated
+  `evolvingArrayWalkTrips` init walk supplies the depth consumer for the corpus pin
+  (largeControlFlowGraph: auto-typed `const data = []` + 10k top-level `data[0] = 0`
+  writes, one level per relevant mutation; after the first trip the container is
+  disabled, so the whole file costs ONE 2000-step walk). Our OWN budgets (visit budget,
+  global re-entry depth, cycle bail) still truncate SILENTLY — only the per-walk depth
+  limit is tsc's TS2563 semantic.
+- **The measured trade (by-code diff, everything else byte-identical):** −26
+  by-construction TS2563 proxies; +20 TS2454 = pre-existing definite-assignment FPs on
+  the giant files the per-file filter had blanket-suppressed. Triage (next bounded
+  burn-down bucket, three shapes): (a) DOMINANT ×~16 — cross-closure reads of an outer
+  `let` (`let sourceStack: Type[];` in the outer fn, `(sourceStack ??= []).push(…)`
+  inside a NESTED function — checker.ts inferFromTypes/serializer, tsc's
+  used-before-assigned check applies only within the declaration's own control-flow
+  container; captured reads assume initialized); (b) core.ts:2474 `return lastResult!`
+  — a NON-NULL-ASSERTED read (tsc does not report TS2454 through a `!`); (c)
+  scanner.ts `resultingToken` ×2 — assigned inside a `while (true)` body before every
+  exit, read after `Debug.assert(resultingToken !== undefined)`; our `isAssignedAtFlow`
+  follows only the loop-ENTRY antecedent at FlowLoopLabel (the deliberate back-edge
+  bound), so in-loop assignment evidence is invisible.
+- **Fix 2 (db69fe59): the 27th TS2563 was OURS, not the proxy's — `flowCallMightNarrow`
+  needs the asserts-callee check (tsc `getEffectsSignature`).**
+  diagnosticInformationMap.generated.ts (~2,100 top-level `diag(…,
+  DiagnosticCategory.Error, …)` statements): any walk for a `DiagnosticCategory`
+  reference found EVERY call's args mentioning the path, so the round-413
+  over-approximating gate recursed per call → 2,100 > 2,000 → trip. tsc resolves the
+  callee's effects signature BEFORE deciding (cached per node): a non-assert call is
+  followed in the `while` loop, consuming NO flowDepth. `flowCalleeMayHaveAssertEffects`
+  gives an EXACT verdict for Identifier callees (map-lookup resolution via
+  `resolveFlowCalleeDecl`'s Identifier branch — never types a receiver; same decl +
+  same predicate test `narrowByAssertCall` applies, so iterating past a false is
+  EQUIVALENT, not just safe) and conservative-TRUE for PropertyAccess callees
+  (`Debug.assert(x)`) — resolving those types the RECEIVER (the round-385
+  services-hang hazard), they keep the consume-depth behavior. LESSON: with faithful
+  TS2563, the round-413 "a too-eager gate only costs a depth level" calculus changed —
+  a too-eager CALL gate now manufactures a false TS2563 on any >2000-chain of
+  path-mentioning non-assert calls.
+- **Local tests (CfaTooLargeBailTest 2 → 8):** deep branch chain trips exactly ONCE +
+  suppresses the container's TS2454; per-container disable (a sibling function's TS2454
+  SURVIVES a trip — the per-file proxy killed it); straight-line 3000-assignment chain
+  does NOT trip; evolving-array 3000-write chain trips once at the first statement
+  (+ 100-write control) — the largeControlFlowGraph pin the JS-emit-only corpus test
+  never asserted; 2,500 non-assert calls mentioning the reference do NOT trip (426b,
+  with the TS2339 control still firing); 2,500 asserts-callee calls DO trip exactly
+  once (the too-lax-gate landmine control).
+- **Perf watch (M5) — 426b is a WIN, not a cost:** bench self-time 150.9 s (round 425,
+  dirty) → 149.4 s (426) → **126.6 s (426b, −15.3%)**. The asserts-callee gate doesn't
+  just fix the false trip — every path-mentioning NON-assert call used to break the
+  fast-forward loop into recursion (+ a narrowByAssertCall resolution at each), and
+  tsc's sources are saturated with calls that mention whatever reference is being
+  walked; now those iterate for free.
+
 **Round 425 (2026-07-06) — M3.4/M1.12: the TS2339 never-cluster ROOT CAUSES + eight more
 narrowing slices. Self-compile (compiler profile) 1,662 → 1,634 → 1,628 → 1,608 → 1,607 →
 1,603 → 1,600 (−62; TS2339 68 → 6, never×21 → 2); EVERY step's by-site diff strictly
@@ -572,107 +644,6 @@ separate M3 issue; the namespace-local class+interface-merge FP hole in `classNa
 (top-level-only) is not exercised by the corpus (suite green) and closing it precisely would need
 namespace-context-keyed name tracking (deferred).
 
-**Round 416 (2026-07-05) — M1.12/M3.4: THREE clean bounded FP-safe / suppression-only fixes from
-bucketing the fresh full `--listAll`. Self-compile (compiler profile) 1,922 → 1,906 (−16); suite
-9,145 → 9,157 (+12 local, 0 regressions); 3 commits (3b216114, f0a3c81f, 77daebc5).** The M3 cores still dominate the histogram (TS2322×785 / TS2345×396 /
-TS7006×301 / TS2339×237, engine-gated) but two contained arithmetic-pass families were genuine
-bugs. **(1) let/var local shadowing an outer function (TS2365 7 → 5):** round 407 recorded an
-un-annotated `const X` whose name SHADOWS an outer same-named FUNCTION so a later bare-identifier
-arithmetic/comparison operand resolves to the shadowing local, not past it to the function — the
-gate was `const`-only. tsc's own checker.ts uses `let min = Number.POSITIVE_INFINITY` / `let max =
-Number.NEGATIVE_INFINITY` (shadowing the imported `function min`/`function max`), so `if (min <
-args.length && args.length < max)` FP'd TS2365 "Operator '<' cannot be applied to types '{ <T>(…) }'
-and 'number'" (checker.ts:36449/36458). Extended the branch to `let`/`var`, recording `anyType`
-(reassignment-proof — a `let` may be reassigned to a different primitive, so recording its INITIAL
-primitive could FP a later comparison; `any` only ever SUPPRESSES the bogus operand check); `const`
-keeps its concrete-primitive recording. The SHADOW gate (the name resolves to an outer FUNCTION) is
-the firewall. **(2) &&/ternary truthy-narrowing (TS2362 10 → 4, TS2365 5 → 1):** the arithmetic pass
-has no flow narrowing, so an `Enum | undefined` operand narrowed by an enclosing `&&` or a ternary
-condition FP'd TS2362/TS2363/TS2365 — a `Type.Union` carries no Undefined flag on ITSELF, so the
-`strictNullChecks` bail in `checkBinaryOperatorTypes` never fires and the operand classifier
-(`isValidArithmeticOperand`) sees the undefined union member and rejects. New field
-`arithTruthyNarrowedNames`: while walking the RIGHT of a `&&` (a dedicated branch in
-`checkArithmeticInExpr` that scopes the narrowing set via try/finally, run BEFORE the left-spine
-flatten so it isn't lost) and the whenTrue/whenFalse of a ternary, the guard's non-nullish
-identifiers have their nullish members stripped in `arithOperandType` (generalizing the existing
-NonNull `x!` strip). `collectArithTruthyNarrowableNames` handles `X` (truthy), `A && B` (union),
-`X !== undefined`/`X != null`; `collectArithFalsyNonNullNames` handles the ternary whenFalse `X ===
-undefined`/`X === null`/`!X`/`A || B` (De Morgan). Fixed checker.ts `checkMode && checkMode &
-CheckMode.Inferential` (×2) + `contextFlags && contextFlags & ContextFlags.NoConstraints` + two
-`checkMode && checkMode & ~CheckMode.SkipGenericFunctions` + a `checkMode && checkMode &
-CheckMode.RestBindingElement` (6 TS2362), sourcemap.ts `sourceLine !== undefined && … pendingSourceLine
-> sourceLine` (×2), generators.ts `label !== undefined && label > 0`, and scanner.ts `length ===
-undefined ? text.length : start! + length` (the ternary false-branch). FP-safe BY CONSTRUCTION: a
-truthy operand provably has no nullish value at that point, so stripping only ever suppresses a
-wrong error, never adds one. The `&&` branch is safe because `checkBinaryOperatorTypes` does nothing
-for `&&` itself, and a `&&` is never on the left-spine of an arithmetic operator (it is the
-lowest-precedence binary except `||`/`??`/assignment), so the dedicated branch always intercepts it.
-+9 local tests (ArithmeticShadowedFunctionLocalTest +1, ArithmeticAmpAmpNarrowingTest ×8) with
-strong negative controls: a bare un-narrowed enum-union operand, a `||`-right operand, and a ternary
-false-branch of a NON-nullish test all STILL fire. **Residual (M3.4/M3-gated): TS2362×4** —
-checker.ts:6639 `flags = flags || None; … flags & X` (reassignment narrowing, cross-statement — a
-different, harder pattern, 1 site not worth the scope-tracking mechanism + its FP surface for one
-FP), programDiagnostics.ts/checker.ts `Debug.checkDefined(x) - y` / `reduceLeft(…) & X` (generic
-call-return inference, M3.1); **TS2365×1** — utilities.ts:6314 `lineCount + T` (generic). META
-(re-confirms the M1.12 method): bucket the FULL `--listAll` by normalized message shape, then
-sub-classify a family by the SYNTACTIC shape at each site (`&&`/ternary vs reassignment vs generic)
-— 9 of the 12 arithmetic residuals were the two syntactic-narrowing shapes, the rest genuinely
-engine-gated. Perf unmeasured beyond the bench row (an operand strip + a `&&`/ternary walk — no
-relation-engine work). **(3) closure-captured-var loop narrowing (TS18048 16 → 12):** re-bucketing
-the fresh TS18048×16 by reference and reproducing one with a minimal test found a genuine bounded
-flow-narrowing bug: `emitTs18048ForClosureCapturedUndefinedReceiver` (B464) used the non-loop-following
-`getNarrowedTypeForReference`, which washes a reference back to its DECLARED type at a loop's
-FlowLoopLabel (the deliberate back-edge-safety wash-out). So a captured variable narrowed by a
-closure-LOCAL guard BEFORE a loop and read INSIDE it FP'd TS18048 — tsc's own checker.ts:8207
-(`expandedParams: readonly Symbol[] | undefined` guarded `if (!expandedParams) return;` then read in
-`for (…; pIndex < expandedParams.length; …)`), builder.ts:1551 (`array` guarded at the outer function,
-read in a NESTED-closure for-loop — the B464 flow-into-closures brings the outer narrowing in, this
-makes it survive the inner loop), and checker.ts:47176/47178 (`baseTypeNode`). Switched to
-`getNarrowedTypeForReferenceFollowLoopEntry` — the loop-ENTRY-following variant the sibling
-`emitTs18048ForOptionalPropertyAccessReceiver` already uses (B81.1c) — which follows antecedent[0] so a
-read inside the loop sees the pre-loop narrowing. FP-safe: it only ever narrows MORE (suppresses a
-TS18048), never adds one, and behaves identically outside loops. The remaining 12 TS18048 are OTHER
-gaps: assignment-in-guard property paths (`if (!state.X) { state.X = new Map() } state.X.set(…)`,
-es2015.ts/builder.ts — round 416 fix 4 closed the `if (!x.y){x.y=new Map()}` subset, but a
-`state.referencedMap`/`oldState` variant with a NESTED assignment target or deeper join remains),
-`X?.kind === lit && X.parent…` optional-chain discriminants (checker.ts:8061/8062), and deep
-single-use property-path narrowing (options.types / node.name / symbol.valueDeclaration) — each
-a distinct M3.4 sub-cause, not a single bounded slice. **DEAD-END NOTED for the optional-chain case
-(next agent, don't repeat): adding `X?.prop === lit → exclude nullish from X` to `narrowByEquality`
-did NOT flip checker.ts:8061/8062 — the optional-property TS18048 emitter
-(`emitTs18048ForOptionalPropertyAccessReceiver`) narrows the receiver via a path that does not route
-the `&&`-left condition through `narrowByEquality` for the receiver reference (reverted, unverified).
-The real fix needs (a) tracing WHERE that emitter's receiver narrowing consults the flow condition,
-and (b) accepting an ENUM-MEMBER RHS (`SyntaxKind.X`) — `literalTypeOfExpression` returns null for
-enum members, so a literal-only gate misses every real site; use a "RHS is definitely non-nullish"
-check (a possibly-undefined RHS is unsafe: `undefined?.p === undefinedRHS` can be true when X is
-undefined).** 3 local tests (ClosureCapturedLoopNarrowTest)
-with an un-guarded negative control (an un-guarded captured possibly-undefined var in a loop STILL
-fires). META: the productive move was to reproduce a scattered-family member with a minimal test
-(gradle suppresses stdout → assert, don't println), which turned "16 scattered property-path gaps"
-into one crisp loop-wash-out bug the corpus could never surface (single-file, no captured-var-in-loop
-shapes). **(4) assignment-effect narrowing based on the DECLARED type (TS18048 12 → 10):**
-reproducing the es2015.ts `state.labeledNonLocalBreaks` FP found the tsc idiom
-`if (!x.y) { x.y = new Map() } x.y.method()` FPs TS18048 for a PROPERTY-PATH target — but the
-identifier form (`if (!m) { m = new Map() } m.set()`), the straight-line form (`x.y = new Map();
-x.y.m()`), and the guard-return form (`if (!x.y) return; x.y.m()`) all worked. Isolation bisection
-pinned it to a TWO-antecedent branch-join where one antecedent narrows via a property-path
-FlowAssignment: `narrowByAssignmentRhs`'s non-nullish-RHS branch returned
-`narrowByExcludingNullUndefined(antecedent)`, and the then-branch antecedent is `x.y` already
-narrowed to bare `undefined` by the `!x.y` guard — `narrowByExcludingNullUndefined` returns a
-NON-union `undefined` UNCHANGED (nothing to filter), so the then-arm re-adds undefined at the join.
-An assignment OVERWRITES the reference (tsc `getAssignmentReducedType(declared, rhsType)`), so its
-post-state is the DECLARED type minus nullish, independent of the pre-assignment flow narrowing.
-Fixed by threading `declaredType` into `narrowByAssignmentRhs` and basing the exclusion on it
-(straight-line is unaffected — antecedent equals declaredType there; a possibly-undefined RHS still
-doesn't narrow). This is a SHARED narrowing path (TS2454/TS18048/TS2339/TS2345) yet the full suite
-stayed green with ZERO regressions — a principled, tsc-faithful correctness improvement, not a
-scoped emitter tweak. 4 local tests (AssignmentInGuardNarrowTest) incl. a negative control
-(assigning a possibly-undefined value STILL fires). META: the isolation-bisection method (vary ONE
-axis at a time — identifier vs property-path, braces vs none, assign vs return, straight vs
-conditional — until the failing combination is a single cell) turned a vague "property-path
-narrowing gap" into an exact root cause in `narrowByExcludingNullUndefined`'s non-union early-return.
-
 ### Mission & strategy
 
 Three strategic reads that shape everything below:
@@ -803,7 +774,10 @@ Three strategic reads that shape everything below:
   USE SITE — flow-based reference typing, exactly the M3.4 capability; none of our four
   narrowing consumers ever walks that file deep, so faithful walk-exhaustion emission
   is impossible until then. Until M3.4, B399's per-file node-count heuristic stays
-  (its 27 self-compile TS2563 FPs remain on the dashboard).
+  (its 27 self-compile TS2563 FPs remain on the dashboard). **SUPERSEDED (round 426):
+  the faithful depth-trip landed early (the narrowing walkers ARE deep flow walks, so
+  trip detection didn't need full M3.4) — B399 proxy + `cfaTooLargeFiles` deleted, the
+  27 FPs gone; see the round-426 session note.**
 - [x] **M1.5 Activate `asserts` predicates end-to-end.** DONE (round 386, eaa27a90):
   parser builds `TypePredicate(assertsModifier=true)` (`asserts x [is T]` /
   `asserts this`); asserts returns resolve to VOID (getTypeFromTypeNode /
@@ -1317,14 +1291,20 @@ each item still decomposes into a multi-session campaign — read PLAN-PHASE-4.m
   (replace the AST-shape walkers; delete the superseded dedicated walkers and pins).
 - [ ] **M3.4 Flow narrowing unified into identifier typing** (`getTypeOfIdentifier`
   consults the flow graph; retire the per-consumer narrowing carve-outs). **Absorbed
-  from M1.2 (round 386): faithful TS2563 walk-exhaustion emission** — tsc fires it
-  when USE-SITE reference typing walks a >2000-relevant-node flow (largeControlFlowGraph
-  = 10k evolving-array mutations, each `data[0] = 0` check walks `data`'s flow), which
-  requires exactly this item's flow-based identifier typing; then delete B399's
-  per-file node-count heuristic + its `cfaTooLargeFiles` TS2454 filter pairing and the
-  27 self-compile TS2563 FPs. tsc-shaped budget consumption (linear single-antecedent
-  steps free via the iterative `while(true)` loop; only branch/condition recursion
-  consumes `flowDepth`) belongs to the same rebuild. **Absorbed from M1.4 (round 387):
+  from M1.2 (round 386): faithful TS2563 walk-exhaustion emission — DONE (round 426,
+  earlier than predicted: the existing narrowing/definite-assignment walkers ARE deep
+  flow walks, so trip detection didn't need full flow-based identifier typing).**
+  Depth-trip at 2000 recursion levels in all three flow walkers → one-shot TS2563 at
+  the containing function-or-module block + per-container `flowDisabledRanges`
+  (replacing B399's per-file node-count heuristic + its `cfaTooLargeFiles` TS2454
+  filter — the 27 self-compile TS2563 FPs are gone: 26 from the proxy removal, the
+  27th via round 426b's asserts-callee gate in `flowCallMightNarrow`; TS2454×20
+  pre-existing walker FPs the per-file filter had masked are now honestly visible,
+  the next bounded burn-down bucket). The corpus largeControlFlowGraph shape
+  (top-level evolving-array writes) trips via the dedicated `evolvingArrayWalkTrips`
+  init walk (pinned by CfaTooLargeBailTest — the generated corpus test is
+  JS-emit-only); GENERAL use-site evolving-array typing (function-local auto arrays)
+  still belongs to this item's flow-based identifier typing. **Absorbed from M1.4 (round 387):
   the self-compile TS2339 family's dominant bucket (461 union-receiver sites + the
   named `Type`/tuple ones) is user-type-guard narrowing feeding MEMBER ACCESS on tsc's
   big AST-node unions (`isTypeParameterDeclaration(node) ? …node.name… : …` on

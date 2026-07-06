@@ -1,3 +1,104 @@
+**Round 416 (2026-07-05) — M1.12/M3.4: THREE clean bounded FP-safe / suppression-only fixes from
+bucketing the fresh full `--listAll`. Self-compile (compiler profile) 1,922 → 1,906 (−16); suite
+9,145 → 9,157 (+12 local, 0 regressions); 3 commits (3b216114, f0a3c81f, 77daebc5).** The M3 cores still dominate the histogram (TS2322×785 / TS2345×396 /
+TS7006×301 / TS2339×237, engine-gated) but two contained arithmetic-pass families were genuine
+bugs. **(1) let/var local shadowing an outer function (TS2365 7 → 5):** round 407 recorded an
+un-annotated `const X` whose name SHADOWS an outer same-named FUNCTION so a later bare-identifier
+arithmetic/comparison operand resolves to the shadowing local, not past it to the function — the
+gate was `const`-only. tsc's own checker.ts uses `let min = Number.POSITIVE_INFINITY` / `let max =
+Number.NEGATIVE_INFINITY` (shadowing the imported `function min`/`function max`), so `if (min <
+args.length && args.length < max)` FP'd TS2365 "Operator '<' cannot be applied to types '{ <T>(…) }'
+and 'number'" (checker.ts:36449/36458). Extended the branch to `let`/`var`, recording `anyType`
+(reassignment-proof — a `let` may be reassigned to a different primitive, so recording its INITIAL
+primitive could FP a later comparison; `any` only ever SUPPRESSES the bogus operand check); `const`
+keeps its concrete-primitive recording. The SHADOW gate (the name resolves to an outer FUNCTION) is
+the firewall. **(2) &&/ternary truthy-narrowing (TS2362 10 → 4, TS2365 5 → 1):** the arithmetic pass
+has no flow narrowing, so an `Enum | undefined` operand narrowed by an enclosing `&&` or a ternary
+condition FP'd TS2362/TS2363/TS2365 — a `Type.Union` carries no Undefined flag on ITSELF, so the
+`strictNullChecks` bail in `checkBinaryOperatorTypes` never fires and the operand classifier
+(`isValidArithmeticOperand`) sees the undefined union member and rejects. New field
+`arithTruthyNarrowedNames`: while walking the RIGHT of a `&&` (a dedicated branch in
+`checkArithmeticInExpr` that scopes the narrowing set via try/finally, run BEFORE the left-spine
+flatten so it isn't lost) and the whenTrue/whenFalse of a ternary, the guard's non-nullish
+identifiers have their nullish members stripped in `arithOperandType` (generalizing the existing
+NonNull `x!` strip). `collectArithTruthyNarrowableNames` handles `X` (truthy), `A && B` (union),
+`X !== undefined`/`X != null`; `collectArithFalsyNonNullNames` handles the ternary whenFalse `X ===
+undefined`/`X === null`/`!X`/`A || B` (De Morgan). Fixed checker.ts `checkMode && checkMode &
+CheckMode.Inferential` (×2) + `contextFlags && contextFlags & ContextFlags.NoConstraints` + two
+`checkMode && checkMode & ~CheckMode.SkipGenericFunctions` + a `checkMode && checkMode &
+CheckMode.RestBindingElement` (6 TS2362), sourcemap.ts `sourceLine !== undefined && … pendingSourceLine
+> sourceLine` (×2), generators.ts `label !== undefined && label > 0`, and scanner.ts `length ===
+undefined ? text.length : start! + length` (the ternary false-branch). FP-safe BY CONSTRUCTION: a
+truthy operand provably has no nullish value at that point, so stripping only ever suppresses a
+wrong error, never adds one. The `&&` branch is safe because `checkBinaryOperatorTypes` does nothing
+for `&&` itself, and a `&&` is never on the left-spine of an arithmetic operator (it is the
+lowest-precedence binary except `||`/`??`/assignment), so the dedicated branch always intercepts it.
++9 local tests (ArithmeticShadowedFunctionLocalTest +1, ArithmeticAmpAmpNarrowingTest ×8) with
+strong negative controls: a bare un-narrowed enum-union operand, a `||`-right operand, and a ternary
+false-branch of a NON-nullish test all STILL fire. **Residual (M3.4/M3-gated): TS2362×4** —
+checker.ts:6639 `flags = flags || None; … flags & X` (reassignment narrowing, cross-statement — a
+different, harder pattern, 1 site not worth the scope-tracking mechanism + its FP surface for one
+FP), programDiagnostics.ts/checker.ts `Debug.checkDefined(x) - y` / `reduceLeft(…) & X` (generic
+call-return inference, M3.1); **TS2365×1** — utilities.ts:6314 `lineCount + T` (generic). META
+(re-confirms the M1.12 method): bucket the FULL `--listAll` by normalized message shape, then
+sub-classify a family by the SYNTACTIC shape at each site (`&&`/ternary vs reassignment vs generic)
+— 9 of the 12 arithmetic residuals were the two syntactic-narrowing shapes, the rest genuinely
+engine-gated. Perf unmeasured beyond the bench row (an operand strip + a `&&`/ternary walk — no
+relation-engine work). **(3) closure-captured-var loop narrowing (TS18048 16 → 12):** re-bucketing
+the fresh TS18048×16 by reference and reproducing one with a minimal test found a genuine bounded
+flow-narrowing bug: `emitTs18048ForClosureCapturedUndefinedReceiver` (B464) used the non-loop-following
+`getNarrowedTypeForReference`, which washes a reference back to its DECLARED type at a loop's
+FlowLoopLabel (the deliberate back-edge-safety wash-out). So a captured variable narrowed by a
+closure-LOCAL guard BEFORE a loop and read INSIDE it FP'd TS18048 — tsc's own checker.ts:8207
+(`expandedParams: readonly Symbol[] | undefined` guarded `if (!expandedParams) return;` then read in
+`for (…; pIndex < expandedParams.length; …)`), builder.ts:1551 (`array` guarded at the outer function,
+read in a NESTED-closure for-loop — the B464 flow-into-closures brings the outer narrowing in, this
+makes it survive the inner loop), and checker.ts:47176/47178 (`baseTypeNode`). Switched to
+`getNarrowedTypeForReferenceFollowLoopEntry` — the loop-ENTRY-following variant the sibling
+`emitTs18048ForOptionalPropertyAccessReceiver` already uses (B81.1c) — which follows antecedent[0] so a
+read inside the loop sees the pre-loop narrowing. FP-safe: it only ever narrows MORE (suppresses a
+TS18048), never adds one, and behaves identically outside loops. The remaining 12 TS18048 are OTHER
+gaps: assignment-in-guard property paths (`if (!state.X) { state.X = new Map() } state.X.set(…)`,
+es2015.ts/builder.ts — round 416 fix 4 closed the `if (!x.y){x.y=new Map()}` subset, but a
+`state.referencedMap`/`oldState` variant with a NESTED assignment target or deeper join remains),
+`X?.kind === lit && X.parent…` optional-chain discriminants (checker.ts:8061/8062), and deep
+single-use property-path narrowing (options.types / node.name / symbol.valueDeclaration) — each
+a distinct M3.4 sub-cause, not a single bounded slice. **DEAD-END NOTED for the optional-chain case
+(next agent, don't repeat): adding `X?.prop === lit → exclude nullish from X` to `narrowByEquality`
+did NOT flip checker.ts:8061/8062 — the optional-property TS18048 emitter
+(`emitTs18048ForOptionalPropertyAccessReceiver`) narrows the receiver via a path that does not route
+the `&&`-left condition through `narrowByEquality` for the receiver reference (reverted, unverified).
+The real fix needs (a) tracing WHERE that emitter's receiver narrowing consults the flow condition,
+and (b) accepting an ENUM-MEMBER RHS (`SyntaxKind.X`) — `literalTypeOfExpression` returns null for
+enum members, so a literal-only gate misses every real site; use a "RHS is definitely non-nullish"
+check (a possibly-undefined RHS is unsafe: `undefined?.p === undefinedRHS` can be true when X is
+undefined).** 3 local tests (ClosureCapturedLoopNarrowTest)
+with an un-guarded negative control (an un-guarded captured possibly-undefined var in a loop STILL
+fires). META: the productive move was to reproduce a scattered-family member with a minimal test
+(gradle suppresses stdout → assert, don't println), which turned "16 scattered property-path gaps"
+into one crisp loop-wash-out bug the corpus could never surface (single-file, no captured-var-in-loop
+shapes). **(4) assignment-effect narrowing based on the DECLARED type (TS18048 12 → 10):**
+reproducing the es2015.ts `state.labeledNonLocalBreaks` FP found the tsc idiom
+`if (!x.y) { x.y = new Map() } x.y.method()` FPs TS18048 for a PROPERTY-PATH target — but the
+identifier form (`if (!m) { m = new Map() } m.set()`), the straight-line form (`x.y = new Map();
+x.y.m()`), and the guard-return form (`if (!x.y) return; x.y.m()`) all worked. Isolation bisection
+pinned it to a TWO-antecedent branch-join where one antecedent narrows via a property-path
+FlowAssignment: `narrowByAssignmentRhs`'s non-nullish-RHS branch returned
+`narrowByExcludingNullUndefined(antecedent)`, and the then-branch antecedent is `x.y` already
+narrowed to bare `undefined` by the `!x.y` guard — `narrowByExcludingNullUndefined` returns a
+NON-union `undefined` UNCHANGED (nothing to filter), so the then-arm re-adds undefined at the join.
+An assignment OVERWRITES the reference (tsc `getAssignmentReducedType(declared, rhsType)`), so its
+post-state is the DECLARED type minus nullish, independent of the pre-assignment flow narrowing.
+Fixed by threading `declaredType` into `narrowByAssignmentRhs` and basing the exclusion on it
+(straight-line is unaffected — antecedent equals declaredType there; a possibly-undefined RHS still
+doesn't narrow). This is a SHARED narrowing path (TS2454/TS18048/TS2339/TS2345) yet the full suite
+stayed green with ZERO regressions — a principled, tsc-faithful correctness improvement, not a
+scoped emitter tweak. 4 local tests (AssignmentInGuardNarrowTest) incl. a negative control
+(assigning a possibly-undefined value STILL fires). META: the isolation-bisection method (vary ONE
+axis at a time — identifier vs property-path, braces vs none, assign vs return, straight vs
+conditional — until the failing combination is a single cell) turned a vague "property-path
+narrowing gap" into an exact root cause in `narrowByExcludingNullUndefined`'s non-union early-return.
+
 **Round 415 (2026-07-05) — M1.12: TWO clean bounded self-compile fixes from bucketing the fresh
 full `--listAll` by normalized message shape, both FP-safe. Self-compile (compiler profile)
 1,930 → 1,922 (−8); suite 9,134 → 9,145 (+11 local, 0 regressions); 2 commits (4c768bb7, a647aa74).**
