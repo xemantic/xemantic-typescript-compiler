@@ -34,6 +34,73 @@ completeness campaigns to dashboard-driven burn-down: the acceptance bar is the 
 tsc's source uses, with the corpus suite as the regression net. M5 unchanged —
 performance is the directive's second half and starts at v1 compliance.
 
+**Round 424 (2026-07-06) — M3.4/M1.12: five flow-narrowing burn-down fixes from the round-423
+residual triage. Self-compile (compiler profile) 1,707 → 1,691 → 1,687 → 1,683 → 1,680 (−27;
+TS2339 104 → 84, TS18048 5 → 1, TS2322 756 → 753); every step's by-site diff STRICTLY removals;
+suite green; 5 fix commits, 5 local test files (~20 tests).**
+- **Fix 1: union-receiver TS2339 suppression survives loop boundaries (−16).** tsc's own
+  `parseResponseFile` (commandLineParser): `const text = tryReadFile(…)` (`string | Diagnostic`),
+  pre-loop `if (!isString(text)) return;`, reads inside `while` loops — the plain walk washes to
+  the declared union at FlowLoopLabel, so the union elaboration FP'd. The union branch of
+  `checkMemberAccessMissing` retries with the loop-entry-following variant, SUPPRESSION-ONLY.
+  **The landmine that cost the first cut: the "plain walk didn't narrow" gate must be STRUCTURAL
+  (member-id sets) — any `&&`/`||` on the path is a 2-antecedent FlowBranchLabel whose union of
+  [declared, declared] MINTS a fresh Type.Union (getUnionType does not intern), so `===` misses
+  the wash exactly when a compound condition is present.**
+- **Fix 2: `narrowByAssignmentRhs` accepts a CALL RHS with a provably non-nullish return
+  annotation** (syntactic `typeNodeDefinitelyNonNullish`; own-TP refs and `?.` calls bail;
+  `flowAssignmentMightNarrow` needed NO change — it already over-approximates on the LHS). No
+  compiler-profile delta: the motivating checker.ts:21170 (`instantiateType`) is an OVERLOAD
+  CLUSTER (2 sigs + impl) → `uniqueFunctionDeclByName` ambiguous → no claim. Selecting the right
+  overload's return is genuine overload resolution (M3) — noted, deferred. Capability is real for
+  single-decl callees (local tests + other profiles).
+- **Fix 3: the aliased-condition back-walk follows closure boundaries, if/else joins, and calls
+  (−4: builder.ts:431/433 `canCopyEmitSignatures` + 2 bonus JsxCallLike TS2339 at
+  checker.ts:37578).** FlowStart → outer flow gated by the B464 captured-name rules on BOTH the
+  alias and the walked root; FlowBranchLabel → every REACHABLE antecedent must independently
+  prove value preservation and land on the same decl (unreachable ones contribute nothing);
+  FlowCall/FlowArrayMutation are value-preserving (a call can't rebind an enclosing let/const —
+  tsc's isConstantVariable gate likewise ignores closure-mediated rebinding); plus a per-call
+  node MEMO (a 6-term `||` condition fans out a diamond per term). **TWO invisible blockers the
+  repro missed but the real builder.ts hit: `FlowAssignment.node` for an assignment EXPRESSION is
+  the whole BinaryExpression (`flowAssignmentRootName` must read its LHS — it bailed at
+  `!(oldInfo = oldState!.fileInfos.get(…))`), and the un-memoized fan-out exhausted the budget.**
+- **Fix 4: prefix-path guard narrowing (−4: moduleNameResolver.ts:849 + 3 bonus builder.ts
+  TS2322).** `usesWildcardTypes(options): options is CompilerOptions & { types: string[] }` with
+  walked path `options.types` — the predicate arg's path is a proper dot-PREFIX of the walked
+  path; when the tail resolves on the predicate target to a REQUIRED property with a provably
+  non-nullish type, the positive branch drops nullish. Minimal claim only. **Landmine: property
+  OPTIONALITY is a symbol attribute, NOT folded into the property type (`types?: string[]`
+  resolves to `string[]`) — `resolvePrefixTailSegment` consults `isOptionalProperty` per segment;
+  on an intersection, required iff ANY constituent declares it required.** The
+  `narrowByCallPredicate` pre-check widened (allocation-free) to prefix matches — the old
+  "exact-match only" note is superseded.
+- **Fix 5: `asserts node is U` with U an INFERRED callee type param (−3: transformers/ts.ts:2012
+  `Debug.assertNode(node.name, isIdentifier)` — BOTH its TS18048 and its latent co-located
+  TS2339, + a bonus emitter.ts:5263).** THREE coupled pieces, each measured necessary: (a)
+  `resolveNamespaceMemberFnDecl` PREFERS a TypePredicate-bearing declaration — an overloaded
+  assert's valueDeclaration is the annotation-less IMPL, which made every narrowing consumer bail
+  before anything else could work; (b) U resolves from the type-guard TEST argument's own
+  predicate target (`predicateTargetTypeOfGuardExpr`, mirroring resolveFlowCalleeDecl's paths
+  without its call-keyed memo) — **the constraint-chain drop-nullish claim ALONE just trades the
+  TS18048 for a TS2339 on the surviving union members** (`Identifier | StringLit` lacks
+  escapedText); (c) the constraint chain (`U → T → Node` all non-nullish) stays as the fallback
+  for asserts without a resolvable test arg.
+- **META (repro-loop discipline):** every fix was developed against a ~400 ms scratch
+  mini-project through the compiled CLI with per-fix NEGATIVE controls (wrong polarity /
+  reassignment / optional tail / unconstrained TP), and every self-compile step was verified by
+  BY-SITE diff (strictly-removals), not just the count. Three of five fixes needed a second
+  iteration only discoverable against the REAL tsc source (the assignment-expression flow-node
+  shape, the overload-cluster impl, the union-member trade) — always re-measure on the real
+  corpus before calling a repro-verified fix done.
+- **Residual TS18048×1: checker.ts:21170 (overload-cluster return selection — M3). Next TS2339
+  buckets: never×27 (per-site M3-relation diagnosis, catalogued round 423), DebugTypeMapper×10 —
+  now PARTIALLY unblocked: needs `type<TypeMapper>(this)` = `asserts value is T` with an EXPLICIT
+  type-arg call (bind T from `expr.typeArguments` — the fix-5 machinery gives the shape), plus
+  the TS2339 `this`-branch consulting flow narrowing for path "this" (the round-418 suppression
+  excludes `isThisAccess`), plus `this.kind` switch narrowing over the TypeMapper union.
+  `Identifier | ComputedPropertyName`×8 stays a measured dead-end (round 423).**
+
 **Round 423 (2026-07-06) — M3.4: exhaustive-switch receiver narrowing (TS2366 → 0) + union-target
 type guards + aliased conditions + truthy optional-chain calls. Self-compile (compiler profile)
 1,756 → 1,752 → 1,708 → 1,707 (−49 total); suite 9,202 → 9,223 (+21 local, 0 regressions); 3 fix
@@ -474,70 +541,6 @@ axis at a time — identifier vs property-path, braces vs none, assign vs return
 conditional — until the failing combination is a single cell) turned a vague "property-path
 narrowing gap" into an exact root cause in `narrowByExcludingNullUndefined`'s non-union early-return.
 
-**Round 415 (2026-07-05) — M1.12: TWO clean bounded self-compile fixes from bucketing the fresh
-full `--listAll` by normalized message shape, both FP-safe. Self-compile (compiler profile)
-1,930 → 1,922 (−8); suite 9,134 → 9,145 (+11 local, 0 regressions); 2 commits (4c768bb7, a647aa74).**
-Method (the M1.12 note): re-ran `--listAll` at HEAD (1,930, 100 s), bucketed all lines by
-normalized shape — the M3 cores dominate (TS2322×785 / TS2345×396 / TS7006×301 / TS2339×237, all
-engine-gated) but two bounded tail buckets were genuine bugs. **(1) NonNull arithmetic operand
-(TS2362 15 → 10, −5):** a `x!` (NonNullExpression) arithmetic/comparison operand whose base type is
-`T | undefined` now uses the NON-NULL type — tsc types `x!` as `NonNullable<typeof x>` and does
-arithmetic on THAT. `getTypeOfExpression` deliberately keeps the union for `(T | undefined)!`
-(round 407: a GLOBAL nullish-strip in that case unmasks M3 object-literal/generic gaps → reverted),
-but the arithmetic pass classifies operands and a `Type.Union`'s own `.flags` carry neither the
-Undefined bit nor the numeric-enum bit, so `TokenFlags | undefined` fails every operand test →
-spurious TS2362/TS2363. New `arithOperandType` strips nullish LOCALLY (only for a syntactic `!`),
-reproducing tsc's own source: `templateFlags! & TokenFlags.TemplateLiteralLikeFlags` (nodeFactory
-×2), `contextFlags! & ContextFlags.X` (checker ×2), `state.affectedFilesIndex! - 1` (builder).
-FP-safe by construction: only fires on an explicit `!`, only ever REMOVES nullish members (a
-`(string | undefined)!` still fails, still errors), and is local to the pass (no touch to global
-expression typing — the round-407 blast radius). The residual 10 TS2362 (+2 TS2363) are
-`&&`/`||`/reassignment flow-narrowing cases (checker.ts `checkMode && checkMode & X`, `flags =
-flags || None`) — M3.4. **(2) exhaustive enum switch (TS2366 15 → 12, −3):** round 414 deferred
-Pattern C2 — a `switch` with NO `default` that EXHAUSTIVELY covers its discriminant's enum is
-terminating (tsc narrows the discriminant to `never` after all cases, so the endpoint is
-unreachable). This lands the FP-SAFE SUBSET: an ENUM / enum-member-union / call-return-enum
-discriminant (the value set is a precise enum). `isExhaustiveEnumSwitch` claims exhaustive ONLY
-when it can PROVE every enum member is covered — every case an `Enum.Member`/`undefined`/`null`,
-and the discriminant resolving to a precise enum (or `enum | undefined/null`) via a simple param's
-type ANNOTATION (`enumSwitchKeysFromTypeNode`: a bare enum name → all members; a type alias =
-union of enum members → recurse — `CompoundAssignmentOperator` = union of `SyntaxKind.X`; an
-`Enum.Member` ref → that one) OR the resolved expression type (`enumSwitchKeysFromType`: a pure
-enum object → all members, a `enum | undefined` union → members + nullish marker). Any uncertainty
-(a non-enum-member case, a discriminant that doesn't resolve to a clean enum, a missing member)
-returns null/false → the TS2366 STANDS, so it never suppresses a genuinely non-exhaustive switch's
-diagnostic (no false negative). Reuses the round-411 enum helpers
-(`resolveEnumSymbolForDiscriminant`/`enumMemberKeyOfExpr`/`enumValues`, barrel-aware). Fixed tsc's
-own `getCategoryFormat(category: DiagnosticCategory)`,
-`getNonAssignmentOperatorForCompoundAssignment(kind: CompoundAssignmentOperator)`,
-`getSetExternalModuleIndicator` over `getEmitModuleDetectionKind(options): ModuleDetectionKind`.
-The remaining 12 are `.kind` discriminated-union switches (`mapper.kind`, `node.kind` ×5,
-`target.kind`, `name.kind`, `LiteralToken["kind"]` indexed-access, `options.newLine` property
-access) — the discriminant is a property of a union of interfaces/TypeLiterals, needing type-alias-
-chain + intersection + inherited/TypeLiteral-`.kind` flattening, with a real false-negative risk
-(`.errors.txt` disabled = weak gate) — the documented larger M3.4 slice, which correctly BAILS
-here. **This analysis feeds ONLY `checkBodyForImplicitReturn` (TS2366/TS7030/TS2355); TS7027
-unreachable-code uses the separate `isDefinitelyTerminating`, so a wrong claim here cannot
-spuriously report post-switch code as unreachable — the change is a pure suppress-when-provable.**
-11 local tests (NonNullArithmeticOperandTest ×5, ExhaustiveEnumSwitchTerminationTest ×6) with
-negative controls (a `(string|undefined)! - 1` still fires TS2362; a bare `flags & X` with no `!`/
-guard still fires; a switch MISSING an enum member, an `enum|undefined` WITHOUT `case undefined`,
-and a `break`-ing case body all STILL fire TS2366 — the FP-safety firewall, since the corpus is a
-weak gate for TS2366 with `.errors.txt` disabled). **DEFERRED (bounded but broad/risky): the
-empty-tuple-vs-all-optional-tuple TS2739** (moduleSpecifiers.ts:344 `return emptyArray as []`
-against `readonly [kind?, specifiers?, moduleFile?, modulePaths?, cache?]`) — `[]` is assignable to
-a tuple whose elements are ALL optional, but `buildTupleFromTypes` builds all numbered props as
-required (`SymbolFlags.Property`, no Optional flag) since the resolved tuple `Type` loses the AST
-`NamedTupleMember.questionToken`/`OptionalType` optionality (the documented no-minLength-tracking
-gotcha). The clean fix needs a new `SymbolFlags.Optional` bit threaded through tuple building +
-`isOptionalProperty` reading it — broad regression surface (many `isOptionalProperty` callers on
-tuple props) for 1 self-compile instance; not worth the risk this session. **META: re-confirms the
-M1.12 method — bucket the FULL `--listAll`, not the log tail. Also re-confirms round 414's finding
-that `.errors.txt` being disabled makes the whole termination analysis (TS2366/TS7030/TS2355) gated
-ONLY by the full suite + local tests → strong negative controls are mandatory for any
-suppress-a-diagnostic change there.** Perf unmeasured beyond the bench row (an operand-strip + a
-syntactic enum-switch — no relation-engine work; the enum resolution reuses round-411's memos).
-
 ### Mission & strategy
 
 Three strategic reads that shape everything below:
@@ -588,8 +591,8 @@ Three strategic reads that shape everything below:
 
 | Metric | Source | Phase 17 target |
 |---|---|---|
-| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 9,202 with local tests as of round 422) |
-| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**1,799 measured at round 420**; M1 complete at 2,726/round 389; rounds 395–420 burned bounded histogram-tail buckets + M3.4 flow-narrowing slices 2,726 → 1,799; round 420 TYPE-ALIAS enum-member discriminant narrowing (M1.12) −9 (a `.kind: <alias>` member survived a `switch (x.kind)` because `enumMemberKeysOfTypeNode` handled only a direct `Enum.Member`; 0 new FPs); round 419 INTERSECTION union-member property resolution (M1.12) −46 (TS2339 189 → 143: `getPropertyOfType`/`typeHasOwnProperty` bail on a `Type.Intersection` member — fold the constituents in property resolution + discriminant-narrowing; 0 new FPs, self-compile time −17%); round 418 NESTED type-guard resolution (M1.12) −48 (TS2339 237 → 189: tsc's `isTupleType`/… guards are nested in `createTypeChecker` so the binder skips them and `resolveFlowCalleeDecl` missed them — program-wide unique-name fallback + a `Type.Union`-gate-bypassing narrow-DOWN suppression + an intersection-target positive-collapse fallback; 0 new FPs; the negative-exhaustion never of `instanceofWithStructurallyIdenticalTypes` stays intact); round 417 namespace-local `extends`-base resolution −2 (coordinated across `getTypeFromBaseTypeExpression` + `lookupInstanceMemberInResolvableChain`, FP-safe); round 409 `export *`-barrel / ESM-`.js` imported-guard FLOW narrowing (M3.4) −175 (TS2339 838 → 672); round 411 enum-member discriminant narrowing + type-guard-narrows-member-DOWN −59; round 412 single-type type-guard narrow-DOWN + TS18048 receiver-narrowing −1; round 413 the `export *` LEAF-EXPORT gate −407 (TS2339 614 → 237): the pre-413 star resolver returned non-exported IMPORT aliases, so barrel-imported `Debug.assert` (& every barrel guard) never resolved — the TRUE builder.ts blocker, NOT the round-412 depth red herring (an instrumented run showed ZERO walk truncations) — plus a dashboard-neutral tsc-faithful linear flow-walk iteration + a return-path narrowing consumer (−1); **round 414 the TS2366 "lacks ending return" family −35 (50 → 15): three CFA fall-through patterns in `statementAlwaysReturns`/`switchAlwaysReturns` — infinite-loop-with-return, trailing never-call (`Debug.fail`), switch fall-through — all FP-safe syntactic/barrel-resolution fixes; the remaining 15 are Pattern C2 (exhaustive switch w/o default → M3.4 discriminant-exhaustiveness)**; remaining bounded pool M3.4/M3-gated (a general-`resolveAlias` `.js`/star fix was measured net +297 via a TS2315 flood, reverted; NonNull-strip −17 but unmasks M3, reverted; const-string-enum→`string` relation deferred M3.3/B425); no-stub stays the honest default) |
+| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 9,245 with local tests as of round 424) |
+| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**1,680 measured at round 424**; M1 complete at 2,726/round 389; rounds 395–424 burned bounded histogram-tail buckets + M3.4 flow-narrowing slices 2,726 → 1,680; round 424 five flow-narrowing fixes −27 (loop-entry union suppression w/ STRUCTURAL wash gate, call-RHS return-annotation narrowing, closure/join/call-crossing aliased conditions, prefix-path receiver guards, asserts-with-inferred-TP test-arg inference — every step by-site strictly removals); rounds 422–423 −92 (overload-arg flow narrowing, optional-chain discriminants, union-target guards end-to-end, exhaustive-switch receiver narrowing → TS2366 ZERO, aliased conditions); round 420 TYPE-ALIAS enum-member discriminant narrowing (M1.12) −9 (a `.kind: <alias>` member survived a `switch (x.kind)` because `enumMemberKeysOfTypeNode` handled only a direct `Enum.Member`; 0 new FPs); round 419 INTERSECTION union-member property resolution (M1.12) −46 (TS2339 189 → 143: `getPropertyOfType`/`typeHasOwnProperty` bail on a `Type.Intersection` member — fold the constituents in property resolution + discriminant-narrowing; 0 new FPs, self-compile time −17%); round 418 NESTED type-guard resolution (M1.12) −48 (TS2339 237 → 189: tsc's `isTupleType`/… guards are nested in `createTypeChecker` so the binder skips them and `resolveFlowCalleeDecl` missed them — program-wide unique-name fallback + a `Type.Union`-gate-bypassing narrow-DOWN suppression + an intersection-target positive-collapse fallback; 0 new FPs; the negative-exhaustion never of `instanceofWithStructurallyIdenticalTypes` stays intact); round 417 namespace-local `extends`-base resolution −2 (coordinated across `getTypeFromBaseTypeExpression` + `lookupInstanceMemberInResolvableChain`, FP-safe); round 409 `export *`-barrel / ESM-`.js` imported-guard FLOW narrowing (M3.4) −175 (TS2339 838 → 672); round 411 enum-member discriminant narrowing + type-guard-narrows-member-DOWN −59; round 412 single-type type-guard narrow-DOWN + TS18048 receiver-narrowing −1; round 413 the `export *` LEAF-EXPORT gate −407 (TS2339 614 → 237): the pre-413 star resolver returned non-exported IMPORT aliases, so barrel-imported `Debug.assert` (& every barrel guard) never resolved — the TRUE builder.ts blocker, NOT the round-412 depth red herring (an instrumented run showed ZERO walk truncations) — plus a dashboard-neutral tsc-faithful linear flow-walk iteration + a return-path narrowing consumer (−1); **round 414 the TS2366 "lacks ending return" family −35 (50 → 15): three CFA fall-through patterns in `statementAlwaysReturns`/`switchAlwaysReturns` — infinite-loop-with-return, trailing never-call (`Debug.fail`), switch fall-through — all FP-safe syntactic/barrel-resolution fixes; the remaining 15 are Pattern C2 (exhaustive switch w/o default → M3.4 discriminant-exhaustiveness)**; remaining bounded pool M3.4/M3-gated (a general-`resolveAlias` `.js`/star fix was measured net +297 via a TS2315 flood, reverted; NonNull-strip −17 but unmasks M3, reverted; const-string-enum→`string` relation deferred M3.3/B425); no-stub stays the honest default) |
 | Project corpus FPs (services/server/…) | `bench/` TSVs (M0.1) | 0 — **the v1 exit** (all 8 profiles) |
 | Conformance adoption | generated-test counts per category | POST-V1 (re-scope 2026-07-03 — see § "Post-v1 backlog", M3.0) |
 | Crashes on any input | bench runs | 0 |

@@ -1,3 +1,67 @@
+**Round 415 (2026-07-05) — M1.12: TWO clean bounded self-compile fixes from bucketing the fresh
+full `--listAll` by normalized message shape, both FP-safe. Self-compile (compiler profile)
+1,930 → 1,922 (−8); suite 9,134 → 9,145 (+11 local, 0 regressions); 2 commits (4c768bb7, a647aa74).**
+Method (the M1.12 note): re-ran `--listAll` at HEAD (1,930, 100 s), bucketed all lines by
+normalized shape — the M3 cores dominate (TS2322×785 / TS2345×396 / TS7006×301 / TS2339×237, all
+engine-gated) but two bounded tail buckets were genuine bugs. **(1) NonNull arithmetic operand
+(TS2362 15 → 10, −5):** a `x!` (NonNullExpression) arithmetic/comparison operand whose base type is
+`T | undefined` now uses the NON-NULL type — tsc types `x!` as `NonNullable<typeof x>` and does
+arithmetic on THAT. `getTypeOfExpression` deliberately keeps the union for `(T | undefined)!`
+(round 407: a GLOBAL nullish-strip in that case unmasks M3 object-literal/generic gaps → reverted),
+but the arithmetic pass classifies operands and a `Type.Union`'s own `.flags` carry neither the
+Undefined bit nor the numeric-enum bit, so `TokenFlags | undefined` fails every operand test →
+spurious TS2362/TS2363. New `arithOperandType` strips nullish LOCALLY (only for a syntactic `!`),
+reproducing tsc's own source: `templateFlags! & TokenFlags.TemplateLiteralLikeFlags` (nodeFactory
+×2), `contextFlags! & ContextFlags.X` (checker ×2), `state.affectedFilesIndex! - 1` (builder).
+FP-safe by construction: only fires on an explicit `!`, only ever REMOVES nullish members (a
+`(string | undefined)!` still fails, still errors), and is local to the pass (no touch to global
+expression typing — the round-407 blast radius). The residual 10 TS2362 (+2 TS2363) are
+`&&`/`||`/reassignment flow-narrowing cases (checker.ts `checkMode && checkMode & X`, `flags =
+flags || None`) — M3.4. **(2) exhaustive enum switch (TS2366 15 → 12, −3):** round 414 deferred
+Pattern C2 — a `switch` with NO `default` that EXHAUSTIVELY covers its discriminant's enum is
+terminating (tsc narrows the discriminant to `never` after all cases, so the endpoint is
+unreachable). This lands the FP-SAFE SUBSET: an ENUM / enum-member-union / call-return-enum
+discriminant (the value set is a precise enum). `isExhaustiveEnumSwitch` claims exhaustive ONLY
+when it can PROVE every enum member is covered — every case an `Enum.Member`/`undefined`/`null`,
+and the discriminant resolving to a precise enum (or `enum | undefined/null`) via a simple param's
+type ANNOTATION (`enumSwitchKeysFromTypeNode`: a bare enum name → all members; a type alias =
+union of enum members → recurse — `CompoundAssignmentOperator` = union of `SyntaxKind.X`; an
+`Enum.Member` ref → that one) OR the resolved expression type (`enumSwitchKeysFromType`: a pure
+enum object → all members, a `enum | undefined` union → members + nullish marker). Any uncertainty
+(a non-enum-member case, a discriminant that doesn't resolve to a clean enum, a missing member)
+returns null/false → the TS2366 STANDS, so it never suppresses a genuinely non-exhaustive switch's
+diagnostic (no false negative). Reuses the round-411 enum helpers
+(`resolveEnumSymbolForDiscriminant`/`enumMemberKeyOfExpr`/`enumValues`, barrel-aware). Fixed tsc's
+own `getCategoryFormat(category: DiagnosticCategory)`,
+`getNonAssignmentOperatorForCompoundAssignment(kind: CompoundAssignmentOperator)`,
+`getSetExternalModuleIndicator` over `getEmitModuleDetectionKind(options): ModuleDetectionKind`.
+The remaining 12 are `.kind` discriminated-union switches (`mapper.kind`, `node.kind` ×5,
+`target.kind`, `name.kind`, `LiteralToken["kind"]` indexed-access, `options.newLine` property
+access) — the discriminant is a property of a union of interfaces/TypeLiterals, needing type-alias-
+chain + intersection + inherited/TypeLiteral-`.kind` flattening, with a real false-negative risk
+(`.errors.txt` disabled = weak gate) — the documented larger M3.4 slice, which correctly BAILS
+here. **This analysis feeds ONLY `checkBodyForImplicitReturn` (TS2366/TS7030/TS2355); TS7027
+unreachable-code uses the separate `isDefinitelyTerminating`, so a wrong claim here cannot
+spuriously report post-switch code as unreachable — the change is a pure suppress-when-provable.**
+11 local tests (NonNullArithmeticOperandTest ×5, ExhaustiveEnumSwitchTerminationTest ×6) with
+negative controls (a `(string|undefined)! - 1` still fires TS2362; a bare `flags & X` with no `!`/
+guard still fires; a switch MISSING an enum member, an `enum|undefined` WITHOUT `case undefined`,
+and a `break`-ing case body all STILL fire TS2366 — the FP-safety firewall, since the corpus is a
+weak gate for TS2366 with `.errors.txt` disabled). **DEFERRED (bounded but broad/risky): the
+empty-tuple-vs-all-optional-tuple TS2739** (moduleSpecifiers.ts:344 `return emptyArray as []`
+against `readonly [kind?, specifiers?, moduleFile?, modulePaths?, cache?]`) — `[]` is assignable to
+a tuple whose elements are ALL optional, but `buildTupleFromTypes` builds all numbered props as
+required (`SymbolFlags.Property`, no Optional flag) since the resolved tuple `Type` loses the AST
+`NamedTupleMember.questionToken`/`OptionalType` optionality (the documented no-minLength-tracking
+gotcha). The clean fix needs a new `SymbolFlags.Optional` bit threaded through tuple building +
+`isOptionalProperty` reading it — broad regression surface (many `isOptionalProperty` callers on
+tuple props) for 1 self-compile instance; not worth the risk this session. **META: re-confirms the
+M1.12 method — bucket the FULL `--listAll`, not the log tail. Also re-confirms round 414's finding
+that `.errors.txt` being disabled makes the whole termination analysis (TS2366/TS7030/TS2355) gated
+ONLY by the full suite + local tests → strong negative controls are mandatory for any
+suppress-a-diagnostic change there.** Perf unmeasured beyond the bench row (an operand-strip + a
+syntactic enum-switch — no relation-engine work; the enum resolution reuses round-411's memos).
+
 **Round 414 (2026-07-05) — M1.12: the TS2366 "Function lacks ending return statement" family
 (50 self-compile FPs; tsc reports 0 on its own source) is THREE CFA fall-through patterns — TWO+
 landed. Self-compile (compiler profile) 1,965 → 1,930 (−35, TS2366 50 → 15); suite 9,117 → 9,134
