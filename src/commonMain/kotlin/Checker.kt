@@ -91992,14 +91992,28 @@ interface DataView {
         // Enum-member discriminant switch (e.g. `switch (s.type) { case Kind.B: }` where the
         // member declares `type: Kind.B`): the enum-member types resolve to `anyType`, so the
         // literal path can't match them — narrow on the AST-read enum key instead.
-        if (literalTypes.isEmpty() && caseEnumKeys.isNotEmpty() && !matchesDirectly) {
-            val discriminant = discriminantName ?: return null
-            val filteredE = filterUnionByEnumDiscriminant(t.types, discriminant, caseEnumKeys, keep = true)
-            return when {
-                filteredE == null || filteredE.isEmpty() -> null
-                filteredE.size == 1 -> filteredE[0]
-                filteredE.size == t.types.size -> null
-                else -> getUnionType(filteredE)
+        if (caseEnumKeys.isNotEmpty() && !matchesDirectly) {
+            // Round 422: a MIXED discriminant space — enum members PLUS plain string-literal
+            // members (`kind: PrivateIdentifierKind.Accessor` vs `kind: "untransformed"`, tsc's
+            // PrivateIdentifierInfo) — narrows on the unified key space: string-literal cases
+            // map to `lit:s:` keys alongside the enum `symId#member` keys. The namespaces are
+            // deliberately DISJOINT and string-only: tsc never equates a string-enum member
+            // type with a same-valued string literal type in narrowing, but numeric enums ARE
+            // number-comparable, so a numeric-literal case keeps the pre-round-422 behavior
+            // (falls through to the assignability path below). Gated on ≥1 genuine enum key so
+            // pure-literal discriminant switches stay on the assignability path (whose
+            // resolved-type semantics the corpus pins).
+            val litKeys = literalTypes.mapNotNull { literalDiscriminantKeyOfType(it) }
+            if (litKeys.size == literalTypes.size) {
+                val discriminant = discriminantName ?: return null
+                val filteredE = filterUnionByEnumDiscriminant(
+                    t.types, discriminant, caseEnumKeys + litKeys, keep = true)
+                return when {
+                    filteredE == null || filteredE.isEmpty() -> null
+                    filteredE.size == 1 -> filteredE[0]
+                    filteredE.size == t.types.size -> null
+                    else -> getUnionType(filteredE)
+                }
             }
         }
         if (literalTypes.isEmpty()) return null
@@ -93047,9 +93061,27 @@ interface DataView {
                     ?: return null
                 return enumMemberKeysOfTypeNode(alias.type, depth + 1)
             }
+            // Round 422: a plain STRING-literal discriminant member (`kind: "untransformed"`,
+            // tsc's UntransformedPrivateIdentifierInfo) joins the key space with a disjoint
+            // `lit:s:` key, so a mixed enum+literal union filters on both case kinds — an
+            // enum-member case drops the literal member and a literal case drops the
+            // enum-annotated members (faithful: a string enum member never equals a plain
+            // string literal in tsc narrowing). String-only — numeric enums ARE
+            // number-comparable, so a numeric-literal annotation stays unrepresented
+            // (member conservatively KEPT), see literalDiscriminantKeyOfType.
+            is LiteralType -> {
+                val lit = literalTypeOfExpression(node.literal) ?: return null
+                return literalDiscriminantKeyOfType(lit)?.let { setOf(it) }
+            }
             else -> return null
         }
     }
+
+    /** Round 422: the `lit:` key of a STRING-literal discriminant type — the literal-member
+     *  companion of the `symId#member` enum keys (disjoint namespaces, string-only; numeric
+     *  literals return null because numeric enums are number-comparable in tsc). */
+    private fun literalDiscriminantKeyOfType(t: Type): String? =
+        (t as? Type.StringLiteral)?.let { "lit:s:${it.value}" }
 
     /** The declared TypeNode of union [member]'s discriminant property [propName] (from its
      *  declaration), since the resolved property type is `anyType` for an enum-member. */
