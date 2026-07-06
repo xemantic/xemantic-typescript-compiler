@@ -91,7 +91,14 @@ commits.**
   TS2322×1. All are the SAME M3-relation-gap family newly EXPOSED because union-target guards now
   narrow at all — each was previously invisible behind the parse truncation. Next targets:
   TS2339 never×27 remaining, DebugTypeMapper×10 (`asserts value is T` + `this`-path narrowing),
-  `string | Diagnostic`×6 (commandLineParser). **TS18048×5 remaining, all triaged with concrete
+  `string | Diagnostic`×6 (commandLineParser.ts:2016-2032 — TRIAGED, next-agent note: the shape is
+  `const text = tryReadFile(…)` (string | Diagnostic via the call-types local recording) +
+  `if (!isString(text)) { …; return; }` — every narrowing piece exists (isString is a plain
+  single-target guard, the negative branch drops Diagnostic), so the question is WHY the union
+  TS2339 emitter doesn't consult it for this receiver — probe with a marker before theorizing;
+  candidate suspects: the emitting site may be a different pass without `currentFlowGraph`, or the
+  local-const union type reaches the emitter through a path that bypasses
+  `getNarrowedTypeForReference`). **TS18048×5 remaining, all triaged with concrete
   mechanisms:** checker.ts:21170 `type.restrictiveInstantiation = instantiateType(…)` then a
   sub-path read — needs `narrowByAssignmentRhs` to accept a CALL RHS whose resolved callee declares
   a non-nullish return annotation (bounded; mind the flowAssignmentMightNarrow keep-in-sync
