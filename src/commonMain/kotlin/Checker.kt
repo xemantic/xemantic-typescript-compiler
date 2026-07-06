@@ -92586,7 +92586,25 @@ interface DataView {
                 // discriminant property is the part after "name."
                 false to subjectPath.substring(name.length + 1)
             }
-            else -> return null
+            else -> {
+                // Round 425 (tsc aliased discriminants): `const kind1 = m1.kind;
+                // switch (kind1) { case TypeMapKind.Simple: m1.source }` narrows m1
+                // through the ALIASED discriminant (tsc's own compareTypeMappers).
+                // The round-423 flow back-walk is the const-ness proof — it bails on
+                // reassignment of the alias OR of the walked root between the switch
+                // and the alias declaration, so the alias provably still holds
+                // `<name>.<prop>`'s value. Single-level property tails only,
+                // mirroring the direct-subject path above.
+                val aliasInit = (switchExpr as? Identifier)
+                    ?.takeIf { it.text != name }
+                    ?.let { aliasedConditionInitializer(it, name) }
+                val initPath = aliasInit?.let { getReferencePath(it) }
+                if (initPath != null && initPath.startsWith("$name.") &&
+                    initPath.indexOf('.', name.length + 1) < 0
+                ) {
+                    false to initPath.substring(name.length + 1)
+                } else return null
+            }
         }
         // Collect literal types (and enum-member keys, M3.4) from cases in the
         // [clauseStart, clauseEnd) range.
