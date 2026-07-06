@@ -131921,15 +131921,22 @@ interface DataView {
                 }
             }
             // For other source types, assignable if it matches any member.
-            // M3.1 (round 428): an array-literal source is unknowable against a
-            // `T[]` member where T is an enclosing fn's type param (`return
-            // [value]` inside `append<T>` vs `T[] | undefined`) — permissive.
+            // M3.1 (round 428): an array-literal source is unknowable against an
+            // ARRAY-ISH union member — a `T[]`/`X[]` suffix form, a tuple
+            // `[A, B]`, or an `Array<X>`/`ReadonlyArray<X>` reference (`return
+            // [value]` inside `append<T>` vs `T[] | undefined`; tsc's
+            // `sourcesContent = []` vs `(string | null)[] | undefined`) —
+            // permissive: the string layer cannot check element types, and the
+            // engine path owns concrete non-union array-literal targets.
             // typeParams is deliberately NOT threaded into the recursion: the
             // TP-aware rules inside (B60.6/B60.7/B212b) were tuned for
             // non-union targets and would flip union members to rejections.
             return members.any {
                 isAssignableTo(sourceType, it) ||
-                    (sourceType == "array" && it.endsWith("[]") && it.removeSuffix("[]") in typeParams)
+                    (sourceType == "array" && (
+                        it.endsWith("[]") ||
+                        (it.startsWith("[") && it.endsWith("]")) ||
+                        it.startsWith("@Array<") || it.startsWith("@ReadonlyArray<")))
             }
         }
         // For named types (TypeReference, prefixed with "@"), we can only confidently say

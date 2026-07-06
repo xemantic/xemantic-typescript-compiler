@@ -179,6 +179,42 @@ class GenericAppendInferenceTest {
     }
 
     @Test
+    fun `array literal assigns to a union target with an array member`() {
+        // Round 428c: the string-layer union check treats an array-literal source vs
+        // an array-ish union member as unknowable (tsc sourcemap.ts's
+        // `sourcesContent = []` vs `(string | null)[] | undefined`, `return []` vs
+        // `string | string[] | undefined`).
+        val d = diags(
+            """
+            export function f(): void {
+                let sourcesContent: (string | null)[] | undefined;
+                if (!sourcesContent) sourcesContent = [];
+                sourcesContent.push(null);
+            }
+            export function g(value: string): string | string[] | undefined {
+                if (value === "") {
+                    return [];
+                }
+                return value;
+            }
+            """
+        )
+        assertTrue(d.none { it.code == 2322 }, "expected no TS2322, got: $d")
+    }
+
+    @Test
+    fun `negative control - array literal vs union WITHOUT array member still fires`() {
+        val d = diags(
+            """
+            export function g(): string | number | undefined {
+                return [];
+            }
+            """
+        )
+        assertTrue(d.any { it.code == 2322 }, "expected TS2322 for [] vs string | number | undefined, got: $d")
+    }
+
+    @Test
     fun `negative control - genuinely wrong call result still fires TS2322`() {
         // appendNum returns number[] regardless — assigning to Statement[] must error.
         val d = diags(
