@@ -93002,11 +93002,25 @@ interface DataView {
     /** The declared TypeNode of union [member]'s discriminant property [propName] (from its
      *  declaration), since the resolved property type is `anyType` for an enum-member. */
     private fun discriminantPropAnnotation(member: Type, propName: String): TypeNode? {
-        val apparent = getApparentType(member) as? Type.Object ?: return null
-        val propSym = getPropertyOfType(apparent, propName) ?: return null
-        for (decl in propSym.declarations) {
-            val ann = (decl as? PropertyDeclaration)?.type
-            if (ann != null) return ann
+        // round 419: an INTERSECTION member (`BindingPattern & { parent: … }`, tsc's declaration
+        // unions) is `Type.Intersection`, not `Type.Object`, so the discriminant `.kind`
+        // annotation lives on a CONSTITUENT — without folding it the member's `.kind` reads as
+        // unknown and it wrongly SURVIVES a `switch (node.kind) { case … }` narrowing → the
+        // over-wide union then FP's TS2339 on a case-body property (`node.moduleSpecifier`).
+        val apparent = try { getApparentType(member) } catch (_: Exception) { return null }
+        val objects = when (apparent) {
+            is Type.Object -> listOf(apparent)
+            is Type.Intersection -> apparent.types.mapNotNull {
+                try { getApparentType(it) } catch (_: Exception) { null } as? Type.Object
+            }
+            else -> return null
+        }
+        for (obj in objects) {
+            val propSym = getPropertyOfType(obj, propName) ?: continue
+            for (decl in propSym.declarations) {
+                val ann = (decl as? PropertyDeclaration)?.type
+                if (ann != null) return ann
+            }
         }
         return null
     }
@@ -96217,6 +96231,33 @@ interface DataView {
         return raw
     }
 
+    /** M1.12 (round 419): resolve [propName]'s type on a single union MEMBER, folding an
+     *  INTERSECTION member (a property exists on `A & B` iff ANY constituent has it — the
+     *  round-352 rule; `getPropertyOfType` has no Intersection branch). Returns null when the
+     *  member genuinely lacks the property. Used by the B83.4e union-member fold. */
+    private fun resolveMemberPropertyType(constituent: Type, propName: String): Type? {
+        val apparent = try { getApparentType(constituent) } catch (_: Exception) { return null }
+        getPropertyOfType(apparent, propName)?.let { prop ->
+            return if (apparent is Type.Reference) resolveGenericPropertyType(apparent, prop) ?: getTypeOfSymbol(prop)
+            else getTypeOfSymbol(prop)
+        }
+        if (apparent is Type.Intersection) {
+            val contributed = mutableListOf<Type>()
+            for (c in apparent.types) {
+                val app = try { getApparentType(c) } catch (_: Exception) { continue }
+                val p = getPropertyOfType(app, propName) ?: continue
+                contributed.add(
+                    if (app is Type.Reference) resolveGenericPropertyType(app, p) ?: getTypeOfSymbol(p)
+                    else getTypeOfSymbol(p)
+                )
+            }
+            if (contributed.isNotEmpty()) {
+                return if (contributed.size == 1) contributed[0] else getIntersectionType(contributed)
+            }
+        }
+        return null
+    }
+
     private fun computeRawTypeOfPropertyAccess(expr: PropertyAccessExpression): Type {
         val rawObjectType = getTypeOfExpression(expr.expression)
         // B1.1: Narrow Union receivers via flow-graph state. Inside
@@ -96249,16 +96290,16 @@ interface DataView {
             val propTypes = mutableListOf<Type>()
             var allHaveProp = true
             for (constituent in unionForProp.types) {
-                val apparent = getApparentType(constituent)
-                val prop = getPropertyOfType(apparent, propName)
-                if (prop == null) {
+                // M1.12 (round 419): a union member may itself be an INTERSECTION
+                // (`PropertyAccessExpression | (ElementAccessExpression & Declaration & {…})`,
+                // tsc's `BindableStaticAccessExpression`). `getPropertyOfType` has no Intersection
+                // branch, so the bare lookup misses `.parent` on the intersection arm and the
+                // whole union access FP'd TS2339 — resolveMemberPropertyType folds intersection
+                // constituents (the round-352 rule: a property exists if ANY constituent has it).
+                val propType = resolveMemberPropertyType(constituent, propName)
+                if (propType == null) {
                     allHaveProp = false
                     break
-                }
-                val propType = if (apparent is Type.Reference) {
-                    resolveGenericPropertyType(apparent, prop) ?: getTypeOfSymbol(prop)
-                } else {
-                    getTypeOfSymbol(prop)
                 }
                 propTypes.add(propType)
             }
@@ -113123,7 +113164,12 @@ interface DataView {
                     val members = narrowed.types.filterNot { isNullishConstituent(it) }
                     fun memberHasIt(m: Type): Boolean {
                         if (m === anyType || m === errorType || m === unknownType) return true
-                        return typeHasOwnProperty(getApparentType(m), propName)
+                        if (typeHasOwnProperty(getApparentType(m), propName)) return true
+                        // round 419: an INTERSECTION member is `Type.Intersection`, not `Type.Object`,
+                        // so `typeHasOwnProperty` bails — fold its constituents (a property exists on
+                        // `A & B` iff ANY constituent has it), else `PropertyAccessExpression |
+                        // (ElementAccessExpression & Declaration & {…})` FP's TS2339 on `.parent`.
+                        return resolveMemberPropertyType(m, propName) != null
                     }
                     val missingMembers = members.filter { !memberHasIt(it) }
                     val anyHasIt = members.any { memberHasIt(it) }
