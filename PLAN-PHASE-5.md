@@ -35,8 +35,9 @@ tsc's source uses, with the corpus suite as the regression net. M5 unchanged —
 performance is the directive's second half and starts at v1 compliance.
 
 **Round 423 (2026-07-06) — M3.4: exhaustive-switch receiver narrowing (TS2366 → 0) + union-target
-type guards + aliased conditions. Self-compile (compiler profile) 1,756 → 1,752 → 1,708 (−48 total);
-suite 9,202 → 9,221 (+19 local, 0 regressions); 2 fix commits.**
+type guards + aliased conditions + truthy optional-chain calls. Self-compile (compiler profile)
+1,756 → 1,752 → 1,708 → 1,707 (−49 total); suite 9,202 → 9,223 (+21 local, 0 regressions); 3 fix
+commits.**
 - **Fix 1 (50297e6a): the four round-422 residual TS2366 sites — TS2366 is now ZERO on the compiler
   profile.** Four mechanisms in `requiredUnionDiscriminantKeys`/`enumSwitchKeysFromTypeNode`, exactly
   the round-422 next-agent note's plan: (a) the discriminant RECEIVER is guard-narrowed via the
@@ -75,6 +76,12 @@ suite 9,202 → 9,221 (+19 local, 0 regressions); 2 fix commits.**
   (1,708 → 1,710 — fixed 4 nevers, surfaced a 12-site checker.ts alias-resolution cluster);
   same-SYMBOL union membership (exact no-op — the real-tsc member/target instances are not
   symbol-identical, so the relation failure is deeper).
+- **Fix 3: truthy optional-chain CALL conditions (TS18048 −1, zero site churn).**
+  `if (state.referencedMap?.size()) { state.referencedMap.keys() }` (builder.ts:1332) — a nullish
+  receiver short-circuits the chain to `undefined` (falsy), so the truthy branch excludes nullish
+  from any `?.`-guarded intermediate. A dedicated walk in `applyConditionNarrowing`'s
+  CallExpression branch, positive branch only (a falsy chain proves nothing — the receiver may be
+  present with a falsy call result, pinned by a local control). 2 local tests.
 - **Residual (by-site diff −68/+24 for fix 2 — the +24 catalogued in the session listalls):**
   never×10 (checker.ts 35055/35094/52738/52739 `isAccessExpression`-family positive collapses,
   factory/utilities 1747/1750, classFields 2689, utilities 5445/6840/6843),
@@ -84,7 +91,15 @@ suite 9,202 → 9,221 (+19 local, 0 regressions); 2 fix commits.**
   TS2322×1. All are the SAME M3-relation-gap family newly EXPOSED because union-target guards now
   narrow at all — each was previously invisible behind the parse truncation. Next targets:
   TS2339 never×27 remaining, DebugTypeMapper×10 (`asserts value is T` + `this`-path narrowing),
-  `string | Diagnostic`×6 (commandLineParser), TS18048×6.
+  `string | Diagnostic`×6 (commandLineParser). **TS18048×5 remaining, all triaged with concrete
+  mechanisms:** checker.ts:21170 `type.restrictiveInstantiation = instantiateType(…)` then a
+  sub-path read — needs `narrowByAssignmentRhs` to accept a CALL RHS whose resolved callee declares
+  a non-nullish return annotation (bounded; mind the flowAssignmentMightNarrow keep-in-sync
+  landmine); builder.ts:431/433 `canCopyEmitSignatures` — the aliased-condition back-walk bails at
+  the closure FlowStart (alias declared OUTSIDE the `forEach` closure, used INSIDE) — needs
+  outerFlow-following with the B464 captured-name gates; moduleNameResolver.ts:849 loop-crossing
+  narrowing; transformers/ts.ts:2012 generic `Debug.assertNode(node.name, isIdentifier)` (the
+  predicate target is an inferred type param — M3.1-adjacent).
 
 **Round 422 (2026-07-06) — M1.12/M3.4: FIVE bounded FP-safe fixes from a fresh full `--listAll`
 bucketing — overload-arg flow narrowing, optional-chain discriminants, mixed enum/literal

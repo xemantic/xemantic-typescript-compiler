@@ -230,6 +230,51 @@ class AliasedConditionAndUnionPredicateTest {
     }
 
     @Test
+    fun `truthy optional-chain call proves the receiver non-nullish`() {
+        // builder.ts:1332: `if (state.referencedMap?.size()) { state.referencedMap.keys() }`
+        // — a nullish receiver short-circuits the chain to undefined (falsy), so the
+        // truthy branch excludes nullish. Positive branch only.
+        val d = diags(
+            """
+            interface RefMap { size(): number; keys(): string[]; }
+            interface State { referencedMap?: RefMap; other: number; }
+            export function f1(state: State): string[] | undefined {
+                if (state.referencedMap?.size()) {
+                    return state.referencedMap.keys();
+                }
+                return undefined;
+            }
+            """,
+        )
+        assertTrue(
+            d.none { it.code == 18048 },
+            "truthy `x.y?.size()` guard must clear the TS18048; got: " +
+                d.joinToString { "TS${it.code}: ${it.message}" },
+        )
+    }
+
+    @Test
+    fun `falsy optional-chain call proves nothing`() {
+        val d = diags(
+            """
+            interface RefMap { size(): number; keys(): string[]; }
+            interface State { referencedMap?: RefMap; other: number; }
+            export function f3(state: State): string[] {
+                if (state.referencedMap?.size()) {
+                    return [];
+                }
+                return state.referencedMap.keys();
+            }
+            """,
+        )
+        assertTrue(
+            d.any { it.code == 18048 },
+            "the falsy branch must keep TS18048 (receiver may be present with size 0); got: " +
+                d.joinToString { "TS${it.code}: ${it.message}" },
+        )
+    }
+
+    @Test
     fun `intervening call between alias and test bails conservatively`() {
         val d = diags(
             """

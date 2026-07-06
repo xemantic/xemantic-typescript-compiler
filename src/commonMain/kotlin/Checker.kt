@@ -92061,6 +92061,22 @@ interface DataView {
                     val arg = expr.arguments[0]
                     if (getReferencePath(arg) == name) return narrowByTruthiness(t, truthy = isTrue)
                 }
+                // Round 423: a TRUTHY optional-chain CALL proves its optional receiver
+                // didn't short-circuit — `if (x.y?.size()) { x.y.keys() }` (builder.ts's
+                // `state.referencedMap?.size()`): a nullish `x.y` makes the whole chain
+                // `undefined` (falsy), so the truthy branch excludes nullish from any
+                // `?.`-guarded intermediate matching [name]. Positive branch only — a
+                // falsy chain proves nothing (the receiver may be present with a falsy
+                // call result).
+                if (isTrue) {
+                    var cur: Expression = callee
+                    while (cur is PropertyAccessExpression) {
+                        if (cur.questionDotToken && getReferencePath(cur.expression) == name) {
+                            return narrowByExcludingNullUndefined(t)
+                        }
+                        cur = cur.expression
+                    }
+                }
                 narrowByCallPredicate(t, expr, isMatch = isTrue, name)
             }
             is Identifier -> if (expr.text == name) {
