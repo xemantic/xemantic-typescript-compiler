@@ -120,8 +120,16 @@ semantics); 7 fix commits, 7 local test files (28 tests).**
   predicate-bearing decls stay ambiguous). The single-file repro cleared in one pass but the
   REAL debug.ts needed (d) — the faithful multi-file repro (barrel import + namespace-local
   overloaded guard) was what exposed it.
-- **Residual TS18048×1: checker.ts:21170 (overload-cluster return selection — M3). Next TS2339
-  buckets: never×21 remaining (per-site M3-relation diagnosis, catalogued round 423), DebugTypeMapper×10 —
+- **Residual TS18048×1: checker.ts:21170 (overload-cluster return selection — M3). Next-agent
+  note for the classFields.ts:841–859 never×5 sub-cluster: the shape is a De-Morgan early
+  return `if (!isPrivateIdentifierClassElementDeclaration(node) || !shouldTransform…) return;`
+  whose positive narrowing target `PrivateClassElementDeclaration` is a UNION OF
+  brand-INTERSECTIONS (`PropertyDeclaration & { name: PrivateIdentifier }`, …) — the round-418
+  positive-collapse fallback is gated `targetType is Type.Intersection` and misses a union of
+  intersections, so the filter drops every member → `never`. Extending that gate (or applying
+  the member-vs-intersection fold before the drop) is the candidate mechanism — verify with a
+  marker first; the negative-exhaustion never pin (instanceofWithStructurallyIdenticalTypes)
+  must stay intact. Next TS2339 buckets: never×21 remaining (per-site M3-relation diagnosis, catalogued round 423), DebugTypeMapper×10 —
   now PARTIALLY unblocked: needs `type<TypeMapper>(this)` = `asserts value is T` with an EXPLICIT
   type-arg call (bind T from `expr.typeArguments` — the fix-5 machinery gives the shape), plus
   the TS2339 `this`-branch consulting flow narrowing for path "this" (the round-418 suppression
