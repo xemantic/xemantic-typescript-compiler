@@ -111,7 +111,23 @@ removals; suite 9,251 → 9,276 (+25 local tests, 0 regressions); 7 fix commits.
   (`flags === 0` vs `flags: TypeFlags` — needs enum-as-literal-union comparability,
   B425/M3.3); moduleNameResolver.ts:2823 (interface modeling, M3);
   builder.ts:2242 (tuple-index on tuple-union, the B526 representation gap);
-  es2020.ts:91 (loop-carried `OptionalChain` reassignment, M3). Next big buckets:
+  es2020.ts:91 (loop-carried `OptionalChain` reassignment, M3). **Next-agent note —
+  TS2563×27 (the whole bucket, diagnosed this session):** tsc emits TS2563 ONLY when a
+  flow WALK recurses 2000 deep (`getTypeAtFlowNode` `flowDepth === 2000` → set
+  `flowAnalysisDisabled`, report at the containing function-or-module block's
+  `statements.pos`, return errorType thereafter — checker.ts:29036/28841); on tsc's own
+  sources NO walk trips (the linear fast-forwarding our round-413 iteration mirrors keeps
+  depth low), so all 27 per-FILE-node-count proxies are FPs by construction. The faithful
+  rebuild: trip-detection + a per-CONTAINER disabled set + one-shot TS2563 at tsc's
+  position, threaded through ALL flow walkers (narrowTypeFromFlow + FollowLoopEntry
+  mirror, the TS2454 definite-assignment walkers), REPLACING the B399 per-file proxy AND
+  its `cfaTooLargeFiles` TS2454 end-of-init filter (tsc's OR-rule then holds per
+  container naturally). `CfaTooLargeBailTest` pins the CURRENT proxy deliberately and
+  must be REWRITTEN to the depth-trip semantics (its 3000-if "big" shape plausibly DOES
+  trip a faithful walk — sequential if-joins recurse per join; verify against
+  `largeControlFlowGraph`'s baseline which expects TS2563). RISK: un-suppressing TS2454
+  on the 27 files may surface previously-masked TS2454 FPs — measure the trade by-site.
+  Next big buckets:
   TS2322×751 / TS2345×394 / TS7006×301 (M3 cores), TS2769×45 (M3.1 generic call-site
   inference), TS2563×27 (B399 heuristic → M3.4), TS2591×43 + TS2304×2 (env-legit).**
 
