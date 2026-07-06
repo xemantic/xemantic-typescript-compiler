@@ -93061,14 +93061,63 @@ interface DataView {
         return null
     }
 
+    /**
+     * M1.12 (round 424): resolve property [seg] on [cur] for the prefix-path
+     * claim — returns the property type plus whether the property is OPTIONAL
+     * (may be absent, failing the claim). On an intersection the property is
+     * optional iff ALL contributing constituents declare it optional (a
+     * constituent that declares it required pins presence — exactly the
+     * `CompilerOptions & { types: string[] }` brand shape); on a plain type the
+     * declaring symbol's questionToken decides.
+     */
+    private fun resolvePrefixTailSegment(cur: Type, seg: String): Pair<Type, Boolean>? {
+        val apparent = try { getApparentType(cur) } catch (_: Exception) { return null }
+        if (apparent is Type.Intersection) {
+            var anyRequired = false
+            val contributed = mutableListOf<Type>()
+            for (c in apparent.types) {
+                val app = try { getApparentType(c) } catch (_: Exception) { continue }
+                val p = getPropertyOfType(app, seg) ?: continue
+                if (!isOptionalProperty(p)) anyRequired = true
+                contributed.add(
+                    if (app is Type.Reference) resolveGenericPropertyType(app, p) ?: getTypeOfSymbol(p)
+                    else getTypeOfSymbol(p),
+                )
+            }
+            if (contributed.isEmpty()) return null
+            val ty = if (contributed.size == 1) contributed[0] else getIntersectionType(contributed)
+            return ty to !anyRequired
+        }
+        val p = getPropertyOfType(apparent, seg) ?: return null
+        val ty = if (apparent is Type.Reference) resolveGenericPropertyType(apparent, p) ?: getTypeOfSymbol(p)
+        else getTypeOfSymbol(p)
+        return ty to isOptionalProperty(p)
+    }
+
+    /** M1.12 (round 424): may [t] hold a nullish value? `any`/`unknown`/`error`
+     *  count as "maybe" (conservative — the prefix-path narrowing must only claim
+     *  non-nullish when the resolved tail type PROVES it). */
+    private fun typeMayBeNullish(t: Type): Boolean = when {
+        t === anyType || t === unknownType || t === errorType -> true
+        t is Type.Union -> t.types.any { typeMayBeNullish(it) }
+        else -> t.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)
+    }
+
     private fun narrowByCallPredicate(
         t: Type, expr: CallExpression, isMatch: Boolean, name: String,
     ): Type {
         // P0 (services hang) fast path — mirrors [narrowByAssertCall]'s pre-check: the
         // predicate can only narrow [name] when some argument's reference path IS
-        // [name], and checking that before callee resolution avoids the re-entrant
-        // receiver-typing walk for the overwhelmingly common non-matching call.
-        if (expr.arguments.none { getReferencePath(it) == name }) return t
+        // [name] — or, since round 424, a proper dot-PREFIX of it (a guard on the
+        // RECEIVER narrows the property path) — and checking that before callee
+        // resolution avoids the re-entrant receiver-typing walk for the
+        // overwhelmingly common non-matching call. Allocation-free prefix test.
+        if (expr.arguments.none { a ->
+                val p = getReferencePath(a)
+                p != null && (p == name ||
+                    (name.length > p.length && name.startsWith(p) && name[p.length] == '.'))
+            }
+        ) return t
         // Unwrap value-preserving wrappers around the callee so `(isFoo)(x)`,
         // `isFoo!(x)`, `(isFoo as F)(x)` narrow identically to `isFoo(x)`.
         var callee: Expression = expr.expression
@@ -93105,7 +93154,37 @@ interface DataView {
         if (paramIdx < 0) return t
         val arg = expr.arguments.getOrNull(paramIdx) ?: return t
         // 17.34b: path-based comparison so `predFn(A._a)` matches when name="A._a".
-        if (getReferencePath(arg) != name) return t
+        val argPath = getReferencePath(arg)
+        if (argPath != name) {
+            // M1.12 (round 424): PREFIX-path narrowing — the guard target is a
+            // RECEIVER prefix of the walked path (`usesWildcardTypes(options):
+            // options is CompilerOptions & { types: string[] }` with walked path
+            // `options.types` — tsc moduleNameResolver.ts). When the path TAIL
+            // resolves on the predicate target type to a type with no nullish
+            // constituent, the walked path is non-nullish on the POSITIVE branch.
+            // Minimal claim: drop nullish from the antecedent only — never
+            // substitute the resolved tail type — so this stays suppression-safe;
+            // the negative branch proves nothing about the property. Generic
+            // TP-binding inference is skipped here (the walked type `t` is the
+            // PROPERTY's type, not the predicate param's — bindings would be
+            // garbage).
+            if (!isMatch || argPath == null) return t
+            if (!(name.length > argPath.length && name.startsWith(argPath) &&
+                    name[argPath.length] == '.')
+            ) return t
+            val prefixTarget = getTypeFromTypeNode(targetTypeNode)
+            if (prefixTarget === errorType || prefixTarget === anyType) return t
+            var cur: Type = prefixTarget
+            for (seg in name.substring(argPath.length + 1).split('.')) {
+                val (segType, segOptional) = resolvePrefixTailSegment(cur, seg) ?: return t
+                // An OPTIONAL segment may be absent at runtime — the claim fails
+                // (optionality is a symbol attribute, NOT folded into the property
+                // type in our model, so the type check alone would miss it).
+                if (segOptional) return t
+                cur = segType
+            }
+            return if (!typeMayBeNullish(cur)) narrowByExcludingNullUndefined(t) else t
+        }
         // B481: GENERIC type-guard inference. For `isPlainResponse<T>(value: T | {data:T}): value is T`,
         // the predicate target `T` is a function type-param; resolving it without bindings yields
         // errorType (T not in scope at the call site) → the old code bailed → no narrowing →
