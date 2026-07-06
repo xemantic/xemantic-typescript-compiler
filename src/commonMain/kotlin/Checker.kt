@@ -78516,7 +78516,12 @@ interface DataView {
             when {
                 e is Identifier && e.text == "undefined" -> covered.add("@undefined")
                 e is Identifier && e.text == "null" -> covered.add("@null")
-                else -> covered.add(enumMemberKeyOfExpr(e) ?: return false)
+                // Round 422: a string-literal case joins with its `lit:s:` key (matching the
+                // round-422 discriminant key space) so a mixed enum+literal-kind union can
+                // prove exhaustive; numeric literals produce no key → bail (conservative).
+                else -> covered.add(enumMemberKeyOfExpr(e)
+                    ?: literalTypeOfExpression(e)?.let { literalDiscriminantKeyOfType(it) }
+                    ?: return false)
             }
         }
         // REQUIRED: the discriminant's full value set.
@@ -78533,7 +78538,64 @@ interface DataView {
             val p = currentFunctionParams.firstOrNull { (it.name as? Identifier)?.text == expr.text }
             p?.type?.let { return enumSwitchKeysFromTypeNode(it) }
         }
+        // Round 422 (Pattern C2, the `.kind` discriminated-union half): `switch (mapper.kind)`
+        // over a UNION whose every member declares a readable REQUIRED `kind` annotation
+        // (enum members and/or string literals) — the required set is the union of the
+        // members' discriminant keys. tsc's own `getMappedType` (TypeMapper) /
+        // `getAssignmentTargetKind` shapes. Any uncertainty bails to the enum paths below.
+        if (expr is PropertyAccessExpression && !expr.questionDotToken) {
+            val propName = expr.name.text
+            if (propName.isNotEmpty()) {
+                requiredUnionDiscriminantKeys(expr.expression, propName)?.let { return it }
+            }
+        }
         return enumSwitchKeysFromType(getTypeOfExpression(expr))
+    }
+
+    /**
+     * Round 422: the exhaustive value set of a property discriminant over a UNION receiver.
+     * Returns non-null ONLY when EVERY union member contributes a complete key set from a
+     * REQUIRED (non-optional) declared annotation — enum-member references and/or string
+     * literals (`lit:s:` keys). Any gap — a non-union receiver, a member without the
+     * property, an optional `kind?:`, an unreadable/numeric-literal annotation, a nullish
+     * member — returns null, so the caller's TS2366 STANDS (the FP-safety contract; the
+     * corpus is a weak gate for this analysis with `.errors.txt` disabled).
+     */
+    private fun requiredUnionDiscriminantKeys(recv: Expression, propName: String): Set<String>? {
+        // An Identifier receiver is usually a PARAMETER (`switch (mapper.kind)` in a fn
+        // taking `mapper: TypeMapper`) — this pass has no param scope in getTypeOfExpression,
+        // so resolve the declared annotation first (same reason requiredEnumSwitchKeys does).
+        val recvType = (recv as? Identifier)?.let { id ->
+            currentFunctionParams.firstOrNull { (it.name as? Identifier)?.text == id.text }
+                ?.type?.let { getTypeFromTypeNode(it) }
+        } ?: getTypeOfExpression(recv)
+        if (recvType === anyType || recvType === errorType) return null
+        val apparent = try { getApparentType(recvType) } catch (_: Exception) { return null }
+        if (apparent !is Type.Union) return null
+        val keys = mutableSetOf<String>()
+        for (member in apparent.types) {
+            val memberApparent = try { getApparentType(member) } catch (_: Exception) { return null }
+            val objects = when (memberApparent) {
+                is Type.Object -> listOf(memberApparent)
+                is Type.Intersection -> memberApparent.types.map {
+                    (try { getApparentType(it) } catch (_: Exception) { null }) as? Type.Object
+                        ?: return null
+                }
+                else -> return null
+            }
+            var ann: TypeNode? = null
+            for (obj in objects) {
+                val propSym = getPropertyOfType(obj, propName) ?: continue
+                for (decl in propSym.declarations) {
+                    val pd = decl as? PropertyDeclaration ?: continue
+                    if (pd.questionToken) return null // optional → value set includes undefined
+                    if (pd.type != null) { ann = pd.type; break }
+                }
+                if (ann != null) break
+            }
+            keys.addAll(enumMemberKeysOfTypeNode(ann ?: return null) ?: return null)
+        }
+        return keys.ifEmpty { null }
     }
 
     /** Enum-member keys of a discriminant TYPE ANNOTATION: a bare enum name → all members; a
