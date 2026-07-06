@@ -34,6 +34,87 @@ completeness campaigns to dashboard-driven burn-down: the acceptance bar is the 
 tsc's source uses, with the corpus suite as the regression net. M5 unchanged —
 performance is the directive's second half and starts at v1 compliance.
 
+**Round 425 (2026-07-06) — M3.4/M1.12: the TS2339 never-cluster ROOT CAUSES + eight more
+narrowing slices. Self-compile (compiler profile) 1,662 → 1,634 → 1,628 → 1,608 → 1,607 →
+1,603 → 1,600 (−62; TS2339 68 → 6, never×21 → 2); EVERY step's by-site diff strictly
+removals; suite 9,251 → 9,276 (+25 local tests, 0 regressions); 7 fix commits.**
+- **Fix 1 (−28, eb28f0d3): union-target guards distribute over candidates + CANONICAL enum
+  discriminant keys.** Two coupled root causes behind the never cluster: (a)
+  `narrowByCallPredicate`'s positive union branch tested narrow-DOWN against the WHOLE
+  target union (`targetUnion <: member` — requires every candidate, never holds); tsc's
+  getNarrowedType distributes `mapType(candidate, c => …)` — now per-candidate, strictly
+  more-keeping. (b) THE BIG ONE: the round-411 `"symId#member"` key space SPLIT — the same
+  enum reaches the key builders as DIFFERENT Symbol instances (program-global merged vs
+  declaring-file local via the barrel resolver), so ALL SyntaxKind keys looked pairwise
+  disjoint and `typeGuardMemberDisjoint` dropped every guard-narrowed member.
+  `canonicalEnumSymbol` (memoized; prefers the global merged symbol when it shares an
+  EnumDeclaration NODE by identity and has enumValues) at all four key-builder sites.
+  **Also cleared the round-423 "dead-end" `Identifier | ComputedPropertyName`×8 family and
+  the isAccessExpression never×4 — the DISJOINTNESS VERDICTS, not the relation, were the
+  blocker all along.** META: the scratch repro cleared while the real corpus didn't budge
+  (zero site churn); two rounds of repro-enrichment found nothing — only stderr
+  instrumentation on the REAL corpus (print the key sets) found the split.
+- **Fix 2 (−6, 4cb59a6c): aliased SWITCH discriminants** (tsc compareTypeMappers:
+  `const kind1 = m1.kind; switch (kind1) { case TypeMapKind.Simple: m1.source }`) —
+  `narrowBySwitchClause` resolves a bare-Identifier subject through the round-423
+  aliased-condition back-walk (the const-ness proof) to `<name>.<prop>`.
+- **Fix 3 (08835c06, part of −20): four slices** — (a) `narrowByDiscriminantProperty`:
+  a UNION-of-literals discriminant (`type: "list" | "listOrElement"`) matches positively
+  when ANY constituent equals / survives a negative when ANY differs; an OBJECT-typed
+  discriminant (`type: Map<…>`) can never === a primitive VALUE literal → positive drops
+  the member (enum-flavored objects excluded). **LANDMINE (+3 nevers in the first cut,
+  caught by the by-site diff): BOTH rules gate on a definite VALUE literal — optionality
+  is a symbol attribute NOT folded into the resolved prop type, so `x.body === undefined`
+  proves NOTHING** (checkGrammarAccessor/isUncheckedJSSuggestion collapsed). (b) `typeof
+  x === "object"` three-way union filter (object-like + null match; primitives/undefined/
+  CALLABLES — they report "function" — don't; any/unknown kept both branches). (c)
+  truthiness of a BOOLEAN-LITERAL discriminant (`info.isStatic ? info.variableName : …`,
+  classFields ×2). (d) a DESTRUCTURING read consults flow narrowing of its initializer
+  (`if (!result) return; const { version, paths } = result` — moduleNameResolver/
+  programDiagnostics/utilities ×6).
+- **Fix 4 (fb6c23f4, part of −20): loop-entry retry for the round-418 single-type
+  narrow-DOWN suppression** — a guard before a loop narrows a read inside it; the plain
+  walk washes at the FlowLoopLabel (checker.ts tuple-inference `constraint.target` ×3).
+  The single-type sibling of round-424 fix 1.
+- **Fix 5 (−1, aa00dc51): instanceof narrows a SUPERTYPE member DOWN to the class**
+  (`tracker instanceof SymbolTrackerImpl` on `SymbolTracker | undefined`, the class
+  implements the interface — the subtype-only filter dropped everything). Approximates
+  tsc's intersection fallback with the class type; the structural-identity corpus pin
+  (instanceofWithStructurallyIdenticalTypes) verified intact.
+- **Fix 6 (−4, 5ff41ffb): aliased `===` discriminants** (commandLineParser
+  `const optType = opt.type; if (optType === "listOrElement") { opt.element }`) **+
+  switch-DEFAULT negative narrowing** (a default clause alone in its flow range narrows
+  by every case literal/enum key of the whole switch — executeCommandLine's
+  `option.type.forEach`/`option.deprecatedKeys` + bonus utilities.ts:3466; conservative:
+  non-literal case exprs bail, fallthrough ranges bail, only LITERAL-typed members drop
+  on the direct path).
+- **Fix 7 (−3): tsc's positive-empty INTERSECTION fallback** (`hasDynamicName(accessor)`
+  vs an unrelated-in-both-directions target now yields `m & c` for object-capable pairs
+  instead of `never` — **REVERSES the round-423 dead-end verdict: the 1,708 → 1,710
+  net-negative was an artifact of the enum-key split; re-measure dead-ends when an
+  upstream root cause falls**) + `typeof "object"` classifies an ENUM member as
+  NOT-object (watchPublic's `ScriptTarget | CreateSourceFileOptions`).
+- **Process notes:** (1) do NOT `compileKotlinJvm` while a background self-compile A/B is
+  in flight — the recompile clobbers class files the running JVM lazily loads
+  (ClassNotFoundException mid-run); concurrent CLI RUNS are safe. (2) The patch-split
+  protocol again (5 same-file batches split into 7 bisectable commits, tests distributed
+  per commit).
+- **Perf watch (M5):** the round-425 bench single-run came in at 151 s self-reported vs the
+  ~100–137 s recent band (+10%) — single-run noise vs the new retry/back-walk paths not yet
+  disentangled; the retries only run on would-be-FP emissions and the back-walks are memoized,
+  but re-measure with iterations at the next M5 touchpoint.
+- **Residual TS2339×6 (all triaged):** checker.ts:33288/33289 never×2 — try/finally:
+  `bindTryStatement` gives a finally-only block ONLY the try-end antecedent (unreachable
+  when the try returns → never) — needs a preTry antecedent for the finally entry (but
+  NOT for the post-switch continuation — TS2454 regression risk documented in-session)
+  PLUS `??=` non-nullish-call-RHS narrowing; checker.ts:28630 `Type | IncompleteType`
+  (`flags === 0` vs `flags: TypeFlags` — needs enum-as-literal-union comparability,
+  B425/M3.3); moduleNameResolver.ts:2823 (interface modeling, M3);
+  builder.ts:2242 (tuple-index on tuple-union, the B526 representation gap);
+  es2020.ts:91 (loop-carried `OptionalChain` reassignment, M3). Next big buckets:
+  TS2322×751 / TS2345×394 / TS7006×301 (M3 cores), TS2769×45 (M3.1 generic call-site
+  inference), TS2563×27 (B399 heuristic → M3.4), TS2591×43 + TS2304×2 (env-legit).**
+
 **Round 424 (2026-07-06) — M3.4/M1.12: seven flow-narrowing burn-down fixes from the round-423
 residual triage. Self-compile (compiler profile) 1,707 → 1,691 → 1,687 → 1,683 → 1,680 → 1,672 →
 1,662 (−45; TS2339 104 → 68, TS18048 5 → 1, TS2322 756 → 751); every step's by-site diff STRICTLY
