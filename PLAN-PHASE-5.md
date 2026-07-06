@@ -34,6 +34,44 @@ completeness campaigns to dashboard-driven burn-down: the acceptance bar is the 
 tsc's source uses, with the corpus suite as the regression net. M5 unchanged —
 performance is the directive's second half and starts at v1 compliance.
 
+**Round 419 (2026-07-06) — M1.12: resolve properties on INTERSECTION union-members. Self-compile
+(compiler profile) 1,854 → 1,808 (−46, TS2339 189 → 143); suite 9,173 → 9,177 (+4 local, 0
+regressions); 1 fix commit (39f22170).** After round 418, re-bucketing TS2339 by receiver type put
+the intersection-arm unions (`PropertyAccessExpression | (ElementAccessExpression & Declaration &
+{…})`, tsc's `BindableStaticAccessExpression`) as the biggest remaining sub-family (~28 sites in
+binder.ts/utilities.ts, all PRE-EXISTING). Root cause: `getPropertyOfType` has NO Intersection
+branch (deliberately — "modifying it is broad", CLAUDE.md) and `typeHasOwnProperty` bails on a
+`Type.Intersection` member (`type !is Type.Object`), so a property INHERITED by the intersection arm
+(`.parent` via `Node`) reads as missing and the whole union access FP's TS2339. **TWO coupled pieces
+— the 2nd because the 1st EXPOSED a switch-narrowing gap:**
+- **(1) property resolution** — new `resolveMemberPropertyType(member, prop)` folds an intersection
+  member's constituents (a property exists on `A & B` iff ANY constituent has it — the round-352
+  rule, applied per union member instead of only for a direct-intersection receiver). Wired into the
+  B83.4e union-member fold in `computeRawTypeOfPropertyAccess` (the property TYPE) AND into
+  `checkMemberAccessMissing`'s `memberHasIt` (the TS2339 EMISSION). Minimal blast radius: for a
+  NON-intersection member it reduces to the existing `getPropertyOfType`, so only intersection
+  members change.
+- **(2) discriminant narrowing** — piece (1) ALONE introduced 3 new FPs at utilities.ts:4362/4365/4367:
+  a `switch (node.kind) { case Import: case Export: return node.moduleSpecifier }` left an
+  intersection member (`BindingPattern & {…}` — a NON-matching `.kind`) in the narrowed union because
+  `discriminantPropAnnotation` bailed on the intersection (`getApparentType(member) as? Type.Object`)
+  → the member's `.kind` read as unknown → it wrongly SURVIVED the switch → the over-wide narrowed
+  union FP'd `.moduleSpecifier`. Folding the intersection constituents in `discriminantPropAnnotation`
+  (read the `.kind` annotation from any constituent) filters the member correctly → 0 new FPs.
+- **PERF: self-compile TIME −17% (122 → 101 s)** — the more-accurate narrowing + fewer FP
+  elaborations RECLAIM round 418's +17% regression, so rounds 418+419 net roughly FLAT on time
+  (~104 → ~101 s) while −94 on FPs. BOTH dashboard metrics improved this round. Corpus suite time
+  flat. +4 local tests (IntersectionMemberPropertyTest: intersection-arm property resolves +
+  switch-`.kind` filters the intersection member + FP-safety: plain-union genuinely-missing still
+  fires, partial-coverage still fires). **META: the fix is the documented
+  `getPropertyOfType`-has-no-Intersection-branch gap, resolved NARROWLY in the union-member path (not
+  `getPropertyOfType` itself — that stays broad-risk); the 1st cut's 3-FP regression is the lesson
+  that the same intersection-fold must be applied to EVERY place that reads a member property (both
+  property resolution AND discriminant-narrowing annotation), not just the obvious one.** DEFERRED
+  (residual, M3): the `.kind`-switch narrowing still doesn't handle a WIDER-declared discriminant
+  union (the TS2366 `.kind` exhaustive-switch family); the M3 cores TS2322×784 / TS2345×396 /
+  TS7006×301 dominate.
+
 **Round 418 (2026-07-06) — M1.12: resolve NESTED type-guard functions so their narrowing fires.
 Self-compile (compiler profile) 1,902 → 1,854 (−48, TS2339 237 → 189); suite 9,168 → 9,173
 (+5 local, 0 regressions); 1 fix commit (7a806360).** Bucketing the fresh full `--listAll` by
@@ -521,63 +559,6 @@ surface — so measure the self-compile before/after every cut, and when a fix u
 debug-instrument to distinguish a RESOLUTION gap (rhsKey=null → the barrel resolver) from a
 LOGIC gap.
 
-**Round 410 (2026-07-05) — M1.12 + M3.4: THREE clean bounded self-compile fixes, all
-FP-safe / suppression-only, found by bucketing the FULL compiler-profile `--listAll` (2,443
-lines) by normalized message shape. Self-compile (compiler profile) 2,443 → 2,433 (−10); suite
-9,076 → 9,087 (+11 local, 0 regressions); 3 code commits + 1 continuity docs commit.** Method
-(the M1.12 note): re-ran `--listAll` at HEAD (2,443, 63 s) and bucketed all lines; the M3 cores
-(TS2322×793, TS2339×672, TS2345×400, TS7006×301) dominate and stay engine-gated, but three bounded
-buckets in the tail were genuine non-M3 bugs. **(1) TS2862 1→0 (commit 3512c756):** the B98.r80
-generic-index-write walker fired for ANY constrained type-parameter receiver whose index write used
-a non-numeric key, FP-ing tsc's own `assign<T extends object>(t: T){ t[p] = arg[p] }` (core.ts).
-tsc emits TS2862 only when the write would otherwise fall back to a STRING/symbol index signature
-(checker.ts ~19294: `accessFlags & NoIndexSignatures && indexInfo.keyType !== numberType`) — a bare
-`T extends object` has no such `indexInfo`. Narrowed `constrainedTpNames` (used only by this walker)
-to constraints bearing a string/symbol index signature: an inline `{ [s: string]: V }` TypeLiteral,
-a `Record<K, V>` with a string/symbol-like key, or an intersection of either. Both
-`cannotIndexGenericWritingError` corpus shapes (`Record<string | symbol, any>`,
-`number[] & { [s: string]: … }`) still fire; a user `TypeReference` to an interface with an index
-signature is a harmless false negative. **(2) assign-RHS type-guard narrowing −8 (commit 2c9fd451):**
-a plain assignment `x = y` where `y` (an Identifier / property path) is narrowed by a preceding user
-type-guard to a SUBTYPE of `x`'s declared type FP'd a missing-brand-property error — tsc's own
-`node = parent` inside `if (isParenthesizedExpression(parent))` (utilities.ts) and `target = callee`
-inside `if (isSuperProperty(callee))` (nodeFactory.ts). Flow narrowing was consulted by the var-decl
-assignability path / TS2339 / call-args / the TS2349 callee, but NOT by `checkAssignmentExpression`,
-so the RHS resolved to its wider declared type. Fix: before the identifier-target missing-property /
-relation checks, narrow an Identifier/PropertyAccess RHS via `getNarrowedTypeForReference` and use
-the narrowed type only when it is a STRICT improvement that makes the assignment relate
-(`checkTypeRelatedTo(narrowed, tt, assignableRelation)` passes). Gated to a named object target
-(Interface/Reference) — the shape the var-decl path deliberately defers. Suppression-only + FP-safe:
-a genuine widening (no narrowing, or narrowed still not assignable) keeps the raw type and still
-fires. Cleared TS2739 7→3, TS2741 3→2, TS2322 793→790; the residual TS2741×2 (compound `&&` guard
-conditions) + TS2739×3 are deeper narrowing cases (M3.4). **(3) TS2394 1→0 (commit b0c38b2b):** a
-`void` OVERLOAD return is compatible with ANY implementation return (tsc
-`isImplementationCompatibleWithOverload`: `targetReturnType === voidType || (overload→impl) ||
-(impl→overload)`); `isSignatureCompatible` ran the return check unconditionally, FP-ing tsc's
-`writeTokenText(…): void` overload against its `: number` implementation. Skip the return check
-(both the syntactic compare and the class-return covariance) when the overload return is `void`.
-Constructor overloads are unaffected (no explicit return annotation). **Also cleaned a pre-existing
-always-true `eff is Type.Union` warning introduced by round 408's callee-narrowing commit
-(dabd5557) — `eff` is initialized from the smart-cast `calleeType: Type.Union`, so the guard was
-redundant; rewritten to reference `calleeType`. Build is warning-clean again.** 11 local tests
-(GenericIndexWriteConstraintTest ×5, AssignmentRhsNarrowingTest ×3, OverloadVoidReturnTest ×3), each
-with negative controls (a `T extends object` / plain-interface constraint must NOT fire TS2862; a
-genuine widening assignment must still fire; an overload returning an unrelated class must still fire
-TS2394). **DEFERRED as M3/B425 (broad relation-engine risk): a const STRING enum is NOT assignable to
-`string` in our engine.** A minimal probe showed even the SCALAR `const y: string = x` (where
-`x: E`, `E` a const string enum) FPs TS2322 — not just the nested `Extension[][]` / `string[][]`
-TS2367×2 + TS2322×2 module-resolution cluster. Fixing it needs modeling a string-valued enum as
-string-like in the relation engine + `comparabilityCategory` (mirroring round 407's
-`isNumericEnumObjectType` for the arithmetic pass), which the round-408 note already flagged M3 —
-enum assignability is heavily corpus-tested, so it belongs to a dedicated M3.3/B425 slice, not a
-bounded quick fix. **META (re-confirms the M1.12 method): TWO of the three bounded bugs were hiding
-under M3-LABELED families — TS2394 under "overload", the assignment narrowing under the
-TS2741/TS2739 brand-property bucket — and were surfaced only by bucketing the FULL `--listAll` by
-normalized message shape, not the 30-line log tail. The residual bounded pool is genuinely thin:
-after these, the tail is TS2591×43 (node globals, env-legit), TS2563×27 (B399 heuristic → M3.4), the
-arithmetic ~22 (enum-`| undefined` un-narrowing → M3.4), the brand-property residue (M3.4/M3), and
-the const-string-enum relation (M3.3/B425). Next real progress is a decomposed M3.1/M3.3/M3.4 slice
-or M2.2 (real-lib A/B).**
 
 
 ### Mission & strategy
@@ -630,8 +611,8 @@ Three strategic reads that shape everything below:
 
 | Metric | Source | Phase 17 target |
 |---|---|---|
-| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 9,173 with local tests as of round 418) |
-| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**1,854 measured at round 418**; M1 complete at 2,726/round 389; rounds 395–418 burned bounded histogram-tail buckets + M3.4 flow-narrowing slices 2,726 → 1,854; round 418 NESTED type-guard resolution (M1.12) −48 (TS2339 237 → 189: tsc's `isTupleType`/… guards are nested in `createTypeChecker` so the binder skips them and `resolveFlowCalleeDecl` missed them — program-wide unique-name fallback + a `Type.Union`-gate-bypassing narrow-DOWN suppression + an intersection-target positive-collapse fallback; 0 new FPs; the negative-exhaustion never of `instanceofWithStructurallyIdenticalTypes` stays intact); round 417 namespace-local `extends`-base resolution −2 (coordinated across `getTypeFromBaseTypeExpression` + `lookupInstanceMemberInResolvableChain`, FP-safe); round 409 `export *`-barrel / ESM-`.js` imported-guard FLOW narrowing (M3.4) −175 (TS2339 838 → 672); round 411 enum-member discriminant narrowing + type-guard-narrows-member-DOWN −59; round 412 single-type type-guard narrow-DOWN + TS18048 receiver-narrowing −1; round 413 the `export *` LEAF-EXPORT gate −407 (TS2339 614 → 237): the pre-413 star resolver returned non-exported IMPORT aliases, so barrel-imported `Debug.assert` (& every barrel guard) never resolved — the TRUE builder.ts blocker, NOT the round-412 depth red herring (an instrumented run showed ZERO walk truncations) — plus a dashboard-neutral tsc-faithful linear flow-walk iteration + a return-path narrowing consumer (−1); **round 414 the TS2366 "lacks ending return" family −35 (50 → 15): three CFA fall-through patterns in `statementAlwaysReturns`/`switchAlwaysReturns` — infinite-loop-with-return, trailing never-call (`Debug.fail`), switch fall-through — all FP-safe syntactic/barrel-resolution fixes; the remaining 15 are Pattern C2 (exhaustive switch w/o default → M3.4 discriminant-exhaustiveness)**; remaining bounded pool M3.4/M3-gated (a general-`resolveAlias` `.js`/star fix was measured net +297 via a TS2315 flood, reverted; NonNull-strip −17 but unmasks M3, reverted; const-string-enum→`string` relation deferred M3.3/B425); no-stub stays the honest default) |
+| Corpus suite | jvmTest XMLs | green forever (8,842 / 0 / 3 at phase start; 9,177 with local tests as of round 419) |
+| Self-compile FPs (tsc src/compiler) | `bench/self-compile-tsc.tsv` | 13,245 → 0 (**1,808 measured at round 419**; M1 complete at 2,726/round 389; rounds 395–419 burned bounded histogram-tail buckets + M3.4 flow-narrowing slices 2,726 → 1,808; round 419 INTERSECTION union-member property resolution (M1.12) −46 (TS2339 189 → 143: `getPropertyOfType`/`typeHasOwnProperty` bail on a `Type.Intersection` member — fold the constituents in property resolution + discriminant-narrowing; 0 new FPs, self-compile time −17%); round 418 NESTED type-guard resolution (M1.12) −48 (TS2339 237 → 189: tsc's `isTupleType`/… guards are nested in `createTypeChecker` so the binder skips them and `resolveFlowCalleeDecl` missed them — program-wide unique-name fallback + a `Type.Union`-gate-bypassing narrow-DOWN suppression + an intersection-target positive-collapse fallback; 0 new FPs; the negative-exhaustion never of `instanceofWithStructurallyIdenticalTypes` stays intact); round 417 namespace-local `extends`-base resolution −2 (coordinated across `getTypeFromBaseTypeExpression` + `lookupInstanceMemberInResolvableChain`, FP-safe); round 409 `export *`-barrel / ESM-`.js` imported-guard FLOW narrowing (M3.4) −175 (TS2339 838 → 672); round 411 enum-member discriminant narrowing + type-guard-narrows-member-DOWN −59; round 412 single-type type-guard narrow-DOWN + TS18048 receiver-narrowing −1; round 413 the `export *` LEAF-EXPORT gate −407 (TS2339 614 → 237): the pre-413 star resolver returned non-exported IMPORT aliases, so barrel-imported `Debug.assert` (& every barrel guard) never resolved — the TRUE builder.ts blocker, NOT the round-412 depth red herring (an instrumented run showed ZERO walk truncations) — plus a dashboard-neutral tsc-faithful linear flow-walk iteration + a return-path narrowing consumer (−1); **round 414 the TS2366 "lacks ending return" family −35 (50 → 15): three CFA fall-through patterns in `statementAlwaysReturns`/`switchAlwaysReturns` — infinite-loop-with-return, trailing never-call (`Debug.fail`), switch fall-through — all FP-safe syntactic/barrel-resolution fixes; the remaining 15 are Pattern C2 (exhaustive switch w/o default → M3.4 discriminant-exhaustiveness)**; remaining bounded pool M3.4/M3-gated (a general-`resolveAlias` `.js`/star fix was measured net +297 via a TS2315 flood, reverted; NonNull-strip −17 but unmasks M3, reverted; const-string-enum→`string` relation deferred M3.3/B425); no-stub stays the honest default) |
 | Project corpus FPs (services/server/…) | `bench/` TSVs (M0.1) | 0 — **the v1 exit** (all 8 profiles) |
 | Conformance adoption | generated-test counts per category | POST-V1 (re-scope 2026-07-03 — see § "Post-v1 backlog", M3.0) |
 | Crashes on any input | bench runs | 0 |
@@ -1063,6 +1044,16 @@ Three strategic reads that shape everything below:
   (more narrowing walks succeed; M5). The 8 binder/nodeFactory intersection-arm-UNION FPs a broader
   "raw exposes the property → suppress" guard would flip were DEFERRED as an M3 gap (union
   property-access over an intersection-arm member).**
+  **Round 419 resolved that DEFERRED intersection-arm gap (self-compile 1,854 → 1,808, TS2339
+  189 → 143): `getPropertyOfType` has no Intersection branch and `typeHasOwnProperty` bails on a
+  `Type.Intersection` member, so `PropertyAccessExpression | (ElementAccessExpression & Declaration
+  & {…})` FP'd TS2339 on a property inherited by the intersection arm (~28 binder.ts/utilities.ts
+  sites). Fixed with `resolveMemberPropertyType` (folds an intersection member's constituents),
+  wired into the B83.4e union-member fold + `checkMemberAccessMissing`'s `memberHasIt`; plus
+  `discriminantPropAnnotation` now reads the `.kind` annotation from intersection constituents so a
+  `switch (node.kind) { case … }` filters an intersection member (else the 1st cut left it in the
+  narrowed union → 3 new FPs on the case-body property). 0 new FPs; self-compile time −17%
+  (reclaims round 418's +17%); +4 local tests (IntersectionMemberPropertyTest).**
 
 **M2 — Real-lib migration (staged; decompose further at start)**
 
