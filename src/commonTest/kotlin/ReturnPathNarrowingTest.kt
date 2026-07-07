@@ -114,4 +114,50 @@ class ReturnPathNarrowingTest {
             have(any { it.code == 2739 || it.code == 2740 || it.code == 2741 || it.code == 2322 })
         }
     }
+
+    /**
+     * Round 438: the return-path narrowing gate now also covers a UNION return target
+     * (`Identifier | ... | undefined`) — the symmetric partner of the assignment-path
+     * union gate. A returned reference guard-narrowed to a subtype of a union member
+     * must relate; tsc's utilitiesPublic/utilities/factory `return node` sites (×12).
+     */
+    @Test
+    fun `return guard-narrowed reference to a UNION target - no error`() {
+        diagnose(
+            """
+            interface Node { kind: number; }
+            interface Expression extends Node { _e: any; }
+            interface Identifier extends Expression { _id: any; }
+            interface PrivateIdentifier extends Expression { _pid: any; }
+            declare function isIdentifier(n: Node): n is Identifier;
+
+            export function nameOf(node: Expression): Identifier | PrivateIdentifier | undefined {
+                if (isIdentifier(node)) {
+                    return node; // Expression narrowed to Identifier <: the union
+                }
+                return undefined;
+            }
+            """
+        ) should {
+            have(none { it.code == 2322 || it.code == 2741 || it.code == 2739 })
+        }
+    }
+
+    @Test
+    fun `return unguarded reference to a UNION target still fires - negative control`() {
+        diagnose(
+            """
+            interface Node { kind: number; }
+            interface Expression extends Node { _e: any; }
+            interface Identifier extends Expression { _id: any; }
+            interface PrivateIdentifier extends Expression { _pid: any; }
+
+            export function nameOf(node: Expression): Identifier | PrivateIdentifier | undefined {
+                return node; // Expression ≁ Identifier | PrivateIdentifier | undefined
+            }
+            """
+        ) should {
+            have(any { it.code == 2322 || it.code == 2741 })
+        }
+    }
 }

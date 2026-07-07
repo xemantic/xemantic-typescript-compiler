@@ -86318,7 +86318,12 @@ interface DataView {
             // to a named object target — the shape where a redefined-required-member
             // subtype matters.
             val sourceType = if ((expr is Identifier || expr is PropertyAccessExpression) &&
-                (targetType is Type.Interface || targetType is Type.Reference || targetType is Type.Object)) {
+                (targetType is Type.Interface || targetType is Type.Reference ||
+                    targetType is Type.Object || targetType is Type.Union)) {
+                // Round 438: a UNION return target (`SourceFile | undefined`) is the
+                // symmetric partner of the assignment-path union gate — a returned
+                // reference guard-narrowed to a subtype of a union member must relate
+                // (suppression-only: substituted only when it makes the return relate).
                 val narrowed = getNarrowedTypeForReference(sourceTypeRaw, expr)
                 if (narrowed !== sourceTypeRaw && checkTypeRelatedTo(narrowed, targetType, assignableRelation)) narrowed
                 else sourceTypeRaw
