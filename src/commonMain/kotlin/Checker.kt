@@ -94755,6 +94755,24 @@ interface DataView {
             val filtered = t.types.filter { m -> verdict(m)?.let { it == isMatch } ?: true }
             return if (filtered.isEmpty() || filtered.size == t.types.size) t else getUnionType(filtered)
         }
+        // M3.4 (round 429d): `typeof x === "<primitive>"` narrows a non-union UNKNOWN
+        // to that primitive (tsc narrowTypeByTypeof) — the non-union flags path below
+        // returns `never` for a positive match on `unknown` (it carries no primitive
+        // flags), which the relation-gated consumers then reject, so the guard never
+        // fed the call-arg path (tsc moduleNameResolver's `target: unknown` string
+        // arm, ×10 self-compile). The negative branch keeps `unknown` unchanged
+        // (no practical subtraction).
+        if (t === unknownType) {
+            if (!isMatch) return t
+            return when (guard) {
+                "string" -> stringType
+                "number" -> numberType
+                "boolean" -> booleanType
+                "bigint" -> bigintType
+                "undefined" -> undefinedType
+                else -> t
+            }
+        }
         val flags = typeofTypeGuardFlags(guard) ?: return t
         if (flags == TypeFlags.None) return t
         if (t is Type.Union) {
@@ -123539,7 +123557,8 @@ interface DataView {
                 // them explicitly here. Only Union types can be refined.
                 if ((arg is Identifier || arg is PropertyAccessExpression) && ctxApplied is Type.Union) {
                     getNarrowedTypeForReference(ctxApplied, arg)
-                } else if (arg is Identifier && ctxApplied is Type.Interface &&
+                } else if (arg is Identifier &&
+                    (ctxApplied is Type.Interface || ctxApplied === unknownType) &&
                     paramType !== neverType) {
                     // M3.4 (round 428b, generalized round 429c): an Identifier arg whose
                     // NON-union interface type is narrowed DOWN by a type guard
@@ -124862,7 +124881,14 @@ interface DataView {
         for (i in lastIdx until args.size) {
             val arg = args[i]
             if (arg is SpreadElement) continue
-            val argType = getTypeOfExpression(arg)
+            val argType0 = getTypeOfExpression(arg)
+            // M3.4 (round 429d): mirror B469 — a reference arg in a REST position
+            // narrows by the flow graph too (`cond ? diag(…, deprecatedEntity) : …`
+            // truthy-narrows the `string | undefined` rest arg to `string` — tsc
+            // checker.ts addDeprecatedSuggestionWithSignature, ×5 self-compile).
+            val argType = if ((arg is Identifier || arg is PropertyAccessExpression) && argType0 is Type.Union) {
+                getNarrowedTypeForReference(argType0, arg)
+            } else argType0
             if (argType === anyType || argType === errorType) continue
             if (argType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)) continue
             // Conservative gate: only emit when argType is a simple/primitive
@@ -125170,6 +125196,12 @@ interface DataView {
         // numbers — tsc debug.ts `formatEnum(this.flags, …)` where flags: FlowFlags
         // vs a `number` param). String-valued enums excluded by the classifier.
         if (tf.hasAny(TypeFlags.Number) && isNumericEnumObjectType(source)) return true
+        // M3.1 (round 429d): string-enum → string, the string sibling (an ALL-string-
+        // valued enum is a union of string literals in tsc — `changeAnyExtension(path,
+        // Extension.Dts)` vs a `string` param; also cascades to `Extension[]` →
+        // `string[]` via the same-target covariant element comparison). Mixed/numeric/
+        // unknown-valued enums excluded (conservative: unevaluated → not provable).
+        if (tf.hasAny(TypeFlags.String) && isStringEnumObjectType(source)) return true
         // object type (non-primitive) — primitives are NOT assignable to object
         if (tf.hasAny(TypeFlags.NonPrimitive)) {
             return !sf.hasAny(TypeFlags.Primitive or TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)
@@ -145195,6 +145227,19 @@ interface DataView {
         if (!sym.flags.hasAny(SymbolFlags.Enum)) return false
         val values = enumValues[sym.id] ?: return true // no computed values → all auto-numeric
         return values.values.none { it is ConstantValue.StringValue }
+    }
+
+    /** M3.1 (round 429d): an ALL-string-valued enum (`enum Extension { Ts = ".ts", … }`)
+     *  — its values ARE strings, so the enum type is assignable to `string` (tsc models
+     *  it as a union of string literals). Unlike [isNumericEnumObjectType]'s
+     *  unknown-→-numeric default, an enum with NO evaluated values is NOT
+     *  string-provable (conservative false). A ConstEnum-flagged NAMESPACE (the
+     *  cascade gotcha) has no `enumValues` entry → false. */
+    private fun isStringEnumObjectType(type: Type): Boolean {
+        val sym = (type as? Type.Object)?.symbol ?: return false
+        if (!sym.flags.hasAny(SymbolFlags.Enum)) return false
+        val values = enumValues[sym.id] ?: return false
+        return values.values.isNotEmpty() && values.values.all { it is ConstantValue.StringValue }
     }
 
     /** For + and STRICT arithmetic, an object operand PROCEEDS to per-operand classification
