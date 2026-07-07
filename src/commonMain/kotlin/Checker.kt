@@ -123383,6 +123383,39 @@ interface DataView {
         return decl.questionToken || decl.initializer != null
     }
 
+    /** M3.1 (round 429c): tsc types a non-null-asserted expression `x!` as
+     *  NonNullable<T> — strip nullish members from a UNION arg whose expression is a
+     *  NonNullExpression (through parens). LOCAL to the call-arg path, mirroring the
+     *  arithmetic pass's `arithOperandType` (round 415): the GLOBAL strip in
+     *  `getTypeOfExpression` was measured to unmask M3 object-literal/generic gaps
+     *  (round 407, reverted) — do not move this there. */
+    private fun stripNullishForNonNullArg(arg: Expression, t: Type): Type {
+        if (t !is Type.Union) return t
+        var e = arg
+        while (e is ParenthesizedExpression) e = e.expression
+        if (e !is NonNullExpression) return t
+        val kept = t.types.filter { !it.flags.hasAny(TypeFlags.Undefined or TypeFlags.Null) }
+        if (kept.isEmpty() || kept.size == t.types.size) return t
+        return if (kept.size == 1) kept[0] else getUnionType(kept)
+    }
+
+    /** M3.1 (round 429c): under strictNullChecks an OPTIONAL parameter's effective
+     *  type includes `undefined` (tsc getTypeAtPosition), so a UNION arg whose only
+     *  failing member is `undefined` is LEGAL for `configFileName?: string` —
+     *  equivalently, the undefined-stripped arg must relate to the declared param
+     *  type. `null` members stay (null is not interchangeable with absence).
+     *  Suppression-only: a still-failing arg keeps the unstripped display. */
+    private fun unionArgOkForOptionalParam(argType: Type, paramSym: Symbol, paramType: Type): Boolean {
+        if (argType !is Type.Union) return false
+        if (!argType.types.any { it.flags.hasAny(TypeFlags.Undefined) }) return false
+        val decl = paramSym.valueDeclaration as? Parameter ?: return false
+        if (!decl.questionToken && decl.initializer == null) return false
+        val kept = argType.types.filter { !it.flags.hasAny(TypeFlags.Undefined) }
+        if (kept.isEmpty()) return true
+        val stripped = if (kept.size == 1) kept[0] else getUnionType(kept)
+        return checkTypeRelatedTo(stripped, paramType, assignableRelation)
+    }
+
     private fun checkArgumentsAgainstSignature(
         args: List<Expression>,
         sigIn: Signature,
@@ -123494,21 +123527,31 @@ interface DataView {
                 // call-return path, which would cascade `void` into currentLocalTypes /
                 // var-init inference (the `isFromCall` rule).
                 val widened = if (raw === anyType) (voidIifeArgType(arg) ?: raw) else raw
-                val ctxApplied = if (propTypeContainsLiteral(paramType)) {
+                val ctxAppliedRaw = if (propTypeContainsLiteral(paramType)) {
                     literalTypeOfExpression(arg) ?: widened
                 } else widened
+                // M3.1 (round 429c): a non-null-asserted arg (`readFile(path)!`) types
+                // as its nullish-stripped union (tsc NonNullable) — LOCAL strip only.
+                val ctxApplied = stripNullishForNonNullArg(arg, ctxAppliedRaw)
                 // B469: narrow a reference argument by the flow graph. PropertyAccess
                 // args already narrow inside getTypeOfPropertyAccess, but bare Identifier
                 // args do not (getTypeOfIdentifier never consults narrowing), so narrow
                 // them explicitly here. Only Union types can be refined.
                 if ((arg is Identifier || arg is PropertyAccessExpression) && ctxApplied is Type.Union) {
                     getNarrowedTypeForReference(ctxApplied, arg)
-                } else if (arg is Identifier && arg.text == "this" && ctxApplied is Type.Interface) {
-                    // M3.4 (round 428b): a this-param-typed `this` arg narrowed DOWN by
-                    // a guard (`isIdentifier(this) ? idText(this) : …` — tsc debug.ts's
+                } else if (arg is Identifier && ctxApplied is Type.Interface &&
+                    paramType !== neverType) {
+                    // M3.4 (round 428b, generalized round 429c): an Identifier arg whose
+                    // NON-union interface type is narrowed DOWN by a type guard
+                    // (`isSourceFile(x) && isExternalOrCommonJsModule(x)` — Node narrows
+                    // to SourceFile; originally bounded to `this` for debug.ts's
                     // __tsDebuggerDisplay). Relation-gated: substitute only a genuine
-                    // refinement, so this can only suppress. Bounded to `this` — the
-                    // reference the round-428b this-param binding newly types.
+                    // refinement, so this can only suppress. The `never`-PARAM exclusion
+                    // is load-bearing: `assertType<never>(node)` in an exhaustive-switch
+                    // default needs exhaustiveness narrowing we don't model — a partial
+                    // refinement (a union of case-matched members) would take the
+                    // union-arg emission path and manufacture an FP where the declared
+                    // interface previously stayed silent.
                     val n = getNarrowedTypeForReference(ctxApplied, arg)
                     if (n !== ctxApplied && n !== neverType &&
                         checkTypeRelatedTo(n, ctxApplied, assignableRelation)) n else ctxApplied
@@ -124595,6 +124638,10 @@ interface DataView {
             // simple-checkable path too (covers primitive-typed `b?: string` params —
             // the M1.7a gates below only reached the Reference/anon-fn branches).
             if (isUndefinedArgForOptionalParam(argType, params[i])) continue
+            // M3.1 (round 429c): a `string | undefined` UNION arg is legal for an
+            // OPTIONAL `configFileName?: string` param (tsc's effective param type
+            // unions undefined under strict). Suppression-only.
+            if (unionArgOkForOptionalParam(argType, params[i], paramType)) continue
             if (forceVoidUndefinedFail || !checkTypeRelatedTo(argType, paramType, assignableRelation)) {
                 // B291: a MIXED bigint/number literal-union argument is the
                 // typeof-discrimination idiom (`0 | 1n` narrowed by
