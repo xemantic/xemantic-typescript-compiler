@@ -195,6 +195,67 @@ class ImplicitAnyContextualTypingTest {
     }
 
     // ------------------------------------------------------------------
+    // round 431b: receiver/member shapes
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `intersection-cast receiver provides the member context`() {
+        val params = ts7006Params(
+            """
+            interface HostA { watchDir: (dir: string, flags: number) => void; }
+            interface HostB { readFile: (p: string) => string; }
+            declare function makeHost(): unknown;
+            export function f() {
+                const h = makeHost() as HostA & HostB;
+                h.watchDir = (dir, flags) => { void dir; void flags; };
+            }
+            """
+        )
+        assertEquals(emptyList(), params)
+    }
+
+    @Test
+    fun `call-initialized local types as the callee's return annotation`() {
+        val params = ts7006Params(
+            """
+            interface BuilderProgram { getAllDependencies: (sourceFile: string) => readonly string[]; }
+            declare function createRedirected(): BuilderProgram;
+            export function g() {
+                const bp = createRedirected();
+                bp.getAllDependencies = sourceFile => [sourceFile];
+            }
+            """
+        )
+        assertEquals(emptyList(), params)
+    }
+
+    @Test
+    fun `member inherited through extends provides the context`() {
+        val params = ts7006Params(
+            """
+            interface ReadonlyMap2 { getKeys: (v: string) => string[]; }
+            interface Map2 extends ReadonlyMap2 { setKeys: (v: string) => void; }
+            export function k(m: Map2) {
+                m.getKeys = v => [v];
+            }
+            """
+        )
+        assertEquals(emptyList(), params)
+    }
+
+    @Test
+    fun `negative control - member of an any-typed receiver still fires`() {
+        val params = ts7006Params(
+            """
+            export function neg(x: any) {
+                x.member = (a) => a;
+            }
+            """
+        )
+        assertEquals(listOf("a"), params)
+    }
+
+    // ------------------------------------------------------------------
     // logical-operator propagation (tsc getContextualTypeForBinaryOperand)
     // ------------------------------------------------------------------
 

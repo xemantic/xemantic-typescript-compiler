@@ -20591,6 +20591,12 @@ class Checker(
                             if (dn is Identifier && dn.text.isNotEmpty()) {
                                 scope[dn.text] = decl.type
                                     ?: (decl.initializer as? AsExpression)?.type
+                                    // M3.2 (round 431b): a call-initialized local types as
+                                    // the callee's declared RETURN annotation (`const
+                                    // builderProgram = createRedirectedBuilderProgram(…)`)
+                                    // — AST-only at registration (the TypeNode resolves
+                                    // lazily, only if an assignment consumes it).
+                                    ?: calleeReturnAnnotationForImplicitAny(decl.initializer)
                             } else {
                                 collectBindingNamesForImplicitAny(dn, scope)
                             }
@@ -21142,6 +21148,21 @@ class Checker(
         return if (hasRest) Int.MAX_VALUE else sig.parameters.size
     }
 
+    /** M3.2 (round 431b): the declared RETURN annotation of a call initializer's
+     *  callee — `const x = makeHost(…)` types `x` as makeHost's return annotation for
+     *  the implicit-any scope map. Identifier callees only (file symbol or nested-fn
+     *  map); a TypePredicate return is boolean-ish, not a useful member source → null. */
+    private fun calleeReturnAnnotationForImplicitAny(init: Expression?): TypeNode? {
+        val call = init as? CallExpression ?: return null
+        val callee = call.expression as? Identifier ?: return null
+        val sym = currentFileLocals?.get(callee.text) ?: globals[callee.text]
+        val fd = (sym?.declarations?.firstOrNull { it is FunctionDeclaration } as? FunctionDeclaration)
+            ?: uniqueFunctionDeclByName(callee.text)
+            ?: return null
+        val ret = fd.type ?: return null
+        return if (ret is TypePredicate) null else ret
+    }
+
     /** True when an assignment RHS shape can consume a function contextual type —
      *  gates the LHS type resolution (first-touch discipline + per-assignment cost). */
     private fun rhsCanConsumeFnCtx(rhs: Expression): Boolean = when (rhs) {
@@ -21585,11 +21606,28 @@ class Checker(
      * Differs from [getPropertyOfType] which requires the property on EVERY
      * union constituent — this helper is heuristic and picks first hit.
      */
-    private fun lookupPropertyTypeForCtx(type: Type, name: String): Type? {
+    private fun lookupPropertyTypeForCtx(type: Type, name: String, depth: Int = 0): Type? {
+        if (depth > 8) return null // cyclic extends chains survive parse recovery
         return when (type) {
             is Type.Object -> {
                 resolveStructuredTypeMembers(type)
-                val sym = type.members?.get(name)
+                var sym = type.members?.get(name)
+                // M3.2 (round 431b): a Type.Reference's own members can stay lazy —
+                // fall back to the target's (un-substituted member types are fine for
+                // the arity-only consumers this helper serves).
+                if (sym == null && type is Type.Reference) {
+                    resolveStructuredTypeMembers(type.target)
+                    sym = type.target.members?.get(name)
+                }
+                // M3.2 (round 431b): a member inherited from an `extends` base
+                // (ManyToManyPathMap extends ReadonlyManyToManyPathMap — getKeys lives
+                // on the base).
+                if (sym == null && type is Type.Interface) {
+                    for (base in type.baseTypes.orEmpty()) {
+                        val t = lookupPropertyTypeForCtx(base, name, depth + 1)
+                        if (t != null) return t
+                    }
+                }
                 if (sym != null) getTypeOfSymbol(sym)
                 else {
                     // Fall back to index signature when no named property matches:
@@ -21602,7 +21640,12 @@ class Checker(
                     info?.type
                 }
             }
-            is Type.Union -> type.types.firstNotNullOfOrNull { lookupPropertyTypeForCtx(it, name) }
+            is Type.Union -> type.types.firstNotNullOfOrNull { lookupPropertyTypeForCtx(it, name, depth + 1) }
+            // M3.2 (round 431b): an intersection receiver (`x as CompilerHost &
+            // ResolutionCacheHost`) resolves a member from ANY constituent that has it
+            // (a property exists on A & B iff either declares it — cf.
+            // resolveMemberPropertyType's rule).
+            is Type.Intersection -> type.types.firstNotNullOfOrNull { lookupPropertyTypeForCtx(it, name, depth + 1) }
             else -> null
         }
     }
