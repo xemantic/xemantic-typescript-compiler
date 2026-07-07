@@ -34,6 +34,34 @@ completeness campaigns to dashboard-driven burn-down: the acceptance bar is the 
 tsc's source uses, with the corpus suite as the regression net. M5 unchanged —
 performance is the directive's second half and starts at v1 compliance.
 
+**Round 430 (2026-07-07) — M5 (first performance round, JFR-driven): the alias-resolution
+quadratic — self-compile (compiler profile) wall ~490–593 s → 38.6 s (~13–15×), zod
+6.0 → 5.0 s, diagnostics byte-identical (1,148 / by-code identical; zod 1,665 identical);
+suite 9,328/0 green (+2 local).** A JFR profile (settings=profile, stackdepth=1024) on the
+compiler profile showed **76% of ALL samples in `Identifier.equals` ← `ImportSpecifier.equals`
+← `ArrayList.indexOf`**: the program-wide structural scans in `resolveAlias`'s
+ImportSpecifier branch and `findEnclosingImport` (`spec in bindings.elements` over every
+ImportDeclaration of every binderResult). Root cause: only POSITIVE resolutions are cached
+(`setSymbolTarget`), so every UNRESOLVABLE alias — exactly tsc's ESM-`.js` barrel imports,
+which `resolveModuleSpecifier` deliberately won't strip — re-ran the full scan on EVERY
+`resolveAlias` call, from flow-walk recursion depths >1024 (stacks truncated, so most samples
+lost root attribution; the visible tail pointed at `computeImportedFunctionLikeDecl` /
+`resolveEnumSymbolForDiscriminant`). Fix (semantics-preserving by construction, verified
+byte-identical on both dashboards): (1) `enclosingImportsOf` — a lazily-built structural-keyed
+index ImportSpecifier → encounter-ordered list of (fileName, ImportDeclaration), replacing
+both scans; structural keys + first-write-wins lists reproduce the old scans' first-match AND
+fallback-to-next-match semantics exactly (structurally-equal specifiers across files share a
+key, as they matched each other in the old scans). (2) `resolveModuleSpecifier` memoized incl.
+null results via containsKey (it is a pure function of the specifier — `fileResults`/`options`
+fixed before init, contextNode unused; the null case is the hot one). Second-tier zod finding
+(NOT yet fixed, queue candidate): `resolveQualifiedName`-driven `resolveAlias` string churn
+still ~30% of the zod compile. `EnclosingImportIndexTest` pins collision + distinct-key
+resolution (the same-name-from-different-modules variant is UNUSABLE as a signal — Blocker #3
+scope conflation masks it, verified pre-existing on clean HEAD via stash A/B). Also: zod
+compiles end-to-end (107 files, 0 crashes, runnable emit — smoke-tested; 1,665 FPs vs real
+tsc 6.0.3's 0 in 2.8 s) — a good second dashboard profile; and `bench-compile-tsc.sh` stat
+parsing (`grep -oP`) silently logs 0s on macOS (BSD grep), wall_ms is real.
+
 **Round 428 (2026-07-06) — M3.1 (first real slice of the TS2322/TS2345 cores): generic
 call-site inference for tsc's `append` idiom + the TS2345 histogram top + the array-literal
 string-layer union rule + the body-local-shadows-function conflation. Self-compile

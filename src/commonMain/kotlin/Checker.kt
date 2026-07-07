@@ -1136,6 +1136,25 @@ class Checker(
      *  (`s.type === UpToDateStatusType.X`). Declared before `init` per the init-order trap. */
     private val importedEnumSymCache = HashMap<Int, Symbol?>()
 
+    /** Perf (round 430): memo for [resolveModuleSpecifier] — the function is a pure
+     *  function of the specifier string ([fileResults]/[options] are fixed before `init`;
+     *  the contextNode param is unused), but its fallback path iterates EVERY program
+     *  file with per-call string stripping. Negative results (null) are the hot case
+     *  (ESM `.js` barrel specifiers, deliberately unresolvable) so they are cached via
+     *  containsKey, not getOrPut. Declared before `init` per the init-order trap. */
+    private val moduleSpecifierCache = HashMap<String, String?>()
+
+    /** Perf (round 430): program-wide index ImportSpecifier → the (fileName,
+     *  ImportDeclaration) statements whose NamedImports CONTAIN a structurally-equal
+     *  specifier, in binderResults/statement encounter order. Replaces the O(program)
+     *  `spec in bindings.elements` structural scans in [resolveAlias]'s ImportSpecifier
+     *  branch and [findEnclosingImport] — the scan was 76% of the tsc-source self-compile
+     *  (every UNRESOLVABLE barrel alias re-scanned all files on every resolveAlias call,
+     *  since only positive resolutions are cached in symbolTargets). Structural keying +
+     *  encounter-order lists keep first-match semantics byte-identical to the scans.
+     *  Built once, lazily; declared before `init` per the init-order trap. */
+    private var enclosingImportIndexCache: HashMap<ImportSpecifier, MutableList<Pair<String, ImportDeclaration>>>? = null
+
     /** Round 425: memo for [canonicalEnumSymbol] — an enum reaches the discriminant-key
      *  builders by several resolution paths (the program-global merged instance vs a
      *  file-LOCAL instance reached via `currentFileLocals`/the barrel resolver), and the
@@ -6018,44 +6037,39 @@ class Checker(
                     is ImportSpecifier -> {
                         // Named import — the original name to look up
                         val originalName = decl.propertyName?.text ?: decl.name.text
-                        // Find the ImportDeclaration parent for this specifier
-                        // Since we don't have parent pointers, search all files
-                        for (result in binderResults) {
-                            for (stmt in result.sourceFile.statements) {
-                                if (stmt is ImportDeclaration) {
-                                    val bindings = stmt.importClause?.namedBindings
-                                    if (bindings is NamedImports && decl in bindings.elements) {
-                                        val specifier2 = (stmt.moduleSpecifier as? StringLiteralNode)?.text
-                                            ?: continue
-                                        val targetFile2 = resolveModuleSpecifier(specifier2, stmt)
-                                        if (targetFile2 == null) {
-                                            // Ambient module fallback — `declare module "X"` in a .d.ts file.
-                                            val ambient = globals[specifier2]
-                                            if (ambient != null && ambient.flags.hasAny(SymbolFlags.Module)) {
-                                                ambient.exports?.get(originalName)?.let { target ->
-                                                    setSymbolTarget(symbol, target)
-                                                    return resolveAlias(target, visited)
-                                                }
-                                                // Fallback: ambient module body has `export = X`
-                                                // (e.g. `import alias = demoNS; export = alias`) —
-                                                // resolve X then look up `originalName` in X's exports.
-                                                val exportEqualsTarget = resolveAmbientModuleExportEquals(ambient, visited)
-                                                if (exportEqualsTarget != null) {
-                                                    exportEqualsTarget.exports?.get(originalName)?.let { target ->
-                                                        setSymbolTarget(symbol, target)
-                                                        return resolveAlias(target, visited)
-                                                    }
-                                                }
-                                            }
-                                            continue
-                                        }
-                                        val targetResult2 = fileResults[targetFile2] ?: continue
-                                        val target = targetResult2.locals[originalName] ?: continue
+                        // Find the ImportDeclaration parent for this specifier via the
+                        // prebuilt index (no parent pointers; round 430 — was a
+                        // program-wide structural scan re-run on every call for
+                        // unresolvable barrel aliases).
+                        for ((_, stmt) in enclosingImportsOf(decl)) {
+                            val specifier2 = (stmt.moduleSpecifier as? StringLiteralNode)?.text
+                                ?: continue
+                            val targetFile2 = resolveModuleSpecifier(specifier2, stmt)
+                            if (targetFile2 == null) {
+                                // Ambient module fallback — `declare module "X"` in a .d.ts file.
+                                val ambient = globals[specifier2]
+                                if (ambient != null && ambient.flags.hasAny(SymbolFlags.Module)) {
+                                    ambient.exports?.get(originalName)?.let { target ->
                                         setSymbolTarget(symbol, target)
                                         return resolveAlias(target, visited)
                                     }
+                                    // Fallback: ambient module body has `export = X`
+                                    // (e.g. `import alias = demoNS; export = alias`) —
+                                    // resolve X then look up `originalName` in X's exports.
+                                    val exportEqualsTarget = resolveAmbientModuleExportEquals(ambient, visited)
+                                    if (exportEqualsTarget != null) {
+                                        exportEqualsTarget.exports?.get(originalName)?.let { target ->
+                                            setSymbolTarget(symbol, target)
+                                            return resolveAlias(target, visited)
+                                        }
+                                    }
                                 }
+                                continue
                             }
+                            val targetResult2 = fileResults[targetFile2] ?: continue
+                            val target = targetResult2.locals[originalName] ?: continue
+                            setSymbolTarget(symbol, target)
+                            return resolveAlias(target, visited)
                         }
                     }
                     else -> {}
@@ -6279,6 +6293,16 @@ class Checker(
      * Also supports baseUrl-relative non-relative specifiers (e.g., "defs/cc" with baseUrl "/proj").
      */
     private fun resolveModuleSpecifier(specifier: String, contextNode: Node? = null): String? {
+        // Perf (round 430): pure function of the specifier ([fileResults]/[options] are
+        // fixed; contextNode is unused) — memoized incl. null results via containsKey
+        // (getOrPut would recompute the hot unresolvable-specifier case every call).
+        if (moduleSpecifierCache.containsKey(specifier)) return moduleSpecifierCache[specifier]
+        val result = computeModuleSpecifier(specifier)
+        moduleSpecifierCache[specifier] = result
+        return result
+    }
+
+    private fun computeModuleSpecifier(specifier: String): String? {
         val isRelative = specifier.startsWith("./") || specifier.startsWith("../")
         val baseName = specifier.removePrefix("./").removePrefix("../")
         // Try exact match first, then with extensions
@@ -93577,18 +93601,32 @@ interface DataView {
 
     /** Find the ImportDeclaration containing [spec] plus its file (no parent
      *  pointers), for [resolveImportedFunctionLikeDecl]. */
-    private fun findEnclosingImport(spec: ImportSpecifier): Pair<String, ImportDeclaration>? {
-        for (result in binderResults) {
-            for (stmt in result.sourceFile.statements) {
-                if (stmt is ImportDeclaration) {
-                    val bindings = stmt.importClause?.namedBindings
-                    if (bindings is NamedImports && spec in bindings.elements) {
-                        return result.sourceFile.fileName to stmt
+    private fun findEnclosingImport(spec: ImportSpecifier): Pair<String, ImportDeclaration>? =
+        enclosingImportsOf(spec).firstOrNull()
+
+    /**
+     * Perf (round 430): all (fileName, ImportDeclaration) statements whose NamedImports
+     * contain a specifier structurally equal to [spec], in the same encounter order the
+     * replaced program-wide scans used ([enclosingImportIndexCache] has the rationale).
+     * A statement is listed once even if it contains structural duplicates of [spec].
+     */
+    private fun enclosingImportsOf(spec: ImportSpecifier): List<Pair<String, ImportDeclaration>> {
+        val index = enclosingImportIndexCache ?: HashMap<ImportSpecifier, MutableList<Pair<String, ImportDeclaration>>>().also { idx ->
+            for (result in binderResults) {
+                for (stmt in result.sourceFile.statements) {
+                    if (stmt !is ImportDeclaration) continue
+                    val bindings = stmt.importClause?.namedBindings as? NamedImports ?: continue
+                    for (el in bindings.elements) {
+                        val entries = idx.getOrPut(el) { mutableListOf() }
+                        if (entries.lastOrNull()?.second !== stmt) {
+                            entries.add(result.sourceFile.fileName to stmt)
+                        }
                     }
                 }
             }
+            enclosingImportIndexCache = idx
         }
-        return null
+        return index[spec] ?: emptyList()
     }
 
     /**
