@@ -80690,15 +80690,18 @@ interface DataView {
                     }
                 }
                 is TryStatement -> {
-                    checkTypeAssignabilityInStatements(stmt.tryBlock.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams)
-                    stmt.catchClause?.block?.let { checkTypeAssignabilityInStatements(it.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams) }
-                    stmt.finallyBlock?.let { checkTypeAssignabilityInStatements(it.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams) }
+                    // round 431c: thread returnTypeNode so returns inside try/catch check
+                    // through the ENGINE path, consistent with top-level/if returns.
+                    checkTypeAssignabilityInStatements(stmt.tryBlock.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams, returnTypeNode)
+                    stmt.catchClause?.block?.let { checkTypeAssignabilityInStatements(it.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams, returnTypeNode) }
+                    stmt.finallyBlock?.let { checkTypeAssignabilityInStatements(it.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams, returnTypeNode) }
                 }
                 is SwitchStatement -> {
+                    // round 431c: thread returnTypeNode (see the TryStatement note above).
                     for (clause in stmt.caseBlock) {
                         when (clause) {
-                            is CaseClause -> checkTypeAssignabilityInStatements(clause.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams)
-                            is DefaultClause -> checkTypeAssignabilityInStatements(clause.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams)
+                            is CaseClause -> checkTypeAssignabilityInStatements(clause.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams, returnTypeNode)
+                            is DefaultClause -> checkTypeAssignabilityInStatements(clause.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams, returnTypeNode)
                             else -> {}
                         }
                     }
@@ -82050,15 +82053,15 @@ interface DataView {
                     currentLocalTypes[varName]?.let { narrowedDeclaredTypes[varName] = it }
                     currentLocalTypes[varName] = narrowedType
                     try {
-                        checkTypeAssignabilityInStmt(stmt.thenStatement, source, fileName, varTypes, returnType, typeParams)
+                        checkTypeAssignabilityInStmt(stmt.thenStatement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
                     } finally {
                         currentLocalTypes = savedLocalTypes
                         narrowedDeclaredTypes = savedDeclared
                     }
                 } else {
-                    checkTypeAssignabilityInStmt(stmt.thenStatement, source, fileName, varTypes, returnType, typeParams)
+                    checkTypeAssignabilityInStmt(stmt.thenStatement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
                 }
-                stmt.elseStatement?.let { checkTypeAssignabilityInStmt(it, source, fileName, varTypes, returnType, typeParams) }
+                stmt.elseStatement?.let { checkTypeAssignabilityInStmt(it, source, fileName, varTypes, returnType, typeParams, returnTypeNode) }
             }
             is ForStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
             is ForInStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
@@ -82066,18 +82069,20 @@ interface DataView {
             is WhileStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
             is DoStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
             is SwitchStatement -> {
+                // round 431c: thread returnTypeNode so returns inside switch cases check
+                // through the ENGINE path, consistent with top-level/if returns.
                 for (clause in stmt.caseBlock) {
                     when (clause) {
-                        is CaseClause -> checkTypeAssignabilityInStatements(clause.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams)
-                        is DefaultClause -> checkTypeAssignabilityInStatements(clause.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams)
+                        is CaseClause -> checkTypeAssignabilityInStatements(clause.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams, returnTypeNode)
+                        is DefaultClause -> checkTypeAssignabilityInStatements(clause.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams, returnTypeNode)
                         else -> {}
                     }
                 }
             }
             is TryStatement -> {
-                checkTypeAssignabilityInStatements(stmt.tryBlock.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams)
-                stmt.catchClause?.block?.let { checkTypeAssignabilityInStatements(it.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams) }
-                stmt.finallyBlock?.let { checkTypeAssignabilityInStatements(it.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams) }
+                checkTypeAssignabilityInStatements(stmt.tryBlock.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams, returnTypeNode)
+                stmt.catchClause?.block?.let { checkTypeAssignabilityInStatements(it.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams, returnTypeNode) }
+                stmt.finallyBlock?.let { checkTypeAssignabilityInStatements(it.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams, returnTypeNode) }
             }
             is LabeledStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
             else -> {}
@@ -85902,6 +85907,25 @@ interface DataView {
         return false
     }
 
+    /** M3.1 (round 431c): true when [t] structurally contains a Type.TypeParam whose
+     *  NAME is not in [ownTpNames] — the signature of an UN-INFERRED generic call
+     *  result (the callee's own TP leaked through a failed/absent inference). Name-based
+     *  (a callee TP shadowing an enclosing same-named TP stays "own" — conservative,
+     *  keeps checking). Walks unions/intersections/reference args/tuples, depth-bounded. */
+    private fun typeContainsForeignTypeParam(t: Type, ownTpNames: Set<String>, depth: Int = 0): Boolean {
+        if (depth > 6) return false
+        return when (t) {
+            // A nameless TypeParam cannot be one of the enclosing fn's own (those are
+            // matched by name) — treat as foreign (un-inferred callee TP).
+            is Type.TypeParam -> (t.symbol?.name ?: return true) !in ownTpNames
+            is Type.Union -> t.types.any { typeContainsForeignTypeParam(it, ownTpNames, depth + 1) }
+            is Type.Intersection -> t.types.any { typeContainsForeignTypeParam(it, ownTpNames, depth + 1) }
+            is Type.Reference -> t.resolvedTypeArguments?.any { typeContainsForeignTypeParam(it, ownTpNames, depth + 1) } == true
+            is Type.Object -> t.tupleElementTypes?.any { typeContainsForeignTypeParam(it, ownTpNames, depth + 1) } == true
+            else -> false
+        }
+    }
+
     private fun checkReturnAssignability(
         stmt: ReturnStatement, returnType: String, source: String, fileName: String,
         varTypes: Map<String, String>, typeParams: Set<String>,
@@ -85979,6 +86003,16 @@ interface DataView {
                 if (narrowed !== sourceTypeRaw && checkTypeRelatedTo(narrowed, targetType, assignableRelation)) narrowed
                 else sourceTypeRaw
             } else sourceTypeRaw
+            // M3.1 (round 431c): a source containing a FOREIGN type parameter — one
+            // that is NOT among the enclosing function's own [typeParams] — is an
+            // UN-INFERRED generic call result (`return append(outer, tp)` types as
+            // `T[]` with append's own T when inference found no anchor). tsc infers
+            // the callee's TP from args/context and the return relates; checking the
+            // raw uninstantiated type is meaningless and FP'd TS2322 at every such
+            // return (the self-compile `T[]`/`U | undefined` return family). Bail —
+            // an OWN-TP source (fn<T>(x: T): number { return x }) keeps checking
+            // (corpus-pinned), as does everything TP-free.
+            if (typeContainsForeignTypeParam(sourceType, typeParams)) return
             // B87.1 (round 73): async-generic-return — `async function f<T>(...):
             // Promise<T>` returning a value whose (awaited) type is a UNION that
             // includes the bare unconstrained type parameter T PLUS other (non-
@@ -127337,6 +127371,24 @@ interface DataView {
         if (leftArgs == rightArgs) return
         if (checkTypeRelatedTo(leftType, rightType, assignableRelation)) return
         if (checkTypeRelatedTo(rightType, leftType, assignableRelation)) return
+        // round 431c: the disjointness proof above leans on the relation being
+        // COMPLETE for the arg types — for an OBJECT-vs-OBJECT arg pair
+        // (`NodeArray<TypeNode>` vs `NodeArray<Node>` where TypeNode extends Node
+        // through cross-file heritage), a vacuous both-directions failure is
+        // indistinguishable from genuine disjointness (M3). Only trust the proof
+        // when some DIFFERING arg pair is anchored in a non-object type
+        // (literal/primitive/enum — `Array<string>` vs `Array<number>` stays firing).
+        var anchoredDisjoint = false
+        for (i in leftArgs.indices) {
+            val l = leftArgs[i]
+            val r = rightArgs[i]
+            if (l === r) continue
+            if (l !is Type.Object || r !is Type.Object) {
+                anchoredDisjoint = true
+                break
+            }
+        }
+        if (!anchoredDisjoint) return
         val leftDisp = typeToString(leftType)
         val rightDisp = typeToString(rightType)
         val start = expr.pos
