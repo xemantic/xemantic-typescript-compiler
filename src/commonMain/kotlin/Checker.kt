@@ -125336,6 +125336,15 @@ interface DataView {
                     // Skip when the param return is itself a type parameter (unresolved
                     // generic) — that's an inference scenario, not a concrete mismatch.
                     if (paramReturn is Type.TypeParam) return@run false
+                    // M3.2 (round 436): same rule when the param return merely CONTAINS a
+                    // TP of a GENERIC callee — `forEachEntry<K, V, U>(map, callback:
+                    // (value: V, key: K) => U | undefined)` called with a boolean-returning
+                    // callback: tsc infers U from the callback's own return (an
+                    // unconstrained U accepts ANY return type), and instantiateSignature
+                    // never substitutes inside callSignatures anyway, so a TP-carrying
+                    // callback return is our inference gap, not a user error.
+                    if (!sigIn.typeParameters.isNullOrEmpty() &&
+                        typeContainsForeignTypeParam(paramReturn, emptySet())) return@run false
                     // Each param pair must be contravariant-assignable (target→source) so
                     // the ONLY remaining incompatibility is the return type. If any param
                     // pair fails, fall through to the standard paths (allowFuncToFunc etc.).
