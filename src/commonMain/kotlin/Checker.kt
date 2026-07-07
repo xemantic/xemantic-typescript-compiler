@@ -308,6 +308,14 @@ class Checker(
      *  return type is `Promise<T>` — async functions implicitly wrap returns. */
     private var inAsyncFunctionBody = false
 
+    /** True while walking the body of a GENERATOR function/method (`function*`).
+     *  A generator's `return expr` checks against the annotation's TReturn (tsc
+     *  getIterationTypeOfGeneratorFunctionReturnType), never the iterator type
+     *  itself — a bare `return;` in `function* g(): IterableIterator<T>` is legal
+     *  (TReturn defaults to `any`). See the gate at the top of
+     *  [checkReturnAssignability]. */
+    private var inGeneratorFunctionBody = false
+
     /** Match keys of computed-name private members (`x` for `private [x]: T`) for the
      *  current class being checked by `checkUnusedPrivateMembers`. Set per-class before
      *  reference collection; empty for classes with no computed-name members so the
@@ -39824,6 +39832,14 @@ class Checker(
          *  missing-property checks against function types must skip it. */
         private val FUNCTION_TYPE_PROPERTIES = setOf(
             "apply", "call", "bind", "prototype", "length", "arguments", "caller", "name",
+        )
+
+        /** Lib iterator-family generic references whose 2nd type argument is the
+         *  generator TReturn (`Generator<Y, R, N>` → R). Consulted by the generator
+         *  return-unwrap gate in [checkReturnAssignability] (round 435). */
+        private val GENERATOR_LIKE_TYPE_NAMES = setOf(
+            "Generator", "AsyncGenerator", "Iterator", "AsyncIterator",
+            "IterableIterator", "AsyncIterableIterator", "IteratorObject", "AsyncIteratorObject",
         )
 
         /** Names of the built-in primitive wrapper interfaces.
@@ -80498,7 +80514,8 @@ interface DataView {
                         // mismatch checks silently never fired in nested generic fns).
                         checkFunctionBody(stmt.body, stmt.type, stmt.parameters, stmt.typeParameters, source, fileName, varTypes,
                             outerTypeParams = typeParams,
-                            isAsync = ModifierFlag.Async in stmt.modifiers)
+                            isAsync = ModifierFlag.Async in stmt.modifiers,
+                            isGenerator = stmt.asteriskToken)
                     } finally {
                         currentClassForThis = savedThis
                     }
@@ -80580,7 +80597,8 @@ interface DataView {
                                     }
                                 }
                                 checkFunctionBody(member.body, member.type, member.parameters, member.typeParameters, source, fileName, methodTypes, classTypeParams,
-                                    isAsync = ModifierFlag.Async in member.modifiers)
+                                    isAsync = ModifierFlag.Async in member.modifiers,
+                                    isGenerator = member.asteriskToken)
                             }
                             is Constructor -> member.body?.let { body ->
                                 val ctorTypes = varTypes.toMutableMap()
@@ -81645,6 +81663,7 @@ interface DataView {
         source: String, fileName: String, varTypes: MutableMap<String, String>,
         outerTypeParams: Set<String> = emptySet(),
         isAsync: Boolean = false,
+        isGenerator: Boolean = false,
     ) {
         body?.let {
             // B442: a `var X` declared by a `for (var X in …)` (→ string) and later
@@ -81667,6 +81686,8 @@ interface DataView {
             inNonArrowFunctionBody = true
             val savedAsync = inAsyncFunctionBody
             inAsyncFunctionBody = isAsync
+            val savedGenerator = inGeneratorFunctionBody
+            inGeneratorFunctionBody = isGenerator
             // B55.2: populate TypeParam decls for the current scope so emitTS2322
             // can emit TS2208 related info pointing back to the source TypeParam.
             val savedTypeParamDecls = currentTypeParamDecls
@@ -81755,6 +81776,7 @@ interface DataView {
             } finally {
                 inNonArrowFunctionBody = savedInFunc
                 inAsyncFunctionBody = savedAsync
+                inGeneratorFunctionBody = savedGenerator
                 currentTypeParamDecls = savedTypeParamDecls
             }
             // Restore outer local types
@@ -81895,7 +81917,8 @@ interface DataView {
                 currentClassForThis = null
                 try {
                     checkFunctionBody(expr.body, expr.type, expr.parameters, expr.typeParameters, source, fileName, varTypes, typeParams,
-                        isAsync = ModifierFlag.Async in expr.modifiers)
+                        isAsync = ModifierFlag.Async in expr.modifiers,
+                        isGenerator = expr.asteriskToken)
                 } finally {
                     currentClassForThis = savedThis
                 }
@@ -81929,12 +81952,12 @@ interface DataView {
                 // its methods' `this.X = v` mismatch DISPLAYS the alias (e.g. `WatchHandler<any>`).
                 val ctxNode = objLitArgCtxTypeNode
                 val ctxAliasDisplay = if (jsLike) objLitCtxIndexSigAliasDisplay(ctxNode) else null
-                fun walkMember(body: Block?, ret: TypeNode?, params: List<Parameter>, tps: List<TypeParameter>?, async: Boolean) {
+                fun walkMember(body: Block?, ret: TypeNode?, params: List<Parameter>, tps: List<TypeParameter>?, async: Boolean, generator: Boolean = false) {
                     val savedAlias = objLitMethodThisIndexAliasDisplay
                     objLitMethodThisIndexAliasDisplay = ctxAliasDisplay
                     try {
                         walkObjectLiteralMemberBody(body, ret, params, tps, objLitThis(),
-                            source, fileName, varTypes, typeParams, async)
+                            source, fileName, varTypes, typeParams, async, generator)
                     } finally {
                         objLitMethodThisIndexAliasDisplay = savedAlias
                     }
@@ -81953,7 +81976,8 @@ interface DataView {
                         }
                         is SpreadAssignment -> walkFunctionBodiesInExpr(prop.expression, source, fileName, varTypes, typeParams)
                         is MethodDeclaration -> if (jsLike) walkMember(
-                            prop.body, prop.type, prop.parameters, prop.typeParameters, ModifierFlag.Async in prop.modifiers)
+                            prop.body, prop.type, prop.parameters, prop.typeParameters, ModifierFlag.Async in prop.modifiers,
+                            generator = prop.asteriskToken)
                         is GetAccessor -> if (jsLike) walkMember(prop.body, prop.type, prop.parameters, null, false)
                         is SetAccessor -> if (jsLike) walkMember(prop.body, prop.type, prop.parameters, null, false)
                         else -> {}
@@ -82043,7 +82067,7 @@ interface DataView {
         body: Block?, returnTypeNode: TypeNode?, parameters: List<Parameter>,
         funcTypeParams: List<TypeParameter>?, thisType: Type,
         source: String, fileName: String, varTypes: MutableMap<String, String>,
-        typeParams: Set<String>, isAsync: Boolean,
+        typeParams: Set<String>, isAsync: Boolean, isGenerator: Boolean = false,
     ) {
         if (body == null) return
         val savedClassForThis = currentClassForThis
@@ -82051,7 +82075,7 @@ interface DataView {
         val savedLocal = currentLocalTypes
         currentLocalTypes = currentLocalTypes.toMutableMap().apply { put("this", thisType) }
         try {
-            checkFunctionBody(body, returnTypeNode, parameters, funcTypeParams, source, fileName, varTypes, typeParams, isAsync = isAsync)
+            checkFunctionBody(body, returnTypeNode, parameters, funcTypeParams, source, fileName, varTypes, typeParams, isAsync = isAsync, isGenerator = isGenerator)
         } finally {
             currentLocalTypes = savedLocal
             currentClassForThis = savedClassForThis
@@ -86010,8 +86034,34 @@ interface DataView {
         stmt: ReturnStatement, returnType: String, source: String, fileName: String,
         varTypes: Map<String, String>, typeParams: Set<String>,
         returnTypeNode: TypeNode? = null,
+        generatorReturnUnwrapped: Boolean = false,
     ) {
         val expr = stmt.expression
+
+        // Round 435: a GENERATOR's `return expr` checks against the annotation's
+        // TReturn (tsc getIterationTypeOfGeneratorFunctionReturnType), never the
+        // iterator type itself — a bare `return;` in `function* g():
+        // IterableIterator<T>` is legal (TReturn defaults to `any`; tsc's own
+        // checker.ts generateJsxAttributes: `if (!length(…)) return;` against the
+        // ElaborationIterator alias). AST-side unwrap: a Generator-family reference
+        // with an EXPLICIT 2nd type arg re-targets the whole check (engine + string
+        // paths) at that node; every other annotation shape (single-arg forms,
+        // aliases whose TReturn we cannot see) has TReturn = any → skip. The
+        // re-entry passes generatorReturnUnwrapped so a TReturn that is itself an
+        // iterator reference is not unwrapped again.
+        if (inGeneratorFunctionBody && !generatorReturnUnwrapped) {
+            val ref = returnTypeNode as? TypeReference
+            val refName = (ref?.typeName as? Identifier)?.text
+            val tArgs = ref?.typeArguments
+            val treturn = if (refName in GENERATOR_LIKE_TYPE_NAMES && tArgs != null && tArgs.size >= 2)
+                tArgs[1] else null
+            if (treturn == null) return
+            checkReturnAssignability(
+                stmt, resolveSimpleTypeName(treturn) ?: "", source, fileName,
+                varTypes, typeParams, treturn, generatorReturnUnwrapped = true,
+            )
+            return
+        }
 
         // If the declared return type is a TypeReference with a QualifiedName whose
         // leftmost is unresolvable AND has a spelling-suggestion target (meaning
