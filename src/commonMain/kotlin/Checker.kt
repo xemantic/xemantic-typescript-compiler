@@ -93831,6 +93831,20 @@ interface DataView {
             idx++
         }
         if (literalTypes.isEmpty() && caseEnumKeys.isEmpty()) return null
+        // Round 436f (M3.4): a BARE string/number subject narrows to the matched
+        // clause range's literal(s) — tsc semver.ts `parseComparator(operator:
+        // string, …) { switch (operator) { case "<": case ">=":
+        // createComparator(operator, version) } }` types `operator` as
+        // '"<" | ">="' inside the body (tsc getAssignmentReducedType). Bail unless
+        // EVERY range clause is a literal of the subject's base (enum keys /
+        // foreign-base literals keep the conservative null).
+        if (matchesDirectly && t !is Type.Union &&
+            (t === stringType || t === numberType)) {
+            if (caseEnumKeys.isNotEmpty()) return null
+            val matching = literalTypes.filter { getWidenedLiteralType(it) === t }
+            if (matching.size != literalTypes.size || matching.isEmpty()) return null
+            return if (matching.size == 1) matching[0] else getUnionType(matching)
+        }
         if (t !is Type.Union) return null
         // Enum-member discriminant switch (e.g. `switch (s.type) { case Kind.B: }` where the
         // member declares `type: Kind.B`): the enum-member types resolve to `anyType`, so the
@@ -124481,7 +124495,8 @@ interface DataView {
                 if ((arg is Identifier || arg is PropertyAccessExpression) && ctxApplied is Type.Union) {
                     getNarrowedTypeForReference(ctxApplied, arg)
                 } else if (arg is Identifier &&
-                    (ctxApplied is Type.Interface || ctxApplied === unknownType) &&
+                    (ctxApplied is Type.Interface || ctxApplied === unknownType ||
+                        ctxApplied === stringType || ctxApplied === numberType) &&
                     paramType !== neverType) {
                     // M3.4 (round 428b, generalized round 429c): an Identifier arg whose
                     // NON-union interface type is narrowed DOWN by a type guard
