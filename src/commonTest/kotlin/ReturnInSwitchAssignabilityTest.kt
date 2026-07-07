@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * Round 431c (M3.1): `returnTypeNode` threading through the switch/try/if arms of
@@ -40,12 +41,9 @@ import kotlin.test.assertTrue
  */
 class ReturnInSwitchAssignabilityTest {
 
-    private fun diags(source: String): List<Diagnostic> =
-        TypeScriptCompiler().compile("// @strict: true\n" + source.trimIndent(), "t.ts").diagnostics
-
     @Test
     fun `return undefined in a switch case against an alias union with undefined is clean`() {
-        val d = diags(
+        diagnose(
             """
             interface Node2 { kind: number; }
             type VisitResult<T extends Node2 | undefined> = T | readonly Node2[];
@@ -58,13 +56,14 @@ class ReturnInSwitchAssignabilityTest {
                 }
             }
             """
-        )
-        assertTrue(d.none { it.code == 2322 }, "expected no TS2322, got: $d")
+        ) should {
+            have(none { it.code == 2322 })
+        }
     }
 
     @Test
     fun `return undefined in a try block against a nullable union is clean`() {
-        val d = diags(
+        diagnose(
             """
             interface Node2 { kind: number; }
             type MaybeNode = Node2 | undefined;
@@ -76,8 +75,9 @@ class ReturnInSwitchAssignabilityTest {
                 }
             }
             """
-        )
-        assertTrue(d.none { it.code == 2322 }, "expected no TS2322, got: $d")
+        ) should {
+            have(none { it.code == 2322 })
+        }
     }
 
     // ------------------------------------------------------------------
@@ -89,7 +89,7 @@ class ReturnInSwitchAssignabilityTest {
     fun `un-inferred generic call return is not checked against the annotation`() {
         // `append<T>` called with no usable anchor types as `T[]` — tsc infers T
         // from context and the return relates; checking the raw type is a FP.
-        val d = diags(
+        diagnose(
             """
             declare function append<T extends {}>(to: T[] | undefined, value: T | undefined): T[] | undefined;
             interface TypeParameter2 { id: number; }
@@ -102,15 +102,16 @@ class ReturnInSwitchAssignabilityTest {
                 }
             }
             """
-        )
-        assertTrue(d.none { it.code == 2322 }, "expected no TS2322, got: $d")
+        ) should {
+            have(none { it.code == 2322 })
+        }
     }
 
     @Test
     fun `foreign TP hidden in an anonymous alias-body member is gated too`() {
         // tsc moduleNameResolver's SearchResult<T> = { value: T | undefined } |
         // undefined — the un-inferred T hides inside an anonymous object member.
-        val d = diags(
+        diagnose(
             """
             interface Resolved2 { path: string; }
             type SearchResult2<T> = { value: T | undefined } | undefined;
@@ -122,8 +123,9 @@ class ReturnInSwitchAssignabilityTest {
                 return undefined;
             }
             """
-        )
-        assertTrue(d.none { it.code == 2322 }, "expected no TS2322, got: $d")
+        ) should {
+            have(none { it.code == 2322 })
+        }
     }
 
     // ------------------------------------------------------------------
@@ -133,20 +135,21 @@ class ReturnInSwitchAssignabilityTest {
 
     @Test
     fun `un-inferred generic call var-decl initializer is not checked`() {
-        val d = diags(
+        diagnose(
             """
             declare function memoize<T>(cb: () => T): () => T;
             interface Printer { print(): void; }
             declare function createPrinter(): Printer;
             export const withDefaults: () => Printer = memoize(() => createPrinter());
             """
-        )
-        assertTrue(d.none { it.code == 2322 }, "expected no TS2322, got: $d")
+        ) should {
+            have(none { it.code == 2322 })
+        }
     }
 
     @Test
     fun `un-inferred generic call assignment RHS is not checked`() {
-        val d = diags(
+        diagnose(
             """
             declare function append<U extends {}>(to: U[] | undefined, value: U | undefined): U[] | undefined;
             export function g(reasons: string[] | undefined, extra: string) {
@@ -155,15 +158,16 @@ class ReturnInSwitchAssignabilityTest {
                 return fileIncludeReasons;
             }
             """
-        )
-        assertTrue(d.none { it.code == 2322 }, "expected no TS2322, got: $d")
+        ) should {
+            have(none { it.code == 2322 })
+        }
     }
 
     @Test
     fun `un-inferred generic call in a conditional return branch is not checked`() {
         // tsc parser.ts walkTreeForImportMeta: `return isMeta(node) ? node :
         // forEachChild(node, cb)` — the forEachChild branch types as T | undefined.
-        val d = diags(
+        diagnose(
             """
             interface Node2 { kind: number; }
             declare function forEachChild<T>(node: Node2, cb: (n: Node2) => T | undefined): T | undefined;
@@ -172,13 +176,14 @@ class ReturnInSwitchAssignabilityTest {
                 return isMeta(node) ? node : forEachChild(node, walk);
             }
             """
-        )
-        assertTrue(d.none { it.code == 2322 }, "expected no TS2322, got: $d")
+        ) should {
+            have(none { it.code == 2322 })
+        }
     }
 
     @Test
     fun `negative control - concrete var-decl and assignment mismatches keep firing`() {
-        val d = diags(
+        val d = diagnose(
             """
             export const bad1: number = "str";
             export function h(k: boolean) {
@@ -197,19 +202,20 @@ class ReturnInSwitchAssignabilityTest {
         // and an own-TP source must not trip the gate — the concrete "str" branch
         // keeps firing. (A BARE own-TP return `return x` vs number is a pre-existing
         // FN unrelated to the gate — do not pin it.)
-        val d = diags(
+        diagnose(
             """
             export function f<T>(x: T, cond: boolean): number {
                 return cond ? x : "str";
             }
             """
-        )
-        assertTrue(d.any { it.code == 2322 }, "expected TS2322 for the string branch, got: $d")
+        ) should {
+            have(any { it.code == 2322 })
+        }
     }
 
     @Test
     fun `negative control - a genuine mismatch in a switch case still fires`() {
-        val d = diags(
+        diagnose(
             """
             export function f(k: number): number {
                 switch (k) {
@@ -220,13 +226,14 @@ class ReturnInSwitchAssignabilityTest {
                 }
             }
             """
-        )
-        assertTrue(d.any { it.code == 2322 }, "expected TS2322 for string-vs-number, got: $d")
+        ) should {
+            have(any { it.code == 2322 })
+        }
     }
 
     @Test
     fun `negative control - undefined against a non-nullable switch return still fires`() {
-        val d = diags(
+        diagnose(
             """
             interface Node2 { kind: number; }
             export function f(node: Node2): Node2 {
@@ -238,7 +245,8 @@ class ReturnInSwitchAssignabilityTest {
                 }
             }
             """
-        )
-        assertTrue(d.any { it.code == 2322 }, "expected TS2322 for undefined-vs-Node2, got: $d")
+        ) should {
+            have(any { it.code == 2322 })
+        }
     }
 }

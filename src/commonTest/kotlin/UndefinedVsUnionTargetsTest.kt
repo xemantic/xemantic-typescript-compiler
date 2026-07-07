@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * M1.9 (round 388): `undefined` lost against targets that legitimately include it.
@@ -50,25 +51,16 @@ import kotlin.test.assertTrue
  */
 class UndefinedVsUnionTargetsTest {
 
-    private fun compile(source: String) =
-        TypeScriptCompiler().compile("// @strict: true\n" + source, "t.ts")
-
     private fun assertClean(source: String, what: String) {
-        val r = compile(source)
-        assertTrue(
-            r.diagnostics.none { it.code == 2322 || it.code == 2345 },
-            "$what must not error: " +
-                r.diagnostics.joinToString { "TS${it.code} ${it.message}" },
-        )
+        diagnose(source) should {
+            have(none { it.code == 2322 || it.code == 2345 }, "$what must not error")
+        }
     }
 
     private fun assertRejects(source: String, code: Int, what: String) {
-        val r = compile(source)
-        assertTrue(
-            r.diagnostics.any { it.code == code },
-            "$what must still reject with TS$code: " +
-                r.diagnostics.joinToString { "TS${it.code} ${it.message}" },
-        )
+        diagnose(source) should {
+            have(any { it.code == code }, "$what must still reject with TS$code")
+        }
     }
 
     // -- family 1: return undefined vs union alias ---------------------------

@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * M1.12 (self-compile burn-down): a BRANDED number `number & { __brand }` is assignable to
@@ -40,74 +41,59 @@ import kotlin.test.assertTrue
  */
 class BrandedNumberArithmeticTest {
 
-    private fun diags(source: String): List<Diagnostic> =
-        TypeScriptCompiler().compile("// @strict: true\n" + source.trimIndent(), "t.ts").diagnostics
-
     @Test
     fun `branded number arithmetic - no TS2362`() {
-        val d = diags(
+        diagnose(
             """
             type FileId = number & { __fileIdBrand: any };
             export function toIndex(id: FileId): number {
                 return id - 1;
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2362 || it.code == 2363 },
-            "arithmetic on a branded number `number & {…}` must not fire TS2362/TS2363; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 2362 || it.code == 2363 })
+        }
     }
 
     @Test
     fun `branded number comparison - no TS2365`() {
-        val d = diags(
+        diagnose(
             """
             type FileId = number & { __fileIdBrand: any };
             export function lt(a: FileId, b: FileId): boolean {
                 return a < b;
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2365 },
-            "comparison of two branded numbers must not fire TS2365; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 2365 })
+        }
     }
 
     @Test
     fun `branded bigint arithmetic - no TS2362`() {
-        val d = diags(
+        diagnose(
             """
             type BigId = bigint & { __bigBrand: any };
             export function dec(id: BigId): bigint {
                 return id - 1n;
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2362 || it.code == 2363 },
-            "arithmetic on a branded bigint must not fire TS2362/TS2363; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 2362 || it.code == 2363 })
+        }
     }
 
     @Test
     fun `intersection with no primitive member STILL fires TS2362 - negative control`() {
-        val d = diags(
+        diagnose(
             """
             type Combo = { a: number } & { b: string };
             export function bad(x: Combo): number {
                 return x - 1;
             }
             """,
-        )
-        assertTrue(
-            d.any { it.code == 2362 },
-            "an object-intersection (no number member) MUST still fire TS2362 on `x - 1`; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(any { it.code == 2362 })
+        }
     }
 }

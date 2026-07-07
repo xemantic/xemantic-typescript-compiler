@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * The RIGHT segment of an ENUM-qualified name (`SyntaxKind.ThisType`, `TypeMapKind.Array`) in
@@ -39,66 +40,54 @@ import kotlin.test.assertTrue
  */
 class EnumMemberGenericArityTest {
 
-    private fun diags(body: String): List<Diagnostic> =
-        TypeScriptCompiler().compile(body.trimIndent(), "t.ts").diagnostics
-
     @Test
     fun `enum member named like a generic lib type does NOT fire TS2314`() {
-        val d = diags(
+        diagnose(
             """
             enum SyntaxKind { ThisType, Other }
             type NodeKind = SyntaxKind.ThisType | SyntaxKind.Other;
             declare const k: NodeKind;
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2314 },
-            "SyntaxKind.ThisType (enum member) must NOT be TS2314; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            directives = "",
+        ) should {
+            have(none { it.code == 2314 })
+        }
     }
 
     @Test
     fun `enum member named Array does NOT fire TS2314`() {
-        val d = diags(
+        diagnose(
             """
             const enum TypeMapKind { Simple, Array }
             type K = TypeMapKind.Array;
             declare const k: K;
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2314 },
-            "TypeMapKind.Array (enum member) must NOT be TS2314; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            directives = "",
+        ) should {
+            have(none { it.code == 2314 })
+        }
     }
 
     @Test
     fun `a bare generic lib type used without type args STILL fires TS2314 (negative control)`() {
         // `Array` used bare (not enum-qualified) genuinely requires 1 type argument.
-        val d = diags("type Bad = Array;")
-        assertTrue(
-            d.any { it.code == 2314 && it.message.contains("Array") },
-            "bare `Array` (no type args) must still be TS2314; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        diagnose("type Bad = Array;", directives = "") should {
+            have(any { it.code == 2314 && it.message.contains("Array") })
+        }
     }
 
     @Test
     fun `a namespace-qualified generic used without type args STILL fires TS2314 (negative control)`() {
         // The qualifier is a NAMESPACE (not an enum), and the member IS a generic type missing
         // its arg — the enum-qualifier skip must not apply here.
-        val d = diags(
+        diagnose(
             """
             namespace N { export interface Box<T> { v: T; } }
             type Bad = N.Box;
             """,
-        )
-        assertTrue(
-            d.any { it.code == 2314 && it.message.contains("Box") },
-            "N.Box (namespace-qualified generic, no args) must still be TS2314; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            directives = "",
+        ) should {
+            have(any { it.code == 2314 && it.message.contains("Box") })
+        }
     }
 }

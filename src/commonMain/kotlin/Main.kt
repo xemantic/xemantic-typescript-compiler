@@ -94,7 +94,7 @@ private fun printDiagnostics(diagnostics: List<Diagnostic>, listAll: Boolean = f
         println("  $loc - error TS${d.code}: ${d.message}")
         // --listAll: print elaboration chains too (indented; never matches the
         // `error TS` grep the A/B diffs key on) — TS2769/TS2322 triage needs them.
-        if (listAll) d.messageChain?.forEach { line -> println("      |$line") }
+        if (listAll) d.messageChain.forEach { line -> println("      |$line") }
     }
     if (errors.size > shown.size) println("  ... and ${errors.size - shown.size} more error(s)")
 }

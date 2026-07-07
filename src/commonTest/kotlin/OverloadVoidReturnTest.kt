@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * M1.12 (self-compile burn-down): TS2394 ("This overload signature is not compatible with its
@@ -37,13 +38,10 @@ import kotlin.test.assertTrue
  */
 class OverloadVoidReturnTest {
 
-    private fun diags(source: String): List<Diagnostic> =
-        TypeScriptCompiler().compile(source.trimIndent(), "t.ts").diagnostics
-
     @Test
     fun `void overload return with non-void impl return - no TS2394`() {
         // The exact emitter.ts writeTokenText shape.
-        val d = diags(
+        diagnose(
             """
             function writeTokenText(token: number, writer: (s: string) => void): void;
             function writeTokenText(token: number, writer: (s: string) => void, pos: number): number;
@@ -51,35 +49,31 @@ class OverloadVoidReturnTest {
                 return pos ?? 0;
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2394 },
-            "a `void` overload return must be compatible with a `number` implementation return; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            directives = "",
+        ) should {
+            have(none { it.code == 2394 })
+        }
     }
 
     @Test
     fun `void overload return over a value-returning impl - no TS2394`() {
-        val d = diags(
+        diagnose(
             """
             function f(x: string): void;
             function f(x: string): string {
                 return x;
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2394 },
-            "a `void` overload return must accept a `string` implementation return; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            directives = "",
+        ) should {
+            have(none { it.code == 2394 })
+        }
     }
 
     @Test
     fun `unrelated non-void overload return still fires TS2394 - negative control`() {
         // overload returns C, impl returns E; C and E are unrelated → genuine incompatibility.
-        val d = diags(
+        diagnose(
             """
             class C { c!: number; }
             class E { e!: string; }
@@ -88,11 +82,9 @@ class OverloadVoidReturnTest {
                 return new E();
             }
             """,
-        )
-        assertTrue(
-            d.any { it.code == 2394 },
-            "an overload returning an unrelated class must still fire TS2394; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            directives = "",
+        ) should {
+            have(any { it.code == 2394 })
+        }
     }
 }

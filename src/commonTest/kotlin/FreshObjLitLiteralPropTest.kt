@@ -21,8 +21,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * Round 435: a FRESH object literal's literal-valued props keep their literal
@@ -43,10 +44,6 @@ import kotlin.test.assertTrue
  */
 class FreshObjLitLiteralPropTest {
 
-    private fun ts2322s(source: String) =
-        TypeScriptCompiler().compile("// @strict: true\n" + source, "t.ts")
-            .diagnostics.filter { it.code == 2322 }
-
     private val resolverIface = """
         interface IterationTypesResolver {
             iterableCacheKey: "iterationTypesOfAsyncIterable" | "iterationTypesOfIterable";
@@ -54,55 +51,59 @@ class FreshObjLitLiteralPropTest {
         }
     """.trimIndent()
 
-    /** The tsc checker.ts IterationTypesResolver var-decl shape. */
-    @Test fun freshLiteralPropsAgainstLiteralUnionMembersAreLegal() {
-        val diags = ts2322s(
-            """
-            $resolverIface
+    @Test
+    fun `fresh literal props against literal-union members are legal`() {
+        // The tsc checker.ts IterationTypesResolver var-decl shape.
+        diagnose(
+            resolverIface + """
+
             var asyncResolver: IterationTypesResolver = {
                 iterableCacheKey: "iterationTypesOfAsyncIterable",
                 iteratorSymbolName: "asyncIterator",
             };
-            """.trimIndent()
-        )
-        assertTrue(diags.isEmpty(), "expected no TS2322, got: $diags")
+            """
+        ) should {
+            have(none { it.code == 2322 })
+        }
     }
 
-    /** NEGATIVE control: a literal absent from the target union still fails. */
-    @Test fun literalNotInUnionStillFires() {
-        val diags = ts2322s(
-            """
-            $resolverIface
+    @Test
+    fun `negative control - a literal absent from the target union still fails`() {
+        diagnose(
+            resolverIface + """
+
             var bad: IterationTypesResolver = {
                 iterableCacheKey: "iterationTypesOfAsyncIterable",
                 iteratorSymbolName: "wrongLiteral",
             };
-            """.trimIndent()
-        )
-        assertTrue(diags.isNotEmpty(), "expected TS2322 for a literal outside the union")
+            """
+        ) should {
+            have(any { it.code == 2322 })
+        }
     }
 
-    /** NEGATIVE control (the tsc freshness rule): a WIDENED var reference is not
-     *  fresh — assigning it must still fail even though its initializer's literals
-     *  would have matched. */
-    @Test fun widenedVarReferenceStillFires() {
-        val diags = ts2322s(
-            """
-            $resolverIface
+    @Test
+    fun `negative control - a widened var reference is not fresh and still fails`() {
+        // The tsc freshness rule: assigning the reference must still fail even
+        // though its initializer's literals would have matched.
+        diagnose(
+            resolverIface + """
+
             const notFresh = {
                 iterableCacheKey: "iterationTypesOfAsyncIterable",
                 iteratorSymbolName: "asyncIterator",
             };
             var viaRef: IterationTypesResolver = notFresh;
-            """.trimIndent()
-        )
-        assertTrue(diags.isNotEmpty(), "expected TS2322 for the widened (non-fresh) reference")
+            """
+        ) should {
+            have(any { it.code == 2322 })
+        }
     }
 
-    /** The esDecorators shape: assignment of a fresh literal to a let typed as a
-     *  discriminated union — the `kind` literal picks the matching member. */
-    @Test fun assignmentToDiscriminatedUnionIsLegal() {
-        val diags = ts2322s(
+    @Test
+    fun `assignment of a fresh literal to a discriminated union is legal`() {
+        // The esDecorators shape: the `kind` literal picks the matching member.
+        diagnose(
             """
             interface AEntry { kind: "a"; n: number; }
             interface BEntry { kind: "b"; s: string; }
@@ -111,14 +112,15 @@ class FreshObjLitLiteralPropTest {
             function enter(n: number) {
                 top = { kind: "a", n };
             }
-            """.trimIndent()
-        )
-        assertTrue(diags.isEmpty(), "expected no TS2322, got: $diags")
+            """
+        ) should {
+            have(none { it.code == 2322 })
+        }
     }
 
-    /** NEGATIVE control: a fresh literal matching NO union member still fails. */
-    @Test fun assignmentToDiscriminatedUnionWrongKindStillFires() {
-        val diags = ts2322s(
+    @Test
+    fun `negative control - a fresh literal matching no union member still fails`() {
+        diagnose(
             """
             interface AEntry { kind: "a"; n: number; }
             interface BEntry { kind: "b"; s: string; }
@@ -127,15 +129,17 @@ class FreshObjLitLiteralPropTest {
             function enter(n: number) {
                 top = { kind: "c", n };
             }
-            """.trimIndent()
-        )
-        assertTrue(diags.isNotEmpty(), "expected TS2322 for a kind outside the union")
+            """
+        ) should {
+            have(any { it.code == 2322 })
+        }
     }
 
-    /** The moduleSpecifiers shape: return ternary of fresh literals, each branch's
-     *  `kind` literal against the target's literal-union member. */
-    @Test fun returnTernaryBranchLiteralsAreLegal() {
-        val diags = ts2322s(
+    @Test
+    fun `return ternary branch literals are legal`() {
+        // The moduleSpecifiers shape: return ternary of fresh literals, each
+        // branch's `kind` literal against the target's literal-union member.
+        diagnose(
             """
             interface MSR { kind: "paths" | "redirect" | "relative"; specs: readonly string[]; }
             declare const p: string[];
@@ -144,21 +148,23 @@ class FreshObjLitLiteralPropTest {
                 return cond ? { kind: "paths", specs: p } :
                     { kind: "relative", specs: p };
             }
-            """.trimIndent()
-        )
-        assertTrue(diags.isEmpty(), "expected no TS2322, got: $diags")
+            """
+        ) should {
+            have(none { it.code == 2322 })
+        }
     }
 
-    /** A ternary-of-literals PROP VALUE also keeps its literal union (the
-     *  literalTypeOfExpression ConditionalExpression arm). */
-    @Test fun ternaryOfLiteralsPropValueIsLegal() {
-        val diags = ts2322s(
+    @Test
+    fun `ternary-of-literals prop value keeps its literal union`() {
+        // The literalTypeOfExpression ConditionalExpression arm.
+        diagnose(
             """
             interface Opt { polarity: "plus" | "minus" | "zero"; }
             declare const neg: boolean;
             var o: Opt = { polarity: neg ? "minus" : "plus" };
-            """.trimIndent()
-        )
-        assertTrue(diags.isEmpty(), "expected no TS2322, got: $diags")
+            """
+        ) should {
+            have(none { it.code == 2322 })
+        }
     }
 }

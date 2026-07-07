@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * Round 429d (M3.1/M3.4): two more arg-typing rules.
@@ -44,12 +45,9 @@ import kotlin.test.assertTrue
  */
 class UnknownTypeofAndStringEnumArgTest {
 
-    private fun diags(source: String): List<Diagnostic> =
-        TypeScriptCompiler().compile("// @strict: true\n" + source.trimIndent(), "t.ts").diagnostics
-
     @Test
     fun `typeof-string-guarded unknown arg to a string param is clean`() {
-        val d = diags(
+        diagnose(
             """
             declare function startsWith(s: string, prefix: string): boolean;
             export function f(target: unknown): boolean {
@@ -59,13 +57,14 @@ class UnknownTypeofAndStringEnumArgTest {
                 return false;
             }
             """
-        )
-        assertTrue(d.none { it.code == 2345 }, "expected no TS2345, got: $d")
+        ) should {
+            have(none { it.code == 2345 })
+        }
     }
 
     @Test
     fun `typeof-number-guarded unknown arg to a number param is clean`() {
-        val d = diags(
+        diagnose(
             """
             declare function add(n: number): number;
             export function f(x: unknown): number {
@@ -75,26 +74,28 @@ class UnknownTypeofAndStringEnumArgTest {
                 return 0;
             }
             """
-        )
-        assertTrue(d.none { it.code == 2345 }, "expected no TS2345, got: $d")
+        ) should {
+            have(none { it.code == 2345 })
+        }
     }
 
     @Test
     fun `negative control - unguarded unknown arg still fires`() {
-        val d = diags(
+        diagnose(
             """
             declare function startsWith(s: string, prefix: string): boolean;
             export function f(target: unknown): boolean {
                 return startsWith(target, "./");
             }
             """
-        )
-        assertTrue(d.any { it.code == 2345 }, "expected TS2345 for unknown vs string, got: $d")
+        ) should {
+            have(any { it.code == 2345 })
+        }
     }
 
     @Test
     fun `negative control - wrong-typeof-guarded unknown arg still fires`() {
-        val d = diags(
+        diagnose(
             """
             declare function startsWith(s: string, prefix: string): boolean;
             export function f(target: unknown): boolean {
@@ -104,13 +105,14 @@ class UnknownTypeofAndStringEnumArgTest {
                 return false;
             }
             """
-        )
-        assertTrue(d.any { it.code == 2345 }, "expected TS2345 for number-narrowed unknown vs string, got: $d")
+        ) should {
+            have(any { it.code == 2345 })
+        }
     }
 
     @Test
     fun `string enum value arg to a string param is clean`() {
-        val d = diags(
+        diagnose(
             """
             enum Extension { Ts = ".ts", Dts = ".d.ts", Js = ".js" }
             declare function changeExt(path: string, ext: string): string;
@@ -118,13 +120,14 @@ class UnknownTypeofAndStringEnumArgTest {
                 return changeExt(path, ext);
             }
             """
-        )
-        assertTrue(d.none { it.code == 2345 }, "expected no TS2345, got: $d")
+        ) should {
+            have(none { it.code == 2345 })
+        }
     }
 
     @Test
     fun `string enum member arg to a string param is clean`() {
-        val d = diags(
+        diagnose(
             """
             enum Extension { Ts = ".ts", Dts = ".d.ts" }
             declare function changeExt(path: string, ext: string): string;
@@ -132,41 +135,44 @@ class UnknownTypeofAndStringEnumArgTest {
                 return changeExt(path, Extension.Dts);
             }
             """
-        )
-        assertTrue(d.none { it.code == 2345 }, "expected no TS2345, got: $d")
+        ) should {
+            have(none { it.code == 2345 })
+        }
     }
 
     @Test
     fun `truthy-guarded union arg in a REST position is clean`() {
         // The rest-args helper mirrors B469: a ternary truthy guard narrows the
         // `string | undefined` rest arg (tsc addDeprecatedSuggestionWithSignature).
-        val d = diags(
+        diagnose(
             """
             declare function diag(msg: string, ...args: (string | number)[]): object;
             export function f(entity: string | undefined): object {
                 return entity ? diag("sig", entity) : diag("plain");
             }
             """
-        )
-        assertTrue(d.none { it.code == 2345 }, "expected no TS2345, got: $d")
+        ) should {
+            have(none { it.code == 2345 })
+        }
     }
 
     @Test
     fun `negative control - unguarded union arg in a REST position still fires`() {
-        val d = diags(
+        diagnose(
             """
             declare function diag(msg: string, ...args: (string | number)[]): object;
             export function f(entity: boolean): object {
                 return diag("sig", entity);
             }
             """
-        )
-        assertTrue(d.any { it.code == 2345 }, "expected TS2345 for boolean vs string | number, got: $d")
+        ) should {
+            have(any { it.code == 2345 })
+        }
     }
 
     @Test
     fun `negative control - NUMERIC enum arg to a string param still fires`() {
-        val d = diags(
+        diagnose(
             """
             enum Flags { A, B, C }
             declare function changeExt(path: string, ext: string): string;
@@ -174,13 +180,14 @@ class UnknownTypeofAndStringEnumArgTest {
                 return changeExt(path, flag);
             }
             """
-        )
-        assertTrue(d.any { it.code == 2345 }, "expected TS2345 for numeric enum vs string, got: $d")
+        ) should {
+            have(any { it.code == 2345 })
+        }
     }
 
     @Test
     fun `negative control - MIXED-value enum arg to a string param still fires`() {
-        val d = diags(
+        diagnose(
             """
             enum Mixed { A = 1, B = "b" }
             declare function changeExt(path: string, ext: string): string;
@@ -188,7 +195,8 @@ class UnknownTypeofAndStringEnumArgTest {
                 return changeExt(path, m);
             }
             """
-        )
-        assertTrue(d.any { it.code == 2345 }, "expected TS2345 for mixed enum vs string, got: $d")
+        ) should {
+            have(any { it.code == 2345 })
+        }
     }
 }

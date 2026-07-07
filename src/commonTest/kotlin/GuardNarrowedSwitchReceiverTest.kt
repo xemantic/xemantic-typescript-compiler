@@ -25,8 +25,8 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * Round 423 — the four TS2366 shapes left by round 422's `requiredUnionDiscriminantKeys`:
@@ -48,25 +48,15 @@ import kotlin.test.assertTrue
  */
 class GuardNarrowedSwitchReceiverTest {
 
-    private fun diags(source: String): List<Diagnostic> =
-        TypeScriptCompiler().compile(
-            "// @strict: true\n" + source.trimIndent(), "t.ts",
-        ).diagnostics
-
     private fun assertNoImplicitReturnCodes(d: List<Diagnostic>, what: String) {
-        assertTrue(
+        have(
             d.none { it.code == 2366 || it.code == 7030 || it.code == 2355 },
-            "$what must count as terminating; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
+            "$what must count as terminating",
         )
     }
 
     private fun assertFires2366(d: List<Diagnostic>, what: String) {
-        assertTrue(
-            d.any { it.code == 2366 },
-            "$what must keep TS2366; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        have(d.any { it.code == 2366 }, "$what must keep TS2366")
     }
 
     private val nodeDecls = """
@@ -86,7 +76,7 @@ class GuardNarrowedSwitchReceiverTest {
 
     @Test
     fun `local const from call return annotation plus nullish guard is exhaustive`() {
-        val d = diags(
+        val d = diagnose(
             """
             $nodeDecls
             export function f(node: Node): number {
@@ -109,7 +99,7 @@ class GuardNarrowedSwitchReceiverTest {
 
     @Test
     fun `missing member keeps TS2366 for the guarded const receiver`() {
-        val d = diags(
+        val d = diagnose(
             """
             $nodeDecls
             export function f(node: Node): number {
@@ -133,7 +123,7 @@ class GuardNarrowedSwitchReceiverTest {
     fun `unguarded const receiver keeps TS2366`() {
         // Without the `if (!target) return` guard the undefined member survives the
         // narrowing walk → the union contains a non-object → conservative bail.
-        val d = diags(
+        val d = diagnose(
             """
             $nodeDecls
             export function f(node: Node): number {
@@ -153,7 +143,7 @@ class GuardNarrowedSwitchReceiverTest {
 
     @Test
     fun `early-return type guard narrows a param receiver down to the union`() {
-        val d = diags(
+        val d = diagnose(
             """
             $nodeDecls
             interface PropAssign extends Node { readonly kind: K.PropAssign; }
@@ -180,7 +170,7 @@ class GuardNarrowedSwitchReceiverTest {
 
     @Test
     fun `type-guard-narrowed union with an uncovered member keeps TS2366`() {
-        val d = diags(
+        val d = diagnose(
             """
             $nodeDecls
             interface PropAssign extends Node { readonly kind: K.PropAssign; }
@@ -206,7 +196,7 @@ class GuardNarrowedSwitchReceiverTest {
 
     @Test
     fun `optional enum property with case undefined is exhaustive`() {
-        val d = diags(
+        val d = diagnose(
             """
             const enum NewLineKind { CarriageReturnLineFeed = 0, LineFeed = 1 }
             interface CompilerOptions { newLine?: NewLineKind; strict?: boolean; }
@@ -225,7 +215,7 @@ class GuardNarrowedSwitchReceiverTest {
 
     @Test
     fun `optional enum property without case undefined keeps TS2366`() {
-        val d = diags(
+        val d = diagnose(
             """
             const enum NewLineKind { CarriageReturnLineFeed = 0, LineFeed = 1 }
             interface CompilerOptions { newLine?: NewLineKind; strict?: boolean; }
@@ -243,7 +233,7 @@ class GuardNarrowedSwitchReceiverTest {
 
     @Test
     fun `indexed-access param annotation unions the alias members kind keys`() {
-        val d = diags(
+        val d = diagnose(
             """
             const enum K { Numeric, BigIntLit, Str, JsxText, JsxTextAll }
             interface Node { readonly kind: K; }
@@ -269,7 +259,7 @@ class GuardNarrowedSwitchReceiverTest {
 
     @Test
     fun `indexed-access annotation with an uncovered case keeps TS2366`() {
-        val d = diags(
+        val d = diagnose(
             """
             const enum K { Numeric, BigIntLit, Str, JsxText, JsxTextAll }
             interface Node { readonly kind: K; }
@@ -300,7 +290,7 @@ class GuardNarrowedSwitchReceiverTest {
         // covering every kind draws no TS2366 in tsc. Pin that we agree on the
         // TS2366 verdict. (The TS18048 on the access is a separate, known M3.4
         // emitter gap — the round-422 assignment-washing note.)
-        val d = diags(
+        val d = diagnose(
             """
             $nodeDecls
             export function f(node: Node): number {

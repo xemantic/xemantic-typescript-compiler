@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * M2.2 (round 393): under `useRealLibs` the library utility aliases
@@ -44,27 +45,22 @@ import kotlin.test.assertTrue
  */
 class RealLibsUtilityModifiersTest {
 
-    private fun diags(body: String): List<Diagnostic> =
-        TypeScriptCompiler().compile(
-            "// @useRealLibs: true\n// @strict: true\n// @target: es2015\n$body",
-            "t.ts",
-        ).diagnostics
+    private val realLibDirectives = "// @useRealLibs: true\n// @strict: true\n// @target: es2015"
 
     @Test
     fun `Omit preserves the readonly modifier under real libs`() {
         // `readonly c` survives Omit — writing it is TS2540. If the modifier were dropped
         // (the non-homomorphic mapped-type expansion), no error would fire.
-        val d = diags(
+        diagnose(
             """
             type A = { a: number; b?: string; readonly c: boolean; };
             type B = Omit<A, 'a'>;
             function f(x: B) { x.c = true; }
-            """.trimIndent(),
-        )
-        assertTrue(
-            d.any { it.code == 2540 },
-            "Omit must preserve `readonly c` → TS2540 on write; got: " + d.joinToString { "TS${it.code}" },
-        )
+            """,
+            directives = realLibDirectives,
+        ) should {
+            have(any { it.code == 2540 })
+        }
     }
 
     @Test
@@ -72,34 +68,31 @@ class RealLibsUtilityModifiersTest {
         // `b?: string` survives Omit as optional, so `x.b = undefined` is legal (b is
         // `string | undefined`). A dropped `?` would make b required `string` → a wrong
         // TS2322 'undefined' is not assignable to 'string'.
-        val d = diags(
+        diagnose(
             """
             type A = { a: number; b?: string; readonly c: boolean; };
             type B = Omit<A, 'a'>;
             function f(x: B) { x.b = undefined; }
-            """.trimIndent(),
-        )
-        assertTrue(
-            d.none { it.code == 2322 },
-            "Omit must keep `b?` optional so `x.b = undefined` is legal; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            """,
+            directives = realLibDirectives,
+        ) should {
+            have(none { it.code == 2322 })
+        }
     }
 
     @Test
     fun `Omit removes the omitted key under real libs`() {
         // `Omit<Foo, "c">` must not have `c` → accessing it is TS2339.
-        val d = diags(
+        diagnose(
             """
             interface Foo { a: string; b: number; c: boolean; }
             type Bar = Omit<Foo, "c">;
             function g(bar: Bar) { return bar.c; }
-            """.trimIndent(),
-        )
-        assertTrue(
-            d.any { it.code == 2339 },
-            "Omit<Foo,'c'> must drop `c` → TS2339; got: " + d.joinToString { "TS${it.code}" },
-        )
+            """,
+            directives = realLibDirectives,
+        ) should {
+            have(any { it.code == 2339 })
+        }
     }
 
     @Test
@@ -108,18 +101,16 @@ class RealLibsUtilityModifiersTest {
         // builtinLibDecls) → isBuiltinUtilityAlias returns false → the user definition
         // wins. Here the user Omit is the identity `{ [P in keyof T]: T[P] }`, so `c`
         // survives and `bar.c` is legal — NO TS2339.
-        val d = diags(
+        diagnose(
             """
             type Omit<T, K> = { [P in keyof T]: T[P] };
             interface Foo { a: string; c: boolean; }
             type Bar = Omit<Foo, "c">;
             function g(bar: Bar) { return bar.c; }
-            """.trimIndent(),
-        )
-        assertTrue(
-            d.none { it.code == 2339 },
-            "a user Omit shadow must win (materializer must not hijack it); got: " +
-                d.joinToString { "TS${it.code}" },
-        )
+            """,
+            directives = realLibDirectives,
+        ) should {
+            have(none { it.code == 2339 })
+        }
     }
 }

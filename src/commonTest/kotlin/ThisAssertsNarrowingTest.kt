@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * Round 424b — the DebugTypeMapper slice (tsc debug.ts): an explicit-type-arg
@@ -61,15 +62,10 @@ class ThisAssertsNarrowingTest {
         declare function type<T>(value: unknown): asserts value is T;
     """
 
-    private fun diags(body: String): List<Diagnostic> =
-        TypeScriptCompiler().compile(
-            "// @strict: true\n" + (prelude + body).trimIndent(), "t.ts",
-        ).diagnostics
-
     @Test
     fun explicitTypeArgAssertRetypesThisAndSwitchNarrows() {
-        val d = diags(
-            """
+        diagnose(
+            prelude + """
             export class DebugTypeMapper {
                 declare kind: TypeMapKind;
                 debugToString(): string {
@@ -85,20 +81,17 @@ class ThisAssertsNarrowingTest {
                 }
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2339 || it.code == 2366 || it.code == 7030 },
-            "the assert re-types this and the switch narrows + is exhaustive; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 2339 || it.code == 2366 || it.code == 7030 })
+        }
     }
 
     @Test
     fun withoutTheAssertThisMembersStillFire() {
         // Negative control: no assert — the class-chain TS2339 on a member the
         // class does not declare must keep firing.
-        val d = diags(
-            """
+        diagnose(
+            prelude + """
             export class DebugTypeMapper {
                 declare kind: TypeMapKind;
                 debugToString(): number {
@@ -106,12 +99,9 @@ class ThisAssertsNarrowingTest {
                 }
             }
             """,
-        )
-        assertTrue(
-            d.any { it.code == 2339 && it.message.contains("bogusMember") },
-            "a genuinely-missing this-member must keep TS2339 without an assert; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(any { it.code == 2339 && it.message.contains("bogusMember") })
+        }
     }
 
     @Test
@@ -119,8 +109,8 @@ class ThisAssertsNarrowingTest {
         // Negative control: the assert + switch narrow to the Array member,
         // which genuinely lacks `source` — the suppression requires the
         // property on EVERY narrowed member.
-        val d = diags(
-            """
+        diagnose(
+            prelude + """
             export class DebugTypeMapper {
                 declare kind: TypeMapKind;
                 debugToString(): Ty {
@@ -134,11 +124,8 @@ class ThisAssertsNarrowingTest {
                 }
             }
             """,
-        )
-        assertTrue(
-            d.any { it.code == 2339 && it.message.contains("source") },
-            "a property absent from the narrowed member must keep TS2339; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(any { it.code == 2339 && it.message.contains("source") })
+        }
     }
 }

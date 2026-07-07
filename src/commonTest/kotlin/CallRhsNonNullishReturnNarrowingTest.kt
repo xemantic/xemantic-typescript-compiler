@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * Round 424 — an assignment whose RHS is a CALL to a callee with a provably
@@ -47,33 +48,25 @@ class CallRhsNonNullishReturnNarrowingTest {
         interface Ty { id: number; inst?: Ty; }
     """
 
-    private fun diags(body: String): List<Diagnostic> =
-        TypeScriptCompiler().compile(
-            "// @strict: true\n" + (prelude + body).trimIndent(), "t.ts",
-        ).diagnostics
-
     @Test
     fun callRhsWithNonNullishReturnAnnotationNarrows() {
-        val d = diags(
-            """
+        diagnose(
+            prelude + """
             declare function instantiate(t: Ty): Ty;
             export function f(t: Ty) {
                 t.inst = instantiate(t);
                 t.inst.inst = t.inst;
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 18048 },
-            "call RHS with `: Ty` return annotation must prove t.inst non-nullish; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 18048 })
+        }
     }
 
     @Test
     fun aliasReturnAnnotationResolvesThroughTypeAlias() {
-        val d = diags(
-            """
+        diagnose(
+            prelude + """
             type Instantiated = Ty;
             declare function instantiate(t: Ty): Instantiated;
             export function f(t: Ty) {
@@ -81,65 +74,53 @@ class CallRhsNonNullishReturnNarrowingTest {
                 t.inst.inst = t.inst;
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 18048 },
-            "a type-alias return annotation must resolve through the alias body; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 18048 })
+        }
     }
 
     @Test
     fun nullableReturnAnnotationStillFires() {
-        val d = diags(
-            """
+        diagnose(
+            prelude + """
             declare function maybe(t: Ty): Ty | undefined;
             export function f(t: Ty) {
                 t.inst = maybe(t);
                 t.inst.inst = t.inst;
             }
             """,
-        )
-        assertTrue(
-            d.any { it.code == 18048 },
-            "a `Ty | undefined` return must keep TS18048; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(any { it.code == 18048 })
+        }
     }
 
     @Test
     fun optionalChainedCallStillFires() {
-        val d = diags(
-            """
+        diagnose(
+            prelude + """
             declare const factory: { make(t: Ty): Ty } | undefined;
             export function f(t: Ty) {
                 t.inst = factory?.make(t);
                 t.inst.inst = t.inst;
             }
             """,
-        )
-        assertTrue(
-            d.any { it.code == 18048 },
-            "an optional-chained call short-circuits to undefined — TS18048 must stand; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(any { it.code == 18048 })
+        }
     }
 
     @Test
     fun genericOwnTypeParamReturnStillFires() {
-        val d = diags(
-            """
+        diagnose(
+            prelude + """
             declare function ident<T>(x: T): T;
             export function f(t: Ty, m: Ty | undefined) {
                 t.inst = ident(m);
                 t.inst.inst = t.inst;
             }
             """,
-        )
-        assertTrue(
-            d.any { it.code == 18048 },
-            "a bare own-type-param return (`<T>(x: T): T`) may be nullish — TS18048 must stand; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(any { it.code == 18048 })
+        }
     }
 }

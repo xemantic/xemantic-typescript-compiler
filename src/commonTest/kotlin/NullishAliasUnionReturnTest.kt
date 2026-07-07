@@ -21,8 +21,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * Round 435g: `return undefined`/`return null` against an ALIAS whose union
@@ -41,13 +42,10 @@ import kotlin.test.assertTrue
  */
 class NullishAliasUnionReturnTest {
 
-    private fun ts2322s(source: String) =
-        TypeScriptCompiler().compile("// @strict: true\n" + source, "t.ts")
-            .diagnostics.filter { it.code == 2322 }
-
-    /** The parseResolutionMode shape (single-file facsimile). */
-    @Test fun returnUndefinedAgainstNullishAliasUnionIsLegal() {
-        val diags = ts2322s(
+    @Test
+    fun `return undefined against a nullish alias union is legal`() {
+        // The parseResolutionMode shape (single-file facsimile).
+        diagnose(
             """
             enum ModuleKind { None = 0, CommonJS = 1, ESNext = 99 }
             type ResolutionMode = ModuleKind.ESNext | ModuleKind.CommonJS | undefined;
@@ -60,22 +58,25 @@ class NullishAliasUnionReturnTest {
                 }
                 return undefined;
             }
-            """.trimIndent()
-        )
-        assertTrue(diags.isEmpty(), "expected no TS2322, got: $diags")
+            """
+        ) should {
+            have(none { it.code == 2322 })
+        }
     }
 
-    /** NEGATIVE control: a CONCRETE mismatched return against an alias union
-     *  still fires — the gate returns early only for bare nullish identifiers. */
-    @Test fun concreteMismatchAgainstAliasUnionStillFires() {
-        val diags = ts2322s(
+    @Test
+    fun `negative control - a concrete mismatched return against an alias union still fires`() {
+        // The gate returns early only for bare nullish identifiers — a number
+        // against `string | undefined` must still report TS2322.
+        diagnose(
             """
             type MaybeString = string | undefined;
             function f(): MaybeString {
                 return 42;
             }
-            """.trimIndent()
-        )
-        assertTrue(diags.isNotEmpty(), "expected TS2322 for number vs string | undefined")
+            """
+        ) should {
+            have(any { it.code == 2322 })
+        }
     }
 }

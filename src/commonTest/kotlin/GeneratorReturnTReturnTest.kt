@@ -21,8 +21,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * Round 435: a GENERATOR's `return expr` is checked against the return
@@ -40,43 +41,43 @@ import kotlin.test.assertTrue
  */
 class GeneratorReturnTReturnTest {
 
-    private fun ts2322s(source: String) =
-        TypeScriptCompiler().compile("// @strict: true\n" + source, "t.ts")
-            .diagnostics.filter { it.code == 2322 }
-
-    /** Bare `return;` in a generator annotated with a single-arg IterableIterator
-     *  (TReturn = any) draws nothing — the tsc checker.ts ElaborationIterator shape. */
-    @Test fun bareReturnInGeneratorWithSingleArgIteratorAnnotationIsLegal() {
-        val diags = ts2322s(
+    @Test
+    fun `bare return in a generator with a single-arg IterableIterator annotation is legal`() {
+        // TReturn = any — the tsc checker.ts ElaborationIterator shape.
+        diagnose(
             """
             type ElabIter = IterableIterator<{ a: number }>;
             function* gen(items: number[]): ElabIter {
                 if (!items.length) return;
                 for (const i of items) yield { a: i };
             }
-            """.trimIndent()
-        )
-        assertTrue(diags.isEmpty(), "expected no TS2322, got: $diags")
+            """
+        ) should {
+            have(none { it.code == 2322 })
+        }
     }
 
-    /** `return undefined;` through an ALIAS annotation (TReturn invisible → any). */
-    @Test fun returnUndefinedInGeneratorWithAliasAnnotationIsLegal() {
-        val diags = ts2322s(
+    @Test
+    fun `return undefined in a generator with an alias annotation is legal`() {
+        // TReturn is invisible through the alias → any.
+        diagnose(
             """
             type ElabIter = IterableIterator<{ a: number }>;
             function* gen(items: number[]): ElabIter {
                 if (!items.length) return undefined;
                 yield { a: 1 };
             }
-            """.trimIndent()
-        )
-        assertTrue(diags.isEmpty(), "expected no TS2322, got: $diags")
+            """
+        ) should {
+            have(none { it.code == 2322 })
+        }
     }
 
-    /** Generator METHOD bodies get the same rule (the isGenerator flag threads
-     *  through the MethodDeclaration checkFunctionBody site). */
-    @Test fun bareReturnInGeneratorMethodIsLegal() {
-        val diags = ts2322s(
+    @Test
+    fun `bare return in a generator method is legal`() {
+        // The isGenerator flag threads through the MethodDeclaration
+        // checkFunctionBody site.
+        diagnose(
             """
             class C {
                 *gen(items: number[]): IterableIterator<number> {
@@ -84,51 +85,53 @@ class GeneratorReturnTReturnTest {
                     yield 1;
                 }
             }
-            """.trimIndent()
-        )
-        assertTrue(diags.isEmpty(), "expected no TS2322, got: $diags")
+            """
+        ) should {
+            have(none { it.code == 2322 })
+        }
     }
 
-    /** NEGATIVE control: an explicit TReturn still checks — `return 42` against
-     *  Generator<Y, string, N> fires TS2322 number→string through the unwrap. */
-    @Test fun explicitTReturnMismatchStillFires() {
-        val diags = ts2322s(
+    @Test
+    fun `negative control - an explicit TReturn mismatch still fires`() {
+        // `return 42` against Generator<Y, string, N> fires TS2322
+        // number→string through the TReturn unwrap.
+        diagnose(
             """
             function* gen(): Generator<{ a: number }, string, unknown> {
                 yield { a: 1 };
                 return 42;
             }
-            """.trimIndent()
-        )
-        assertTrue(
-            diags.any { it.message == "Type 'number' is not assignable to type 'string'." },
-            "expected TS2322 number->string via the TReturn unwrap, got: $diags"
-        )
+            """
+        ) should {
+            have(any { it.code == 2322 && it.message == "Type 'number' is not assignable to type 'string'." })
+        }
     }
 
-    /** NEGATIVE control: a matching explicit TReturn stays clean. */
-    @Test fun explicitTReturnMatchIsLegal() {
-        val diags = ts2322s(
+    @Test
+    fun `negative control - a matching explicit TReturn stays clean`() {
+        diagnose(
             """
             function* gen(): Generator<{ a: number }, string, unknown> {
                 yield { a: 1 };
                 return "done";
             }
-            """.trimIndent()
-        )
-        assertTrue(diags.isEmpty(), "expected no TS2322, got: $diags")
+            """
+        ) should {
+            have(none { it.code == 2322 })
+        }
     }
 
-    /** NEGATIVE control: a NON-generator's `return undefined` against a concrete
-     *  annotation still fires — the gate is generator-scoped. */
-    @Test fun nonGeneratorReturnUndefinedStillFires() {
-        val diags = ts2322s(
+    @Test
+    fun `negative control - a non-generator return undefined still fires`() {
+        // The gate is generator-scoped.
+        diagnose(
             """
             function f(): { a: number } {
                 return undefined;
             }
-            """.trimIndent()
-        )
-        assertTrue(diags.isNotEmpty(), "expected TS2322 for non-generator return undefined")
+            """
+        ) should {
+            have(any { it.code == 2322 })
+        }
     }
 }

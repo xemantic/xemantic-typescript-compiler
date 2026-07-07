@@ -21,8 +21,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * M3.2 (round 436): a GENERIC callee's callback param whose RETURN carries the
@@ -38,13 +39,10 @@ import kotlin.test.assertTrue
  */
 class CallbackReturnTpParamTest {
 
-    private fun ts2345s(source: String) =
-        TypeScriptCompiler().compile("// @strict: true\n" + source, "t.ts")
-            .diagnostics.filter { it.code == 2345 }
-
-    /** The forEachEntry shape: U only in the callback return position. */
-    @Test fun booleanCallbackAgainstTpUnionReturnParamIsLegal() {
-        val diags = ts2345s(
+    @Test
+    fun `boolean callback against a TP-union return param is legal`() {
+        // The forEachEntry shape: U only in the callback return position.
+        diagnose(
             """
             declare function forEachEntry<K, V, U>(
                 map: ReadonlyMap<K, V>,
@@ -54,14 +52,16 @@ class CallbackReturnTpParamTest {
             function hasExportedMembers() {
                 return forEachEntry(exports2, (_, id) => id !== "export=");
             }
-            """.trimIndent()
-        )
-        assertTrue(diags.isEmpty(), "expected no TS2345, got: $diags")
+            """
+        ) should {
+            have(none { it.code == 2345 })
+        }
     }
 
-    /** The firstDefinedIterator shape: `true | undefined` callback return. */
-    @Test fun trueOrUndefinedCallbackAgainstTpUnionReturnParamIsLegal() {
-        val diags = ts2345s(
+    @Test
+    fun `true-or-undefined callback against a TP-union return param is legal`() {
+        // The firstDefinedIterator shape: `true | undefined` callback return.
+        diagnose(
             """
             declare function firstDefinedIterator<T, U>(
                 iter: Iterable<T>,
@@ -74,25 +74,24 @@ class CallbackReturnTpParamTest {
                     p => startsWith(locationPath, p) ? true : undefined,
                 );
             }
-            """.trimIndent()
-        )
-        assertTrue(diags.isEmpty(), "expected no TS2345, got: $diags")
+            """
+        ) should {
+            have(none { it.code == 2345 })
+        }
     }
 
-    /** NEGATIVE control: a NON-generic callee's concrete callback-return
-     *  mismatch still fires — the skip is gated to generic callees. (An arrow
-     *  arg with only a return mismatch reports the fine-grained TS2322 at the
-     *  arrow's return expression per the round-79l rule, so accept either.) */
-    @Test fun concreteReturnMismatchOnNonGenericCalleeStillFires() {
-        val diags = TypeScriptCompiler().compile(
-            "// @strict: true\n" +
-                """
-                declare function eachString(callback: (x: number) => string): void;
-                eachString((x) => x > 0);
-                """.trimIndent(),
-            "t.ts",
-        ).diagnostics.filter { it.code == 2345 || it.code == 2322 }
-        assertTrue(diags.isNotEmpty(),
-            "expected TS2345/TS2322 for boolean-returning callback vs string return")
+    @Test
+    fun `negative control - a concrete return mismatch on a non-generic callee still fires`() {
+        // The skip is gated to generic callees. An arrow arg with only a return
+        // mismatch reports the fine-grained TS2322 at the arrow's return
+        // expression per the round-79l rule, so accept either TS2345 or TS2322.
+        diagnose(
+            """
+            declare function eachString(callback: (x: number) => string): void;
+            eachString((x) => x > 0);
+            """
+        ) should {
+            have(any { it.code == 2345 || it.code == 2322 })
+        }
     }
 }

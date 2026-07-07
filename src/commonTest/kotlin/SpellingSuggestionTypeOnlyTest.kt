@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * M2.2 (round 391): a VALUE-position unresolved name must never be spelling-corrected
@@ -41,27 +42,19 @@ import kotlin.test.assertTrue
  */
 class SpellingSuggestionTypeOnlyTest {
 
-    private fun compile(source: String) = TypeScriptCompiler().compile(source, "t.ts")
-
     @Test
     fun `value-position name is not spell-corrected to a type-only lib interface`() {
         // `IArgument` is one edit from the type-only `interface IArguments`.
-        val r = compile(
+        diagnose(
             """
             // @useRealLibs: true
             const x = IArgument;
-            """.trimIndent(),
-        )
-        assertTrue(
-            r.diagnostics.any { it.code == 2304 },
-            "an unresolved value name must be a plain TS2304, got: " +
-                r.diagnostics.joinToString { "TS${it.code} ${it.message}" },
-        )
-        assertTrue(
-            r.diagnostics.none { it.message.contains("IArguments") },
-            "a type-only lib interface must not be suggested in value position, got: " +
-                r.diagnostics.joinToString { "TS${it.code} ${it.message}" },
-        )
+            """,
+            directives = "",
+        ) should {
+            have(any { it.code == 2304 })
+            have(none { it.message.contains("IArguments") })
+        }
     }
 
     @Test
@@ -70,18 +63,16 @@ class SpellingSuggestionTypeOnlyTest {
         // symbols; it must NOT leak into the type-position path. A type-only user
         // interface `MyThing` is now in `typeOnlyNames`, yet a type-position typo for it
         // must still be suggested (type-position never consults `typeOnlyNames`).
-        val r = compile(
+        diagnose(
             """
             // @useRealLibs: true
             interface MyThing { a: number; }
             let y: MyThin;
-            """.trimIndent(),
-        )
-        assertTrue(
-            r.diagnostics.any { it.code == 2552 && it.message.contains("MyThing") },
-            "a type-only user interface must still be suggested in type position, got: " +
-                r.diagnostics.joinToString { "TS${it.code} ${it.message}" },
-        )
+            """,
+            directives = "",
+        ) should {
+            have(any { it.code == 2552 && it.message.contains("MyThing") })
+        }
     }
 
     @Test
@@ -89,16 +80,14 @@ class SpellingSuggestionTypeOnlyTest {
         // Negative control: `Object` has a `declare var Object: ObjectConstructor`
         // companion, so it carries a Value flag and must remain suggestable in value
         // position — the filter must not over-remove.
-        val r = compile(
+        diagnose(
             """
             // @useRealLibs: true
             const z = Objectt.keys({});
-            """.trimIndent(),
-        )
-        assertTrue(
-            r.diagnostics.any { it.code == 2552 && it.message.contains("Object") },
-            "a value-carrying lib name must still be suggested in value position, got: " +
-                r.diagnostics.joinToString { "TS${it.code} ${it.message}" },
-        )
+            """,
+            directives = "",
+        ) should {
+            have(any { it.code == 2552 && it.message.contains("Object") })
+        }
     }
 }

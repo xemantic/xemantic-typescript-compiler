@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * Round 429b (M3.1 histogram burn-down): the embedded lib's String methods
@@ -39,24 +40,22 @@ import kotlin.test.assertTrue
  */
 class StringRegExpMethodsTest {
 
-    private fun diags(source: String): List<Diagnostic> =
-        TypeScriptCompiler().compile("// @strict: true\n" + source.trimIndent(), "t.ts").diagnostics
-
     @Test
     fun `replace with a RegExp search value and string replacement is clean`() {
-        val d = diags(
+        diagnose(
             """
             export function makeIdentifier(moduleName: string): string {
                 return moduleName.replace(/^(\d)/, "_${'$'}1").replace(/\W/g, "_");
             }
             """
-        )
-        assertTrue(d.none { it.code == 2345 }, "expected no TS2345, got: $d")
+        ) should {
+            have(none { it.code == 2345 })
+        }
     }
 
     @Test
     fun `replace with a RegExp search value and function replacer is clean`() {
-        val d = diags(
+        diagnose(
             """
             const fileNameLowerCaseRegExp = /[^İıßa-z0-9\\/:\-_. ]+/g;
             function toLowerCase(x: string) { return x.toLowerCase(); }
@@ -66,33 +65,36 @@ class StringRegExpMethodsTest {
                     x;
             }
             """
-        )
-        assertTrue(d.none { it.code == 2345 }, "expected no TS2345, got: $d")
+        ) should {
+            have(none { it.code == 2345 })
+        }
     }
 
     @Test
     fun `split and search with a RegExp are clean`() {
-        val d = diags(
+        diagnose(
             """
             export function f(text: string): number {
                 const lines = text.split(/\r\n?|\n/);
                 return lines.length + text.search(/x/);
             }
             """
-        )
-        assertTrue(d.none { it.code == 2345 }, "expected no TS2345, got: $d")
+        ) should {
+            have(none { it.code == 2345 })
+        }
     }
 
     @Test
     fun `replaceAll with a RegExp is clean`() {
-        val d = diags(
+        diagnose(
             """
             export function f(text: string): string {
                 return text.replaceAll(/a/g, "b");
             }
             """
-        )
-        assertTrue(d.none { it.code == 2345 }, "expected no TS2345, got: $d")
+        ) should {
+            have(none { it.code == 2345 })
+        }
     }
 
     @Test
@@ -102,13 +104,14 @@ class StringRegExpMethodsTest {
         // TS2345 arg check bails for that parameter (which is exactly the mechanism
         // that suppresses the RegExp FP). The control pins that plain string-param
         // arg checking on the SAME interface still fires.
-        val d = diags(
+        diagnose(
             """
             export function f(text: string): number {
                 return text.indexOf(42);
             }
             """
-        )
-        assertTrue(d.any { it.code == 2345 }, "expected TS2345 for number vs string, got: $d")
+        ) should {
+            have(any { it.code == 2345 })
+        }
     }
 }

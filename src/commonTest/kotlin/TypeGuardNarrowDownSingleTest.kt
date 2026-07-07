@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * M3.4 (self-compile burn-down): a user type-guard `x is C` narrowing a SINGLE (non-union) type
@@ -44,12 +45,9 @@ import kotlin.test.assertTrue
  */
 class TypeGuardNarrowDownSingleTest {
 
-    private fun diags(source: String): List<Diagnostic> =
-        TypeScriptCompiler().compile("// @strict: true\n" + source.trimIndent(), "t.ts").diagnostics
-
     @Test
     fun `assert guard narrows down to subtype redefining an optional member as required`() {
-        val d = diags(
+        diagnose(
             """
             interface Program { emit(): void; }
             interface Reusable { program?: Program | undefined; other: number; }
@@ -64,18 +62,14 @@ class TypeGuardNarrowDownSingleTest {
                 state.program.emit();
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 18048 || it.code == 2339 },
-            "the guard must narrow `state` to WithProgram (program: Program), not keep the wide " +
-                "Full (program?: Program | undefined); got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 18048 || it.code == 2339 })
+        }
     }
 
     @Test
     fun `plain if-guard narrows down to subtype redefining an optional member as required`() {
-        val d = diags(
+        diagnose(
             """
             interface Program { emit(): void; }
             interface Reusable { program?: Program | undefined; other: number; }
@@ -88,18 +82,15 @@ class TypeGuardNarrowDownSingleTest {
                 }
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 18048 || it.code == 2339 },
-            "positive branch must narrow to WithProgram; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 18048 || it.code == 2339 })
+        }
     }
 
     @Test
     fun `guard narrows captured variable inside a closure`() {
         // The real builder.ts shape: `state` is a captured const, the assert is inside a nested fn.
-        val d = diags(
+        diagnose(
             """
             interface Program { emit(): void; }
             interface Reusable { program?: Program | undefined; other: number; }
@@ -119,17 +110,14 @@ class TypeGuardNarrowDownSingleTest {
                 }
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 18048 || it.code == 2339 },
-            "closure-captured state must narrow; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 18048 || it.code == 2339 })
+        }
     }
 
     @Test
     fun `negative control - guard to an already-narrower Derived keeps Derived members`() {
-        val d = diags(
+        diagnose(
             """
             interface Base { kind: string; }
             interface Derived extends Base { extra: number; }
@@ -141,17 +129,14 @@ class TypeGuardNarrowDownSingleTest {
                 }
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2339 },
-            "narrowing to a supertype guard target must NOT drop the already-narrower `Derived`'s " +
-                "own members; got: " + d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 2339 })
+        }
     }
 
     @Test
     fun `negative control - false branch of an unrelated-type guard still narrows`() {
-        val d = diags(
+        diagnose(
             """
             interface Cat { meow(): void; }
             interface Dog { bark(): void; }
@@ -163,11 +148,8 @@ class TypeGuardNarrowDownSingleTest {
                 }
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2339 },
-            "false branch must narrow the union to Dog; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 2339 })
+        }
     }
 }

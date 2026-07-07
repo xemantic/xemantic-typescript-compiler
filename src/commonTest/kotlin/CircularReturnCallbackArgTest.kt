@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * M1.12 (self-compile burn-down): TS7023 ("implicitly has return type 'any' because it is
@@ -48,12 +49,9 @@ import kotlin.test.assertTrue
  */
 class CircularReturnCallbackArgTest {
 
-    private fun diags(source: String): List<Diagnostic> =
-        TypeScriptCompiler().compile("// @strict: true\n" + source.trimIndent(), "t.ts").diagnostics
-
     @Test
     fun `self passed as a callback arg in one conditional branch - no TS7023`() {
-        val d = diags(
+        diagnose(
             """
             declare function mapType(t: object, f: (x: object) => object): object;
             declare function isUnion(t: object): boolean;
@@ -61,17 +59,14 @@ class CircularReturnCallbackArgTest {
                 return isUnion(type) ? mapType(type, getMutable) : type;
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 7023 },
-            "self as a callback arg (mapType(type, self)) alongside a concrete branch must not fire TS7023; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 7023 })
+        }
     }
 
     @Test
     fun `unwrapAwaitedType shape - self only as callback arg - no TS7023`() {
-        val d = diags(
+        diagnose(
             """
             declare function mapType(t: object, f: (x: object) => object): object;
             declare function isUnion(t: object): boolean;
@@ -83,44 +78,35 @@ class CircularReturnCallbackArgTest {
                     type;
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 7023 },
-            "the unwrapAwaitedType conditional shape must not fire TS7023; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 7023 })
+        }
     }
 
     @Test
     fun `self in an array element that is then called STILL fires TS7023 - negative control`() {
         // `[self][0]()` genuinely forces self's return-type resolution → stuck → TS7023.
-        val d = diags(
+        diagnose(
             """
             function f() {
                 return [f][0]();
             }
             """,
-        )
-        assertTrue(
-            d.any { it.code == 7023 },
-            "self as an array element that is then called MUST still fire TS7023; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(any { it.code == 7023 })
+        }
     }
 
     @Test
     fun `self as an object-literal value STILL fires TS7023 - negative control`() {
-        val d = diags(
+        diagnose(
             """
             function g() {
                 return { next: g };
             }
             """,
-        )
-        assertTrue(
-            d.any { it.code == 7023 },
-            "self as an object-literal property value MUST still fire TS7023; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(any { it.code == 7023 })
+        }
     }
 }

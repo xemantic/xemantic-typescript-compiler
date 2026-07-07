@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * Round 429c (M3.1): two argument-typing rules on the call-arg path.
@@ -47,38 +48,37 @@ import kotlin.test.assertTrue
  */
 class OptionalParamUnionArgTest {
 
-    private fun diags(source: String): List<Diagnostic> =
-        TypeScriptCompiler().compile("// @strict: true\n" + source.trimIndent(), "t.ts").diagnostics
-
     @Test
     fun `string-or-undefined union arg to an optional string param is clean`() {
-        val d = diags(
+        diagnose(
             """
             declare function getDefaults(configFileName?: string): object;
             export function parse(configFileName: string | undefined) {
                 return getDefaults(configFileName);
             }
             """
-        )
-        assertTrue(d.none { it.code == 2345 }, "expected no TS2345, got: $d")
+        ) should {
+            have(none { it.code == 2345 })
+        }
     }
 
     @Test
     fun `union arg to a default-initialized param is clean`() {
-        val d = diags(
+        diagnose(
             """
             declare function getComponents(path: string, currentDirectory?: string): string[];
             export function f(path: string, dir: string | undefined) {
                 return getComponents(path, dir);
             }
             """
-        )
-        assertTrue(d.none { it.code == 2345 }, "expected no TS2345, got: $d")
+        ) should {
+            have(none { it.code == 2345 })
+        }
     }
 
     @Test
     fun `non-null-asserted union arg to a required string param is clean`() {
-        val d = diags(
+        diagnose(
             """
             declare function readFile(path: string): string | undefined;
             declare function parseJson(text: string): object;
@@ -86,56 +86,60 @@ class OptionalParamUnionArgTest {
                 return parseJson(readFile(path)!);
             }
             """
-        )
-        assertTrue(d.none { it.code == 2345 }, "expected no TS2345, got: $d")
+        ) should {
+            have(none { it.code == 2345 })
+        }
     }
 
     @Test
     fun `negative control - union arg to a REQUIRED param still fires`() {
-        val d = diags(
+        diagnose(
             """
             declare function getDefaults(configFileName: string): object;
             export function parse(configFileName: string | undefined) {
                 return getDefaults(configFileName);
             }
             """
-        )
-        assertTrue(d.any { it.code == 2345 }, "expected TS2345 for string | undefined vs required string, got: $d")
+        ) should {
+            have(any { it.code == 2345 })
+        }
     }
 
     @Test
     fun `negative control - wrong-category union arg to an optional param still fires`() {
         // Stripping undefined leaves `number`, which still fails vs `string` —
         // the optionality rule must not blanket-accept unions.
-        val d = diags(
+        diagnose(
             """
             declare function getDefaults(configFileName?: string): object;
             export function parse(x: number | undefined) {
                 return getDefaults(x);
             }
             """
-        )
-        assertTrue(d.any { it.code == 2345 }, "expected TS2345 for number | undefined vs string?, got: $d")
+        ) should {
+            have(any { it.code == 2345 })
+        }
     }
 
     @Test
     fun `negative control - null member is not excused by optionality`() {
         // null is NOT interchangeable with absence: `string | null` vs `string?`
         // keeps firing (only undefined members are stripped).
-        val d = diags(
+        diagnose(
             """
             declare function getDefaults(configFileName?: string): object;
             export function parse(x: string | null) {
                 return getDefaults(x);
             }
             """
-        )
-        assertTrue(d.any { it.code == 2345 }, "expected TS2345 for string | null vs string?, got: $d")
+        ) should {
+            have(any { it.code == 2345 })
+        }
     }
 
     @Test
     fun `guard-narrowed interface arg does not FP against the narrower param`() {
-        val d = diags(
+        diagnose(
             """
             interface Nd { kind: number; }
             interface SrcFile extends Nd { fileName: string; }
@@ -145,13 +149,14 @@ class OptionalParamUnionArgTest {
                 return isSourceFile(enclosingDeclaration) && isExternalModule(enclosingDeclaration);
             }
             """
-        )
-        assertTrue(d.none { it.code == 2345 }, "expected no TS2345, got: $d")
+        ) should {
+            have(none { it.code == 2345 })
+        }
     }
 
     @Test
     fun `guard-narrowed if-statement interface arg does not FP`() {
-        val d = diags(
+        diagnose(
             """
             interface Nd { kind: number; }
             interface SrcFile extends Nd { fileName: string; }
@@ -164,8 +169,9 @@ class OptionalParamUnionArgTest {
                 return undefined;
             }
             """
-        )
-        assertTrue(d.none { it.code == 2345 }, "expected no TS2345, got: $d")
+        ) should {
+            have(none { it.code == 2345 })
+        }
     }
 
     // NOTE (round 429c): the interface-arg narrowing branch EXCLUDES `never`-typed
@@ -179,7 +185,7 @@ class OptionalParamUnionArgTest {
 
     @Test
     fun `negative control - un-narrowed interface arg still fires`() {
-        val d = diags(
+        diagnose(
             """
             interface Nd { kind: number; }
             interface SrcFile extends Nd { fileName: string; }
@@ -188,13 +194,14 @@ class OptionalParamUnionArgTest {
                 return getSymbol(node);
             }
             """
-        )
-        assertTrue(d.any { it.code == 2345 }, "expected TS2345 for Nd vs SrcFile, got: $d")
+        ) should {
+            have(any { it.code == 2345 })
+        }
     }
 
     @Test
     fun `negative control - un-asserted union arg still fires`() {
-        val d = diags(
+        diagnose(
             """
             declare function readFile(path: string): string | undefined;
             declare function parseJson(text: string): object;
@@ -202,7 +209,8 @@ class OptionalParamUnionArgTest {
                 return parseJson(readFile(path));
             }
             """
-        )
-        assertTrue(d.any { it.code == 2345 }, "expected TS2345 without the non-null assertion, got: $d")
+        ) should {
+            have(any { it.code == 2345 })
+        }
     }
 }

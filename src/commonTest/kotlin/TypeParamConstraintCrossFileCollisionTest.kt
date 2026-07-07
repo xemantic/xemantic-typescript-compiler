@@ -25,8 +25,8 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * `checkConstraintsForTypeArgs` interns each generic's type-parameter as a shared
@@ -73,11 +73,7 @@ class TypeParamConstraintCrossFileCollisionTest {
                 """.trimIndent(),
             )
         )
-        assertTrue(
-            ts2344(result).isEmpty(),
-            "an unconstrained type param must NOT draw TS2344 from a cross-file pos collision; got: " +
-                ts2344(result),
-        )
+        have(ts2344(result).isEmpty())
     }
 
     @Test
@@ -104,10 +100,7 @@ class TypeParamConstraintCrossFileCollisionTest {
                 """.trimIndent(),
             )
         )
-        assertTrue(
-            ts2344(result).isEmpty(),
-            "the LexicalEnvironment shape must NOT draw a spurious TS2344; got: " + ts2344(result),
-        )
+        have(ts2344(result).isEmpty())
     }
 
     @Test
@@ -126,9 +119,6 @@ class TypeParamConstraintCrossFileCollisionTest {
                 """.trimIndent(),
             )
         )
-        assertTrue(
-            ts2344(result).any { it.contains("'string'") && it.contains("'number'") },
-            "a genuine string-vs-number constraint violation must still fire TS2344; got: " + ts2344(result),
-        )
+        have(ts2344(result).any { it.contains("'string'") && it.contains("'number'") })
     }
 }

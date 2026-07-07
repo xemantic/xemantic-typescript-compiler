@@ -21,8 +21,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * Round 427: two tsc-faithful `assumeInitialized` rules for TS2454
@@ -56,7 +57,7 @@ class Ts2454AssumeInitializedTest {
     /** tsc's `(sourceStack ??= []).push(…)` in a nested closure: the `??=` is a
      *  DEFINITE assignment, so neither its own read nor later captured reads fire. */
     @Test fun coalescingAssignInNestedClosureSuppressesCapturedReads() {
-        val diags = ts2454s(
+        ts2454s(
             """
             export function outer() {
                 let stack: number[];
@@ -70,13 +71,14 @@ class Ts2454AssumeInitializedTest {
                 return other();
             }
             """.trimIndent()
-        )
-        assertTrue(diags.isEmpty(), "??= is a definite assignment — captured reads assume initialized, got: $diags")
+        ) should {
+            have(isEmpty())
+        }
     }
 
     /** `||=` and `&&=` are likewise definite. */
     @Test fun logicalAssignsAreDefinite() {
-        val diags = ts2454s(
+        ts2454s(
             """
             export function outer() {
                 let a: number;
@@ -92,8 +94,9 @@ class Ts2454AssumeInitializedTest {
                 return reader();
             }
             """.trimIndent()
-        )
-        assertTrue(diags.isEmpty(), "||=/&&= are definite assignments, got: $diags")
+        ) should {
+            have(isEmpty())
+        }
     }
 
     /** tsc checker.ts getSignaturesOfType: the definite assignment sits in a COMMA
@@ -105,7 +108,7 @@ class Ts2454AssumeInitializedTest {
      *  expression nests the assignment on the LEFT spine of a BinaryExpression,
      *  which an outer-only target check silently skips. */
     @Test fun commaNestedAssignInArrowIsDefinite() {
-        val diags = ts2454s(
+        ts2454s(
             """
             declare function every(f: (t: number) => boolean): boolean;
             export function outer() {
@@ -116,8 +119,9 @@ class Ts2454AssumeInitializedTest {
                 return 0;
             }
             """.trimIndent()
-        )
-        assertTrue(diags.isEmpty(), "a comma-nested `=` in a nested arrow is definite, got: $diags")
+        ) should {
+            have(isEmpty())
+        }
     }
 
     /** The REAL checker.ts:15956 shape adds an ENCLOSING if-block around the `let` —
@@ -126,7 +130,7 @@ class Ts2454AssumeInitializedTest {
      *  emitter than the top-level variant above. Both must honor the
      *  definitely-assigned-in-arrow exemption. */
     @Test fun commaNestedAssignInArrowInsideIfBlockIsDefinite() {
-        val diags = ts2454s(
+        ts2454s(
             """
             declare function every(f: (t: number) => boolean): boolean;
             export function outer(kind: number) {
@@ -139,14 +143,15 @@ class Ts2454AssumeInitializedTest {
                 return 0;
             }
             """.trimIndent()
-        )
-        assertTrue(diags.isEmpty(), "the if-block-nested variant must be exempt too, got: $diags")
+        ) should {
+            have(isEmpty())
+        }
     }
 
     /** NEGATIVE control (unusedLocalsInMethod4's transformClassFields): a compound
      *  `|=` is read-modify-write, NOT definite — the captured read still fires. */
     @Test fun compoundAssignDoesNotSuppressCapturedRead() {
-        val diags = ts2454s(
+        ts2454s(
             """
             export function outer() {
                 let flags: number;
@@ -157,17 +162,15 @@ class Ts2454AssumeInitializedTest {
                 return inner();
             }
             """.trimIndent()
-        )
-        assertTrue(
-            diags.isNotEmpty(),
-            "a compound |= must NOT count as the first assignment — tsc still emits TS2454"
-        )
+        ) should {
+            have(isNotEmpty(), "a compound |= must NOT count as the first assignment — tsc still emits TS2454")
+        }
     }
 
     /** NEGATIVE control (B78.2 base behavior): no assignment anywhere — the
      *  captured read fires. */
     @Test fun neverAssignedCapturedReadStillFires() {
-        val diags = ts2454s(
+        ts2454s(
             """
             export function outer() {
                 let x: number[];
@@ -177,14 +180,15 @@ class Ts2454AssumeInitializedTest {
                 return foo();
             }
             """.trimIndent()
-        )
-        assertTrue(diags.isNotEmpty(), "a never-assigned captured read must still fire TS2454")
+        ) should {
+            have(isNotEmpty())
+        }
     }
 
     /** tsc core.ts `or()`: `let lastResult: U;` conditionally assigned in a loop,
      *  then `return lastResult!` — the `!` assumes initialized. */
     @Test fun nonNullAssertedReadAssumesInitialized() {
-        val diags = ts2454s(
+        ts2454s(
             """
             export function orFn(fs: (() => number)[]) {
                 let lastResult: number;
@@ -195,13 +199,14 @@ class Ts2454AssumeInitializedTest {
                 return lastResult!;
             }
             """.trimIndent()
-        )
-        assertTrue(diags.isEmpty(), "a `!`-asserted read assumes initialized (tsc), got: $diags")
+        ) should {
+            have(isEmpty())
+        }
     }
 
     /** `x!.prop` — the identifier's DIRECT parent is the assertion, exempt too. */
     @Test fun nonNullAssertedReceiverAssumesInitialized() {
-        val diags = ts2454s(
+        ts2454s(
             """
             export function f(cond: boolean) {
                 let obj: { p: number };
@@ -209,20 +214,22 @@ class Ts2454AssumeInitializedTest {
                 return obj!.p;
             }
             """.trimIndent()
-        )
-        assertTrue(diags.isEmpty(), "an `x!.prop` read assumes initialized (tsc), got: $diags")
+        ) should {
+            have(isEmpty())
+        }
     }
 
     /** NEGATIVE control: the same shapes WITHOUT `!` still fire. */
     @Test fun plainReadWithoutAssertionStillFires() {
-        val diags = ts2454s(
+        ts2454s(
             """
             export function f() {
                 let v: number;
                 return v;
             }
             """.trimIndent()
-        )
-        assertTrue(diags.isNotEmpty(), "a plain uninitialized read must still fire TS2454")
+        ) should {
+            have(isNotEmpty())
+        }
     }
 }

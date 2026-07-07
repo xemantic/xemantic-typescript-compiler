@@ -21,8 +21,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * Round 436f (M3.4): a switch over a BARE `string`/`number` reference narrows
@@ -35,60 +36,61 @@ import kotlin.test.assertTrue
  */
 class SwitchCaseBareStringNarrowingTest {
 
-    private fun ts2345s(source: String) =
-        TypeScriptCompiler().compile("// @strict: true\n" + source, "t.ts")
-            .diagnostics.filter { it.code == 2345 }
-
     private val prelude = """
         interface Version { major: number }
         declare function createComparator(op: "<" | "<=" | ">" | ">=" | "=", operand: Version): number;
     """.trimIndent()
 
-    /** The semver.ts shape: fall-through case pair narrows to a 2-literal union. */
-    @Test fun caseNarrowedBareStringArgIsLegal() {
-        val d = ts2345s(
-            prelude + "\n" +
-                """
-                function parseComparator(operator: string, v: Version) {
-                    switch (operator) {
-                        case "<":
-                        case ">=":
-                            createComparator(operator, v);
-                            break;
-                    }
+    @Test
+    fun `case-narrowed bare string arg is legal`() {
+        // The semver.ts shape: fall-through case pair narrows to a 2-literal union.
+        diagnose(
+            prelude + """
+
+            function parseComparator(operator: string, v: Version) {
+                switch (operator) {
+                    case "<":
+                    case ">=":
+                        createComparator(operator, v);
+                        break;
                 }
-                """.trimIndent()
-        )
-        assertTrue(d.isEmpty(), "expected no TS2345, got: $d")
+            }
+            """
+        ) should {
+            have(none { it.code == 2345 })
+        }
     }
 
-    /** NEGATIVE control: a case literal OUTSIDE the param union still fires. */
-    @Test fun caseNarrowedToNonMemberLiteralStillFires() {
-        val d = ts2345s(
-            prelude + "\n" +
-                """
-                function parseComparator(operator: string, v: Version) {
-                    switch (operator) {
-                        case "~":
-                            createComparator(operator, v);
-                            break;
-                    }
+    @Test
+    fun `negative control - a case literal outside the param union still fires`() {
+        diagnose(
+            prelude + """
+
+            function parseComparator(operator: string, v: Version) {
+                switch (operator) {
+                    case "~":
+                        createComparator(operator, v);
+                        break;
                 }
-                """.trimIndent()
-        )
-        assertTrue(d.isNotEmpty(), "expected TS2345 for '\"~\"' vs the comparator union")
+            }
+            """
+        ) should {
+            have(any { it.code == 2345 })
+        }
     }
 
-    /** NEGATIVE control: an UN-narrowed bare string still fires (no switch). */
-    @Test fun unNarrowedBareStringStillFires() {
-        val d = ts2345s(
-            prelude + "\n" +
-                """
-                function f(operator: string, v: Version) {
-                    createComparator(operator, v);
-                }
-                """.trimIndent()
-        )
-        assertTrue(d.isNotEmpty(), "expected TS2345 for 'string' vs the comparator union")
+    @Test
+    fun `negative control - an un-narrowed bare string still fires`() {
+        // No switch at all: 'string' vs the comparator union must report.
+        diagnose(
+            prelude + """
+
+            function f(operator: string, v: Version) {
+                createComparator(operator, v);
+            }
+            """
+        ) should {
+            have(any { it.code == 2345 })
+        }
     }
 }

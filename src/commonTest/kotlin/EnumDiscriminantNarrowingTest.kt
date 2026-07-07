@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * M3.4 (self-compile burn-down): discriminated-union narrowing keyed on an ENUM-MEMBER
@@ -43,9 +44,6 @@ import kotlin.test.assertTrue
  */
 class EnumDiscriminantNarrowingTest {
 
-    private fun diags(source: String): List<Diagnostic> =
-        TypeScriptCompiler().compile("// @strict: true\n" + source.trimIndent(), "t.ts").diagnostics
-
     private val decls = """
         enum Kind { A, B, C }
         interface AStatus { type: Kind.A; aField: string; }
@@ -56,39 +54,30 @@ class EnumDiscriminantNarrowingTest {
 
     @Test
     fun `if equality narrows enum discriminant - no error`() {
-        val d = diags("$decls\nexport function f(s: Status){ if (s.type === Kind.A) { const x: string = s.aField; } }")
-        assertTrue(
-            d.none { it.code == 2339 },
-            "`if (s.type === Kind.A)` must narrow `s` to AStatus so `s.aField` resolves; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        diagnose("$decls\nexport function f(s: Status){ if (s.type === Kind.A) { const x: string = s.aField; } }") should {
+            have(none { it.code == 2339 })
+        }
     }
 
     @Test
     fun `switch narrows enum discriminant - no error`() {
-        val d = diags("$decls\nexport function g(s: Status){ switch (s.type) { case Kind.B: { const y: number = s.bField; break; } } }")
-        assertTrue(
-            d.none { it.code == 2339 },
-            "`switch (s.type) { case Kind.B }` must narrow `s` to BStatus so `s.bField` resolves; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        diagnose("$decls\nexport function g(s: Status){ switch (s.type) { case Kind.B: { const y: number = s.bField; break; } } }") should {
+            have(none { it.code == 2339 })
+        }
     }
 
     @Test
     fun `negative equality else branch narrows - no error`() {
         // `if (s.type !== Kind.A) {} else { ... }` — the else branch is `s.type === Kind.A`.
-        val d = diags("$decls\nexport function h(s: Status){ if (s.type !== Kind.A) {} else { const x: string = s.aField; } }")
-        assertTrue(
-            d.none { it.code == 2339 },
-            "the else of `if (s.type !== Kind.A)` must narrow `s` to AStatus; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        diagnose("$decls\nexport function h(s: Status){ if (s.type !== Kind.A) {} else { const x: string = s.aField; } }") should {
+            have(none { it.code == 2339 })
+        }
     }
 
     @Test
     fun `multi-value enum discriminant narrows positively`() {
         // A member whose discriminant is a UNION of enum members: `=== Kind.A` keeps it.
-        val d = diags(
+        diagnose(
             """
             enum Kind { A, B, C, D }
             interface AB { type: Kind.A | Kind.B; abField: string; }
@@ -96,19 +85,16 @@ class EnumDiscriminantNarrowingTest {
             type S = AB | CD;
             export function f(s: S){ if (s.type === Kind.A) { const x: string = s.abField; } }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2339 },
-            "`=== Kind.A` must keep the `Kind.A | Kind.B` member so `abField` resolves; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 2339 })
+        }
     }
 
     @Test
     fun `multi-value member survives a single negative comparison - keeps member`() {
         // `!== Kind.A` must NOT drop a `Kind.A | Kind.B` member (it could still be Kind.B), so a
         // member access valid on that member must not become an error.
-        val d = diags(
+        diagnose(
             """
             enum Kind { A, B, C, D }
             interface AB { type: Kind.A | Kind.B; abField: string; }
@@ -116,20 +102,18 @@ class EnumDiscriminantNarrowingTest {
             type S = AB | CD;
             export function f(s: S){ if (s.type !== Kind.A) { /* s could be AB (Kind.B) or CD */ } }
             """,
-        )
-        assertTrue(d.none { it.code == 2339 }, "got: " + d.joinToString { "TS${it.code}: ${it.message}" })
+        ) should {
+            have(none { it.code == 2339 })
+        }
     }
 
     @Test
     fun `wrong-branch field still errors - negative control`() {
         // In the `Kind.A` branch, accessing BStatus's field must still fire TS2339 (correct):
         // narrowing to AStatus makes `bField` genuinely absent.
-        val d = diags("$decls\nexport function f(s: Status){ if (s.type === Kind.A) { const x: number = s.bField; } }")
-        assertTrue(
-            d.any { it.code == 2339 && it.message.contains("bField") },
-            "accessing `bField` in the AStatus-narrowed branch must still fire TS2339; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        diagnose("$decls\nexport function f(s: Status){ if (s.type === Kind.A) { const x: number = s.bField; } }") should {
+            have(any { it.code == 2339 && it.message.contains("bField") })
+        }
     }
 
     @Test
@@ -158,22 +142,17 @@ class EnumDiscriminantNarrowingTest {
             )
         )
         val result = ProjectCompiler(vfs).build("/proj", noEmit = true)
-        assertTrue(
-            result.diagnostics.none { it.code == 2339 },
-            "a barrel-imported enum discriminant must still narrow (both `===` and `switch`); got: " +
-                result.diagnostics.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        result.diagnostics should {
+            have(none { it.code == 2339 }, "a barrel-imported enum discriminant must still narrow (both `===` and `switch`)")
+        }
     }
 
     @Test
     fun `non-discriminant property access still errors - negative control`() {
         // A property on NO member is still an error even after narrowing.
-        val d = diags("$decls\nexport function f(s: Status){ if (s.type === Kind.A) { const x = (s as any).nope; s.doesNotExist; } }")
-        assertTrue(
-            d.any { it.code == 2339 && it.message.contains("doesNotExist") },
-            "a genuinely-missing property must still fire TS2339; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        diagnose("$decls\nexport function f(s: Status){ if (s.type === Kind.A) { const x = (s as any).nope; s.doesNotExist; } }") should {
+            have(any { it.code == 2339 && it.message.contains("doesNotExist") })
+        }
     }
 
     @Test
@@ -181,7 +160,7 @@ class EnumDiscriminantNarrowingTest {
         // tsc's `ProjectReferenceFile { kind: ProjectReferenceFileKind }` where
         // `ProjectReferenceFileKind = FileIncludeKind.A | FileIncludeKind.B`. The switch case
         // `case Kind.AutoType` must drop ProjectRefFile even though its `.kind` is an ALIAS.
-        val d = diags(
+        diagnose(
             """
             enum Kind { Root, Source, Output, AutoType }
             type ProjectRefKind = Kind.Source | Kind.Output;
@@ -198,11 +177,8 @@ class EnumDiscriminantNarrowingTest {
                 return undefined;
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2339 },
-            "a `.kind: <type-alias-of-enum-members>` member must be filtered from a non-matching " +
-                "case; got: " + d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 2339 })
+        }
     }
 }

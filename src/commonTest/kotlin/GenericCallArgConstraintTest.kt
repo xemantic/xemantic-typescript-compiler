@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * A type-PARAMETER argument satisfies a generic call's type-parameter constraint when its OWN
@@ -38,76 +39,65 @@ import kotlin.test.assertTrue
  */
 class GenericCallArgConstraintTest {
 
-    private fun diags(body: String): List<Diagnostic> =
-        TypeScriptCompiler().compile(body.trimIndent(), "t.ts").diagnostics
-
     @Test
     fun `type-param arg whose constraint satisfies the callee constraint - no TS2344`() {
-        val d = diags(
+        diagnose(
             """
             interface Base { b: number; }
             declare function g<U extends Base>(): U;
             function f<T extends Base>(): void { g<T>(); }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2344 },
-            "T extends Base passed to g<U extends Base> must NOT be TS2344; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            directives = "",
+        ) should {
+            have(none { it.code == 2344 })
+        }
     }
 
     @Test
     fun `type-param arg whose constraint is a SUBTYPE of the callee constraint - no TS2344`() {
-        val d = diags(
+        diagnose(
             """
             interface Base { b: number; }
             interface Derived extends Base { d: number; }
             declare function g<U extends Base>(): U;
             function f<T extends Derived>(): void { g<T>(); }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2344 },
-            "T extends Derived (⊂ Base) passed to g<U extends Base> must NOT be TS2344; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            directives = "",
+        ) should {
+            have(none { it.code == 2344 })
+        }
     }
 
     @Test
     fun `type-param arg whose constraint does NOT satisfy the callee constraint - TS2344 fires`() {
         // Negative control: `Other` is unrelated to `Base`, so the constraint chain does not
         // satisfy — the skip must not fire and TS2344 must be emitted.
-        val d = diags(
+        diagnose(
             """
             interface Base { b: number; }
             interface Other { o: number; }
             declare function g<U extends Base>(): U;
             function f<T extends Other>(): void { g<T>(); }
             """,
-        )
-        assertTrue(
-            d.any { it.code == 2344 && it.message.contains("'Base'") },
-            "T extends Other passed to g<U extends Base> must still be TS2344; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            directives = "",
+        ) should {
+            have(any { it.code == 2344 && it.message.contains("'Base'") })
+        }
     }
 
     @Test
     fun `unconstrained type-param arg does NOT over-skip a real constraint - TS2344 fires`() {
         // An unconstrained T (no constraint) must not be skipped — its apparent type `{}` does
         // not satisfy `Base`, so TS2344 must fire (the skip is gated to `constraint != null`).
-        val d = diags(
+        diagnose(
             """
             interface Base { b: number; }
             declare function g<U extends Base>(): U;
             function f<T>(): void { g<T>(); }
             """,
-        )
-        assertTrue(
-            d.any { it.code == 2344 && it.message.contains("'Base'") },
-            "unconstrained T passed to g<U extends Base> must still be TS2344; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            directives = "",
+        ) should {
+            have(any { it.code == 2344 && it.message.contains("'Base'") })
+        }
     }
 }

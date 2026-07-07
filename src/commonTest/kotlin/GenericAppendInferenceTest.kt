@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * Round 428 (M3.1 slice): call-site inference for tsc core.ts's `append<T>` idiom —
@@ -50,9 +51,6 @@ import kotlin.test.assertTrue
  */
 class GenericAppendInferenceTest {
 
-    private fun diags(source: String): List<Diagnostic> =
-        TypeScriptCompiler().compile("// @strict: true\n" + source.trimIndent(), "t.ts").diagnostics
-
     private val appendOverloads = """
         declare function append<T extends {}>(to: T[], value: T | undefined): T[];
         declare function append<T extends {}>(to: T[] | undefined, value: T): T[];
@@ -61,7 +59,7 @@ class GenericAppendInferenceTest {
 
     @Test
     fun `overloaded all-generic append call assigns back without TS2322`() {
-        val d = diags(
+        diagnose(
             """
             $appendOverloads
             interface Statement { kind: number; }
@@ -71,13 +69,14 @@ class GenericAppendInferenceTest {
                 return leading ?? [];
             }
             """
-        )
-        assertTrue(d.none { it.code == 2322 }, "expected no TS2322, got: $d")
+        ) should {
+            have(none { it.code == 2322 })
+        }
     }
 
     @Test
     fun `single-sig generic with nullable union params infers through assignment`() {
-        val d = diags(
+        diagnose(
             """
             interface Statement { kind: number; }
             function appendOne<T extends {}>(to: T[] | undefined, value: T): T[] {
@@ -91,15 +90,16 @@ class GenericAppendInferenceTest {
                 return leading ?? [];
             }
             """
-        )
-        assertTrue(d.none { it.code == 2322 }, "expected no TS2322, got: $d")
+        ) should {
+            have(none { it.code == 2322 })
+        }
     }
 
     @Test
     fun `anyType arg contributes no candidate instead of killing return inference`() {
         // `item` is a for-of loop variable — unmodeled, resolves to anyType. T must
         // still anchor from the `leading` array arg.
-        val d = diags(
+        diagnose(
             """
             interface Statement { kind: number; }
             declare function appendOne<T extends {}>(to: T[] | undefined, value: T): T[];
@@ -111,13 +111,14 @@ class GenericAppendInferenceTest {
                 return leading ?? [];
             }
             """
-        )
-        assertTrue(d.none { it.code == 2322 }, "expected no TS2322, got: $d")
+        ) should {
+            have(none { it.code == 2322 })
+        }
     }
 
     @Test
     fun `nullish arg to nullable union param contributes nothing but does not bail`() {
-        val d = diags(
+        diagnose(
             """
             interface Statement { kind: number; }
             declare function append<T extends {}>(to: T[] | undefined, value: T | undefined): T[] | undefined;
@@ -126,13 +127,14 @@ class GenericAppendInferenceTest {
                 leading = append(undefined, s);
             }
             """
-        )
-        assertTrue(d.none { it.code == 2322 }, "expected no TS2322, got: $d")
+        ) should {
+            have(none { it.code == 2322 })
+        }
     }
 
     @Test
     fun `array literal return inside generic fn body does not FP against T array union`() {
-        val d = diags(
+        diagnose(
             """
             export function appendOne<T extends {}>(to: T[] | undefined, value: T | undefined): T[] | undefined {
                 if (value === undefined) return to;
@@ -141,20 +143,22 @@ class GenericAppendInferenceTest {
                 return to;
             }
             """
-        )
-        assertTrue(d.none { it.code == 2322 }, "expected no TS2322, got: $d")
+        ) should {
+            have(none { it.code == 2322 })
+        }
     }
 
     @Test
     fun `array literal return inside generic fn body vs bare T array does not FP`() {
-        val d = diags(
+        diagnose(
             """
             export function wrap<T extends {}>(value: T): T[] {
                 return [value];
             }
             """
-        )
-        assertTrue(d.none { it.code == 2322 }, "expected no TS2322, got: $d")
+        ) should {
+            have(none { it.code == 2322 })
+        }
     }
 
     @Test
@@ -164,7 +168,7 @@ class GenericAppendInferenceTest {
         // model. The new inference path must SKIP (previous outcome preserved: no
         // emission), not infer the boolean overload's `(Identifier | undefined)[]`
         // and FP against the declared `Identifier[]` return.
-        val d = diags(
+        diagnose(
             """
             interface Identifier { kind: 80; text: string; }
             declare function isIdentifierAndNotUndefined(node: unknown): node is Identifier;
@@ -174,8 +178,9 @@ class GenericAppendInferenceTest {
                 return filter(maybe, isIdentifierAndNotUndefined);
             }
             """
-        )
-        assertTrue(d.none { it.code == 2322 }, "expected no TS2322, got: $d")
+        ) should {
+            have(none { it.code == 2322 })
+        }
     }
 
     @Test
@@ -184,7 +189,7 @@ class GenericAppendInferenceTest {
         // an array-ish union member as unknowable (tsc sourcemap.ts's
         // `sourcesContent = []` vs `(string | null)[] | undefined`, `return []` vs
         // `string | string[] | undefined`).
-        val d = diags(
+        diagnose(
             """
             export function f(): void {
                 let sourcesContent: (string | null)[] | undefined;
@@ -198,26 +203,28 @@ class GenericAppendInferenceTest {
                 return value;
             }
             """
-        )
-        assertTrue(d.none { it.code == 2322 }, "expected no TS2322, got: $d")
+        ) should {
+            have(none { it.code == 2322 })
+        }
     }
 
     @Test
     fun `negative control - array literal vs union WITHOUT array member still fires`() {
-        val d = diags(
+        diagnose(
             """
             export function g(): string | number | undefined {
                 return [];
             }
             """
-        )
-        assertTrue(d.any { it.code == 2322 }, "expected TS2322 for [] vs string | number | undefined, got: $d")
+        ) should {
+            have(any { it.code == 2322 })
+        }
     }
 
     @Test
     fun `negative control - genuinely wrong call result still fires TS2322`() {
         // appendNum returns number[] regardless — assigning to Statement[] must error.
-        val d = diags(
+        diagnose(
             """
             interface Statement { kind: number; }
             declare function appendNum<T extends {}>(to: T[] | undefined, value: T): T[];
@@ -226,20 +233,22 @@ class GenericAppendInferenceTest {
                 leading = appendNum([1, 2], 3);
             }
             """
-        )
-        assertTrue(d.any { it.code == 2322 }, "expected TS2322 for number[] into Statement[], got: $d")
+        ) should {
+            have(any { it.code == 2322 })
+        }
     }
 
     @Test
     fun `negative control - non-array return inside generic fn still fires`() {
         // `return 3` against `T[]` is a kind mismatch regardless of T.
-        val d = diags(
+        diagnose(
             """
             export function bad<T extends {}>(value: T): T[] {
                 return 3;
             }
             """
-        )
-        assertTrue(d.any { it.code == 2322 }, "expected TS2322 for `return 3` vs T[], got: $d")
+        ) should {
+            have(any { it.code == 2322 })
+        }
     }
 }

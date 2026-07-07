@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * M3.4 (round 413): the return-assignability path is now a flow-narrowing consumer for a
@@ -64,12 +65,9 @@ class ReturnPathNarrowingTest {
                 throw new Error();
             }
         """.trimIndent() + "\n"
-        val result = TypeScriptCompiler().compile(source, "guardRet.ts")
-        assertTrue(
-            result.diagnostics.none { it.code == 2739 || it.code == 2740 || it.code == 2741 || it.code == 2322 },
-            "guard-narrowed return to the subtype must be assignable, got: " +
-                result.diagnostics.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        TypeScriptCompiler().compile(source, "guardRet.ts").diagnostics should {
+            have(none { it.code == 2739 || it.code == 2740 || it.code == 2741 || it.code == 2322 })
+        }
     }
 
     /** The bare-assert form (`assertDefined(x); return x;`) — builder.ts's exact idiom. */
@@ -80,12 +78,9 @@ class ReturnPathNarrowingTest {
                 return x;
             }
         """.trimIndent() + "\n"
-        val result = TypeScriptCompiler().compile(source, "assertRet.ts")
-        assertTrue(
-            result.diagnostics.none { it.code == 2739 || it.code == 2740 || it.code == 2741 || it.code == 2322 },
-            "assert-narrowed return must be assignable, got: " +
-                result.diagnostics.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        TypeScriptCompiler().compile(source, "assertRet.ts").diagnostics should {
+            have(none { it.code == 2739 || it.code == 2740 || it.code == 2741 || it.code == 2322 })
+        }
     }
 
     /**
@@ -98,12 +93,9 @@ class ReturnPathNarrowingTest {
                 return x;
             }
         """.trimIndent() + "\n"
-        val result = TypeScriptCompiler().compile(source, "unnarrowedRet.ts")
-        assertTrue(
-            result.diagnostics.any { it.code == 2739 || it.code == 2740 || it.code == 2741 || it.code == 2322 },
-            "negative control lost: unnarrowed Small → Big return must error, got: " +
-                result.diagnostics.joinToString { "TS${it.code}" },
-        )
+        TypeScriptCompiler().compile(source, "unnarrowedRet.ts").diagnostics should {
+            have(any { it.code == 2739 || it.code == 2740 || it.code == 2741 || it.code == 2322 })
+        }
     }
 
     /**
@@ -118,11 +110,8 @@ class ReturnPathNarrowingTest {
                 return x;
             }
         """.trimIndent() + "\n"
-        val result = TypeScriptCompiler().compile(source, "wrongRet.ts")
-        assertTrue(
-            result.diagnostics.any { it.code == 2739 || it.code == 2740 || it.code == 2741 || it.code == 2322 },
-            "a Defined-narrowed value returned where an unrelated Other is expected must still error, got: " +
-                result.diagnostics.joinToString { "TS${it.code}" },
-        )
+        TypeScriptCompiler().compile(source, "wrongRet.ts").diagnostics should {
+            have(any { it.code == 2739 || it.code == 2740 || it.code == 2741 || it.code == 2322 })
+        }
     }
 }

@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * M1.12 (round 419): a UNION whose member is itself an INTERSECTION
@@ -39,12 +40,9 @@ import kotlin.test.assertTrue
  */
 class IntersectionMemberPropertyTest {
 
-    private fun diags(source: String): List<Diagnostic> =
-        TypeScriptCompiler().compile("// @strict: true\n" + source.trimIndent(), "t.ts").diagnostics
-
     @Test
     fun `property inherited by an intersection union-member resolves`() {
-        val d = diags(
+        diagnose(
             """
             interface Node { parent: Node; }
             interface ElementAccessExpression extends Node { argumentExpression: string; }
@@ -59,17 +57,14 @@ class IntersectionMemberPropertyTest {
                 return x.expression;  // .expression is on PropertyAccessExpression AND the intersection's {expression:any}
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2339 },
-            "a property present on every union member (folding the intersection arm) must resolve; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 2339 })
+        }
     }
 
     @Test
     fun `switch on kind filters an intersection member with a non-matching discriminant`() {
-        val d = diags(
+        diagnose(
             """
             declare const enum Kind { Import, Export, Binding }
             interface Base { kind: Kind; }
@@ -88,19 +83,16 @@ class IntersectionMemberPropertyTest {
                 }
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2339 },
-            "the intersection member (Kind.Binding) must be filtered from the Import|Export case; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 2339 })
+        }
     }
 
     @Test
     fun `FP-safety - a property missing on a plain union still fires TS2339`() {
         // The intersection-member fold must not disturb the plain-union missing-property
         // emission (the well-resolved-union elaboration path).
-        val d = diags(
+        diagnose(
             """
             interface A { a: number; }
             interface B { b: number; }
@@ -110,17 +102,14 @@ class IntersectionMemberPropertyTest {
                 return x.nope; // `nope` on neither A nor B → TS2339 must still fire
             }
             """,
-        )
-        assertTrue(
-            d.any { it.code == 2339 && it.message.contains("nope") },
-            "a genuinely-missing property on a plain union must still fire TS2339; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(any { it.code == 2339 && it.message.contains("nope") })
+        }
     }
 
     @Test
     fun `FP-safety - a property on only SOME union members still fires TS2339`() {
-        val d = diags(
+        diagnose(
             """
             interface A { a: number; shared: string; }
             interface B { b: number; }
@@ -131,11 +120,8 @@ class IntersectionMemberPropertyTest {
                 return x.shared; // on A but NOT on (B & C) → union access still fails
             }
             """,
-        )
-        assertTrue(
-            d.any { it.code == 2339 && it.message.contains("shared") },
-            "a property present on only some members must still fire TS2339; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(any { it.code == 2339 && it.message.contains("shared") })
+        }
     }
 }

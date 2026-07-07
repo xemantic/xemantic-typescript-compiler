@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * Round 408 (M3.4 slice): a callee reference typed `F | undefined` that a
@@ -47,18 +48,15 @@ class CalleeNarrowingNotCallableTest {
         TypeScriptCompiler().compile(source, name).diagnostics
 
     private fun assertNo2349(source: String) {
-        val hits = diagnosticsOf(source).filter { it.code == 2349 }
-        assertTrue(
-            hits.isEmpty(),
-            "expected no TS2349, got: " + hits.joinToString { it.message }
-        )
+        diagnosticsOf(source) should {
+            have(none { it.code == 2349 })
+        }
     }
 
     private fun assert2349(source: String) {
-        assertTrue(
-            diagnosticsOf(source).any { it.code == 2349 },
-            "negative control lost — expected TS2349 to still fire"
-        )
+        diagnosticsOf(source) should {
+            have(any { it.code == 2349 })
+        }
     }
 
     /** `if (fn) fn()` — truthiness guard on an optional-callable identifier param. */

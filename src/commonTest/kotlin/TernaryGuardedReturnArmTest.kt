@@ -21,8 +21,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * Round 436g (M3.4): a guard-gated ternary RETURN arm narrows by the condition
@@ -34,10 +35,6 @@ import kotlin.test.assertTrue
  */
 class TernaryGuardedReturnArmTest {
 
-    private fun ts2322s(source: String) =
-        TypeScriptCompiler().compile("// @strict: true\n" + source, "t.ts")
-            .diagnostics.filter { it.code == 2322 }
-
     private val prelude = """
         interface Node3 { kind: number }
         interface NamedTupleMember extends Node3 { name: string }
@@ -46,42 +43,46 @@ class TernaryGuardedReturnArmTest {
         declare function isParameter(n: Node3): n is ParameterDeclaration;
     """.trimIndent()
 
-    /** The utilities.ts shape: ||-combined guards gate the true arm. */
-    @Test fun guardGatedTernaryArmNarrows() {
-        val d = ts2322s(
-            prelude + "\n" +
-                """
-                function memberIfLabeled(member: Node3): NamedTupleMember | ParameterDeclaration | undefined {
-                    return isNamedTupleMember(member) || isParameter(member) ? member : undefined;
-                }
-                """.trimIndent()
-        )
-        assertTrue(d.isEmpty(), "expected no TS2322, got: $d")
+    @Test
+    fun `guard-gated ternary return arm narrows`() {
+        // The utilities.ts shape: ||-combined guards gate the true arm.
+        diagnose(
+            prelude + """
+
+            function memberIfLabeled(member: Node3): NamedTupleMember | ParameterDeclaration | undefined {
+                return isNamedTupleMember(member) || isParameter(member) ? member : undefined;
+            }
+            """
+        ) should {
+            have(none { it.code == 2322 })
+        }
     }
 
-    /** Single-guard variant. */
-    @Test fun singleGuardTernaryArmNarrows() {
-        val d = ts2322s(
-            prelude + "\n" +
-                """
-                function paramIf(member: Node3): ParameterDeclaration | undefined {
-                    return isParameter(member) ? member : undefined;
-                }
-                """.trimIndent()
-        )
-        assertTrue(d.isEmpty(), "expected no TS2322, got: $d")
+    @Test
+    fun `single-guard ternary arm narrows`() {
+        diagnose(
+            prelude + """
+
+            function paramIf(member: Node3): ParameterDeclaration | undefined {
+                return isParameter(member) ? member : undefined;
+            }
+            """
+        ) should {
+            have(none { it.code == 2322 })
+        }
     }
 
-    /** NEGATIVE control: an UN-guarded arm still fires. */
-    @Test fun unGuardedTernaryArmStillFires() {
-        val d = ts2322s(
-            prelude + "\n" +
-                """
-                function bad(member: Node3, c: boolean): ParameterDeclaration | undefined {
-                    return c ? member : undefined;
-                }
-                """.trimIndent()
-        )
-        assertTrue(d.isNotEmpty(), "expected TS2322 for un-narrowed 'Node3' arm")
+    @Test
+    fun `negative control - an un-guarded ternary arm still fires`() {
+        diagnose(
+            prelude + """
+
+            function bad(member: Node3, c: boolean): ParameterDeclaration | undefined {
+                return c ? member : undefined;
+            }
+            """
+        ) should {
+            have(any { it.code == 2322 })
+        }
     }
 }

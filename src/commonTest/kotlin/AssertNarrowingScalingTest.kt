@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
-import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.measureTimedValue
 
@@ -70,20 +71,20 @@ class AssertNarrowingScalingTest {
      * is a LIVE `x is string` predicate: the guarded var-decl compiles clean only if
      * narrowing still applies through the memoized machinery.
      */
-    private fun callDenseSource(calls: Int): String = buildString {
-        append("// @strict: true\n")
-        append("interface Dbg {\n")
-        append("    keep(v: unknown, w: unknown): asserts v is Dbg;\n")
-        append("    isStr(w: unknown): w is string;\n")
-        append("}\n")
-        append("interface Utils { dbg: Dbg; }\n")
-        append("declare const utils: Utils;\n")
-        append("declare const x: unknown;\n")
-        repeat(calls) { append("utils.dbg.keep(utils.dbg, x);\n") }
-        append("if (utils.dbg.isStr(x)) {\n")
-        append("    const y: string = x;\n")
-        append("}\n")
-    }
+    private fun callDenseSource(calls: Int): String = """
+        // @strict: true
+        interface Dbg {
+            keep(v: unknown, w: unknown): asserts v is Dbg;
+            isStr(w: unknown): w is string;
+        }
+        interface Utils { dbg: Dbg; }
+        declare const utils: Utils;
+        declare const x: unknown;
+        ${List(calls) { "utils.dbg.keep(utils.dbg, x);" }.joinToString("\n        ")}
+        if (utils.dbg.isStr(x)) {
+            const y: string = x;
+        }
+    """.trimIndent()
 
     /**
      * Negative control: with NO predicate guard, `unknown` is not assignable to
@@ -98,21 +99,13 @@ class AssertNarrowingScalingTest {
             const y: string = x;
         """.trimIndent() + "\n"
         val result = TypeScriptCompiler().compile(source, "control.ts")
-        assertTrue(
-            result.diagnostics.any { it.code == 2322 },
-            "negative control lost: unknown → string under strict must be TS2322, got: " +
-                result.diagnostics.joinToString { "TS${it.code}" }
-        )
+        have(result.diagnostics.any { it.code == 2322 })
     }
 
     /** Positive control at trivial depth: the `x is string` predicate narrows → clean. */
     @Test fun predicateNarrowingStillApplies() {
         val result = TypeScriptCompiler().compile(callDenseSource(calls = 2), "narrowed.ts")
-        assertTrue(
-            result.diagnostics.isEmpty(),
-            "predicate narrowing regressed — expected clean compile, got: " +
-                result.diagnostics.joinToString { "TS${it.code}: ${it.message}" }
-        )
+        have(result.diagnostics.isEmpty())
     }
 
     /**
@@ -130,14 +123,7 @@ class AssertNarrowingScalingTest {
         val (result, elapsed) = measureTimedValue {
             TypeScriptCompiler().compile(callDenseSource(calls = 120), "dense.ts")
         }
-        assertTrue(
-            result.diagnostics.isEmpty(),
-            "call-dense compile must stay clean (narrowing through the memoized path), got: " +
-                result.diagnostics.joinToString { "TS${it.code}" }
-        )
-        assertTrue(
-            elapsed < 60.seconds,
-            "call-dense narrowing took $elapsed — superlinear re-entry is back"
-        )
+        have(result.diagnostics.isEmpty())
+        have(elapsed < 60.seconds, "superlinear re-entry is back")
     }
 }

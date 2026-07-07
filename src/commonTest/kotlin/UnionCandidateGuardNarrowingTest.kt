@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * M1.12 (round 425): a type guard whose target is a UNION distributes the
@@ -43,9 +44,6 @@ import kotlin.test.assertTrue
  * the negative branch stays untouched.
  */
 class UnionCandidateGuardNarrowingTest {
-
-    private fun diags(source: String): List<Diagnostic> =
-        TypeScriptCompiler().compile("// @strict: true\n" + source.trimIndent(), "t.ts").diagnostics
 
     private val classFieldsShape = """
         interface Identifier { ident: string; }
@@ -71,7 +69,7 @@ class UnionCandidateGuardNarrowingTest {
 
     @Test
     fun `union-target guard narrows each member down to its related candidates`() {
-        val d = diags(
+        diagnose(
             classFieldsShape + """
 
             function visit(node: MethodDeclaration | AccessorDeclaration) {
@@ -80,16 +78,14 @@ class UnionCandidateGuardNarrowingTest {
                 return info + node.body;
             }
             """
-        )
-        assertTrue(
-            d.none { it.code == 2339 || it.code == 2345 },
-            "guard-narrowed union member access must not error, got: $d"
-        )
+        ) should {
+            have(none { it.code == 2339 || it.code == 2345 })
+        }
     }
 
     @Test
     fun `De-Morgan early return keeps the positive narrowing on fall-through`() {
-        val d = diags(
+        diagnose(
             classFieldsShape + """
 
             declare function shouldTransform(node: PrivateClassElementDeclaration): boolean;
@@ -98,16 +94,14 @@ class UnionCandidateGuardNarrowingTest {
                 return accessPrivateIdentifier(node.name) + node.body;
             }
             """
-        )
-        assertTrue(
-            d.none { it.code == 2339 || it.code == 2345 },
-            "fall-through after De-Morgan early return must keep the narrowing, got: $d"
-        )
+        ) should {
+            have(none { it.code == 2339 || it.code == 2345 })
+        }
     }
 
     @Test
     fun `single-target guard narrow-down behavior is unchanged`() {
-        val d = diags(
+        diagnose(
             """
             interface Type { flags: number; }
             interface TupleTypeReference extends Type { target: { readonly: boolean }; }
@@ -120,8 +114,9 @@ class UnionCandidateGuardNarrowingTest {
                 return false;
             }
             """
-        )
-        assertTrue(d.none { it.code == 2339 }, "single-candidate narrow-down regressed: $d")
+        ) should {
+            have(none { it.code == 2339 })
+        }
     }
 
     /**
@@ -185,12 +180,12 @@ class UnionCandidateGuardNarrowingTest {
         )
         val result = ProjectCompiler(vfs).build("/proj", noEmit = true)
         val fps = result.diagnostics.filter { it.code == 2339 }
-        assertTrue(fps.isEmpty(), "canonical enum keys must not split across files, got: $fps")
+        have(fps.isEmpty())
     }
 
     @Test
     fun `negative branch of a union-target guard is untouched`() {
-        val d = diags(
+        diagnose(
             classFieldsShape + """
 
             declare function visitEachChild(node: MethodDeclaration | AccessorDeclaration): string;
@@ -202,10 +197,8 @@ class UnionCandidateGuardNarrowingTest {
                 return node.body;
             }
             """
-        )
-        assertTrue(
-            d.none { it.code == 2339 || it.code == 2345 },
-            "negative-branch declared-union use must stay clean, got: $d"
-        )
+        ) should {
+            have(none { it.code == 2339 || it.code == 2345 })
+        }
     }
 }

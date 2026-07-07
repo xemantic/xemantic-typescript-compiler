@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * M1.10 (round 388): the `-readonly` mapped modifier STRIPS readonly — tsc's
@@ -49,46 +50,34 @@ class MutableMappedTypeTest {
     """.trimIndent()
 
     @Test fun writeThroughMutableCastIsLegal() {
-        val r = compile("$decls\n(sf as Mutable<SF>).flags |= 4;\n(sf as Mutable<SF>).text = \"x\";\n")
-        assertTrue(
-            r.diagnostics.none { it.code == 2540 },
-            "writes through a -readonly mapped cast must not be TS2540: " +
-                r.diagnostics.joinToString { "TS${it.code} ${it.message}" },
-        )
+        compile("$decls\n(sf as Mutable<SF>).flags |= 4;\n(sf as Mutable<SF>).text = \"x\";\n") should {
+            have(diagnostics.none { it.code == 2540 })
+        }
     }
 
     @Test fun writeThroughMutableAnnotatedVarIsLegal() {
-        val r = compile("$decls\ndeclare const m: Mutable<SF>;\nm.flags = 1;\n")
-        assertTrue(
-            r.diagnostics.none { it.code == 2540 },
-            "writes through a -readonly mapped annotation must not be TS2540: " +
-                r.diagnostics.joinToString { "TS${it.code} ${it.message}" },
-        )
+        compile("$decls\ndeclare const m: Mutable<SF>;\nm.flags = 1;\n") should {
+            have(diagnostics.none { it.code == 2540 })
+        }
     }
 
     @Test fun directReadonlyWriteStillRejects() {
-        val r = compile("$decls\nsf.flags = 1;\n")
-        assertTrue(
-            r.diagnostics.any { it.code == 2540 },
-            "a direct write to the readonly source member must stay TS2540: " +
-                r.diagnostics.joinToString { "TS${it.code} ${it.message}" },
-        )
+        compile("$decls\nsf.flags = 1;\n") should {
+            have(diagnostics.any { it.code == 2540 })
+        }
     }
 
     @Test fun plainHomomorphicMappedKeepsSourceReadonly() {
         // WITHOUT the minus, a bare `readonly` mapped type ADDS readonly.
-        val r = compile(
+        compile(
             """
             interface P { x: number; }
             type Frozen<T> = { readonly [K in keyof T]: T[K] };
             declare const f: Frozen<P>;
             f.x = 1;
             """.trimIndent(),
-        )
-        assertTrue(
-            r.diagnostics.any { it.code == 2540 },
-            "a +readonly mapped member write must stay TS2540: " +
-                r.diagnostics.joinToString { "TS${it.code} ${it.message}" },
-        )
+        ) should {
+            have(diagnostics.any { it.code == 2540 })
+        }
     }
 }

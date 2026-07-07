@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * M2.1(d) (round 390): `// @useRealLibs: true` routes the checker's default
@@ -39,28 +40,20 @@ import kotlin.test.assertTrue
  */
 class RealLibsInCheckerTest {
 
-    private fun compile(source: String) = TypeScriptCompiler().compile(source, "t.ts")
-
-    private fun assertClean(source: String) {
-        val r = compile(source)
-        assertTrue(
-            r.diagnostics.isEmpty(),
-            "expected no diagnostics, got: " +
-                r.diagnostics.joinToString { "TS${it.code} ${it.message}" },
-        )
-    }
-
     @Test
     fun `core es5 globals resolve through the real lib`() {
-        assertClean(
+        diagnose(
             """
             // @useRealLibs: true
             const n: number = Math.floor(1.5);
             const j: string = JSON.stringify({ a: 1 });
             const p: number = parseInt("42");
             const arr: number[] = [1, 2, 3];
-            """.trimIndent(),
-        )
+            """,
+            directives = "",
+        ) should {
+            have(isEmpty())
+        }
     }
 
     @Test
@@ -68,33 +61,36 @@ class RealLibsInCheckerTest {
         // es2016's Array.includes lives in es2016.array.include.d.ts and must MERGE
         // onto es5's interface Array<T> — the cross-file lib merge the snapshot's
         // per-file binds rely on.
-        assertClean(
+        diagnose(
             """
             // @useRealLibs: true
             // @lib: es2016
             // @target: es2016
             const b: boolean = [1, 2, 3].includes(2);
-            """.trimIndent(),
-        )
+            """,
+            directives = "",
+        ) should {
+            have(isEmpty())
+        }
     }
 
     @Test
     fun `unresolved names still error under real libs`() {
-        val r = compile(
+        diagnose(
             """
             // @useRealLibs: true
             const x = definitelyNotAGlobal;
-            """.trimIndent(),
-        )
-        assertTrue(
-            r.diagnostics.any { it.code == 2304 },
-            "an unresolved name must still be TS2304 under real libs, got: " +
-                r.diagnostics.joinToString { "TS${it.code} ${it.message}" },
-        )
+            """,
+            directives = "",
+        ) should {
+            have(any { it.code == 2304 })
+        }
     }
 
     @Test
     fun `embedded lib remains the default without the flag`() {
-        assertClean("const n: number = Math.floor(1.5);")
+        diagnose("const n: number = Math.floor(1.5);", directives = "") should {
+            have(isEmpty())
+        }
     }
 }

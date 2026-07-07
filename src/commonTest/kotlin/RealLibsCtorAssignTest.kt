@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * M2.2 (round 393): tsc reports a structural relation failure ONCE. When a source is
@@ -42,24 +43,15 @@ import kotlin.test.assertTrue
  */
 class RealLibsCtorAssignTest {
 
-    private fun diags(body: String): List<Diagnostic> =
-        TypeScriptCompiler().compile(
-            "// @useRealLibs: true\n// @target: es2015\n$body",
-            "t.ts",
-        ).diagnostics
-
     @Test
     fun `Array = fn reports only the missing-property TS2739, not a construct-sig TS2322`() {
-        val d = diags("Array = function (n:number, s:string) {return n;};")
-        assertTrue(
-            d.any { it.code == 2739 },
-            "expected the missing-property TS2739; got: " + d.joinToString { "TS${it.code}" },
-        )
-        assertTrue(
-            d.none { it.code == 2322 },
-            "the construct-/call-sig mismatch TS2322 must be suppressed when props are missing; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        diagnose(
+            "Array = function (n:number, s:string) {return n;};",
+            directives = "// @useRealLibs: true\n// @target: es2015",
+        ) should {
+            have(any { it.code == 2739 })
+            have(none { it.code == 2322 })
+        }
     }
 
     @Test
@@ -70,20 +62,16 @@ class RealLibsCtorAssignTest {
         // construct-sig mismatch TS2322 must still fire. This is the case the guard must NOT
         // suppress (unlike `Array = fn`, where ArrayConstructor's isArray/from/of ARE
         // missing). Embedded lib — no real libs needed.
-        val d = TypeScriptCompiler().compile(
+        diagnose(
             """
             // @target: es2015
             interface Ctor { new (): object; }
             declare let c: Ctor;
             c = function () { return {}; };
-            """.trimIndent(),
-            "t.ts",
-        ).diagnostics
-        assertTrue(
-            d.any { it.code == 2322 },
-            "a function assigned to a construct-only interface (no missing props) must still " +
-                "report the construct-sig mismatch TS2322; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            """,
+            directives = "",
+        ) should {
+            have(any { it.code == 2322 })
+        }
     }
 }

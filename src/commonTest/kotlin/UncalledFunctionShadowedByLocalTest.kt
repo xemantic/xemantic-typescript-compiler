@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * TS2774 ("this condition will always return true since this function is always defined")
@@ -41,12 +42,9 @@ import kotlin.test.assertTrue
  */
 class UncalledFunctionShadowedByLocalTest {
 
-    private fun diags(body: String): List<Diagnostic> =
-        TypeScriptCompiler().compile(body.trimIndent(), "t.ts").diagnostics
-
     @Test
     fun `a local const shadowing an outer function - no TS2774 even when the initializer types to any`() {
-        val d = diags(
+        diagnose(
             """
             function emitComments(): void {}
             function pipe(o: any): void {
@@ -54,17 +52,15 @@ class UncalledFunctionShadowedByLocalTest {
                 if (emitComments) {}
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2774 },
-            "a local const shadowing an outer function must NOT draw TS2774; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            directives = "",
+        ) should {
+            have(none { it.code == 2774 })
+        }
     }
 
     @Test
     fun `a local const shadowing an outer function in a nested block - no TS2774`() {
-        val d = diags(
+        diagnose(
             """
             function shouldEmit(): boolean { return true; }
             function pipe(o: any): void {
@@ -74,12 +70,10 @@ class UncalledFunctionShadowedByLocalTest {
                 }
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2774 },
-            "a nested-block local shadowing an outer function must NOT draw TS2774; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            directives = "",
+        ) should {
+            have(none { it.code == 2774 })
+        }
     }
 
     @Test
@@ -89,7 +83,7 @@ class UncalledFunctionShadowedByLocalTest {
         // shadowing `const shouldEmit` in a deeper block types to `any`. Before the follow-up
         // fix, `lookupUncalledTypedLocal` fell through the inner (shadowed-but-untyped) scope to
         // the outer scope's callable entry and FP'd. `if (shouldEmit)` must resolve to the local.
-        val d = diags(
+        diagnose(
             """
             declare function trampoline(cb: (n: number, s: any) => void): number;
             function outer(): number {
@@ -103,28 +97,24 @@ class UncalledFunctionShadowedByLocalTest {
                 }
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2774 },
-            "a local shadowing a nested outer function must NOT draw TS2774; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            directives = "",
+        ) should {
+            have(none { it.code == 2774 })
+        }
     }
 
     @Test
     fun `an unshadowed always-defined function still fires TS2774 (negative control)`() {
-        val d = diags(
+        diagnose(
             """
             function isReady(): boolean { return true; }
             function run(): void {
                 if (isReady) {}
             }
             """,
-        )
-        assertTrue(
-            d.any { it.code == 2774 },
-            "a genuinely-uncalled function in a condition must still fire TS2774; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            directives = "",
+        ) should {
+            have(any { it.code == 2774 })
+        }
     }
 }

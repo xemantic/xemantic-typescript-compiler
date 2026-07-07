@@ -25,8 +25,10 @@
 
 package com.xemantic.typescript.compiler
 
+import org.intellij.lang.annotations.Language
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * Round 423 — three coupled narrowing fixes for tsc's Jsx/CallLike guard shapes:
@@ -49,25 +51,7 @@ import kotlin.test.assertTrue
  */
 class AliasedConditionAndUnionPredicateTest {
 
-    private fun diags(source: String): List<Diagnostic> =
-        TypeScriptCompiler().compile(
-            "// @strict: true\n" + source.trimIndent(), "t.ts",
-        ).diagnostics
-
-    private fun assertNo2339(d: List<Diagnostic>, what: String) {
-        assertTrue(
-            d.none { it.code == 2339 },
-            "$what must not fire TS2339; got: " + d.joinToString { "TS${it.code}: ${it.message}" },
-        )
-    }
-
-    private fun assertFires2339(d: List<Diagnostic>, what: String) {
-        assertTrue(
-            d.any { it.code == 2339 },
-            "$what must keep TS2339; got: " + d.joinToString { "TS${it.code}: ${it.message}" },
-        )
-    }
-
+    @Language("typescript")
     private val decls = """
         const enum K { Call, New, Tagged, JsxSelf, JsxOpen, JsxFrag }
         interface Node { readonly kind: K; readonly flags: number; }
@@ -88,7 +72,7 @@ class AliasedConditionAndUnionPredicateTest {
 
     @Test
     fun `union predicate target narrows a union receiver`() {
-        val d = diags(
+        diagnose(
             """
             $decls
             type CallLike = CallExpression | NewExpression | TaggedTemplateExpression;
@@ -99,13 +83,14 @@ class AliasedConditionAndUnionPredicateTest {
                 return callLike;
             }
             """,
-        )
-        assertNo2339(d, "`x is A | B` guard on a union receiver")
+        ) should {
+            have(none { it.code == 2339 })
+        }
     }
 
     @Test
     fun `union predicate target narrows a single-type receiver to the union`() {
-        val d = diags(
+        diagnose(
             """
             $decls
             export function f(x: Node): Node {
@@ -115,13 +100,14 @@ class AliasedConditionAndUnionPredicateTest {
                 return x;
             }
             """,
-        )
-        assertNo2339(d, "`x is A | B` guard narrowing an interface receiver down")
+        ) should {
+            have(none { it.code == 2339 })
+        }
     }
 
     @Test
     fun `union-narrowed member missing on one member keeps TS2339`() {
-        val d = diags(
+        diagnose(
             """
             $decls
             export function f(x: Node): Node {
@@ -131,13 +117,14 @@ class AliasedConditionAndUnionPredicateTest {
                 return x;
             }
             """,
-        )
-        assertFires2339(d, "a property absent from one narrowed-union member")
+        ) should {
+            have(any { it.code == 2339 })
+        }
     }
 
     @Test
     fun `negative guard keeps disjoint-kind members instead of collapsing to never`() {
-        val d = diags(
+        diagnose(
             """
             $decls
             export function f(node: JsxCallLike): Node {
@@ -147,13 +134,14 @@ class AliasedConditionAndUnionPredicateTest {
                 return node;
             }
             """,
-        )
-        assertNo2339(d, "negative fragment guard keeping the tagName-bearing members")
+        ) should {
+            have(none { it.code == 2339 })
+        }
     }
 
     @Test
     fun `aliased condition narrows like the inline guard`() {
-        val d = diags(
+        diagnose(
             """
             $decls
             export function f(node: JsxCallLike): Node {
@@ -164,13 +152,14 @@ class AliasedConditionAndUnionPredicateTest {
                 return node;
             }
             """,
-        )
-        assertNo2339(d, "const-stored guard result in a negated if")
+        ) should {
+            have(none { it.code == 2339 })
+        }
     }
 
     @Test
     fun `aliased condition tolerates value-preserving statements in between`() {
-        val d = diags(
+        diagnose(
             """
             $decls
             export function f(node: JsxCallLike): Node {
@@ -183,13 +172,14 @@ class AliasedConditionAndUnionPredicateTest {
                 return parent;
             }
             """,
-        )
-        assertNo2339(d, "alias separated from the test by unrelated declarations")
+        ) should {
+            have(none { it.code == 2339 })
+        }
     }
 
     @Test
     fun `reassigned alias does not narrow`() {
-        val d = diags(
+        diagnose(
             """
             $decls
             export function f(node: JsxCallLike): Node {
@@ -201,10 +191,11 @@ class AliasedConditionAndUnionPredicateTest {
                 return node;
             }
             """,
-        )
-        // tsc agrees: a reassigned `let` is not a constant alias → no narrowing →
-        // tagName is genuinely absent from JsxOpeningFragment.
-        assertFires2339(d, "reassigned alias between declaration and test")
+        ) should {
+            // tsc agrees: a reassigned `let` is not a constant alias → no narrowing →
+            // tagName is genuinely absent from JsxOpeningFragment.
+            have(any { it.code == 2339 })
+        }
     }
 
     @Test
@@ -212,7 +203,7 @@ class AliasedConditionAndUnionPredicateTest {
         // The receiver must be a PARAM (a body-local `let` types as `any` in this
         // pass, so nothing fires with or without narrowing) — params are mutable,
         // so the reassignment-between-alias-and-test shape still exists.
-        val d = diags(
+        diagnose(
             """
             $decls
             export function f(node: JsxCallLike, b: JsxCallLike): Node {
@@ -224,9 +215,10 @@ class AliasedConditionAndUnionPredicateTest {
                 return node;
             }
             """,
-        )
-        // The alias captured the OLD value of `node` — inlining would over-narrow.
-        assertFires2339(d, "reference reassigned after the alias captured it")
+        ) should {
+            // The alias captured the OLD value of `node` — inlining would over-narrow.
+            have(any { it.code == 2339 })
+        }
     }
 
     @Test
@@ -234,7 +226,7 @@ class AliasedConditionAndUnionPredicateTest {
         // builder.ts:1332: `if (state.referencedMap?.size()) { state.referencedMap.keys() }`
         // — a nullish receiver short-circuits the chain to undefined (falsy), so the
         // truthy branch excludes nullish. Positive branch only.
-        val d = diags(
+        diagnose(
             """
             interface RefMap { size(): number; keys(): string[]; }
             interface State { referencedMap?: RefMap; other: number; }
@@ -245,17 +237,14 @@ class AliasedConditionAndUnionPredicateTest {
                 return undefined;
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 18048 },
-            "truthy `x.y?.size()` guard must clear the TS18048; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 18048 })
+        }
     }
 
     @Test
     fun `falsy optional-chain call proves nothing`() {
-        val d = diags(
+        diagnose(
             """
             interface RefMap { size(): number; keys(): string[]; }
             interface State { referencedMap?: RefMap; other: number; }
@@ -266,17 +255,14 @@ class AliasedConditionAndUnionPredicateTest {
                 return state.referencedMap.keys();
             }
             """,
-        )
-        assertTrue(
-            d.any { it.code == 18048 },
-            "the falsy branch must keep TS18048 (receiver may be present with size 0); got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(any { it.code == 18048 })
+        }
     }
 
     @Test
     fun `intervening call between alias and test still narrows`() {
-        val d = diags(
+        diagnose(
             """
             $decls
             declare function sideEffect(): void;
@@ -289,13 +275,14 @@ class AliasedConditionAndUnionPredicateTest {
                 return node;
             }
             """,
-        )
-        // Round 424 DELIBERATE flip of the round-423 conservative pin (its note
-        // said "relaxing it later should flip this assertion deliberately"):
-        // the back-walk now treats a FlowCall as value-preserving — a call
-        // cannot rebind an enclosing let/const binding directly, matching tsc,
-        // which narrows here (the alias is a const; tsc's isConstantVariable
-        // gate likewise ignores closure-mediated rebinding).
-        assertNo2339(d, "call between alias declaration and test (value-preserving)")
+        ) should {
+            // Round 424 DELIBERATE flip of the round-423 conservative pin (its note
+            // said "relaxing it later should flip this assertion deliberately"):
+            // the back-walk now treats a FlowCall as value-preserving — a call
+            // cannot rebind an enclosing let/const binding directly, matching tsc,
+            // which narrows here (the alias is a const; tsc's isConstantVariable
+            // gate likewise ignores closure-mediated rebinding).
+            have(none { it.code == 2339 })
+        }
     }
 }

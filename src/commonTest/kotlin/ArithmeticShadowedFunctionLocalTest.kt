@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * M1.12 (self-compile burn-down): the arithmetic/comparison pass records a bare-identifier
@@ -45,12 +46,9 @@ import kotlin.test.assertTrue
  */
 class ArithmeticShadowedFunctionLocalTest {
 
-    private fun diags(source: String): List<Diagnostic> =
-        TypeScriptCompiler().compile("// @strict: true\n" + source.trimIndent(), "t.ts").diagnostics
-
     @Test
     fun `local const shadowing an outer function used in a comparison - no TS2365`() {
-        val d = diags(
+        diagnose(
             """
             export function length(array: readonly number[]): number { return array.length; }
             export function f(items: readonly number[]): void {
@@ -59,12 +57,9 @@ class ArithmeticShadowedFunctionLocalTest {
                 while (i < length) { i = i + 1; }
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2365 },
-            "a local `const length = items.length` shadows the outer function → `i < length` is number<number, no TS2365; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 2365 })
+        }
     }
 
     @Test
@@ -72,7 +67,7 @@ class ArithmeticShadowedFunctionLocalTest {
         // The `if (outer)`-narrowed-union receiver shape (checker.ts:7481): the arithmetic pass
         // can't type `outer.length` (outer is an un-narrowed union it doesn't resolve), so the
         // any-fallback records the shadow local as `any` → the comparison bails.
-        val d = diags(
+        diagnose(
             """
             export function length(array: readonly number[]): number { return array.length; }
             export function f(type: { items?: readonly number[] }): void {
@@ -84,31 +79,25 @@ class ArithmeticShadowedFunctionLocalTest {
                 }
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2365 },
-            "a shadow local whose initializer types to any must still be suppressed; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 2365 })
+        }
     }
 
     @Test
     fun `genuine number-lt-function (not shadowed) STILL fires TS2365 - negative control`() {
         // FP-safety: a bare function used as a comparison operand (not shadowed by any local) must
         // still error — the fix only records LOCAL const declarations that shadow a function.
-        val d = diags(
+        diagnose(
             """
             export function g(): number { return 1; }
             export function h(): boolean {
                 return 5 < g;
             }
             """,
-        )
-        assertTrue(
-            d.any { it.code == 2365 },
-            "a non-shadowed function operand `5 < g` MUST still fire TS2365; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(any { it.code == 2365 })
+        }
     }
 
     @Test
@@ -118,7 +107,7 @@ class ArithmeticShadowedFunctionLocalTest {
         // "Operator '<' cannot be applied to types '{ <T>(...) }' and 'number'." The round-407
         // recording was gated to `const`; extend to `let`/`var` (recording `anyType`, which is
         // reassignment-proof — the shadow is what kills the FP).
-        val d = diags(
+        diagnose(
             """
             export function min(items: readonly number[]): number { return items[0]; }
             export function max(items: readonly number[]): number { return items[0]; }
@@ -129,11 +118,8 @@ class ArithmeticShadowedFunctionLocalTest {
                 if (min < args.length && args.length < max) { return; }
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2365 },
-            "`let min`/`let max` shadowing the outer functions → `min < args.length` is number<number, no TS2365; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 2365 })
+        }
     }
 }

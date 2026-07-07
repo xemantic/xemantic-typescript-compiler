@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * M3.4 (self-compile burn-down): a plain assignment `x = y` where `y` (an Identifier or property
@@ -41,13 +42,10 @@ import kotlin.test.assertTrue
  */
 class AssignmentRhsNarrowingTest {
 
-    private fun diags(source: String): List<Diagnostic> =
-        TypeScriptCompiler().compile("// @strict: true\n" + source.trimIndent(), "t.ts").diagnostics
-
     @Test
     fun `assign a type-guard-narrowed local to a supertype-typed local - no error`() {
         // Mirrors utilities.ts expressionResultIsUnused: `node = parent`.
-        val d = diags(
+        diagnose(
             """
             interface Node { kind: number; }
             interface Expression extends Node { _expressionBrand: any; }
@@ -64,18 +62,15 @@ class AssignmentRhsNarrowingTest {
                 }
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2741 || it.code == 2322 || it.code == 2739 },
-            "assigning a guard-narrowed `parent` (ParenthesizedExpression) to an Expression local " +
-                "must not fire a missing-property error; got: " + d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 2741 || it.code == 2322 || it.code == 2739 })
+        }
     }
 
     @Test
     fun `nodeFactory target = callee shape - no error`() {
         // Mirrors nodeFactory.ts createCallBinding: `target = callee`.
-        val d = diags(
+        diagnose(
             """
             interface Node { kind: number; }
             interface Expression extends Node { _expressionBrand: any; }
@@ -92,12 +87,9 @@ class AssignmentRhsNarrowingTest {
                 }
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2739 || it.code == 2741 || it.code == 2322 },
-            "assigning a guard-narrowed `callee` (SuperProperty) to a LeftHandSideExpression local " +
-                "must not fire a missing-property error; got: " + d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 2739 || it.code == 2741 || it.code == 2322 })
+        }
     }
 
     @Test
@@ -105,7 +97,7 @@ class AssignmentRhsNarrowingTest {
         // EXACT shape of utilities.ts expressionResultIsUnused: a `while (true)` loop reassigns the
         // PARAMETER `node` to a type-guard-narrowed `const parent`, where the narrowed type is a
         // deep (6-level) multi-base subtype.
-        val d = diags(
+        diagnose(
             """
             interface Node { kind: number; parent: Node; }
             interface Expression extends Node { _expressionBrand: any; }
@@ -129,19 +121,15 @@ class AssignmentRhsNarrowingTest {
                 }
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2741 || it.code == 2322 || it.code == 2739 },
-            "assigning a deep-chain guard-narrowed `parent` to an `Expression` parameter inside a " +
-                "while-loop must not fire a missing-property error; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 2741 || it.code == 2322 || it.code == 2739 })
+        }
     }
 
     @Test
     fun `genuine widening assignment still fires - negative control`() {
         // No guard: assigning a bare `Node` to an `Expression` local IS an error.
-        val d = diags(
+        diagnose(
             """
             interface Node { kind: number; }
             interface Expression extends Node { _expressionBrand: any; }
@@ -150,11 +138,8 @@ class AssignmentRhsNarrowingTest {
                 node = parent; // Node is missing _expressionBrand — genuine error
             }
             """,
-        )
-        assertTrue(
-            d.any { it.code == 2741 || it.code == 2322 },
-            "assigning a bare `Node` to an `Expression` (no narrowing) must still fire the " +
-                "missing-property error; got: " + d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(any { it.code == 2741 || it.code == 2322 })
+        }
     }
 }

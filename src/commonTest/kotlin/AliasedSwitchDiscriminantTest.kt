@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * M3.4 (round 425): a `switch` on an ALIASED discriminant narrows the aliased
@@ -38,9 +39,6 @@ import kotlin.test.assertTrue
  * alias declaration, so the alias provably still holds `<ref>.kind`'s value.
  */
 class AliasedSwitchDiscriminantTest {
-
-    private fun diags(source: String): List<Diagnostic> =
-        TypeScriptCompiler().compile("// @strict: true\n" + source.trimIndent(), "t.ts").diagnostics
 
     private val mapperShape = """
         interface Type { id: number }
@@ -55,7 +53,7 @@ class AliasedSwitchDiscriminantTest {
 
     @Test
     fun `switch on an aliased enum discriminant narrows the receiver`() {
-        val d = diags(
+        diagnose(
             mapperShape + """
 
             function compareTypeMappers(m1: TypeMapper) {
@@ -69,13 +67,14 @@ class AliasedSwitchDiscriminantTest {
                 return 0;
             }
             """
-        )
-        assertTrue(d.none { it.code == 2339 }, "aliased switch discriminant must narrow m1, got: $d")
+        ) should {
+            have(none { it.code == 2339 })
+        }
     }
 
     @Test
     fun `reassigned receiver between alias and switch withholds the narrowing`() {
-        val d = diags(
+        diagnose(
             mapperShape + """
 
             declare function otherMapper(): TypeMapper;
@@ -91,16 +90,14 @@ class AliasedSwitchDiscriminantTest {
                 return 0;
             }
             """
-        )
-        assertTrue(
-            d.any { it.code == 2339 },
-            "a reassigned receiver must not be narrowed through the stale alias, got: $d"
-        )
+        ) should {
+            have(any { it.code == 2339 })
+        }
     }
 
     @Test
     fun `reassigned alias before the switch withholds the narrowing`() {
-        val d = diags(
+        diagnose(
             mapperShape + """
 
             function f(m1: TypeMapper, m2: TypeMapper) {
@@ -113,16 +110,14 @@ class AliasedSwitchDiscriminantTest {
                 return 0;
             }
             """
-        )
-        assertTrue(
-            d.any { it.code == 2339 },
-            "a reassigned alias no longer proves m1's kind, got: $d"
-        )
+        ) should {
+            have(any { it.code == 2339 })
+        }
     }
 
     @Test
     fun `direct discriminant switch keeps working`() {
-        val d = diags(
+        diagnose(
             mapperShape + """
 
             function f(m1: TypeMapper) {
@@ -133,7 +128,8 @@ class AliasedSwitchDiscriminantTest {
                 return 0;
             }
             """
-        )
-        assertTrue(d.none { it.code == 2339 }, "direct discriminant switch regressed: $d")
+        ) should {
+            have(none { it.code == 2339 })
+        }
     }
 }

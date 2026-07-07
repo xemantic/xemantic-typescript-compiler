@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * Round 429 (M3.1): the call-types pass respects lexical SHADOWING for three
@@ -47,12 +48,9 @@ import kotlin.test.assertTrue
  */
 class CallTypesScopeShadowingTest {
 
-    private fun diags(source: String): List<Diagnostic> =
-        TypeScriptCompiler().compile("// @strict: true\n" + source.trimIndent(), "t.ts").diagnostics
-
     @Test
     fun `nested-fn body-local shadowing an enclosing param does not FP as arg`() {
-        val d = diags(
+        diagnose(
             """
             interface TypeCheckerHost { getSourceFiles(): string[]; }
             interface Nd { parent: Nd; kind: number; }
@@ -65,13 +63,14 @@ class CallTypesScopeShadowingTest {
                 return [getAliasSymbolForTypeNode, host];
             }
             """
-        )
-        assertTrue(d.none { it.code == 2345 }, "expected no TS2345, got: $d")
+        ) should {
+            have(none { it.code == 2345 })
+        }
     }
 
     @Test
     fun `block-scoped const in a nested block shadows the enclosing param too`() {
-        val d = diags(
+        diagnose(
             """
             interface TypeCheckerHost { getSourceFiles(): string[]; }
             interface Nd { parent: Nd; kind: number; }
@@ -87,13 +86,14 @@ class CallTypesScopeShadowingTest {
                 return [blockScoped, host];
             }
             """
-        )
-        assertTrue(d.none { it.code == 2345 }, "expected no TS2345, got: $d")
+        ) should {
+            have(none { it.code == 2345 })
+        }
     }
 
     @Test
     fun `destructured param colliding with a file-level function does not FP as arg`() {
-        val d = diags(
+        diagnose(
             """
             interface ModuleResolutionState { host: unknown; }
             export function useCaseSensitiveFileNames(state: ModuleResolutionState) {
@@ -106,13 +106,14 @@ class CallTypesScopeShadowingTest {
                 return [comparer, other];
             }
             """
-        )
-        assertTrue(d.none { it.code == 2345 }, "expected no TS2345, got: $d")
+        ) should {
+            have(none { it.code == 2345 })
+        }
     }
 
     @Test
     fun `arrow param shadowing an enclosing param does not FP as arg`() {
-        val d = diags(
+        diagnose(
             """
             interface TypeCheckerHost { getSourceFiles(): string[]; }
             interface Nd { parent: Nd; kind: number; }
@@ -122,13 +123,14 @@ class CallTypesScopeShadowingTest {
                 return [walk, host];
             }
             """
-        )
-        assertTrue(d.none { it.code == 2345 }, "expected no TS2345, got: $d")
+        ) should {
+            have(none { it.code == 2345 })
+        }
     }
 
     @Test
     fun `arrow body-local shadowing an enclosing param does not FP as arg`() {
-        val d = diags(
+        diagnose(
             """
             interface TypeCheckerHost { getSourceFiles(): string[]; }
             interface Nd { parent: Nd; kind: number; }
@@ -141,15 +143,16 @@ class CallTypesScopeShadowingTest {
                 return [walk, host];
             }
             """
-        )
-        assertTrue(d.none { it.code == 2345 }, "expected no TS2345, got: $d")
+        ) should {
+            have(none { it.code == 2345 })
+        }
     }
 
     @Test
     fun `negative control - the enclosing param itself still fires as a wrong arg`() {
         // No shadow anywhere: passing the ENCLOSING param where a different
         // interface is required must keep firing.
-        val d = diags(
+        diagnose(
             """
             interface TypeCheckerHost { getSourceFiles(): string[]; }
             interface Nd { parent: Nd; kind: number; }
@@ -158,15 +161,16 @@ class CallTypesScopeShadowingTest {
                 return isTypeAlias(host);
             }
             """
-        )
-        assertTrue(d.any { it.code == 2345 }, "expected TS2345 for TypeCheckerHost vs Nd, got: $d")
+        ) should {
+            have(any { it.code == 2345 })
+        }
     }
 
     @Test
     fun `negative control - a var redeclaring the SAME function's param keeps the param type`() {
         // `var x` redeclaring a same-function param is a REDECLARATION (param
         // wins), NOT a shadow — the genuine wrong-arg check must keep firing.
-        val d = diags(
+        diagnose(
             """
             interface TypeCheckerHost { getSourceFiles(): string[]; }
             interface Nd { parent: Nd; kind: number; }
@@ -176,20 +180,22 @@ class CallTypesScopeShadowingTest {
                 return isTypeAlias(host);
             }
             """
-        )
-        assertTrue(d.any { it.code == 2345 }, "expected TS2345 (param wins over var redecl), got: $d")
+        ) should {
+            have(any { it.code == 2345 })
+        }
     }
 
     @Test
     fun `negative control - non-shadowed wrong-typed simple param still fires`() {
-        val d = diags(
+        diagnose(
             """
             declare function canUse(name: string): boolean;
             export function f(count: number): boolean {
                 return canUse(count);
             }
             """
-        )
-        assertTrue(d.any { it.code == 2345 }, "expected TS2345 for number vs string, got: $d")
+        ) should {
+            have(any { it.code == 2345 })
+        }
     }
 }

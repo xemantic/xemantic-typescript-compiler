@@ -21,8 +21,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * M3.1 (round 436): a DESTRUCTURED function-body local (`const { version, major }
@@ -37,13 +38,10 @@ import kotlin.test.assertTrue
  */
 class DestructuredLocalShadowingTest {
 
-    private fun ts2345s(source: String) =
-        TypeScriptCompiler().compile("// @strict: true\n" + source, "t.ts")
-            .diagnostics.filter { it.code == 2345 }
-
-    /** The semver.ts shape: destructured `version` shadows a file-level string. */
-    @Test fun destructuredLocalShadowsFileLevelConst() {
-        val diags = ts2345s(
+    @Test
+    fun `destructured local shadows a file-level const`() {
+        // The semver.ts shape: destructured `version` shadows a file-level string.
+        diagnose(
             """
             export const version = "5.0";
             interface Version { major: number; minor: number }
@@ -56,14 +54,16 @@ class DestructuredLocalShadowingTest {
                 createComparator(">=", version);
                 return major;
             }
-            """.trimIndent()
-        )
-        assertTrue(diags.isEmpty(), "expected no TS2345, got: $diags")
+            """
+        ) should {
+            have(none { it.code == 2345 })
+        }
     }
 
-    /** The checker.ts shape: destructured `length` shadows a global function. */
-    @Test fun destructuredLocalShadowsGlobalFunction() {
-        val diags = ts2345s(
+    @Test
+    fun `destructured local shadows a global function`() {
+        // The checker.ts shape: destructured `length` shadows a global function.
+        diagnose(
             """
             declare function length(array: readonly any[] | undefined): number;
             declare function useNum(n: number): void;
@@ -73,14 +73,15 @@ class DestructuredLocalShadowingTest {
                 useNum(length);
                 return start;
             }
-            """.trimIndent()
-        )
-        assertTrue(diags.isEmpty(), "expected no TS2345, got: $diags")
+            """
+        ) should {
+            have(none { it.code == 2345 })
+        }
     }
 
-    /** ARRAY-pattern variant of the same shadow. */
-    @Test fun arrayDestructuredLocalShadowsGlobalFunction() {
-        val diags = ts2345s(
+    @Test
+    fun `array-destructured local shadows a global function`() {
+        diagnose(
             """
             declare function length(array: readonly any[] | undefined): number;
             declare function useNum(n: number): void;
@@ -90,15 +91,16 @@ class DestructuredLocalShadowingTest {
                 useNum(length);
                 return start;
             }
-            """.trimIndent()
-        )
-        assertTrue(diags.isEmpty(), "expected no TS2345, got: $diags")
+            """
+        ) should {
+            have(none { it.code == 2345 })
+        }
     }
 
-    /** NEGATIVE control: a NON-shadowed outer function arg still fires — the
-     *  side-set registration must not leak beyond the declaring function. */
-    @Test fun outerFunctionArgOutsideShadowingFnStillFires() {
-        val diags = ts2345s(
+    @Test
+    fun `negative control - an outer function arg outside the shadowing fn still fires`() {
+        // The side-set registration must not leak beyond the declaring function.
+        diagnose(
             """
             declare function length(array: readonly any[] | undefined): number;
             declare function useNum(n: number): void;
@@ -110,9 +112,9 @@ class DestructuredLocalShadowingTest {
             export function unshadowed() {
                 useNum(length);
             }
-            """.trimIndent()
-        )
-        assertTrue(diags.isNotEmpty(),
-            "expected TS2345 for the function-valued `length` arg outside the shadowing fn")
+            """
+        ) should {
+            have(any { it.code == 2345 })
+        }
     }
 }

@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * M1.12 (self-compile burn-down): indexing a NUMERIC ENUM object (`NumericEnum[key]`) is a valid
@@ -41,56 +42,44 @@ import kotlin.test.assertTrue
  */
 class EnumReverseMappingIndexTest {
 
-    private fun diags(source: String): List<Diagnostic> =
-        TypeScriptCompiler().compile("// @strict: true\n" + source.trimIndent(), "t.ts").diagnostics
-
     @Test
     fun `numeric enum reverse mapping with any key - no TS7053`() {
-        val d = diags(
+        diagnose(
             """
             enum Kind { A, B, C }
             export function nameOf(k: any): string {
                 return Kind[k];
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 7053 },
-            "a numeric enum reverse mapping `Kind[k]` must not fire TS7053; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 7053 })
+        }
     }
 
     @Test
     fun `const enum reverse mapping with any key - no TS7053`() {
-        val d = diags(
+        diagnose(
             """
             enum ModuleResolutionKind { Classic = 1, NodeJs = 2 }
             export function trace(k: any): string {
                 return ModuleResolutionKind[k];
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 7053 },
-            "an enum reverse mapping with an any key must not fire TS7053; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 7053 })
+        }
     }
 
     @Test
     fun `empty object indexed by any key STILL fires TS7053 - negative control`() {
-        val d = diags(
+        diagnose(
             """
             export function bad(obj: {}, k: any): any {
                 return obj[k];
             }
             """,
-        )
-        assertTrue(
-            d.any { it.code == 7053 },
-            "an empty `{}` object indexed by an any key MUST still fire TS7053; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(any { it.code == 7053 })
+        }
     }
 }

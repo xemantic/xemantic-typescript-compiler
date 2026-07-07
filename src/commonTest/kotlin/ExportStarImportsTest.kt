@@ -25,9 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 
 /**
  * Pins the M1.1 invariant: the named-import existence check (TS2305 family)
@@ -216,9 +216,9 @@ class ExportStarImportsTest {
             """.trimIndent()
         }
         val result = build(files)
-        assertTrue(
+        have(
             ts2305Messages(result).isEmpty(),
-            "no false absence through the wide barrel: ${ts2305Messages(result).take(3)}",
+            "no false absence through the wide barrel",
         )
     }
 }

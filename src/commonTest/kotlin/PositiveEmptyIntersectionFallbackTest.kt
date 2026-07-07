@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * M3.4 (round 425): tsc's positive-empty INTERSECTION fallback in
@@ -44,12 +45,9 @@ import kotlin.test.assertTrue
  */
 class PositiveEmptyIntersectionFallbackTest {
 
-    private fun diags(source: String): List<Diagnostic> =
-        TypeScriptCompiler().compile("// @strict: true\n" + source.trimIndent(), "t.ts").diagnostics
-
     @Test
     fun `unrelated positive guard target intersects instead of collapsing`() {
-        val d = diags(
+        diagnose(
             """
             const enum SyntaxKind { GetAccessor, SetAccessor }
             interface NamedDeclaration { name?: { k: number }; }
@@ -69,16 +67,14 @@ class PositiveEmptyIntersectionFallbackTest {
                 return 0;
             }
             """
-        )
-        assertTrue(
-            d.none { it.code == 2339 },
-            "the intersection fallback must keep kind/body resolvable, got: $d"
-        )
+        ) should {
+            have(none { it.code == 2339 })
+        }
     }
 
     @Test
     fun `typeof object classifies an enum member as not-object`() {
-        val d = diags(
+        diagnose(
             """
             const enum ScriptTarget { ES5, ES2020 }
             interface CreateSourceFileOptions { impliedNodeFormat?: number; }
@@ -88,16 +84,14 @@ class PositiveEmptyIntersectionFallbackTest {
                     : undefined;
             }
             """
-        )
-        assertTrue(
-            d.none { it.code == 2339 },
-            "an enum member is never typeof 'object', got: $d"
-        )
+        ) should {
+            have(none { it.code == 2339 })
+        }
     }
 
     @Test
     fun `negative branch exhaustion to never is preserved`() {
-        val d = diags(
+        diagnose(
             """
             class C1 { x: string = "" }
             class C2 { y: string = "" }
@@ -112,7 +106,8 @@ class PositiveEmptyIntersectionFallbackTest {
                 return "";
             }
             """
-        )
-        assertTrue(d.none { it.code == 2339 }, "control shape must stay clean, got: $d")
+        ) should {
+            have(none { it.code == 2339 })
+        }
     }
 }

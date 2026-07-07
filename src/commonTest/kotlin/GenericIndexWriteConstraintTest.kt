@@ -25,8 +25,8 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * M1.12 (self-compile burn-down): TS2862 ("Type 'T' is generic and can only be indexed for
@@ -44,15 +44,12 @@ import kotlin.test.assertTrue
  */
 class GenericIndexWriteConstraintTest {
 
-    private fun diags(source: String): List<Diagnostic> =
-        TypeScriptCompiler().compile("// @strict: true\n" + source.trimIndent(), "t.ts").diagnostics
-
-    private fun has2862(source: String) = diags(source).any { it.code == 2862 }
+    private fun has2862(source: String) = diagnose(source).any { it.code == 2862 }
 
     @Test
     fun `assign over T extends object - no TS2862`() {
         // The exact tsc core.ts `assign` idiom: `object` has no index signature.
-        assertTrue(
+        have(
             !has2862(
                 """
                 function assign<T extends object>(t: T, arg: T): T {
@@ -69,7 +66,7 @@ class GenericIndexWriteConstraintTest {
 
     @Test
     fun `T extends plain interface with no index signature - no TS2862`() {
-        assertTrue(
+        have(
             !has2862(
                 """
                 interface Point { a: number; b: number; }
@@ -85,7 +82,7 @@ class GenericIndexWriteConstraintTest {
     @Test
     fun `T extends Record with string-symbol key - fires TS2862`() {
         // cannotIndexGenericWritingError.ts foo() — the corpus positive shape.
-        assertTrue(
+        have(
             has2862(
                 """
                 function foo<T extends Record<string | symbol, any>>(target: T, p: string | symbol) {
@@ -100,7 +97,7 @@ class GenericIndexWriteConstraintTest {
     @Test
     fun `T extends inline string index signature intersection - fires TS2862`() {
         // cannotIndexGenericWritingError.ts foo2() — the corpus positive shape.
-        assertTrue(
+        have(
             has2862(
                 """
                 function foo2<T extends number[] & { [s: string]: number | string }>(target: T, p: string | number) {
@@ -115,7 +112,7 @@ class GenericIndexWriteConstraintTest {
 
     @Test
     fun `T extends Record of string number - fires TS2862`() {
-        assertTrue(
+        have(
             has2862(
                 """
                 function put<T extends Record<string, number>>(t: T, k: string): void {

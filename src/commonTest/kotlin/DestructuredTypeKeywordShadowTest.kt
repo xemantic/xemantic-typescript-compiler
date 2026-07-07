@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * A DESTRUCTURING declaration whose element name is a primitive type keyword
@@ -39,12 +40,9 @@ import kotlin.test.assertTrue
  */
 class DestructuredTypeKeywordShadowTest {
 
-    private fun diags(body: String): List<Diagnostic> =
-        TypeScriptCompiler().compile(body.trimIndent(), "t.ts").diagnostics
-
     @Test
     fun `object-destructured symbol shadows the type keyword - no TS2693`() {
-        val d = diags(
+        diagnose(
             """
             interface Node { symbol: { flags: number }; }
             function bind(node: Node): void {
@@ -52,34 +50,30 @@ class DestructuredTypeKeywordShadowTest {
                 symbol.flags = 1;
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2693 },
-            "destructured `symbol` used as a value must NOT be TS2693; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            directives = "",
+        ) should {
+            have(none { it.code == 2693 })
+        }
     }
 
     @Test
     fun `array-destructured number shadows the type keyword - no TS2693`() {
-        val d = diags(
+        diagnose(
             """
             function use(arr: number[]): number {
                 const [ number ] = arr;
                 return number + 1;
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2693 },
-            "destructured `number` used as a value must NOT be TS2693; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            directives = "",
+        ) should {
+            have(none { it.code == 2693 })
+        }
     }
 
     @Test
     fun `renamed destructure binds the LOCAL name as a value - no TS2693`() {
-        val d = diags(
+        diagnose(
             """
             interface Node { s: { flags: number }; }
             function bind(node: Node): void {
@@ -87,28 +81,24 @@ class DestructuredTypeKeywordShadowTest {
                 symbol.flags = 1;
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2693 },
-            "renamed-to-`symbol` destructure must NOT be TS2693; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            directives = "",
+        ) should {
+            have(none { it.code == 2693 })
+        }
     }
 
     @Test
     fun `the bare symbol type keyword used as a value STILL fires TS2693 (negative control)`() {
         // No binding — `symbol` is the type keyword used in a value position, which is TS2693.
-        val d = diags(
+        diagnose(
             """
             function bad(): void {
                 symbol.foo = 1;
             }
             """,
-        )
-        assertTrue(
-            d.any { it.code == 2693 && it.message.contains("'symbol'") },
-            "an unbound `symbol` used as a value must still be TS2693; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            directives = "",
+        ) should {
+            have(any { it.code == 2693 && it.message.contains("'symbol'") })
+        }
     }
 }

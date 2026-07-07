@@ -21,8 +21,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * Round 435e: two coupled relation fixes exposed by tsc's getContainingNodeArray
@@ -45,10 +46,6 @@ import kotlin.test.assertTrue
  */
 class GenericContainerCovarianceTest {
 
-    private fun ts2322s(source: String) =
-        TypeScriptCompiler().compile("// @strict: true\n" + source, "t.ts")
-            .diagnostics.filter { it.code == 2322 }
-
     private val nodeArrayDefs = """
         const enum SyntaxKind { Unknown = 0, TemplateSpan = 239 }
         interface ReadonlyTextRange { readonly pos: number; readonly end: number; }
@@ -66,42 +63,46 @@ class GenericContainerCovarianceTest {
         }
     """.trimIndent()
 
-    /** The getContainingNodeArray shape: covariant container return through a
-     *  union target must relate via the same-target arg shortcut. */
-    @Test fun covariantContainerThroughUnionTargetIsLegal() {
-        val diags = ts2322s(
-            """
-            $nodeArrayDefs
+    @Test
+    fun `covariant container return through a union target is legal`() {
+        // The getContainingNodeArray shape: must relate via the same-target
+        // covariant arg shortcut.
+        diagnose(
+            nodeArrayDefs + """
+
             declare const spans: NodeArray2<TemplateSpan2>;
             function f(): NodeArray2<Node2> | undefined {
                 if (!spans.length) return undefined;
                 return spans;
             }
-            """.trimIndent()
-        )
-        assertTrue(diags.isEmpty(), "expected no TS2322, got: $diags")
+            """
+        ) should {
+            have(none { it.code == 2322 })
+        }
     }
 
-    /** NEGATIVE control: an incompatible element type still fails through the
-     *  union target (the shortcut compares args, it does not rubber-stamp). */
-    @Test fun incompatibleElementThroughUnionTargetStillFires() {
-        val diags = ts2322s(
-            """
-            $nodeArrayDefs
+    @Test
+    fun `negative control - an incompatible element type through the union target still fires`() {
+        // The shortcut compares args, it does not rubber-stamp.
+        diagnose(
+            nodeArrayDefs + """
+
             interface Unrelated { readonly notANode: string; }
             declare const uns: ReadonlyArray<Unrelated>;
             function g(): ReadonlyArray<Node2> | undefined {
                 return uns;
             }
-            """.trimIndent()
-        )
-        assertTrue(diags.isNotEmpty(), "expected TS2322 for the unrelated element type")
+            """
+        ) should {
+            have(any { it.code == 2322 })
+        }
     }
 
-    /** The nodeChildren.ts shape: a bare `new WeakMap()` contextually
-     *  instantiates from the assignment target. */
-    @Test fun bareNewContainerAssignmentIsLegal() {
-        val diags = ts2322s(
+    @Test
+    fun `bare new container assignment is contextually instantiated from the target`() {
+        // The nodeChildren.ts shape: a bare `new WeakMap()` instantiates from
+        // the assignment target.
+        diagnose(
             """
             interface Node2 { kind: number; }
             declare const cache: WeakMap<Node2, WeakMap<Node2, readonly Node2[] | undefined>>;
@@ -113,21 +114,23 @@ class GenericContainerCovarianceTest {
                 }
                 return map;
             }
-            """.trimIndent()
-        )
-        assertTrue(diags.isEmpty(), "expected no TS2322, got: $diags")
+            """
+        ) should {
+            have(none { it.code == 2322 })
+        }
     }
 
-    /** NEGATIVE control: a bare `new` of a DIFFERENT class still fails. */
-    @Test fun bareNewOfDifferentClassStillFires() {
-        val diags = ts2322s(
+    @Test
+    fun `negative control - a bare new of a different class still fires`() {
+        diagnose(
             """
             class Left<T> { l: T | undefined; }
             class Right<T> { r: T | undefined; }
             let x: Left<number> | undefined;
             x = new Right();
-            """.trimIndent()
-        )
-        assertTrue(diags.isNotEmpty(), "expected TS2322 for the mismatched class")
+            """
+        ) should {
+            have(any { it.code == 2322 })
+        }
     }
 }

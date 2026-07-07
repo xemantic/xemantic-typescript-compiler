@@ -25,9 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 
 /**
  * Pins the parse-based module-specifier extraction invariant (M0.3): the parser
@@ -95,10 +95,7 @@ class ModuleSpecifierExtractionTest {
             const s3 = "from 'garbage-8'";
         """.trimIndent()
         val specs = specifiersOf(src)
-        assertTrue(
-            specs.none { it.contains("garbage") },
-            "no string/comment/template/regex content may be extracted, got: $specs",
-        )
+        have(specs.none { it.contains("garbage") })
         // Real specifiers still found — including a dynamic import INSIDE a template
         // substitution (real code position) right next to template text that is not.
         assertEquals(setOf("./real", "./real-in-template"), specs)
@@ -179,9 +176,9 @@ class ModuleSpecifierExtractionTest {
             result.unresolved,
             "only the genuinely missing import is unresolved",
         )
-        assertTrue(
+        have(
             result.programFiles.none { it.contains("some-package") },
-            "a string-literal mention must not pull a file into the program: ${result.programFiles}",
+            "a string-literal mention must not pull a file into the program",
         )
     }
 }

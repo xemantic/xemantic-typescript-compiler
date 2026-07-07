@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * M1.12 (self-compile burn-down): a namespace-local interface/class whose base is ALSO
@@ -52,12 +53,9 @@ import kotlin.test.assertTrue
  */
 class NamespaceLocalBaseInheritanceTest {
 
-    private fun diags(source: String): List<Diagnostic> =
-        TypeScriptCompiler().compile("// @strict: true\n" + source.trimIndent(), "t.ts").diagnostics
-
     @Test
     fun `inherited member from a namespace-local base is not excess - no TS2353`() {
-        val d = diags(
+        diagnose(
             """
             export namespace M {
                 export interface Base {
@@ -77,22 +75,18 @@ class NamespaceLocalBaseInheritanceTest {
                 }
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2353 },
-            "an inherited namespace-local-base member (`getKeys`) in the object literal is not excess; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
-        assertTrue(
-            d.none { it.code == 2739 || it.code == 2740 || it.code == 2741 },
-            "the object literal provides every own+inherited member, so no missing-property error; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 2353 })
+            have(
+                none { it.code == 2739 || it.code == 2740 || it.code == 2741 },
+                "the object literal provides every own+inherited member, so no missing-property error",
+            )
+        }
     }
 
     @Test
     fun `base member in an OUTER namespace is inherited across nesting - no TS2353`() {
-        val d = diags(
+        diagnose(
             """
             export namespace Outer {
                 export interface Base { a(): number; }
@@ -102,17 +96,14 @@ class NamespaceLocalBaseInheritanceTest {
                 }
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2353 },
-            "a base declared in an OUTER namespace is inherited into a nested-namespace interface; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 2353 })
+        }
     }
 
     @Test
     fun `missing a required inherited member STILL fires - negative control`() {
-        val d = diags(
+        diagnose(
             """
             export namespace M {
                 export interface Base { a(): number; b(): number; }
@@ -120,17 +111,14 @@ class NamespaceLocalBaseInheritanceTest {
                 export const v: Derived = { c: () => 3 };
             }
             """,
-        )
-        assertTrue(
-            d.any { it.code == 2739 || it.code == 2740 || it.code == 2741 },
-            "omitting required inherited members `a`/`b` MUST fire a missing-property error; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(any { it.code == 2739 || it.code == 2740 || it.code == 2741 })
+        }
     }
 
     @Test
     fun `a genuinely-unknown property is STILL flagged excess - negative control`() {
-        val d = diags(
+        diagnose(
             """
             export namespace M {
                 export interface Base { a(): number; }
@@ -138,17 +126,14 @@ class NamespaceLocalBaseInheritanceTest {
                 export const v: Derived = { a: () => 1, b: () => 2, zzz: 9 };
             }
             """,
-        )
-        assertTrue(
-            d.any { it.code == 2353 && it.message.contains("zzz") },
-            "a property in NEITHER the interface nor its base MUST still be flagged excess; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(any { it.code == 2353 && it.message.contains("zzz") })
+        }
     }
 
     @Test
     fun `module-level base is still resolved - regression control`() {
-        val d = diags(
+        diagnose(
             """
             export interface TopBase { a(): number; }
             export namespace M {
@@ -156,12 +141,9 @@ class NamespaceLocalBaseInheritanceTest {
                 export const v: Derived = { a: () => 1, b: () => 2 };
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2353 },
-            "a module-level base's members are still inherited into a namespace-local interface; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 2353 })
+        }
     }
 
     @Test
@@ -171,7 +153,7 @@ class NamespaceLocalBaseInheritanceTest {
         // resolution populates baseTypes for the namespace-local base, the `this.X` check must
         // resolve the base chain namespace-awarely (→ `false`) and still emit TS2339, rather than
         // bail on a globals-only `null`.
-        val d = diags(
+        diagnose(
             """
             export namespace TS {
                 export class PullSymbol { public kind: number = 0; }
@@ -183,19 +165,16 @@ class NamespaceLocalBaseInheritanceTest {
                 }
             }
             """,
-        )
-        assertTrue(
-            d.any { it.code == 2339 && it.message.contains("isArray") },
-            "`this.isArray()` where isArray is absent from the whole namespace-local class chain MUST fire TS2339; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(any { it.code == 2339 && it.message.contains("isArray") })
+        }
     }
 
     @Test
     fun `this-access of an INHERITED member in a namespace-local class chain does NOT fire TS2339`() {
         // FP-safety: `kind` IS declared in the namespace-local base `PullSymbol`, so `this.kind`
         // in the derived class must NOT fire TS2339 (the chain resolves `kind` → returns true).
-        val d = diags(
+        diagnose(
             """
             export namespace TS {
                 export class PullSymbol { public kind: number = 0; }
@@ -204,11 +183,8 @@ class NamespaceLocalBaseInheritanceTest {
                 }
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2339 },
-            "`this.kind` inherited from the namespace-local base must NOT fire TS2339; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 2339 })
+        }
     }
 }

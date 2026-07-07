@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * M2.2 (round 394): `delete x.<Object.prototype member>` is always TS2790 "The operand
@@ -47,61 +48,49 @@ import kotlin.test.assertTrue
  */
 class DeleteObjectPrototypeTs2790Test {
 
-    private fun diags(prelude: String, body: String): List<Diagnostic> =
-        TypeScriptCompiler().compile("$prelude\n$body", "t.ts").diagnostics
-
     private val realLibs = "// @useRealLibs: true\n// @target: es2015"
     private val embedded = "// @target: es2015"
 
     @Test
     fun `real libs - delete Array_toString fires TS2790 (the keywordExpressionInternalComments fix)`() {
-        val d = diags(realLibs, "delete Array.toString;")
-        assertTrue(
-            d.any { it.code == 2790 },
-            "delete Array.toString must be TS2790 under real libs (toString inherited from " +
-                "Object.prototype); got: " + d.joinToString { "TS${it.code}" },
-        )
+        diagnose("delete Array.toString;", directives = realLibs) should {
+            have(
+                any { it.code == 2790 },
+                "delete Array.toString must be TS2790 under real libs (toString inherited from Object.prototype)",
+            )
+        }
     }
 
     @Test
     fun `real libs - delete Array_valueOf fires TS2790`() {
-        val d = diags(realLibs, "delete Array.valueOf;")
-        assertTrue(
-            d.any { it.code == 2790 },
-            "delete Array.valueOf must be TS2790 under real libs; got: " +
-                d.joinToString { "TS${it.code}" },
-        )
+        diagnose("delete Array.valueOf;", directives = realLibs) should {
+            have(any { it.code == 2790 })
+        }
     }
 
     @Test
     fun `embedded lib - delete Array_toString still fires TS2790 (regression control)`() {
         // Under the embedded lib the member is found as an OWN declaration, exercising the
         // pre-existing branch — this pins that the refactor did not disturb it.
-        val d = diags(embedded, "delete Array.toString;")
-        assertTrue(
-            d.any { it.code == 2790 },
-            "delete Array.toString must still be TS2790 under the embedded lib; got: " +
-                d.joinToString { "TS${it.code}" },
-        )
+        diagnose("delete Array.toString;", directives = embedded) should {
+            have(any { it.code == 2790 })
+        }
     }
 
     @Test
     fun `own optional Object-prototype member does NOT fire (fallback not reached)`() {
         // The receiver declares `toString?` itself, so propSym is found and optional →
         // the own-member branch handles it (no TS2790). The fallback must NOT fire.
-        val d = diags(
-            embedded,
+        diagnose(
             """
             interface I { toString?(): string; }
             declare const i: I;
             delete i.toString;
-            """.trimIndent(),
-        )
-        assertTrue(
-            d.none { it.code == 2790 },
-            "delete i.toString where toString is declared optional must NOT be TS2790; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            """,
+            directives = embedded,
+        ) should {
+            have(none { it.code == 2790 })
+        }
     }
 
     @Test
@@ -109,27 +98,24 @@ class DeleteObjectPrototypeTs2790Test {
         // `foo` is reached via the string index signature (no named property, propSym null)
         // and is NOT an Object.prototype member name — the fallback is scoped to that set,
         // so no TS2790.
-        val d = diags(
-            embedded,
+        diagnose(
             """
             declare const x: { [k: string]: number };
             delete x.foo;
-            """.trimIndent(),
-        )
-        assertTrue(
-            d.none { it.code == 2790 },
-            "delete x.foo (index-signature access, non-prototype name) must NOT be TS2790; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            """,
+            directives = embedded,
+        ) should {
+            have(none { it.code == 2790 })
+        }
     }
 
     @Test
     fun `strictNullChecks off suppresses the fallback`() {
-        val d = diags("$realLibs\n// @strict: false\n// @strictNullChecks: false", "delete Array.toString;")
-        assertTrue(
-            d.none { it.code == 2790 },
-            "delete Array.toString must NOT be TS2790 when strictNullChecks is off; got: " +
-                d.joinToString { "TS${it.code}" },
-        )
+        diagnose(
+            "delete Array.toString;",
+            directives = "$realLibs\n// @strict: false\n// @strictNullChecks: false",
+        ) should {
+            have(none { it.code == 2790 })
+        }
     }
 }

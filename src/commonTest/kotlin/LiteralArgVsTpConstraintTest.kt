@@ -21,8 +21,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * Round 435d: a bare TYPE-PARAMETER param whose CONSTRAINT contains literal
@@ -39,13 +40,9 @@ import kotlin.test.assertTrue
  */
 class LiteralArgVsTpConstraintTest {
 
-    private fun ts2345s(source: String) =
-        TypeScriptCompiler().compile("// @strict: true\n" + source, "t.ts")
-            .diagnostics.filter { it.code == 2345 }
-
-    /** A literal arg satisfying the TP's literal-union constraint is legal. */
-    @Test fun literalArgInConstraintUnionIsLegal() {
-        val diags = ts2345s(
+    @Test
+    fun `a literal arg satisfying the TP literal-union constraint is legal`() {
+        diagnose(
             """
             function readField<K extends "typings" | "types" | "main" | "tsconfig">(
                 json: object, fieldName: K): string | undefined {
@@ -54,15 +51,16 @@ class LiteralArgVsTpConstraintTest {
             export function readTypes(json: object) {
                 return readField(json, "typings") || readField(json, "types");
             }
-            """.trimIndent()
-        )
-        assertTrue(diags.isEmpty(), "expected no TS2345, got: $diags")
+            """
+        ) should {
+            have(none { it.code == 2345 })
+        }
     }
 
-    /** NEGATIVE control: a literal OUTSIDE the constraint union still fails —
-     *  and displays with its LITERAL type (tsc's display for this shape). */
-    @Test fun literalArgOutsideConstraintUnionStillFires() {
-        val diags = ts2345s(
+    @Test
+    fun `negative control - a literal outside the constraint union still fires`() {
+        // The failure displays with its LITERAL type (tsc's display for this shape).
+        diagnose(
             """
             function readField<K extends "typings" | "types" | "main" | "tsconfig">(
                 json: object, fieldName: K): string | undefined {
@@ -71,14 +69,15 @@ class LiteralArgVsTpConstraintTest {
             export function bad(json: object) {
                 return readField(json, "nope");
             }
-            """.trimIndent()
-        )
-        assertTrue(diags.isNotEmpty(), "expected TS2345 for a literal outside the constraint")
+            """
+        ) should {
+            have(any { it.code == 2345 })
+        }
     }
 
-    /** A widened (non-literal) string arg still fails a literal-union constraint. */
-    @Test fun widenedStringArgStillFires() {
-        val diags = ts2345s(
+    @Test
+    fun `negative control - a widened string arg still fails a literal-union constraint`() {
+        diagnose(
             """
             function readField<K extends "typings" | "types" | "main" | "tsconfig">(
                 json: object, fieldName: K): string | undefined {
@@ -87,8 +86,9 @@ class LiteralArgVsTpConstraintTest {
             export function bad(json: object, s: string) {
                 return readField(json, s);
             }
-            """.trimIndent()
-        )
-        assertTrue(diags.isNotEmpty(), "expected TS2345 for a plain string arg")
+            """
+        ) should {
+            have(any { it.code == 2345 })
+        }
     }
 }

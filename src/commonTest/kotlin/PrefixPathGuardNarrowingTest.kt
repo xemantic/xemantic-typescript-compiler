@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * Round 424 — a type guard on a RECEIVER narrows a PROPERTY PATH through it
@@ -56,15 +57,10 @@ class PrefixPathGuardNarrowingTest {
         declare function dedupe(x: string[]): string[];
     """
 
-    private fun diags(body: String): List<Diagnostic> =
-        TypeScriptCompiler().compile(
-            "// @strict: true\n" + (prelude + body).trimIndent(), "t.ts",
-        ).diagnostics
-
     @Test
     fun receiverGuardNarrowsPropertyPathAcrossLoops() {
-        val d = diags(
-            """
+        diagnose(
+            prelude + """
             export function f(options: CompilerOptions, roots: string[]): string[] {
                 if (!usesWildcardTypes(options)) {
                     return options.types ?? [];
@@ -78,12 +74,9 @@ class PrefixPathGuardNarrowingTest {
                 return dedupe(options.types.map(t => t === "*" ? "w" : t));
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 18048 },
-            "a receiver guard pinning `types: string[]` must prove options.types non-nullish; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 18048 })
+        }
     }
 
     @Test
@@ -91,8 +84,8 @@ class PrefixPathGuardNarrowingTest {
         // The intersection pins typeRoots, NOT types — types stays optional
         // (`types?: string[]` resolves to `string[]`; the OPTIONALITY lives on
         // the symbol, which the claim must consult).
-        val d = diags(
-            """
+        diagnose(
+            prelude + """
             declare function isOpts(options: CompilerOptions): options is CompilerOptions & { typeRoots: string[] };
             export function g(options: CompilerOptions): string[] {
                 if (!isOpts(options)) {
@@ -101,18 +94,15 @@ class PrefixPathGuardNarrowingTest {
                 return options.types.map(t => t);
             }
             """,
-        )
-        assertTrue(
-            d.any { it.code == 18048 },
-            "a guard that does not pin `types` must keep TS18048; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(any { it.code == 18048 })
+        }
     }
 
     @Test
     fun negativeBranchProvesNothingAboutTheProperty() {
-        val d = diags(
-            """
+        diagnose(
+            prelude + """
             export function h(options: CompilerOptions): string[] {
                 if (usesWildcardTypes(options)) {
                     return [];
@@ -120,11 +110,8 @@ class PrefixPathGuardNarrowingTest {
                 return options.types.map(t => t);
             }
             """,
-        )
-        assertTrue(
-            d.any { it.code == 18048 },
-            "the negative guard branch must keep TS18048 on the property path; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(any { it.code == 18048 })
+        }
     }
 }

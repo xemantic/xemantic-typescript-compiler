@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * Round 424 — `asserts node is U` where U is the callee's own INFERRED type
@@ -48,15 +49,10 @@ class AssertsInferredTypeParamNarrowingTest {
         interface FnDecl extends Nd { name?: Ident; }
     """
 
-    private fun diags(body: String): List<Diagnostic> =
-        TypeScriptCompiler().compile(
-            "// @strict: true\n" + (prelude + body).trimIndent(), "t.ts",
-        ).diagnostics
-
     @Test
     fun assertsInferredTpWithNonNullishConstraintChainNarrows() {
-        val d = diags(
-            """
+        diagnose(
+            prelude + """
             declare namespace Debug {
                 export function assertNode<T extends Nd, U extends T>(node: T | undefined, test: (node: T) => node is U): asserts node is U;
             }
@@ -66,12 +62,9 @@ class AssertsInferredTypeParamNarrowingTest {
                 return node.name.escapedText;
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 18048 },
-            "asserts-U with constraint chain U -> T -> Nd must exclude nullish; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 18048 })
+        }
     }
 
     @Test
@@ -80,8 +73,8 @@ class AssertsInferredTypeParamNarrowingTest {
         // valueDeclaration is the annotation-less impl — the resolver must
         // prefer the TypePredicate-bearing overload, else every consumer bails
         // before narrowing.
-        val d = diags(
-            """
+        diagnose(
+            prelude + """
             declare namespace Debug {
                 export function assertNode<T extends Nd, U extends T>(node: T | undefined, test: (node: T) => node is U): asserts node is U;
                 export function assertNode(node: Nd | undefined, test: ((node: Nd) => boolean) | undefined): void;
@@ -92,12 +85,9 @@ class AssertsInferredTypeParamNarrowingTest {
                 return node.name.escapedText;
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 18048 },
-            "an overloaded assert with an annotation-less impl must still narrow; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 18048 })
+        }
     }
 
     @Test
@@ -106,8 +96,8 @@ class AssertsInferredTypeParamNarrowingTest {
         // (`isIdent: node is Ident`), narrowing a union receiver down to Ident —
         // the constraint-chain minimal claim alone (drop-nullish) would leave
         // `Ident | StringLit` and trade the TS18048 for a TS2339 on escapedText.
-        val d = diags(
-            """
+        diagnose(
+            prelude + """
             interface StringLit extends Nd { text: string; }
             interface ModuleDecl extends Nd { name: Ident | StringLit; }
             declare namespace Debug {
@@ -120,18 +110,15 @@ class AssertsInferredTypeParamNarrowingTest {
                 return node.name.escapedText;
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 18048 || it.code == 2339 },
-            "test-arg inference must narrow node.name to Ident (no TS18048, no TS2339); got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 18048 || it.code == 2339 })
+        }
     }
 
     @Test
     fun assertsUnconstrainedTpStillFires() {
-        val d = diags(
-            """
+        diagnose(
+            prelude + """
             declare namespace Dbg {
                 export function assertThing<V>(x: V | undefined): asserts x is V;
             }
@@ -140,27 +127,21 @@ class AssertsInferredTypeParamNarrowingTest {
                 return node.name.escapedText;
             }
             """,
-        )
-        assertTrue(
-            d.any { it.code == 18048 },
-            "an UNCONSTRAINED asserted type param proves nothing — TS18048 must stand; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(any { it.code == 18048 })
+        }
     }
 
     @Test
     fun noAssertStillFires() {
-        val d = diags(
-            """
+        diagnose(
+            prelude + """
             export function h(node: FnDecl): string {
                 return node.name.escapedText;
             }
             """,
-        )
-        assertTrue(
-            d.any { it.code == 18048 },
-            "no assert at all — TS18048 must stand; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(any { it.code == 18048 })
+        }
     }
 }

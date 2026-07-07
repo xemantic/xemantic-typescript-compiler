@@ -25,9 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 
 /**
  * M2.1(a) (round 390): [RealLibFiles] ships the real TypeScript lib `.d.ts`
@@ -44,17 +44,17 @@ class RealLibFilesTest {
         val files = RealLibFiles.files
         // 100 files at the current pin; assert a floor so a pin bump doesn't
         // spuriously fail, plus exact membership of the load-bearing entries.
-        assertTrue(files.size >= 90, "expected >= 90 lib files, got ${files.size}")
+        have(files.size >= 90)
         for (key in listOf(
             "es5", "es2015", "es2015.core", "es2015.iterable", "es2015.symbol.wellknown",
             "es2020.bigint", "es2024.collection", "esnext", "decorators", "decorators.legacy",
         )) {
-            assertTrue(key in files, "missing lib '$key'")
+            have(key in files)
         }
         // Keys are bare lib names — no extension, no DOM/host libs.
-        assertTrue(files.keys.none { it.endsWith(".d.ts") })
-        assertTrue(files.keys.none { it.startsWith("dom") || it.startsWith("webworker") || it.startsWith("scripthost") })
-        assertTrue(files.values.none { it.isBlank() })
+        have(files.keys.none { it.endsWith(".d.ts") })
+        have(files.keys.none { it.startsWith("dom") || it.startsWith("webworker") || it.startsWith("scripthost") })
+        have(files.values.none { it.isBlank() })
     }
 
     @Test
@@ -62,15 +62,15 @@ class RealLibFilesTest {
         val es5 = RealLibFiles.files.getValue("es5")
         // es5.d.ts is ~218 KB — far past the 65,535-byte single-constant cap, so a
         // correct value here PROVES multi-chunk runtime reassembly.
-        assertTrue(es5.length > 65_535, "es5 must exceed the class-file constant cap, got ${es5.length}")
+        have(es5.length > 65_535)
         // First chunk: the file opens with its lib-reference directives.
-        assertTrue(es5.startsWith("/// <reference lib=\"decorators\" />\r\n"))
+        have(es5.startsWith("/// <reference lib=\"decorators\" />\r\n"))
         // Middle chunks: declarations that live past the first 60 KB.
-        assertTrue("interface RegExpConstructor" in es5)
-        assertTrue("interface Array<T>" in es5)
+        have("interface RegExpConstructor" in es5)
+        have("interface Array<T>" in es5)
         // Last chunk: the file's final declaration.
-        assertTrue(es5.trimEnd().endsWith("}"))
-        assertTrue("toLocaleTimeString(locales?: string | string[], options?: Intl.DateTimeFormatOptions): string;" in es5)
+        have(es5.trimEnd().endsWith("}"))
+        have("toLocaleTimeString(locales?: string | string[], options?: Intl.DateTimeFormatOptions): string;" in es5)
         // CRLF line endings preserved byte-faithfully (no LF-only lines).
         assertEquals(0, es5.count { it == '\n' } - es5.windowed(2).count { it == "\r\n" })
     }
@@ -80,8 +80,8 @@ class RealLibFilesTest {
         // M2.1(b) will expand lib.es2015 -> es5 + es2015.* via these directives;
         // pin that the shipped text actually carries them.
         val es2015 = RealLibFiles.files.getValue("es2015")
-        assertTrue("/// <reference lib=\"es5\" />" in es2015)
-        assertTrue("/// <reference lib=\"es2015.core\" />" in es2015)
-        assertTrue("/// <reference lib=\"es2015.iterable\" />" in es2015)
+        have("/// <reference lib=\"es5\" />" in es2015)
+        have("/// <reference lib=\"es2015.core\" />" in es2015)
+        have("/// <reference lib=\"es2015.iterable\" />" in es2015)
     }
 }

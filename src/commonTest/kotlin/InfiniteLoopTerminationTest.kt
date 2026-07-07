@@ -25,8 +25,8 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * Round 414 (M1.12): an INFINITE loop (`while(true)` / `for(;;)` / `do..while(true)`)
@@ -44,25 +44,15 @@ import kotlin.test.assertTrue
  */
 class InfiniteLoopTerminationTest {
 
-    private fun compile(source: String) =
-        TypeScriptCompiler().compile("// @strict: true\n$source", "t.ts")
-
     private fun assertNoImplicitReturn(source: String, what: String) {
-        val r = compile(source)
-        assertTrue(
-            r.diagnostics.none { it.code == 2366 || it.code == 7030 || it.code == 2355 },
-            "$what must not draw TS2366/TS7030/TS2355: " +
-                r.diagnostics.joinToString { "TS${it.code} ${it.message}" },
+        have(
+            diagnose(source).none { it.code == 2366 || it.code == 7030 || it.code == 2355 },
+            "$what must not draw TS2366/TS7030/TS2355",
         )
     }
 
     private fun assertImplicitReturn(source: String, what: String) {
-        val r = compile(source)
-        assertTrue(
-            r.diagnostics.any { it.code == 2366 },
-            "$what must draw TS2366: " +
-                r.diagnostics.joinToString { "TS${it.code} ${it.message}" },
-        )
+        have(diagnose(source).any { it.code == 2366 }, "$what must draw TS2366")
     }
 
     // --- the fixed false-positive cases (an infinite loop with only return exits) ---

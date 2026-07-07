@@ -25,9 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
 import kotlin.test.Test
 import kotlin.test.assertNotNull
-import kotlin.test.assertTrue
 
 /**
  * Local corner-case tests for DEEP binary-expression chains.
@@ -52,10 +52,7 @@ class DeepExpressionChainTest {
         // TS2589 at position 0 is the init boundary guard's overflow report
         // (reportCheckerStackOverflow) — a masked StackOverflowError, not a pass.
         val overflow = result.diagnostics.firstOrNull { it.code == 2589 }
-        assertTrue(
-            overflow == null,
-            "checker stack overflow swallowed by the init boundary guard: ${overflow?.message}"
-        )
+        have(overflow == null, "checker stack overflow swallowed by the init boundary guard")
         return result
     }
 
@@ -65,8 +62,8 @@ class DeepExpressionChainTest {
         val source = "var a = 1;\nvar r = " + "a + ".repeat(terms - 1) + "a;\n"
         val result = compileExpectingNoOverflow(source)
         val js = assertNotNull(result.javascript, "no JS emitted for the left-associative chain")
-        assertTrue(js.contains("var r = a + a"), "chain head missing from emitted JS")
-        assertTrue(js.length > 3 * terms, "emitted JS suspiciously short — chain truncated?")
+        have(js.contains("var r = a + a"), "chain head missing from emitted JS")
+        have(js.length > 3 * terms, "emitted JS suspiciously short — chain truncated?")
     }
 
     /** The mirror image the corpus does NOT cover: `a = (a = (a = 1))` — deep down the RIGHT spine. */
@@ -75,8 +72,8 @@ class DeepExpressionChainTest {
         val source = "var a;\n" + "a = ".repeat(assignments) + "1;\n"
         val result = compileExpectingNoOverflow(source)
         val js = assertNotNull(result.javascript, "no JS emitted for the right-associative chain")
-        assertTrue(js.contains("a = a = "), "assignment chain missing from emitted JS")
-        assertTrue(js.length > 3 * assignments, "emitted JS suspiciously short — chain truncated?")
+        have(js.contains("a = a = "), "assignment chain missing from emitted JS")
+        have(js.length > 3 * assignments, "emitted JS suspiciously short — chain truncated?")
     }
 
     /** Wrapper unwrapping stays iterative when parenthesized groups alternate with the spine. */
@@ -85,7 +82,7 @@ class DeepExpressionChainTest {
         val source = "var a = 1;\nvar r = " + "(a + a) + ".repeat(groups) + "a;\n"
         val result = compileExpectingNoOverflow(source)
         val js = assertNotNull(result.javascript, "no JS emitted for the parenthesized-group chain")
-        assertTrue(js.contains("(a + a) + (a + a)"), "parenthesized groups missing from emitted JS")
+        have(js.contains("(a + a) + (a + a)"), "parenthesized groups missing from emitted JS")
     }
 
     /**
@@ -95,16 +92,14 @@ class DeepExpressionChainTest {
      */
     @Test fun deepChainInsideObjectLiteralCallArgument() {
         val terms = 10_000
-        val source = buildString {
-            append("var a = 1;\n")
-            append("function f(x) { return x; }\n")
-            append("f({ p: ")
-            append("a + ".repeat(terms - 1))
-            append("a });\n")
-        }
+        val source = """
+            var a = 1;
+            function f(x) { return x; }
+            f({ p: ${"a + ".repeat(terms - 1)}a });
+        """.trimIndent()
         val result = compileExpectingNoOverflow(source)
         val js = assertNotNull(result.javascript, "no JS emitted for the nested chain")
-        assertTrue(js.contains("f({ p: a + a"), "nested chain missing from emitted JS")
+        have(js.contains("f({ p: a + a"), "nested chain missing from emitted JS")
     }
 
     /**

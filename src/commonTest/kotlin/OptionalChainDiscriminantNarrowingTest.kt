@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * Round 422 (M3.4): an OPTIONAL discriminant access proves the receiver non-nullish on
@@ -45,9 +46,6 @@ import kotlin.test.assertTrue
  */
 class OptionalChainDiscriminantNarrowingTest {
 
-    private fun diags(source: String): List<Diagnostic> =
-        TypeScriptCompiler().compile("// @strict: true\n" + source.trimIndent(), "t.ts").diagnostics
-
     private val decls = """
         export enum SyntaxKind { JSDocSignature = 1, JSDocOverloadTag = 2, Other = 3 }
         interface Node { kind: SyntaxKind; parent: Node; }
@@ -58,7 +56,7 @@ class OptionalChainDiscriminantNarrowingTest {
 
     @Test
     fun `optional-chain enum discriminant proves receiver non-nullish in AND rhs and body`() {
-        val d = diags(
+        diagnose(
             """
             $decls
             export function f(signature: Signature): string | undefined {
@@ -69,17 +67,14 @@ class OptionalChainDiscriminantNarrowingTest {
                 return undefined;
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 18048 },
-            "`x?.kind === Enum.Member` (true) must drop undefined from x; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 18048 })
+        }
     }
 
     @Test
     fun `optional-chain string-literal discriminant proves receiver non-nullish`() {
-        val d = diags(
+        diagnose(
             """
             interface Named { name?: { text: string; parent: Named }; }
             export function f(n: Named): Named | undefined {
@@ -89,17 +84,14 @@ class OptionalChainDiscriminantNarrowingTest {
                 return undefined;
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 18048 },
-            "`x?.text === \"lit\"` (true) must drop undefined from x; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 18048 })
+        }
     }
 
     @Test
     fun `negative comparison keeps nullish - access in true branch still fires`() {
-        val d = diags(
+        diagnose(
             """
             $decls
             export function f(signature: Signature): SyntaxKind | undefined {
@@ -109,17 +101,17 @@ class OptionalChainDiscriminantNarrowingTest {
                 return undefined;
             }
             """,
-        )
-        assertTrue(
-            d.any { it.code == 18048 },
-            "`x?.kind !== Enum.Member` is TRUE when x is undefined — the access must still " +
-                "fire TS18048; got: " + d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(
+                any { it.code == 18048 },
+                "`x?.kind !== Enum.Member` is TRUE when x is undefined — the access must still fire TS18048",
+            )
+        }
     }
 
     @Test
     fun `undefined RHS keeps nullish - access still fires`() {
-        val d = diags(
+        diagnose(
             """
             $decls
             export function f(signature: Signature): SyntaxKind | undefined {
@@ -129,17 +121,17 @@ class OptionalChainDiscriminantNarrowingTest {
                 return undefined;
             }
             """,
-        )
-        assertTrue(
-            d.any { it.code == 18048 },
-            "`x?.kind === undefined` holds when x IS undefined — the access must still fire " +
-                "TS18048; got: " + d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(
+                any { it.code == 18048 },
+                "`x?.kind === undefined` holds when x IS undefined — the access must still fire TS18048",
+            )
+        }
     }
 
     @Test
     fun `non-optional discriminant access is unaffected`() {
-        val d = diags(
+        diagnose(
             """
             $decls
             export function f(s: { declaration: JSDocSignature | OtherDecl }): string {
@@ -149,11 +141,8 @@ class OptionalChainDiscriminantNarrowingTest {
                 return "";
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 18048 || it.code == 2339 },
-            "plain (non-`?.`) discriminant narrowing must keep working; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 18048 || it.code == 2339 })
+        }
     }
 }

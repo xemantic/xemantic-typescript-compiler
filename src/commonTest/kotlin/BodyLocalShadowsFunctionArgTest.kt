@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * Round 428d (M3.1): the call-types walker registers an anyType SHADOW for a
@@ -39,12 +40,9 @@ import kotlin.test.assertTrue
  */
 class BodyLocalShadowsFunctionArgTest {
 
-    private fun diags(source: String): List<Diagnostic> =
-        TypeScriptCompiler().compile("// @strict: true\n" + source.trimIndent(), "t.ts").diagnostics
-
     @Test
     fun `body-local const shadowing a file-level function does not FP as arg`() {
-        val d = diags(
+        diagnose(
             """
             interface Sym { name: string; }
             function symbolName(symbol: Sym): string { return symbol.name; }
@@ -54,30 +52,32 @@ class BodyLocalShadowsFunctionArgTest {
                 return canUse(symbolName, 5);
             }
             """
-        )
-        assertTrue(d.none { it.code == 2345 }, "expected no TS2345, got: $d")
+        ) should {
+            have(none { it.code == 2345 })
+        }
     }
 
     @Test
     fun `negative control - non-shadowing wrong-typed param still fires`() {
         // (A non-callable BODY local isn't typed by this pass at all — the baseline
         // capability is param-args — so the control uses a param.)
-        val d = diags(
+        diagnose(
             """
             declare function canUse(name: string, version: number): boolean;
             export function f(count: number): boolean {
                 return canUse(count, 5);
             }
             """
-        )
-        assertTrue(d.any { it.code == 2345 }, "expected TS2345 for number vs string, got: $d")
+        ) should {
+            have(any { it.code == 2345 })
+        }
     }
 
     @Test
     fun `negative control - passing the actual function still fires`() {
         // No local shadow in scope: the outer function passed by name where a
         // string is required must keep firing.
-        val d = diags(
+        diagnose(
             """
             interface Sym { name: string; }
             function symbolName(symbol: Sym): string { return symbol.name; }
@@ -86,7 +86,8 @@ class BodyLocalShadowsFunctionArgTest {
                 return canUse(symbolName, 5);
             }
             """
-        )
-        assertTrue(d.any { it.code == 2345 }, "expected TS2345 for fn vs string, got: $d")
+        ) should {
+            have(any { it.code == 2345 })
+        }
     }
 }

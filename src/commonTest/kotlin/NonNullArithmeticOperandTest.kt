@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * M1.12 (self-compile burn-down, round 415): a `x!` (NonNullExpression) arithmetic operand
@@ -48,95 +49,77 @@ import kotlin.test.assertTrue
  */
 class NonNullArithmeticOperandTest {
 
-    private fun diags(source: String): List<Diagnostic> =
-        TypeScriptCompiler().compile("// @strict: true\n" + source.trimIndent(), "t.ts").diagnostics
-
     @Test
     fun `nonnull numeric enum operand bitwise - no TS2362`() {
         // Mirrors nodeFactory.ts `templateFlags! & TokenFlags.TemplateLiteralLikeFlags`.
-        val d = diags(
+        diagnose(
             """
             enum TokenFlags { None = 0, A = 1, B = 2, Mask = 3 }
             export function f(flags: TokenFlags | undefined): TokenFlags {
                 return flags! & TokenFlags.Mask;
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2362 || it.code == 2363 },
-            "`flags! & TokenFlags.Mask` on a `TokenFlags | undefined` operand must not fire " +
-                "TS2362/TS2363; got: " + d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 2362 || it.code == 2363 })
+        }
     }
 
     @Test
     fun `nonnull number operand subtraction - no TS2362`() {
         // Mirrors builder.ts `state.affectedFilesIndex! - 1`.
-        val d = diags(
+        diagnose(
             """
             interface S { idx: number | undefined; }
             export function f(s: S): number {
                 return s.idx! - 1;
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2362 || it.code == 2363 },
-            "`s.idx! - 1` on a `number | undefined` member must not fire TS2362/TS2363; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 2362 || it.code == 2363 })
+        }
     }
 
     @Test
     fun `nonnull operand on the right side - no TS2363`() {
-        val d = diags(
+        diagnose(
             """
             enum F { None = 0, A = 1 }
             export function f(mask: F, flags: F | undefined): F {
                 return mask & flags!;
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2362 || it.code == 2363 },
-            "`mask & flags!` (nonnull on the RHS) must not fire TS2362/TS2363; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 2362 || it.code == 2363 })
+        }
     }
 
     @Test
     fun `nonnull non-numeric operand STILL fires TS2362 - negative control`() {
-        val d = diags(
+        diagnose(
             """
             export function bad(s: string | undefined): number {
                 return s! - 1;
             }
             """,
-        )
-        // `s! - 1` — after the strip the operand is `string`, still non-numeric → TS2362 stands.
-        assertTrue(
-            d.any { it.code == 2362 },
-            "a nonnull operand whose non-null type is `string` MUST still fire TS2362; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            // `s! - 1` — after the strip the operand is `string`, still non-numeric → TS2362 stands.
+            have(any { it.code == 2362 })
+        }
     }
 
     @Test
     fun `plain undefined-union operand without nonnull STILL fires TS2362 - control`() {
         // Without the `!`, the arithmetic pass does no flow narrowing → the union is invalid.
         // (tsc narrows via `&&`, but that is M3.4; here there is no guard, so TS2362 is correct.)
-        val d = diags(
+        diagnose(
             """
             enum TokenFlags { None = 0, A = 1, Mask = 3 }
             export function f(flags: TokenFlags | undefined): TokenFlags {
                 return flags & TokenFlags.Mask;
             }
             """,
-        )
-        assertTrue(
-            d.any { it.code == 2362 },
-            "a bare `flags & X` on a `TokenFlags | undefined` (no `!`, no guard) MUST still fire " +
-                "TS2362; got: " + d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(any { it.code == 2362 })
+        }
     }
 }

@@ -21182,7 +21182,7 @@ class Checker(
         is TypeReference -> {
             val nm = (ann.typeName as? Identifier)?.text
             if ((nm == "Map" || nm == "WeakMap" || nm == "ESMap" || nm == "ReadonlyMap") &&
-                ann.typeArguments?.size == 2) ann.typeArguments!![1] else null
+                ann.typeArguments?.size == 2) ann.typeArguments[1] else null
         }
         is UnionType -> ann.types.firstNotNullOfOrNull { mapValueTypeNodeOf(it) }
         is ParenthesizedType -> mapValueTypeNodeOf(ann.type)

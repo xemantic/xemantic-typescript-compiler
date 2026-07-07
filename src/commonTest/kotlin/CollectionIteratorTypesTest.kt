@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * `SetIterator<T>` / `MapIterator<T>` / `ArrayIterator<T>` are declared in
@@ -38,12 +39,9 @@ import kotlin.test.assertTrue
  */
 class CollectionIteratorTypesTest {
 
-    private fun diags(body: String): List<Diagnostic> =
-        TypeScriptCompiler().compile(body.trimIndent(), "t.ts").diagnostics
-
     @Test
     fun `SetIterator MapIterator ArrayIterator resolve as type names - no TS2304 or TS2552`() {
-        val d = diags(
+        diagnose(
             """
             function* setGen(): SetIterator<number> { yield 1; }
             function* mapGen(): MapIterator<string> { yield "a"; }
@@ -52,21 +50,16 @@ class CollectionIteratorTypesTest {
             let m: MapIterator<string> = mapGen();
             let a: ArrayIterator<boolean> = arrGen();
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2304 || it.code == 2552 },
-            "SetIterator/MapIterator/ArrayIterator must resolve (no TS2304/TS2552); got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            directives = "",
+        ) should {
+            have(none { it.code == 2304 || it.code == 2552 })
+        }
     }
 
     @Test
     fun `a genuinely unknown iterator type still errors (negative control)`() {
-        val d = diags("let x: NotAnIterator<number> = null as any;")
-        assertTrue(
-            d.any { it.code == 2304 || it.code == 2552 },
-            "an unknown type name must still error; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        diagnose("let x: NotAnIterator<number> = null as any;", directives = "") should {
+            have(any { it.code == 2304 || it.code == 2552 })
+        }
     }
 }

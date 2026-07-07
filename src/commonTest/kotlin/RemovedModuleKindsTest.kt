@@ -25,10 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
 import kotlin.test.Test
 import kotlin.test.assertNotNull
-import kotlin.test.assertTrue
-import kotlin.test.assertFalse
 
 /**
  * Pins the compiler's behavior for the module kinds tsgo (TypeScript 7) removed.
@@ -53,15 +52,15 @@ class RemovedModuleKindsTest {
         for (kind in listOf("amd", "umd", "system")) {
             val result = TypeScriptCompiler().compile("// @module: $kind\n$moduleSource", "input.ts")
             val js = assertNotNull(result.javascript, "module: $kind emitted no output")
-            assertTrue(js.isNotBlank(), "module: $kind emitted blank output")
+            have(js.isNotBlank(), "module: $kind emitted blank output")
             // The transforms are gone — their wrappers must never appear again.
-            assertFalse(js.contains("define("), "module: $kind emitted an AMD define() wrapper")
-            assertFalse(js.contains("System.register("), "module: $kind emitted a System wrapper")
-            assertFalse(js.contains("typeof define === \"function\" && define.amd",),
+            have(!js.contains("define("), "module: $kind emitted an AMD define() wrapper")
+            have(!js.contains("System.register("), "module: $kind emitted a System wrapper")
+            have(!js.contains("typeof define === \"function\" && define.amd"),
                 "module: $kind emitted a UMD wrapper")
             // The config-level deprecation (TS5107, deprecated in 6.0 / removed in 7)
             // is the signal that the kind is unsupported.
-            assertTrue(result.diagnostics.any { it.code == 5107 },
+            have(result.diagnostics.any { it.code == 5107 },
                 "module: $kind lost its TS5107 deprecation diagnostic")
         }
     }

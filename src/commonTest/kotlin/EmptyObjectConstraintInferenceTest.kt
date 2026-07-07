@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * Round 430 (M3.1): two inference-gate unlocks for tsc's exact `append`/`addRange`
@@ -43,12 +44,9 @@ import kotlin.test.assertTrue
  */
 class EmptyObjectConstraintInferenceTest {
 
-    private fun diags(source: String): List<Diagnostic> =
-        TypeScriptCompiler().compile("// @strict: true\n" + source.trimIndent(), "t.ts").diagnostics
-
     @Test
     fun `append with T extends empty-object constraint infers from string args`() {
-        val d = diags(
+        diagnose(
             """
             export function append<T extends {}>(to: T[], value: T | undefined): T[];
             export function append<T extends {}>(to: T[] | undefined, value: T): T[];
@@ -65,13 +63,14 @@ class EmptyObjectConstraintInferenceTest {
                 return xs;
             }
             """
-        )
-        assertTrue(d.none { it.code == 2322 }, "expected no TS2322, got: $d")
+        ) should {
+            have(none { it.code == 2322 })
+        }
     }
 
     @Test
     fun `addRange with readonly-array params infers the element type`() {
-        val d = diags(
+        diagnose(
             """
             export function addRange<T>(to: T[] | undefined, from: readonly T[] | undefined, start?: number, end?: number): T[] | undefined {
                 return to;
@@ -84,13 +83,14 @@ class EmptyObjectConstraintInferenceTest {
                 return diagnostics;
             }
             """
-        )
-        assertTrue(d.none { it.code == 2322 }, "expected no TS2322, got: $d")
+        ) should {
+            have(none { it.code == 2322 })
+        }
     }
 
     @Test
     fun `negative control - a wrong-element array assignment still fires`() {
-        val d = diags(
+        diagnose(
             """
             export function addRange<T>(to: T[] | undefined, from: readonly T[] | undefined): T[] | undefined {
                 return to;
@@ -104,32 +104,35 @@ class EmptyObjectConstraintInferenceTest {
                 return diagnostics;
             }
             """
-        )
-        assertTrue(d.any { it.code == 2322 }, "expected TS2322 for number[] vs Diag[], got: $d")
+        ) should {
+            have(any { it.code == 2322 })
+        }
     }
 
     @Test
     fun `negative control - null and undefined still rejected by an empty-object target`() {
         // (Uses the var-decl path — an anonymous `{}` PARAM isn't simple-checkable,
         // so the call-arg path never checked it at baseline either.)
-        val d = diags(
+        diagnose(
             """
             export const a: {} = null;
             export const b: {} = undefined;
             """
-        )
-        assertTrue(d.count { it.code == 2322 } == 2, "expected TS2322 x2 for null/undefined vs {}, got: $d")
+        ) should {
+            have(count { it.code == 2322 } == 2)
+        }
     }
 
     @Test
     fun `primitives assigned to an empty-object target are clean`() {
-        val d = diags(
+        diagnose(
             """
             export const a: {} = "ok";
             export const b: {} = 42;
             export const c: {} = true;
             """
-        )
-        assertTrue(d.none { it.code == 2322 }, "expected no TS2322, got: $d")
+        ) should {
+            have(none { it.code == 2322 })
+        }
     }
 }

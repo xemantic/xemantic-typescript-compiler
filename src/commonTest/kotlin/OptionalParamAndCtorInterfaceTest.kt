@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * M1.7 (round 387): two bounded engine bugs found by the self-compile family map.
@@ -53,70 +54,49 @@ class OptionalParamAndCtorInterfaceTest {
     """.trimIndent()
 
     @Test fun explicitUndefinedIsLegalForOptionalReferenceParam() {
-        val r = compile("$tok\ndeclare function f(a: number, q?: Tok<number>): void;\nf(1, undefined);\n")
-        assertTrue(
-            r.diagnostics.none { it.code == 2345 },
-            "explicit undefined to an optional param must not error: " +
-                r.diagnostics.joinToString { "TS${it.code} ${it.message}" },
-        )
+        compile("$tok\ndeclare function f(a: number, q?: Tok<number>): void;\nf(1, undefined);\n") should {
+            have(diagnostics.none { it.code == 2345 })
+        }
     }
 
     @Test fun explicitUndefinedIsLegalForDefaultedReferenceParam() {
-        val r = compile("$tok\nfunction g(a: number, q: Tok<number> = { k: 1 }): void {}\ng(1, undefined);\n")
-        assertTrue(
-            r.diagnostics.none { it.code == 2345 },
-            "explicit undefined to a defaulted param must not error: " +
-                r.diagnostics.joinToString { "TS${it.code} ${it.message}" },
-        )
+        compile("$tok\nfunction g(a: number, q: Tok<number> = { k: 1 }): void {}\ng(1, undefined);\n") should {
+            have(diagnostics.none { it.code == 2345 })
+        }
     }
 
     @Test fun nullIsStillRejectedForOptionalReferenceParam() {
-        val r = compile("$tok\ndeclare function f(a: number, q?: Tok<number>): void;\nf(1, null);\n")
-        assertTrue(
-            r.diagnostics.any { it.code == 2345 && it.message.contains("'null'") },
-            "null is NOT interchangeable with absence — must stay TS2345: " +
-                r.diagnostics.joinToString { "TS${it.code} ${it.message}" },
-        )
+        compile("$tok\ndeclare function f(a: number, q?: Tok<number>): void;\nf(1, null);\n") should {
+            have(diagnostics.any { it.code == 2345 && it.message.contains("'null'") })
+        }
     }
 
     @Test fun undefinedIsStillRejectedForRequiredReferenceParam() {
-        val r = compile("$tok\ndeclare function h(q: Tok<number>): void;\nh(undefined);\n")
-        assertTrue(
-            r.diagnostics.any { it.code == 2345 && it.message.contains("'undefined'") },
-            "undefined to a REQUIRED param must stay TS2345: " +
-                r.diagnostics.joinToString { "TS${it.code} ${it.message}" },
-        )
+        compile("$tok\ndeclare function h(q: Tok<number>): void;\nh(undefined);\n") should {
+            have(diagnostics.any { it.code == 2345 && it.message.contains("'undefined'") })
+        }
     }
 
     @Test fun explicitUndefinedIsLegalForOptionalFunctionTypedParam() {
-        val r = compile("declare function j<T>(x: T, cb?: (a: T) => number): void;\nj(1, undefined);\n")
-        assertTrue(
-            r.diagnostics.none { it.code == 2345 },
-            "explicit undefined to an optional fn-typed param must not error: " +
-                r.diagnostics.joinToString { "TS${it.code} ${it.message}" },
-        )
+        compile("declare function j<T>(x: T, cb?: (a: T) => number): void;\nj(1, undefined);\n") should {
+            have(diagnostics.none { it.code == 2345 })
+        }
     }
 
     @Test fun newMapWithExplicitTypeArgsYieldsInstanceType() {
-        val r = compile("const m = new Map<string, number>();\nm.set(\"a\", 1);\nconst v = m.get(\"a\");\n")
-        assertTrue(
-            r.diagnostics.none { it.code == 2339 },
-            "Map<string, number> instance members must resolve (not MapConstructor): " +
-                r.diagnostics.joinToString { "TS${it.code} ${it.message}" },
-        )
+        compile("const m = new Map<string, number>();\nm.set(\"a\", 1);\nconst v = m.get(\"a\");\n") should {
+            have(diagnostics.none { it.code == 2339 })
+        }
     }
 
     @Test fun newMapWithoutTypeArgsStillYieldsInstanceType() {
-        val r = compile("const m = new Map();\nm.set(\"a\", 1);\n")
-        assertTrue(
-            r.diagnostics.none { it.code == 2339 },
-            "the pre-existing no-type-args construct-sig path must keep working: " +
-                r.diagnostics.joinToString { "TS${it.code} ${it.message}" },
-        )
+        compile("const m = new Map();\nm.set(\"a\", 1);\n") should {
+            have(diagnostics.none { it.code == 2339 })
+        }
     }
 
     @Test fun userDeclaredCtorInterfaceWithExplicitTypeArgs() {
-        val r = compile(
+        compile(
             """
             interface Box<T> { val: T; boxed(): T; }
             interface BoxCtor { new(): Box<any>; }
@@ -125,11 +105,8 @@ class OptionalParamAndCtorInterfaceTest {
             const x = b.boxed();
             b.val = 1;
             """.trimIndent() + "\n",
-        )
-        assertTrue(
-            r.diagnostics.none { it.code == 2339 },
-            "user ctor-interface with explicit args must resolve instance members: " +
-                r.diagnostics.joinToString { "TS${it.code} ${it.message}" },
-        )
+        ) should {
+            have(diagnostics.none { it.code == 2339 })
+        }
     }
 }

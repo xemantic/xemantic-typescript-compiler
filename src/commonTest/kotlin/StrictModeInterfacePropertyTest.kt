@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * M1.12 (self-compile burn-down): a property/method NAME is NEVER subject to the strict-mode
@@ -42,79 +43,68 @@ import kotlin.test.assertTrue
  */
 class StrictModeInterfacePropertyTest {
 
-    private fun diags(source: String, fileName: String = "t.ts"): List<Diagnostic> =
-        TypeScriptCompiler().compile(source.trimIndent(), fileName).diagnostics
-
     @Test
     fun `module interface property named arguments - no TS1100`() {
         // The exact types.ts shape (module file = auto strict).
-        val d = diags(
+        diagnose(
             """
             export interface CallExpression {
                 readonly arguments: number[];
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 1100 },
-            "an interface property named 'arguments' is a property NAME, not a binding name — no TS1100; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            directives = "",
+        ) should {
+            have(none { it.code == 1100 })
+        }
     }
 
     @Test
     fun `module interface optional property named arguments - no TS1100`() {
-        val d = diags(
+        diagnose(
             """
             export interface NewExpression {
                 readonly arguments?: number[];
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 1100 },
-            "an optional interface property named 'arguments' must not fire TS1100; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            directives = "",
+        ) should {
+            have(none { it.code == 1100 })
+        }
     }
 
     @Test
     fun `module interface property named eval - no TS1100`() {
-        val d = diags(
+        diagnose(
             """
             export interface I {
                 eval: string;
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 1100 },
-            "an interface property named 'eval' must not fire TS1100; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            directives = "",
+        ) should {
+            have(none { it.code == 1100 })
+        }
     }
 
     @Test
     fun `interface method named arguments - no TS1100`() {
         // A METHOD name is also exempt (only params are checked in the interface branch).
-        val d = diags(
+        diagnose(
             """
             export interface I {
                 arguments(): void;
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 1100 },
-            "an interface method named 'arguments' must not fire TS1100; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            directives = "",
+        ) should {
+            have(none { it.code == 1100 })
+        }
     }
 
     @Test
     fun `strict-mode var named arguments STILL fires TS1100 - negative control`() {
         // FP-safety boundary: a real binding name in strict code must still be flagged.
-        val d = diags(
+        diagnose(
             """
             "use strict";
             function f() {
@@ -122,11 +112,9 @@ class StrictModeInterfacePropertyTest {
                 var arguments = 1;
             }
             """,
-        )
-        assertTrue(
-            d.any { it.code == 1100 },
-            "a strict-mode `var arguments` binding name MUST still fire TS1100; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            directives = "",
+        ) should {
+            have(any { it.code == 1100 })
+        }
     }
 }

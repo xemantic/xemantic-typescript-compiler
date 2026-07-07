@@ -25,9 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 
 /**
  * Pins the round-409 (M3.4) invariant: a user type-guard / assert imported
@@ -280,10 +280,7 @@ class BarrelImportedGuardNarrowingTest {
                 """.trimIndent(),
             )
         )
-        assertTrue(
-            ts2345(result).any { it.contains("not assignable to parameter of type 'string'") },
-            "a non-guard call must NOT narrow — TS2345 must still fire: ${ts2345(result)}",
-        )
+        have(ts2345(result).any { it.contains("not assignable to parameter of type 'string'") })
     }
 
     @Test
@@ -304,9 +301,6 @@ class BarrelImportedGuardNarrowingTest {
                 """.trimIndent(),
             )
         )
-        assertTrue(
-            ts2345(result).any { it.contains("not assignable to parameter of type 'string'") },
-            "the call before the guard must still fire TS2345: ${ts2345(result)}",
-        )
+        have(ts2345(result).any { it.contains("not assignable to parameter of type 'string'") })
     }
 }

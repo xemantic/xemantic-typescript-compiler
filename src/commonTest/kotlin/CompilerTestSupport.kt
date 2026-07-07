@@ -25,36 +25,22 @@
 
 package com.xemantic.typescript.compiler
 
-import com.xemantic.kotlin.test.have
-import com.xemantic.kotlin.test.should
-import kotlin.test.Test
+import org.intellij.lang.annotations.Language
 
 /**
- * `Object.setPrototypeOf` is a standard ES2015 `ObjectConstructor` method that was missing from
- * the embedded lib (only `getPrototypeOf` was present), so tsc's own debug.ts calls to it
- * FP'd TS2551 "Property 'setPrototypeOf' does not exist on type 'ObjectConstructor'. Did you
- * mean 'getPrototypeOf'?" (5 self-compile FPs). Added to the embedded ObjectConstructor;
- * zero corpus baseline shifts.
+ * Compiles an inline TypeScript [source] snippet and returns its diagnostics.
+ *
+ * The snippet is [String.trimIndent]-ed and prefixed with [directives]
+ * (harness `// @option: value` lines); pass an empty string to compile
+ * without any directives. Shared declarations reused across a test class
+ * are interpolated or concatenated into [source] by the caller.
  */
-class ObjectSetPrototypeOfTest {
-
-    @Test
-    fun `Object_setPrototypeOf resolves - no TS2551 or TS2339`() {
-        diagnose(
-            """
-            const o = {};
-            Object.setPrototypeOf(o, null);
-            """,
-            directives = "",
-        ) should {
-            have(none { it.code == 2551 || it.code == 2339 })
-        }
-    }
-
-    @Test
-    fun `a genuinely missing ObjectConstructor member still errors (negative control)`() {
-        diagnose("Object.definitelyNotAMethod({});", directives = "") should {
-            have(any { it.code == 2339 || it.code == 2551 })
-        }
-    }
-}
+internal fun diagnose(
+    @Language("typescript") source: String,
+    directives: String = "// @strict: true",
+    fileName: String = "t.ts",
+): List<Diagnostic> =
+    TypeScriptCompiler().compile(
+        (if (directives.isEmpty()) "" else directives + "\n") + source.trimIndent(),
+        fileName,
+    ).diagnostics

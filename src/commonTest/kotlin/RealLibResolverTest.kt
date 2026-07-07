@@ -25,9 +25,10 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 
 /**
  * M2.1(b) (round 390): [RealLibResolver] expands lib names through the
@@ -41,81 +42,99 @@ class RealLibResolverTest {
 
     @Test
     fun `lib option expands the es2015 composite through its reference DAG in priority order`() {
-        val r = RealLibResolver.resolve(listOf("es2015"), ScriptTarget.ES5)
         // Exact tsc inclusion order: es5 (referenced by es2015) first, the composite
         // itself, its by-feature pieces in libEntries order, and es5's decorators
         // references LAST despite being discovered first via es5 — priority order,
         // not DFS order.
-        assertEquals(
-            listOf(
+        RealLibResolver.resolve(
+            listOf("es2015"), ScriptTarget.ES5
+        ) should {
+            have(orderedKeys == listOf(
                 "es5", "es2015",
                 "es2015.core", "es2015.collection", "es2015.generator", "es2015.iterable",
                 "es2015.promise", "es2015.proxy", "es2015.reflect", "es2015.symbol",
                 "es2015.symbol.wellknown",
                 "decorators", "decorators.legacy",
-            ),
-            r.orderedKeys,
-        )
-        assertEquals(emptyList(), r.unknownNames)
-        assertEquals(emptyList(), r.unavailable)
+            ))
+            have(unknownNames.isEmpty())
+            have(unavailable.isEmpty())
+        }
     }
 
     @Test
     fun `target default without lib option uses the full variant and skips unshipped DOM libs`() {
-        val r = RealLibResolver.resolve(null, ScriptTarget.ES5)
         // lib.d.ts (= es5.full) has priority 0 -> first; its DOM/host references are
         // not shipped -> recorded, not included.
-        assertEquals(listOf("es5.full", "es5", "decorators", "decorators.legacy"), r.orderedKeys)
-        assertEquals(
-            listOf("lib.dom.d.ts", "lib.webworker.importscripts.d.ts", "lib.scripthost.d.ts"),
-            r.unavailable,
-        )
-        assertEquals(emptyList(), r.unknownNames)
+        RealLibResolver.resolve(
+            null, ScriptTarget.ES5
+        ) should {
+            have(orderedKeys == listOf("es5.full", "es5", "decorators", "decorators.legacy"))
+            have(unavailable == listOf(
+                "lib.dom.d.ts", "lib.webworker.importscripts.d.ts", "lib.scripthost.d.ts",
+            ))
+            have(unknownNames.isEmpty())
+        }
     }
 
     @Test
     fun `es2015 target default keeps tsc's lib es6 back-compat name at priority zero`() {
-        assertEquals("lib.es6.d.ts", RealLibResolver.defaultLibFileName(ScriptTarget.ES2015))
-        val r = RealLibResolver.resolve(null, ScriptTarget.ES2015)
+        assert(RealLibResolver.defaultLibFileName(ScriptTarget.ES2015) == "lib.es6.d.ts")
         // lib.es6.d.ts maps to the es2015.full source and sorts FIRST (priority 0).
-        assertEquals("es2015.full", r.orderedKeys.first())
-        assertTrue("es5" in r.orderedKeys && "es2015.symbol.wellknown" in r.orderedKeys)
+        RealLibResolver.resolve(
+            null, ScriptTarget.ES2015
+        ) should {
+            have(orderedKeys.first() == "es2015.full")
+            have("es5" in orderedKeys)
+            have("es2015.symbol.wellknown" in orderedKeys)
+        }
     }
 
     @Test
     fun `aliases and case-insensitivity resolve through libMap like tsc`() {
         // "ES6" (case-insensitive alias) -> lib.es2015.d.ts — identical to "es2015".
-        val alias = RealLibResolver.resolve(listOf("ES6"), ScriptTarget.ES5)
         val canonical = RealLibResolver.resolve(listOf("es2015"), ScriptTarget.ES5)
-        assertEquals(canonical.orderedKeys, alias.orderedKeys)
+        RealLibResolver.resolve(
+            listOf("ES6"), ScriptTarget.ES5
+        ) should {
+            have(orderedKeys == canonical.orderedKeys)
+        }
         // The back-compat fallbacks remap to their real homes — and the target's OWN
         // reference directives still expand (es2020.bigint -> es2020.intl -> es2018.intl).
-        val bigint = RealLibResolver.resolve(listOf("esnext.bigint"), ScriptTarget.ES5)
-        assertEquals(listOf("es2018.intl", "es2020.bigint", "es2020.intl"), bigint.orderedKeys)
+        RealLibResolver.resolve(
+            listOf("esnext.bigint"), ScriptTarget.ES5
+        ) should {
+            have(orderedKeys == listOf("es2018.intl", "es2020.bigint", "es2020.intl"))
+        }
     }
 
     @Test
     fun `unknown lib names are reported not silently dropped`() {
-        val r = RealLibResolver.resolve(listOf("es2015.core", "nope.not.a.lib"), ScriptTarget.ES5)
-        assertEquals(listOf("nope.not.a.lib"), r.unknownNames)
-        assertEquals(listOf("es2015.core"), r.orderedKeys)
+        RealLibResolver.resolve(
+            listOf("es2015.core", "nope.not.a.lib"), ScriptTarget.ES5
+        ) should {
+            have(unknownNames == listOf("nope.not.a.lib"))
+            have(orderedKeys == listOf("es2015.core"))
+        }
     }
 
     @Test
     fun `es2020 default closure is transitively complete and deduped`() {
-        val r = RealLibResolver.resolve(listOf("es2020"), ScriptTarget.ES5)
-        // Transitive: es2020 -> es2019 -> es2018 -> ... -> es5; every layer's pieces present.
-        for (key in listOf(
-            "es5", "es2015", "es2016", "es2017", "es2018", "es2019", "es2020",
-            "es2015.iterable", "es2016.array.include", "es2017.string",
-            "es2018.asyncgenerator", "es2019.array", "es2020.bigint", "es2020.intl",
-        )) assertTrue(key in r.orderedKeys, "missing '$key'")
-        // Deduped: es2015.symbol is referenced by iterable + symbol.wellknown + es2015.
-        assertEquals(r.orderedKeys.size, r.orderedKeys.distinct().size)
-        // Ordered: every composite before its own dotted pieces, layers ascending.
-        assertTrue(r.orderedKeys.indexOf("es5") < r.orderedKeys.indexOf("es2015"))
-        assertTrue(r.orderedKeys.indexOf("es2015") < r.orderedKeys.indexOf("es2015.core"))
-        assertTrue(r.orderedKeys.indexOf("es2015.symbol.wellknown") < r.orderedKeys.indexOf("es2016.array.include"))
-        assertTrue(r.orderedKeys.last() == "decorators.legacy")
+        RealLibResolver.resolve(
+            listOf("es2020"), ScriptTarget.ES5
+        ) should {
+            // Transitive: es2020 -> es2019 -> es2018 -> ... -> es5; every layer's pieces present.
+            for (key in listOf(
+                "es5", "es2015", "es2016", "es2017", "es2018", "es2019", "es2020",
+                "es2015.iterable", "es2016.array.include", "es2017.string",
+                "es2018.asyncgenerator", "es2019.array", "es2020.bigint", "es2020.intl",
+            )) have(key in orderedKeys)
+            // Deduped: es2015.symbol is referenced by iterable + symbol.wellknown + es2015.
+            have(orderedKeys.size == orderedKeys.distinct().size)
+            // Ordered: every composite before its own dotted pieces, layers ascending.
+            have(orderedKeys.indexOf("es5") < orderedKeys.indexOf("es2015"))
+            have(orderedKeys.indexOf("es2015") < orderedKeys.indexOf("es2015.core"))
+            have(orderedKeys.indexOf("es2015.symbol.wellknown") < orderedKeys.indexOf("es2016.array.include"))
+            have(orderedKeys.last() == "decorators.legacy")
+        }
     }
 }

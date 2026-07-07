@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * Round 424 — an assignment that targets the walked reference RESETS the flow
@@ -57,15 +58,10 @@ class AssignmentOverwriteResetNarrowingTest {
         declare function loadFromImports(name: string): SearchResult<Resolved>;
     """
 
-    private fun diags(body: String): List<Diagnostic> =
-        TypeScriptCompiler().compile(
-            "// @strict: true\n" + (prelude + body).trimIndent(), "t.ts",
-        ).diagnostics
-
     @Test
     fun shadowingRedeclarationAfterFalsyGuardDoesNotCollapseToNever() {
-        val d = diags(
-            """
+        diagnose(
+            prelude + """
             export function f(name: string, features: number) {
                 const resolved = tryLoad(name);
                 if (resolved) {
@@ -80,12 +76,9 @@ class AssignmentOverwriteResetNarrowingTest {
                 return undefined;
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2339 },
-            "a shadowing redeclaration must reset the walk to ITS OWN declared type; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 2339 })
+        }
     }
 
     @Test
@@ -96,8 +89,8 @@ class AssignmentOverwriteResetNarrowingTest {
         // keep `undefined` and the truthy guard would collapse to `never`).
         // Deliberately NOT the reader's flat-map declared type: that injects
         // an outer shadowed binding's type (3 measured new FPs).
-        val d = diags(
-            """
+        diagnose(
+            prelude + """
             export function g(name: string) {
                 let r = tryLoad(name);
                 if (!r) {
@@ -109,20 +102,17 @@ class AssignmentOverwriteResetNarrowingTest {
                 return undefined;
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2339 },
-            "reassignment must reset stale narrowing before the truthy guard; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 2339 })
+        }
     }
 
     @Test
     fun genuineMissingMemberOnUnionStillFires() {
         // Negative control: the overwrite reset must not suppress a genuine
         // missing-member TS2339 on the declaration's own (union) type.
-        val d = diags(
-            """
+        diagnose(
+            prelude + """
             interface Failed { reason: string; }
             declare function loadOther(name: string): Resolved | Failed;
             export function k(name: string) {
@@ -130,11 +120,8 @@ class AssignmentOverwriteResetNarrowingTest {
                 return resolved.path;
             }
             """,
-        )
-        assertTrue(
-            d.any { it.code == 2339 && it.message.contains("path") },
-            "a genuinely-missing union member property must keep TS2339; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(any { it.code == 2339 && it.message.contains("path") })
+        }
     }
 }

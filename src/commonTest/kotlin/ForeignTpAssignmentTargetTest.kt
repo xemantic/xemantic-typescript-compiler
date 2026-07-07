@@ -21,8 +21,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * Round 435f: an assignment TARGET whose type contains a FOREIGN type parameter
@@ -37,14 +38,11 @@ import kotlin.test.assertTrue
  */
 class ForeignTpAssignmentTargetTest {
 
-    private fun ts2322s(source: String) =
-        TypeScriptCompiler().compile("// @strict: true\n" + source, "t.ts")
-            .diagnostics.filter { it.code == 2322 }
-
-    /** The visitor shape: reassigning a local typed by an un-inferred generic
-     *  call return draws nothing. */
-    @Test fun reassignmentAgainstUnInferredGenericReturnIsLegal() {
-        val diags = ts2322s(
+    @Test
+    fun `reassignment against an un-inferred generic call return is legal`() {
+        // The visitor shape: reassigning a local typed by an un-inferred generic
+        // call return draws nothing.
+        diagnose(
             """
             interface Node2 { kind: number; }
             interface Expression2 extends Node2 { _e: any; }
@@ -57,22 +55,24 @@ class ForeignTpAssignmentTargetTest {
                 expression = makeExpr();
                 return expression;
             }
-            """.trimIndent()
-        )
-        assertTrue(diags.isEmpty(), "expected no TS2322, got: $diags")
+            """
+        ) should {
+            have(none { it.code == 2322 })
+        }
     }
 
-    /** NEGATIVE control: a CONCRETE-typed target still checks. */
-    @Test fun concreteTargetStillFires() {
-        val diags = ts2322s(
+    @Test
+    fun `negative control - a concrete-typed target still checks`() {
+        diagnose(
             """
             function f() {
                 let s: string;
                 s = 42;
                 return s;
             }
-            """.trimIndent()
-        )
-        assertTrue(diags.isNotEmpty(), "expected TS2322 for number -> string")
+            """
+        ) should {
+            have(any { it.code == 2322 })
+        }
     }
 }

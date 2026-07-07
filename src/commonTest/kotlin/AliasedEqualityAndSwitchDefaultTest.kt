@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * M3.4 (round 425): two symmetric discriminant-narrowing extensions —
@@ -41,9 +42,6 @@ import kotlin.test.assertTrue
  */
 class AliasedEqualityAndSwitchDefaultTest {
 
-    private fun diags(source: String): List<Diagnostic> =
-        TypeScriptCompiler().compile("// @strict: true\n" + source.trimIndent(), "t.ts").diagnostics
-
     private val optShape = """
         interface OptBase { name: string; }
         interface CustomOpt extends OptBase { type: Map<string, string | number>; deprecatedKeys?: Set<string>; }
@@ -55,7 +53,7 @@ class AliasedEqualityAndSwitchDefaultTest {
 
     @Test
     fun `aliased equality discriminant narrows the receiver`() {
-        val d = diags(
+        diagnose(
             optShape + """
 
             declare function convertOne(opt: OptBase): number;
@@ -67,13 +65,14 @@ class AliasedEqualityAndSwitchDefaultTest {
                 return 0;
             }
             """
-        )
-        assertTrue(d.none { it.code == 2339 }, "aliased === discriminant must narrow opt, got: $d")
+        ) should {
+            have(none { it.code == 2339 })
+        }
     }
 
     @Test
     fun `reassigned receiver between alias and comparison withholds the narrowing`() {
-        val d = diags(
+        diagnose(
             optShape + """
 
             declare function other(): Opt;
@@ -86,16 +85,14 @@ class AliasedEqualityAndSwitchDefaultTest {
                 return 0;
             }
             """
-        )
-        assertTrue(
-            d.any { it.code == 2339 && it.message.contains("'element'") },
-            "a reassigned receiver must not narrow through the stale alias, got: $d"
-        )
+        ) should {
+            have(any { it.code == 2339 && it.message.contains("'element'") })
+        }
     }
 
     @Test
     fun `switch default narrows negatively by all case literals`() {
-        val d = diags(
+        diagnose(
             optShape + """
 
             export function getPossibleValues(option: Opt): string {
@@ -118,16 +115,14 @@ class AliasedEqualityAndSwitchDefaultTest {
                 }
             }
             """
-        )
-        assertTrue(
-            d.none { it.code == 2339 },
-            "the default clause must exclude every literal-typed member, got: $d"
-        )
+        ) should {
+            have(none { it.code == 2339 })
+        }
     }
 
     @Test
     fun `switch default keeps a wide non-literal member`() {
-        val d = diags(
+        diagnose(
             """
             declare function takes(s: string): number;
             export function neg(x: "a" | string): number {
@@ -137,10 +132,8 @@ class AliasedEqualityAndSwitchDefaultTest {
                 }
             }
             """
-        )
-        assertTrue(
-            d.none { it.code == 2345 },
-            "a wide string member must survive the default clause, got: $d"
-        )
+        ) should {
+            have(none { it.code == 2345 })
+        }
     }
 }

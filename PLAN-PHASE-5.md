@@ -39,6 +39,32 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
+**Round 437 (2026-07-07) — test-convention sweep (branch `test-refactoring`, merged with
+main; numbered 437 at merge per the parallel-branch renumbering convention above — the
+branch ran in PARALLEL with main's rounds 435–436): all hand-written tests now use the
+shared `diagnose()` helper (CompilerTestSupport.kt) + the `should`/`have` idiom. Suite
+9,444 / 0 failing / 3 skipped unchanged, 0 regressions; no compiler behavior change.**
+- The sweep (~99 test files, landed on the branch as 6 refactor commits): per-file
+  `TypeScriptCompiler().compile(...)` helpers → the shared
+  `diagnose(source, directives = "// @strict: true", fileName = "t.ts")` (trimIndents the
+  source, prepends the directives line); `assertTrue(d.isEmpty()/isNotEmpty(), msg)` →
+  `diagnose(...) should { have(none/any { it.code == NNNN }) }`; buildString source
+  builders → multiline templates; class-shared TS preludes hoisted to a trimIndented
+  `private val` concatenated by the caller (`diagnose(prelude + """…""")`); test names
+  converted to backtick sentences; RealLibResolverTest onto `should`/`have` receiver blocks.
+- At merge, the 14 round-435/436 test files that landed on main in parallel
+  (CallbackReturnTpParam, DestructuredLocalShadowing, ExplicitTypeArgOverloadSelection,
+  ForeignTpAssignmentTarget, FreshObjLitLiteralProp, GeneratorReturnTReturn,
+  GenericContainerCovariance, ImplicitAnyCtxSources, LiteralArgVsTpConstraint,
+  LiteralReturnVsLiteralUnion, NullishAliasUnionReturn, OverloadOptionalUnionArg,
+  SwitchCaseBareStringNarrowing, TernaryGuardedReturnArm) were converted to the same
+  conventions — class-level KDocs (round provenance) kept byte-identical.
+- Two compiler warnings introduced by the round-436 merge fixed (Checker.kt:21185
+  redundant `!!`, Main.kt:97 redundant `?.`) — the warning-clean invariant holds.
+- CLAUDE.md: testing-conventions entry added under "Test assertion gotchas" so future
+  agents write new local tests in the new style (main's rounds 435/436 tests were
+  written old-style in parallel — exactly the drift the entry prevents).
+
 **Round 436 (2026-07-07) — M3.1/M3.2/M3.4 burn-down, SEVEN more bounded fixes: compiler
 profile 373 → 294 (−79, −21.2%; TS2322 184 → 158, TS2345 79 → 47, TS2769 30 → 9) + the
 round-436 full-dashboard baseline at the round-435 end state. Suite 9,419 → 9,444

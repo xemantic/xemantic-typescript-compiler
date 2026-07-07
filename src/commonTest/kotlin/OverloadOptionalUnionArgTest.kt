@@ -21,8 +21,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * Round 436e: the OVERLOAD arg-check helpers mirror two single-sig rules —
@@ -34,13 +35,10 @@ import kotlin.test.assertTrue
  */
 class OverloadOptionalUnionArgTest {
 
-    private fun ts2769s(source: String) =
-        TypeScriptCompiler().compile("// @strict: true\n" + source, "t.ts")
-            .diagnostics.filter { it.code == 2769 || it.code == 2345 }
-
-    /** The program.ts shape: union receiver, optional params, union args. */
-    @Test fun optionalParamUnionArgAcrossUnionReceiverOverloads() {
-        val d = ts2769s(
+    @Test
+    fun `optional param accepts a union arg across union-receiver overloads`() {
+        // The program.ts shape: union receiver, optional params, union args.
+        diagnose(
             """
             interface CancellationToken2 { throwIfCancellationRequested(): void }
             interface Diagnostic2 { code: number }
@@ -63,15 +61,17 @@ class OverloadOptionalUnionArgTest {
                 const r = program.emitBuildInfo(writeFile, cancellationToken);
                 return [a, r];
             }
-            """.trimIndent()
-        )
-        assertTrue(d.isEmpty(), "expected no TS2769/TS2345, got: $d")
+            """
+        ) should {
+            have(none { it.code == 2769 || it.code == 2345 })
+        }
     }
 
-    /** NEGATIVE control: a union arg whose NON-undefined member also fails
-     *  still reports across overloads. */
-    @Test fun failingNonUndefinedUnionMemberStillReports() {
-        val d = ts2769s(
+    @Test
+    fun `negative control - a union arg whose non-undefined member also fails still reports`() {
+        // 'string | undefined' vs the optional CancellationToken2 param must
+        // still report across the union-receiver overloads.
+        diagnose(
             """
             interface CancellationToken2 { throwIfCancellationRequested(): void }
             interface Program2 {
@@ -84,9 +84,9 @@ class OverloadOptionalUnionArgTest {
             declare const program: Program2 | BuilderProgram2;
             declare const bogus: string | undefined;
             program.getOptionsDiagnostics(bogus);
-            """.trimIndent()
-        )
-        assertTrue(d.isNotEmpty(),
-            "expected an error for 'string | undefined' vs optional CancellationToken2 param, got none")
+            """
+        ) should {
+            have(any { it.code == 2769 || it.code == 2345 })
+        }
     }
 }

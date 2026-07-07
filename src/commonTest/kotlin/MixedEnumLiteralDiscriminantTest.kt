@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * Round 422 (M3.4): a discriminated union MIXING string-enum-member discriminants with a
@@ -40,9 +41,6 @@ import kotlin.test.assertTrue
  */
 class MixedEnumLiteralDiscriminantTest {
 
-    private fun diags(source: String): List<Diagnostic> =
-        TypeScriptCompiler().compile("// @strict: true\n" + source.trimIndent(), "t.ts").diagnostics
-
     private val decls = """
         export const enum PrivateIdentifierKind { Field = "f", Method = "m", Accessor = "a" }
         interface AccessorInfo { kind: PrivateIdentifierKind.Accessor; brandCheckIdentifier: string; getterName?: string; }
@@ -54,7 +52,7 @@ class MixedEnumLiteralDiscriminantTest {
 
     @Test
     fun `enum-member switch cases drop the string-literal member`() {
-        val d = diags(
+        diagnose(
             """
             $decls
             export function helper(info: PrivateIdentifierInfo): string | undefined {
@@ -72,17 +70,14 @@ class MixedEnumLiteralDiscriminantTest {
                 }
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2339 },
-            "each enum-member case must narrow out the `kind: \"untransformed\"` member; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 2339 })
+        }
     }
 
     @Test
     fun `equality guard on an enum member drops the string-literal member`() {
-        val d = diags(
+        diagnose(
             """
             $decls
             export function f(info: PrivateIdentifierInfo): string | undefined {
@@ -92,17 +87,14 @@ class MixedEnumLiteralDiscriminantTest {
                 return undefined;
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2339 },
-            "`info.kind === Kind.Accessor` must narrow out the literal-typed member; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 2339 })
+        }
     }
 
     @Test
     fun `wrong-variant property access still fires`() {
-        val d = diags(
+        diagnose(
             """
             $decls
             export function bad(info: PrivateIdentifierInfo): string | undefined {
@@ -114,17 +106,14 @@ class MixedEnumLiteralDiscriminantTest {
                 }
             }
             """,
-        )
-        assertTrue(
-            d.any { it.code == 2339 && "getterName" in it.message },
-            "accessing an Accessor-only property in the Method case must keep firing TS2339; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(any { it.code == 2339 && "getterName" in it.message })
+        }
     }
 
     @Test
     fun `pure string-literal discriminated union still narrows via the literal path`() {
-        val d = diags(
+        diagnose(
             """
             interface A { kind: "a"; onlyA: string; }
             interface B { kind: "b"; onlyB: string; }
@@ -135,12 +124,9 @@ class MixedEnumLiteralDiscriminantTest {
                 }
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2339 },
-            "pure-literal discriminant switches must keep narrowing; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 2339 })
+        }
     }
 
     @Test
@@ -148,7 +134,7 @@ class MixedEnumLiteralDiscriminantTest {
         // A NUMERIC enum member and a same-valued numeric literal ARE comparable in tsc,
         // so the literal member must NOT be dropped from the enum-member case — tsc keeps
         // it too, and both report TS2339 for a property only on the enum-annotated variant.
-        val d = diags(
+        diagnose(
             """
             export const enum NumKind { A = 1, B = 2 }
             interface EnumVariant { kind: NumKind.A; onlyEnum: string; }
@@ -163,12 +149,8 @@ class MixedEnumLiteralDiscriminantTest {
                 }
             }
             """,
-        )
-        assertTrue(
-            d.any { it.code == 2339 && "onlyEnum" in it.message },
-            "the `kind: 1` member must be conservatively KEPT (numeric enums are " +
-                "number-comparable), so `x.onlyEnum` stays an error exactly as in tsc; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(any { it.code == 2339 && "onlyEnum" in it.message })
+        }
     }
 }

@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * M2.2 (round 391): under `useRealLibs` the default library is SPLIT across many files
@@ -50,62 +51,51 @@ class RealLibsTs2728FileTest {
     fun `TS2728 for a non-es5 lib member points at its real lib file, masked`() {
         // `includes` lives in a post-es5 lib layer (es2016.array.include). Before the fix
         // the position fell through to the FIRST lib file (es5) or a user-file false-match.
-        val rel = related(
+        related(
             """
             // @useRealLibs: true
             // @lib: es2016
             // @target: es2016
             const b = [1, 2, 3].includess(2);
             """.trimIndent(),
-        )
-        assertTrue(rel.isNotEmpty(), "expected a TS2728 'declared here' related info")
-        assertTrue(
-            rel.any {
-                val f = it.fileName ?: ""
-                f.startsWith("lib.") && f.endsWith(".d.ts") &&
-                    f != "lib.es5.d.ts" && it.line == null && it.character == null
-            },
-            "a post-es5 lib member must be attributed to its OWN lib file (not es5, masked), got: " +
-                rel.joinToString { "${it.fileName}:${it.line}:${it.character}" },
-        )
+        ) should {
+            have(isNotEmpty())
+            have(
+                any {
+                    val f = it.fileName ?: ""
+                    f.startsWith("lib.") && f.endsWith(".d.ts") &&
+                        f != "lib.es5.d.ts" && it.line == null && it.character == null
+                },
+            )
+        }
     }
 
     @Test
     fun `TS2728 for an es5 lib member points at lib_es5_d_ts, not the user file`() {
-        val rel = related(
+        related(
             """
             // @useRealLibs: true
             Object.getOwnPropertyNamess(null);
             """.trimIndent(),
-        )
-        assertTrue(
-            rel.any { it.fileName == "lib.es5.d.ts" && it.line == null },
-            "an es5 lib member must render lib.es5.d.ts:--:--, got: " +
-                rel.joinToString { "${it.fileName}:${it.line}:${it.character}" },
-        )
-        assertTrue(
-            rel.none { it.fileName == "t.ts" },
-            "a lib member must never be attributed to the user file, got: " +
-                rel.joinToString { "${it.fileName}:${it.line}:${it.character}" },
-        )
+        ) should {
+            have(any { it.fileName == "lib.es5.d.ts" && it.line == null }, "an es5 lib member must render lib.es5.d.ts:--:--")
+            have(none { it.fileName == "t.ts" })
+        }
     }
 
     @Test
     fun `TS2728 for a user member still points at the user file with a real position`() {
         // Control: the node->file map is lib-only, so a USER member is unaffected.
-        val rel = related(
+        related(
             """
             // @useRealLibs: true
             interface Foo { bar: number; }
             declare const f: Foo;
             f.barr;
             """.trimIndent(),
-        )
-        assertTrue(
-            rel.any { it.fileName == "t.ts" && it.line != null },
-            "a user member must be attributed to the user file with a real position, got: " +
-                rel.joinToString { "${it.fileName}:${it.line}:${it.character}" },
-        )
+        ) should {
+            have(any { it.fileName == "t.ts" && it.line != null })
+        }
     }
 
     @Test
@@ -140,19 +130,13 @@ class RealLibsTs2728FileTest {
             """.trimIndent(),
             "index.ts",
         ).diagnostics
-        val ts2551 = diags.firstOrNull { it.code == 2551 && it.message.contains("toFixed") }
-        assertTrue(ts2551 != null, "expected TS2551 for a.toFixed(); got: " +
-            diags.joinToString { "TS${it.code}" })
-        val rel = ts2551.relatedInformation.filter { it.code == 2728 }
-        assertTrue(
-            rel.any { it.fileName == "lib.es2015.core.d.ts" && it.line == null && it.character == null },
-            "the 'fixed' TS2728 must be masked to lib.es2015.core.d.ts:--:--, got: " +
-                rel.joinToString { "${it.fileName}:${it.line}:${it.character}" },
-        )
-        assertTrue(
-            rel.none { (it.fileName ?: "").endsWith("index.ts") },
-            "the TS2728 must NOT be attributed to the user file /index.ts, got: " +
-                rel.joinToString { "${it.fileName}:${it.line}:${it.character}" },
-        )
+        diags.firstOrNull { it.code == 2551 && it.message.contains("toFixed") } should {
+            val rel = relatedInformation.filter { it.code == 2728 }
+            have(
+                rel.any { it.fileName == "lib.es2015.core.d.ts" && it.line == null && it.character == null },
+                "the 'fixed' TS2728 must be masked to lib.es2015.core.d.ts:--:--",
+            )
+            have(rel.none { (it.fileName ?: "").endsWith("index.ts") })
+        }
     }
 }

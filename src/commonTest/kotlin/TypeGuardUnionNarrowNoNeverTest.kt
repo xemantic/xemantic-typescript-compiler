@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * M3.4 (self-compile burn-down): a user type-guard `x is C` narrowing a union whose members are
@@ -39,12 +40,9 @@ import kotlin.test.assertTrue
  */
 class TypeGuardUnionNarrowNoNeverTest {
 
-    private fun diags(source: String): List<Diagnostic> =
-        TypeScriptCompiler().compile("// @strict: true\n" + source.trimIndent(), "t.ts").diagnostics
-
     @Test
     fun `guard target is a subtype of a union member - narrows down, not never`() {
-        val d = diags(
+        diagnose(
             """
             interface Node { kind: number; }
             interface Expression extends Node { _expressionBrand: any; }
@@ -59,18 +57,15 @@ class TypeGuardUnionNarrowNoNeverTest {
                 return "";
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2339 },
-            "the guard must narrow `node` to TaggedTemplate (not never) so `node.template` " +
-                "resolves; got: " + d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 2339 })
+        }
     }
 
     @Test
     fun `deep multi-level chain - narrows down through inheritance`() {
         // Mirrors the real depth: TaggedTemplateExpression is ~6 interfaces below Expression.
-        val d = diags(
+        diagnose(
             """
             interface Node { kind: number; }
             interface Expression extends Node { _e: any; }
@@ -88,14 +83,15 @@ class TypeGuardUnionNarrowNoNeverTest {
                 return "";
             }
             """,
-        )
-        assertTrue(d.none { it.code == 2339 }, "got: " + d.joinToString { "TS${it.code}: ${it.message}" })
+        ) should {
+            have(none { it.code == 2339 })
+        }
     }
 
     @Test
     fun `member already a subtype is kept as-is`() {
         // `A | B` narrowed by `is A` keeps A (m <: c), drops B — a property on A resolves.
-        val d = diags(
+        diagnose(
             """
             interface Base { k: number; }
             interface A extends Base { a: string; }
@@ -106,15 +102,16 @@ class TypeGuardUnionNarrowNoNeverTest {
                 return "";
             }
             """,
-        )
-        assertTrue(d.none { it.code == 2339 }, "got: " + d.joinToString { "TS${it.code}: ${it.message}" })
+        ) should {
+            have(none { it.code == 2339 })
+        }
     }
 
     @Test
     fun `unrelated guard target still narrows to nothing usable - negative control`() {
         // If the guard target is unrelated to every member, the narrowed value is never and a
         // member access on it is still an error (tsc behaves the same).
-        val d = diags(
+        diagnose(
             """
             interface A { a: string; }
             interface B { b: number; }
@@ -124,11 +121,8 @@ class TypeGuardUnionNarrowNoNeverTest {
                 if (isC(x)) { const q = x.nonexistent; }
             }
             """,
-        )
-        assertTrue(
-            d.any { it.code == 2339 },
-            "a genuinely-absent property in the narrowed branch must still fire TS2339; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(any { it.code == 2339 })
+        }
     }
 }

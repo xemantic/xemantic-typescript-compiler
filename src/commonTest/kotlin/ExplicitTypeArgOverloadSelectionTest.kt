@@ -21,8 +21,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * Round 436d: an explicit-type-arg call against MULTIPLE arity-accommodating
@@ -36,10 +37,6 @@ import kotlin.test.assertTrue
  */
 class ExplicitTypeArgOverloadSelectionTest {
 
-    private fun diags(source: String) =
-        TypeScriptCompiler().compile("// @strict: true\n" + source, "t.ts")
-            .diagnostics.filter { it.code == 2345 || it.code == 2769 }
-
     private val prelude = """
         interface Node2 { kind: number }
         interface Identifier2 extends Node2 { text: string }
@@ -47,84 +44,89 @@ class ExplicitTypeArgOverloadSelectionTest {
         declare const Diagnostics: { Identifier_expected: DiagnosticMessage };
     """.trimIndent()
 
-    @Test fun laterMatchingOverloadIsSelected() {
-        val d = diags(
-            prelude + "\n" +
-                """
-                namespace Parser {
-                    function createMissingNode<T extends Node2>(kind: T["kind"], reportAtCurrentPosition: false, diagnosticMessage?: DiagnosticMessage): T;
-                    function createMissingNode<T extends Node2>(kind: T["kind"], reportAtCurrentPosition: boolean, diagnosticMessage: DiagnosticMessage): T;
-                    function createMissingNode<T extends Node2>(kind: T["kind"], reportAtCurrentPosition: boolean, diagnosticMessage?: DiagnosticMessage): T {
-                        return { kind } as T;
-                    }
-                    export function parse(): Identifier2 {
-                        return createMissingNode<Identifier2>(1, /*rACP*/ true, Diagnostics.Identifier_expected);
-                    }
+    @Test
+    fun `later matching overload is selected`() {
+        diagnose(
+            prelude + """
+
+            namespace Parser {
+                function createMissingNode<T extends Node2>(kind: T["kind"], reportAtCurrentPosition: false, diagnosticMessage?: DiagnosticMessage): T;
+                function createMissingNode<T extends Node2>(kind: T["kind"], reportAtCurrentPosition: boolean, diagnosticMessage: DiagnosticMessage): T;
+                function createMissingNode<T extends Node2>(kind: T["kind"], reportAtCurrentPosition: boolean, diagnosticMessage?: DiagnosticMessage): T {
+                    return { kind } as T;
                 }
-                """.trimIndent()
-        )
-        assertTrue(d.isEmpty(), "expected no TS2345/TS2769, got: $d")
+                export function parse(): Identifier2 {
+                    return createMissingNode<Identifier2>(1, /*rACP*/ true, Diagnostics.Identifier_expected);
+                }
+            }
+            """
+        ) should {
+            have(none { it.code == 2345 || it.code == 2769 })
+        }
     }
 
-    /** The FIRST overload still serves when its args match (literal false). */
-    @Test fun firstOverloadStillSelectedWhenMatching() {
-        val d = diags(
-            prelude + "\n" +
-                """
-                namespace Parser {
-                    function createMissingNode<T extends Node2>(kind: T["kind"], reportAtCurrentPosition: false, diagnosticMessage?: DiagnosticMessage): T;
-                    function createMissingNode<T extends Node2>(kind: T["kind"], reportAtCurrentPosition: boolean, diagnosticMessage: DiagnosticMessage): T;
-                    function createMissingNode<T extends Node2>(kind: T["kind"], reportAtCurrentPosition: boolean, diagnosticMessage?: DiagnosticMessage): T {
-                        return { kind } as T;
-                    }
-                    export function parse(): Identifier2 {
-                        return createMissingNode<Identifier2>(1, /*rACP*/ false);
-                    }
+    @Test
+    fun `first overload still serves when its args match`() {
+        // literal false matches the first overload's pinned `false` param
+        diagnose(
+            prelude + """
+
+            namespace Parser {
+                function createMissingNode<T extends Node2>(kind: T["kind"], reportAtCurrentPosition: false, diagnosticMessage?: DiagnosticMessage): T;
+                function createMissingNode<T extends Node2>(kind: T["kind"], reportAtCurrentPosition: boolean, diagnosticMessage: DiagnosticMessage): T;
+                function createMissingNode<T extends Node2>(kind: T["kind"], reportAtCurrentPosition: boolean, diagnosticMessage?: DiagnosticMessage): T {
+                    return { kind } as T;
                 }
-                """.trimIndent()
-        )
-        assertTrue(d.isEmpty(), "expected no TS2345/TS2769, got: $d")
+                export function parse(): Identifier2 {
+                    return createMissingNode<Identifier2>(1, /*rACP*/ false);
+                }
+            }
+            """
+        ) should {
+            have(none { it.code == 2345 || it.code == 2769 })
+        }
     }
 
-    /** Applicability filters by TYPE-ARG CONSTRAINT first (tsc): `foo1<Date>("")`
-     *  disqualifies the `T extends Number` overload, so the arg failure reports
-     *  TS2345 'string' ≁ 'Date' against the `T extends Date` one — NOT a TS2344
-     *  against the Number constraint (typeArgumentConstraintResolution1's pin,
-     *  which the unfiltered first cut broke). */
-    @Test fun constraintFilteredCandidateReportsArgError() {
-        val all = TypeScriptCompiler().compile(
+    @Test
+    fun `constraint-filtered candidate reports the arg error not TS2344`() {
+        // Applicability filters by TYPE-ARG CONSTRAINT first (tsc): `foo1<Date>("")`
+        // disqualifies the `T extends Number` overload, so the arg failure reports
+        // TS2345 'string' ≁ 'Date' against the `T extends Date` one — NOT a TS2344
+        // against the Number constraint (typeArgumentConstraintResolution1's pin,
+        // which the unfiltered first cut broke).
+        diagnose(
             """
             function foo1<T extends Date>(test: T);
             function foo1<T extends Number>(test: string);
             function foo1<T extends String>(test: any) { }
             foo1<Date>("");
-            """.trimIndent(),
-            "t.ts",
-        ).diagnostics
-        assertTrue(all.any { it.code == 2345 && "'Date'" in it.message },
-            "expected TS2345 'string' vs 'Date', got: $all")
-        assertTrue(all.none { it.code == 2344 },
-            "expected NO TS2344 (constraint-failing overload is not applicable), got: $all")
+            """,
+            directives = "",
+        ) should {
+            have(any { it.code == 2345 && "'Date'" in it.message })
+            have(none { it.code == 2344 })
+        }
     }
 
-    /** NEGATIVE control: args matching NO overload still report (against the
-     *  first candidate, the pre-existing error-reporting target). */
-    @Test fun noMatchingOverloadStillReports() {
-        val d = diags(
-            prelude + "\n" +
-                """
-                namespace Parser {
-                    function pick<T extends Node2>(kind: T["kind"], flag: false): T;
-                    function pick<T extends Node2>(kind: T["kind"], flag: true): T;
-                    function pick<T extends Node2>(kind: T["kind"], flag: boolean): T {
-                        return { kind } as T;
-                    }
-                    export function parse(): Identifier2 {
-                        return pick<Identifier2>(1, "nope");
-                    }
+    @Test
+    fun `negative control - args matching no overload still report`() {
+        // reports against the first candidate, the pre-existing error-reporting target
+        diagnose(
+            prelude + """
+
+            namespace Parser {
+                function pick<T extends Node2>(kind: T["kind"], flag: false): T;
+                function pick<T extends Node2>(kind: T["kind"], flag: true): T;
+                function pick<T extends Node2>(kind: T["kind"], flag: boolean): T {
+                    return { kind } as T;
                 }
-                """.trimIndent()
-        )
-        assertTrue(d.isNotEmpty(), "expected a TS2345 against the first overload, got none")
+                export function parse(): Identifier2 {
+                    return pick<Identifier2>(1, "nope");
+                }
+            }
+            """
+        ) should {
+            have(any { it.code == 2345 || it.code == 2769 })
+        }
     }
 }

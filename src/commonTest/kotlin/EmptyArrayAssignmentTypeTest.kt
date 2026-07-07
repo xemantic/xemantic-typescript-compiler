@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * Round 408: a fresh EMPTY array literal assigned to an array target is
@@ -47,8 +48,9 @@ class EmptyArrayAssignmentTypeTest {
         TypeScriptCompiler().compile(source, name).diagnostics
 
     private fun assertNo2349(source: String) {
-        val hits = diagnosticsOf(source).filter { it.code == 2349 }
-        assertTrue(hits.isEmpty(), "expected no TS2349, got: " + hits.joinToString { it.message })
+        diagnosticsOf(source) should {
+            have(none { it.code == 2349 })
+        }
     }
 
     /** `(x || (x = [])).push(v)` — the `||` default-init idiom. */
@@ -104,11 +106,8 @@ class EmptyArrayAssignmentTypeTest {
             }
             """.trimIndent() + "\n",
         ).filter { it.code == 2322 }.joinToString { it.message }
-        assertTrue(
-            msg.contains("'number[]'"),
-            "expected the assignment to type as 'number[]', got: $msg"
-        )
-        assertTrue(!msg.contains("any[]"), "assignment should NOT type as any[], got: $msg")
+        have(msg.contains("'number[]'"), "expected the assignment to type as 'number[]'")
+        have(!msg.contains("any[]"), "assignment should NOT type as any[]")
     }
 
     /**
@@ -117,17 +116,16 @@ class EmptyArrayAssignmentTypeTest {
      * so a `boolean[]` → `number[]` mismatch still fires TS2322.
      */
     @Test fun nonEmptyArrayNotRetyped() {
-        assertTrue(
-            diagnosticsOf(
-                """
-                // @strict: true
-                function f() {
-                    let a: number[] = [];
-                    const bad: number[] = (a = [true] as any as boolean[]);
-                }
-                """.trimIndent() + "\n",
-            ).any { it.code == 2322 },
-            "negative control lost — a non-empty differently-typed array assign should still error"
-        )
+        diagnosticsOf(
+            """
+            // @strict: true
+            function f() {
+                let a: number[] = [];
+                const bad: number[] = (a = [true] as any as boolean[]);
+            }
+            """.trimIndent() + "\n",
+        ) should {
+            have(any { it.code == 2322 })
+        }
     }
 }

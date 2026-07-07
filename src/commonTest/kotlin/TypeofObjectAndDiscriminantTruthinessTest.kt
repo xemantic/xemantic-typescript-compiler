@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * M3.4 (round 425): three bounded narrowing slices from the self-compile
@@ -42,12 +43,9 @@ import kotlin.test.assertTrue
  */
 class TypeofObjectAndDiscriminantTruthinessTest {
 
-    private fun diags(source: String): List<Diagnostic> =
-        TypeScriptCompiler().compile("// @strict: true\n" + source.trimIndent(), "t.ts").diagnostics
-
     @Test
     fun `typeof object narrows away string and undefined members`() {
-        val d = diags(
+        diagnose(
             """
             interface GeneratedNamePart { prefix?: string; node: { g: number }; suffix?: string; }
             declare function fmt(prefix: string | undefined, node: { g: number }, suffix: string | undefined): string;
@@ -57,13 +55,14 @@ class TypeofObjectAndDiscriminantTruthinessTest {
                     "";
             }
             """
-        )
-        assertTrue(d.none { it.code == 2339 }, "typeof-object true branch must keep only the object member, got: $d")
+        ) should {
+            have(none { it.code == 2339 })
+        }
     }
 
     @Test
     fun `typeof object keeps a callable member out of the true branch`() {
-        val d = diags(
+        diagnose(
             """
             interface Bag { data: number }
             export function f(x: Bag | (() => number)) {
@@ -73,16 +72,14 @@ class TypeofObjectAndDiscriminantTruthinessTest {
                 return x();
             }
             """
-        )
-        assertTrue(
-            d.none { it.code == 2339 || it.code == 2349 },
-            "a function member reports typeof 'function', not 'object', got: $d"
-        )
+        ) should {
+            have(none { it.code == 2339 || it.code == 2349 }, "a function member reports typeof 'function', not 'object'")
+        }
     }
 
     @Test
     fun `boolean-literal discriminant truthiness filters the union`() {
-        val d = diags(
+        diagnose(
             """
             interface Identifier { ident: string }
             interface InstanceFieldInfo { isStatic: false; brand: string; }
@@ -92,13 +89,14 @@ class TypeofObjectAndDiscriminantTruthinessTest {
                 return helper(info.brand, info.isStatic ? info.variableName : undefined);
             }
             """
-        )
-        assertTrue(d.none { it.code == 2339 }, "isStatic truthiness must select StaticFieldInfo, got: $d")
+        ) should {
+            have(none { it.code == 2339 })
+        }
     }
 
     @Test
     fun `plain boolean discriminant does not filter`() {
-        val d = diags(
+        diagnose(
             """
             interface P1 { isStatic: boolean; a: number }
             interface P2 { isStatic: boolean; b: number }
@@ -109,14 +107,12 @@ class TypeofObjectAndDiscriminantTruthinessTest {
                 return 1;
             }
             """
-        )
-        // A plain (non-literal) boolean proves nothing: x stays P1 | P2, so
-        // x.a on the union is a GENUINE error — the filter must not have
-        // removed P2.
-        assertTrue(
-            d.any { it.code == 2339 && it.message.contains("'a'") },
-            "a plain-boolean discriminant must not narrow, got: $d"
-        )
+        ) should {
+            // A plain (non-literal) boolean proves nothing: x stays P1 | P2, so
+            // x.a on the union is a GENUINE error — the filter must not have
+            // removed P2.
+            have(any { it.code == 2339 && it.message.contains("'a'") })
+        }
     }
 
     /**
@@ -129,7 +125,7 @@ class TypeofObjectAndDiscriminantTruthinessTest {
      */
     @Test
     fun `optional object prop compared to undefined does not drop the receiver`() {
-        val d = diags(
+        diagnose(
             """
             interface Body { stmts: number }
             interface Accessor { body?: Body; end: number; flags: number; }
@@ -140,16 +136,14 @@ class TypeofObjectAndDiscriminantTruthinessTest {
                 return 0;
             }
             """
-        )
-        assertTrue(
-            d.none { it.code == 2339 },
-            "an optional-prop === undefined comparison must not collapse the receiver, got: $d"
-        )
+        ) should {
+            have(none { it.code == 2339 })
+        }
     }
 
     @Test
     fun `destructuring read consults flow narrowing of the initializer`() {
-        val d = diags(
+        diagnose(
             """
             interface VersionPaths { version: string; paths: object; }
             declare function getPathsFromMap(): VersionPaths | undefined;
@@ -162,8 +156,9 @@ class TypeofObjectAndDiscriminantTruthinessTest {
                 return bestVersionKey + String(bestVersionPaths);
             }
             """
-        )
-        assertTrue(d.none { it.code == 2339 }, "guarded destructuring must not report nullable-union, got: $d")
+        ) should {
+            have(none { it.code == 2339 })
+        }
     }
 
     /**
@@ -176,7 +171,7 @@ class TypeofObjectAndDiscriminantTruthinessTest {
      */
     @Test
     fun `instanceof narrows a supertype union member down to the class`() {
-        val d = diags(
+        diagnose(
             """
             interface SymbolTracker {
                 trackSymbol?(sym: object): boolean;
@@ -194,8 +189,9 @@ class TypeofObjectAndDiscriminantTruthinessTest {
                 trackSymbol(sym: object): boolean { return false; }
             }
             """
-        )
-        assertTrue(d.none { it.code == 2339 }, "instanceof narrow-down must not collapse to never, got: $d")
+        ) should {
+            have(none { it.code == 2339 })
+        }
     }
 
     /**
@@ -205,7 +201,7 @@ class TypeofObjectAndDiscriminantTruthinessTest {
      */
     @Test
     fun `pre-loop guard narrowing survives a read inside the loop`() {
-        val d = diags(
+        diagnose(
             """
             interface Type { flags: number; }
             interface TupleTypeReference extends Type { target: { fixedLength: number }; }
@@ -220,13 +216,14 @@ class TypeofObjectAndDiscriminantTruthinessTest {
                 return acc;
             }
             """
-        )
-        assertTrue(d.none { it.code == 2339 }, "pre-loop guard must survive the loop wash, got: $d")
+        ) should {
+            have(none { it.code == 2339 })
+        }
     }
 
     @Test
     fun `unguarded nullable destructuring still fires`() {
-        val d = diags(
+        diagnose(
             """
             interface VersionPaths { version: string; }
             declare function getPathsFromMap(): VersionPaths | undefined;
@@ -236,10 +233,8 @@ class TypeofObjectAndDiscriminantTruthinessTest {
                 return version;
             }
             """
-        )
-        assertTrue(
-            d.any { it.code == 2339 && it.message.contains("'version'") },
-            "unguarded nullable destructuring is a genuine error, got: $d"
-        )
+        ) should {
+            have(any { it.code == 2339 && it.message.contains("'version'") })
+        }
     }
 }

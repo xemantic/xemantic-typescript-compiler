@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * M1.12: the TS2774 uncalled-function check types a `let X = <bareIdent>` initializer by
@@ -46,15 +47,12 @@ import kotlin.test.assertTrue
  */
 class UncalledFunctionParamTypeTest {
 
-    private fun diags(body: String): List<Diagnostic> =
-        TypeScriptCompiler().compile(body.trimIndent(), "t.ts").diagnostics
-
     @Test
     fun `let x = booleanParam shadowing an outer function - no TS2774`() {
         // Without the fix, `getTypeOfExpression(reportErrors)` finds the outer `function
         // reportErrors` (a callable) instead of the boolean parameter, so `if (shouldElaborate)`
         // FP'd TS2774. The param's boolean type must win.
-        val d = diags(
+        diagnose(
             """
             function reportErrors(): boolean { return true; }
             function related(reportErrors: boolean): void {
@@ -63,12 +61,10 @@ class UncalledFunctionParamTypeTest {
                 if (shouldElaborate) {}
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2774 },
-            "a `let x = booleanParam` must resolve to the param's boolean type, not an outer function; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            directives = "",
+        ) should {
+            have(none { it.code == 2774 })
+        }
     }
 
     @Test
@@ -76,7 +72,7 @@ class UncalledFunctionParamTypeTest {
         // The exact checker.ts shape: the `let` sits in a nested block of the function, so the
         // param `reportErrors` is not in the block's own collected scope but IS in the enclosing
         // function scope already on the uncalled stack (isUncalledShadowed/lookupUncalledTypedLocal).
-        val d = diags(
+        diagnose(
             """
             function reportErrors(): boolean { return true; }
             function related(reportErrors: boolean): void {
@@ -86,12 +82,10 @@ class UncalledFunctionParamTypeTest {
                 }
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2774 },
-            "a nested-block `let x = booleanParam` must resolve to the param's boolean type; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            directives = "",
+        ) should {
+            have(none { it.code == 2774 })
+        }
     }
 
     @Test
@@ -99,7 +93,7 @@ class UncalledFunctionParamTypeTest {
         // FP-safety boundary: a same-scope binding that is genuinely a FUNCTION is recorded as
         // callable, so aliasing it and testing it in a condition must STILL fire TS2774. This is
         // exactly what distinguishes the fix from a blanket bail on bare-identifier initializers.
-        val d = diags(
+        diagnose(
             """
             function related(): void {
                 function helper(): boolean { return true; }
@@ -107,11 +101,9 @@ class UncalledFunctionParamTypeTest {
                 if (x) {}
             }
             """,
-        )
-        assertTrue(
-            d.any { it.code == 2774 },
-            "aliasing a same-scope function and testing it must STILL fire TS2774; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            directives = "",
+        ) should {
+            have(any { it.code == 2774 })
+        }
     }
 }

@@ -21,8 +21,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * Round 436c: `return <literal>` against an annotation whose top-level union
@@ -35,18 +36,17 @@ import kotlin.test.assertTrue
  */
 class LiteralReturnVsLiteralUnionTest {
 
-    private fun ts2322s(source: String) =
-        TypeScriptCompiler().compile("// @strict: true\n" + source, "t.ts")
-            .diagnostics.filter { it.code == 2322 }
-
-    @Test fun stringLiteralReturnAgainstItsUnionIsLegal() {
-        val diags = ts2322s("""function g(): "a" | "b" { return "a"; }""")
-        assertTrue(diags.isEmpty(), "expected no TS2322, got: $diags")
+    @Test
+    fun `string literal return against its own union is legal`() {
+        diagnose("""function g(): "a" | "b" { return "a"; }""") should {
+            have(none { it.code == 2322 })
+        }
     }
 
-    /** The tsc parser.ts shape: `return false` vs an interface union with `| false`. */
-    @Test fun returnFalseAgainstUnionWithFalseIsLegal() {
-        val diags = ts2322s(
+    @Test
+    fun `return false against an interface union with false is legal`() {
+        // The tsc parser.ts shape: `return false` vs an interface union with `| false`.
+        diagnose(
             """
             interface TagA { kind: "a"; x: number }
             interface TagB { kind: "b"; y: number }
@@ -55,51 +55,58 @@ class LiteralReturnVsLiteralUnionTest {
                 if (c) { return tryParse(); }
                 return false;
             }
-            """.trimIndent()
-        )
-        assertTrue(diags.isEmpty(), "expected no TS2322, got: $diags")
+            """
+        ) should {
+            have(none { it.code == 2322 })
+        }
     }
 
-    @Test fun numericLiteralAndNegativeFormsMatch() {
-        val diags = ts2322s(
+    @Test
+    fun `numeric literal and negative forms match the union`() {
+        diagnose(
             """
             function f(c: boolean): 0 | -1 | "x" {
                 if (c) { return 0; }
                 return -1;
             }
-            """.trimIndent()
-        )
-        assertTrue(diags.isEmpty(), "expected no TS2322, got: $diags")
+            """
+        ) should {
+            have(none { it.code == 2322 })
+        }
     }
 
-    /** Alias form: the union body lives behind a type alias. */
-    @Test fun literalReturnAgainstAliasUnionIsLegal() {
-        val diags = ts2322s(
+    @Test
+    fun `literal return against an alias union is legal`() {
+        // Alias form: the union body lives behind a type alias.
+        diagnose(
             """
             type Mode = "read" | "write" | false;
             function f(c: boolean): Mode {
                 if (c) { return "read"; }
                 return false;
             }
-            """.trimIndent()
-        )
-        assertTrue(diags.isEmpty(), "expected no TS2322, got: $diags")
+            """
+        ) should {
+            have(none { it.code == 2322 })
+        }
     }
 
-    /** NEGATIVE control: a literal NOT in the union still fires. */
-    @Test fun nonMemberLiteralReturnStillFires() {
-        val diags = ts2322s("""function g(): "a" | "b" { return "c"; }""")
-        assertTrue(diags.isNotEmpty(), "expected TS2322 for '\"c\"' vs '\"a\" | \"b\"'")
+    @Test
+    fun `negative control - a literal not in the union still fires`() {
+        diagnose("""function g(): "a" | "b" { return "c"; }""") should {
+            have(any { it.code == 2322 })
+        }
     }
 
-    /** NEGATIVE control: `return true` when only `false` is in the union still fires. */
-    @Test fun trueAgainstFalseOnlyUnionStillFires() {
-        val diags = ts2322s(
+    @Test
+    fun `negative control - return true when only false is in the union still fires`() {
+        diagnose(
             """
             interface TagA { kind: "a" }
             function g(): TagA | false { return true; }
-            """.trimIndent()
-        )
-        assertTrue(diags.isNotEmpty(), "expected TS2322 for 'true' vs 'TagA | false'")
+            """
+        ) should {
+            have(any { it.code == 2322 })
+        }
     }
 }

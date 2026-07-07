@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * Multi-base heritage with a GENERIC base BEFORE a comma
@@ -45,39 +46,32 @@ import kotlin.test.assertTrue
  */
 class MultiBaseGenericHeritageTest {
 
-    private fun diags(body: String): List<Diagnostic> =
-        TypeScriptCompiler().compile(body.trimIndent(), "t.ts").diagnostics
-
     @Test
     fun `interface with non-last generic base no longer FP-emits TS2499`() {
-        val d = diags(
+        diagnose(
             """
             interface TextRange { pos: number; end: number; }
             interface NodeArray<T> extends ReadonlyArray<T>, TextRange { hasTrailingComma: boolean; }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2499 },
-            "non-last generic base must NOT fire TS2499; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            directives = "",
+        ) should {
+            have(none { it.code == 2499 })
+        }
     }
 
     @Test
     fun `three bases with two generic non-last bases - no TS2499`() {
-        val d = diags(
+        diagnose(
             """
             interface A<T> { a: T; }
             interface B<U> { b: U; }
             interface Marker { m: number; }
             interface Combo<T, U> extends A<T>, B<U>, Marker {}
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2499 },
-            "multiple generic non-last bases must NOT fire TS2499; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            directives = "",
+        ) should {
+            have(none { it.code == 2499 })
+        }
     }
 
     @Test
@@ -86,7 +80,7 @@ class MultiBaseGenericHeritageTest {
         // a string must be TS2322. Before the fix the base was lost, so `s.value` was `any`
         // (or TS2339) and no assignability error fired — this is the sharp signal that the
         // type arguments survived the multi-base parse.
-        val d = diags(
+        diagnose(
             """
             interface Container<T> { value: T; }
             interface Named { name: string; }
@@ -94,68 +88,56 @@ class MultiBaseGenericHeritageTest {
             declare const s: Sub<number>;
             const x: string = s.value;
             """,
-        )
-        assertTrue(
-            d.any { it.code == 2322 },
-            "s.value (inherited number) assigned to string must be TS2322; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
-        assertTrue(
-            d.none { it.code == 2339 },
-            "s.value must resolve (member inherited from the non-last generic base), not TS2339; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            directives = "",
+        ) should {
+            have(any { it.code == 2322 })
+            have(none { it.code == 2339 })
+        }
     }
 
     @Test
     fun `class implements with non-last generic base - no TS2499`() {
-        val d = diags(
+        diagnose(
             """
             interface A<T> { a: T; }
             interface B { b: number; }
             class C implements A<string>, B { a = "x"; b = 1; }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2499 },
-            "class implements with a non-last generic base must NOT fire TS2499; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            directives = "",
+        ) should {
+            have(none { it.code == 2499 })
+        }
     }
 
     @Test
     fun `genuine non-entity-name interface base STILL fires TS2499 (negative control)`() {
         // A call-expression base is a real non-entity-name; the heritage-spine flag only
         // suppresses the instantiation-expr collapse, so this must still error.
-        val d = diags(
+        diagnose(
             """
             declare function foo(): { x: number };
             interface Bad extends foo() {}
             """,
-        )
-        assertTrue(
-            d.any { it.code == 2499 },
-            "interface extends foo() must still be TS2499; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            directives = "",
+        ) should {
+            have(any { it.code == 2499 })
+        }
     }
 
     @Test
     fun `single generic base in last position still works (regression control)`() {
         // This shape already parsed correctly (the follow token `{` is not in
         // canFollowTypeArgumentsInExpression); pin that the flag did not disturb it.
-        val d = diags(
+        diagnose(
             """
             interface Base<T> { value: T; }
             interface Only<T> extends Base<T> {}
             declare const o: Only<number>;
             const y: string = o.value;
             """,
-        )
-        assertTrue(
-            d.any { it.code == 2322 },
-            "single generic base member inheritance must still work (TS2322); got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            directives = "",
+        ) should {
+            have(any { it.code == 2322 })
+        }
     }
 }

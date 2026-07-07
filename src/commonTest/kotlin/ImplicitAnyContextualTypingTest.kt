@@ -25,9 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 
 /**
  * Round 431 (M3.2): TS7006 contextual-typing slice — the self-compile TS7006×301
@@ -52,11 +52,8 @@ import kotlin.test.assertTrue
  */
 class ImplicitAnyContextualTypingTest {
 
-    private fun diags(source: String): List<Diagnostic> =
-        TypeScriptCompiler().compile("// @strict: true\n" + source.trimIndent(), "t.ts").diagnostics
-
     private fun ts7006Params(source: String): List<String> =
-        diags(source).filter { it.code == 7006 }
+        diagnose(source).filter { it.code == 7006 }
             .map { it.message.removePrefix("Parameter '").substringBefore("'") }
 
     // ------------------------------------------------------------------
@@ -90,8 +87,8 @@ class ImplicitAnyContextualTypingTest {
 
     @Test
     fun `negative control - unresolvable callee still fires TS7006`() {
-        val d = diags("missingFn(zz => zz);")
-        assertTrue(d.any { it.code == 2304 }, "expected TS2304 on the callee, got: $d")
+        val d = diagnose("missingFn(zz => zz);")
+        have(d.any { it.code == 2304 }, "expected TS2304 on the callee")
         assertEquals(listOf("zz"), d.filter { it.code == 7006 }
             .map { it.message.removePrefix("Parameter '").substringBefore("'") })
     }

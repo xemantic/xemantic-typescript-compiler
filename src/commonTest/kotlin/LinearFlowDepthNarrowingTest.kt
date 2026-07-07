@@ -25,8 +25,8 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
 import kotlin.test.Test
-import kotlin.test.assertTrue
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.measureTimedValue
 
@@ -57,10 +57,21 @@ class LinearFlowDepthNarrowingTest {
     private val chain = 3000
 
     /** N straight-line `let` declarations of DISTINCT names — each a FlowAssignment that is
-     *  pass-through for the walked reference `x` (writes a different variable). */
-    private fun filler(n: Int): String = buildString {
-        repeat(n) { append("    let v$it = $it;\n") }
-    }
+     *  pass-through for the walked reference `x` (writes a different variable). Joined at the
+     *  interpolation site with the template's own indentation, so trimIndent still finds a
+     *  non-zero common indent (a column-0 interpolated block would silently disable it). */
+    private fun filler(n: Int): List<String> = List(n) { "let v$it = $it;" }
+
+    /** The [assertNarrowingSurvivesDeepLinearChain] shape at a parameterized depth. */
+    private fun assertChainSource(fillerLines: Int): String = """
+        // @strict: true
+        declare function assertIsString(v: unknown): asserts v is string;
+        function f(x: unknown): void {
+            assertIsString(x);
+            ${filler(fillerLines).joinToString("\n            ")}
+            const y: string = x;
+        }
+    """.trimIndent()
 
     /**
      * An `asserts v is string` at the top narrows `x`; then [chain] pass-through
@@ -69,37 +80,19 @@ class LinearFlowDepthNarrowingTest {
      * top-of-function assert past the deep chain.
      */
     @Test fun assertNarrowingSurvivesDeepLinearChain() {
-        val source = buildString {
-            append("// @strict: true\n")
-            append("declare function assertIsString(v: unknown): asserts v is string;\n")
-            append("function f(x: unknown): void {\n")
-            append("    assertIsString(x);\n")
-            append(filler(chain))
-            append("    const y: string = x;\n")
-            append("}\n")
-        }
+        val source = assertChainSource(chain)
         // Warm up (JIT + embedded-lib parse dominate the first compile).
-        TypeScriptCompiler().compile(
-            buildString {
-                append("// @strict: true\n")
-                append("declare function assertIsString(v: unknown): asserts v is string;\n")
-                append("function f(x: unknown): void {\n    assertIsString(x);\n")
-                append(filler(30)); append("    const y: string = x;\n}\n")
-            },
-            "warmup.ts",
-        )
+        TypeScriptCompiler().compile(assertChainSource(30), "warmup.ts")
         val (result, elapsed) = measureTimedValue {
             TypeScriptCompiler().compile(source, "deepAssert.ts")
         }
-        assertTrue(
+        have(
             result.diagnostics.none { it.code == 2322 || it.code == 2345 },
-            "assert narrowing lost past a $chain-node linear chain (NARROW_MAX_DEPTH=2000): " +
-                result.diagnostics.filter { it.code == 2322 || it.code == 2345 }
-                    .joinToString { "TS${it.code}: ${it.message}" },
+            "assert narrowing lost past a $chain-node linear chain (NARROW_MAX_DEPTH=2000)",
         )
         // Iterating a linear chain is trivial work — a truncation-storm regression would
         // be visibly slower, but the slack bound just guards against pathology.
-        assertTrue(elapsed < 60.seconds, "deep-chain narrowing took $elapsed — non-linear walk")
+        have(elapsed < 60.seconds, "deep-chain narrowing took $elapsed — non-linear walk")
     }
 
     /**
@@ -107,20 +100,18 @@ class LinearFlowDepthNarrowingTest {
      * assert — the FlowCondition sits above the deep pass-through chain.
      */
     @Test fun conditionNarrowingSurvivesDeepLinearChain() {
-        val source = buildString {
-            append("// @strict: true\n")
-            append("declare const x: unknown;\n")
-            append("if (typeof x === \"string\") {\n")
-            append(filler(chain))
-            append("    const y: string = x;\n")
-            append("}\n")
-        }
+        val source = """
+            // @strict: true
+            declare const x: unknown;
+            if (typeof x === "string") {
+                ${filler(chain).joinToString("\n                ")}
+                const y: string = x;
+            }
+        """.trimIndent()
         val result = TypeScriptCompiler().compile(source, "deepCond.ts")
-        assertTrue(
+        have(
             result.diagnostics.none { it.code == 2322 || it.code == 2345 },
-            "condition narrowing lost past a $chain-node linear chain: " +
-                result.diagnostics.filter { it.code == 2322 || it.code == 2345 }
-                    .joinToString { "TS${it.code}: ${it.message}" },
+            "condition narrowing lost past a $chain-node linear chain",
         )
     }
 
@@ -130,25 +121,23 @@ class LinearFlowDepthNarrowingTest {
      * iteration and must not consume depth either.
      */
     @Test fun assertNarrowingSurvivesDeepCallChain() {
-        val source = buildString {
-            append("// @strict: true\n")
-            append("declare function assertIsString(v: unknown): asserts v is string;\n")
-            append("declare function sink(n: number): void;\n")
-            append("function f(x: unknown): void {\n")
-            append("    assertIsString(x);\n")
-            repeat(chain) { append("    sink($it);\n") }
-            append("    const y: string = x;\n")
-            append("}\n")
-        }
+        val source = """
+            // @strict: true
+            declare function assertIsString(v: unknown): asserts v is string;
+            declare function sink(n: number): void;
+            function f(x: unknown): void {
+                assertIsString(x);
+                ${List(chain) { "sink($it);" }.joinToString("\n                ")}
+                const y: string = x;
+            }
+        """.trimIndent()
         TypeScriptCompiler().compile(
             "// @strict: true\ndeclare function sink(n: number): void;\nsink(1);\n", "warmup2.ts",
         )
         val result = TypeScriptCompiler().compile(source, "deepCall.ts")
-        assertTrue(
+        have(
             result.diagnostics.none { it.code == 2322 || it.code == 2345 },
-            "assert narrowing lost past a $chain-call pass-through chain: " +
-                result.diagnostics.filter { it.code == 2322 || it.code == 2345 }
-                    .joinToString { "TS${it.code}: ${it.message}" },
+            "assert narrowing lost past a $chain-call pass-through chain",
         )
     }
 
@@ -158,18 +147,17 @@ class LinearFlowDepthNarrowingTest {
      * bailed to declared type would still "pass" them).
      */
     @Test fun unnarrowedReadAfterChainStillErrors() {
-        val source = buildString {
-            append("// @strict: true\n")
-            append("function f(x: unknown): void {\n")
-            append(filler(chain))
-            append("    const y: string = x;\n")
-            append("}\n")
-        }
+        val source = """
+            // @strict: true
+            function f(x: unknown): void {
+                ${filler(chain).joinToString("\n                ")}
+                const y: string = x;
+            }
+        """.trimIndent()
         val result = TypeScriptCompiler().compile(source, "controlDeep.ts")
-        assertTrue(
+        have(
             result.diagnostics.any { it.code == 2322 },
-            "negative control lost: unnarrowed unknown → string must be TS2322, got: " +
-                result.diagnostics.joinToString { "TS${it.code}" },
+            "negative control lost: unnarrowed unknown → string must be TS2322",
         )
     }
 
@@ -178,20 +166,7 @@ class LinearFlowDepthNarrowingTest {
      * clean — pins that the machinery narrows at all (not just that deep chains truncate).
      */
     @Test fun assertNarrowingAtTrivialDepth() {
-        val source = buildString {
-            append("// @strict: true\n")
-            append("declare function assertIsString(v: unknown): asserts v is string;\n")
-            append("function f(x: unknown): void {\n")
-            append("    assertIsString(x);\n")
-            append(filler(3))
-            append("    const y: string = x;\n")
-            append("}\n")
-        }
-        val result = TypeScriptCompiler().compile(source, "shallow.ts")
-        assertTrue(
-            result.diagnostics.none { it.code == 2322 },
-            "assert narrowing regressed at trivial depth: " +
-                result.diagnostics.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        val result = TypeScriptCompiler().compile(assertChainSource(3), "shallow.ts")
+        have(result.diagnostics.none { it.code == 2322 })
     }
 }

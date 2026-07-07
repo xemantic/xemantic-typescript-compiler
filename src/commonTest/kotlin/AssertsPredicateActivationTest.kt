@@ -25,8 +25,8 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * Local corner-case tests for M1.5: `asserts` predicates activated end-to-end.
@@ -51,20 +51,12 @@ class AssertsPredicateActivationTest {
     private fun assertNone(source: String, vararg codes: Int) {
         val diags = diagnosticsOf(source)
         val hits = diags.filter { it.code in codes.toSet() }
-        assertTrue(
-            hits.isEmpty(),
-            "expected none of TS${codes.joinToString("/TS")}, got: " +
-                hits.joinToString { "TS${it.code}: ${it.message}" }
-        )
+        have(hits.isEmpty())
     }
 
     private fun assertSome(source: String, vararg codes: Int) {
         val diags = diagnosticsOf(source)
-        assertTrue(
-            diags.any { it.code in codes.toSet() },
-            "negative control lost — expected one of TS${codes.joinToString("/TS")}, got: " +
-                diags.joinToString { "TS${it.code}" }
-        )
+        have(diags.any { it.code in codes.toSet() })
     }
 
     /**

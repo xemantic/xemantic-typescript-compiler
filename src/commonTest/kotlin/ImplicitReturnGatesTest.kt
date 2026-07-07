@@ -25,8 +25,8 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * M1.8 (round 388): TS7030/TS2366 gates aligned with tsc's exact rule
@@ -44,24 +44,17 @@ import kotlin.test.assertTrue
  */
 class ImplicitReturnGatesTest {
 
-    private fun compile(header: String, source: String) =
-        TypeScriptCompiler().compile("$header\n$source", "t.ts")
-
     private fun assertNone(header: String, source: String, codes: Set<Int>, what: String) {
-        val r = compile(header, source)
-        assertTrue(
-            r.diagnostics.none { it.code in codes },
-            "$what must not draw ${codes.joinToString { "TS$it" }}: " +
-                r.diagnostics.joinToString { "TS${it.code} ${it.message}" },
+        have(
+            diagnose(source, directives = header).none { it.code in codes },
+            "$what must not draw ${codes.joinToString { "TS$it" }}",
         )
     }
 
     private fun assertHas(header: String, source: String, code: Int, what: String) {
-        val r = compile(header, source)
-        assertTrue(
-            r.diagnostics.any { it.code == code },
-            "$what must draw TS$code: " +
-                r.diagnostics.joinToString { "TS${it.code} ${it.message}" },
+        have(
+            diagnose(source, directives = header).any { it.code == code },
+            "$what must draw TS$code",
         )
     }
 
@@ -135,8 +128,7 @@ class ImplicitReturnGatesTest {
     }
 
     @Test fun strictOnlyEmptyReturnAgainstNonNullableIsTs2322NotTs7030() {
-        val r = compile(
-            "// @strict: true",
+        val d = diagnose(
             """
             declare const cond: boolean;
             function f(): number {
@@ -146,11 +138,11 @@ class ImplicitReturnGatesTest {
                 return;
             }
             """.trimIndent(),
+            directives = "// @strict: true",
         )
-        assertTrue(
-            r.diagnostics.any { it.code == 2322 } && r.diagnostics.none { it.code == 7030 },
-            "strict empty return routes through return-expression assignability (TS2322), not TS7030: " +
-                r.diagnostics.joinToString { "TS${it.code} ${it.message}" },
+        have(
+            d.any { it.code == 2322 } && d.none { it.code == 7030 },
+            "strict empty return routes through return-expression assignability (TS2322), not TS7030",
         )
     }
 

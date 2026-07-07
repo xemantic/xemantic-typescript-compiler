@@ -25,9 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 
 /**
  * Pins the round-433 perf refactors' semantic invariants:
@@ -126,10 +126,9 @@ class FlowNarrowingPerfInvariantsTest {
             }
             """.trimIndent()
         )
-        assertTrue(
+        have(
             ts18048Lines(result).isNotEmpty(),
-            "unguarded captured maybe-undefined receiver must fire TS18048 (emitter active); " +
-                "diagnostics: ${result.diagnostics.map { "${it.line}: TS${it.code} ${it.message}" }}"
+            "unguarded captured maybe-undefined receiver must fire TS18048 (emitter active)",
         )
     }
 }

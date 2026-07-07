@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * A nested `let`/`var` declaration SHADOWS an enclosing `const` of the same name within its
@@ -40,12 +41,9 @@ import kotlin.test.assertTrue
  */
 class ConstShadowedByNestedLetTest {
 
-    private fun diags(body: String): List<Diagnostic> =
-        TypeScriptCompiler().compile(body.trimIndent(), "t.ts").diagnostics
-
     @Test
     fun `nested let shadowing an enclosing const - reassign does NOT fire TS2588`() {
-        val d = diags(
+        diagnose(
             """
             function f(a: number): number {
                 if (a & 1) {
@@ -60,18 +58,16 @@ class ConstShadowedByNestedLetTest {
                 return 0;
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2588 },
-            "reassigning a nested let that shadows an enclosing const must NOT be TS2588; got: " +
-                d.joinToString { "TS${it.code}@${it.line}:${it.character}" },
-        )
+            directives = "",
+        ) should {
+            have(none { it.code == 2588 })
+        }
     }
 
     @Test
     fun `nested var (compound assign) shadowing an enclosing const - no TS2588`() {
         // moduleNameResolver's `let resolved = …; resolved ??= …` shape shadowing an outer const.
-        val d = diags(
+        diagnose(
             """
             function g(x: boolean, y: number | undefined): number {
                 const resolved = 1;
@@ -85,17 +81,15 @@ class ConstShadowedByNestedLetTest {
                 return resolved;
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2588 },
-            "reassigning a nested let that shadows an enclosing const must NOT be TS2588; got: " +
-                d.joinToString { "TS${it.code}@${it.line}:${it.character}" },
-        )
+            directives = "",
+        ) should {
+            have(none { it.code == 2588 })
+        }
     }
 
     @Test
     fun `a genuine const reassignment STILL fires TS2588 (negative control)`() {
-        val d = diags(
+        diagnose(
             """
             function h(): number {
                 const c = 1;
@@ -103,18 +97,16 @@ class ConstShadowedByNestedLetTest {
                 return c;
             }
             """,
-        )
-        assertTrue(
-            d.any { it.code == 2588 && it.message.contains("'c'") },
-            "reassigning a real const must still be TS2588; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            directives = "",
+        ) should {
+            have(any { it.code == 2588 && it.message.contains("'c'") })
+        }
     }
 
     @Test
     fun `an enclosing const reassigned before a nested let still fires on the outer one`() {
         // The outer `c = 2` reassigns the const (TS2588); the inner `let c; c = 4` is fine.
-        val d = diags(
+        diagnose(
             """
             function k(a: number): number {
                 const c = 1;
@@ -123,12 +115,10 @@ class ConstShadowedByNestedLetTest {
                 return c;
             }
             """,
-        )
-        val ts2588 = d.filter { it.code == 2588 }
-        assertTrue(
-            ts2588.size == 1 && ts2588[0].line == 3,
-            "exactly one TS2588 on the outer const reassignment (line 3); got: " +
-                d.joinToString { "TS${it.code}@${it.line}:${it.character}" },
-        )
+            directives = "",
+        ) should {
+            val ts2588 = filter { it.code == 2588 }
+            have(ts2588.size == 1 && ts2588[0].line == 3, "exactly one TS2588 on the outer const reassignment (line 3)")
+        }
     }
 }

@@ -25,8 +25,8 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * M1.5b: assert-function narrowing must survive tsc's real import topology —
@@ -71,11 +71,7 @@ class AssertsBarrelResolutionTest {
             }
             """
         )).build("/proj", noEmit = true)
-        assertTrue(
-            result.diagnostics.any { it.code == 2345 },
-            "negative control lost — expected TS2345 for string|undefined arg, got: " +
-                result.diagnostics.joinToString { "TS${it.code}" }
-        )
+        have(result.diagnostics.any { it.code == 2345 })
     }
 
     /** A namespace assert imported THROUGH an export-star barrel narrows after the call. */
@@ -91,11 +87,7 @@ class AssertsBarrelResolutionTest {
             """
         )).build("/proj", noEmit = true)
         val hits = result.diagnostics.filter { it.code == 2345 }
-        assertTrue(
-            hits.isEmpty(),
-            "barrel-imported Debug.assert must narrow x — got: " +
-                hits.joinToString { "TS${it.code}: ${it.message}" }
-        )
+        have(hits.isEmpty())
     }
 
     /** Same shape imported DIRECTLY (no barrel) — the simpler topology also narrows. */
@@ -111,10 +103,6 @@ class AssertsBarrelResolutionTest {
             """
         )).build("/proj", noEmit = true)
         val hits = result.diagnostics.filter { it.code == 2345 }
-        assertTrue(
-            hits.isEmpty(),
-            "directly-imported Debug.assert must narrow x — got: " +
-                hits.joinToString { "TS${it.code}: ${it.message}" }
-        )
+        have(hits.isEmpty())
     }
 }

@@ -25,9 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
 import kotlin.test.Test
 import kotlin.test.assertContains
-import kotlin.test.assertTrue
 
 /**
  * M1.3: tsconfig `types` / `typeRoots` / `node_modules/@types` acquisition in
@@ -67,10 +67,7 @@ class TypesAcquisitionTest {
         val program = result.programFiles.toSet()
         assertContains(program, gadgetEntry, "entry via package.json 'types' field")
         assertContains(program, widgetEntry, "entry via index.d.ts fallback")
-        assertTrue(
-            result.diagnostics.none { it.code == 2304 },
-            "both ambient globals must resolve: ${result.diagnostics.map { it.code to it.message }}",
-        )
+        have(result.diagnostics.none { it.code == 2304 })
     }
 
     @Test
@@ -80,9 +77,9 @@ class TypesAcquisitionTest {
         ).build("/proj", noEmit = true)
         val program = result.programFiles.toSet()
         assertContains(program, gadgetEntry)
-        assertTrue(widgetEntry !in program, "'types' must exclude unlisted packages")
-        assertTrue(!cannotFindName(result, "gadget"), "listed package's global resolves")
-        assertTrue(cannotFindName(result, "widget"), "unlisted package's global must NOT resolve")
+        have(widgetEntry !in program, "'types' must exclude unlisted packages")
+        have(!cannotFindName(result, "gadget"), "listed package's global resolves")
+        have(cannotFindName(result, "widget"), "unlisted package's global must NOT resolve")
     }
 
     @Test
@@ -91,8 +88,8 @@ class TypesAcquisitionTest {
             project("""{ "compilerOptions": { "types": [] }, "include": ["src/**/*.ts"] }"""),
         ).build("/proj", noEmit = true)
         val program = result.programFiles.toSet()
-        assertTrue(gadgetEntry !in program && widgetEntry !in program, "types:[] disables acquisition")
-        assertTrue(cannotFindName(result, "gadget") && cannotFindName(result, "widget"))
+        have(gadgetEntry !in program && widgetEntry !in program, "types:[] disables acquisition")
+        have(cannotFindName(result, "gadget") && cannotFindName(result, "widget"))
     }
 
     @Test
@@ -100,11 +97,11 @@ class TypesAcquisitionTest {
         val result = ProjectCompiler(
             project("""{ "compilerOptions": { "types": ["gadget", "nope"] }, "include": ["src/**/*.ts"] }"""),
         ).build("/proj", noEmit = true)
-        assertTrue(
+        have(
             result.diagnostics.any { it.code == 2688 && it.message.contains("'nope'") },
-            "explicitly requested but unresolvable name reports TS2688: ${result.diagnostics}",
+            "explicitly requested but unresolvable name reports TS2688",
         )
-        assertTrue(
+        have(
             result.diagnostics.none { it.code == 2688 && it.message.contains("'gadget'") },
             "resolvable requested name must not report TS2688",
         )
@@ -120,11 +117,11 @@ class TypesAcquisitionTest {
         ).build("/proj", noEmit = true)
         val program = result.programFiles.toSet()
         assertContains(program, "/proj/typings/env/index.d.ts")
-        assertTrue(
+        have(
             gadgetEntry !in program && widgetEntry !in program,
             "explicit typeRoots must REPLACE the node_modules/@types default, not extend it",
         )
-        assertTrue(result.diagnostics.none { it.code == 2304 })
+        have(result.diagnostics.none { it.code == 2304 })
     }
 
     @Test
@@ -139,7 +136,7 @@ class TypesAcquisitionTest {
         )
         val result = ProjectCompiler(vfs).build("/repo/packages/app", noEmit = true)
         assertContains(result.programFiles.toSet(), "/repo/node_modules/@types/hoistedlib/index.d.ts")
-        assertTrue(result.diagnostics.none { it.code == 2304 }, "${result.diagnostics}")
+        have(result.diagnostics.none { it.code == 2304 })
     }
 
     @Test
@@ -154,7 +151,7 @@ class TypesAcquisitionTest {
             ),
         ).build("/proj", noEmit = true)
         assertContains(result.programFiles.toSet(), "/proj/node_modules/@types/@myscope/thing/index.d.ts")
-        assertTrue(!cannotFindName(result, "scopedThing"), "${result.diagnostics}")
+        have(!cannotFindName(result, "scopedThing"))
     }
 
     @Test
@@ -170,8 +167,8 @@ class TypesAcquisitionTest {
             ),
         ).build("/proj", noEmit = true)
         assertContains(result.programFiles.toSet(), "/proj/node_modules/@types/myscope__thing/index.d.ts")
-        assertTrue(result.diagnostics.none { it.code == 2688 }, "mangled probe must satisfy the request")
-        assertTrue(!cannotFindName(result, "scopedThing"))
+        have(result.diagnostics.none { it.code == 2688 }, "mangled probe must satisfy the request")
+        have(!cannotFindName(result, "scopedThing"))
     }
 
     @Test
@@ -191,6 +188,6 @@ class TypesAcquisitionTest {
             ),
         ).build("/proj", noEmit = true)
         assertContains(result.programFiles.toSet(), "/proj/node_modules/@types/reflib/index.d.ts")
-        assertTrue(!cannotFindName(result, "refthing"), "${result.diagnostics}")
+        have(!cannotFindName(result, "refthing"))
     }
 }

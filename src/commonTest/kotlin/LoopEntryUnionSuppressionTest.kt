@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * Round 424 — union-receiver TS2339 suppression must survive a loop boundary.
@@ -56,23 +57,14 @@ class LoopEntryUnionSuppressionTest {
         }
     """
 
-    private fun diags(body: String): List<Diagnostic> =
-        TypeScriptCompiler().compile(
-            "// @strict: true\n" + (prelude + body).trimIndent(), "t.ts",
-        ).diagnostics
-
     private fun assertNo2339(d: List<Diagnostic>, what: String) {
-        assertTrue(
-            d.none { it.code == 2339 },
-            "$what must not fire TS2339; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        have(d.none { it.code == 2339 }, "$what must not fire TS2339")
     }
 
     @Test
     fun guardedUnionReadInsideWhileTrueLoopDoesNotFire2339() {
-        val d = diags(
-            """
+        val d = diagnose(
+            prelude + """
             export function f(fileName: string) {
                 const text = tryReadFile(fileName);
                 if (!isString(text)) return;
@@ -91,8 +83,8 @@ class LoopEntryUnionSuppressionTest {
         // 2-antecedent FlowBranchLabel on the walked path, so the plain walk
         // returns a FRESH structurally-identical union — the retry gate must
         // compare member sets, not instances.
-        val d = diags(
-            """
+        val d = diagnose(
+            prelude + """
             export function f(fileName: string) {
                 const text = tryReadFile(fileName);
                 if (!isString(text)) return;
@@ -111,8 +103,8 @@ class LoopEntryUnionSuppressionTest {
 
     @Test
     fun compoundIfConditionInsideLoopDoesNotFire2339() {
-        val d = diags(
-            """
+        val d = diagnose(
+            prelude + """
             export function f(fileName: string, pos: number) {
                 const text = tryReadFile(fileName);
                 if (!isString(text)) return;
@@ -131,8 +123,8 @@ class LoopEntryUnionSuppressionTest {
         // Negative control: with NO guard the loop-entry retry finds no
         // narrowing (the pre-loop flow still carries the full union), so the
         // genuine TS2339 must stand.
-        val d = diags(
-            """
+        diagnose(
+            prelude + """
             export function f(fileName: string) {
                 const text = tryReadFile(fileName);
                 while (true) {
@@ -140,12 +132,9 @@ class LoopEntryUnionSuppressionTest {
                 }
             }
             """,
-        )
-        assertTrue(
-            d.any { it.code == 2339 && it.message.contains("charCodeAt") },
-            "unguarded union member read must keep TS2339; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(any { it.code == 2339 && it.message.contains("charCodeAt") })
+        }
     }
 
     @Test
@@ -153,8 +142,8 @@ class LoopEntryUnionSuppressionTest {
         // Negative control: the guard proves the WRONG branch (positive branch
         // returns) — past the if, text is Diagnostic, so a string member read
         // must keep firing.
-        val d = diags(
-            """
+        diagnose(
+            prelude + """
             export function f(fileName: string) {
                 const text = tryReadFile(fileName);
                 if (isString(text)) return;
@@ -163,11 +152,8 @@ class LoopEntryUnionSuppressionTest {
                 }
             }
             """,
-        )
-        assertTrue(
-            d.any { it.code == 2339 && it.message.contains("charCodeAt") },
-            "read of a string member on the Diagnostic-narrowed branch must keep TS2339; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(any { it.code == 2339 && it.message.contains("charCodeAt") })
+        }
     }
 }

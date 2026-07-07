@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * M3.4 (round 416): a captured variable narrowed by a closure-LOCAL guard BEFORE a loop, then
@@ -44,12 +45,9 @@ import kotlin.test.assertTrue
  */
 class ClosureCapturedLoopNarrowTest {
 
-    private fun diags(source: String): List<Diagnostic> =
-        TypeScriptCompiler().compile("// @strict: true\n" + source.trimIndent(), "t.ts").diagnostics
-
     @Test
     fun `captured param guarded before a for-loop, used inside - no TS18048`() {
-        val d = diags(
+        diagnose(
             """
             export function f(expandedParams: readonly number[] | undefined): void {
                 const cb = (add: number) => {
@@ -59,17 +57,14 @@ class ClosureCapturedLoopNarrowTest {
                 cb(1);
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 18048 },
-            "a captured param guarded `if (!expandedParams) return` before a loop must not FP TS18048 in the loop; got: " +
-                d.joinToString { "TS${it.code}@${it.line}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 18048 })
+        }
     }
 
     @Test
     fun `captured param guarded before a while-loop, used inside - no TS18048`() {
-        val d = diags(
+        diagnose(
             """
             export function f(state: { count: number } | undefined): void {
                 const cb = () => {
@@ -79,17 +74,14 @@ class ClosureCapturedLoopNarrowTest {
                 cb();
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 18048 },
-            "a captured var guarded before a while-loop must not FP TS18048; got: " +
-                d.joinToString { "TS${it.code}@${it.line}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 18048 })
+        }
     }
 
     @Test
     fun `un-guarded captured possibly-undefined var in a loop STILL fires - negative control`() {
-        val d = diags(
+        diagnose(
             """
             export function f(expandedParams: readonly number[] | undefined): void {
                 const cb = () => {
@@ -98,11 +90,8 @@ class ClosureCapturedLoopNarrowTest {
                 cb();
             }
             """,
-        )
-        assertTrue(
-            d.any { it.code == 18048 },
-            "an UN-guarded captured possibly-undefined var used in a loop MUST still fire TS18048; got: " +
-                d.joinToString { "TS${it.code}@${it.line}: ${it.message}" },
-        )
+        ) should {
+            have(any { it.code == 18048 })
+        }
     }
 }

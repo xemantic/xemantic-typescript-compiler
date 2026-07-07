@@ -25,8 +25,8 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * M1.11 (round 389): call resolution respects lexical shadowing — a call to a name
@@ -49,9 +49,6 @@ class NestedFnShadowingTest {
 
     private fun ts2554(r: CompilationResult) = r.diagnostics.filter { it.code == 2554 }
 
-    private fun describe(r: CompilationResult) =
-        r.diagnostics.joinToString { "TS${it.code} ${it.message}" }
-
     @Test fun fnTypedParamShadowsFileLevelFunctionForArity() {
         // utilities.ts shape: `writeFileEnsuringDirectories(..., writeFile: (a,b,c)=>void)`
         // calls its 3-param PARAM while the file exports a 5-param `writeFile`.
@@ -63,7 +60,7 @@ class NestedFnShadowingTest {
             }
             """.trimIndent()
         )
-        assertTrue(ts2554(r).isEmpty(), "param-shadowed call must not be arity-checked against the file-level fn: ${describe(r)}")
+        have(ts2554(r).isEmpty())
     }
 
     @Test fun controlUnshadowedWrongArityCallStillFires() {
@@ -75,10 +72,7 @@ class NestedFnShadowingTest {
             }
             """.trimIndent()
         )
-        assertTrue(
-            ts2554(r).any { it.message == "Expected 5 arguments, but got 2." },
-            "an UNshadowed nested wrong-arity call must still fire TS2554: ${describe(r)}",
-        )
+        have(ts2554(r).any { it.message == "Expected 5 arguments, but got 2." })
     }
 
     @Test fun destructuredParamShadowsFileLevelDeclare() {
@@ -93,7 +87,7 @@ class NestedFnShadowingTest {
             }
             """.trimIndent()
         )
-        assertTrue(ts2554(r).isEmpty(), "destructured-param shadow must suppress the 2-param declare's arity: ${describe(r)}")
+        have(ts2554(r).isEmpty())
     }
 
     @Test fun bodyLocalConstShadowsEnclosingFunctionName() {
@@ -109,7 +103,7 @@ class NestedFnShadowingTest {
             export const top = existsUsingSource("p", true);
             """.trimIndent()
         )
-        assertTrue(ts2554(r).isEmpty(), "body-local const shadow must suppress the enclosing fn's 2-param arity: ${describe(r)}")
+        have(ts2554(r).isEmpty())
     }
 
     @Test fun namespaceInternalFunctionDoesNotLeakToFileLevel() {
@@ -130,10 +124,10 @@ class NestedFnShadowingTest {
             """.trimIndent()
         )
         val msgs = ts2554(r).map { it.message }
-        assertTrue(
+        have(
             msgs == listOf("Expected 1 arguments, but got 3."),
             "file-level call must use the file signature (no error) and the in-namespace " +
-                "3-arg call must fail against the NAMESPACE-local 1-param fn: ${describe(r)}",
+                "3-arg call must fail against the NAMESPACE-local 1-param fn",
         )
     }
 
@@ -151,7 +145,7 @@ class NestedFnShadowingTest {
             export const w = new Version("1.2.3");
             """.trimIndent()
         )
-        assertTrue(ts2554(r).isEmpty(), "ctor-overload arity range must accept both shapes: ${describe(r)}")
+        have(ts2554(r).isEmpty())
     }
 
     @Test fun controlSingleCtorWrongArityStillFires() {
@@ -163,10 +157,7 @@ class NestedFnShadowingTest {
             export const s = new Single("a", 2);
             """.trimIndent()
         )
-        assertTrue(
-            ts2554(r).any { it.message == "Expected 1 arguments, but got 2." },
-            "a single-ctor class keeps its exact arity check: ${describe(r)}",
-        )
+        have(ts2554(r).any { it.message == "Expected 1 arguments, but got 2." })
     }
 
     @Test fun spreadArgumentSuppressesTooFew() {
@@ -179,7 +170,7 @@ class NestedFnShadowingTest {
             three(...tup);
             """.trimIndent()
         )
-        assertTrue(ts2554(r).isEmpty(), "a spread argument must suppress the too-few arity check: ${describe(r)}")
+        have(ts2554(r).isEmpty())
     }
 
     @Test fun controlPlainTooFewStillFires() {
@@ -189,10 +180,7 @@ class NestedFnShadowingTest {
             three("x");
             """.trimIndent()
         )
-        assertTrue(
-            ts2554(r).any { it.message == "Expected 3 arguments, but got 1." },
-            "plain too-few keeps firing: ${describe(r)}",
-        )
+        have(ts2554(r).any { it.message == "Expected 3 arguments, but got 1." })
     }
 
     @Test fun fnDefaultParamShadowsFileLevelFunctionInArgPosition() {
@@ -208,10 +196,7 @@ class NestedFnShadowingTest {
             }
             """.trimIndent()
         )
-        assertTrue(
-            r.diagnostics.none { it.code == 2345 },
-            "the fn-valued default param must shadow the file-level fn in arg position: ${describe(r)}",
-        )
+        have(r.diagnostics.none { it.code == 2345 })
     }
 
     @Test fun controlFileLevelFnAsWrongArgStillFires() {
@@ -222,10 +207,7 @@ class NestedFnShadowingTest {
             export const out = worker("in", gcsd);
             """.trimIndent()
         )
-        assertTrue(
-            r.diagnostics.any { it.code == 2345 },
-            "passing the real 4-param fn where '() => string' is expected keeps firing TS2345: ${describe(r)}",
-        )
+        have(r.diagnostics.any { it.code == 2345 })
     }
 
     // --- Type path: a body-nested SIBLING function shadows a same-named IMPORT
@@ -259,11 +241,7 @@ class NestedFnShadowingTest {
             }
             """.trimIndent()
         )
-        assertTrue(
-            r.diagnostics.none { it.code == 2345 },
-            "the nested sibling writeFile must shadow the import (bail, no wrong-signature check): " +
-                r.diagnostics.joinToString { "TS${it.code} ${it.message}" },
-        )
+        have(r.diagnostics.none { it.code == 2345 })
     }
 
     @Test fun controlImportedFnUndefinedArgStillFires() {
@@ -273,10 +251,6 @@ class NestedFnShadowingTest {
             writeFile({ h: 1 }, { d: 2 }, undefined);
             """.trimIndent()
         )
-        assertTrue(
-            r.diagnostics.any { it.code == 2345 && it.message.contains("'undefined'") },
-            "an unshadowed imported call keeps its TS2345 'undefined' ≁ 'string': " +
-                r.diagnostics.joinToString { "TS${it.code} ${it.message}" },
-        )
+        have(r.diagnostics.any { it.code == 2345 && it.message.contains("'undefined'") })
     }
 }

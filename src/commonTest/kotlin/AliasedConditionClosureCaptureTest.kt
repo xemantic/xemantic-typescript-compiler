@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * Round 424 — the aliased-condition back-walk follows a closure boundary and
@@ -56,15 +57,11 @@ class AliasedConditionClosureCaptureTest {
         declare function affectsPath(a: object, b: object): boolean;
     """
 
-    private fun diags(body: String): List<Diagnostic> =
-        TypeScriptCompiler().compile(
-            "// @strict: true\n" + (prelude + body).trimIndent(), "t.ts",
-        ).diagnostics
-
     @Test
     fun capturedAliasNarrowsInsideClosureAcrossIfElseJoin() {
-        val d = diags(
+        diagnose(
             """
+            $prelude
             export function createState(options: Options, oldState: OldState | undefined, useOldState: boolean, files: Map<string, string>) {
                 const canCopy = options.composite &&
                     oldState?.emitSignatures &&
@@ -82,19 +79,17 @@ class AliasedConditionClosureCaptureTest {
                     }
                 });
             }
-            """,
-        )
-        assertTrue(
-            d.none { it.code == 18048 },
-            "a captured const alias must narrow oldState inside the closure; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            """
+        ) should {
+            have(none { it.code == 18048 })
+        }
     }
 
     @Test
     fun reassignmentInsideClosureBeforeTestStillFires() {
-        val d = diags(
+        diagnose(
             """
+            $prelude
             export function g(options: Options, oldState: OldState | undefined, files: Map<string, string>, fresh: OldState | undefined) {
                 const canCopy = options.composite && oldState?.emitSignatures;
                 files.forEach(() => {
@@ -104,13 +99,10 @@ class AliasedConditionClosureCaptureTest {
                     }
                 });
             }
-            """,
-        )
-        assertTrue(
-            d.any { it.code == 18048 },
-            "a closure-internal reassignment of the walked root must keep TS18048; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            """
+        ) should {
+            have(any { it.code == 18048 })
+        }
     }
 
     @Test
@@ -118,8 +110,9 @@ class AliasedConditionClosureCaptureTest {
         // The B464 reassignedAfterNames gate: an assignment at/after the closure
         // in the enclosing function withholds the captured narrowing (the closure
         // may run after the reassignment).
-        val d = diags(
+        diagnose(
             """
+            $prelude
             export function h(options: Options, oldState: OldState | undefined, files: Map<string, string>, fresh: OldState | undefined) {
                 const canCopy = options.composite && oldState?.emitSignatures;
                 files.forEach(() => {
@@ -129,19 +122,17 @@ class AliasedConditionClosureCaptureTest {
                 });
                 oldState = fresh;
             }
-            """,
-        )
-        assertTrue(
-            d.any { it.code == 18048 },
-            "a post-closure reassignment of the walked root must keep TS18048; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            """
+        ) should {
+            have(any { it.code == 18048 })
+        }
     }
 
     @Test
     fun mutableAliasReassignedBetweenDeclAndClosureStillFires() {
-        val d = diags(
+        diagnose(
             """
+            $prelude
             export function k(options: Options, oldState: OldState | undefined, files: Map<string, string>, other: boolean) {
                 let canCopy = options.composite && oldState?.emitSignatures;
                 canCopy = other ? undefined : canCopy;
@@ -151,12 +142,9 @@ class AliasedConditionClosureCaptureTest {
                     }
                 });
             }
-            """,
-        )
-        assertTrue(
-            d.any { it.code == 18048 },
-            "an alias reassigned between its declaration and the closure must keep TS18048; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            """
+        ) should {
+            have(any { it.code == 18048 })
+        }
     }
 }

@@ -25,8 +25,8 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * A named import of a TYPE-ONLY export (an interface / type alias, possibly reached through an
@@ -68,10 +68,7 @@ class ImportTypeOnlyBarrelMergeTest {
                 """.trimIndent(),
             )
         )
-        assertTrue(
-            ts2440(result).isEmpty(),
-            "type-only barrel import + local function must NOT fire TS2440; got TS2440: " + ts2440(result),
-        )
+        have(ts2440(result).isEmpty())
     }
 
     @Test
@@ -89,10 +86,7 @@ class ImportTypeOnlyBarrelMergeTest {
                 """.trimIndent(),
             )
         )
-        assertTrue(
-            ts2440(result).isEmpty(),
-            "type-only barrel import + local value const must NOT fire TS2440; got: " + ts2440(result),
-        )
+        have(ts2440(result).isEmpty())
     }
 
     @Test
@@ -110,10 +104,7 @@ class ImportTypeOnlyBarrelMergeTest {
                 """.trimIndent(),
             )
         )
-        assertTrue(
-            ts2440(result).isEmpty(),
-            "multi-hop barrel type-only import + local function must NOT fire TS2440; got: " + ts2440(result),
-        )
+        have(ts2440(result).isEmpty())
     }
 
     @Test
@@ -131,10 +122,7 @@ class ImportTypeOnlyBarrelMergeTest {
                 """.trimIndent(),
             )
         )
-        assertTrue(
-            ts2440(result).any { it.contains("'Widget'") },
-            "a value import + a local function of the same name must still fire TS2440; got: " + ts2440(result),
-        )
+        have(ts2440(result).any { it.contains("'Widget'") })
     }
 
     @Test
@@ -153,9 +141,6 @@ class ImportTypeOnlyBarrelMergeTest {
                 """.trimIndent(),
             )
         )
-        assertTrue(
-            ts2440(result).any { it.contains("'Node'") },
-            "a type-only import + a local class (type side conflicts) must still fire TS2440; got: " + ts2440(result),
-        )
+        have(ts2440(result).any { it.contains("'Node'") })
     }
 }

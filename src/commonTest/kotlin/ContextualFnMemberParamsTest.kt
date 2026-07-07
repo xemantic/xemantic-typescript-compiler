@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * M1.6(b) (round 388): contextual typing of object-literal fn-valued members —
@@ -54,12 +55,9 @@ class ContextualFnMemberParamsTest {
     """.trimIndent()
 
     private fun assertNo7006(source: String, what: String) {
-        val r = compile(source)
-        assertTrue(
-            r.diagnostics.none { it.code == 7006 },
-            "$what must not draw TS7006: " +
-                r.diagnostics.joinToString { "TS${it.code} ${it.message}" },
-        )
+        compile(source).diagnostics should {
+            have(none { it.code == 7006 }, "$what must not draw TS7006")
+        }
     }
 
     @Test fun varDeclAnnotationFactoryArrowMembers() {
@@ -122,40 +120,36 @@ class ContextualFnMemberParamsTest {
     }
 
     @Test fun excessParamBeyondContextualArityStillFires() {
-        val r = compile(
+        compile(
             "interface One { f(a: number): void; }\n" +
                 "const o: One = { f: (a, b) => {} };\n",
-        )
-        assertTrue(
-            r.diagnostics.any { it.code == 7006 && it.message.contains("'b'") } &&
-                r.diagnostics.none { it.code == 7006 && it.message.contains("'a'") },
-            "param BEYOND the contextual arity fires TS7006, the covered one does not: " +
-                r.diagnostics.joinToString { "TS${it.code} ${it.message}" },
-        )
+        ).diagnostics should {
+            have(
+                any { it.code == 7006 && it.message.contains("'b'") } &&
+                    none { it.code == 7006 && it.message.contains("'a'") },
+            )
+        }
     }
 
     @Test fun uncontextualizedLiteralStillFires() {
-        val r = compile("const o = { f: (a) => a };\n")
-        assertTrue(
-            r.diagnostics.any { it.code == 7006 },
-            "an annotation-less literal's arrow params stay implicitly any: " +
-                r.diagnostics.joinToString { "TS${it.code} ${it.message}" },
-        )
+        compile("const o = { f: (a) => a };\n").diagnostics should {
+            have(any { it.code == 7006 })
+        }
     }
 
     @Test fun unannotatedReturnStillFires() {
-        val r = compile("function create() {\n    return { f: (a) => a };\n}\n")
-        assertTrue(
-            r.diagnostics.any { it.code == 7006 },
-            "a return without a return-type annotation provides no contextual type: " +
-                r.diagnostics.joinToString { "TS${it.code} ${it.message}" },
-        )
+        compile("function create() {\n    return { f: (a) => a };\n}\n").diagnostics should {
+            have(
+                any { it.code == 7006 },
+                "a return without a return-type annotation provides no contextual type",
+            )
+        }
     }
 
     @Test fun nestedFunctionResetsReturnContext() {
         // The OUTER fn's TC annotation must NOT leak into the INNER
         // annotation-less function's return literal.
-        val r = compile(
+        compile(
             "$iface\nfunction outer(): TC {\n" +
                 "    function inner() {\n" +
                 "        return { isUndef: (s) => true };\n" +
@@ -166,13 +160,12 @@ class ContextualFnMemberParamsTest {
                 "        spread: (x, y) => {},\n" +
                 "    };\n" +
                 "}\n",
-        )
-        assertTrue(
-            r.diagnostics.any { it.code == 7006 && it.message.contains("'s'") } &&
-                r.diagnostics.none { it.code == 7006 && !it.message.contains("'s'") },
-            "inner annotation-less fn keeps TS7006; outer factory members do not: " +
-                r.diagnostics.joinToString { "TS${it.code} ${it.message}" },
-        )
+        ).diagnostics should {
+            have(
+                any { it.code == 7006 && it.message.contains("'s'") } &&
+                    none { it.code == 7006 && !it.message.contains("'s'") },
+            )
+        }
     }
 
     @Test fun restParamContextCoversAllPositionalParams() {
@@ -203,30 +196,26 @@ class ContextualFnMemberParamsTest {
     }
 
     @Test fun computedKeyExcessParamBeyondMappedArityStillFires() {
-        val r = compile(
+        compile(
             "$mappedTable\nconst table: Table = {\n" +
                 "    [SK.A]: function (node, extra, oops) { return node; },\n" +
                 "};\n",
-        )
-        assertTrue(
-            r.diagnostics.any { it.code == 7006 && it.message.contains("'oops'") } &&
-                r.diagnostics.none { it.code == 7006 && it.message.contains("'node'") },
-            "a param beyond the mapped value's arity fires; covered params do not: " +
-                r.diagnostics.joinToString { "TS${it.code} ${it.message}" },
-        )
+        ).diagnostics should {
+            have(
+                any { it.code == 7006 && it.message.contains("'oops'") } &&
+                    none { it.code == 7006 && it.message.contains("'node'") },
+            )
+        }
     }
 
     @Test fun computedKeyWithoutMappedAnnotationStillFires() {
-        val r = compile(
+        compile(
             "enum SK { A = 1 }\n" +
                 "const table = {\n" +
                 "    [SK.A]: function (node) { return node; },\n" +
                 "};\n",
-        )
-        assertTrue(
-            r.diagnostics.any { it.code == 7006 },
-            "computed-key fn values without a mapped annotation stay implicitly any: " +
-                r.diagnostics.joinToString { "TS${it.code} ${it.message}" },
-        )
+        ).diagnostics should {
+            have(any { it.code == 7006 })
+        }
     }
 }

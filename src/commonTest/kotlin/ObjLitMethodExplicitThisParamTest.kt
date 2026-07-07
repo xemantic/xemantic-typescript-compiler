@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * Round 428b (M3.1): inside an object-literal method, an EXPLICIT `this` PARAMETER
@@ -44,12 +45,9 @@ import kotlin.test.assertTrue
  */
 class ObjLitMethodExplicitThisParamTest {
 
-    private fun diags(source: String): List<Diagnostic> =
-        TypeScriptCompiler().compile("// @strict: true\n" + source.trimIndent(), "t.ts").diagnostics
-
     @Test
     fun `explicit this param annotation types this inside objlit method`() {
-        val d = diags(
+        diagnose(
             """
             interface Node2 { kind: number; }
             declare function isIdentifier(node: Node2): boolean;
@@ -59,15 +57,16 @@ class ObjLitMethodExplicitThisParamTest {
                 },
             };
             """
-        )
-        assertTrue(d.none { it.code == 2345 }, "expected no TS2345, got: $d")
+        ) should {
+            have(none { it.code == 2345 })
+        }
     }
 
     @Test
     fun `negative control - objlit this without this-param still checks against objlit type`() {
         // Without an explicit `this` param, the objlit contextual this stays: passing
         // `this` (the objlit) where a Node2 is required still fires TS2345.
-        val d = diags(
+        diagnose(
             """
             interface Node2 { kind: number; }
             declare function isIdentifier(node: Node2): boolean;
@@ -77,8 +76,9 @@ class ObjLitMethodExplicitThisParamTest {
                 },
             };
             """
-        )
-        assertTrue(d.any { it.code == 2345 }, "expected TS2345 for objlit this vs Node2, got: $d")
+        ) should {
+            have(any { it.code == 2345 })
+        }
     }
 
     @Test
@@ -86,7 +86,7 @@ class ObjLitMethodExplicitThisParamTest {
         // debug.ts's __tsDebuggerDisplay: `isIdentifier(this) ? idText(this) : …` —
         // the ternary guard narrows `this: Node2` DOWN to Identifier2, so the
         // idText(MemberName-ish) arg check must pass.
-        val d = diags(
+        diagnose(
             """
             interface Node2 { kind: number; }
             interface Identifier2 extends Node2 { kind: 80; text: string; }
@@ -98,14 +98,15 @@ class ObjLitMethodExplicitThisParamTest {
                 },
             };
             """
-        )
-        assertTrue(d.none { it.code == 2345 }, "expected no TS2345, got: $d")
+        ) should {
+            have(none { it.code == 2345 })
+        }
     }
 
     @Test
     fun `numeric enum arg is assignable to a number param`() {
         // debug.ts's formatEnum(this.flags, …) — FlowFlags (numeric enum) vs `number`.
-        val d = diags(
+        diagnose(
             """
             enum FlowFlags { Unreachable = 1, Start = 2 }
             interface FlowNode2 { flags: FlowFlags; }
@@ -116,13 +117,14 @@ class ObjLitMethodExplicitThisParamTest {
                 },
             };
             """
-        )
-        assertTrue(d.none { it.code == 2345 }, "expected no TS2345, got: $d")
+        ) should {
+            have(none { it.code == 2345 })
+        }
     }
 
     @Test
     fun `unresolvable this-param annotation binds nothing rather than the objlit`() {
-        val d = diags(
+        diagnose(
             """
             declare function wantsNumber(x: number): void;
             export const props = {
@@ -131,7 +133,8 @@ class ObjLitMethodExplicitThisParamTest {
                 },
             };
             """
-        )
-        assertTrue(d.none { it.code == 2345 }, "expected no TS2345, got: $d")
+        ) should {
+            have(none { it.code == 2345 })
+        }
     }
 }

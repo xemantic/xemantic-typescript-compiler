@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * Round 422 (Pattern C2, the `.kind`-discriminated-union half deferred by rounds 414/415):
@@ -41,11 +42,6 @@ import kotlin.test.assertTrue
  */
 class UnionKindDiscriminantExhaustiveSwitchTest {
 
-    private fun diags(source: String): List<Diagnostic> =
-        TypeScriptCompiler().compile(
-            "// @strict: true\n// @noImplicitReturns: true\n" + source.trimIndent(), "t.ts",
-        ).diagnostics
-
     private val mapperDecls = """
         export const enum TypeMapKind { Simple, Array, Deferred }
         interface T { id: number; }
@@ -57,7 +53,7 @@ class UnionKindDiscriminantExhaustiveSwitchTest {
 
     @Test
     fun `exhaustive union-kind switch with no default is terminating`() {
-        val d = diags(
+        diagnose(
             """
             $mapperDecls
             export function f(t: T, mapper: TypeMapper): T {
@@ -68,17 +64,15 @@ class UnionKindDiscriminantExhaustiveSwitchTest {
                 }
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2366 || it.code == 7030 || it.code == 2355 },
-            "an exhaustive `.kind` union switch must count as terminating; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            directives = "// @strict: true\n// @noImplicitReturns: true",
+        ) should {
+            have(none { it.code == 2366 || it.code == 7030 || it.code == 2355 })
+        }
     }
 
     @Test
     fun `multi-valued kind member counts all its values`() {
-        val d = diags(
+        diagnose(
             """
             export const enum K { A, B, C }
             interface T { id: number; }
@@ -91,17 +85,15 @@ class UnionKindDiscriminantExhaustiveSwitchTest {
                 }
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2366 || it.code == 7030 },
-            "a `kind: K.B | K.C` member requires BOTH values covered — and they are; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            directives = "// @strict: true\n// @noImplicitReturns: true",
+        ) should {
+            have(none { it.code == 2366 || it.code == 7030 })
+        }
     }
 
     @Test
     fun `missing member keeps TS2366 firing`() {
-        val d = diags(
+        diagnose(
             """
             $mapperDecls
             export function f(t: T, mapper: TypeMapper): T {
@@ -111,17 +103,15 @@ class UnionKindDiscriminantExhaustiveSwitchTest {
                 }
             }
             """,
-        )
-        assertTrue(
-            d.any { it.code == 2366 },
-            "a switch missing the Deferred member must keep TS2366; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            directives = "// @strict: true\n// @noImplicitReturns: true",
+        ) should {
+            have(any { it.code == 2366 })
+        }
     }
 
     @Test
     fun `optional kind property keeps TS2366 firing`() {
-        val d = diags(
+        diagnose(
             """
             export const enum K { A, B }
             interface T { id: number; }
@@ -133,12 +123,10 @@ class UnionKindDiscriminantExhaustiveSwitchTest {
                 }
             }
             """,
-        )
-        assertTrue(
-            d.any { it.code == 2366 },
-            "an optional `kind?:` means the value set includes undefined — TS2366 must stand; " +
-                "got: " + d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            directives = "// @strict: true\n// @noImplicitReturns: true",
+        ) should {
+            have(any { it.code == 2366 }, "an optional `kind?:` means the value set includes undefined — TS2366 must stand")
+        }
     }
 
     @Test
@@ -150,7 +138,7 @@ class UnionKindDiscriminantExhaustiveSwitchTest {
         // emitter for this shape is a known M3.4 gap, but the exhaustiveness
         // verdict must match tsc (the round-423 reassigned-let pin requires
         // the same receiver-nullish drop).
-        val d = diags(
+        diagnose(
             """
             $mapperDecls
             export function f(t: T, mapper: TypeMapper | undefined): T {
@@ -161,17 +149,15 @@ class UnionKindDiscriminantExhaustiveSwitchTest {
                 }
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2366 || it.code == 7030 },
-            "exhaustiveness is computed over the non-nullish receiver part (tsc emits only " +
-                "TS18048 here); got: " + d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            directives = "// @strict: true\n// @noImplicitReturns: true",
+        ) should {
+            have(none { it.code == 2366 || it.code == 7030 })
+        }
     }
 
     @Test
     fun `mixed enum and string-literal kinds prove exhaustive together`() {
-        val d = diags(
+        diagnose(
             """
             export const enum K { A = "a", B = "b" }
             interface T { id: number; }
@@ -184,11 +170,12 @@ class UnionKindDiscriminantExhaustiveSwitchTest {
                 }
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2366 || it.code == 7030 },
-            "string-literal kinds join the key space (`lit:s:`), so the mix proves exhaustive; " +
-                "got: " + d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+            directives = "// @strict: true\n// @noImplicitReturns: true",
+        ) should {
+            have(
+                none { it.code == 2366 || it.code == 7030 },
+                "string-literal kinds join the key space (`lit:s:`), so the mix proves exhaustive",
+            )
+        }
     }
 }

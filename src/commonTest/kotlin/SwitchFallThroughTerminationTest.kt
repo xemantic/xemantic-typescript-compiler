@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * Round 414 (M1.12, Pattern C1): a `switch` with a `default` (or otherwise exhaustive)
@@ -39,30 +40,9 @@ import kotlin.test.assertTrue
  */
 class SwitchFallThroughTerminationTest {
 
-    private fun compile(source: String) =
-        TypeScriptCompiler().compile("// @strict: true\n$source", "t.ts")
-
-    private fun assertNoImplicitReturn(source: String, what: String) {
-        val r = compile(source)
-        assertTrue(
-            r.diagnostics.none { it.code == 2366 || it.code == 7030 || it.code == 2355 },
-            "$what must not draw TS2366/TS7030/TS2355: " +
-                r.diagnostics.joinToString { "TS${it.code} ${it.message}" },
-        )
-    }
-
-    private fun assertImplicitReturn(source: String, what: String) {
-        val r = compile(source)
-        assertTrue(
-            r.diagnostics.any { it.code == 2366 },
-            "$what must draw TS2366: " +
-                r.diagnostics.joinToString { "TS${it.code} ${it.message}" },
-        )
-    }
-
     @Test fun caseFallsThroughToReturningDefaultDrawsNothing() {
         // The parseSimpleUnaryExpression shape.
-        assertNoImplicitReturn(
+        diagnose(
             """
             declare const t: number;
             declare const c: boolean;
@@ -79,14 +59,15 @@ class SwitchFallThroughTerminationTest {
                         return b();
                 }
             }
-            """.trimIndent(),
-            "a non-empty case that falls through to a returning default",
-        )
+            """,
+        ) should {
+            have(none { it.code == 2366 || it.code == 7030 || it.code == 2355 })
+        }
     }
 
     @Test fun emptyCaseFallThroughChainDrawsNothing() {
         // case 1: case 2: case 3: return x; — stacked empty labels.
-        assertNoImplicitReturn(
+        diagnose(
             """
             declare const t: number;
             function f(): number {
@@ -99,14 +80,15 @@ class SwitchFallThroughTerminationTest {
                         return 0;
                 }
             }
-            """.trimIndent(),
-            "stacked empty case labels falling through to a return",
-        )
+            """,
+        ) should {
+            have(none { it.code == 2366 || it.code == 7030 || it.code == 2355 })
+        }
     }
 
     @Test fun allCasesReturnDrawsNothing() {
         // Regression sanity: the previously-working case must still pass.
-        assertNoImplicitReturn(
+        diagnose(
             """
             declare const t: number;
             function f(): number {
@@ -116,16 +98,17 @@ class SwitchFallThroughTerminationTest {
                     default: return 0;
                 }
             }
-            """.trimIndent(),
-            "every clause returns with a default",
-        )
+            """,
+        ) should {
+            have(none { it.code == 2366 || it.code == 7030 || it.code == 2355 })
+        }
     }
 
     // --- negative controls ---
 
     @Test fun caseThatBreaksOutStillFires() {
         // A `break` escapes the switch → control reaches the end with no return.
-        assertImplicitReturn(
+        diagnose(
             """
             declare const t: number;
             declare const c: boolean;
@@ -138,14 +121,15 @@ class SwitchFallThroughTerminationTest {
                         return 0;
                 }
             }
-            """.trimIndent(),
-            "a case that breaks out of the switch (control reaches the end)",
-        )
+            """,
+        ) should {
+            have(any { it.code == 2366 })
+        }
     }
 
     @Test fun nonExhaustiveSwitchWithoutDefaultStillFires() {
         // No default over a `number` discriminant → not exhaustive → endpoint reachable.
-        assertImplicitReturn(
+        diagnose(
             """
             declare const t: number;
             function f(): number {
@@ -154,14 +138,15 @@ class SwitchFallThroughTerminationTest {
                     case 2: return 2;
                 }
             }
-            """.trimIndent(),
-            "a switch with no default over a non-literal discriminant",
-        )
+            """,
+        ) should {
+            have(any { it.code == 2366 })
+        }
     }
 
     @Test fun defaultThatFallsThroughToNothingStillFires() {
         // The default is the LAST clause and completes normally (no return) → escapes.
-        assertImplicitReturn(
+        diagnose(
             """
             declare const t: number;
             declare function log(): void;
@@ -172,8 +157,9 @@ class SwitchFallThroughTerminationTest {
                         log();
                 }
             }
-            """.trimIndent(),
-            "a default clause that completes normally as the last clause",
-        )
+            """,
+        ) should {
+            have(any { it.code == 2366 })
+        }
     }
 }

@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * M3.4 (round 416): the tsc idiom `if (!x.y) { x.y = new Map() } x.y.method()` FP'd TS18048 for a
@@ -45,12 +46,9 @@ import kotlin.test.assertTrue
  */
 class AssignmentInGuardNarrowTest {
 
-    private fun diags(source: String): List<Diagnostic> =
-        TypeScriptCompiler().compile("// @strict: true\n" + source.trimIndent(), "t.ts").diagnostics
-
     @Test
     fun `property-path assign-in-guard block then use - no TS18048`() {
-        val d = diags(
+        diagnose(
             """
             interface State { m?: Map<string, string>; }
             export function f(state: State, k: string): void {
@@ -58,17 +56,14 @@ class AssignmentInGuardNarrowTest {
                 state.m.set(k, k);
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 18048 },
-            "`if (!state.m) { state.m = new Map() } state.m.set()` must not FP TS18048; got: " +
-                d.joinToString { "TS${it.code}@${it.line}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 18048 })
+        }
     }
 
     @Test
     fun `property-path assign-in-guard no braces then use - no TS18048`() {
-        val d = diags(
+        diagnose(
             """
             interface State { m?: Map<string, string>; }
             export function f(state: State, k: string): void {
@@ -76,36 +71,30 @@ class AssignmentInGuardNarrowTest {
                 state.m.set(k, k);
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 18048 },
-            "braceless `if (!state.m) state.m = new Map();` must not FP TS18048; got: " +
-                d.joinToString { "TS${it.code}@${it.line}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 18048 })
+        }
     }
 
     @Test
     fun `identifier assign-in-guard still works - no TS18048`() {
-        val d = diags(
+        diagnose(
             """
             export function f(m: Map<string, string> | undefined, k: string): void {
                 if (!m) { m = new Map<string, string>(); }
                 m.set(k, k);
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 18048 },
-            "the identifier form must keep working; got: " +
-                d.joinToString { "TS${it.code}@${it.line}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 18048 })
+        }
     }
 
     @Test
     fun `assign to a possibly-undefined value STILL fires - negative control`() {
         // FP-safety: only a DEFINITELY-non-nullish RHS (`new X()` / object / …) overwrites to
         // non-nullish. Assigning a possibly-undefined identifier does not narrow, so the use fires.
-        val d = diags(
+        diagnose(
             """
             interface State { m?: Map<string, string>; }
             export function f(state: State, k: string, other: Map<string, string> | undefined): void {
@@ -113,11 +102,8 @@ class AssignmentInGuardNarrowTest {
                 state.m.set(k, k);
             }
             """,
-        )
-        assertTrue(
-            d.any { it.code == 18048 },
-            "assigning a possibly-undefined value must STILL fire TS18048; got: " +
-                d.joinToString { "TS${it.code}@${it.line}: ${it.message}" },
-        )
+        ) should {
+            have(any { it.code == 18048 })
+        }
     }
 }

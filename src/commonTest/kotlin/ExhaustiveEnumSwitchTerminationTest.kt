@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * M1.12 (self-compile burn-down, round 415): TS2366 "Function lacks ending return statement"
@@ -41,12 +42,9 @@ import kotlin.test.assertTrue
  */
 class ExhaustiveEnumSwitchTerminationTest {
 
-    private fun diags(source: String): List<Diagnostic> =
-        TypeScriptCompiler().compile("// @strict: true\n" + source.trimIndent(), "t.ts").diagnostics
-
     @Test
     fun `exhaustive enum switch on a param - no TS2366`() {
-        val d = diags(
+        diagnose(
             """
             enum Category { Error, Warning, Suggestion, Message }
             function fmt(category: Category): string {
@@ -58,17 +56,14 @@ class ExhaustiveEnumSwitchTerminationTest {
                 }
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2366 || it.code == 7030 || it.code == 2355 },
-            "an exhaustive enum switch (all members, no default, all return) must not fire " +
-                "TS2366/7030/2355; got: " + d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 2366 || it.code == 7030 || it.code == 2355 })
+        }
     }
 
     @Test
     fun `exhaustive enum-plus-undefined switch with case undefined - no TS2366`() {
-        val d = diags(
+        diagnose(
             """
             enum NewLine { Crlf, Lf }
             function nl(kind: NewLine | undefined): string {
@@ -80,18 +75,15 @@ class ExhaustiveEnumSwitchTerminationTest {
                 }
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2366 || it.code == 7030 || it.code == 2355 },
-            "an exhaustive `enum | undefined` switch WITH a `case undefined` must not fire TS2366; " +
-                "got: " + d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 2366 || it.code == 7030 || it.code == 2355 })
+        }
     }
 
     @Test
     fun `exhaustive type-alias-union of enum members - no TS2366`() {
         // Mirrors `CompoundAssignmentOperator = SyntaxKind.PlusEqualsToken | ...`.
-        val d = diags(
+        diagnose(
             """
             enum Tok { PlusEq, MinusEq, StarEq, Other }
             type CompoundOp = Tok.PlusEq | Tok.MinusEq | Tok.StarEq;
@@ -103,17 +95,14 @@ class ExhaustiveEnumSwitchTerminationTest {
                 }
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2366 || it.code == 7030 || it.code == 2355 },
-            "an exhaustive switch over a type-alias union of enum members must not fire TS2366; " +
-                "got: " + d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 2366 || it.code == 7030 || it.code == 2355 })
+        }
     }
 
     @Test
     fun `missing an enum member STILL fires - negative control`() {
-        val d = diags(
+        diagnose(
             """
             enum Category { Error, Warning, Suggestion, Message }
             function fmt(category: Category): string {
@@ -124,17 +113,14 @@ class ExhaustiveEnumSwitchTerminationTest {
                 }
             }
             """,
-        )
-        assertTrue(
-            d.any { it.code == 2366 },
-            "a switch MISSING an enum member (Message) is NOT exhaustive → TS2366 MUST fire; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(any { it.code == 2366 })
+        }
     }
 
     @Test
     fun `enum-plus-undefined WITHOUT case undefined STILL fires - negative control`() {
-        val d = diags(
+        diagnose(
             """
             enum NewLine { Crlf, Lf }
             function nl(kind: NewLine | undefined): string {
@@ -144,17 +130,14 @@ class ExhaustiveEnumSwitchTerminationTest {
                 }
             }
             """,
-        )
-        assertTrue(
-            d.any { it.code == 2366 },
-            "an `enum | undefined` switch WITHOUT a `case undefined` is not exhaustive → TS2366 " +
-                "MUST fire; got: " + d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(any { it.code == 2366 })
+        }
     }
 
     @Test
     fun `a non-returning case body STILL fires - negative control`() {
-        val d = diags(
+        diagnose(
             """
             enum Category { Error, Warning }
             function fmt(category: Category): string {
@@ -164,11 +147,8 @@ class ExhaustiveEnumSwitchTerminationTest {
                 }
             }
             """,
-        )
-        assertTrue(
-            d.any { it.code == 2366 },
-            "a switch whose case `break`s out (falls through past the switch) → TS2366 MUST fire; " +
-                "got: " + d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(any { it.code == 2366 })
+        }
     }
 }

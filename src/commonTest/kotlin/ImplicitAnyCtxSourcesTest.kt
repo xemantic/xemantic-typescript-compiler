@@ -21,8 +21,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * Round 435c: four TS7006 contextual-typing sources from the round-431 residual
@@ -44,13 +45,9 @@ import kotlin.test.assertTrue
  */
 class ImplicitAnyCtxSourcesTest {
 
-    private fun ts7006s(source: String) =
-        TypeScriptCompiler().compile("// @strict: true\n" + source, "t.ts")
-            .diagnostics.filter { it.code == 7006 }
-
-    /** Namespace-local interface annotation provides object-literal member ctx. */
-    @Test fun namespaceLocalAnnotationProvidesMemberCtx() {
-        val diags = ts7006s(
+    @Test
+    fun `namespace-local interface annotation provides object-literal member context`() {
+        diagnose(
             """
             namespace BuilderState {
                 export interface ManyToManyPathMap {
@@ -65,14 +62,15 @@ class ImplicitAnyCtxSourcesTest {
                     return map;
                 }
             }
-            """.trimIndent()
-        )
-        assertTrue(diags.isEmpty(), "expected no TS7006, got: $diags")
+            """
+        ) should {
+            have(none { it.code == 7006 })
+        }
     }
 
-    /** Declared-by-initializer local: assignment RHS arrow params type from it. */
-    @Test fun arrowInitializerLocalTypesLaterAssignment() {
-        val diags = ts7006s(
+    @Test
+    fun `declared-by-initializer local types a later assignment RHS arrow`() {
+        diagnose(
             """
             function outer() {
                 var addLazyDiagnostic = (arg: () => void) => { arg(); };
@@ -83,29 +81,33 @@ class ImplicitAnyCtxSourcesTest {
                 }
                 run();
             }
-            """.trimIndent()
-        )
-        assertTrue(diags.isEmpty(), "expected no TS7006, got: $diags")
+            """
+        ) should {
+            have(none { it.code == 7006 })
+        }
     }
 
-    /** NEGATIVE control (the pinned evolving-any rule): a local with NEITHER
-     *  annotation NOR initializer keeps TS7006 firing on the assigned arrow. */
-    @Test fun untypedUninitializedLocalStillFires() {
-        val diags = ts7006s(
+    @Test
+    fun `negative control - an untyped uninitialized local keeps TS7006 firing`() {
+        // The pinned evolving-any rule: a local with NEITHER annotation NOR
+        // initializer keeps TS7006 firing on the assigned arrow.
+        diagnose(
             """
             function outer() {
                 let mark;
                 mark = tag => tag;
                 return mark;
             }
-            """.trimIndent()
-        )
-        assertTrue(diags.isNotEmpty(), "expected TS7006 for the evolving-any local")
+            """
+        ) should {
+            have(any { it.code == 7006 })
+        }
     }
 
-    /** The parenthesizerRules Map.get idiom. */
-    @Test fun mapGetInitializedLocalTypesLaterAssignment() {
-        val diags = ts7006s(
+    @Test
+    fun `map get initialized local types a later assignment`() {
+        // The parenthesizerRules Map.get idiom.
+        diagnose(
             """
             function outer() {
                 let cache: Map<number, (node: string) => string> | undefined;
@@ -120,16 +122,18 @@ class ImplicitAnyCtxSourcesTest {
                 }
                 return rule;
             }
-            """.trimIndent()
-        )
-        assertTrue(diags.isEmpty(), "expected no TS7006, got: $diags")
+            """
+        ) should {
+            have(none { it.code == 7006 })
+        }
     }
 
-    /** A `Host | undefined` return annotation still contextually types the
-     *  returned literal's member arrows (nullish constituents are discriminated
-     *  out of contextual unions). */
-    @Test fun nullishUnionReturnAnnotationStillProvidesMemberCtx() {
-        val diags = ts7006s(
+    @Test
+    fun `nullish union return annotation still provides member context`() {
+        // A `Host | undefined` return annotation still contextually types the
+        // returned literal's member arrows (nullish constituents are
+        // discriminated out of contextual unions).
+        diagnose(
             """
             interface CachedHost {
                 readFile(path: string, encoding?: string): string | undefined;
@@ -141,15 +145,17 @@ class ImplicitAnyCtxSourcesTest {
                     readFile: (path, encoding) => host.readFile(path, encoding),
                 };
             }
-            """.trimIndent()
-        )
-        assertTrue(diags.isEmpty(), "expected no TS7006, got: $diags")
+            """
+        ) should {
+            have(none { it.code == 7006 })
+        }
     }
 
-    /** NEGATIVE control (corpus-pinned rule): a REAL primitive union alternative
-     *  still disables member contextual typing. */
-    @Test fun primitiveUnionAlternativeStillFires() {
-        val diags = ts7006s(
+    @Test
+    fun `negative control - a real primitive union alternative still fires`() {
+        // Corpus-pinned rule: a REAL primitive union alternative disables
+        // member contextual typing.
+        diagnose(
             """
             interface FullRule {
                 normalize(match: string): string;
@@ -160,8 +166,9 @@ class ImplicitAnyCtxSourcesTest {
                     normalize: match => match,
                 };
             }
-            """.trimIndent()
-        )
-        assertTrue(diags.isNotEmpty(), "expected TS7006 under the union-with-primitive rule")
+            """
+        ) should {
+            have(any { it.code == 7006 })
+        }
     }
 }

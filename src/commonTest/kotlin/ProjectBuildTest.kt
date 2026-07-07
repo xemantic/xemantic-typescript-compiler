@@ -25,11 +25,11 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
 import kotlin.test.Test
 import kotlin.test.assertContains
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
-import kotlin.test.assertTrue
 
 /**
  * Deterministic, filesystem-independent validation of the whole-project build
@@ -71,7 +71,7 @@ class ProjectBuildTest {
     fun loadsTsConfigWithExtendsChain() {
         val cfg = TsConfigLoader(sampleProject()).load("/proj/tsconfig.json")
         assertEquals(ScriptTarget.ES2020, cfg.options.target, "target inherited from base.json")
-        assertTrue(cfg.options.strict, "strict inherited from base.json")
+        have(cfg.options.strict, "strict inherited from base.json")
         assertEquals("/proj/dist", cfg.options.outDir, "outDir resolved to absolute")
         assertEquals(listOf("src/**/*.ts"), cfg.include)
         assertEquals(listOf("**/*.test.ts"), cfg.exclude)
@@ -98,7 +98,7 @@ class ProjectBuildTest {
         val roots = result.rootFiles.toSet()
         assertContains(roots, "/proj/src/index.ts")
         assertContains(roots, "/proj/src/math.ts")
-        assertTrue("/proj/src/ignore.test.ts" !in roots, "exclude must drop *.test.ts")
+        have("/proj/src/ignore.test.ts" !in roots, "exclude must drop *.test.ts")
         // The dependency's declaration file is pulled into the program via the import graph.
         assertContains(result.programFiles.toSet(), "/proj/node_modules/dep/types/index.d.ts")
         // Everything resolved — no dangling relative/bare specifiers.
@@ -114,9 +114,9 @@ class ProjectBuildTest {
         assertContains(written, "/proj/dist/index.js")
         assertContains(written, "/proj/dist/math.js")
         val mathJs = vfs.readText("/proj/dist/math.js")
-        assertTrue(mathJs != null && mathJs.contains("function add"), "emitted JS retains the add function: $mathJs")
+        have(mathJs != null && mathJs.contains("function add"))
         // node_modules outputs are never written.
-        assertTrue(written.none { it.contains("/node_modules/") })
+        have(written.none { it.contains("/node_modules/") })
     }
 
     /** Nested source dirs + same-basename files in two directories (output-layout regressions). */
@@ -142,7 +142,7 @@ class ProjectBuildTest {
         assertContains(written, "/proj/dist/index.js")
         assertContains(written, "/proj/dist/helpers/util.js")
         val utilJs = vfs.readText("/proj/dist/helpers/util.js")
-        assertTrue(utilJs != null && utilJs.contains("utilMarker"), "nested output holds its module: $utilJs")
+        have(utilJs != null && utilJs.contains("utilMarker"))
         assertNull(vfs.readText("/proj/dist/util.js"), "nested output must not also land flattened at the outDir root")
     }
 
@@ -153,10 +153,10 @@ class ProjectBuildTest {
         assertEquals(3, result.written.size, "all three inputs must emit: ${result.written}")
         val rootIndex = vfs.readText("/proj/dist/index.js")
         val localeIndex = vfs.readText("/proj/dist/locales/index.js")
-        assertTrue(rootIndex != null && rootIndex.contains("rootMarker"), "root index.js written: $rootIndex")
-        assertTrue(
+        have(rootIndex != null && rootIndex.contains("rootMarker"))
+        have(
             localeIndex != null && localeIndex.contains("localeMarker"),
-            "locales/index.js written separately, not overwritten by a basename collision: $localeIndex",
+            "locales/index.js written separately, not overwritten by a basename collision",
         )
     }
 
@@ -164,12 +164,12 @@ class ProjectBuildTest {
     fun writtenOutputsEndWithExactlyOneTrailingNewline() {
         val vfs = nestedProject()
         val result = ProjectCompiler(vfs).build("/proj")
-        assertTrue(result.written.isNotEmpty())
+        have(result.written.isNotEmpty())
         for ((path, _) in result.written) {
             val text = vfs.readText(path)
-            assertTrue(
+            have(
                 text != null && text.endsWith("\n") && !text.endsWith("\n\n"),
-                "$path must end with exactly one newline, got tail: ${text?.takeLast(3)}",
+                "$path must end with exactly one newline",
             )
         }
     }
@@ -183,10 +183,7 @@ class ProjectBuildTest {
             ),
         )
         val result = ProjectCompiler(vfs).build("/proj", noEmit = true)
-        assertTrue(
-            result.diagnostics.any { it.code == 5014 },
-            "malformed tsconfig should report TS5014: ${result.diagnostics.map { it.code }}",
-        )
+        have(result.diagnostics.any { it.code == 5014 })
     }
 
     @Test
@@ -198,10 +195,7 @@ class ProjectBuildTest {
             ),
         )
         val result = ProjectCompiler(vfs).build("/proj", noEmit = true)
-        assertTrue(
-            result.diagnostics.any { it.code == 6053 },
-            "missing extends target should report TS6053: ${result.diagnostics.map { it.code }}",
-        )
+        have(result.diagnostics.any { it.code == 6053 })
     }
 
     @Test
@@ -209,10 +203,7 @@ class ProjectBuildTest {
         // Point at a directory with no tsconfig.json.
         val vfs = InMemoryVfs(mapOf("/proj/src/index.ts" to "export const x = 1;"))
         val result = ProjectCompiler(vfs).build("/proj", noEmit = true)
-        assertTrue(
-            result.diagnostics.any { it.code == 5083 },
-            "missing tsconfig should report TS5083: ${result.diagnostics.map { it.code }}",
-        )
+        have(result.diagnostics.any { it.code == 5083 })
     }
 }
 

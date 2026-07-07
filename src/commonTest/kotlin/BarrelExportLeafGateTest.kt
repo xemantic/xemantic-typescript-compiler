@@ -25,9 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
 import kotlin.test.Test
 import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 
 /**
  * M3.4 (round 413): pins the `export *` leaf-export gate in
@@ -133,11 +133,7 @@ export * from "./dbg.js";"""
                 """.trimIndent()
             )
         )
-        assertTrue(
-            result.diagnostics.any { it.code == 2322 },
-            "negative control lost: string|number → string without narrowing must be TS2322, got: " +
-                result.diagnostics.joinToString { "TS${it.code}" },
-        )
+        have(result.diagnostics.any { it.code == 2322 })
     }
 
     /**

@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * Round 430b (M3.1): a type parameter binds from a PREDICATE-position callback —
@@ -39,12 +40,9 @@ import kotlin.test.assertTrue
  */
 class PredicatePositionTpInferenceTest {
 
-    private fun diags(source: String): List<Diagnostic> =
-        TypeScriptCompiler().compile("// @strict: true\n" + source.trimIndent(), "t.ts").diagnostics
-
     @Test
     fun `TP binds from a named guard arg's predicate target`() {
-        val d = diags(
+        diagnose(
             """
             interface Tag { kind: number; comment?: string; }
             interface AugmentsTag extends Tag { cls: string; }
@@ -54,13 +52,14 @@ class PredicatePositionTpInferenceTest {
                 return getFirstTag(name, isAugmentsTag);
             }
             """
-        )
-        assertTrue(d.none { it.code == 2322 }, "expected no TS2322, got: $d")
+        ) should {
+            have(none { it.code == 2322 })
+        }
     }
 
     @Test
     fun `TP binding flows to an assignment target`() {
-        val d = diags(
+        diagnose(
             """
             interface Tag { kind: number; }
             interface ClassTag extends Tag { cls: string; }
@@ -72,13 +71,14 @@ class PredicatePositionTpInferenceTest {
                 return t;
             }
             """
-        )
-        assertTrue(d.none { it.code == 2322 }, "expected no TS2322, got: $d")
+        ) should {
+            have(none { it.code == 2322 })
+        }
     }
 
     @Test
     fun `negative control - a WRONG-target guard still fires`() {
-        val d = diags(
+        diagnose(
             """
             interface Tag { kind: number; }
             interface ClassTag extends Tag { cls: string; }
@@ -91,7 +91,8 @@ class PredicatePositionTpInferenceTest {
                 return t;
             }
             """
-        )
-        assertTrue(d.any { it.code == 2322 }, "expected TS2322 for OtherTag vs ClassTag, got: $d")
+        ) should {
+            have(any { it.code == 2322 })
+        }
     }
 }

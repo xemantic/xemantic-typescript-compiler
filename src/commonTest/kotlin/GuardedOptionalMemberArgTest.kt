@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * Round 428c (M3.4): the optional-member-arg TS2345 emitter
@@ -43,9 +44,6 @@ import kotlin.test.assertTrue
  */
 class GuardedOptionalMemberArgTest {
 
-    private fun diags(source: String): List<Diagnostic> =
-        TypeScriptCompiler().compile("// @strict: true\n" + source.trimIndent(), "t.ts").diagnostics
-
     private val decls = """
         interface Declaration { kind: number; }
         interface Sym { flags: number; valueDeclaration?: Declaration; }
@@ -55,7 +53,7 @@ class GuardedOptionalMemberArgTest {
 
     @Test
     fun `if-guarded optional member arg does not fire`() {
-        val d = diags(
+        diagnose(
             """
             $decls
             export function mergeSymbol(target: Sym, source: Sym): void {
@@ -64,26 +62,28 @@ class GuardedOptionalMemberArgTest {
                 }
             }
             """
-        )
-        assertTrue(d.none { it.code == 2345 }, "expected no TS2345, got: $d")
+        ) should {
+            have(none { it.code == 2345 })
+        }
     }
 
     @Test
     fun `double-bang and-chain guarded optional member arg does not fire`() {
-        val d = diags(
+        diagnose(
             """
             $decls
             export function ctxSensitive(symbol: Sym): boolean {
                 return !!symbol.valueDeclaration && isExpression(symbol.valueDeclaration);
             }
             """
-        )
-        assertTrue(d.none { it.code == 2345 }, "expected no TS2345, got: $d")
+        ) should {
+            have(none { it.code == 2345 })
+        }
     }
 
     @Test
     fun `deep-path and-chain guarded optional member arg does not fire`() {
-        val d = diags(
+        diagnose(
             """
             $decls
             interface Ty { symbol: Sym; }
@@ -91,27 +91,29 @@ class GuardedOptionalMemberArgTest {
                 return !!(type.symbol.valueDeclaration && isExpression(type.symbol.valueDeclaration));
             }
             """
-        )
-        assertTrue(d.none { it.code == 2345 }, "expected no TS2345, got: $d")
+        ) should {
+            have(none { it.code == 2345 })
+        }
     }
 
     @Test
     fun `negative control - unguarded optional member arg still fires`() {
-        val d = diags(
+        diagnose(
             """
             $decls
             export function unguarded(target: Sym, source: Sym): void {
                 setValueDeclaration(target, source.valueDeclaration);
             }
             """
-        )
-        assertTrue(d.any { it.code == 2345 }, "expected TS2345 for unguarded optional member, got: $d")
+        ) should {
+            have(any { it.code == 2345 })
+        }
     }
 
     @Test
     fun `negative control - wrong-polarity guard still fires`() {
         // The FALSE branch of the truthy guard is exactly where the member IS undefined.
-        val d = diags(
+        diagnose(
             """
             $decls
             export function wrongBranch(target: Sym, source: Sym): void {
@@ -120,7 +122,8 @@ class GuardedOptionalMemberArgTest {
                 }
             }
             """
-        )
-        assertTrue(d.any { it.code == 2345 }, "expected TS2345 in the falsy branch, got: $d")
+        ) should {
+            have(any { it.code == 2345 })
+        }
     }
 }

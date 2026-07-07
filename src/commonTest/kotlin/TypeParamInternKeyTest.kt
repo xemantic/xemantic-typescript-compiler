@@ -25,8 +25,8 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * M1.13: `Checker.typeParamInternCache` interns each generic's type parameter as a shared
@@ -69,11 +69,7 @@ class TypeParamInternKeyTest {
                 """.trimIndent(),
             )
         )
-        assertTrue(
-            ts2344(result).isEmpty(),
-            "an unconstrained type param must NOT inherit a later file's colliding constraint; got: " +
-                ts2344(result),
-        )
+        have(ts2344(result).isEmpty())
     }
 
     @Test
@@ -94,11 +90,7 @@ class TypeParamInternKeyTest {
                 """.trimIndent(),
             )
         )
-        assertTrue(
-            ts2344(result).isEmpty(),
-            "primitive explicit type args to an unconstrained generic function must not draw TS2344; got: " +
-                ts2344(result),
-        )
+        have(ts2344(result).isEmpty())
     }
 
     @Test
@@ -123,11 +115,7 @@ class TypeParamInternKeyTest {
                 """.trimIndent(),
             )
         )
-        assertTrue(
-            ts2344(result).isEmpty(),
-            "mixed constrained/unconstrained generics across three files must not cross-contaminate; got: " +
-                ts2344(result),
-        )
+        have(ts2344(result).isEmpty())
     }
 
     @Test
@@ -145,11 +133,7 @@ class TypeParamInternKeyTest {
                 """.trimIndent(),
             )
         )
-        assertTrue(
-            result.diagnostics.filter { it.code == 2344 || it.code == 2339 }.isEmpty(),
-            "valid single-file generics must produce no constraint/member errors; got: " +
-                result.diagnostics.filter { it.code == 2344 || it.code == 2339 }.map { "${it.code}: ${it.message}" },
-        )
+        have(result.diagnostics.filter { it.code == 2344 || it.code == 2339 }.isEmpty())
     }
 
     @Test
@@ -168,9 +152,6 @@ class TypeParamInternKeyTest {
                 """.trimIndent(),
             )
         )
-        assertTrue(
-            ts2344(result).any { it.contains("'string'") && it.contains("'number'") },
-            "a genuine string-vs-number violation must still fire TS2344; got: " + ts2344(result),
-        )
+        have(ts2344(result).any { it.contains("'string'") && it.contains("'number'") })
     }
 }

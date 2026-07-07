@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * M1.12 (round 418): a user type-guard declared as a NESTED function (inside another
@@ -45,12 +46,9 @@ import kotlin.test.assertTrue
  */
 class NestedTypeGuardNarrowingTest {
 
-    private fun diags(source: String): List<Diagnostic> =
-        TypeScriptCompiler().compile("// @strict: true\n" + source.trimIndent(), "t.ts").diagnostics
-
     @Test
     fun `nested guard narrows a single type DOWN via an if-statement`() {
-        val d = diags(
+        diagnose(
             """
             interface Type { flags: number; }
             interface TupleTypeReference extends Type { target: { readonly: boolean }; }
@@ -66,18 +64,15 @@ class NestedTypeGuardNarrowingTest {
                 return { check };
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2339 },
-            "a nested type-guard must narrow `target` to the subtype; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 2339 })
+        }
     }
 
     @Test
     fun `nested guard narrows on the RHS of an and-short-circuit`() {
         // The `isGenericTupleType` shape: `return isTupleType(type) && type.target.combinedFlags`.
-        val d = diags(
+        diagnose(
             """
             interface Type { flags: number; }
             interface TupleTypeReference extends Type { target: { combinedFlags: number }; }
@@ -90,17 +85,14 @@ class NestedTypeGuardNarrowingTest {
                 return { isGenericTupleType };
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2339 },
-            "the `&&` RHS must see `type` narrowed by the left guard; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 2339 })
+        }
     }
 
     @Test
     fun `nested guard narrows a UNION receiver`() {
-        val d = diags(
+        diagnose(
             """
             interface Cat { meow(): void; }
             interface Dog { bark(): void; }
@@ -114,19 +106,16 @@ class NestedTypeGuardNarrowingTest {
                 return f;
             }
             """,
-        )
-        assertTrue(
-            d.none { it.code == 2339 },
-            "a nested union guard must narrow both branches; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(none { it.code == 2339 })
+        }
     }
 
     @Test
     fun `FP-safety - a genuinely-missing property is NOT suppressed by narrowing`() {
         // The narrowed subtype `Sub` does NOT declare `missing`, so TS2339 MUST still fire —
         // the suppression only fires when the narrowed subtype HAS the accessed property.
-        val d = diags(
+        diagnose(
             """
             interface Base { flags: number; }
             interface Sub extends Base { extra: number; }
@@ -142,12 +131,9 @@ class NestedTypeGuardNarrowingTest {
                 return f;
             }
             """,
-        )
-        assertTrue(
-            d.any { it.code == 2339 && it.message.contains("missing") },
-            "a property missing on the narrowed subtype must still fire TS2339; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(any { it.code == 2339 && it.message.contains("missing") })
+        }
     }
 
     @Test
@@ -155,7 +141,7 @@ class NestedTypeGuardNarrowingTest {
         // Two distinct nested functions share the name `pick` → the program-wide unique-name
         // map records it as ambiguous (null) → no narrowing. The access on the wide `Base`
         // (which lacks `extra`) therefore still fires TS2339 (the conservative outcome).
-        val d = diags(
+        diagnose(
             """
             interface Base { flags: number; }
             interface Sub extends Base { extra: number; }
@@ -170,11 +156,8 @@ class NestedTypeGuardNarrowingTest {
                 return pick;
             }
             """,
-        )
-        assertTrue(
-            d.any { it.code == 2339 && it.message.contains("extra") },
-            "an ambiguous guard name must NOT narrow (conservative); TS2339 must still fire; got: " +
-                d.joinToString { "TS${it.code}: ${it.message}" },
-        )
+        ) should {
+            have(any { it.code == 2339 && it.message.contains("extra") })
+        }
     }
 }
