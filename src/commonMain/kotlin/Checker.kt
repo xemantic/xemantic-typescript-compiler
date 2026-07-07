@@ -118077,7 +118077,8 @@ interface DataView {
      *  matching THIS function's OWN param is a REDECLARATION (param wins, TS2403), not a
      *  shadow — excluded via the param-name set (mirrors [applyBodyLocalShadowing]). */
     private fun applyCallTypesBodyLocalShadowing(statements: List<Statement>, parameters: List<Parameter>) {
-        if (currentLocalTypes.isEmpty()) return
+        // (round 436: no currentLocalTypes.isEmpty() early-out — the destructured-local
+        // binding-name registration below must run even when no param types were recorded.)
         val paramNames = mutableSetOf<String>()
         for (p in parameters) collectBindingNames(p.name, paramNames)
         for (s in statements) shadowCallTypesLocalDecls(s, paramNames)
@@ -118085,7 +118086,30 @@ interface DataView {
 
     private fun shadowCallTypesDeclList(declarations: List<VariableDeclaration>, paramNames: Set<String>) {
         for (d in declarations) {
-            val nm = (d.name as? Identifier)?.text ?: continue
+            // M3.1 (round 436): a DESTRUCTURED local (`const { version, major } =
+            // parsePartial(text)` — tsc's semver.ts; `const { sourceFile, start, length }
+            // = getDiagnosticSpanForCallNode(node)` — checker.ts) shadows outer bindings,
+            // but its member types are unmodeled and the names live in NO local map, so a
+            // bare-identifier arg fell through getTypeOfIdentifier to the merged globals
+            // and resolved tsc's imported `version: string` / `function length(...)`
+            // instead → FP TS2345. Register the binding names into the fn-scoped side set
+            // (same mechanism as round 429's destructured PARAMS) → anyType,
+            // suppression-only.
+            val nameNode = d.name
+            if (nameNode is ObjectBindingPattern || nameNode is ArrayBindingPattern) {
+                val bindingNames = mutableSetOf<String>()
+                collectBindingNames(nameNode, bindingNames)
+                for (bn in bindingNames) {
+                    if (bn in paramNames) continue
+                    currentParamBindingNames.add(bn)
+                    // An INHERITED currentLocalTypes entry (e.g. the file-level
+                    // `const version = "5.0"` recording) is consulted BEFORE the
+                    // side set — override it like the Identifier branch does.
+                    if (currentLocalTypes.containsKey(bn)) currentLocalTypes[bn] = anyType
+                }
+                continue
+            }
+            val nm = (nameNode as? Identifier)?.text ?: continue
             if (nm in paramNames) continue
             if (currentLocalTypes.containsKey(nm)) currentLocalTypes[nm] = anyType
         }
