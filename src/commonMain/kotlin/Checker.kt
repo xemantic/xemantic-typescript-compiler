@@ -86207,6 +86207,16 @@ interface DataView {
             return
         }
 
+        // Round 435g: `return undefined`/`return null` against an ALIAS whose union
+        // body syntactically carries the matching nullish keyword (`ResolutionMode =
+        // ModuleKind.ESNext | ModuleKind.CommonJS | undefined`) is legal — the
+        // RESOLVED union can collapse when enum-member constituents resolve through
+        // cross-file merging, so trust the syntactic proof (the M1.8 TS2366 rule,
+        // extended to the return-VALUE path; tsc's own parseResolutionMode).
+        (expr as? Identifier)?.text?.takeIf { it == "undefined" || it == "null" }?.let { nm ->
+            if (aliasUnionContainsNullishKeyword(returnTypeNode, nm)) return
+        }
+
 
         // If the declared return type is a TypeReference with a QualifiedName whose
         // leftmost is unresolvable AND has a spelling-suggestion target (meaning
@@ -86682,8 +86692,12 @@ interface DataView {
         val ref = typeNode as? TypeReference ?: return false
         val name = (ref.typeName as? Identifier)?.text ?: return false
         val sym = currentFileLocals?.get(name) ?: globals[name] ?: return false
-        val aliasDecl = sym.declarations.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration
-            ?: return false
+        // Round 435g: an IMPORTED alias's file-local symbol carries only the
+        // ImportSpecifier — fall through to the merged globals, where the declaring
+        // file's TypeAliasDeclaration lives (tsc's barrel-imported ResolutionMode).
+        val aliasDecl = (sym.declarations.firstOrNull { it is TypeAliasDeclaration }
+            ?: globals[name]?.declarations?.firstOrNull { it is TypeAliasDeclaration })
+            as? TypeAliasDeclaration ?: return false
         val body = aliasDecl.type as? UnionType ?: return false
         val kind = if (nullishName == "undefined") SyntaxKind.UndefinedKeyword else SyntaxKind.NullKeyword
         return body.types.any { it is KeywordTypeNode && it.kind == kind }
