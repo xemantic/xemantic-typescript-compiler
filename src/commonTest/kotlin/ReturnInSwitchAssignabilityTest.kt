@@ -80,6 +80,68 @@ class ReturnInSwitchAssignabilityTest {
         assertTrue(d.none { it.code == 2322 }, "expected no TS2322, got: $d")
     }
 
+    // ------------------------------------------------------------------
+    // round 431c/d: foreign-TP source gate — an un-inferred generic call
+    // result must not be relation-checked against the return annotation
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `un-inferred generic call return is not checked against the annotation`() {
+        // `append<T>` called with no usable anchor types as `T[]` — tsc infers T
+        // from context and the return relates; checking the raw type is a FP.
+        val d = diags(
+            """
+            declare function append<T extends {}>(to: T[] | undefined, value: T | undefined): T[] | undefined;
+            interface TypeParameter2 { id: number; }
+            export function outer(outerTps: TypeParameter2[] | undefined, anyValue: any): TypeParameter2[] | undefined {
+                switch (anyValue.kind) {
+                    case 1:
+                        return append(outerTps, anyValue.tp);
+                    default:
+                        return undefined;
+                }
+            }
+            """
+        )
+        assertTrue(d.none { it.code == 2322 }, "expected no TS2322, got: $d")
+    }
+
+    @Test
+    fun `foreign TP hidden in an anonymous alias-body member is gated too`() {
+        // tsc moduleNameResolver's SearchResult<T> = { value: T | undefined } |
+        // undefined — the un-inferred T hides inside an anonymous object member.
+        val d = diags(
+            """
+            interface Resolved2 { path: string; }
+            type SearchResult2<T> = { value: T | undefined } | undefined;
+            declare function toSearchResult<T>(value: T | undefined): SearchResult2<T>;
+            export function load(trace: boolean): SearchResult2<Resolved2> {
+                if (trace) {
+                    return toSearchResult(/*value*/ undefined);
+                }
+                return undefined;
+            }
+            """
+        )
+        assertTrue(d.none { it.code == 2322 }, "expected no TS2322, got: $d")
+    }
+
+    @Test
+    fun `negative control - a mismatch beside the enclosing fn's OWN type param keeps firing`() {
+        // The per-branch conditional check (B69.1) runs BEFORE the foreign-TP gate,
+        // and an own-TP source must not trip the gate — the concrete "str" branch
+        // keeps firing. (A BARE own-TP return `return x` vs number is a pre-existing
+        // FN unrelated to the gate — do not pin it.)
+        val d = diags(
+            """
+            export function f<T>(x: T, cond: boolean): number {
+                return cond ? x : "str";
+            }
+            """
+        )
+        assertTrue(d.any { it.code == 2322 }, "expected TS2322 for the string branch, got: $d")
+    }
+
     @Test
     fun `negative control - a genuine mismatch in a switch case still fires`() {
         val d = diags(

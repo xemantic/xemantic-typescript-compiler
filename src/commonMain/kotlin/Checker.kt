@@ -85921,7 +85921,28 @@ interface DataView {
             is Type.Union -> t.types.any { typeContainsForeignTypeParam(it, ownTpNames, depth + 1) }
             is Type.Intersection -> t.types.any { typeContainsForeignTypeParam(it, ownTpNames, depth + 1) }
             is Type.Reference -> t.resolvedTypeArguments?.any { typeContainsForeignTypeParam(it, ownTpNames, depth + 1) } == true
-            is Type.Object -> t.tupleElementTypes?.any { typeContainsForeignTypeParam(it, ownTpNames, depth + 1) } == true
+            is Type.Object -> {
+                if (t.tupleElementTypes?.any { typeContainsForeignTypeParam(it, ownTpNames, depth + 1) } == true) return true
+                // round 431d: an ANONYMOUS object (alias-body materialization —
+                // `SearchResult<T> = { value: T | undefined } | undefined`) hides the
+                // un-inferred TP in its members / call-signature positions. Named
+                // interfaces stay excluded (their TPs surface as Reference args; a
+                // member walk there would be broad + first-touch-order-shifting).
+                if (t.symbol == null) {
+                    t.members?.values?.forEach { m ->
+                        if (typeContainsForeignTypeParam(getTypeOfSymbol(m), ownTpNames, depth + 1)) return true
+                    }
+                    t.callSignatures?.forEach { s ->
+                        s.resolvedReturnType?.let { rt ->
+                            if (typeContainsForeignTypeParam(rt, ownTpNames, depth + 1)) return true
+                        }
+                        s.parameters.forEach { p ->
+                            if (typeContainsForeignTypeParam(getTypeOfSymbol(p), ownTpNames, depth + 1)) return true
+                        }
+                    }
+                }
+                false
+            }
             else -> false
         }
     }
