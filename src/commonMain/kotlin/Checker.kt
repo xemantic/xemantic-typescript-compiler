@@ -40131,10 +40131,10 @@ interface String {
     lastIndexOf(searchString: string, position?: number): number;
     localeCompare(that: string): number;
     match(regexp: string | RegExp): RegExpMatchArray | null;
-    replace(searchValue: string, replaceValue: string): string;
-    search(regexp: string): number;
+    replace(searchValue: string | RegExp, replaceValue: any): string;
+    search(regexp: string | RegExp): number;
     slice(start?: number, end?: number): string;
-    split(separator: string, limit?: number): string[];
+    split(separator: string | RegExp, limit?: number): string[];
     substring(start: number, end?: number): string;
     sub(): string;
     toLowerCase(): string;
@@ -40157,7 +40157,7 @@ interface String {
     trimStart(): string;
     trimEnd(): string;
     matchAll(regexp: any): any;
-    replaceAll(searchValue: string, replaceValue: string): string;
+    replaceAll(searchValue: string | RegExp, replaceValue: any): string;
     fixed(): string;
     [index: number]: string;
 }
