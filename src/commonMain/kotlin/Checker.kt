@@ -84698,9 +84698,10 @@ interface DataView {
             (targetType is Type.Intrinsic || targetType is Type.StringLiteral ||
                 targetType is Type.NumberLiteral || targetType is Type.BigIntLiteral)
         val canUse = canUseRaw || callBypass
-        val isAssignable = canUse && withFreshObjLitSource(init) {
-            checkTypeRelatedTo(sourceType, targetType, assignableRelation)
-        }
+        val isAssignable = canUse && (bareNewMatchesTarget(init, targetType) ||
+            withFreshObjLitSource(init) {
+                checkTypeRelatedTo(sourceType, targetType, assignableRelation)
+            })
         // B103: the relation engine ignores optional-vs-required presence, so it can
         // wrongly report `{ x?: T }`-shaped source as assignable to `{ x: T }`. When the
         // comparison otherwise PASSES but a target REQUIRED property's source counterpart
@@ -87037,7 +87038,6 @@ interface DataView {
                 }
                 if (targetType != null && targetType !== anyType && targetType !== errorType) {
                     val tt = targetType
-                    // B8.1: target is `never` because its annotation is an
                     // intersection that reduced due to a conflicting private
                     // property. Emit TS2322 with `never` display + chain so the
                     // standard emission path doesn't print `Type 'X' is not
@@ -87510,9 +87510,10 @@ interface DataView {
                         }
                     }
                     val canUse = canUseTypeEngine(sourceType, tt)
-                    val isAssignable = canUse && withFreshObjLitSource(expr.right) {
-                        checkTypeRelatedTo(sourceType, tt, assignableRelation)
-                    }
+                    val isAssignable = canUse && (bareNewMatchesTarget(expr.right, tt) ||
+                        withFreshObjLitSource(expr.right) {
+                            checkTypeRelatedTo(sourceType, tt, assignableRelation)
+                        })
                     // B138 (assignment path): NON-LITERAL object source vs an index-sig-only
                     // target — `x = a` where `x: {[k:string]:T}`. Gated to `isAssignable`
                     // (the relation wrongly passes) so it never double-emits.
@@ -126074,6 +126075,23 @@ interface DataView {
         }
         // Union target: source must be related to some constituent
         if (target is Type.Union) {
+            // Round 435e: the (source, union) frame's own source-stack entry is
+            // REDUNDANT with each member call's re-push of the SAME source instance —
+            // pop it around the member iteration so a union decomposition doesn't
+            // read as a re-entry to the same-target arg-shortcut below
+            // (`NodeArray<TemplateSpan>` vs `NodeArray<Node> | undefined` was
+            // deferred into structural comparison, which FPs on Array-method
+            // contravariance — tsc's getContainingNodeArray family ×23). A genuine
+            // member-recursion re-entry (recursiveTypeComparison's Observable
+            // reached through needThisOne) has TWO distinct frames and still defers.
+            if (source is Type.Reference) {
+                state.relationSourceTargets.removeAt(state.relationSourceTargets.lastIndex)
+                try {
+                    return target.types.any { checkTypeRelatedTo(source, it, relation) }
+                } finally {
+                    state.relationSourceTargets.add(source.target.id)
+                }
+            }
             return target.types.any { checkTypeRelatedTo(source, it, relation) }
         }
         // Intersection target: source must be related to each constituent
@@ -126126,6 +126144,11 @@ interface DataView {
                 // etc. — Observable<{}> vs Observable<number> reached via propertiesRelatedTo
                 // must defer to structural so the inner needThisOne self-reference cycle-breaks).
                 // count > 1 because the current pair was already pushed by checkTypeRelatedTo.
+                // Round 435e: a UNION-target decomposition frame is TRANSPARENT on the
+                // source stack (see the Union-target branch above), so reaching here
+                // through `NodeArray<Node> | undefined` counts as a single frame and
+                // does NOT defer; the recursiveTypeComparison member-recursion pin
+                // (source-side-only repeat through needThisOne) still does.
                 val tid = source.target.id
                 val isReentry = countOccurrences(state.relationSourceTargets, tid) > 1 ||
                     countOccurrences(state.relationTargetTargets, tid) > 1
@@ -128184,6 +128207,26 @@ interface DataView {
                 else -> return e
             }
         }
+    }
+
+    /** Round 435e: a BARE `new C()` (no explicit type args, no ctor args) assigned
+     *  where the target contains a Reference to the SAME class/interface C is
+     *  contextually instantiated from the target — tsc infers C's type arguments
+     *  from the assignment context, so `map = new WeakMap()` against
+     *  `WeakMap<Node, readonly Node[] | undefined> | undefined` is legal (tsc's own
+     *  nodeChildren.ts). Suppression-only: gated to the same declared symbol name,
+     *  so a mismatched container class still fails. */
+    private fun bareNewMatchesTarget(rhs: Expression?, target: Type): Boolean {
+        val ne = rhs as? NewExpression ?: return false
+        if (!ne.typeArguments.isNullOrEmpty() || !ne.arguments.isNullOrEmpty()) return false
+        val calleeName = (ne.expression as? Identifier)?.text ?: return false
+        fun matches(t: Type): Boolean = when (t) {
+            is Type.Union -> t.types.any { matches(it) }
+            is Type.Reference -> t.target.symbol?.name == calleeName
+            is Type.Interface -> t.symbol?.name == calleeName
+            else -> false
+        }
+        return matches(target)
     }
 
     /** Round 435: run [block] with [freshObjLitRange] set when [expr] unwraps to an
