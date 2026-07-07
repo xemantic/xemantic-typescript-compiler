@@ -72,4 +72,25 @@ class OverloadArgNarrowDownTest {
             have(any { it.code == 2769 })
         }
     }
+
+    @Test
+    fun `typeof narrows an unknown overload arg to string`() {
+        // tsc moduleNameResolver's `target: unknown` string arm feeding an overloaded
+        // `getPathComponents(target)`. The `typeof` guard narrows `unknown` → `string`,
+        // which matches the plain-string overload.
+        diagnose(
+            """
+            declare function toParts(p: string & { __brand: any }): string[];
+            declare function toParts(p: string): string[];
+            function h(target: unknown): string[] {
+                if (typeof target === "string") {
+                    return toParts(target);
+                }
+                return [];
+            }
+            """.trimIndent(),
+        ) should {
+            have(none { it.code == 2769 })
+        }
+    }
 }
