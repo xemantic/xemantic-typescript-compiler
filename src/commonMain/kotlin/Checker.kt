@@ -1158,6 +1158,27 @@ class Checker(
      *  `init` per the init-order trap (the walker runs during init). */
     private val implicitAnyScopes = ArrayDeque<HashMap<String, TypeNode?>>()
 
+    /** Round 435c: the PARALLEL stack of [implicitAnyScopes] — name → INITIALIZER
+     *  expression for annotation-less body locals (`var addLazyDiagnostic = (arg: ()
+     *  => void) => {…}` / `let rule = cache.get(k)`), so a later `name = arrow`
+     *  assignment derives its contextual signature from the declared-by-initializer
+     *  type (tsc infers the local's type from the initializer; only a local with
+     *  NEITHER annotation NOR initializer is the evolving-any that keeps TS7006
+     *  firing). Pushed/popped ONLY via [pushImplicitAnyScope]/[popImplicitAnyScope]
+     *  so the two stacks stay index-aligned. Declared before `init` (init-order trap). */
+    private val implicitAnyScopeInits = ArrayDeque<HashMap<String, Expression>>()
+
+    /** Round 435c: the enclosing-namespace stack for the implicit-any walker —
+     *  pushed at [checkImplicitAnyInStatements]'s ModuleDeclaration branch (the
+     *  namespace's merged binder symbol), consulted by
+     *  [getTypeFromTypeNodeSafeNsAware] which bridges the innermost entry onto
+     *  [inferenceNamespaceStack] ONLY around one type-node resolution (the
+     *  established bridge pattern — never for a whole body walk). Lets a
+     *  namespace-local annotation (`const map: ManyToManyPathMap = {…}` inside
+     *  `namespace BuilderState`) provide object-literal member context. Declared
+     *  before `init` (init-order trap). */
+    private val implicitAnyNsStack = ArrayDeque<Symbol>()
+
     /** M3.4 (round 411): process-wide memo for [resolveImportedEnumSymbol] (alias symbol
      *  id → enum Symbol, or null) — the enum-flavored sibling of [importedNamespaceSymCache],
      *  for discriminated-union narrowing keyed on a barrel-imported enum member
@@ -15350,6 +15371,8 @@ class Checker(
             val savedLocals = currentFileLocals
             currentFileLocals = result.locals
             implicitAnyScopes.clear() // per-file hygiene (every push pops via finally; belt-and-braces)
+            implicitAnyScopeInits.clear()
+            implicitAnyNsStack.clear()
             try {
                 checkImplicitAnyInStatements(result.sourceFile.statements, source, fileName)
             } finally {
@@ -20546,7 +20569,7 @@ class Checker(
                         try {
                             checkImplicitAnyInStatements(it.statements, source, fileName, returnCtxAnnotation = stmt.type)
                         } finally {
-                            implicitAnyScopes.removeLast()
+                            popImplicitAnyScope()
                         }
                     }
                     // TS7010 for bodyless functions is now in checkBodylessFunctionReturnTypes (unconditional)
@@ -20654,6 +20677,15 @@ class Checker(
                                     // — AST-only at registration (the TypeNode resolves
                                     // lazily, only if an assignment consumes it).
                                     ?: calleeReturnAnnotationForImplicitAny(decl.initializer)
+                                // Round 435c: an annotation-less initialized local also
+                                // records its INITIALIZER (a `name = arrow` assignment
+                                // derives context from the declared-by-initializer type —
+                                // resolved lazily in initializerCtxTypeForImplicitAny).
+                                // A local with NEITHER stays the evolving-any that keeps
+                                // TS7006 firing (the pinned uncalledFunctionChecks rule).
+                                if (decl.type == null) decl.initializer?.let {
+                                    implicitAnyScopeInits.lastOrNull()?.put(dn.text, it)
+                                }
                             } else {
                                 collectBindingNamesForImplicitAny(dn, scope)
                             }
@@ -20711,7 +20743,7 @@ class Checker(
                             // type and propagate it into the literal so nested arrow values
                             // whose slot is a union-with-primitive-and-function can suppress
                             // TS7006 (B6.1 — `contextualOverloadListFromUnionWithPrimitive*`).
-                            val annotatedType = decl.type?.let { getTypeFromTypeNodeSafe(it) }
+                            val annotatedType = decl.type?.let { getTypeFromTypeNodeSafeNsAware(it) }
                             // When the var decl has a type annotation AND the initializer
                             // is an arrow/function expression, the params are contextually
                             // typed by the annotation. Suppress TS7006 by setting
@@ -20764,10 +20796,23 @@ class Checker(
                 }
                 is ModuleDeclaration -> {
                     val childAmbient = inAmbientContext || ModifierFlag.Declare in stmt.modifiers
-                    when (val body = stmt.body) {
-                        is ModuleBlock -> checkImplicitAnyInStatements(body.statements, source, fileName, childAmbient)
-                        is ModuleDeclaration -> checkImplicitAnyInStatements(listOf(body), source, fileName, childAmbient)
-                        else -> {}
+                    // Round 435c: track the enclosing namespace so annotation resolution
+                    // inside the body can see namespace-local type names (bridged one call
+                    // at a time via getTypeFromTypeNodeSafeNsAware — never a whole-walk
+                    // inferenceNamespaceStack push, per the TS2576 gotcha). The dotted-name
+                    // binder rule records the INNERMOST segment's merged symbol on the node.
+                    val nsSym = fileResults[fileName]?.nodeToSymbol?.get(nodeKey(stmt))?.takeIf {
+                        it.flags.hasAny(SymbolFlags.Module or SymbolFlags.NamespaceModule or SymbolFlags.ValueModule)
+                    }
+                    if (nsSym != null) implicitAnyNsStack.addLast(nsSym)
+                    try {
+                        when (val body = stmt.body) {
+                            is ModuleBlock -> checkImplicitAnyInStatements(body.statements, source, fileName, childAmbient)
+                            is ModuleDeclaration -> checkImplicitAnyInStatements(listOf(body), source, fileName, childAmbient)
+                            else -> {}
+                        }
+                    } finally {
+                        if (nsSym != null) implicitAnyNsStack.removeLast()
                     }
                 }
                 is Block -> checkImplicitAnyInStatements(stmt.statements, source, fileName, returnCtxAnnotation = returnCtxAnnotation)
@@ -20787,7 +20832,7 @@ class Checker(
                                 retExpr is ObjectLiteralExpression || retExpr is ArrowFunction ||
                                 retExpr is FunctionExpression || retExpr is ParenthesizedExpression ||
                                 retExpr is ConditionalExpression))
-                            getTypeFromTypeNodeSafe(returnCtxAnnotation) else null
+                            getTypeFromTypeNodeSafeNsAware(returnCtxAnnotation) else null
                         checkImplicitAnyInExpr(retExpr, source, fileName, contextualType = retCtx,
                             ctxAnnotation = returnCtxAnnotation)
                     }
@@ -20875,7 +20920,7 @@ class Checker(
                     try {
                         checkImplicitAnyInStatements(it.statements, source, fileName, returnCtxAnnotation = element.type)
                     } finally {
-                        implicitAnyScopes.removeLast()
+                        popImplicitAnyScope()
                     }
                 }
             }
@@ -20886,7 +20931,7 @@ class Checker(
                     try {
                         checkImplicitAnyInStatements(it.statements, source, fileName)
                     } finally {
-                        implicitAnyScopes.removeLast()
+                        popImplicitAnyScope()
                     }
                 }
             }
@@ -20896,7 +20941,7 @@ class Checker(
                     try {
                         checkImplicitAnyInStatements(it.statements, source, fileName, returnCtxAnnotation = element.type)
                     } finally {
-                        implicitAnyScopes.removeLast()
+                        popImplicitAnyScope()
                     }
                 }
             }
@@ -20931,7 +20976,7 @@ class Checker(
                     try {
                         checkImplicitAnyInStatements(it.statements, source, fileName)
                     } finally {
-                        implicitAnyScopes.removeLast()
+                        popImplicitAnyScope()
                     }
                 }
             }
@@ -21070,6 +21115,78 @@ class Checker(
             }
         }
         implicitAnyScopes.addLast(m)
+        implicitAnyScopeInits.addLast(HashMap())
+    }
+
+    /** Round 435c: pops BOTH parallel scope stacks — the only legal pop. */
+    private fun popImplicitAnyScope() {
+        implicitAnyScopes.removeLast()
+        implicitAnyScopeInits.removeLast()
+    }
+
+    /** Round 435c: [getTypeFromTypeNodeSafe] with the implicit-any walker's enclosing
+     *  namespace bridged onto [inferenceNamespaceStack] for exactly this one call (the
+     *  established bridge pattern) — a namespace-local annotation like
+     *  `ManyToManyPathMap` inside `namespace BuilderState` resolves through the
+     *  namespace's exports (the nodeTypes cache is bypassed while the stack is active,
+     *  so no wrong entry can be cached). */
+    private fun getTypeFromTypeNodeSafeNsAware(typeNode: TypeNode): Type? {
+        val ns = implicitAnyNsStack.lastOrNull() ?: return getTypeFromTypeNodeSafe(typeNode)
+        inferenceNamespaceStack.addLast(ns)
+        try {
+            return getTypeFromTypeNodeSafe(typeNode)
+        } finally {
+            inferenceNamespaceStack.removeLast()
+        }
+    }
+
+    /** Round 435c: the contextual type a declared-by-INITIALIZER local provides to a
+     *  later `name = arrow` assignment (tsc: the local's type IS the initializer's
+     *  inferred type). Two shapes, both from tsc's own sources: an arrow/fn-expr
+     *  initializer (`var addLazyDiagnostic = (arg: () => void) => {…}` — checker.ts)
+     *  types directly; a `recv.get(…)` call on a Map-annotated lexical local
+     *  (`let rule = cache.get(k)` where `cache: Map<K, (node: X) => Y> | undefined` —
+     *  parenthesizerRules.ts) types as the Map's VALUE type argument. Anything else →
+     *  null (no context; TS7006 stands). */
+    private fun initializerCtxTypeForImplicitAny(init0: Expression): Type? {
+        var init: Expression = init0
+        while (init is ParenthesizedExpression) init = init.expression
+        return when {
+            init is ArrowFunction || init is FunctionExpression ->
+                getTypeOfExpression(init).takeIf { it !== anyType && it !== errorType }
+            init is CallExpression -> {
+                val pa = init.expression as? PropertyAccessExpression ?: return null
+                if (pa.name.text != "get") return null
+                val recv = pa.expression as? Identifier ?: return null
+                val recvAnn = implicitAnyScopeAnnOf(recv.text) ?: return null
+                val valueNode = mapValueTypeNodeOf(recvAnn) ?: return null
+                getTypeFromTypeNodeSafeNsAware(valueNode)
+            }
+            else -> null
+        }
+    }
+
+    /** The innermost lexical scope's declared annotation for [name], or null (absent
+     *  OR declared untyped — both mean "no annotation to consult"). */
+    private fun implicitAnyScopeAnnOf(name: String): TypeNode? {
+        for (i in implicitAnyScopes.indices.reversed()) {
+            val m = implicitAnyScopes[i]
+            if (m.containsKey(name)) return m[name]
+        }
+        return null
+    }
+
+    /** The VALUE type argument of a `Map`/`WeakMap`-family annotation (`Map<K, V>` →
+     *  V), looking through a union wrapper (`Map<K, V> | undefined`). */
+    private fun mapValueTypeNodeOf(ann: TypeNode): TypeNode? = when (ann) {
+        is TypeReference -> {
+            val nm = (ann.typeName as? Identifier)?.text
+            if ((nm == "Map" || nm == "WeakMap" || nm == "ESMap" || nm == "ReadonlyMap") &&
+                ann.typeArguments?.size == 2) ann.typeArguments!![1] else null
+        }
+        is UnionType -> ann.types.firstNotNullOfOrNull { mapValueTypeNodeOf(it) }
+        is ParenthesizedType -> mapValueTypeNodeOf(ann.type)
+        else -> null
     }
 
     private fun collectBindingNamesForImplicitAny(name: Node?, out: HashMap<String, TypeNode?>) {
@@ -21115,21 +21232,28 @@ class Checker(
     private fun resolveAssignTargetCtxTypeForImplicitAny(left: Expression): Type? = when (left) {
         is Identifier -> {
             var found = false
+            var foundIdx = -1
             var ann: TypeNode? = null
             for (i in implicitAnyScopes.indices.reversed()) {
                 val m = implicitAnyScopes[i]
                 if (m.containsKey(left.text)) {
                     found = true
+                    foundIdx = i
                     ann = m[left.text]
                     break
                 }
             }
             if (found) {
-                ann?.let { getTypeFromTypeNodeSafe(it) }
+                ann?.let { getTypeFromTypeNodeSafeNsAware(it) }
+                    // Round 435c: an annotation-less local with a recorded INITIALIZER
+                    // types from it (arrow/fn-expr initializers + the Map.get idiom);
+                    // declared-untyped-without-initializer stays null (TS7006 stands).
+                    ?: implicitAnyScopeInits.getOrNull(foundIdx)?.get(left.text)
+                        ?.let { initializerCtxTypeForImplicitAny(it) }
             } else {
                 val sym = currentFileLocals?.get(left.text) ?: globals[left.text]
                 val vd = sym?.declarations?.firstOrNull { it is VariableDeclaration } as? VariableDeclaration
-                vd?.type?.let { getTypeFromTypeNodeSafe(it) }
+                vd?.type?.let { getTypeFromTypeNodeSafeNsAware(it) }
             }
         }
         is PropertyAccessExpression -> {
@@ -21423,7 +21547,7 @@ class Checker(
                         else -> {}
                     }
                 } finally {
-                    implicitAnyScopes.removeLast()
+                    popImplicitAnyScope()
                 }
             }
             is FunctionExpression -> {
@@ -21444,7 +21568,7 @@ class Checker(
                 try {
                     checkImplicitAnyInStatements(expr.body.statements, source, fileName, returnCtxAnnotation = expr.type)
                 } finally {
-                    implicitAnyScopes.removeLast()
+                    popImplicitAnyScope()
                 }
             }
             is ClassExpression -> {
@@ -21455,8 +21579,15 @@ class Checker(
             is ObjectLiteralExpression -> {
                 // M1.6(b): members looked up through a union-with-non-object literal
                 // context get NO callable-arity suppression (see the param doc).
+                // Round 435c: NULLISH constituents don't count — tsc discriminates
+                // undefined/null out of a contextual union (`CachedDirectoryStructureHost
+                // | undefined` return annotations still contextually type the literal's
+                // member arrows — watchUtilities.ts readFile); the pinned FIRING case
+                // (`Rule = string | FullRule`) has a REAL primitive alternative.
                 val viaUnionWithPrimitive = contextualType is Type.Union &&
-                    contextualType.types.any { it !is Type.Object }
+                    contextualType.types.any {
+                        it !is Type.Object && !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)
+                    }
                 // M1.6(a): computed-key members against a mapped-table annotation get
                 // their contextual arity from the mapped VALUE's fn-type node (lazy —
                 // resolved on the first computed-key member only).
@@ -21493,7 +21624,7 @@ class Checker(
                                 try {
                                     checkImplicitAnyInStatements(it.statements, source, fileName, returnCtxAnnotation = prop.type)
                                 } finally {
-                                    implicitAnyScopes.removeLast()
+                                    popImplicitAnyScope()
                                 }
                             }
                         }
