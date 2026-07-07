@@ -126,6 +126,71 @@ class ReturnInSwitchAssignabilityTest {
         assertTrue(d.none { it.code == 2322 }, "expected no TS2322, got: $d")
     }
 
+    // ------------------------------------------------------------------
+    // round 431e: the foreign-TP gate extends to the var-decl, assignment,
+    // and conditional-return-branch paths
+    // ------------------------------------------------------------------
+
+    @Test
+    fun `un-inferred generic call var-decl initializer is not checked`() {
+        val d = diags(
+            """
+            declare function memoize<T>(cb: () => T): () => T;
+            interface Printer { print(): void; }
+            declare function createPrinter(): Printer;
+            export const withDefaults: () => Printer = memoize(() => createPrinter());
+            """
+        )
+        assertTrue(d.none { it.code == 2322 }, "expected no TS2322, got: $d")
+    }
+
+    @Test
+    fun `un-inferred generic call assignment RHS is not checked`() {
+        val d = diags(
+            """
+            declare function append<U extends {}>(to: U[] | undefined, value: U | undefined): U[] | undefined;
+            export function g(reasons: string[] | undefined, extra: string) {
+                let fileIncludeReasons: string[] | undefined;
+                fileIncludeReasons = append(reasons, extra);
+                return fileIncludeReasons;
+            }
+            """
+        )
+        assertTrue(d.none { it.code == 2322 }, "expected no TS2322, got: $d")
+    }
+
+    @Test
+    fun `un-inferred generic call in a conditional return branch is not checked`() {
+        // tsc parser.ts walkTreeForImportMeta: `return isMeta(node) ? node :
+        // forEachChild(node, cb)` — the forEachChild branch types as T | undefined.
+        val d = diags(
+            """
+            interface Node2 { kind: number; }
+            declare function forEachChild<T>(node: Node2, cb: (n: Node2) => T | undefined): T | undefined;
+            declare function isMeta(node: Node2): boolean;
+            export function walk(node: Node2): Node2 | undefined {
+                return isMeta(node) ? node : forEachChild(node, walk);
+            }
+            """
+        )
+        assertTrue(d.none { it.code == 2322 }, "expected no TS2322, got: $d")
+    }
+
+    @Test
+    fun `negative control - concrete var-decl and assignment mismatches keep firing`() {
+        val d = diags(
+            """
+            export const bad1: number = "str";
+            export function h(k: boolean) {
+                let bad2: number;
+                bad2 = "str2";
+                return k ? bad2 : 0;
+            }
+            """
+        )
+        kotlin.test.assertEquals(2, d.count { it.code == 2322 }, "expected 2 concrete TS2322s, got: $d")
+    }
+
     @Test
     fun `negative control - a mismatch beside the enclosing fn's OWN type param keeps firing`() {
         // The per-branch conditional check (B69.1) runs BEFORE the foreign-TP gate,

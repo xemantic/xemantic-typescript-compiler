@@ -78186,6 +78186,8 @@ interface DataView {
         targetNode: TypeNode,
         source: String,
         fileName: String,
+        // round 431e: the enclosing fn's own TP names for the foreign-TP gate.
+        typeParams: Set<String> = emptySet(),
     ): Boolean {
         if (expr == null) return false
         val unwrapped = unwrapParens(expr)
@@ -78196,7 +78198,7 @@ interface DataView {
             // Recurse into nested conditionals: `cond ? (a ? b : c) : d` — each leaf
             // branch should be checked individually.
             if (inner is ConditionalExpression) {
-                if (checkConditionalReturnBranches(inner, targetType, targetNode, source, fileName)) emitted = true
+                if (checkConditionalReturnBranches(inner, targetType, targetNode, source, fileName, typeParams)) emitted = true
                 continue
             }
             // Compute branch type with literal preservation when target contains literals.
@@ -78205,6 +78207,10 @@ interface DataView {
             } else getTypeOfExpression(inner)
             if (branchType === anyType || branchType === errorType) continue
             if (branchType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) continue
+            // round 431e: an un-inferred generic call branch (`… ? node :
+            // forEachChild(node, cb)` typing as `T | undefined`) — same foreign-TP
+            // rule as checkReturnAssignability's gate.
+            if (typeContainsForeignTypeParam(branchType, typeParams)) continue
             if (!canUseTypeEngine(branchType, targetType)) continue
             if (checkTypeRelatedTo(branchType, targetType, assignableRelation)) continue
             val displaySource = typeToString(branchType)
@@ -84391,6 +84397,11 @@ interface DataView {
             isNarrowableTarget(targetType)) {
             getNarrowedTypeForReference(rawSourceType, init)
         } else rawSourceType
+        // round 431e: same foreign-TP rule as checkReturnAssignability's gate — an
+        // un-inferred generic call initializer (`const p: () => Printer =
+        // memoize(() => …)` typing as `() => T`) must not be relation-checked;
+        // tsc infers the callee's TP from context and the init relates.
+        if (typeContainsForeignTypeParam(sourceType, typeParams)) return
         // B112: function/property source vs CONSTRUCTOR-type var-decl target.
         // `var Person: new () => T = function(){...}`. canUseTypeEngine bails when
         // the source lacks construct sigs but the target requires them, so the
@@ -85933,11 +85944,18 @@ interface DataView {
                         if (typeContainsForeignTypeParam(getTypeOfSymbol(m), ownTpNames, depth + 1)) return true
                     }
                     t.callSignatures?.forEach { s ->
+                        // round 431e: a signature's OWN type parameters are BOUND within
+                        // it — a generic FUNCTION VALUE source (`var f: (x: number) =>
+                        // number = genericFn` where genericFn is `<T>(x: T) => T`) is
+                        // legitimately checkable (5 corpus pins); only a TP the sig does
+                        // NOT declare is leaked inference.
+                        val sigOwn = s.typeParameters?.mapNotNull { it.symbol?.name }?.toSet().orEmpty()
+                        val names = if (sigOwn.isEmpty()) ownTpNames else ownTpNames + sigOwn
                         s.resolvedReturnType?.let { rt ->
-                            if (typeContainsForeignTypeParam(rt, ownTpNames, depth + 1)) return true
+                            if (typeContainsForeignTypeParam(rt, names, depth + 1)) return true
                         }
                         s.parameters.forEach { p ->
-                            if (typeContainsForeignTypeParam(getTypeOfSymbol(p), ownTpNames, depth + 1)) return true
+                            if (typeContainsForeignTypeParam(getTypeOfSymbol(p), names, depth + 1)) return true
                         }
                     }
                 }
@@ -85985,7 +86003,7 @@ interface DataView {
             // BEFORE the standard aggregated check so per-branch positions land
             // instead of one outer error.
             if (targetType !== anyType && targetType !== errorType &&
-                checkConditionalReturnBranches(expr, targetType, returnTypeNode, source, fileName)) {
+                checkConditionalReturnBranches(expr, targetType, returnTypeNode, source, fileName, typeParams)) {
                 return
             }
             // 16.0: contextual typing — set return type as context for arrow/function
@@ -86889,6 +86907,10 @@ interface DataView {
                         else sourceTypeRaw
                     } else sourceTypeRaw
                     contextualType = savedContextual
+                    // round 431e: same foreign-TP rule as checkReturnAssignability's
+                    // gate — an un-inferred generic call RHS (`fileIncludeReasons =
+                    // append(…)` typing as `T[]`) must not be relation-checked.
+                    if (typeContainsForeignTypeParam(sourceType, typeParams)) return
                     lastMissingPropertyName = null
                     lastMissingIndexSigKind = null
                     // B96-INDEXSIG (assignment path): per-property/element VALUE vs the
@@ -88771,6 +88793,12 @@ interface DataView {
         val pt = propType
         val valueType = getTypeOfExpression(value)
         if (valueType === anyType || valueType === errorType) return
+        // round 431e: foreign-TP gate (see checkReturnAssignability) — an un-inferred
+        // generic call RHS (`type.typeParameters = concatenate(outer, local)` typing
+        // as `T[]`) must not be relation-checked. This walker has no enclosing-fn
+        // typeParams threading, so ALL TPs are treated as foreign — a value whose
+        // type still mentions a TP here is (today) always an un-inferred call result.
+        if (typeContainsForeignTypeParam(valueType, emptySet())) return
         // void source: bail unconditionally (no test exercises void-property-assign).
         if (valueType.flags.hasAny(TypeFlags.Void)) return
         // null/undefined source: under strictNullChecks this IS an error against a
