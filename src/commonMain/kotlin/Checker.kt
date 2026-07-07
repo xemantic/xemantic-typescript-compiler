@@ -122195,8 +122195,33 @@ interface DataView {
                 // namespace. Without this, `new List<T>(null)` inside
                 // `namespace Editor { class ListFactory<T> { make() { ... } } }` would
                 // bail at anyType and skip arg-type checking. Mirrors
-                // `getTypeOfIdentifier`'s namespace fallback.
+                // `getTypeOfIdentifier`'s namespace fallback. MUST precede the file-local
+                // consult below: a call inside `namespace Parser` to `createSourceFile`
+                // must pick the namespace-internal one, NOT the file-level exported
+                // `createSourceFile(fileName, sourceText: string, ...)` (parser.ts).
                 lookupInInferenceNamespace(expr.text)?.let { return it }
+                // Blocker #3 (cross-file name collision): the current file's OWN top-level
+                // FUNCTION declaration of the callee name must win over the merged `globals`
+                // symbol. `mergeSymbolTable` pollutes the FIRST-processed file's own symbol with
+                // every other file's same-named declarations, so resolving `getBuildInfo` via
+                // globals inside tsbuildPublic.ts (which has its OWN `function getBuildInfo<T>(
+                // state: SolutionBuilderState<T>, ...)`) picked emitter.ts's `getBuildInfo(file:
+                // string, ...)` → FP'd `state` against `string`. A non-first-processed file's
+                // currentFileLocals entry is a CLEAN own-symbol (mergeSymbolTable never mutates
+                // the source table). NARROW to a genuine same-file FUNCTION declaration (NOT a
+                // type-only import / interface / type-alias): a callee `Date` shadowed by a
+                // type-only `import { Date }` (an interface) must still resolve to the GLOBAL
+                // `Date` VALUE (isolatedModulesShadowGlobalTypeNotValue), so an Alias/non-function
+                // local must not override globals here.
+                currentFileLocals?.get(expr.text)?.let { symbol ->
+                    if (symbol.flags.hasAny(SymbolFlags.Function) &&
+                        !symbol.flags.hasAny(SymbolFlags.Alias) &&
+                        symbol.declarations.any { it is FunctionDeclaration }
+                    ) {
+                        val type = getTypeOfSymbol(symbol)
+                        if (type !== anyType && type !== errorType) return type
+                    }
+                }
                 val symbol = globals[expr.text] ?: return anyType
                 getTypeOfSymbol(symbol)
             }
