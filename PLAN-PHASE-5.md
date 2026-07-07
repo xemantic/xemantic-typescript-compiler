@@ -36,10 +36,11 @@ performance is the directive's second half and starts at v1 compliance.
 
 **Round 431 (2026-07-07) — M3.2 (STARTED) + M3.1: the TS7006 core falls 301 → 11
 (−96%) via contextual typing, and engine return-checking reaches switch/try bodies
-behind a foreign-TP source gate. Self-compile (compiler profile) 936 → 672 → 641 →
-574 → 551 (−385, −41%; TS7006 301 → 11, TS7019 4 → 0, TS2322 435 → 345, TS2367 kept
-0); by-code strictly shrinking at every landed step; suite 9,356 → 9,380 (+24 local,
-0 regressions); 4 fix commits (b2411656, 186cb3cd, cceeb26b, f12dfe61).**
+behind a foreign-TP source gate that then extends to every assignability path.
+Self-compile (compiler profile) 936 → 672 → 641 → 574 → 551 → 482 (−454, −48%;
+TS7006 301 → 11, TS7019 4 → 0, TS2322 435 → 276, TS2367 kept 0); by-code strictly
+shrinking at every landed step; suite 9,356 → 9,384 (+28 local, 0 regressions);
+5 fix commits (b2411656, 186cb3cd, cceeb26b, f12dfe61, bd567338).**
 - **Fix 1 (b2411656, −264 strictly removals): TS7006 contextual typing — the two
   dominant mechanisms.** (a) Callee RESOLVABILITY: `isCalleeResolvable` falls back to
   the round-418 nested-function name map (`filterType`/`mapType` inside
@@ -85,6 +86,18 @@ behind a foreign-TP source gate. Self-compile (compiler profile) 936 → 672 →
   hides the un-inferred TP in a member (`return toSearchResult(undefined)` ×12 +
   `() => T` factory returns ×4); named interfaces stay excluded (Reference args
   carry their TPs; a member walk would be broad + first-touch-shifting).
+- **Fix 5 (bd567338, −69 strictly removals): the foreign-TP gate extends to the
+  var-decl (`const p: () => Printer = memoize(…)`), assignment
+  (`fileIncludeReasons = append(…)`), property-access-assignment
+  (`type.typeParameters = concatenate(…)` — no typeParams threading there, ALL
+  TPs treated foreign), and conditional-return-branch (B69.1 runs BEFORE the
+  return-path gate) paths. LANDMINE caught by the SUITE GATE (5 corpus
+  regressions fixed pre-land): a generic FUNCTION VALUE source (`var f:
+  (x: number) => number = genericFn`) carries its sig-OWN TPs — legitimately
+  checkable, NOT leaked inference; `typeContainsForeignTypeParam` treats a
+  signature's own type parameters as bound within that signature
+  (genericAssignmentCompatOfFunctionSignatures1 + 4 siblings pin it; the
+  refinement cost zero self-compile suppressions).
 - **META:** (1) the round-431 TSV row used `--no-emit` (emitted column 0 — not an
   emit regression). (2) The round-428 negative-control lesson RECURRED: the first
   own-TP control asserted a capability the baseline never had (bare `return x`
@@ -929,8 +942,10 @@ each item still decomposes into a multi-session campaign — read PLAN-PHASE-4.m
   behind the FOREIGN-TP source gate (`typeContainsForeignTypeParam` — an
   un-inferred generic call result is our inference gap, not a user error;
   cleared the `T[]`/`U | undefined`/`SearchResult<T>` return families, ~130
-  sites incl. anonymous-alias-body members). Next: extend the foreign-TP gate
-  to the ASSIGNMENT/VAR-DECL paths (×~6 siblings), contextual-RETURN inference
+  sites incl. anonymous-alias-body members; round 431e extended it to the
+  var-decl/assignment/property-write/conditional-return paths, −69, with the
+  sig-own-TP refinement keeping generic fn-value sources checkable). Next:
+  contextual-RETURN inference
   (`parseTokenNode<T>()`, no args — M3.2), `Iterable<T>`-style single-arg
   generic anchors, `.map`-family callback-return inference (M3.2),
   NodeArray-covariance via cross-file heritage (`TypeNode <: Node`).
