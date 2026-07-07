@@ -128735,7 +128735,15 @@ interface DataView {
                 // 17.70 return-path / B326 overload-arg rule.
                 val effValueType = if (propTypeContainsLiteral(tgtMemberType))
                     literalTypeOfExpression(value) ?: valueType else valueType
-                if (checkTypeRelatedTo(effValueType, tgtMemberType, assignableRelation)) continue
+                // An OPTIONAL target property `a?: T` accepts a `T | undefined` source when
+                // exactOptionalPropertyTypes is off (widenOptionalTargetPropType, source-nullish
+                // gated) — e.g. `sourceIndex: hasSource ? n : undefined` (`number | undefined`)
+                // vs `sourceIndex?: number` (sourcemap.ts captureMapping). The DISPLAY below
+                // keeps the bare `tgtMemberType`; only the relation widens.
+                val tgtForRel = targetMemberSym(propName)?.let {
+                    widenOptionalTargetPropType(tgtMemberType, it, effValueType)
+                } ?: tgtMemberType
+                if (checkTypeRelatedTo(effValueType, tgtForRel, assignableRelation)) continue
                 val keyPos = nameNode.pos
                 val keyLen = when (nameNode) {
                     is StringLiteralNode -> (nameNode.rawText?.length ?: nameNode.text.length) + 2
