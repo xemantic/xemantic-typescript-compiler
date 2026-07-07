@@ -121456,6 +121456,19 @@ interface DataView {
     }
 
     /** Get the first argument type error message for a signature, or null if all match. */
+    /** Round 436e: shared overload-helper per-arg skips, mirroring the single-sig
+     *  path's rules — (a) a UNION arg whose only failing member is `undefined` is
+     *  legal for an OPTIONAL param (unionArgOkForOptionalParam; tsc program.ts's
+     *  `(Program | T).getOptionsDiagnostics(cancellationToken)` where the arg is
+     *  `CancellationToken | undefined` vs `cancellationToken?:` — the union-receiver
+     *  synthesized overload pair failed BOTH ways, ×6); (b) an arg carrying an
+     *  un-inferred TP (a generic call result leaked into an overload arg —
+     *  `visitNode(…)` → `TOut | TIn & undefined`) is unjudgeable. Suppression-only:
+     *  over-matching can only select an overload instead of reporting TS2769. */
+    private fun overloadArgSkippable(argType: Type, paramSym: Symbol, paramType: Type): Boolean =
+        unionArgOkForOptionalParam(argType, paramSym, paramType) ||
+            typeContainsForeignTypeParam(argType, emptySet())
+
     private fun getFirstArgumentError(args: List<Expression>, sig: Signature): String? {
         val params = sig.parameters
         for ((i, arg) in args.withIndex()) {
@@ -121466,6 +121479,7 @@ interface DataView {
             val argType = overloadNarrowedArgType(arg, if (propTypeContainsLiteral(paramType))
                 (literalTypeOfExpression(arg) ?: getTypeOfExpression(arg)) else getTypeOfExpression(arg))
             if (argType === anyType || argType === errorType) continue
+            if (overloadArgSkippable(argType, params[i], paramType)) continue
             if (!checkTypeRelatedTo(argType, paramType, assignableRelation)) {
                 // For object literal args, try to find the specific mismatched property
                 val propError = getObjectLiteralPropertyError(arg, argType, paramType)
@@ -121499,6 +121513,7 @@ interface DataView {
             val argType = overloadNarrowedArgType(arg, if (propTypeContainsLiteral(paramType))
                 (literalTypeOfExpression(arg) ?: getTypeOfExpression(arg)) else getTypeOfExpression(arg))
             if (argType === anyType || argType === errorType) continue
+            if (overloadArgSkippable(argType, params[i], paramType)) continue
             if (!checkTypeRelatedTo(argType, paramType, assignableRelation)) {
                 if (arg is ArrayLiteralExpression && paramType is Type.Reference &&
                     paramType.target.symbol?.name == "Array") {
@@ -121680,6 +121695,7 @@ interface DataView {
             if (paramType === anyType || paramType === errorType) continue
             val argType = overloadNarrowedArgType(arg, getTypeOfExpression(arg))
             if (argType === anyType || argType === errorType) continue
+            if (overloadArgSkippable(argType, params[i], paramType)) continue
             if (!checkTypeRelatedTo(argType, paramType, assignableRelation)) {
                 // For object/array literals, find the inner mismatched expression
                 val inner = findInnerMismatchPosition(arg, paramType)
@@ -121903,6 +121919,7 @@ interface DataView {
             // and undefined are interchangeable for params unless exactOptionalPropertyTypes).
             if (argType.flags.hasAny(TypeFlags.Undefined) && !options.exactOptionalPropertyTypes &&
                 params[i].declarations.any { d -> d is Parameter && d.questionToken }) continue
+            if (overloadArgSkippable(argType, params[i], paramType)) continue
             if (!checkTypeRelatedTo(argType, paramType, assignableRelation)) {
                 // B70.15: Bivariant fallback for function-vs-function under @strict: false.
                 // Also try reverse direction; if param accepts arg's shape going either way,
