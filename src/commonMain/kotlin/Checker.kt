@@ -98415,6 +98415,13 @@ interface DataView {
                 TypeFlags.BooleanLiteral or TypeFlags.BigIntLiteral
         ) -> true
         propType is Type.Union -> propType.types.any { propTypeContainsLiteral(it) }
+        // Round 435d: a bare TYPE PARAMETER whose CONSTRAINT contains literals is a
+        // literal-preserving inference position (tsc keeps literal candidates when the
+        // TP's constraint includes literal types) — `readPackageJsonPathField<K extends
+        // "typings" | "types" | "main" | "tsconfig">(json, fieldName: K)` called with
+        // `"typings"` infers K as the literal, so the arg checks (16.4i) and displays
+        // with its literal type, matching tsc.
+        propType is Type.TypeParam -> propType.constraint?.let { propTypeContainsLiteral(it) } == true
         else -> false
     }
 
