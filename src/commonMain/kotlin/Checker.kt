@@ -78331,7 +78331,7 @@ interface DataView {
         // TypeScript's behavior of checking each branch of `cond ? a : b`
         // against the declared return type independently, so each side gets
         // its own TS2322 diagnostic at its own position.
-        if (checkConditionalReturnBranches(body, targetType, retTypeNode, source, fileName)) return
+        if (checkConditionalReturnBranches(body, targetType, retTypeNode, source, fileName) != 0) return
         val bodyType = getTypeOfExpression(body)
         if (bodyType === anyType || bodyType === errorType) return
         // Skip null/undefined sources — strictNullChecks mismatch with TypeScript test defaults.
@@ -78376,6 +78376,10 @@ interface DataView {
      * the innermost expression. AsExpression / non-Conditional expressions fall
      * through (return false) so the caller emits its normal outer-level error.
      */
+    /** Result codes: 0 = unverified (caller proceeds to the aggregated check),
+     *  1 = every leaf branch individually verified assignable (caller returns —
+     *  round 436g: a guard-NARROWED arm passes here while the aggregated
+     *  whole-ternary union re-fails on the un-narrowed member), 2 = emitted. */
     private fun checkConditionalReturnBranches(
         expr: Expression?,
         targetType: Type,
@@ -78384,30 +78388,50 @@ interface DataView {
         fileName: String,
         // round 431e: the enclosing fn's own TP names for the foreign-TP gate.
         typeParams: Set<String> = emptySet(),
-    ): Boolean {
-        if (expr == null) return false
+    ): Int {
+        if (expr == null) return 0
         val unwrapped = unwrapParens(expr)
-        if (unwrapped !is ConditionalExpression) return false
+        if (unwrapped !is ConditionalExpression) return 0
         var emitted = false
+        var allVerified = true
         for (branch in listOf(unwrapped.whenTrue, unwrapped.whenFalse)) {
             val inner = unwrapParens(branch)
             // Recurse into nested conditionals: `cond ? (a ? b : c) : d` — each leaf
             // branch should be checked individually.
             if (inner is ConditionalExpression) {
-                if (checkConditionalReturnBranches(inner, targetType, targetNode, source, fileName, typeParams)) emitted = true
+                when (checkConditionalReturnBranches(inner, targetType, targetNode, source, fileName, typeParams)) {
+                    2 -> emitted = true
+                    0 -> allVerified = false
+                }
                 continue
             }
             // Compute branch type with literal preservation when target contains literals.
             val branchType = if (propTypeContainsLiteral(targetType)) {
                 literalTypeOfExpression(inner) ?: getTypeOfExpression(inner)
             } else getTypeOfExpression(inner)
-            if (branchType === anyType || branchType === errorType) continue
-            if (branchType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) continue
+            if (branchType === anyType || branchType === errorType) { allVerified = false; continue }
+            if (branchType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) {
+                // A nullish arm is VERIFIED only when the target genuinely accepts it —
+                // else the aggregated check must keep catching `c ? x : undefined` vs X.
+                if (!checkTypeRelatedTo(branchType, targetType, assignableRelation)) allVerified = false
+                continue
+            }
             // round 431e: an un-inferred generic call branch (`… ? node :
             // forEachChild(node, cb)` typing as `T | undefined`) — same foreign-TP
             // rule as checkReturnAssignability's gate.
-            if (typeContainsForeignTypeParam(branchType, typeParams)) continue
-            if (!canUseTypeEngine(branchType, targetType)) continue
+            if (typeContainsForeignTypeParam(branchType, typeParams)) { allVerified = false; continue }
+            // Round 436g (M3.4): a guard-gated ternary ARM narrows by the condition —
+            // `return isNamedTupleMember(m) || isParameter(m) ? m : undefined` types
+            // the true arm as the guard targets (tsc utilities.ts's
+            // memberIfLabeledElementDeclaration family). The flow graph binds ternary
+            // arms, so the round-413 return-path rule applies per-branch: substitute
+            // the narrowed type only when it is a refinement that makes the branch
+            // relate (suppression-only by monotonicity).
+            if ((inner is Identifier || inner is PropertyAccessExpression) &&
+                getNarrowedTypeForReference(branchType, inner).let { n ->
+                    n !== branchType && checkTypeRelatedTo(n, targetType, assignableRelation)
+                }) continue
+            if (!canUseTypeEngine(branchType, targetType)) { allVerified = false; continue }
             if (withFreshObjLitSource(inner) {
                     checkTypeRelatedTo(branchType, targetType, assignableRelation)
                 }) continue
@@ -78415,7 +78439,7 @@ interface DataView {
             val displayTarget = formatTypeForDisplay(targetNode) ?: typeToString(targetType)
             val start = inner.pos
             val length = expressionTrueEnd(inner) - start
-            if (length <= 0) continue
+            if (length <= 0) { allVerified = false; continue }
             val (line, character) = getLineAndCharacterOfPosition(source, start)
             diagnostics.add(Diagnostic(
                 message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
@@ -78429,7 +78453,7 @@ interface DataView {
             ))
             emitted = true
         }
-        return emitted
+        return if (emitted) 2 else if (allVerified) 1 else 0
     }
 
     /**
@@ -86260,7 +86284,7 @@ interface DataView {
             // BEFORE the standard aggregated check so per-branch positions land
             // instead of one outer error.
             if (targetType !== anyType && targetType !== errorType &&
-                checkConditionalReturnBranches(expr, targetType, returnTypeNode, source, fileName, typeParams)) {
+                checkConditionalReturnBranches(expr, targetType, returnTypeNode, source, fileName, typeParams) != 0) {
                 return
             }
             // 16.0: contextual typing — set return type as context for arrow/function
