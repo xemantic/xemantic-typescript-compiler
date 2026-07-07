@@ -1,3 +1,41 @@
+**Round 419 (2026-07-06) — M1.12: resolve properties on INTERSECTION union-members. Self-compile
+(compiler profile) 1,854 → 1,808 (−46, TS2339 189 → 143); suite 9,173 → 9,177 (+4 local, 0
+regressions); 1 fix commit (39f22170).** After round 418, re-bucketing TS2339 by receiver type put
+the intersection-arm unions (`PropertyAccessExpression | (ElementAccessExpression & Declaration &
+{…})`, tsc's `BindableStaticAccessExpression`) as the biggest remaining sub-family (~28 sites in
+binder.ts/utilities.ts, all PRE-EXISTING). Root cause: `getPropertyOfType` has NO Intersection
+branch (deliberately — "modifying it is broad", CLAUDE.md) and `typeHasOwnProperty` bails on a
+`Type.Intersection` member (`type !is Type.Object`), so a property INHERITED by the intersection arm
+(`.parent` via `Node`) reads as missing and the whole union access FP's TS2339. **TWO coupled pieces
+— the 2nd because the 1st EXPOSED a switch-narrowing gap:**
+- **(1) property resolution** — new `resolveMemberPropertyType(member, prop)` folds an intersection
+  member's constituents (a property exists on `A & B` iff ANY constituent has it — the round-352
+  rule, applied per union member instead of only for a direct-intersection receiver). Wired into the
+  B83.4e union-member fold in `computeRawTypeOfPropertyAccess` (the property TYPE) AND into
+  `checkMemberAccessMissing`'s `memberHasIt` (the TS2339 EMISSION). Minimal blast radius: for a
+  NON-intersection member it reduces to the existing `getPropertyOfType`, so only intersection
+  members change.
+- **(2) discriminant narrowing** — piece (1) ALONE introduced 3 new FPs at utilities.ts:4362/4365/4367:
+  a `switch (node.kind) { case Import: case Export: return node.moduleSpecifier }` left an
+  intersection member (`BindingPattern & {…}` — a NON-matching `.kind`) in the narrowed union because
+  `discriminantPropAnnotation` bailed on the intersection (`getApparentType(member) as? Type.Object`)
+  → the member's `.kind` read as unknown → it wrongly SURVIVED the switch → the over-wide narrowed
+  union FP'd `.moduleSpecifier`. Folding the intersection constituents in `discriminantPropAnnotation`
+  (read the `.kind` annotation from any constituent) filters the member correctly → 0 new FPs.
+- **PERF: self-compile TIME −17% (122 → 101 s)** — the more-accurate narrowing + fewer FP
+  elaborations RECLAIM round 418's +17% regression, so rounds 418+419 net roughly FLAT on time
+  (~104 → ~101 s) while −94 on FPs. BOTH dashboard metrics improved this round. Corpus suite time
+  flat. +4 local tests (IntersectionMemberPropertyTest: intersection-arm property resolves +
+  switch-`.kind` filters the intersection member + FP-safety: plain-union genuinely-missing still
+  fires, partial-coverage still fires). **META: the fix is the documented
+  `getPropertyOfType`-has-no-Intersection-branch gap, resolved NARROWLY in the union-member path (not
+  `getPropertyOfType` itself — that stays broad-risk); the 1st cut's 3-FP regression is the lesson
+  that the same intersection-fold must be applied to EVERY place that reads a member property (both
+  property resolution AND discriminant-narrowing annotation), not just the obvious one.** DEFERRED
+  (residual, M3): the `.kind`-switch narrowing still doesn't handle a WIDER-declared discriminant
+  union (the TS2366 `.kind` exhaustive-switch family); the M3 cores TS2322×784 / TS2345×396 /
+  TS7006×301 dominate.
+
 **Round 418 (2026-07-06) — M1.12: resolve NESTED type-guard functions so their narrowing fires.
 Self-compile (compiler profile) 1,902 → 1,854 (−48, TS2339 237 → 189); suite 9,168 → 9,173
 (+5 local, 0 regressions); 1 fix commit (7a806360).** Bucketing the fresh full `--listAll` by

@@ -34,6 +34,85 @@ completeness campaigns to dashboard-driven burn-down: the acceptance bar is the 
 tsc's source uses, with the corpus suite as the regression net. M5 unchanged —
 performance is the directive's second half and starts at v1 compliance.
 
+**Round 429 (2026-07-07) — M3.1 histogram burn-down: the TS2345 core falls 261 → 86
+(−67%). Self-compile (compiler profile) 1,186 → 1,156 → 1,135 → 1,027 → 1,000 (−186,
+−15.7%; TS2345 261 → 86, TS2769 36 → 32, TS2322 501 → 496, TS2367 −2); every step's
+by-site diff STRICTLY removals (the one +3 excursion was caught by the diff and gated
+before commit); suite 9,315 → 9,348 (+33 local, 0 regressions); 4 fix commits
+(577b2c54, 5fbb8caf, bc893882, d1e53cbd).**
+- **Fix 1 (577b2c54, −30): call-types pass lexical shadowing — three scope shapes
+  resolved a bare-identifier ARG to the WRONG outer declaration.** (1) A NESTED
+  function's body-local (`let host = node.parent`) shadowing an ENCLOSING fn's param
+  (`createTypeChecker(host: TypeCheckerHost)`): the inherited `currentLocalTypes` entry
+  survived because round 428d's branch is gated entry==null —
+  `applyCallTypesBodyLocalShadowing` pre-scans the body (statement-level, not
+  descending into nested fn-likes) and anyType-overrides colliding local-decl names;
+  same-fn param redeclaration excluded (param wins, pinned). (2) The round-428
+  "PARAM-shadow mini-repro does not reproduce" mystery RESOLVED: the real shape is a
+  DESTRUCTURED param (`{ useCaseSensitiveFileNames }` in sys.ts vs moduleNameResolver's
+  same-named function) — binding names live only in the `currentParamBindingNames` side
+  set, and `getTypeOfIdentifier` fell through to the merged globals; it now returns
+  anyType for side-set names (after `currentLocalTypes`). (3) Arrow/fn-expr params
+  (the walker deliberately doesn't type them) leaked the enclosing binding — those
+  branches now scope the maps and register anyType for own param names. 8 local tests
+  (CallTypesScopeShadowingTest).
+- **Fix 2 (5fbb8caf, −21): embedded String.replace/replaceAll/search/split accept
+  RegExp** (`searchValue: string | RegExp`, replaceValue `any` per the
+  callbacks-are-any doctrine) — tsc regex-replaces pervasively. Corpus byte-identical
+  (no "and N more" shifts). Accepted documented FN: a union-with-interface param is
+  not simple-checkable, so wrong-typed args to these four params no longer error
+  (control pins indexOf still fires).
+- **Fix 3 (bc893882, −129, the big one): three arg-typing rules on the call-arg
+  path.** (a) A `string | undefined` union arg is legal for an OPTIONAL param
+  (`configFileName?: string` — tsc getTypeAtPosition unions undefined under strict);
+  only undefined members stripped (null stays), relation on the stripped type,
+  suppression-only. (b) A non-null-asserted arg (`readFile(p)!`) types as its
+  nullish-stripped union — LOCAL strip (`stripNullishForNonNullArg`), mirroring the
+  round-415 arithmetic rule; the round-407 global-strip revert stands. (c) THE
+  DOMINANT mechanism (~110 sites): an Identifier arg whose NON-union interface type
+  is guard-narrowed DOWN (`isSourceFile(x) && isExternalOrCommonJsModule(x)` — Node
+  → SourceFile) substitutes the refined type, relation-gated — generalizes round
+  428b's `this`-only branch. LANDMINE caught by the by-site diff: `never`-typed
+  params must be EXCLUDED — `assertType<never>(node)` in an exhaustive-switch default
+  needs exhaustiveness narrowing we don't model, and a partial case-union refinement
+  TAKES THE UNION-ARG EMISSION PATH (interface args stay conservatively silent vs
+  never; unions emit) → +3 FPs until gated. No stable local pin exists for the gate
+  (tsc itself errors on the in-file non-exhaustive shape; the exhaustive
+  discriminated-union shape needs M3.4 exhaustiveness) — pinned by the by-site diff.
+  10 local tests (OptionalParamUnionArgTest).
+- **Fix 4 (d1e53cbd, −27): typeof-unknown + string-enum + rest-arg narrowing.**
+  (a) `typeof x === "<primitive>"` narrows a non-union UNKNOWN to the primitive —
+  `narrowByTypeOfGuard`'s non-union flags path returned NEVER for a positive match
+  on unknown (no primitive flags), which the relation-gated consumers rejected
+  (moduleNameResolver `target: unknown` ×10). (b) An all-string-valued enum is
+  assignable to `string` (`isStringEnumObjectType` in `isSimpleTypeRelatedTo`, the
+  round-428b numeric sibling; unevaluated values NOT provable, conservative) —
+  resolves the round-410 DEFERRED `Extension[][]` cluster: cascades to `Extension[]`
+  → `string[]` via same-target covariant element comparison + clears the paired
+  TS2367 no-overlap FPs (×8). (c) The rest-args helper mirrors B469 flow narrowing
+  (`cond ? diag(…, deprecatedEntity) : …` ×5). 10 local tests
+  (UnknownTypeofAndStringEnumArgTest).
+- **META:** two process notes. (1) A mid-bench Checker edit poisoned one bench row
+  (the 429b TSV row's build raced my 429c edits) — recovered via git-stash patch-split
+  and per-commit listalls; batch edits BEFORE launching a suite/bench. (2) The
+  round-428 residual note said "probe the pass's nesting entry with a marker before
+  theorizing" — the actual fix needed no marker: re-reading the real site showed the
+  param was DESTRUCTURED, which the mini-repro had simplified away. Repro fidelity
+  beats instrumentation.
+- **Residual triage (next-agent):** TS2345×86 — `'true'` vs `'false'` ×5 (parser.ts
+  createMissingNode nested OVERLOADS with literal-typed params; the top-level
+  mini-repro does NOT reproduce — the nested/closure context matters, probe needed);
+  `string` vs literal-union ×10 (`"typings"|"types"|…`, pragma names, comparators —
+  likely needs literal-preserving locals or narrowing); `Node` vs `never` ×3 +
+  in-file exhaustive discriminated-union `assertType<never>` (needs M3.4
+  exhaustiveness narrowing — catalogued, our A|B switch repro still fires);
+  `NodeArray<Node>` vs SourceFile ×3, `System` vs IncrementalCompilationOptions ×2,
+  `K` vs string ×2 (keyof-TP). TS2322×496 — `string` vs `string` ×24
+  (interface-override literal props, M3), `T[]` residuals (~40: rest-param sigs,
+  readonly-array params — `addRange(to: T[] | undefined, from: readonly T[] |
+  undefined)`'s TypeOperator param defeats the union-mode detection), SearchResult<T>
+  ×10, `undefined` vs VisitResult ×12. TS7006×301 (M3.2) untouched.**
+
 **Round 428 (2026-07-06) — M3.1 (first real slice of the TS2322/TS2345 cores): generic
 call-site inference for tsc's `append` idiom + the TS2345 histogram top + the array-literal
 string-layer union rule + the body-local-shadows-function conflation. Self-compile
@@ -633,45 +712,6 @@ be closed at EVERY narrowing site AND for EVERY discriminant SHAPE (direct `Enum
 intersection-member, and now type-alias-of-enum-members); the remaining discriminated-union TS2339
 (the anonymous TypeMapper `{ kind: any }` union, `PrivateIdentifier*Info`) are `.kind`-narrowing on
 ANONYMOUS/`any`-kind members, a harder M3.4 slice.**
-
-**Round 419 (2026-07-06) — M1.12: resolve properties on INTERSECTION union-members. Self-compile
-(compiler profile) 1,854 → 1,808 (−46, TS2339 189 → 143); suite 9,173 → 9,177 (+4 local, 0
-regressions); 1 fix commit (39f22170).** After round 418, re-bucketing TS2339 by receiver type put
-the intersection-arm unions (`PropertyAccessExpression | (ElementAccessExpression & Declaration &
-{…})`, tsc's `BindableStaticAccessExpression`) as the biggest remaining sub-family (~28 sites in
-binder.ts/utilities.ts, all PRE-EXISTING). Root cause: `getPropertyOfType` has NO Intersection
-branch (deliberately — "modifying it is broad", CLAUDE.md) and `typeHasOwnProperty` bails on a
-`Type.Intersection` member (`type !is Type.Object`), so a property INHERITED by the intersection arm
-(`.parent` via `Node`) reads as missing and the whole union access FP's TS2339. **TWO coupled pieces
-— the 2nd because the 1st EXPOSED a switch-narrowing gap:**
-- **(1) property resolution** — new `resolveMemberPropertyType(member, prop)` folds an intersection
-  member's constituents (a property exists on `A & B` iff ANY constituent has it — the round-352
-  rule, applied per union member instead of only for a direct-intersection receiver). Wired into the
-  B83.4e union-member fold in `computeRawTypeOfPropertyAccess` (the property TYPE) AND into
-  `checkMemberAccessMissing`'s `memberHasIt` (the TS2339 EMISSION). Minimal blast radius: for a
-  NON-intersection member it reduces to the existing `getPropertyOfType`, so only intersection
-  members change.
-- **(2) discriminant narrowing** — piece (1) ALONE introduced 3 new FPs at utilities.ts:4362/4365/4367:
-  a `switch (node.kind) { case Import: case Export: return node.moduleSpecifier }` left an
-  intersection member (`BindingPattern & {…}` — a NON-matching `.kind`) in the narrowed union because
-  `discriminantPropAnnotation` bailed on the intersection (`getApparentType(member) as? Type.Object`)
-  → the member's `.kind` read as unknown → it wrongly SURVIVED the switch → the over-wide narrowed
-  union FP'd `.moduleSpecifier`. Folding the intersection constituents in `discriminantPropAnnotation`
-  (read the `.kind` annotation from any constituent) filters the member correctly → 0 new FPs.
-- **PERF: self-compile TIME −17% (122 → 101 s)** — the more-accurate narrowing + fewer FP
-  elaborations RECLAIM round 418's +17% regression, so rounds 418+419 net roughly FLAT on time
-  (~104 → ~101 s) while −94 on FPs. BOTH dashboard metrics improved this round. Corpus suite time
-  flat. +4 local tests (IntersectionMemberPropertyTest: intersection-arm property resolves +
-  switch-`.kind` filters the intersection member + FP-safety: plain-union genuinely-missing still
-  fires, partial-coverage still fires). **META: the fix is the documented
-  `getPropertyOfType`-has-no-Intersection-branch gap, resolved NARROWLY in the union-member path (not
-  `getPropertyOfType` itself — that stays broad-risk); the 1st cut's 3-FP regression is the lesson
-  that the same intersection-fold must be applied to EVERY place that reads a member property (both
-  property resolution AND discriminant-narrowing annotation), not just the obvious one.** DEFERRED
-  (residual, M3): the `.kind`-switch narrowing still doesn't handle a WIDER-declared discriminant
-  union (the TS2366 `.kind` exhaustive-switch family); the M3 cores TS2322×784 / TS2345×396 /
-  TS7006×301 dominate.
-
 
 ### Mission & strategy
 
@@ -1317,12 +1357,23 @@ each item still decomposes into a multi-session campaign — read PLAN-PHASE-4.m
   inference in `getReturnTypeOfCallExpression` killed the `T[]`-return family
   (TS2322 751 → 501); the TS2345 histogram top (this-param binding, guarded
   optional-member args, enum→number) + the body-local-shadows-function anyType
-  registration took 394 → 261 (TS2769 45 → 36). Next sub-slices (triaged in
-  the round-428 session note): the PARAM-shadow half of the conflation ×~28
-  (mini-repro does not reproduce — probe the pass's nesting entry), residual
-  `T[]` inference-gate misses ×~30, `SearchResult<T>` un-inferred generic
-  Reference returns ×10, `string | string` interface-override literal props ×24
-  (M3), inferred type predicates (tsc 5.5 — `helper => !helper.scoped`, M3.4).
+  registration took 394 → 261 (TS2769 45 → 36). **CONTINUED (round 429, −186:
+  1,186 → 1,000, TS2345 261 → 86):** call-types lexical shadowing (body-locals
+  vs enclosing params; destructured params — the round-428 "mini-repro does not
+  reproduce" residue was DESTRUCTURING, resolved via the
+  `currentParamBindingNames` side set in `getTypeOfIdentifier`; arrow
+  own-params), String-lib RegExp signatures, optional-param union args,
+  NonNull-asserted args, guard-narrowed interface/unknown args (the ~110-site
+  dominant mechanism, never-param excluded), string-enum→string (round-410
+  deferral resolved), rest-arg flow narrowing. Next sub-slices (triaged in the
+  round-429 session note): `'true'` vs `'false'` nested-overload selection ×5,
+  string-vs-literal-union args ×10, residual `T[]` inference-gate misses (~40:
+  readonly-array `TypeOperator` params defeat `nullableUnionOfTpMode` —
+  `addRange(to: T[] | undefined, from: readonly T[] | undefined)`),
+  `SearchResult<T>` un-inferred generic Reference returns ×10, `string | string`
+  interface-override literal props ×24 (M3), inferred type predicates (tsc 5.5 —
+  `helper => !helper.scoped`, M3.4), exhaustive-switch `assertType<never>`
+  (M3.4 exhaustiveness).
 - [ ] **M3.2 Contextual typing engine** (parameters, returns, object/array literals,
   generic-context propagation — replaces `applyContextualParamTypesForArrow`-era
   special cases).
