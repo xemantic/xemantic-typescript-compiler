@@ -34,6 +34,26 @@ completeness campaigns to dashboard-driven burn-down: the acceptance bar is the 
 tsc's source uses, with the corpus suite as the regression net. M5 unchanged —
 performance is the directive's second half and starts at v1 compliance.
 
+**Round 432 (2026-07-07) — M5.4 groundwork (owner-directed): parallel-caching design
+record + eager-immutable index + durable tooling.** `enclosingImportIndex` converted
+from lazy-mutable to an eager immutable field initializer (Tier 1 — byte-identical
+diagnostics + timing on both dashboards, suite 9,333/0). NEW **`docs/parallel-caching.md`**
+is the canonical design record for M5.4: the three cache tiers (eager-immutable
+program facts / worker-local scratch / replicated-never-shared first-touch type state),
+the share-nothing phased plan (tsgo parity → shared frozen lib slice → single-flight
+pure computations), the determinism-over-everything rule, the multiplatform primitives
+ladder (freeze → `kotlin.concurrent.atomics` CoW → expect/actual), the
+evaluated-and-DECLINED CharlieTap/cachemap dependency (left-right KMP map: dormant, no
+JS/WASM targets, no single-flight; the real blockers to sharing checking work are
+Tier-3 immutability/purity, not the map), the JFR profiling how-to, and the
+tsc/tsgo/xtsc comparison (tsc-source: tsgo 0.94 s / tsc 5.1 s / xtsc 19.6 s; zod:
+0.52 / 2.1 / 3.5 s). `scripts/aggregate_jfr.py` (portable jfr-tool resolution,
+self/inclusive/by-class + `--callers-of` attribution) checked in — profiling is now
+reproducible on any box (VPS included), nothing lives only in a session scratchpad.
+Backlog: M4.6 (`package.json "type": "module"` ProjectCompiler gap, found via zod) +
+M4.7 (zod as second dashboard profile, full recipe + FP baseline) written down with
+stable IDs; M5.1/M5.4 queue items now point at the design note.
+
 **Round 431 (2026-07-07) — M5 (perf round 2, JFR-driven): the two post-430 hotspots —
 self-compile (compiler profile) 38–41 s → 19.9 s noEmit / 21.7 s wall with emit (the
 2026-07-05 baseline was 592.8 s → cumulative ~27×), zod 5.0 → 3.6 s; diagnostics
@@ -1466,7 +1486,12 @@ each item still decomposes into a multi-session campaign — read PLAN-PHASE-4.m
 
 - [ ] **M5.1 Profiling grid**: JFR/async-profiler over the project corpus (cold CLI,
   warm in-process via BenchMain, RSS); publish flamegraph findings in a session note
-  before optimizing anything.
+  before optimizing anything. **Partially done early (rounds 430–432, branch
+  `perf/flow-import-resolution`, owner-directed): two JFR rounds removed the four
+  dominant hotspots — self-compile ~593 → ~20 s, zod 6 → 3.5 s, byte-identical
+  diagnostics. Tooling: `scripts/aggregate_jfr.py`; method + remaining flat-profile
+  leads + tsc/tsgo comparison: `docs/parallel-caching.md`. A FRESH JFR pass is
+  mandatory before the next perf item — the profile shifts after every fix.**
 - [ ] **M5.2 Allocation discipline in the relation engine** (type interning /
   canonicalization — replace the documented fresh-mint caps like the
   `getPropertyTypeForRelation` depth bound with proper sharing).
@@ -1474,6 +1499,11 @@ each item still decomposes into a multi-session campaign — read PLAN-PHASE-4.m
   whenever any resolution context is active = recompute on every generic-heavy path).
 - [ ] **M5.4 Parallel per-file checking** via the existing-but-unused `CheckerPool`
   (LinkStore side-tables already keep binder output immutable for this).
+  **Design decided (2026-07-07, owner discussion): share-nothing workers à la tsgo —
+  NO shared/concurrent maps; cache-tier rules, determinism requirements, the phased
+  plan (share-nothing → shared frozen lib slice → single-flight pure computations),
+  and the evaluated-and-declined cachemap dependency are all in
+  `docs/parallel-caching.md`. Read it BEFORE starting this item.**
 - [ ] **M5.5 Incremental compilation** (`.tsbuildinfo`-style reuse; the M2.1 shared
   lib snapshot is the first piece).
 - [ ] **M5.6 Native target re-enable + tune** (linuxX64 was disabled in c7e3535f;
@@ -1515,6 +1545,24 @@ with a session note saying why). Item IDs are stable; session notes reference th
 - [ ] **M4.4 External sourcemaps** (`.js.map` files; inline maps exist).
 - [ ] **M4.5 Decision point**: project references / composite / incremental scope
   (tsgo supports them; needed for large monorepos — decide build vs defer with owner).
+- [ ] **M4.6 `package.json "type": "module"` module-format detection in
+  `ProjectCompiler`** (found compiling zod, 2026-07-07): under `module: NodeNext`
+  with a `"type": "module"` package.json, real tsc emits ESM but we emit CJS — the
+  `collectPackageJsonTypes` machinery exists only for the multi-file TEST-source path
+  and is not wired into the on-disk project pipeline. Repro: zod (see M4.7); the
+  emitted CJS only runs in a `"type": "commonjs"` context. Unused for v1 (the
+  tsc-source bench project has no package.json → CJS default is correct there).
+- [ ] **M4.7 zod as a second dashboard profile** (validated 2026-07-07, round 430
+  session note): shallow-clone `github.com/colinhacks/zod`, compile
+  `packages/zod/src` (107 files, ~31k LOC) via a `tsconfig.xtsc.json` extending zod's
+  real `.configs/tsconfig.base.json` (strict, exactOptionalPropertyTypes,
+  noUnusedLocals, NodeNext), include `src/**/*.ts`, exclude tests/benchmarks — real
+  tsc 6.0.3 reports 0 errors on it, so every xtsc diagnostic is an FP. Baseline
+  2026-07-07: 1,665 FPs (top: TS7006×447 contextual params, TS2694×284 namespace
+  members via `export *` barrels, TS7029×211 switch-fallthrough, TS2344×182), 0
+  crashes, all 107 files emit, output passes a runtime smoke test. Complements the
+  tsc-source profiles: stresses generic method chaining + noFallthroughCasesInSwitch,
+  which tsc's own source doesn't.
 
 ### Offline asset inventory (verified 2026-07-02)
 

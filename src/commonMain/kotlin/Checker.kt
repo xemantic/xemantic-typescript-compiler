@@ -1144,16 +1144,33 @@ class Checker(
      *  containsKey, not getOrPut. Declared before `init` per the init-order trap. */
     private val moduleSpecifierCache = HashMap<String, String?>()
 
-    /** Perf (round 430): program-wide index ImportSpecifier → the (fileName,
-     *  ImportDeclaration) statements whose NamedImports CONTAIN a structurally-equal
-     *  specifier, in binderResults/statement encounter order. Replaces the O(program)
-     *  `spec in bindings.elements` structural scans in [resolveAlias]'s ImportSpecifier
-     *  branch and [findEnclosingImport] — the scan was 76% of the tsc-source self-compile
-     *  (every UNRESOLVABLE barrel alias re-scanned all files on every resolveAlias call,
-     *  since only positive resolutions are cached in symbolTargets). Structural keying +
-     *  encounter-order lists keep first-match semantics byte-identical to the scans.
-     *  Built once, lazily; declared before `init` per the init-order trap. */
-    private var enclosingImportIndexCache: HashMap<ImportSpecifier, MutableList<Pair<String, ImportDeclaration>>>? = null
+    /** Perf (round 430, eager-immutable round 432): program-wide index ImportSpecifier →
+     *  the (fileName, ImportDeclaration) statements whose NamedImports CONTAIN a
+     *  structurally-equal specifier, in binderResults/statement encounter order. Replaces
+     *  the O(program) `spec in bindings.elements` structural scans in [resolveAlias]'s
+     *  ImportSpecifier branch and [findEnclosingImport] — the scan was 76% of the
+     *  tsc-source self-compile (every UNRESOLVABLE barrel alias re-scanned all files on
+     *  every resolveAlias call, since only positive resolutions are cached in
+     *  symbolTargets). Structural keying + encounter-order lists keep first-match
+     *  semantics byte-identical to the scans. Built EAGERLY from the frozen
+     *  [binderResults] and never mutated afterwards — read-only shareable across future
+     *  parallel checker workers (Tier 1 in docs/parallel-caching.md). Declared before
+     *  `init` per the init-order trap. */
+    private val enclosingImportIndex: Map<ImportSpecifier, List<Pair<String, ImportDeclaration>>> =
+        buildMap<ImportSpecifier, MutableList<Pair<String, ImportDeclaration>>> {
+            for (result in binderResults) {
+                for (stmt in result.sourceFile.statements) {
+                    if (stmt !is ImportDeclaration) continue
+                    val bindings = stmt.importClause?.namedBindings as? NamedImports ?: continue
+                    for (el in bindings.elements) {
+                        val entries = getOrPut(el) { mutableListOf() }
+                        if (entries.lastOrNull()?.second !== stmt) {
+                            entries.add(result.sourceFile.fileName to stmt)
+                        }
+                    }
+                }
+            }
+        }
 
     /** Round 425: memo for [canonicalEnumSymbol] — an enum reaches the discriminant-key
      *  builders by several resolution paths (the program-global merged instance vs a
@@ -93639,27 +93656,11 @@ interface DataView {
     /**
      * Perf (round 430): all (fileName, ImportDeclaration) statements whose NamedImports
      * contain a specifier structurally equal to [spec], in the same encounter order the
-     * replaced program-wide scans used ([enclosingImportIndexCache] has the rationale).
+     * replaced program-wide scans used ([enclosingImportIndex] has the rationale).
      * A statement is listed once even if it contains structural duplicates of [spec].
      */
-    private fun enclosingImportsOf(spec: ImportSpecifier): List<Pair<String, ImportDeclaration>> {
-        val index = enclosingImportIndexCache ?: HashMap<ImportSpecifier, MutableList<Pair<String, ImportDeclaration>>>().also { idx ->
-            for (result in binderResults) {
-                for (stmt in result.sourceFile.statements) {
-                    if (stmt !is ImportDeclaration) continue
-                    val bindings = stmt.importClause?.namedBindings as? NamedImports ?: continue
-                    for (el in bindings.elements) {
-                        val entries = idx.getOrPut(el) { mutableListOf() }
-                        if (entries.lastOrNull()?.second !== stmt) {
-                            entries.add(result.sourceFile.fileName to stmt)
-                        }
-                    }
-                }
-            }
-            enclosingImportIndexCache = idx
-        }
-        return index[spec] ?: emptyList()
-    }
+    private fun enclosingImportsOf(spec: ImportSpecifier): List<Pair<String, ImportDeclaration>> =
+        enclosingImportIndex[spec] ?: emptyList()
 
     /**
      * M1.12 (round 424): resolve property [seg] on [cur] for the prefix-path
