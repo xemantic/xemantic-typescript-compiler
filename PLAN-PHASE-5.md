@@ -39,6 +39,60 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
+**Round 439 (2026-07-07) — predicate-overload / arg-narrow-DOWN burn-down: THREE bounded
+fixes take the compiler profile 244 → 228 (−16, −6.6%; TS2769 9 → 1). Suite 9,458 → 9,465
+(+7 local, 0 regressions); 3 fix commits (4bdb051f, ee43d153, e6f61973). Every step
+diffed by-POSITION as strictly removals (fix 1's one exposed regression fixed in the same
+commit by the companion NonNull strip).**
+- **Baseline @ HEAD (round 438, listall-439.txt): 244 FPs.** Reused the `--listAll`
+  per-fix diff loop (materialize once, ~30 s CLI run per fix, `comm -13` on `file:line:col`).
+- **Fix 1 (4bdb051f, −8): findAncestor-style predicate-overload RETURN inference (M3.2).**
+  A generic overload whose callback param is a type-guard position `(x) => x is T` and
+  whose return is built from T (`T | undefined`/`T`/`S[]`) infers T from the actual
+  type-guard ARGUMENT's predicate target (`predicateTargetTypeOfGuardExpr`), BEFORE the
+  B136 concrete-overload swap. `findAncestor(node.parent, isFunctionLike)` →
+  `SignatureDeclaration | undefined` (not the B136 `Node | undefined`). New helpers
+  `tryInferPredicateOverloadReturn` + `predicateCallbackParamGuardTpName` (AST-side: read
+  the sig's declaration params for a `FunctionType` returning a non-asserts `TypePredicate`
+  whose target names a sig TP). A non-guard callback (`=> boolean | "quit"`) yields null →
+  B136 still owns it. Cleared utilities.ts getContainingFunction/Declaration/Class/
+  OrClassStaticBlock + getJSDocRoot + commandLineParser. **Companion NonNull strip:** the
+  inference made `getParseTreeNode(x, isGetOrSetAccessorDeclaration)!` return the CONCRETE
+  `AccessorDeclaration | undefined` (was a foreign `T | undefined` suppressed by the round-431
+  gate), exposing the documented round-407 NonNull-union non-strip → +1. Fixed in the same
+  commit: a `<call>()!` on an all-CONCRETE union return (no un-inferred TP) strips nullish
+  via narrowByExcludingNullUndefined. Restricted to a CALL operand + concrete members so
+  property-access `.x!` (object-literal-vs-interface gap) and TP-carrying returns
+  (generic-inference gap) keep the deferred behavior — net −8, ALSO cleared emitter ×2.
+- **Fix 2 (ee43d153, −5): overloadNarrowedArgType narrows a NON-union arg DOWN.** A bare
+  Identifier/PropertyAccess whose non-union declared type is guard-narrowed DOWN to a
+  subtype (`if (isLiteralLikeAccess(name)) getElementOrPropertyAccessName(name)` —
+  utilities.ts `isSameEntityName`) kept the wide `Expression` and failed both overloads.
+  Narrows an Object/Interface/Reference raw via getNarrowedTypeForReference when the result
+  is a strict improvement (mirror of round 438 fix C for the OVERLOAD path); suppression-only;
+  never-collapse keeps `raw`. utilities.ts getElementOrPropertyAccessName family ×5,
+  TS2769 9 → 4.
+- **Fix 3 (e6f61973, −3): same branch extended to `raw === unknownType`.** A `typeof target
+  === "string"` arm narrows the `unknown` param to `string`, matching the plain-string
+  overload. Round 429d added `unknown`→primitive narrowing but it reached only the single-sig
+  call-arg path; `getPathComponents(target)` is overloaded. moduleNameResolver ×3, TS2769 4 → 1.
+- **META / next-agent residual (228):** the clean predicate-overload/narrow-DOWN vein is now
+  mostly mined. Remaining TS2769×1 (watchPublic `watchFile` complex-type callee), TS2349×2
+  (core.ts/binder.ts `??= []` union-target contextual typing, round-408 known gap). Deeper
+  buckets NOT bounded: (a) `Node → HasModifiers`/`Declaration|undefined` narrow-DOWN returns
+  (utilities 5085/11856) — the RELATION GATE (`checkTypeRelatedTo(narrowed, declared)`) fails
+  on tsc-specific heritage (`JsxNamespacedName <: Expression` etc.) so the single-sig branch's
+  legit narrowing is discarded, AND the `.parent`-property-of-narrowed-ComputedPropertyName
+  needs per-node-type `.parent` modeling; (b) `assertType<never>` exhaustive-switch defaults
+  (×8) — the large `.kind`-discriminated-union exhaustiveness slice; (c) the CROSS-FILE
+  function-SHADOW cluster (executeCommandLine `createWatchStatusReporter`/
+  `performIncrementalCompilation` ×4) — a module-file-local function shadowing a same-named
+  cross-file EXPORT; the mergeSymbolTable pollution (addAll onto the shared symbol) builds a
+  bogus cross-file overload set in getTypeOfFunction, so the wrong sig is picked (Blocker #3 /
+  M3.5 — needs a node→file filter keyed on valueDeclaration's file, deferred: touches the hot
+  getTypeOfFunction and lacks a cheap node→file map); (d) B526 tuple/brand + generic-fn-alias
+  TS2322 representation gaps.
+
 **Round 438 (2026-07-07) — M3.1/M3.4 narrowing/relation burn-down: FIVE bounded fixes take
 the compiler profile 294 → 244 (−50, −17%; TS2322 158 → 116, TS2345 47 → 39). Suite
 9,444 → 9,458 (+14 local, 0 regressions); 5 fix commits (988ffacd, b3ee2ae1, 7e921b5d,
@@ -771,6 +825,12 @@ each item still decomposes into a multi-session campaign — read PLAN-PHASE-4.m
   (implicitAnyNsStack bridge), initializer-typed locals (implicitAnyScopeInits),
   the Map.get idiom, nullish-union member ctx. Residual ×1: tsbuildPublic's
   destructured-member local.
+  **CONTINUED (round 439, 244 → 236): findAncestor-style predicate-overload RETURN
+  inference — a generic overload with a type-guard-callback param `(x) => x is T`
+  returning `T | undefined`/`S[]` infers T from the actual guard arg's predicate
+  target (`tryInferPredicateOverloadReturn`, before the B136 concrete-overload swap)
+  + a companion `<call>()!` concrete-union NonNull strip. This is the residual TS2769
+  "findAncestor predicate-overload returns" bucket the round-436 note flagged.**
 - [ ] **M3.3 Mapped / conditional / template-literal / indexed-access evaluation**
   (replace the AST-shape walkers; delete the superseded dedicated walkers and pins).
 - [ ] **M3.4 Flow narrowing unified into identifier typing** (`getTypeOfIdentifier`
