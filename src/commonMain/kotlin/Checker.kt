@@ -86217,6 +86217,17 @@ interface DataView {
             if (aliasUnionContainsNullishKeyword(returnTypeNode, nm)) return
         }
 
+        // Round 436c: `return <literal>` against an annotation whose top-level union
+        // SYNTACTICALLY contains that literal member is ALWAYS legal — decide it before
+        // either checking path. The engine relation passes but does NOT early-return for
+        // a non-nullish source, so control fell through to the string fallback, which
+        // re-widens the literal ('boolean'/'string') and FP'd against the union display
+        // (`return false` vs `JSDocTypeTag | … | false`, tsc parser.ts ×4; the general
+        // `return "a"` vs `"a" | "b"` shape had NO corpus pin). Also covers a
+        // canUse-false cross-file union the engine cannot resolve. FP-proof: a literal
+        // is assignable to a union containing itself in every tsc mode.
+        if (returnUnionSyntacticallyContainsLiteral(returnTypeNode, expr)) return
+
 
         // If the declared return type is a TypeReference with a QualifiedName whose
         // leftmost is unresolvable AND has a spelling-suggestion target (meaning
@@ -86688,6 +86699,61 @@ interface DataView {
      * to a direct single-identifier reference + a direct UnionType body — anything else
      * returns false (keeps the fallback's rejections for aliases that exclude the keyword).
      */
+    /** Round 436c: is [expr] a LITERAL (string/number/true/false, incl. parenthesized
+     *  and negative-number forms) that appears as a LiteralType member of [typeNode]'s
+     *  top-level union (inline union, or a direct single-identifier alias whose body is
+     *  a union)? Such a return is always assignable — see the call site. */
+    private fun returnUnionSyntacticallyContainsLiteral(typeNode: TypeNode?, expr: Expression?): Boolean {
+        if (expr == null) return false
+        val key = literalExprSyntacticKey(expr) ?: return false
+        val union = (typeNode as? UnionType)
+            ?: run {
+                // Direct alias reference whose body is a union (reuses the M1.9
+                // alias-resolution shape from aliasUnionContainsNullishKeyword).
+                val ref = typeNode as? TypeReference ?: return false
+                if (!ref.typeArguments.isNullOrEmpty()) return false
+                val name = (ref.typeName as? Identifier)?.text ?: return false
+                val sym = currentFileLocals?.get(name) ?: globals[name] ?: return false
+                val aliasDecl = (sym.declarations.firstOrNull { it is TypeAliasDeclaration }
+                    ?: globals[name]?.declarations?.firstOrNull { it is TypeAliasDeclaration })
+                    as? TypeAliasDeclaration ?: return false
+                aliasDecl.type as? UnionType ?: return false
+            }
+        return union.types.any { m -> (m as? LiteralType)?.let { literalTypeNodeSyntacticKey(it) } == key }
+    }
+
+    private fun literalExprSyntacticKey(exprIn: Expression): String? {
+        val expr = unwrapParensExpr(exprIn)
+        return when (expr) {
+            is StringLiteralNode -> "s:${expr.text}"
+            is NoSubstitutionTemplateLiteralNode -> "s:${expr.text}"
+            is NumericLiteralNode -> expr.text.toDoubleOrNull()?.let { "n:$it" }
+            is PrefixUnaryExpression ->
+                if (expr.operator == SyntaxKind.Minus && expr.operand is NumericLiteralNode)
+                    (expr.operand).text.toDoubleOrNull()?.let { "n:${-it}" } else null
+            is Identifier -> when (expr.text) {
+                "true" -> "b:true"
+                "false" -> "b:false"
+                else -> null
+            }
+            else -> null
+        }
+    }
+
+    private fun literalTypeNodeSyntacticKey(node: LiteralType): String? = when (val lit = node.literal) {
+        is StringLiteralNode -> "s:${lit.text}"
+        is NumericLiteralNode -> lit.text.toDoubleOrNull()?.let { "n:$it" }
+        is PrefixUnaryExpression ->
+            if (lit.operator == SyntaxKind.Minus && lit.operand is NumericLiteralNode)
+                (lit.operand).text.toDoubleOrNull()?.let { "n:${-it}" } else null
+        is Identifier -> when (lit.text) {
+            "true" -> "b:true"
+            "false" -> "b:false"
+            else -> null
+        }
+        else -> null
+    }
+
     private fun aliasUnionContainsNullishKeyword(typeNode: TypeNode?, nullishName: String): Boolean {
         val ref = typeNode as? TypeReference ?: return false
         val name = (ref.typeName as? Identifier)?.text ?: return false
