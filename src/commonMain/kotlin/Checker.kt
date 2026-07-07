@@ -122180,6 +122180,16 @@ interface DataView {
                 // param, not the outer function — so resolving via globals would
                 // miss the primitive-callee case.
                 currentLocalTypes[expr.text]?.let { return it }
+                // A function-body destructured/shadowed binding name (registered into the
+                // side set by applyCallTypesBodyLocalShadowing — see the
+                // currentParamBindingNames gotcha) shadows any cross-file `globals` function
+                // of the same name. Mirrors getTypeOfIdentifier (line ~92457): without it,
+                // `const { watchFile } = createWatchFactory()` resolved the CALLEE to
+                // tsbuildPublic's top-level `function watchFile<T>(state: SolutionBuilderState<T>,
+                // file: string, ...)` and FP'd the call's args against ITS params (arrow arg
+                // vs `file: string`). The binding's member type is unmodeled → anyType
+                // (suppression-only).
+                if (expr.text in currentParamBindingNames) return anyType
                 // 17.21: Namespace fallback so a class/fn declared inside `namespace M`
                 // is reachable from a call/new inside another method in the same
                 // namespace. Without this, `new List<T>(null)` inside
