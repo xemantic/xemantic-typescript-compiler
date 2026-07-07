@@ -34,6 +34,30 @@ completeness campaigns to dashboard-driven burn-down: the acceptance bar is the 
 tsc's source uses, with the corpus suite as the regression net. M5 unchanged —
 performance is the directive's second half and starts at v1 compliance.
 
+**Round 431 (2026-07-07) — M5 (perf round 2, JFR-driven): the two post-430 hotspots —
+self-compile (compiler profile) 38–41 s → 19.9 s noEmit / 21.7 s wall with emit (the
+2026-07-05 baseline was 592.8 s → cumulative ~27×), zod 5.0 → 3.6 s; diagnostics
+byte-identical both rounds (1,148 incl. per-error diff / 1,665); suite 9,333/0 (+3 local).**
+(a) `collectReassignedNamesInRange` (Flow.kt, B464) char-scanned `[closure.pos,
+enclosingFn.end)` PER CLOSURE — ~14% of the compile (7.3% self + the String.charAt/getOrNull
+churn) on `createTypeChecker`-scale functions. The matcher's decisions depend only on
+BACKWARD context and the range END, never the scan start (a scan entering mid-word skips
+the partial word exactly as a from-the-start scan attributes it before the range), so all
+closures sharing an enclosing function now share ONE scan cached per `hi`, filtered by
+position — exact semantics. (b) The flow walkers copied the whole cycle-detection `seen`
+set PER BRANCH ANTECEDENT at every FlowBranchLabel (~11%: thousands of ids × a copy per
+antecedent). `NarrowSeen` bundles set + add-log: branch antecedents walk the shared
+path-so-far membership with mark/popToMark restoring it after each — only genuinely-added
+ids are logged, so the restored membership is exactly the fresh-copy state; linear recursion
+shares unmarked (additions persist upward, as before); both walkers changed in sync.
+`FlowNarrowingPerfInvariantsTest` pins per-closure past-last-assignment semantics through
+the shared scan (params, not `let` locals — the TS18048 emitter's captured-body-local
+recovery is var-only per B467, verified pre-existing), branch-sibling isolation across a
+diamond join, and an emitter-active positive control. Remaining profile is FLAT (top self
+≤8%): HashMap churn in the walkers' memo, `findLocalTypeAlias$scan` (~4%, via
+`discUnionParamMembers`), `checkMemberAccessMissing` ~3% — next M5 round needs a fresh
+JFR pass, no obvious single target left.
+
 **Round 430 (2026-07-07) — M5 (first performance round, JFR-driven): the alias-resolution
 quadratic — self-compile (compiler profile) wall ~490–593 s → 38.6 s (~13–15×), zod
 6.0 → 5.0 s, diagnostics byte-identical (1,148 / by-code identical; zod 1,665 identical);
