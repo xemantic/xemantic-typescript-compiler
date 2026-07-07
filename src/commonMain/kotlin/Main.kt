@@ -92,6 +92,9 @@ private fun printDiagnostics(diagnostics: List<Diagnostic>, listAll: Boolean = f
     for (d in shown) {
         val loc = if (d.fileName != null && d.line != null) "${d.fileName}:${d.line}:${d.character ?: 1}" else (d.fileName ?: "")
         println("  $loc - error TS${d.code}: ${d.message}")
+        // --listAll: print elaboration chains too (indented; never matches the
+        // `error TS` grep the A/B diffs key on) — TS2769/TS2322 triage needs them.
+        if (listAll) d.messageChain?.forEach { line -> println("      |$line") }
     }
     if (errors.size > shown.size) println("  ... and ${errors.size - shown.size} more error(s)")
 }
