@@ -99342,7 +99342,19 @@ interface DataView {
             }
             SyntaxKind.QuestionQuestion -> {
                 val rightT = getTypeOfExpression(right)
-                if (leftType === rightT) leftType else getUnionType(listOf(leftType, rightT))
+                // tsc: `a ?? b` is `NonNullable<a> | b` — the left operand's null/undefined/void
+                // members route to the right and must be stripped (`verbosityLevel ?? -1` where
+                // `verbosityLevel: number | undefined` → `number`, NOT `number | undefined`;
+                // checker.ts nodeBuilder `maxExpansionDepth`).
+                val leftKept = if (leftType !is Type.Union &&
+                    leftType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) {
+                    null // pure-nullish left → the right operand only
+                } else narrowByExcludingNullUndefined(leftType)
+                when {
+                    leftKept == null -> rightT
+                    leftKept === rightT -> leftKept
+                    else -> getUnionType(listOf(leftKept, rightT))
+                }
             }
 
             // Comma → type of right
