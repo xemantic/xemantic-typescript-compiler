@@ -246,6 +246,7 @@ class FlowGraphBuilder {
 
     fun build(sourceFile: SourceFile): FlowGraph {
         sourceText = sourceFile.text
+        reassignScanCache.clear() // per-file text — a reused builder must not serve stale scans
         currentFlow = newStart(sourceFile)
         bindEachStatement(sourceFile.statements)
         return FlowGraph(nodeToFlow, closureStarts.toList(), sourceFile, containerStarts.toList())
@@ -819,7 +820,42 @@ class FlowGraphBuilder {
         if (start < 0 || start >= source.length) return emptySet()
         val hi = minOf(end, source.length)
         if (hi <= start) return emptySet()
+        // Perf (round 431): every closure inside one enclosing function queries the SAME
+        // `hi` (= the enclosing function's end) with only `start` varying — and the
+        // matcher's decisions at a position depend only on BACKWARD context (read via
+        // getOrNull, unbounded) and `hi`, never on where the scan started (a scan
+        // entering mid-word skips the partial word, exactly as a from-the-word's-start
+        // scan attributes it to a position before the range). So one scan from the
+        // lowest start seen serves all siblings via a position filter — exact semantics,
+        // replacing the per-closure O(range) char scan that was ~14% of the tsc-source
+        // self-compile (thousands of closures inside `createTypeChecker`-scale functions).
+        var scan = reassignScanCache[hi]
+        if (scan == null || scan.start > start) {
+            scan = scanReassignedEntries(source, start, hi)
+            reassignScanCache[hi] = scan
+        }
+        // First entry with position >= start (positions ascend); all entries are < hi.
+        var lo = 0
+        var h = scan.positions.size
+        while (lo < h) {
+            val mid = (lo + h) ushr 1
+            if (scan.positions[mid] < start) lo = mid + 1 else h = mid
+        }
+        if (lo == scan.positions.size) return emptySet()
         val result = mutableSetOf<String>()
+        for (k in lo until scan.positions.size) result.add(scan.names[k])
+        return result
+    }
+
+    /** One reassignment-target scan over [start, hi): match positions (ascending) +
+     *  the matched names, cached per `hi` in [reassignScanCache]. */
+    private class ReassignScan(val start: Int, val positions: IntArray, val names: Array<String>)
+
+    private val reassignScanCache = HashMap<Int, ReassignScan>()
+
+    private fun scanReassignedEntries(source: String, start: Int, hi: Int): ReassignScan {
+        val positions = mutableListOf<Int>()
+        val names = mutableListOf<String>()
         fun isWordChar(c: Char?) = c != null && (c.isLetterOrDigit() || c == '_' || c == '$')
         fun isWordStart(c: Char) = c.isLetter() || c == '_' || c == '$'
         var i = start
@@ -850,13 +886,13 @@ class FlowGraphBuilder {
                     c0 == '>' && c1 == '>' && (c2 == '=' || (c2 == '>' && c3 == '=')) -> true
                     else -> false
                 }
-                if (prefixInc || suffixAssigned) result.add(name)
+                if (prefixInc || suffixAssigned) { positions.add(i); names.add(name) }
                 i = j
             } else {
                 i++
             }
         }
-        return result
+        return ReassignScan(start, positions.toIntArray(), names.toTypedArray())
     }
 
     /** B464: collect a closure's own binding names (params + body-declared) so a
