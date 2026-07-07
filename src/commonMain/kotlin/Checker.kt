@@ -91896,7 +91896,7 @@ interface DataView {
         // element-access, etc.) — those bail to declared type.
         val path = getReferencePath(expr) ?: return declaredType
         val flow = getFlowAt(expr) ?: return declaredType
-        val seen = mutableSetOf<Int>()
+        val seen = NarrowSeen()
         return flowWalkWithTripCheck(expr) {
             narrowTypeFromFlow(declaredType, flow, path, seen, depth = 0)
         } ?: declaredType
@@ -91923,7 +91923,7 @@ interface DataView {
     ): Type {
         val path = getReferencePath(expr) ?: return declaredType
         val flow = getFlowAt(expr) ?: return declaredType
-        val seen = mutableSetOf<Int>()
+        val seen = NarrowSeen()
         return flowWalkWithTripCheck(expr) {
             narrowTypeFromFlowFollowLoopEntry(declaredType, flow, path, seen, depth = 0)
         } ?: declaredType
@@ -92123,9 +92123,36 @@ interface DataView {
         }
     }
 
+    /**
+     * Perf (round 431): the flow walkers' cycle-detection set with an ADD-LOG, so a
+     * FlowBranchLabel can walk each antecedent against the path-so-far membership and
+     * restore it afterwards ([mark]/[popToMark]) instead of COPYING the whole set per
+     * antecedent (the copies were ~11% of the tsc-source self-compile: `seen` holds
+     * thousands of ids on a deep walk × one full copy per branch antecedent). Only
+     * genuinely ADDED ids are logged, so a pop never removes a pre-existing id —
+     * after popToMark the membership is exactly the pre-branch state, which is what
+     * the per-antecedent fresh copy provided. Linear recursion shares the instance
+     * unmarked (additions persist upward), matching the old shared-set behavior.
+     * Each top-level walk constructs its own instance (re-entrant walks via callee
+     * resolution get independent logs).
+     */
+    private class NarrowSeen {
+        private val ids = HashSet<Int>()
+        private val log = ArrayList<Int>()
+        fun add(id: Int): Boolean {
+            if (!ids.add(id)) return false
+            log.add(id)
+            return true
+        }
+        fun mark(): Int = log.size
+        fun popToMark(mark: Int) {
+            while (log.size > mark) ids.remove(log.removeAt(log.size - 1))
+        }
+    }
+
     private fun narrowTypeFromFlow(
         declaredType: Type, flowNodeIn: FlowNode, name: String,
-        seen: MutableSet<Int>, depth: Int,
+        seen: NarrowSeen, depth: Int,
         memo: MutableMap<Int, Pair<Int, Type>> = mutableMapOf(),
     ): Type {
         // P0 (services hang): reset the per-request budget + callee-decl cache at an
@@ -92202,7 +92229,12 @@ interface DataView {
                 if (node.antecedents.isEmpty()) neverType
                 else {
                     val branchTypes = node.antecedents.map {
-                        narrowTypeFromFlow(declaredType, it, name, mutableSetOf<Int>().apply { addAll(seen) }, depth + 1, memo)
+                        // Each antecedent walks against the path-so-far membership;
+                        // popToMark restores it (≡ the old fresh-copy-per-antecedent).
+                        val mark = seen.mark()
+                        val t = narrowTypeFromFlow(declaredType, it, name, seen, depth + 1, memo)
+                        seen.popToMark(mark)
+                        t
                     }
                     getUnionType(branchTypes)
                 }
@@ -113390,7 +113422,7 @@ interface DataView {
         val recvFlow = getFlowAt(info.recvOfRecv) ?: getFlowAt(info.narrowExpr)
         if (recvPath != null && recvFlow != null) {
             val recvNarrowed = flowWalkWithTripCheck(info.recvOfRecv) {
-                narrowTypeFromFlowFollowLoopEntry(recvOfRecvType, recvFlow, recvPath, mutableSetOf(), 0)
+                narrowTypeFromFlowFollowLoopEntry(recvOfRecvType, recvFlow, recvPath, NarrowSeen(), 0)
             } ?: recvOfRecvType
             if (recvNarrowed !== recvOfRecvType) {
                 val np = getPropertyOfType(getApparentType(recvNarrowed), info.propName)
@@ -113640,7 +113672,7 @@ interface DataView {
         var path: String = leftmost.text
         if (receiverType is Type.Union) {
             receiverType = flowWalkWithTripCheck(leftmost) {
-                narrowTypeFromFlowFollowLoopEntry(receiverType, flow, path, mutableSetOf(), 0)
+                narrowTypeFromFlowFollowLoopEntry(receiverType, flow, path, NarrowSeen(), 0)
             } ?: receiverType
         }
 
@@ -113683,7 +113715,7 @@ interface DataView {
             path = newPath
             receiverType = if (propType is Type.Union) {
                 flowWalkWithTripCheck(segment) {
-                    narrowTypeFromFlowFollowLoopEntry(propType, flow, path, mutableSetOf(), 0)
+                    narrowTypeFromFlowFollowLoopEntry(propType, flow, path, NarrowSeen(), 0)
                 } ?: propType
             } else propType
         }
@@ -113725,7 +113757,7 @@ interface DataView {
      */
     private fun narrowTypeFromFlowFollowLoopEntry(
         declaredType: Type, flowNodeIn: FlowNode, name: String,
-        seen: MutableSet<Int>, depth: Int,
+        seen: NarrowSeen, depth: Int,
         memo: MutableMap<Int, Pair<Int, Type>> = mutableMapOf(),
     ): Type {
         // P0 (services hang): budgets + memo mirror [narrowTypeFromFlow] — see the
@@ -113785,10 +113817,13 @@ interface DataView {
                 if (node.antecedents.isEmpty()) neverType
                 else {
                     val branchTypes = node.antecedents.map {
-                        narrowTypeFromFlowFollowLoopEntry(
-                            declaredType, it, name,
-                            mutableSetOf<Int>().apply { addAll(seen) }, depth + 1, memo,
+                        // Mirror of narrowTypeFromFlow's mark/popToMark (≡ fresh copy).
+                        val mark = seen.mark()
+                        val t = narrowTypeFromFlowFollowLoopEntry(
+                            declaredType, it, name, seen, depth + 1, memo,
                         )
+                        seen.popToMark(mark)
+                        t
                     }
                     getUnionType(branchTypes)
                 }
@@ -125765,7 +125800,7 @@ interface DataView {
         val flow = getFlowAt(flowAnchor) ?: return false
         val narrowed = try {
             flowWalkWithTripCheck(flowAnchor) {
-                narrowTypeFromFlow(declaredVar, flow, varName, mutableSetOf(), 0)
+                narrowTypeFromFlow(declaredVar, flow, varName, NarrowSeen(), 0)
             } ?: return false
         } catch (_: Exception) { return false }
         if (narrowed === declaredVar || !isSimpleCheckableType(narrowed)) return false
@@ -126363,7 +126398,7 @@ interface DataView {
                     val flow = getFlowAt(rhs)
                     if (flow != null) {
                         flowWalkWithTripCheck(rhs) {
-                            narrowTypeFromFlow(unknownType, flow, path, mutableSetOf(), 0)
+                            narrowTypeFromFlow(unknownType, flow, path, NarrowSeen(), 0)
                         } ?: unknownType
                     } else unknownType
                 } finally {
