@@ -86207,6 +86207,7 @@ interface DataView {
             return
         }
 
+
         // If the declared return type is a TypeReference with a QualifiedName whose
         // leftmost is unresolvable AND has a spelling-suggestion target (meaning
         // TS2833 likely fired on the qualifier in `checkTypeNameResolved`), skip
@@ -87038,6 +87039,15 @@ interface DataView {
                 }
                 if (targetType != null && targetType !== anyType && targetType !== errorType) {
                     val tt = targetType
+                    // Round 435f: an assignment TARGET carrying a FOREIGN type param is a
+                    // local typed from an UN-INFERRED generic call return (`let expression =
+                    // visitNode(…)` registers visitNode's raw `TOut | (TIn & undefined) |
+                    // (TVisited & undefined)` — tsc infers those TPs at the call site, so
+                    // any check against the raw type is meaningless and FP'd the visitor
+                    // family ×15). Mirrors the round-431e SOURCE gate: the enclosing fn's
+                    // OWN TPs stay checkable, as do signature-own TPs.
+                    if (typeContainsForeignTypeParam(tt, typeParams)) return
+                    // B8.1: target is `never` because its annotation is an
                     // intersection that reduced due to a conflicting private
                     // property. Emit TS2322 with `never` display + chain so the
                     // standard emission path doesn't print `Type 'X' is not
