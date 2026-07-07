@@ -87261,10 +87261,16 @@ interface DataView {
                     // when it is a STRICT improvement (`!==` raw) that makes the assignment relate
                     // (`checkTypeRelatedTo(narrowed, tt)` passes) — so a genuine widening assignment
                     // (no narrowing, or narrowed still not assignable) keeps the raw type and still
-                    // fires. Gated to a named object target (Interface/Reference), the shape the
-                    // var-decl path deliberately defers.
+                    // fires. Gated to a named object target (Interface/Reference) or a
+                    // UNION target (round 438: `currentSourceFile = node` inside
+                    // `if (isSourceFile(node))` where `currentSourceFile: SourceFile |
+                    // undefined` — tsc's impliedNodeFormatDependent/esnextAnd2015
+                    // onSubstituteNode; the round-410 gate excluded unions so the RHS kept
+                    // its wider `Node` type and FP'd the missing-property error). Union
+                    // targets are equally FP-safe: the narrowed type is substituted only
+                    // when it makes the relation pass, so a genuine widening still fires.
                     val sourceType = if ((expr.right is Identifier || expr.right is PropertyAccessExpression) &&
-                        (tt is Type.Interface || tt is Type.Reference)) {
+                        (tt is Type.Interface || tt is Type.Reference || tt is Type.Union)) {
                         val narrowed = getNarrowedTypeForReference(sourceTypeRaw, expr.right)
                         if (narrowed !== sourceTypeRaw && checkTypeRelatedTo(narrowed, tt, assignableRelation)) narrowed
                         else sourceTypeRaw

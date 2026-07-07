@@ -142,4 +142,48 @@ class AssignmentRhsNarrowingTest {
             have(any { it.code == 2741 || it.code == 2322 })
         }
     }
+
+    @Test
+    fun `assign a guard-narrowed local to a UNION-typed target - no error`() {
+        // Round 438: the round-410 gate excluded UNION targets, so
+        // `currentSourceFile = node` inside `if (isSourceFile(node))` where
+        // `currentSourceFile: SourceFile | undefined` FP'd `Node => SourceFile`.
+        // tsc's impliedNodeFormatDependent/esnextAnd2015 onSubstituteNode.
+        diagnose(
+            """
+            interface Node { kind: number; }
+            interface SourceFile extends Node { fileName: string; }
+            declare function isSourceFile(n: Node): n is SourceFile;
+
+            export function f(node: Node): SourceFile | undefined {
+                let currentSourceFile: SourceFile | undefined;
+                if (isSourceFile(node)) {
+                    currentSourceFile = node; // Node narrowed to SourceFile <: SourceFile | undefined
+                }
+                return currentSourceFile;
+            }
+            """,
+        ) should {
+            have(none { it.code == 2322 || it.code == 2741 || it.code == 2739 })
+        }
+    }
+
+    @Test
+    fun `genuine widening to a UNION target still fires - negative control`() {
+        // No guard: a bare `Node` is NOT assignable to `SourceFile | undefined`
+        // (Node is a supertype of SourceFile, and a Node value is never undefined).
+        diagnose(
+            """
+            interface Node { kind: number; }
+            interface SourceFile extends Node { fileName: string; }
+
+            export function bad(node: Node): void {
+                let currentSourceFile: SourceFile | undefined;
+                currentSourceFile = node; // genuine error — Node ≁ SourceFile | undefined
+            }
+            """,
+        ) should {
+            have(any { it.code == 2322 || it.code == 2741 })
+        }
+    }
 }
