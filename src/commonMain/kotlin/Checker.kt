@@ -86536,6 +86536,21 @@ interface DataView {
                 checkTypeRelatedTo(sourceType, targetType, assignableRelation)) {
                 return
             }
+            // Round 438: a source assignable to a target that STRUCTURALLY carries an
+            // empty-object `{}` member (`{} | undefined`) is legal — the engine confirms
+            // it (round 430's empty-object rule is sound: every non-nullish value relates
+            // to `{}`), but because the relation PASSES for a non-nullish source there was
+            // no early return, so control fell to the string fallback which re-widens /
+            // mis-handles `{}` and FP'd (`return ""` vs `{} | undefined`, tsc
+            // commandLineParser.ts getOptionValueWithEmptyStrings ×2). Precise-verdict
+            // early return (per the checkReturnAssignability gotcha — the `{}`-member shape
+            // is one where the engine is trustworthy, so this does NOT open the blanket
+            // engine-confirmed return the gotcha warns against). The empty-object guard
+            // keeps the extra engine call off every other return.
+            if (targetHasEmptyObjectMember(targetType) &&
+                checkTypeRelatedTo(sourceType, targetType, assignableRelation)) {
+                return
+            }
             if (canUseForReturn && !checkTypeRelatedTo(sourceType, targetType, assignableRelation)) {
                 // Async-function returns: declared `Promise<T>` accepts `T` directly.
                 // The returned value is implicitly wrapped in a Promise at runtime,
@@ -131036,6 +131051,23 @@ interface DataView {
      * source (which then correctly PASSES, matching tsc), and the DISPLAY to add the
      * `| undefined` tsc shows for non-exact optional targets.
      */
+    /**
+     * The empty anonymous object type `{}` — no symbol, no members, no signatures,
+     * no index infos (round 430's `structuredTypeRelatedTo` empty-object rule: `{}`
+     * is the supertype of every non-nullish, non-void value). Factored out so the
+     * return-path precise-verdict early return (round 438) can reuse the exact shape.
+     */
+    private fun isEmptyAnonymousObjectType(t: Type): Boolean =
+        t is Type.Object && t !is Type.Interface && t !is Type.Reference &&
+            t.symbol == null && t.members.isNullOrEmpty() &&
+            t.callSignatures.isNullOrEmpty() && t.constructSignatures.isNullOrEmpty() &&
+            t.stringIndexInfo == null && t.numberIndexInfo == null
+
+    /** `{}` itself, or a union with an empty-object `{}` member (`{} | undefined`). */
+    private fun targetHasEmptyObjectMember(t: Type): Boolean =
+        isEmptyAnonymousObjectType(t) ||
+            (t is Type.Union && t.types.any { isEmptyAnonymousObjectType(it) })
+
     private fun widenOptionalTargetPropType(targetType: Type, targetProp: Symbol, sourceType: Type): Type {
         if (!strictNullChecks) return targetType
         if (options.exactOptionalPropertyTypes) return targetType
