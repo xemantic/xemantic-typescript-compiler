@@ -308,6 +308,14 @@ class Checker(
      *  return type is `Promise<T>` — async functions implicitly wrap returns. */
     private var inAsyncFunctionBody = false
 
+    /** Round 435: the `[pos, end]` range of the FRESH object-literal expression whose
+     *  relation is currently being checked (tsc freshness: literal prop types in a
+     *  directly-checked fresh literal are kept against literal-expecting target
+     *  members; a widened var REFERENCE gets no such retry). Consulted by
+     *  [propertiesRelatedTo]'s literal retry; set via [withFreshObjLitSource] at the
+     *  var-decl / assignment / conditional-return consumer sites. */
+    private var freshObjLitRange: IntRange? = null
+
     /** True while walking the body of a GENERATOR function/method (`function*`).
      *  A generator's `return expr` checks against the annotation's TReturn (tsc
      *  getIterationTypeOfGeneratorFunctionReturnType), never the iterator type
@@ -78269,7 +78277,9 @@ interface DataView {
             // rule as checkReturnAssignability's gate.
             if (typeContainsForeignTypeParam(branchType, typeParams)) continue
             if (!canUseTypeEngine(branchType, targetType)) continue
-            if (checkTypeRelatedTo(branchType, targetType, assignableRelation)) continue
+            if (withFreshObjLitSource(inner) {
+                    checkTypeRelatedTo(branchType, targetType, assignableRelation)
+                }) continue
             val displaySource = typeToString(branchType)
             val displayTarget = formatTypeForDisplay(targetNode) ?: typeToString(targetType)
             val start = inner.pos
@@ -84557,7 +84567,9 @@ interface DataView {
             (targetType is Type.Intrinsic || targetType is Type.StringLiteral ||
                 targetType is Type.NumberLiteral || targetType is Type.BigIntLiteral)
         val canUse = canUseRaw || callBypass
-        val isAssignable = canUse && checkTypeRelatedTo(sourceType, targetType, assignableRelation)
+        val isAssignable = canUse && withFreshObjLitSource(init) {
+            checkTypeRelatedTo(sourceType, targetType, assignableRelation)
+        }
         // B103: the relation engine ignores optional-vs-required presence, so it can
         // wrongly report `{ x?: T }`-shaped source as assignable to `{ x: T }`. When the
         // comparison otherwise PASSES but a target REQUIRED property's source counterpart
@@ -87367,7 +87379,9 @@ interface DataView {
                         }
                     }
                     val canUse = canUseTypeEngine(sourceType, tt)
-                    val isAssignable = canUse && checkTypeRelatedTo(sourceType, tt, assignableRelation)
+                    val isAssignable = canUse && withFreshObjLitSource(expr.right) {
+                        checkTypeRelatedTo(sourceType, tt, assignableRelation)
+                    }
                     // B138 (assignment path): NON-LITERAL object source vs an index-sig-only
                     // target — `x = a` where `x: {[k:string]:T}`. Gated to `isAssignable`
                     // (the relation wrongly passes) so it never double-emits.
@@ -126294,7 +126308,23 @@ interface DataView {
             val sourcePropType = getPropertyTypeForRelation(source, sourceProp)
             val effectiveSource = widenOptionalSourcePropType(sourcePropType, sourceProp, targetProp)
             val targetPropType = widenOptionalTargetPropType(getPropertyTypeForRelation(target, targetProp), targetProp, effectiveSource)
-            if (!checkTypeRelatedTo(effectiveSource, targetPropType, relation)) return false
+            if (!checkTypeRelatedTo(effectiveSource, targetPropType, relation)) {
+                // Round 435 (tsc contextual literal types): a FRESH object-literal prop
+                // keeps its literal type against a literal-containing target member —
+                // getTypeOfObjectLiteral widens (`kind: "paths"` → string), so retry with
+                // the un-widened literal recovered from the member symbol's
+                // PropertyAssignment. Gated to the CURRENT fresh literal's source range
+                // ([freshObjLitRange]) so a widened var reference still fails (tsc's own
+                // freshness rule); a literal absent from the target union also still
+                // fails. tsc's moduleSpecifiers.ts `{ kind: "paths", … }` returns /
+                // esDecorators.ts `top = { kind: "class", … }` assignments.
+                val fresh = freshObjLitRange
+                val srcDecl = if (fresh != null && propTypeContainsLiteral(targetPropType))
+                    sourceProp.valueDeclaration as? PropertyAssignment else null
+                val lit = if (srcDecl != null && srcDecl.pos in fresh!!)
+                    literalTypeOfExpression(srcDecl.initializer) else null
+                if (lit == null || !checkTypeRelatedTo(lit, targetPropType, relation)) return false
+            }
         }
         return true
     }
@@ -128018,6 +128048,19 @@ interface DataView {
         }
     }
 
+    /** Round 435: run [block] with [freshObjLitRange] set when [expr] unwraps to an
+     *  ObjectLiteralExpression — the tsc-freshness gate for propertiesRelatedTo's
+     *  literal retry. A non-literal source (identifier/call/…) runs [block] unchanged,
+     *  so a WIDENED reference (`const x = { kind: "a" }; const y: T = x`) keeps
+     *  failing exactly as tsc does. */
+    private inline fun <T> withFreshObjLitSource(expr: Expression?, block: () -> T): T {
+        val lit = expr?.let { unwrapToObjLitValue(it) } as? ObjectLiteralExpression
+            ?: return block()
+        val saved = freshObjLitRange
+        freshObjLitRange = lit.pos..lit.end
+        return try { block() } finally { freshObjLitRange = saved }
+    }
+
     private fun checkNestedObjLitPropTypes(
         objLit: ObjectLiteralExpression, targetType: Type, source: String, fileName: String,
         viaUnion: Boolean = false,
@@ -128146,7 +128189,14 @@ interface DataView {
                 // non-simple source still needs the deeper-chain path → keep skipping it.
                 if (!isSimpleCheckableType(valueType)) continue
                 if (valueType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) continue
-                if (checkTypeRelatedTo(valueType, tgtMemberType, assignableRelation)) continue
+                // Round 435 (tsc contextual literal types): a FRESH literal prop value keeps
+                // its literal type when the target member contains literals — tsc's own
+                // checker.ts IterationTypesResolver tables (`iterableCacheKey:
+                // "iterationTypesOfAsyncIterable"` vs the two-literal union). Mirrors the
+                // 17.70 return-path / B326 overload-arg rule.
+                val effValueType = if (propTypeContainsLiteral(tgtMemberType))
+                    literalTypeOfExpression(value) ?: valueType else valueType
+                if (checkTypeRelatedTo(effValueType, tgtMemberType, assignableRelation)) continue
                 val keyPos = nameNode.pos
                 val keyLen = when (nameNode) {
                     is StringLiteralNode -> (nameNode.rawText?.length ?: nameNode.text.length) + 2
@@ -129490,6 +129540,12 @@ interface DataView {
             val sourcePropType = getPropertyTypeForRelation(sourceType, sourceProp)
             if (sourcePropType === anyType || sourcePropType === errorType) continue
             if (checkTypeRelatedTo(sourcePropType, targetPropType, assignableRelation)) continue
+            // Round 435: fresh literal prop value vs a literal-containing target member —
+            // retry with the UN-widened literal type (see checkNestedObjLitPropTypes).
+            if (propTypeContainsLiteral(targetPropType)) {
+                val lit = literalTypeOfExpression(unwrapToObjLitValue(propNode.initializer))
+                if (lit != null && checkTypeRelatedTo(lit, targetPropType, assignableRelation)) continue
+            }
             // Deep-leaf descent (excessPropertyChecksWithNestedIntersections): when the
             // property VALUE is itself a FRESH object literal and the target prop type is an
             // object/intersection, tsc descends into it and reports the deepest simple-leaf
