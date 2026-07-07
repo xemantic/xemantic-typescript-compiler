@@ -96340,7 +96340,12 @@ interface DataView {
                 // skip — `append(undefined, x)` still infers from `x`).
                 val unionMode = if (!isRest && !isBareT && !isRestT && !isArrayT && !isObjLitOfT)
                     nullableUnionOfTpMode(pt, tp) else 0
-                if (!isBareT && !isRestT && !isArrayT && !isObjLitOfT && !isFnTypedOfT && unionMode == 0) continue
+                // (j) M3.1 (round 430b): predicate-position callback `(x: Base) =>
+                // x is tp` — tp binds from a NAMED guard arg's own predicate target
+                // (`getFirstJSDocTag(node, isJSDocAugmentsTag)` → T = JSDocAugmentsTag).
+                val isPredT = !isRest && !isBareT && !isRestT && !isArrayT && !isObjLitOfT &&
+                    unionMode == 0 && predicatePositionTpOf(params[i], tps) === tp
+                if (!isBareT && !isRestT && !isArrayT && !isObjLitOfT && !isFnTypedOfT && unionMode == 0 && !isPredT) continue
                 fun isNamedLikeAtom(t: Type): Boolean =
                     t is Type.Interface || t is Type.Reference || t is Type.Intrinsic ||
                         t.flags.hasAny(
@@ -96353,6 +96358,18 @@ interface DataView {
                     if (ai >= args.size) break
                     val arg = args[ai]
                     if (arg is SpreadElement) continue
+                    // (j) round 430b: predicate-position candidate — the NAMED guard
+                    // arg's own predicate target (barrel-aware resolution via
+                    // predicateTargetTypeOfGuardExpr). Unresolvable / inline-arrow /
+                    // predicate-less args contribute nothing (soft skip) — branches
+                    // BEFORE the standard rawArgType path, which would type the guard
+                    // as a callable object and hard-bail at the named-like gate.
+                    if (isPredT) {
+                        val t = predicateTargetTypeOfGuardExpr(arg) ?: continue
+                        if (t === anyType || t === errorType) continue
+                        candidates.add(Candidate(ai, t, null))
+                        continue
+                    }
                     // 17.38: object-literal-of-T inference — walk arg's properties matching
                     // pt's tp-typed members; LUB-as-Union over collected widened types.
                     // Branches BEFORE the standard rawArgType bail because the arg as a whole
@@ -97331,6 +97348,22 @@ interface DataView {
         if (name != "Array" && name != "ReadonlyArray") return false
         val args0 = type.resolvedTypeArguments ?: return false
         return args0.size == 1 && args0[0] === tp
+    }
+
+    /** M3.1 (round 430b): a param declared `(x: Base) => x is T` where T ∈ [tps] —
+     *  returns the matched tp. Reads the param's declared AST: the RESOLVED signature
+     *  ERASES the predicate (`getTypeFromTypeNode(TypePredicate)` is booleanType per
+     *  the documented gotcha), so the Type side cannot see it. Non-asserts, bare
+     *  single-Identifier predicate targets only. */
+    private fun predicatePositionTpOf(paramSym: Symbol, tps: List<Type.TypeParam>): Type.TypeParam? {
+        val decl = paramSym.valueDeclaration as? Parameter ?: return null
+        val ft = decl.type as? FunctionType ?: return null
+        val pred = ft.type as? TypePredicate ?: return null
+        if (pred.assertsModifier) return null
+        val target = pred.type as? TypeReference ?: return null
+        if (!target.typeArguments.isNullOrEmpty()) return null
+        val name = (target.typeName as? Identifier)?.text ?: return null
+        return tps.firstOrNull { it.symbol?.name == name }
     }
 
     /**
