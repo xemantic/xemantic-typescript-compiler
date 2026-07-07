@@ -1130,6 +1130,18 @@ class Checker(
      *  init-order trap (the narrowing walk runs during checking). */
     private var nestedFunctionByNameCache: MutableMap<String, FunctionDeclaration?>? = null
 
+    /** M3.2 (round 431): lexical scope stack for the implicit-any (TS7006) walker —
+     *  one map per enclosing function-like, name → declared annotation TypeNode (null
+     *  value = declared UNTYPED, which must keep TS7006 firing on `x = arrow` per the
+     *  uncalledFunctionChecksInConditional2 baseline). Params register `param.type`;
+     *  body var-decls register `decl.type ?: (init as? AsExpression)?.type`. Consulted
+     *  by [isCalleeResolvable] (a lexically-declared callee resolves) and
+     *  [resolveAssignTargetCtxTypeForImplicitAny] (assignment-RHS contextual typing).
+     *  Maintained ONLY inside checkImplicitAnyInStatements/-Expr/-ClassElement
+     *  (push/pop in try/finally at every function-like boundary). Declared before
+     *  `init` per the init-order trap (the walker runs during init). */
+    private val implicitAnyScopes = ArrayDeque<HashMap<String, TypeNode?>>()
+
     /** M3.4 (round 411): process-wide memo for [resolveImportedEnumSymbol] (alias symbol
      *  id → enum Symbol, or null) — the enum-flavored sibling of [importedNamespaceSymCache],
      *  for discriminated-union narrowing keyed on a barrel-imported enum member
@@ -15280,6 +15292,7 @@ class Checker(
             val source = result.sourceFile.text
             val savedLocals = currentFileLocals
             currentFileLocals = result.locals
+            implicitAnyScopes.clear() // per-file hygiene (every push pops via finally; belt-and-braces)
             try {
                 checkImplicitAnyInStatements(result.sourceFile.statements, source, fileName)
             } finally {
@@ -20471,7 +20484,14 @@ class Checker(
                     // Check params for TS7006 for ALL function declarations (both regular and declare)
                     // TypeScript emits TS7006 for untyped parameters in declare functions too
                     checkParamsForImplicitAny(stmt.parameters, source, fileName)
-                    stmt.body?.let { checkImplicitAnyInStatements(it.statements, source, fileName, returnCtxAnnotation = stmt.type) }
+                    stmt.body?.let {
+                        pushImplicitAnyScope(stmt.parameters)
+                        try {
+                            checkImplicitAnyInStatements(it.statements, source, fileName, returnCtxAnnotation = stmt.type)
+                        } finally {
+                            implicitAnyScopes.removeLast()
+                        }
+                    }
                     // TS7010 for bodyless functions is now in checkBodylessFunctionReturnTypes (unconditional)
                 }
                 is ClassDeclaration -> {
@@ -20560,6 +20580,21 @@ class Checker(
                 }
                 is VariableStatement -> {
                     for (decl in stmt.declarationList.declarations) {
+                        // M3.2 (round 431): register the local in the innermost implicit-any
+                        // scope — annotation, or an `as T` cast's type (`const host = x as
+                        // WatchCompilerHost` types host as T), or null (declared UNTYPED —
+                        // an assignment to it must keep TS7006 firing). Function-level
+                        // granularity: only inside a function-like (the stack is empty at
+                        // file level, where the binder-symbol fallback resolves).
+                        implicitAnyScopes.lastOrNull()?.let { scope ->
+                            val dn = decl.name
+                            if (dn is Identifier && dn.text.isNotEmpty()) {
+                                scope[dn.text] = decl.type
+                                    ?: (decl.initializer as? AsExpression)?.type
+                            } else {
+                                collectBindingNamesForImplicitAny(dn, scope)
+                            }
+                        }
                         // TS7005: Variable implicitly has an 'any' type (ambient/declare declarations only)
                         if (decl.type == null && decl.initializer == null
                             && (ModifierFlag.Declare in stmt.modifiers || inAmbientContext)) {
@@ -20772,14 +20807,35 @@ class Checker(
         when (element) {
             is MethodDeclaration -> {
                 checkParamsForImplicitAny(element.parameters, source, fileName)
-                element.body?.let { checkImplicitAnyInStatements(it.statements, source, fileName, returnCtxAnnotation = element.type) }
+                element.body?.let {
+                    pushImplicitAnyScope(element.parameters)
+                    try {
+                        checkImplicitAnyInStatements(it.statements, source, fileName, returnCtxAnnotation = element.type)
+                    } finally {
+                        implicitAnyScopes.removeLast()
+                    }
+                }
             }
             is Constructor -> {
                 checkParamsForImplicitAny(element.parameters, source, fileName)
-                element.body?.let { checkImplicitAnyInStatements(it.statements, source, fileName) }
+                element.body?.let {
+                    pushImplicitAnyScope(element.parameters)
+                    try {
+                        checkImplicitAnyInStatements(it.statements, source, fileName)
+                    } finally {
+                        implicitAnyScopes.removeLast()
+                    }
+                }
             }
             is GetAccessor -> {
-                element.body?.let { checkImplicitAnyInStatements(it.statements, source, fileName, returnCtxAnnotation = element.type) }
+                element.body?.let {
+                    pushImplicitAnyScope(element.parameters)
+                    try {
+                        checkImplicitAnyInStatements(it.statements, source, fileName, returnCtxAnnotation = element.type)
+                    } finally {
+                        implicitAnyScopes.removeLast()
+                    }
+                }
             }
             is SetAccessor -> {
                 // Setter value parameters are contextually typed from a sibling getter
@@ -20807,7 +20863,14 @@ class Checker(
                         checkParamsForImplicitAny(element.parameters, source, fileName)
                     }
                 }
-                element.body?.let { checkImplicitAnyInStatements(it.statements, source, fileName) }
+                element.body?.let {
+                    pushImplicitAnyScope(element.parameters)
+                    try {
+                        checkImplicitAnyInStatements(it.statements, source, fileName)
+                    } finally {
+                        implicitAnyScopes.removeLast()
+                    }
+                }
             }
             is PropertyDeclaration -> {
                 // Check function type annotation: `pub_f10: (x) => string` → TS7006 for `x`
@@ -20918,6 +20981,195 @@ class Checker(
         return false
     }
 
+    /** M3.2 (round 431): true when [name] is declared as a FunctionDeclaration ANYWHERE
+     *  in the program, at any nesting depth — including names with ≥2 declarations
+     *  (ambiguity doesn't matter for resolvability: tsc resolves the callee lexically to
+     *  one of them and its params provide contextual types either way). Reuses the
+     *  round-418 nested-function map, whose KEYS record every collected name (the value
+     *  is null for collisions). */
+    private fun anyNestedFunctionNamed(name: String): Boolean {
+        val cache = nestedFunctionByNameCache ?: buildNestedFunctionMap().also {
+            nestedFunctionByNameCache = it
+        }
+        return cache.containsKey(name)
+    }
+
+    /** M3.2 (round 431): push a fresh implicit-any scope populated with [params]
+     *  (Identifier params register their annotation; binding-pattern params register
+     *  each bound name as declared-untyped — resolvable as a callee, no assignment ctx). */
+    private fun pushImplicitAnyScope(params: List<Parameter>) {
+        val m = HashMap<String, TypeNode?>()
+        for (p in params) {
+            if (p.isCommentPlaceholder) continue
+            when (val n = p.name) {
+                is Identifier -> if (n.text.isNotEmpty()) m[n.text] = p.type
+                else -> collectBindingNamesForImplicitAny(n, m)
+            }
+        }
+        implicitAnyScopes.addLast(m)
+    }
+
+    private fun collectBindingNamesForImplicitAny(name: Node?, out: HashMap<String, TypeNode?>) {
+        when (name) {
+            is ObjectBindingPattern -> for (el in name.elements) {
+                when (val inner = el.name) {
+                    is Identifier -> if (inner.text.isNotEmpty() && !out.containsKey(inner.text)) out[inner.text] = null
+                    else -> collectBindingNamesForImplicitAny(inner, out)
+                }
+            }
+            is ArrayBindingPattern -> for (el in name.elements) {
+                when (val inner = (el as? BindingElement)?.name) {
+                    is Identifier -> if (inner.text.isNotEmpty() && !out.containsKey(inner.text)) out[inner.text] = null
+                    else -> collectBindingNamesForImplicitAny(inner, out)
+                }
+            }
+            else -> {}
+        }
+    }
+
+    /** True when [name] is declared in any live implicit-any scope (param or body local
+     *  of an enclosing function-like in the current walk). */
+    private fun implicitAnyScopeContains(name: String): Boolean {
+        for (i in implicitAnyScopes.indices.reversed()) {
+            if (implicitAnyScopes[i].containsKey(name)) return true
+        }
+        return false
+    }
+
+    /**
+     * M3.2 (round 431): resolve the contextual type an assignment TARGET provides for
+     * its RHS (tsc getContextualTypeForBinaryOperand: `lhs = arrow` contextually types
+     * the arrow from lhs's declared type). Sources, in order:
+     *  - a lexically-scoped param/body-local's declared annotation (the implicit-any
+     *    scope stack; a declared-UNTYPED local yields null so `let mark; mark = tag =>`
+     *    keeps firing — uncalledFunctionChecksInConditional2's pinned rule);
+     *  - a file-level var's declared annotation (binder symbol);
+     *  - for a property-access target, the member's type looked up on the receiver's
+     *    resolved type (receiver resolved through the same sources, falling back to
+     *    getTypeOfExpression for imports/namespaces).
+     * Null = no contextual type = status quo (TS7006 stands).
+     */
+    private fun resolveAssignTargetCtxTypeForImplicitAny(left: Expression): Type? = when (left) {
+        is Identifier -> {
+            var found = false
+            var ann: TypeNode? = null
+            for (i in implicitAnyScopes.indices.reversed()) {
+                val m = implicitAnyScopes[i]
+                if (m.containsKey(left.text)) {
+                    found = true
+                    ann = m[left.text]
+                    break
+                }
+            }
+            if (found) {
+                ann?.let { getTypeFromTypeNodeSafe(it) }
+            } else {
+                val sym = currentFileLocals?.get(left.text) ?: globals[left.text]
+                val vd = sym?.declarations?.firstOrNull { it is VariableDeclaration } as? VariableDeclaration
+                vd?.type?.let { getTypeFromTypeNodeSafe(it) }
+            }
+        }
+        is PropertyAccessExpression -> {
+            val recvT = resolveAssignTargetCtxTypeForImplicitAny(left.expression)
+                ?: getTypeOfExpression(left.expression).takeIf { it !== anyType && it !== errorType }
+            recvT?.let { lookupPropertyTypeForCtx(it, left.name.text) }
+        }
+        is ParenthesizedExpression -> resolveAssignTargetCtxTypeForImplicitAny(left.expression)
+        else -> null
+    }
+
+    /**
+     * M3.2 (round 431): the call signatures a contextual type contributes, for the
+     * TS7006 suppression paths only. Sees through a Union with exactly ONE callable
+     * member (tsc getContextualSignature collects per-member signatures; nullish and
+     * non-callable members contribute none — `WriteFileCallback | undefined` provides
+     * WriteFileCallback's signature) and through a Type.Reference whose own signatures
+     * are lazy (falls back to the target's — arity survives missing substitution).
+     * Null when the type provides no signatures.
+     */
+    private fun callableSignaturesForCtx(type: Type?): List<Signature>? {
+        val obj: Type.Object = when (type) {
+            is Type.Union -> {
+                var single: Type.Object? = null
+                for (m in type.types) {
+                    if (m !is Type.Object) continue
+                    resolveStructuredTypeMembers(m)
+                    val callable = !m.callSignatures.isNullOrEmpty() ||
+                        (m is Type.Reference && run {
+                            resolveStructuredTypeMembers(m.target)
+                            !m.target.callSignatures.isNullOrEmpty()
+                        })
+                    if (callable) {
+                        if (single != null) return null // ≥2 callable members: no single ctx sig
+                        single = m
+                    }
+                }
+                single ?: return null
+            }
+            is Type.Object -> type
+            else -> return null
+        }
+        resolveStructuredTypeMembers(obj)
+        var sigs = obj.callSignatures
+        if (sigs.isNullOrEmpty() && obj is Type.Reference) {
+            resolveStructuredTypeMembers(obj.target)
+            sigs = obj.target.callSignatures
+        }
+        return if (sigs.isNullOrEmpty()) null else sigs
+    }
+
+    /**
+     * M3.2 (round 431): the contextual arity an assignment-provided type gives an
+     * arrow/function-expression RHS — tsc's single-applicable-signature rule (mirrors
+     * B476 / getContextualCallSignature): among the type's call signatures, those with
+     * arity ≥ the arrow's REQUIRED param count (or a rest param) are applicable;
+     * exactly ONE applicable → its arity (MAX_VALUE for rest); zero or several → null,
+     * TS7006 stands (contextualTypingWithGenericAndNonGenericSignature pins the 2-sig
+     * FIRE; tsc only intersects overloads under strictFunctionTypes, unmodeled).
+     */
+    private fun singleApplicableSigArity(type: Type?, requiredParamCount: Int): Int? {
+        val sigs = callableSignaturesForCtx(type) ?: return null
+        var single: Signature? = null
+        for (s in sigs) {
+            val hasRest = (s.parameters.lastOrNull()?.valueDeclaration as? Parameter)?.dotDotDotToken == true
+            if (hasRest || s.parameters.size >= requiredParamCount) {
+                if (single != null) return null
+                single = s
+            }
+        }
+        val sig = single ?: return null
+        val hasRest = (sig.parameters.lastOrNull()?.valueDeclaration as? Parameter)?.dotDotDotToken == true
+        return if (hasRest) Int.MAX_VALUE else sig.parameters.size
+    }
+
+    /** True when an assignment RHS shape can consume a function contextual type —
+     *  gates the LHS type resolution (first-touch discipline + per-assignment cost). */
+    private fun rhsCanConsumeFnCtx(rhs: Expression): Boolean = when (rhs) {
+        is ArrowFunction, is FunctionExpression -> true
+        is ParenthesizedExpression -> rhsCanConsumeFnCtx(rhs.expression)
+        is ConditionalExpression -> rhsCanConsumeFnCtx(rhs.whenTrue) || rhsCanConsumeFnCtx(rhs.whenFalse)
+        is BinaryExpression -> when (rhs.operator) {
+            SyntaxKind.BarBar, SyntaxKind.QuestionQuestion ->
+                rhsCanConsumeFnCtx(rhs.left) || rhsCanConsumeFnCtx(rhs.right)
+            SyntaxKind.AmpersandAmpersand, SyntaxKind.Comma -> rhsCanConsumeFnCtx(rhs.right)
+            else -> false
+        }
+        else -> false
+    }
+
+    /** The REQUIRED-parameter prefix count of an arrow/fn-expr (tsc isAritySmaller's
+     *  target count: stop at the first optional/initialized/rest param). */
+    private fun requiredParamPrefixCount(params: List<Parameter>): Int {
+        var n = 0
+        for (p in params) {
+            if (p.isCommentPlaceholder) continue
+            if ((p.name as? Identifier)?.text == "this") continue
+            if (p.questionToken || p.initializer != null || p.dotDotDotToken) break
+            n++
+        }
+        return n
+    }
+
     /**
      * Cheap resolvability check for a call/new expression callee. Used by
      * checkImplicitAnyInExpr to decide whether to suppress TS7006 on callback
@@ -20954,6 +21206,14 @@ class Checker(
         if (globals.containsKey(name)) return true
         if (currentFileLocals?.containsKey(name) == true) return true
         if (name in KNOWN_GLOBALS) return true
+        // M3.2 (round 431): a param/body-local of an enclosing function-like resolves
+        // lexically (same permissive rule as a file-level var callee above), and a
+        // NESTED FunctionDeclaration anywhere in the program resolves too — the binder
+        // does not bind nested declarations (B83.5), so tsc's giant closures
+        // (`filterType`/`mapType` inside createTypeChecker) previously FP'd TS7006 on
+        // every callback arg.
+        if (implicitAnyScopeContains(name)) return true
+        if (anyNestedFunctionNamed(name)) return true
         return false
     }
 
@@ -21020,10 +21280,10 @@ class Checker(
      * `const checker: TypeChecker = { isUndefinedSymbol: symbol => … }`.
      */
     private fun contextualCallableArity(type: Type?): Int? {
-        val obj = type as? Type.Object ?: return null
-        resolveStructuredTypeMembers(obj)
-        val sigs = obj.callSignatures
-        if (sigs.isNullOrEmpty()) return null
+        // M3.2 (round 431): signatures resolved via callableSignaturesForCtx — sees
+        // through a Union with a single callable member (`WriteFileCallback |
+        // undefined` return/member contexts) and a lazy-membered Type.Reference.
+        val sigs = callableSignaturesForCtx(type) ?: return null
         var max = 0
         for (s in sigs) {
             val hasRest = (s.parameters.lastOrNull()?.valueDeclaration as? Parameter)?.dotDotDotToken == true
@@ -21054,6 +21314,11 @@ class Checker(
         // fn-typed value (`{ [SyntaxKind.X]: function (node, …) {…} }` against
         // `VisitEachChildTable`); the engine cannot resolve those member sets.
         ctxAnnotation: TypeNode? = null,
+        // M3.2 (round 431): [contextualType] came from an ASSIGNMENT TARGET — apply the
+        // single-applicable-signature rule (a 2-sig LHS gives NO ctx: the pinned
+        // contextualTypingWithGenericAndNonGenericSignature FIRE) instead of the
+        // permissive max-arity rule the annotation/member paths use.
+        ctxViaAssignment: Boolean = false,
     ) {
         when (expr) {
             is ArrowFunction -> {
@@ -21061,30 +21326,48 @@ class Checker(
                 if (!contextuallyTyped && !unionSuppress) {
                     // M1.6(b): a callable contextual type supplies param types up to
                     // its arity — TS7006 only beyond it.
-                    val ctxArity = if (ctxViaUnionWithPrimitive) null else contextualCallableArity(contextualType)
+                    val ctxArity = when {
+                        ctxViaUnionWithPrimitive -> null
+                        ctxViaAssignment -> singleApplicableSigArity(contextualType, requiredParamPrefixCount(expr.parameters))
+                        else -> contextualCallableArity(contextualType)
+                    }
                     if (ctxArity != null) {
                         emitTs7006BeyondCtxArity(expr.parameters, ctxArity, source, fileName)
                     } else {
                         checkParamsForImplicitAny(expr.parameters, source, fileName)
                     }
                 }
-                when (val body = expr.body) {
-                    is Block -> checkImplicitAnyInStatements(body.statements, source, fileName, returnCtxAnnotation = expr.type)
-                    is Expression -> checkImplicitAnyInExpr(body, source, fileName)
-                    else -> {}
+                pushImplicitAnyScope(expr.parameters)
+                try {
+                    when (val body = expr.body) {
+                        is Block -> checkImplicitAnyInStatements(body.statements, source, fileName, returnCtxAnnotation = expr.type)
+                        is Expression -> checkImplicitAnyInExpr(body, source, fileName)
+                        else -> {}
+                    }
+                } finally {
+                    implicitAnyScopes.removeLast()
                 }
             }
             is FunctionExpression -> {
                 val unionSuppress = contextualType != null && unionHasFunctionAndPrimitive(contextualType)
                 if (!contextuallyTyped && !unionSuppress) {
-                    val ctxArity = if (ctxViaUnionWithPrimitive) null else contextualCallableArity(contextualType)
+                    val ctxArity = when {
+                        ctxViaUnionWithPrimitive -> null
+                        ctxViaAssignment -> singleApplicableSigArity(contextualType, requiredParamPrefixCount(expr.parameters))
+                        else -> contextualCallableArity(contextualType)
+                    }
                     if (ctxArity != null) {
                         emitTs7006BeyondCtxArity(expr.parameters, ctxArity, source, fileName)
                     } else {
                         checkParamsForImplicitAny(expr.parameters, source, fileName)
                     }
                 }
-                checkImplicitAnyInStatements(expr.body.statements, source, fileName, returnCtxAnnotation = expr.type)
+                pushImplicitAnyScope(expr.parameters)
+                try {
+                    checkImplicitAnyInStatements(expr.body.statements, source, fileName, returnCtxAnnotation = expr.type)
+                } finally {
+                    implicitAnyScopes.removeLast()
+                }
             }
             is ClassExpression -> {
                 for (member in expr.members) {
@@ -21127,7 +21410,14 @@ class Checker(
                                     checkParamsForImplicitAny(prop.parameters, source, fileName)
                                 }
                             }
-                            prop.body?.let { checkImplicitAnyInStatements(it.statements, source, fileName, returnCtxAnnotation = prop.type) }
+                            prop.body?.let {
+                                pushImplicitAnyScope(prop.parameters)
+                                try {
+                                    checkImplicitAnyInStatements(it.statements, source, fileName, returnCtxAnnotation = prop.type)
+                                } finally {
+                                    implicitAnyScopes.removeLast()
+                                }
+                            }
                         }
                         is PropertyAssignment -> {
                             // Propagate contextual typing to property initializers.
@@ -21193,17 +21483,53 @@ class Checker(
                 }
             }
             is BinaryExpression -> {
+                // M3.2 (round 431): contextual typing flows through binary operators the
+                // way tsc's getContextualTypeForBinaryOperand does — an assignment's RHS
+                // is contextually typed by the LHS's declared type; `||`/`??` pass the
+                // incoming context to BOTH operands; `&&` and comma to the RIGHT only
+                // (contextuallyTypeLogicalAnd03/contextuallyTypeCommaOperator03 pin the
+                // left FIRING). Left-spine iteration preserved (binderBinaryExpressionStress).
                 var current: Expression = expr
+                var leftTyped = contextuallyTyped
+                var leftType = contextualType
+                var leftAssign = ctxViaAssignment
                 while (current is BinaryExpression) {
-                    checkImplicitAnyInExpr(current.right, source, fileName)
+                    when (current.operator) {
+                        SyntaxKind.Equals, SyntaxKind.BarBarEquals,
+                        SyntaxKind.AmpersandAmpersandEquals, SyntaxKind.QuestionQuestionEquals -> {
+                            // Resolve the LHS type ONLY when the RHS can consume a fn
+                            // context (bounds first-touch resolution-order changes and
+                            // per-assignment cost to the shapes that need it).
+                            val lhsT = if (rhsCanConsumeFnCtx(current.right))
+                                resolveAssignTargetCtxTypeForImplicitAny(current.left) else null
+                            checkImplicitAnyInExpr(current.right, source, fileName,
+                                contextualType = lhsT, ctxViaAssignment = lhsT != null)
+                            leftTyped = false; leftType = null; leftAssign = false
+                        }
+                        SyntaxKind.BarBar, SyntaxKind.QuestionQuestion -> {
+                            checkImplicitAnyInExpr(current.right, source, fileName, leftTyped, leftType,
+                                ctxViaUnionWithPrimitive, ctxViaAssignment = leftAssign)
+                            // left operand keeps inheriting the context
+                        }
+                        SyntaxKind.AmpersandAmpersand, SyntaxKind.Comma -> {
+                            checkImplicitAnyInExpr(current.right, source, fileName, leftTyped, leftType,
+                                ctxViaUnionWithPrimitive, ctxViaAssignment = leftAssign)
+                            leftTyped = false; leftType = null; leftAssign = false
+                        }
+                        else -> {
+                            checkImplicitAnyInExpr(current.right, source, fileName)
+                            leftTyped = false; leftType = null; leftAssign = false
+                        }
+                    }
                     current = current.left
                 }
-                checkImplicitAnyInExpr(current, source, fileName)
+                checkImplicitAnyInExpr(current, source, fileName, leftTyped, leftType,
+                    ctxViaUnionWithPrimitive, ctxViaAssignment = leftAssign)
             }
-            is ParenthesizedExpression -> checkImplicitAnyInExpr(expr.expression, source, fileName, contextuallyTyped, contextualType, ctxViaUnionWithPrimitive)
+            is ParenthesizedExpression -> checkImplicitAnyInExpr(expr.expression, source, fileName, contextuallyTyped, contextualType, ctxViaUnionWithPrimitive, ctxViaAssignment = ctxViaAssignment)
             is ConditionalExpression -> {
-                checkImplicitAnyInExpr(expr.whenTrue, source, fileName, contextuallyTyped, contextualType, ctxViaUnionWithPrimitive)
-                checkImplicitAnyInExpr(expr.whenFalse, source, fileName, contextuallyTyped, contextualType, ctxViaUnionWithPrimitive)
+                checkImplicitAnyInExpr(expr.whenTrue, source, fileName, contextuallyTyped, contextualType, ctxViaUnionWithPrimitive, ctxViaAssignment = ctxViaAssignment)
+                checkImplicitAnyInExpr(expr.whenFalse, source, fileName, contextuallyTyped, contextualType, ctxViaUnionWithPrimitive, ctxViaAssignment = ctxViaAssignment)
             }
             is ArrayLiteralExpression -> {
                 // Propagate contextual typing through arrays ONLY for non-arrow elements
