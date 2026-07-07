@@ -448,6 +448,16 @@ Static-member bifurcation: statics live in BOTH `members` and `staticMembers` (T
 - **TS7009 = `new F()` where F lacks a CONSTRUCT signature — fires REGARDLESS of F's return annotation** (a function's `new`-instance type is not its call-return type). Gate is `noImplicitAny || strict`, NOT the `!strictExplicitlyFalse` harness-default TS2683 uses (`checkImplicitAnyNewExpressions`).
 - **`new <T>Expr()` (leading type args) is NOT a clean `new Expr()`**: TypeScript parses `new <any>Test2()` as a comparison expression (`new < any > Test2()`) → TS2365/TS1109/TS2693, NOT TS7009. Our parser recovers an Identifier target, so `checkNewExprImplicitAny` must skip when `expr.leadingTypeArguments` is non-empty or it spuriously emits TS7009.
 
+### TS7006 contextual-typing gotchas (round 431)
+
+- **The TS7006 walker has TWO signature-selection rules that must NOT be unified**: `contextualCallableArity` (max arity over ALL sigs — annotation/object-member/return contexts, deliberately permissive) vs `singleApplicableSigArity` (assignment contexts, the `ctxViaAssignment` flag — B476's rule: a ≥2-arity-applicable-sig LHS provides NO context, pinned by contextualTypingWithGenericAndNonGenericSignature's FIRE). Binary ctx propagation: `||`/`??` feed BOTH operands, `&&`/comma the RIGHT only (contextuallyTypeLogicalAnd03/CommaOperator03 pin the left firing); an UNTYPED local LHS (`let mark; mark = tag => …`) must keep firing (uncalledFunctionChecksInConditional2).
+- **`implicitAnyScopes` (the walker's lexical scope stack) is maintained by push/pop in try/finally at EVERY function-like boundary** — a new body-walk site in the implicit-any walker must push its params or callee/assignment-target resolution silently falls to file symbols. `isCalleeResolvable` also consults the nested-fn name map (`anyNestedFunctionNamed` — B83.5-unbound nested decls); scope-map values are declared ANNOTATIONS (null = declared untyped → fire), plus `as T` casts and callee return annotations for call-initialized locals.
+
+### Return-path foreign-TP gate (round 431c/d) — coupled pair, do not touch one side alone
+
+- **`checkReturnAssignability` bails on a source containing a FOREIGN TypeParam** (`typeContainsForeignTypeParam`: TP name ∉ the enclosing fn's `typeParams`; walks unions/intersections/Reference args/tuples + ANONYMOUS-object members/call-sigs — named interfaces only via Reference args): an un-inferred generic call result (`return append(…)` typing as `T[]`) is OUR inference gap, not a user error. **This gate and the round-431c `returnTypeNode` threading through the switch/try/if dispatcher arms are LOAD-BEARING as a PAIR** — un-threading regresses the VisitResult family; removing the gate floods ~118 un-inferred-generic return FPs.
+- **TS2367 same-target-Reference disjointness requires a differing arg pair anchored in a NON-object type** (`Array<string>` vs `Array<number>` fires; `NodeArray<TypeNode>` vs `NodeArray<Node>` bails) — an object-vs-object both-directions relation failure is indistinguishable from an M3 relation gap.
+
 ### TS7057 / TS4025-globalThis / TS8021 FP-firewall gates (round 106) — load-bearing, do NOT broaden
 
 - **TS8021 (`checkJSDocTypedefTags`) is JS-only and purely syntactic**: fires ONLY for `@typedef` with no `{type}` AND no `@property`/`@member` anywhere in the same comment block — do not broaden beyond that shape.

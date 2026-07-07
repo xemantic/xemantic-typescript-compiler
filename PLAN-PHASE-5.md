@@ -34,6 +34,78 @@ completeness campaigns to dashboard-driven burn-down: the acceptance bar is the 
 tsc's source uses, with the corpus suite as the regression net. M5 unchanged —
 performance is the directive's second half and starts at v1 compliance.
 
+**Round 431 (2026-07-07) — M3.2 (STARTED) + M3.1: the TS7006 core falls 301 → 11
+(−96%) via contextual typing, and engine return-checking reaches switch/try bodies
+behind a foreign-TP source gate. Self-compile (compiler profile) 936 → 672 → 641 →
+574 → 551 (−385, −41%; TS7006 301 → 11, TS7019 4 → 0, TS2322 435 → 345, TS2367 kept
+0); by-code strictly shrinking at every landed step; suite 9,356 → 9,380 (+24 local,
+0 regressions); 4 fix commits (b2411656, 186cb3cd, cceeb26b, f12dfe61).**
+- **Fix 1 (b2411656, −264 strictly removals): TS7006 contextual typing — the two
+  dominant mechanisms.** (a) Callee RESOLVABILITY: `isCalleeResolvable` falls back to
+  the round-418 nested-function name map (`filterType`/`mapType` inside
+  `createTypeChecker` are B83.5-unbound ×~140 sites) and a NEW lexical scope stack
+  (`implicitAnyScopes` — params incl. binding-pattern names + body locals, push/pop
+  in try/finally at every function-like boundary), so param-typed and nested callees
+  contextually type their callback args — the same permissive rule file-level
+  callees already had. (b) Assignment-RHS contextual typing (tsc
+  getContextualTypeForBinaryOperand): `lhs = arrow` resolves the LHS DECLARED type
+  (scope-map annotations, `as T` casts, property-access members via the receiver)
+  under the single-applicable-signature rule (mirrors B476 — a ≥2-sig LHS gives NO
+  ctx, contextualTypingWithGenericAndNonGenericSignature's pinned FIRE; an untyped
+  `let mark; mark = tag => …` keeps firing, uncalledFunctionChecksInConditional2's
+  pin). Binary propagation: `||`/`??` feed BOTH operands, `&&`/comma the RIGHT only
+  (contextuallyTypeLogicalAnd03/CommaOperator03 pin the left firing).
+  `contextualCallableArity` sees through single-callable-member unions
+  (`WriteFileCallback | undefined` returns) + lazy References. 13 local tests.
+- **Fix 2 (186cb3cd, −31 strictly removals): residual receiver shapes.**
+  `lookupPropertyTypeForCtx` resolves members through Type.Intersection receivers
+  (`x as CompilerHost & ResolutionCacheHost`, watchPublic ×9), lazy-membered
+  References (target fallback — arity survives missing substitution), and interface
+  `extends` bases (depth-guarded); an un-annotated call-initialized local registers
+  its callee's declared RETURN annotation (AST-only, lazily resolved).
+- **Fix 3 (cceeb26b, −108/+41): engine return-checking in switch/try + the
+  foreign-TP gate + TS2367 anchoring.** `returnTypeNode` now threads through the
+  SwitchStatement/TryStatement arms of BOTH assignability dispatchers (+ the
+  Stmt-dispatcher IfStatement arm) — a `return undefined` in a switch case
+  previously fell to the STRING path which can't resolve alias unions
+  (`VisitResult<Node | undefined>` ×12 FP'd). COUPLED (load-bearing pair):
+  `checkReturnAssignability` bails on a source containing a FOREIGN type param
+  (name ∉ enclosing `typeParams` — an un-inferred generic call result like `return
+  append(…)` typing as `T[]`; own-TP sources keep checking, corpus-pinned) — this
+  cleared ~95 PRE-EXISTING top-level un-inferred-generic return FPs. The +41 are
+  position-exposures of pre-existing M3 families at newly-checked positions
+  (round-426 "honestly visible" precedent): NodeArray<X>-vs-NodeArray<Node>
+  covariance ×~17 (cross-file heritage relation gap), `Node` narrowing-dependent
+  returns ×5, branded `__String` ×2, TransformerFactory ×3. The TS2367
+  same-target-Reference disjointness proof now requires a differing arg pair
+  anchored in a NON-object type (a first-touch-exposed `nodes ===
+  (parent as X).typeArguments` FP; `Array<string>` vs `Array<number>` stays firing).
+- **Fix 4 (f12dfe61, −23 strictly removals): the gate walks ANONYMOUS-object
+  members/call-sigs** — `SearchResult<T> = { value: T | undefined } | undefined`
+  hides the un-inferred TP in a member (`return toSearchResult(undefined)` ×12 +
+  `() => T` factory returns ×4); named interfaces stay excluded (Reference args
+  carry their TPs; a member walk would be broad + first-touch-shifting).
+- **META:** (1) the round-431 TSV row used `--no-emit` (emitted column 0 — not an
+  emit regression). (2) The round-428 negative-control lesson RECURRED: the first
+  own-TP control asserted a capability the baseline never had (bare `return x`
+  own-TP-vs-number is a pre-existing FN) — verify a control fires at BASELINE before
+  pinning it; replaced with the B69.1-ordered ternary shape.
+- **Residual triage (next-agent):** TS7006×11 — namespace-local interface
+  annotations ×5 (builderState `const map: ManyToManyPathMap = {…}` inside
+  `namespace BuilderState` — the walker's getTypeFromTypeNode has no namespace
+  context), initializer-inferred fn locals ×3 (parenthesizerRules
+  `let rule = cache.get(k); rule = node => …`, checker addLazyDiagnostic),
+  destructured-member local ×1, object-member ctx ×2 (watchUtilities). TS2322×345 —
+  `string`→`string` ×24 (interface-override literal props, M3), assignment-path
+  foreign-TP siblings (`T[]`→`TypeParameter[]` ×2, `U | undefined`→`Modifier` ×2 —
+  extend the gate to checkVarDeclAssignability/checkAssignmentExpression, same
+  principle), `undefined`→ResolutionMode/ElaborationIterator ×8 (non-return
+  positions), NodeArray-covariance adds ×~17 (fix `TypeNode <: Node` cross-file
+  heritage or catalogue), `Node`→`Declaration | undefined` ×5 (narrowing-dependent,
+  M3.4). TS2345×86/TS2769×30 (nested-overload `'true'`/`'false'` ×5,
+  string-vs-literal-union ×10). TS2591×43 is env-legit (offline, no @types/node —
+  `--node-stub` suppresses).
+
 **Round 430 (2026-07-07) — M3.1: the `append`/`addRange` inference unlocks +
 TP-from-predicate binding. Self-compile (compiler profile) 1,000 → 956 → 936 (−64;
 TS2322 496 → 435, TS2769 32 → 30); suite 9,348 → 9,356 (+8 local, 0 regressions);
@@ -711,70 +783,6 @@ pass, narrowed by `if (!target) return`. The fix needs (a) a DEDICATED flow-grap
 local-const case, initializer typing from the callee's return annotation), and the M3 cores
 TS2322×784 / TS2345×396 / TS7006×301.
 
-**Round 421 (2026-07-06) — maintenance (owner-requested): CLAUDE.md trim + root history reorg.
-No code changes; suite re-verified green; 3 commits (c3c9c8c1, 396ce8ae, + docs).** The owner asked
-whether CLAUDE.md should shrink and whether root-folder history should move. Findings + actions:
-- **CLAUDE.md had silently regrown to 594 KB / ~147k tokens** (3.5× the 170 KB cap its own format
-  rule set at the 2026-06-10 audit) — loaded into EVERY session's context, ~25%+ of a working
-  budget, with measurable task-success cost per the arxiv note in the file itself. Rounds 361–420
-  each appended 1–2 KB and nobody enforced the cap.
-- **Phase 17 residency criterion applied** (the trim's principle, now codified in the file's rules):
-  KEEP cross-cutting architecture of live subsystems, process/build traps, and measured negative
-  knowledge; ARCHIVE per-test/per-walker corpus-pin documentation — its protection is the
-  always-green 2-minute corpus gate + the walker's own code comments, NOT agent memory, and Phase 17
-  doctrine deletes those walkers as the engine supersedes them (the deleter greps by name).
-- **250 of 650 entries (316 KB) → docs/history/CLAUDE-GOTCHAS-ARCHIVE.md**; CLAUDE.md 594 → 280 KB
-  (−53%, ~70k tokens). A distilled "Measured dead-ends" block preserves the headline negative facts
-  whose parent entries archived (variance-in-relation-engine DEAD ~263 regressions; B153 general
-  property-receiver fallback not viable; tuple-`?` discarded by the parser; `@typedef` never bound;
-  weak-type rule not in the relation engine). New rule: grep the archive BEFORE modifying/deleting a
-  dedicated walker or working in a frozen subsystem.
-- **Root .md files 19 → 7**: STATUS-HISTORY (1.5 MB), PLAN-PHASE-4-HISTORY (4.1 MB),
-  PLAN-PHASE-5-HISTORY, PLAN-PHASE-3(-done), PLAN.md, NEXT-SESSION.md, FAILURES.md, DESIGN-*.md,
-  ANALYSIS-A0, TYPESCRIPT-TEST-HARNESS.md → docs/history/. Path couplings updated:
-  scripts/find_candidates.py + scripts/mine_small_diffs.py (both smoke-tested), CLAUDE.md
-  trim-on-write/workflow pointers, STATUS.md, PLAN-PHASE-4.md. PLAN-PHASE-4.md itself STAYS at root
-  (its "Known architectural blockers" section is the live M3 reference).
-- **Trim-on-write now targets docs/history/ paths** — future round notes trim there.
-
-**Round 419 resolved that DEFERRED intersection-arm gap (self-compile 1,854 → 1,808, TS2339
-  189 → 143): `getPropertyOfType` has no Intersection branch and `typeHasOwnProperty` bails on a
-  `Type.Intersection` member, so `PropertyAccessExpression | (ElementAccessExpression & Declaration
-  & {…})` FP'd TS2339 on a property inherited by the intersection arm (~28 binder.ts/utilities.ts
-  sites). Fixed with `resolveMemberPropertyType` (folds an intersection member's constituents),
-  wired into the B83.4e union-member fold + `checkMemberAccessMissing`'s `memberHasIt`; plus
-  `discriminantPropAnnotation` now reads the `.kind` annotation from intersection constituents so a
-  `switch (node.kind) { case … }` filters an intersection member (else the 1st cut left it in the
-  narrowed union → 3 new FPs on the case-body property). 0 new FPs; self-compile time −17%
-  (reclaims round 418's +17%); +4 local tests (IntersectionMemberPropertyTest).**
-  **Round 420 resolved TYPE-ALIAS enum-member discriminants in narrowing (self-compile 1,808 →
-  1,799, TS2339 143 → 134): a `.kind: <type-alias-of-enum-members>` discriminated-union member
-  (`ProjectReferenceFile.kind = ProjectReferenceFileKind = FileIncludeKind.Source |
-  FileIncludeKind.Output`) survived a `switch (x.kind) { case … }` because `enumMemberKeysOfTypeNode`
-  handled only a direct `Enum.Member` (QualifiedName), not a bare-Identifier alias — resolve +
-  recurse the alias body (mirroring round-415's `enumSwitchKeysFromTypeNode`), depth-guarded. 0 new
-  FPs; +1 local test. Residual discriminated-union TS2339 (anonymous TypeMapper `{ kind: any }`
-  union, `PrivateIdentifier*Info`) is `.kind`-narrowing on ANONYMOUS/`any`-kind members — a harder
-  M3.4 slice.**
-  **Round 422 killed FIVE bounded families (1,799 → 1,756, −43; see the session note): overload
-  arg-check flow narrowing (TS2769 60 → 47 — the five helpers now route through
-  `overloadNarrowedArgType`, mirroring B469), optional-chain discriminant receiver proof
-  (TS18048 10 → 7 — `x?.kind === <non-nullish RHS>` drops nullish members, resolving round
-  416's dead-end), mixed enum + string-literal discriminant keys (TS2339 134 → 117 —
-  PrivateIdentifierInfo's `kind: "untransformed"` joins the key space as disjoint `lit:s:`
-  keys; numeric literals stay conservatively KEPT since numeric enums are number-comparable),
-  boolean-vs-literal-overload narrowing (TS2769 47 → 45 — a synthetic `true | false` union for
-  bare-boolean args, tsc's parseParametersWorker), and the deferred Pattern-C2
-  discriminated-union half (TS2366 12 → 4 — `requiredUnionDiscriminantKeys` proves a
-  `switch (x.kind)` exhaustive from REQUIRED member annotations, any gap bails). Residual
-  bounded pool: TS2769×45 generic call-site inference (createNodeArray/createImportAttributes,
-  `Program | T` generic-union callees — M3.1), TS2339×117 (never×29 alias-collapse,
-  JsxCallLike×12 alias-of-alias, DebugTypeMapper×10 `this`-narrowing), TS18048×7
-  (assignment-in-guard variants, deep property paths), TS2366×4. NOTED false-negative family
-  (M3.4): assigning a NULLISH literal after a guard (`if (x !== undefined) { x = undefined;
-  use(x) }`) does not narrow the reference to `undefined` — `narrowByAssignmentRhs`'s
-  nullish-RHS branch is a no-op, even on the var-decl path.**
-
 **M2 — Real-lib migration (staged; decompose further at start)**
 
 - [x] **M2.1 Lib graph loader.** COMPLETE (round 390, all four sub-steps below). Parse + bind the real `typescript-repo/src/lib/*.d.ts`
@@ -916,12 +924,26 @@ each item still decomposes into a multi-session campaign — read PLAN-PHASE-4.m
   relation rule, TP-source excluded per genericPrototypeProperty3), readonly-array
   anchors (`Reference(ReadonlyArray, [T])`), TP-from-PREDICATE binding
   (`getFirstJSDocTag(node, isJSDocAugmentsTag)` → T from the guard's target).
-  Next: contextual-RETURN inference (`parseTokenNode<T>()`, no args — M3.2),
-  `Iterable<T>`-style single-arg generic anchors, `.map`-family callback-return
-  inference (M3.2).
+  **CONTINUED (round 431c/d, part of −385: 936 → 551):** engine return-checking
+  reaches switch/try bodies (returnTypeNode threading through both dispatchers)
+  behind the FOREIGN-TP source gate (`typeContainsForeignTypeParam` — an
+  un-inferred generic call result is our inference gap, not a user error;
+  cleared the `T[]`/`U | undefined`/`SearchResult<T>` return families, ~130
+  sites incl. anonymous-alias-body members). Next: extend the foreign-TP gate
+  to the ASSIGNMENT/VAR-DECL paths (×~6 siblings), contextual-RETURN inference
+  (`parseTokenNode<T>()`, no args — M3.2), `Iterable<T>`-style single-arg
+  generic anchors, `.map`-family callback-return inference (M3.2),
+  NodeArray-covariance via cross-file heritage (`TypeNode <: Node`).
 - [ ] **M3.2 Contextual typing engine** (parameters, returns, object/array literals,
   generic-context propagation — replaces `applyContextualParamTypesForArrow`-era
-  special cases).
+  special cases). **STARTED (round 431, −295 of the session's −385): the TS7006
+  core fell 301 → 11** — callee resolvability (nested-fn map + the new
+  `implicitAnyScopes` lexical scope stack), assignment-RHS contextual typing
+  from the LHS declared type (B476 single-applicable-sig rule; `||`/`??` both
+  operands, `&&`/comma right-only — corpus-pinned asymmetries), receiver
+  member resolution through intersections/lazy References/extends bases, and
+  call-return-annotation locals. Residual TS7006×11 triaged in the round-431
+  note (namespace-local annotations, initializer-inferred fn locals).
 - [ ] **M3.3 Mapped / conditional / template-literal / indexed-access evaluation**
   (replace the AST-shape walkers; delete the superseded dedicated walkers and pins).
 - [ ] **M3.4 Flow narrowing unified into identifier typing** (`getTypeOfIdentifier`

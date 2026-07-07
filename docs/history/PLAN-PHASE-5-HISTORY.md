@@ -1,3 +1,67 @@
+**Round 421 (2026-07-06) — maintenance (owner-requested): CLAUDE.md trim + root history reorg.
+No code changes; suite re-verified green; 3 commits (c3c9c8c1, 396ce8ae, + docs).** The owner asked
+whether CLAUDE.md should shrink and whether root-folder history should move. Findings + actions:
+- **CLAUDE.md had silently regrown to 594 KB / ~147k tokens** (3.5× the 170 KB cap its own format
+  rule set at the 2026-06-10 audit) — loaded into EVERY session's context, ~25%+ of a working
+  budget, with measurable task-success cost per the arxiv note in the file itself. Rounds 361–420
+  each appended 1–2 KB and nobody enforced the cap.
+- **Phase 17 residency criterion applied** (the trim's principle, now codified in the file's rules):
+  KEEP cross-cutting architecture of live subsystems, process/build traps, and measured negative
+  knowledge; ARCHIVE per-test/per-walker corpus-pin documentation — its protection is the
+  always-green 2-minute corpus gate + the walker's own code comments, NOT agent memory, and Phase 17
+  doctrine deletes those walkers as the engine supersedes them (the deleter greps by name).
+- **250 of 650 entries (316 KB) → docs/history/CLAUDE-GOTCHAS-ARCHIVE.md**; CLAUDE.md 594 → 280 KB
+  (−53%, ~70k tokens). A distilled "Measured dead-ends" block preserves the headline negative facts
+  whose parent entries archived (variance-in-relation-engine DEAD ~263 regressions; B153 general
+  property-receiver fallback not viable; tuple-`?` discarded by the parser; `@typedef` never bound;
+  weak-type rule not in the relation engine). New rule: grep the archive BEFORE modifying/deleting a
+  dedicated walker or working in a frozen subsystem.
+- **Root .md files 19 → 7**: STATUS-HISTORY (1.5 MB), PLAN-PHASE-4-HISTORY (4.1 MB),
+  PLAN-PHASE-5-HISTORY, PLAN-PHASE-3(-done), PLAN.md, NEXT-SESSION.md, FAILURES.md, DESIGN-*.md,
+  ANALYSIS-A0, TYPESCRIPT-TEST-HARNESS.md → docs/history/. Path couplings updated:
+  scripts/find_candidates.py + scripts/mine_small_diffs.py (both smoke-tested), CLAUDE.md
+  trim-on-write/workflow pointers, STATUS.md, PLAN-PHASE-4.md. PLAN-PHASE-4.md itself STAYS at root
+  (its "Known architectural blockers" section is the live M3 reference).
+- **Trim-on-write now targets docs/history/ paths** — future round notes trim there.
+
+**Round 419 resolved that DEFERRED intersection-arm gap (self-compile 1,854 → 1,808, TS2339
+  189 → 143): `getPropertyOfType` has no Intersection branch and `typeHasOwnProperty` bails on a
+  `Type.Intersection` member, so `PropertyAccessExpression | (ElementAccessExpression & Declaration
+  & {…})` FP'd TS2339 on a property inherited by the intersection arm (~28 binder.ts/utilities.ts
+  sites). Fixed with `resolveMemberPropertyType` (folds an intersection member's constituents),
+  wired into the B83.4e union-member fold + `checkMemberAccessMissing`'s `memberHasIt`; plus
+  `discriminantPropAnnotation` now reads the `.kind` annotation from intersection constituents so a
+  `switch (node.kind) { case … }` filters an intersection member (else the 1st cut left it in the
+  narrowed union → 3 new FPs on the case-body property). 0 new FPs; self-compile time −17%
+  (reclaims round 418's +17%); +4 local tests (IntersectionMemberPropertyTest).**
+  **Round 420 resolved TYPE-ALIAS enum-member discriminants in narrowing (self-compile 1,808 →
+  1,799, TS2339 143 → 134): a `.kind: <type-alias-of-enum-members>` discriminated-union member
+  (`ProjectReferenceFile.kind = ProjectReferenceFileKind = FileIncludeKind.Source |
+  FileIncludeKind.Output`) survived a `switch (x.kind) { case … }` because `enumMemberKeysOfTypeNode`
+  handled only a direct `Enum.Member` (QualifiedName), not a bare-Identifier alias — resolve +
+  recurse the alias body (mirroring round-415's `enumSwitchKeysFromTypeNode`), depth-guarded. 0 new
+  FPs; +1 local test. Residual discriminated-union TS2339 (anonymous TypeMapper `{ kind: any }`
+  union, `PrivateIdentifier*Info`) is `.kind`-narrowing on ANONYMOUS/`any`-kind members — a harder
+  M3.4 slice.**
+  **Round 422 killed FIVE bounded families (1,799 → 1,756, −43; see the session note): overload
+  arg-check flow narrowing (TS2769 60 → 47 — the five helpers now route through
+  `overloadNarrowedArgType`, mirroring B469), optional-chain discriminant receiver proof
+  (TS18048 10 → 7 — `x?.kind === <non-nullish RHS>` drops nullish members, resolving round
+  416's dead-end), mixed enum + string-literal discriminant keys (TS2339 134 → 117 —
+  PrivateIdentifierInfo's `kind: "untransformed"` joins the key space as disjoint `lit:s:`
+  keys; numeric literals stay conservatively KEPT since numeric enums are number-comparable),
+  boolean-vs-literal-overload narrowing (TS2769 47 → 45 — a synthetic `true | false` union for
+  bare-boolean args, tsc's parseParametersWorker), and the deferred Pattern-C2
+  discriminated-union half (TS2366 12 → 4 — `requiredUnionDiscriminantKeys` proves a
+  `switch (x.kind)` exhaustive from REQUIRED member annotations, any gap bails). Residual
+  bounded pool: TS2769×45 generic call-site inference (createNodeArray/createImportAttributes,
+  `Program | T` generic-union callees — M3.1), TS2339×117 (never×29 alias-collapse,
+  JsxCallLike×12 alias-of-alias, DebugTypeMapper×10 `this`-narrowing), TS18048×7
+  (assignment-in-guard variants, deep property paths), TS2366×4. NOTED false-negative family
+  (M3.4): assigning a NULLISH literal after a guard (`if (x !== undefined) { x = undefined;
+  use(x) }`) does not narrow the reference to `undefined` — `narrowByAssignmentRhs`'s
+  nullish-RHS branch is a no-op, even on the var-decl path.**
+
 **Round 420 (2026-07-06) — M1.12: resolve TYPE-ALIAS enum-member discriminants in narrowing.
 Self-compile (compiler profile) 1,808 → 1,799 (−9, TS2339 143 → 134); suite 9,177 → 9,178 (+1
 local, 0 regressions); 1 fix commit (47c655c8).** After round 419, re-bucketing TS2339 by receiver
