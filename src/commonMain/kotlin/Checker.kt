@@ -122051,6 +122051,18 @@ interface DataView {
             val narrowed = getNarrowedTypeForReference(getUnionType(listOf(trueType, falseType)), arg)
             if (narrowed === trueType || narrowed === falseType) return narrowed
         }
+        // Round 439: a bare Identifier/PropertyAccess arg narrowed DOWN from a NON-union
+        // declared type to a subtype — `if (isLiteralLikeAccess(name)) …
+        // getElementOrPropertyAccessName(name)` (utilities.ts `isSameEntityName`): a
+        // type guard narrows `name: Expression` to `LiteralLikeElementAccessExpression |
+        // PropertyAccessExpression`, which matches the overload param, but the arg check
+        // saw the wide `Expression`. Mirrors round 438's single-sig call-arg fix C.
+        // Suppression-only (a subtype arg matches strictly MORE params than its
+        // supertype, never fewer); the never-collapse (round 418 hazard) keeps `raw`.
+        if (raw is Type.Object || raw is Type.Interface || raw is Type.Reference) {
+            val narrowed = getNarrowedTypeForReference(raw, arg)
+            if (narrowed !== raw && narrowed !== neverType) return narrowed
+        }
         return raw
     }
 
