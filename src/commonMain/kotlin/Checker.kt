@@ -124539,16 +124539,20 @@ interface DataView {
                 // them explicitly here. Only Union types can be refined.
                 if ((arg is Identifier || arg is PropertyAccessExpression) && ctxApplied is Type.Union) {
                     getNarrowedTypeForReference(ctxApplied, arg)
-                } else if (arg is Identifier &&
+                } else if ((arg is Identifier || arg is PropertyAccessExpression) &&
                     (ctxApplied is Type.Interface || ctxApplied === unknownType ||
                         ctxApplied === stringType || ctxApplied === numberType) &&
                     paramType !== neverType) {
-                    // M3.4 (round 428b, generalized round 429c): an Identifier arg whose
-                    // NON-union interface type is narrowed DOWN by a type guard
-                    // (`isSourceFile(x) && isExternalOrCommonJsModule(x)` — Node narrows
-                    // to SourceFile; originally bounded to `this` for debug.ts's
-                    // __tsDebuggerDisplay). Relation-gated: substitute only a genuine
-                    // refinement, so this can only suppress. The `never`-PARAM exclusion
+                    // M3.4 (round 428b, generalized round 429c/438): an Identifier or
+                    // PROPERTY-ACCESS arg whose NON-union interface type is narrowed DOWN by
+                    // a type guard (`isSourceFile(x) && isExternalOrCommonJsModule(x)` — Node
+                    // narrows to SourceFile; `getExports(node.left)` inside
+                    // `if (isIdentifier(node.left))` — Expression narrows to Identifier, tsc's
+                    // module/system transformers). A PropertyAccess's built-in narrowing only
+                    // refines UNION receivers, not a non-union interface DOWN to a subtype, so
+                    // it needs the same explicit narrow as a bare Identifier. Relation-gated:
+                    // substitute only a genuine refinement, so this can only suppress. The
+                    // `never`-PARAM exclusion
                     // is load-bearing: `assertType<never>(node)` in an exhaustive-switch
                     // default needs exhaustiveness narrowing we don't model — a partial
                     // refinement (a union of case-matched members) would take the
