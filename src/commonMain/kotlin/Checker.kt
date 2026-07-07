@@ -1148,6 +1148,42 @@ class Checker(
      *  (`s.type === UpToDateStatusType.X`). Declared before `init` per the init-order trap. */
     private val importedEnumSymCache = HashMap<Int, Symbol?>()
 
+    /** Perf (round 432): memo for [resolveModuleSpecifier] — the function is a pure
+     *  function of the specifier string ([fileResults]/[options] are fixed before `init`;
+     *  the contextNode param is unused), but its fallback path iterates EVERY program
+     *  file with per-call string stripping. Negative results (null) are the hot case
+     *  (ESM `.js` barrel specifiers, deliberately unresolvable) so they are cached via
+     *  containsKey, not getOrPut. Declared before `init` per the init-order trap. */
+    private val moduleSpecifierCache = HashMap<String, String?>()
+
+    /** Perf (round 432, eager-immutable round 434): program-wide index ImportSpecifier →
+     *  the (fileName, ImportDeclaration) statements whose NamedImports CONTAIN a
+     *  structurally-equal specifier, in binderResults/statement encounter order. Replaces
+     *  the O(program) `spec in bindings.elements` structural scans in [resolveAlias]'s
+     *  ImportSpecifier branch and [findEnclosingImport] — the scan was 76% of the
+     *  tsc-source self-compile (every UNRESOLVABLE barrel alias re-scanned all files on
+     *  every resolveAlias call, since only positive resolutions are cached in
+     *  symbolTargets). Structural keying + encounter-order lists keep first-match
+     *  semantics byte-identical to the scans. Built EAGERLY from the frozen
+     *  [binderResults] and never mutated afterwards — read-only shareable across future
+     *  parallel checker workers (Tier 1 in docs/parallel-caching.md). Declared before
+     *  `init` per the init-order trap. */
+    private val enclosingImportIndex: Map<ImportSpecifier, List<Pair<String, ImportDeclaration>>> =
+        buildMap<ImportSpecifier, MutableList<Pair<String, ImportDeclaration>>> {
+            for (result in binderResults) {
+                for (stmt in result.sourceFile.statements) {
+                    if (stmt !is ImportDeclaration) continue
+                    val bindings = stmt.importClause?.namedBindings as? NamedImports ?: continue
+                    for (el in bindings.elements) {
+                        val entries = getOrPut(el) { mutableListOf() }
+                        if (entries.lastOrNull()?.second !== stmt) {
+                            entries.add(result.sourceFile.fileName to stmt)
+                        }
+                    }
+                }
+            }
+        }
+
     /** Round 425: memo for [canonicalEnumSymbol] — an enum reaches the discriminant-key
      *  builders by several resolution paths (the program-global merged instance vs a
      *  file-LOCAL instance reached via `currentFileLocals`/the barrel resolver), and the
@@ -6030,44 +6066,39 @@ class Checker(
                     is ImportSpecifier -> {
                         // Named import — the original name to look up
                         val originalName = decl.propertyName?.text ?: decl.name.text
-                        // Find the ImportDeclaration parent for this specifier
-                        // Since we don't have parent pointers, search all files
-                        for (result in binderResults) {
-                            for (stmt in result.sourceFile.statements) {
-                                if (stmt is ImportDeclaration) {
-                                    val bindings = stmt.importClause?.namedBindings
-                                    if (bindings is NamedImports && decl in bindings.elements) {
-                                        val specifier2 = (stmt.moduleSpecifier as? StringLiteralNode)?.text
-                                            ?: continue
-                                        val targetFile2 = resolveModuleSpecifier(specifier2, stmt)
-                                        if (targetFile2 == null) {
-                                            // Ambient module fallback — `declare module "X"` in a .d.ts file.
-                                            val ambient = globals[specifier2]
-                                            if (ambient != null && ambient.flags.hasAny(SymbolFlags.Module)) {
-                                                ambient.exports?.get(originalName)?.let { target ->
-                                                    setSymbolTarget(symbol, target)
-                                                    return resolveAlias(target, visited)
-                                                }
-                                                // Fallback: ambient module body has `export = X`
-                                                // (e.g. `import alias = demoNS; export = alias`) —
-                                                // resolve X then look up `originalName` in X's exports.
-                                                val exportEqualsTarget = resolveAmbientModuleExportEquals(ambient, visited)
-                                                if (exportEqualsTarget != null) {
-                                                    exportEqualsTarget.exports?.get(originalName)?.let { target ->
-                                                        setSymbolTarget(symbol, target)
-                                                        return resolveAlias(target, visited)
-                                                    }
-                                                }
-                                            }
-                                            continue
-                                        }
-                                        val targetResult2 = fileResults[targetFile2] ?: continue
-                                        val target = targetResult2.locals[originalName] ?: continue
+                        // Find the ImportDeclaration parent for this specifier via the
+                        // prebuilt index (no parent pointers; round 432 — was a
+                        // program-wide structural scan re-run on every call for
+                        // unresolvable barrel aliases).
+                        for ((_, stmt) in enclosingImportsOf(decl)) {
+                            val specifier2 = (stmt.moduleSpecifier as? StringLiteralNode)?.text
+                                ?: continue
+                            val targetFile2 = resolveModuleSpecifier(specifier2, stmt)
+                            if (targetFile2 == null) {
+                                // Ambient module fallback — `declare module "X"` in a .d.ts file.
+                                val ambient = globals[specifier2]
+                                if (ambient != null && ambient.flags.hasAny(SymbolFlags.Module)) {
+                                    ambient.exports?.get(originalName)?.let { target ->
                                         setSymbolTarget(symbol, target)
                                         return resolveAlias(target, visited)
                                     }
+                                    // Fallback: ambient module body has `export = X`
+                                    // (e.g. `import alias = demoNS; export = alias`) —
+                                    // resolve X then look up `originalName` in X's exports.
+                                    val exportEqualsTarget = resolveAmbientModuleExportEquals(ambient, visited)
+                                    if (exportEqualsTarget != null) {
+                                        exportEqualsTarget.exports?.get(originalName)?.let { target ->
+                                            setSymbolTarget(symbol, target)
+                                            return resolveAlias(target, visited)
+                                        }
+                                    }
                                 }
+                                continue
                             }
+                            val targetResult2 = fileResults[targetFile2] ?: continue
+                            val target = targetResult2.locals[originalName] ?: continue
+                            setSymbolTarget(symbol, target)
+                            return resolveAlias(target, visited)
                         }
                     }
                     else -> {}
@@ -6291,6 +6322,16 @@ class Checker(
      * Also supports baseUrl-relative non-relative specifiers (e.g., "defs/cc" with baseUrl "/proj").
      */
     private fun resolveModuleSpecifier(specifier: String, contextNode: Node? = null): String? {
+        // Perf (round 432): pure function of the specifier ([fileResults]/[options] are
+        // fixed; contextNode is unused) — memoized incl. null results via containsKey
+        // (getOrPut would recompute the hot unresolvable-specifier case every call).
+        if (moduleSpecifierCache.containsKey(specifier)) return moduleSpecifierCache[specifier]
+        val result = computeModuleSpecifier(specifier)
+        moduleSpecifierCache[specifier] = result
+        return result
+    }
+
+    private fun computeModuleSpecifier(specifier: String): String? {
         val isRelative = specifier.startsWith("./") || specifier.startsWith("../")
         val baseName = specifier.removePrefix("./").removePrefix("../")
         // Try exact match first, then with extensions
@@ -92324,7 +92365,7 @@ interface DataView {
         // element-access, etc.) — those bail to declared type.
         val path = getReferencePath(expr) ?: return declaredType
         val flow = getFlowAt(expr) ?: return declaredType
-        val seen = mutableSetOf<Int>()
+        val seen = NarrowSeen()
         return flowWalkWithTripCheck(expr) {
             narrowTypeFromFlow(declaredType, flow, path, seen, depth = 0)
         } ?: declaredType
@@ -92351,7 +92392,7 @@ interface DataView {
     ): Type {
         val path = getReferencePath(expr) ?: return declaredType
         val flow = getFlowAt(expr) ?: return declaredType
-        val seen = mutableSetOf<Int>()
+        val seen = NarrowSeen()
         return flowWalkWithTripCheck(expr) {
             narrowTypeFromFlowFollowLoopEntry(declaredType, flow, path, seen, depth = 0)
         } ?: declaredType
@@ -92551,9 +92592,36 @@ interface DataView {
         }
     }
 
+    /**
+     * Perf (round 433): the flow walkers' cycle-detection set with an ADD-LOG, so a
+     * FlowBranchLabel can walk each antecedent against the path-so-far membership and
+     * restore it afterwards ([mark]/[popToMark]) instead of COPYING the whole set per
+     * antecedent (the copies were ~11% of the tsc-source self-compile: `seen` holds
+     * thousands of ids on a deep walk × one full copy per branch antecedent). Only
+     * genuinely ADDED ids are logged, so a pop never removes a pre-existing id —
+     * after popToMark the membership is exactly the pre-branch state, which is what
+     * the per-antecedent fresh copy provided. Linear recursion shares the instance
+     * unmarked (additions persist upward), matching the old shared-set behavior.
+     * Each top-level walk constructs its own instance (re-entrant walks via callee
+     * resolution get independent logs).
+     */
+    private class NarrowSeen {
+        private val ids = HashSet<Int>()
+        private val log = ArrayList<Int>()
+        fun add(id: Int): Boolean {
+            if (!ids.add(id)) return false
+            log.add(id)
+            return true
+        }
+        fun mark(): Int = log.size
+        fun popToMark(mark: Int) {
+            while (log.size > mark) ids.remove(log.removeAt(log.size - 1))
+        }
+    }
+
     private fun narrowTypeFromFlow(
         declaredType: Type, flowNodeIn: FlowNode, name: String,
-        seen: MutableSet<Int>, depth: Int,
+        seen: NarrowSeen, depth: Int,
         memo: MutableMap<Int, Pair<Int, Type>> = mutableMapOf(),
     ): Type {
         // P0 (services hang): reset the per-request budget + callee-decl cache at an
@@ -92630,7 +92698,12 @@ interface DataView {
                 if (node.antecedents.isEmpty()) neverType
                 else {
                     val branchTypes = node.antecedents.map {
-                        narrowTypeFromFlow(declaredType, it, name, mutableSetOf<Int>().apply { addAll(seen) }, depth + 1, memo)
+                        // Each antecedent walks against the path-so-far membership;
+                        // popToMark restores it (≡ the old fresh-copy-per-antecedent).
+                        val mark = seen.mark()
+                        val t = narrowTypeFromFlow(declaredType, it, name, seen, depth + 1, memo)
+                        seen.popToMark(mark)
+                        t
                     }
                     getUnionType(branchTypes)
                 }
@@ -94029,19 +94102,17 @@ interface DataView {
 
     /** Find the ImportDeclaration containing [spec] plus its file (no parent
      *  pointers), for [resolveImportedFunctionLikeDecl]. */
-    private fun findEnclosingImport(spec: ImportSpecifier): Pair<String, ImportDeclaration>? {
-        for (result in binderResults) {
-            for (stmt in result.sourceFile.statements) {
-                if (stmt is ImportDeclaration) {
-                    val bindings = stmt.importClause?.namedBindings
-                    if (bindings is NamedImports && spec in bindings.elements) {
-                        return result.sourceFile.fileName to stmt
-                    }
-                }
-            }
-        }
-        return null
-    }
+    private fun findEnclosingImport(spec: ImportSpecifier): Pair<String, ImportDeclaration>? =
+        enclosingImportsOf(spec).firstOrNull()
+
+    /**
+     * Perf (round 432): all (fileName, ImportDeclaration) statements whose NamedImports
+     * contain a specifier structurally equal to [spec], in the same encounter order the
+     * replaced program-wide scans used ([enclosingImportIndex] has the rationale).
+     * A statement is listed once even if it contains structural duplicates of [spec].
+     */
+    private fun enclosingImportsOf(spec: ImportSpecifier): List<Pair<String, ImportDeclaration>> =
+        enclosingImportIndex[spec] ?: emptyList()
 
     /**
      * M1.12 (round 424): resolve property [seg] on [cur] for the prefix-path
@@ -113862,7 +113933,7 @@ interface DataView {
         val recvFlow = getFlowAt(info.recvOfRecv) ?: getFlowAt(info.narrowExpr)
         if (recvPath != null && recvFlow != null) {
             val recvNarrowed = flowWalkWithTripCheck(info.recvOfRecv) {
-                narrowTypeFromFlowFollowLoopEntry(recvOfRecvType, recvFlow, recvPath, mutableSetOf(), 0)
+                narrowTypeFromFlowFollowLoopEntry(recvOfRecvType, recvFlow, recvPath, NarrowSeen(), 0)
             } ?: recvOfRecvType
             if (recvNarrowed !== recvOfRecvType) {
                 val np = getPropertyOfType(getApparentType(recvNarrowed), info.propName)
@@ -114112,7 +114183,7 @@ interface DataView {
         var path: String = leftmost.text
         if (receiverType is Type.Union) {
             receiverType = flowWalkWithTripCheck(leftmost) {
-                narrowTypeFromFlowFollowLoopEntry(receiverType, flow, path, mutableSetOf(), 0)
+                narrowTypeFromFlowFollowLoopEntry(receiverType, flow, path, NarrowSeen(), 0)
             } ?: receiverType
         }
 
@@ -114155,7 +114226,7 @@ interface DataView {
             path = newPath
             receiverType = if (propType is Type.Union) {
                 flowWalkWithTripCheck(segment) {
-                    narrowTypeFromFlowFollowLoopEntry(propType, flow, path, mutableSetOf(), 0)
+                    narrowTypeFromFlowFollowLoopEntry(propType, flow, path, NarrowSeen(), 0)
                 } ?: propType
             } else propType
         }
@@ -114197,7 +114268,7 @@ interface DataView {
      */
     private fun narrowTypeFromFlowFollowLoopEntry(
         declaredType: Type, flowNodeIn: FlowNode, name: String,
-        seen: MutableSet<Int>, depth: Int,
+        seen: NarrowSeen, depth: Int,
         memo: MutableMap<Int, Pair<Int, Type>> = mutableMapOf(),
     ): Type {
         // P0 (services hang): budgets + memo mirror [narrowTypeFromFlow] — see the
@@ -114257,10 +114328,13 @@ interface DataView {
                 if (node.antecedents.isEmpty()) neverType
                 else {
                     val branchTypes = node.antecedents.map {
-                        narrowTypeFromFlowFollowLoopEntry(
-                            declaredType, it, name,
-                            mutableSetOf<Int>().apply { addAll(seen) }, depth + 1, memo,
+                        // Mirror of narrowTypeFromFlow's mark/popToMark (≡ fresh copy).
+                        val mark = seen.mark()
+                        val t = narrowTypeFromFlowFollowLoopEntry(
+                            declaredType, it, name, seen, depth + 1, memo,
                         )
+                        seen.popToMark(mark)
+                        t
                     }
                     getUnionType(branchTypes)
                 }
@@ -126323,7 +126397,7 @@ interface DataView {
         val flow = getFlowAt(flowAnchor) ?: return false
         val narrowed = try {
             flowWalkWithTripCheck(flowAnchor) {
-                narrowTypeFromFlow(declaredVar, flow, varName, mutableSetOf(), 0)
+                narrowTypeFromFlow(declaredVar, flow, varName, NarrowSeen(), 0)
             } ?: return false
         } catch (_: Exception) { return false }
         if (narrowed === declaredVar || !isSimpleCheckableType(narrowed)) return false
@@ -126921,7 +126995,7 @@ interface DataView {
                     val flow = getFlowAt(rhs)
                     if (flow != null) {
                         flowWalkWithTripCheck(rhs) {
-                            narrowTypeFromFlow(unknownType, flow, path, mutableSetOf(), 0)
+                            narrowTypeFromFlow(unknownType, flow, path, NarrowSeen(), 0)
                         } ?: unknownType
                     } else unknownType
                 } finally {

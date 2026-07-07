@@ -34,6 +34,83 @@ completeness campaigns to dashboard-driven burn-down: the acceptance bar is the 
 tsc's source uses, with the corpus suite as the regression net. M5 unchanged —
 performance is the directive's second half and starts at v1 compliance.
 
+*(Numbering note: rounds 432–434 below are the `perf/flow-import-resolution` branch's original
+rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's own rounds 429c–431e,
+which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
+numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
+
+**Round 434 (2026-07-07) — M5.4 groundwork (owner-directed): parallel-caching design
+record + eager-immutable index + durable tooling.** `enclosingImportIndex` converted
+from lazy-mutable to an eager immutable field initializer (Tier 1 — byte-identical
+diagnostics + timing on both dashboards, suite 9,333/0). NEW **`docs/parallel-caching.md`**
+is the canonical design record for M5.4: the three cache tiers (eager-immutable
+program facts / worker-local scratch / replicated-never-shared first-touch type state),
+the share-nothing phased plan (tsgo parity → shared frozen lib slice → single-flight
+pure computations), the determinism-over-everything rule, the multiplatform primitives
+ladder (freeze → `kotlin.concurrent.atomics` CoW → expect/actual), the
+evaluated-and-DECLINED CharlieTap/cachemap dependency (left-right KMP map: dormant, no
+JS/WASM targets, no single-flight; the real blockers to sharing checking work are
+Tier-3 immutability/purity, not the map), the JFR profiling how-to, and the
+tsc/tsgo/xtsc comparison (tsc-source: tsgo 0.94 s / tsc 5.1 s / xtsc 19.6 s; zod:
+0.52 / 2.1 / 3.5 s). `scripts/aggregate_jfr.py` (portable jfr-tool resolution,
+self/inclusive/by-class + `--callers-of` attribution) checked in — profiling is now
+reproducible on any box (VPS included), nothing lives only in a session scratchpad.
+Backlog: M4.6 (`package.json "type": "module"` ProjectCompiler gap, found via zod) +
+M4.7 (zod as second dashboard profile, full recipe + FP baseline) written down with
+stable IDs; M5.1/M5.4 queue items now point at the design note.
+
+**Round 433 (2026-07-07) — M5 (perf round 2, JFR-driven): the two post-432 hotspots —
+self-compile (compiler profile) 38–41 s → 19.9 s noEmit / 21.7 s wall with emit (the
+2026-07-05 baseline was 592.8 s → cumulative ~27×), zod 5.0 → 3.6 s; diagnostics
+byte-identical both rounds (1,148 incl. per-error diff / 1,665); suite 9,333/0 (+3 local).**
+(a) `collectReassignedNamesInRange` (Flow.kt, B464) char-scanned `[closure.pos,
+enclosingFn.end)` PER CLOSURE — ~14% of the compile (7.3% self + the String.charAt/getOrNull
+churn) on `createTypeChecker`-scale functions. The matcher's decisions depend only on
+BACKWARD context and the range END, never the scan start (a scan entering mid-word skips
+the partial word exactly as a from-the-start scan attributes it before the range), so all
+closures sharing an enclosing function now share ONE scan cached per `hi`, filtered by
+position — exact semantics. (b) The flow walkers copied the whole cycle-detection `seen`
+set PER BRANCH ANTECEDENT at every FlowBranchLabel (~11%: thousands of ids × a copy per
+antecedent). `NarrowSeen` bundles set + add-log: branch antecedents walk the shared
+path-so-far membership with mark/popToMark restoring it after each — only genuinely-added
+ids are logged, so the restored membership is exactly the fresh-copy state; linear recursion
+shares unmarked (additions persist upward, as before); both walkers changed in sync.
+`FlowNarrowingPerfInvariantsTest` pins per-closure past-last-assignment semantics through
+the shared scan (params, not `let` locals — the TS18048 emitter's captured-body-local
+recovery is var-only per B467, verified pre-existing), branch-sibling isolation across a
+diamond join, and an emitter-active positive control. Remaining profile is FLAT (top self
+≤8%): HashMap churn in the walkers' memo, `findLocalTypeAlias$scan` (~4%, via
+`discUnionParamMembers`), `checkMemberAccessMissing` ~3% — next M5 round needs a fresh
+JFR pass, no obvious single target left.
+
+**Round 432 (2026-07-07) — M5 (first performance round, JFR-driven): the alias-resolution
+quadratic — self-compile (compiler profile) wall ~490–593 s → 38.6 s (~13–15×), zod
+6.0 → 5.0 s, diagnostics byte-identical (1,148 / by-code identical; zod 1,665 identical);
+suite 9,328/0 green (+2 local).** A JFR profile (settings=profile, stackdepth=1024) on the
+compiler profile showed **76% of ALL samples in `Identifier.equals` ← `ImportSpecifier.equals`
+← `ArrayList.indexOf`**: the program-wide structural scans in `resolveAlias`'s
+ImportSpecifier branch and `findEnclosingImport` (`spec in bindings.elements` over every
+ImportDeclaration of every binderResult). Root cause: only POSITIVE resolutions are cached
+(`setSymbolTarget`), so every UNRESOLVABLE alias — exactly tsc's ESM-`.js` barrel imports,
+which `resolveModuleSpecifier` deliberately won't strip — re-ran the full scan on EVERY
+`resolveAlias` call, from flow-walk recursion depths >1024 (stacks truncated, so most samples
+lost root attribution; the visible tail pointed at `computeImportedFunctionLikeDecl` /
+`resolveEnumSymbolForDiscriminant`). Fix (semantics-preserving by construction, verified
+byte-identical on both dashboards): (1) `enclosingImportsOf` — a lazily-built structural-keyed
+index ImportSpecifier → encounter-ordered list of (fileName, ImportDeclaration), replacing
+both scans; structural keys + first-write-wins lists reproduce the old scans' first-match AND
+fallback-to-next-match semantics exactly (structurally-equal specifiers across files share a
+key, as they matched each other in the old scans). (2) `resolveModuleSpecifier` memoized incl.
+null results via containsKey (it is a pure function of the specifier — `fileResults`/`options`
+fixed before init, contextNode unused; the null case is the hot one). Second-tier zod finding
+(NOT yet fixed, queue candidate): `resolveQualifiedName`-driven `resolveAlias` string churn
+still ~30% of the zod compile. `EnclosingImportIndexTest` pins collision + distinct-key
+resolution (the same-name-from-different-modules variant is UNUSABLE as a signal — Blocker #3
+scope conflation masks it, verified pre-existing on clean HEAD via stash A/B). Also: zod
+compiles end-to-end (107 files, 0 crashes, runnable emit — smoke-tested; 1,665 FPs vs real
+tsc 6.0.3's 0 in 2.8 s) — a good second dashboard profile; and `bench-compile-tsc.sh` stat
+parsing (`grep -oP`) silently logs 0s on macOS (BSD grep), wall_ms is real.
+
 **Round 431 (2026-07-07) — M3.2 (STARTED) + M3.1: the TS7006 core falls 301 → 11
 (−96%) via contextual typing, and engine return-checking reaches switch/try bodies
 behind a foreign-TP source gate that then extends to every assignability path.
@@ -1047,7 +1124,12 @@ each item still decomposes into a multi-session campaign — read PLAN-PHASE-4.m
 
 - [ ] **M5.1 Profiling grid**: JFR/async-profiler over the project corpus (cold CLI,
   warm in-process via BenchMain, RSS); publish flamegraph findings in a session note
-  before optimizing anything.
+  before optimizing anything. **Partially done early (rounds 432–434, branch
+  `perf/flow-import-resolution`, owner-directed): two JFR rounds removed the four
+  dominant hotspots — self-compile ~593 → ~20 s, zod 6 → 3.5 s, byte-identical
+  diagnostics. Tooling: `scripts/aggregate_jfr.py`; method + remaining flat-profile
+  leads + tsc/tsgo comparison: `docs/parallel-caching.md`. A FRESH JFR pass is
+  mandatory before the next perf item — the profile shifts after every fix.**
 - [ ] **M5.2 Allocation discipline in the relation engine** (type interning /
   canonicalization — replace the documented fresh-mint caps like the
   `getPropertyTypeForRelation` depth bound with proper sharing).
@@ -1055,6 +1137,11 @@ each item still decomposes into a multi-session campaign — read PLAN-PHASE-4.m
   whenever any resolution context is active = recompute on every generic-heavy path).
 - [ ] **M5.4 Parallel per-file checking** via the existing-but-unused `CheckerPool`
   (LinkStore side-tables already keep binder output immutable for this).
+  **Design decided (2026-07-07, owner discussion): share-nothing workers à la tsgo —
+  NO shared/concurrent maps; cache-tier rules, determinism requirements, the phased
+  plan (share-nothing → shared frozen lib slice → single-flight pure computations),
+  and the evaluated-and-declined cachemap dependency are all in
+  `docs/parallel-caching.md`. Read it BEFORE starting this item.**
 - [ ] **M5.5 Incremental compilation** (`.tsbuildinfo`-style reuse; the M2.1 shared
   lib snapshot is the first piece).
 - [ ] **M5.6 Native target re-enable + tune** (linuxX64 was disabled in c7e3535f;
@@ -1096,6 +1183,24 @@ with a session note saying why). Item IDs are stable; session notes reference th
 - [ ] **M4.4 External sourcemaps** (`.js.map` files; inline maps exist).
 - [ ] **M4.5 Decision point**: project references / composite / incremental scope
   (tsgo supports them; needed for large monorepos — decide build vs defer with owner).
+- [ ] **M4.6 `package.json "type": "module"` module-format detection in
+  `ProjectCompiler`** (found compiling zod, 2026-07-07): under `module: NodeNext`
+  with a `"type": "module"` package.json, real tsc emits ESM but we emit CJS — the
+  `collectPackageJsonTypes` machinery exists only for the multi-file TEST-source path
+  and is not wired into the on-disk project pipeline. Repro: zod (see M4.7); the
+  emitted CJS only runs in a `"type": "commonjs"` context. Unused for v1 (the
+  tsc-source bench project has no package.json → CJS default is correct there).
+- [ ] **M4.7 zod as a second dashboard profile** (validated 2026-07-07, round 432
+  session note): shallow-clone `github.com/colinhacks/zod`, compile
+  `packages/zod/src` (107 files, ~31k LOC) via a `tsconfig.xtsc.json` extending zod's
+  real `.configs/tsconfig.base.json` (strict, exactOptionalPropertyTypes,
+  noUnusedLocals, NodeNext), include `src/**/*.ts`, exclude tests/benchmarks — real
+  tsc 6.0.3 reports 0 errors on it, so every xtsc diagnostic is an FP. Baseline
+  2026-07-07: 1,665 FPs (top: TS7006×447 contextual params, TS2694×284 namespace
+  members via `export *` barrels, TS7029×211 switch-fallthrough, TS2344×182), 0
+  crashes, all 107 files emit, output passes a runtime smoke test. Complements the
+  tsc-source profiles: stresses generic method chaining + noFallthroughCasesInSwitch,
+  which tsc's own source doesn't.
 
 ### Offline asset inventory (verified 2026-07-02)
 
