@@ -92357,9 +92357,23 @@ interface DataView {
             is NonNullExpression -> {
                 // `undefined!`/`null!` is NonNullable<nullish> = never (assignable to
                 // everything — `return undefined!` is legal, B282); other operands keep
-                // their type (full nullish-stripping is a broader change, deferred).
+                // their type (full nullish-stripping on a union is a broader change,
+                // deferred — round 407 note).
                 val t = getTypeOfExpression(expr.expression)
-                if (t !is Type.Union && t.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)) neverType else t
+                when {
+                    t !is Type.Union ->
+                        if (t.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)) neverType else t
+                    // Round 439: a `<call>()!` strips nullish from an all-CONCRETE union
+                    // return (`getParseTreeNode(x, guard)!` → `AccessorDeclaration`).
+                    // Restricted to a CALL operand + no un-inferred type param:
+                    // property-access `.x!` (the object-literal-vs-interface gap) and a
+                    // TP-carrying call return (the generic-inference gap) keep the
+                    // deferred union behavior the round-407 note documents.
+                    expr.expression is CallExpression &&
+                        t.types.none { typeContainsUnresolvedTypeParam(it) } ->
+                        narrowByExcludingNullUndefined(t)
+                    else -> t
+                }
             }
 
             // Parenthesized — honor JSDoc type cast `/** @type {T} */ (expr)` when present.
@@ -96933,6 +96947,14 @@ interface DataView {
         if (calleeType is Type.Interface) return anyType
         // Multiple signatures on functions — attempt overload resolution.
         val chosen = resolveCallOverload(sigs, expr.arguments) ?: return anyType
+        // M3.2 (round 439): findAncestor-style predicate-overload inference. A generic
+        // overload whose callback param is a type-guard position `(x) => x is T` and
+        // whose return is built from T (`T | undefined`, `T`, `S[]`) infers T from the
+        // actual type-guard ARGUMENT's predicate target. `findAncestor(node, isFoo)` →
+        // `Foo | undefined` (not the B136 concrete-overload `Node | undefined`). Runs
+        // before the B136 swap so a resolvable named/method guard gets the precise
+        // return; a non-guard callback (inline `=> boolean|"quit"`) yields null → B136.
+        tryInferPredicateOverloadReturn(sigs, expr)?.let { return it }
         val chosenRt = chosen.resolvedReturnType ?: anyType
         // B136: predicate-overload pair fix (e.g. `Array.filter<S extends T>(p): S[]`
         // vs `filter(p): T[]`). resolveCallOverload matches by arity and may pick the
@@ -96988,6 +97010,59 @@ interface DataView {
             is Type.Intersection -> type.types.any { typeContainsUnresolvedTypeParam(it, depth + 1) }
             else -> false
         }
+    }
+
+    /** M3.2 (round 439): `findAncestor(node, isFoo)`-style predicate-overload
+     *  inference. Scans [sigs] for a GENERIC overload whose callback parameter is a
+     *  type-guard position `(x) => x is T` (T a sig type parameter); when the actual
+     *  argument at that position is itself a type guard `x is Target`, infers T :=
+     *  Target and returns the overload's return type instantiated with that binding
+     *  (`T | undefined` → `Target | undefined`, `S[]` → `Target[]`). Returns null when
+     *  no such overload/arg pair resolves (→ caller falls back to the B136 swap). The
+     *  result is strictly more precise (a subtype) than the concrete-overload
+     *  approximation, so it is suppression-only / FP-safe. */
+    private fun tryInferPredicateOverloadReturn(sigs: List<Signature>, expr: CallExpression): Type? {
+        if (!expr.typeArguments.isNullOrEmpty()) return null
+        val argCount = expr.arguments.size
+        for (sig in sigs) {
+            val tps = sig.typeParameters ?: continue
+            if (tps.isEmpty()) continue
+            if (argCount < sig.minArgumentCount || argCount > sig.parameters.size) continue
+            val decl = sig.declaration
+            val declParams: List<Parameter> = when (decl) {
+                is FunctionDeclaration -> decl.parameters
+                is MethodDeclaration -> decl.parameters
+                else -> continue
+            }
+            val tpNames: Set<String> = when (decl) {
+                is FunctionDeclaration -> decl.typeParameters
+                is MethodDeclaration -> decl.typeParameters
+                else -> null
+            }?.map { it.name.text }?.toSet() ?: continue
+            val rt = sig.resolvedReturnType ?: continue
+            for ((i, p) in declParams.withIndex()) {
+                if (i >= expr.arguments.size) break
+                val guardTpName = predicateCallbackParamGuardTpName(p.type, tpNames) ?: continue
+                val tpType = tps.firstOrNull { it.symbol?.name == guardTpName } ?: continue
+                val argTarget = predicateTargetTypeOfGuardExpr(expr.arguments[i]) ?: continue
+                val mapper = createTypeMapper(listOf(tpType), listOf(argTarget))
+                return instantiateType(rt, mapper)
+            }
+        }
+        return null
+    }
+
+    /** If [t] is a callback type `(…) => x is <TP>` whose predicate targets a type
+     *  parameter named in [tpNames], returns that name; else null. Unwraps a
+     *  parenthesized function type. An `asserts` predicate is not a value guard. */
+    private fun predicateCallbackParamGuardTpName(t: TypeNode?, tpNames: Set<String>): String? {
+        var node: TypeNode? = t
+        if (node is ParenthesizedType) node = node.type
+        val ft = node as? FunctionType ?: return null
+        val pred = ft.type as? TypePredicate ?: return null
+        if (pred.assertsModifier) return null
+        val nm = ((pred.type as? TypeReference)?.typeName as? Identifier)?.text ?: return null
+        return if (nm in tpNames) nm else null
     }
 
     /** M3.1 (round 428): is [arg] an Identifier resolving to a fn declaration whose
