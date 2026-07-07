@@ -1,3 +1,126 @@
+
+**Round 428 (2026-07-06) — M3.1 (first real slice of the TS2322/TS2345 cores): generic
+call-site inference for tsc's `append` idiom + the TS2345 histogram top + the array-literal
+string-layer union rule + the body-local-shadows-function conflation. Self-compile
+(compiler profile) 1,577 → 1,385 → 1,266 → 1,213 → 1,186 (−391, −25%; TS2322 751 → 501,
+TS2345 394 → 261, TS2769 45 → 36, TS2339 6 → 7); suite 9,291 → 9,315 (+24 local, 0
+regressions); 4 fix commits (67efa224, 14e9d566, 1791e87a, fbda155d).**
+- **Fix 1 (67efa224, −192): nullable-union generic params + overloaded generic callees.**
+  The single biggest TS2322 shape (`Type 'T[]' is not assignable to type 'Statement[]'`
+  ×130+ + siblings) is tsc core.ts's `x = append(x, item)` — every `append` overload is
+  GENERIC (single TP each) with `T[] | undefined` / `T | undefined` union params. Four
+  coupled mechanisms: (a) `tryInferSingleTypeParamFromArgs` accepts a nullable-union-of-tp
+  param (`nullableUnionOfTpMode`) and strips nullish members from a UNION arg (purely
+  nullish arg → soft-skip, T still anchors from the other arg); (b) an `anyType` arg (an
+  unmodeled local — for-of loop var) contributes NO candidate at the RETURN-TYPE site
+  instead of killing the inference (`forReturnType`-gated; the arg-vs-param site keeps the
+  hard bail — its consumers EMIT); (c) `getReturnTypeOfCallExpression`'s multi-sig path
+  runs single-TP inference for overloaded all-generic callees (chosen sig first, then
+  arity-matching sigs; first full mapper wins) — gated on NO named-type-guard Identifier
+  arg (`argIsNamedTypeGuardIdentifier`: `filter(arr, isFoo)` selects tsc's guard overload
+  whose S binds from the PREDICATE, which we don't model — and the gate is deliberately
+  NOT folded into `callHasTypeGuardArg`, whose B136 concrete-overload swap must keep
+  firing for named guards); (d) the string-layer `isAssignableTo` treats an array-literal
+  source vs `T[]` (T an enclosing fn's TP) as unknowable. By-site: 201 removed, 8
+  position-identical message transformations (builder.ts tuple-vs-anon-object — the B526
+  representation gap now visible where 'T[]' was), 1 new FP at factory/utilities.ts:713 —
+  **tsc 5.5 INFERRED TYPE PREDICATES: `filter(helpers, helper => !helper.scoped)` gets an
+  inferred `helper is UnscopedEmitHelper` in tsc, selecting the guard overload; we take
+  the boolean overload → EmitHelper keeps the ScopedEmitHelper member → TS2339 on
+  `.importName` (catalogued M3.4; needs predicate inference from arrow bodies).**
+- **Fix 2 (14e9d566, −119): the TS2345 histogram top — three mechanisms.** (a) explicit
+  `this`-PARAM annotation wins over the objlit contextual `this` in the call-types walker
+  (`withObjThis` now resolves `value(this: Node)` — debug.ts's Object.defineProperties
+  `__tsDebuggerDisplay` FP'd ×36 at every `isFoo(this)` arg). (b)
+  `tryEmitOptionalMemberArgVsRequiredNamedTs2345` (the optional-member arg emitter that
+  synthesizes `T | undefined` locally) consults `propertyAccessNarrowedNonNull` — a
+  truthy-guarded access is not undefined (`if (source.valueDeclaration)
+  setValueDeclaration(target, source.valueDeclaration)`, checker.ts mergeSymbol ×24+;
+  unguarded + wrong-polarity controls pinned). (c) two exposure companions the by-site
+  diff caught: numeric-enum → `number` in `isSimpleTypeRelatedTo` (FlowFlags/Comparison/
+  TypeFlags ×8), and a this-typed arg narrowed DOWN by a guard substitutes the refined
+  type (relation-gated suppression-only; `isIdentifier(this) ? idText(this) : …`).
+- **Fix 3 (1791e87a, −53): 'array' vs union-with-array-member at the string layer.** An
+  array-literal source against a union member that is array-ish (`[]`-suffix, tuple,
+  `Array<X>`/`ReadonlyArray<X>`) is unknowable at the string layer → permissive
+  (`sourcesContent = []` vs `(string | null)[] | undefined`, `return []`); a union WITHOUT
+  an array member still fires (pinned).
+- **Fix 4 (fbda155d, −27): the body-local-shadows-function half of the conflation
+  family.** A body-local `const symbolName = …` colliding with an outer/imported FUNCTION
+  resolved through the merged globals to the function in bare-identifier ARG positions
+  (checker.ts's `canUsePropertyAccess(symbolName, …)` → TS2345
+  `(symbol: Symbol) => string` vs `string` ×15 + TS2769 ×8). The call-types walker's
+  VariableStatement branch registers an anyType shadow when the colliding outer symbol
+  declares a FUNCTION (AST-only gate) — mirrors M1.11's `shadowNestedFunctionNames`.
+  First-cut negative control was WRONG about baseline capability (non-callable body
+  locals aren't typed by this pass at all — the suite gate caught it); replaced with a
+  param-based control.
+- **META:** the ~450 ms scratch-CLI repro loop + temporary `println` tracing (the CLI shows
+  stdout, unlike gradle) found the root causes fast; the XDBG probe DISPROVED the assumed
+  emitter for fix 2b (checkArgumentsAgainstSignature's B469 narrowing never ran — the
+  emitter was the dedicated optional-member walker).
+- **Residual triage (next-agent):** TS2345×261 — the PARAM-shadow half of the conflation
+  remains (`(state: ModuleResolutionState) => any` vs boolean ×14, `TypeCheckerHost` ×14:
+  watch.ts's `useCaseSensitiveFileNames` / checker.ts's `host` are enclosing-fn PARAMS
+  shadowing barrel-imported functions, read inside NESTED arrows — the mini-repro of the
+  same shape does NOT reproduce, so the real blocker is in how the pass enters those
+  specific nestings; probe with a marker before theorizing); `Declaration | undefined`
+  guard-shape leftovers. TS2322×501 — `string | string` ×24 (interface-override literal
+  props: `TsConfigOnlyOption.type: "object"` — per-prop resolution through the narrowed
+  redeclaration, M3), `undefined | VisitResult<Node | undefined>` ×12 (generic alias
+  unions), residual `T[]` shapes ×~30 (inference gate misses: rest-params, multi-TP),
+  `SearchResult<T>` ×10 (un-inferred generic Reference returns), builder.ts
+  tuple-vs-anon-object ×8 (B526). TS7006×301 (M3.2 contextual typing) untouched.**
+
+**Round 427 (2026-07-06) — M3.4: the TS2454 bucket round 426 unmasked — three tsc-faithful
+`assumeInitialized`/definiteness rules. Self-compile (compiler profile) 1,593 → 1,577
+(−16; TS2454 20 → 4, all else byte-identical); suite 9,282 → 9,291 (+9 local, 0
+regressions); 1 fix commit (7b2e3807).**
+- **(1) Logical assignments are DEFINITE (tsc `getAssignmentTargetKind`):** `??=`/`||=`/
+  `&&=` classify `AssignmentKind.Definite` (same as plain `=`), so
+  `isSymbolAssignedDefinitely` → `isNeverInitialized` false → a CAPTURED (cross-closure)
+  read of an outer `let` assumes initialized when any definite assignment exists
+  ANYWHERE, nested closures included (tsc checker.ts:31196 `assumeInitialized =
+  … (isOuterVariable && !isNeverInitialized) …`). Our B78.2 anywhere-scan
+  (`collectAssignmentsInExpr`) recognized only `=` — tsc's own
+  `(sourceStack ??= []).push(source)` / `(trackedSymbols ??= []).push(…)` closures FP'd
+  ×13. Compound assignments (`|=`, `+=`, `++`) stay NON-definite
+  (`AssignmentKind.Compound`) — the negative control matches unusedLocalsInMethod4's
+  `enabledSubstitutions |= …` baseline expectation.
+- **(2) A `!`-asserted read assumes initialized:** the literal `node.parent.kind ===
+  SyntaxKind.NonNullExpression` disjunct — tsc's own core.ts `return lastResult!`.
+  Applied in BOTH read walkers (`findUninitializedRefs` + `walkExprForFlowTS2454`): a
+  bare Identifier DIRECTLY under `!` is exempt (covers `x!` and `x!.prop`);
+  `(obj.foo)!` still walks the receiver `obj`.
+- **(3) The comma-nested definite assignment (`(!memberName ? (memberName = X, true) :
+  …)`, checker.ts getSignaturesOfType) needed TWO coupled fixes, both caught by the
+  bench by-site diff:** (a) the anywhere-scan's iterative left-spine walk applied the
+  assignment-target rule only to the OUTERMOST BinaryExpression — a COMMA expression
+  nests the assignment on the LEFT spine, silently skipped; per spine node now (tsc
+  `markNodeAssignments` is a full forEachChild walk). (b) The FLOW-based walker's
+  expression-bodied-arrow branch (B86.1a) checks the arrow body against the OUTER
+  uninit set when reached via a flagged position (a NESTED if's condition is walked
+  `inUncheckedBody=true` — which is why the real site only fired inside the enclosing
+  `if (kind === SignatureKind.Call …)` block and a top-level repro was clean); it now
+  masks out names with a definite assignment inside the arrow body (the captured-read
+  exemption), via the same anywhere-scan expression walker.
+- **Residual TS2454×4 (triaged, none bounded):** scanner.ts `resultingToken` ×2
+  (assigned inside a `while (true)` body before every exit — `isAssignedAtFlow` follows
+  only the loop-ENTRY antecedent at FlowLoopLabel, the deliberate back-edge bound; needs
+  loop-aware assignment evidence); checker.ts:14106 `indexInfos` (same-container flow
+  precision: `x = concatenate(x, …)` self-read in a for-of after conditional seeding);
+  generators.ts:1681 (`for (const variable of …)` SHADOWS the outer `let variable` — the
+  name-based block-unaware `uninitialized` set resolves the read to the outer decl;
+  needs block-scoped shadow tracking).
+- 9 local tests (Ts2454AssumeInitializedTest) with negative controls (compound `|=`
+  still fires; never-assigned captured read still fires; plain un-asserted read still
+  fires; a plain same-container read after an in-arrow assignment still fires — the
+  arrow's assignment is invisible to the outer control flow, which is why the real tsc
+  source uses `memberName!` for those reads).
+- **Perf note:** bench self-time 126.6 → 112.2 s — likely band movement (three
+  consecutive runs trended 149 → 127 → 112 s); treat the M5 single-run baseline as
+  ~110–150 s until an iterations run.
+
 **Round 426 (2026-07-06) — M3.4 (absorbs M1.2's TS2563 item): faithful TS2563 — flow-walk
 DEPTH-TRIP semantics with per-container disable, replacing the B399 per-file node-count
 proxy. Self-compile (compiler profile) 1,600 → 1,594 → 1,593 (−7; TS2563 27 → 1 → 0,
