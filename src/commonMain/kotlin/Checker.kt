@@ -96458,7 +96458,10 @@ interface DataView {
                     // instead — the shape is a new capability, never a new bail.)
                     val argType = if (isArrayT || unionMode == 2) {
                         if (rawArgType !is Type.Reference) { if (unionMode == 2) continue else return null }
-                        if (rawArgType.target.symbol?.name != "Array") { if (unionMode == 2) continue else return null }
+                        // Round 430: a `readonly X[]` arg (Reference(ReadonlyArray, [X]))
+                        // anchors the element like a mutable array.
+                        val argRefName = rawArgType.target.symbol?.name
+                        if (argRefName != "Array" && argRefName != "ReadonlyArray") { if (unionMode == 2) continue else return null }
                         val refArgs = rawArgType.resolvedTypeArguments
                         if (refArgs == null || refArgs.size != 1) { if (unionMode == 2) continue else return null }
                         val element = refArgs[0]
@@ -97321,7 +97324,11 @@ interface DataView {
      */
     private fun isArrayOfTypeParam(type: Type, tp: Type.TypeParam): Boolean {
         if (type !is Type.Reference) return false
-        if (type.target.symbol?.name != "Array") return false
+        // M3.1 (round 430): `readonly T[]` resolves to Reference(ReadonlyArray, [T])
+        // (getTypeFromTypeOperator) — accept it as an array-of-tp anchor too, else
+        // `addRange(to: T[] | undefined, from: readonly T[] | undefined)` never infers.
+        val name = type.target.symbol?.name
+        if (name != "Array" && name != "ReadonlyArray") return false
         val args0 = type.resolvedTypeArguments ?: return false
         return args0.size == 1 && args0[0] === tp
     }
@@ -125456,6 +125463,31 @@ interface DataView {
                     return checkTypeRelatedTo(apparent, target, relation)
                 }
             }
+        }
+        // M3.1 (round 430): an EMPTY anonymous object target (`{}` — no members, no
+        // signatures, no index infos) accepts ANY non-nullish, non-void source (tsc:
+        // `{}` is the supertype of everything but null/undefined). Object sources
+        // already passed vacuously via propertiesRelatedTo; this adds primitive/
+        // literal/enum sources — `T extends {}` constraints (tsc core.ts `append`)
+        // previously rejected `string` and killed the whole call-site inference.
+        if (target is Type.Object && target !is Type.Interface && target !is Type.Reference &&
+            target.symbol == null &&
+            target.members.isNullOrEmpty() &&
+            target.callSignatures.isNullOrEmpty() && target.constructSignatures.isNullOrEmpty() &&
+            target.stringIndexInfo == null && target.numberIndexInfo == null) {
+            // A Type.Union's own flags carry no Null/Undefined bits (the documented
+            // gotcha) — check members explicitly so `string | null` still fails.
+            // A TYPE PARAM source is excluded: an unconstrained T could instantiate
+            // to null/undefined, and tsc rejects `T → {}` under strict with the
+            // "might need an `extends {}` constraint" hint (genericPrototypeProperty3
+            // pins it) — TP sources fall through to the pre-existing paths.
+            val nullishBits = TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void
+            fun nonNullishMember(m: Type): Boolean =
+                m !is Type.TypeParam && !m.flags.hasAny(nullishBits)
+            val sourceNonNullish = if (source is Type.Union)
+                source.types.all { nonNullishMember(it) }
+            else nonNullishMember(source)
+            if (sourceNonNullish) return true
         }
         // B418: primitive source vs an ANONYMOUS object target carrying index
         // signatures (no symbol → not a named interface). A `string`'s apparent
