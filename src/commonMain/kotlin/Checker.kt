@@ -95773,6 +95773,23 @@ interface DataView {
     }
 
     /** Get the type of an object literal expression as an anonymous object type. */
+    /**
+     * Round 438: gate for narrowing an object-literal property VALUE. Accept the flow
+     * narrowing ONLY when it STRIPS nullish from a union (`X | undefined` → `X`) — the
+     * fresh-object family (`specs = append(specs, x); return { moduleSpecifiers: specs }`,
+     * tsc's moduleSpecifiers.ts). A narrow-DOWN to an unrelated subtype, or the name-based-
+     * flow SHADOWING hazard (an inner `const affected = state.program` picking up an outer
+     * `if (!affected)` → `undefined`), is REJECTED — those keep the raw type. Narrowing that
+     * ADDS nullish or empties the type is never a valid property-value refinement.
+     */
+    private fun objLitValueNullishStrip(raw: Type, narrowed: Type): Boolean {
+        if (narrowed === raw || narrowed === neverType || narrowed === errorType) return false
+        val nullishBits = TypeFlags.Null or TypeFlags.Undefined
+        fun hasNullish(t: Type) = t.flags.hasAny(nullishBits) ||
+            (t is Type.Union && t.types.any { it.flags.hasAny(nullishBits) })
+        return hasNullish(raw) && !hasNullish(narrowed)
+    }
+
     private fun getTypeOfObjectLiteral(expr: ObjectLiteralExpression): Type {
         val members = symbolTable()
         val properties = mutableListOf<Symbol>()
@@ -95808,7 +95825,20 @@ interface DataView {
                         // in tsc's object-literal type.
                         if (prop.initializer.let { it is BinaryExpression && it.operator == SyntaxKind.Equals })
                             anyType
-                        else getTypeOfExpression(prop.initializer)
+                        else {
+                            val raw = getTypeOfExpression(prop.initializer)
+                            // Round 438: a property VALUE that is a flow-narrowed bare Identifier
+                            // reads its narrowed type — tsc types object-literal property values as
+                            // expressions in flow context, but getTypeOfIdentifier does not consult
+                            // narrowing, so `specs = append(specs, x); return { moduleSpecifiers:
+                            // specs }` kept `specs`'s wider `string[] | undefined` (tsc's
+                            // moduleSpecifiers.ts). PropertyAccess values already narrow inside
+                            // getTypeOfExpression. NULLISH-STRIP-gated (objLitValueNullishStrip) to
+                            // avoid the shadowing / narrow-DOWN hazards.
+                            val narrowed = if (prop.initializer is Identifier)
+                                getNarrowedTypeForReference(raw, prop.initializer) else raw
+                            if (objLitValueNullishStrip(raw, narrowed)) narrowed else raw
+                        }
                     } finally {
                         if (useCtx) contextualType = savedCtx
                     }
@@ -95828,7 +95858,13 @@ interface DataView {
                 }
                 is ShorthandPropertyAssignment -> {
                     val name = prop.name.text
-                    val propType = getTypeOfExpression(prop.name)
+                    // Round 438: a shorthand value is a bare Identifier — narrow it (see the
+                    // PropertyAssignment branch above). NULLISH-STRIP-gated (the name-based flow +
+                    // shadowing hazard, e.g. builder.ts's inner `const affected = state.program`
+                    // under an outer `if (!affected)`, would otherwise over-narrow to `undefined`).
+                    val shRaw = getTypeOfExpression(prop.name)
+                    val shNarrowed = getNarrowedTypeForReference(shRaw, prop.name)
+                    val propType = if (objLitValueNullishStrip(shRaw, shNarrowed)) shNarrowed else shRaw
                     val sym = Symbol(SymbolFlags.Property, name)
                     sym.declarations.add(prop)
                     sym.valueDeclaration = prop
