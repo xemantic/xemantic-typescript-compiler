@@ -120070,10 +120070,33 @@ interface DataView {
                 // Previously only exact-arity sigs matched, so `fn<MyObjA>` against
                 // `<A extends ObjA, B extends ObjB = ObjB>` skipped the constraint check for
                 // the supplied `A` entirely (TS2344/TS2559 never fired).
-                val genericSig = signatures.firstOrNull { sig ->
-                    val tp = sig.typeParameters ?: return@firstOrNull false
+                val genericCandidates = signatures.filter { sig ->
+                    val tp = sig.typeParameters ?: return@filter false
                     resolvedTypeArgs.size in tp.count { it.default == null }..tp.size
                 }
+                // Round 436d: with MULTIPLE arity-accommodating generic overloads, tsc
+                // selects the first whose ARGUMENTS match under the supplied type args —
+                // parser.ts `createMissingNode<Identifier>(kind, /*reportAtCurrentPosition*/
+                // true, msg)` must select the 2nd overload (the 1st pins the param to the
+                // literal `false`). Blindly checking against the FIRST candidate FP'd
+                // 'true' ≁ 'false' ×5. tsc applicability filters by TYPE-ARG CONSTRAINT
+                // first (typeArgumentConstraintResolution1: `foo1<Date>("")` disqualifies
+                // the `T extends Number` overload, so the arg failure reports against the
+                // `T extends Date` one — the suite gate caught the unfiltered cut). Falls
+                // back to the first candidate when none match (the error-reporting target,
+                // as before) — an over-accepting match can only SUPPRESS (this path only
+                // checks args; return-type inference lives elsewhere).
+                val constraintOkCandidates = genericCandidates.filter {
+                    implTypeArgConstraintsSatisfied(it, resolvedTypeArgs)
+                }.ifEmpty { genericCandidates }
+                val genericSig = if (constraintOkCandidates.size <= 1) constraintOkCandidates.firstOrNull()
+                else constraintOkCandidates.firstOrNull { sig ->
+                    val tps = sig.typeParameters!!
+                    val padded = if (resolvedTypeArgs.size < tps.size)
+                        resolvedTypeArgs + (resolvedTypeArgs.size until tps.size).map { tps[it].default ?: errorType }
+                    else resolvedTypeArgs
+                    allArgumentsMatch(expr.arguments, instantiateContextualSignature(sig, createTypeMapper(tps, padded)))
+                } ?: constraintOkCandidates.first()
                 if (genericSig?.typeParameters != null) {
                     val tps = genericSig.typeParameters
                     // Pad the supplied args with the trailing params' resolved defaults so the
