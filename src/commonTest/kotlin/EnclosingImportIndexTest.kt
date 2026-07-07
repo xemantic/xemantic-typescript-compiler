@@ -29,7 +29,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 
 /**
- * Pins the round-430 perf refactor: the program-wide `spec in bindings.elements`
+ * Pins the round-432 perf refactor: the program-wide `spec in bindings.elements`
  * structural scans in `resolveAlias`'s ImportSpecifier branch and
  * `findEnclosingImport` were replaced by a prebuilt structural-keyed index
  * (`enclosingImportsOf`). The index MUST preserve the scans' semantics:

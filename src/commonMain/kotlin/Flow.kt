@@ -820,7 +820,7 @@ class FlowGraphBuilder {
         if (start < 0 || start >= source.length) return emptySet()
         val hi = minOf(end, source.length)
         if (hi <= start) return emptySet()
-        // Perf (round 431): every closure inside one enclosing function queries the SAME
+        // Perf (round 433): every closure inside one enclosing function queries the SAME
         // `hi` (= the enclosing function's end) with only `start` varying — and the
         // matcher's decisions at a position depend only on BACKWARD context (read via
         // getOrNull, unbounded) and `hi`, never on where the scan started (a scan

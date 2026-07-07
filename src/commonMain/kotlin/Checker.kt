@@ -1130,13 +1130,25 @@ class Checker(
      *  init-order trap (the narrowing walk runs during checking). */
     private var nestedFunctionByNameCache: MutableMap<String, FunctionDeclaration?>? = null
 
+    /** M3.2 (round 431): lexical scope stack for the implicit-any (TS7006) walker —
+     *  one map per enclosing function-like, name → declared annotation TypeNode (null
+     *  value = declared UNTYPED, which must keep TS7006 firing on `x = arrow` per the
+     *  uncalledFunctionChecksInConditional2 baseline). Params register `param.type`;
+     *  body var-decls register `decl.type ?: (init as? AsExpression)?.type`. Consulted
+     *  by [isCalleeResolvable] (a lexically-declared callee resolves) and
+     *  [resolveAssignTargetCtxTypeForImplicitAny] (assignment-RHS contextual typing).
+     *  Maintained ONLY inside checkImplicitAnyInStatements/-Expr/-ClassElement
+     *  (push/pop in try/finally at every function-like boundary). Declared before
+     *  `init` per the init-order trap (the walker runs during init). */
+    private val implicitAnyScopes = ArrayDeque<HashMap<String, TypeNode?>>()
+
     /** M3.4 (round 411): process-wide memo for [resolveImportedEnumSymbol] (alias symbol
      *  id → enum Symbol, or null) — the enum-flavored sibling of [importedNamespaceSymCache],
      *  for discriminated-union narrowing keyed on a barrel-imported enum member
      *  (`s.type === UpToDateStatusType.X`). Declared before `init` per the init-order trap. */
     private val importedEnumSymCache = HashMap<Int, Symbol?>()
 
-    /** Perf (round 430): memo for [resolveModuleSpecifier] — the function is a pure
+    /** Perf (round 432): memo for [resolveModuleSpecifier] — the function is a pure
      *  function of the specifier string ([fileResults]/[options] are fixed before `init`;
      *  the contextNode param is unused), but its fallback path iterates EVERY program
      *  file with per-call string stripping. Negative results (null) are the hot case
@@ -1144,7 +1156,7 @@ class Checker(
      *  containsKey, not getOrPut. Declared before `init` per the init-order trap. */
     private val moduleSpecifierCache = HashMap<String, String?>()
 
-    /** Perf (round 430, eager-immutable round 432): program-wide index ImportSpecifier →
+    /** Perf (round 432, eager-immutable round 434): program-wide index ImportSpecifier →
      *  the (fileName, ImportDeclaration) statements whose NamedImports CONTAIN a
      *  structurally-equal specifier, in binderResults/statement encounter order. Replaces
      *  the O(program) `spec in bindings.elements` structural scans in [resolveAlias]'s
@@ -6055,7 +6067,7 @@ class Checker(
                         // Named import — the original name to look up
                         val originalName = decl.propertyName?.text ?: decl.name.text
                         // Find the ImportDeclaration parent for this specifier via the
-                        // prebuilt index (no parent pointers; round 430 — was a
+                        // prebuilt index (no parent pointers; round 432 — was a
                         // program-wide structural scan re-run on every call for
                         // unresolvable barrel aliases).
                         for ((_, stmt) in enclosingImportsOf(decl)) {
@@ -6310,7 +6322,7 @@ class Checker(
      * Also supports baseUrl-relative non-relative specifiers (e.g., "defs/cc" with baseUrl "/proj").
      */
     private fun resolveModuleSpecifier(specifier: String, contextNode: Node? = null): String? {
-        // Perf (round 430): pure function of the specifier ([fileResults]/[options] are
+        // Perf (round 432): pure function of the specifier ([fileResults]/[options] are
         // fixed; contextNode is unused) — memoized incl. null results via containsKey
         // (getOrPut would recompute the hot unresolvable-specifier case every call).
         if (moduleSpecifierCache.containsKey(specifier)) return moduleSpecifierCache[specifier]
@@ -15321,6 +15333,7 @@ class Checker(
             val source = result.sourceFile.text
             val savedLocals = currentFileLocals
             currentFileLocals = result.locals
+            implicitAnyScopes.clear() // per-file hygiene (every push pops via finally; belt-and-braces)
             try {
                 checkImplicitAnyInStatements(result.sourceFile.statements, source, fileName)
             } finally {
@@ -20512,7 +20525,14 @@ class Checker(
                     // Check params for TS7006 for ALL function declarations (both regular and declare)
                     // TypeScript emits TS7006 for untyped parameters in declare functions too
                     checkParamsForImplicitAny(stmt.parameters, source, fileName)
-                    stmt.body?.let { checkImplicitAnyInStatements(it.statements, source, fileName, returnCtxAnnotation = stmt.type) }
+                    stmt.body?.let {
+                        pushImplicitAnyScope(stmt.parameters)
+                        try {
+                            checkImplicitAnyInStatements(it.statements, source, fileName, returnCtxAnnotation = stmt.type)
+                        } finally {
+                            implicitAnyScopes.removeLast()
+                        }
+                    }
                     // TS7010 for bodyless functions is now in checkBodylessFunctionReturnTypes (unconditional)
                 }
                 is ClassDeclaration -> {
@@ -20601,6 +20621,27 @@ class Checker(
                 }
                 is VariableStatement -> {
                     for (decl in stmt.declarationList.declarations) {
+                        // M3.2 (round 431): register the local in the innermost implicit-any
+                        // scope — annotation, or an `as T` cast's type (`const host = x as
+                        // WatchCompilerHost` types host as T), or null (declared UNTYPED —
+                        // an assignment to it must keep TS7006 firing). Function-level
+                        // granularity: only inside a function-like (the stack is empty at
+                        // file level, where the binder-symbol fallback resolves).
+                        implicitAnyScopes.lastOrNull()?.let { scope ->
+                            val dn = decl.name
+                            if (dn is Identifier && dn.text.isNotEmpty()) {
+                                scope[dn.text] = decl.type
+                                    ?: (decl.initializer as? AsExpression)?.type
+                                    // M3.2 (round 431b): a call-initialized local types as
+                                    // the callee's declared RETURN annotation (`const
+                                    // builderProgram = createRedirectedBuilderProgram(…)`)
+                                    // — AST-only at registration (the TypeNode resolves
+                                    // lazily, only if an assignment consumes it).
+                                    ?: calleeReturnAnnotationForImplicitAny(decl.initializer)
+                            } else {
+                                collectBindingNamesForImplicitAny(dn, scope)
+                            }
+                        }
                         // TS7005: Variable implicitly has an 'any' type (ambient/declare declarations only)
                         if (decl.type == null && decl.initializer == null
                             && (ModifierFlag.Declare in stmt.modifiers || inAmbientContext)) {
@@ -20813,14 +20854,35 @@ class Checker(
         when (element) {
             is MethodDeclaration -> {
                 checkParamsForImplicitAny(element.parameters, source, fileName)
-                element.body?.let { checkImplicitAnyInStatements(it.statements, source, fileName, returnCtxAnnotation = element.type) }
+                element.body?.let {
+                    pushImplicitAnyScope(element.parameters)
+                    try {
+                        checkImplicitAnyInStatements(it.statements, source, fileName, returnCtxAnnotation = element.type)
+                    } finally {
+                        implicitAnyScopes.removeLast()
+                    }
+                }
             }
             is Constructor -> {
                 checkParamsForImplicitAny(element.parameters, source, fileName)
-                element.body?.let { checkImplicitAnyInStatements(it.statements, source, fileName) }
+                element.body?.let {
+                    pushImplicitAnyScope(element.parameters)
+                    try {
+                        checkImplicitAnyInStatements(it.statements, source, fileName)
+                    } finally {
+                        implicitAnyScopes.removeLast()
+                    }
+                }
             }
             is GetAccessor -> {
-                element.body?.let { checkImplicitAnyInStatements(it.statements, source, fileName, returnCtxAnnotation = element.type) }
+                element.body?.let {
+                    pushImplicitAnyScope(element.parameters)
+                    try {
+                        checkImplicitAnyInStatements(it.statements, source, fileName, returnCtxAnnotation = element.type)
+                    } finally {
+                        implicitAnyScopes.removeLast()
+                    }
+                }
             }
             is SetAccessor -> {
                 // Setter value parameters are contextually typed from a sibling getter
@@ -20848,7 +20910,14 @@ class Checker(
                         checkParamsForImplicitAny(element.parameters, source, fileName)
                     }
                 }
-                element.body?.let { checkImplicitAnyInStatements(it.statements, source, fileName) }
+                element.body?.let {
+                    pushImplicitAnyScope(element.parameters)
+                    try {
+                        checkImplicitAnyInStatements(it.statements, source, fileName)
+                    } finally {
+                        implicitAnyScopes.removeLast()
+                    }
+                }
             }
             is PropertyDeclaration -> {
                 // Check function type annotation: `pub_f10: (x) => string` → TS7006 for `x`
@@ -20959,6 +21028,210 @@ class Checker(
         return false
     }
 
+    /** M3.2 (round 431): true when [name] is declared as a FunctionDeclaration ANYWHERE
+     *  in the program, at any nesting depth — including names with ≥2 declarations
+     *  (ambiguity doesn't matter for resolvability: tsc resolves the callee lexically to
+     *  one of them and its params provide contextual types either way). Reuses the
+     *  round-418 nested-function map, whose KEYS record every collected name (the value
+     *  is null for collisions). */
+    private fun anyNestedFunctionNamed(name: String): Boolean {
+        val cache = nestedFunctionByNameCache ?: buildNestedFunctionMap().also {
+            nestedFunctionByNameCache = it
+        }
+        return cache.containsKey(name)
+    }
+
+    /** M3.2 (round 431): push a fresh implicit-any scope populated with [params]
+     *  (Identifier params register their annotation; binding-pattern params register
+     *  each bound name as declared-untyped — resolvable as a callee, no assignment ctx). */
+    private fun pushImplicitAnyScope(params: List<Parameter>) {
+        val m = HashMap<String, TypeNode?>()
+        for (p in params) {
+            if (p.isCommentPlaceholder) continue
+            when (val n = p.name) {
+                is Identifier -> if (n.text.isNotEmpty()) m[n.text] = p.type
+                else -> collectBindingNamesForImplicitAny(n, m)
+            }
+        }
+        implicitAnyScopes.addLast(m)
+    }
+
+    private fun collectBindingNamesForImplicitAny(name: Node?, out: HashMap<String, TypeNode?>) {
+        when (name) {
+            is ObjectBindingPattern -> for (el in name.elements) {
+                when (val inner = el.name) {
+                    is Identifier -> if (inner.text.isNotEmpty() && !out.containsKey(inner.text)) out[inner.text] = null
+                    else -> collectBindingNamesForImplicitAny(inner, out)
+                }
+            }
+            is ArrayBindingPattern -> for (el in name.elements) {
+                when (val inner = (el as? BindingElement)?.name) {
+                    is Identifier -> if (inner.text.isNotEmpty() && !out.containsKey(inner.text)) out[inner.text] = null
+                    else -> collectBindingNamesForImplicitAny(inner, out)
+                }
+            }
+            else -> {}
+        }
+    }
+
+    /** True when [name] is declared in any live implicit-any scope (param or body local
+     *  of an enclosing function-like in the current walk). */
+    private fun implicitAnyScopeContains(name: String): Boolean {
+        for (i in implicitAnyScopes.indices.reversed()) {
+            if (implicitAnyScopes[i].containsKey(name)) return true
+        }
+        return false
+    }
+
+    /**
+     * M3.2 (round 431): resolve the contextual type an assignment TARGET provides for
+     * its RHS (tsc getContextualTypeForBinaryOperand: `lhs = arrow` contextually types
+     * the arrow from lhs's declared type). Sources, in order:
+     *  - a lexically-scoped param/body-local's declared annotation (the implicit-any
+     *    scope stack; a declared-UNTYPED local yields null so `let mark; mark = tag =>`
+     *    keeps firing — uncalledFunctionChecksInConditional2's pinned rule);
+     *  - a file-level var's declared annotation (binder symbol);
+     *  - for a property-access target, the member's type looked up on the receiver's
+     *    resolved type (receiver resolved through the same sources, falling back to
+     *    getTypeOfExpression for imports/namespaces).
+     * Null = no contextual type = status quo (TS7006 stands).
+     */
+    private fun resolveAssignTargetCtxTypeForImplicitAny(left: Expression): Type? = when (left) {
+        is Identifier -> {
+            var found = false
+            var ann: TypeNode? = null
+            for (i in implicitAnyScopes.indices.reversed()) {
+                val m = implicitAnyScopes[i]
+                if (m.containsKey(left.text)) {
+                    found = true
+                    ann = m[left.text]
+                    break
+                }
+            }
+            if (found) {
+                ann?.let { getTypeFromTypeNodeSafe(it) }
+            } else {
+                val sym = currentFileLocals?.get(left.text) ?: globals[left.text]
+                val vd = sym?.declarations?.firstOrNull { it is VariableDeclaration } as? VariableDeclaration
+                vd?.type?.let { getTypeFromTypeNodeSafe(it) }
+            }
+        }
+        is PropertyAccessExpression -> {
+            val recvT = resolveAssignTargetCtxTypeForImplicitAny(left.expression)
+                ?: getTypeOfExpression(left.expression).takeIf { it !== anyType && it !== errorType }
+            recvT?.let { lookupPropertyTypeForCtx(it, left.name.text) }
+        }
+        is ParenthesizedExpression -> resolveAssignTargetCtxTypeForImplicitAny(left.expression)
+        else -> null
+    }
+
+    /**
+     * M3.2 (round 431): the call signatures a contextual type contributes, for the
+     * TS7006 suppression paths only. Sees through a Union with exactly ONE callable
+     * member (tsc getContextualSignature collects per-member signatures; nullish and
+     * non-callable members contribute none — `WriteFileCallback | undefined` provides
+     * WriteFileCallback's signature) and through a Type.Reference whose own signatures
+     * are lazy (falls back to the target's — arity survives missing substitution).
+     * Null when the type provides no signatures.
+     */
+    private fun callableSignaturesForCtx(type: Type?): List<Signature>? {
+        val obj: Type.Object = when (type) {
+            is Type.Union -> {
+                var single: Type.Object? = null
+                for (m in type.types) {
+                    if (m !is Type.Object) continue
+                    resolveStructuredTypeMembers(m)
+                    val callable = !m.callSignatures.isNullOrEmpty() ||
+                        (m is Type.Reference && run {
+                            resolveStructuredTypeMembers(m.target)
+                            !m.target.callSignatures.isNullOrEmpty()
+                        })
+                    if (callable) {
+                        if (single != null) return null // ≥2 callable members: no single ctx sig
+                        single = m
+                    }
+                }
+                single ?: return null
+            }
+            is Type.Object -> type
+            else -> return null
+        }
+        resolveStructuredTypeMembers(obj)
+        var sigs = obj.callSignatures
+        if (sigs.isNullOrEmpty() && obj is Type.Reference) {
+            resolveStructuredTypeMembers(obj.target)
+            sigs = obj.target.callSignatures
+        }
+        return if (sigs.isNullOrEmpty()) null else sigs
+    }
+
+    /**
+     * M3.2 (round 431): the contextual arity an assignment-provided type gives an
+     * arrow/function-expression RHS — tsc's single-applicable-signature rule (mirrors
+     * B476 / getContextualCallSignature): among the type's call signatures, those with
+     * arity ≥ the arrow's REQUIRED param count (or a rest param) are applicable;
+     * exactly ONE applicable → its arity (MAX_VALUE for rest); zero or several → null,
+     * TS7006 stands (contextualTypingWithGenericAndNonGenericSignature pins the 2-sig
+     * FIRE; tsc only intersects overloads under strictFunctionTypes, unmodeled).
+     */
+    private fun singleApplicableSigArity(type: Type?, requiredParamCount: Int): Int? {
+        val sigs = callableSignaturesForCtx(type) ?: return null
+        var single: Signature? = null
+        for (s in sigs) {
+            val hasRest = (s.parameters.lastOrNull()?.valueDeclaration as? Parameter)?.dotDotDotToken == true
+            if (hasRest || s.parameters.size >= requiredParamCount) {
+                if (single != null) return null
+                single = s
+            }
+        }
+        val sig = single ?: return null
+        val hasRest = (sig.parameters.lastOrNull()?.valueDeclaration as? Parameter)?.dotDotDotToken == true
+        return if (hasRest) Int.MAX_VALUE else sig.parameters.size
+    }
+
+    /** M3.2 (round 431b): the declared RETURN annotation of a call initializer's
+     *  callee — `const x = makeHost(…)` types `x` as makeHost's return annotation for
+     *  the implicit-any scope map. Identifier callees only (file symbol or nested-fn
+     *  map); a TypePredicate return is boolean-ish, not a useful member source → null. */
+    private fun calleeReturnAnnotationForImplicitAny(init: Expression?): TypeNode? {
+        val call = init as? CallExpression ?: return null
+        val callee = call.expression as? Identifier ?: return null
+        val sym = currentFileLocals?.get(callee.text) ?: globals[callee.text]
+        val fd = (sym?.declarations?.firstOrNull { it is FunctionDeclaration } as? FunctionDeclaration)
+            ?: uniqueFunctionDeclByName(callee.text)
+            ?: return null
+        val ret = fd.type ?: return null
+        return if (ret is TypePredicate) null else ret
+    }
+
+    /** True when an assignment RHS shape can consume a function contextual type —
+     *  gates the LHS type resolution (first-touch discipline + per-assignment cost). */
+    private fun rhsCanConsumeFnCtx(rhs: Expression): Boolean = when (rhs) {
+        is ArrowFunction, is FunctionExpression -> true
+        is ParenthesizedExpression -> rhsCanConsumeFnCtx(rhs.expression)
+        is ConditionalExpression -> rhsCanConsumeFnCtx(rhs.whenTrue) || rhsCanConsumeFnCtx(rhs.whenFalse)
+        is BinaryExpression -> when (rhs.operator) {
+            SyntaxKind.BarBar, SyntaxKind.QuestionQuestion ->
+                rhsCanConsumeFnCtx(rhs.left) || rhsCanConsumeFnCtx(rhs.right)
+            SyntaxKind.AmpersandAmpersand, SyntaxKind.Comma -> rhsCanConsumeFnCtx(rhs.right)
+            else -> false
+        }
+        else -> false
+    }
+
+    /** The REQUIRED-parameter prefix count of an arrow/fn-expr (tsc isAritySmaller's
+     *  target count: stop at the first optional/initialized/rest param). */
+    private fun requiredParamPrefixCount(params: List<Parameter>): Int {
+        var n = 0
+        for (p in params) {
+            if (p.isCommentPlaceholder) continue
+            if ((p.name as? Identifier)?.text == "this") continue
+            if (p.questionToken || p.initializer != null || p.dotDotDotToken) break
+            n++
+        }
+        return n
+    }
+
     /**
      * Cheap resolvability check for a call/new expression callee. Used by
      * checkImplicitAnyInExpr to decide whether to suppress TS7006 on callback
@@ -20995,6 +21268,14 @@ class Checker(
         if (globals.containsKey(name)) return true
         if (currentFileLocals?.containsKey(name) == true) return true
         if (name in KNOWN_GLOBALS) return true
+        // M3.2 (round 431): a param/body-local of an enclosing function-like resolves
+        // lexically (same permissive rule as a file-level var callee above), and a
+        // NESTED FunctionDeclaration anywhere in the program resolves too — the binder
+        // does not bind nested declarations (B83.5), so tsc's giant closures
+        // (`filterType`/`mapType` inside createTypeChecker) previously FP'd TS7006 on
+        // every callback arg.
+        if (implicitAnyScopeContains(name)) return true
+        if (anyNestedFunctionNamed(name)) return true
         return false
     }
 
@@ -21061,10 +21342,10 @@ class Checker(
      * `const checker: TypeChecker = { isUndefinedSymbol: symbol => … }`.
      */
     private fun contextualCallableArity(type: Type?): Int? {
-        val obj = type as? Type.Object ?: return null
-        resolveStructuredTypeMembers(obj)
-        val sigs = obj.callSignatures
-        if (sigs.isNullOrEmpty()) return null
+        // M3.2 (round 431): signatures resolved via callableSignaturesForCtx — sees
+        // through a Union with a single callable member (`WriteFileCallback |
+        // undefined` return/member contexts) and a lazy-membered Type.Reference.
+        val sigs = callableSignaturesForCtx(type) ?: return null
         var max = 0
         for (s in sigs) {
             val hasRest = (s.parameters.lastOrNull()?.valueDeclaration as? Parameter)?.dotDotDotToken == true
@@ -21095,6 +21376,11 @@ class Checker(
         // fn-typed value (`{ [SyntaxKind.X]: function (node, …) {…} }` against
         // `VisitEachChildTable`); the engine cannot resolve those member sets.
         ctxAnnotation: TypeNode? = null,
+        // M3.2 (round 431): [contextualType] came from an ASSIGNMENT TARGET — apply the
+        // single-applicable-signature rule (a 2-sig LHS gives NO ctx: the pinned
+        // contextualTypingWithGenericAndNonGenericSignature FIRE) instead of the
+        // permissive max-arity rule the annotation/member paths use.
+        ctxViaAssignment: Boolean = false,
     ) {
         when (expr) {
             is ArrowFunction -> {
@@ -21102,30 +21388,48 @@ class Checker(
                 if (!contextuallyTyped && !unionSuppress) {
                     // M1.6(b): a callable contextual type supplies param types up to
                     // its arity — TS7006 only beyond it.
-                    val ctxArity = if (ctxViaUnionWithPrimitive) null else contextualCallableArity(contextualType)
+                    val ctxArity = when {
+                        ctxViaUnionWithPrimitive -> null
+                        ctxViaAssignment -> singleApplicableSigArity(contextualType, requiredParamPrefixCount(expr.parameters))
+                        else -> contextualCallableArity(contextualType)
+                    }
                     if (ctxArity != null) {
                         emitTs7006BeyondCtxArity(expr.parameters, ctxArity, source, fileName)
                     } else {
                         checkParamsForImplicitAny(expr.parameters, source, fileName)
                     }
                 }
-                when (val body = expr.body) {
-                    is Block -> checkImplicitAnyInStatements(body.statements, source, fileName, returnCtxAnnotation = expr.type)
-                    is Expression -> checkImplicitAnyInExpr(body, source, fileName)
-                    else -> {}
+                pushImplicitAnyScope(expr.parameters)
+                try {
+                    when (val body = expr.body) {
+                        is Block -> checkImplicitAnyInStatements(body.statements, source, fileName, returnCtxAnnotation = expr.type)
+                        is Expression -> checkImplicitAnyInExpr(body, source, fileName)
+                        else -> {}
+                    }
+                } finally {
+                    implicitAnyScopes.removeLast()
                 }
             }
             is FunctionExpression -> {
                 val unionSuppress = contextualType != null && unionHasFunctionAndPrimitive(contextualType)
                 if (!contextuallyTyped && !unionSuppress) {
-                    val ctxArity = if (ctxViaUnionWithPrimitive) null else contextualCallableArity(contextualType)
+                    val ctxArity = when {
+                        ctxViaUnionWithPrimitive -> null
+                        ctxViaAssignment -> singleApplicableSigArity(contextualType, requiredParamPrefixCount(expr.parameters))
+                        else -> contextualCallableArity(contextualType)
+                    }
                     if (ctxArity != null) {
                         emitTs7006BeyondCtxArity(expr.parameters, ctxArity, source, fileName)
                     } else {
                         checkParamsForImplicitAny(expr.parameters, source, fileName)
                     }
                 }
-                checkImplicitAnyInStatements(expr.body.statements, source, fileName, returnCtxAnnotation = expr.type)
+                pushImplicitAnyScope(expr.parameters)
+                try {
+                    checkImplicitAnyInStatements(expr.body.statements, source, fileName, returnCtxAnnotation = expr.type)
+                } finally {
+                    implicitAnyScopes.removeLast()
+                }
             }
             is ClassExpression -> {
                 for (member in expr.members) {
@@ -21168,7 +21472,14 @@ class Checker(
                                     checkParamsForImplicitAny(prop.parameters, source, fileName)
                                 }
                             }
-                            prop.body?.let { checkImplicitAnyInStatements(it.statements, source, fileName, returnCtxAnnotation = prop.type) }
+                            prop.body?.let {
+                                pushImplicitAnyScope(prop.parameters)
+                                try {
+                                    checkImplicitAnyInStatements(it.statements, source, fileName, returnCtxAnnotation = prop.type)
+                                } finally {
+                                    implicitAnyScopes.removeLast()
+                                }
+                            }
                         }
                         is PropertyAssignment -> {
                             // Propagate contextual typing to property initializers.
@@ -21234,17 +21545,53 @@ class Checker(
                 }
             }
             is BinaryExpression -> {
+                // M3.2 (round 431): contextual typing flows through binary operators the
+                // way tsc's getContextualTypeForBinaryOperand does — an assignment's RHS
+                // is contextually typed by the LHS's declared type; `||`/`??` pass the
+                // incoming context to BOTH operands; `&&` and comma to the RIGHT only
+                // (contextuallyTypeLogicalAnd03/contextuallyTypeCommaOperator03 pin the
+                // left FIRING). Left-spine iteration preserved (binderBinaryExpressionStress).
                 var current: Expression = expr
+                var leftTyped = contextuallyTyped
+                var leftType = contextualType
+                var leftAssign = ctxViaAssignment
                 while (current is BinaryExpression) {
-                    checkImplicitAnyInExpr(current.right, source, fileName)
+                    when (current.operator) {
+                        SyntaxKind.Equals, SyntaxKind.BarBarEquals,
+                        SyntaxKind.AmpersandAmpersandEquals, SyntaxKind.QuestionQuestionEquals -> {
+                            // Resolve the LHS type ONLY when the RHS can consume a fn
+                            // context (bounds first-touch resolution-order changes and
+                            // per-assignment cost to the shapes that need it).
+                            val lhsT = if (rhsCanConsumeFnCtx(current.right))
+                                resolveAssignTargetCtxTypeForImplicitAny(current.left) else null
+                            checkImplicitAnyInExpr(current.right, source, fileName,
+                                contextualType = lhsT, ctxViaAssignment = lhsT != null)
+                            leftTyped = false; leftType = null; leftAssign = false
+                        }
+                        SyntaxKind.BarBar, SyntaxKind.QuestionQuestion -> {
+                            checkImplicitAnyInExpr(current.right, source, fileName, leftTyped, leftType,
+                                ctxViaUnionWithPrimitive, ctxViaAssignment = leftAssign)
+                            // left operand keeps inheriting the context
+                        }
+                        SyntaxKind.AmpersandAmpersand, SyntaxKind.Comma -> {
+                            checkImplicitAnyInExpr(current.right, source, fileName, leftTyped, leftType,
+                                ctxViaUnionWithPrimitive, ctxViaAssignment = leftAssign)
+                            leftTyped = false; leftType = null; leftAssign = false
+                        }
+                        else -> {
+                            checkImplicitAnyInExpr(current.right, source, fileName)
+                            leftTyped = false; leftType = null; leftAssign = false
+                        }
+                    }
                     current = current.left
                 }
-                checkImplicitAnyInExpr(current, source, fileName)
+                checkImplicitAnyInExpr(current, source, fileName, leftTyped, leftType,
+                    ctxViaUnionWithPrimitive, ctxViaAssignment = leftAssign)
             }
-            is ParenthesizedExpression -> checkImplicitAnyInExpr(expr.expression, source, fileName, contextuallyTyped, contextualType, ctxViaUnionWithPrimitive)
+            is ParenthesizedExpression -> checkImplicitAnyInExpr(expr.expression, source, fileName, contextuallyTyped, contextualType, ctxViaUnionWithPrimitive, ctxViaAssignment = ctxViaAssignment)
             is ConditionalExpression -> {
-                checkImplicitAnyInExpr(expr.whenTrue, source, fileName, contextuallyTyped, contextualType, ctxViaUnionWithPrimitive)
-                checkImplicitAnyInExpr(expr.whenFalse, source, fileName, contextuallyTyped, contextualType, ctxViaUnionWithPrimitive)
+                checkImplicitAnyInExpr(expr.whenTrue, source, fileName, contextuallyTyped, contextualType, ctxViaUnionWithPrimitive, ctxViaAssignment = ctxViaAssignment)
+                checkImplicitAnyInExpr(expr.whenFalse, source, fileName, contextuallyTyped, contextualType, ctxViaUnionWithPrimitive, ctxViaAssignment = ctxViaAssignment)
             }
             is ArrayLiteralExpression -> {
                 // Propagate contextual typing through arrays ONLY for non-arrow elements
@@ -21300,11 +21647,28 @@ class Checker(
      * Differs from [getPropertyOfType] which requires the property on EVERY
      * union constituent — this helper is heuristic and picks first hit.
      */
-    private fun lookupPropertyTypeForCtx(type: Type, name: String): Type? {
+    private fun lookupPropertyTypeForCtx(type: Type, name: String, depth: Int = 0): Type? {
+        if (depth > 8) return null // cyclic extends chains survive parse recovery
         return when (type) {
             is Type.Object -> {
                 resolveStructuredTypeMembers(type)
-                val sym = type.members?.get(name)
+                var sym = type.members?.get(name)
+                // M3.2 (round 431b): a Type.Reference's own members can stay lazy —
+                // fall back to the target's (un-substituted member types are fine for
+                // the arity-only consumers this helper serves).
+                if (sym == null && type is Type.Reference) {
+                    resolveStructuredTypeMembers(type.target)
+                    sym = type.target.members?.get(name)
+                }
+                // M3.2 (round 431b): a member inherited from an `extends` base
+                // (ManyToManyPathMap extends ReadonlyManyToManyPathMap — getKeys lives
+                // on the base).
+                if (sym == null && type is Type.Interface) {
+                    for (base in type.baseTypes.orEmpty()) {
+                        val t = lookupPropertyTypeForCtx(base, name, depth + 1)
+                        if (t != null) return t
+                    }
+                }
                 if (sym != null) getTypeOfSymbol(sym)
                 else {
                     // Fall back to index signature when no named property matches:
@@ -21317,7 +21681,12 @@ class Checker(
                     info?.type
                 }
             }
-            is Type.Union -> type.types.firstNotNullOfOrNull { lookupPropertyTypeForCtx(it, name) }
+            is Type.Union -> type.types.firstNotNullOfOrNull { lookupPropertyTypeForCtx(it, name, depth + 1) }
+            // M3.2 (round 431b): an intersection receiver (`x as CompilerHost &
+            // ResolutionCacheHost`) resolves a member from ANY constituent that has it
+            // (a property exists on A & B iff either declares it — cf.
+            // resolveMemberPropertyType's rule).
+            is Type.Intersection -> type.types.firstNotNullOfOrNull { lookupPropertyTypeForCtx(it, name, depth + 1) }
             else -> null
         }
     }
@@ -77858,6 +78227,8 @@ interface DataView {
         targetNode: TypeNode,
         source: String,
         fileName: String,
+        // round 431e: the enclosing fn's own TP names for the foreign-TP gate.
+        typeParams: Set<String> = emptySet(),
     ): Boolean {
         if (expr == null) return false
         val unwrapped = unwrapParens(expr)
@@ -77868,7 +78239,7 @@ interface DataView {
             // Recurse into nested conditionals: `cond ? (a ? b : c) : d` — each leaf
             // branch should be checked individually.
             if (inner is ConditionalExpression) {
-                if (checkConditionalReturnBranches(inner, targetType, targetNode, source, fileName)) emitted = true
+                if (checkConditionalReturnBranches(inner, targetType, targetNode, source, fileName, typeParams)) emitted = true
                 continue
             }
             // Compute branch type with literal preservation when target contains literals.
@@ -77877,6 +78248,10 @@ interface DataView {
             } else getTypeOfExpression(inner)
             if (branchType === anyType || branchType === errorType) continue
             if (branchType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) continue
+            // round 431e: an un-inferred generic call branch (`… ? node :
+            // forEachChild(node, cb)` typing as `T | undefined`) — same foreign-TP
+            // rule as checkReturnAssignability's gate.
+            if (typeContainsForeignTypeParam(branchType, typeParams)) continue
             if (!canUseTypeEngine(branchType, targetType)) continue
             if (checkTypeRelatedTo(branchType, targetType, assignableRelation)) continue
             val displaySource = typeToString(branchType)
@@ -80362,15 +80737,18 @@ interface DataView {
                     }
                 }
                 is TryStatement -> {
-                    checkTypeAssignabilityInStatements(stmt.tryBlock.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams)
-                    stmt.catchClause?.block?.let { checkTypeAssignabilityInStatements(it.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams) }
-                    stmt.finallyBlock?.let { checkTypeAssignabilityInStatements(it.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams) }
+                    // round 431c: thread returnTypeNode so returns inside try/catch check
+                    // through the ENGINE path, consistent with top-level/if returns.
+                    checkTypeAssignabilityInStatements(stmt.tryBlock.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams, returnTypeNode)
+                    stmt.catchClause?.block?.let { checkTypeAssignabilityInStatements(it.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams, returnTypeNode) }
+                    stmt.finallyBlock?.let { checkTypeAssignabilityInStatements(it.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams, returnTypeNode) }
                 }
                 is SwitchStatement -> {
+                    // round 431c: thread returnTypeNode (see the TryStatement note above).
                     for (clause in stmt.caseBlock) {
                         when (clause) {
-                            is CaseClause -> checkTypeAssignabilityInStatements(clause.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams)
-                            is DefaultClause -> checkTypeAssignabilityInStatements(clause.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams)
+                            is CaseClause -> checkTypeAssignabilityInStatements(clause.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams, returnTypeNode)
+                            is DefaultClause -> checkTypeAssignabilityInStatements(clause.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams, returnTypeNode)
                             else -> {}
                         }
                     }
@@ -81722,15 +82100,15 @@ interface DataView {
                     currentLocalTypes[varName]?.let { narrowedDeclaredTypes[varName] = it }
                     currentLocalTypes[varName] = narrowedType
                     try {
-                        checkTypeAssignabilityInStmt(stmt.thenStatement, source, fileName, varTypes, returnType, typeParams)
+                        checkTypeAssignabilityInStmt(stmt.thenStatement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
                     } finally {
                         currentLocalTypes = savedLocalTypes
                         narrowedDeclaredTypes = savedDeclared
                     }
                 } else {
-                    checkTypeAssignabilityInStmt(stmt.thenStatement, source, fileName, varTypes, returnType, typeParams)
+                    checkTypeAssignabilityInStmt(stmt.thenStatement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
                 }
-                stmt.elseStatement?.let { checkTypeAssignabilityInStmt(it, source, fileName, varTypes, returnType, typeParams) }
+                stmt.elseStatement?.let { checkTypeAssignabilityInStmt(it, source, fileName, varTypes, returnType, typeParams, returnTypeNode) }
             }
             is ForStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
             is ForInStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
@@ -81738,18 +82116,20 @@ interface DataView {
             is WhileStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
             is DoStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
             is SwitchStatement -> {
+                // round 431c: thread returnTypeNode so returns inside switch cases check
+                // through the ENGINE path, consistent with top-level/if returns.
                 for (clause in stmt.caseBlock) {
                     when (clause) {
-                        is CaseClause -> checkTypeAssignabilityInStatements(clause.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams)
-                        is DefaultClause -> checkTypeAssignabilityInStatements(clause.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams)
+                        is CaseClause -> checkTypeAssignabilityInStatements(clause.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams, returnTypeNode)
+                        is DefaultClause -> checkTypeAssignabilityInStatements(clause.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams, returnTypeNode)
                         else -> {}
                     }
                 }
             }
             is TryStatement -> {
-                checkTypeAssignabilityInStatements(stmt.tryBlock.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams)
-                stmt.catchClause?.block?.let { checkTypeAssignabilityInStatements(it.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams) }
-                stmt.finallyBlock?.let { checkTypeAssignabilityInStatements(it.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams) }
+                checkTypeAssignabilityInStatements(stmt.tryBlock.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams, returnTypeNode)
+                stmt.catchClause?.block?.let { checkTypeAssignabilityInStatements(it.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams, returnTypeNode) }
+                stmt.finallyBlock?.let { checkTypeAssignabilityInStatements(it.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams, returnTypeNode) }
             }
             is LabeledStatement -> checkTypeAssignabilityInStmt(stmt.statement, source, fileName, varTypes, returnType, typeParams, returnTypeNode)
             else -> {}
@@ -84058,6 +84438,11 @@ interface DataView {
             isNarrowableTarget(targetType)) {
             getNarrowedTypeForReference(rawSourceType, init)
         } else rawSourceType
+        // round 431e: same foreign-TP rule as checkReturnAssignability's gate — an
+        // un-inferred generic call initializer (`const p: () => Printer =
+        // memoize(() => …)` typing as `() => T`) must not be relation-checked;
+        // tsc infers the callee's TP from context and the init relates.
+        if (typeContainsForeignTypeParam(sourceType, typeParams)) return
         // B112: function/property source vs CONSTRUCTOR-type var-decl target.
         // `var Person: new () => T = function(){...}`. canUseTypeEngine bails when
         // the source lacks construct sigs but the target requires them, so the
@@ -85574,6 +85959,53 @@ interface DataView {
         return false
     }
 
+    /** M3.1 (round 431c): true when [t] structurally contains a Type.TypeParam whose
+     *  NAME is not in [ownTpNames] — the signature of an UN-INFERRED generic call
+     *  result (the callee's own TP leaked through a failed/absent inference). Name-based
+     *  (a callee TP shadowing an enclosing same-named TP stays "own" — conservative,
+     *  keeps checking). Walks unions/intersections/reference args/tuples, depth-bounded. */
+    private fun typeContainsForeignTypeParam(t: Type, ownTpNames: Set<String>, depth: Int = 0): Boolean {
+        if (depth > 6) return false
+        return when (t) {
+            // A nameless TypeParam cannot be one of the enclosing fn's own (those are
+            // matched by name) — treat as foreign (un-inferred callee TP).
+            is Type.TypeParam -> (t.symbol?.name ?: return true) !in ownTpNames
+            is Type.Union -> t.types.any { typeContainsForeignTypeParam(it, ownTpNames, depth + 1) }
+            is Type.Intersection -> t.types.any { typeContainsForeignTypeParam(it, ownTpNames, depth + 1) }
+            is Type.Reference -> t.resolvedTypeArguments?.any { typeContainsForeignTypeParam(it, ownTpNames, depth + 1) } == true
+            is Type.Object -> {
+                if (t.tupleElementTypes?.any { typeContainsForeignTypeParam(it, ownTpNames, depth + 1) } == true) return true
+                // round 431d: an ANONYMOUS object (alias-body materialization —
+                // `SearchResult<T> = { value: T | undefined } | undefined`) hides the
+                // un-inferred TP in its members / call-signature positions. Named
+                // interfaces stay excluded (their TPs surface as Reference args; a
+                // member walk there would be broad + first-touch-order-shifting).
+                if (t.symbol == null) {
+                    t.members?.values?.forEach { m ->
+                        if (typeContainsForeignTypeParam(getTypeOfSymbol(m), ownTpNames, depth + 1)) return true
+                    }
+                    t.callSignatures?.forEach { s ->
+                        // round 431e: a signature's OWN type parameters are BOUND within
+                        // it — a generic FUNCTION VALUE source (`var f: (x: number) =>
+                        // number = genericFn` where genericFn is `<T>(x: T) => T`) is
+                        // legitimately checkable (5 corpus pins); only a TP the sig does
+                        // NOT declare is leaked inference.
+                        val sigOwn = s.typeParameters?.mapNotNull { it.symbol?.name }?.toSet().orEmpty()
+                        val names = if (sigOwn.isEmpty()) ownTpNames else ownTpNames + sigOwn
+                        s.resolvedReturnType?.let { rt ->
+                            if (typeContainsForeignTypeParam(rt, names, depth + 1)) return true
+                        }
+                        s.parameters.forEach { p ->
+                            if (typeContainsForeignTypeParam(getTypeOfSymbol(p), names, depth + 1)) return true
+                        }
+                    }
+                }
+                false
+            }
+            else -> false
+        }
+    }
+
     private fun checkReturnAssignability(
         stmt: ReturnStatement, returnType: String, source: String, fileName: String,
         varTypes: Map<String, String>, typeParams: Set<String>,
@@ -85612,7 +86044,7 @@ interface DataView {
             // BEFORE the standard aggregated check so per-branch positions land
             // instead of one outer error.
             if (targetType !== anyType && targetType !== errorType &&
-                checkConditionalReturnBranches(expr, targetType, returnTypeNode, source, fileName)) {
+                checkConditionalReturnBranches(expr, targetType, returnTypeNode, source, fileName, typeParams)) {
                 return
             }
             // 16.0: contextual typing — set return type as context for arrow/function
@@ -85651,6 +86083,16 @@ interface DataView {
                 if (narrowed !== sourceTypeRaw && checkTypeRelatedTo(narrowed, targetType, assignableRelation)) narrowed
                 else sourceTypeRaw
             } else sourceTypeRaw
+            // M3.1 (round 431c): a source containing a FOREIGN type parameter — one
+            // that is NOT among the enclosing function's own [typeParams] — is an
+            // UN-INFERRED generic call result (`return append(outer, tp)` types as
+            // `T[]` with append's own T when inference found no anchor). tsc infers
+            // the callee's TP from args/context and the return relates; checking the
+            // raw uninstantiated type is meaningless and FP'd TS2322 at every such
+            // return (the self-compile `T[]`/`U | undefined` return family). Bail —
+            // an OWN-TP source (fn<T>(x: T): number { return x }) keeps checking
+            // (corpus-pinned), as does everything TP-free.
+            if (typeContainsForeignTypeParam(sourceType, typeParams)) return
             // B87.1 (round 73): async-generic-return — `async function f<T>(...):
             // Promise<T>` returning a value whose (awaited) type is a UNION that
             // includes the bare unconstrained type parameter T PLUS other (non-
@@ -86506,6 +86948,10 @@ interface DataView {
                         else sourceTypeRaw
                     } else sourceTypeRaw
                     contextualType = savedContextual
+                    // round 431e: same foreign-TP rule as checkReturnAssignability's
+                    // gate — an un-inferred generic call RHS (`fileIncludeReasons =
+                    // append(…)` typing as `T[]`) must not be relation-checked.
+                    if (typeContainsForeignTypeParam(sourceType, typeParams)) return
                     lastMissingPropertyName = null
                     lastMissingIndexSigKind = null
                     // B96-INDEXSIG (assignment path): per-property/element VALUE vs the
@@ -88388,6 +88834,12 @@ interface DataView {
         val pt = propType
         val valueType = getTypeOfExpression(value)
         if (valueType === anyType || valueType === errorType) return
+        // round 431e: foreign-TP gate (see checkReturnAssignability) — an un-inferred
+        // generic call RHS (`type.typeParameters = concatenate(outer, local)` typing
+        // as `T[]`) must not be relation-checked. This walker has no enclosing-fn
+        // typeParams threading, so ALL TPs are treated as foreign — a value whose
+        // type still mentions a TP here is (today) always an un-inferred call result.
+        if (typeContainsForeignTypeParam(valueType, emptySet())) return
         // void source: bail unconditionally (no test exercises void-property-assign).
         if (valueType.flags.hasAny(TypeFlags.Void)) return
         // null/undefined source: under strictNullChecks this IS an error against a
@@ -92141,7 +92593,7 @@ interface DataView {
     }
 
     /**
-     * Perf (round 431): the flow walkers' cycle-detection set with an ADD-LOG, so a
+     * Perf (round 433): the flow walkers' cycle-detection set with an ADD-LOG, so a
      * FlowBranchLabel can walk each antecedent against the path-so-far membership and
      * restore it afterwards ([mark]/[popToMark]) instead of COPYING the whole set per
      * antecedent (the copies were ~11% of the tsc-source self-compile: `seen` holds
@@ -93654,7 +94106,7 @@ interface DataView {
         enclosingImportsOf(spec).firstOrNull()
 
     /**
-     * Perf (round 430): all (fileName, ImportDeclaration) statements whose NamedImports
+     * Perf (round 432): all (fileName, ImportDeclaration) statements whose NamedImports
      * contain a specifier structurally equal to [spec], in the same encounter order the
      * replaced program-wide scans used ([enclosingImportIndex] has the rationale).
      * A statement is listed once even if it contains structural duplicates of [spec].
@@ -94825,6 +95277,24 @@ interface DataView {
             }
             val filtered = t.types.filter { m -> verdict(m)?.let { it == isMatch } ?: true }
             return if (filtered.isEmpty() || filtered.size == t.types.size) t else getUnionType(filtered)
+        }
+        // M3.4 (round 429d): `typeof x === "<primitive>"` narrows a non-union UNKNOWN
+        // to that primitive (tsc narrowTypeByTypeof) — the non-union flags path below
+        // returns `never` for a positive match on `unknown` (it carries no primitive
+        // flags), which the relation-gated consumers then reject, so the guard never
+        // fed the call-arg path (tsc moduleNameResolver's `target: unknown` string
+        // arm, ×10 self-compile). The negative branch keeps `unknown` unchanged
+        // (no practical subtraction).
+        if (t === unknownType) {
+            if (!isMatch) return t
+            return when (guard) {
+                "string" -> stringType
+                "number" -> numberType
+                "boolean" -> booleanType
+                "bigint" -> bigintType
+                "undefined" -> undefinedType
+                else -> t
+            }
         }
         val flags = typeofTypeGuardFlags(guard) ?: return t
         if (flags == TypeFlags.None) return t
@@ -96393,7 +96863,12 @@ interface DataView {
                 // skip — `append(undefined, x)` still infers from `x`).
                 val unionMode = if (!isRest && !isBareT && !isRestT && !isArrayT && !isObjLitOfT)
                     nullableUnionOfTpMode(pt, tp) else 0
-                if (!isBareT && !isRestT && !isArrayT && !isObjLitOfT && !isFnTypedOfT && unionMode == 0) continue
+                // (j) M3.1 (round 430b): predicate-position callback `(x: Base) =>
+                // x is tp` — tp binds from a NAMED guard arg's own predicate target
+                // (`getFirstJSDocTag(node, isJSDocAugmentsTag)` → T = JSDocAugmentsTag).
+                val isPredT = !isRest && !isBareT && !isRestT && !isArrayT && !isObjLitOfT &&
+                    unionMode == 0 && predicatePositionTpOf(params[i], tps) === tp
+                if (!isBareT && !isRestT && !isArrayT && !isObjLitOfT && !isFnTypedOfT && unionMode == 0 && !isPredT) continue
                 fun isNamedLikeAtom(t: Type): Boolean =
                     t is Type.Interface || t is Type.Reference || t is Type.Intrinsic ||
                         t.flags.hasAny(
@@ -96406,6 +96881,18 @@ interface DataView {
                     if (ai >= args.size) break
                     val arg = args[ai]
                     if (arg is SpreadElement) continue
+                    // (j) round 430b: predicate-position candidate — the NAMED guard
+                    // arg's own predicate target (barrel-aware resolution via
+                    // predicateTargetTypeOfGuardExpr). Unresolvable / inline-arrow /
+                    // predicate-less args contribute nothing (soft skip) — branches
+                    // BEFORE the standard rawArgType path, which would type the guard
+                    // as a callable object and hard-bail at the named-like gate.
+                    if (isPredT) {
+                        val t = predicateTargetTypeOfGuardExpr(arg) ?: continue
+                        if (t === anyType || t === errorType) continue
+                        candidates.add(Candidate(ai, t, null))
+                        continue
+                    }
                     // 17.38: object-literal-of-T inference — walk arg's properties matching
                     // pt's tp-typed members; LUB-as-Union over collected widened types.
                     // Branches BEFORE the standard rawArgType bail because the arg as a whole
@@ -96511,7 +96998,10 @@ interface DataView {
                     // instead — the shape is a new capability, never a new bail.)
                     val argType = if (isArrayT || unionMode == 2) {
                         if (rawArgType !is Type.Reference) { if (unionMode == 2) continue else return null }
-                        if (rawArgType.target.symbol?.name != "Array") { if (unionMode == 2) continue else return null }
+                        // Round 430: a `readonly X[]` arg (Reference(ReadonlyArray, [X]))
+                        // anchors the element like a mutable array.
+                        val argRefName = rawArgType.target.symbol?.name
+                        if (argRefName != "Array" && argRefName != "ReadonlyArray") { if (unionMode == 2) continue else return null }
                         val refArgs = rawArgType.resolvedTypeArguments
                         if (refArgs == null || refArgs.size != 1) { if (unionMode == 2) continue else return null }
                         val element = refArgs[0]
@@ -97374,9 +97864,29 @@ interface DataView {
      */
     private fun isArrayOfTypeParam(type: Type, tp: Type.TypeParam): Boolean {
         if (type !is Type.Reference) return false
-        if (type.target.symbol?.name != "Array") return false
+        // M3.1 (round 430): `readonly T[]` resolves to Reference(ReadonlyArray, [T])
+        // (getTypeFromTypeOperator) — accept it as an array-of-tp anchor too, else
+        // `addRange(to: T[] | undefined, from: readonly T[] | undefined)` never infers.
+        val name = type.target.symbol?.name
+        if (name != "Array" && name != "ReadonlyArray") return false
         val args0 = type.resolvedTypeArguments ?: return false
         return args0.size == 1 && args0[0] === tp
+    }
+
+    /** M3.1 (round 430b): a param declared `(x: Base) => x is T` where T ∈ [tps] —
+     *  returns the matched tp. Reads the param's declared AST: the RESOLVED signature
+     *  ERASES the predicate (`getTypeFromTypeNode(TypePredicate)` is booleanType per
+     *  the documented gotcha), so the Type side cannot see it. Non-asserts, bare
+     *  single-Identifier predicate targets only. */
+    private fun predicatePositionTpOf(paramSym: Symbol, tps: List<Type.TypeParam>): Type.TypeParam? {
+        val decl = paramSym.valueDeclaration as? Parameter ?: return null
+        val ft = decl.type as? FunctionType ?: return null
+        val pred = ft.type as? TypePredicate ?: return null
+        if (pred.assertsModifier) return null
+        val target = pred.type as? TypeReference ?: return null
+        if (!target.typeArguments.isNullOrEmpty()) return null
+        val name = (target.typeName as? Identifier)?.text ?: return null
+        return tps.firstOrNull { it.symbol?.name == name }
     }
 
     /**
@@ -123457,6 +123967,39 @@ interface DataView {
         return decl.questionToken || decl.initializer != null
     }
 
+    /** M3.1 (round 429c): tsc types a non-null-asserted expression `x!` as
+     *  NonNullable<T> — strip nullish members from a UNION arg whose expression is a
+     *  NonNullExpression (through parens). LOCAL to the call-arg path, mirroring the
+     *  arithmetic pass's `arithOperandType` (round 415): the GLOBAL strip in
+     *  `getTypeOfExpression` was measured to unmask M3 object-literal/generic gaps
+     *  (round 407, reverted) — do not move this there. */
+    private fun stripNullishForNonNullArg(arg: Expression, t: Type): Type {
+        if (t !is Type.Union) return t
+        var e = arg
+        while (e is ParenthesizedExpression) e = e.expression
+        if (e !is NonNullExpression) return t
+        val kept = t.types.filter { !it.flags.hasAny(TypeFlags.Undefined or TypeFlags.Null) }
+        if (kept.isEmpty() || kept.size == t.types.size) return t
+        return if (kept.size == 1) kept[0] else getUnionType(kept)
+    }
+
+    /** M3.1 (round 429c): under strictNullChecks an OPTIONAL parameter's effective
+     *  type includes `undefined` (tsc getTypeAtPosition), so a UNION arg whose only
+     *  failing member is `undefined` is LEGAL for `configFileName?: string` —
+     *  equivalently, the undefined-stripped arg must relate to the declared param
+     *  type. `null` members stay (null is not interchangeable with absence).
+     *  Suppression-only: a still-failing arg keeps the unstripped display. */
+    private fun unionArgOkForOptionalParam(argType: Type, paramSym: Symbol, paramType: Type): Boolean {
+        if (argType !is Type.Union) return false
+        if (!argType.types.any { it.flags.hasAny(TypeFlags.Undefined) }) return false
+        val decl = paramSym.valueDeclaration as? Parameter ?: return false
+        if (!decl.questionToken && decl.initializer == null) return false
+        val kept = argType.types.filter { !it.flags.hasAny(TypeFlags.Undefined) }
+        if (kept.isEmpty()) return true
+        val stripped = if (kept.size == 1) kept[0] else getUnionType(kept)
+        return checkTypeRelatedTo(stripped, paramType, assignableRelation)
+    }
+
     private fun checkArgumentsAgainstSignature(
         args: List<Expression>,
         sigIn: Signature,
@@ -123568,21 +124111,32 @@ interface DataView {
                 // call-return path, which would cascade `void` into currentLocalTypes /
                 // var-init inference (the `isFromCall` rule).
                 val widened = if (raw === anyType) (voidIifeArgType(arg) ?: raw) else raw
-                val ctxApplied = if (propTypeContainsLiteral(paramType)) {
+                val ctxAppliedRaw = if (propTypeContainsLiteral(paramType)) {
                     literalTypeOfExpression(arg) ?: widened
                 } else widened
+                // M3.1 (round 429c): a non-null-asserted arg (`readFile(path)!`) types
+                // as its nullish-stripped union (tsc NonNullable) — LOCAL strip only.
+                val ctxApplied = stripNullishForNonNullArg(arg, ctxAppliedRaw)
                 // B469: narrow a reference argument by the flow graph. PropertyAccess
                 // args already narrow inside getTypeOfPropertyAccess, but bare Identifier
                 // args do not (getTypeOfIdentifier never consults narrowing), so narrow
                 // them explicitly here. Only Union types can be refined.
                 if ((arg is Identifier || arg is PropertyAccessExpression) && ctxApplied is Type.Union) {
                     getNarrowedTypeForReference(ctxApplied, arg)
-                } else if (arg is Identifier && arg.text == "this" && ctxApplied is Type.Interface) {
-                    // M3.4 (round 428b): a this-param-typed `this` arg narrowed DOWN by
-                    // a guard (`isIdentifier(this) ? idText(this) : …` — tsc debug.ts's
+                } else if (arg is Identifier &&
+                    (ctxApplied is Type.Interface || ctxApplied === unknownType) &&
+                    paramType !== neverType) {
+                    // M3.4 (round 428b, generalized round 429c): an Identifier arg whose
+                    // NON-union interface type is narrowed DOWN by a type guard
+                    // (`isSourceFile(x) && isExternalOrCommonJsModule(x)` — Node narrows
+                    // to SourceFile; originally bounded to `this` for debug.ts's
                     // __tsDebuggerDisplay). Relation-gated: substitute only a genuine
-                    // refinement, so this can only suppress. Bounded to `this` — the
-                    // reference the round-428b this-param binding newly types.
+                    // refinement, so this can only suppress. The `never`-PARAM exclusion
+                    // is load-bearing: `assertType<never>(node)` in an exhaustive-switch
+                    // default needs exhaustiveness narrowing we don't model — a partial
+                    // refinement (a union of case-matched members) would take the
+                    // union-arg emission path and manufacture an FP where the declared
+                    // interface previously stayed silent.
                     val n = getNarrowedTypeForReference(ctxApplied, arg)
                     if (n !== ctxApplied && n !== neverType &&
                         checkTypeRelatedTo(n, ctxApplied, assignableRelation)) n else ctxApplied
@@ -124669,6 +125223,10 @@ interface DataView {
             // simple-checkable path too (covers primitive-typed `b?: string` params —
             // the M1.7a gates below only reached the Reference/anon-fn branches).
             if (isUndefinedArgForOptionalParam(argType, params[i])) continue
+            // M3.1 (round 429c): a `string | undefined` UNION arg is legal for an
+            // OPTIONAL `configFileName?: string` param (tsc's effective param type
+            // unions undefined under strict). Suppression-only.
+            if (unionArgOkForOptionalParam(argType, params[i], paramType)) continue
             if (forceVoidUndefinedFail || !checkTypeRelatedTo(argType, paramType, assignableRelation)) {
                 // B291: a MIXED bigint/number literal-union argument is the
                 // typeof-discrimination idiom (`0 | 1n` narrowed by
@@ -124889,7 +125447,14 @@ interface DataView {
         for (i in lastIdx until args.size) {
             val arg = args[i]
             if (arg is SpreadElement) continue
-            val argType = getTypeOfExpression(arg)
+            val argType0 = getTypeOfExpression(arg)
+            // M3.4 (round 429d): mirror B469 — a reference arg in a REST position
+            // narrows by the flow graph too (`cond ? diag(…, deprecatedEntity) : …`
+            // truthy-narrows the `string | undefined` rest arg to `string` — tsc
+            // checker.ts addDeprecatedSuggestionWithSignature, ×5 self-compile).
+            val argType = if ((arg is Identifier || arg is PropertyAccessExpression) && argType0 is Type.Union) {
+                getNarrowedTypeForReference(argType0, arg)
+            } else argType0
             if (argType === anyType || argType === errorType) continue
             if (argType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)) continue
             // Conservative gate: only emit when argType is a simple/primitive
@@ -125197,6 +125762,12 @@ interface DataView {
         // numbers — tsc debug.ts `formatEnum(this.flags, …)` where flags: FlowFlags
         // vs a `number` param). String-valued enums excluded by the classifier.
         if (tf.hasAny(TypeFlags.Number) && isNumericEnumObjectType(source)) return true
+        // M3.1 (round 429d): string-enum → string, the string sibling (an ALL-string-
+        // valued enum is a union of string literals in tsc — `changeAnyExtension(path,
+        // Extension.Dts)` vs a `string` param; also cascades to `Extension[]` →
+        // `string[]` via the same-target covariant element comparison). Mixed/numeric/
+        // unknown-valued enums excluded (conservative: unevaluated → not provable).
+        if (tf.hasAny(TypeFlags.String) && isStringEnumObjectType(source)) return true
         // object type (non-primitive) — primitives are NOT assignable to object
         if (tf.hasAny(TypeFlags.NonPrimitive)) {
             return !sf.hasAny(TypeFlags.Primitive or TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)
@@ -125451,6 +126022,31 @@ interface DataView {
                     return checkTypeRelatedTo(apparent, target, relation)
                 }
             }
+        }
+        // M3.1 (round 430): an EMPTY anonymous object target (`{}` — no members, no
+        // signatures, no index infos) accepts ANY non-nullish, non-void source (tsc:
+        // `{}` is the supertype of everything but null/undefined). Object sources
+        // already passed vacuously via propertiesRelatedTo; this adds primitive/
+        // literal/enum sources — `T extends {}` constraints (tsc core.ts `append`)
+        // previously rejected `string` and killed the whole call-site inference.
+        if (target is Type.Object && target !is Type.Interface && target !is Type.Reference &&
+            target.symbol == null &&
+            target.members.isNullOrEmpty() &&
+            target.callSignatures.isNullOrEmpty() && target.constructSignatures.isNullOrEmpty() &&
+            target.stringIndexInfo == null && target.numberIndexInfo == null) {
+            // A Type.Union's own flags carry no Null/Undefined bits (the documented
+            // gotcha) — check members explicitly so `string | null` still fails.
+            // A TYPE PARAM source is excluded: an unconstrained T could instantiate
+            // to null/undefined, and tsc rejects `T → {}` under strict with the
+            // "might need an `extends {}` constraint" hint (genericPrototypeProperty3
+            // pins it) — TP sources fall through to the pre-existing paths.
+            val nullishBits = TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void
+            fun nonNullishMember(m: Type): Boolean =
+                m !is Type.TypeParam && !m.flags.hasAny(nullishBits)
+            val sourceNonNullish = if (source is Type.Union)
+                source.types.all { nonNullishMember(it) }
+            else nonNullishMember(source)
+            if (sourceNonNullish) return true
         }
         // B418: primitive source vs an ANONYMOUS object target carrying index
         // signatures (no symbol → not a named interface). A `string`'s apparent
@@ -126898,6 +127494,24 @@ interface DataView {
         if (leftArgs == rightArgs) return
         if (checkTypeRelatedTo(leftType, rightType, assignableRelation)) return
         if (checkTypeRelatedTo(rightType, leftType, assignableRelation)) return
+        // round 431c: the disjointness proof above leans on the relation being
+        // COMPLETE for the arg types — for an OBJECT-vs-OBJECT arg pair
+        // (`NodeArray<TypeNode>` vs `NodeArray<Node>` where TypeNode extends Node
+        // through cross-file heritage), a vacuous both-directions failure is
+        // indistinguishable from genuine disjointness (M3). Only trust the proof
+        // when some DIFFERING arg pair is anchored in a non-object type
+        // (literal/primitive/enum — `Array<string>` vs `Array<number>` stays firing).
+        var anchoredDisjoint = false
+        for (i in leftArgs.indices) {
+            val l = leftArgs[i]
+            val r = rightArgs[i]
+            if (l === r) continue
+            if (l !is Type.Object || r !is Type.Object) {
+                anchoredDisjoint = true
+                break
+            }
+        }
+        if (!anchoredDisjoint) return
         val leftDisp = typeToString(leftType)
         val rightDisp = typeToString(rightType)
         val start = expr.pos
@@ -145222,6 +145836,19 @@ interface DataView {
         if (!sym.flags.hasAny(SymbolFlags.Enum)) return false
         val values = enumValues[sym.id] ?: return true // no computed values → all auto-numeric
         return values.values.none { it is ConstantValue.StringValue }
+    }
+
+    /** M3.1 (round 429d): an ALL-string-valued enum (`enum Extension { Ts = ".ts", … }`)
+     *  — its values ARE strings, so the enum type is assignable to `string` (tsc models
+     *  it as a union of string literals). Unlike [isNumericEnumObjectType]'s
+     *  unknown-→-numeric default, an enum with NO evaluated values is NOT
+     *  string-provable (conservative false). A ConstEnum-flagged NAMESPACE (the
+     *  cascade gotcha) has no `enumValues` entry → false. */
+    private fun isStringEnumObjectType(type: Type): Boolean {
+        val sym = (type as? Type.Object)?.symbol ?: return false
+        if (!sym.flags.hasAny(SymbolFlags.Enum)) return false
+        val values = enumValues[sym.id] ?: return false
+        return values.values.isNotEmpty() && values.values.all { it is ConstantValue.StringValue }
     }
 
     /** For + and STRICT arithmetic, an object operand PROCEEDS to per-operand classification

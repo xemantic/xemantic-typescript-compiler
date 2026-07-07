@@ -1,6 +1,6 @@
 # Cache taxonomy & the parallel-checking plan (M5.4)
 
-*Written 2026-07-07 (rounds 430–432, branch `perf/flow-import-resolution`). This is the
+*Written 2026-07-07 (rounds 432–434 — renumbered at merge from the branch's original 430–432; main's parallel M3 rounds own those numbers). This is the
 design record for how checker caches must be structured so the compiler can go parallel
 the way tsgo did — read it before adding a cache, a shared map, or any M5.4 work.*
 
@@ -23,7 +23,7 @@ the same model. Consequences:
 Classify every cache (existing or new) into exactly one tier:
 
 **Tier 1 — derived from immutable program input; deterministic; enumerable domain.**
-Examples: `enclosingImportIndex` (eager `val` since round 432 — the reference
+Examples: `enclosingImportIndex` (eager `val` since round 434 — the reference
 implementation of this tier), `moduleStarExportsCache`, `barrelTypeOnlyMemo`,
 `crossFileFuncs`. Rule: **build eagerly in a single-threaded phase (field initializer /
 init prologue), expose as read-only `Map`, share freely across workers.** No
@@ -101,7 +101,7 @@ work are Tier-3 immutability/purity/determinism, which no map library provides. 
 as a reference implementation of left-right in Kotlin if a Native `actual` is ever
 hand-rolled.
 
-## JFR profiling how-to (the method behind rounds 430–431)
+## JFR profiling how-to (the method behind rounds 432–433)
 
 ```bash
 # 1. Build + classpath (bench script's init-script trick, or reuse build/bench/):
@@ -123,7 +123,7 @@ Notes: `jfr` may not be on PATH — the script resolves it next to `java`. `jfr 
 uses locale decimal commas in sizes. Line numbers in frames are irrelevant here, but
 remember stack-trace line numbers from Checker.kt wrap mod 65536 (CLAUDE.md).
 
-## Perf state as of round 432 (branch `perf/flow-import-resolution`)
+## Perf state as of round 434 (branch `perf/flow-import-resolution`)
 
 Machine: Apple Silicon macOS dev box; all noEmit wall, cold CLI, same tsconfigs.
 
@@ -132,7 +132,7 @@ Machine: Apple Silicon macOS dev box; all noEmit wall, cold CLI, same tsconfigs.
 | tsc-source `compiler` (78 files, 195k LOC) | 0.94 s | 5.1 s | 19.6 s (56 s CPU) | ~490–593 s |
 | zod `packages/zod/src` (107 files, 31k LOC) | 0.52 s | 2.1 s | 3.5 s | ~6–7 s |
 
-What was fixed (byte-identical diagnostics at every step; details in the round 430/431
+What was fixed (byte-identical diagnostics at every step; details in the round 432/433
 session notes + CLAUDE.md gotchas): the `resolveAlias`/`findEnclosingImport`
 program-wide structural scans (76% of samples) → `enclosingImportIndex`;
 `resolveModuleSpecifier` memo; the per-closure B464 reassignment text scan (~14%) →
@@ -144,7 +144,7 @@ HashMap churn in the flow-walk memos, `findLocalTypeAlias$scan` (~4%, via
 `discUnionParamMembers` — another candidate for a Tier-1 prebuilt index),
 `checkMemberAccessMissing` (~3%), `Checker.<init>` walker-pass aggregate. A fresh JFR
 pass is mandatory before the next optimization — the profile shifts after every fix
-(round 431's targets were invisible before round 430 landed).
+(round 433's targets were invisible before round 432 landed).
 
 Caveat when comparing against tsc/tsgo: the workload is not semantically identical —
 xtsc's checker is incomplete (M3 gaps → less relation work) but runs hundreds of

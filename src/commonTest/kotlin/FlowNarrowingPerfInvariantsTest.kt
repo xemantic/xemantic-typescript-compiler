@@ -30,7 +30,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 /**
- * Pins the round-431 perf refactors' semantic invariants:
+ * Pins the round-433 perf refactors' semantic invariants:
  *
  * 1. `collectReassignedNamesInRange` (Flow.kt) now shares ONE scan per enclosing
  *    function (cached by range end) filtered by each closure's position. Two
