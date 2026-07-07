@@ -49,6 +49,14 @@ type-guard-narrowing consumers each gated their TARGET/PARAM shape and excluded 
 - **Baseline @ HEAD (b6cdcb6a, round 437 test-only): 294 FPs** (bench confirms; the
   round-436g listall was still HEAD-accurate). Reusable `--listAll` per-fix diff loop set up
   (materialize + build once, then a ~30 s CLI run per fix).
+- **Full-dashboard baseline at the round-438 end state (all 8 profiles, `--no-emit`, wall
+  29–42 s each): compiler 244 / tsc-cli 246 / jsTyping 241 / deprecatedCompat 243 /
+  typingsInstallerCore 246 / services 1,116 / server 1,401 / harness 1,693.** The
+  narrowing-gate fixes GENERALIZE STRONGLY — the big profiles dropped even harder than the
+  small ones (services 1,476 → 1,116 −360, server 1,769 → 1,401 −368, harness 2,062 → 1,693
+  −369 vs the round-436 baseline, which includes round 436's own un-re-measured big-profile
+  gains) because the larger profiles exercise more narrowing/assignability paths. Small
+  profiles converged at 241–246 (the same ~4 residual families).
 - **Fix A (988ffacd, −2): checkReturnAssignability precise-verdict early return for a target
   carrying an empty-object `{}` union member.** `return ""` vs `{} | undefined` (tsc
   commandLineParser.ts `getOptionValueWithEmptyStrings`): the engine CONFIRMS `string <: {} |
