@@ -89,8 +89,15 @@ commit by the companion NonNull strip).**
   `performIncrementalCompilation` ×4) — a module-file-local function shadowing a same-named
   cross-file EXPORT; the mergeSymbolTable pollution (addAll onto the shared symbol) builds a
   bogus cross-file overload set in getTypeOfFunction, so the wrong sig is picked (Blocker #3 /
-  M3.5 — needs a node→file filter keyed on valueDeclaration's file, deferred: touches the hot
-  getTypeOfFunction and lacks a cheap node→file map); (d) B526 tuple/brand + generic-fn-alias
+  M3.5). ATTEMPTED + REVERTED (round 439): a node→file map (eager `topLevelFnDeclFiles`) +
+  a filter keeping only the valueDeclaration-file's decls in getTypeOfFunction went
+  NET-NEGATIVE (228 → 230) — it did NOT clear the target FPs (the executeCommandLine callee
+  sig resolves via a path the filter didn't reach) AND regressed +2 (checker.ts:7360,
+  es2018.ts:1052), disproving the "function overloads are always same-file" premise
+  (legitimate cross-file function symbols exist — ambient `declare function` merges or the
+  B434 crossFileFuncs interaction). A correct fix must prefer the current file's own
+  declarations at the RESOLUTION site (getTypeOfIdentifier's currentFileLocals path), not a
+  global getTypeOfFunction filter — deferred. (d) B526 tuple/brand + generic-fn-alias
   TS2322 representation gaps.
 
 **Round 438 (2026-07-07) — M3.1/M3.4 narrowing/relation burn-down: FIVE bounded fixes take
