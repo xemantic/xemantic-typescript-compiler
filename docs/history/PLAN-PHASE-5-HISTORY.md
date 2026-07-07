@@ -1,3 +1,75 @@
+**Round 426 (2026-07-06) — M3.4 (absorbs M1.2's TS2563 item): faithful TS2563 — flow-walk
+DEPTH-TRIP semantics with per-container disable, replacing the B399 per-file node-count
+proxy. Self-compile (compiler profile) 1,600 → 1,594 → 1,593 (−7; TS2563 27 → 1 → 0,
+TS2454 0 → 20 — pre-existing walker FPs the proxy's blanket per-file filter had masked,
+now honestly visible; all else byte-identical by-code); suite 9,276 → 9,282 (+6 local,
+0 regressions); 2 fix commits (4d23738f + db69fe59). (The implementing session was OOM-killed
+mid-verification with the work complete-but-uncommitted; this session verified, measured,
+landed it, and root-caused + fixed the one residual trip.)**
+- **Mechanics (4d23738f):** tsc reports TS2563 ONLY when a flow walk recurses 2000 deep
+  (checker.ts `getTypeAtFlowNode` `flowDepth === 2000` → `flowAnalysisDisabled` +
+  `reportFlowControlError(reference)` at the containing function-or-module block +
+  errorType for that container's flow queries thereafter — so TS2454 is suppressed per
+  CONTAINER, tsc's OR-rule). All three flow walkers (`narrowTypeFromFlow` + the
+  FollowLoopEntry mirror + `isAssignedAtFlow` — the last rewritten ITERATIVE with the
+  round-413 accounting: linear pass-through antecedents free, only branch-join /
+  condition / loop-entry recursion consumes depth) set `flowDepthTripped` at the trip;
+  every depth-0 entry (11 sites) routes through `flowWalkWithTripCheck(reference)` —
+  pre-checks `flowDisabledRanges` (disabled → conservative default WITHOUT walking),
+  one-shot TS2563 per container via the flow graph's new `containerStarts` (innermost
+  containing function-like body block, else the file); the end-of-init TS2454 filter is
+  per-container-RANGE (was per-file `cfaTooLargeFiles`, deleted). The dedicated
+  `evolvingArrayWalkTrips` init walk supplies the depth consumer for the corpus pin
+  (largeControlFlowGraph: auto-typed `const data = []` + 10k top-level `data[0] = 0`
+  writes, one level per relevant mutation; after the first trip the container is
+  disabled, so the whole file costs ONE 2000-step walk). Our OWN budgets (visit budget,
+  global re-entry depth, cycle bail) still truncate SILENTLY — only the per-walk depth
+  limit is tsc's TS2563 semantic.
+- **The measured trade (by-code diff, everything else byte-identical):** −26
+  by-construction TS2563 proxies; +20 TS2454 = pre-existing definite-assignment FPs on
+  the giant files the per-file filter had blanket-suppressed. Triage (next bounded
+  burn-down bucket, three shapes): (a) DOMINANT ×~16 — cross-closure reads of an outer
+  `let` (`let sourceStack: Type[];` in the outer fn, `(sourceStack ??= []).push(…)`
+  inside a NESTED function — checker.ts inferFromTypes/serializer, tsc's
+  used-before-assigned check applies only within the declaration's own control-flow
+  container; captured reads assume initialized); (b) core.ts:2474 `return lastResult!`
+  — a NON-NULL-ASSERTED read (tsc does not report TS2454 through a `!`); (c)
+  scanner.ts `resultingToken` ×2 — assigned inside a `while (true)` body before every
+  exit, read after `Debug.assert(resultingToken !== undefined)`; our `isAssignedAtFlow`
+  follows only the loop-ENTRY antecedent at FlowLoopLabel (the deliberate back-edge
+  bound), so in-loop assignment evidence is invisible.
+- **Fix 2 (db69fe59): the 27th TS2563 was OURS, not the proxy's — `flowCallMightNarrow`
+  needs the asserts-callee check (tsc `getEffectsSignature`).**
+  diagnosticInformationMap.generated.ts (~2,100 top-level `diag(…,
+  DiagnosticCategory.Error, …)` statements): any walk for a `DiagnosticCategory`
+  reference found EVERY call's args mentioning the path, so the round-413
+  over-approximating gate recursed per call → 2,100 > 2,000 → trip. tsc resolves the
+  callee's effects signature BEFORE deciding (cached per node): a non-assert call is
+  followed in the `while` loop, consuming NO flowDepth. `flowCalleeMayHaveAssertEffects`
+  gives an EXACT verdict for Identifier callees (map-lookup resolution via
+  `resolveFlowCalleeDecl`'s Identifier branch — never types a receiver; same decl +
+  same predicate test `narrowByAssertCall` applies, so iterating past a false is
+  EQUIVALENT, not just safe) and conservative-TRUE for PropertyAccess callees
+  (`Debug.assert(x)`) — resolving those types the RECEIVER (the round-385
+  services-hang hazard), they keep the consume-depth behavior. LESSON: with faithful
+  TS2563, the round-413 "a too-eager gate only costs a depth level" calculus changed —
+  a too-eager CALL gate now manufactures a false TS2563 on any >2000-chain of
+  path-mentioning non-assert calls.
+- **Local tests (CfaTooLargeBailTest 2 → 8):** deep branch chain trips exactly ONCE +
+  suppresses the container's TS2454; per-container disable (a sibling function's TS2454
+  SURVIVES a trip — the per-file proxy killed it); straight-line 3000-assignment chain
+  does NOT trip; evolving-array 3000-write chain trips once at the first statement
+  (+ 100-write control) — the largeControlFlowGraph pin the JS-emit-only corpus test
+  never asserted; 2,500 non-assert calls mentioning the reference do NOT trip (426b,
+  with the TS2339 control still firing); 2,500 asserts-callee calls DO trip exactly
+  once (the too-lax-gate landmine control).
+- **Perf watch (M5) — 426b is a WIN, not a cost:** bench self-time 150.9 s (round 425,
+  dirty) → 149.4 s (426) → **126.6 s (426b, −15.3%)**. The asserts-callee gate doesn't
+  just fix the false trip — every path-mentioning NON-assert call used to break the
+  fast-forward loop into recursion (+ a narrowByAssertCall resolution at each), and
+  tsc's sources are saturated with calls that mention whatever reference is being
+  walked; now those iterate for free.
+
 **Round 425 (2026-07-06) — M3.4/M1.12: the TS2339 never-cluster ROOT CAUSES + eight more
 narrowing slices. Self-compile (compiler profile) 1,662 → 1,634 → 1,628 → 1,608 → 1,607 →
 1,603 → 1,600 (−62; TS2339 68 → 6, never×21 → 2); EVERY step's by-site diff strictly

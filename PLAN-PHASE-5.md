@@ -39,6 +39,89 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
+**Round 436 (2026-07-07) — M3.1/M3.2/M3.4 burn-down, SEVEN more bounded fixes: compiler
+profile 373 → 294 (−79, −21.2%; TS2322 184 → 158, TS2345 79 → 47, TS2769 30 → 9) + the
+round-436 full-dashboard baseline at the round-435 end state. Suite 9,419 → 9,444
+(+25 local, 0 regressions); 7 fix commits (2938d681, d0155b68, a10aa528, b5250f25,
+39160e43, 4419d333, b80ab634) + `--listAll` chain printing (f70e4fa6); every step's
+by-site diff strictly removals.**
+- **Baseline (all 8 profiles at 182b5877, wall 27–41 s):** compiler 373 / tsc-cli 375 /
+  jsTyping 371 / deprecatedCompat 372 / typingsInstallerCore 380 / services 1,476 /
+  server 1,769 / harness 2,062 — every profile shrank from the round-435 fixes
+  (services −127, server −125, harness −131); throughput ~7,000 LOC/s across the board.
+- **Fix 1 (2938d681, −14): TP-carrying callback-return params of a generic callee skip
+  the fn-return mismatch** (M3.2) — `forEachEntry<K, V, U>(map, cb: (v, k) => U |
+  undefined)` with a boolean-returning callback: tsc infers U from the callback's own
+  return; `allowFuncReturnMismatch` already skipped a BARE-TP param return, now any
+  TP-CONTAINING one (generic callee only). The forEachEntry/firstDefinedIterator/
+  forEach/forEachKey family across 5 files.
+- **Fix 2 (d0155b68, −17): destructured LOCALS shadow outer bindings in the call-types
+  walker** (M3.1) — `const { version, major } = parsePartial(text)` (semver.ts) /
+  `const { sourceFile, start, length } = getDiagnosticSpanForCallNode(node)`
+  (checker.ts): the binding names lived in NO local map, so bare-identifier args fell
+  through to the merged globals and resolved tsc's imported `version: string` /
+  `function length(…)`. Registered into the round-429 `currentParamBindingNames` side
+  set (anyType, suppression-only) + INHERITED currentLocalTypes entries overridden (the
+  file-level `const version = "5.0"` literal recording is consulted before the side
+  set). Also cleared 8 TS2769 + 4 TS2345 in the transformers — the same shadow.
+- **Fix 3 (a10aa528, −7): a literal return whose annotation union syntactically
+  contains it is legal.** DISCOVERY: the engine relation PASSES a literal return
+  against a literal-containing union but does NOT early-return for non-nullish sources
+  — control falls to the STRING fallback, which re-widens the literal ('boolean' /
+  'string') → tsc parser.ts's `return false;` vs `JSDocTypeTag | … | false` ×4, AND the
+  completely UNPINNED basic shape `function f(): "a" | "b" { return "a"; }` (fails via
+  harness and CLI — no corpus test covers it). `returnUnionSyntacticallyContainsLiteral`
+  decides before either path (inline union or direct alias body; FP-proof). CLAUDE.md
+  gotcha added for the fall-through trap.
+- **Fix 4 (b5250f25, −6): explicit-type-arg calls select the MATCHING generic overload,
+  constraint-filtered** — parser.ts `createMissingNode<Identifier>(kind,
+  /*reportAtCurrentPosition*/ true, msg)` must select the 2nd overload (the 1st pins
+  the literal `false`); the namespace container is load-bearing for the repro (the
+  round-429 "mini-repro does not reproduce" residue). **The suite gate caught the
+  unfiltered first cut** regressing typeArgumentConstraintResolution1 — tsc
+  applicability filters by TYPE-ARG CONSTRAINT first (`foo1<Date>("")` disqualifies the
+  `T extends Number` overload; the arg failure reports against the `T extends Date`
+  one). Selection: constraint-satisfying candidates (implTypeArgConstraintsSatisfied,
+  fallback all) → first args-matching (allArgumentsMatch on the padded contextual
+  instantiation) → first candidate.
+- **Fix 5 (39160e43, −13): the four overload arg helpers mirror the optional-param
+  union-arg rule + skip foreign-TP args** — tsc program.ts's UNION-RECEIVER method
+  calls (`(Program | T).getOptionsDiagnostics(cancellationToken)` — the synthesized
+  overload pair failed BOTH ways on `CancellationToken | undefined` vs the optional
+  param, TS2769 ×6) + `visitNode(…)` results leaking `TOut | TIn & undefined` into
+  overload args. Shared `overloadArgSkippable` = `unionArgOkForOptionalParam` (round
+  429c) || foreign-TP-carrying arg.
+- **Fix 6 (4419d333, −3): switch-case narrowing of a BARE string subject** (M3.4) —
+  `narrowBySwitchClause`'s direct path bailed on non-union subjects; semver.ts's
+  `switch (operator) { case "<": case ">=": createComparator(operator, v) }` narrows
+  to the clause range's literal union (all-literals-of-base gate); the call-arg
+  consumer accepts bare-string/number identifiers in the relation-gated refinement
+  branch.
+- **Fix 7 (b80ab634, −19): guard-gated ternary return arms narrow + the all-leaves-
+  verified early return** (M3.4) — `return isNamedTupleMember(m) || isParameter(m) ?
+  m : undefined` (utilities.ts family): arms narrow via getNarrowedTypeForReference
+  (relation-gated), and `checkConditionalReturnBranches` returns a TRI-STATE (0
+  unverified / 1 all-leaves-verified / 2 emitted) so a fully-verified ternary skips
+  the aggregated whole-union re-check that FP'd at the return keyword; bailing leaves
+  keep the aggregated coverage. −19 across utilities/checker/factory/transformers.
+- **Tooling (f70e4fa6): `--listAll` prints elaboration chains** (indented `|`-prefixed
+  sub-lines, never matching the `error TS` grep) — the TS2769 triage was unactionable
+  without them; chains directly identified fix 5's two mechanisms.
+- **META:** (1) the fix-3 discovery generalizes: a shape can fail via BOTH harness and
+  CLI with zero corpus coverage — when a dashboard FP looks "too basic", test the
+  minimal shape through the harness before assuming corpus protection. (2) Two commit-
+  split dances (revert-hunk → gate → commit → re-apply) kept same-file fixes cleanly
+  bisectable. (3) The background-suite `| grep` pipeline intermittently returns empty/
+  exit-1 — XMLs are the ground truth.
+- **Residual triage (next-agent), 294 = TS2322×158 (top buckets now ≤4: `number |
+  undefined`→number ×4 M3.4, ModuleSpecifierResult fresh-prop ×4, `__String` branded
+  ×3, TransformerFactory generic alias ×3, B526 tuple/brand shapes ×~10, long tail),
+  TS2345×47 (`Node`→never exhaustiveness ×3, NodeArray<Node>→SourceFile ×3,
+  Expression→Identifier narrowing ×3, `K`→string own-TP ×2, System→
+  IncrementalCompilationOptions ×2), TS2591×43 env-legit (needs real @types/node),
+  TS2769×9 (findAncestor predicate-overload returns — M3.2 B136-adjacent,
+  moduleNameResolver `unknown` narrowing ×3), TS2339×7, TS2454×4, TS2362×4.**
+
 **Round 435 (2026-07-07) — M3.1/M3.2 burn-down at post-perf-arc iteration speed: SEVEN
 bounded fixes take the compiler profile 482 → 373 (−109, −22.6%; TS2322 276 → 184,
 TS7006 11 → 1, TS2345 86 → 79) + the first full-dashboard bench baseline. Suite
@@ -524,78 +607,6 @@ regressions); 1 fix commit (7b2e3807).**
   consecutive runs trended 149 → 127 → 112 s); treat the M5 single-run baseline as
   ~110–150 s until an iterations run.
 
-**Round 426 (2026-07-06) — M3.4 (absorbs M1.2's TS2563 item): faithful TS2563 — flow-walk
-DEPTH-TRIP semantics with per-container disable, replacing the B399 per-file node-count
-proxy. Self-compile (compiler profile) 1,600 → 1,594 → 1,593 (−7; TS2563 27 → 1 → 0,
-TS2454 0 → 20 — pre-existing walker FPs the proxy's blanket per-file filter had masked,
-now honestly visible; all else byte-identical by-code); suite 9,276 → 9,282 (+6 local,
-0 regressions); 2 fix commits (4d23738f + db69fe59). (The implementing session was OOM-killed
-mid-verification with the work complete-but-uncommitted; this session verified, measured,
-landed it, and root-caused + fixed the one residual trip.)**
-- **Mechanics (4d23738f):** tsc reports TS2563 ONLY when a flow walk recurses 2000 deep
-  (checker.ts `getTypeAtFlowNode` `flowDepth === 2000` → `flowAnalysisDisabled` +
-  `reportFlowControlError(reference)` at the containing function-or-module block +
-  errorType for that container's flow queries thereafter — so TS2454 is suppressed per
-  CONTAINER, tsc's OR-rule). All three flow walkers (`narrowTypeFromFlow` + the
-  FollowLoopEntry mirror + `isAssignedAtFlow` — the last rewritten ITERATIVE with the
-  round-413 accounting: linear pass-through antecedents free, only branch-join /
-  condition / loop-entry recursion consumes depth) set `flowDepthTripped` at the trip;
-  every depth-0 entry (11 sites) routes through `flowWalkWithTripCheck(reference)` —
-  pre-checks `flowDisabledRanges` (disabled → conservative default WITHOUT walking),
-  one-shot TS2563 per container via the flow graph's new `containerStarts` (innermost
-  containing function-like body block, else the file); the end-of-init TS2454 filter is
-  per-container-RANGE (was per-file `cfaTooLargeFiles`, deleted). The dedicated
-  `evolvingArrayWalkTrips` init walk supplies the depth consumer for the corpus pin
-  (largeControlFlowGraph: auto-typed `const data = []` + 10k top-level `data[0] = 0`
-  writes, one level per relevant mutation; after the first trip the container is
-  disabled, so the whole file costs ONE 2000-step walk). Our OWN budgets (visit budget,
-  global re-entry depth, cycle bail) still truncate SILENTLY — only the per-walk depth
-  limit is tsc's TS2563 semantic.
-- **The measured trade (by-code diff, everything else byte-identical):** −26
-  by-construction TS2563 proxies; +20 TS2454 = pre-existing definite-assignment FPs on
-  the giant files the per-file filter had blanket-suppressed. Triage (next bounded
-  burn-down bucket, three shapes): (a) DOMINANT ×~16 — cross-closure reads of an outer
-  `let` (`let sourceStack: Type[];` in the outer fn, `(sourceStack ??= []).push(…)`
-  inside a NESTED function — checker.ts inferFromTypes/serializer, tsc's
-  used-before-assigned check applies only within the declaration's own control-flow
-  container; captured reads assume initialized); (b) core.ts:2474 `return lastResult!`
-  — a NON-NULL-ASSERTED read (tsc does not report TS2454 through a `!`); (c)
-  scanner.ts `resultingToken` ×2 — assigned inside a `while (true)` body before every
-  exit, read after `Debug.assert(resultingToken !== undefined)`; our `isAssignedAtFlow`
-  follows only the loop-ENTRY antecedent at FlowLoopLabel (the deliberate back-edge
-  bound), so in-loop assignment evidence is invisible.
-- **Fix 2 (db69fe59): the 27th TS2563 was OURS, not the proxy's — `flowCallMightNarrow`
-  needs the asserts-callee check (tsc `getEffectsSignature`).**
-  diagnosticInformationMap.generated.ts (~2,100 top-level `diag(…,
-  DiagnosticCategory.Error, …)` statements): any walk for a `DiagnosticCategory`
-  reference found EVERY call's args mentioning the path, so the round-413
-  over-approximating gate recursed per call → 2,100 > 2,000 → trip. tsc resolves the
-  callee's effects signature BEFORE deciding (cached per node): a non-assert call is
-  followed in the `while` loop, consuming NO flowDepth. `flowCalleeMayHaveAssertEffects`
-  gives an EXACT verdict for Identifier callees (map-lookup resolution via
-  `resolveFlowCalleeDecl`'s Identifier branch — never types a receiver; same decl +
-  same predicate test `narrowByAssertCall` applies, so iterating past a false is
-  EQUIVALENT, not just safe) and conservative-TRUE for PropertyAccess callees
-  (`Debug.assert(x)`) — resolving those types the RECEIVER (the round-385
-  services-hang hazard), they keep the consume-depth behavior. LESSON: with faithful
-  TS2563, the round-413 "a too-eager gate only costs a depth level" calculus changed —
-  a too-eager CALL gate now manufactures a false TS2563 on any >2000-chain of
-  path-mentioning non-assert calls.
-- **Local tests (CfaTooLargeBailTest 2 → 8):** deep branch chain trips exactly ONCE +
-  suppresses the container's TS2454; per-container disable (a sibling function's TS2454
-  SURVIVES a trip — the per-file proxy killed it); straight-line 3000-assignment chain
-  does NOT trip; evolving-array 3000-write chain trips once at the first statement
-  (+ 100-write control) — the largeControlFlowGraph pin the JS-emit-only corpus test
-  never asserted; 2,500 non-assert calls mentioning the reference do NOT trip (426b,
-  with the TS2339 control still firing); 2,500 asserts-callee calls DO trip exactly
-  once (the too-lax-gate landmine control).
-- **Perf watch (M5) — 426b is a WIN, not a cost:** bench self-time 150.9 s (round 425,
-  dirty) → 149.4 s (426) → **126.6 s (426b, −15.3%)**. The asserts-callee gate doesn't
-  just fix the false trip — every path-mentioning NON-assert call used to break the
-  fast-forward loop into recursion (+ a narrowByAssertCall resolution at each), and
-  tsc's sources are saturated with calls that mention whatever reference is being
-  walked; now those iterate for free.
-
 **M2 — Real-lib migration (staged; decompose further at start)**
 
 - [x] **M2.1 Lib graph loader.** COMPLETE (round 390, all four sub-steps below). Parse + bind the real `typescript-repo/src/lib/*.d.ts`
@@ -750,11 +761,16 @@ each item still decomposes into a multi-session campaign — read PLAN-PHASE-4.m
   TP-literal-constraint args, the union-decomposition-transparent relation
   re-entry gate (resolves the NodeArray-covariance family ×23 — NOT a heritage
   gap after all), bare-`new` contextual instantiation, the foreign-TP gate on
-  assignment TARGETS (visitor family), nullish alias-union returns. Next:
-  contextual-RETURN inference
+  assignment TARGETS (visitor family), nullish alias-union returns.
+  **CONTINUED (round 436, part of −79: 373 → 294):** TP-carrying
+  callback-return param skip (the forEachEntry ×14 family), destructured-
+  LOCAL shadowing (semver/checker + 12 transformer sites), literal-return
+  syntactic union membership, explicit-type-arg overload selection
+  (constraint-filtered), overload-helper optional-param/foreign-TP arg
+  rules. Next: contextual-RETURN inference
   (`parseTokenNode<T>()`, no args — M3.2), `Iterable<T>`-style single-arg
-  generic anchors, `.map`-family callback-return inference (M3.2 — also the
-  TS2345 `(…)=>boolean` vs `(…)=>U | undefined` forEachEntry family ×7).
+  generic anchors, `.map`-family callback-return inference (M3.2 — also
+  findAncestor predicate-overload returns, the residual TS2769 core).
 - [ ] **M3.2 Contextual typing engine** (parameters, returns, object/array literals,
   generic-context propagation — replaces `applyContextualParamTypesForArrow`-era
   special cases). **STARTED (round 431, −295 of the session's −385): the TS7006
@@ -772,7 +788,14 @@ each item still decomposes into a multi-session campaign — read PLAN-PHASE-4.m
 - [ ] **M3.3 Mapped / conditional / template-literal / indexed-access evaluation**
   (replace the AST-shape walkers; delete the superseded dedicated walkers and pins).
 - [ ] **M3.4 Flow narrowing unified into identifier typing** (`getTypeOfIdentifier`
-  consults the flow graph; retire the per-consumer narrowing carve-outs). **Absorbed
+  consults the flow graph; retire the per-consumer narrowing carve-outs).
+  **CONTINUED (round 436f/g): switch-case narrowing of a BARE string subject
+  (semver operator family) + guard-gated ternary RETURN arms (the
+  checkConditionalReturnBranches tri-state — utilities.ts's
+  memberIfLabeledElementDeclaration family, −22 combined). Residual M3.4
+  slices: `number | undefined`→number reassignment flow ×4,
+  Expression→Identifier narrowed args ×3, `Node`→never exhaustiveness ×3,
+  moduleNameResolver `unknown` typeof-narrowing ×3.** **Absorbed
   from M1.2 (round 386): faithful TS2563 walk-exhaustion emission — DONE (round 426,
   earlier than predicted: the existing narrowing/definite-assignment walkers ARE deep
   flow walks, so trip detection didn't need full flow-based identifier typing).**
