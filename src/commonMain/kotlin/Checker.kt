@@ -110550,7 +110550,37 @@ interface DataView {
                         else -> typeToString(derivedType)
                     }
 
-                    val assignable = checkTypeRelatedTo(derivedType, basePropType, assignableRelation)
+                    // An OPTIONAL base member `p?: T` has effective type `T | undefined`
+                    // under strictNullChecks — a derived override declared `p: T | undefined`
+                    // (non-optional but nullish-including) is legal (services.ts's
+                    // SourceFileObject.checkJsDirective vs SourceFile.checkJsDirective?, the
+                    // SymbolTrackerImpl.moduleResolverHost family). The raw base declared type
+                    // drops the optional `| undefined`, so widen it FOR THE RELATION only
+                    // (display stays on the un-widened `basePropType`). widenOptionalTargetPropType
+                    // is source-nullish-gated, so a non-nullish derived override still compares
+                    // against the bare base type — suppression-only, no genuine mismatch is hidden.
+                    val basePropTypeForRel = widenOptionalTargetPropType(basePropType, basePropSymbol, derivedType)
+                    // A derived override typed as a CONSTRAINED type parameter (`kind: TKind`
+                    // where `TKind extends SyntaxKind`) overriding a base member typed as the
+                    // constraint (`kind: SyntaxKind`) is a valid override — every `TKind` value
+                    // is a `SyntaxKind` (services.ts NodeObject<TKind>/TokenOrIdentifierObject<TKind>).
+                    // Our relation engine has no general `TypeParam-source → non-TypeParam-target`
+                    // rule (the 39+-regression gate), so bail per-site via the constraint, mirroring
+                    // tsc's `getApparentType(TKind)` relation. FP-safe: a value of the constrained
+                    // TP is always assignable to its constraint.
+                    val assignable = checkTypeRelatedTo(derivedType, basePropTypeForRel, assignableRelation) ||
+                        (derivedType is Type.TypeParam && basePropTypeForRel !is Type.TypeParam &&
+                            derivedType.constraint?.let {
+                                checkTypeRelatedTo(it, basePropTypeForRel, assignableRelation)
+                            } == true) ||
+                        // tsc compares METHOD signatures with BIVARIANT parameters (only
+                        // function-type PROPERTIES get strict contravariance). A base method
+                        // `getWidth(sourceFile?: SourceFileLike)` overridden by
+                        // `getWidth(sourceFile?: SourceFile)` (SourceFile <: SourceFileLike) is
+                        // legal bivariantly (services.ts NodeObject/TokenOrIdentifierObject).
+                        // Retry per-site with bivariant params when both members are methods.
+                        (member is MethodDeclaration && baseDecl is MethodDeclaration &&
+                            methodSignaturesBivariantlyRelated(derivedType, basePropTypeForRel))
 
                     if (!assignable || isPredicateMismatch || isGenericConstraintMismatch) {
                         val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
@@ -129778,10 +129808,34 @@ interface DataView {
     }
 
     /** Compare two individual signatures. */
+    /**
+     * Method-member override relation with BIVARIANT parameters. Both types must be
+     * function-shaped (single call signature). Used only by the class-property-override
+     * check (TS2416) — tsc compares METHOD signatures bivariantly. Returns true iff every
+     * source call sig relates to some target call sig with bivariant params.
+     */
+    private fun methodSignaturesBivariantlyRelated(derivedType: Type, baseType: Type): Boolean {
+        if (derivedType !is Type.Object || baseType !is Type.Object) return false
+        val dSigs = derivedType.callSignatures ?: return false
+        val bSigs = baseType.callSignatures ?: return false
+        if (dSigs.isEmpty() || bSigs.isEmpty()) return false
+        // Every target (base) signature must be matched by some source (derived) signature.
+        return bSigs.all { bSig ->
+            dSigs.any { dSig -> signatureRelatedTo(dSig, bSig, assignableRelation, bivariantParams = true) }
+        }
+    }
+
     private fun signatureRelatedTo(
         source: Signature,
         target: Signature,
         relation: Relation,
+        // When true, parameter positions are compared BIVARIANTLY (source param
+        // assignable to target param OR vice versa) instead of strictly
+        // contravariantly. tsc compares METHOD signatures bivariantly (only
+        // function-type PROPERTIES get strict contravariance under
+        // strictFunctionTypes). Used by the class-property-override check for
+        // method members. Default false — every other caller keeps strict variance.
+        bivariantParams: Boolean = false,
     ): Boolean {
         // Source requires more args than target provides → incompatible
         val sourceParams = source.parameters
@@ -129885,8 +129939,10 @@ interface DataView {
                 }
                 continue
             }
-            // Standard contravariant: target param must be assignable to source param
-            if (!checkTypeRelatedTo(targetParamType, sourceParamType, relation)) return false
+            // Standard contravariant: target param must be assignable to source param.
+            // Under bivariantParams (method members), also accept the covariant direction.
+            if (!checkTypeRelatedTo(targetParamType, sourceParamType, relation) &&
+                !(bivariantParams && checkTypeRelatedTo(sourceParamType, targetParamType, relation))) return false
         }
         // B63.29 continuation: Source has MORE params than target.size — target's rest
         // covers them. For each excess source position, check target rest element type
