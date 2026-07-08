@@ -115521,22 +115521,60 @@ interface DataView {
         // module-file-local VARIABLE leak (moduleFileLocalVarNames).
         if ((objectExpr is Identifier || objectExpr is PropertyAccessExpression) && conflatedTypeAliasFiles.isNotEmpty()) {
             val recvType = try { getTypeOfExpression(objectExpr) } catch (_: Exception) { null }
-            if (recvType is Type.Union) {
-                // Match the union's alias display; also try with nullish members stripped so an
-                // OPTIONAL leaked-alias receiver (`sourceFile?: SourceFileLike`, guarded by `&&`)
-                // whose display is "SourceFileLike | undefined" still resolves to the conflated name.
-                val displays = buildList {
-                    try { typeToString(recvType)?.let { add(it) } } catch (_: Exception) {}
+            // Blocker #3 (round 444): the ALIAS'S-OWN-FILE complement of the round-443 bail below. In
+            // the file that DECLARES `type X = A | B | …`, the receiver may resolve — via the merged
+            // last-wins pick (Interface+TypeAlias do not merge) — to a SIBLING file's unrelated
+            // `interface X` instead of the local union (fixAddMissingMember.ts's `type Info =
+            // TypeLikeDeclarationInfo | EnumInfo | …` vs 12 sibling codefix files' `interface Info`;
+            // `info.kind`/`info.parentDeclaration`/`info.token` then FP'd TS2339). When the receiver's
+            // conflated name `X` is declared as a `type X` in THIS file, resolve the file-local union
+            // and bail if the property exists on ANY constituent (tsc reaches such members after a
+            // `.kind`-discriminant narrowing our conflated receiver can't model). FP-safe: a property
+            // on NO constituent still fires.
+            fun aliasOwnFileHasProp(display: String): Boolean {
+                val aliasFiles = conflatedTypeAliasFiles[display] ?: return false
+                if (fileName !in aliasFiles) return false
+                // Resolve the union from the `type X` declaration's body NODE directly — NOT via
+                // getDeclaredTypeOfSymbol on the file-local symbol, whose `declarations` list is
+                // polluted by mergeSymbolTable with the sibling `interface X`es (so it would resolve
+                // to an Interface, not the Union). The body node is unambiguously the alias union.
+                val aliasDecl = fileResults[fileName]?.locals?.get(display)
+                    ?.declarations?.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration ?: return false
+                val aliasType = try { getTypeFromTypeNode(aliasDecl.type) } catch (_: Exception) { return false }
+                return aliasType is Type.Union && aliasType.types.any { m -> getPropertyOfType(m, propName) != null }
+            }
+            when (recvType) {
+                is Type.Union -> {
+                    // Match the union's alias display; also try with nullish members stripped so an
+                    // OPTIONAL leaked-alias receiver (`sourceFile?: SourceFileLike`, guarded by `&&`)
+                    // whose display is "SourceFileLike | undefined" still resolves to the conflated name.
                     val nonNullish = recvType.types.filter {
                         !it.flags.hasAny(TypeFlags.Undefined or TypeFlags.Null or TypeFlags.Void)
                     }
-                    if (nonNullish.size in 2 until recvType.types.size) {
-                        try { typeToString(getUnionType(nonNullish))?.let { add(it) } } catch (_: Exception) {}
+                    val displays = buildList {
+                        try { typeToString(recvType)?.let { add(it) } } catch (_: Exception) {}
+                        if (nonNullish.size in 2 until recvType.types.size) {
+                            try { typeToString(getUnionType(nonNullish))?.let { add(it) } } catch (_: Exception) {}
+                        }
                     }
+                    // Round 443 direction: a leaked type-ALIAS union displayed as its name, accessed
+                    // in a NON-alias file (where tsc resolves the name to the interface).
+                    for (display in displays) {
+                        val aliasFiles = conflatedTypeAliasFiles[display]
+                        if (aliasFiles != null && fileName !in aliasFiles) return
+                    }
+                    // Round 444 direction: a SINGLE non-nullish member is the wrong `interface X`
+                    // (`Info | undefined`), accessed in the `type X`-declaring file.
+                    val soleDisplay = nonNullish.singleOrNull()?.let { try { typeToString(it) } catch (_: Exception) { null } }
+                    if (soleDisplay != null && aliasOwnFileHasProp(soleDisplay)) return
                 }
-                for (display in displays) {
-                    val aliasFiles = conflatedTypeAliasFiles[display]
-                    if (aliasFiles != null && fileName !in aliasFiles) return
+                null -> {}
+                // A non-union receiver whose display is the conflated name — the wrong sibling
+                // `interface X` (a Type.Interface OR a Type.Reference to it) won the merge and is the
+                // receiver's whole (already nullish-narrowed) type.
+                else -> {
+                    val display = try { typeToString(recvType) } catch (_: Exception) { null }
+                    if (display != null && aliasOwnFileHasProp(display)) return
                 }
             }
         }

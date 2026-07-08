@@ -68,6 +68,67 @@ class ConflatedTypeAliasLeakTest {
     }
 
     @Test
+    fun `in the type-alias's own file a union-member access does not FP when the wrong interface won the merge - no TS2339`() {
+        // Round 444 (alias's-own-file complement): `type Info = A | B` (a.ts) conflates with
+        // `interface Info` (b.ts, c.ts). A sibling `interface Info` can win the merge, so a receiver
+        // typed `Info` in a.ts resolves to that interface and a union-member access (`.kind` — present
+        // on both A and B) FP'd TS2339. The alias's-own-file bail resolves the file-local union.
+        compile(
+            """
+            // @strict: true
+
+            // @Filename: a.ts
+            interface A { kind: 1; label: string; }
+            interface B { kind: 2; label: string; }
+            type Info = A | B;
+            declare function getInfo(): Info | undefined;
+            export function run(): string {
+                const info = getInfo();
+                if (info === undefined) return "";
+                return info.kind + info.label;
+            }
+
+            // @Filename: b.ts
+            export interface Info { other: string; }
+
+            // @Filename: c.ts
+            export interface Info { another: number; }
+            """,
+            primary = "a.ts",
+        ) should {
+            have(none { it.code == 2339 })
+        }
+    }
+
+    @Test
+    fun `a member on NO union constituent still fires in the alias's own file - TS2339`() {
+        // Firewall for the round-444 bail: it resolves the file-local union and only suppresses when
+        // the property is on SOME constituent. A genuinely-missing name still fires.
+        compile(
+            """
+            // @strict: true
+
+            // @Filename: a.ts
+            interface A { kind: 1; }
+            interface B { kind: 2; }
+            type Info = A | B;
+            declare function getInfo(): Info | undefined;
+            export function run(): void {
+                const info = getInfo();
+                if (info === undefined) return;
+                const bad = info.nonexistent;
+            }
+
+            // @Filename: b.ts
+            export interface Info { other: string; }
+            """,
+            primary = "a.ts",
+        ) should {
+            have(any { it.code == 2339 && it.message.contains("nonexistent") })
+        }
+    }
+
+    @Test
     fun `a plain interface member access is unaffected - no TS2339`() {
         // Sanity: the added early-bail must not disturb ordinary interface member resolution.
         diagnose(
