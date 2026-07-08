@@ -78596,6 +78596,12 @@ interface DataView {
             // forEachChild(node, cb)` typing as `T | undefined`) — same foreign-TP
             // rule as checkReturnAssignability's gate.
             if (typeContainsForeignTypeParam(branchType, typeParams)) { allVerified = false; continue }
+            // Round 446: an array-literal ARM matching a variadic-tuple member of the
+            // target (`cond ? [Diagnostics.X, a] : [Diagnostics.Y]` vs
+            // DiagnosticOrDiagnosticAndArguments) — same array→tuple-union rule as the
+            // direct-return path in checkReturnAssignability.
+            if (inner is ArrayLiteralExpression &&
+                arrayLiteralSatisfiesTupleTarget(inner, targetNode, currentFileLocals)) continue
             // Round 436g (M3.4): a guard-gated ternary ARM narrows by the condition —
             // `return isNamedTupleMember(m) || isParameter(m) ? m : undefined` types
             // the true arm as the guard targets (tsc utilities.ts's
@@ -86550,6 +86556,15 @@ interface DataView {
         }
         // Try new Type-based engine when returnTypeNode is available
         if (returnTypeNode != null) {
+            // Round 446: `return [Diagnostics.X, arg, …]` where the target is a variadic
+            // tuple, or a union/alias containing one (`DiagnosticOrDiagnosticAndArguments =
+            // DiagnosticMessage | [message: DiagnosticMessage, ...args: (string|number)[]]`).
+            // The relation engine skips array→tuple and the resolved tuple collapses its
+            // rest slot, so both the engine and the string fallback FP'd. AST-match the
+            // array literal against the tuple; suppression-only.
+            (expr?.let { unwrapParens(it) } as? ArrayLiteralExpression)?.let { arr ->
+                if (arrayLiteralSatisfiesTupleTarget(arr, returnTypeNode, currentFileLocals)) return
+            }
             val targetType = getTypeFromTypeNode(returnTypeNode)
             // B69.1: Per-branch conditional return-expression checking. Must run
             // BEFORE the standard aggregated check so per-branch positions land
@@ -129106,6 +129121,135 @@ interface DataView {
             }
         }
         return true
+    }
+
+    /**
+     * Round 446: does array literal [arr] (no spread) satisfy a VARIADIC-TUPLE member of
+     * the target type NODE [targetNode] — a tuple, or a union/alias containing one?
+     *
+     * The canonical shape is tsc's `DiagnosticOrDiagnosticAndArguments = DiagnosticMessage
+     * | DiagnosticAndArguments` where `DiagnosticAndArguments = [message: DiagnosticMessage,
+     * ...args: (string | number)[]]`. The relation engine SKIPS array→tuple (Checker.kt
+     * ~64488), and `getTupleType` COLLAPSES the rest slot (losing minLength/rest-element
+     * separation, per the CLAUDE.md gotcha), so a resolved-Type comparison cannot decide
+     * this. Match against the AST TupleType instead: verify every array element is
+     * assignable to its tuple slot. Suppression-only — returns true ONLY on a confident
+     * match (permissive on unresolvable/complex slots, matching
+     * [checkArrayLiteralElementsAgainstTuple]'s skip-non-simple-slot behavior), so a
+     * genuine arity/type mismatch keeps failing through the normal path.
+     */
+    private fun arrayLiteralSatisfiesTupleTarget(
+        arr: ArrayLiteralExpression, targetNode: TypeNode?, locals: SymbolTable?,
+    ): Boolean {
+        if (arr.elements.any { it is SpreadElement }) return false
+        val tuple = findVariadicTupleInTarget(targetNode, locals) ?: return false
+        return arrayLiteralMatchesVariadicTuple(arr, tuple, locals)
+    }
+
+    /** Walk a target type NODE (tuple / union / parenthesized / alias reference) to the
+     *  first TupleType it contains. Depth-capped; alias bodies resolved AST-side. */
+    private fun findVariadicTupleInTarget(node: TypeNode?, locals: SymbolTable?, depth: Int = 0): TupleType? {
+        if (node == null || depth > 5) return null
+        return when (node) {
+            is TupleType -> node
+            is ParenthesizedType -> findVariadicTupleInTarget(node.type, locals, depth + 1)
+            is UnionType -> node.types.firstNotNullOfOrNull { findVariadicTupleInTarget(it, locals, depth + 1) }
+            is TypeReference -> {
+                if (!node.typeArguments.isNullOrEmpty()) return null
+                val n = (node.typeName as? Identifier)?.text ?: return null
+                // An IMPORTED alias's file-local symbol carries only the ImportSpecifier —
+                // fall through to the merged globals where the declaring file's
+                // TypeAliasDeclaration lives (mirrors aliasUnionContainsNullishKeyword).
+                val alias = (locals?.get(n)?.declarations?.firstOrNull { it is TypeAliasDeclaration }
+                    ?: globals[n]?.declarations?.firstOrNull { it is TypeAliasDeclaration })
+                    as? TypeAliasDeclaration ?: return null
+                if (!alias.typeParameters.isNullOrEmpty()) return null
+                findVariadicTupleInTarget(alias.type, locals, depth + 1)
+            }
+            else -> null
+        }
+    }
+
+    /** Element type NODE of an array/ReadonlyArray/alias-of-array type node (for a tuple
+     *  rest slot `...args: T[]`). Null when it isn't array-shaped or can't be resolved. */
+    private fun arrayElementTypeNode(node: TypeNode, locals: SymbolTable?, depth: Int = 0): TypeNode? {
+        if (depth > 5) return null
+        return when (node) {
+            is ArrayType -> node.elementType
+            is ParenthesizedType -> arrayElementTypeNode(node.type, locals, depth + 1)
+            is TypeReference -> {
+                val n = (node.typeName as? Identifier)?.text ?: return null
+                if (n == "Array" || n == "ReadonlyArray") node.typeArguments?.singleOrNull()
+                else {
+                    if (!node.typeArguments.isNullOrEmpty()) return null
+                    val alias = (locals?.get(n)?.declarations?.firstOrNull { it is TypeAliasDeclaration }
+                        ?: globals[n]?.declarations?.firstOrNull { it is TypeAliasDeclaration })
+                        as? TypeAliasDeclaration ?: return null
+                    if (!alias.typeParameters.isNullOrEmpty()) return null
+                    arrayElementTypeNode(alias.type, locals, depth + 1)
+                }
+            }
+            else -> null
+        }
+    }
+
+    /** Match array literal [arr] against a single-rest variadic tuple. Parses the tuple
+     *  into a fixed prefix / one optional rest element / fixed suffix (bailing on >1 rest
+     *  or optional/labelled-optional members) and verifies each array element against its
+     *  slot. Permissive on unresolvable slots (returns true), so it only ever SUPPRESSES a
+     *  confident match. */
+    private fun arrayLiteralMatchesVariadicTuple(
+        arr: ArrayLiteralExpression, tuple: TupleType, locals: SymbolTable?,
+    ): Boolean {
+        val before = mutableListOf<TypeNode>()
+        val after = mutableListOf<TypeNode>()
+        var restElemNode: TypeNode? = null
+        var hasRest = false
+        for (el in tuple.elements) {
+            val isRest: Boolean
+            val isOptional: Boolean
+            val typeNode: TypeNode
+            when (el) {
+                is NamedTupleMember -> { isRest = el.dotDotDotToken; isOptional = el.questionToken; typeNode = el.type }
+                is RestType -> { isRest = true; isOptional = false; typeNode = el.type }
+                is OptionalType -> { isRest = false; isOptional = true; typeNode = el.type }
+                else -> { isRest = false; isOptional = false; typeNode = el }
+            }
+            when {
+                isRest -> {
+                    if (hasRest) return false // >1 rest — bail
+                    hasRest = true
+                    restElemNode = arrayElementTypeNode(typeNode, locals) // may be null → permissive rest
+                }
+                isOptional -> return false // optional fixed element — bail (rare for these shapes)
+                else -> if (!hasRest) before.add(typeNode) else after.add(typeNode)
+            }
+        }
+        val n = arr.elements.size
+        val minLen = before.size + after.size
+        if (n < minLen) return false // too few — a real mismatch, don't suppress
+        if (!hasRest && n != minLen) return false // no rest and wrong arity
+        for (i in before.indices) if (!elementAssignableToSlot(arr.elements[i], before[i], locals)) return false
+        for (j in after.indices) if (!elementAssignableToSlot(arr.elements[n - after.size + j], after[j], locals)) return false
+        if (hasRest && restElemNode != null) {
+            for (i in before.size until (n - after.size)) {
+                if (!elementAssignableToSlot(arr.elements[i], restElemNode, locals)) return false
+            }
+        }
+        return true
+    }
+
+    /** Is array-element expression [elem] assignable to tuple-slot type node [slotNode]?
+     *  Permissive (true) when either side is any/error/unresolvable or the engine can't
+     *  decide — the caller only uses this to SUPPRESS a confident match. */
+    private fun elementAssignableToSlot(elem: Expression, slotNode: TypeNode, locals: SymbolTable?): Boolean {
+        if (elem is SpreadElement) return false
+        val slotType = getTypeFromTypeNodeSafe(slotNode) ?: return true
+        if (slotType === anyType || slotType === errorType || slotType is Type.TypeParam) return true
+        val elemType = getTypeOfExpression(elem)
+        if (elemType === anyType || elemType === errorType) return true
+        if (!canUseTypeEngine(elemType, slotType)) return true
+        return checkTypeRelatedTo(elemType, slotType, assignableRelation)
     }
 
     private fun checkArrayLiteralElementsAgainstTuple(
