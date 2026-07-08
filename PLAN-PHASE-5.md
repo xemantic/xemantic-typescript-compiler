@@ -40,11 +40,11 @@ which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the b
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
 **Round 445 (2026-07-08) — TS2416/TS2430 property-override variance families + the cross-file
-interface-merge conflation (Blocker #3) + spread-of-any object returns: FOUR bounded fixes, all
-suppression-only. Dashboard: compiler 190 → 188 (−2), services 439 → 404 (−35), server 669 → 628
-(−41), harness 919 → 873 (−46). Suite 9,523 → 9,538 (+15 local across 4 test files, 0 regressions);
-4 fix commits (76b7f2cc/a81d6300/c31f3577/e93fc974); services diffed via `--listAll` as strictly
-by-position removals.**
+interface-merge conflation (Blocker #3) + spread-of-any object returns + the module-var-leak TS2322
+extension: FIVE bounded fixes, all suppression-only. Dashboard: compiler 190 → 188 (−2), services
+439 → 399 (−40), server 669 → 623 (−46), harness 919 → 868 (−51). Suite 9,523 → 9,540 (+17 local
+across 5 test files, 0 regressions); 5 fix commits (76b7f2cc/a81d6300/c31f3577/e93fc974/6db81b97);
+services diffed via `--listAll` as strictly by-position removals.**
 - **Baseline @ HEAD (round 444): services 439, compiler 190.** Bucketed the services `--listAll`
   and found TS2416×11 + TS2430×3 (bounded override-variance families) and the `Info | undefined`
   TS2322×11 (the biggest single conflation family). The `readonly ApplicableRefactorInfo[]` ×15 and
@@ -94,13 +94,24 @@ by-position removals.**
   literal has an any/error-typed spread (after the per-property drills, so a genuine explicit-prop mismatch
   still fires). Root fix is `inferReturnTypeFromBody`'s object-literal branch (documented suite-wide blast
   radius — deferred); this suppression is FP-safe (spread-of-any is genuinely `any` in tsc).
-- **NEXT (services @ 404, all deeper):** the union-of-2-interfaces conflation (`ExportInfo |
-  RefactorErrorInfo | undefined` ×3 — the single-interface gate needs a union-member extension), the
-  module-var-leak in ASSIGNMENT position (checker.ts `NavigationBarNode → Node` TS2322 ×4 — round-442
-  `moduleFileLocalVarNames` covers TS2339/TS2345 but not TS2322), and the two deep-M3 relation
-  families `readonly ApplicableRefactorInfo[]` ×15 / `DiagnosticOrDiagnosticAndArguments` ×16. Extend
-  the conflation bail to var-decl/argument positions only when a non-return conflation FP surfaces
-  (none observed this round).
+- **Fix 5 (6db81b97, module-var-leak TS2322 extension; services 404→399 −5, server 628→623, harness
+  873→868): a `return <leakedVar>` / `<ident> = <leakedVar>`.** Round 442's `moduleFileLocalVarNames`
+  bail (a top-level `let`/`var`/`const` in a MODULE file leaks into `globals` and shadows every OTHER
+  file's same-named block/destructured local, unbound per B83.5) covered TS2339/TS2345. A block/
+  destructured `parent` (whose initializer our checker can't infer locally — a destructuring or `&&`)
+  leaks to navigationBar.ts's `let parent: NavigationBarNode`, so `return parent` (inferFromUsage.ts) /
+  `lastParent = parent` (checker.ts) FP'd TS2322. `checkReturnAssignability` bails a returned
+  bare-identifier leaked var; `checkAssignmentExpression` bails an `<ident> = <leaked ident>` (gated to
+  a simple Identifier target). Both skip UNLESS it IS this file's own top-level binding. Compiler
+  unchanged (navigationBar.ts is not in the compiler-only program). Local test confirms the destructured
+  leak FPs without the fix (both `return parent` and `lastParent = parent`) and is clean with it.
+- **NEXT (services @ 399, all deeper):** the union-of-2-interfaces conflation (`ExportInfo |
+  RefactorErrorInfo | undefined` ×3 — the single-interface gate needs a union-member extension AND the
+  `||`-nested object literal path), the two deep-M3 relation families `readonly ApplicableRefactorInfo[]`
+  ×15 (object-literal-array vs interface-array with union/`.concat` element types) /
+  `DiagnosticOrDiagnosticAndArguments` ×16 (array→tuple-union relation, plus a duplicate-chain-line
+  display bug + an `'array'` fallback display). Extend the conflation / spread bails to var-decl/argument
+  positions only when a non-return FP surfaces (none observed this round).
 
 **Round 444 (2026-07-08) — cross-file heritage / `this`-guard receiver narrowing / alias-own-file
 conflation / module-var-leak property chain (Blocker #3): FOUR bounded fixes, all suppression-only.
