@@ -86464,6 +86464,114 @@ interface DataView {
         return false
     }
 
+    /**
+     * Blocker #3 (round 447): the EXCESS-property (TS2353) complement of round 444's
+     * alias's-own-file member-access bail (checkMemberAccessMissing). In the file that DECLARES
+     * `type X = A | B | …`, a returned/assigned object literal is excess-checked against `X`,
+     * which — via the last-wins Interface+TypeAlias merge — resolves to a SIBLING file's
+     * unrelated `interface X` (fixAddMissingMember.ts's `type Info = TypeLikeDeclarationInfo |
+     * EnumInfo | …` vs 12 sibling codefix files' `interface Info`), so `return { kind:
+     * InfoKind.Enum, … }` FP'd TS2353 "'kind' does not exist in type 'Info'". True when THIS
+     * file declares `type X`, the target names the conflated `X` (via the annotation
+     * [returnTypeNode] or the resolved [targetType] display), and [obj] SATISFIES some
+     * constituent of the TRUE file-local alias union (resolved from the alias declaration's BODY
+     * node — the merged symbol's `declarations` list is polluted by mergeSymbolTable). FP-safe:
+     * an object matching NO constituent still fires. Suppression-only.
+     */
+    private fun objectLiteralMatchesConflatedFileLocalTypeAlias(
+        obj: ObjectLiteralExpression, targetType: Type, returnTypeNode: TypeNode?, fileName: String,
+    ): Boolean {
+        if (conflatedTypeAliasFiles.isEmpty()) return false
+        if (obj.properties.any { it is SpreadAssignment }) return false
+        val names = LinkedHashSet<String>()
+        fun collectFromNode(n: TypeNode?) {
+            when (n) {
+                is TypeReference -> (n.typeName as? Identifier)?.text?.let { names.add(it) }
+                is UnionType -> n.types.forEach { collectFromNode(it) }
+                is ParenthesizedType -> collectFromNode(n.type)
+                else -> {}
+            }
+        }
+        collectFromNode(returnTypeNode)
+        try { names.add(typeToString(targetType)) } catch (_: Exception) {}
+        if (targetType is Type.Union) {
+            for (m in targetType.types) {
+                if (m.flags.hasAny(TypeFlags.Undefined or TypeFlags.Null or TypeFlags.Void)) continue
+                try { names.add(typeToString(m)) } catch (_: Exception) {}
+            }
+        }
+        val stmts = binderResults.firstOrNull { it.sourceFile.fileName == fileName }
+            ?.sourceFile?.statements ?: return false
+        for (name in names) {
+            val aliasFiles = conflatedTypeAliasFiles[name] ?: continue
+            if (fileName !in aliasFiles) continue
+            // Read the alias declaration from THIS file's own statements (the merged symbol's
+            // `declarations` are polluted). Its body union member interfaces are ALSO conflated
+            // across files (e.g. `FunctionInfo`/`SignatureInfo` gain sibling files' members), so
+            // the satisfaction check must read each member interface AST-side too, NOT via the
+            // resolved (merged) constituent type.
+            val aliasDecl = stmts.filterIsInstance<TypeAliasDeclaration>()
+                .firstOrNull { it.name.text == name } ?: continue
+            val memberNames = LinkedHashSet<String>()
+            fun collectAliasMembers(t: TypeNode?) {
+                when (t) {
+                    is UnionType -> t.types.forEach { collectAliasMembers(it) }
+                    is ParenthesizedType -> collectAliasMembers(t.type)
+                    is TypeReference -> (t.typeName as? Identifier)?.text?.let { memberNames.add(it) }
+                    else -> {}
+                }
+            }
+            collectAliasMembers(aliasDecl.type)
+            if (memberNames.any { objectLiteralExactlySatisfiesFileLocalInterface(obj, it, fileName) }) return true
+        }
+        return false
+    }
+
+    /**
+     * Like [objectLiteralSatisfiesFileLocalInterface] but ALSO enforces no EXCESS property
+     * (that helper only checks required-provided). Reads the file-local `interface [ifaceName]`
+     * members AST-side — pollution-proof, since the merged symbol's members fold sibling files'
+     * same-named interfaces. Returns false (conservative → keeps firing) for a heritage-bearing
+     * interface, a non-plain object property, or when the interface isn't found in [fileName].
+     * An index signature disables the excess rule (any key allowed).
+     */
+    private fun objectLiteralExactlySatisfiesFileLocalInterface(
+        obj: ObjectLiteralExpression, ifaceName: String, fileName: String,
+    ): Boolean {
+        val stmts = binderResults.firstOrNull { it.sourceFile.fileName == fileName }
+            ?.sourceFile?.statements ?: return false
+        val iface = stmts.filterIsInstance<InterfaceDeclaration>()
+            .firstOrNull { it.name.text == ifaceName } ?: return false
+        if (!iface.heritageClauses.isNullOrEmpty()) return false
+        val memberOptional = HashMap<String, Boolean>()
+        var hasIndexSig = false
+        for (m in iface.members) {
+            when (m) {
+                is PropertyDeclaration -> (m.name as? Identifier)?.text?.let { memberOptional[it] = m.questionToken }
+                is MethodDeclaration -> (m.name as? Identifier)?.text?.let { memberOptional[it] = m.questionToken }
+                is IndexSignature -> hasIndexSig = true
+                else -> {}
+            }
+        }
+        val provided = HashSet<String>()
+        for (p in obj.properties) {
+            val nm = when (p) {
+                is PropertyAssignment -> (p.name as? Identifier)?.text
+                is ShorthandPropertyAssignment -> p.name.text
+                is MethodDeclaration -> (p.name as? Identifier)?.text
+                is GetAccessor -> (p.name as? Identifier)?.text
+                is SetAccessor -> (p.name as? Identifier)?.text
+                else -> null
+            } ?: return false
+            provided.add(nm)
+            if (!hasIndexSig && nm !in memberOptional) return false // excess
+        }
+        for ((nm, optional) in memberOptional) {
+            if (!optional && nm !in provided) return false
+        }
+        return true
+    }
+
     private fun checkReturnAssignability(
         stmt: ReturnStatement, returnType: String, source: String, fileName: String,
         varTypes: Map<String, String>, typeParams: Set<String>,
@@ -86689,6 +86797,16 @@ interface DataView {
                 targetType.target.symbol?.name == "Promise")
                 (targetType.resolvedTypeArguments?.singleOrNull() ?: targetType)
             else targetType
+            // Blocker #3 (round 447): a `return { … }` whose target is a CONFLATED type-alias `X`
+            // (`type X` this file declares, merged last-wins with sibling files' `interface X`)
+            // that the object literal satisfies via the TRUE file-local alias union. Must run
+            // BEFORE the excess check below (which would FP TS2353 against the wrong sibling
+            // `interface X`). Suppression-only; FP-safe (an object matching no constituent still
+            // fires). The TYPE-ALIAS analog of the round-445 conflated-INTERFACE bail further down.
+            if (expr is ObjectLiteralExpression &&
+                objectLiteralMatchesConflatedFileLocalTypeAlias(expr, targetType, returnTypeNode, fileName)) {
+                return
+            }
             if (expr is ObjectLiteralExpression && canUseTypeEngine(sourceType, effObjTarget)) {
                 val displayTarget = if (effObjTarget === targetType)
                     excessPropDisplayTarget(targetType, returnTypeNode) else typeToString(effObjTarget)
