@@ -84484,6 +84484,21 @@ interface DataView {
         val typeAnnotation = decl.type
         if (typeAnnotation == null) {
             val init = decl.initializer ?: return
+            // Blocker #3 (round 448): a local ALIASED directly from a leaked module var
+            // (`const invocation = parent`, where navigationBar.ts's module-level
+            // `let parent: NavigationBarNode` leaked into globals per round 442 and the
+            // block/destructured `parent` is unbound per B83.5) inherits the wrong
+            // cross-file type — which then poisons downstream uses our bare-Identifier
+            // moduleFileLocalVarNames bails can't reach (e.g. a nested object-literal value
+            // `{ node: invocation }` in a returned object, signatureHelp.ts's ArgumentListInfo).
+            // Infer anyType so the alias resolves permissively. Gated: the initializer is a
+            // bare leaked-module-var Identifier that is NOT this file's own binding AND is NOT
+            // already a properly-typed param/local (currentLocalTypes) — so a genuine same-named
+            // param `(parent: Node)` keeps propagating its real type. Suppression-only (anyType).
+            if (init is Identifier && init.text in moduleFileLocalVarNames &&
+                currentFileLocals?.get(init.text) == null && currentLocalTypes[init.text] == null) {
+                return
+            }
             val inferred = getTypeOfExpression(init)
             // 16.0: Allow void from explicit super()/CallExpression — for super(...)
             // returning void, we want `x = 5` later to fire TS2322. Filter void
