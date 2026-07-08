@@ -39,12 +39,13 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
-**Round 447 (2026-07-08) — cross-file conflation emission-site bails, ARG + RETURN sides (Blocker #3):
-FOUR bounded suppression-only fixes across three commits. Compiler UNCHANGED (185 — these are
-services-side conflations/leaks), but they generalize uniformly: services 373 → 347 (−26), server
-589 → 563 (−26), harness 806 → 780 (−26). Suite 9,558 → 9,568 (+10 local across 4 test files, 0
-regressions); commits d4065ea6 / 72b441c7 / da8c64a9; every services diff strictly by-position removals
-via the `--listAll` `comm` loop.**
+**Round 447 (2026-07-08) — cross-file conflation emission-site bails (ARG + RETURN sides, Blocker #3)
++ nested-arrow inner-local shadowing: FIVE fixes across four commits (four suppression bails + one
+general shadowing correctness fix). Compiler UNCHANGED (185 — services-side conflations/leaks/shadowing),
+but they generalize uniformly: services 373 → 339 (−34), server 589 → 555 (−34), harness 806 → 772
+(−34). Suite 9,558 → 9,571 (+13 local across 5 test files, 0 regressions); commits d4065ea6 /
+72b441c7 / da8c64a9 / ebc83ea3; every services diff strictly by-position removals via the `--listAll`
+`comm` loop.**
 - **Baseline @ HEAD (round 446): services 373.** Bucketed the `--listAll`: the round-446 NEXT pointer's
   `ApplicableRefactorInfo` ×9 root-caused to a stray-`U[]` type-param-scope pollution that does NOT
   reproduce minimally (deferred — needs a whole-program probe); the clean bounded veins were the
@@ -79,12 +80,22 @@ via the `--listAll` `comm` loop.**
   used `.singleOrNull()` (single non-nullish member). Extended to `X | Err | undefined` unions — the
   object is assignable iff it EXACTLY satisfies some conflated file-local interface member (tsc's refactor
   `getInfo(): FunctionInfo | RefactorErrorInfo | undefined` shape).
-- **NEXT (services @ 347):** `ExportInfoMap` TS2339 ×8 (completions.ts — a destructuring assignment
-  `({ exportInfo } = result)` re-types the declared `exportInfo`; does NOT reproduce minimally →
-  whole-program probe needed); the `X | RefactorErrorInfo | undefined` object-vs-union RELATION gap for
+- **Fix 5 (ebc83ea3, nested-arrow/fn-expr inner-local SHADOWING; TS2339 `ExportInfoMap` ×8; services
+  347 → 339): a GENERAL correctness fix, not a suppression.** The round-444 NEXT pointer mislabelled this
+  as a "destructuring-reassignment" gap; the real cause (found by reproducing it minimally — it DOES
+  reproduce, unlike the leaks) is a nested-scope shadowing gap: `checkPropertyAccessInExpr`'s
+  ArrowFunction / FunctionExpression branches recorded PARAM types on entering the body but never called
+  `applyBodyLocalShadowing` for the body's own local declarations. completions.ts has an outer
+  `const exportInfo: ExportInfoMap` and, in a nested `forEachEntry` callback, an inner
+  `let exportInfo: SymbolExportInfo | FutureSymbolExportInfo` — reads of `exportInfo.exportKind`/`.symbol`/
+  `.moduleFileName` resolved to the OUTER `ExportInfoMap` → FP TS2339. Both branches now call
+  `applyBodyLocalShadowing(body.statements, paramNames)` for a Block body and save/restore
+  `currentShadowedNames` (so the inner shadow does not leak outward). Suite-verified 0 corpus regressions
+  from the broader walker change; 3 local tests pin the shadow + both firewall directions.
+- **NEXT (services @ 339):** the `X | RefactorErrorInfo | undefined` object-vs-union RELATION gap for
   SINGLE-FILE interfaces (InliningInfo/OptionalChainInfo/ExportInfo — genuine M3, not conflation); the
-  `ApplicableRefactorInfo` stray-`U[]` type-param-scope pollution ×9 (deferred, needs a probe); deep
-  fragmented TS2322.
+  `ApplicableRefactorInfo` stray-`U[]` type-param-scope pollution ×9 (deferred, needs a whole-program
+  probe — does not reproduce minimally); deep fragmented TS2322.
 
 **Round 446 (2026-07-08) — array-literal→variadic-tuple-in-union returns + nested Array<X>-in-Array<Y>
 covariant relation + destructured-param method arity: THREE bounded fixes. Dashboard: compiler 188 →
