@@ -124797,6 +124797,15 @@ interface DataView {
             if (i >= params.size) break // extra args handled by TS2554
             // Skip spread arguments — complex handling
             if (arg is SpreadElement) continue
+            // Blocker #3 (round 442): a bare-Identifier arg that is EXCLUSIVELY a
+            // module-file-local variable leaked into `globals` is not this file's own
+            // binding — its resolved type (navigationBar.ts's `NavigationBarNode` for a
+            // local `parent`) is a cross-file conflation, so the standard relation
+            // FP-fires TS2345 against the real param (153 on the services profile). Skip
+            // it UNLESS it IS the current file's own top-level var. Mirrors the
+            // checkMemberAccessMissing bail; suppression-only (only affects TS2345 here).
+            if (arg is Identifier && arg.text in moduleFileLocalVarNames &&
+                currentFileLocals?.get(arg.text) == null) continue
             val paramType = getTypeOfSymbol(params[i])
             if (paramType === anyType || paramType === errorType) continue
             // 16.0b: contextual typing — set param type as context so arrow/function

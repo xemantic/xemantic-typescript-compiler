@@ -71,6 +71,33 @@ class ModuleFileLocalVarLeakTest {
     }
 
     @Test
+    fun `another file's local passed as an argument - no TS2345`() {
+        // a.ts (module) has `let parent: NavNode`; b.ts passes its own local `parent` (of an
+        // unrelated but compatible shape) as an arg. Without the fix, `parent` leaks to NavNode
+        // and FP-fires TS2345 against the real param (the companion arg-check bail).
+        compile(
+            """
+            // @strict: true
+
+            // @Filename: a.ts
+            export interface NavNode { node: number; parent: NavNode | undefined; }
+            let parent: NavNode = undefined!;
+            export function walk(): number { return parent.node; }
+
+            // @Filename: b.ts
+            interface Expr { left: number; }
+            declare function takesExpr(e: Expr): void;
+            export function useExpr(e: Expr): void {
+                const parent = e;
+                takesExpr(parent);
+            }
+            """
+        ) should {
+            have(none { it.code == 2345 })
+        }
+    }
+
+    @Test
     fun `the declaring file's own module var still reports missing members - TS2339`() {
         // Negative control: within a.ts, `parent` IS the file's own top-level var (currentFileLocals),
         // so a genuinely-missing member must still fire TS2339 (the bail is gated to OTHER files).
