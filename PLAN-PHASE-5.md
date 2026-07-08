@@ -39,11 +39,12 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
-**Round 440 (2026-07-07) — optional-widen / operator-typing / cross-file-callee burn-down:
-FOUR bounded fixes take the compiler profile 228 → 210 (−18, −7.9%; TS2345 39 → 29,
-TS2322 108 → 101). Suite 9,465 → 9,479 (+14 local across 4 test files, 0 regressions);
-4 fix commits (a6155814, 390b5a6a, f812e017, 19d19d08). Every step diffed via the
-`--listAll` loop as strictly removals except fix B's documented position shift.**
+**Round 440 (2026-07-07) — optional-widen / operator-typing / cross-file-callee /
+generic-inference burn-down: FIVE bounded fixes take the compiler profile 228 → 205
+(−23, −10.1%; TS2345 39 → 28, TS2322 108 → 100, TS2362 4 → 2, TS2365 1 → 0). Suite
+9,465 → 9,482 (+17 local across 5 test files, 0 regressions); 5 fix commits (a6155814,
+390b5a6a, f812e017, 19d19d08, 67366445). Every step diffed via the `--listAll` loop as
+strictly removals except fix B's documented position shift.**
 - **Baseline @ HEAD (round 439, 228 FPs).** Reused the materialize-once `--listAll` per-fix
   `comm -13` diff loop (~30 s CLI run per fix).
 - **Fix A (a6155814, −4): fresh object-literal OPTIONAL prop accepts `T | undefined` (M3.4).**
@@ -83,22 +84,32 @@ TS2322 108 → 101). Suite 9,465 → 9,479 (+14 local across 4 test files, 0 reg
   `createSourceFile` picking the namespace-internal one over the file-level export (a first cut
   with file-local BEFORE the namespace lookup FP'd parser.ts:1819 — caught by the `--listAll`
   diff). builder.ts:1686, executeCommandLine 688/727/860/1048, classFields:3359, tsbuildPublic:1531.
-- **GENERALIZATION (full-dashboard bench, `--no-emit`, vs the round-438 recorded baseline — so
-  the deltas fold in round 439 + round 440): compiler 244 → 210 (−34), services 1,116 → 1,038
-  (−78), server 1,401 → 1,322 (−79), harness 1,693 → 1,611 (−82); ~6,900 LOC/s, RSS ~1 GB.**
-  The cross-file-callee fixes (C/D) generalize strongly — collisions and destructured-factory
-  locals are pervasive in the larger profiles.
-- **META / next-agent residual (210):** TS2322×101 (deep M3 — the NodeBuilderContext whole-object
+- **Fix E (67366445, −5): generic inference binds T=any from an any-typed arg at a return-type
+  site (M3.1).** `tryInferSingleTypeParamFromArgs` soft-skips an any-typed arg at a return-type
+  site (round 428, so concrete args elsewhere drive inference) — but when a TP's ONLY candidate
+  position is an any arg the candidate list ended up empty → inference returned null → the caller
+  used the un-inferred bare `T` as the call's return. `Debug.checkDefined<T>(value: T | null |
+  undefined): T` called with a destructured-const local `pos` (typed anyType via
+  currentParamBindingNames — the round-C mechanism, so this was UNMASKED once pos stopped
+  resolving to a cross-file function) returned `T`, FP'ing against `createFileDiagnostic`'s
+  `number` param + a downstream `T - pos` arithmetic. Now binds T=any when candidates are empty
+  ONLY because of a soft-skipped any arg (per-TP `tpSawAnyArg` flag, return-type site only) —
+  tsc-faithful (`id<T>(x:T)` with an any arg infers T=any), strictly suppression-only (an any
+  return is assignable to any consumer). The arg-vs-param check site keeps the hard bail.
+  programDiagnostics 198/199, checker.ts:25098, utilities.ts:6314, watch.ts:627.
+- **GENERALIZATION (full-dashboard bench at the round-440 END state, `--no-emit`, vs the
+  round-438 recorded baseline — so the deltas fold in round 439 + round 440): compiler 244 → 205
+  (−39), services 1,116 → 1,037 (−79), server 1,401 → 1,321 (−80), harness 1,693 → 1,610 (−83);
+  ~6,900 LOC/s, RSS ~1 GB.** The cross-file-callee (C/D) + generic-inference (E) fixes generalize
+  strongly — collisions, destructured-factory locals, and any-arg generic calls are pervasive.
+- **META / next-agent residual (205):** TS2322×100 (deep M3 — the NodeBuilderContext whole-object
   relation, `__String` cross-file branded-string returns, B526 tuple/brand, `Declaration |
   undefined`/`Node → HasModifiers` narrow-DOWN blocked by incomplete relation-heritage);
-  TS2591×43 env-legit (offline, no @types/node); TS2345×29 — NEXT bounded bucket is the
-  NAMESPACE-MEMBER generic inference gap: `Debug.checkDefined(pos)` returns the UNINFERRED `T`
-  instead of `number` (programDiagnostics 198/199 pair — TS2345 + a paired TS2362 `T - pos`;
-  `Debug.checkDefined<T>(value: T | undefined): T` is pervasive in tsc, so this likely
-  generalizes), plus the constraint-chain `TKind extends JSDocSyntaxKind extends SyntaxKind`
-  TS2344 (parser.ts 2531/2545), the MappingsDecoder excess-of-inherited-generic-base member
-  (TS2353 `next` from `extends IterableIterator<Mapping>`), and wrong-callee singles
-  (moduleSpecifiers:929, utilities:6325, program:832).
+  TS2591×43 env-legit (offline, no @types/node); TS2345×28 — NEXT bounded buckets: the
+  constraint-chain `TKind extends JSDocSyntaxKind extends SyntaxKind` TS2344 (parser.ts
+  2531/2545), the MappingsDecoder excess-of-inherited-generic-base member (TS2353 `next` from
+  `extends IterableIterator<Mapping>`), and wrong-callee singles (moduleSpecifiers:929,
+  utilities:6325, program:832). TS2339×7.
 
 **Round 439 (2026-07-07) — predicate-overload / arg-narrow-DOWN burn-down: THREE bounded
 fixes take the compiler profile 244 → 228 (−16, −6.6%; TS2769 9 → 1). Suite 9,458 → 9,465
@@ -759,10 +770,12 @@ each item still decomposes into a multi-session campaign — read PLAN-PHASE-4.m
   FunctionDeclaration over merged globals (Blocker #3 name collisions:
   getBuildInfo/createWatchStatusReporter/... picked the wrong file's fn),
   function-only-gated so a type-only `import { Date }` interface doesn't
-  shadow the global Date VALUE. Generalizes: services −78 / server −79 /
-  harness −82.** NEXT: NAMESPACE-MEMBER generic inference —
-  `Debug.checkDefined<T>(value: T | undefined): T` returns the UNINFERRED T
-  (programDiagnostics 198/199 TS2345 + paired TS2362; pervasive in tsc).
+  shadow the global Date VALUE; PLUS tryInferSingleTypeParamFromArgs binds T=any when a TP's
+  only candidate is an any-typed arg at a return-type site (`Debug.checkDefined(pos)` where
+  `pos` is a destructured-const anyType local returned the un-inferred T — UNMASKED once fix C
+  stopped pos resolving to a cross-file function). Generalizes (folding round 439): services
+  −79 / server −80 / harness −83.** NEXT: the constraint-chain `TKind extends JSDocSyntaxKind
+  extends SyntaxKind` TS2344, and the deeper whole-object / branded-string TS2322 relation gaps.
 - [ ] **M3.2 Contextual typing engine** (parameters, returns, object/array literals,
   generic-context propagation — replaces `applyContextualParamTypesForArrow`-era
   special cases). **STARTED (round 431, −295 of the session's −385): the TS7006
