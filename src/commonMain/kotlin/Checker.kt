@@ -97302,6 +97302,13 @@ interface DataView {
         // anchor TPs into un-annotated lambda param-type inference.
         for (tp in tps) {
             val candidates = mutableListOf<Candidate>()
+            // Round 440: track whether this TP had an `any`-typed arg soft-skipped at a
+            // return-type site — if it's the ONLY reason the candidate list ends up empty,
+            // bind T = any (tsc infers `T = any` from an `any` arg) instead of leaving the
+            // return's TP un-inferred (`Debug.checkDefined(pos)` where `pos` is a
+            // destructured-const local typed anyType → `T | null | undefined` yields no
+            // candidate → return `T`, FP'ing against a concrete consumer).
+            var tpSawAnyArg = false
             // Pass 1: anchor positions (non-callback).
             for (i in params.indices) {
                 if (i >= args.size) break
@@ -97442,7 +97449,7 @@ interface DataView {
                         // The arg-vs-param call site keeps the hard bail (its consumers
                         // CHECK args against the substituted params — a wrong partial
                         // inference there could emit, not just suppress).
-                        if (forReturnType && rawArgType === anyType) continue
+                        if (forReturnType && rawArgType === anyType) { tpSawAnyArg = true; continue }
                         return null
                     }
                     if (rawArgType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) {
@@ -97897,7 +97904,13 @@ interface DataView {
                     candidates.addAll(newCandidates)
                 }
             }
-            if (candidates.isEmpty()) return null
+            if (candidates.isEmpty()) {
+                // Round 440: an `any` arg in a T-position at a return-type site binds T = any
+                // (tsc-faithful; strictly suppression-only — an `any` return is assignable to
+                // any consumer, so it can only REMOVE the un-inferred-TP FP, never add one).
+                if (forReturnType && tpSawAnyArg) { mapperPairs.add(tp to anyType); continue }
+                return null
+            }
 
             // 17.37: an empty-array literal's `never` candidate is a "wildcard" —
             // it conveys no element-type information, so ignore it in inference
