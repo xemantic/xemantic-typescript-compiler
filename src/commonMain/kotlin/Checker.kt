@@ -115613,9 +115613,21 @@ interface DataView {
         // `NavigationBarNode` → FP TS2339 on `Node`/`BinaryExpression` members (279 on the
         // services profile). Skip UNLESS `parent` IS the current file's own top-level var
         // (currentFileLocals — then the receiver genuinely IS that module's variable).
-        if (objectExpr is Identifier && !isThisAccess &&
-            objectExpr.text in moduleFileLocalVarNames &&
-            currentFileLocals?.get(objectExpr.text) == null) return
+        // Round 444: the leaked-var ROOT may be behind a PROPERTY-ACCESS chain — `parent.parent.kind`
+        // (checker.ts): the bare `parent` leaks NavigationBarNode, so `parent.parent` resolves to
+        // NavigationBarNode (it has a `.parent`) and `.kind` FP's on the CHAIN, not the bare identifier.
+        // Walk to the root identifier; if IT is a leaked module var, the whole chain is resolved through
+        // the wrong leaked type, so every member access on it is a false positive → bail (FP-safe: a
+        // cross-file leaked module var access is TS2304 in real tsc, never TS2339). The bare-Identifier
+        // case (root == receiver) is the same walk with zero steps.
+        val leakRoot = run {
+            var e: Expression = objectExpr
+            while (e is PropertyAccessExpression) e = e.expression
+            e as? Identifier
+        }
+        if (leakRoot != null && !isThisAccess && leakRoot.text != "this" &&
+            leakRoot.text in moduleFileLocalVarNames &&
+            currentFileLocals?.get(leakRoot.text) == null) return
 
         // Scope shadowing: a function-local var (currentShadowedNames) shadows an outer
         // binding. The symbol-based branches below resolve the receiver via globals/

@@ -71,6 +71,33 @@ class ModuleFileLocalVarLeakTest {
     }
 
     @Test
+    fun `a property-access chain rooted at the module-var leak does not FP - no TS2339`() {
+        // Round 444: the leaked root can be behind a PROPERTY-ACCESS chain — `parent.parent.kind`
+        // (checker.ts): the bare `parent` leaks NavNode, so `parent.parent` resolves to NavNode
+        // (it has a `.parent`) and `.kind` FP'd on the CHAIN, not the bare identifier. Walk to the
+        // root; if it's a leaked module var, the whole chain is bogus → bail.
+        compile(
+            """
+            // @strict: true
+
+            // @Filename: a.ts
+            export interface NavNode { node: number; parent: NavNode; }
+            let parent: NavNode = undefined!;
+            export function walk(): number { return parent.node; }
+
+            // @Filename: b.ts
+            interface Expr { kind: number; parent: Expr; }
+            export function useExpr(e: Expr): number {
+                const parent = e;
+                return parent.parent.kind;
+            }
+            """
+        ) should {
+            have(none { it.code == 2339 })
+        }
+    }
+
+    @Test
     fun `another file's local passed as an argument - no TS2345`() {
         // a.ts (module) has `let parent: NavNode`; b.ts passes its own local `parent` (of an
         // unrelated but compatible shape) as an arg. Without the fix, `parent` leaks to NavNode
