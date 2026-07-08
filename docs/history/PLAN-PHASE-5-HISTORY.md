@@ -1,3 +1,130 @@
+**Round 430 (2026-07-07) — M3.1: the `append`/`addRange` inference unlocks +
+TP-from-predicate binding. Self-compile (compiler profile) 1,000 → 956 → 936 (−64;
+TS2322 496 → 435, TS2769 32 → 30); suite 9,348 → 9,356 (+8 local, 0 regressions);
+2 fix commits (6a056b95, 83aeceb1).**
+- **Fix 1 (6a056b95, −44 with +6 catalogued): the `T extends {}` constraint killed the
+  whole `append` inference + readonly-array anchors.** Round 428's nullable-union
+  inference worked for UNCONSTRAINED test sigs, but tsc declares `append<T extends
+  {}>` — the candidate constraint check `checkTypeRelatedTo(string, {})` FAILED (an
+  anonymous empty object target had no primitive-source rule; the apparent-type
+  recovery is Type.Interface-gated), so the mapper was null and every `x = append(x,
+  item)` kept the un-instantiated `T[]` return. New relation rule: an EMPTY anonymous
+  object target accepts any non-nullish non-void source. TWO landmines pinned:
+  (a) a `Type.Union` source's own flags carry no nullish bits (documented gotcha) —
+  members checked explicitly so `string | null` still fails; (b) a TYPE-PARAM source
+  is EXCLUDED — genericPrototypeProperty3 pins tsc's `Type 'T' is not assignable to
+  type '{}'` + "might need an `extends {}` constraint" for unconstrained T under
+  strict (the ungated first cut suppressed it; the SUITE GATE caught it — the
+  corpus-as-regression-net working exactly as designed). Companion:
+  `readonly T[]` params/args anchor array-of-tp inference (`Reference(ReadonlyArray,
+  [T])` from getTypeFromTypeOperator; both `isArrayOfTypeParam` and the arg-side
+  element extraction matched only "Array") — `addRange(to: T[] | undefined, from:
+  readonly T[] | undefined)` never inferred. The +6 are precision-exposures of
+  documented M3 residuals where anyType used to hide them (brand-string map keys via
+  callback-return widening, optional-target ternary props, visitor generics,
+  un-inferred `.map` U[], tuple-vs-array B526 ×2) — by-code still strictly shrank.
+- **Fix 2 (83aeceb1, −20 strictly removals): TP-from-PREDICATE binding.**
+  `getFirstJSDocTag<T extends JSDocTag>(node, predicate: (tag: JSDocTag) => tag is
+  T)` called with a NAMED guard (`isJSDocAugmentsTag`) binds T from the guard's own
+  predicate target — the `T | undefined` TS2322 bucket (utilitiesPublic's ~20
+  getJSDoc*Tag wrappers, 41 → 21). The resolved signature ERASES the predicate
+  (TypePredicate resolves to booleanType), so the param gate reads the AST
+  (`predicatePositionTpOf`) and the candidate branch reuses round-424's barrel-aware
+  `predicateTargetTypeOfGuardExpr`, soft-skipping unresolvable/inline guards. The
+  candidate branch runs BEFORE the standard rawArgType path (which would type the
+  guard as a callable object and hard-bail at the named-like gate). Single-sig path
+  only (the multi-sig named-guard gate is untouched — B136's swap keeps firing).
+- **Residual triage (next-agent):** TS2322×435 — `string` ×38 (incl. the ×24
+  interface-override literal props, M3), `T` ×29 (dominated by CONTEXTUAL-RETURN
+  inference: `parseTokenNode<T extends Node>()` has NO args — T comes from the
+  return context, M3.2), `undefined` ×26 (VisitResult family), `T | undefined` ×21
+  residue (non-Array single-arg generic anchors: `firstOrUndefinedIterator(it:
+  Iterable<T>)` — extend the anchor set to same-target single-arg References),
+  `U[]`/`U | undefined` ×31 (`.map`-family callback-return inference, M3.2),
+  visitNodes TOut/TIn ×11 (visitor generics). TS7006×301 (M3.2). TS2345×86:
+  `'true'` vs `'false'` nested-overload selection ×5, string-vs-literal-union ×10,
+  `Node` vs never ×3 (M3.4 exhaustiveness), NodeArray vs SourceFile ×3.
+
+**Round 429 (2026-07-07) — M3.1 histogram burn-down: the TS2345 core falls 261 → 86
+(−67%). Self-compile (compiler profile) 1,186 → 1,156 → 1,135 → 1,027 → 1,000 (−186,
+−15.7%; TS2345 261 → 86, TS2769 36 → 32, TS2322 501 → 496, TS2367 −2); every step's
+by-site diff STRICTLY removals (the one +3 excursion was caught by the diff and gated
+before commit); suite 9,315 → 9,348 (+33 local, 0 regressions); 4 fix commits
+(577b2c54, 5fbb8caf, bc893882, d1e53cbd).**
+- **Fix 1 (577b2c54, −30): call-types pass lexical shadowing — three scope shapes
+  resolved a bare-identifier ARG to the WRONG outer declaration.** (1) A NESTED
+  function's body-local (`let host = node.parent`) shadowing an ENCLOSING fn's param
+  (`createTypeChecker(host: TypeCheckerHost)`): the inherited `currentLocalTypes` entry
+  survived because round 428d's branch is gated entry==null —
+  `applyCallTypesBodyLocalShadowing` pre-scans the body (statement-level, not
+  descending into nested fn-likes) and anyType-overrides colliding local-decl names;
+  same-fn param redeclaration excluded (param wins, pinned). (2) The round-428
+  "PARAM-shadow mini-repro does not reproduce" mystery RESOLVED: the real shape is a
+  DESTRUCTURED param (`{ useCaseSensitiveFileNames }` in sys.ts vs moduleNameResolver's
+  same-named function) — binding names live only in the `currentParamBindingNames` side
+  set, and `getTypeOfIdentifier` fell through to the merged globals; it now returns
+  anyType for side-set names (after `currentLocalTypes`). (3) Arrow/fn-expr params
+  (the walker deliberately doesn't type them) leaked the enclosing binding — those
+  branches now scope the maps and register anyType for own param names. 8 local tests
+  (CallTypesScopeShadowingTest).
+- **Fix 2 (5fbb8caf, −21): embedded String.replace/replaceAll/search/split accept
+  RegExp** (`searchValue: string | RegExp`, replaceValue `any` per the
+  callbacks-are-any doctrine) — tsc regex-replaces pervasively. Corpus byte-identical
+  (no "and N more" shifts). Accepted documented FN: a union-with-interface param is
+  not simple-checkable, so wrong-typed args to these four params no longer error
+  (control pins indexOf still fires).
+- **Fix 3 (bc893882, −129, the big one): three arg-typing rules on the call-arg
+  path.** (a) A `string | undefined` union arg is legal for an OPTIONAL param
+  (`configFileName?: string` — tsc getTypeAtPosition unions undefined under strict);
+  only undefined members stripped (null stays), relation on the stripped type,
+  suppression-only. (b) A non-null-asserted arg (`readFile(p)!`) types as its
+  nullish-stripped union — LOCAL strip (`stripNullishForNonNullArg`), mirroring the
+  round-415 arithmetic rule; the round-407 global-strip revert stands. (c) THE
+  DOMINANT mechanism (~110 sites): an Identifier arg whose NON-union interface type
+  is guard-narrowed DOWN (`isSourceFile(x) && isExternalOrCommonJsModule(x)` — Node
+  → SourceFile) substitutes the refined type, relation-gated — generalizes round
+  428b's `this`-only branch. LANDMINE caught by the by-site diff: `never`-typed
+  params must be EXCLUDED — `assertType<never>(node)` in an exhaustive-switch default
+  needs exhaustiveness narrowing we don't model, and a partial case-union refinement
+  TAKES THE UNION-ARG EMISSION PATH (interface args stay conservatively silent vs
+  never; unions emit) → +3 FPs until gated. No stable local pin exists for the gate
+  (tsc itself errors on the in-file non-exhaustive shape; the exhaustive
+  discriminated-union shape needs M3.4 exhaustiveness) — pinned by the by-site diff.
+  10 local tests (OptionalParamUnionArgTest).
+- **Fix 4 (d1e53cbd, −27): typeof-unknown + string-enum + rest-arg narrowing.**
+  (a) `typeof x === "<primitive>"` narrows a non-union UNKNOWN to the primitive —
+  `narrowByTypeOfGuard`'s non-union flags path returned NEVER for a positive match
+  on unknown (no primitive flags), which the relation-gated consumers rejected
+  (moduleNameResolver `target: unknown` ×10). (b) An all-string-valued enum is
+  assignable to `string` (`isStringEnumObjectType` in `isSimpleTypeRelatedTo`, the
+  round-428b numeric sibling; unevaluated values NOT provable, conservative) —
+  resolves the round-410 DEFERRED `Extension[][]` cluster: cascades to `Extension[]`
+  → `string[]` via same-target covariant element comparison + clears the paired
+  TS2367 no-overlap FPs (×8). (c) The rest-args helper mirrors B469 flow narrowing
+  (`cond ? diag(…, deprecatedEntity) : …` ×5). 10 local tests
+  (UnknownTypeofAndStringEnumArgTest).
+- **META:** two process notes. (1) A mid-bench Checker edit poisoned one bench row
+  (the 429b TSV row's build raced my 429c edits) — recovered via git-stash patch-split
+  and per-commit listalls; batch edits BEFORE launching a suite/bench. (2) The
+  round-428 residual note said "probe the pass's nesting entry with a marker before
+  theorizing" — the actual fix needed no marker: re-reading the real site showed the
+  param was DESTRUCTURED, which the mini-repro had simplified away. Repro fidelity
+  beats instrumentation.
+- **Residual triage (next-agent):** TS2345×86 — `'true'` vs `'false'` ×5 (parser.ts
+  createMissingNode nested OVERLOADS with literal-typed params; the top-level
+  mini-repro does NOT reproduce — the nested/closure context matters, probe needed);
+  `string` vs literal-union ×10 (`"typings"|"types"|…`, pragma names, comparators —
+  likely needs literal-preserving locals or narrowing); `Node` vs `never` ×3 +
+  in-file exhaustive discriminated-union `assertType<never>` (needs M3.4
+  exhaustiveness narrowing — catalogued, our A|B switch repro still fires);
+  `NodeArray<Node>` vs SourceFile ×3, `System` vs IncrementalCompilationOptions ×2,
+  `K` vs string ×2 (keyof-TP). TS2322×496 — `string` vs `string` ×24
+  (interface-override literal props, M3), `T[]` residuals (~40: rest-param sigs,
+  readonly-array params — `addRange(to: T[] | undefined, from: readonly T[] |
+  undefined)`'s TypeOperator param defeats the union-mode detection), SearchResult<T>
+  ×10, `undefined` vs VisitResult ×12. TS7006×301 (M3.2) untouched.**
+
+
 
 **Round 428 (2026-07-06) — M3.1 (first real slice of the TS2322/TS2345 cores): generic
 call-site inference for tsc's `append` idiom + the TS2345 histogram top + the array-literal
