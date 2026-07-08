@@ -39,6 +39,53 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
+**Round 447 (2026-07-08) — cross-file conflation emission-site bails, ARG + RETURN sides (Blocker #3):
+FOUR bounded suppression-only fixes across three commits. Compiler UNCHANGED (185 — these are
+services-side conflations/leaks), but they generalize uniformly: services 373 → 347 (−26), server
+589 → 563 (−26), harness 806 → 780 (−26). Suite 9,558 → 9,568 (+10 local across 4 test files, 0
+regressions); commits d4065ea6 / 72b441c7 / da8c64a9; every services diff strictly by-position removals
+via the `--listAll` `comm` loop.**
+- **Baseline @ HEAD (round 446): services 373.** Bucketed the `--listAll`: the round-446 NEXT pointer's
+  `ApplicableRefactorInfo` ×9 root-caused to a stray-`U[]` type-param-scope pollution that does NOT
+  reproduce minimally (deferred — needs a whole-program probe); the clean bounded veins were the
+  conflated-`Info` families the round-444/445 machinery already understands.
+- **Fix 1 (d4065ea6, return object literal vs a conflated file-local TYPE-ALIAS union; TS2353 6 → 0;
+  services 373 → 367):** the EXCESS-property complement of round 444's alias's-own-file member-access
+  bail. In the file declaring `type X = A | B | …`, a `return { … }` excess-checked against `X`
+  resolves — last-wins Interface+TypeAlias merge — to a SIBLING file's `interface X`
+  (fixAddMissingMember.ts's `type Info = TypeLikeDeclarationInfo | EnumInfo | …` vs 12 sibling
+  `interface Info`), FP'ing "'kind' does not exist in type 'Info'". `objectLiteralMatchesConflated-
+  FileLocalTypeAlias` bails when THIS file declares `type X`, the target names the conflated `X`, and
+  the object satisfies some alias-union member interface. **LANDMINE (cost me an instrumented CLI trace):
+  the union member interfaces (`FunctionInfo`/`SignatureInfo`) are THEMSELVES conflated — `getProperties-
+  OfType` returned polluted merged members (extra `selectedVariableDeclaration`/`newParameters`/… from
+  sibling files), so 4 of 6 initially stayed FP'ing. The satisfaction check must read each member
+  interface AST-side (`objectLiteralExactlySatisfiesFileLocalInterface` — no-excess + required-provided
+  from the file's own InterfaceDeclaration), NOT via the resolved constituent members.**
+- **Fix 2 (72b441c7, ARG-side conflated-alias PARAM; TS2345 `SourceFileLike` 8 → 0; services 367 → 359):**
+  the arg complement of round 443's conflated-type-alias RECEIVER bail. A param typed as a leaked
+  conflated `type X` (importTracker.ts's `type SourceFileLike` vs compiler/types.ts's `interface
+  SourceFileLike`) resolves, in a NON-owning file, to the bogus alias union, so an object/class-instance
+  arg satisfying the real interface FP'd. `paramTypeIsLeakedConflatedAlias` skips when the param displays
+  as a conflated name and the file is not the alias's own.
+- **Fix 3 (72b441c7, ARG-side leaked-var chain; TS2345 10 incl. 6 compiler-file leak-chains; services
+  359 → 349):** the arg complement of round 444's receiver chain-walk. Round 442 bailed only a
+  bare-Identifier leaked-var arg; the root can sit behind a property-access chain
+  (`isCallExpression(parent.parent)` where `parent` leaks navigationBar.ts's `NavigationBarNode`).
+  `argRootIsLeakedModuleVar` walks the arg to its root Identifier and bails on a leaked module var
+  (a CALL in the chain breaks the walk).
+- **Fix 4 (da8c64a9, return object literal vs a MULTI-member union with a conflated interface; TS2322
+  FunctionInfo ×2; services 349 → 347):** round 445's `objectLiteralMatchesConflatedFileLocalInterface`
+  used `.singleOrNull()` (single non-nullish member). Extended to `X | Err | undefined` unions — the
+  object is assignable iff it EXACTLY satisfies some conflated file-local interface member (tsc's refactor
+  `getInfo(): FunctionInfo | RefactorErrorInfo | undefined` shape).
+- **NEXT (services @ 347):** `ExportInfoMap` TS2339 ×8 (completions.ts — a destructuring assignment
+  `({ exportInfo } = result)` re-types the declared `exportInfo`; does NOT reproduce minimally →
+  whole-program probe needed); the `X | RefactorErrorInfo | undefined` object-vs-union RELATION gap for
+  SINGLE-FILE interfaces (InliningInfo/OptionalChainInfo/ExportInfo — genuine M3, not conflation); the
+  `ApplicableRefactorInfo` stray-`U[]` type-param-scope pollution ×9 (deferred, needs a probe); deep
+  fragmented TS2322.
+
 **Round 446 (2026-07-08) — array-literal→variadic-tuple-in-union returns + nested Array<X>-in-Array<Y>
 covariant relation + destructured-param method arity: THREE bounded fixes. Dashboard: compiler 188 →
 185 (−3), services 399 → 373 (−26), server 623 → 589 (−34), harness 868 → 806 (−62). Suite 9,540 →
