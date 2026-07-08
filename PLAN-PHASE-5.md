@@ -39,6 +39,45 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
+**Round 441 (2026-07-08) — TS2344 constraint-chain burn-down: ONE bounded fix takes the
+compiler profile 205 → 202 (−3, all TS2344). Suite 9,482 → 9,487 (+5 local, 0 regressions);
+1 fix commit. Diffed via the `--listAll` `comm` loop as strictly by-position removals.**
+- **Baseline @ HEAD (round 440): 205 FPs.** Bucketed the full `--listAll`: TS2322×100 (deep
+  M3 relation, fragmented — largest sub-shape only 3), TS2591×43 + TS2304 `global`×2 + TS2584
+  `console`×1 env-legit (offline, no @types/node — NOT compiler FPs), TS2345×28 (fragmented:
+  assertNever `→never` exhaustiveness ×8, wrong-callee singles, `number|undefined`→number
+  arithmetic-flow), TS2344×3, small buckets. The clean bounded family was TS2344×3.
+- **Fix (checker, −3): `checkConstraintsForTypeArgs` + `checkTpListDefaults` (default validation)
+  gained two constraint-chain bail-outs.** (a) A bare TypeParam arg whose `.constraint` resolves
+  to `anyType` satisfies EVERY target constraint (a literal `extends any` OR — our gap — an
+  enum-member union constraint `JSDocSyntaxKind = SyntaxKind.A | …` that collapses to `any`: each
+  member type resolves to `any` so the union collapses). A DIRECT `Token<JSDocSyntaxKind>` arg is
+  already skipped by the `argType === anyType` guard, so a TypeParam arg (`Token<TKind>` where
+  `TKind extends JSDocSyntaxKind`, Token's param `extends SyntaxKind`) must be too — parser.ts
+  `parseOptionalTokenJSDoc`/`parseExpectedTokenJSDoc` ×2. (b) A UNION arg/default satisfies when
+  EVERY member does, incl. a TypeParam member whose own constraint relates — `Visitor<TIn extends
+  Node, TOut extends Node | undefined = TIn | undefined>` (`TIn | undefined` vs `Node | undefined`;
+  the whole-union relation misses `TIn <: Node | undefined` because we have no
+  TypeParam-source-via-constraint relation rule) — types.ts `Visitor` default ×1. FP-safe: every
+  union member must genuinely relate (2 negative controls: unrelated union member → TS2344 still
+  fires). The relation engine still has NO general `source is Type.TypeParam && target !is
+  Type.TypeParam` branch — a broad relation change risks the documented 39+ cycle regressions, so
+  the fix stays as per-site bail-outs.
+- **META / next-agent residual (202):** the clean bounded veins on the COMPILER profile are now
+  nearly mined out — the residual is genuinely hard. TS2322×100 is deeply fragmented (largest
+  sub-shape 3: `TransformerFactory<SourceFile|Bundle>`, `__String | undefined`, `Expression`) —
+  deep M3 relation/narrow-DOWN work. The biggest COHERENT remaining family is TS2345 assertNever
+  `→never` (×8: `Debug.assertNever(x)`/`assertType<never>(x)` in exhaustive `switch` defaults —
+  needs real `.kind`-discriminated-union exhaustiveness narrowing to `never`, the hard M3.4 slice;
+  likely MUCH larger on services/server/harness so high-leverage but multi-session). Lib-completeness
+  gaps deferred to M2.3: TS2353 `next` (sourcemap.ts — embedded `interface IterableIterator<T> {}`
+  is EMPTY, doesn't `extends Iterator<T>`, so an object literal with `next()` looks excess);
+  TS2740 Set set-methods (core.ts). Arithmetic-flow `number|undefined`→number (parser.ts 8911/8974)
+  are the round-440-flagged not-reproducible-in-isolation M3.4 slices. Wrong-callee singles
+  (utilities:6325 `getIndentString(indent)` → indent resolves to string; moduleSpecifiers:929;
+  program:832) are the round-440 C/D cross-file-collision/shadow pattern — each 1 FP, individual
+  root-cause. TS2454×4 `resultingToken` is the `while(true)`-break definite-assignment flow gap.
+
 **Round 440 (2026-07-07) — optional-widen / operator-typing / cross-file-callee /
 generic-inference burn-down: FIVE bounded fixes take the compiler profile 228 → 205
 (−23, −10.1%; TS2345 39 → 28, TS2322 108 → 100, TS2362 4 → 2, TS2365 1 → 0). Suite

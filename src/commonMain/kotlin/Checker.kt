@@ -111893,6 +111893,18 @@ interface DataView {
                 // relation engine's TypeParam-source path under-resolves and FPs.
                 if (dType is Type.TypeParam && dType.constraint != null && dType.constraint !== errorType &&
                     checkTypeRelatedTo(dType.constraint!!, cType, assignableRelation)) continue
+                // A UNION default satisfies the constraint when EVERY member does — including
+                // a TypeParam member whose own constraint satisfies (`Visitor<TIn extends Node,
+                // TOut extends Node | undefined = TIn | undefined>` — `TIn | undefined` vs
+                // `Node | undefined`; the whole-union relation misses `TIn <: Node | undefined`
+                // because our relation has no TypeParam-source-via-constraint rule). FP-safe:
+                // requires every member to genuinely relate.
+                if (dType is Type.Union && dType.types.all { m ->
+                        checkTypeRelatedTo(m, cType, assignableRelation) ||
+                        (m is Type.TypeParam && m.constraint != null && m.constraint !== errorType &&
+                            (m.constraint === anyType ||
+                                checkTypeRelatedTo(m.constraint!!, cType, assignableRelation)))
+                    }) continue
                 // A self-referential default (`Config = ExtendableConfig<Options, any>`) satisfies a
                 // constraint UNION that itself contains a reference to the enclosing generic
                 // (`ExtensionConfig<Options> | ExtendableConfig<Options>`) — tsc resolves the recursive
@@ -112462,13 +112474,40 @@ interface DataView {
                 // `argType.constraint` directly (not `getApparentType` which would
                 // wrap primitives to their interface). Only fires when source HAS a
                 // constraint (unconstrained T → would over-skip and lose genuine
-                // TS2344 cases).
+                // TS2344 cases — those keep `constraint == null` and fall through).
                 if (argType is Type.TypeParam && argType.constraint != null) {
                     val cnst = argType.constraint!!
-                    if (cnst !== anyType && cnst !== errorType &&
-                        checkTypeRelatedTo(cnst, instantiatedConstraint, assignableRelation)) {
+                    // A constraint that resolves to `any` satisfies EVERY target
+                    // constraint (`any` is assignable to anything), exactly like the
+                    // direct anyType-arg skip above. This covers a literal `extends any`
+                    // AND — our resolution gap — an enum-member union constraint that
+                    // collapses to `any` (`parseOptionalTokenJSDoc<TKind extends
+                    // JSDocSyntaxKind>(): Token<TKind>` — Token's param extends
+                    // SyntaxKind, JSDocSyntaxKind ⊆ SyntaxKind, but each member type
+                    // resolves to `any` so the union collapses; a DIRECT `Token<
+                    // JSDocSyntaxKind>` arg skips at the `argType === anyType` guard
+                    // above, so a TypeParam arg must too).
+                    if (cnst === anyType ||
+                        (cnst !== errorType &&
+                            checkTypeRelatedTo(cnst, instantiatedConstraint, assignableRelation))) {
                         continue
                     }
+                }
+                // A UNION arg satisfies the constraint if EVERY member does — including
+                // a member that is a TypeParam whose own constraint satisfies (types.ts
+                // `Wrap<TIn | undefined>` where `TIn extends Node`, Wrap's param extends
+                // `Node | undefined`). The whole-union relation misses this because our
+                // relation has no TypeParam-source-via-constraint rule for a
+                // non-TypeParam target member (a lone `TIn <: Node | undefined` returns
+                // false). FP-safe: requires every member to genuinely relate.
+                if (argType is Type.Union && argType.types.all { m ->
+                        checkTypeRelatedTo(m, instantiatedConstraint, assignableRelation) ||
+                        (m is Type.TypeParam && m.constraint != null &&
+                            m.constraint !== errorType &&
+                            (m.constraint === anyType ||
+                                checkTypeRelatedTo(m.constraint!!, instantiatedConstraint, assignableRelation)))
+                    }) {
+                    continue
                 }
                 val argNode = typeArgs[i]
                 val argDisplay = formatTypeForDisplay(argNode) ?: typeToString(argType)
