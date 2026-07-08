@@ -495,6 +495,16 @@ class Checker(
      *  `currentFileLocals` first, so navigationBar's own `parent` is unaffected). */
     private var moduleFileLocalVarNames: Set<String> = emptySet()
 
+    /** Blocker #3 (round 443): name X → the set of files declaring `type X = ...` (a type
+     *  alias), for names X that are ALSO declared as `interface X` somewhere else — the
+     *  TYPE-space analog of [moduleFileLocalVarNames]. A module-file-local `type X` leaks
+     *  into `globals` and shadows the real global `interface X` in every OTHER file, so a
+     *  receiver typed `X` there resolves to the leaked alias's UNION instead of the interface
+     *  → FP TS2339. `checkMemberAccessMissing` bails a UNION-receiver TS2339 when the receiver
+     *  displays as such an X and the current file is NOT the alias's own file. Populated after
+     *  the globals merge. */
+    private var conflatedTypeAliasFiles: Map<String, Set<String>> = emptyMap()
+
     /** Param name → enum display name for params typed as a type parameter constrained
      *  to an enum (`function f<B extends E>(p: B)` → `p` → `E`). Populated by pure symbol
      *  lookup at function-body entry; consulted ONLY by [enumTypedReceiverDisplay] for the
@@ -1347,6 +1357,25 @@ class Checker(
                 }
             }
             moduleFileLocalVarNames = moduleVar - otherGlobal
+        }
+        // 1a3 (round 443, Blocker #3): the TYPE-space analog — a module-file-local `type X`
+        // alias that conflates with a global `interface X` in a DIFFERENT file (see
+        // [conflatedTypeAliasFiles]). Record which files declare `type X` so the member-access
+        // FP-bail can exempt the alias's own file (where the local union is the genuine type).
+        run {
+            val aliasFiles = HashMap<String, MutableSet<String>>()
+            val interfaceNames = HashSet<String>()
+            for (result in binderResults) {
+                val fn = result.sourceFile.fileName
+                for (stmt in result.sourceFile.statements) {
+                    when (stmt) {
+                        is TypeAliasDeclaration -> aliasFiles.getOrPut(stmt.name.text) { HashSet() }.add(fn)
+                        is InterfaceDeclaration -> interfaceNames.add(stmt.name.text)
+                        else -> {}
+                    }
+                }
+            }
+            conflatedTypeAliasFiles = aliasFiles.filterKeys { it in interfaceNames }
         }
         // 1b. Merge module augmentation exports into target module symbols
         mergeModuleAugmentations()
@@ -115441,6 +115470,37 @@ interface DataView {
         // same branches as their un-parenthesized forms. Parens only affect precedence.
         var objectExpr = objectExprIn
         while (objectExpr is ParenthesizedExpression) objectExpr = objectExpr.expression
+        // Blocker #3 (round 443): a module-file-local `type X = ...` alias leaks into `globals`
+        // and shadows the real global `interface X` in OTHER files. importTracker.ts's non-exported
+        // `type SourceFileLike = SourceFile | AmbientModuleDeclaration` shadowed compiler/types.ts's
+        // `interface SourceFileLike`, so scanner.ts's `sourceFile: SourceFileLike` param resolved to
+        // the bogus union → `sourceFile.text` FP'd TS2339 (AmbientModuleDeclaration has no `.text`).
+        // Bail when the receiver's UNION type displays as a conflated type-alias/interface name AND
+        // the current file is NOT the alias's own file (there the union is the genuine local type).
+        // FP-safe: in every other file tsc resolves the name to the INTERFACE (all members present,
+        // incl. augmentation-added), so it never errors there. The TYPE-space analog of round 442's
+        // module-file-local VARIABLE leak (moduleFileLocalVarNames).
+        if ((objectExpr is Identifier || objectExpr is PropertyAccessExpression) && conflatedTypeAliasFiles.isNotEmpty()) {
+            val recvType = try { getTypeOfExpression(objectExpr) } catch (_: Exception) { null }
+            if (recvType is Type.Union) {
+                // Match the union's alias display; also try with nullish members stripped so an
+                // OPTIONAL leaked-alias receiver (`sourceFile?: SourceFileLike`, guarded by `&&`)
+                // whose display is "SourceFileLike | undefined" still resolves to the conflated name.
+                val displays = buildList {
+                    try { typeToString(recvType)?.let { add(it) } } catch (_: Exception) {}
+                    val nonNullish = recvType.types.filter {
+                        !it.flags.hasAny(TypeFlags.Undefined or TypeFlags.Null or TypeFlags.Void)
+                    }
+                    if (nonNullish.size in 2 until recvType.types.size) {
+                        try { typeToString(getUnionType(nonNullish))?.let { add(it) } } catch (_: Exception) {}
+                    }
+                }
+                for (display in displays) {
+                    val aliasFiles = conflatedTypeAliasFiles[display]
+                    if (aliasFiles != null && fileName !in aliasFiles) return
+                }
+            }
+        }
         // B8.1: receiver typed as `never` because its annotation is an intersection
         // that reduced to never due to a conflicting private property. Emit TS2339
         // with `never` display + chain. Gate on cache hit so we don't change the
