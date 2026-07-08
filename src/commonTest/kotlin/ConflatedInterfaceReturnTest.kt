@@ -111,4 +111,59 @@ class ConflatedInterfaceReturnTest {
             have(any { it.code == 2322 || it.code == 2739 || it.code == 2741 })
         }
     }
+
+    @Test
+    fun `object literal returned to a MULTI-member union with a conflated interface - no TS2322`() {
+        // Round 447: tsc's refactor `getInfo(): FunctionInfo | RefactorErrorInfo | undefined` shape.
+        // `Fi` is conflated (declared in both files); the return `{ decl, node }` satisfies a.ts's
+        // file-local `Fi` — assignable to the union `Fi | Err | undefined` — but the merged (polluted)
+        // `Fi` looked "missing properties". The union bail now checks each conflated member exactly.
+        compile(
+            """
+            // @strict: true
+
+            // @Filename: a.ts
+            interface Fi { decl: number; node: string; }
+            interface Err { error: string; }
+            export function getA(x: boolean): Fi | Err | undefined {
+                if (x) return { decl: 1, node: "n" };
+                return { error: "bad" };
+            }
+
+            // @Filename: b.ts
+            interface Fi { extra1: number; extra2: string; other: number; }
+            export function getB(): Fi | undefined {
+                return { extra1: 1, extra2: "y", other: 2 };
+            }
+            """
+        ) should {
+            have(none { it.code == 2322 })
+            have(none { it.code == 2739 })
+            have(none { it.code == 2740 })
+        }
+    }
+
+    @Test
+    fun `negative control - object matching NO union member still fires`() {
+        // Firewall for the multi-member union bail: an object that satisfies neither conflated member
+        // (excess property present on neither) must still report a relation failure.
+        compile(
+            """
+            // @strict: true
+
+            // @Filename: a.ts
+            interface Fi { decl: number; node: string; }
+            interface Err { error: string; }
+            export function getA(): Fi | Err | undefined {
+                return { decl: 1, node: "n", junk: 9 };
+            }
+
+            // @Filename: b.ts
+            interface Fi { extra1: number; }
+            export function getB(): Fi | undefined { return { extra1: 1 }; }
+            """
+        ) should {
+            have(any { it.code == 2322 || it.code == 2739 || it.code == 2741 || it.code == 2353 })
+        }
+    }
 }

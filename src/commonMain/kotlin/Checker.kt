@@ -86427,22 +86427,36 @@ interface DataView {
      * Blocker #3 (round 445): the target [t] (or the sole non-nullish member of an
      * `X | undefined` union) is a conflated interface X (merged across module files) that
      * [fileName] declares its OWN `interface X` for, and [obj] satisfies that file-local X.
+     * Round 447: also handles a target union with MULTIPLE non-nullish members
+     * (`FunctionInfo | RefactorErrorInfo | undefined` — tsc's refactor `getInfo` shape): the
+     * object is assignable to the union iff it EXACTLY satisfies (no excess + required) some
+     * member that is a conflated file-local interface.
      */
     private fun objectLiteralMatchesConflatedFileLocalInterface(
         obj: ObjectLiteralExpression, t: Type, fileName: String,
     ): Boolean {
         if (conflatedInterfaceFiles.isEmpty()) return false
-        val ifaceType = when {
-            t is Type.Interface -> t
-            t is Type.Union -> t.types.filter {
-                !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)
-            }.singleOrNull() as? Type.Interface
-            else -> null
-        } ?: return false
-        val name = ifaceType.symbol?.name ?: return false
-        val files = conflatedInterfaceFiles[name] ?: return false
-        if (fileName !in files) return false
-        return objectLiteralSatisfiesFileLocalInterface(obj, name, fileName)
+        fun matchesSingle(iface: Type.Interface): Boolean {
+            val name = iface.symbol?.name ?: return false
+            val files = conflatedInterfaceFiles[name] ?: return false
+            if (fileName !in files) return false
+            return objectLiteralSatisfiesFileLocalInterface(obj, name, fileName)
+        }
+        if (t is Type.Interface) return matchesSingle(t)
+        if (t is Type.Union) {
+            val nonNullish = t.types.filter { !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) }
+            val single = nonNullish.singleOrNull() as? Type.Interface
+            if (single != null) return matchesSingle(single) // round-445 single-member behavior
+            // Multiple non-nullish members: an object assignable to a union member must not have
+            // excess vs it, so use the strict (no-excess + required) check.
+            for (m in nonNullish) {
+                val name = (m as? Type.Interface)?.symbol?.name ?: continue
+                val files = conflatedInterfaceFiles[name] ?: continue
+                if (fileName !in files) continue
+                if (objectLiteralExactlySatisfiesFileLocalInterface(obj, name, fileName)) return true
+            }
+        }
+        return false
     }
 
     /**
