@@ -127162,7 +127162,27 @@ interface DataView {
                 val tid = source.target.id
                 val isReentry = countOccurrences(state.relationSourceTargets, tid) > 1 ||
                     countOccurrences(state.relationTargetTargets, tid) > 1
-                if (!isReentry) {
+                // Round 446: Array / ReadonlyArray are covariant containers whose
+                // STRUCTURAL comparison spuriously FAILS (their `concat` signature takes a
+                // contravariant element param `ConcatArray<T>`, and we have no per-TP
+                // variance info), so they must ALWAYS use the covariant element shortcut.
+                // The isReentry deferral misfired for the extremely common nested shape
+                // `Array<X>` inside `Array<Y>` (`{ actions: ActionInfo[] }[]` vs
+                // `ApplicableRefactorInfo[]`): the OUTER Array pushes globalArrayType.id, so
+                // the INNER Array's same tid counted as a re-entry → structural → `concat`
+                // mismatch → FP TS2322. Array recursion still terminates via
+                // relationComparisonStack (identical pair) + isDeeplyNested (5+ occurrences);
+                // covariant `A ⊄ B ⇒ Array<A> ⊄ Array<B>` is the correct rule, so the eager
+                // shortcut is sound here. Non-Array (user recursive) generics keep deferring
+                // to structural on re-entry so an eager false can't pre-empt the cycle-break.
+                // Gate: only when the TARGET args are TP-free — an UNBOUND type parameter in
+                // the target (`flatten<T>(…: T[][] | …)`) is an M3.1 generic-inference gap,
+                // and the trivial structural pass currently MASKS it; the eager shortcut
+                // would turn that into an FP, so keep deferring there.
+                val isArrayLike = (source.target === globalArrayType ||
+                    source.target === globalReadonlyArrayType) &&
+                    targetArgs.none { typeContainsUnresolvedTypeParam(it) }
+                if (!isReentry || isArrayLike) {
                     for (i in sourceArgs.indices) {
                         if (!checkTypeRelatedTo(sourceArgs[i], targetArgs[i], relation)) return false
                     }
