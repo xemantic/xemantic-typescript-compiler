@@ -56,11 +56,19 @@ strictly by-position removals (fix 2: 0 added).**
   with resolvable discriminated-union subjects (programDiagnostics.ts:419 `RootFile | LibFile | …`,
   tsbuildPublic.ts:2482 `Unbuildable | UpToDate | …`). The other 6 compiler `→never` FPs
   (utilities/debug/programDiagnostics/diagnostics) have `Node`/`Expression` BASE-INTERFACE subjects
-  — tsc narrows them via a preceding `Debug.type<SomeUnion>(node)` assert that casts `node` to a
-  union FIRST, then the switch exhausts it; that needs (a) `Debug.type<T>` assert-to-union
-  narrowing (round-424 DebugTypeMapper slice extended to a non-`this` explicit-type-arg assert)
-  AND (b) resolving the target union with readable `.kind` members — the larger M3.4 slice,
-  deliberately not done.
+  — tsc narrows them via a preceding `Debug.type<SomeUnion>(node)` assert (`asserts value is T`,
+  explicit type arg) that casts `node` to a union FIRST, then the switch exhausts it. **DIAGNOSED
+  (round 441, do not re-chase without instrumentation): the assert-to-union narrowing of an
+  OBJECT-typed reference does NOT fire — even for a TOP-LEVEL `declare function asType<T>(value:
+  unknown): asserts value is T; asType<Shape>(node)` (no `Debug` namespace), `node: {kind:"a"|"b"}`
+  stays its declared type in the switch default, so my exhaustive-never fix has no union to
+  exhaust.** `narrowByAssertCall`'s code path (Checker.kt ~94150-94167) DOES bind the explicit type
+  arg (round-424b) and return the target for a non-relating object source (`checkTypeRelatedTo(t,
+  target)` false → return target), so the gap is UPSTREAM: `narrowByAssertCall` is not being
+  REACHED / its result not consumed for this shape — likely the round-413 fast-forward loop's
+  `flowCallMightNarrow`/`flowCalleeMayHaveAssertEffects` gate skipping the FlowCall, or the walk not
+  reaching it. Needs a marker-diagnostic trace at the FlowCall handler. High leverage (the
+  `Debug.type<T>` + exhaustive-switch idiom is pervasive in tsc source) but a real M3.4 slice.
 - **Fix 1 (checker, −3, TS2344): constraint-chain bail-outs (detail below).**
 - **Generalization (both fixes, `--no-emit` `--listAll`, vs the round-440 END baseline): server
   1,321 → 1,317 (−4), harness 1,610 → 1,606 (−4).** Modest — these specific shapes (enum-union
