@@ -2941,3 +2941,83 @@ reproducible on any box (VPS included), nothing lives only in a session scratchp
 Backlog: M4.6 (`package.json "type": "module"` ProjectCompiler gap, found via zod) +
 M4.7 (zod as second dashboard profile, full recipe + FP baseline) written down with
 stable IDs; M5.1/M5.4 queue items now point at the design note.
+
+**Round 435 (2026-07-07) — M3.1/M3.2 burn-down at post-perf-arc iteration speed: SEVEN
+bounded fixes take the compiler profile 482 → 373 (−109, −22.6%; TS2322 276 → 184,
+TS7006 11 → 1, TS2345 86 → 79) + the first full-dashboard bench baseline. Suite
+9,389 → 9,419 (+30 local, 0 regressions); 7 fix commits (449957bc, 3a275609, cf54c26d,
+c99efbb5, 451abce6, 0bcdeadf, b751249b); every step's by-site diff strictly removals
+(fix 2's +3 were same-site transformations).**
+- **Baseline (bench/*.tsv, "round 435 baseline post-M5-perf-arc", all 8 profiles at
+  e24ae081, wall 29–41 s each — every profile is now cheap to iterate):** compiler 482 /
+  tsc-cli 484 / jsTyping 480 / deprecatedCompat 481 / typingsInstallerCore 489 /
+  services 1,603 / server 1,894 / harness 2,193. The small profiles are CONVERGED
+  (~480 ± 9 — the same 4 families); services/server/harness carry ~3–5× (TS2339×407+,
+  TS2564×66+ appear there — the next dashboard-widening signal).
+- **Fix 1 (449957bc, −4): generator returns check the annotation's TReturn** (tsc
+  getIterationTypeOfGeneratorFunctionReturnType): `inGeneratorFunctionBody` threaded
+  like isAsync; checkReturnAssignability's top gate re-targets a Generator-family
+  reference's explicit 2nd type arg and skips otherwise (bare `return;` in
+  `function* (): ElaborationIterator` — checker.ts ×4). Explicit-TReturn mismatch
+  still fires through the unwrap (pinned).
+- **Fix 2 (3a275609, −38/+3 transforms): fresh object-literal literal props.**
+  propertiesRelatedTo + both per-prop emitters retry a failing literal-containing
+  target member with the un-widened literal from the member symbol's
+  PropertyAssignment, gated to `freshObjLitRange` (withFreshObjLitSource at the
+  var-decl/assignment/conditional-return consumers) — tsc freshness: a WIDENED var
+  reference still fails (pinned). Cleared checker.ts's IterationTypesResolver tables,
+  watch.ts's message table (the `'string' ≁ 'string'` display family ×21),
+  esDecorators' discriminated-union stack pushes. The +3: per-prop suppression
+  unmasked whole-object residuals on OTHER props (same-position-masking, catalogued —
+  ModuleSpecifierResult's `?.length`-guarded props need narrowing).
+- **Fix 3 (cf54c26d, −10): four TS7006 contextual-typing sources** from the round-431
+  triage — namespace-local annotations (implicitAnyNsStack + the one-call
+  inferenceNamespaceStack bridge; builderState ×5), declared-by-INITIALIZER locals
+  (implicitAnyScopeInits parallel stack; checker.ts addLazyDiagnostic), the
+  `let rule = cache.get(k)` Map-VALUE idiom (parenthesizerRules ×2), and NULLISH union
+  constituents no longer disabling member ctx (`Host | undefined` returns —
+  watchUtilities ×2; the real-primitive corpus pin still fires). TS7006 11 → 1.
+- **Fix 4 (c99efbb5, −7): a TP whose CONSTRAINT contains literals is a
+  literal-preserving arg position** (propTypeContainsLiteral TypeParam arm) —
+  `readPackageJsonPathField<K extends "typings" | …>(json, "typings")` ×4 + the
+  pragmas.get keyof-constraint sites ×3 check and display with the literal (tsc's
+  inference keeps literal candidates under literal constraints).
+- **Fix 5 (451abce6, −27): union-target decomposition is TRANSPARENT to the relation
+  re-entry gate + bare-`new` contextual instantiation.** The same-target covariant
+  arg-shortcut's isReentry misread `NodeArray<TemplateSpan>` vs
+  `NodeArray<Node> | undefined` as a re-entry (the union decomposition re-pushes the
+  SAME source) and deferred to structural comparison → Array-method-contravariance FPs
+  (tsc's getContainingNodeArray family ×23). The union-target branch now pops its own
+  redundant source-stack entry around the member iteration. **The first cut (isReentry
+  requiring the repeat on BOTH stacks) broke the recursiveTypeComparison corpus pin —
+  a genuine member-recursion re-entry repeats on the SOURCE side only; the suite gate
+  caught it.** Companion: a bare `new C()` (no type/ctor args) is contextually
+  instantiated when the target references the same C (nodeChildren.ts
+  `map = new WeakMap()`).
+- **Fix 6 (0bcdeadf, −22): the foreign-TP gate covers the assignment TARGET** — a
+  local typed from an un-inferred generic call return (`let expression =
+  visitNode(…)` → raw `TOut | TIn & undefined | TVisited & undefined`) makes every
+  later reassignment check meaningless (the visitor family ×15: esDecorators/
+  classFields/es2018/es2020). Mirrors round 431e's source gate.
+- **Fix 7 (b751249b, −4): nullish returns trust the alias union's syntactic
+  `| undefined`** (aliasUnionContainsNullishKeyword, extended with the
+  imported-alias→globals fallback) — `return undefined` vs barrel-imported
+  `ResolutionMode` (parser.ts/program.ts ×4); the resolved union collapses through
+  cross-file enum-member resolution, so the M1.8 syntactic proof extends to the
+  return-VALUE path. The local facsimile resolves cleanly (no repro) — the
+  discriminating pin is the self-compile A/B, noted in the test.
+- **META:** (1) the pre-perf listall-431e2.txt on disk matched HEAD exactly (482) —
+  bucketing needed no fresh run; at ~30 s/run the probe loop is now bench-friendly.
+  (2) The commit-split dance (revert-hunk → commit → re-apply) worked for landing
+  three same-file fixes from one tree state with per-fix suites.
+- **Residual triage (next-agent):** TS2322×184 — narrowing-dependent ×~15
+  (`Node`→`Declaration | undefined` ×5, `number | undefined`→number ×4, TempFlags ×2,
+  FlowNode ×2 — M3.4), `boolean`→JSDocTag-union-with-`false` ×4,
+  ModuleSpecifierResult ×4 (fresh-prop values need `?.length`-guard narrowing),
+  `__String` ×3 (branded, M3), builder.ts tuple/brand shapes (B526). TS2345×79 —
+  callback-return inference `(…)=>boolean` vs `(…)=>U | undefined` ×7 (program.ts
+  forEachEntry family — infer U from the callback return, M3.2), semver switch-CASE
+  narrowing of a bare `string` to the case literals ×3 (M3.4), `'true'` vs `'false'`
+  nested-overloads ×5, `Node`→never exhaustiveness ×3 (M3.4). TS2769×30 (un-triaged
+  chains — sample next). TS2591×43 env-legit. TS7006×1 (tsbuildPublic destructured-
+  member local — needs member-typed binding registration).**

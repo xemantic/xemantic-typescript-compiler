@@ -39,6 +39,58 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
+**Round 445 (2026-07-08) — TS2416/TS2430 property-override variance families + the cross-file
+interface-merge conflation (Blocker #3): THREE bounded fixes, all suppression-only. Dashboard:
+compiler 190 → 188 (−2), services 439 → 409 (−30), server 669 → 637 (−32), harness 919 → 884 (−35).
+Suite 9,523 → 9,536 (+13 local across 3 test files, 0 regressions); 3 fix commits
+(76b7f2cc/a81d6300/c31f3577); services diffed via `--listAll` as strictly by-position removals.**
+- **Baseline @ HEAD (round 444): services 439, compiler 190.** Bucketed the services `--listAll`
+  and found TS2416×11 + TS2430×3 (bounded override-variance families) and the `Info | undefined`
+  TS2322×11 (the biggest single conflation family). The `readonly ApplicableRefactorInfo[]` ×15 and
+  `DiagnosticOrDiagnosticAndArguments (| undefined)` ×16 stay deep-M3 (object-literal-array vs
+  interface-array / array→tuple-union relation) — deferred.
+- **Fix 1 (76b7f2cc, TS2416 override 11 → 0; compiler 190→189, services 439→428, server 669→656,
+  harness 919→904): three class-property-override FP families from services.ts's NodeObject /
+  TokenOrIdentifierObject / SourceFileObject implementors.** (A) An OPTIONAL base member `p?: T` has
+  effective type `T | undefined`; a derived `p: T | undefined` override is legal — the raw base
+  declared type dropped the optional `| undefined`, so widen it for the relation via
+  `widenOptionalTargetPropType` (source-nullish gated → a non-nullish override still compares against
+  the bare base). (B) A CONSTRAINED-type-parameter override (`kind: TKind` where `TKind extends
+  SyntaxKind`, base `kind: SyntaxKind`) is valid via the constraint — per-site constraint bail (no
+  general TypeParam-source relation rule). (C) tsc compares METHOD signatures with BIVARIANT params
+  (`getWidth(sf?: SourceFile)` vs base `getWidth(sf?: SourceFileLike)`) — per-site
+  `methodSignaturesBivariantlyRelated` retry (adds a defaulted `bivariantParams` flag to
+  `signatureRelatedTo`, no threading elsewhere).
+- **Fix 2 (a81d6300, TS2430 interface-extends 3 → 0; services 428→425): two FP families.** (A) The
+  optional-base widen applied to the interface-extends check (`ValidParameterDeclaration extends
+  ParameterDeclaration { modifiers: undefined }` — `undefined` assignable to the optional base's
+  `T | undefined`). (B) A derived METHOD implementing a base function-typed DATA property
+  (`EmitHost.getCanonicalFileName(fileName): string` implementing
+  `SourceFileMayBeEmittedHost.getCanonicalFileName: GetCanonicalFileName`) was compared as the
+  method's RETURN type (`string`) vs the base property's full function type — `getMemberNameAndType`
+  returns a method's return type. Skip the simple property comparison when the derived member is a
+  method.
+- **Fix 3 (c31f3577, the interface-merge conflation; compiler 189→188, services 425→409 −16, server
+  656→637, harness 904→884): a name X declared as `interface X` in ≥2 DISTINCT MODULE files merges
+  via `mergeSymbolTable` into one polluted `globals[X]`, even though each module's interface is
+  module-scoped.** tsc's codefixes each declare a private `interface Info`, so `getInfo(): Info |
+  undefined` returning `{ importNode, name, moduleSpecifier }` (matching the FILE-LOCAL Info) looked
+  "missing properties" against the merged union. Built `conflatedInterfaceFiles` (name → module files
+  declaring `interface X`, for X in ≥2 files); `checkReturnAssignability` bails a returned object
+  literal whose target is (the sole non-nullish member of) such a conflated X when THIS file declares
+  its own `interface X` AND the object satisfies the file-local X (checked AST-side — the merged
+  symbol's `declarations` list is polluted). Runs AFTER the per-property drills (genuine inner-key
+  mismatch still fires), BEFORE the coarse missing-property/relation paths. Conservative for
+  heritage-bearing interfaces / spread object literals. `Info | undefined` TS2322 11 → 1 (the residual
+  fixExpectedComma.ts `{ node }` doesn't satisfy its file-local Info).
+- **NEXT (services @ 409, all deeper):** the union-of-2-interfaces conflation (`ExportInfo |
+  RefactorErrorInfo | undefined` ×3 — the single-interface gate needs a union-member extension), the
+  module-var-leak in ASSIGNMENT position (checker.ts `NavigationBarNode → Node` TS2322 ×4 — round-442
+  `moduleFileLocalVarNames` covers TS2339/TS2345 but not TS2322), and the two deep-M3 relation
+  families `readonly ApplicableRefactorInfo[]` ×15 / `DiagnosticOrDiagnosticAndArguments` ×16. Extend
+  the conflation bail to var-decl/argument positions only when a non-return conflation FP surfaces
+  (none observed this round).
+
 **Round 444 (2026-07-08) — cross-file heritage / `this`-guard receiver narrowing / alias-own-file
 conflation / module-var-leak property chain (Blocker #3): FOUR bounded fixes, all suppression-only.
 Compiler profile UNCHANGED (190), but they GENERALIZE strongly across the big profiles: services
@@ -657,86 +709,6 @@ by-site diff strictly removals.**
   IncrementalCompilationOptions ×2), TS2591×43 env-legit (needs real @types/node),
   TS2769×9 (findAncestor predicate-overload returns — M3.2 B136-adjacent,
   moduleNameResolver `unknown` narrowing ×3), TS2339×7, TS2454×4, TS2362×4.**
-
-**Round 435 (2026-07-07) — M3.1/M3.2 burn-down at post-perf-arc iteration speed: SEVEN
-bounded fixes take the compiler profile 482 → 373 (−109, −22.6%; TS2322 276 → 184,
-TS7006 11 → 1, TS2345 86 → 79) + the first full-dashboard bench baseline. Suite
-9,389 → 9,419 (+30 local, 0 regressions); 7 fix commits (449957bc, 3a275609, cf54c26d,
-c99efbb5, 451abce6, 0bcdeadf, b751249b); every step's by-site diff strictly removals
-(fix 2's +3 were same-site transformations).**
-- **Baseline (bench/*.tsv, "round 435 baseline post-M5-perf-arc", all 8 profiles at
-  e24ae081, wall 29–41 s each — every profile is now cheap to iterate):** compiler 482 /
-  tsc-cli 484 / jsTyping 480 / deprecatedCompat 481 / typingsInstallerCore 489 /
-  services 1,603 / server 1,894 / harness 2,193. The small profiles are CONVERGED
-  (~480 ± 9 — the same 4 families); services/server/harness carry ~3–5× (TS2339×407+,
-  TS2564×66+ appear there — the next dashboard-widening signal).
-- **Fix 1 (449957bc, −4): generator returns check the annotation's TReturn** (tsc
-  getIterationTypeOfGeneratorFunctionReturnType): `inGeneratorFunctionBody` threaded
-  like isAsync; checkReturnAssignability's top gate re-targets a Generator-family
-  reference's explicit 2nd type arg and skips otherwise (bare `return;` in
-  `function* (): ElaborationIterator` — checker.ts ×4). Explicit-TReturn mismatch
-  still fires through the unwrap (pinned).
-- **Fix 2 (3a275609, −38/+3 transforms): fresh object-literal literal props.**
-  propertiesRelatedTo + both per-prop emitters retry a failing literal-containing
-  target member with the un-widened literal from the member symbol's
-  PropertyAssignment, gated to `freshObjLitRange` (withFreshObjLitSource at the
-  var-decl/assignment/conditional-return consumers) — tsc freshness: a WIDENED var
-  reference still fails (pinned). Cleared checker.ts's IterationTypesResolver tables,
-  watch.ts's message table (the `'string' ≁ 'string'` display family ×21),
-  esDecorators' discriminated-union stack pushes. The +3: per-prop suppression
-  unmasked whole-object residuals on OTHER props (same-position-masking, catalogued —
-  ModuleSpecifierResult's `?.length`-guarded props need narrowing).
-- **Fix 3 (cf54c26d, −10): four TS7006 contextual-typing sources** from the round-431
-  triage — namespace-local annotations (implicitAnyNsStack + the one-call
-  inferenceNamespaceStack bridge; builderState ×5), declared-by-INITIALIZER locals
-  (implicitAnyScopeInits parallel stack; checker.ts addLazyDiagnostic), the
-  `let rule = cache.get(k)` Map-VALUE idiom (parenthesizerRules ×2), and NULLISH union
-  constituents no longer disabling member ctx (`Host | undefined` returns —
-  watchUtilities ×2; the real-primitive corpus pin still fires). TS7006 11 → 1.
-- **Fix 4 (c99efbb5, −7): a TP whose CONSTRAINT contains literals is a
-  literal-preserving arg position** (propTypeContainsLiteral TypeParam arm) —
-  `readPackageJsonPathField<K extends "typings" | …>(json, "typings")` ×4 + the
-  pragmas.get keyof-constraint sites ×3 check and display with the literal (tsc's
-  inference keeps literal candidates under literal constraints).
-- **Fix 5 (451abce6, −27): union-target decomposition is TRANSPARENT to the relation
-  re-entry gate + bare-`new` contextual instantiation.** The same-target covariant
-  arg-shortcut's isReentry misread `NodeArray<TemplateSpan>` vs
-  `NodeArray<Node> | undefined` as a re-entry (the union decomposition re-pushes the
-  SAME source) and deferred to structural comparison → Array-method-contravariance FPs
-  (tsc's getContainingNodeArray family ×23). The union-target branch now pops its own
-  redundant source-stack entry around the member iteration. **The first cut (isReentry
-  requiring the repeat on BOTH stacks) broke the recursiveTypeComparison corpus pin —
-  a genuine member-recursion re-entry repeats on the SOURCE side only; the suite gate
-  caught it.** Companion: a bare `new C()` (no type/ctor args) is contextually
-  instantiated when the target references the same C (nodeChildren.ts
-  `map = new WeakMap()`).
-- **Fix 6 (0bcdeadf, −22): the foreign-TP gate covers the assignment TARGET** — a
-  local typed from an un-inferred generic call return (`let expression =
-  visitNode(…)` → raw `TOut | TIn & undefined | TVisited & undefined`) makes every
-  later reassignment check meaningless (the visitor family ×15: esDecorators/
-  classFields/es2018/es2020). Mirrors round 431e's source gate.
-- **Fix 7 (b751249b, −4): nullish returns trust the alias union's syntactic
-  `| undefined`** (aliasUnionContainsNullishKeyword, extended with the
-  imported-alias→globals fallback) — `return undefined` vs barrel-imported
-  `ResolutionMode` (parser.ts/program.ts ×4); the resolved union collapses through
-  cross-file enum-member resolution, so the M1.8 syntactic proof extends to the
-  return-VALUE path. The local facsimile resolves cleanly (no repro) — the
-  discriminating pin is the self-compile A/B, noted in the test.
-- **META:** (1) the pre-perf listall-431e2.txt on disk matched HEAD exactly (482) —
-  bucketing needed no fresh run; at ~30 s/run the probe loop is now bench-friendly.
-  (2) The commit-split dance (revert-hunk → commit → re-apply) worked for landing
-  three same-file fixes from one tree state with per-fix suites.
-- **Residual triage (next-agent):** TS2322×184 — narrowing-dependent ×~15
-  (`Node`→`Declaration | undefined` ×5, `number | undefined`→number ×4, TempFlags ×2,
-  FlowNode ×2 — M3.4), `boolean`→JSDocTag-union-with-`false` ×4,
-  ModuleSpecifierResult ×4 (fresh-prop values need `?.length`-guard narrowing),
-  `__String` ×3 (branded, M3), builder.ts tuple/brand shapes (B526). TS2345×79 —
-  callback-return inference `(…)=>boolean` vs `(…)=>U | undefined` ×7 (program.ts
-  forEachEntry family — infer U from the callback return, M3.2), semver switch-CASE
-  narrowing of a bare `string` to the case literals ×3 (M3.4), `'true'` vs `'false'`
-  nested-overloads ×5, `Node`→never exhaustiveness ×3 (M3.4). TS2769×30 (un-triaged
-  chains — sample next). TS2591×43 env-legit. TS7006×1 (tsbuildPublic destructured-
-  member local — needs member-typed binding registration).**
 
 **M2 — Real-lib migration (staged; decompose further at start)**
 
