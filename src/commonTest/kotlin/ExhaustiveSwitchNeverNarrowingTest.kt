@@ -87,6 +87,57 @@ class ExhaustiveSwitchNeverNarrowingTest {
     }
 
     @Test
+    fun `assert-to-union re-types a non-union arg then the exhaustive switch narrows to never - no TS2345`() {
+        // `asType<Shape>(node)` (an `asserts value is T` with an explicit type arg) casts the
+        // non-union `node` to the union `Shape`; the exhaustive switch then narrows it to `never`.
+        // The arg-check narrows a non-union arg for a `never` param ONLY when the walk proves
+        // `never` (the round-441 gate that relaxed the previous never-param exclusion).
+        diagnose(
+            assertNever +
+                """
+                declare function asType<T>(value: unknown): asserts value is T;
+                type Shape = { kind: "a", a: number } | { kind: "b", b: string };
+                function f(node: { kind: "a" | "b" }): void {
+                    asType<Shape>(node);
+                    switch (node.kind) {
+                        case "a": break;
+                        case "b": break;
+                        default: assertNever(node);
+                    }
+                }
+                """,
+            directives = "",
+        ) should {
+            have(none { it.code == 2345 })
+        }
+    }
+
+    @Test
+    fun `negative control - assert-to-union then NON-exhaustive switch keeps the survivor - TS2345 fires`() {
+        // The switch omits "c", so the default narrows `node` to `{ kind: "c"; ... }` (a partial
+        // union), NOT `never` — the gate must NOT use a partial refinement, so the never-param
+        // call still errors.
+        diagnose(
+            assertNever +
+                """
+                declare function asType<T>(value: unknown): asserts value is T;
+                type Shape = { kind: "a", a: number } | { kind: "b", b: string } | { kind: "c", c: boolean };
+                function f(node: { kind: "a" | "b" | "c" }): void {
+                    asType<Shape>(node);
+                    switch (node.kind) {
+                        case "a": break;
+                        case "b": break;
+                        default: assertNever(node);
+                    }
+                }
+                """,
+            directives = "",
+        ) should {
+            have(any { it.code == 2345 })
+        }
+    }
+
+    @Test
     fun `negative control - non-exhaustive switch keeps the uncovered member - TS2345 fires`() {
         // 'c' is not cased, so reaching the default the discriminant is `{ kind: "c"; ... }`,
         // NOT `never` — the never-param call must still error.

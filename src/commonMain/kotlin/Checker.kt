@@ -124781,6 +124781,19 @@ interface DataView {
                 if ((arg is Identifier || arg is PropertyAccessExpression) && ctxApplied is Type.Union) {
                     getNarrowedTypeForReference(ctxApplied, arg)
                 } else if ((arg is Identifier || arg is PropertyAccessExpression) &&
+                    paramType === neverType && ctxApplied !is Type.Union) {
+                    // Round 441: `assertNever(x)` / `assertType<never>(x)` whose arg has a
+                    // NON-union declared type (a `Debug.type<SomeUnion>(node)` assert casts
+                    // `node` to a union earlier, then an EXHAUSTIVE switch narrows it to
+                    // `never` — utilities.ts's isDeclarationWithTypeParameterChildren family).
+                    // Narrow and use the result ONLY when it PROVES `never` — a partial
+                    // union (non-exhaustive switch) is NOT used (keeps the declared type →
+                    // the SAME TS2345 the pre-narrow path emitted, so no manufactured FP;
+                    // this is the FP-safe subset of the exclusion the comment below warns
+                    // about, now that the exhaustive default narrows to `never`).
+                    val n = getNarrowedTypeForReference(ctxApplied, arg)
+                    if (n === neverType) n else ctxApplied
+                } else if ((arg is Identifier || arg is PropertyAccessExpression) &&
                     (ctxApplied is Type.Interface || ctxApplied === unknownType ||
                         ctxApplied === stringType || ctxApplied === numberType) &&
                     paramType !== neverType) {

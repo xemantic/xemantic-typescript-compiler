@@ -39,10 +39,27 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
-**Round 441 (2026-07-08) — TS2344 constraint-chain + exhaustive-switch never-narrowing burn-down:
-TWO bounded fixes take the compiler profile 205 → 200 (−5). Suite 9,482 → 9,490 (+8 local across
-2 test files, 0 regressions); 2 fix commits. Both diffed via the `--listAll` `comm` loop as
-strictly by-position removals (fix 2: 0 added).**
+**Round 441 (2026-07-08) — TS2344 constraint-chain + assertNever exhaustiveness burn-down:
+THREE bounded fixes take the compiler profile 205 → 197 (−8). Suite 9,482 → 9,492 (+10 local across
+2 test files, 0 regressions); 3 fix commits. All diffed via the `--listAll` `comm` loop as
+strictly by-position removals (0 added). Fixes 2+3 together clear 5 of the 8 assertNever `→never`
+FPs.**
+- **Fix 3 (checker, −3, TS2345): the arg-check narrows a NON-union arg to a `never` param when the
+  walk proves `never`.** `checkArgumentsAgainstSignature` (~124781) previously EXCLUDED the
+  never-param case for non-union args (the exclusion was correct only BEFORE fix 2, when a partial
+  refinement would manufacture an FP). Now: narrow the arg and USE the result ONLY when
+  `n === neverType` (a partial union stays `ctxApplied` → the same TS2345 the pre-narrow path
+  emitted → no manufactured FP). This makes the `Debug.type<SomeUnion>(node)` / `asType<T>(node)`
+  assert (`asserts value is T`, explicit type arg) end-to-end: `narrowByAssertCall` re-types the
+  non-union `node` to the union (round-424b explicit-type-arg bind + the non-relating-object →
+  return-target branch), the exhaustive switch narrows it to `never`, and this gate consumes it.
+  Cleared debug.ts:852, utilities.ts:2270/12050 (the `isDeclarationWithTypeParameterChildren`
+  family). **DIAGNOSIS UPDATE (supersedes the round-441 "fails top-level too" note below): the
+  assert-to-union narrowing WAS working in the walk all along — the block was purely the arg-check
+  CONSUMER gate; the 3 residual `→never` (utilities.ts:12082, programDiagnostics.ts:346,
+  diagnostics.ts:702) now need the target union to resolve with readable `.kind` members
+  (`HasInferredType`-style unions of big AST-node interfaces) — a deeper resolution gap, not a
+  narrowing/consumer gap.**
 - **Fix 2 (checker, −2, TS2345): exhaustive-switch `default` narrows the discriminant to `never`.**
   `narrowBySwitchClause`'s round-425 default-clause negative-narrowing branch already dropped the
   case-covered members but returned `null` (= "no narrowing") when the filtered set was EMPTY
@@ -95,14 +112,13 @@ strictly by-position removals (fix 2: 0 added).**
   fires). The relation engine still has NO general `source is Type.TypeParam && target !is
   Type.TypeParam` branch — a broad relation change risks the documented 39+ cycle regressions, so
   the fix stays as per-site bail-outs.
-- **META / next-agent residual (200 after both fixes):** the clean bounded veins on the COMPILER
-  profile are now nearly mined out — the residual is genuinely hard. TS2322×100 is deeply
+- **META / next-agent residual (197 after all three fixes):** the clean bounded veins on the
+  COMPILER profile are now nearly mined out — the residual is genuinely hard. TS2322×100 is deeply
   fragmented (largest sub-shape 3: `TransformerFactory<SourceFile|Bundle>`, `__String | undefined`,
-  `Expression`) — deep M3 relation/narrow-DOWN work. The biggest COHERENT remaining family is the
-  TS2345 assertNever `→never` TAIL (fix 2 cleared the 2 with resolvable discriminated-union
-  subjects; the other 6 need `Debug.type<Union>(node)` assert-to-union narrowing FIRST — the hard
-  M3.4 slice, likely MUCH larger on services/server/harness so high-leverage but multi-session).
-  Lib-completeness
+  `Expression`) — deep M3 relation/narrow-DOWN work. The assertNever `→never` TAIL is down to 3
+  (fixes 2+3 cleared 5 of 8): the residual need the target union (`HasInferredType`-style: a union
+  of big AST-node interfaces reached via `Debug.type<Union>(node)`) to RESOLVE with readable
+  `.kind` members — a resolution gap, not narrowing. Lib-completeness
   gaps deferred to M2.3: TS2353 `next` (sourcemap.ts — embedded `interface IterableIterator<T> {}`
   is EMPTY, doesn't `extends Iterator<T>`, so an object literal with `next()` looks excess);
   TS2740 Set set-methods (core.ts). Arithmetic-flow `number|undefined`→number (parser.ts 8911/8974)
