@@ -113795,9 +113795,19 @@ interface DataView {
             is ArrowFunction -> {
                 val savedLocalTypes = currentLocalTypes
                 val savedParamBindings = currentParamBindingNames
+                val savedArrowShadowed = currentShadowedNames
                 currentLocalTypes = currentLocalTypes.toMutableMap()
                 currentParamBindingNames = currentParamBindingNames.toMutableSet()
+                currentShadowedNames = currentShadowedNames.toMutableSet()
                 populateParameterLocalTypes(expr.parameters)
+                // Round 447: a Block-bodied nested arrow's own `let/const x` shadows an outer
+                // same-named binding for reads INSIDE it — record the inner annotation into
+                // currentLocalTypes (completions.ts's inner `let exportInfo: SymbolExportInfo`
+                // shadows an outer `const exportInfo: ExportInfoMap`; without this the reads
+                // resolved to ExportInfoMap → FP TS2339). Mirrors checkFunctionBody's call.
+                (expr.body as? Block)?.let { b ->
+                    applyBodyLocalShadowing(b.statements, expr.parameters.mapNotNull { p -> (p.name as? Identifier)?.text }.toSet())
+                }
                 // 16.0: contextual param inference for un-annotated arrow parameters
                 val ctxType = contextualType
                 // B83.4d: when this arrow's body is an EXPRESSION (concise body) and its
@@ -113840,6 +113850,7 @@ interface DataView {
                 }
                 currentLocalTypes = savedLocalTypes
                 currentParamBindingNames = savedParamBindings
+                currentShadowedNames = savedArrowShadowed
             }
             is NewExpression -> {
                 checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
@@ -113918,8 +113929,10 @@ interface DataView {
             is FunctionExpression -> {
                 val savedLocalTypes = currentLocalTypes
                 val savedParamBindings = currentParamBindingNames
+                val savedFnExprShadowed = currentShadowedNames
                 currentLocalTypes = currentLocalTypes.toMutableMap()
                 currentParamBindingNames = currentParamBindingNames.toMutableSet()
+                currentShadowedNames = currentShadowedNames.toMutableSet()
                 // 16.0: shadow outer vars with unannotated function-expression params
                 // so `(s: string) => ... || function (s) { s.aaa }` does not falsely
                 // type the inner `s` from the outer scope.
@@ -113962,6 +113975,9 @@ interface DataView {
                         }
                     }
                 }
+                // Round 447: nested function-expression body's own `let/const x` shadows an
+                // outer same-named binding (mirrors the ArrowFunction branch above).
+                applyBodyLocalShadowing(expr.body.statements, expr.parameters.mapNotNull { p -> (p.name as? Identifier)?.text }.toSet())
                 val savedCtx = contextualType
                 contextualType = null
                 try {
@@ -113971,6 +113987,7 @@ interface DataView {
                 }
                 currentLocalTypes = savedLocalTypes
                 currentParamBindingNames = savedParamBindings
+                currentShadowedNames = savedFnExprShadowed
             }
             is ClassExpression -> {
                 // B98.r109: a class EXPRESSION (`class { m() { this.X } }`, e.g. used as a
