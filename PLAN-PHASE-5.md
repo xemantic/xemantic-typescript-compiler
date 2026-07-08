@@ -87,10 +87,11 @@ FPs.**
   reaching it. Needs a marker-diagnostic trace at the FlowCall handler. High leverage (the
   `Debug.type<T>` + exhaustive-switch idiom is pervasive in tsc source) but a real M3.4 slice.
 - **Fix 1 (checker, −3, TS2344): constraint-chain bail-outs (detail below).**
-- **Generalization (both fixes, `--no-emit` `--listAll`, vs the round-440 END baseline): server
-  1,321 → 1,317 (−4), harness 1,610 → 1,606 (−4).** Modest — these specific shapes (enum-union
-  constraints, exhaustive discriminated-union switches) are less common than round-440's cross-file
-  collisions — but strictly negative, no regressions on the larger profiles.
+- **Generalization (all THREE fixes, `--no-emit` `--listAll`, vs the round-440 END baseline):
+  services 1,037 → 1,030 (−7), server 1,321 → 1,314 (−7), harness 1,610 → 1,603 (−7).** Consistent
+  −7 to −8 across profiles, no regressions. The assertNever `→never` cases on the larger profiles
+  are gated by the same union-`.kind`-resolution requirement, so only the resolvable ones clear
+  there too.
 - **Baseline @ HEAD (round 440): 205 FPs.** Bucketed the full `--listAll`: TS2322×100 (deep
   M3 relation, fragmented — largest sub-shape only 3), TS2591×43 + TS2304 `global`×2 + TS2584
   `console`×1 env-legit (offline, no @types/node — NOT compiler FPs), TS2345×28 (fragmented:
