@@ -108814,6 +108814,17 @@ interface DataView {
                     }
                     if (derivedType == null) continue
 
+                    // When the base member is a DATA property (not a Function symbol — the
+                    // method-vs-method branch above already `continue`d those) but the DERIVED
+                    // member is a METHOD, `getMemberNameAndType` gave us the method's RETURN-type
+                    // node, not its full function type. Comparing a method's return type against
+                    // the base property's function type is the wrong shape and FP-fires (tsc's own
+                    // `EmitHost.getCanonicalFileName(fileName): string` — a method — implementing
+                    // `SourceFileMayBeEmittedHost.getCanonicalFileName: GetCanonicalFileName` — a
+                    // function-typed property — is legal). Skip: a method implementing a
+                    // function-typed property is compatible when its signature matches.
+                    if (propName in derivedMethods) continue
+
                     // Get base property's type
                     val basePropType = getTypeOfSymbol(baseProp)
                     if (basePropType === anyType || basePropType === errorType) continue
@@ -108831,8 +108842,13 @@ interface DataView {
                     if (derivedType is KeywordTypeNode) {
                         val derivedSemanticType = getTypeFromKeyword(derivedType.kind)
                         if (derivedSemanticType !== anyType && derivedSemanticType !== errorType) {
-                            // Use structural comparison
-                            if (!isTypeAssignableTo(derivedSemanticType, basePropType)) {
+                            // Use structural comparison. An OPTIONAL base member `p?: T` accepts a
+                            // narrower derived member — `ValidParameterDeclaration.modifiers: undefined`
+                            // extending `ParameterDeclaration.modifiers?: NodeArray<...>` is legal
+                            // (`undefined` assignable to `T | undefined`). Widen the base target with
+                            // `| undefined` for the relation (source-nullish gated; display unchanged).
+                            val baseForRel = widenOptionalTargetPropType(basePropType, baseProp, derivedSemanticType)
+                            if (!isTypeAssignableTo(derivedSemanticType, baseForRel)) {
                                 emitTS2430(ifaceDecl.name, derivedName, baseName, propName,
                                     derivedTypeName, baseTypeName, source, fileName)
                                 return // One TS2430 per interface per base
@@ -108843,7 +108859,8 @@ interface DataView {
                         // Only flag if both are simple known type names that differ
                         val derivedResolvedType = getTypeFromTypeNodeSafe(derivedType)
                         if (derivedResolvedType != null && derivedResolvedType !== anyType && derivedResolvedType !== errorType) {
-                            if (!isTypeAssignableTo(derivedResolvedType, basePropType)) {
+                            val baseForRel = widenOptionalTargetPropType(basePropType, baseProp, derivedResolvedType)
+                            if (!isTypeAssignableTo(derivedResolvedType, baseForRel)) {
                                 emitTS2430(ifaceDecl.name, derivedName, baseName, propName,
                                     derivedTypeName, baseTypeName, source, fileName)
                                 return
