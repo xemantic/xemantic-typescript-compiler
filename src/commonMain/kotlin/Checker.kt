@@ -42863,6 +42863,16 @@ interface DataView {
                     shadowed.add(fnName)
                 }
                 is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                    // A DESTRUCTURED binding (`const { hasReturn } = commentOwnerInfo`) shadows an
+                    // outer same-named binding just like a simple `const x` — register every binding
+                    // name as a shadow so TS2774 bails instead of resolving `hasReturn` to a same-file
+                    // `function hasReturn` (jsDoc.ts getDocCommentTemplateAtPosition FP'd "always
+                    // defined, did you mean to call it"). Shadow-only (no per-element typing here) —
+                    // consistent with an untyped simple local, which also only registers the shadow.
+                    if (d.name !is Identifier) {
+                        collectBindingNames(d.name, shadowed)
+                        continue
+                    }
                     val vName = (d.name as? Identifier)?.text ?: continue
                     val annotated = d.type?.let { try { getTypeFromTypeNode(it) } catch (_: Exception) { null } }
                     val init = d.initializer
