@@ -115552,9 +115552,9 @@ interface DataView {
                         !it.flags.hasAny(TypeFlags.Undefined or TypeFlags.Null or TypeFlags.Void)
                     }
                     val displays = buildList {
-                        try { typeToString(recvType)?.let { add(it) } } catch (_: Exception) {}
+                        try { add(typeToString(recvType)) } catch (_: Exception) {}
                         if (nonNullish.size in 2 until recvType.types.size) {
-                            try { typeToString(getUnionType(nonNullish))?.let { add(it) } } catch (_: Exception) {}
+                            try { add(typeToString(getUnionType(nonNullish))) } catch (_: Exception) {}
                         }
                     }
                     // Round 443 direction: a leaked type-ALIAS union displayed as its name, accessed

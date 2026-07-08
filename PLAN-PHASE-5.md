@@ -39,6 +39,64 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
+**Round 444 (2026-07-08) — cross-file heritage / `this`-guard receiver narrowing / alias-own-file
+conflation (Blocker #3): THREE bounded fixes, all suppression-only. Compiler profile UNCHANGED (190),
+but they GENERALIZE strongly across the big profiles: services 498 → 448 (−50), server 733 → 678
+(−55), harness 989 → 928 (−61). Suite 9,512 → 9,522 (+10 local across 2 test files, 0 regressions);
+3 fix commits (19e282f0/59868e67/796d263f); services diffed via `--listAll` as strictly by-position
+removals (heritage 22 removed / 1 unmasked; this-predicate 17/0; conflation 12/0). Bench rows recorded.**
+- **Baseline @ HEAD (round 443): services 498, compiler 190.** The compiler profile is mined out for
+  clean bounded veins; bucketed the SERVICES `--listAll` TS2339×85: `Type`×20 / `Info`×12 /
+  `RefactorContext`×9 / `NavigationBarNode`×9 / `ExportInfoMap`×8 / `CodeFixContextBase`×8 / `Symbol`×5.
+- **Fix 1 (19e282f0, −21 services, TS2339): namespace-import-aliased heritage base.** An interface
+  whose `extends` base is `NS.Base` where `NS` is a MODULE namespace-import alias
+  (`RefactorContext`/`CodeFixContextBase extends textChanges.TextChangesContext`, with
+  `import * as textChanges` / a `_namespaces` `export * as` barrel) did not inherit the base's members.
+  `resolveAlias` does NOT resolve an `import * as NS` / `export * as NS` namespace alias to a module with
+  `.exports` (the alias's declaration is the NamespaceImport node, which none of resolveAlias's branches
+  handle), so `resolveHeritageBaseSymbol`'s exports lookup returned null → base = errorType → inherited
+  `.host` FP'd TS2339 ×17. Fix: `getTypeFromBaseTypeExpression` falls back to the merged-global
+  LAST-SEGMENT name (`globals[baseExpr.name.text]`) — exactly what `getTypeFromTypeReference` does for
+  the same qualified shape in ANNOTATION position (which is why a direct `ctx: textChanges.TextChangesContext`
+  annotation resolved while the heritage base did not). By-position diff 22 removed / 1 unmasked
+  (pasteEdits.ts:111 — a pre-existing `originalProgram!` NonNull-strip gap in an object-literal value,
+  surfaced because CodeFixContextBase now resolves its base; needs exact nested-flow context, does not
+  reproduce in isolation → left as residual).
+- **Fix 2 (59868e67, −17 services, TS2339 — the `.types`-on-`Type` bucket 20 → 2): a `this is X` guard
+  METHOD narrows the call RECEIVER.** The tsc `Type`/`Symbol`/`Node` public-API guards
+  (`isUnion(): this is UnionType`, `isIntersection()`, `isLiteral()`, …, added to the interfaces by a
+  `declare module` augmentation) narrow the method-call receiver, not an argument. `narrowByCallPredicate`
+  bailed twice: (1) the `this` subject of a `this is X` predicate parses as a **ThisType** node (not an
+  Identifier), so `predicateParamName` extraction returned null; (2) even with the name, the narrowed
+  reference is the receiver, so the arg-path fast-path / paramIdx logic never matched. Fix: recognise a
+  ThisType subject as `"this"`, compute the method-call receiver path up front (participating in the P0
+  fast-path), and narrow the receiver via the existing single-type/union logic. **FP-safe gate (caught by
+  the corpus suite): a `this is X` method guard narrows only a NON-UNION receiver** — tsc narrows a
+  union-receiver method-guard only if EVERY constituent has a matching predicate (typePredicatesInUnion3:
+  `Type1 | Type2` where `Type2.predicate(): boolean` is not a guard), and resolveFlowCalleeDecl found only
+  one member's method, so a union bails (suppression-only → a bail is a harmless false-negative).
+- **Fix 3 (796d263f, −12 services, TS2339): the alias's-own-file complement of round 443.** In the file
+  that DECLARES `type Info = TypeLikeDeclarationInfo | EnumInfo | …` (fixAddMissingMember.ts), the receiver
+  `info` resolves — via the merged last-wins pick (Interface+TypeAlias don't merge) — to a SIBLING codefix
+  file's unrelated `interface Info` instead of the local union, so `info.kind`/`info.parentDeclaration`/
+  `info.token` (union members reachable after a `.kind` discriminant narrowing our conflated receiver can't
+  model) FP'd. `checkMemberAccessMissing` bails when the receiver's conflated name is a `type X` in THIS
+  file AND the property exists on SOME constituent of the file-local union. **The union is resolved from the
+  TypeAliasDeclaration's BODY node directly (`getTypeFromTypeNode`), NOT via `getDeclaredTypeOfSymbol` on the
+  file-local symbol — that symbol's `declarations` list is polluted by `mergeSymbolTable` with the sibling
+  `interface X`es, so getDeclaredTypeOfSymbol resolves an Interface, not the Union** (found by an instrumented
+  probe: `localInfo=[TypeAliasDeclaration, InterfaceDeclaration, InterfaceDeclaration] laType=Interface`).
+  Handles both a single `interface X` receiver and an `X | undefined` union receiver (sole non-nullish member).
+- **INVESTIGATED & DEFERRED: the type-RESOLUTION fix (prefer the file-local `type X` in `getTypeFromTypeReference`)
+  fails — `currentCheckFileName` is NULL at the lazy `getInfo`-return-type resolution (the type is resolved +
+  cached before any file-check context sets it). The emission-site bail (fix 3) is the robust choice.**
+- **META / next-agent (services @ 448):** the residual TS2339×38 is now dominated by the AUGMENTATION-MEMBER
+  merge (`symbol.links` / `type.checker` — a `declare module "../compiler/types.js" { interface Symbol {
+  links } }` adds members our binder does NOT merge into the base interface; CLAUDE.md's documented hard
+  Blocker #3) — the highest-value single remaining cross-file fix, would clear `Symbol`/`ExportInfoMap` and
+  much of server/harness. `NavigationBarNode`×9 is the round-442 module-var-leak residual (names with a
+  competing global meaning are excluded from `moduleFileLocalVarNames`). The bulk is now deep-M3 TS2322×236.
+
 **Round 443 (2026-07-08) — module-augmentation family + the module-file-local TYPE-alias leak
 (Blocker #3): FOUR bounded fixes, all suppression-only. Compiler profile UNCHANGED (190 — no FPs in
 these families there), but the fixes GENERALIZE hugely across the big profiles: services 591 → 498
@@ -664,26 +722,6 @@ c99efbb5, 451abce6, 0bcdeadf, b751249b); every step's by-site diff strictly remo
   nested-overloads ×5, `Node`→never exhaustiveness ×3 (M3.4). TS2769×30 (un-triaged
   chains — sample next). TS2591×43 env-legit. TS7006×1 (tsbuildPublic destructured-
   member local — needs member-typed binding registration).**
-
-**Round 434 (2026-07-07) — M5.4 groundwork (owner-directed): parallel-caching design
-record + eager-immutable index + durable tooling.** `enclosingImportIndex` converted
-from lazy-mutable to an eager immutable field initializer (Tier 1 — byte-identical
-diagnostics + timing on both dashboards, suite 9,333/0). NEW **`docs/parallel-caching.md`**
-is the canonical design record for M5.4: the three cache tiers (eager-immutable
-program facts / worker-local scratch / replicated-never-shared first-touch type state),
-the share-nothing phased plan (tsgo parity → shared frozen lib slice → single-flight
-pure computations), the determinism-over-everything rule, the multiplatform primitives
-ladder (freeze → `kotlin.concurrent.atomics` CoW → expect/actual), the
-evaluated-and-DECLINED CharlieTap/cachemap dependency (left-right KMP map: dormant, no
-JS/WASM targets, no single-flight; the real blockers to sharing checking work are
-Tier-3 immutability/purity, not the map), the JFR profiling how-to, and the
-tsc/tsgo/xtsc comparison (tsc-source: tsgo 0.94 s / tsc 5.1 s / xtsc 19.6 s; zod:
-0.52 / 2.1 / 3.5 s). `scripts/aggregate_jfr.py` (portable jfr-tool resolution,
-self/inclusive/by-class + `--callers-of` attribution) checked in — profiling is now
-reproducible on any box (VPS included), nothing lives only in a session scratchpad.
-Backlog: M4.6 (`package.json "type": "module"` ProjectCompiler gap, found via zod) +
-M4.7 (zod as second dashboard profile, full recipe + FP baseline) written down with
-stable IDs; M5.1/M5.4 queue items now point at the design note.
 
 **M2 — Real-lib migration (staged; decompose further at start)**
 

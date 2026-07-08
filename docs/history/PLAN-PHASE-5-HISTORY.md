@@ -2921,3 +2921,23 @@ shrinking at every landed step; suite 9,356 → 9,384 (+28 local, 0 regressions)
   M3.4). TS2345×86/TS2769×30 (nested-overload `'true'`/`'false'` ×5,
   string-vs-literal-union ×10). TS2591×43 is env-legit (offline, no @types/node —
   `--node-stub` suppresses).
+
+**Round 434 (2026-07-07) — M5.4 groundwork (owner-directed): parallel-caching design
+record + eager-immutable index + durable tooling.** `enclosingImportIndex` converted
+from lazy-mutable to an eager immutable field initializer (Tier 1 — byte-identical
+diagnostics + timing on both dashboards, suite 9,333/0). NEW **`docs/parallel-caching.md`**
+is the canonical design record for M5.4: the three cache tiers (eager-immutable
+program facts / worker-local scratch / replicated-never-shared first-touch type state),
+the share-nothing phased plan (tsgo parity → shared frozen lib slice → single-flight
+pure computations), the determinism-over-everything rule, the multiplatform primitives
+ladder (freeze → `kotlin.concurrent.atomics` CoW → expect/actual), the
+evaluated-and-DECLINED CharlieTap/cachemap dependency (left-right KMP map: dormant, no
+JS/WASM targets, no single-flight; the real blockers to sharing checking work are
+Tier-3 immutability/purity, not the map), the JFR profiling how-to, and the
+tsc/tsgo/xtsc comparison (tsc-source: tsgo 0.94 s / tsc 5.1 s / xtsc 19.6 s; zod:
+0.52 / 2.1 / 3.5 s). `scripts/aggregate_jfr.py` (portable jfr-tool resolution,
+self/inclusive/by-class + `--callers-of` attribution) checked in — profiling is now
+reproducible on any box (VPS included), nothing lives only in a session scratchpad.
+Backlog: M4.6 (`package.json "type": "module"` ProjectCompiler gap, found via zod) +
+M4.7 (zod as second dashboard profile, full recipe + FP baseline) written down with
+stable IDs; M5.1/M5.4 queue items now point at the design note.
