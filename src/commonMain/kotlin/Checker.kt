@@ -125739,9 +125739,17 @@ interface DataView {
                 // Allows the check even when sigHasOnlySimpleTypes fails (e.g. unresolved
                 // ItemSet → errorType, or `any` return type).
                 val allowArityMismatch = paramIsAnonFunc && argIsAnonFunc && run {
-                    val argSig = (argType).callSignatures!!.first()
                     val paramSig = (paramType).callSignatures!!.first()
-                    argSig.minArgumentCount > paramSig.parameters.size
+                    // Round 442: for an OVERLOADED arg (multiple call sigs) it is
+                    // arity-incompatible with the target only when EVERY overload
+                    // requires more arguments than the target provides — tsc picks a
+                    // matching overload. `tryCast(x, isAssignmentExpression)` where
+                    // isAssignmentExpression's 1st overload takes 2 required params but
+                    // its 2nd has an OPTIONAL 2nd param (minArgumentCount 1) satisfies the
+                    // 1-arg `(value: TIn) => value is TOut` callback target. Using
+                    // callSignatures.first() wrongly flagged the all-required 1st overload.
+                    // A single-sig arg is unaffected (minOf == first).
+                    (argType).callSignatures!!.minOf { it.minArgumentCount } > paramSig.parameters.size
                 }
                 // 17.238: Zero-param void-return source vs anon-func target with a simple
                 // non-void return — assign-incompatible regardless of target's param types.
