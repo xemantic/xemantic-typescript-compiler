@@ -6492,6 +6492,22 @@ class Checker(
     }
 
     /**
+     * [resolveModuleSpecifierRelative] that ALSO retries with a trailing ESM `.js`/`.jsx`
+     * extension stripped (nodenext resolves `../compiler/types.js` → `../compiler/types.ts`).
+     * The base resolver deliberately avoids `.js` globally (FP-prone per the TS2459 gotcha), so
+     * callers that must be `.js`-tolerant use this. Purely additive — can only make MORE
+     * specifiers resolve, never fewer — so it only ever SUPPRESSES a false-positive
+     * "cannot be found" diagnostic. Consolidates the strip-and-retry pattern inlined at the
+     * TS2694/TS2305/TS2307 augmentation-target sites.
+     */
+    private fun resolveModuleSpecifierRelativeJsAware(specifier: String, contextFileName: String): String? =
+        resolveModuleSpecifierRelative(specifier, contextFileName)
+            ?: (if (specifier.endsWith(".js")) resolveModuleSpecifierRelative(specifier.removeSuffix(".js"), contextFileName) else null)
+            ?: (if (specifier.endsWith(".jsx")) resolveModuleSpecifierRelative(specifier.removeSuffix(".jsx"), contextFileName) else null)
+            ?: (if (specifier.endsWith(".mjs")) resolveModuleSpecifierRelative(specifier.removeSuffix(".mjs"), contextFileName) else null)
+            ?: (if (specifier.endsWith(".cjs")) resolveModuleSpecifierRelative(specifier.removeSuffix(".cjs"), contextFileName) else null)
+
+    /**
      * Resolve a relative module specifier strictly relative to the context file's directory,
      * WITHOUT falling back to global (non-directory-aware) resolution.
      * Used for TS2307/TS2792 checks where directory context must be respected.
@@ -35911,7 +35927,7 @@ class Checker(
                 // It is a superset of `resolveModuleSpecifier` (falls back to it), so this
                 // can only SUPPRESS false-positive TS2664 for resolvable relative modules,
                 // never add new TS2664 (a truly-missing module still resolves to null).
-                val resolvesToFile = resolveModuleSpecifierRelative(moduleName, fileName) != null ||
+                val resolvesToFile = resolveModuleSpecifierRelativeJsAware(moduleName, fileName) != null ||
                     resolvesAsJsOrJsx(moduleName)
                 val definedElsewhere = moduleName in moduleDefinitions
 
