@@ -140,4 +140,46 @@ class ConflatedTypeAliasLeakTest {
             have(none { it.code == 2339 })
         }
     }
+
+    // Round 447: the ARG-side complement of the receiver bail. A parameter typed as a conflated
+    // `type X` (leaked into globals, shadowing the real `interface X` in a NON-owning file)
+    // resolves to the bogus alias union, so an arg that DOES satisfy the real interface FP-fires
+    // TS2345 (SourceFileLike ×8 → 0 on the services profile). The actual leak is whole-program;
+    // these pin the FP FIREWALL (the bail must never suppress a genuine mismatch).
+
+    @Test
+    fun `a genuinely-mismatched arg in the alias's own file still fires - TS2345`() {
+        // `type SFL` (a.ts) conflates with `interface SFL` (b.ts). The arg-side bail is gated to
+        // files OTHER than the alias's own, so a bad arg to an `SFL` param IN a.ts must still fire.
+        compile(
+            """
+            // @strict: true
+
+            // @Filename: a.ts
+            type SFL = { x: number };
+            function use(v: SFL): number { return 0; }
+            export const r = use("bad");
+
+            // @Filename: b.ts
+            export interface SFL { a: number; }
+            """,
+            primary = "a.ts",
+        ) should {
+            have(any { it.code == 2345 })
+        }
+    }
+
+    @Test
+    fun `an ordinary primitive arg mismatch is unaffected - TS2345`() {
+        // Regression guard for the per-arg loop: a plain `string` arg to a `number` param must
+        // still fire; the conflated-alias bail only affects conflated type-alias-named params.
+        diagnose(
+            """
+            function needNum(x: number): number { return x; }
+            export const bad = needNum("hello");
+            """
+        ) should {
+            have(any { it.code == 2345 })
+        }
+    }
 }

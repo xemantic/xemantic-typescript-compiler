@@ -125290,6 +125290,53 @@ interface DataView {
         return checkTypeRelatedTo(stripped, paramType, assignableRelation)
     }
 
+    /**
+     * Blocker #3 (round 447): the ARG-side complement of round 443's conflated-type-alias RECEIVER
+     * bail (checkMemberAccessMissing). A parameter typed as a conflated `type X` — one that leaks
+     * into `globals` and shadows the real `interface X` in OTHER files (importTracker.ts's
+     * `type SourceFileLike = SourceFile | AmbientModuleDeclaration` vs compiler/types.ts's
+     * `interface SourceFileLike`) — resolves, in a NON-owning file, to the bogus alias UNION, so an
+     * object/class-instance arg that DOES satisfy the real interface FP-fires TS2345. True when the
+     * param type displays as a conflated alias name AND [fileName] is NOT the alias's own file (there
+     * the union is the genuine local type). FP-safe: tsc resolves X to the INTERFACE here (the arg
+     * satisfies it) — same reasoning as the round-443 receiver bail. Suppression-only.
+     */
+    /**
+     * Blocker #3 (round 447): true when [arg] is a bare leaked module var (round 442) OR a
+     * PROPERTY-ACCESS chain rooted at one (`parent.parent` where `parent` leaks navigationBar.ts's
+     * `NavigationBarNode` — the arg-side complement of round 444's receiver chain-walk). The whole
+     * chain resolves through the wrong leaked type, so a TS2345 against a real param is a false
+     * positive (a cross-file leaked module var is TS2304 in real tsc, never TS2345). A CALL in the
+     * chain breaks the walk (only pure property chains bail). Skips the current file's own binding.
+     */
+    private fun argRootIsLeakedModuleVar(arg: Expression): Boolean {
+        if (moduleFileLocalVarNames.isEmpty()) return false
+        var e: Expression = arg
+        while (e is PropertyAccessExpression) e = e.expression
+        val root = e as? Identifier ?: return false
+        return root.text in moduleFileLocalVarNames && currentFileLocals?.get(root.text) == null
+    }
+
+    private fun paramTypeIsLeakedConflatedAlias(paramType: Type, fileName: String): Boolean {
+        if (conflatedTypeAliasFiles.isEmpty()) return false
+        val displays = buildList {
+            try { add(typeToString(paramType)) } catch (_: Exception) {}
+            if (paramType is Type.Union) {
+                val nonNullish = paramType.types.filter {
+                    !it.flags.hasAny(TypeFlags.Undefined or TypeFlags.Null or TypeFlags.Void)
+                }
+                if (nonNullish.size in 2 until paramType.types.size) {
+                    try { add(typeToString(getUnionType(nonNullish))) } catch (_: Exception) {}
+                }
+            }
+        }
+        for (d in displays) {
+            val aliasFiles = conflatedTypeAliasFiles[d] ?: continue
+            if (fileName !in aliasFiles) return true
+        }
+        return false
+    }
+
     private fun checkArgumentsAgainstSignature(
         args: List<Expression>,
         sigIn: Signature,
@@ -125381,10 +125428,16 @@ interface DataView {
             // FP-fires TS2345 against the real param (153 on the services profile). Skip
             // it UNLESS it IS the current file's own top-level var. Mirrors the
             // checkMemberAccessMissing bail; suppression-only (only affects TS2345 here).
-            if (arg is Identifier && arg.text in moduleFileLocalVarNames &&
-                currentFileLocals?.get(arg.text) == null) continue
+            // Round 447: the leaked-var ROOT may sit behind a property-access chain —
+            // `isCallExpression(parent.parent)` where `parent` leaks NavigationBarNode
+            // (the arg-side complement of round 444's receiver chain-walk).
+            if (argRootIsLeakedModuleVar(arg)) continue
             val paramType = getTypeOfSymbol(params[i])
             if (paramType === anyType || paramType === errorType) continue
+            // Blocker #3 (round 447): the param is typed as a conflated `type X` leaked into
+            // globals (the ARG-side complement of round 443's receiver bail) — skip when it
+            // displays as a conflated alias name in a file that is NOT the alias's own.
+            if (paramTypeIsLeakedConflatedAlias(paramType, fileName)) continue
             // 16.0b: contextual typing — set param type as context so arrow/function
             // arguments get their parameters typed from the expected signature.
             // B83.4g: also propagate the param type for ObjectLiteralExpression args

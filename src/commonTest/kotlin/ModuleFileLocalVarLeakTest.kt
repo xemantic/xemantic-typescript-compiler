@@ -125,6 +125,56 @@ class ModuleFileLocalVarLeakTest {
     }
 
     @Test
+    fun `a property-access chain rooted at the module-var leak passed as an argument - no TS2345`() {
+        // Round 447: the arg-side complement of round 444's receiver chain-walk. `parent.parent` as
+        // an arg, where `parent` leaks NavNode, resolves the whole chain to NavNode → FP TS2345
+        // against a real Node-shaped param (`isCallExpression(parent.parent)` in tsc's codefixes).
+        // Walk to the root; bail when it is a leaked module var (a CALL in the chain breaks it).
+        compile(
+            """
+            // @strict: true
+
+            // @Filename: a.ts
+            export interface NavNode { node: number; parent: NavNode; }
+            let parent: NavNode = undefined!;
+            export function walk(): number { return parent.node; }
+
+            // @Filename: b.ts
+            interface Expr { kind: number; parent: Expr; }
+            declare function takesExpr(e: Expr): void;
+            export function useExpr(e: Expr): void {
+                const parent = e;
+                takesExpr(parent.parent);
+            }
+            """
+        ) should {
+            have(none { it.code == 2345 })
+        }
+    }
+
+    @Test
+    fun `a genuinely-mismatched non-leaked arg still fires - TS2345`() {
+        // Negative control for the arg-chain bail: an arg NOT rooted at a leaked module var must
+        // keep firing an ordinary type mismatch (the bail only affects leaked-var roots).
+        TypeScriptCompiler().compile(
+            """
+            // @strict: true
+
+            // @Filename: a.ts
+            export interface NavNode { node: number; parent: NavNode; }
+            let parent: NavNode = undefined!;
+
+            // @Filename: b.ts
+            declare function needNum(n: number): void;
+            export function f(): void { needNum("nope"); }
+            """.trimIndent(),
+            "b.ts",
+        ).diagnostics should {
+            have(any { it.code == 2345 })
+        }
+    }
+
+    @Test
     fun `the declaring file's own module var still reports missing members - TS2339`() {
         // Negative control: within a.ts, `parent` IS the file's own top-level var (currentFileLocals),
         // so a genuinely-missing member must still fire TS2339 (the bail is gated to OTHER files).
