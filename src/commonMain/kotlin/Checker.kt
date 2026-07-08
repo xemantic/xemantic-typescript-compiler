@@ -121006,10 +121006,28 @@ interface DataView {
             if (LIB_MIN_TARGET_SOFT.any { (k, v) -> k.endsWith(".$mName") && !libFeatureAvailable(v) }) return
         }
         val params = sig.parameters
-        val hasRest = (params.lastOrNull()?.valueDeclaration as? Parameter)?.dotDotDotToken == true
+        // Round 446: a DESTRUCTURED param `{ a, b }: T` produces NO Symbol, so
+        // `sig.parameters` DROPS it (`{ fileName, pos }: Range` → empty parameters list),
+        // giving an impossible arity range (`maxParams` 0 while `minArgumentCount` 1 →
+        // "Expected 1-0 arguments"). Recover the TRUE arity from the DECLARATION's
+        // parameter list (paramInfo counts binding-pattern params + handles rest/optional)
+        // when the declaration is a function-like node.
+        val declParams: List<Parameter>? = when (val d = sig.declaration) {
+            is FunctionDeclaration -> d.parameters
+            is MethodDeclaration -> d.parameters
+            is FunctionExpression -> d.parameters
+            is ArrowFunction -> d.parameters
+            is Constructor -> d.parameters
+            is GetAccessor -> d.parameters
+            is SetAccessor -> d.parameters
+            else -> null
+        }
+        val declInfo = declParams?.let { paramInfo(it) }
+        val hasRest = declInfo?.hasRest
+            ?: ((params.lastOrNull()?.valueDeclaration as? Parameter)?.dotDotDotToken == true)
         val argCount = expr.arguments.size
-        val minParams = sig.minArgumentCount
-        val maxParams = params.size
+        val minParams = declInfo?.minParams ?: sig.minArgumentCount
+        val maxParams = declInfo?.maxParams ?: params.size
         if (argCount >= minParams && (hasRest || argCount <= maxParams)) return
         if (argCount >= minParams) {
             // B279: too-many args for a method call — same squiggle convention as the
