@@ -40,10 +40,10 @@ which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the b
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
 **Round 442 (2026-07-08) — TypeParam-constraint arg + overloaded-callback arity + the
-module-file-local-variable global-leak (Blocker #3): FOUR bounded fixes. Compiler profile
-197 → 190 (−7), and the module-var-leak fix GENERALIZES MASSIVELY across the big profiles:
-services 1,030 → 604 (−426), server 1,314 → 887 (−427), harness 1,603 → 1,118 (−485). Suite
-9,492 → 9,502 (+10 local across 3 test files, 0 regressions); 4 fix commits. Compiler diffed
+module-file-local-variable/type global-leak (Blocker #3): FIVE bounded fixes. Compiler profile
+197 → 190 (−7), and the leak fixes GENERALIZE MASSIVELY across the big profiles:
+services 1,030 → 591 (−439), server 1,314 → 887 (−427), harness 1,603 → 1,118 (−485). Suite
+9,492 → 9,504 (+12 local across 4 test files, 0 regressions); 5 fix commits. Compiler diffed
 via the `--listAll` `comm` loop as strictly by-position removals.**
 - **Baseline @ HEAD (round 441): compiler 197.** Bucketed the `--listAll`: the clean bounded veins
   were (a) `K`/`T` (constrained TypeParam) → `string` param ×3, (b) the overloaded-callback arity ×2,
@@ -82,6 +82,18 @@ via the `--listAll` `comm` loop as strictly by-position removals.**
   services TS2339 404 → 129 (NavNode 279 → 9), TS2345 197 → 44 (NavNode-as-arg 153 → 10); compiler −1
   (utilities.ts:6325 `getIndentString(indent)` — the round-440-flagged 'wrong-callee single', actually
   a module-var leak). 3 local tests (cross-file positive + same-file negative control + arg-check positive).
+- **Fix 5 (TYPE-position analog of the leak, Blocker #3, −13 services TS2314): a file's OWN
+  non-generic Class/Interface/TypeAlias declaration shadows a cross-file same-named GENERIC type.**
+  `getTypeParamInfo` iterates ALL files' locals and returns the first generic match, so
+  convertToAsyncFunction.ts's non-generic `interface Transformer` lost to types.ts's `type
+  Transformer<T>` → FP TS2314 "requires 1 type argument" (×14). `checkTypeArgCount` bails via a new
+  AST-based `fileDeclaresNonGenericType(fileName, name)` (scans the file's own top-level statements —
+  pollution-proof, since the merged `globals`/first-file symbol carries BOTH declarations); a same-file
+  GENERIC decl returns false so its real arity still applies. Strictly 14 TS2314 removed / 1 TS2322
+  added (convertToAsyncFunction.ts:166 — a pre-existing object-literal-vs-local-interface M3 relation
+  gap unmasked once `Transformer` correctly resolves to the local interface). NOTE the FP requires the
+  file to have a local decl (so `scope.has(name)` is true and the arity check runs at all) — a bare
+  cross-file generic with NO local shadow is scope-gated out and never fired TS2314 to begin with.
 - **LESSON / MEASURED DEAD-END: a broader `getTypeOfIdentifier` variant (return anyType for these names
   in the globals fallback) was tried and REVERTED — it took services TS2345 197 → 44 too but broke
   cross-file initializer inference / redeclare / `.d.ts` emit → 5 corpus regressions (es6Import*,
