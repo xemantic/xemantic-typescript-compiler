@@ -86439,6 +86439,25 @@ interface DataView {
         return objectLiteralSatisfiesFileLocalInterface(obj, name, fileName)
     }
 
+    /**
+     * True when [obj] has a spread `...x` whose type is `any`/error (unresolved). tsc types
+     * an object literal that spreads `any` as `any` (the spread poisons the whole object), so
+     * missing-required-property checks must not fire — the spread could provide them. Our
+     * un-annotated function-return inference is incomplete (`inferReturnTypeFromBody` has no
+     * object-literal branch), so a spread of such a call (`...getFileAndTextSpanFromNode(node)`
+     * → `{ sourceFile, textSpan }`) resolves to `any`; without this the returned object FP'd
+     * "missing sourceFile, textSpan" (findAllReferences.ts ×5). Suppression-only.
+     */
+    private fun objectLiteralHasUnresolvedSpread(obj: ObjectLiteralExpression): Boolean {
+        for (p in obj.properties) {
+            if (p is SpreadAssignment) {
+                val st = try { getTypeOfExpression(p.expression) } catch (_: Exception) { return true }
+                if (st === anyType || st === errorType) return true
+            }
+        }
+        return false
+    }
+
     private fun checkReturnAssignability(
         stmt: ReturnStatement, returnType: String, source: String, fileName: String,
         varTypes: Map<String, String>, typeParams: Set<String>,
@@ -86708,6 +86727,13 @@ interface DataView {
             // and BEFORE the coarse missing-property / relation paths. Suppression-only.
             if (expr is ObjectLiteralExpression &&
                 objectLiteralMatchesConflatedFileLocalInterface(expr, targetType, fileName)) {
+                return
+            }
+            // A `return { ...anyExpr, ... }` — an object literal spreading an any/unresolved
+            // type — is typed `any` by tsc (the spread poisons the object), so it cannot be
+            // "missing" required target properties (the spread may provide them). Runs after
+            // the per-property drills (a genuine explicit-prop type mismatch still fires).
+            if (expr is ObjectLiteralExpression && objectLiteralHasUnresolvedSpread(expr)) {
                 return
             }
             // B87.4c (round 73): class-instance source → interface/class return-type
