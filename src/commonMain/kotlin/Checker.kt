@@ -505,6 +505,20 @@ class Checker(
      *  the globals merge. */
     private var conflatedTypeAliasFiles: Map<String, Set<String>> = emptyMap()
 
+    /** Blocker #3 (round 445): name X → the set of MODULE files declaring a top-level
+     *  `interface X`, for names X declared as `interface X` in ≥2 DISTINCT module files.
+     *  Such interfaces MERGE via `mergeSymbolTable` into one polluted `globals[X]` (the
+     *  union of every file's members), even though each module's `interface X` is really
+     *  module-scoped and separate. So an object literal matching a file's OWN local
+     *  `interface X` looks "missing properties" against the merged union (tsc's own
+     *  codefixes all declare a private `interface Info`). The RETURN/var-decl object-literal
+     *  assignability paths bail when the target is such a conflated interface X, the current
+     *  file declares its own `interface X`, and the source object literal satisfies the
+     *  FILE-LOCAL X (checked AST-side from the raw declaration — the merged symbol's
+     *  `declarations` list is polluted). FP-safe: tsc checks against the file-local X only,
+     *  which is exactly what the gate replicates. Populated after the globals merge. */
+    private var conflatedInterfaceFiles: Map<String, Set<String>> = emptyMap()
+
     /** Param name → enum display name for params typed as a type parameter constrained
      *  to an enum (`function f<B extends E>(p: B)` → `p` → `E`). Populated by pure symbol
      *  lookup at function-body entry; consulted ONLY by [enumTypedReceiverDisplay] for the
@@ -1376,6 +1390,24 @@ class Checker(
                 }
             }
             conflatedTypeAliasFiles = aliasFiles.filterKeys { it in interfaceNames }
+        }
+        // 1a4 (round 445, Blocker #3): the INTERFACE-vs-interface merge analog — a name X
+        // declared as a top-level `interface X` in ≥2 DISTINCT MODULE files merges into one
+        // polluted `globals[X]` even though each module's interface is really module-local
+        // (see [conflatedInterfaceFiles]). Record which module files declare each such X.
+        run {
+            val ifaceFiles = HashMap<String, MutableSet<String>>()
+            for (result in binderResults) {
+                val fn = result.sourceFile.fileName
+                val stmts = result.sourceFile.statements
+                if (!isModuleFile(stmts)) continue
+                for (stmt in stmts) {
+                    if (stmt is InterfaceDeclaration) {
+                        ifaceFiles.getOrPut(stmt.name.text) { HashSet() }.add(fn)
+                    }
+                }
+            }
+            conflatedInterfaceFiles = ifaceFiles.filterValues { it.size >= 2 }
         }
         // 1b. Merge module augmentation exports into target module symbols
         mergeModuleAugmentations()
@@ -86342,6 +86374,71 @@ interface DataView {
         }
     }
 
+    /**
+     * Blocker #3 (round 445): true when [obj] provides every REQUIRED member of the
+     * file-LOCAL `interface [ifaceName]` declared in [fileName]. Used to suppress a
+     * missing-property TS2322/TS2739/TS2740 when a conflated interface name (one merged
+     * across module files, see [conflatedInterfaceFiles]) is the assignment/return target:
+     * tsc checks against the FILE-LOCAL interface, so an object literal that satisfies it is
+     * correct even though it "misses" other files' merged members. The check is AST-based —
+     * the merged symbol's `declarations` list is polluted, so we read the raw declaration.
+     * Conservative (returns false → keeps firing) for interfaces with heritage clauses
+     * (inherited required members we can't collect AST-side) and object literals with spreads.
+     */
+    private fun objectLiteralSatisfiesFileLocalInterface(
+        obj: ObjectLiteralExpression, ifaceName: String, fileName: String,
+    ): Boolean {
+        val stmts = binderResults.firstOrNull { it.sourceFile.fileName == fileName }
+            ?.sourceFile?.statements ?: return false
+        val iface = stmts.filterIsInstance<InterfaceDeclaration>()
+            .firstOrNull { it.name.text == ifaceName } ?: return false
+        if (!iface.heritageClauses.isNullOrEmpty()) return false
+        if (obj.properties.any { it is SpreadAssignment }) return false
+        val provided = HashSet<String>()
+        for (p in obj.properties) {
+            val nm = when (p) {
+                is PropertyAssignment -> (p.name as? Identifier)?.text
+                is ShorthandPropertyAssignment -> p.name.text
+                is MethodDeclaration -> (p.name as? Identifier)?.text
+                is GetAccessor -> (p.name as? Identifier)?.text
+                is SetAccessor -> (p.name as? Identifier)?.text
+                else -> null
+            }
+            if (nm != null) provided.add(nm)
+        }
+        for (m in iface.members) {
+            val (nm, optional) = when (m) {
+                is PropertyDeclaration -> (m.name as? Identifier)?.text to m.questionToken
+                is MethodDeclaration -> (m.name as? Identifier)?.text to m.questionToken
+                else -> null to true // index/call signatures — not a named required prop
+            }
+            if (nm != null && !optional && nm !in provided) return false
+        }
+        return true
+    }
+
+    /**
+     * Blocker #3 (round 445): the target [t] (or the sole non-nullish member of an
+     * `X | undefined` union) is a conflated interface X (merged across module files) that
+     * [fileName] declares its OWN `interface X` for, and [obj] satisfies that file-local X.
+     */
+    private fun objectLiteralMatchesConflatedFileLocalInterface(
+        obj: ObjectLiteralExpression, t: Type, fileName: String,
+    ): Boolean {
+        if (conflatedInterfaceFiles.isEmpty()) return false
+        val ifaceType = when {
+            t is Type.Interface -> t
+            t is Type.Union -> t.types.filter {
+                !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)
+            }.singleOrNull() as? Type.Interface
+            else -> null
+        } ?: return false
+        val name = ifaceType.symbol?.name ?: return false
+        val files = conflatedInterfaceFiles[name] ?: return false
+        if (fileName !in files) return false
+        return objectLiteralSatisfiesFileLocalInterface(obj, name, fileName)
+    }
+
     private fun checkReturnAssignability(
         stmt: ReturnStatement, returnType: String, source: String, fileName: String,
         varTypes: Map<String, String>, typeParams: Set<String>,
@@ -86599,6 +86696,18 @@ interface DataView {
                 targetType is Type.Union &&
                 tryDeepDisambiguateObjectVsUnion(expr, sourceType, targetType, source, fileName)
             ) {
+                return
+            }
+            // Blocker #3 (round 445): a `return { ... }` whose target is a CONFLATED interface
+            // X (merged across module files) that THIS file declares its own `interface X`
+            // for, and the object literal satisfies the FILE-LOCAL X. tsc checks the return
+            // against the module-local interface, so the "missing properties" from other
+            // files' merged members are a conflation artifact (tsc's codefixes each declare a
+            // private `interface Info` / `interface Fix` → getInfo(): Info | undefined). Runs
+            // AFTER the per-property drills (so a genuine inner-key type mismatch still fires)
+            // and BEFORE the coarse missing-property / relation paths. Suppression-only.
+            if (expr is ObjectLiteralExpression &&
+                objectLiteralMatchesConflatedFileLocalInterface(expr, targetType, fileName)) {
                 return
             }
             // B87.4c (round 73): class-instance source → interface/class return-type
