@@ -3104,3 +3104,111 @@ c99efbb5, 451abce6, 0bcdeadf, b751249b); every step's by-site diff strictly remo
   nested-overloads ×5, `Node`→never exhaustiveness ×3 (M3.4). TS2769×30 (un-triaged
   chains — sample next). TS2591×43 env-legit. TS7006×1 (tsbuildPublic destructured-
   member local — needs member-typed binding registration).**
+
+**Round 438 (2026-07-07) — M3.1/M3.4 narrowing/relation burn-down: FIVE bounded fixes take
+the compiler profile 294 → 244 (−50, −17%; TS2322 158 → 116, TS2345 47 → 39). Suite
+9,444 → 9,458 (+14 local, 0 regressions); 5 fix commits (988ffacd, b3ee2ae1, 7e921b5d,
+da67f611, f643f04e). Every fix suppression-only / relation-gated; each diffed by-site
+(fix E additionally by-POSITION) as strictly removals before the suite gate. Theme: the
+type-guard-narrowing consumers each gated their TARGET/PARAM shape and excluded `Type.Union`
+/ PROPERTY-ACCESS — four symmetric extensions + a fresh-object-value narrowing.**
+- **Baseline @ HEAD (b6cdcb6a, round 437 test-only): 294 FPs** (bench confirms; the
+  round-436g listall was still HEAD-accurate). Reusable `--listAll` per-fix diff loop set up
+  (materialize + build once, then a ~30 s CLI run per fix).
+- **Full-dashboard baseline at the round-438 end state (all 8 profiles, `--no-emit`, wall
+  29–42 s each): compiler 244 / tsc-cli 246 / jsTyping 241 / deprecatedCompat 243 /
+  typingsInstallerCore 246 / services 1,116 / server 1,401 / harness 1,693.** The
+  narrowing-gate fixes GENERALIZE STRONGLY — the big profiles dropped even harder than the
+  small ones (services 1,476 → 1,116 −360, server 1,769 → 1,401 −368, harness 2,062 → 1,693
+  −369 vs the round-436 baseline, which includes round 436's own un-re-measured big-profile
+  gains) because the larger profiles exercise more narrowing/assignability paths. Small
+  profiles converged at 241–246 (the same ~4 residual families).
+- **Fix A (988ffacd, −2): checkReturnAssignability precise-verdict early return for a target
+  carrying an empty-object `{}` union member.** `return ""` vs `{} | undefined` (tsc
+  commandLineParser.ts `getOptionValueWithEmptyStrings`): the engine CONFIRMS `string <: {} |
+  undefined` (round 430's empty-object rule is sound), but with the relation passing for a
+  non-nullish source there was no early return, so control fell to the STRING fallback which
+  re-widens / mis-handles `{}` — the round-436c trap, for empty-object members instead of
+  literals. `targetHasEmptyObjectMember(t) && checkTypeRelatedTo(source, t)` is added to the
+  precise-verdict list (the `{}`-member shape is where the engine is trustworthy). Only the
+  return path had this gap (var-decl/assignment/bare-`{}` all pass).
+- **Fix B (b3ee2ae1, −15): the assignment-RHS type-guard narrowing gate (round 410) extends to
+  UNION targets.** `currentSourceFile = node` inside `if (isSourceFile(node))` where
+  `currentSourceFile: SourceFile | undefined` — the `Interface || Reference` gate excluded the
+  union, so `node` kept its wider `Node` type and FP'd the missing-property error.
+  Suppression-only (the narrowed type is substituted only when it makes the relation pass). tsc's
+  impliedNodeFormatDependent/esnextAnd2015/checker/parser/transformers — `Node=>SourceFile/
+  EntityName/Declaration`, `CodeBlock=>ExceptionBlock`, `X | undefined => Y | undefined`.
+- **Fix C (7e921b5d, −8): the call-arg guard-narrow-DOWN branch (round 428b/429c) covers
+  PROPERTY-ACCESS args.** `getExports(node.left)` inside `if (isIdentifier(node.left))` —
+  `node.left: Expression` narrows to `Identifier`, but the branch was gated to `arg is
+  Identifier`. A PropertyAccess's built-in narrowing only refines UNION receivers, NOT a
+  non-union interface DOWN to a subtype, so it needs the same explicit narrow as a bare
+  Identifier. Relation-gated + never-excluded (unchanged). tsc's module/system transformers,
+  checker/binder narrow-then-pass sites (`Node=>ModuleDeclaration/Expression/SourceFile`,
+  `Expression=>Identifier/GeneratedIdentifier`, `Declaration=>BindingElement`).
+- **Fix D (da67f611, −12): the return-path narrowing gate (round 413) extends to UNION targets
+  — the symmetric partner of fix B.** `return node` where the return type is `Identifier |
+  PrivateIdentifier | undefined` — the `Interface || Reference || Object` gate excluded the
+  union. Suppression-only. tsc's utilitiesPublic/utilities/factory/checker/tsbuildPublic
+  `return node` sites.
+- **Fix E (f643f04e, −13): object-literal property VALUES read their nullish-stripped narrowed
+  type in getTypeOfObjectLiteral.** `{ moduleSpecifiers: specs }` where `specs = append(specs,
+  x)` narrowed `specs` to `string[]` — but the property value read the wider `string[] |
+  undefined` (getTypeOfIdentifier does not narrow). Both PropertyAssignment-Identifier and
+  ShorthandPropertyAssignment branches now narrow, **NULLISH-STRIP-gated (`objLitValueNullishStrip`):
+  accept ONLY `X | undefined` → `X`.** LANDMINE (caught by the full listall diff): the ungated
+  first cut cleared −15 but regressed +2 — the name-based-flow SHADOWING hazard (builder.ts's
+  inner `const affected = state.program` under an outer `if (!affected)` over-narrowed the
+  SHORTHAND `affected` to `undefined`) and a narrow-DOWN cascade (executeCommandLine `createWatch
+  StatusReporter` arg). The nullish-strip gate rejects both (a narrow-to-`undefined` keeps
+  nullish; a narrow-to-subtype doesn't strip nullish) → net-clean (a POSITION-only diff confirms
+  zero new FP positions; the 3 remaining message-diffs at moduleSpecifiers:507 / moduleNameResolver:1300
+  / program:4041 are the SAME already-failing positions with a narrowed display, still firing on a
+  residual — `kind: string` literal-widening etc.). Cleared moduleSpecifiers ×3, tsbuildPublic ×3,
+  moduleNameResolver ×2, esDecorators ×2, utilities/declarations/commandLineParser/program/builder.
+- **META:** (1) many small residual families (sourcemap `number | undefined => number` ×4,
+  emitter `TempFlags | undefined => TempFlags` ×2, the `undefined => X` M1.9 assignment-target
+  set) do NOT reproduce in isolation — the mini-repro passes, so they need the exact flow context
+  (documented round-428/429 pattern). Chasing them is low-yield; the reproducible narrowing-gate
+  gaps were the vein. (2) The listall per-fix loop + the POSITION-only diff (`comm -13` on
+  `file:line:col`) is the right regression check for a BROAD change (fix E) where a message diff
+  over-reports (transformed vs new).
+- **Residual triage (next-agent), 244 = TS2322×116** (deep M3, mostly NOT reproducible in isolation:
+  `__String` branded ×3, `TransformerFactory<T>` generic-fn-alias ×3, B526 tuple/brand `{ [x:number]:
+  …; N:…; length }[] => [A,B][]` ×~10, `number | undefined`→number reassignment-flow M3.4 ×4,
+  `TempFlags | undefined`→TempFlags NonNull-assign ×2, FlowNode-union returns ×2, the
+  `undefined => Symbol/Expression/SyntaxKind` M1.9 assignment-target family ×5), **TS2345×39**
+  (`X => never` exhaustive-switch ×8 — M3.4 exhaustiveness, `NodeArray<Node> => SourceFile` ×3,
+  generic/keyof `K=>string`/`T=>string`), **TS2591×43 + TS2304×2 (`global`) + TS2584×1 env-legit**
+  (offline, no @types/node — `--node-stub` suppresses), TS2769×9 (findAncestor predicate-overload
+  M3.2, moduleNameResolver `unknown` narrowing), TS2339×7 (discriminant/assert narrowing gaps),
+  TS2454×4 / TS2362×4 (documented M3.4 residuals). The clean narrowing-gate vein is now mostly
+  mined; the next slices are the M1.9 assignment-target-uses-declared-type family (a focused flow
+  change) or the deeper M3 relation gaps (branding/generic-fn-alias/tuple representation).
+
+**Round 437 (2026-07-07) — test-convention sweep (branch `test-refactoring`, merged with
+main; numbered 437 at merge per the parallel-branch renumbering convention above — the
+branch ran in PARALLEL with main's rounds 435–436): all hand-written tests now use the
+shared `diagnose()` helper (CompilerTestSupport.kt) + the `should`/`have` idiom. Suite
+9,444 / 0 failing / 3 skipped unchanged, 0 regressions; no compiler behavior change.**
+- The sweep (~99 test files, landed on the branch as 6 refactor commits): per-file
+  `TypeScriptCompiler().compile(...)` helpers → the shared
+  `diagnose(source, directives = "// @strict: true", fileName = "t.ts")` (trimIndents the
+  source, prepends the directives line); `assertTrue(d.isEmpty()/isNotEmpty(), msg)` →
+  `diagnose(...) should { have(none/any { it.code == NNNN }) }`; buildString source
+  builders → multiline templates; class-shared TS preludes hoisted to a trimIndented
+  `private val` concatenated by the caller (`diagnose(prelude + """…""")`); test names
+  converted to backtick sentences; RealLibResolverTest onto `should`/`have` receiver blocks.
+- At merge, the 14 round-435/436 test files that landed on main in parallel
+  (CallbackReturnTpParam, DestructuredLocalShadowing, ExplicitTypeArgOverloadSelection,
+  ForeignTpAssignmentTarget, FreshObjLitLiteralProp, GeneratorReturnTReturn,
+  GenericContainerCovariance, ImplicitAnyCtxSources, LiteralArgVsTpConstraint,
+  LiteralReturnVsLiteralUnion, NullishAliasUnionReturn, OverloadOptionalUnionArg,
+  SwitchCaseBareStringNarrowing, TernaryGuardedReturnArm) were converted to the same
+  conventions — class-level KDocs (round provenance) kept byte-identical.
+- Two compiler warnings introduced by the round-436 merge fixed (Checker.kt:21185
+  redundant `!!`, Main.kt:97 redundant `?.`) — the warning-clean invariant holds.
+- CLAUDE.md: testing-conventions entry added under "Test assertion gotchas" so future
+  agents write new local tests in the new style (main's rounds 435/436 tests were
+  written old-style in parallel — exactly the drift the entry prevents).
