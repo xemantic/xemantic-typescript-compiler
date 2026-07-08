@@ -39,12 +39,13 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
-**Round 448 (2026-07-08) — TS2322 burn-down: `this.optionalProp = undefined` write +
-discriminated-union object-literal return + module-var-leak local alias: THREE bounded fixes, all
-suppression-only / FP-safe. Compiler UNCHANGED (185 — the families live in services-side files:
-services.ts, completions.ts, signatureHelp.ts), services 339 → 322 (−17), server 555 → 530 (−25),
-harness 772 → 747 (−25). Suite 9,577 corpus green + 8 local (0 regressions); commits 1b65da39 /
-764afbd0 / da2f421b; every services diff strictly by-position removals via the `--listAll` `comm` loop.**
+**Round 448 (2026-07-08) — TS2322/TS2774 burn-down: `this.optionalProp = undefined` write +
+discriminated-union object-literal return + module-var-leak local alias + destructured-shadow TS2774:
+FOUR bounded fixes, all suppression-only / FP-safe. Compiler UNCHANGED (185 — the families live in
+services-side files: services.ts, completions.ts, signatureHelp.ts, jsDoc.ts), services 339 → 321 (−18),
+server 555 → 529 (−26), harness 772 → 746 (−26). Suite 9,577 corpus green + 10 local (0 regressions);
+commits 1b65da39 / 764afbd0 / da2f421b / d34b48d2; every services diff strictly by-position removals
+via the `--listAll` `comm` loop.**
 - **Baseline @ HEAD (round 447): services 339.** Bucketed the `--listAll` TS2322×188: the biggest CLEAN
   bounded families were the services.ts `undefined`-to-optional constructor field resets (×10) and the
   completions.ts discriminated-union return (×5). The `readonly ApplicableRefactorInfo[]` ×9 stayed the
@@ -82,6 +83,14 @@ harness 772 → 747 (−25). Suite 9,577 corpus green + 8 local (0 regressions);
   `(parent: Node)` IS recorded → keeps its real type — firewall pinned). Cleared 2 of the 3 signatureHelp
   ArgumentListInfo FPs; the 3rd uses `node: parent` DIRECTLY in the object-literal value (no alias) — a
   getTypeOfObjectLiteral property-value bail would clear it but that is a hot/shared path, deferred.
+- **Fix 4 (d34b48d2, destructured local shadows a same-file function; TS2774 −1; services 322 → 321,
+  server 530 → 529, harness 747 → 746):** `const { hasReturn } = commentOwnerInfo` (jsDoc.ts
+  getDocCommentTemplateAtPosition) shadows a same-file module-level `function hasReturn`, but the TS2774
+  uncalled-function walker's shadow-collector (`collectUncalledTypedLocalsFromBody`) handled only a simple
+  `const x` — it skipped binding patterns (`d.name as? Identifier ?: continue`). So `hasReturn` in
+  `hasReturn ? … : …` resolved to the function → FP "always defined, did you mean to call it". Binding-pattern
+  names are now registered as shadows via `collectBindingNames` (shadow-only, consistent with an untyped
+  simple local); a genuine uncalled same-file function in a condition still fires (firewall pinned).
 - **INVESTIGATED & DEFERRED:** (a) the `SourceFileLike` object-literal conflation (sourcemaps.ts/textChanges.ts
   ×2) — the base `interface SourceFileLike` LACKS `getLineAndCharacterOfPosition` (added by a `declare module`
   augmentation), so an AST-based satisfaction check against the raw InterfaceDeclaration reads it as EXCESS →
@@ -92,7 +101,7 @@ harness 772 → 747 (−25). Suite 9,577 corpus green + 8 local (0 regressions);
   AST-node interfaces). (c) the `X | undefined` arg-vs-non-nullish-`Node`-param cases (es2015/convertParams/
   fixUnreferenceable) — element-access reference paths + big-AST-union `.kind`-discriminant filtering (M1.4),
   each a per-site narrowing gap.
-- **NEXT (services @ 322, all deep/whole-program):** ApplicableRefactorInfo stray-`U[]` type-param-scope
+- **NEXT (services @ 321, all deep/whole-program):** ApplicableRefactorInfo stray-`U[]` type-param-scope
   pollution ×9 (whole-program probe), the `InterfaceDeclaration`→`IsInterface` union-of-named-AST relation gap,
   array-of-union generic-inference (compact/slice → `readonly T[]`), big-AST-union discriminant filtering (M1.4).
 
