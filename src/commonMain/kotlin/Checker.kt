@@ -86894,6 +86894,21 @@ interface DataView {
             if (expr is ObjectLiteralExpression && objectLiteralHasUnresolvedSpread(expr)) {
                 return
             }
+            // Round 448: a fresh object literal returned against a UNION of object types
+            // discriminated by a LITERAL property (`return { type: "cases" }` vs
+            // `... | { type: "cases"; } | { type: "none"; } | ...`). getTypeOfObjectLiteral
+            // WIDENS the discriminant to its base primitive (source displays `{ type: string }`),
+            // so it matches no union member and the coarse relation below FP-fires TS2322.
+            // Retry with freshObjLitRange set (round 435): propertiesRelatedTo then recovers the
+            // un-widened literal from each PropertyAssignment per union member, so the object
+            // relates to its discriminated member. Suppression-only (only when the relation then
+            // PASSES) → FP-safe: an object matching no member still falls through and fires.
+            // tsc's discriminated-union returns (completions.ts getSymbolCompletionFromEntryId).
+            if (expr is ObjectLiteralExpression && targetType is Type.Union &&
+                canUseTypeEngine(sourceType, targetType) &&
+                withFreshObjLitSource(expr) { checkTypeRelatedTo(sourceType, targetType, assignableRelation) }) {
+                return
+            }
             // B87.4c (round 73): class-instance source → interface/class return-type
             // missing-property — completes the TS2741/2739 feature for the RETURN
             // position (uniform with assignment B87.4 / var-decl B87.4b / argument
@@ -88538,7 +88553,20 @@ interface DataView {
                     // fresh per-member scope so FP risk is bounded.
                     val exprType = inferSimpleExprType(expr.right, varTypes)
                         ?: (expr.right as? Identifier)?.let { varTypes[it.text] }
-                    if (exprType != null && !isAssignableTo(exprType, declaredType)) {
+                    // A `this.optionalProp = undefined` write is legal: an optional
+                    // property `p?: T` has write-type `T | undefined` (non-eOPT).
+                    // The varTypes string map stores only the bare type name (drops
+                    // the `?`), so mirror checkPropertyAccessAssignment's
+                    // undefined-optional bail (89644) here — else `this.parent =
+                    // undefined` where `parent?: Symbol` FP-fires TS2322 (services.ts
+                    // SymbolObject/NodeObject constructor field resets). An explicit
+                    // `| undefined` in the declared type, or an array type, already
+                    // passes the lenient string relation. FP-safe: optional +
+                    // non-exact always accepts an undefined write.
+                    val undefinedToOptional = exprType == "undefined" &&
+                        !options.exactOptionalPropertyTypes &&
+                        thisPropertyIsOptional(propName)
+                    if (!undefinedToOptional && exprType != null && !isAssignableTo(exprType, declaredType)) {
                         // Squiggle spans "this.prop" (the entire PropertyAccessExpression)
                         val squiggleStart = target.expression.pos
                         val squiggleLength = target.name.pos + target.name.text.length - squiggleStart
@@ -132182,6 +132210,17 @@ interface DataView {
                 TypeFlags.Undefined or TypeFlags.Any or TypeFlags.Unknown or TypeFlags.Never)) return true
         if (type is Type.Union) return type.types.any { typeIncludesUndefinedOrTop(it) }
         return false
+    }
+
+    /** Whether the enclosing class (`currentClassForThis`) declares `propName` as an
+     *  OWN optional property (`p?: T`). Used by the string-based `this.prop = undefined`
+     *  write path to skip a false TS2322 (varTypes drops the `?`). Own members only,
+     *  matching the varTypes["this.X"] population scope. */
+    private fun thisPropertyIsOptional(propName: String): Boolean {
+        val cls = currentClassForThis ?: return false
+        return cls.members.any { m ->
+            m is PropertyDeclaration && (m.name as? Identifier)?.text == propName && m.questionToken
+        }
     }
 
     private fun isOptionalProperty(symbol: Symbol): Boolean {
