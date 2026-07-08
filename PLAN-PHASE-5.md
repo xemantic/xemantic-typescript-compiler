@@ -60,8 +60,12 @@ strictly by-position removals (fix 2: 0 added).**
   union FIRST, then the switch exhausts it; that needs (a) `Debug.type<T>` assert-to-union
   narrowing (round-424 DebugTypeMapper slice extended to a non-`this` explicit-type-arg assert)
   AND (b) resolving the target union with readable `.kind` members — the larger M3.4 slice,
-  deliberately not done. Likely generalizes strongly to services/server/harness (more switches).
+  deliberately not done.
 - **Fix 1 (checker, −3, TS2344): constraint-chain bail-outs (detail below).**
+- **Generalization (both fixes, `--no-emit` `--listAll`, vs the round-440 END baseline): server
+  1,321 → 1,317 (−4), harness 1,610 → 1,606 (−4).** Modest — these specific shapes (enum-union
+  constraints, exhaustive discriminated-union switches) are less common than round-440's cross-file
+  collisions — but strictly negative, no regressions on the larger profiles.
 - **Baseline @ HEAD (round 440): 205 FPs.** Bucketed the full `--listAll`: TS2322×100 (deep
   M3 relation, fragmented — largest sub-shape only 3), TS2591×43 + TS2304 `global`×2 + TS2584
   `console`×1 env-legit (offline, no @types/node — NOT compiler FPs), TS2345×28 (fragmented:
