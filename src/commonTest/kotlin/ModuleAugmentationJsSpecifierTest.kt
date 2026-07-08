@@ -67,6 +67,38 @@ class ModuleAugmentationJsSpecifierTest {
     }
 
     @Test
+    fun `augmentation body sees the augmented module's exports by bare name - no TS2304`() {
+        // The augmented module (compiler/types.ts) exports Node/SymbolFlags/underscoreString; the
+        // augmentation body in services/types.ts references them by BARE name (they are NOT imported
+        // into services/types.ts). tsc checks the body in the augmented module's context, so they
+        // resolve. Without the fix they FP-fired TS2304 (24 on the services profile).
+        compile(
+            """
+            // @strict: true
+            // @module: nodenext
+            // @moduleResolution: nodenext
+
+            // @Filename: compiler/types.ts
+            export interface Node { kind: number; }
+            export type __String = string & { __brand: void };
+            export enum SymbolFlags { None, Alias }
+
+            // @Filename: services/types.ts
+            export const marker = 1;
+            declare module "../compiler/types.js" {
+                export interface Node {
+                    getFlags(): SymbolFlags;
+                    getName(): __String;
+                    firstChild(): Node | undefined;
+                }
+            }
+            """
+        ) should {
+            have(none { it.code == 2304 })
+        }
+    }
+
+    @Test
     fun `negative control - augmentation of a genuinely-missing relative js specifier still fires TS2664`() {
         compile(
             """

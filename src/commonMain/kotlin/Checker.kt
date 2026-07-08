@@ -26163,6 +26163,23 @@ class Checker(
                     }
                 }
             }
+            is StringLiteralNode -> {
+                // `declare module "<specifier>" { ... }` — a module AUGMENTATION. tsc checks the
+                // body in the context of the AUGMENTED module, so that module's exported names are
+                // in scope by bare name (e.g. services/types.ts augments "../compiler/types.js" and
+                // its bodies reference Node/NodeArray/SymbolFlags/TypeChecker — compiler/types.ts
+                // exports — that are NOT imported into services/types.ts). Bring the resolved
+                // target's exports into scope so they don't FP TS2304. Purely additive (a bare
+                // module or an unresolvable specifier is a no-op → only ever SUPPRESSES).
+                val target = resolveModuleSpecifierRelativeJsAware(name.text, fileName)
+                val targetFile = target?.let { fileResults[it]?.sourceFile }
+                if (targetFile != null) {
+                    for (exportName in moduleNamedExportsOf(targetFile)) {
+                        nsScope.names.add(exportName)
+                        nsScope.typeNames.add(exportName)
+                    }
+                }
+            }
             else -> {}
         }
         if (nsScope.names.isEmpty()) return parentScope
