@@ -481,6 +481,20 @@ class Checker(
      *  at function-body entry. NOT used for type resolution — membership-only. */
     private var currentParamBindingNames: MutableSet<String> = mutableSetOf()
 
+    /** Blocker #3 (round 442): names that are EXCLUSIVELY top-level `let`/`var`/`const`
+     *  VARIABLE declarations in MODULE files — with NO other global meaning (no
+     *  script-file top-level declaration, no global function/class/interface/enum/
+     *  type-alias/namespace of that name anywhere). Such a name leaks into `globals`
+     *  via the file-locals merge but is NOT legitimately visible by bare name in another
+     *  file (a module-local variable requires an import). A common local name like
+     *  `parent` (navigationBar.ts's module-level `let parent: NavigationBarNode`)
+     *  otherwise shadows every OTHER file's local `parent` in `getTypeOfIdentifier`'s
+     *  globals fallback → FP TS2339 on `Node`/`BinaryExpression` members (279 on the
+     *  services profile). Populated after the globals merge; consulted in the globals
+     *  fallback to return `anyType` (suppression-only — same-file uses hit
+     *  `currentFileLocals` first, so navigationBar's own `parent` is unaffected). */
+    private var moduleFileLocalVarNames: Set<String> = emptySet()
+
     /** Param name → enum display name for params typed as a type parameter constrained
      *  to an enum (`function f<B extends E>(p: B)` → `p` → `E`). Populated by pure symbol
      *  lookup at function-body entry; consulted ONLY by [enumTypedReceiverDisplay] for the
@@ -1303,6 +1317,36 @@ class Checker(
         // 1. Merge file-level symbols into globals
         for (result in binderResults) {
             mergeSymbolTable(globals, result.locals)
+        }
+        // 1a2 (round 442, Blocker #3): compute the module-file-local-variable name set
+        // (see [moduleFileLocalVarNames]). A name qualifies only if it is a top-level
+        // variable in a MODULE file AND has NO competing global meaning (script-file
+        // top-level decl, or a function/class/interface/enum/type/namespace anywhere) —
+        // so returning anyType for it in the globals fallback can only suppress a
+        // cross-file conflation FP, never mask a legitimate global.
+        run {
+            val moduleVar = HashSet<String>()
+            val otherGlobal = HashSet<String>()
+            for (result in binderResults) {
+                val stmts = result.sourceFile.statements
+                val isMod = isModuleFile(stmts)
+                for (stmt in stmts) {
+                    when (stmt) {
+                        is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                            val nm = (d.name as? Identifier)?.text ?: continue
+                            if (isMod) moduleVar.add(nm) else otherGlobal.add(nm)
+                        }
+                        is FunctionDeclaration -> stmt.name?.text?.let { otherGlobal.add(it) }
+                        is ClassDeclaration -> stmt.name?.text?.let { otherGlobal.add(it) }
+                        is InterfaceDeclaration -> otherGlobal.add(stmt.name.text)
+                        is EnumDeclaration -> otherGlobal.add(stmt.name.text)
+                        is TypeAliasDeclaration -> otherGlobal.add(stmt.name.text)
+                        is ModuleDeclaration -> (stmt.name as? Identifier)?.text?.let { otherGlobal.add(it) }
+                        else -> {}
+                    }
+                }
+            }
+            moduleFileLocalVarNames = moduleVar - otherGlobal
         }
         // 1b. Merge module augmentation exports into target module symbols
         mergeModuleAugmentations()
@@ -115352,6 +115396,18 @@ interface DataView {
         val ts2576Start = ts2576SquiggleStart
         val ts2576Length = ts2576SquiggleLength
         val isThisAccess = objectExpr is Identifier && objectExpr.text == "this"
+
+        // Blocker #3 (round 442): a bare-Identifier receiver that is EXCLUSIVELY a
+        // module-file-local variable (see [moduleFileLocalVarNames]) leaked into globals
+        // is NOT this file's own binding — the many symbol-based branches below resolve it
+        // through globals and type an unrelated same-named local (`parent`, a block-scoped
+        // const / nested-fn param our scope machinery misses) as e.g. navigationBar.ts's
+        // `NavigationBarNode` → FP TS2339 on `Node`/`BinaryExpression` members (279 on the
+        // services profile). Skip UNLESS `parent` IS the current file's own top-level var
+        // (currentFileLocals — then the receiver genuinely IS that module's variable).
+        if (objectExpr is Identifier && !isThisAccess &&
+            objectExpr.text in moduleFileLocalVarNames &&
+            currentFileLocals?.get(objectExpr.text) == null) return
 
         // Scope shadowing: a function-local var (currentShadowedNames) shadows an outer
         // binding. The symbol-based branches below resolve the receiver via globals/
