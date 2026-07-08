@@ -39,14 +39,13 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
-**Round 443 (2026-07-08) — module-augmentation `.js`-specifier resolution + `| undefined`
-property-init exemption + augmentation-body scope: THREE bounded fixes, all in the module-augmentation
-family, all suppression-only. Compiler profile UNCHANGED (190 — no augmentation FPs there), but the
-fixes GENERALIZE hugely across the big profiles (services/types.ts augments `../compiler/types.js`
-10× and augments the compiler interfaces; server/harness augment even more modules): services
-591 → 542 (−49), server 887 → 777 (−110), harness 1,118 → 992 (−126). Suite 9,504 → 9,510 (+6 local
-across 2 test files, 0 regressions); 3 fix commits. Services diffed via `--listAll`: TS2664 10→0,
-TS2564 17→0, TS2304 24→2 (the 2 remaining are NodeJS `global` — env-legit, offline).**
+**Round 443 (2026-07-08) — module-augmentation family + the module-file-local TYPE-alias leak
+(Blocker #3): FOUR bounded fixes, all suppression-only. Compiler profile UNCHANGED (190 — no FPs in
+these families there), but the fixes GENERALIZE hugely across the big profiles: services 591 → 498
+(−93), server 887 → 733 (−154), harness 1,118 → 989 (−129). Suite 9,504 → 9,512 (+8 local across 3
+test files, 0 regressions); 4 fix commits. Services diffed via `--listAll` as strictly by-position
+removals: TS2664 10→0, TS2564 17→0, TS2304 24→2 (2 remaining = NodeJS `global`, env-legit offline),
+TS2339 129→85 (SourceFileLike 44→0).**
 - **Baseline @ HEAD (round 442): services 591.** Bucketed the `--listAll`: the clean bounded veins
   were all in `services/types.ts`'s `declare module "../compiler/types.js"` augmentations —
   (a) TS2664 "Invalid module name in augmentation ... cannot be found." ×10, (b) TS2304 on compiler
@@ -81,15 +80,28 @@ TS2564 17→0, TS2304 24→2 (the 2 remaining are NodeJS `global` — env-legit,
   type to propagate. The array-element fix is a correct M3.2 enabler but its dashboard payoff is gated
   on nested-type resolution (B83.5). Reverted to avoid landing a dashboard no-op; land it TOGETHER with
   the nested-interface-resolution companion when a session takes B83.5 for annotation positions.
-- **NEXT (biggest remaining services vein): TS2339 on `SourceFileLike` ×44 (13 `text`/base members,
-  27 augmentation-added `getLineAndCharacterOfPosition`, ...).** services/types.ts augments
-  `SourceFileLike`; in the FULL 252-file services program both the augmentation-added AND the BASE
-  members FP, but the compiler-only profile has 0 SourceFileLike FPs. Minimal + barrel repros (built
-  this session) do NOT reproduce — it needs the full program's mergeSymbolTable interface-pollution /
-  declaration-order state (Blocker #3, cross-file interface merge). A genuine rabbit hole; needs an
-  instrumented run against the real services program to pin the mechanism (which symbol wins, in what
-  declaration order) before a fix. Other bounded services buckets: TS2416×11 (override, diverse/deep),
-  TS2353×10 (union/inherited excess), TS2740×9 / TS2739×8 (missing-property, deep relation).
+- **Fix 4 (TS2339 on `SourceFileLike` ×44 → 0, Blocker #3 — the module-file-local TYPE-alias leak):
+  a module-file-local `type X = A | B` alias leaks into `globals` and shadows the global `interface X`
+  in OTHER files.** ROOT CAUSE pinned with an instrumented probe (the minimal/barrel repros do NOT
+  reproduce — the leak is file-order/pollution-dependent, a whole-program phenomenon): the receiver
+  `sourceFile: SourceFileLike` resolves to `Type.Union` `SourceFile | AmbientModuleDeclaration`
+  (displayed via the alias map as 'SourceFileLike'), because services/importTracker.ts's NON-exported
+  `type SourceFileLike = SourceFile | AmbientModuleDeclaration` won the last-wins merge over
+  compiler/types.ts's `interface SourceFileLike` (Interface+TypeAlias don't merge). `AmbientModuleDeclaration`
+  has no `.text` → the union member-access FP'd (both base `text`/`lineMap` AND augmentation-added
+  `getLineAndCharacterOfPosition`). Built `conflatedTypeAliasFiles` (name X → files declaring `type X`,
+  for X also declared as `interface X`); `checkMemberAccessMissing` bails a UNION-receiver TS2339 when
+  the receiver's display (nullish-stripped, for `X | undefined` optional receivers) is a conflated name
+  AND the current file is NOT the alias's own file. TYPE-space analog of round 442's `moduleFileLocalVarNames`.
+  FP-safe: in every other file tsc resolves X to the INTERFACE (all members present), so it never errors;
+  the alias's own file still fires. services/server −44 each, harness −3 (harness test files resolve
+  `SourceFileLike` differently). Local tests pin the FP firewall only (the positive case is whole-program-only).
+- **NEXT (remaining services buckets @ 498, all deep): TS2322×235 / TS2339×85 / TS2345×54 (M3 relation +
+  residual Blocker #3), TS2416×11 (override, diverse), TS2353×10 (union/inherited excess), TS2740×9 /
+  TS2739×8 (missing-property, deep relation), TS7006×8 (contextual typing — the inferFromUsage `Priority[]`
+  case needs B83.5 nested-interface resolution + the reverted array-element enabler). TS2339×85 residual
+  buckets: `Type`×20, `Info`×12, `RefactorContext`/`CodeFixContextBase`/`ExportInfoMap` — likely more
+  module-file-local-type-alias/interface conflations (same Blocker #3 family — bucket + probe each).**
 
 **Round 442 (2026-07-08) — TypeParam-constraint arg + overloaded-callback arity + the
 module-file-local-variable/type global-leak (Blocker #3): FIVE bounded fixes. Compiler profile
