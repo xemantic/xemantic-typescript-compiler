@@ -39,6 +39,58 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
+**Round 443 (2026-07-08) — module-augmentation `.js`-specifier resolution + `| undefined`
+property-init exemption + augmentation-body scope: THREE bounded fixes, all in the module-augmentation
+family, all suppression-only. Compiler profile UNCHANGED (190 — no augmentation FPs there), but the
+fixes GENERALIZE hugely across the big profiles (services/types.ts augments `../compiler/types.js`
+10× and augments the compiler interfaces; server/harness augment even more modules): services
+591 → 542 (−49), server 887 → 777 (−110), harness 1,118 → 992 (−126). Suite 9,504 → 9,510 (+6 local
+across 2 test files, 0 regressions); 3 fix commits. Services diffed via `--listAll`: TS2664 10→0,
+TS2564 17→0, TS2304 24→2 (the 2 remaining are NodeJS `global` — env-legit, offline).**
+- **Baseline @ HEAD (round 442): services 591.** Bucketed the `--listAll`: the clean bounded veins
+  were all in `services/types.ts`'s `declare module "../compiler/types.js"` augmentations —
+  (a) TS2664 "Invalid module name in augmentation ... cannot be found." ×10, (b) TS2304 on compiler
+  type names inside augmentation bodies ×22, and (c) TS2564 on `| undefined` properties ×17.
+- **Fix 1 (TS2664, `.js`-aware augmentation-target resolution): a `declare module "../compiler/types.js"`
+  augmentation resolves `.js` → the `.ts` sibling.** The TS2664 check went through
+  `resolveModuleSpecifierRelative`, which deliberately does NOT strip the ESM `.js` extension (the
+  TS2459 gotcha) → the augmentation target never resolved → FP. Added
+  `resolveModuleSpecifierRelativeJsAware` (strip-and-retry for `.js`/`.jsx`/`.mjs`/`.cjs` — purely
+  additive, only makes MORE specifiers resolve, so only ever SUPPRESSES a false 'cannot be found');
+  consolidates the inline strip-and-retry already at the TS2694/TS2305/TS2307 augmentation sites.
+- **Fix 2 (TS2564, `| undefined` property exemption): a class property whose declared type INCLUDES
+  `undefined` needs no definite assignment.** tsc's strictPropertyInitialization exempts it
+  (`getFalsyFlags(type) & TypeFlags.Undefined`); `checkClassPropertyInit` skipped
+  initializer/optional/!/declare/static/abstract/any but NOT `| undefined`, so services.ts's
+  `SourceFileObject` (`nameTable: Map<...> | undefined` + siblings) FP-fired. Reuses the existing
+  `typeIncludesUndefined` helper (also used by the TS2454 definite-assignment path). Suppression-only.
+- **Fix 3 (TS2304, augmentation-body scope): a `declare module "X" { ... }` body sees the AUGMENTED
+  module's exports by bare name.** `buildNamespaceScope` had no `StringLiteralNode` branch, so inside
+  the augmentation body only the augmenting file's own scope was visible; tsc checks the body in the
+  augmented module's context (Node/NodeArray/SymbolFlags/TypeChecker/__String — compiler/types.ts
+  exports NOT imported into services/types.ts). Added the branch: resolve the specifier (via the
+  `.js`-aware resolver from fix 1) and add the target's `moduleNamedExportsOf` to the namespace scope's
+  `names` + `typeNames`. Purely additive (bare/unresolvable specifier is a no-op).
+- **INVESTIGATED & REVERTED (dashboard no-op, blocked on B83.5): TS7006 array-element contextual typing.**
+  `checkImplicitAnyInExpr`'s `ArrayLiteralExpression` case propagated only the `contextuallyTyped` flag,
+  not the element `Type`, so an OBJECT-LITERAL element of `Priority[]` got no contextual type and its
+  property arrows FP'd TS7006 (inferFromUsage.ts `const priorities: Priority[] = [{ high: t => …, low:
+  t => … }]`). Wired `arrayElementTypeOf(contextualType, i)` into object-literal elements (3 local
+  tests passed). BUT it reduced ZERO dashboard FPs: `interface Priority` is NESTED inside
+  `function inferTypeFromReferences` → UNBOUND per B83.5 → `Priority[]` resolves to any → no element
+  type to propagate. The array-element fix is a correct M3.2 enabler but its dashboard payoff is gated
+  on nested-type resolution (B83.5). Reverted to avoid landing a dashboard no-op; land it TOGETHER with
+  the nested-interface-resolution companion when a session takes B83.5 for annotation positions.
+- **NEXT (biggest remaining services vein): TS2339 on `SourceFileLike` ×44 (13 `text`/base members,
+  27 augmentation-added `getLineAndCharacterOfPosition`, ...).** services/types.ts augments
+  `SourceFileLike`; in the FULL 252-file services program both the augmentation-added AND the BASE
+  members FP, but the compiler-only profile has 0 SourceFileLike FPs. Minimal + barrel repros (built
+  this session) do NOT reproduce — it needs the full program's mergeSymbolTable interface-pollution /
+  declaration-order state (Blocker #3, cross-file interface merge). A genuine rabbit hole; needs an
+  instrumented run against the real services program to pin the mechanism (which symbol wins, in what
+  declaration order) before a fix. Other bounded services buckets: TS2416×11 (override, diverse/deep),
+  TS2353×10 (union/inherited excess), TS2740×9 / TS2739×8 (missing-property, deep relation).
+
 **Round 442 (2026-07-08) — TypeParam-constraint arg + overloaded-callback arity + the
 module-file-local-variable/type global-leak (Blocker #3): FIVE bounded fixes. Compiler profile
 197 → 190 (−7), and the leak fixes GENERALIZE MASSIVELY across the big profiles:
@@ -620,30 +672,6 @@ reproducible on any box (VPS included), nothing lives only in a session scratchp
 Backlog: M4.6 (`package.json "type": "module"` ProjectCompiler gap, found via zod) +
 M4.7 (zod as second dashboard profile, full recipe + FP baseline) written down with
 stable IDs; M5.1/M5.4 queue items now point at the design note.
-
-**Round 433 (2026-07-07) — M5 (perf round 2, JFR-driven): the two post-432 hotspots —
-self-compile (compiler profile) 38–41 s → 19.9 s noEmit / 21.7 s wall with emit (the
-2026-07-05 baseline was 592.8 s → cumulative ~27×), zod 5.0 → 3.6 s; diagnostics
-byte-identical both rounds (1,148 incl. per-error diff / 1,665); suite 9,333/0 (+3 local).**
-(a) `collectReassignedNamesInRange` (Flow.kt, B464) char-scanned `[closure.pos,
-enclosingFn.end)` PER CLOSURE — ~14% of the compile (7.3% self + the String.charAt/getOrNull
-churn) on `createTypeChecker`-scale functions. The matcher's decisions depend only on
-BACKWARD context and the range END, never the scan start (a scan entering mid-word skips
-the partial word exactly as a from-the-start scan attributes it before the range), so all
-closures sharing an enclosing function now share ONE scan cached per `hi`, filtered by
-position — exact semantics. (b) The flow walkers copied the whole cycle-detection `seen`
-set PER BRANCH ANTECEDENT at every FlowBranchLabel (~11%: thousands of ids × a copy per
-antecedent). `NarrowSeen` bundles set + add-log: branch antecedents walk the shared
-path-so-far membership with mark/popToMark restoring it after each — only genuinely-added
-ids are logged, so the restored membership is exactly the fresh-copy state; linear recursion
-shares unmarked (additions persist upward, as before); both walkers changed in sync.
-`FlowNarrowingPerfInvariantsTest` pins per-closure past-last-assignment semantics through
-the shared scan (params, not `let` locals — the TS18048 emitter's captured-body-local
-recovery is var-only per B467, verified pre-existing), branch-sibling isolation across a
-diamond join, and an emitter-active positive control. Remaining profile is FLAT (top self
-≤8%): HashMap churn in the walkers' memo, `findLocalTypeAlias$scan` (~4%, via
-`discUnionParamMembers`), `checkMemberAccessMissing` ~3% — next M5 round needs a fresh
-JFR pass, no obvious single target left.
 
 **M2 — Real-lib migration (staged; decompose further at start)**
 
