@@ -93854,7 +93854,13 @@ interface DataView {
                         litTypes.any { lit -> literalsEqualForDiscriminant(m, lit) })
                 }
                 return when {
-                    filtered.isEmpty() || filtered.size == t.types.size -> null
+                    // Every literal-kind member matched a case → the switch is
+                    // EXHAUSTIVE and reaching the default means the discriminant is
+                    // `never` (tsc narrows to never; `default: assertNever(x)` is legal).
+                    // Only literal-kind members are dropped (a wide member is kept), so an
+                    // empty result is a genuine exhaustiveness proof, not an "unknown".
+                    filtered.isEmpty() -> neverType
+                    filtered.size == t.types.size -> null
                     filtered.size == 1 -> filtered[0]
                     else -> getUnionType(filtered)
                 }
@@ -93865,7 +93871,12 @@ interface DataView {
             val filtered = filterUnionByEnumDiscriminant(
                 t.types, discriminant, enumKeys + litKeys, keep = false) ?: return null
             return when {
-                filtered.isEmpty() || filtered.size == t.types.size -> null
+                // Exhaustive discriminated union — every member's discriminant is
+                // covered by a case → the default clause narrows to `never`
+                // (`filterUnionByEnumDiscriminant` keeps any member without a readable
+                // discriminant, so `[]` is a genuine exhaustiveness proof).
+                filtered.isEmpty() -> neverType
+                filtered.size == t.types.size -> null
                 filtered.size == 1 -> filtered[0]
                 else -> getUnionType(filtered)
             }

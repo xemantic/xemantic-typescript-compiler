@@ -39,9 +39,29 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
-**Round 441 (2026-07-08) — TS2344 constraint-chain burn-down: ONE bounded fix takes the
-compiler profile 205 → 202 (−3, all TS2344). Suite 9,482 → 9,487 (+5 local, 0 regressions);
-1 fix commit. Diffed via the `--listAll` `comm` loop as strictly by-position removals.**
+**Round 441 (2026-07-08) — TS2344 constraint-chain + exhaustive-switch never-narrowing burn-down:
+TWO bounded fixes take the compiler profile 205 → 200 (−5). Suite 9,482 → 9,490 (+8 local across
+2 test files, 0 regressions); 2 fix commits. Both diffed via the `--listAll` `comm` loop as
+strictly by-position removals (fix 2: 0 added).**
+- **Fix 2 (checker, −2, TS2345): exhaustive-switch `default` narrows the discriminant to `never`.**
+  `narrowBySwitchClause`'s round-425 default-clause negative-narrowing branch already dropped the
+  case-covered members but returned `null` (= "no narrowing") when the filtered set was EMPTY
+  (i.e. every member covered = exhaustive) — it now returns `neverType`. That is what makes
+  `default: return assertNever(x)` / `assertType<never>(x)` type-check: the `never`-param arg-check
+  reads the narrowed `never` via `getNarrowedTypeForReference` (`never <: never` passes). BOTH
+  filter paths only DROP a member with a readable literal/enum `.kind` matching a case (a wide-kind
+  member OR one without a readable discriminant is KEPT), so `[]` is a genuine exhaustiveness proof
+  and a NON-exhaustive switch narrows to the surviving members (the never-param call still errors
+  with the uncovered member — verified by negative control). Cleared the 2 compiler `→never` FPs
+  with resolvable discriminated-union subjects (programDiagnostics.ts:419 `RootFile | LibFile | …`,
+  tsbuildPublic.ts:2482 `Unbuildable | UpToDate | …`). The other 6 compiler `→never` FPs
+  (utilities/debug/programDiagnostics/diagnostics) have `Node`/`Expression` BASE-INTERFACE subjects
+  — tsc narrows them via a preceding `Debug.type<SomeUnion>(node)` assert that casts `node` to a
+  union FIRST, then the switch exhausts it; that needs (a) `Debug.type<T>` assert-to-union
+  narrowing (round-424 DebugTypeMapper slice extended to a non-`this` explicit-type-arg assert)
+  AND (b) resolving the target union with readable `.kind` members — the larger M3.4 slice,
+  deliberately not done. Likely generalizes strongly to services/server/harness (more switches).
+- **Fix 1 (checker, −3, TS2344): constraint-chain bail-outs (detail below).**
 - **Baseline @ HEAD (round 440): 205 FPs.** Bucketed the full `--listAll`: TS2322×100 (deep
   M3 relation, fragmented — largest sub-shape only 3), TS2591×43 + TS2304 `global`×2 + TS2584
   `console`×1 env-legit (offline, no @types/node — NOT compiler FPs), TS2345×28 (fragmented:
@@ -63,13 +83,14 @@ compiler profile 205 → 202 (−3, all TS2344). Suite 9,482 → 9,487 (+5 local
   fires). The relation engine still has NO general `source is Type.TypeParam && target !is
   Type.TypeParam` branch — a broad relation change risks the documented 39+ cycle regressions, so
   the fix stays as per-site bail-outs.
-- **META / next-agent residual (202):** the clean bounded veins on the COMPILER profile are now
-  nearly mined out — the residual is genuinely hard. TS2322×100 is deeply fragmented (largest
-  sub-shape 3: `TransformerFactory<SourceFile|Bundle>`, `__String | undefined`, `Expression`) —
-  deep M3 relation/narrow-DOWN work. The biggest COHERENT remaining family is TS2345 assertNever
-  `→never` (×8: `Debug.assertNever(x)`/`assertType<never>(x)` in exhaustive `switch` defaults —
-  needs real `.kind`-discriminated-union exhaustiveness narrowing to `never`, the hard M3.4 slice;
-  likely MUCH larger on services/server/harness so high-leverage but multi-session). Lib-completeness
+- **META / next-agent residual (200 after both fixes):** the clean bounded veins on the COMPILER
+  profile are now nearly mined out — the residual is genuinely hard. TS2322×100 is deeply
+  fragmented (largest sub-shape 3: `TransformerFactory<SourceFile|Bundle>`, `__String | undefined`,
+  `Expression`) — deep M3 relation/narrow-DOWN work. The biggest COHERENT remaining family is the
+  TS2345 assertNever `→never` TAIL (fix 2 cleared the 2 with resolvable discriminated-union
+  subjects; the other 6 need `Debug.type<Union>(node)` assert-to-union narrowing FIRST — the hard
+  M3.4 slice, likely MUCH larger on services/server/harness so high-leverage but multi-session).
+  Lib-completeness
   gaps deferred to M2.3: TS2353 `next` (sourcemap.ts — embedded `interface IterableIterator<T> {}`
   is EMPTY, doesn't `extends Iterator<T>`, so an object literal with `next()` looks excess);
   TS2740 Set set-methods (core.ts). Arithmetic-flow `number|undefined`→number (parser.ts 8911/8974)
