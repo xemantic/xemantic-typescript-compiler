@@ -94691,18 +94691,6 @@ interface DataView {
     private fun narrowByCallPredicate(
         t: Type, expr: CallExpression, isMatch: Boolean, name: String,
     ): Type {
-        // P0 (services hang) fast path — mirrors [narrowByAssertCall]'s pre-check: the
-        // predicate can only narrow [name] when some argument's reference path IS
-        // [name] — or, since round 424, a proper dot-PREFIX of it (a guard on the
-        // RECEIVER narrows the property path) — and checking that before callee
-        // resolution avoids the re-entrant receiver-typing walk for the
-        // overwhelmingly common non-matching call. Allocation-free prefix test.
-        if (expr.arguments.none { a ->
-                val p = getReferencePath(a)
-                p != null && (p == name ||
-                    (name.length > p.length && name.startsWith(p) && name[p.length] == '.'))
-            }
-        ) return t
         // Unwrap value-preserving wrappers around the callee so `(isFoo)(x)`,
         // `isFoo!(x)`, `(isFoo as F)(x)` narrow identically to `isFoo(x)`.
         var callee: Expression = expr.expression
@@ -94716,6 +94704,20 @@ interface DataView {
                 else -> break
             }
         }
+        // For a METHOD call `recv.m(...)` the callee is a PropertyAccessExpression; a `this is X`
+        // predicate on `m` narrows the RECEIVER (`recv`), not an argument. Compute the receiver's
+        // reference path up front so it participates in the fast-path below.
+        val calleeReceiverPath = (callee as? PropertyAccessExpression)?.let { getReferencePath(it.expression) }
+        fun pathMatches(p: String?): Boolean =
+            p != null && (p == name ||
+                (name.length > p.length && name.startsWith(p) && name[p.length] == '.'))
+        // P0 (services hang) fast path — mirrors [narrowByAssertCall]'s pre-check: the
+        // predicate can only narrow [name] when some argument's reference path IS
+        // [name] — or, since round 424, a proper dot-PREFIX of it (a guard on the
+        // RECEIVER narrows the property path) — OR (round 444) the METHOD RECEIVER's path
+        // matches (a `this is X` predicate). Checking this before callee resolution avoids
+        // the re-entrant receiver-typing walk for the overwhelmingly common non-matching call.
+        if (expr.arguments.none { pathMatches(getReferencePath(it)) } && !pathMatches(calleeReceiverPath)) return t
         // round 43 iter9: PropertyAccess callee — `obj.isMethod(x)` where
         // `obj`'s type has a method `isMethod` with `x is T` return type.
         val decl: Node? = resolveFlowCalleeDecl(expr, callee) ?: return t
@@ -94733,13 +94735,38 @@ interface DataView {
         val predicateParamName = when (val pn = predicate.parameterName) {
             is Identifier -> pn.text
             is TypeReference -> (pn.typeName as? Identifier)?.text
+            // Round 444: a `this is X` predicate — the `this` subject parses as a ThisType node,
+            // not an Identifier. Its narrowed reference is the method-call RECEIVER (handled below).
+            is ThisType -> "this"
             else -> null
         } ?: return t
-        val paramIdx = params.indexOfFirst { (it.name as? Identifier)?.text == predicateParamName }
-        if (paramIdx < 0) return t
-        val arg = expr.arguments.getOrNull(paramIdx) ?: return t
-        // 17.34b: path-based comparison so `predFn(A._a)` matches when name="A._a".
-        val argPath = getReferencePath(arg)
+        // Round 444: a `this is X` predicate on a METHOD (`type.isUnion(): this is UnionType`)
+        // narrows the RECEIVER of the call, not an argument. The method resolves like any other
+        // (the tsc `Type`/`Symbol`/`Node` public-API guards `isUnion`/`isIntersection`/… added by
+        // interface augmentation); only the narrowed reference differs. `paramAnnotation` (for the
+        // B481 generic type-guard inference below) has no meaning for a `this` predicate — the walked
+        // type is the receiver's declared type, not a param's — so it is null (the guards are
+        // non-generic anyway, so `tpNames` is empty and inference is skipped regardless).
+        val argPath: String?
+        val paramAnnotation: TypeNode?
+        if (predicateParamName == "this") {
+            // A `this is X` method guard narrows the receiver only when the receiver resolves the
+            // method UNAMBIGUOUSLY. For a UNION receiver, tsc narrows only if EVERY constituent has
+            // a matching type predicate (typePredicatesInUnion3: `Type1 | Type2` where
+            // `Type2.predicate(): boolean` is NOT a guard, so `val.predicate()` is not a narrowing
+            // guard); `resolveFlowCalleeDecl` found only ONE member's method, so bail on a union to
+            // stay FP-safe — suppression-only means a bail is a harmless false-negative, never an FP.
+            if (t is Type.Union) return t
+            argPath = calleeReceiverPath ?: return t
+            paramAnnotation = null
+        } else {
+            val paramIdx = params.indexOfFirst { (it.name as? Identifier)?.text == predicateParamName }
+            if (paramIdx < 0) return t
+            val arg = expr.arguments.getOrNull(paramIdx) ?: return t
+            // 17.34b: path-based comparison so `predFn(A._a)` matches when name="A._a".
+            argPath = getReferencePath(arg)
+            paramAnnotation = params.getOrNull(paramIdx)?.type
+        }
         if (argPath != name) {
             // M1.12 (round 424): PREFIX-path narrowing — the guard target is a
             // RECEIVER prefix of the walked path (`usesWildcardTypes(options):
@@ -94779,7 +94806,6 @@ interface DataView {
         // TypeReference resolution), and resolve the target with them. FP-safe: narrowing only
         // refines a union (removes members) → suppresses downstream errors, never adds them.
         val tpNames = typeParams?.mapNotNull { (it.name).text }?.toSet() ?: emptySet()
-        val paramAnnotation: TypeNode? = params.getOrNull(paramIdx)?.type
         val targetType: Type = if (tpNames.isNotEmpty() && paramAnnotation != null) {
             val bindings = mutableMapOf<String, Type>()
             collectPredicateTpBindings(paramAnnotation, t, tpNames, bindings)
