@@ -90982,7 +90982,20 @@ interface DataView {
             // now-resolvable base does not push the class into the conservative "has base types"
             // skip and swallow a genuinely-missing-member TS2339 (genericRecursiveImplicitConstructorErrors3).
             is Identifier -> lookupTypeSymbolInInferenceNamespace(baseExpr.text) ?: globals[baseExpr.text]
-            is PropertyAccessExpression -> resolveHeritageBaseSymbol(baseExpr)
+            // A namespace-qualified base `NS.Base` (`RefactorContext extends
+            // textChanges.TextChangesContext`, where `NS` is a namespace-IMPORT alias to
+            // another module). `resolveHeritageBaseSymbol` resolves it via the alias's
+            // exports, but our `resolveAlias` does not resolve an `import * as NS` /
+            // `export * as NS` namespace alias to a module with `.exports` (its declaration
+            // is the NamespaceImport node, unhandled), so the exports lookup returns null.
+            // Fall back to the merged-global LAST-SEGMENT name — exactly what
+            // getTypeFromTypeReference does for the same shape in ANNOTATION position
+            // (`?: globals[name]` where name is the rightmost segment), so heritage stays
+            // consistent with annotations. Suppression-only: resolving a base only ADDS
+            // inherited members (fewer missing-member TS2339); the merged-global name is
+            // globally unique enough that the type-reference path has relied on it for the
+            // same qualified shapes without FPs.
+            is PropertyAccessExpression -> resolveHeritageBaseSymbol(baseExpr) ?: globals[baseExpr.name.text]
             else -> return errorType
         } ?: return errorType
         val declared = getDeclaredTypeOfSymbol(symbol)
