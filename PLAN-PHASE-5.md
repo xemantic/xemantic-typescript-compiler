@@ -39,6 +39,63 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
+**Round 442 (2026-07-08) — TypeParam-constraint arg + overloaded-callback arity + the
+module-file-local-variable global-leak (Blocker #3): FOUR bounded fixes. Compiler profile
+197 → 190 (−7), and the module-var-leak fix GENERALIZES MASSIVELY across the big profiles:
+services 1,030 → 604 (−426), server 1,314 → 887 (−427), harness 1,603 → 1,118 (−485). Suite
+9,492 → 9,502 (+10 local across 3 test files, 0 regressions); 4 fix commits. Compiler diffed
+via the `--listAll` `comm` loop as strictly by-position removals.**
+- **Baseline @ HEAD (round 441): compiler 197.** Bucketed the `--listAll`: the clean bounded veins
+  were (a) `K`/`T` (constrained TypeParam) → `string` param ×3, (b) the overloaded-callback arity ×2,
+  and — found only by bucketing the SERVICES profile — (c) TS2339 on `NavigationBarNode` ×279 (!).
+- **Fix 1 (TypeParam-constraint arg, M3.1, −4 compiler TS2345): `checkArgumentsAgainstSignature`
+  bails when a bare-TypeParam arg's declared constraint is assignable to a concrete primitive param.**
+  tsc's rule (a type param relates to X iff its constraint does). The relation engine deliberately
+  has NO general `source is Type.TypeParam && target !is Type.TypeParam` branch (39+ cycle-regression
+  gate — CLAUDE.md), so this is a per-site bail-out mirroring round 441's `checkConstraintsForTypeArgs`.
+  Uses the RAW constraint (NOT `getApparentType`, which wraps a bare `string` constraint into the
+  String interface — not assignable to primitive `string`). Gated to a constrained TP (an unconstrained
+  `T` still fires). `readPackageJsonField<K extends keyof PackageJson>` → `hasProperty(json, fieldName)`;
+  `changeExtension<T extends string | Path>` → `changeAnyExtension`; + the `IncludeTypeSpaceImports`
+  TP-vs-boolean case (5 negative/positive local tests).
+- **Fix 2 (overloaded-callback arity, M3.1, −2 compiler TS2345): `allowArityMismatch` uses the MIN
+  minArgumentCount across an overloaded arg's call sigs.** An overloaded function passed as a callback
+  is arity-incompatible with a single-sig target only when EVERY overload needs more args than the
+  target provides (tsc picks a matching overload). `tryCast(x, isAssignmentExpression)` — 1st overload
+  2 required, 2nd's 2nd param OPTIONAL (minArgumentCount 1) — no longer reports 'too few arguments'
+  against the 1-param `(value: TIn) => value is TOut` target (es2015.ts decorator IIFE ×2). Single-sig
+  args unaffected (minOf == first).
+- **Fixes 3+4 (module-file-local var global-leak, Blocker #3 — THE big one): a top-level `let/var/const`
+  in a MODULE file leaks into `globals` and shadows every OTHER file's local of the same name.**
+  ROOT CAUSE (found by bucketing services TS2339×404 → `NavigationBarNode`×279): navigationBar.ts's
+  module-level `let parent: NavigationBarNode` merged into `globals`, so every other file's local
+  `parent` — a block-scoped const (`const parent = errorLocation.parent` in checker.ts) or a nested-fn
+  param (`function maybeEmitExpression(next, parent: BinaryExpression)` in emitter.ts), both invisible
+  to our scope machinery per B83.5 — resolved to `NavigationBarNode` → FP TS2339 on `.left`/`.pos`/
+  `.operatorToken` and FP TS2345 when passed as an arg. Built `moduleFileLocalVarNames` (after the merge)
+  = names EXCLUSIVELY module-file-local variables MINUS any competing global meaning (script-file
+  top-level decl, or a function/class/interface/enum/type-alias/namespace of that name anywhere), so a
+  name in the set can only be a cross-file conflation. Bail `checkMemberAccessMissing` (TS2339) AND
+  `checkArgumentsAgainstSignature`'s per-arg loop (TS2345) for such a bare-Identifier receiver/arg
+  UNLESS `currentFileLocals?.get(name) != null` (it IS this file's own module var — keeps firing).
+  FP-safe by construction (a cross-file bare module var is TS2304 in real tsc, never TS2339/TS2345).
+  services TS2339 404 → 129 (NavNode 279 → 9), TS2345 197 → 44 (NavNode-as-arg 153 → 10); compiler −1
+  (utilities.ts:6325 `getIndentString(indent)` — the round-440-flagged 'wrong-callee single', actually
+  a module-var leak). 3 local tests (cross-file positive + same-file negative control + arg-check positive).
+- **LESSON / MEASURED DEAD-END: a broader `getTypeOfIdentifier` variant (return anyType for these names
+  in the globals fallback) was tried and REVERTED — it took services TS2345 197 → 44 too but broke
+  cross-file initializer inference / redeclare / `.d.ts` emit → 5 corpus regressions (es6Import*,
+  typePredicateInLoop, checkJsdoc*, structurally*Imports*). Identifier typing feeds emit/redeclare paths
+  that need the real cross-file type; only the two DIAGNOSTIC emission sites are safe to suppress. The
+  suite gate caught it — the property-access + arg-check bails are the safe subset.**
+- **META / next-agent:** the module-var-leak fix is the highest-yield single fix in many rounds
+  (−426/−427/−485 on services/server/harness). The remaining big-profile buckets: services TS2322×220
+  / TS2345×44 / TS2339×120 (SourceFileLike×44, Type×20 — deeper narrowing on big AST-node unions,
+  the M1.4 territory), TS2314 `Generic type 'Transformer' requires 1 type argument` ×14 (a generic-arity
+  gap — `Transformer<T>` used bare where tsc has a default), TS2564×17 / TS2664×10 (fresh bounded
+  buckets not yet triaged). The compiler profile (190) is genuinely mined out for CLEAN bounded veins —
+  bucket the SERVICES/SERVER profile to find the next generalizable family.
+
 **Round 441 (2026-07-08) — TS2344 constraint-chain + assertNever exhaustiveness burn-down:
 THREE bounded fixes take the compiler profile 205 → 197 (−8). Suite 9,482 → 9,492 (+10 local across
 2 test files, 0 regressions); 3 fix commits. All diffed via the `--listAll` `comm` loop as
@@ -575,119 +632,6 @@ diamond join, and an emitter-active positive control. Remaining profile is FLAT 
 ≤8%): HashMap churn in the walkers' memo, `findLocalTypeAlias$scan` (~4%, via
 `discUnionParamMembers`), `checkMemberAccessMissing` ~3% — next M5 round needs a fresh
 JFR pass, no obvious single target left.
-
-**Round 432 (2026-07-07) — M5 (first performance round, JFR-driven): the alias-resolution
-quadratic — self-compile (compiler profile) wall ~490–593 s → 38.6 s (~13–15×), zod
-6.0 → 5.0 s, diagnostics byte-identical (1,148 / by-code identical; zod 1,665 identical);
-suite 9,328/0 green (+2 local).** A JFR profile (settings=profile, stackdepth=1024) on the
-compiler profile showed **76% of ALL samples in `Identifier.equals` ← `ImportSpecifier.equals`
-← `ArrayList.indexOf`**: the program-wide structural scans in `resolveAlias`'s
-ImportSpecifier branch and `findEnclosingImport` (`spec in bindings.elements` over every
-ImportDeclaration of every binderResult). Root cause: only POSITIVE resolutions are cached
-(`setSymbolTarget`), so every UNRESOLVABLE alias — exactly tsc's ESM-`.js` barrel imports,
-which `resolveModuleSpecifier` deliberately won't strip — re-ran the full scan on EVERY
-`resolveAlias` call, from flow-walk recursion depths >1024 (stacks truncated, so most samples
-lost root attribution; the visible tail pointed at `computeImportedFunctionLikeDecl` /
-`resolveEnumSymbolForDiscriminant`). Fix (semantics-preserving by construction, verified
-byte-identical on both dashboards): (1) `enclosingImportsOf` — a lazily-built structural-keyed
-index ImportSpecifier → encounter-ordered list of (fileName, ImportDeclaration), replacing
-both scans; structural keys + first-write-wins lists reproduce the old scans' first-match AND
-fallback-to-next-match semantics exactly (structurally-equal specifiers across files share a
-key, as they matched each other in the old scans). (2) `resolveModuleSpecifier` memoized incl.
-null results via containsKey (it is a pure function of the specifier — `fileResults`/`options`
-fixed before init, contextNode unused; the null case is the hot one). Second-tier zod finding
-(NOT yet fixed, queue candidate): `resolveQualifiedName`-driven `resolveAlias` string churn
-still ~30% of the zod compile. `EnclosingImportIndexTest` pins collision + distinct-key
-resolution (the same-name-from-different-modules variant is UNUSABLE as a signal — Blocker #3
-scope conflation masks it, verified pre-existing on clean HEAD via stash A/B). Also: zod
-compiles end-to-end (107 files, 0 crashes, runnable emit — smoke-tested; 1,665 FPs vs real
-tsc 6.0.3's 0 in 2.8 s) — a good second dashboard profile; and `bench-compile-tsc.sh` stat
-parsing (`grep -oP`) silently logs 0s on macOS (BSD grep), wall_ms is real.
-
-**Round 431 (2026-07-07) — M3.2 (STARTED) + M3.1: the TS7006 core falls 301 → 11
-(−96%) via contextual typing, and engine return-checking reaches switch/try bodies
-behind a foreign-TP source gate that then extends to every assignability path.
-Self-compile (compiler profile) 936 → 672 → 641 → 574 → 551 → 482 (−454, −48%;
-TS7006 301 → 11, TS7019 4 → 0, TS2322 435 → 276, TS2367 kept 0); by-code strictly
-shrinking at every landed step; suite 9,356 → 9,384 (+28 local, 0 regressions);
-5 fix commits (b2411656, 186cb3cd, cceeb26b, f12dfe61, bd567338).**
-- **Fix 1 (b2411656, −264 strictly removals): TS7006 contextual typing — the two
-  dominant mechanisms.** (a) Callee RESOLVABILITY: `isCalleeResolvable` falls back to
-  the round-418 nested-function name map (`filterType`/`mapType` inside
-  `createTypeChecker` are B83.5-unbound ×~140 sites) and a NEW lexical scope stack
-  (`implicitAnyScopes` — params incl. binding-pattern names + body locals, push/pop
-  in try/finally at every function-like boundary), so param-typed and nested callees
-  contextually type their callback args — the same permissive rule file-level
-  callees already had. (b) Assignment-RHS contextual typing (tsc
-  getContextualTypeForBinaryOperand): `lhs = arrow` resolves the LHS DECLARED type
-  (scope-map annotations, `as T` casts, property-access members via the receiver)
-  under the single-applicable-signature rule (mirrors B476 — a ≥2-sig LHS gives NO
-  ctx, contextualTypingWithGenericAndNonGenericSignature's pinned FIRE; an untyped
-  `let mark; mark = tag => …` keeps firing, uncalledFunctionChecksInConditional2's
-  pin). Binary propagation: `||`/`??` feed BOTH operands, `&&`/comma the RIGHT only
-  (contextuallyTypeLogicalAnd03/CommaOperator03 pin the left firing).
-  `contextualCallableArity` sees through single-callable-member unions
-  (`WriteFileCallback | undefined` returns) + lazy References. 13 local tests.
-- **Fix 2 (186cb3cd, −31 strictly removals): residual receiver shapes.**
-  `lookupPropertyTypeForCtx` resolves members through Type.Intersection receivers
-  (`x as CompilerHost & ResolutionCacheHost`, watchPublic ×9), lazy-membered
-  References (target fallback — arity survives missing substitution), and interface
-  `extends` bases (depth-guarded); an un-annotated call-initialized local registers
-  its callee's declared RETURN annotation (AST-only, lazily resolved).
-- **Fix 3 (cceeb26b, −108/+41): engine return-checking in switch/try + the
-  foreign-TP gate + TS2367 anchoring.** `returnTypeNode` now threads through the
-  SwitchStatement/TryStatement arms of BOTH assignability dispatchers (+ the
-  Stmt-dispatcher IfStatement arm) — a `return undefined` in a switch case
-  previously fell to the STRING path which can't resolve alias unions
-  (`VisitResult<Node | undefined>` ×12 FP'd). COUPLED (load-bearing pair):
-  `checkReturnAssignability` bails on a source containing a FOREIGN type param
-  (name ∉ enclosing `typeParams` — an un-inferred generic call result like `return
-  append(…)` typing as `T[]`; own-TP sources keep checking, corpus-pinned) — this
-  cleared ~95 PRE-EXISTING top-level un-inferred-generic return FPs. The +41 are
-  position-exposures of pre-existing M3 families at newly-checked positions
-  (round-426 "honestly visible" precedent): NodeArray<X>-vs-NodeArray<Node>
-  covariance ×~17 (cross-file heritage relation gap), `Node` narrowing-dependent
-  returns ×5, branded `__String` ×2, TransformerFactory ×3. The TS2367
-  same-target-Reference disjointness proof now requires a differing arg pair
-  anchored in a NON-object type (a first-touch-exposed `nodes ===
-  (parent as X).typeArguments` FP; `Array<string>` vs `Array<number>` stays firing).
-- **Fix 4 (f12dfe61, −23 strictly removals): the gate walks ANONYMOUS-object
-  members/call-sigs** — `SearchResult<T> = { value: T | undefined } | undefined`
-  hides the un-inferred TP in a member (`return toSearchResult(undefined)` ×12 +
-  `() => T` factory returns ×4); named interfaces stay excluded (Reference args
-  carry their TPs; a member walk would be broad + first-touch-shifting).
-- **Fix 5 (bd567338, −69 strictly removals): the foreign-TP gate extends to the
-  var-decl (`const p: () => Printer = memoize(…)`), assignment
-  (`fileIncludeReasons = append(…)`), property-access-assignment
-  (`type.typeParameters = concatenate(…)` — no typeParams threading there, ALL
-  TPs treated foreign), and conditional-return-branch (B69.1 runs BEFORE the
-  return-path gate) paths. LANDMINE caught by the SUITE GATE (5 corpus
-  regressions fixed pre-land): a generic FUNCTION VALUE source (`var f:
-  (x: number) => number = genericFn`) carries its sig-OWN TPs — legitimately
-  checkable, NOT leaked inference; `typeContainsForeignTypeParam` treats a
-  signature's own type parameters as bound within that signature
-  (genericAssignmentCompatOfFunctionSignatures1 + 4 siblings pin it; the
-  refinement cost zero self-compile suppressions).
-- **META:** (1) the round-431 TSV row used `--no-emit` (emitted column 0 — not an
-  emit regression). (2) The round-428 negative-control lesson RECURRED: the first
-  own-TP control asserted a capability the baseline never had (bare `return x`
-  own-TP-vs-number is a pre-existing FN) — verify a control fires at BASELINE before
-  pinning it; replaced with the B69.1-ordered ternary shape.
-- **Residual triage (next-agent):** TS7006×11 — namespace-local interface
-  annotations ×5 (builderState `const map: ManyToManyPathMap = {…}` inside
-  `namespace BuilderState` — the walker's getTypeFromTypeNode has no namespace
-  context), initializer-inferred fn locals ×3 (parenthesizerRules
-  `let rule = cache.get(k); rule = node => …`, checker addLazyDiagnostic),
-  destructured-member local ×1, object-member ctx ×2 (watchUtilities). TS2322×345 —
-  `string`→`string` ×24 (interface-override literal props, M3), assignment-path
-  foreign-TP siblings (`T[]`→`TypeParameter[]` ×2, `U | undefined`→`Modifier` ×2 —
-  extend the gate to checkVarDeclAssignability/checkAssignmentExpression, same
-  principle), `undefined`→ResolutionMode/ElaborationIterator ×8 (non-return
-  positions), NodeArray-covariance adds ×~17 (fix `TypeNode <: Node` cross-file
-  heritage or catalogue), `Node`→`Declaration | undefined` ×5 (narrowing-dependent,
-  M3.4). TS2345×86/TS2769×30 (nested-overload `'true'`/`'false'` ×5,
-  string-vs-literal-union ×10). TS2591×43 is env-legit (offline, no @types/node —
-  `--node-stub` suppresses).
 
 **M2 — Real-lib migration (staged; decompose further at start)**
 
