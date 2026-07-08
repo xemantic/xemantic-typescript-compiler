@@ -14718,6 +14718,12 @@ class Checker(
             if (member.type == null) continue
             // Skip `any` type — no assignment needed for any
             if (isAnyType(member.type)) continue
+            // A property whose declared type INCLUDES `undefined` starts with a valid value
+            // (undefined) and so needs no definite assignment — tsc's strictPropertyInitialization
+            // exempts it (`getFalsyFlags(type) & TypeFlags.Undefined`). e.g. services.ts's
+            // `public nameTable: Map<__String, number> | undefined;`. Same helper the TS2454
+            // definite-assignment path uses, so the two stay consistent.
+            if (typeIncludesUndefined(member.type)) continue
             // Skip if type annotation is a bare generic reference (would trigger TS2314)
             // TypeScript doesn't flag TS2564 on error types
             if (isUnresolvedGenericType(member.type)) continue
