@@ -86466,6 +86466,17 @@ interface DataView {
     ) {
         val expr = stmt.expression
 
+        // Blocker #3 (round 445): `return <leakedModuleVar>` where the returned bare identifier
+        // is a module-file-local variable leaked into `globals` (round 442's
+        // moduleFileLocalVarNames — e.g. inferFromUsage.ts's `return parent` where a
+        // block-const `const parent` is unbound per B83.5 and resolves to navigationBar.ts's
+        // module-level `let parent: NavigationBarNode`). Its resolved type is a cross-file
+        // conflation, so the return relation FP-fires (NavigationBarNode ≁ Declaration |
+        // undefined). Skip UNLESS it IS this file's own top-level binding. Mirrors the
+        // checkMemberAccessMissing / arg-check bails; suppression-only.
+        if (expr is Identifier && expr.text in moduleFileLocalVarNames &&
+            currentFileLocals?.get(expr.text) == null) return
+
         // Round 435: a GENERATOR's `return expr` checks against the annotation's
         // TReturn (tsc getIterationTypeOfGeneratorFunctionReturnType), never the
         // iterator type itself — a bare `return;` in `function* g():
@@ -87100,6 +87111,19 @@ interface DataView {
             // Each assignment in the chain gets checked independently
             if (expr.right is BinaryExpression) {
                 checkAssignmentExpression(expr.right, source, fileName, varTypes, typeParams)
+            }
+            // Blocker #3 (round 445): `<ident> = <leakedModuleVar>` — the RHS bare identifier
+            // is a module-file-local variable leaked into `globals` (moduleFileLocalVarNames),
+            // resolving to a cross-file-conflated type (navigationBar.ts's NavigationBarNode for
+            // a local `parent`), so the assignment relation FP-fires (checker.ts `lastParent =
+            // parent`). Skip UNLESS it IS this file's own top-level binding. Gated to a simple
+            // Identifier target (nothing else to walk). Mirrors the return/arg/property bails;
+            // suppression-only.
+            run {
+                val rhs = expr.right
+                if (expr.left is Identifier && rhs is Identifier &&
+                    rhs.text in moduleFileLocalVarNames &&
+                    currentFileLocals?.get(rhs.text) == null) return
             }
             // 16.4dp: `arguments = <primitive>` inside a non-arrow function body fires
             // TS2322 because `arguments` is the implicit `IArguments` parameter. Only
