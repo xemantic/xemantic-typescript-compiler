@@ -40,10 +40,10 @@ which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the b
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
 **Round 446 (2026-07-08) — array-literal→variadic-tuple-in-union returns + nested Array<X>-in-Array<Y>
-covariant relation: TWO bounded fixes. Dashboard: compiler 188 → 185 (−3), services 399 → 373 (−26),
-server 623 → 597 (−26), harness 868 → 842 (−26). Suite 9,540 → 9,553 (+13 local across 2 test files,
-0 regressions); 2 fix commits (4a97bd52/28abf66a); services diffed via `--listAll` as strictly
-by-position removals; bench rows logged for all four profiles.**
+covariant relation + destructured-param method arity: THREE bounded fixes. Dashboard: compiler 188 →
+185 (−3), services 399 → 373 (−26), server 623 → 589 (−34), harness 868 → 806 (−62). Suite 9,540 →
+9,558 (+18 local across 3 test files, 0 regressions); 3 fix commits (4a97bd52/28abf66a/03acbf0d);
+diffed via `--listAll` as strictly by-position removals; bench rows logged for all four profiles.**
 - **Baseline @ HEAD (round 445): services 399, compiler 188.** Bucketed the services `--listAll` and
   found the two families round 445's note flagged as NEXT: `DiagnosticOrDiagnosticAndArguments (|
   undefined)` ×16 (array-literal→variadic-tuple-in-union) and `readonly ApplicableRefactorInfo[]` ×15
@@ -75,6 +75,16 @@ by-position removals; bench rows logged for all four profiles.**
   first cut without the gate turned it into a +1 compiler FP (program.ts `flatten(allDiagnostics)`
   `readonly Diagnostic[] ⊄ T[]`). Core relation-engine change; corpus-clean (suite 9,548 → 9,553).
   Services TS2322 196 → 190.
+- **Fix 3 (03acbf0d, destructured-param method arity; harness 842 → 806, server 597 → 589, compiler /
+  services unchanged):** a method with a binding-pattern param (`goToRangeStart({ fileName, pos }:
+  Range)`) FP'd TS2554 "Expected 1-0 arguments, but got 1." on a correctly-argumented property-access
+  call. A destructured param produces NO Symbol, so the built Signature DROPS it — `sig.parameters` is
+  empty (maxParams 0) while `minArgumentCount` stays 1, an impossible range that reads any 1-arg call as
+  "too many". `checkTs2554ForPropertyAccessCall` recovers the true arity from the DECLARATION's parameter
+  list via `paramInfo` (which counts binding-pattern params + handles rest/optional). Harness TS2554 37
+  → 1 (the residual mapCode.ts:103 is pre-existing/unrelated); the harness is the test-infrastructure
+  profile with many `fourslashImpl` destructured-param methods — the smaller profiles have few such
+  property-access calls, hence compiler/services unchanged. Pure TS2554 removal, no other code touched.
 - **NEXT (services @ 373):** the residual `ApplicableRefactorInfo[]` ×10 — a SEPARATE bug: their
   `actions` property resolves to a stray `U[]` (an unbound type parameter — no `U` in the file), a
   type-param-scope pollution / `getPropertyTypeForRelation` gap (my TP-gate correctly avoids making it an
