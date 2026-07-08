@@ -40,11 +40,12 @@ which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the b
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
 **Round 444 (2026-07-08) — cross-file heritage / `this`-guard receiver narrowing / alias-own-file
-conflation (Blocker #3): THREE bounded fixes, all suppression-only. Compiler profile UNCHANGED (190),
-but they GENERALIZE strongly across the big profiles: services 498 → 448 (−50), server 733 → 678
-(−55), harness 989 → 928 (−61). Suite 9,512 → 9,522 (+10 local across 2 test files, 0 regressions);
-3 fix commits (19e282f0/59868e67/796d263f); services diffed via `--listAll` as strictly by-position
-removals (heritage 22 removed / 1 unmasked; this-predicate 17/0; conflation 12/0). Bench rows recorded.**
+conflation / module-var-leak property chain (Blocker #3): FOUR bounded fixes, all suppression-only.
+Compiler profile UNCHANGED (190), but they GENERALIZE strongly across the big profiles: services
+498 → 439 (−59), server 733 → 669 (−64), harness 989 → 919 (−70). Suite 9,512 → 9,523 (+11 local
+across 3 test files, 0 regressions); 4 fix commits (19e282f0/59868e67/796d263f/bd0d8eba); services
+diffed via `--listAll` as strictly by-position removals (heritage 22 removed / 1 unmasked;
+this-predicate 17/0; conflation 12/0; NavNode-chain 9/0). Bench rows recorded.**
 - **Baseline @ HEAD (round 443): services 498, compiler 190.** The compiler profile is mined out for
   clean bounded veins; bucketed the SERVICES `--listAll` TS2339×85: `Type`×20 / `Info`×12 /
   `RefactorContext`×9 / `NavigationBarNode`×9 / `ExportInfoMap`×8 / `CodeFixContextBase`×8 / `Symbol`×5.
@@ -87,15 +88,29 @@ removals (heritage 22 removed / 1 unmasked; this-predicate 17/0; conflation 12/0
   `interface X`es, so getDeclaredTypeOfSymbol resolves an Interface, not the Union** (found by an instrumented
   probe: `localInfo=[TypeAliasDeclaration, InterfaceDeclaration, InterfaceDeclaration] laType=Interface`).
   Handles both a single `interface X` receiver and an `X | undefined` union receiver (sole non-nullish member).
+- **Fix 4 (bd0d8eba, −9 services, TS2339 — the NavigationBarNode ×9 residual): the module-var-leak root
+  behind a PROPERTY-ACCESS chain.** Round 442's `moduleFileLocalVarNames` bail covered a bare-Identifier
+  receiver, but `parent.parent.kind` (checker.ts) leaks navigationBar.ts's `let parent: NavigationBarNode`
+  through the bare `parent` — `parent.parent` resolves to NavigationBarNode (it has a `.parent`) so `.kind`
+  FP'd on the CHAIN. `checkMemberAccessMissing` walks the receiver chain to its root Identifier and bails
+  when the root is a leaked module var (and not the current file's own binding). FP-safe: the whole chain is
+  resolved through the wrong leaked type; a CALL in the chain breaks the property-access walk so only pure
+  chains bail. Generalizes: services/server/harness each −9.
 - **INVESTIGATED & DEFERRED: the type-RESOLUTION fix (prefer the file-local `type X` in `getTypeFromTypeReference`)
   fails — `currentCheckFileName` is NULL at the lazy `getInfo`-return-type resolution (the type is resolved +
   cached before any file-check context sets it). The emission-site bail (fix 3) is the robust choice.**
-- **META / next-agent (services @ 448):** the residual TS2339×38 is now dominated by the AUGMENTATION-MEMBER
-  merge (`symbol.links` / `type.checker` — a `declare module "../compiler/types.js" { interface Symbol {
-  links } }` adds members our binder does NOT merge into the base interface; CLAUDE.md's documented hard
-  Blocker #3) — the highest-value single remaining cross-file fix, would clear `Symbol`/`ExportInfoMap` and
-  much of server/harness. `NavigationBarNode`×9 is the round-442 module-var-leak residual (names with a
-  competing global meaning are excluded from `moduleFileLocalVarNames`). The bulk is now deep-M3 TS2322×236.
+- **META / next-agent (services @ 439):** the clean bounded services veins are now largely mined; the
+  residual TS2339×30 is deep — **`Symbol.links`×5 is NOT augmentation-merge** (INVESTIGATED round 444: `links`
+  is on `TransientSymbol`, narrowed by an `isTransientSymbol(symbol) && symbol.links…` `&&`-chain — the
+  narrowing WORKS in isolation but the real symbolDisplay.ts FP is a deep gap, likely the huge-file flow-walk
+  depth cap or a `TransientSymbol`/`Symbol`-lib conflation; needs an instrumented probe). **`ExportInfoMap`×8 is
+  a WRONG-TYPE issue** (`exportInfo: SymbolExportInfo | FutureSymbolExportInfo` — a `let x: T = …; ({ x } = result)`
+  destructuring-reassignment re-types `exportInfo` to `ExportInfoMap`; an inference/destructuring-target-type gap).
+  The bulk is now deep-M3 TS2322×236 (fragmented relation gaps). The genuine AUGMENTATION-MEMBER merge (a
+  `declare module { interface Symbol { links } }` adding members our binder doesn't merge into the base) is
+  PARTIALLY modeled already — `mergeModuleAugmentations` merges the augmentation's interface DECLARATIONS into the
+  base symbol's `declarations` list (round-444 repro: `Type.isUnion()` added by augmentation RESOLVES cross-file),
+  so it is no longer the dominant residual it was thought to be.
 
 **Round 443 (2026-07-08) — module-augmentation family + the module-file-local TYPE-alias leak
 (Blocker #3): FOUR bounded fixes, all suppression-only. Compiler profile UNCHANGED (190 — no FPs in
