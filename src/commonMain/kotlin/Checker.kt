@@ -41538,6 +41538,30 @@ interface DataView {
     /**
      * Get type parameter info for a named type. Returns null if the type is not generic.
      */
+    /** Blocker #3 (round 442): true when [fileName]'s OWN top-level Class/Interface/
+     *  TypeAlias declaration of [name] is NON-generic. Such a local shadows a cross-file
+     *  same-named GENERIC type (convertToAsyncFunction.ts's non-generic `interface
+     *  Transformer` vs types.ts's `type Transformer<T>`), so a bare reference in that file
+     *  needs no type args and must NOT trip the cross-file [getTypeParamInfo] arity scan →
+     *  TS2314. AST-based so it is immune to the `mergeSymbolTable` declaration pollution
+     *  (the merged `globals`/first-file `result.locals` symbol carries BOTH declarations).
+     *  A same-file GENERIC declaration returns false (its real arity applies). */
+    private fun fileDeclaresNonGenericType(fileName: String, name: String): Boolean {
+        val result = binderResults.firstOrNull { it.sourceFile.fileName == fileName } ?: return false
+        var found = false
+        for (stmt in result.sourceFile.statements) {
+            val tps: List<TypeParameter>? = when (stmt) {
+                is ClassDeclaration -> if (stmt.name?.text == name) stmt.typeParameters else continue
+                is InterfaceDeclaration -> if (stmt.name.text == name) stmt.typeParameters else continue
+                is TypeAliasDeclaration -> if (stmt.name.text == name) stmt.typeParameters else continue
+                else -> continue
+            }
+            if (!tps.isNullOrEmpty()) return false // a same-file GENERIC decl — real arity applies
+            found = true
+        }
+        return found
+    }
+
     private fun getTypeParamInfo(name: String, forTypePosition: Boolean = false): TypeParamInfo? {
         // Check binder symbols first (user-declared types)
         for (result in binderResults) {
@@ -41913,6 +41937,14 @@ interface DataView {
             }
             else -> return
         }
+
+        // Blocker #3 (round 442): the current file's OWN non-generic Class/Interface/
+        // TypeAlias declaration of `name` shadows a cross-file same-named GENERIC type — a
+        // bare reference here needs no type args, so getTypeParamInfo's cross-file scan
+        // (which finds types.ts's generic `type Transformer<T>`, ordered before this file's
+        // non-generic `interface Transformer`) FP-fires TS2314 (14 on the services profile).
+        // AST-based (pollution-proof; the merged `globals` symbol carries both declarations).
+        if (fileDeclaresNonGenericType(fileName, name)) return
 
         // Look up type parameter info
         val info = getTypeParamInfo(name, forTypePosition) ?: return

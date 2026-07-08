@@ -1,0 +1,76 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Kazimierz Pogoda / Xemantic
+ * SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-xtsc-output-exception
+ *
+ * xemantic-typescript-compiler - a conformant TypeScript compiler and type
+ * checker that runs on JVM, native, and WebAssembly
+ * Copyright (C) 2026 Kazimierz Pogoda / Xemantic
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, version 3 of the License.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public
+ * License along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ *
+ * As a special exception, this file contains Helper Code covered by the
+ * xemantic-typescript-compiler Output Exception; additional permissions
+ * are granted as described in the file LICENSE-EXCEPTION.
+ */
+
+package com.xemantic.typescript.compiler
+
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
+import kotlin.test.Test
+
+/**
+ * Round 442 (Blocker #3, self-compile burn-down): a file's OWN non-generic Class/Interface/
+ * TypeAlias declaration shadows a cross-file same-named GENERIC type. convertToAsyncFunction.ts's
+ * non-generic `interface Transformer` was lost to the global generic `type Transformer<T>`
+ * (types.ts) in getTypeParamInfo's cross-file scan, so a bare `const t: Transformer` FP-fired
+ * TS2314 "requires 1 type argument" (14 on the services profile). `checkTypeArgCount` now bails
+ * (AST-based, pollution-proof) when the current file declares the name non-generically.
+ */
+class LocalTypeShadowsCrossFileGenericTest {
+
+    private fun compile(source: String) =
+        TypeScriptCompiler().compile(source.trimIndent(), "b.ts").diagnostics
+
+    @Test
+    fun `local non-generic interface shadows a cross-file generic of the same name - no TS2314`() {
+        compile(
+            """
+            // @strict: true
+
+            // @Filename: a.ts
+            export type Box<T> = { value: T };
+
+            // @Filename: b.ts
+            interface Box { n: number; }
+            export const b: Box = { n: 1 };
+            """
+        ) should {
+            have(none { it.code == 2314 })
+        }
+    }
+
+    @Test
+    fun `local GENERIC type still arity-checks its own references - TS2314 fires`() {
+        // A same-file GENERIC decl returns false from the bail (its real arity applies), so a
+        // bare reference to it still fires TS2314.
+        diagnose(
+            """
+            interface Wrap<T> { value: T; }
+            let w: Wrap = null as any;
+            """
+        ) should {
+            have(any { it.code == 2314 })
+        }
+    }
+}
