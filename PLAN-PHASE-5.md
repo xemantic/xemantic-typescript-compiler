@@ -39,6 +39,50 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
+**Round 446 (2026-07-08) — array-literal→variadic-tuple-in-union returns + nested Array<X>-in-Array<Y>
+covariant relation: TWO bounded fixes. Dashboard: compiler 188 → 185 (−3), services 399 → 373 (−26),
+server 623 → 597 (−26), harness 868 → 842 (−26). Suite 9,540 → 9,553 (+13 local across 2 test files,
+0 regressions); 2 fix commits (4a97bd52/28abf66a); services diffed via `--listAll` as strictly
+by-position removals; bench rows logged for all four profiles.**
+- **Baseline @ HEAD (round 445): services 399, compiler 188.** Bucketed the services `--listAll` and
+  found the two families round 445's note flagged as NEXT: `DiagnosticOrDiagnosticAndArguments (|
+  undefined)` ×16 (array-literal→variadic-tuple-in-union) and `readonly ApplicableRefactorInfo[]` ×15
+  (nested-array element relation).
+- **Fix 1 (4a97bd52, array-literal→variadic-tuple-in-union returns; services 399 → 379, compiler 188 →
+  185, server 623 → 603, harness 868 → 848):** `return [Diagnostics.X, arg, …]` where the target is a
+  variadic tuple, or a union/alias containing one (`DiagnosticOrDiagnosticAndArguments =
+  DiagnosticMessage | [message: DiagnosticMessage, ...args: (string|number)[]]`). The relation engine
+  SKIPS array→tuple and `getTupleType` COLLAPSES the rest slot, so both the engine and the string
+  fallback ("array" display) FP'd. `arrayLiteralSatisfiesTupleTarget` AST-matches the array literal
+  against the tuple found by `findVariadicTupleInTarget` (walk the target node: tuple / union /
+  parenthesized / alias — **alias bodies resolved through the merged `globals`, since an imported
+  alias's file-local symbol is only the ImportSpecifier**). `arrayLiteralMatchesVariadicTuple` parses
+  the tuple into fixed-prefix / one rest / fixed-suffix and verifies each element against its slot
+  (permissive on unresolvable slots → suppression-only). Hooked into `checkReturnAssignability` (direct)
+  + `checkConditionalReturnBranches` (`?:`). Also covers FIXED tuples in a union — compiler's
+  `specToDiagnostic(): [DiagnosticMessage, string] | undefined` + utilities.ts's `isDirectory ? [a,b] :
+  undefined`. Services TS2322 216 → 196.
+- **Fix 2 (28abf66a, nested `Array<X>`-in-`Array<Y>` covariant shortcut; services 379 → 373, server 603
+  → 597, harness 848 → 842, compiler unchanged):** `{ actions: ActionInfo[] }[]` vs `readonly
+  ApplicableRefactorInfo[]` FP'd TS2322. Root cause (found by minimal-repro bisection): the OUTER Array
+  pushes `globalArrayType.id` on the comparison stack, so when the INNER `Array<ActionInfo>` is
+  compared, the same target id counts as an `isReentry` → the covariant element shortcut is deferred to
+  STRUCTURAL comparison of the two `Array` INTERFACES → `concat`'s contravariant element param
+  `ConcatArray<T>` spuriously fails (no per-TP variance info). Array/ReadonlyArray are covariant, so they
+  must ALWAYS use the element shortcut (`A ⊄ B ⇒ Array<A> ⊄ Array<B>`; termination via
+  `relationComparisonStack` + `isDeeplyNested`). **Gated to TP-FREE target args** — an unbound-TP target
+  (`flatten<T>(…: T[][])`) is an M3.1 inference gap the trivial structural pass currently MASKS; the
+  first cut without the gate turned it into a +1 compiler FP (program.ts `flatten(allDiagnostics)`
+  `readonly Diagnostic[] ⊄ T[]`). Core relation-engine change; corpus-clean (suite 9,548 → 9,553).
+  Services TS2322 196 → 190.
+- **NEXT (services @ 373):** the residual `ApplicableRefactorInfo[]` ×10 — a SEPARATE bug: their
+  `actions` property resolves to a stray `U[]` (an unbound type parameter — no `U` in the file), a
+  type-param-scope pollution / `getPropertyTypeForRelation` gap (my TP-gate correctly avoids making it an
+  FP, so they stay as-is); the `X | RefactorErrorInfo | undefined` refactor-info family (object-literal /
+  `&&`-object / `{error}`-union-source vs union-with-object-member — fragmented M3 object-vs-union
+  relation, not conflation since the Info interfaces are single-file); the `DiagnosticOrDiagnosticAndArguments`
+  residual is a TS2339 (`messageAndArgs[0]` indexing the union — a different code).
+
 **Round 445 (2026-07-08) — TS2416/TS2430 property-override variance families + the cross-file
 interface-merge conflation (Blocker #3) + spread-of-any object returns + the module-var-leak TS2322
 extension: FIVE bounded fixes, all suppression-only. Dashboard: compiler 190 → 188 (−2), services
@@ -649,88 +693,6 @@ shared `diagnose()` helper (CompilerTestSupport.kt) + the `should`/`have` idiom.
   agents write new local tests in the new style (main's rounds 435/436 tests were
   written old-style in parallel — exactly the drift the entry prevents).
 
-**Round 436 (2026-07-07) — M3.1/M3.2/M3.4 burn-down, SEVEN more bounded fixes: compiler
-profile 373 → 294 (−79, −21.2%; TS2322 184 → 158, TS2345 79 → 47, TS2769 30 → 9) + the
-round-436 full-dashboard baseline at the round-435 end state. Suite 9,419 → 9,444
-(+25 local, 0 regressions); 7 fix commits (2938d681, d0155b68, a10aa528, b5250f25,
-39160e43, 4419d333, b80ab634) + `--listAll` chain printing (f70e4fa6); every step's
-by-site diff strictly removals.**
-- **Baseline (all 8 profiles at 182b5877, wall 27–41 s):** compiler 373 / tsc-cli 375 /
-  jsTyping 371 / deprecatedCompat 372 / typingsInstallerCore 380 / services 1,476 /
-  server 1,769 / harness 2,062 — every profile shrank from the round-435 fixes
-  (services −127, server −125, harness −131); throughput ~7,000 LOC/s across the board.
-- **Fix 1 (2938d681, −14): TP-carrying callback-return params of a generic callee skip
-  the fn-return mismatch** (M3.2) — `forEachEntry<K, V, U>(map, cb: (v, k) => U |
-  undefined)` with a boolean-returning callback: tsc infers U from the callback's own
-  return; `allowFuncReturnMismatch` already skipped a BARE-TP param return, now any
-  TP-CONTAINING one (generic callee only). The forEachEntry/firstDefinedIterator/
-  forEach/forEachKey family across 5 files.
-- **Fix 2 (d0155b68, −17): destructured LOCALS shadow outer bindings in the call-types
-  walker** (M3.1) — `const { version, major } = parsePartial(text)` (semver.ts) /
-  `const { sourceFile, start, length } = getDiagnosticSpanForCallNode(node)`
-  (checker.ts): the binding names lived in NO local map, so bare-identifier args fell
-  through to the merged globals and resolved tsc's imported `version: string` /
-  `function length(…)`. Registered into the round-429 `currentParamBindingNames` side
-  set (anyType, suppression-only) + INHERITED currentLocalTypes entries overridden (the
-  file-level `const version = "5.0"` literal recording is consulted before the side
-  set). Also cleared 8 TS2769 + 4 TS2345 in the transformers — the same shadow.
-- **Fix 3 (a10aa528, −7): a literal return whose annotation union syntactically
-  contains it is legal.** DISCOVERY: the engine relation PASSES a literal return
-  against a literal-containing union but does NOT early-return for non-nullish sources
-  — control falls to the STRING fallback, which re-widens the literal ('boolean' /
-  'string') → tsc parser.ts's `return false;` vs `JSDocTypeTag | … | false` ×4, AND the
-  completely UNPINNED basic shape `function f(): "a" | "b" { return "a"; }` (fails via
-  harness and CLI — no corpus test covers it). `returnUnionSyntacticallyContainsLiteral`
-  decides before either path (inline union or direct alias body; FP-proof). CLAUDE.md
-  gotcha added for the fall-through trap.
-- **Fix 4 (b5250f25, −6): explicit-type-arg calls select the MATCHING generic overload,
-  constraint-filtered** — parser.ts `createMissingNode<Identifier>(kind,
-  /*reportAtCurrentPosition*/ true, msg)` must select the 2nd overload (the 1st pins
-  the literal `false`); the namespace container is load-bearing for the repro (the
-  round-429 "mini-repro does not reproduce" residue). **The suite gate caught the
-  unfiltered first cut** regressing typeArgumentConstraintResolution1 — tsc
-  applicability filters by TYPE-ARG CONSTRAINT first (`foo1<Date>("")` disqualifies the
-  `T extends Number` overload; the arg failure reports against the `T extends Date`
-  one). Selection: constraint-satisfying candidates (implTypeArgConstraintsSatisfied,
-  fallback all) → first args-matching (allArgumentsMatch on the padded contextual
-  instantiation) → first candidate.
-- **Fix 5 (39160e43, −13): the four overload arg helpers mirror the optional-param
-  union-arg rule + skip foreign-TP args** — tsc program.ts's UNION-RECEIVER method
-  calls (`(Program | T).getOptionsDiagnostics(cancellationToken)` — the synthesized
-  overload pair failed BOTH ways on `CancellationToken | undefined` vs the optional
-  param, TS2769 ×6) + `visitNode(…)` results leaking `TOut | TIn & undefined` into
-  overload args. Shared `overloadArgSkippable` = `unionArgOkForOptionalParam` (round
-  429c) || foreign-TP-carrying arg.
-- **Fix 6 (4419d333, −3): switch-case narrowing of a BARE string subject** (M3.4) —
-  `narrowBySwitchClause`'s direct path bailed on non-union subjects; semver.ts's
-  `switch (operator) { case "<": case ">=": createComparator(operator, v) }` narrows
-  to the clause range's literal union (all-literals-of-base gate); the call-arg
-  consumer accepts bare-string/number identifiers in the relation-gated refinement
-  branch.
-- **Fix 7 (b80ab634, −19): guard-gated ternary return arms narrow + the all-leaves-
-  verified early return** (M3.4) — `return isNamedTupleMember(m) || isParameter(m) ?
-  m : undefined` (utilities.ts family): arms narrow via getNarrowedTypeForReference
-  (relation-gated), and `checkConditionalReturnBranches` returns a TRI-STATE (0
-  unverified / 1 all-leaves-verified / 2 emitted) so a fully-verified ternary skips
-  the aggregated whole-union re-check that FP'd at the return keyword; bailing leaves
-  keep the aggregated coverage. −19 across utilities/checker/factory/transformers.
-- **Tooling (f70e4fa6): `--listAll` prints elaboration chains** (indented `|`-prefixed
-  sub-lines, never matching the `error TS` grep) — the TS2769 triage was unactionable
-  without them; chains directly identified fix 5's two mechanisms.
-- **META:** (1) the fix-3 discovery generalizes: a shape can fail via BOTH harness and
-  CLI with zero corpus coverage — when a dashboard FP looks "too basic", test the
-  minimal shape through the harness before assuming corpus protection. (2) Two commit-
-  split dances (revert-hunk → gate → commit → re-apply) kept same-file fixes cleanly
-  bisectable. (3) The background-suite `| grep` pipeline intermittently returns empty/
-  exit-1 — XMLs are the ground truth.
-- **Residual triage (next-agent), 294 = TS2322×158 (top buckets now ≤4: `number |
-  undefined`→number ×4 M3.4, ModuleSpecifierResult fresh-prop ×4, `__String` branded
-  ×3, TransformerFactory generic alias ×3, B526 tuple/brand shapes ×~10, long tail),
-  TS2345×47 (`Node`→never exhaustiveness ×3, NodeArray<Node>→SourceFile ×3,
-  Expression→Identifier narrowing ×3, `K`→string own-TP ×2, System→
-  IncrementalCompilationOptions ×2), TS2591×43 env-legit (needs real @types/node),
-  TS2769×9 (findAncestor predicate-overload returns — M3.2 B136-adjacent,
-  moduleNameResolver `unknown` narrowing ×3), TS2339×7, TS2454×4, TS2362×4.**
 
 **M2 — Real-lib migration (staged; decompose further at start)**
 
