@@ -40,10 +40,11 @@ which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the b
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
 **Round 445 (2026-07-08) — TS2416/TS2430 property-override variance families + the cross-file
-interface-merge conflation (Blocker #3): THREE bounded fixes, all suppression-only. Dashboard:
-compiler 190 → 188 (−2), services 439 → 409 (−30), server 669 → 637 (−32), harness 919 → 884 (−35).
-Suite 9,523 → 9,536 (+13 local across 3 test files, 0 regressions); 3 fix commits
-(76b7f2cc/a81d6300/c31f3577); services diffed via `--listAll` as strictly by-position removals.**
+interface-merge conflation (Blocker #3) + spread-of-any object returns: FOUR bounded fixes, all
+suppression-only. Dashboard: compiler 190 → 188 (−2), services 439 → 404 (−35), server 669 → 628
+(−41), harness 919 → 873 (−46). Suite 9,523 → 9,538 (+15 local across 4 test files, 0 regressions);
+4 fix commits (76b7f2cc/a81d6300/c31f3577/e93fc974); services diffed via `--listAll` as strictly
+by-position removals.**
 - **Baseline @ HEAD (round 444): services 439, compiler 190.** Bucketed the services `--listAll`
   and found TS2416×11 + TS2430×3 (bounded override-variance families) and the `Info | undefined`
   TS2322×11 (the biggest single conflation family). The `readonly ApplicableRefactorInfo[]` ×15 and
@@ -83,7 +84,17 @@ Suite 9,523 → 9,536 (+13 local across 3 test files, 0 regressions); 3 fix comm
   mismatch still fires), BEFORE the coarse missing-property/relation paths. Conservative for
   heritage-bearing interfaces / spread object literals. `Info | undefined` TS2322 11 → 1 (the residual
   fixExpectedComma.ts `{ node }` doesn't satisfy its file-local Info).
-- **NEXT (services @ 409, all deeper):** the union-of-2-interfaces conflation (`ExportInfo |
+- **Fix 4 (e93fc974, spread-of-any object returns; services 409→404 −5, server 637→628, harness 884→873):
+  a returned `{ ...anyExpr, ... }`.** tsc types an object literal that spreads an `any`/unresolved value as
+  `any` (the spread poisons the whole object), so it cannot be "missing" required target properties.
+  `getFileAndTextSpanFromNode` (no return annotation) returns an object literal → our
+  `inferReturnTypeFromBody` has no object-literal branch → the call resolves to `any` → the spread
+  `...getFileAndTextSpanFromNode(node)` looked to provide nothing → findAllReferences.ts's 5 returned
+  objects FP'd "missing sourceFile, textSpan". `checkReturnAssignability` bails when the returned object
+  literal has an any/error-typed spread (after the per-property drills, so a genuine explicit-prop mismatch
+  still fires). Root fix is `inferReturnTypeFromBody`'s object-literal branch (documented suite-wide blast
+  radius — deferred); this suppression is FP-safe (spread-of-any is genuinely `any` in tsc).
+- **NEXT (services @ 404, all deeper):** the union-of-2-interfaces conflation (`ExportInfo |
   RefactorErrorInfo | undefined` ×3 — the single-interface gate needs a union-member extension), the
   module-var-leak in ASSIGNMENT position (checker.ts `NavigationBarNode → Node` TS2322 ×4 — round-442
   `moduleFileLocalVarNames` covers TS2339/TS2345 but not TS2322), and the two deep-M3 relation
