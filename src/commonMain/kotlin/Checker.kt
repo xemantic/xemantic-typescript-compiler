@@ -125911,6 +125911,21 @@ interface DataView {
             // OPTIONAL `configFileName?: string` param (tsc's effective param type
             // unions undefined under strict). Suppression-only.
             if (unionArgOkForOptionalParam(argType, params[i], paramType)) continue
+            // M3.1 (round 442): a bare TypeParam arg `K`/`T` whose declared CONSTRAINT
+            // is assignable to the (concrete) param type is itself assignable — tsc's
+            // rule (a type param relates to X iff its constraint does). The relation
+            // engine deliberately has NO general `source is Type.TypeParam && target
+            // !is Type.TypeParam` branch (broad-regression risk per the documented 39+
+            // cycle gate — CLAUDE.md), so this is a per-site bail-out mirroring round
+            // 441's checkConstraintsForTypeArgs fix. Uses the RAW constraint, NOT
+            // getApparentType (which wraps a bare `string` constraint into the String
+            // interface, not assignable to primitive `string`). An UNCONSTRAINED T
+            // (constraint == null) is skipped, so `foo<T>(x:T){ needString(x) }` still
+            // fires TS2345. Suppression-only. (`readPackageJsonField<K extends keyof
+            // PackageJson>` → `hasProperty(json, fieldName)`; `changeExtension<T extends
+            // string | Path>` → `changeAnyExtension(path, …)`.)
+            if (argType is Type.TypeParam && argType.constraint != null &&
+                checkTypeRelatedTo(argType.constraint!!, paramType, assignableRelation)) continue
             if (forceVoidUndefinedFail || !checkTypeRelatedTo(argType, paramType, assignableRelation)) {
                 // B291: a MIXED bigint/number literal-union argument is the
                 // typeof-discrimination idiom (`0 | 1n` narrowed by
