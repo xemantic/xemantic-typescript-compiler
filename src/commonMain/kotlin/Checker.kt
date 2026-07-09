@@ -115019,6 +115019,29 @@ interface DataView {
                 ) {
                     currentLocalTypes[paramName.text] = inferred
                 }
+            } else if (paramName is Identifier) {
+                // Round 453: an un-annotated parameter (no type annotation, and a
+                // non-function default or no default) is implicitly `any` — and must
+                // SHADOW a same-named outer binding, most importantly a top-level
+                // module-level var that leaked into `globals` (`const indent = "    "`
+                // shadowed by a param `indent = 0`; tsc's own program.ts
+                // flattenDiagnosticMessageText, where the recursive arg `indent`
+                // resolved to the leaked const's `string` → FP TS2345/TS2322). Register
+                // the name in the shadow set so getTypeOfIdentifier returns anyType
+                // instead of the leaked binding's (wrong) type. Suppression-only; a
+                // param with a resolvable annotation / function default is handled above
+                // and is not reached here. Contextual arrow-param typing (which sets
+                // currentLocalTypes) still wins — getTypeOfIdentifier consults
+                // currentLocalTypes first.
+                currentParamBindingNames.add(paramName.text)
+                // A same-named leaked module-level var may already sit in
+                // currentLocalTypes (consulted BEFORE currentParamBindingNames in
+                // getTypeOfIdentifier), so the set alone doesn't win — override the
+                // inherited entry with anyType so the param shadows it (mirrors the
+                // binding-pattern branch below).
+                if (currentLocalTypes.containsKey(paramName.text)) {
+                    currentLocalTypes[paramName.text] = anyType
+                }
             } else if (paramName is ArrayBindingPattern || paramName is ObjectBindingPattern) {
                 // B83.4i: register destructured-param binding NAMES (e.g. `[x]` / `{x}`)
                 // into the shadow tracker so a same-named file-level `var x = foo(...)`
