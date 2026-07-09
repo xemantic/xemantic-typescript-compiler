@@ -82282,6 +82282,17 @@ interface DataView {
             val savedShadowed = currentShadowedNames
             currentShadowedNames = currentShadowedNames.toMutableSet()
             applyBodyLocalShadowing(it.statements, parameters.mapNotNull { p -> (p.name as? Identifier)?.text }.toSet())
+            // Round 454: a body-NESTED `function NAME(...)` shadows a same-named outer/global
+            // binding (B83.5-unbound). Registering it as anyType in currentLocalTypes makes
+            // `getTypeOfIdentifier` (which the return-check `getReturnTypeOfCallExpression` and
+            // the value-position arg check consult first) resolve a call to it as anyType rather
+            // than the merged-globals same-named EXPORTED function — tsc's own builderState.ts
+            // has a nested `function create(forward, reverse, deleted): ManyToManyPathMap`
+            // shadowing the file-level exported `create(newProgram: Program, …): BuilderState`,
+            // so `return create(new Map, new Map, undefined)` FP-fired TS2740 (return) + TS2345
+            // (arg). Mirrors the call-types pass; suppression-only (only fires on a genuine
+            // outer-binding collision).
+            shadowNestedFunctionNames(it.statements)
             // 16.4dp: Non-arrow function body — `arguments` binds to the implicit
             // IArguments parameter here. `checkAssignmentExpression` consults this
             // flag to emit TS2322 for `arguments = <primitive>`.
