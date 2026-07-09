@@ -41114,7 +41114,7 @@ interface ObjectConstructor {
     keys(o: any): string[];
     assign(target: any, source: any): any;
     values(o: any): any[];
-    entries(o: any): any[];
+    entries<T>(o: any): any[];
     fromEntries(entries: any): any;
     is(value1: any, value2: any): boolean;
     groupBy(items: any, keySelector: any): any;
