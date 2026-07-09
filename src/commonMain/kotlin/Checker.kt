@@ -88468,9 +88468,17 @@ interface DataView {
                     // union). The type engine already authoritatively confirmed THIS assignment
                     // (canUse && isAssignable, keeping the literal via propTypeContainsLiteral),
                     // so skip the legacy widening path for a literal RHS.
+                    // Round 450: a BOOLEAN literal `true`/`false` parses as an `Identifier`
+                    // (see literalTypeOfExpression), so it was NOT covered by the literal-node
+                    // guard below — `isSnippet = true` where `isSnippet: true | undefined`
+                    // (completions.ts) FP'd because the legacy path widens `true`→"boolean"
+                    // and `isAssignableTo("boolean", "true | undefined")` fails. The engine
+                    // already validated it (sourceType kept as `true` via propTypeContainsLiteral).
+                    val rhsIsBooleanLiteral = (expr.right as? Identifier)?.text.let { it == "true" || it == "false" }
                     if (canUse && isAssignable && (expr.right is NumericLiteralNode ||
                             expr.right is StringLiteralNode || expr.right is BigIntLiteralNode ||
-                            expr.right is NoSubstitutionTemplateLiteralNode)) {
+                            expr.right is NoSubstitutionTemplateLiteralNode ||
+                            rhsIsBooleanLiteral)) {
                         return
                     }
                 }
