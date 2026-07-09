@@ -39,11 +39,11 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
-**Round 459 (2026-07-09) — bounded FP burn-down: SEVEN fixes, all GENERAL checker correctness
-that reproduce minimally. Dashboard: compiler 116 → 104 (−12; TS2322 43 → 34, TS2339 5 → 3,
-TS2349 2 → 0), services 210 → 194 (−16; TS2322 94 → 81, TS2345 29 → 25, TS2339 13 → 11).
-Suite 9,706 → 9,729 (+23 local across 7 new test files, 0 regressions); 7 fix commits
-(b68d6487 / e6b6d990 / 435d7220 / bef95f36 / 4139b47a / 6c630b54 / d209b138).**
+**Round 459 (2026-07-09) — bounded FP burn-down: EIGHT fixes, all GENERAL checker correctness
+that reproduce minimally. Dashboard: compiler 116 → 103 (−13; TS2322 43 → 33, TS2339 5 → 3,
+TS2349 2 → 0), services 210 → 194 (−16 measured at fix 7; TS2322 94 → 81, TS2345 29 → 25,
+TS2339 13 → 11). Suite 9,706 → 9,731 (+25 local across 8 new test files, 0 regressions); 8 fix
+commits (b68d6487 / e6b6d990 / 435d7220 / bef95f36 / 4139b47a / 6c630b54 / d209b138 / 47cb985f).**
 - **Fix 1 (b68d6487, array-literal→tuple ASSIGNMENT; compiler −3):** the round-458 NEXT item.
   New `currentLocalDeclTypeNodes` map records body-local annotation NODES alongside
   `currentLocalTypes` (first-decl-wins; saved/restored in checkFunctionBody) so
@@ -95,11 +95,22 @@ Suite 9,706 → 9,729 (+23 local across 7 new test files, 0 regressions); 7 fix 
   member is Array-family. The local wrong-arg control pins that the receiver collapses to the
   PRECISE `string[]` (an `any[]` would accept the bad arg). This closes the round-452
   "inline-property-receiver" deferral.
-- **NEXT (compiler @ 104, ~58 real excl. TS2591×43 + TS2304×2 `global` + TS2584 console env-legit):**
+- **Fix 8 (47cb985f, truthy ASSIGNMENT condition; compiler 104 → 103):** `while (child =
+  tryParse(() => …))` — the assignment evaluates to the assigned value, so the body sees `child`
+  truthy; tsc's parser JSDoc loops declare `let child: Tag | … | false` and the `false` member
+  otherwise survived every discriminant filter (a primitive literal member has no `.kind` — the
+  enum-key filter conservatively keeps it) → FP TS2322 at parser.ts:9638. `applyConditionNarrowing`
+  gains a `SyntaxKind.Equals` arm (LHS is the walked reference → narrowByTruthiness; the false
+  branch falsy-narrows symmetrically), covering both the flow FlowCondition and the round-458 AST
+  paths.
+- **NEXT (compiler @ 103, ~57 real excl. TS2591×43 + TS2304×2 `global` + TS2584 console env-legit):**
   the TransformerFactory<T> whole-program conflation probe (transformer.ts:83/98/100 — round-457
-  finding: NOT a generic-alias gap, needs an instrumented probe); parser.ts:9638 (`while (child =
-  tryParse(...))` truthy-narrow + kind discriminant with a `false` union member); program.ts:3705
-  `false | SourceFile | undefined` (probe needed); program.ts:1220 (switch-exhaustive +
+  finding: NOT a generic-alias gap, needs an instrumented probe); program.ts:3705 — ROOT CAUSE FOUND
+  (no probe needed): findSourceFileWorker has TWO block-scoped `const file` decls
+  (`filesByName.get(path)` → `SourceFile | false | undefined`, declared FIRST inside an if-block,
+  vs the outer `host.getSourceFile(…)`) colliding in the block-UNAWARE first-decl-wins
+  `currentLocalTypes`, so `return file;` reads the wrong binding's type — the B83.5/block-scoping
+  family, needs block-aware local types or a scoped bail; program.ts:1220 (switch-exhaustive +
   destructuring-assignment definite assignment); the `assertNever` never-param family ×3 (round 441
   deep); utilities.ts:9978/9972 flatten (M3.1 generic inference); `string → __String` branding
   (whole-program); moduleSpecifiers.ts:929 for-of element mis-inference (whole-program-only —
