@@ -95,6 +95,11 @@ class Parser(
     private var classBodyDepth = 0
     private var inTypeArgsDepth = 0
     private var inTupleTypeDepth = 0
+    /** Round 452: set when [parseType]'s trailing-`?` recovery consumes a tuple element's
+     *  optional marker (`[number?]`), so [parseTupleType] can record the optionality that
+     *  would otherwise be silently discarded. Read+reset per element (so a nested tuple's
+     *  marker does not leak to an enclosing element). */
+    private var tupleElementConsumedOptionalMarker = false
     private var jsxElementDepth = 0
     /** expressionWithJSDocTypeArguments: set true when a JSDoc-`?` (nullable) type was recovered
      *  inside a type-argument list (`foo<?string>`), so a value-position instantiation paren can
@@ -9143,6 +9148,11 @@ class Parser(
             val questionEnd = scanner.getPos()
             nextToken()
             if (inTypeArgsDepth > 0) sawJsDocInTypeArgs = true
+            // A direct tuple-element `?` (`[number?]`) is a valid optional marker, silently
+            // consumed here; flag it so parseTupleType can record the optionality (gated to
+            // NOT-inside-type-args so a `[Map<K, V?>]` inner `?` is not mistaken for the
+            // element's marker).
+            if (inTupleTypeDepth > 0 && inTypeArgsDepth == 0) tupleElementConsumedOptionalMarker = true
             if (inTupleTypeDepth == 0) {
                 val typeText = source.substring(type.pos, typeProperEnd)
                 val suggestion = when (typeText) {
@@ -9399,11 +9409,16 @@ class Parser(
         val pos = getPos()
         parseExpected(SyntaxKind.OpenBracket)
         val elements = mutableListOf<TypeNode>()
+        // Per-element optionality: the `?` tokens below are discarded from the element
+        // nodes, so record them here for `getTupleType` (an all-optional tuple target must
+        // not count its elements as required — TS2739 on `[] : [a?, b?]`).
+        val optional = mutableListOf<Boolean>()
         inTupleTypeDepth++
         try {
             while (token != SyntaxKind.CloseBracket && token != SyntaxKind.EndOfFile) {
                 // Labeled tuple elements: `name: Type` or `name?: Type` or `...name: Type`
                 val isRest = parseOptional(SyntaxKind.DotDotDot)
+                var isOptional = false
                 val isLabeledElement = isIdentifier() && lookAhead {
                     nextToken()
                     when {
@@ -9415,19 +9430,30 @@ class Parser(
                 if (isLabeledElement) {
                     // Skip label (identifier) and optional `?`
                     nextToken() // consume identifier (label)
-                    parseOptional(SyntaxKind.Question) // optional `?`
+                    if (parseOptional(SyntaxKind.Question)) isOptional = true // optional `?`
                     parseExpected(SyntaxKind.Colon) // consume `:`
                 }
+                tupleElementConsumedOptionalMarker = false
                 val elementType = parseType()
-                parseOptional(SyntaxKind.Question) // optional tuple element: string?, number?
+                if (parseOptional(SyntaxKind.Question)) isOptional = true // optional tuple element: string?, number?
+                // parseType's trailing-`?` recovery may have already consumed an unnamed
+                // element's marker (`[number?]`); read+reset it here so a nested tuple's
+                // marker does not leak to this element.
+                if (tupleElementConsumedOptionalMarker) isOptional = true
+                tupleElementConsumedOptionalMarker = false
                 elements.add(if (isRest) RestType(type = elementType, pos = pos, end = getEnd()) else elementType)
+                optional.add(isOptional)
                 if (!parseOptional(SyntaxKind.Comma)) break
             }
         } finally {
             inTupleTypeDepth--
         }
         parseExpected(SyntaxKind.CloseBracket)
-        return TupleType(elements = elements, pos = pos, end = getEnd())
+        return TupleType(
+            elements = elements,
+            elementOptional = if (optional.any { it }) optional else null,
+            pos = pos, end = getEnd(),
+        )
     }
 
     private fun parseTypeLiteralOrMappedType(): TypeNode {

@@ -1393,6 +1393,11 @@ data class ArrayType(
 
 data class TupleType(
     val elements: List<TypeNode>,
+    /** Per-element optionality (`[a?, b?]` / `[a?: T, b?: T]`). The parser discards the
+     *  `?` tokens (and any labels) from `elements`, so it records optionality here instead;
+     *  `getTupleType` consults it so an all-optional tuple target does not count its
+     *  elements as required (TS2739). Same length as [elements]; null = all-required. */
+    val elementOptional: List<Boolean>? = null,
     override val pos: Int = 0,
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,

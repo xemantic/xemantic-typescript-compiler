@@ -714,6 +714,15 @@ class Checker(
      *  non-null during the check pipeline. */
     private val mappedReadonlyMemberIds = mutableSetOf<Int>()
 
+    /** Round 452: ids of tuple member symbols synthesized by [buildTupleFromTypes] for an
+     *  OPTIONAL tuple element (`[kind?: T]` / `[T?]`). The tuple `Type.Object`'s numbered
+     *  member symbols carry no declaration, so [isOptionalProperty] cannot see the `?` — it
+     *  consults this side-channel by Symbol id instead. Without it an all-optional tuple
+     *  target (`[a?, b?]`) counts every element as required, so `[] : [a?, b?]` FP's TS2739
+     *  (moduleSpecifiers.ts `return emptyArray as []`). Declared before `init` so it is
+     *  non-null during the check pipeline. */
+    private val optionalTupleMemberIds = mutableSetOf<Int>()
+
     /** M1.10: the INVERSE of [mappedReadonlyMemberIds] — ids of members synthesized by a
      *  `-readonly` mapped type (`Mutable<T> = { -readonly [K in keyof T]: T[K] }`). A
      *  homomorphic mapped member carries its SOURCE property's declaration (for
@@ -132546,6 +132555,9 @@ interface DataView {
     }
 
     private fun isOptionalProperty(symbol: Symbol): Boolean {
+        // Round 452: an optional tuple element (`[kind?: T]`) has a declaration-less member
+        // symbol; its optionality lives in the side-channel [optionalTupleMemberIds].
+        if (symbol.id in optionalTupleMemberIds) return true
         val decl = symbol.valueDeclaration ?: symbol.declarations.firstOrNull() ?: return false
         return when (decl) {
             is PropertyDeclaration -> decl.questionToken
@@ -133005,11 +133017,17 @@ interface DataView {
                 else -> getTypeFromTypeNode(elem)
             }
         }
-        return buildTupleFromTypes(elementTypes)
+        // Round 452: per-element optionality (`[kind?: T]` / `[T?]`) recovered by the parser
+        // into `node.elementOptional` (the `?` tokens are stripped from `elements`), so an
+        // all-optional tuple target does not count its elements as required — `[] : [a?, b?]`
+        // no longer FP's TS2739 (moduleSpecifiers.ts `return emptyArray as []`).
+        return buildTupleFromTypes(elementTypes, node.elementOptional)
     }
 
-    /** Build a tuple `Type.Object` (with `tupleElementTypes`, numbered props, length, number index sig). */
-    private fun buildTupleFromTypes(elementTypes: List<Type>): Type {
+    /** Build a tuple `Type.Object` (with `tupleElementTypes`, numbered props, length, number index sig).
+     *  [optionalFlags], when non-null, marks the matching element's member symbol OPTIONAL
+     *  (recorded in [optionalTupleMemberIds] so [isOptionalProperty] can see it). */
+    private fun buildTupleFromTypes(elementTypes: List<Type>, optionalFlags: List<Boolean>? = null): Type {
         val tupleObj = Type.Object()
         tupleObj.tupleElementTypes = elementTypes
         // Create numbered property symbols: "0", "1", "2", ...
@@ -133021,15 +133039,25 @@ interface DataView {
                 name = i.toString(),
             )
             symbolTypes[propSymbol.id] = elemType
+            if (optionalFlags?.getOrNull(i) == true) optionalTupleMemberIds.add(propSymbol.id)
             props.add(propSymbol)
             members[propSymbol.name] = propSymbol
         }
-        // Add readonly "length" property with literal type
+        // Add readonly "length" property with literal type. For a tuple with OPTIONAL
+        // elements the length is the union `minLength | … | maxLength` (tsc), so an empty
+        // `[]` (length 0) relates to `[a?, b?]` (length `0 | 1 | 2`). minLength = number of
+        // leading required elements (optionals must be trailing); maxLength = element count.
         val lengthSymbol = Symbol(
             flags = SymbolFlags.Property,
             name = "length",
         )
-        symbolTypes[lengthSymbol.id] = Type.NumberLiteral(elementTypes.size.toDouble())
+        val maxLen = elementTypes.size
+        val minLen = optionalFlags?.indexOfFirst { it }?.takeIf { it >= 0 } ?: maxLen
+        symbolTypes[lengthSymbol.id] = if (minLen >= maxLen) {
+            Type.NumberLiteral(maxLen.toDouble())
+        } else {
+            getUnionType((minLen..maxLen).map { Type.NumberLiteral(it.toDouble()) })
+        }
         props.add(lengthSymbol)
         members["length"] = lengthSymbol
         tupleObj.properties = props
