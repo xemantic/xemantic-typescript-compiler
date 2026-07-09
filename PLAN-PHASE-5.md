@@ -40,9 +40,10 @@ which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the b
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
 **Round 455 (2026-07-09) — global-shadow anyType + widenType tuple shape + ReadonlyArray filter
-guard: THREE fixes, all GENERAL correctness that reproduce minimally. Dashboard: compiler 153 → 135
-(−18, TS2322 77 → 59); shared checker/lib so they generalize to every profile. Suite 9,654 → 9,663
-(+9 local across 3 new test files, 0 regressions); 3 fix commits (4e94a4e1 / b90d79f1 / 7d82a0aa).**
+guard + generic-identity-fn assignability: FOUR fixes, all GENERAL correctness that reproduce
+minimally. Dashboard: compiler 153 → 132 (−21, TS2322 77 → 56); shared checker/lib so they generalize
+to every profile. Suite 9,654 → 9,666 (+12 local across 4 new test files, 0 regressions); 4 fix
+commits (4e94a4e1 / b90d79f1 / 7d82a0aa / generic-fn).**
 - **Fix 1 (4e94a4e1, body-local shadows a global function; TS2322 −7):** `applyBodyLocalShadowing`
   (the return/argument-assignability pass) recorded an un-annotated top-level local shadowing an outer
   binding by REMOVING it from `currentLocalTypes` (round 351), so a value-position use (`return clone`)
@@ -75,6 +76,18 @@ guard: THREE fixes, all GENERAL correctness that reproduce minimally. Dashboard:
   `'JSDocTag[]' ⊄ 'readonly JSDocParameterTag[]'` (×3). Added the overload (and `every`), so
   `tryInferPredicateOverloadReturn` (round 439) infers S from the guard's predicate target. Lib change →
   full corpus blast-radius gate clean.
+- **Fix 4 (generic-identity-fn → concrete-fn assignability; TS2322 −3):** `signatureRelatedTo` already
+  pinned source type params from the target's param positions for the source-generic/target-non-generic
+  case (17.10d — `identity<T>(x: T): T` vs `(fileName: string) => string` pins T := string), but did NOT
+  substitute those pins into the source RETURN type, so the return `T` FP-rejected against the concrete
+  target return `string`. tsc's core.ts `createGetCanonicalFileName` (`return useCS ? identity :
+  toFileNameLowerCase` → `GetCanonicalFileName`) and sourcemap.ts `identitySourceMapConsumer` FP-fired
+  TS2322, plus the construct-sig variant parser.ts:1737 (`new <TKind extends SyntaxKind>(…): Token<TKind>`
+  → `new (…): Node`). The return type is now instantiated with the pins (`tpAssignments` by id + a
+  `tpAssignByName` fallback — TypeParam interning is per-AST-position (B199), so the return's `T` may
+  carry a different id than the param's) before the covariant compare. Correctness preserved: `identity`
+  vs `(x: string) => number` still fails (pinned return `string ⊄ number`). Relation-engine change →
+  full corpus gate clean.
 - **INVESTIGATED, deferred (whole-program-only or deep M3, confirmed via minimal repro):** the
   `isPropertyNameLiteral(name) && …` TS2345 Expression→Identifier narrowing is 0-error in isolation (a
   whole-program alias/merge issue); the generic-identity-fn `<T>(x: T) => T` → concrete-fn assignability
@@ -82,10 +95,11 @@ guard: THREE fixes, all GENERAL correctness that reproduce minimally. Dashboard:
   relation; the `Type | IncompleteType` `.type` access is a specialized `flags === 0` enum-domain
   narrowing; the `assertNever(reason)` exhaustive-switch residual (programDiagnostics.ts) needs the
   enum-union `ReferencedFile` to narrow to `never` in the default (round 441 family).
-- **NEXT (compiler @ 135):** the generic-identity-fn `<T>(x: T) => T` → concrete-fn assignability (M3.1,
-  clean minimal repro — likely the highest-value tractable relation slice); TransformerFactory<T>
-  generic-type-alias-of-fn relation ×3; the exhaustive-switch enum-union `assertNever`/`assertType<never>`
-  residuals; `string → __String` branding (whole-program); the `.map` DIRECT array-literal-in-assignment
+- **NEXT (compiler @ 132):** the `TransformerFactory<T>` generic-type-alias-of-fn relation ×3 (M3.3 —
+  `(context) => (x) => x` vs the alias `(context) => Transformer<T>`; likely a generic type-alias
+  instantiation gap); the exhaustive-switch enum-union `assertNever`/`assertType<never>` residuals
+  (programDiagnostics.ts's `ReferencedFile` union → `never` in the default, round 441 family);
+  `string → __String` branding (whole-program); the `.map` DIRECT array-literal-in-assignment
   contextual tuple typing (assignment path lacks the var-decl array-literal-vs-tuple handling).
 
 **Round 454 (2026-07-09) — nested-function-shadow generalization + flow-narrowing + method-param

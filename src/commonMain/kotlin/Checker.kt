@@ -131017,9 +131017,14 @@ interface DataView {
             target.typeParameters.isNullOrEmpty() &&
             sourceParams.any { getTypeOfSymbol(it) is Type.TypeParam }
         val tpAssignments = if (sourceHasTpInParams) mutableMapOf<Int, Type>() else null
+        // Round 455: a NAME-keyed companion to tpAssignments — Type.TypeParam instances
+        // are interned per AST position (B199), so the sig's own type-param object and
+        // the param-annotation's TypeParam may carry different ids; matching the return
+        // type's TypeParam by name is the robust fallback for the substitution below.
+        val tpAssignByName = if (sourceHasTpInParams) mutableMapOf<String, Type>() else null
         // Check parameter types (contravariant). We do params BEFORE return type so
-        // the type-param assignments from param pinning could (in a future extension)
-        // also drive return-type substitution.
+        // the type-param assignments from param pinning drive return-type substitution
+        // (round 455).
         val len = minOf(sourceParams.size, targetParams.size)
         // B63.29: When target's last param is a rest `...t: U[]`, positional comparison
         // beyond target.size-1 (and AT target.size-1 against a non-rest source param)
@@ -131095,6 +131100,7 @@ interface DataView {
                 val existing = tpAssignments[tpId]
                 if (existing != null && existing !== targetParamType) return false
                 tpAssignments[tpId] = targetParamType
+                sourceParamType.symbol?.name?.let { tpAssignByName?.put(it, targetParamType) }
                 // Constraint check: target must satisfy source TypeParam's constraint
                 val cons = sourceParamType.constraint
                 if (cons != null && cons !== errorType) {
@@ -131124,8 +131130,20 @@ interface DataView {
         }
         // Check return types (covariant)
         // Void target return accepts any source return type (void means "don't care about return")
-        val sourceReturn = source.resolvedReturnType ?: anyType
+        var sourceReturn = source.resolvedReturnType ?: anyType
         val targetReturn = target.resolvedReturnType ?: anyType
+        // Round 455: substitute the pinned source type params into the source RETURN
+        // type before the covariant check. `identity<T>(x: T): T` (source-generic,
+        // target-non-generic) pins T := <target param type> from the param loop above,
+        // so the return `T` becomes e.g. `string` and relates to a
+        // `(fileName: string) => string` target (`GetCanonicalFileName`). Without this
+        // the raw TypeParam return FP-rejects against the concrete target return.
+        if (tpAssignments != null && tpAssignments.isNotEmpty()) {
+            val pinMapper = TypeMapper { tp ->
+                tpAssignments[tp.id] ?: tp.symbol?.name?.let { tpAssignByName?.get(it) }
+            }
+            sourceReturn = instantiateType(sourceReturn, pinMapper)
+        }
         if (!targetReturn.flags.hasAny(TypeFlags.Void) &&
             !checkTypeRelatedTo(sourceReturn, targetReturn, relation)) return false
         return true
