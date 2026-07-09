@@ -39,9 +39,10 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
-**Round 454 (2026-07-09) — nested-function-shadow generalization + two flow-narrowing slices:
-FOUR fixes. Dashboard: compiler 170 → 154 (−16). Suite 9,642 → 9,652 (+10 local across 4 new
-test files, 0 regressions); 4 fix commits (0df21c9b / a0c0f3d8 / d4e93ead / 3eb6c99b).**
+**Round 454 (2026-07-09) — nested-function-shadow generalization + flow-narrowing + method-param
+bivariance: FIVE fixes. Dashboard: compiler 170 → 153 (−17); services 275 → 251 (−24, the fixes
+generalize). Suite 9,642 → 9,654 (+12 local across 5 new test files, 0 regressions); 5 fix commits
+(0df21c9b / a0c0f3d8 / d4e93ead / 3eb6c99b / a505ce0a).**
 - **Fix 1 (0df21c9b, nested-fn shadow in arrow/fn-expr bodies; TS2345 ×3):** `shadowNestedFunctionNames`
   (anyType-bails a body-nested `function NAME` colliding with an outer/global binding, B83.5 —
   suppression-only, round 429) ran ONLY for FunctionDeclaration bodies in the call-types walker. tsc's
@@ -71,20 +72,29 @@ test files, 0 regressions); 4 fix commits (0df21c9b / a0c0f3d8 / d4e93ead / 3eb6
   pervasive object-literal-factory pattern `{ clear, create, … }` (shorthand → nested fn) was poisoned the
   same way — the shorthand resolved to a global's wrong signature and broke the object's assignability to
   its target interface (~13 cases across moduleNameResolver/sys/resolutionCache/emitter/nodeFactory).
-- **UNMASKED (documented, not manufactured):** the more-correct fix-4 resolution exposes two pre-existing
-  latent gaps, now dashboard-visible: (a) checker.ts:6310 — object-literal METHOD-param bivariance vs an
-  interface target (`symbol: Symbol` source vs `symbol: Symbol | undefined` target — a `const x:
-  SyntacticTypeNodeBuilderResolver = { canReuseTypeNodeAnnotation(…) {…} }`; tsc compares method params
-  bivariantly, our object-literal-vs-interface relation is contravariant → the general fix); (b)
-  expressionToTypeNode.ts:535 — an un-annotated block-scoped `const clone = resolver.markNodeReuse(…)`
-  shadowing the global `clone<T>(object: T): T` resolves to the GLOBAL in the return check, because
-  `applyBodyLocalShadowing` does not descend into if-blocks and un-annotated shadowing locals are
-  removed from currentLocalTypes (→ fall to globals). Both need broad, careful fixes; corpus green.
-- **NEXT (compiler @ 154):** the two unmasked gaps above (method-param bivariance is a general win);
-  TS2322×78 deep-M3 relation (generic-fn-identity `<T>(object: T) => T`, `.map`-returns-tuple-array
+- **Fix 5 (a505ce0a, object-literal METHOD-param bivariance; TS2322 −1 + fixes an unmasked FP):** a method
+  member (method syntax) compares its params BIVARIANTLY vs an interface target (tsc — `strictFunctionTypes`
+  never applies to methods), but our object-literal-vs-interface relation (`propertiesRelatedTo`) compared
+  function-typed members contravariantly. `propertiesRelatedTo` now retries a failed member comparison via
+  `methodSignaturesBivariantlyRelated` (the same helper as TS2416/TS2430) when BOTH members are methods —
+  suppression-only, FP-safe by construction (a method-param bivariance match is not an error in tsc), a
+  function-typed PROPERTY stays contravariant. Cleared checker.ts:6310 (`const x:
+  SyntacticTypeNodeBuilderResolver = { canReuseTypeNodeAnnotation(…, symbol: Symbol, …) {…} }` vs interface
+  `symbol: Symbol | undefined`) — one of the two fix-4 unmasked gaps, and a general correctness win. Corpus
+  green (relation-engine change — the critical gate).
+- **UNMASKED (one remaining, documented, not manufactured):** fix 4's more-correct resolution exposed two
+  latent gaps; fix 5 cleared the first (method-param bivariance). The remaining one: expressionToTypeNode.ts:535
+  — an un-annotated block-scoped `const clone = resolver.markNodeReuse(…)` shadowing the global
+  `clone<T>(object: T): T` resolves to the GLOBAL in the return check, because `applyBodyLocalShadowing`
+  does NOT descend into if-blocks and un-annotated shadowing locals are removed from currentLocalTypes (→
+  fall to globals). Needs a broad, careful applyBodyLocalShadowing fix; corpus green.
+- **NEXT (compiler @ 153):** the expressionToTypeNode.ts:535 unmasked gap (applyBodyLocalShadowing if-block
+  descent); TS2322×77 deep-M3 relation (generic-fn-identity `<T>(object: T) => T`, `.map`-returns-tuple-array
   M3.2, whole-program conflation); TS2353 sourcemap getter/method excess + utilities.ts mapped-type-key
-  eval (M3.3); TS2349 `(x || (x = [])).push()` inline-property-receiver; moduleNameResolver.ts:2823
-  `.value` union-return; checker.ts:21170 restrictiveInstantiation overload-selection TS18048.
+  eval (M3.3); TS2349 `(x || (x = [])).push()` inline-property-receiver; factory/utilities.ts:713 tsc-5.5
+  inferred type predicates (`helper => !helper.scoped` → `helper is UnscopedEmitHelper`); moduleNameResolver.ts:2823
+  `.value` union-return; checker.ts:21170 restrictiveInstantiation overload-selection TS18048; the three
+  `assertType<never>(node)` big-AST-union exhaustive-switch residuals (round 441 deep).
 
 **Round 453 (2026-07-09) — bounded FP burn-down: THREE fixes, all GENERAL checker correctness
 that reproduce minimally. Dashboard: compiler 176 → 170 (−6), tsc-cli 179 → 172, jsTyping 176 →
