@@ -40911,6 +40911,18 @@ class Checker(
             "String.startsWith" to ScriptTarget.ES2015,
             "String.endsWith" to ScriptTarget.ES2015,
             "String.repeat" to ScriptTarget.ES2015,
+            // ES2024/ES2025 Set set-operations (lib.es2025.collection.d.ts in the pinned tsc).
+            // Gated at ESNext (our ScriptTarget has no ES2025): absent at es2020 (the self-compile
+            // lib — where tsc's own `const set: Set<T> = { has, add, … }` shim satisfies Set),
+            // present at esnext (the `setMethods` corpus test's @target). No corpus baseline has a
+            // `Set<>` missing-property display, so filtering shifts no "and N more" count.
+            "Set.union" to ScriptTarget.ESNext,
+            "Set.intersection" to ScriptTarget.ESNext,
+            "Set.difference" to ScriptTarget.ESNext,
+            "Set.symmetricDifference" to ScriptTarget.ESNext,
+            "Set.isSubsetOf" to ScriptTarget.ESNext,
+            "Set.isSupersetOf" to ScriptTarget.ESNext,
+            "Set.isDisjointFrom" to ScriptTarget.ESNext,
         ) + TYPED_ARRAY_NAMES.flatMap { ta ->
             // B242: per-typed-array later-lib members (indexAt / findLast family).
             // The embedded typed-array interfaces don't declare these, so the
