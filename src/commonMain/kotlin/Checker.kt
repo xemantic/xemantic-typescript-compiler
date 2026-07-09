@@ -93278,11 +93278,15 @@ interface DataView {
                         if (t.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)) neverType else t
                     // Round 439: a `<call>()!` strips nullish from an all-CONCRETE union
                     // return (`getParseTreeNode(x, guard)!` → `AccessorDeclaration`).
-                    // Restricted to a CALL operand + no un-inferred type param:
-                    // property-access `.x!` (the object-literal-vs-interface gap) and a
-                    // TP-carrying call return (the generic-inference gap) keep the
-                    // deferred union behavior the round-407 note documents.
-                    expr.expression is CallExpression &&
+                    // Round 456: a bare-IDENTIFIER `x!` (a local/param/module-var typed
+                    // `T | undefined`) strips too — `writer = _writer!` (Writer | undefined),
+                    // `currentFlow = preSwitchCaseFlow!` (FlowNode | undefined). Restricted
+                    // to a CALL or IDENTIFIER operand + no un-inferred type param:
+                    // property-access `.x!` (the object-literal-vs-interface member-precision
+                    // gap) and a TP-carrying operand (the generic-inference gap) keep the
+                    // deferred union behavior the round-407 note documents. A bare Identifier
+                    // is a simple reference, so it cannot expose the `.x!` object-literal gap.
+                    (expr.expression is CallExpression || expr.expression is Identifier) &&
                         t.types.none { typeContainsUnresolvedTypeParam(it) } ->
                         narrowByExcludingNullUndefined(t)
                     else -> t
