@@ -94510,6 +94510,15 @@ interface DataView {
                 SyntaxKind.EqualsEquals -> narrowByEquality(t, expr, equal = isTrue, name)
                 SyntaxKind.ExclamationEqualsEquals,
                 SyntaxKind.ExclamationEquals -> narrowByEquality(t, expr, equal = !isTrue, name)
+                // Round 459: a truthy ASSIGNMENT condition narrows its target — the
+                // assignment evaluates to the assigned value, so `while (child =
+                // tryParse(() => …))` sees `child` truthy in the body (tsc's parser
+                // JSDoc loops: `let child: Tag | false; while (child = tryParse(…))
+                // { child.kind … }` — the `false` member otherwise survived every
+                // downstream discriminant filter). The false branch falsy-narrows
+                // symmetrically.
+                SyntaxKind.Equals ->
+                    if (getReferencePath(expr.left) == name) narrowByTruthiness(t, truthy = isTrue) else t
                 SyntaxKind.InstanceOfKeyword -> narrowByInstanceOf(t, expr, isMatch = isTrue, name)
                 SyntaxKind.InKeyword -> narrowByInOperator(t, expr, hasProp = isTrue, name)
                 else -> t
