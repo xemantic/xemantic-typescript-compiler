@@ -41603,7 +41603,7 @@ interface Iterator<T> {
     return?(value?: any): any;
     throw?(e?: any): any;
 }
-interface IterableIterator<T> { }
+interface IterableIterator<T> extends Iterator<T> { }
 interface ArrayIterator<T> { }
 interface MapIterator<T> { }
 interface SetIterator<T> { }
