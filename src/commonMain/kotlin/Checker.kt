@@ -94061,20 +94061,61 @@ interface DataView {
             // right operand is usually a const/local reference (`DEFAULT`), which is not
             // syntactically classifiable — resolve its type and check non-nullishness
             // (a simple identifier does not re-enter the flow walk, so this stays cheap).
-            is BinaryExpression -> {
-                val op = rhs.operator
-                if (op != SyntaxKind.BarBar && op != SyntaxKind.QuestionQuestion) false
-                else if (rhsIsDefinitelyNonNullish(rhs.right)) true
-                else {
-                    val rt = try { getTypeOfExpression(rhs.right) } catch (_: Exception) { null }
-                    rt != null && rt !== anyType && rt !== errorType &&
-                        !typeIncludesUndefined(rt) && !typeIncludesNull(rt)
-                }
+            is BinaryExpression -> when (rhs.operator) {
+                SyntaxKind.BarBar, SyntaxKind.QuestionQuestion ->
+                    if (rhsIsDefinitelyNonNullish(rhs.right)) true
+                    else {
+                        val rt = try { getTypeOfExpression(rhs.right) } catch (_: Exception) { null }
+                        rt != null && rt !== anyType && rt !== errorType &&
+                            !typeIncludesUndefined(rt) && !typeIncludesNull(rt)
+                    }
+                // Round 453: arithmetic / bitwise / shift / relational / equality /
+                // `+` operators always evaluate to a primitive (number / string /
+                // boolean / bigint) that is never null or undefined — so
+                // `length = end - start`, `flags = a & b`, `ok = i < n` etc. prove
+                // the assigned reference non-nullish afterward. `&&` and `,` are
+                // EXCLUDED (their result can be the nullish left / right operand).
+                SyntaxKind.Plus, SyntaxKind.Minus, SyntaxKind.Asterisk, SyntaxKind.Slash,
+                SyntaxKind.Percent, SyntaxKind.AsteriskAsterisk,
+                SyntaxKind.Ampersand, SyntaxKind.Bar, SyntaxKind.Caret,
+                SyntaxKind.LessThanLessThan, SyntaxKind.GreaterThanGreaterThan,
+                SyntaxKind.GreaterThanGreaterThanGreaterThan,
+                SyntaxKind.LessThan, SyntaxKind.GreaterThan,
+                SyntaxKind.LessThanEquals, SyntaxKind.GreaterThanEquals,
+                SyntaxKind.EqualsEquals, SyntaxKind.ExclamationEquals,
+                SyntaxKind.EqualsEqualsEquals, SyntaxKind.ExclamationEqualsEquals,
+                SyntaxKind.InKeyword, SyntaxKind.InstanceOfKeyword -> true
+                else -> false
             }
+            // Round 453: an enum-member value access (`Flags.None`,
+            // `NodeBuilderFlags.None`) is a number/string — never nullish; the
+            // flag-defaulting idiom `flags = flags || NodeBuilderFlags.None` (tsc
+            // checker.ts) relies on it. Detected syntactically (the receiver
+            // resolves to a real enum) because a numeric-enum member in value
+            // position does not always resolve cleanly through getTypeOfExpression.
+            is PropertyAccessExpression ->
+                receiverResolvesToRealEnum(rhs.expression) ||
+                    (literalTypeOfExpression(rhs)?.let {
+                        !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)
+                    } ?: false)
             else -> literalTypeOfExpression(rhs)?.let {
                 !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)
             } ?: false
         }
+    }
+
+    /** Round 453: does [recv] name a REAL enum (an EnumDeclaration, not a
+     *  const-enum-holding namespace)? Used to classify `Enum.Member` value
+     *  accesses as non-nullish for flow narrowing. Single-segment identifier
+     *  receiver only — a qualified `Ns.Enum.Member` is a false negative (safe). */
+    private fun receiverResolvesToRealEnum(recv: Expression): Boolean {
+        val name = (recv as? Identifier)?.text ?: return false
+        var sym = currentFileLocals?.get(name) ?: globals[name] ?: return false
+        // An imported enum (`import { NodeBuilderFlags } from "./types"`) is an
+        // Alias in this file's locals — follow it to the EnumDeclaration.
+        if (sym.flags.hasAny(SymbolFlags.Alias)) sym = resolveAlias(sym)
+        return sym.flags.hasAny(SymbolFlags.Enum) &&
+            sym.declarations.any { it is EnumDeclaration }
     }
 
     /**
@@ -147996,9 +148037,48 @@ interface DataView {
         while (inner is ParenthesizedExpression) inner = inner.expression
         val stripNullish = e is NonNullExpression ||
             (inner is Identifier && inner.text in arithTruthyNarrowedNames)
-        if (!stripNullish) return t
-        val kept = t.types.filter { !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) }
-        return if (kept.isEmpty() || kept.size == t.types.size) t else getUnionType(kept)
+        if (stripNullish) {
+            val kept = t.types.filter { !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) }
+            return if (kept.isEmpty() || kept.size == t.types.size) t else getUnionType(kept)
+        }
+        // Round 453 (M3.4 reassignment/guard flow narrowing): a reference operand
+        // may be provably non-nullish here via a cross-statement reassignment
+        // (`length = end - start; length - 5`, `flags = flags || None; flags & X`)
+        // or an enclosing `if (m !== undefined)` guard that the syntactic
+        // arithTruthyNarrowedNames set can't see. Consult the flow graph and use
+        // the flow-narrowed type ONLY when it proves non-nullish (the arithmetic FP
+        // is the nullish member — a narrowing that leaves nullish keeps firing).
+        if (inner is Identifier || inner is PropertyAccessExpression) {
+            arithFlowNarrowedNonNullish(inner, t)?.let { return it }
+        }
+        return t
+    }
+
+    /** Round 453: flow-narrow a reference operand in the arithmetic pass. Returns the
+     *  flow-narrowed type ONLY when it (a) differs from [t], (b) is not `never`, and
+     *  (c) carries no nullish member — i.e. the flow graph PROVES the reference
+     *  non-nullish at this position (cross-statement reassignment or an enclosing
+     *  guard). Otherwise null → caller keeps the declared union (still fires).
+     *
+     *  currentFlowGraph is set ONLY around the walk (restored in finally): setting it
+     *  for the whole arithmetic pass makes getTypeOfExpression's union-receiver path
+     *  flow-aware and regressed 78 tests — scoping it to the narrow call keeps every
+     *  OTHER getTypeOfExpression in the pass flow-unaware. */
+    private fun arithFlowNarrowedNonNullish(ref: Expression, t: Type.Union): Type? {
+        val graph = currentArithmeticFlowGraph ?: return null
+        if (getReferencePath(ref) == null) return null
+        if (graph.nodeToFlow[nodeKey(ref)] == null) return null
+        val saved = currentFlowGraph
+        currentFlowGraph = graph
+        val narrowed = try {
+            getNarrowedTypeForReference(t, ref)
+        } finally { currentFlowGraph = saved }
+        if (narrowed === t || narrowed === neverType) return null
+        val hasNullish = narrowed.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) ||
+            (narrowed is Type.Union && narrowed.types.any {
+                it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)
+            })
+        return if (hasNullish) null else narrowed
     }
 
     /** Round 416: names that are TRUTHY-narrowed (guaranteed non-nullish) whenever [cond]
