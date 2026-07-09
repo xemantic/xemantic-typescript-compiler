@@ -94524,6 +94524,29 @@ interface DataView {
                     val arg = expr.arguments[0]
                     if (getReferencePath(arg) == name) return narrowByTruthiness(t, truthy = isTrue)
                 }
+                // Round 459: `Array.isArray(x)` — the lib guard `isArray(arg: any): arg is
+                // any[]`. The embedded lib deliberately has NO ArrayConstructor, so the
+                // predicate cannot resolve via declarations — special-case it (tsc's own
+                // `details === undefined || Array.isArray(details) ? details : [details]`
+                // in chainDiagnosticMessages). true keeps array-ish union members
+                // (Array/ReadonlyArray references, tuples); false removes them.
+                // Conservative: unchanged when the filter keeps nothing or removes nothing.
+                if (callee is PropertyAccessExpression && callee.name.text == "isArray" &&
+                    (callee.expression as? Identifier)?.text == "Array" &&
+                    expr.arguments.size == 1 && getReferencePath(expr.arguments[0]) == name) {
+                    // isArray.ts corpus pin: a USE-BEFORE-ASSIGNED var keeps its DECLARED
+                    // type in tsc (the TS2454 rule — its baseline expects the ELSE branch
+                    // of Array.isArray un-narrowed for `var maybeArray: number | number[];`
+                    // with no assignment anywhere). Cheap approximation: skip the narrowing
+                    // for a bare identifier resolving to a file-level var declared WITHOUT
+                    // an initializer; a parameter, an initialized local, or a body local
+                    // (B83.5-unbound → not in the tables) narrows normally.
+                    val unassignedFileVar = !name.contains('.') && run {
+                        val decl = (currentFileLocals?.get(name) ?: globals[name])?.valueDeclaration
+                        decl is VariableDeclaration && decl.initializer == null
+                    }
+                    if (!unassignedFileVar) return narrowByArrayIsArray(t, isMatch = isTrue)
+                }
                 // Round 423: a TRUTHY optional-chain CALL proves its optional receiver
                 // didn't short-circuit — `if (x.y?.size()) { x.y.keys() }` (builder.ts's
                 // `state.referencedMap?.size()`): a nullish `x.y` makes the whole chain
@@ -94764,6 +94787,32 @@ interface DataView {
             filtered.size == t.types.size -> t  // no narrowing
             filtered.size == 1 -> filtered[0]
             else -> getUnionType(filtered)
+        }
+    }
+
+    /**
+     * Round 459: `Array.isArray(x)` narrowing — keep (isMatch) or drop (!isMatch) the
+     * ARRAY-ISH members of a union: Array/ReadonlyArray references and tuples.
+     * any/unknown/error members are kept on BOTH branches; a filter that keeps nothing
+     * or removes nothing returns [t] unchanged (mirrors narrowByTypeOfGuard's
+     * conservatism — never narrow to never on this guard).
+     */
+    private fun narrowByArrayIsArray(t: Type, isMatch: Boolean): Type {
+        if (t !is Type.Union) return t
+        fun isArrayIsh(m: Type): Boolean = when {
+            m is Type.Reference ->
+                m.target.symbol?.name.let { it == "Array" || it == "ReadonlyArray" }
+            m is Type.Object && m.tupleElementTypes != null -> true
+            else -> false
+        }
+        val kept = t.types.filter { m ->
+            m === anyType || m === errorType || m.flags.hasAny(TypeFlags.Unknown) ||
+                isArrayIsh(m) == isMatch
+        }
+        return when {
+            kept.isEmpty() || kept.size == t.types.size -> t
+            kept.size == 1 -> kept[0]
+            else -> getUnionType(kept)
         }
     }
 
@@ -97577,7 +97626,19 @@ interface DataView {
         val elementTypes = mutableListOf<Type>()
         for (el in expr.elements) {
             if (el is SpreadElement) return anyType // spread not yet supported
-            val t = getTypeOfExpression(el)
+            val raw = getTypeOfExpression(el)
+            // Round 459: an ELEMENT that is a flow-narrowed bare Identifier reads its
+            // narrowed type — the array-literal sibling of round 438's object-literal
+            // property-value narrowing. tsc's builderState.ts `if (!sourceFile) return
+            // emptyArray; … return [sourceFile];` otherwise kept the element's wider
+            // `SourceFile | undefined` → FP `(SourceFile | undefined)[]` ⊄
+            // `readonly SourceFile[]`. Same NULLISH-STRIP gate (objLitValueNullishStrip)
+            // to avoid the shadowing / narrow-DOWN hazards; PropertyAccess elements
+            // already narrow inside getTypeOfExpression.
+            val t = if (el is Identifier) {
+                val narrowed = getNarrowedTypeForReference(raw, el)
+                if (objLitValueNullishStrip(raw, narrowed)) narrowed else raw
+            } else raw
             if (t === anyType || t === errorType) return anyType // can't determine
             // B98.r162: STRUCTURAL dedup of element types — the plain `!in` (reference
             // identity) misses two fresh-but-structurally-identical anonymous object
