@@ -1,3 +1,51 @@
+**Round 449 (2026-07-09) — object-literal spread member-symbol corruption (Blocker #3-adjacent):
+ONE root-cause fix clears the `readonly ApplicableRefactorInfo[]` TS2322 ×9 family deferred across
+rounds 446-448 as "a type-param-scope pollution needing a whole-program probe" — PLUS the convertExport
+`ExportInfo | RefactorErrorInfo` cascade that round 448's NEXT pointer mislabelled a "deep M3
+union-of-named-AST relation gap". Dashboard: compiler 185 → 183 (−2), services 321 → 310 (−11), server
+529 → 518 (−11), harness 746 → 735 (−11). Suite 9,581 corpus green / 0 fail / 3 skip + 3 local (0
+regressions); 1 fix commit (6df8166f); services by-code diff strictly TS2322 −11, zero regressions.**
+- **Baseline @ HEAD (round 448): services 321.** The `readonly ApplicableRefactorInfo[]` ×9 was the
+  single biggest bounded TS2322 family but had been deferred 3× as "does not reproduce minimally / needs
+  a whole-program probe". Built the probe: the chain showed the TARGET member `ApplicableRefactorInfo.actions`
+  displaying as `U[]` (a stray unbound type parameter) instead of `RefactorActionInfo[]`.
+- **Instrumentation (the decisive tool — the root cause is invisible without it):** (1) probing
+  `getTypeFromTypeReference("RefactorActionInfo")` showed it ALWAYS resolves cleanly (scope=null) → the
+  `U` does NOT come from resolving the member's type node; (2) probing `getPropertyTypeForRelation`
+  showed the SAME symbol (id 47351) returning `U[]` 28× and `RefactorActionInfo[]` 13× — a non-deterministic
+  cache; (3) probing the cached VALUE showed two distinct `Type.Reference` objects (element = interface vs
+  element = `TypeParam U`) → `symbolTypes[47351]` was being OVERWRITTEN; (4) a `symbolTypes.put`-interceptor
+  stack trace pointed at `getTypeOfObjectLiteral`'s `existing != null` override write, reached via
+  `tryInferSingleTypeParamFromArgs` (generic inference); (5) dumping the members table showed
+  `propNames=[SpreadAssignment, actions]` — the object literal is `{ ...info, actions: [...] }`, and the
+  SPREAD had merged the interface member symbol 47351 into `members` BY REFERENCE.
+- **ROOT CAUSE:** `getTypeOfObjectLiteral`'s B426 spread merge did `members[pn] = psym` — sharing the spread
+  SOURCE's member SYMBOLS. When a later explicit member of the same name overrode a spread member, the
+  `existing != null` branch wrote `symbolTypes[existing.id] = <override type>` — mutating the spread SOURCE's
+  member type cache GLOBALLY. In the refactor return sites (`return [{ ...info, actions: [...] }]`) the
+  override array was typed under a generic-inference context as `U[]`, so `ApplicableRefactorInfo.actions`'s
+  cached type became `U[]` and every subsequent relation against `ApplicableRefactorInfo` FP-fired TS2322.
+  (The getter/setter override branches similarly MUTATE `existing.declarations` — same latent hazard.)
+- **FIX (Checker.kt, spread branch of getTypeOfObjectLiteral):** COPY each guaranteed spread member into a
+  FRESH literal-owned `Symbol` (carrying `psym`'s resolved type via `getTypeOfSymbol` + declarations +
+  valueDeclaration + parent, so reads/optionality/positions are byte-unchanged), so an override touches the
+  literal's own symbol — never the shared source member. Core hot/shared path, so gated on the full corpus
+  suite (9,581/0/3, byte-clean) + a `symbolTypes`-write A/B before/after.
+- **Removed by position (11 TS2322, 0 added):** 7 `ApplicableRefactorInfo[]` (extractType,
+  convertParamsToDestructuredObject, moveToNewFile ×2, convertOverloadListToSingleSignature,
+  inferFunctionReturnType ×2) + convertExport.ts:85/89 (the round-448 "deep M3" mislabel — same bug) +
+  checker.ts:9392 + moduleNameResolver.ts:2365 (compiler-side cascade, hence compiler −2).
+- **3 local tests (SpreadOverrideMemberCorruptionTest):** the refactor-shaped return, the corruption
+  invariant (`{ ...base, actions: [{ name, extra }] }` must not corrupt `Info.actions` for a later
+  relation — VERIFIED to FAIL on the reverted buggy version), and a negative control (a genuinely-wrong
+  override element still fires). NOTE the refactor-shaped minimal test PASSES even on the buggy version
+  (the `U[]` corruption needs the whole-program generic-inference context — the services profile is its
+  proof); test 2 is the load-bearing pin.
+- **NEXT (services @ 310):** TS7006×8 (inferFromUsage `Priority[]` — the B83.5 nested-interface-resolution
+  blocker; land WITH the reverted round-443 array-element contextual-typing enabler), TS2454×5 (definite-
+  assignment `while(true)`-break flow gap: `resultingToken`/`indexInfos`/`variable`/`previousRange`),
+  residual deep-M3 TS2322/TS2345 relation fragments (each ≤3).
+
 **Round 448 (2026-07-08) — TS2322/TS2774 burn-down: `this.optionalProp = undefined` write +
 discriminated-union object-literal return + module-var-leak local alias + destructured-shadow TS2774:
 FOUR bounded fixes, all suppression-only / FP-safe. Compiler UNCHANGED (185 — the families live in

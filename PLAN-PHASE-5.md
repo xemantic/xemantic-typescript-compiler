@@ -39,6 +39,72 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
+**Round 459 (2026-07-09) — bounded FP burn-down: SEVEN fixes, all GENERAL checker correctness
+that reproduce minimally. Dashboard: compiler 116 → 104 (−12; TS2322 43 → 34, TS2339 5 → 3,
+TS2349 2 → 0), services 210 → 194 (−16; TS2322 94 → 81, TS2345 29 → 25, TS2339 13 → 11).
+Suite 9,706 → 9,729 (+23 local across 7 new test files, 0 regressions); 7 fix commits
+(b68d6487 / e6b6d990 / 435d7220 / bef95f36 / 4139b47a / 6c630b54 / d209b138).**
+- **Fix 1 (b68d6487, array-literal→tuple ASSIGNMENT; compiler −3):** the round-458 NEXT item.
+  New `currentLocalDeclTypeNodes` map records body-local annotation NODES alongside
+  `currentLocalTypes` (first-decl-wins; saved/restored in checkFunctionBody) so
+  `checkAssignmentExpression` can feed the DECLARED tuple node to the round-446
+  `arrayLiteralSatisfiesTupleTarget` helper for an ArrayLiteralExpression RHS (body locals are
+  B83.5-unbound and the resolved Type collapses the rest slot). Cleared checker.ts:22621/22927
+  (`lastSkippedInfo = [source, target]`, `relatedInfo = [info]`), esnextAnd2015.ts:248. The map is
+  general infra — any new body-local AST-shape check should read it.
+- **Fix 2 (e6b6d990, enum-member-literal overload selection; compiler −1):** an enum-member param
+  (`kind: SyntaxKind.NamedImports`) resolves to anyType, so an enum-member ARG matched EVERY
+  overload and the FIRST won — `parseNamedImportsOrExports(SyntaxKind.NamedExports)` (parser.ts:8717)
+  returned the NamedImports overload's type → FP TS2322. `resolveCallOverload` now compares the param
+  annotation's canonical enum-member key set (round-411 key space) against the arg's key AST-side.
+- **Fix 3 (435d7220, array-element flow narrowing + Array.isArray; compiler −2):**
+  (a) `getTypeOfArrayLiteral` narrows a bare-Identifier ELEMENT via getNarrowedTypeForReference —
+  the array sibling of round 438's objlit-value narrowing, same nullish-strip gate — clearing
+  builderState.ts:388 (`if (!sourceFile) return emptyArray; … return [sourceFile]`);
+  (b) `applyConditionNarrowing` gains `Array.isArray(x)` (covers BOTH the round-458 AST path and the
+  flow FlowCondition path; the embedded lib deliberately has no ArrayConstructor so the predicate
+  can't resolve via declarations) — clearing utilities.ts:8757 (chainDiagnosticMessages'
+  `details === undefined || Array.isArray(details) ? details : [details]`). The isArray.ts corpus pin
+  (a USE-BEFORE-ASSIGNED file-level var keeps its DECLARED type in tsc — the TS2454 rule; its
+  baseline expects the ELSE branch un-narrowed) is honored by skipping the narrowing for a bare
+  identifier resolving to a file-level var with no initializer — the first gate run caught this
+  as the session's only (fixed-before-commit) corpus regression.
+- **Fix 4 (bef95f36, objLitValueNullishStrip union-member-subset):** the gate on flow-narrowed
+  objlit property values / array elements also accepts a nullish-FREE strict MEMBER-SUBSET narrow of
+  a union source — monotone-safe (if the raw union relates, any member subset relates → can only
+  suppress). Cleared commandLineParser.ts:2269 (readConfigFile's `isString(x) ? … : { config: {},
+  error: x }` — `string | Diagnostic` → `Diagnostic` is not a nullish strip). The round-438
+  shadowing hazard stays excluded (a nullish narrowed type never qualifies).
+- **Fix 5 (4139b47a, numeric-literal vs enum-domain discriminant):** `narrowByDiscriminantProperty`
+  compares a NUMERIC-literal RHS against an enum-typed discriminant's VALUE domain (enumValues via
+  canonicalEnumSymbol): `flowType.flags === 0` drops `Type` (TypeFlags has no 0-valued member),
+  keeping IncompleteType — tsc's getTypeFromFlowType/isIncomplete (checker.ts:28630 TS2339 +
+  the 29132 TS2322 cascade). An enum WITH a matching value does not narrow (negative control).
+- **Fix 6 (d209b138, tuple-union element access; TS2339):** `value[1]` on a receiver NARROWED to
+  `[FileId] | [FileId, BuilderFileEmit]` (builder.ts:2242 toBuilderFileEmit) — tsc resolves union
+  element access per-member with undefined for out-of-bounds members. The element-access
+  missing-member path bails for a numeric key in bounds for SOME member of an all-tuples union;
+  the bail tests the NARROWED receiver (the DECLARED type still carries the guard-removed FileId).
+- **Fix 7 (6c630b54, nullable-array default-init push on PROPERTY targets; TS2349 2 → 0):**
+  `(label.antecedent || (label.antecedent = [])).push(antecedent)` (binder.ts:1375; core.ts:2135
+  cleared too). Root cause found by tracing: inside the `||` right operand the read of `x.p` is
+  flow-narrowed to the falsy `undefined`, so the round-408 empty-`[]` contextual rule never saw the
+  array type. Two coupled rules: combineBinaryTypes' Equals arm recomputes the RAW property type for
+  a PropertyAccess target with a fresh empty-array RHS (an assignment TARGET types against its
+  DECLARED type — M1.9); contextualAssignmentRhsType accepts a UNION target whose sole non-nullish
+  member is Array-family. The local wrong-arg control pins that the receiver collapses to the
+  PRECISE `string[]` (an `any[]` would accept the bad arg). This closes the round-452
+  "inline-property-receiver" deferral.
+- **NEXT (compiler @ 104, ~58 real excl. TS2591×43 + TS2304×2 `global` + TS2584 console env-legit):**
+  the TransformerFactory<T> whole-program conflation probe (transformer.ts:83/98/100 — round-457
+  finding: NOT a generic-alias gap, needs an instrumented probe); parser.ts:9638 (`while (child =
+  tryParse(...))` truthy-narrow + kind discriminant with a `false` union member); program.ts:3705
+  `false | SourceFile | undefined` (probe needed); program.ts:1220 (switch-exhaustive +
+  destructuring-assignment definite assignment); the `assertNever` never-param family ×3 (round 441
+  deep); utilities.ts:9978/9972 flatten (M3.1 generic inference); `string → __String` branding
+  (whole-program); moduleSpecifiers.ts:929 for-of element mis-inference (whole-program-only —
+  minimal repro clean).
+
 **Round 458 (2026-07-09) — logical/ternary operand narrowing + try/finally flow fix +
 fresh-objlit interface-target retry + a P0 single-file-CLI crash fix. FOUR fixes, all GENERAL
 checker/flow/driver correctness that reproduce minimally. Dashboard: compiler 121 → 116 (−5),
@@ -562,54 +628,6 @@ harness 735 → 715 (−20). Suite 9,605 corpus green / 0 fail / 3 skip; 6 fix c
 - **NEXT (services @ 294):** the whole-program narrow-DOWN family (Symbol.links / Type.types) via
   services-profile instrumentation, the `.map` contextual-return M3.2 slice, deep-M3 TS2322/TS2345
   relation fragments.
-
-**Round 449 (2026-07-09) — object-literal spread member-symbol corruption (Blocker #3-adjacent):
-ONE root-cause fix clears the `readonly ApplicableRefactorInfo[]` TS2322 ×9 family deferred across
-rounds 446-448 as "a type-param-scope pollution needing a whole-program probe" — PLUS the convertExport
-`ExportInfo | RefactorErrorInfo` cascade that round 448's NEXT pointer mislabelled a "deep M3
-union-of-named-AST relation gap". Dashboard: compiler 185 → 183 (−2), services 321 → 310 (−11), server
-529 → 518 (−11), harness 746 → 735 (−11). Suite 9,581 corpus green / 0 fail / 3 skip + 3 local (0
-regressions); 1 fix commit (6df8166f); services by-code diff strictly TS2322 −11, zero regressions.**
-- **Baseline @ HEAD (round 448): services 321.** The `readonly ApplicableRefactorInfo[]` ×9 was the
-  single biggest bounded TS2322 family but had been deferred 3× as "does not reproduce minimally / needs
-  a whole-program probe". Built the probe: the chain showed the TARGET member `ApplicableRefactorInfo.actions`
-  displaying as `U[]` (a stray unbound type parameter) instead of `RefactorActionInfo[]`.
-- **Instrumentation (the decisive tool — the root cause is invisible without it):** (1) probing
-  `getTypeFromTypeReference("RefactorActionInfo")` showed it ALWAYS resolves cleanly (scope=null) → the
-  `U` does NOT come from resolving the member's type node; (2) probing `getPropertyTypeForRelation`
-  showed the SAME symbol (id 47351) returning `U[]` 28× and `RefactorActionInfo[]` 13× — a non-deterministic
-  cache; (3) probing the cached VALUE showed two distinct `Type.Reference` objects (element = interface vs
-  element = `TypeParam U`) → `symbolTypes[47351]` was being OVERWRITTEN; (4) a `symbolTypes.put`-interceptor
-  stack trace pointed at `getTypeOfObjectLiteral`'s `existing != null` override write, reached via
-  `tryInferSingleTypeParamFromArgs` (generic inference); (5) dumping the members table showed
-  `propNames=[SpreadAssignment, actions]` — the object literal is `{ ...info, actions: [...] }`, and the
-  SPREAD had merged the interface member symbol 47351 into `members` BY REFERENCE.
-- **ROOT CAUSE:** `getTypeOfObjectLiteral`'s B426 spread merge did `members[pn] = psym` — sharing the spread
-  SOURCE's member SYMBOLS. When a later explicit member of the same name overrode a spread member, the
-  `existing != null` branch wrote `symbolTypes[existing.id] = <override type>` — mutating the spread SOURCE's
-  member type cache GLOBALLY. In the refactor return sites (`return [{ ...info, actions: [...] }]`) the
-  override array was typed under a generic-inference context as `U[]`, so `ApplicableRefactorInfo.actions`'s
-  cached type became `U[]` and every subsequent relation against `ApplicableRefactorInfo` FP-fired TS2322.
-  (The getter/setter override branches similarly MUTATE `existing.declarations` — same latent hazard.)
-- **FIX (Checker.kt, spread branch of getTypeOfObjectLiteral):** COPY each guaranteed spread member into a
-  FRESH literal-owned `Symbol` (carrying `psym`'s resolved type via `getTypeOfSymbol` + declarations +
-  valueDeclaration + parent, so reads/optionality/positions are byte-unchanged), so an override touches the
-  literal's own symbol — never the shared source member. Core hot/shared path, so gated on the full corpus
-  suite (9,581/0/3, byte-clean) + a `symbolTypes`-write A/B before/after.
-- **Removed by position (11 TS2322, 0 added):** 7 `ApplicableRefactorInfo[]` (extractType,
-  convertParamsToDestructuredObject, moveToNewFile ×2, convertOverloadListToSingleSignature,
-  inferFunctionReturnType ×2) + convertExport.ts:85/89 (the round-448 "deep M3" mislabel — same bug) +
-  checker.ts:9392 + moduleNameResolver.ts:2365 (compiler-side cascade, hence compiler −2).
-- **3 local tests (SpreadOverrideMemberCorruptionTest):** the refactor-shaped return, the corruption
-  invariant (`{ ...base, actions: [{ name, extra }] }` must not corrupt `Info.actions` for a later
-  relation — VERIFIED to FAIL on the reverted buggy version), and a negative control (a genuinely-wrong
-  override element still fires). NOTE the refactor-shaped minimal test PASSES even on the buggy version
-  (the `U[]` corruption needs the whole-program generic-inference context — the services profile is its
-  proof); test 2 is the load-bearing pin.
-- **NEXT (services @ 310):** TS7006×8 (inferFromUsage `Priority[]` — the B83.5 nested-interface-resolution
-  blocker; land WITH the reverted round-443 array-element contextual-typing enabler), TS2454×5 (definite-
-  assignment `while(true)`-break flow gap: `resultingToken`/`indexInfos`/`variable`/`previousRange`),
-  residual deep-M3 TS2322/TS2345 relation fragments (each ≤3).
 
 ### Post-v1 backlog — the "any TypeScript project" horizon (parked 2026-07-03)
 
