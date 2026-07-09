@@ -94050,8 +94050,15 @@ interface DataView {
         while (true) {
             rhs = when (rhs) {
                 is ParenthesizedExpression -> rhs.expression
-                is AsExpression -> rhs.expression
-                is TypeAssertionExpression -> rhs.expression
+                // Round 454: a cast `X as T` / `<T>X` produces a value of the CAST TARGET
+                // type T regardless of the inner expression — so if T is a concrete
+                // non-nullish type the assigned reference is non-nullish, even when the
+                // inner expression is an `any`-returning call (`Object.create(Array.prototype)
+                // as NodeArray<Node>`, tsc debug.ts — narrowing a `NodeArray<Node> | undefined`
+                // module var to `NodeArray<Node>`). Otherwise (T is `any`/nullable) fall
+                // through to the inner expression's own shape.
+                is AsExpression -> if (castTargetIsNonNullish(rhs.type)) return true else rhs.expression
+                is TypeAssertionExpression -> if (castTargetIsNonNullish(rhs.type)) return true else rhs.expression
                 is SatisfiesExpression -> rhs.expression
                 is NonNullExpression -> rhs.expression
                 else -> break
@@ -94117,6 +94124,17 @@ interface DataView {
                 !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)
             } ?: false
         }
+    }
+
+    /** Round 454: does the cast-target [typeNode] resolve to a CONCRETE non-nullish
+     *  type (never any/unknown/error, and not a union containing null/undefined)? A
+     *  value `X as T` with such a T is non-nullish regardless of X. Resolution is
+     *  gated to a syntactic cast RHS so it stays rare on the flow-walk hot path. */
+    private fun castTargetIsNonNullish(typeNode: TypeNode?): Boolean {
+        if (typeNode == null) return false
+        val t = try { getTypeFromTypeNode(typeNode) } catch (_: Exception) { return false }
+        if (t === anyType || t === errorType || t === unknownType) return false
+        return !typeIncludesUndefined(t) && !typeIncludesNull(t)
     }
 
     /** Round 453: does [recv] name a REAL enum (an EnumDeclaration, not a
