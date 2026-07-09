@@ -43003,7 +43003,7 @@ interface DataView {
                         collectBindingNames(d.name, shadowed)
                         continue
                     }
-                    val vName = (d.name as? Identifier)?.text ?: continue
+                    val vName = d.name.text
                     val annotated = d.type?.let { try { getTypeFromTypeNode(it) } catch (_: Exception) { null } }
                     val init = d.initializer
                     val resolved: Type? = when {
