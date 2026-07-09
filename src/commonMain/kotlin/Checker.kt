@@ -82119,6 +82119,17 @@ interface DataView {
         for (s in statements) {
             if (s !is VariableStatement) continue
             for (d in s.declarationList.declarations) {
+                // Round 450: a DESTRUCTURED-const local (`const { parent } = node`) that
+                // shadows a same-named outer binding (typically a leaked module-file var,
+                // moduleFileLocalVarNames) is NOT bound (B83.5), so a body read of `parent`
+                // resolved to the OUTER declaration (navigationBar.ts's `let parent:
+                // NavigationBarNode`) and FP'd TS2339 on `parent.operatorToken`. Register the
+                // binding names as shadowed and resolve each from the destructured property
+                // type so a following user type-guard narrows the RIGHT type.
+                if (d.name is ObjectBindingPattern && d.initializer != null) {
+                    applyDestructuredShadow(d.name, d.initializer, paramNames)
+                    continue
+                }
                 val nm = (d.name as? Identifier)?.text ?: continue
                 // A `var x` that redeclares a PARAM `x` of the SAME function is a
                 // redeclaration (first/param declaration wins, TS2403), NOT an
@@ -82141,6 +82152,33 @@ interface DataView {
                     currentLocalTypes.remove(nm)
                 }
             }
+        }
+    }
+
+    /** Round 450: register the shadowing names of a `const { a, b: c } = init` destructuring
+     *  pattern and record each from the destructured property type of `init` (so a following
+     *  user type-guard narrows the RIGHT type, not the shadowed outer/leaked binding). Only
+     *  names that ALSO have an outer binding are shadowed; a pure local is left untouched. */
+    private fun applyDestructuredShadow(pattern: ObjectBindingPattern, initializer: Expression, paramNames: Set<String>) {
+        var initType: Type? = null
+        var initResolved = false
+        for (el in pattern.elements) {
+            if (el.dotDotDotToken) continue
+            val bnName = (el.name as? Identifier)?.text ?: continue
+            if (bnName in paramNames) continue
+            if (!currentLocalTypes.containsKey(bnName) && !globals.containsKey(bnName)) continue
+            currentShadowedNames.add(bnName)
+            if (!initResolved) {
+                initType = try { getTypeOfExpression(initializer) } catch (_: Exception) { null }
+                initResolved = true
+            }
+            val propName = (el.propertyName as? Identifier)?.text ?: bnName
+            val pt = if (initType != null && initType !== anyType && initType !== errorType) {
+                try { getPropertyOfType(getApparentType(initType), propName)?.let { getTypeOfSymbol(it) } }
+                catch (_: Exception) { null }
+            } else null
+            if (pt != null && pt !== anyType && pt !== errorType) currentLocalTypes[bnName] = pt
+            else currentLocalTypes.remove(bnName)
         }
     }
 
