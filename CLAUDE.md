@@ -547,6 +547,7 @@ Static-member bifurcation: statics live in BOTH `members` and `staticMembers` (T
 
 ### TS2454/TS2564 gotchas
 
+- **TWO disjoint used-before-assigned passes (round 450): the SET-based `checkUsesOfUninitialized`/`markAssignments` (statement-sequenced, does NOT recurse into if/loop BODIES) and the flow-graph `walkStmtForFlowTS2454`/`isAssignedAtFlow` (recurses into bodies, consults the flow graph). They fire in DIFFERENT contexts, so a TS2454 FP may need fixing in one, both, or neither — check which emits before editing.** `markAssignments`' `while(true)` case removes a var via `whileTrueDefinitelyAssigns` — a SOUND single-variable definite-assignment walk (sequential flow + if/else join + abrupt break/return/throw/continue) that BAILS (keeps the var uninitialized, never over-clears) on any labeled break/continue or a `try`/labeled statement that could hide an exiting break; nested loops/switch are opaque. Do NOT "simplify" it to credit inner-loop assignments or drop the bail — that reintroduces unsoundness (missed genuine TS2454). The flow pass drops a `for (const/let X of/in …)` loop var from its uninitialized set when descending into the body (X shadows + is bound each iteration) — same rationale as the catch-body shadowing skip.
 - **`any` type skips checking**: Variables/properties typed as `any` skip TS2454/TS2564.
 - **`var` declarations**: TypeScript DOES check `var` for TS2454 (when strict) — only `any`-typed vars are skipped.
 - **`ExportAssignment` is a use site**: `export = Foo` must be checked in `checkUsesOfUninitialized`.

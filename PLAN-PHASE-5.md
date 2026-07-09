@@ -39,6 +39,62 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
+**Round 450 (2026-07-09) — bounded FP burn-down: FIVE suppression-only / soundness fixes,
+all cleanly reproducible in isolated multi-file repros + locally tested (4 new test files,
+17 tests). Dashboard: compiler 183 → 178 (−5), services 310 → 294 (−16), server 518 → 501
+(−17), harness 735 → 718 (−17). Suite 9,602 corpus green / 0 fail / 3 skip; 5 fix commits
+(21f41105 / 2da83a26 / 4d443ae9 / 2c202d67 / 134f9d7a).**
+- **Fix 1 (21f41105, boolean-literal assign; TS2322 −3 services):** a `true`/`false` literal
+  assigned to a literal-boolean local (`let isSnippet: true | undefined; isSnippet = true`,
+  completions.ts). A boolean literal parses as an `Identifier` (literalTypeOfExpression), so it
+  was NOT covered by the `tryCatchFinallyControlFlow` guard that skips the legacy varTypes
+  string-fallback for numeric/string/bigint literal RHS — the fallback widens `true`→"boolean"
+  and `isAssignableTo("boolean", "true | undefined")` fails even though the engine already
+  validated it (keeping the literal via propTypeContainsLiteral). Extend the guard to
+  `true`/`false`. FP-safe (canUse && isAssignable gate); negative controls fire via the engine.
+- **Fix 2 (2da83a26, leaked-module-var assignment TARGET; TS2740 −3 + TS2322 −3 services,
+  compiler −2; Blocker #3):** `parent = parent.parent` inside a NESTED block where
+  `let parent = node.parent` shadows navigationBar.ts's module-level `let parent: NavigationBarNode`
+  (leaked into globals per round 442). applyBodyLocalShadowing only scans function-body TOP-LEVEL
+  statements, so a nested `let parent` isn't in currentShadowedNames — the assignment target then
+  resolved to the leaked `NavigationBarNode` annotation and FP'd TS2740 ('Node' missing its props).
+  Skip the globals lookup in the assignment-target resolution for a moduleFileLocalVarNames name
+  not owned by this file (currentFileLocals). FP-safe (a cross-file leaked var is TS2304 in tsc);
+  the own-file binding is still checked.
+- **Fix 3 (4d443ae9, `x = x || DEFAULT` narrowing; TS2345 −4 services):** the default-init idiom
+  `maximumLength = maximumLength || defaultMaximumTruncationLength` (utilities.ts) didn't narrow a
+  `T | undefined` reference to non-nullish `T`. `rhsIsDefinitelyNonNullish` (consulted by
+  narrowByAssignmentRhs → narrowByExcludingNullUndefined(declaredType), round 416) didn't classify
+  a `||`/`??` RHS. `a || b`/`a ?? b` are non-nullish iff the RIGHT operand is; the right operand is
+  usually a const/local reference so its type is resolved and nullish-checked. FP-safe: a nullish
+  right operand keeps the reference nullable (pinned by a control).
+- **Fix 4 (2c202d67, `while (true)` definite-assignment; TS2454 −2 compiler / −2 services):** a
+  `while (true)` loop's only normal exit is a `break`, so a var assigned before EVERY exiting break
+  is definitely assigned after it (scanner.ts scanTemplateAndSetTokenValue idiom). The set-based
+  `markAssignments` had no WhileStatement case; add a constant-true case backed by a sound
+  single-variable definite-assignment walk (sequential flow, if/else join, abrupt break/return/
+  throw/continue). Bails conservatively on any labeled break/continue or a try/labeled statement
+  that could hide an exiting break; nested loops/switch opaque. Only `while (true)`. Controls: a
+  non-assigning break, `while (cond)`, and a break-in-try all keep firing.
+- **Fix 5 (134f9d7a, for-of/for-in shadow; TS2454 −1 compiler / −1 services):** a `for (const X
+  of/in …)` loop variable shadowing an outer uninitialized `let X` and bound each iteration
+  (generators.ts `let variable; for (const variable of decls) { …variable.name… }`). The
+  flow-based used-before-assigned pass descended into the loop body with the outer var still in
+  its set — drop loop-declared names (incl. binding patterns) when descending (mirrors the
+  catch-body shadowing skip). Controls: outer read outside the loop, and a non-shadowing for-of,
+  both fire.
+- **INVESTIGATED & DEFERRED (do not re-chase minimally):** the `Symbol.links` (isTransientSymbol
+  narrow-DOWN ×5), `Node → NavigationBarNode` TS2339 (navigationBar.ts's own `const { parent } =
+  node` destructured-shadow of the module var, B83.5), and `Node → PropertyAccessExpression` TS2740
+  (fixMissingCallParentheses) families all PASS in isolated multi-file repros (incl. barrel imports)
+  — they need whole-program conflation/leak context; instrument the services profile, not a minimal
+  repro. The `.map`-returns-tuple-array TS2322 (`map(refs, f => [sf, f])` vs `readonly [A,B][]`)
+  needs contextual return inference (M3.2). The last `indexInfos` TS2454 is the flow graph's
+  if-else-both-assign-then-loop gap.
+- **NEXT (services @ 294):** the whole-program narrow-DOWN family (Symbol.links / Type.types) via
+  services-profile instrumentation, the `.map` contextual-return M3.2 slice, deep-M3 TS2322/TS2345
+  relation fragments.
+
 **Round 449 (2026-07-09) — object-literal spread member-symbol corruption (Blocker #3-adjacent):
 ONE root-cause fix clears the `readonly ApplicableRefactorInfo[]` TS2322 ×9 family deferred across
 rounds 446-448 as "a type-param-scope pollution needing a whole-program probe" — PLUS the convertExport
