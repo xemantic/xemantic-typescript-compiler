@@ -29754,6 +29754,25 @@ class Checker(
                 // B435: a frozen-object result (Readonly<T> shape) never widens — keep the
                 // marked, literal-preserving instance intact.
                 if (type.id in frozenObjectTypeIds) return type
+                // Round 455: a TUPLE widens its ELEMENT types but stays a proper tuple —
+                // tsc widens `[true, "x"]` to `[boolean, string]`, NOT to a
+                // `{0,1,length:number}` object. The generic member-widening below rebuilds
+                // the object WITHOUT `tupleElementTypes` and widens the `length` literal
+                // (`2 → number`), so a widened tuple then fails to relate to a tuple target
+                // (`length: number ⊄ 2`) — the `map(arr, x => [a, b])` returns-tuple family
+                // (declarations.ts/builder.ts). Widen element types and rebuild via
+                // buildTupleFromTypes (preserves the length literal, numbered props, index
+                // sig, and per-element optionality). When no element widens (the common
+                // case — the elements are already non-literal), return the tuple untouched.
+                type.tupleElementTypes?.let { elems ->
+                    var changed = false
+                    val widenedElems = elems.map { e -> widenType(e).also { w -> if (w !== e) changed = true } }
+                    if (!changed) return type
+                    val optionalFlags = elems.indices.map { i ->
+                        type.members?.get(i.toString())?.id?.let { it in optionalTupleMemberIds } ?: false
+                    }.takeIf { flags -> flags.any { it } }
+                    return buildTupleFromTypes(widenedElems, optionalFlags)
+                }
                 // Recursively widen anonymous object literal member types — matches
                 // TypeScript's behavior where `let x = {a: true}` infers `{a: boolean}`.
                 // Skip Reference/Interface (handled above) — only fresh anonymous Object
