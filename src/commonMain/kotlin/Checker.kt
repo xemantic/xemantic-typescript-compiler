@@ -41108,10 +41108,12 @@ interface ReadonlyArray<T> {
     slice(start?: number, end?: number): T[];
     indexOf(searchElement: T, fromIndex?: number): number;
     lastIndexOf(searchElement: T, fromIndex?: number): number;
+    every<S extends T>(predicate: (value: T, index: number, array: T[]) => value is S, thisArg?: any): this is S[];
     every(predicate: (value: T, index: number, array: T[]) => unknown): boolean;
     some(predicate: (value: T, index: number, array: T[]) => boolean): boolean;
     forEach(callbackfn: (value: T, index: number, array: T[]) => void): void;
     map(callbackfn: (value: T, index: number, array: T[]) => any): any[];
+    filter<S extends T>(predicate: (value: T, index: number, array: T[]) => value is S, thisArg?: any): S[];
     filter(predicate: (value: T, index: number, array: T[]) => unknown): T[];
     reduce(callbackfn: (previousValue: T, currentValue: T, currentIndex: number, array: T[]) => T): T;
     reduceRight(callbackfn: (previousValue: T, currentValue: T, currentIndex: number, array: T[]) => T): T;
