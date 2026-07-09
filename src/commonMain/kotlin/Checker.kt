@@ -88828,7 +88828,22 @@ interface DataView {
                             else if (isTpUnionMismatch) rhsVarType
                             else if (isBareTpToTpUnion) rhsVarType
                             else null
-                    if (exprType != null && !isAssignableTo(exprType, declaredType, typeParams)) {
+                    // Round 453: `<ident> = undefined` where the target's DECLARED type
+                    // includes undefined — an OPTIONAL parameter `x?: T` (whose effective
+                    // type is `T | undefined`, tsc's B85.1a) or a `T | undefined` local.
+                    // The string `varTypes` drops the `?` (resolveSimpleTypeName → "T"),
+                    // so the relation FP-fires; the type-engine map (currentLocalTypes /
+                    // its pre-narrowing declared form narrowedDeclaredTypes) carries the
+                    // correct `T | undefined`. tsc's own generators.ts
+                    // (`leadingElement = undefined` where `leadingElement?: Expression`)
+                    // trips this. FP-safe: assigning undefined to a `T | undefined` target
+                    // is always legal (non-eOPT); a non-optional `x: T` local keeps firing.
+                    val undefinedToOptionalLocal = exprType == "undefined" &&
+                        !options.exactOptionalPropertyTypes &&
+                        (narrowedDeclaredTypes[target.text] ?: currentLocalTypes[target.text])
+                            ?.let { typeIncludesUndefined(it) } == true
+                    if (!undefinedToOptionalLocal &&
+                        exprType != null && !isAssignableTo(exprType, declaredType, typeParams)) {
                         emitTS2322(target.pos, target.text.length, exprType, declaredType, source, fileName, hasElaboration = !isSimpleLiteral(expr.right), typeParams = typeParams)
                     }
                 }
