@@ -1219,6 +1219,15 @@ class Checker(
      *  init-order trap (the narrowing walk runs during checking). */
     private var nestedFunctionByNameCache: MutableMap<String, FunctionDeclaration?>? = null
 
+    /** Round 460: the type-alias sibling of [nestedFunctionByNameCache] — program-wide map
+     *  name → the UNIQUELY-named TypeAliasDeclaration (any nesting depth), or `null` when
+     *  ambiguous. A FUNCTION-BODY-local `type X = …` is B83.5-unbound, so an assert target
+     *  `Debug.type<X>(node)` never resolved (tsc declarations/diagnostics.ts's
+     *  `WithIsolatedDeclarationDiagnostic` is declared inside the factory closure). Built
+     *  once, lazily (see [uniqueNestedTypeAliasByName]); declared before `init` per the
+     *  init-order trap. */
+    private var nestedTypeAliasByNameCache: MutableMap<String, TypeAliasDeclaration?>? = null
+
     /** M3.2 (round 431): lexical scope stack for the implicit-any (TS7006) walker —
      *  one map per enclosing function-like, name → declared annotation TypeNode (null
      *  value = declared UNTYPED, which must keep TS7006 firing on `x = arrow` per the
@@ -95056,7 +95065,6 @@ interface DataView {
             val all = flowNode.switchStatement.caseBlock
             val range = all.filterIndexed { i, _ -> i >= flowNode.clauseStart && i < flowNode.clauseEnd }
             if (range.size != 1 || range[0] !is DefaultClause) return@run
-            if (t !is Type.Union) return null
             val litTypes = mutableListOf<Type>()
             val enumKeys = mutableSetOf<String>()
             for (clause in all) {
@@ -95066,6 +95074,26 @@ interface DataView {
                 else enumKeys.add(enumMemberKeyOfExpr(clause.expression) ?: return null)
             }
             if (litTypes.isEmpty() && enumKeys.isEmpty()) return null
+            // Round 460: a NON-union subject — a SINGLE interface (often after a type guard
+            // already narrowed the union away) whose declared discriminant annotation is an
+            // enum-member union fully covered by the cases → the default clause is
+            // unreachable and the subject narrows to `never` (tsc's own
+            // fileIncludeReasonToRelatedInformation: `isReferencedFile(reason)` then
+            // `switch (reason.kind)` covering all four ReferencedFileKind members, with
+            // `default: Debug.assertNever(reason)`). FP-safe: fires only when EVERY key of
+            // the member's discriminant annotation is readable (enum-member-union alias via
+            // enumMemberKeysOfTypeNode) AND covered — a partial/unreadable annotation keeps
+            // the conservative null.
+            if (t !is Type.Union) {
+                if (matchesDirectly) return null
+                val discriminant = discriminantName ?: return null
+                val litKeys = litTypes.mapNotNull { literalDiscriminantKeyOfType(it) }
+                if (litKeys.size != litTypes.size) return null
+                val caseKeys = enumKeys + litKeys
+                val memberKeys = discriminantPropAnnotation(t, discriminant)
+                    ?.let { enumMemberKeysOfTypeNode(it) } ?: return null
+                return if (memberKeys.all { it in caseKeys }) neverType else null
+            }
             if (matchesDirectly) {
                 val filtered = t.types.filter { m ->
                     !(isLiteralKindForDiscriminant(m) &&
@@ -95377,6 +95405,12 @@ interface DataView {
                     val resolved = try { getTypeFromTypeNode(explicitArg) } catch (_: Exception) { null }
                     if (resolved != null && resolved !== errorType && resolved !== anyType) {
                         inferred = resolved
+                    } else {
+                        // Round 460: a function-body-local alias target (B83.5-unbound)
+                        // or a union alias with a lib Exclude<T, U> member (no union
+                        // distribution in our conditional evaluation) — resolve
+                        // member-wise; null keeps the conservative no-narrowing path.
+                        inferred = resolveAssertTargetTypeNode(explicitArg)
                     }
                 }
             }
@@ -95611,6 +95645,99 @@ interface DataView {
             }
             else -> {}
         }
+    }
+
+    /** Round 460: see [nestedTypeAliasByNameCache]. */
+    private fun uniqueNestedTypeAliasByName(name: String): TypeAliasDeclaration? {
+        val cache = nestedTypeAliasByNameCache ?: run {
+            val collected = HashMap<String, MutableList<TypeAliasDeclaration>>()
+            // Throwaway sink so the walk can reuse collectFnDeclNode's container descent
+            // without keeping its function-name collection.
+            val fnSink = HashMap<String, MutableList<FunctionDeclaration>>()
+            val work = ArrayDeque<List<Node>>()
+            for (result in binderResults) work.addLast(result.sourceFile.statements)
+            while (work.isNotEmpty()) {
+                for (node in work.removeLast()) {
+                    if (node is TypeAliasDeclaration) {
+                        collected.getOrPut(node.name.text) { mutableListOf() }.add(node)
+                    } else {
+                        collectFnDeclNode(node, fnSink, work)
+                    }
+                }
+            }
+            val out = HashMap<String, TypeAliasDeclaration?>()
+            for ((nm, decls) in collected) out[nm] = decls.singleOrNull()
+            nestedTypeAliasByNameCache = out
+            out
+        }
+        return cache[name]
+    }
+
+    /**
+     * Round 460: resolve an assert-call's EXPLICIT type-arg node when the standard
+     * `getTypeFromTypeNode` yields any/error — the two tsc shapes that defeat it:
+     * (a) a FUNCTION-BODY-local alias target (B83.5-unbound → [uniqueNestedTypeAliasByName]);
+     * (b) a union alias containing a lib `Exclude<T, U>` member (our conditional-type
+     *     evaluation has no union distribution, so the member resolves anyType and
+     *     poisons the whole union — tsc's `HasInferredType`). Evaluated member-wise:
+     *     Exclude keeps T's members NOT assignable to U.
+     * Null on ANY unresolvable piece (an any/error member would over- or under-narrow) —
+     * callers keep their conservative no-narrowing fallback. Flow-only consumer
+     * (narrowByAssertCall) → no engine blast radius.
+     */
+    private fun resolveAssertTargetTypeNode(node: TypeNode, depth: Int = 0): Type? {
+        if (depth > 8) return null
+        when (node) {
+            is ParenthesizedType -> return resolveAssertTargetTypeNode(node.type, depth + 1)
+            is UnionType -> {
+                val members = mutableListOf<Type>()
+                for (m in node.types) {
+                    val t = resolveAssertTargetTypeNode(m, depth + 1) ?: return null
+                    if (t is Type.Union) members.addAll(t.types) else if (t !== neverType) members.add(t)
+                }
+                if (members.isEmpty()) return null
+                if (members.any { it === anyType || it === errorType }) return null
+                return if (members.size == 1) members[0] else getUnionType(members)
+            }
+            is TypeReference -> {
+                val name = (node.typeName as? Identifier)?.text
+                if (name == "Exclude" && node.typeArguments?.size == 2 && isLibOnlyTypeName("Exclude")) {
+                    val tArg = resolveAssertTargetTypeNode(node.typeArguments[0], depth + 1) ?: return null
+                    val uArg = resolveAssertTargetTypeNode(node.typeArguments[1], depth + 1) ?: return null
+                    val members = (tArg as? Type.Union)?.types ?: listOf(tArg)
+                    if (members.any { it === anyType || it === errorType }) return null
+                    val kept = members.filter { !checkTypeRelatedTo(it, uArg, assignableRelation) }
+                    return when {
+                        kept.isEmpty() -> neverType
+                        kept.size == 1 -> kept[0]
+                        else -> getUnionType(kept)
+                    }
+                }
+                val direct = try { getTypeFromTypeNode(node) } catch (_: Exception) { null }
+                if (direct != null && direct !== anyType && direct !== errorType) return direct
+                if (name != null && node.typeArguments.isNullOrEmpty()) {
+                    val aliasDecl = ((currentFileLocals?.get(name) ?: globals[name])
+                        ?.declarations?.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration)
+                        ?: uniqueNestedTypeAliasByName(name)
+                    if (aliasDecl != null && aliasDecl.typeParameters.isNullOrEmpty()) {
+                        return resolveAssertTargetTypeNode(aliasDecl.type, depth + 1)
+                    }
+                }
+                return null
+            }
+            else -> {
+                val t = try { getTypeFromTypeNode(node) } catch (_: Exception) { null }
+                return t?.takeIf { it !== anyType && it !== errorType }
+            }
+        }
+    }
+
+    /** Round 460: true when [name] resolves to nothing user-declared — either absent from
+     *  the merged tables entirely (the embedded lib declares no such alias) or declared
+     *  ONLY by embedded-lib statements. Keeps a user shadow of a lib utility authoritative. */
+    private fun isLibOnlyTypeName(name: String): Boolean {
+        val sym = currentFileLocals?.get(name) ?: globals[name] ?: return true
+        return sym.declarations.all { it in builtinLibDecls }
     }
 
     /**
