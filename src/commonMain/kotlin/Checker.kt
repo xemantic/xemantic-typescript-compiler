@@ -14190,7 +14190,21 @@ class Checker(
             // narrowTypeFromFlow's round-413 fast-forward); only branch/loop-join and
             // condition recursion consumes depth (tsc's `flowDepth`).
             when (val f = flow) {
-                is FlowStart -> return false
+                is FlowStart -> {
+                    // Round 460: a read INSIDE a closure (FlowStart with outerFlow —
+                    // arrow/function-expression nested in another function) continues
+                    // into the ENCLOSING flow: tsc assumes a CAPTURED read initialized
+                    // when the variable is assigned in the enclosing scope (checker.ts
+                    // isOuterVariable — tsc's checkGrammar-style
+                    // `filter(b, info => !findIndexInfo(indexInfos, info.keyType))`
+                    // reads indexInfos assigned by the outer if/else). The walk is
+                    // OR-semantics (assignment evidence SUPPRESSES the report), so the
+                    // continuation only suppresses; a closure-LOCAL redeclaration of the
+                    // name stays inside (localNames gate).
+                    val outer = f.outerFlow
+                    if (outer != null && varName !in f.localNames) flow = outer
+                    else return false
+                }
                 is FlowUnreachable -> return false
                 is FlowAssignment -> {
                     if (flowAssignmentTargetsName(f.node, varName)) return true
