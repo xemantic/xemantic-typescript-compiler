@@ -12405,8 +12405,108 @@ class Checker(
             is Block -> {
                 for (s in stmt.statements) markAssignments(s, uninitialized)
             }
+            is WhileStatement -> {
+                // Round 450: a `while (true)` loop's ONLY normal exit is a `break` (its
+                // condition never becomes false), so a variable assigned before EVERY
+                // break that exits the loop is definitely assigned after it — tsc's
+                // definite-assignment for constant-true loops. Pervasive scanner idiom:
+                // `let tok: T; while (true) { if (...) { tok = X; break; } ... } return tok;`.
+                // (Only `while (true)` — a general `while (cond)` body may run zero times,
+                // so its assignments are not guaranteed and this case is unhandled there.)
+                if (isConstantTrueCondition(stmt.expression) && uninitialized.isNotEmpty()) {
+                    val toRemove = uninitialized.filter {
+                        whileTrueDefinitelyAssigns(stmt.statement, it)
+                    }
+                    uninitialized.removeAll(toRemove.toSet())
+                }
+            }
             else -> {}
         }
+    }
+
+    /** `while (true)` / `do…while (true)` constant-true condition (round 450). */
+    private fun isConstantTrueCondition(expr: Expression): Boolean =
+        (expr as? Identifier)?.text == "true" ||
+            (expr as? ParenthesizedExpression)?.let { isConstantTrueCondition(it.expression) } == true
+
+    /** Completion state for the [whileTrueDefinitelyAssigns] walk. */
+    private class DaComp(val fallsThrough: Boolean, val assigned: Boolean)
+
+    private class DaState {
+        var allBreaksAssigned = true
+        var bail = false
+    }
+
+    /**
+     * Round 450: is variable [v] definitely assigned on every `break` edge that exits a
+     * `while (true)` loop whose body is [body]? (Vacuously true when there are no exiting
+     * breaks — the post-loop code is then unreachable, which tsc does not flag.) A sound
+     * forward definite-assignment walk for a single variable: sequential flow, if/else
+     * join, and abrupt completion (break/return/throw/continue). BAILS (returns false,
+     * keeping the conservative "still uninitialized" behavior) on any labeled break/continue
+     * or a `try`/labeled statement that could hide an exiting break — never over-clears.
+     * Nested loops and `switch` are opaque (their unlabeled breaks target themselves, and
+     * their assignments are not credited).
+     */
+    private fun whileTrueDefinitelyAssigns(body: Statement, v: String): Boolean {
+        if (containsLabeledBreakEscaping(body)) return false
+        val st = DaState()
+        daWalkStmt(body, v, assignedOnEntry = false, st = st)
+        return !st.bail && st.allBreaksAssigned
+    }
+
+    private fun daWalkStmt(stmt: Statement, v: String, assignedOnEntry: Boolean, st: DaState): DaComp {
+        if (st.bail) return DaComp(false, false)
+        return when (stmt) {
+            is Block -> daWalkList(stmt.statements, v, assignedOnEntry, st)
+            is ExpressionStatement -> DaComp(true, assignedOnEntry || exprAssignsVarSimple(stmt.expression, v))
+            is IfStatement -> {
+                val t = daWalkStmt(stmt.thenStatement, v, assignedOnEntry, st)
+                val e = stmt.elseStatement?.let { daWalkStmt(it, v, assignedOnEntry, st) }
+                    ?: DaComp(true, assignedOnEntry)
+                when {
+                    t.fallsThrough && e.fallsThrough -> DaComp(true, t.assigned && e.assigned)
+                    t.fallsThrough -> DaComp(true, t.assigned)
+                    e.fallsThrough -> DaComp(true, e.assigned)
+                    else -> DaComp(false, false)
+                }
+            }
+            is BreakStatement -> {
+                // Unlabeled break directly in the walked region exits THIS loop.
+                st.allBreaksAssigned = st.allBreaksAssigned && assignedOnEntry
+                DaComp(false, false)
+            }
+            is ContinueStatement, is ReturnStatement, is ThrowStatement -> DaComp(false, false)
+            // A nested loop / switch is opaque: its unlabeled breaks target itself (we
+            // pre-scanned for labeled breaks), and its conditional assignments are not
+            // credited. It completes normally without changing v's assignment state.
+            is WhileStatement, is DoStatement, is ForStatement, is ForInStatement,
+            is ForOfStatement, is SwitchStatement -> DaComp(true, assignedOnEntry)
+            // Could hide an exiting break — bail conservatively.
+            is TryStatement, is LabeledStatement -> { st.bail = true; DaComp(false, false) }
+            // VariableStatement can only introduce a (shadowing) binding of v, never assign
+            // the outer v; any other statement kind cannot contain a break exiting our loop.
+            else -> DaComp(true, assignedOnEntry)
+        }
+    }
+
+    private fun daWalkList(stmts: List<Statement>, v: String, entryAssigned: Boolean, st: DaState): DaComp {
+        var assigned = entryAssigned
+        for (s in stmts) {
+            if (st.bail) return DaComp(false, false)
+            val c = daWalkStmt(s, v, assigned, st)
+            if (!c.fallsThrough) return DaComp(false, false) // remaining statements are unreachable
+            assigned = c.assigned
+        }
+        return DaComp(true, assigned)
+    }
+
+    /** Does evaluating [expr] definitely assign the simple variable [v] (`v = …`, `[v] = …`,
+     *  `{v} = …`, chained/comma assignments)? Reuses [markAssignmentsInExpr]'s detection. */
+    private fun exprAssignsVarSimple(expr: Expression, v: String): Boolean {
+        val s = mutableSetOf(v)
+        markAssignmentsInExpr(expr, s)
+        return v !in s
     }
 
     private fun markAssignmentsInStmt(stmt: Statement, uninitialized: MutableSet<String>) {
