@@ -118814,11 +118814,17 @@ interface DataView {
                 }
             }
         }
-        // B292: a non-numeric string-literal key on a STRING-typed receiver
-        // (`s["s"]` where s: string) is never TS2339 in tsc — element access on a
-        // primitive is TS7053 under noImplicitAny and SILENT otherwise (the
-        // property-existence TS2339 path is property-access only).
-        if (arg is StringLiteralNode && arg.text.toDoubleOrNull() == null) {
+        // B292 (broadened round 452): a LITERAL-key element access on a STRING-typed
+        // receiver is never TS2339 in tsc — element access on a primitive is TS7053 under
+        // noImplicitAny and SILENT otherwise (the property-existence TS2339 path is
+        // property-access only). Covers a non-numeric string key (`s["s"]`), a
+        // numeric-looking string key (`s["0"]`), AND a numeric-literal key (`s[0]` →
+        // `String`'s numeric index sig). The identifier-receiver case `str[0]` already
+        // resolved elsewhere, but an element-access-typed receiver `(arr[i])[0]` (whose
+        // inner access is typed `string`) reached this missing-member path and FP'd
+        // "Property '0' does not exist on type 'string'." (jsTyping.ts `pathComponents[
+        // ...][0] === "@"`). FP-safe: every literal index into a string is valid.
+        if (arg is StringLiteralNode || arg is NumericLiteralNode) {
             val rt = getTypeOfExpression(expr.expression)
             if (rt === stringType || rt is Type.StringLiteral) return
         }
