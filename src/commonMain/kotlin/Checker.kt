@@ -13799,6 +13799,28 @@ class Checker(
         }
     }
 
+    /** Names declared by a `for (const/let … of/in …)` / `for (let …; …)` initializer
+     *  (round 450) — including binding-pattern names. Used to drop the loop variable from
+     *  the definite-assignment set when descending into the loop body (it shadows any
+     *  outer same-named var and is bound each iteration). */
+    private fun forLoopDeclaredNames(initializer: Node?): Set<String> {
+        val list = initializer as? VariableDeclarationList ?: return emptySet()
+        val names = mutableSetOf<String>()
+        for (decl in list.declarations) collectBindingIdentifierNames(decl.name, names)
+        return names
+    }
+
+    private fun collectBindingIdentifierNames(name: Node?, out: MutableSet<String>) {
+        when (name) {
+            is Identifier -> out.add(name.text)
+            is ArrayBindingPattern -> name.elements.forEach {
+                (it as? BindingElement)?.let { be -> collectBindingIdentifierNames(be.name, out) }
+            }
+            is ObjectBindingPattern -> name.elements.forEach { collectBindingIdentifierNames(it.name, out) }
+            else -> {}
+        }
+    }
+
     private fun addIfUninitForFlow(
         decl: VariableDeclaration, uninitialized: MutableSet<String>,
         preInit: Set<String>, fileLocals: SymbolTable?,
@@ -13853,11 +13875,19 @@ class Checker(
             }
             is ForInStatement -> {
                 walkExprForFlowTS2454(stmt.expression, uninitialized, source, fileName, emitted, inUncheckedBody)
-                walkStmtForFlowTS2454(stmt.statement, uninitialized, source, fileName, emitted, inUncheckedBody = true)
+                // A `for (const/let X in …)` loop variable X SHADOWS an outer same-named
+                // uninitialized var and is bound every iteration — drop it from the body's
+                // set so a body read of X isn't mis-attributed to the outer var (round 450;
+                // mirrors the catch-body shadowing skip above).
+                val bodyUninit = uninitialized - forLoopDeclaredNames(stmt.initializer)
+                walkStmtForFlowTS2454(stmt.statement, bodyUninit, source, fileName, emitted, inUncheckedBody = true)
             }
             is ForOfStatement -> {
                 walkExprForFlowTS2454(stmt.expression, uninitialized, source, fileName, emitted, inUncheckedBody)
-                walkStmtForFlowTS2454(stmt.statement, uninitialized, source, fileName, emitted, inUncheckedBody = true)
+                // for-of loop variable shadows + is bound each iteration (generators.ts
+                // `let variable; if (…) for (const variable of decls) { …variable.name… }`).
+                val bodyUninit = uninitialized - forLoopDeclaredNames(stmt.initializer)
+                walkStmtForFlowTS2454(stmt.statement, bodyUninit, source, fileName, emitted, inUncheckedBody = true)
             }
             is SwitchStatement -> {
                 walkExprForFlowTS2454(stmt.expression, uninitialized, source, fileName, emitted, inUncheckedBody)
