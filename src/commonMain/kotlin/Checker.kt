@@ -148845,6 +148845,22 @@ interface DataView {
      * errors), and it is local to this pass (no touch to global expression typing).
      */
     private fun arithOperandType(e: Expression): Type {
+        // Round 460 (the round-442 module-var-leak family, arithmetic-pass arm): a bare
+        // Identifier operand whose name is EXCLUSIVELY a top-level module-file variable
+        // in ANOTHER file resolved through the leaked global — parser.ts's body-local
+        // `let indent` (number) read `margin - indent` resolved to program.ts's
+        // module-level `const indent = "    "` (string) → FP TS2363. FP-safe by the
+        // round-442 doctrine: a cross-file bare module var is TS2304 in real tsc,
+        // never an arithmetic-category error; the own-file gate keeps the genuine
+        // module var firing in its own file, and a concrete pass-local recording
+        // (currentLocalTypes) still wins.
+        run {
+            var bare: Expression = e
+            while (bare is ParenthesizedExpression) bare = bare.expression
+            if (bare is Identifier && bare.text in moduleFileLocalVarNames &&
+                currentFileLocals?.get(bare.text) == null && currentLocalTypes[bare.text] == null
+            ) return anyType
+        }
         val t = getTypeOfExpression(e)
         if (t !is Type.Union) return t
         // Strip nullish members from (a) an explicit NonNull `x!` operand (tsc types
