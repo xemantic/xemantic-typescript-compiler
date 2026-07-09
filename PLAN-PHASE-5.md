@@ -39,6 +39,53 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
+**Round 454 (2026-07-09) — nested-function-shadow generalization + two flow-narrowing slices:
+FOUR fixes. Dashboard: compiler 170 → 154 (−16). Suite 9,642 → 9,652 (+10 local across 4 new
+test files, 0 regressions); 4 fix commits (0df21c9b / a0c0f3d8 / d4e93ead / 3eb6c99b).**
+- **Fix 1 (0df21c9b, nested-fn shadow in arrow/fn-expr bodies; TS2345 ×3):** `shadowNestedFunctionNames`
+  (anyType-bails a body-nested `function NAME` colliding with an outer/global binding, B83.5 —
+  suppression-only, round 429) ran ONLY for FunctionDeclaration bodies in the call-types walker. tsc's
+  program.ts nests `function createDiagnosticForNodeArray(nodes, message)` inside the
+  `runWithCancellationToken(() => { … })` ARROW body, shadowing utilities.ts's exported 3-param
+  `createDiagnosticForNodeArray(sourceFile, nodes, message)`; a sibling-nested `walkArray`'s call
+  FP-checked `nodes` (NodeArray) against `sourceFile` (SourceFile) → TS2345 ×3 (program.ts:3152/
+  3182/3194). Added the call to the ArrowFunction (Block body) + FunctionExpression branches.
+- **Fix 2 (a0c0f3d8, cast narrowing; TS2345 −1):** an assignment `x = expr as T` produces a value of the
+  cast TARGET T. `rhsIsDefinitelyNonNullish` unwrapped the `as`/`<T>` cast to its inner and classified
+  THAT, so `Object.create(Array.prototype) as NodeArray<Node>` (debug.ts) inside `if (!nodeArrayProto)`
+  kept the falsy-guard `undefined` narrowing → the next `attachNodeArrayDebugInfoWorker(proto)` FP'd
+  TS2345. New `castTargetIsNonNullish`: a cast to a concrete non-nullish target re-narrows to
+  declared-minus-nullish; a nullable/any/unknown target still falls through to the inner shape.
+- **Fix 3 (d4e93ead, TS2722 loop-entry; −1):** the optional-member-invoke "possibly undefined"
+  suppression used only the plain narrower, which washes at a loop's FlowLoopLabel. tsc's
+  moduleNameResolver.ts guards optional host methods BEFORE a loop — `if (host.directoryExists &&
+  host.getDirectories) { for (…) { if (host.directoryExists(root)) … } }` — so `host.directoryExists(root)`
+  FP'd inside; `propertyAccessNarrowedNonNull` now retries with the loop-entry-following variant
+  (mirrors emitTs18048ForClosureCaptured…). Suppression-only.
+- **Fix 4 (3eb6c99b, nested-fn shadow in checkFunctionBody; TS2322 89 → 78, TS2740 1 → 0):** the
+  RETURN/argument-assignability pass now applies `shadowNestedFunctionNames` too (`getTypeOfIdentifier`,
+  which `getReturnTypeOfCallExpression` consults, resolves a call to a nested function as anyType rather
+  than a same-named merged-globals EXPORTED function). tsc's builderState.ts nests
+  `create(forward, reverse, deleted): ManyToManyPathMap` shadowing the exported `create(newProgram:
+  Program, …): BuilderState`, so `return create(new Map, new Map, undefined)` FP'd TS2740+TS2345. The
+  pervasive object-literal-factory pattern `{ clear, create, … }` (shorthand → nested fn) was poisoned the
+  same way — the shorthand resolved to a global's wrong signature and broke the object's assignability to
+  its target interface (~13 cases across moduleNameResolver/sys/resolutionCache/emitter/nodeFactory).
+- **UNMASKED (documented, not manufactured):** the more-correct fix-4 resolution exposes two pre-existing
+  latent gaps, now dashboard-visible: (a) checker.ts:6310 — object-literal METHOD-param bivariance vs an
+  interface target (`symbol: Symbol` source vs `symbol: Symbol | undefined` target — a `const x:
+  SyntacticTypeNodeBuilderResolver = { canReuseTypeNodeAnnotation(…) {…} }`; tsc compares method params
+  bivariantly, our object-literal-vs-interface relation is contravariant → the general fix); (b)
+  expressionToTypeNode.ts:535 — an un-annotated block-scoped `const clone = resolver.markNodeReuse(…)`
+  shadowing the global `clone<T>(object: T): T` resolves to the GLOBAL in the return check, because
+  `applyBodyLocalShadowing` does not descend into if-blocks and un-annotated shadowing locals are
+  removed from currentLocalTypes (→ fall to globals). Both need broad, careful fixes; corpus green.
+- **NEXT (compiler @ 154):** the two unmasked gaps above (method-param bivariance is a general win);
+  TS2322×78 deep-M3 relation (generic-fn-identity `<T>(object: T) => T`, `.map`-returns-tuple-array
+  M3.2, whole-program conflation); TS2353 sourcemap getter/method excess + utilities.ts mapped-type-key
+  eval (M3.3); TS2349 `(x || (x = [])).push()` inline-property-receiver; moduleNameResolver.ts:2823
+  `.value` union-return; checker.ts:21170 restrictiveInstantiation overload-selection TS18048.
+
 **Round 453 (2026-07-09) — bounded FP burn-down: THREE fixes, all GENERAL checker correctness
 that reproduce minimally. Dashboard: compiler 176 → 170 (−6), tsc-cli 179 → 172, jsTyping 176 →
 169, deprecatedCompat 179 → 172, typingsInstallerCore 176 → 169, services 280 → 275 (−5), server
