@@ -1,3 +1,64 @@
+**Round 439 (2026-07-07) — predicate-overload / arg-narrow-DOWN burn-down: THREE bounded
+fixes take the compiler profile 244 → 228 (−16, −6.6%; TS2769 9 → 1). Suite 9,458 → 9,465
+(+7 local, 0 regressions); 3 fix commits (4bdb051f, ee43d153, e6f61973). Every step
+diffed by-POSITION as strictly removals (fix 1's one exposed regression fixed in the same
+commit by the companion NonNull strip).**
+- **Baseline @ HEAD (round 438, listall-439.txt): 244 FPs.** Reused the `--listAll`
+  per-fix diff loop (materialize once, ~30 s CLI run per fix, `comm -13` on `file:line:col`).
+- **Fix 1 (4bdb051f, −8): findAncestor-style predicate-overload RETURN inference (M3.2).**
+  A generic overload whose callback param is a type-guard position `(x) => x is T` and
+  whose return is built from T (`T | undefined`/`T`/`S[]`) infers T from the actual
+  type-guard ARGUMENT's predicate target (`predicateTargetTypeOfGuardExpr`), BEFORE the
+  B136 concrete-overload swap. `findAncestor(node.parent, isFunctionLike)` →
+  `SignatureDeclaration | undefined` (not the B136 `Node | undefined`). New helpers
+  `tryInferPredicateOverloadReturn` + `predicateCallbackParamGuardTpName` (AST-side: read
+  the sig's declaration params for a `FunctionType` returning a non-asserts `TypePredicate`
+  whose target names a sig TP). A non-guard callback (`=> boolean | "quit"`) yields null →
+  B136 still owns it. Cleared utilities.ts getContainingFunction/Declaration/Class/
+  OrClassStaticBlock + getJSDocRoot + commandLineParser. **Companion NonNull strip:** the
+  inference made `getParseTreeNode(x, isGetOrSetAccessorDeclaration)!` return the CONCRETE
+  `AccessorDeclaration | undefined` (was a foreign `T | undefined` suppressed by the round-431
+  gate), exposing the documented round-407 NonNull-union non-strip → +1. Fixed in the same
+  commit: a `<call>()!` on an all-CONCRETE union return (no un-inferred TP) strips nullish
+  via narrowByExcludingNullUndefined. Restricted to a CALL operand + concrete members so
+  property-access `.x!` (object-literal-vs-interface gap) and TP-carrying returns
+  (generic-inference gap) keep the deferred behavior — net −8, ALSO cleared emitter ×2.
+- **Fix 2 (ee43d153, −5): overloadNarrowedArgType narrows a NON-union arg DOWN.** A bare
+  Identifier/PropertyAccess whose non-union declared type is guard-narrowed DOWN to a
+  subtype (`if (isLiteralLikeAccess(name)) getElementOrPropertyAccessName(name)` —
+  utilities.ts `isSameEntityName`) kept the wide `Expression` and failed both overloads.
+  Narrows an Object/Interface/Reference raw via getNarrowedTypeForReference when the result
+  is a strict improvement (mirror of round 438 fix C for the OVERLOAD path); suppression-only;
+  never-collapse keeps `raw`. utilities.ts getElementOrPropertyAccessName family ×5,
+  TS2769 9 → 4.
+- **Fix 3 (e6f61973, −3): same branch extended to `raw === unknownType`.** A `typeof target
+  === "string"` arm narrows the `unknown` param to `string`, matching the plain-string
+  overload. Round 429d added `unknown`→primitive narrowing but it reached only the single-sig
+  call-arg path; `getPathComponents(target)` is overloaded. moduleNameResolver ×3, TS2769 4 → 1.
+- **META / next-agent residual (228):** the clean predicate-overload/narrow-DOWN vein is now
+  mostly mined. Remaining TS2769×1 (watchPublic `watchFile` complex-type callee), TS2349×2
+  (core.ts/binder.ts `??= []` union-target contextual typing, round-408 known gap). Deeper
+  buckets NOT bounded: (a) `Node → HasModifiers`/`Declaration|undefined` narrow-DOWN returns
+  (utilities 5085/11856) — the RELATION GATE (`checkTypeRelatedTo(narrowed, declared)`) fails
+  on tsc-specific heritage (`JsxNamespacedName <: Expression` etc.) so the single-sig branch's
+  legit narrowing is discarded, AND the `.parent`-property-of-narrowed-ComputedPropertyName
+  needs per-node-type `.parent` modeling; (b) `assertType<never>` exhaustive-switch defaults
+  (×8) — the large `.kind`-discriminated-union exhaustiveness slice; (c) the CROSS-FILE
+  function-SHADOW cluster (executeCommandLine `createWatchStatusReporter`/
+  `performIncrementalCompilation` ×4) — a module-file-local function shadowing a same-named
+  cross-file EXPORT; the mergeSymbolTable pollution (addAll onto the shared symbol) builds a
+  bogus cross-file overload set in getTypeOfFunction, so the wrong sig is picked (Blocker #3 /
+  M3.5). ATTEMPTED + REVERTED (round 439): a node→file map (eager `topLevelFnDeclFiles`) +
+  a filter keeping only the valueDeclaration-file's decls in getTypeOfFunction went
+  NET-NEGATIVE (228 → 230) — it did NOT clear the target FPs (the executeCommandLine callee
+  sig resolves via a path the filter didn't reach) AND regressed +2 (checker.ts:7360,
+  es2018.ts:1052), disproving the "function overloads are always same-file" premise
+  (legitimate cross-file function symbols exist — ambient `declare function` merges or the
+  B434 crossFileFuncs interaction). A correct fix must prefer the current file's own
+  declarations at the RESOLUTION site (getTypeOfIdentifier's currentFileLocals path), not a
+  global getTypeOfFunction filter — deferred. (d) B526 tuple/brand + generic-fn-alias
+  TS2322 representation gaps.
+
 **Round 436 (2026-07-07) — M3.1/M3.2/M3.4 burn-down, SEVEN more bounded fixes: compiler
 profile 373 → 294 (−79, −21.2%; TS2322 184 → 158, TS2345 79 → 47, TS2769 30 → 9) + the
 round-436 full-dashboard baseline at the round-435 end state. Suite 9,419 → 9,444

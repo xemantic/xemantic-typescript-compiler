@@ -39,6 +39,54 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
+**Round 449 (2026-07-09) — object-literal spread member-symbol corruption (Blocker #3-adjacent):
+ONE root-cause fix clears the `readonly ApplicableRefactorInfo[]` TS2322 ×9 family deferred across
+rounds 446-448 as "a type-param-scope pollution needing a whole-program probe" — PLUS the convertExport
+`ExportInfo | RefactorErrorInfo` cascade that round 448's NEXT pointer mislabelled a "deep M3
+union-of-named-AST relation gap". Dashboard: compiler 185 → 183 (−2), services 321 → 310 (−11), server
+529 → 518 (−11), harness 746 → 735 (−11). Suite 9,581 corpus green / 0 fail / 3 skip + 3 local (0
+regressions); 1 fix commit (6df8166f); services by-code diff strictly TS2322 −11, zero regressions.**
+- **Baseline @ HEAD (round 448): services 321.** The `readonly ApplicableRefactorInfo[]` ×9 was the
+  single biggest bounded TS2322 family but had been deferred 3× as "does not reproduce minimally / needs
+  a whole-program probe". Built the probe: the chain showed the TARGET member `ApplicableRefactorInfo.actions`
+  displaying as `U[]` (a stray unbound type parameter) instead of `RefactorActionInfo[]`.
+- **Instrumentation (the decisive tool — the root cause is invisible without it):** (1) probing
+  `getTypeFromTypeReference("RefactorActionInfo")` showed it ALWAYS resolves cleanly (scope=null) → the
+  `U` does NOT come from resolving the member's type node; (2) probing `getPropertyTypeForRelation`
+  showed the SAME symbol (id 47351) returning `U[]` 28× and `RefactorActionInfo[]` 13× — a non-deterministic
+  cache; (3) probing the cached VALUE showed two distinct `Type.Reference` objects (element = interface vs
+  element = `TypeParam U`) → `symbolTypes[47351]` was being OVERWRITTEN; (4) a `symbolTypes.put`-interceptor
+  stack trace pointed at `getTypeOfObjectLiteral`'s `existing != null` override write, reached via
+  `tryInferSingleTypeParamFromArgs` (generic inference); (5) dumping the members table showed
+  `propNames=[SpreadAssignment, actions]` — the object literal is `{ ...info, actions: [...] }`, and the
+  SPREAD had merged the interface member symbol 47351 into `members` BY REFERENCE.
+- **ROOT CAUSE:** `getTypeOfObjectLiteral`'s B426 spread merge did `members[pn] = psym` — sharing the spread
+  SOURCE's member SYMBOLS. When a later explicit member of the same name overrode a spread member, the
+  `existing != null` branch wrote `symbolTypes[existing.id] = <override type>` — mutating the spread SOURCE's
+  member type cache GLOBALLY. In the refactor return sites (`return [{ ...info, actions: [...] }]`) the
+  override array was typed under a generic-inference context as `U[]`, so `ApplicableRefactorInfo.actions`'s
+  cached type became `U[]` and every subsequent relation against `ApplicableRefactorInfo` FP-fired TS2322.
+  (The getter/setter override branches similarly MUTATE `existing.declarations` — same latent hazard.)
+- **FIX (Checker.kt, spread branch of getTypeOfObjectLiteral):** COPY each guaranteed spread member into a
+  FRESH literal-owned `Symbol` (carrying `psym`'s resolved type via `getTypeOfSymbol` + declarations +
+  valueDeclaration + parent, so reads/optionality/positions are byte-unchanged), so an override touches the
+  literal's own symbol — never the shared source member. Core hot/shared path, so gated on the full corpus
+  suite (9,581/0/3, byte-clean) + a `symbolTypes`-write A/B before/after.
+- **Removed by position (11 TS2322, 0 added):** 7 `ApplicableRefactorInfo[]` (extractType,
+  convertParamsToDestructuredObject, moveToNewFile ×2, convertOverloadListToSingleSignature,
+  inferFunctionReturnType ×2) + convertExport.ts:85/89 (the round-448 "deep M3" mislabel — same bug) +
+  checker.ts:9392 + moduleNameResolver.ts:2365 (compiler-side cascade, hence compiler −2).
+- **3 local tests (SpreadOverrideMemberCorruptionTest):** the refactor-shaped return, the corruption
+  invariant (`{ ...base, actions: [{ name, extra }] }` must not corrupt `Info.actions` for a later
+  relation — VERIFIED to FAIL on the reverted buggy version), and a negative control (a genuinely-wrong
+  override element still fires). NOTE the refactor-shaped minimal test PASSES even on the buggy version
+  (the `U[]` corruption needs the whole-program generic-inference context — the services profile is its
+  proof); test 2 is the load-bearing pin.
+- **NEXT (services @ 310):** TS7006×8 (inferFromUsage `Priority[]` — the B83.5 nested-interface-resolution
+  blocker; land WITH the reverted round-443 array-element contextual-typing enabler), TS2454×5 (definite-
+  assignment `while(true)`-break flow gap: `resultingToken`/`indexInfos`/`variable`/`previousRange`),
+  residual deep-M3 TS2322/TS2345 relation fragments (each ≤3).
+
 **Round 448 (2026-07-08) — TS2322/TS2774 burn-down: `this.optionalProp = undefined` write +
 discriminated-union object-literal return + module-var-leak local alias + destructured-shadow TS2774:
 FOUR bounded fixes, all suppression-only / FP-safe. Compiler UNCHANGED (185 — the families live in
@@ -657,68 +705,6 @@ strictly removals except fix B's documented position shift.**
   2531/2545), the MappingsDecoder excess-of-inherited-generic-base member (TS2353 `next` from
   `extends IterableIterator<Mapping>`), and wrong-callee singles (moduleSpecifiers:929,
   utilities:6325, program:832). TS2339×7.
-
-**Round 439 (2026-07-07) — predicate-overload / arg-narrow-DOWN burn-down: THREE bounded
-fixes take the compiler profile 244 → 228 (−16, −6.6%; TS2769 9 → 1). Suite 9,458 → 9,465
-(+7 local, 0 regressions); 3 fix commits (4bdb051f, ee43d153, e6f61973). Every step
-diffed by-POSITION as strictly removals (fix 1's one exposed regression fixed in the same
-commit by the companion NonNull strip).**
-- **Baseline @ HEAD (round 438, listall-439.txt): 244 FPs.** Reused the `--listAll`
-  per-fix diff loop (materialize once, ~30 s CLI run per fix, `comm -13` on `file:line:col`).
-- **Fix 1 (4bdb051f, −8): findAncestor-style predicate-overload RETURN inference (M3.2).**
-  A generic overload whose callback param is a type-guard position `(x) => x is T` and
-  whose return is built from T (`T | undefined`/`T`/`S[]`) infers T from the actual
-  type-guard ARGUMENT's predicate target (`predicateTargetTypeOfGuardExpr`), BEFORE the
-  B136 concrete-overload swap. `findAncestor(node.parent, isFunctionLike)` →
-  `SignatureDeclaration | undefined` (not the B136 `Node | undefined`). New helpers
-  `tryInferPredicateOverloadReturn` + `predicateCallbackParamGuardTpName` (AST-side: read
-  the sig's declaration params for a `FunctionType` returning a non-asserts `TypePredicate`
-  whose target names a sig TP). A non-guard callback (`=> boolean | "quit"`) yields null →
-  B136 still owns it. Cleared utilities.ts getContainingFunction/Declaration/Class/
-  OrClassStaticBlock + getJSDocRoot + commandLineParser. **Companion NonNull strip:** the
-  inference made `getParseTreeNode(x, isGetOrSetAccessorDeclaration)!` return the CONCRETE
-  `AccessorDeclaration | undefined` (was a foreign `T | undefined` suppressed by the round-431
-  gate), exposing the documented round-407 NonNull-union non-strip → +1. Fixed in the same
-  commit: a `<call>()!` on an all-CONCRETE union return (no un-inferred TP) strips nullish
-  via narrowByExcludingNullUndefined. Restricted to a CALL operand + concrete members so
-  property-access `.x!` (object-literal-vs-interface gap) and TP-carrying returns
-  (generic-inference gap) keep the deferred behavior — net −8, ALSO cleared emitter ×2.
-- **Fix 2 (ee43d153, −5): overloadNarrowedArgType narrows a NON-union arg DOWN.** A bare
-  Identifier/PropertyAccess whose non-union declared type is guard-narrowed DOWN to a
-  subtype (`if (isLiteralLikeAccess(name)) getElementOrPropertyAccessName(name)` —
-  utilities.ts `isSameEntityName`) kept the wide `Expression` and failed both overloads.
-  Narrows an Object/Interface/Reference raw via getNarrowedTypeForReference when the result
-  is a strict improvement (mirror of round 438 fix C for the OVERLOAD path); suppression-only;
-  never-collapse keeps `raw`. utilities.ts getElementOrPropertyAccessName family ×5,
-  TS2769 9 → 4.
-- **Fix 3 (e6f61973, −3): same branch extended to `raw === unknownType`.** A `typeof target
-  === "string"` arm narrows the `unknown` param to `string`, matching the plain-string
-  overload. Round 429d added `unknown`→primitive narrowing but it reached only the single-sig
-  call-arg path; `getPathComponents(target)` is overloaded. moduleNameResolver ×3, TS2769 4 → 1.
-- **META / next-agent residual (228):** the clean predicate-overload/narrow-DOWN vein is now
-  mostly mined. Remaining TS2769×1 (watchPublic `watchFile` complex-type callee), TS2349×2
-  (core.ts/binder.ts `??= []` union-target contextual typing, round-408 known gap). Deeper
-  buckets NOT bounded: (a) `Node → HasModifiers`/`Declaration|undefined` narrow-DOWN returns
-  (utilities 5085/11856) — the RELATION GATE (`checkTypeRelatedTo(narrowed, declared)`) fails
-  on tsc-specific heritage (`JsxNamespacedName <: Expression` etc.) so the single-sig branch's
-  legit narrowing is discarded, AND the `.parent`-property-of-narrowed-ComputedPropertyName
-  needs per-node-type `.parent` modeling; (b) `assertType<never>` exhaustive-switch defaults
-  (×8) — the large `.kind`-discriminated-union exhaustiveness slice; (c) the CROSS-FILE
-  function-SHADOW cluster (executeCommandLine `createWatchStatusReporter`/
-  `performIncrementalCompilation` ×4) — a module-file-local function shadowing a same-named
-  cross-file EXPORT; the mergeSymbolTable pollution (addAll onto the shared symbol) builds a
-  bogus cross-file overload set in getTypeOfFunction, so the wrong sig is picked (Blocker #3 /
-  M3.5). ATTEMPTED + REVERTED (round 439): a node→file map (eager `topLevelFnDeclFiles`) +
-  a filter keeping only the valueDeclaration-file's decls in getTypeOfFunction went
-  NET-NEGATIVE (228 → 230) — it did NOT clear the target FPs (the executeCommandLine callee
-  sig resolves via a path the filter didn't reach) AND regressed +2 (checker.ts:7360,
-  es2018.ts:1052), disproving the "function overloads are always same-file" premise
-  (legitimate cross-file function symbols exist — ambient `declare function` merges or the
-  B434 crossFileFuncs interaction). A correct fix must prefer the current file's own
-  declarations at the RESOLUTION site (getTypeOfIdentifier's currentFileLocals path), not a
-  global getTypeOfFunction filter — deferred. (d) B526 tuple/brand + generic-fn-alias
-  TS2322 representation gaps.
-
 
 **M2 — Real-lib migration (staged; decompose further at start)**
 
