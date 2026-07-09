@@ -88,4 +88,65 @@ class ModuleVarLeakAssignReturnTest {
             have(any { it.code == 2322 })
         }
     }
+
+    @Test
+    fun `round 450 - reassigning a nested-block leaked-var local does not FP TS2740`() {
+        // checker.ts `let parent = node.parent; while (...) { parent = parent.parent; }` inside
+        // an `if` block: the nested `let parent` is missed by applyBodyLocalShadowing (top-level
+        // scan only), so the assignment TARGET `parent` resolved to the leaked
+        // navigationBar.ts `let parent: NavigationBarNode` annotation and FP'd
+        // TS2740 ('Node' missing NavigationBarNode's props).
+        compile(
+            """
+            // @strict: true
+
+            // @Filename: navbar.ts
+            export interface NavigationBarNode {
+                node: BareNode; name: string;
+                additionalNodes: BareNode[] | undefined;
+                children: NavigationBarNode[] | undefined; indent: number;
+            }
+            export interface BareNode { parent: BareNode; kind: number; }
+            let parent: NavigationBarNode;
+            export function useParent() { return parent; }
+
+            // @Filename: walk.ts
+            import { BareNode } from "./navbar";
+            export function walk(node: BareNode, flag: boolean): BareNode {
+                if (flag) {
+                    let parent = node.parent;
+                    while (parent.kind === 1) {
+                        parent = parent.parent;
+                    }
+                    return parent;
+                }
+                return node;
+            }
+            """
+        ) should {
+            have(none { it.code == 2740 })
+            have(none { it.code == 2322 })
+        }
+    }
+
+    @Test
+    fun `negative control - own-file assignment to a module var still fires TS2322`() {
+        // In the file that DECLARES the module var, `parent = <wrong>` must still be checked
+        // (currentFileLocals owns the binding, so the leak bail does not apply).
+        compile(
+            """
+            // @strict: true
+
+            // @Filename: navbar.ts
+            export interface NavigationBarNode { indent: number; }
+            let parent: NavigationBarNode;
+            export function reset(s: string) {
+                parent = s;
+                return parent;
+            }
+            """
+        ) should {
+            have(any { it.code == 2322 })
+        }
+    }
 }

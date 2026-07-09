@@ -87628,7 +87628,20 @@ interface DataView {
                 // name — prefer the LOCAL type, do NOT consult globals (which would
                 // resolve the outer declaration).
                 val isShadowed = target.text in currentShadowedNames
-                if (!isShadowed) {
+                // Round 450: the assignment TARGET's name is a module-file-local variable
+                // leaked into `globals` (moduleFileLocalVarNames) — e.g. `parent = parent.parent`
+                // inside a NESTED block where `let parent = node.parent` shadows navigationBar.ts's
+                // module-level `let parent: NavigationBarNode`. applyBodyLocalShadowing only scans
+                // function-body-TOP-LEVEL statements, so a nested `let parent` isn't in
+                // currentShadowedNames — the target then resolves to the leaked `NavigationBarNode`
+                // annotation and FP-fires TS2740 ('Node' missing NavigationBarNode's props).
+                // Skip the globals lookup for such a name (unless it IS this file's own top-level
+                // binding) so the target type comes from the genuine function-local
+                // currentLocalTypes entry. FP-safe: a cross-file leaked module var is TS2304 in
+                // real tsc, never a TS2740 assignment mismatch.
+                val isLeakedModuleVar = target.text in moduleFileLocalVarNames &&
+                    currentFileLocals?.get(target.text) == null
+                if (!isShadowed && !isLeakedModuleVar) {
                     val symbol = globals[target.text]
                     if (symbol != null) {
                         val decl = symbol.valueDeclaration ?: symbol.declarations.firstOrNull()
