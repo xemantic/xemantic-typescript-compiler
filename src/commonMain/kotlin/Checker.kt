@@ -96482,7 +96482,27 @@ interface DataView {
                     // no-op so union spreads filter nullish constituents in spreadGuaranteedProps.
                     val st = try { getTypeOfExpression(prop.expression) } catch (_: Exception) { continue }
                     for ((pn, psym) in spreadGuaranteedProps(st)) {
-                        if (members[pn] == null) { members[pn] = psym; properties.add(psym) }
+                        if (members[pn] == null) {
+                            // Round 449: COPY the spread source's member into a FRESH symbol OWNED
+                            // by this object literal — do NOT merge `psym` by reference. A later
+                            // explicit member with the SAME name (`{ ...info, actions: [...] }`)
+                            // hits the `existing != null` override branches below, which write
+                            // `symbolTypes[existing.id]` (and getter/setter branches mutate
+                            // `existing.declarations`). Sharing `psym` there corrupted the spread
+                            // SOURCE's member type cache GLOBALLY (e.g. `ApplicableRefactorInfo.actions`
+                            // got overwritten with a contextually-inferred `U[]`, then every relation
+                            // against `ApplicableRefactorInfo` FP-fired). The copy carries `psym`'s
+                            // resolved type + declarations so reads/optionality/positions are
+                            // unchanged, but overrides now touch this literal's own symbol.
+                            val local = Symbol(psym.flags, pn).also {
+                                it.declarations.addAll(psym.declarations)
+                                it.valueDeclaration = psym.valueDeclaration
+                                it.parent = psym.parent
+                            }
+                            symbolTypes[local.id] = getTypeOfSymbol(psym)
+                            members[pn] = local
+                            properties.add(local)
+                        }
                     }
                 }
                 is GetAccessor -> {
