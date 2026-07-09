@@ -39,6 +39,55 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
+**Round 453 (2026-07-09) — bounded FP burn-down: THREE fixes, all GENERAL checker correctness
+that reproduce minimally. Dashboard: compiler 176 → 170 (−6), tsc-cli 179 → 172, jsTyping 176 →
+169, deprecatedCompat 179 → 172, typingsInstallerCore 176 → 169, services 280 → 275 (−5), server
+485 → 479 (−6), harness 701 → 695 (−6). Suite 9,628 → 9,642 (+14 local across 3 new test files,
+0 regressions); 3 fix commits (9f53366d / 1246458a / df18ce2f).**
+- **Fix 1 (9f53366d, arithmetic reassignment/guard narrowing; M3.4):** a `number | undefined`
+  reference proven non-nullish by a CROSS-STATEMENT reassignment (`length = end - start; length - 5`
+  — tsc parser.ts `parseJSDocCommentWorker`) or an enclosing guard (`if (m !== undefined) indent += m`)
+  was still rejected as an arithmetic operand (TS2362/TS2363/TS2365) — the arithmetic pass had no
+  flow narrowing (only the `x!` NonNull + `arithTruthyNarrowedNames` `&&`/ternary strips). Two coupled
+  changes: (a) `arithOperandType` runs a SCOPED flow-narrowing walk (`arithFlowNarrowedNonNullish`) for
+  a bare Identifier / PropertyAccess operand — `currentFlowGraph` set ONLY around the walk (setting it
+  pass-wide makes getTypeOfExpression's union-receiver path flow-aware and regressed 78 tests, per the
+  gotcha), using the flow-narrowed type only when it PROVES non-nullish; (b) `rhsIsDefinitelyNonNullish`
+  classifies arithmetic / bitwise / shift / relational / equality / `+` BinaryExpressions AND
+  enum-member value accesses (`Flags.None`, incl. imported enums via resolveAlias) as non-nullish, so
+  the reassignment idioms narrow the assigned reference. FP-safe (narrowing only removes union
+  members). Cleared parser.ts:8911. **Barrel-imported enums** (checker.ts:6639's `NodeBuilderFlags`
+  from `_namespaces/ts.js`) stay — resolveAlias can't follow the ESM `.js` barrel (known-hard).
+- **Fix 2 (1246458a, optional-target `= undefined`; TS2322):** `<ident> = undefined` where the target's
+  DECLARED type includes undefined — an OPTIONAL parameter `x?: T` (effective `T | undefined`, B85.1a)
+  or a `T | undefined` local — FP-fired TS2322. The identifier-target assignment check resolves the
+  target from the string `varTypes` map, which drops the `?` (resolveSimpleTypeName → "T"); the
+  type-engine `currentLocalTypes` (and its pre-narrowing `narrowedDeclaredTypes`) carries the correct
+  `T | undefined`. Bail when the RHS is literally `undefined`, `!exactOptionalPropertyTypes`, and the
+  declared engine type includes undefined — the identifier-target analog of round 448's
+  `this.optionalProp = undefined`. Cleared generators.ts (`leadingElement = undefined`),
+  checker.ts:19908 (`aliasSymbol = undefined`), nodeFactory.ts:1331. FP-safe (a non-optional `x: T`
+  target keeps firing).
+- **Fix 3 (df18ce2f, un-annotated param shadows a leaked module var; TS2345):** program.ts's
+  `const indent = "    "` (module const, string) is SHADOWED by `flattenDiagnosticMessageText(diag,
+  newLine, indent = 0)`'s param, but `populateParameterLocalTypes` registered annotated (case 1) and
+  function-default (case 2) params only, leaving an un-annotated non-function-default param
+  unregistered — so the recursive arg `indent` resolved to the leaked const's `string` → FP TS2345
+  (program.ts:832). Now an un-annotated Identifier param is added to `currentParamBindingNames`
+  (getTypeOfIdentifier → anyType) AND, when a same-named entry is inherited in `currentLocalTypes`
+  (checked BEFORE the set), overrides it with anyType (mirrors the binding-pattern branch).
+  Un-annotated-only — an ANNOTATED shadowing param is still type-checked (negative control).
+- **INVESTIGATED & REVERTED (dashboard no-op):** the varTypes-side (return-path) shadow override for
+  fix 3 — the assignment/return walk's string `varTypes` resolves a shadowed-param return via a path
+  the `innerTypes` override didn't reach, and the return-path shadowed-param TS2322 is not a confirmed
+  dashboard FP (only my synthetic repro). Reverted to keep the change to the proven type-engine side.
+- **NEXT (compiler @ 170, TS2591×43 env-legit offline node stub → real ≈127):** TS2322×93 deep-M3
+  relation (mostly whole-program contextual inference — `__String` branding, generic-fn identity,
+  SourceFileLike conflation); the TS2353 getter/method object-literal excess (sourcemap.ts
+  MappingsDecoder) + mapped-type-key eval (utilities.ts createComputedCompilerOptions, M3.3); TS2349
+  `(x || (x = [])).push()` inline-property-receiver (binder.ts:1375 / core.ts:2135 — the round-452
+  deferred family); the evolving-let `indexInfos` CFA cluster (TS2454 + TS7034 + TS7005).
+
 **Round 452 (2026-07-09) — bounded FP burn-down: TWO fixes, both GENERAL parser/checker
 correctness that reproduce minimally (unlike the recent whole-program Blocker #3 families).
 Dashboard: compiler 177 → 176 (−1), services 282 → 280 (−2), server 488 → 485 (−3), harness
@@ -574,69 +623,6 @@ this-predicate 17/0; conflation 12/0; NavNode-chain 9/0). Bench rows recorded.**
   base symbol's `declarations` list (round-444 repro: `Type.isUnion()` added by augmentation RESOLVES cross-file),
   so it is no longer the dominant residual it was thought to be.
 
-**Round 443 (2026-07-08) — module-augmentation family + the module-file-local TYPE-alias leak
-(Blocker #3): FOUR bounded fixes, all suppression-only. Compiler profile UNCHANGED (190 — no FPs in
-these families there), but the fixes GENERALIZE hugely across the big profiles: services 591 → 498
-(−93), server 887 → 733 (−154), harness 1,118 → 989 (−129). Suite 9,504 → 9,512 (+8 local across 3
-test files, 0 regressions); 4 fix commits. Services diffed via `--listAll` as strictly by-position
-removals: TS2664 10→0, TS2564 17→0, TS2304 24→2 (2 remaining = NodeJS `global`, env-legit offline),
-TS2339 129→85 (SourceFileLike 44→0).**
-- **Baseline @ HEAD (round 442): services 591.** Bucketed the `--listAll`: the clean bounded veins
-  were all in `services/types.ts`'s `declare module "../compiler/types.js"` augmentations —
-  (a) TS2664 "Invalid module name in augmentation ... cannot be found." ×10, (b) TS2304 on compiler
-  type names inside augmentation bodies ×22, and (c) TS2564 on `| undefined` properties ×17.
-- **Fix 1 (TS2664, `.js`-aware augmentation-target resolution): a `declare module "../compiler/types.js"`
-  augmentation resolves `.js` → the `.ts` sibling.** The TS2664 check went through
-  `resolveModuleSpecifierRelative`, which deliberately does NOT strip the ESM `.js` extension (the
-  TS2459 gotcha) → the augmentation target never resolved → FP. Added
-  `resolveModuleSpecifierRelativeJsAware` (strip-and-retry for `.js`/`.jsx`/`.mjs`/`.cjs` — purely
-  additive, only makes MORE specifiers resolve, so only ever SUPPRESSES a false 'cannot be found');
-  consolidates the inline strip-and-retry already at the TS2694/TS2305/TS2307 augmentation sites.
-- **Fix 2 (TS2564, `| undefined` property exemption): a class property whose declared type INCLUDES
-  `undefined` needs no definite assignment.** tsc's strictPropertyInitialization exempts it
-  (`getFalsyFlags(type) & TypeFlags.Undefined`); `checkClassPropertyInit` skipped
-  initializer/optional/!/declare/static/abstract/any but NOT `| undefined`, so services.ts's
-  `SourceFileObject` (`nameTable: Map<...> | undefined` + siblings) FP-fired. Reuses the existing
-  `typeIncludesUndefined` helper (also used by the TS2454 definite-assignment path). Suppression-only.
-- **Fix 3 (TS2304, augmentation-body scope): a `declare module "X" { ... }` body sees the AUGMENTED
-  module's exports by bare name.** `buildNamespaceScope` had no `StringLiteralNode` branch, so inside
-  the augmentation body only the augmenting file's own scope was visible; tsc checks the body in the
-  augmented module's context (Node/NodeArray/SymbolFlags/TypeChecker/__String — compiler/types.ts
-  exports NOT imported into services/types.ts). Added the branch: resolve the specifier (via the
-  `.js`-aware resolver from fix 1) and add the target's `moduleNamedExportsOf` to the namespace scope's
-  `names` + `typeNames`. Purely additive (bare/unresolvable specifier is a no-op).
-- **INVESTIGATED & REVERTED (dashboard no-op, blocked on B83.5): TS7006 array-element contextual typing.**
-  `checkImplicitAnyInExpr`'s `ArrayLiteralExpression` case propagated only the `contextuallyTyped` flag,
-  not the element `Type`, so an OBJECT-LITERAL element of `Priority[]` got no contextual type and its
-  property arrows FP'd TS7006 (inferFromUsage.ts `const priorities: Priority[] = [{ high: t => …, low:
-  t => … }]`). Wired `arrayElementTypeOf(contextualType, i)` into object-literal elements (3 local
-  tests passed). BUT it reduced ZERO dashboard FPs: `interface Priority` is NESTED inside
-  `function inferTypeFromReferences` → UNBOUND per B83.5 → `Priority[]` resolves to any → no element
-  type to propagate. The array-element fix is a correct M3.2 enabler but its dashboard payoff is gated
-  on nested-type resolution (B83.5). Reverted to avoid landing a dashboard no-op; land it TOGETHER with
-  the nested-interface-resolution companion when a session takes B83.5 for annotation positions.
-- **Fix 4 (TS2339 on `SourceFileLike` ×44 → 0, Blocker #3 — the module-file-local TYPE-alias leak):
-  a module-file-local `type X = A | B` alias leaks into `globals` and shadows the global `interface X`
-  in OTHER files.** ROOT CAUSE pinned with an instrumented probe (the minimal/barrel repros do NOT
-  reproduce — the leak is file-order/pollution-dependent, a whole-program phenomenon): the receiver
-  `sourceFile: SourceFileLike` resolves to `Type.Union` `SourceFile | AmbientModuleDeclaration`
-  (displayed via the alias map as 'SourceFileLike'), because services/importTracker.ts's NON-exported
-  `type SourceFileLike = SourceFile | AmbientModuleDeclaration` won the last-wins merge over
-  compiler/types.ts's `interface SourceFileLike` (Interface+TypeAlias don't merge). `AmbientModuleDeclaration`
-  has no `.text` → the union member-access FP'd (both base `text`/`lineMap` AND augmentation-added
-  `getLineAndCharacterOfPosition`). Built `conflatedTypeAliasFiles` (name X → files declaring `type X`,
-  for X also declared as `interface X`); `checkMemberAccessMissing` bails a UNION-receiver TS2339 when
-  the receiver's display (nullish-stripped, for `X | undefined` optional receivers) is a conflated name
-  AND the current file is NOT the alias's own file. TYPE-space analog of round 442's `moduleFileLocalVarNames`.
-  FP-safe: in every other file tsc resolves X to the INTERFACE (all members present), so it never errors;
-  the alias's own file still fires. services/server −44 each, harness −3 (harness test files resolve
-  `SourceFileLike` differently). Local tests pin the FP firewall only (the positive case is whole-program-only).
-- **NEXT (remaining services buckets @ 498, all deep): TS2322×235 / TS2339×85 / TS2345×54 (M3 relation +
-  residual Blocker #3), TS2416×11 (override, diverse), TS2353×10 (union/inherited excess), TS2740×9 /
-  TS2739×8 (missing-property, deep relation), TS7006×8 (contextual typing — the inferFromUsage `Priority[]`
-  case needs B83.5 nested-interface resolution + the reverted array-element enabler). TS2339×85 residual
-  buckets: `Type`×20, `Info`×12, `RefactorContext`/`CodeFixContextBase`/`ExportInfoMap` — likely more
-  module-file-local-type-alias/interface conflations (same Blocker #3 family — bucket + probe each).**
 
 **M2 — Real-lib migration (staged; decompose further at start)**
 

@@ -1,3 +1,67 @@
+**Round 443 (2026-07-08) — module-augmentation family + the module-file-local TYPE-alias leak
+(Blocker #3): FOUR bounded fixes, all suppression-only. Compiler profile UNCHANGED (190 — no FPs in
+these families there), but the fixes GENERALIZE hugely across the big profiles: services 591 → 498
+(−93), server 887 → 733 (−154), harness 1,118 → 989 (−129). Suite 9,504 → 9,512 (+8 local across 3
+test files, 0 regressions); 4 fix commits. Services diffed via `--listAll` as strictly by-position
+removals: TS2664 10→0, TS2564 17→0, TS2304 24→2 (2 remaining = NodeJS `global`, env-legit offline),
+TS2339 129→85 (SourceFileLike 44→0).**
+- **Baseline @ HEAD (round 442): services 591.** Bucketed the `--listAll`: the clean bounded veins
+  were all in `services/types.ts`'s `declare module "../compiler/types.js"` augmentations —
+  (a) TS2664 "Invalid module name in augmentation ... cannot be found." ×10, (b) TS2304 on compiler
+  type names inside augmentation bodies ×22, and (c) TS2564 on `| undefined` properties ×17.
+- **Fix 1 (TS2664, `.js`-aware augmentation-target resolution): a `declare module "../compiler/types.js"`
+  augmentation resolves `.js` → the `.ts` sibling.** The TS2664 check went through
+  `resolveModuleSpecifierRelative`, which deliberately does NOT strip the ESM `.js` extension (the
+  TS2459 gotcha) → the augmentation target never resolved → FP. Added
+  `resolveModuleSpecifierRelativeJsAware` (strip-and-retry for `.js`/`.jsx`/`.mjs`/`.cjs` — purely
+  additive, only makes MORE specifiers resolve, so only ever SUPPRESSES a false 'cannot be found');
+  consolidates the inline strip-and-retry already at the TS2694/TS2305/TS2307 augmentation sites.
+- **Fix 2 (TS2564, `| undefined` property exemption): a class property whose declared type INCLUDES
+  `undefined` needs no definite assignment.** tsc's strictPropertyInitialization exempts it
+  (`getFalsyFlags(type) & TypeFlags.Undefined`); `checkClassPropertyInit` skipped
+  initializer/optional/!/declare/static/abstract/any but NOT `| undefined`, so services.ts's
+  `SourceFileObject` (`nameTable: Map<...> | undefined` + siblings) FP-fired. Reuses the existing
+  `typeIncludesUndefined` helper (also used by the TS2454 definite-assignment path). Suppression-only.
+- **Fix 3 (TS2304, augmentation-body scope): a `declare module "X" { ... }` body sees the AUGMENTED
+  module's exports by bare name.** `buildNamespaceScope` had no `StringLiteralNode` branch, so inside
+  the augmentation body only the augmenting file's own scope was visible; tsc checks the body in the
+  augmented module's context (Node/NodeArray/SymbolFlags/TypeChecker/__String — compiler/types.ts
+  exports NOT imported into services/types.ts). Added the branch: resolve the specifier (via the
+  `.js`-aware resolver from fix 1) and add the target's `moduleNamedExportsOf` to the namespace scope's
+  `names` + `typeNames`. Purely additive (bare/unresolvable specifier is a no-op).
+- **INVESTIGATED & REVERTED (dashboard no-op, blocked on B83.5): TS7006 array-element contextual typing.**
+  `checkImplicitAnyInExpr`'s `ArrayLiteralExpression` case propagated only the `contextuallyTyped` flag,
+  not the element `Type`, so an OBJECT-LITERAL element of `Priority[]` got no contextual type and its
+  property arrows FP'd TS7006 (inferFromUsage.ts `const priorities: Priority[] = [{ high: t => …, low:
+  t => … }]`). Wired `arrayElementTypeOf(contextualType, i)` into object-literal elements (3 local
+  tests passed). BUT it reduced ZERO dashboard FPs: `interface Priority` is NESTED inside
+  `function inferTypeFromReferences` → UNBOUND per B83.5 → `Priority[]` resolves to any → no element
+  type to propagate. The array-element fix is a correct M3.2 enabler but its dashboard payoff is gated
+  on nested-type resolution (B83.5). Reverted to avoid landing a dashboard no-op; land it TOGETHER with
+  the nested-interface-resolution companion when a session takes B83.5 for annotation positions.
+- **Fix 4 (TS2339 on `SourceFileLike` ×44 → 0, Blocker #3 — the module-file-local TYPE-alias leak):
+  a module-file-local `type X = A | B` alias leaks into `globals` and shadows the global `interface X`
+  in OTHER files.** ROOT CAUSE pinned with an instrumented probe (the minimal/barrel repros do NOT
+  reproduce — the leak is file-order/pollution-dependent, a whole-program phenomenon): the receiver
+  `sourceFile: SourceFileLike` resolves to `Type.Union` `SourceFile | AmbientModuleDeclaration`
+  (displayed via the alias map as 'SourceFileLike'), because services/importTracker.ts's NON-exported
+  `type SourceFileLike = SourceFile | AmbientModuleDeclaration` won the last-wins merge over
+  compiler/types.ts's `interface SourceFileLike` (Interface+TypeAlias don't merge). `AmbientModuleDeclaration`
+  has no `.text` → the union member-access FP'd (both base `text`/`lineMap` AND augmentation-added
+  `getLineAndCharacterOfPosition`). Built `conflatedTypeAliasFiles` (name X → files declaring `type X`,
+  for X also declared as `interface X`); `checkMemberAccessMissing` bails a UNION-receiver TS2339 when
+  the receiver's display (nullish-stripped, for `X | undefined` optional receivers) is a conflated name
+  AND the current file is NOT the alias's own file. TYPE-space analog of round 442's `moduleFileLocalVarNames`.
+  FP-safe: in every other file tsc resolves X to the INTERFACE (all members present), so it never errors;
+  the alias's own file still fires. services/server −44 each, harness −3 (harness test files resolve
+  `SourceFileLike` differently). Local tests pin the FP firewall only (the positive case is whole-program-only).
+- **NEXT (remaining services buckets @ 498, all deep): TS2322×235 / TS2339×85 / TS2345×54 (M3 relation +
+  residual Blocker #3), TS2416×11 (override, diverse), TS2353×10 (union/inherited excess), TS2740×9 /
+  TS2739×8 (missing-property, deep relation), TS7006×8 (contextual typing — the inferFromUsage `Priority[]`
+  case needs B83.5 nested-interface resolution + the reverted array-element enabler). TS2339×85 residual
+  buckets: `Type`×20, `Info`×12, `RefactorContext`/`CodeFixContextBase`/`ExportInfoMap` — likely more
+  module-file-local-type-alias/interface conflations (same Blocker #3 family — bucket + probe each).**
+
 **Round 442 (2026-07-08) — TypeParam-constraint arg + overloaded-callback arity + the
 module-file-local-variable/type global-leak (Blocker #3): FIVE bounded fixes. Compiler profile
 197 → 190 (−7), and the leak fixes GENERALIZE MASSIVELY across the big profiles:
