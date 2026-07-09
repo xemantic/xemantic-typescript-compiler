@@ -59,6 +59,19 @@ correctness that reproduces minimally. Dashboard: compiler 124 → 121 (−3, TS
 - **Local pin:** `AsExpressionPrecedenceTest` (5 tests) — the exact binder.ts shape, a
   multiplicative variant, a `satisfies` smoke, and a negative control (`a + (b as T)` = `string`,
   still fires TS2322 — the fix does not blanket-suppress right-operand casts).
+- **Second item (b8fd350d, `asserts node is Exclude<T, U>` narrowing — DASHBOARD-NEUTRAL capability
+  extension per the round-411 precedent):** `narrowByAssertCall` gained an `Exclude<T, U>` branch
+  (tsc's `Debug.assertNotNode`) beside the `NonNullable<T>` special-case. After the call the walked
+  union drops members assignable to U (bound from the sibling `test` arg's predicate target via
+  `predicateTargetTypeOfGuardExpr`); suppression-only / FP-safe. Verified end-to-end by a FAITHFUL
+  barrel + guard + loop + intersection repro (all pass), so the narrowing is correct — but the one
+  compiler site (es2020.ts:91 `chain.questionDotToken` after `Debug.assertNotNode(chain,
+  isNonNullChain)`) stays FP: instrumented isolation shows the mechanism works, so the real site is
+  blocked by a WHOLE-PROGRAM resolution/relation scale issue (the huge `_namespaces/ts.js` barrel
+  Debug resolution, or `OptionalChain`/`NonNullChain` conflation), NOT the narrowing. `AssertNotNode
+  ExcludeNarrowingTest` (4 tests) pins direct/loop/intersection exclusion + a precise-exclusion
+  negative control. Follow-up: instrument `resolveNamespaceMemberFnDecl`/`checkTypeRelatedTo` on the
+  real es2020 profile to unblock the dashboard site.
 - **NEXT (compiler @ 121):** the remaining compiler FPs are ALL deep M3 / whole-program — the
   bounded surgical pool for the compiler profile is dry (every family scouted this round). Confirmed
   findings for the next agent:
