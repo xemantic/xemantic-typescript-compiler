@@ -8769,6 +8769,26 @@ class Parser(
         else -> null
     }
 
+    // Reverse of primitiveKeywordKindFor: the identifier text for a type-keyword
+    // token. A type-predicate SUBJECT (`symbol is T`) is grammatically a parameter
+    // NAME, but our parser reaches it via parseType, which turns a keyword-like name
+    // (`symbol`/`string`/`object`/…) into a KeywordTypeNode instead of an Identifier.
+    // Every legal keyword-named parameter is a contextual keyword, so mapping the
+    // node back to its text recovers the true subject Identifier.
+    private fun keywordTypeKindText(kind: SyntaxKind): String? = when (kind) {
+        SyntaxKind.StringKeyword -> "string"
+        SyntaxKind.NumberKeyword -> "number"
+        SyntaxKind.BooleanKeyword -> "boolean"
+        SyntaxKind.UnknownKeyword -> "unknown"
+        SyntaxKind.NeverKeyword -> "never"
+        SyntaxKind.UndefinedKeyword -> "undefined"
+        SyntaxKind.BigIntKeyword -> "bigint"
+        SyntaxKind.SymbolKeyword -> "symbol"
+        SyntaxKind.ObjectKeyword -> "object"
+        SyntaxKind.AnyKeyword -> "any"
+        else -> null
+    }
+
     // Locates `@type { ... }` inside a JSDoc block comment and returns the
     // brace-balanced content (trimmed). Skips line-prefix `*` between the tag
     // and the opening brace so multi-line forms still resolve.
@@ -8897,7 +8917,13 @@ class Parser(
         // the union-continuation below then wrapped the PREDICATE as a union member
         // (`(node is A) | B`), so a union-target guard silently never narrowed.
         if (token == SyntaxKind.IsKeyword) {
-            val paramName = type  // The type parsed so far is actually the parameter name
+            // The type parsed so far is actually the parameter name. When the subject is a
+            // keyword-like identifier (`symbol is T`, `string is T`, …) parseType produced a
+            // KeywordTypeNode; recover the real subject Identifier so downstream predicate
+            // consumers (narrowing, asserts) can match it to the parameter by name.
+            val paramName: Node = (type as? KeywordTypeNode)
+                ?.let { kw -> keywordTypeKindText(kw.kind)?.let { Identifier(text = it, pos = kw.pos, end = kw.end) } }
+                ?: type
             nextToken()  // consume 'is'
             val predicateType = parseType()
             return TypePredicate(
