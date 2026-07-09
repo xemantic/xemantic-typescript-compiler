@@ -95082,6 +95082,50 @@ interface DataView {
             val narrowed = narrowByExcludingNullUndefined(t)
             return if (narrowed === t) null else narrowed
         }
+        // Round 457: `asserts node is Exclude<T, U>` — tsc's `Debug.assertNotNode<T, U
+        // extends T>(node: T | undefined, test: (node) => node is U): asserts node is
+        // Exclude<T, U>`. T is the node's OWN type (= the walked `t`); U is the callee's
+        // type param, bound from the `test` argument's predicate target (the same
+        // inference the round-424 `asserts node is U` recovery uses). Narrow `t` by
+        // REMOVING the union members assignable to U — es2020.ts's `flattenChain`:
+        // `assertNotNode(chain, isNonNullChain)` narrows `OptionalChain` to
+        // `PropertyAccessChain | ElementAccessChain | CallChain` so `chain.questionDotToken`
+        // (absent on the excluded NonNullChain) resolves. Suppression-only: fires only
+        // when a member is actually removed and something survives (an unresolvable U, a
+        // non-union `t`, or an all-or-nothing filter → null → no narrowing, FP-safe).
+        run {
+            val exRef = targetTypeNode as? TypeReference ?: return@run
+            if ((exRef.typeName as? Identifier)?.text != "Exclude") return@run
+            val exArgs = exRef.typeArguments ?: return@run
+            if (exArgs.size != 2) return@run
+            val union = t as? Type.Union ?: return@run
+            // U (the 2nd Exclude arg) is a bare type-param of the callee → resolve it
+            // from the sibling `test` param's predicate target.
+            val uTpName = (exArgs[1] as? TypeReference)
+                ?.let { (it.typeName as? Identifier)?.text } ?: return@run
+            val tps = when (decl) {
+                is FunctionDeclaration -> decl.typeParameters
+                is MethodDeclaration -> decl.typeParameters
+                else -> null
+            } ?: return@run
+            if (tps.none { it.name.text == uTpName }) return@run
+            var uType: Type? = null
+            for ((i, p) in params.withIndex()) {
+                if (i == paramIdx) continue
+                val ft = p.type as? FunctionType ?: continue
+                val pred = ft.type as? TypePredicate ?: continue
+                if (pred.assertsModifier) continue
+                if (((pred.type as? TypeReference)?.typeName as? Identifier)?.text != uTpName) continue
+                val testArg = expr.arguments.getOrNull(i) ?: continue
+                uType = predicateTargetTypeOfGuardExpr(testArg)
+                if (uType != null) break
+            }
+            val excluded = uType ?: return@run
+            val kept = union.types.filter { !checkTypeRelatedTo(it, excluded, assignableRelation) }
+            if (kept.size < union.types.size && kept.isNotEmpty()) {
+                return if (kept.size == 1) kept[0] else getUnionType(kept)
+            }
+        }
         var targetType = getTypeFromTypeNode(targetTypeNode)
         if (targetType === errorType || targetType === anyType) {
             // M1.12 (round 424): `asserts node is U` where U is the callee's own
