@@ -98791,6 +98791,10 @@ interface DataView {
             // (i) M3.1 (round 428): nullable union of a single tp anchor —
             // `T | undefined` / `T[] | undefined` (tsc core.ts append/concatenate).
             if (!isRest && tps.any { nullableUnionOfTpMode(pt, it) != 0 }) continue
+            // (k) round 460 (M3.1): union param with a `tp[][]` member — tsc core.ts
+            // `flatten<T>(array: T[][] | readonly (T | readonly T[] | undefined)[])`;
+            // an array-of-array arg binds tp from its inner element type.
+            if (!isRest && tps.any { unionHasDoubleArrayOfTp(pt, it) }) continue
             // (c) fully concrete — must not mention ANY of our TPs
             if (tps.any { typeMentionsTypeParam(pt, it) }) return null
         }
@@ -98848,7 +98852,10 @@ interface DataView {
                 // (`getFirstJSDocTag(node, isJSDocAugmentsTag)` → T = JSDocAugmentsTag).
                 val isPredT = !isRest && !isBareT && !isRestT && !isArrayT && !isObjLitOfT &&
                     unionMode == 0 && predicatePositionTpOf(params[i], tps) === tp
-                if (!isBareT && !isRestT && !isArrayT && !isObjLitOfT && !isFnTypedOfT && unionMode == 0 && !isPredT) continue
+                // (k) round 460: union param with a `tp[][]` member (flatten anchor).
+                val isDblArrT = !isRest && !isBareT && !isRestT && !isArrayT && !isObjLitOfT &&
+                    unionMode == 0 && !isPredT && unionHasDoubleArrayOfTp(pt, tp)
+                if (!isBareT && !isRestT && !isArrayT && !isObjLitOfT && !isFnTypedOfT && unionMode == 0 && !isPredT && !isDblArrT) continue
                 fun isNamedLikeAtom(t: Type): Boolean =
                     t is Type.Interface || t is Type.Reference || t is Type.Intrinsic ||
                         t.flags.hasAny(
@@ -98871,6 +98878,24 @@ interface DataView {
                         val t = predicateTargetTypeOfGuardExpr(arg) ?: continue
                         if (t === anyType || t === errorType) continue
                         candidates.add(Candidate(ai, t, null))
+                        continue
+                    }
+                    // (k) round 460: array-of-array arg for the `tp[][]` union anchor —
+                    // `flatten(supportedTSExtensions)` where the arg is
+                    // `readonly Extension[][]` binds tp := Extension. Soft-skip
+                    // anything that isn't a clean array-of-array of a named-like
+                    // (or enum) element.
+                    if (isDblArrT) {
+                        val rawArg = getTypeOfExpression(arg)
+                        val inner = arrayRefElement(rawArg) ?: continue
+                        val elem = arrayRefElement(inner) ?: continue
+                        if (elem === anyType || elem === errorType) continue
+                        val widened = widenType(elem)
+                        val ok = isNamedLikeAtom(widened) ||
+                            (widened is Type.Union && widened.types.all { isNamedLikeAtom(it) }) ||
+                            (widened is Type.Object && widened.symbol?.flags?.hasAny(SymbolFlags.Enum) == true)
+                        if (!ok) continue
+                        candidates.add(Candidate(ai, widened, null))
                         continue
                     }
                     // 17.38: object-literal-of-T inference — walk arg's properties matching
@@ -99857,6 +99882,25 @@ interface DataView {
         if (name != "Array" && name != "ReadonlyArray") return false
         val args0 = type.resolvedTypeArguments ?: return false
         return args0.size == 1 && args0[0] === tp
+    }
+
+    /** Round 460 (M3.1): a UNION param with a `tp[][]` member — tsc core.ts
+     *  `flatten<T>(array: T[][] | readonly (T | readonly T[] | undefined)[])`. The
+     *  double-array member is the inference ANCHOR: an array-of-array arg binds tp
+     *  from its inner element type. */
+    private fun unionHasDoubleArrayOfTp(pt: Type, tp: Type.TypeParam): Boolean {
+        if (pt !is Type.Union) return false
+        return pt.types.any { m ->
+            arrayRefElement(m)?.let { inner -> isArrayOfTypeParam(inner, tp) } == true
+        }
+    }
+
+    /** The single element type of an Array/ReadonlyArray Reference, else null. */
+    private fun arrayRefElement(t: Type?): Type? {
+        if (t !is Type.Reference) return null
+        val name = t.target.symbol?.name
+        if (name != "Array" && name != "ReadonlyArray") return null
+        return t.resolvedTypeArguments?.singleOrNull()
     }
 
     /** M3.1 (round 430b): a param declared `(x: Base) => x is T` where T ∈ [tps] —
