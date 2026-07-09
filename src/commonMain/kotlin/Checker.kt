@@ -93806,6 +93806,25 @@ interface DataView {
             // Type`) proves the assigned reference non-nullish. Conservative: any
             // uncertainty returns false → no narrowing.
             is CallExpression -> callRhsHasNonNullishReturnAnnotation(rhs)
+            // Round 450: `a || b` and `a ?? b` are non-nullish iff the RIGHT operand
+            // is non-nullish — `a || b` evaluates to `a` when a is truthy (⟹ non-nullish)
+            // or to `b`; `a ?? b` to `NonNullable<a>` or `b`. Either way the result is
+            // non-nullish when `b` is. This narrows the pervasive default-initialization
+            // idiom `maximumLength = maximumLength || DEFAULT` (utilities.ts) so subsequent
+            // reads of a `T | undefined` reference resolve to the non-nullish `T`. The
+            // right operand is usually a const/local reference (`DEFAULT`), which is not
+            // syntactically classifiable — resolve its type and check non-nullishness
+            // (a simple identifier does not re-enter the flow walk, so this stays cheap).
+            is BinaryExpression -> {
+                val op = rhs.operator
+                if (op != SyntaxKind.BarBar && op != SyntaxKind.QuestionQuestion) false
+                else if (rhsIsDefinitelyNonNullish(rhs.right)) true
+                else {
+                    val rt = try { getTypeOfExpression(rhs.right) } catch (_: Exception) { null }
+                    rt != null && rt !== anyType && rt !== errorType &&
+                        !typeIncludesUndefined(rt) && !typeIncludesNull(rt)
+                }
+            }
             else -> literalTypeOfExpression(rhs)?.let {
                 !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)
             } ?: false
