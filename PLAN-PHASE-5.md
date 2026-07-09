@@ -39,6 +39,41 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
+**Round 456 (2026-07-09) — Array/ReadonlyArray `find` type-guard overload + a build-warning
+cleanup; ONE broad relation rule investigated & reverted. Dashboard: compiler 132 → 131 (−1,
+TS2322 56 → 55); services 230 → 229 (generalizes cleanly, no new FP). Suite 9,666 → 9,671
+(+5 local, 0 regressions); 2 commits (860046fc find / 54e644db warning).**
+- **Fix 1 (860046fc, `find`/`findLast` type-predicate overload; TS2322 −1 compiler, −1 services):**
+  the embedded `Array<T>`/`ReadonlyArray<T>` `find`/`findLast` had only the general
+  `(predicate: … => unknown): T | undefined` signature, so `arr.find(isFoo)` returned the base element
+  type. Added the type-predicate overload `find<S extends T>(predicate: (value: T, …) => value is S,
+  thisArg?): S | undefined` (mirrors round 455's filter/every), so `tryInferPredicateOverloadReturn`
+  (round 439) refines the result — cleared utilities.ts:8276 `getClassLikeDeclarationOfSymbol`
+  (`symbol.declarations?.find(isClassLike)`). **Adding an OVERLOAD to an EXISTING method (not a new
+  member name) does NOT shift "and N more" missing-property counts** — corpus green. Generalizes across
+  profiles (`.find(isX)`/`.findLast(isX)` are pervasive in tsc's own source).
+- **Fix 2 (54e644db, build-warning cleanup):** removed a redundant `as TypeOfExpression` cast
+  (round 451 typeof-switch exhaustiveness, Checker.kt:79547) Kotlin flagged "No cast needed"
+  (`stmt.expression` is already smart-cast). The build must stay warning-clean.
+- **INVESTIGATED & REVERTED — the broad relation-engine `source is Type.TypeParam` → relate-its-
+  constraint-chain rule (cycle-guarded for `T extends T`).** MEASURED net-zero A/B on BOTH compiler and
+  services: it fixed exactly one assignment FP (utilities.ts:12338 `getSynthesizedDeepCloneWithReplacements
+  <T extends Node>` — `T` assigned to a `Node | undefined` local) but INTRODUCED one via OVERLOAD
+  SELECTION — a bare un-inferred `T extends string` (from `getPathFromPathComponents<T extends string>`,
+  whose `readonly T[]`-from-`PathPathComponents` inference our engine leaves un-substituted) now matched
+  `ensureTrailingDirectorySeparator`'s `(path: string)` overload instead of `(path: Path)`, returning
+  `string` → FP `string ⊄ string & {__pathBrand}` at moduleNameResolver.ts:2933. The rule is SOUND
+  (T <: constraint <: target) but overload arg-matching shares `checkTypeRelatedTo`, so it perturbs
+  signature selection wherever inference under-resolves a TypeParam arg — exactly CLAUDE.md's standing
+  warning against the broad rule. If retried: apply as a PER-SITE bail at the assignment/return TS2322
+  EMISSION only (not the shared engine), or fix the upstream `getPathFromPathComponents` inference first.
+- **NEXT (compiler @ 131, ~88 real excl. TS2591×43 offline-node):** TransformerFactory<T>
+  generic-type-alias-of-fn relation (M3.3 — the alias `(context) => Transformer<T>` doesn't
+  instantiate its fn-type body; whole-program, minimal repro clean); the exhaustive-switch
+  `assertNever(reason)` enum-union residual (programDiagnostics.ts's `ReferencedFile` → `never` in the
+  default, round 441 deep); the `OptionalChain.questionDotToken` Exclude<>-narrowing (es2020.ts — needs
+  `Exclude<>` materialization + `assertNotNode` narrowing); `string → __String` branding (whole-program).
+
 **Round 455 (2026-07-09) — global-shadow anyType + widenType tuple shape + ReadonlyArray filter
 guard + generic-identity-fn assignability: FOUR fixes, all GENERAL correctness that reproduce
 minimally. Dashboard: compiler 153 → 132 (−21, TS2322 77 → 56); shared checker/lib so they generalize
@@ -541,134 +576,6 @@ but they generalize uniformly: services 373 → 339 (−34), server 589 → 555 
   SINGLE-FILE interfaces (InliningInfo/OptionalChainInfo/ExportInfo — genuine M3, not conflation); the
   `ApplicableRefactorInfo` stray-`U[]` type-param-scope pollution ×9 (deferred, needs a whole-program
   probe — does not reproduce minimally); deep fragmented TS2322.
-
-**Round 446 (2026-07-08) — array-literal→variadic-tuple-in-union returns + nested Array<X>-in-Array<Y>
-covariant relation + destructured-param method arity: THREE bounded fixes. Dashboard: compiler 188 →
-185 (−3), services 399 → 373 (−26), server 623 → 589 (−34), harness 868 → 806 (−62). Suite 9,540 →
-9,558 (+18 local across 3 test files, 0 regressions); 3 fix commits (4a97bd52/28abf66a/03acbf0d);
-diffed via `--listAll` as strictly by-position removals; bench rows logged for all four profiles.**
-- **Baseline @ HEAD (round 445): services 399, compiler 188.** Bucketed the services `--listAll` and
-  found the two families round 445's note flagged as NEXT: `DiagnosticOrDiagnosticAndArguments (|
-  undefined)` ×16 (array-literal→variadic-tuple-in-union) and `readonly ApplicableRefactorInfo[]` ×15
-  (nested-array element relation).
-- **Fix 1 (4a97bd52, array-literal→variadic-tuple-in-union returns; services 399 → 379, compiler 188 →
-  185, server 623 → 603, harness 868 → 848):** `return [Diagnostics.X, arg, …]` where the target is a
-  variadic tuple, or a union/alias containing one (`DiagnosticOrDiagnosticAndArguments =
-  DiagnosticMessage | [message: DiagnosticMessage, ...args: (string|number)[]]`). The relation engine
-  SKIPS array→tuple and `getTupleType` COLLAPSES the rest slot, so both the engine and the string
-  fallback ("array" display) FP'd. `arrayLiteralSatisfiesTupleTarget` AST-matches the array literal
-  against the tuple found by `findVariadicTupleInTarget` (walk the target node: tuple / union /
-  parenthesized / alias — **alias bodies resolved through the merged `globals`, since an imported
-  alias's file-local symbol is only the ImportSpecifier**). `arrayLiteralMatchesVariadicTuple` parses
-  the tuple into fixed-prefix / one rest / fixed-suffix and verifies each element against its slot
-  (permissive on unresolvable slots → suppression-only). Hooked into `checkReturnAssignability` (direct)
-  + `checkConditionalReturnBranches` (`?:`). Also covers FIXED tuples in a union — compiler's
-  `specToDiagnostic(): [DiagnosticMessage, string] | undefined` + utilities.ts's `isDirectory ? [a,b] :
-  undefined`. Services TS2322 216 → 196.
-- **Fix 2 (28abf66a, nested `Array<X>`-in-`Array<Y>` covariant shortcut; services 379 → 373, server 603
-  → 597, harness 848 → 842, compiler unchanged):** `{ actions: ActionInfo[] }[]` vs `readonly
-  ApplicableRefactorInfo[]` FP'd TS2322. Root cause (found by minimal-repro bisection): the OUTER Array
-  pushes `globalArrayType.id` on the comparison stack, so when the INNER `Array<ActionInfo>` is
-  compared, the same target id counts as an `isReentry` → the covariant element shortcut is deferred to
-  STRUCTURAL comparison of the two `Array` INTERFACES → `concat`'s contravariant element param
-  `ConcatArray<T>` spuriously fails (no per-TP variance info). Array/ReadonlyArray are covariant, so they
-  must ALWAYS use the element shortcut (`A ⊄ B ⇒ Array<A> ⊄ Array<B>`; termination via
-  `relationComparisonStack` + `isDeeplyNested`). **Gated to TP-FREE target args** — an unbound-TP target
-  (`flatten<T>(…: T[][])`) is an M3.1 inference gap the trivial structural pass currently MASKS; the
-  first cut without the gate turned it into a +1 compiler FP (program.ts `flatten(allDiagnostics)`
-  `readonly Diagnostic[] ⊄ T[]`). Core relation-engine change; corpus-clean (suite 9,548 → 9,553).
-  Services TS2322 196 → 190.
-- **Fix 3 (03acbf0d, destructured-param method arity; harness 842 → 806, server 597 → 589, compiler /
-  services unchanged):** a method with a binding-pattern param (`goToRangeStart({ fileName, pos }:
-  Range)`) FP'd TS2554 "Expected 1-0 arguments, but got 1." on a correctly-argumented property-access
-  call. A destructured param produces NO Symbol, so the built Signature DROPS it — `sig.parameters` is
-  empty (maxParams 0) while `minArgumentCount` stays 1, an impossible range that reads any 1-arg call as
-  "too many". `checkTs2554ForPropertyAccessCall` recovers the true arity from the DECLARATION's parameter
-  list via `paramInfo` (which counts binding-pattern params + handles rest/optional). Harness TS2554 37
-  → 1 (the residual mapCode.ts:103 is pre-existing/unrelated); the harness is the test-infrastructure
-  profile with many `fourslashImpl` destructured-param methods — the smaller profiles have few such
-  property-access calls, hence compiler/services unchanged. Pure TS2554 removal, no other code touched.
-- **NEXT (services @ 373):** the residual `ApplicableRefactorInfo[]` ×10 — a SEPARATE bug: their
-  `actions` property resolves to a stray `U[]` (an unbound type parameter — no `U` in the file), a
-  type-param-scope pollution / `getPropertyTypeForRelation` gap (my TP-gate correctly avoids making it an
-  FP, so they stay as-is); the `X | RefactorErrorInfo | undefined` refactor-info family (object-literal /
-  `&&`-object / `{error}`-union-source vs union-with-object-member — fragmented M3 object-vs-union
-  relation, not conflation since the Info interfaces are single-file); the `DiagnosticOrDiagnosticAndArguments`
-  residual is a TS2339 (`messageAndArgs[0]` indexing the union — a different code).
-
-**Round 445 (2026-07-08) — TS2416/TS2430 property-override variance families + the cross-file
-interface-merge conflation (Blocker #3) + spread-of-any object returns + the module-var-leak TS2322
-extension: FIVE bounded fixes, all suppression-only. Dashboard: compiler 190 → 188 (−2), services
-439 → 399 (−40), server 669 → 623 (−46), harness 919 → 868 (−51). Suite 9,523 → 9,540 (+17 local
-across 5 test files, 0 regressions); 5 fix commits (76b7f2cc/a81d6300/c31f3577/e93fc974/6db81b97);
-services diffed via `--listAll` as strictly by-position removals.**
-- **Baseline @ HEAD (round 444): services 439, compiler 190.** Bucketed the services `--listAll`
-  and found TS2416×11 + TS2430×3 (bounded override-variance families) and the `Info | undefined`
-  TS2322×11 (the biggest single conflation family). The `readonly ApplicableRefactorInfo[]` ×15 and
-  `DiagnosticOrDiagnosticAndArguments (| undefined)` ×16 stay deep-M3 (object-literal-array vs
-  interface-array / array→tuple-union relation) — deferred.
-- **Fix 1 (76b7f2cc, TS2416 override 11 → 0; compiler 190→189, services 439→428, server 669→656,
-  harness 919→904): three class-property-override FP families from services.ts's NodeObject /
-  TokenOrIdentifierObject / SourceFileObject implementors.** (A) An OPTIONAL base member `p?: T` has
-  effective type `T | undefined`; a derived `p: T | undefined` override is legal — the raw base
-  declared type dropped the optional `| undefined`, so widen it for the relation via
-  `widenOptionalTargetPropType` (source-nullish gated → a non-nullish override still compares against
-  the bare base). (B) A CONSTRAINED-type-parameter override (`kind: TKind` where `TKind extends
-  SyntaxKind`, base `kind: SyntaxKind`) is valid via the constraint — per-site constraint bail (no
-  general TypeParam-source relation rule). (C) tsc compares METHOD signatures with BIVARIANT params
-  (`getWidth(sf?: SourceFile)` vs base `getWidth(sf?: SourceFileLike)`) — per-site
-  `methodSignaturesBivariantlyRelated` retry (adds a defaulted `bivariantParams` flag to
-  `signatureRelatedTo`, no threading elsewhere).
-- **Fix 2 (a81d6300, TS2430 interface-extends 3 → 0; services 428→425): two FP families.** (A) The
-  optional-base widen applied to the interface-extends check (`ValidParameterDeclaration extends
-  ParameterDeclaration { modifiers: undefined }` — `undefined` assignable to the optional base's
-  `T | undefined`). (B) A derived METHOD implementing a base function-typed DATA property
-  (`EmitHost.getCanonicalFileName(fileName): string` implementing
-  `SourceFileMayBeEmittedHost.getCanonicalFileName: GetCanonicalFileName`) was compared as the
-  method's RETURN type (`string`) vs the base property's full function type — `getMemberNameAndType`
-  returns a method's return type. Skip the simple property comparison when the derived member is a
-  method.
-- **Fix 3 (c31f3577, the interface-merge conflation; compiler 189→188, services 425→409 −16, server
-  656→637, harness 904→884): a name X declared as `interface X` in ≥2 DISTINCT MODULE files merges
-  via `mergeSymbolTable` into one polluted `globals[X]`, even though each module's interface is
-  module-scoped.** tsc's codefixes each declare a private `interface Info`, so `getInfo(): Info |
-  undefined` returning `{ importNode, name, moduleSpecifier }` (matching the FILE-LOCAL Info) looked
-  "missing properties" against the merged union. Built `conflatedInterfaceFiles` (name → module files
-  declaring `interface X`, for X in ≥2 files); `checkReturnAssignability` bails a returned object
-  literal whose target is (the sole non-nullish member of) such a conflated X when THIS file declares
-  its own `interface X` AND the object satisfies the file-local X (checked AST-side — the merged
-  symbol's `declarations` list is polluted). Runs AFTER the per-property drills (genuine inner-key
-  mismatch still fires), BEFORE the coarse missing-property/relation paths. Conservative for
-  heritage-bearing interfaces / spread object literals. `Info | undefined` TS2322 11 → 1 (the residual
-  fixExpectedComma.ts `{ node }` doesn't satisfy its file-local Info).
-- **Fix 4 (e93fc974, spread-of-any object returns; services 409→404 −5, server 637→628, harness 884→873):
-  a returned `{ ...anyExpr, ... }`.** tsc types an object literal that spreads an `any`/unresolved value as
-  `any` (the spread poisons the whole object), so it cannot be "missing" required target properties.
-  `getFileAndTextSpanFromNode` (no return annotation) returns an object literal → our
-  `inferReturnTypeFromBody` has no object-literal branch → the call resolves to `any` → the spread
-  `...getFileAndTextSpanFromNode(node)` looked to provide nothing → findAllReferences.ts's 5 returned
-  objects FP'd "missing sourceFile, textSpan". `checkReturnAssignability` bails when the returned object
-  literal has an any/error-typed spread (after the per-property drills, so a genuine explicit-prop mismatch
-  still fires). Root fix is `inferReturnTypeFromBody`'s object-literal branch (documented suite-wide blast
-  radius — deferred); this suppression is FP-safe (spread-of-any is genuinely `any` in tsc).
-- **Fix 5 (6db81b97, module-var-leak TS2322 extension; services 404→399 −5, server 628→623, harness
-  873→868): a `return <leakedVar>` / `<ident> = <leakedVar>`.** Round 442's `moduleFileLocalVarNames`
-  bail (a top-level `let`/`var`/`const` in a MODULE file leaks into `globals` and shadows every OTHER
-  file's same-named block/destructured local, unbound per B83.5) covered TS2339/TS2345. A block/
-  destructured `parent` (whose initializer our checker can't infer locally — a destructuring or `&&`)
-  leaks to navigationBar.ts's `let parent: NavigationBarNode`, so `return parent` (inferFromUsage.ts) /
-  `lastParent = parent` (checker.ts) FP'd TS2322. `checkReturnAssignability` bails a returned
-  bare-identifier leaked var; `checkAssignmentExpression` bails an `<ident> = <leaked ident>` (gated to
-  a simple Identifier target). Both skip UNLESS it IS this file's own top-level binding. Compiler
-  unchanged (navigationBar.ts is not in the compiler-only program). Local test confirms the destructured
-  leak FPs without the fix (both `return parent` and `lastParent = parent`) and is clean with it.
-- **NEXT (services @ 399, all deeper):** the union-of-2-interfaces conflation (`ExportInfo |
-  RefactorErrorInfo | undefined` ×3 — the single-interface gate needs a union-member extension AND the
-  `||`-nested object literal path), the two deep-M3 relation families `readonly ApplicableRefactorInfo[]`
-  ×15 (object-literal-array vs interface-array with union/`.concat` element types) /
-  `DiagnosticOrDiagnosticAndArguments` ×16 (array→tuple-union relation, plus a duplicate-chain-line
-  display bug + an `'array'` fallback display). Extend the conflation / spread bails to var-decl/argument
-  positions only when a non-return FP surfaces (none observed this round).
 
 **M2 — Real-lib migration (staged; decompose further at start)**
 
