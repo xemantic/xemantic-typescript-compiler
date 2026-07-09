@@ -39,6 +39,33 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
+**Round 457 (2026-07-09) — parser `as`/`satisfies` precedence bug. ONE fix, GENERAL parser
+correctness that reproduces minimally. Dashboard: compiler 124 → 121 (−3, TS2322 49 → 46); services
+220 → 217 (−3); the fix generalizes to any `<binary> as T` right-operand cast. Suite 9,681 → 9,686
+(+5 local, 0 regressions); 1 fix commit (22b37a95).**
+- **Root cause:** `parseBinaryExpression` (Parser.kt:5399) called a greedy `parseExpressionSuffix(left)`
+  right after the unary operand, gluing `as`/`satisfies` to the bare RIGHT operand of a binary op
+  BEFORE the precedence-respecting binary loop. `as`/`satisfies` have precedence 7 — LOWER than
+  additive (`+`/`-` = 9) and multiplicative (`*`/`/`/`%` = 10) — so a trailing cast must bind the WHOLE
+  binary result. `a + b as T` was mis-parsed as `a + (b as T)` instead of tsc's `(a + b) as T`.
+- **Fix:** removed the greedy `parseExpressionSuffix(left)` call; the binary loop (which attaches
+  `as`/`satisfies` only when `7 > minPrec`) is now the sole handler; `parseExpressionSuffix` is dead
+  and deleted. The parallel `parseBinaryExpressionRest` loop (7833) already handled the LEFT-operand
+  `as` correctly with the same `prec <= minPrec` break — this only fixed the right-operand path.
+- **Trip site:** binder.ts `getDeclarationName` returns `tokenToString(op) + operand.text as __String`
+  and `"arg" + index as __String` — the whole `+` is the cast source (→ `__String`, assignable to the
+  declared `__String | undefined`); the wrong parse yielded `string + __String` = `string` → FP
+  `string ⊄ __String | undefined` (binder.ts ×2 + utilities.ts ×1). Cleared by the fix.
+- **Local pin:** `AsExpressionPrecedenceTest` (5 tests) — the exact binder.ts shape, a
+  multiplicative variant, a `satisfies` smoke, and a negative control (`a + (b as T)` = `string`,
+  still fires TS2322 — the fix does not blanket-suppress right-operand casts).
+- **NEXT (compiler @ 121):** `TransformerFactory<T>` generic-type-alias-of-fn relation (M3.3,
+  whole-program — the documented `currentTypeAliasArgs` deliberate skip of FunctionType alias bodies,
+  ×3 at transformer.ts getModuleTransformer); the `string → __String` residual (utilities.ts:5414,
+  whole-program); the exhaustive-switch `assertNever(reason)` enum-union residual (round 441 deep);
+  the `(x || (x = [])).push()` inline-property-receiver TS2349 (core.ts/binder.ts, round 452 reverted
+  — receiver typed in the call-type pass).
+
 **Round 456 (2026-07-09) — Array/ReadonlyArray `find` type-guard overload + NonNull-identifier
 undefined-strip + branded-intersection flow-narrowing + IterableIterator heritage + a build-warning
 cleanup; ONE broad relation rule investigated & reverted. Dashboard: compiler 132 → 124 (−8, TS2322
