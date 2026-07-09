@@ -128206,6 +128206,22 @@ interface DataView {
             val effectiveSource = widenOptionalSourcePropType(sourcePropType, sourceProp, targetProp)
             val targetPropType = widenOptionalTargetPropType(getPropertyTypeForRelation(target, targetProp), targetProp, effectiveSource)
             if (!checkTypeRelatedTo(effectiveSource, targetPropType, relation)) {
+                // Round 454: a METHOD member (method syntax `m(...) {…}` / `m(...): T`)
+                // compares its parameters BIVARIANTLY (tsc's rule — `strictFunctionTypes`
+                // never applies to method members), but our `checkTypeRelatedTo` compares
+                // function-typed members contravariantly. When BOTH the source and target
+                // member are methods, retry via the bivariant helper already used by
+                // TS2416/TS2430. Suppression-only (fires only on a contravariant failure)
+                // and FP-safe by construction: a method-param bivariance match is not an
+                // error in tsc, so this can only remove a false positive (e.g. an
+                // object-literal `canReuseTypeNodeAnnotation(…, symbol: Symbol)` satisfying
+                // an interface member `(…, symbol: Symbol | undefined)`). A function-typed
+                // PROPERTY (`m: (…) => T`) is NOT a method → stays strictly contravariant.
+                if (sourceProp.declarations.any { it is MethodDeclaration } &&
+                    targetProp.declarations.any { it is MethodDeclaration } &&
+                    methodSignaturesBivariantlyRelated(
+                        sourcePropType, getPropertyTypeForRelation(target, targetProp))
+                ) continue
                 // Round 435 (tsc contextual literal types): a FRESH object-literal prop
                 // keeps its literal type against a literal-containing target member —
                 // getTypeOfObjectLiteral widens (`kind: "paths"` → string), so retry with
