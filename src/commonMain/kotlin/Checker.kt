@@ -41079,6 +41079,7 @@ interface Array<T> {
     reduce<U>(callbackfn: (previousValue: U, currentValue: T, currentIndex: number, array: T[]) => U, initialValue: U): U;
     reduceRight(callbackfn: (previousValue: T, currentValue: T, currentIndex: number, array: T[]) => T): T;
     reduceRight<U>(callbackfn: (previousValue: U, currentValue: T, currentIndex: number, array: T[]) => U, initialValue: U): U;
+    find<S extends T>(predicate: (value: T, index: number, obj: T[]) => value is S, thisArg?: any): S | undefined;
     find(predicate: (value: T, index: number, obj: T[]) => unknown): T | undefined;
     findIndex(predicate: (value: T, index: number, obj: T[]) => unknown): number;
     fill(value: T, start?: number, end?: number): T[];
@@ -41087,6 +41088,7 @@ interface Array<T> {
     flat(): any[];
     flatMap(callback: (value: T, index: number, array: T[]) => any): any[];
     at(index: number): T | undefined;
+    findLast<S extends T>(predicate: (value: T, index: number, obj: T[]) => value is S, thisArg?: any): S | undefined;
     findLast(predicate: (value: T, index: number, obj: T[]) => unknown): T | undefined;
     findLastIndex(predicate: (value: T, index: number, obj: T[]) => unknown): number;
     toSpliced(start: number, deleteCount: number, ...items: T[]): T[];
@@ -41117,6 +41119,7 @@ interface ReadonlyArray<T> {
     filter(predicate: (value: T, index: number, array: T[]) => unknown): T[];
     reduce(callbackfn: (previousValue: T, currentValue: T, currentIndex: number, array: T[]) => T): T;
     reduceRight(callbackfn: (previousValue: T, currentValue: T, currentIndex: number, array: T[]) => T): T;
+    find<S extends T>(predicate: (value: T, index: number, obj: readonly T[]) => value is S, thisArg?: any): S | undefined;
     find(predicate: (value: T, index: number, obj: T[]) => unknown): T | undefined;
     findIndex(predicate: (value: T, index: number, obj: T[]) => unknown): number;
     includes(searchElement: T, fromIndex?: number): boolean;
