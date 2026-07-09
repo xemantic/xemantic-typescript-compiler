@@ -40,10 +40,10 @@ which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the b
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
 **Round 450 (2026-07-09) — bounded FP burn-down: FIVE suppression-only / soundness fixes,
-all cleanly reproducible in isolated multi-file repros + locally tested (4 new test files,
-17 tests). Dashboard: compiler 183 → 178 (−5), services 310 → 294 (−16), server 518 → 501
-(−17), harness 735 → 718 (−17). Suite 9,602 corpus green / 0 fail / 3 skip; 5 fix commits
-(21f41105 / 2da83a26 / 4d443ae9 / 2c202d67 / 134f9d7a).**
+all cleanly reproducible in isolated repros + locally tested (5 new test files, 20 tests).
+Dashboard: compiler 183 → 178 (−5), services 310 → 291 (−19), server 518 → 498 (−20),
+harness 735 → 715 (−20). Suite 9,605 corpus green / 0 fail / 3 skip; 6 fix commits
+(21f41105 / 2da83a26 / 4d443ae9 / 2c202d67 / 134f9d7a / 4ad6f1b7).**
 - **Fix 1 (21f41105, boolean-literal assign; TS2322 −3 services):** a `true`/`false` literal
   assigned to a literal-boolean local (`let isSnippet: true | undefined; isSnippet = true`,
   completions.ts). A boolean literal parses as an `Identifier` (literalTypeOfExpression), so it
@@ -83,6 +83,16 @@ all cleanly reproducible in isolated multi-file repros + locally tested (4 new t
   its set — drop loop-declared names (incl. binding patterns) when descending (mirrors the
   catch-body shadowing skip). Controls: outer read outside the loop, and a non-shadowing for-of,
   both fire.
+- **Fix 6 (4ad6f1b7, destructured-const shadow of a leaked module var; TS2339 −3 services;
+  Blocker #3):** `const { parent } = node` shadowing a module-file `let parent:
+  NavigationBarNode` (leaked into globals per round 442) is not bound (B83.5), so a body read
+  of `parent` resolved to the leaked outer decl and FP'd `parent.operatorToken` (navigationBar.ts
+  getFunctionOrClassName). applyBodyLocalShadowing handled only a simple `let x`; it now also
+  registers a `const { … } = init` object pattern's binding names as shadowed and records each
+  from the destructured property type of `init` (getPropertyOfType), so the shadowed-name bail
+  suppresses a valid destructured-type member access and a following user type-guard
+  (`isBinExpr(parent)`) narrows the right type. FP-safe: a genuinely-missing member still fires
+  (through the module-var fallback — display divergence only, not an FP).
 - **INVESTIGATED & DEFERRED (do not re-chase minimally):** the `Symbol.links` (isTransientSymbol
   narrow-DOWN ×5), `Node → NavigationBarNode` TS2339 (navigationBar.ts's own `const { parent } =
   node` destructured-shadow of the module var, B83.5), and `Node → PropertyAccessExpression` TS2740
