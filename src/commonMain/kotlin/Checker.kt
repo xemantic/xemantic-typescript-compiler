@@ -79547,7 +79547,7 @@ interface DataView {
                         if (coveredValues.containsAll(typeofValues)) return true
                         // FP-safe: typeofTagsOfType returns null on ANY uncertain constituent
                         // (any/unknown/type-param/enum), so an unprovable subject keeps TS2366/TS7030 firing.
-                        val subjectTags = typeofSwitchSubjectType((stmt.expression as TypeOfExpression).expression)?.let { typeofTagsOfType(it) }
+                        val subjectTags = typeofSwitchSubjectType(stmt.expression.expression)?.let { typeofTagsOfType(it) }
                         if (subjectTags != null && subjectTags.isNotEmpty() && coveredValues.containsAll(subjectTags)) return true
                     }
                     // No default: check for exhaustive switch on a string/boolean literal type parameter
