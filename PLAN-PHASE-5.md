@@ -39,6 +39,55 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
+**Round 455 (2026-07-09) — global-shadow anyType + widenType tuple shape + ReadonlyArray filter
+guard: THREE fixes, all GENERAL correctness that reproduce minimally. Dashboard: compiler 153 → 135
+(−18, TS2322 77 → 59); shared checker/lib so they generalize to every profile. Suite 9,654 → 9,663
+(+9 local across 3 new test files, 0 regressions); 3 fix commits (4e94a4e1 / b90d79f1 / 7d82a0aa).**
+- **Fix 1 (4e94a4e1, body-local shadows a global function; TS2322 −7):** `applyBodyLocalShadowing`
+  (the return/argument-assignability pass) recorded an un-annotated top-level local shadowing an outer
+  binding by REMOVING it from `currentLocalTypes` (round 351), so a value-position use (`return clone`)
+  fell through `getTypeOfIdentifier` to the outer binding. When that outer binding is a GLOBAL (an
+  exported fn merged into globals — core.ts's `clone<T>(object: T): T`, `identity<T>`) the reference
+  resolved to the generic function ITSELF → FP `'<T>(object: T) => T' is not assignable to type
+  'Identifier' / 'Node | undefined' / …`. Two coupled changes (both suppression-only): (a) an
+  un-annotated `inGlobals && !inLocal` shadow now registers `currentLocalTypes[nm] = anyType` (a
+  concrete inferred local still wins, checked first; a file-level VAR shadow keeps round 351's
+  remove-and-re-infer); (b) `applyBodyLocalShadowing` descends into nested blocks (if/loop/try/switch,
+  `applyNestedGlobalShadow`, anyType-only, GLOBAL collisions only — never a concrete annotation type,
+  which would leak the block-local shape function-wide) so `const clone=…;return clone` inside an `if`
+  resolves. Cleared nodeFactory.ts cloneIdentifier/clonePrivateIdentifier, checker.ts:15679,
+  expressionToTypeNode.ts:535 (round-454's documented unmasked gap), plus the builder.ts `create`/`map`
+  and checker.ts `length` object-literal-factory shadows (bonus).
+- **Fix 2 (b90d79f1, widenType preserves tuple shape; TS2322 −8):** `widenType`'s Type.Object branch
+  rebuilt a tuple WITHOUT copying `tupleElementTypes` and widened its `length` LITERAL (`2 → number`),
+  turning `[SF, FR]` into a `{ 0: SF; 1: FR; length: number; [x: number]: SF | FR }` object that no
+  longer related to a tuple target (`length: number ⊄ 2`). tsc's own `map(arr, x => [a, b])` idiom whose
+  result flows through a generic wrapper (`concatenate(...)`) and is assigned to a `[A, B][]` variable
+  FP-fired TS2322 (declarations.ts/builder.ts/destructuring.ts ×8). widenType now widens a tuple's
+  ELEMENT types only + rebuilds via `buildTupleFromTypes` (length literal + tupleElementTypes +
+  per-element optionality preserved); no element widens → tuple returned untouched. Strictly more
+  precise. NOTE the var-decl path already passed (contextual tuple typing); only the ASSIGNMENT path
+  (which widens the RHS) hit the lossy rebuild — that's why it reproduced only as an assignment.
+- **Fix 3 (7d82a0aa, ReadonlyArray.filter/every type-predicate overload; TS2322 −3):** the embedded
+  `ReadonlyArray<T>.filter`/`every` lacked the `filter<S extends T>(…): S[]` overload that `Array<T>`
+  already carried, so `roArr.filter(isFoo)` returned the base `T[]` — utilitiesPublic.ts
+  `getJSDocTagsWorker(...).filter(isJSDocParameterTag)` (a `readonly JSDocTag[]`) FP-fired
+  `'JSDocTag[]' ⊄ 'readonly JSDocParameterTag[]'` (×3). Added the overload (and `every`), so
+  `tryInferPredicateOverloadReturn` (round 439) infers S from the guard's predicate target. Lib change →
+  full corpus blast-radius gate clean.
+- **INVESTIGATED, deferred (whole-program-only or deep M3, confirmed via minimal repro):** the
+  `isPropertyNameLiteral(name) && …` TS2345 Expression→Identifier narrowing is 0-error in isolation (a
+  whole-program alias/merge issue); the generic-identity-fn `<T>(x: T) => T` → concrete-fn assignability
+  (core.ts:2378 `identity` → `GetCanonicalFileName`, sourcemap.ts:820) is a genuine M3.1 generic-signature
+  relation; the `Type | IncompleteType` `.type` access is a specialized `flags === 0` enum-domain
+  narrowing; the `assertNever(reason)` exhaustive-switch residual (programDiagnostics.ts) needs the
+  enum-union `ReferencedFile` to narrow to `never` in the default (round 441 family).
+- **NEXT (compiler @ 135):** the generic-identity-fn `<T>(x: T) => T` → concrete-fn assignability (M3.1,
+  clean minimal repro — likely the highest-value tractable relation slice); TransformerFactory<T>
+  generic-type-alias-of-fn relation ×3; the exhaustive-switch enum-union `assertNever`/`assertType<never>`
+  residuals; `string → __String` branding (whole-program); the `.map` DIRECT array-literal-in-assignment
+  contextual tuple typing (assignment path lacks the var-decl array-literal-vs-tuple handling).
+
 **Round 454 (2026-07-09) — nested-function-shadow generalization + flow-narrowing + method-param
 bivariance: FIVE fixes. Dashboard: compiler 170 → 153 (−17); services 275 → 251 (−24, the fixes
 generalize). Suite 9,642 → 9,654 (+12 local across 5 new test files, 0 regressions); 5 fix commits
@@ -606,80 +655,6 @@ services diffed via `--listAll` as strictly by-position removals.**
   `DiagnosticOrDiagnosticAndArguments` ×16 (array→tuple-union relation, plus a duplicate-chain-line
   display bug + an `'array'` fallback display). Extend the conflation / spread bails to var-decl/argument
   positions only when a non-return FP surfaces (none observed this round).
-
-**Round 444 (2026-07-08) — cross-file heritage / `this`-guard receiver narrowing / alias-own-file
-conflation / module-var-leak property chain (Blocker #3): FOUR bounded fixes, all suppression-only.
-Compiler profile UNCHANGED (190), but they GENERALIZE strongly across the big profiles: services
-498 → 439 (−59), server 733 → 669 (−64), harness 989 → 919 (−70). Suite 9,512 → 9,523 (+11 local
-across 3 test files, 0 regressions); 4 fix commits (19e282f0/59868e67/796d263f/bd0d8eba); services
-diffed via `--listAll` as strictly by-position removals (heritage 22 removed / 1 unmasked;
-this-predicate 17/0; conflation 12/0; NavNode-chain 9/0). Bench rows recorded.**
-- **Baseline @ HEAD (round 443): services 498, compiler 190.** The compiler profile is mined out for
-  clean bounded veins; bucketed the SERVICES `--listAll` TS2339×85: `Type`×20 / `Info`×12 /
-  `RefactorContext`×9 / `NavigationBarNode`×9 / `ExportInfoMap`×8 / `CodeFixContextBase`×8 / `Symbol`×5.
-- **Fix 1 (19e282f0, −21 services, TS2339): namespace-import-aliased heritage base.** An interface
-  whose `extends` base is `NS.Base` where `NS` is a MODULE namespace-import alias
-  (`RefactorContext`/`CodeFixContextBase extends textChanges.TextChangesContext`, with
-  `import * as textChanges` / a `_namespaces` `export * as` barrel) did not inherit the base's members.
-  `resolveAlias` does NOT resolve an `import * as NS` / `export * as NS` namespace alias to a module with
-  `.exports` (the alias's declaration is the NamespaceImport node, which none of resolveAlias's branches
-  handle), so `resolveHeritageBaseSymbol`'s exports lookup returned null → base = errorType → inherited
-  `.host` FP'd TS2339 ×17. Fix: `getTypeFromBaseTypeExpression` falls back to the merged-global
-  LAST-SEGMENT name (`globals[baseExpr.name.text]`) — exactly what `getTypeFromTypeReference` does for
-  the same qualified shape in ANNOTATION position (which is why a direct `ctx: textChanges.TextChangesContext`
-  annotation resolved while the heritage base did not). By-position diff 22 removed / 1 unmasked
-  (pasteEdits.ts:111 — a pre-existing `originalProgram!` NonNull-strip gap in an object-literal value,
-  surfaced because CodeFixContextBase now resolves its base; needs exact nested-flow context, does not
-  reproduce in isolation → left as residual).
-- **Fix 2 (59868e67, −17 services, TS2339 — the `.types`-on-`Type` bucket 20 → 2): a `this is X` guard
-  METHOD narrows the call RECEIVER.** The tsc `Type`/`Symbol`/`Node` public-API guards
-  (`isUnion(): this is UnionType`, `isIntersection()`, `isLiteral()`, …, added to the interfaces by a
-  `declare module` augmentation) narrow the method-call receiver, not an argument. `narrowByCallPredicate`
-  bailed twice: (1) the `this` subject of a `this is X` predicate parses as a **ThisType** node (not an
-  Identifier), so `predicateParamName` extraction returned null; (2) even with the name, the narrowed
-  reference is the receiver, so the arg-path fast-path / paramIdx logic never matched. Fix: recognise a
-  ThisType subject as `"this"`, compute the method-call receiver path up front (participating in the P0
-  fast-path), and narrow the receiver via the existing single-type/union logic. **FP-safe gate (caught by
-  the corpus suite): a `this is X` method guard narrows only a NON-UNION receiver** — tsc narrows a
-  union-receiver method-guard only if EVERY constituent has a matching predicate (typePredicatesInUnion3:
-  `Type1 | Type2` where `Type2.predicate(): boolean` is not a guard), and resolveFlowCalleeDecl found only
-  one member's method, so a union bails (suppression-only → a bail is a harmless false-negative).
-- **Fix 3 (796d263f, −12 services, TS2339): the alias's-own-file complement of round 443.** In the file
-  that DECLARES `type Info = TypeLikeDeclarationInfo | EnumInfo | …` (fixAddMissingMember.ts), the receiver
-  `info` resolves — via the merged last-wins pick (Interface+TypeAlias don't merge) — to a SIBLING codefix
-  file's unrelated `interface Info` instead of the local union, so `info.kind`/`info.parentDeclaration`/
-  `info.token` (union members reachable after a `.kind` discriminant narrowing our conflated receiver can't
-  model) FP'd. `checkMemberAccessMissing` bails when the receiver's conflated name is a `type X` in THIS
-  file AND the property exists on SOME constituent of the file-local union. **The union is resolved from the
-  TypeAliasDeclaration's BODY node directly (`getTypeFromTypeNode`), NOT via `getDeclaredTypeOfSymbol` on the
-  file-local symbol — that symbol's `declarations` list is polluted by `mergeSymbolTable` with the sibling
-  `interface X`es, so getDeclaredTypeOfSymbol resolves an Interface, not the Union** (found by an instrumented
-  probe: `localInfo=[TypeAliasDeclaration, InterfaceDeclaration, InterfaceDeclaration] laType=Interface`).
-  Handles both a single `interface X` receiver and an `X | undefined` union receiver (sole non-nullish member).
-- **Fix 4 (bd0d8eba, −9 services, TS2339 — the NavigationBarNode ×9 residual): the module-var-leak root
-  behind a PROPERTY-ACCESS chain.** Round 442's `moduleFileLocalVarNames` bail covered a bare-Identifier
-  receiver, but `parent.parent.kind` (checker.ts) leaks navigationBar.ts's `let parent: NavigationBarNode`
-  through the bare `parent` — `parent.parent` resolves to NavigationBarNode (it has a `.parent`) so `.kind`
-  FP'd on the CHAIN. `checkMemberAccessMissing` walks the receiver chain to its root Identifier and bails
-  when the root is a leaked module var (and not the current file's own binding). FP-safe: the whole chain is
-  resolved through the wrong leaked type; a CALL in the chain breaks the property-access walk so only pure
-  chains bail. Generalizes: services/server/harness each −9.
-- **INVESTIGATED & DEFERRED: the type-RESOLUTION fix (prefer the file-local `type X` in `getTypeFromTypeReference`)
-  fails — `currentCheckFileName` is NULL at the lazy `getInfo`-return-type resolution (the type is resolved +
-  cached before any file-check context sets it). The emission-site bail (fix 3) is the robust choice.**
-- **META / next-agent (services @ 439):** the clean bounded services veins are now largely mined; the
-  residual TS2339×30 is deep — **`Symbol.links`×5 is NOT augmentation-merge** (INVESTIGATED round 444: `links`
-  is on `TransientSymbol`, narrowed by an `isTransientSymbol(symbol) && symbol.links…` `&&`-chain — the
-  narrowing WORKS in isolation but the real symbolDisplay.ts FP is a deep gap, likely the huge-file flow-walk
-  depth cap or a `TransientSymbol`/`Symbol`-lib conflation; needs an instrumented probe). **`ExportInfoMap`×8 is
-  a WRONG-TYPE issue** (`exportInfo: SymbolExportInfo | FutureSymbolExportInfo` — a `let x: T = …; ({ x } = result)`
-  destructuring-reassignment re-types `exportInfo` to `ExportInfoMap`; an inference/destructuring-target-type gap).
-  The bulk is now deep-M3 TS2322×236 (fragmented relation gaps). The genuine AUGMENTATION-MEMBER merge (a
-  `declare module { interface Symbol { links } }` adding members our binder doesn't merge into the base) is
-  PARTIALLY modeled already — `mergeModuleAugmentations` merges the augmentation's interface DECLARATIONS into the
-  base symbol's `declarations` list (round-444 repro: `Type.isUnion()` added by augmentation RESOLVES cross-file),
-  so it is no longer the dominant residual it was thought to be.
-
 
 **M2 — Real-lib migration (staged; decompose further at start)**
 

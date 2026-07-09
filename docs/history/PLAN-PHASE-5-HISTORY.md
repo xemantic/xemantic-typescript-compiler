@@ -1,3 +1,76 @@
+**Round 444 (2026-07-08) — cross-file heritage / `this`-guard receiver narrowing / alias-own-file
+conflation / module-var-leak property chain (Blocker #3): FOUR bounded fixes, all suppression-only.
+Compiler profile UNCHANGED (190), but they GENERALIZE strongly across the big profiles: services
+498 → 439 (−59), server 733 → 669 (−64), harness 989 → 919 (−70). Suite 9,512 → 9,523 (+11 local
+across 3 test files, 0 regressions); 4 fix commits (19e282f0/59868e67/796d263f/bd0d8eba); services
+diffed via `--listAll` as strictly by-position removals (heritage 22 removed / 1 unmasked;
+this-predicate 17/0; conflation 12/0; NavNode-chain 9/0). Bench rows recorded.**
+- **Baseline @ HEAD (round 443): services 498, compiler 190.** The compiler profile is mined out for
+  clean bounded veins; bucketed the SERVICES `--listAll` TS2339×85: `Type`×20 / `Info`×12 /
+  `RefactorContext`×9 / `NavigationBarNode`×9 / `ExportInfoMap`×8 / `CodeFixContextBase`×8 / `Symbol`×5.
+- **Fix 1 (19e282f0, −21 services, TS2339): namespace-import-aliased heritage base.** An interface
+  whose `extends` base is `NS.Base` where `NS` is a MODULE namespace-import alias
+  (`RefactorContext`/`CodeFixContextBase extends textChanges.TextChangesContext`, with
+  `import * as textChanges` / a `_namespaces` `export * as` barrel) did not inherit the base's members.
+  `resolveAlias` does NOT resolve an `import * as NS` / `export * as NS` namespace alias to a module with
+  `.exports` (the alias's declaration is the NamespaceImport node, which none of resolveAlias's branches
+  handle), so `resolveHeritageBaseSymbol`'s exports lookup returned null → base = errorType → inherited
+  `.host` FP'd TS2339 ×17. Fix: `getTypeFromBaseTypeExpression` falls back to the merged-global
+  LAST-SEGMENT name (`globals[baseExpr.name.text]`) — exactly what `getTypeFromTypeReference` does for
+  the same qualified shape in ANNOTATION position (which is why a direct `ctx: textChanges.TextChangesContext`
+  annotation resolved while the heritage base did not). By-position diff 22 removed / 1 unmasked
+  (pasteEdits.ts:111 — a pre-existing `originalProgram!` NonNull-strip gap in an object-literal value,
+  surfaced because CodeFixContextBase now resolves its base; needs exact nested-flow context, does not
+  reproduce in isolation → left as residual).
+- **Fix 2 (59868e67, −17 services, TS2339 — the `.types`-on-`Type` bucket 20 → 2): a `this is X` guard
+  METHOD narrows the call RECEIVER.** The tsc `Type`/`Symbol`/`Node` public-API guards
+  (`isUnion(): this is UnionType`, `isIntersection()`, `isLiteral()`, …, added to the interfaces by a
+  `declare module` augmentation) narrow the method-call receiver, not an argument. `narrowByCallPredicate`
+  bailed twice: (1) the `this` subject of a `this is X` predicate parses as a **ThisType** node (not an
+  Identifier), so `predicateParamName` extraction returned null; (2) even with the name, the narrowed
+  reference is the receiver, so the arg-path fast-path / paramIdx logic never matched. Fix: recognise a
+  ThisType subject as `"this"`, compute the method-call receiver path up front (participating in the P0
+  fast-path), and narrow the receiver via the existing single-type/union logic. **FP-safe gate (caught by
+  the corpus suite): a `this is X` method guard narrows only a NON-UNION receiver** — tsc narrows a
+  union-receiver method-guard only if EVERY constituent has a matching predicate (typePredicatesInUnion3:
+  `Type1 | Type2` where `Type2.predicate(): boolean` is not a guard), and resolveFlowCalleeDecl found only
+  one member's method, so a union bails (suppression-only → a bail is a harmless false-negative).
+- **Fix 3 (796d263f, −12 services, TS2339): the alias's-own-file complement of round 443.** In the file
+  that DECLARES `type Info = TypeLikeDeclarationInfo | EnumInfo | …` (fixAddMissingMember.ts), the receiver
+  `info` resolves — via the merged last-wins pick (Interface+TypeAlias don't merge) — to a SIBLING codefix
+  file's unrelated `interface Info` instead of the local union, so `info.kind`/`info.parentDeclaration`/
+  `info.token` (union members reachable after a `.kind` discriminant narrowing our conflated receiver can't
+  model) FP'd. `checkMemberAccessMissing` bails when the receiver's conflated name is a `type X` in THIS
+  file AND the property exists on SOME constituent of the file-local union. **The union is resolved from the
+  TypeAliasDeclaration's BODY node directly (`getTypeFromTypeNode`), NOT via `getDeclaredTypeOfSymbol` on the
+  file-local symbol — that symbol's `declarations` list is polluted by `mergeSymbolTable` with the sibling
+  `interface X`es, so getDeclaredTypeOfSymbol resolves an Interface, not the Union** (found by an instrumented
+  probe: `localInfo=[TypeAliasDeclaration, InterfaceDeclaration, InterfaceDeclaration] laType=Interface`).
+  Handles both a single `interface X` receiver and an `X | undefined` union receiver (sole non-nullish member).
+- **Fix 4 (bd0d8eba, −9 services, TS2339 — the NavigationBarNode ×9 residual): the module-var-leak root
+  behind a PROPERTY-ACCESS chain.** Round 442's `moduleFileLocalVarNames` bail covered a bare-Identifier
+  receiver, but `parent.parent.kind` (checker.ts) leaks navigationBar.ts's `let parent: NavigationBarNode`
+  through the bare `parent` — `parent.parent` resolves to NavigationBarNode (it has a `.parent`) so `.kind`
+  FP'd on the CHAIN. `checkMemberAccessMissing` walks the receiver chain to its root Identifier and bails
+  when the root is a leaked module var (and not the current file's own binding). FP-safe: the whole chain is
+  resolved through the wrong leaked type; a CALL in the chain breaks the property-access walk so only pure
+  chains bail. Generalizes: services/server/harness each −9.
+- **INVESTIGATED & DEFERRED: the type-RESOLUTION fix (prefer the file-local `type X` in `getTypeFromTypeReference`)
+  fails — `currentCheckFileName` is NULL at the lazy `getInfo`-return-type resolution (the type is resolved +
+  cached before any file-check context sets it). The emission-site bail (fix 3) is the robust choice.**
+- **META / next-agent (services @ 439):** the clean bounded services veins are now largely mined; the
+  residual TS2339×30 is deep — **`Symbol.links`×5 is NOT augmentation-merge** (INVESTIGATED round 444: `links`
+  is on `TransientSymbol`, narrowed by an `isTransientSymbol(symbol) && symbol.links…` `&&`-chain — the
+  narrowing WORKS in isolation but the real symbolDisplay.ts FP is a deep gap, likely the huge-file flow-walk
+  depth cap or a `TransientSymbol`/`Symbol`-lib conflation; needs an instrumented probe). **`ExportInfoMap`×8 is
+  a WRONG-TYPE issue** (`exportInfo: SymbolExportInfo | FutureSymbolExportInfo` — a `let x: T = …; ({ x } = result)`
+  destructuring-reassignment re-types `exportInfo` to `ExportInfoMap`; an inference/destructuring-target-type gap).
+  The bulk is now deep-M3 TS2322×236 (fragmented relation gaps). The genuine AUGMENTATION-MEMBER merge (a
+  `declare module { interface Symbol { links } }` adding members our binder doesn't merge into the base) is
+  PARTIALLY modeled already — `mergeModuleAugmentations` merges the augmentation's interface DECLARATIONS into the
+  base symbol's `declarations` list (round-444 repro: `Type.isUnion()` added by augmentation RESOLVES cross-file),
+  so it is no longer the dominant residual it was thought to be.
+
 **Round 443 (2026-07-08) — module-augmentation family + the module-file-local TYPE-alias leak
 (Blocker #3): FOUR bounded fixes, all suppression-only. Compiler profile UNCHANGED (190 — no FPs in
 these families there), but the fixes GENERALIZE hugely across the big profiles: services 591 → 498
