@@ -40,11 +40,25 @@ which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the b
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
 **Round 458 (2026-07-09) — logical/ternary operand narrowing + try/finally flow fix +
-fresh-objlit interface-target retry. THREE fixes, all GENERAL checker/flow correctness that
-reproduce minimally. Dashboard: compiler 121 → 116 (−5), services 217 → 210 (−7), server 407 →
-402 (−5), harness 620 → 615 (−5), tsc-cli 118, jsTyping 115, deprecatedCompat 118,
-typingsInstallerCore 115. Suite 9,690 → 9,703 (+13 local across 3 test files, 0 regressions); 3 fix
-commits (a8571636 / 4eb423e7 / b2143c9e).**
+fresh-objlit interface-target retry + a P0 single-file-CLI crash fix. FOUR fixes, all GENERAL
+checker/flow/driver correctness that reproduce minimally. Dashboard: compiler 121 → 116 (−5),
+services 217 → 210 (−7), server 407 → 402 (−5), harness 620 → 615 (−5), tsc-cli 118, jsTyping 115,
+deprecatedCompat 118, typingsInstallerCore 115. Suite 9,690 → 9,706 (+16 local across 4 test files,
+0 regressions); 4 fix commits (a8571636 / 4eb423e7 / b2143c9e / eec58c6a).**
+- **Fix 4 (eec58c6a, P0 — `xtsc foo.ts` crashed on ANY bare source-file argument, even
+  `const x = 1;`):** discovered mid-session via a probe; per the P0 mandate, fixed before wrapping.
+  The bare `.ts` was passed straight into TsConfigLoader (`resolveConfigPath` treats any
+  non-directory as a tsconfig), parsed as JSON → garbage config → a corrupt lib binderResult whose
+  `sourceFile.text` mismatched its statement positions → StringIndexOutOfBounds in
+  `checkMultiBaseInStatement` (`source.substring` at a lib position ~22995 indexed into the 295-char
+  user file). Two narrower guards were tried first (a statement-span bounds check; a merged-decl
+  in-source filter) — NEITHER stopped the crash (the position mismatch is in the binderResult
+  itself, not the cross-file merge), pointing to the ROOT fix: `ProjectCompiler.build` now detects a
+  non-`.json` existing-FILE argument and builds it as a single-file program with default options
+  (like `tsc foo.ts`): the file is the sole root in a synthesized `LoadedTsConfig(files = [it])`,
+  its relative imports are still walked into the program, and type checking works normally.
+  Directory/tsconfig arguments untouched (compiler profile confirmed unchanged at 116). +3 local
+  (SingleFileBuildTest: clean compile, real-error reporting, relative-import walk).
 - **Fix 1 (a8571636, logical/ternary operand narrowing):** `combineBinaryTypes` narrows the
   `||`/`&&` RIGHT operand, and the `ConditionalExpression` typing narrows the TRUE/FALSE branches,
   by the governing condition via a new `narrowOperandByCondition` → `applyConditionNarrowing` (pure
