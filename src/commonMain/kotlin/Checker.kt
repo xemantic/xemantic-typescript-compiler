@@ -119323,6 +119323,23 @@ interface DataView {
         if (arg is StringLiteralNode || arg is NumericLiteralNode) {
             val rt = getTypeOfExpression(expr.expression)
             if (rt === stringType || rt is Type.StringLiteral) return
+            // Round 459: a NUMERIC-literal element access on a UNION-OF-TUPLES receiver
+            // (`value[1]` where value: [A] | [A, B] — tsc's toBuilderFileEmit over
+            // IncrementalBuildInfoFilePendingEmit, builder.ts:2242) resolves per-member
+            // in tsc with `undefined` for the out-of-bounds members — never TS2339 as
+            // long as SOME member has the index. A key out of bounds for EVERY member
+            // still falls through and fires.
+            if (arg is NumericLiteralNode) {
+                // The DECLARED type may carry non-tuple members a preceding guard removed
+                // (`isNumber(value) ? … : value[1]` — FileId dropped) — test the NARROWED
+                // receiver, like the TS2339 emission itself does.
+                val rtn = if (rt is Type.Union && getReferencePath(expr.expression) != null)
+                    getNarrowedTypeForReference(rt, expr.expression) else rt
+                val idx = arg.text.toIntOrNull()
+                if (idx != null && rtn is Type.Union &&
+                    rtn.types.all { (it as? Type.Object)?.tupleElementTypes != null } &&
+                    rtn.types.any { (it as Type.Object).tupleElementTypes!!.size > idx }) return
+            }
         }
         // Build the raw suggestion syntax for TS2576 from the source text:
         // - StringLiteral key keeps original quoting: a["\""] → `["\""]`
