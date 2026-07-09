@@ -59,12 +59,27 @@ correctness that reproduces minimally. Dashboard: compiler 124 → 121 (−3, TS
 - **Local pin:** `AsExpressionPrecedenceTest` (5 tests) — the exact binder.ts shape, a
   multiplicative variant, a `satisfies` smoke, and a negative control (`a + (b as T)` = `string`,
   still fires TS2322 — the fix does not blanket-suppress right-operand casts).
-- **NEXT (compiler @ 121):** `TransformerFactory<T>` generic-type-alias-of-fn relation (M3.3,
-  whole-program — the documented `currentTypeAliasArgs` deliberate skip of FunctionType alias bodies,
-  ×3 at transformer.ts getModuleTransformer); the `string → __String` residual (utilities.ts:5414,
-  whole-program); the exhaustive-switch `assertNever(reason)` enum-union residual (round 441 deep);
-  the `(x || (x = [])).push()` inline-property-receiver TS2349 (core.ts/binder.ts, round 452 reverted
-  — receiver typed in the call-type pass).
+- **NEXT (compiler @ 121):** the remaining compiler FPs are ALL deep M3 / whole-program — the
+  bounded surgical pool for the compiler profile is dry (every family scouted this round). Confirmed
+  findings for the next agent:
+  - `TransformerFactory<T>` (×3 compiler + ×3 services): NOT a generic-alias-instantiation gap — the
+    substitution path (Checker.kt:91386 `getTypeFromTypeNode(decl.type)` WITH `currentTypeAliasArgs`)
+    DOES process a FunctionType alias body, and a minimal repro (`type Transformer<T> = (n:T)=>T;
+    type TransformerFactory<T> = (c:number)=>Transformer<T>; return src`) compiles CLEAN. The real
+    FP is a WHOLE-PROGRAM conflation (Blocker #3 family — `TransformerFactory`/`Transformer`/
+    `SourceFile`/`Bundle` resolve differently in the full program); needs an instrumented probe on
+    the real profile, NOT the M3.3 generic-alias angle.
+  - `checker.ts:28630` `flowType.flags === 0 ? flowType.type` on `Type | IncompleteType`: numeric-
+    literal-`0` discriminant narrowing where the member discriminants are an enum (`Type.flags:
+    TypeFlags`) vs a literal `0` (`IncompleteType.flags`) — deep discriminant narrowing.
+  - `es2020.ts:91` `chain.questionDotToken`: needs `Debug.assertNotNode(x, guard)` NEGATIVE-exclude
+    assert narrowing (`asserts x is Exclude<T, U>`) — new narrowing machinery for a tsc idiom.
+  - `services.ts:2891/2976` `boolean | false` target: `||`-RHS flow narrowing gap (`a === undefined
+    || a` should narrow `a` to non-undefined) + union normalization (`boolean | false` → `boolean`).
+  - `(x || (x = [])).push()` TS2349 (core.ts/binder.ts): round 452 reverted — receiver typed in the
+    call-type pass via a path `contextualAssignmentRhsType` doesn't reach; property/`??=`-IIFE targets.
+  - services missing-property TS2740/TS2741 (`Node` → `Expression`/`PropertyAccessExpression`,
+    `_expressionBrand`): brand-narrowing against conflated Node/Expression types (whole-program).
 
 **Round 456 (2026-07-09) — Array/ReadonlyArray `find` type-guard overload + NonNull-identifier
 undefined-strip + branded-intersection flow-narrowing + IterableIterator heritage + a build-warning
