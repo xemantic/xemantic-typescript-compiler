@@ -79411,6 +79411,55 @@ interface DataView {
     /**
      * Returns true if this statement always returns/throws on all code paths.
      */
+    /**
+     * The set of possible `typeof` result strings for [t]'s runtime values, or null when ANY
+     * constituent is uncertain (any/unknown/error/type-param/enum/intersection). A null result
+     * means "cannot prove", so a `switch (typeof x)` exhaustiveness caller keeps TS2366/TS7030
+     * firing (FP-safe by construction — this only ever SUPPRESSES the diagnostic).
+     */
+    private fun typeofTagsOfType(t: Type): Set<String>? {
+        val members = if (t is Type.Union) t.types else listOf(t)
+        val tags = mutableSetOf<String>()
+        for (m in members) tags.add(typeofTagOfType(m) ?: return null)
+        return tags
+    }
+
+    /**
+     * Resolve the type of a `switch (typeof <subject>)` operand for exhaustiveness. The CFA pass
+     * runs without the function-body scope populated, so `getTypeOfExpression` returns `any` for a
+     * parameter reference — resolve a bare-Identifier subject from its declared annotation via
+     * `currentFunctionParams` (as `isExhaustiveLiteralSwitch` does). Returns null when unresolvable
+     * (→ caller keeps TS2366/TS7030 firing).
+     */
+    private fun typeofSwitchSubjectType(operand: Expression): Type? {
+        if (operand is Identifier) {
+            val param = currentFunctionParams.firstOrNull { (it.name as? Identifier)?.text == operand.text }
+            val annotation = param?.type
+            if (annotation != null) return getTypeFromTypeNode(annotation)
+        }
+        val t = getTypeOfExpression(operand)
+        return if (t === anyType || t === errorType) null else t
+    }
+
+    private fun typeofTagOfType(m: Type): String? = when {
+        m === anyType || m === unknownType || m === errorType -> null
+        m is Type.TypeParam -> null
+        m.flags.hasAny(TypeFlags.StringLike) -> "string"
+        m.flags.hasAny(TypeFlags.NumberLike) -> "number"
+        m.flags.hasAny(TypeFlags.BooleanLike) -> "boolean"
+        m.flags.hasAny(TypeFlags.BigIntLike) -> "bigint"
+        m.flags.hasAny(TypeFlags.ESSymbol or TypeFlags.UniqueESSymbol) -> "symbol"
+        m.flags.hasAny(TypeFlags.Undefined or TypeFlags.Void) -> "undefined"
+        m.flags.hasAny(TypeFlags.Null) -> "object"          // typeof null === "object"
+        // A numeric enum's values are numbers, a string enum's strings, a mixed enum's both —
+        // bail rather than guess (the resolved Type.Object carries no per-member value kind here).
+        (m as? Type.Object)?.symbol?.flags?.hasAny(SymbolFlags.Enum) == true -> null
+        m is Type.Object ->
+            if (getCallSignaturesOfType(m).isNotEmpty() || getConstructSignaturesOfType(m).isNotEmpty()) "function"
+            else "object"
+        else -> null
+    }
+
     private fun statementAlwaysReturns(stmt: Statement): Boolean {
         return when (stmt) {
             is ReturnStatement -> true
@@ -79441,12 +79490,20 @@ interface DataView {
                 // Switch always returns if it has a default clause and all clauses return
                 val hasDefault = stmt.caseBlock.any { it is DefaultClause }
                 if (!hasDefault) {
-                    // No default: check for exhaustive typeof switch covering all 8 values
+                    // No default: check for exhaustive typeof switch. Either every one of the 8
+                    // possible `typeof` strings is covered, OR the switch subject's actual type
+                    // has a known, fully-covered tag set — `switch (typeof value)` on
+                    // `value: string | number | PseudoBigInt` (tags string/number/object) is
+                    // exhaustive with just those three cases (tsc narrows the subject to `never`).
                     if (stmt.expression is TypeOfExpression && switchAlwaysReturns(stmt.caseBlock)) {
                         val typeofValues = setOf("string", "number", "bigint", "boolean", "symbol", "undefined", "object", "function")
                         val caseClauses = stmt.caseBlock.filterIsInstance<CaseClause>()
                         val coveredValues = caseClauses.mapNotNull { (it.expression as? StringLiteralNode)?.text }.toSet()
                         if (coveredValues.containsAll(typeofValues)) return true
+                        // FP-safe: typeofTagsOfType returns null on ANY uncertain constituent
+                        // (any/unknown/type-param/enum), so an unprovable subject keeps TS2366/TS7030 firing.
+                        val subjectTags = typeofSwitchSubjectType((stmt.expression as TypeOfExpression).expression)?.let { typeofTagsOfType(it) }
+                        if (subjectTags != null && subjectTags.isNotEmpty() && coveredValues.containsAll(subjectTags)) return true
                     }
                     // No default: check for exhaustive switch on a string/boolean literal type parameter
                     if (isExhaustiveLiteralSwitch(stmt)) return true
