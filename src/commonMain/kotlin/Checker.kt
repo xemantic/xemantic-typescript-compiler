@@ -96413,6 +96413,29 @@ interface DataView {
                 return@filter if (equal) propType.types.any { literalsEqualForDiscriminant(it, literalType) }
                 else propType.types.any { !literalsEqualForDiscriminant(it, literalType) }
             }
+            // Round 459: an ENUM-typed discriminant vs a NUMERIC literal narrows by the
+            // enum's TYPE-LEVEL domain (the union of member literal values) — tsc's
+            // `flowType.flags === 0` (checker.ts getTypeFromFlowType) drops the `Type`
+            // member because `TypeFlags` has NO 0-valued member, keeping IncompleteType
+            // (whose `flags` is the literal type 0). Runtime bitflag COMBINATIONS are
+            // outside the declared domain — tsc doesn't model them either. Both
+            // branches: equal keeps a member iff SOME enum value == the literal;
+            // not-equal keeps iff SOME value != it. Unknown/empty value sets fall
+            // through to the conservative rules below.
+            if (literalType is Type.NumberLiteral && propType is Type.Object &&
+                propType.symbol?.flags?.hasAny(SymbolFlags.Enum) == true
+            ) {
+                val enumSym = propType.symbol?.let { canonicalEnumSymbol(it) }
+                val values = enumSym?.id?.let { enumValues[it] }
+                if (!values.isNullOrEmpty()) {
+                    singleHadDiscriminant = true
+                    val lit = literalType.value
+                    fun matches(v: ConstantValue) = v is ConstantValue.NumberValue && v.value == lit
+                    return@filter if (equal) values.values.any { matches(it) }
+                    else values.values.any { !matches(it) }
+                }
+                return@filter true // unknown enum domain — keep (conservative)
+            }
             // An OBJECT-typed discriminant (`type: Map<string, string | number>`,
             // tsc's CommandLineOptionOfCustomType) can never strictly-equal a primitive
             // VALUE literal — `===` between an object reference and a string/number/
