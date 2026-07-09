@@ -39,10 +39,23 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
-**Round 456 (2026-07-09) — Array/ReadonlyArray `find` type-guard overload + a build-warning
-cleanup; ONE broad relation rule investigated & reverted. Dashboard: compiler 132 → 131 (−1,
-TS2322 56 → 55); services 230 → 229 (generalizes cleanly, no new FP). Suite 9,666 → 9,671
-(+5 local, 0 regressions); 2 commits (860046fc find / 54e644db warning).**
+**Round 456 (2026-07-09) — Array/ReadonlyArray `find` type-guard overload + NonNull-identifier
+undefined-strip + a build-warning cleanup; ONE broad relation rule investigated & reverted.
+Dashboard: compiler 132 → 127 (−5, TS2322 56 → 51); services 230 → 223 (−7, generalizes cleanly,
+no new FP). Suite 9,666 → 9,675 (+9 local, 0 regressions); 3 commits (860046fc find / 042e2551
+nonnull / 54e644db warning).**
+- **Fix 1b (042e2551, NonNull-identifier undefined-strip; compiler −4, services −6):**
+  `getTypeOfExpression(NonNullExpression)` kept the union for a bare-identifier `x!` — only
+  `undefined!`/`null!` → never and a `<call>()!` all-concrete union stripped (round 439). So
+  `writer = _writer!` (emitter.ts, `_writer: EmitTextWriter | undefined`) and `currentFlow =
+  preSwitchCaseFlow!` (binder.ts, `FlowNode | undefined`) FP-fired `X | undefined ⊄ X`. Extended the
+  round-439 strip to `expr.expression is Identifier` with the SAME all-concrete gate
+  (`types.none { typeContainsUnresolvedTypeParam }`). Property-access `.x!` (the object-literal-vs-
+  interface member-precision gap the round-407 note documents) and TP-carrying operands stay deferred
+  — a bare Identifier is a simple reference and cannot expose the `.x!` object-literal gap. Cleared
+  binder.ts:1748/1768, checker.ts:5791 (`(Symbol | undefined)[]` → `Symbol[] | undefined`),
+  emitter.ts:1417; transformer.ts:271's pre-existing object-literal-vs-TransformationContext FP only
+  shifts a member display (not a new FP). Corpus green (core-path change — the critical gate).
 - **Fix 1 (860046fc, `find`/`findLast` type-predicate overload; TS2322 −1 compiler, −1 services):**
   the embedded `Array<T>`/`ReadonlyArray<T>` `find`/`findLast` had only the general
   `(predicate: … => unknown): T | undefined` signature, so `arr.find(isFoo)` returned the base element
@@ -67,7 +80,7 @@ TS2322 56 → 55); services 230 → 229 (generalizes cleanly, no new FP). Suite 
   signature selection wherever inference under-resolves a TypeParam arg — exactly CLAUDE.md's standing
   warning against the broad rule. If retried: apply as a PER-SITE bail at the assignment/return TS2322
   EMISSION only (not the shared engine), or fix the upstream `getPathFromPathComponents` inference first.
-- **NEXT (compiler @ 131, ~88 real excl. TS2591×43 offline-node):** TransformerFactory<T>
+- **NEXT (compiler @ 127, ~84 real excl. TS2591×43 offline-node):** TransformerFactory<T>
   generic-type-alias-of-fn relation (M3.3 — the alias `(context) => Transformer<T>` doesn't
   instantiate its fn-type body; whole-program, minimal repro clean); the exhaustive-switch
   `assertNever(reason)` enum-union residual (programDiagnostics.ts's `ReferencedFile` → `never` in the
