@@ -1,3 +1,164 @@
+**Round 441 (2026-07-08) — TS2344 constraint-chain + assertNever exhaustiveness burn-down:
+THREE bounded fixes take the compiler profile 205 → 197 (−8). Suite 9,482 → 9,492 (+10 local across
+2 test files, 0 regressions); 3 fix commits. All diffed via the `--listAll` `comm` loop as
+strictly by-position removals (0 added). Fixes 2+3 together clear 5 of the 8 assertNever `→never`
+FPs.**
+- **Fix 3 (checker, −3, TS2345): the arg-check narrows a NON-union arg to a `never` param when the
+  walk proves `never`.** `checkArgumentsAgainstSignature` (~124781) previously EXCLUDED the
+  never-param case for non-union args (the exclusion was correct only BEFORE fix 2, when a partial
+  refinement would manufacture an FP). Now: narrow the arg and USE the result ONLY when
+  `n === neverType` (a partial union stays `ctxApplied` → the same TS2345 the pre-narrow path
+  emitted → no manufactured FP). This makes the `Debug.type<SomeUnion>(node)` / `asType<T>(node)`
+  assert (`asserts value is T`, explicit type arg) end-to-end: `narrowByAssertCall` re-types the
+  non-union `node` to the union (round-424b explicit-type-arg bind + the non-relating-object →
+  return-target branch), the exhaustive switch narrows it to `never`, and this gate consumes it.
+  Cleared debug.ts:852, utilities.ts:2270/12050 (the `isDeclarationWithTypeParameterChildren`
+  family). **DIAGNOSIS UPDATE (supersedes the round-441 "fails top-level too" note below): the
+  assert-to-union narrowing WAS working in the walk all along — the block was purely the arg-check
+  CONSUMER gate; the 3 residual `→never` (utilities.ts:12082, programDiagnostics.ts:346,
+  diagnostics.ts:702) now need the target union to resolve with readable `.kind` members
+  (`HasInferredType`-style unions of big AST-node interfaces) — a deeper resolution gap, not a
+  narrowing/consumer gap.**
+- **Fix 2 (checker, −2, TS2345): exhaustive-switch `default` narrows the discriminant to `never`.**
+  `narrowBySwitchClause`'s round-425 default-clause negative-narrowing branch already dropped the
+  case-covered members but returned `null` (= "no narrowing") when the filtered set was EMPTY
+  (i.e. every member covered = exhaustive) — it now returns `neverType`. That is what makes
+  `default: return assertNever(x)` / `assertType<never>(x)` type-check: the `never`-param arg-check
+  reads the narrowed `never` via `getNarrowedTypeForReference` (`never <: never` passes). BOTH
+  filter paths only DROP a member with a readable literal/enum `.kind` matching a case (a wide-kind
+  member OR one without a readable discriminant is KEPT), so `[]` is a genuine exhaustiveness proof
+  and a NON-exhaustive switch narrows to the surviving members (the never-param call still errors
+  with the uncovered member — verified by negative control). Cleared the 2 compiler `→never` FPs
+  with resolvable discriminated-union subjects (programDiagnostics.ts:419 `RootFile | LibFile | …`,
+  tsbuildPublic.ts:2482 `Unbuildable | UpToDate | …`). The other 6 compiler `→never` FPs
+  (utilities/debug/programDiagnostics/diagnostics) have `Node`/`Expression` BASE-INTERFACE subjects
+  — tsc narrows them via a preceding `Debug.type<SomeUnion>(node)` assert (`asserts value is T`,
+  explicit type arg) that casts `node` to a union FIRST, then the switch exhausts it. **DIAGNOSED
+  (round 441, do not re-chase without instrumentation): the assert-to-union narrowing of an
+  OBJECT-typed reference does NOT fire — even for a TOP-LEVEL `declare function asType<T>(value:
+  unknown): asserts value is T; asType<Shape>(node)` (no `Debug` namespace), `node: {kind:"a"|"b"}`
+  stays its declared type in the switch default, so my exhaustive-never fix has no union to
+  exhaust.** `narrowByAssertCall`'s code path (Checker.kt ~94150-94167) DOES bind the explicit type
+  arg (round-424b) and return the target for a non-relating object source (`checkTypeRelatedTo(t,
+  target)` false → return target), so the gap is UPSTREAM: `narrowByAssertCall` is not being
+  REACHED / its result not consumed for this shape — likely the round-413 fast-forward loop's
+  `flowCallMightNarrow`/`flowCalleeMayHaveAssertEffects` gate skipping the FlowCall, or the walk not
+  reaching it. Needs a marker-diagnostic trace at the FlowCall handler. High leverage (the
+  `Debug.type<T>` + exhaustive-switch idiom is pervasive in tsc source) but a real M3.4 slice.
+- **Fix 1 (checker, −3, TS2344): constraint-chain bail-outs (detail below).**
+- **Generalization (all THREE fixes, `--no-emit` `--listAll`, vs the round-440 END baseline):
+  services 1,037 → 1,030 (−7), server 1,321 → 1,314 (−7), harness 1,610 → 1,603 (−7).** Consistent
+  −7 to −8 across profiles, no regressions. The assertNever `→never` cases on the larger profiles
+  are gated by the same union-`.kind`-resolution requirement, so only the resolvable ones clear
+  there too.
+- **Baseline @ HEAD (round 440): 205 FPs.** Bucketed the full `--listAll`: TS2322×100 (deep
+  M3 relation, fragmented — largest sub-shape only 3), TS2591×43 + TS2304 `global`×2 + TS2584
+  `console`×1 env-legit (offline, no @types/node — NOT compiler FPs), TS2345×28 (fragmented:
+  assertNever `→never` exhaustiveness ×8, wrong-callee singles, `number|undefined`→number
+  arithmetic-flow), TS2344×3, small buckets. The clean bounded family was TS2344×3.
+- **Fix (checker, −3): `checkConstraintsForTypeArgs` + `checkTpListDefaults` (default validation)
+  gained two constraint-chain bail-outs.** (a) A bare TypeParam arg whose `.constraint` resolves
+  to `anyType` satisfies EVERY target constraint (a literal `extends any` OR — our gap — an
+  enum-member union constraint `JSDocSyntaxKind = SyntaxKind.A | …` that collapses to `any`: each
+  member type resolves to `any` so the union collapses). A DIRECT `Token<JSDocSyntaxKind>` arg is
+  already skipped by the `argType === anyType` guard, so a TypeParam arg (`Token<TKind>` where
+  `TKind extends JSDocSyntaxKind`, Token's param `extends SyntaxKind`) must be too — parser.ts
+  `parseOptionalTokenJSDoc`/`parseExpectedTokenJSDoc` ×2. (b) A UNION arg/default satisfies when
+  EVERY member does, incl. a TypeParam member whose own constraint relates — `Visitor<TIn extends
+  Node, TOut extends Node | undefined = TIn | undefined>` (`TIn | undefined` vs `Node | undefined`;
+  the whole-union relation misses `TIn <: Node | undefined` because we have no
+  TypeParam-source-via-constraint relation rule) — types.ts `Visitor` default ×1. FP-safe: every
+  union member must genuinely relate (2 negative controls: unrelated union member → TS2344 still
+  fires). The relation engine still has NO general `source is Type.TypeParam && target !is
+  Type.TypeParam` branch — a broad relation change risks the documented 39+ cycle regressions, so
+  the fix stays as per-site bail-outs.
+- **META / next-agent residual (197 after all three fixes):** the clean bounded veins on the
+  COMPILER profile are now nearly mined out — the residual is genuinely hard. TS2322×100 is deeply
+  fragmented (largest sub-shape 3: `TransformerFactory<SourceFile|Bundle>`, `__String | undefined`,
+  `Expression`) — deep M3 relation/narrow-DOWN work. The assertNever `→never` TAIL is down to 3
+  (fixes 2+3 cleared 5 of 8): the residual need the target union (`HasInferredType`-style: a union
+  of big AST-node interfaces reached via `Debug.type<Union>(node)`) to RESOLVE with readable
+  `.kind` members — a resolution gap, not narrowing. Lib-completeness
+  gaps deferred to M2.3: TS2353 `next` (sourcemap.ts — embedded `interface IterableIterator<T> {}`
+  is EMPTY, doesn't `extends Iterator<T>`, so an object literal with `next()` looks excess);
+  TS2740 Set set-methods (core.ts). Arithmetic-flow `number|undefined`→number (parser.ts 8911/8974)
+  are the round-440-flagged not-reproducible-in-isolation M3.4 slices. Wrong-callee singles
+  (utilities:6325 `getIndentString(indent)` → indent resolves to string; moduleSpecifiers:929;
+  program:832) are the round-440 C/D cross-file-collision/shadow pattern — each 1 FP, individual
+  root-cause. TS2454×4 `resultingToken` is the `while(true)`-break definite-assignment flow gap.
+
+**Round 440 (2026-07-07) — optional-widen / operator-typing / cross-file-callee /
+generic-inference burn-down: FIVE bounded fixes take the compiler profile 228 → 205
+(−23, −10.1%; TS2345 39 → 28, TS2322 108 → 100, TS2362 4 → 2, TS2365 1 → 0). Suite
+9,465 → 9,482 (+17 local across 5 test files, 0 regressions); 5 fix commits (a6155814,
+390b5a6a, f812e017, 19d19d08, 67366445). Every step diffed via the `--listAll` loop as
+strictly removals except fix B's documented position shift.**
+- **Baseline @ HEAD (round 439, 228 FPs).** Reused the materialize-once `--listAll` per-fix
+  `comm -13` diff loop (~30 s CLI run per fix).
+- **Fix A (a6155814, −4): fresh object-literal OPTIONAL prop accepts `T | undefined` (M3.4).**
+  `checkNestedObjLitPropTypes`' per-property LEAF compared the value against the BARE
+  declared member type; it now routes the relation target through `widenOptionalTargetPropType`
+  (source-nullish gated, exactOptionalPropertyTypes off) — a fresh `sourceIndex: hasSource ? n :
+  undefined` (`number | undefined`) passes `Mapping.sourceIndex?: number` (sourcemap.ts
+  captureMapping ×4). Display keeps the bare member type. Widen-site count 4 → 5.
+- **Fix B (390b5a6a, −3): `combineBinaryTypes` types `a ?? b` as `NonNullable<a> | b` (M3.4).**
+  The `??` case unioned the RAW left type; it now strips null/undefined/void from the left
+  (pure-nullish left → the right operand only). `verbosityLevel ?? -1` (`number | undefined`)
+  → `number`. 3 clean whole-object/property removals (moduleNameResolver:1828,
+  moduleSpecifiers:555, typeSerializer:446); ALSO a checker.ts 6647→6640 POSITION SHIFT — the
+  per-property `maxExpansionDepth` FP is replaced by a coarse whole-object `NodeBuilderContext`
+  relation FP (a pre-existing MASKED deep-M3 gap: NodeBuilderContext extends an interface using
+  `Required<Pick<...>>` utility types + Maps; the count on checker.ts is unchanged). Not
+  chased — the whole-object relation is a separate M3.1 slice.
+- **Fix C (f812e017, −4): getCalleeType consults currentParamBindingNames (M3.1).** A
+  function-body destructured-const local (`const { watchFile } = createWatchFactory()`,
+  unbound per B83.5) shadows a same-named cross-file function callee. getCalleeType resolved a
+  bare-Identifier callee straight through merged `globals` → tsbuildPublic's `function
+  watchFile<T>(state: SolutionBuilderState<T>, file: string, ...)`, FP-checking the args
+  against ITS params. Now consults the currentParamBindingNames side set (already populated by
+  applyCallTypesBodyLocalShadowing) → anyType, mirroring getTypeOfIdentifier (watchPublic
+  1053/1165/1199 TS2345 + 643 TS2769).
+- **Fix D (19d19d08, −7): getCalleeType prefers a same-file FunctionDeclaration over merged
+  globals (Blocker #3 cross-file name collision).** `mergeSymbolTable` pollutes the
+  first-processed file's own symbol with every file's same-named decls, so `getBuildInfo` inside
+  tsbuildPublic.ts (with its OWN `function getBuildInfo<T>(state, ...)`) picked emitter.ts's
+  `getBuildInfo(file: string, ...)` → FP'd `state` against `string` (also createWatchStatusReporter,
+  flattenDiagnosticMessageText, classFields). getCalleeType now consults currentFileLocals AFTER
+  the enclosing-namespace lookup and before globals — NARROWED to a genuine same-file
+  FunctionDeclaration (SymbolFlags.Function, non-Alias): a callee `Date` shadowed by a type-only
+  `import { Date }` interface must still resolve to the global `Date` VALUE
+  (isolatedModulesShadowGlobalTypeNotValue — an un-gated any-symbol consult regressed 3 corpus
+  tests, caught by the suite gate). Namespace-lookup-first keeps a `namespace Parser` call to
+  `createSourceFile` picking the namespace-internal one over the file-level export (a first cut
+  with file-local BEFORE the namespace lookup FP'd parser.ts:1819 — caught by the `--listAll`
+  diff). builder.ts:1686, executeCommandLine 688/727/860/1048, classFields:3359, tsbuildPublic:1531.
+- **Fix E (67366445, −5): generic inference binds T=any from an any-typed arg at a return-type
+  site (M3.1).** `tryInferSingleTypeParamFromArgs` soft-skips an any-typed arg at a return-type
+  site (round 428, so concrete args elsewhere drive inference) — but when a TP's ONLY candidate
+  position is an any arg the candidate list ended up empty → inference returned null → the caller
+  used the un-inferred bare `T` as the call's return. `Debug.checkDefined<T>(value: T | null |
+  undefined): T` called with a destructured-const local `pos` (typed anyType via
+  currentParamBindingNames — the round-C mechanism, so this was UNMASKED once pos stopped
+  resolving to a cross-file function) returned `T`, FP'ing against `createFileDiagnostic`'s
+  `number` param + a downstream `T - pos` arithmetic. Now binds T=any when candidates are empty
+  ONLY because of a soft-skipped any arg (per-TP `tpSawAnyArg` flag, return-type site only) —
+  tsc-faithful (`id<T>(x:T)` with an any arg infers T=any), strictly suppression-only (an any
+  return is assignable to any consumer). The arg-vs-param check site keeps the hard bail.
+  programDiagnostics 198/199, checker.ts:25098, utilities.ts:6314, watch.ts:627.
+- **GENERALIZATION (full-dashboard bench at the round-440 END state, `--no-emit`, vs the
+  round-438 recorded baseline — so the deltas fold in round 439 + round 440): compiler 244 → 205
+  (−39), services 1,116 → 1,037 (−79), server 1,401 → 1,321 (−80), harness 1,693 → 1,610 (−83);
+  ~6,900 LOC/s, RSS ~1 GB.** The cross-file-callee (C/D) + generic-inference (E) fixes generalize
+  strongly — collisions, destructured-factory locals, and any-arg generic calls are pervasive.
+- **META / next-agent residual (205):** TS2322×100 (deep M3 — the NodeBuilderContext whole-object
+  relation, `__String` cross-file branded-string returns, B526 tuple/brand, `Declaration |
+  undefined`/`Node → HasModifiers` narrow-DOWN blocked by incomplete relation-heritage);
+  TS2591×43 env-legit (offline, no @types/node); TS2345×28 — NEXT bounded buckets: the
+  constraint-chain `TKind extends JSDocSyntaxKind extends SyntaxKind` TS2344 (parser.ts
+  2531/2545), the MappingsDecoder excess-of-inherited-generic-base member (TS2353 `next` from
+  `extends IterableIterator<Mapping>`), and wrong-callee singles (moduleSpecifiers:929,
+  utilities:6325, program:832). TS2339×7.
+
 **Round 439 (2026-07-07) — predicate-overload / arg-narrow-DOWN burn-down: THREE bounded
 fixes take the compiler profile 244 → 228 (−16, −6.6%; TS2769 9 → 1). Suite 9,458 → 9,465
 (+7 local, 0 regressions); 3 fix commits (4bdb051f, ee43d153, e6f61973). Every step
