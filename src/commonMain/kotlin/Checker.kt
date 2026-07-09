@@ -421,6 +421,16 @@ class Checker(
     private var currentLocalTypes: MutableMap<String, Type> = mutableMapOf()
 
     /**
+     * Round 459: annotation type NODES for function-body locals, populated alongside
+     * `currentLocalTypes` in `checkVarDeclAssignability` (first-decl wins, same rule).
+     * Body locals are B83.5-unbound, so AST-based checks that need the DECLARED type
+     * node (e.g. `arrayLiteralSatisfiesTupleTarget` — the resolved Type collapses a
+     * variadic tuple's rest slot per the getTupleType gotcha) cannot recover it from
+     * symbols. Saved/restored with `currentLocalTypes` in `checkFunctionBody`.
+     */
+    private var currentLocalDeclTypeNodes: MutableMap<String, TypeNode> = mutableMapOf()
+
+    /**
      * Names that a function-body-local variable declaration SHADOWS from an inherited
      * (outer/file-level) binding. Inside such a body, `currentLocalTypes[name]` holds the
      * LOCAL type, but the assignment-LHS resolution otherwise consults `globals[name]`
@@ -82383,6 +82393,8 @@ interface DataView {
             // Save outer local types and create inner scope copy
             val savedLocalTypes = currentLocalTypes
             currentLocalTypes = currentLocalTypes.toMutableMap()
+            val savedLocalDeclNodes = currentLocalDeclTypeNodes
+            currentLocalDeclTypeNodes = currentLocalDeclTypeNodes.toMutableMap()
             val savedShadowed = currentShadowedNames
             currentShadowedNames = currentShadowedNames.toMutableSet()
             applyBodyLocalShadowing(it.statements, parameters.mapNotNull { p -> (p.name as? Identifier)?.text }.toSet())
@@ -82499,6 +82511,7 @@ interface DataView {
             }
             // Restore outer local types
             currentLocalTypes = savedLocalTypes
+            currentLocalDeclTypeNodes = savedLocalDeclNodes
             currentShadowedNames = savedShadowed
         }
     }
@@ -84914,6 +84927,12 @@ interface DataView {
             if (resolvedVarType !== anyType && resolvedVarType !== errorType) {
                 currentLocalTypes[name.text] = resolvedVarType
             }
+        }
+        // Round 459: record the annotation NODE too (same first-wins rule) — AST-based
+        // consumers (arrayLiteralSatisfiesTupleTarget in the assignment path) need the
+        // declared tuple node, which the resolved Type collapses.
+        if (currentLocalDeclTypeNodes[name.text] == null) {
+            currentLocalDeclTypeNodes[name.text] = typeAnnotation
         }
 
         val init = decl.initializer ?: return
@@ -88033,6 +88052,23 @@ interface DataView {
                             targetType = localType
                         }
                     }
+                }
+                // Round 459: `x = [a, b]` against a TUPLE-annotated target (tsc's own
+                // `lastSkippedInfo = [source, target]` vs `[Type, Type] | undefined`,
+                // `relatedInfo = [info]` vs `[X, ...X[]]`, esnextAnd2015's
+                // `importRequireStatements = [importStatement, requireStatement]`).
+                // The relation engine SKIPS array→tuple and getTupleType collapses a
+                // variadic rest slot, so the resolved-Type path cannot decide it — match
+                // the array literal AST-side against the DECLARATION's tuple type NODE
+                // via the round-446 return-path helper. Body locals are B83.5-unbound:
+                // the node comes from currentLocalDeclTypeNodes; globals-resolved
+                // targets use their annotation directly. Suppression-only — the helper
+                // returns true only for a verified element-wise match (wrong arity /
+                // wrong element type still falls through and fires).
+                if (expr.right is ArrayLiteralExpression) {
+                    val declNode = typeAnnotation ?: currentLocalDeclTypeNodes[target.text]
+                    if (declNode != null &&
+                        arrayLiteralSatisfiesTupleTarget(expr.right, declNode, currentFileLocals)) return
                 }
                 if (targetType != null && targetType !== anyType && targetType !== errorType) {
                     val tt = targetType
