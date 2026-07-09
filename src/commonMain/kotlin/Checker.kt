@@ -93322,9 +93322,15 @@ interface DataView {
 
             // Conditional
             is ConditionalExpression -> {
-                // Result is union of true/false branches
-                val trueT = getTypeOfExpression(expr.whenTrue)
-                val falseT = getTypeOfExpression(expr.whenFalse)
+                // Result is union of true/false branches. Each branch is narrowed by
+                // the condition (tsc: the TRUE branch sees `cond` true, the FALSE
+                // branch sees it false) when the branch is a bare reference —
+                // `insertComment !== undefined ? insertComment : …` narrows the true
+                // branch to non-undefined (round 458). FP-safe via applyConditionNarrowing.
+                val trueT = narrowOperandByCondition(
+                    getTypeOfExpression(expr.whenTrue), expr.whenTrue, expr.condition, conditionIsTrue = true)
+                val falseT = narrowOperandByCondition(
+                    getTypeOfExpression(expr.whenFalse), expr.whenFalse, expr.condition, conditionIsTrue = false)
                 if (trueT === falseT) trueT else getUnionType(listOf(trueT, falseT))
             }
 
@@ -93679,6 +93685,30 @@ interface DataView {
      * shapes that can't be encoded (e.g., element access, call expressions).
      * Used by 17.34 PropertyAccess narrowing.
      */
+    /**
+     * Round 458: narrow a logical-operand / ternary-branch reference by the
+     * governing condition, purely AST-based (no flow graph). tsc types `A && B`
+     * with B evaluated under "A is true", `A || B` (and a ternary's FALSE branch)
+     * under "A is false", and a ternary's TRUE branch under "A is true" — the
+     * binder places a FlowCondition on the operand for exactly this. But our
+     * expression-typing path ([getTypeOfExpression]) is flow-UNAWARE for bare
+     * references, so `X === undefined || X` typed `boolean | undefined` instead of
+     * `boolean` (the `undefined` survived → FP TS2322 against `boolean`; services.ts
+     * `isCommenting = insertComment === undefined || insertComment`), and a ternary
+     * `cond ? ref : …` kept the un-narrowed branch. Applying the SAME narrowing
+     * [applyConditionNarrowing] the flow walk uses reproduces tsc's operand type.
+     * Fires only for a pure Identifier / PropertyAccess operand ([getReferencePath]);
+     * [applyConditionNarrowing] is FP-safe by construction (returns the type
+     * unchanged when the condition does not mention the operand's path), so this
+     * can only ever REFINE the operand type, never widen it.
+     */
+    private fun narrowOperandByCondition(
+        operandType: Type, operand: Expression, condition: Expression, conditionIsTrue: Boolean,
+    ): Type {
+        val path = getReferencePath(operand) ?: return operandType
+        return applyConditionNarrowing(operandType, condition, conditionIsTrue, path)
+    }
+
     private fun getReferencePath(expr: Expression): String? = when (expr) {
         is Identifier -> expr.text
         is PropertyAccessExpression -> {
@@ -100354,7 +100384,7 @@ interface DataView {
         var acc = getTypeOfExpression(node) // leftmost non-binary leaf
         for (i in spine.indices.reversed()) {
             val n = spine[i]
-            acc = combineBinaryTypes(n.operator, acc, n.right)
+            acc = combineBinaryTypes(n.operator, acc, n.right, n.left)
         }
         return acc
     }
@@ -100383,7 +100413,7 @@ interface DataView {
      *  from [getTypeOfBinaryExpression], extracted so a chain can be folded
      *  iteratively. [leftType] is the already-resolved type of the left operand;
      *  the right operand is resolved here only when the operator's rule needs it. */
-    private fun combineBinaryTypes(operator: SyntaxKind, leftType: Type, right: Expression): Type {
+    private fun combineBinaryTypes(operator: SyntaxKind, leftType: Type, right: Expression, left: Expression? = null): Type {
         return when (operator) {
             // Arithmetic → number
             SyntaxKind.Plus -> {
@@ -100432,9 +100462,18 @@ interface DataView {
             }
 
             // Logical → union of operands
-            SyntaxKind.AmpersandAmpersand -> getTypeOfExpression(right)
+            SyntaxKind.AmpersandAmpersand -> {
+                // `A && B` evaluates B under "A is true" — narrow a reference operand.
+                val rawRightT = getTypeOfExpression(right)
+                if (left != null) narrowOperandByCondition(rawRightT, right, left, conditionIsTrue = true)
+                else rawRightT
+            }
             SyntaxKind.BarBar -> {
-                val rightT = getTypeOfExpression(right)
+                // `A || B` evaluates B under "A is false" — narrow a reference operand
+                // (`X === undefined || X` → `boolean`, not `boolean | undefined`).
+                val rightT = getTypeOfExpression(right).let {
+                    if (left != null) narrowOperandByCondition(it, right, left, conditionIsTrue = false) else it
+                }
                 // tsc: `a || b` REMOVES the definitely-falsy constituents of a's type —
                 // a literal `false`/`0`/`""`/null/undefined left contributes nothing
                 // (`var b = true && false || true ^ false` is plain `number`,
