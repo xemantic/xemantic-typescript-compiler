@@ -82377,12 +82377,32 @@ interface DataView {
 
     private fun registerNestedGlobalShadowDecls(declarations: List<VariableDeclaration>, paramNames: Set<String>) {
         for (d in declarations) {
-            val nm = (d.name as? Identifier)?.text ?: continue
-            if (nm in paramNames) continue
-            if (globals.containsKey(nm) && !currentLocalTypes.containsKey(nm)) {
-                currentShadowedNames.add(nm)
-                currentLocalTypes[nm] = anyType
+            when (val declName = d.name) {
+                is Identifier -> registerNestedGlobalShadowName(declName.text, paramNames)
+                // Round 460: a nested DESTRUCTURED const's binding names shadow a global
+                // the same way — tsc checker.ts `const { start, length } =
+                // getDiagnosticSpanForCallNode(…)` inside an if-block: the bare-RHS read
+                // `diagnostic.length = length` otherwise resolved through globals to
+                // core.ts's `length(array)` function → FP TS2322 fn-vs-number. Same
+                // anyType-only / global-collision-only discipline as the Identifier arm.
+                is ObjectBindingPattern -> for (el in declName.elements) {
+                    if (el.dotDotDotToken) continue
+                    (el.name as? Identifier)?.text?.let { registerNestedGlobalShadowName(it, paramNames) }
+                }
+                is ArrayBindingPattern -> for (el in declName.elements) {
+                    ((el as? BindingElement)?.name as? Identifier)?.text
+                        ?.let { registerNestedGlobalShadowName(it, paramNames) }
+                }
+                else -> {}
             }
+        }
+    }
+
+    private fun registerNestedGlobalShadowName(nm: String, paramNames: Set<String>) {
+        if (nm in paramNames) return
+        if (globals.containsKey(nm) && !currentLocalTypes.containsKey(nm)) {
+            currentShadowedNames.add(nm)
+            currentLocalTypes[nm] = anyType
         }
     }
 
