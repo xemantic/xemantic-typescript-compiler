@@ -98302,6 +98302,21 @@ interface DataView {
             var allMatch = true
             for ((i, arg) in args.withIndex()) {
                 if (i >= sig.parameters.size) break
+                // Round 459: an ENUM-MEMBER literal param (`kind: SyntaxKind.NamedImports`)
+                // resolves to anyType (enum members are not modeled as literal types), so
+                // an enum-member ARG silently matched every overload and the FIRST won —
+                // tsc's `parseNamedImportsOrExports(SyntaxKind.NamedExports)` resolved to
+                // the NamedImports overload's return → FP TS2322 downstream. Compare the
+                // param ANNOTATION's canonical enum-member key set (round-411 key space,
+                // canonicalEnumSymbol-routed) against the arg's key AST-side; a resolvable
+                // non-member is a mismatch. Both-unresolvable keeps the prior behavior.
+                run {
+                    val paramAnn = (sig.parameters[i].declarations.firstOrNull() as? Parameter)?.type ?: return@run
+                    val paramKeys = enumMemberKeysOfTypeNode(paramAnn) ?: return@run
+                    val argKey = enumMemberKeyOfExpr(arg) ?: return@run
+                    if (argKey !in paramKeys) allMatch = false
+                }
+                if (!allMatch) break
                 val paramType = getTypeOfSymbol(sig.parameters[i])
                 if (paramType === anyType || paramType === errorType) continue
                 // Prefer the non-widened literal type so a string/number-literal arg can
