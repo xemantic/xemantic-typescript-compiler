@@ -43,7 +43,7 @@ numbers; main's concurrent M3.1/M3.2 work independently took the compiler profil
 guard + generic-identity-fn assignability: FOUR fixes, all GENERAL correctness that reproduce
 minimally. Dashboard: compiler 153 → 132 (−21, TS2322 77 → 56); shared checker/lib so they generalize
 to every profile. Suite 9,654 → 9,666 (+12 local across 4 new test files, 0 regressions); 4 fix
-commits (4e94a4e1 / b90d79f1 / 7d82a0aa / generic-fn).**
+commits (4e94a4e1 / b90d79f1 / 7d82a0aa / aada9e31).**
 - **Fix 1 (4e94a4e1, body-local shadows a global function; TS2322 −7):** `applyBodyLocalShadowing`
   (the return/argument-assignability pass) recorded an un-annotated top-level local shadowing an outer
   binding by REMOVING it from `currentLocalTypes` (round 351), so a value-position use (`return clone`)
