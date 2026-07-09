@@ -120164,6 +120164,7 @@ interface DataView {
                     when (val body = expr.body) {
                         is Block -> {
                             applyCallTypesBodyLocalShadowing(body.statements, expr.parameters)
+                            shadowNestedFunctionNames(body.statements)
                             checkCallTypesInStatements(body.statements, source, fileName)
                         }
                         is Expression -> checkCallTypesInExpr(body, source, fileName)
@@ -120190,6 +120191,7 @@ interface DataView {
                 try {
                     expr.body.let { body ->
                         applyCallTypesBodyLocalShadowing(body.statements, expr.parameters)
+                        shadowNestedFunctionNames(body.statements)
                         checkCallTypesInStatements(body.statements, source, fileName)
                     }
                 } finally {
