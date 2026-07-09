@@ -82195,7 +82195,16 @@ interface DataView {
      */
     private fun applyBodyLocalShadowing(statements: List<Statement>, paramNames: Set<String>) {
         for (s in statements) {
-            if (s !is VariableStatement) continue
+            if (s !is VariableStatement) {
+                // Round 455: descend into nested blocks for the GLOBAL-shadow case — a
+                // block-scoped `const clone = …` inside an `if`/loop/try that shadows an
+                // exported function merged into globals (core.ts's `clone<T>(object: T): T`).
+                // A value-position use inside the block (`return clone`) otherwise falls
+                // through getTypeOfIdentifier to the global generic function → FP
+                // TS2322/TS2345 (expressionToTypeNode.ts:535 / checker.ts:15679).
+                applyNestedGlobalShadow(s, paramNames)
+                continue
+            }
             for (d in s.declarationList.declarations) {
                 // Round 450: a DESTRUCTURED-const local (`const { parent } = node`) that
                 // shadows a same-named outer binding (typically a leaked module-file var,
@@ -82219,7 +82228,9 @@ interface DataView {
                 // property-access pass does not (file-level vars live only in `globals`
                 // there). Check BOTH so the shadow is detected in either pass. A pure
                 // local (no outer binding) is left untouched (no member-access FP surface).
-                if (!currentLocalTypes.containsKey(nm) && !globals.containsKey(nm)) continue
+                val inLocal = currentLocalTypes.containsKey(nm)
+                val inGlobals = globals.containsKey(nm)
+                if (!inLocal && !inGlobals) continue
                 currentShadowedNames.add(nm)
                 val ann = d.type
                 if (ann != null) {
@@ -82227,8 +82238,77 @@ interface DataView {
                     if (t !== anyType && t !== errorType) currentLocalTypes[nm] = t
                     else currentLocalTypes.remove(nm)
                 } else {
-                    currentLocalTypes.remove(nm)
+                    // Round 455: a local shadowing a GLOBAL (an exported function merged
+                    // into globals, e.g. core.ts's `clone<T>(object: T): T`) must resolve
+                    // to anyType, NOT fall through to the global in a value position
+                    // (`return clone` → FP `<T>(object: T) => T` vs the return type). A
+                    // concrete inferred type from the body walk still wins
+                    // (currentLocalTypes is checked first in getTypeOfIdentifier), so a
+                    // genuinely-inferable local keeps its type. An inherited file-level VAR
+                    // shadow (inLocal) keeps round 351's remove-and-re-infer behavior.
+                    if (inGlobals && !inLocal) currentLocalTypes[nm] = anyType
+                    else currentLocalTypes.remove(nm)
                 }
+            }
+        }
+    }
+
+    /** Round 455: nested-block companion of [applyBodyLocalShadowing] for the GLOBAL-shadow
+     *  case ONLY. A block-scoped `const/let X` (inside an if/loop/try/switch) whose name
+     *  collides with a GLOBAL binding but not a function-body local is registered as anyType
+     *  + shadowed, so a value-position use inside the block (`return X`) does not fall
+     *  through to the global (`clone`/`identity`/…). anyType-only (suppression); never
+     *  records a concrete annotation type (which would leak the block-local shape
+     *  function-wide). Restricted to global collisions to avoid washing an outer LOCAL's
+     *  type across the whole body. */
+    private fun applyNestedGlobalShadow(s: Statement?, paramNames: Set<String>) {
+        when (s) {
+            null -> {}
+            is VariableStatement -> registerNestedGlobalShadowDecls(s.declarationList.declarations, paramNames)
+            is Block -> for (st in s.statements) applyNestedGlobalShadow(st, paramNames)
+            is IfStatement -> {
+                applyNestedGlobalShadow(s.thenStatement, paramNames)
+                applyNestedGlobalShadow(s.elseStatement, paramNames)
+            }
+            is ForStatement -> {
+                (s.initializer as? VariableDeclarationList)?.let { registerNestedGlobalShadowDecls(it.declarations, paramNames) }
+                applyNestedGlobalShadow(s.statement, paramNames)
+            }
+            is ForInStatement -> {
+                (s.initializer as? VariableDeclarationList)?.let { registerNestedGlobalShadowDecls(it.declarations, paramNames) }
+                applyNestedGlobalShadow(s.statement, paramNames)
+            }
+            is ForOfStatement -> {
+                (s.initializer as? VariableDeclarationList)?.let { registerNestedGlobalShadowDecls(it.declarations, paramNames) }
+                applyNestedGlobalShadow(s.statement, paramNames)
+            }
+            is WhileStatement -> applyNestedGlobalShadow(s.statement, paramNames)
+            is DoStatement -> applyNestedGlobalShadow(s.statement, paramNames)
+            is LabeledStatement -> applyNestedGlobalShadow(s.statement, paramNames)
+            is TryStatement -> {
+                for (st in s.tryBlock.statements) applyNestedGlobalShadow(st, paramNames)
+                s.catchClause?.block?.statements?.forEach { applyNestedGlobalShadow(it, paramNames) }
+                s.finallyBlock?.statements?.forEach { applyNestedGlobalShadow(it, paramNames) }
+            }
+            is SwitchStatement -> for (c in s.caseBlock) {
+                val stmts = when (c) {
+                    is CaseClause -> c.statements
+                    is DefaultClause -> c.statements
+                    else -> emptyList()
+                }
+                for (st in stmts) applyNestedGlobalShadow(st, paramNames)
+            }
+            else -> {}
+        }
+    }
+
+    private fun registerNestedGlobalShadowDecls(declarations: List<VariableDeclaration>, paramNames: Set<String>) {
+        for (d in declarations) {
+            val nm = (d.name as? Identifier)?.text ?: continue
+            if (nm in paramNames) continue
+            if (globals.containsKey(nm) && !currentLocalTypes.containsKey(nm)) {
+                currentShadowedNames.add(nm)
+                currentLocalTypes[nm] = anyType
             }
         }
     }
