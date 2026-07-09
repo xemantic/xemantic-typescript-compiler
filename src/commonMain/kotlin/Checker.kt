@@ -87294,7 +87294,12 @@ interface DataView {
             // relates to its discriminated member. Suppression-only (only when the relation then
             // PASSES) → FP-safe: an object matching no member still falls through and fires.
             // tsc's discriminated-union returns (completions.ts getSymbolCompletionFromEntryId).
-            if (expr is ObjectLiteralExpression && targetType is Type.Union &&
+            // Round 458: also an INTERFACE / anonymous-object target with a literal(-union)
+            // member — `return { kind: "ambient", … }` vs `interface ModuleSpecifierResult {
+            // kind: "node_modules" | … | "ambient"; … }` (moduleSpecifiers.ts): the source's
+            // `kind: "ambient"` widened to `string`, the retry recovers the literal.
+            if (expr is ObjectLiteralExpression &&
+                (targetType is Type.Union || targetType is Type.Interface || targetType is Type.Object) &&
                 canUseTypeEngine(sourceType, targetType) &&
                 withFreshObjLitSource(expr) { checkTypeRelatedTo(sourceType, targetType, assignableRelation) }) {
                 return
