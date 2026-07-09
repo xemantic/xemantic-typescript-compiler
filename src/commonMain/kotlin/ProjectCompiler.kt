@@ -63,8 +63,27 @@ class ProjectCompiler(private val vfs: Vfs) {
         // Absolutize first: glob regexes, module resolution, and output mapping all
         // assume absolute paths (a relative `.` would produce `./src/**` patterns that
         // never match the absolute paths the Vfs walk yields).
-        val configPath = resolveConfigPath(vfs.resolveAbsolute(projectPath))
-        val config = TsConfigLoader(vfs).load(configPath)
+        val absPath = vfs.resolveAbsolute(projectPath)
+        // A bare SOURCE-file argument (`xtsc foo.ts`) is compiled as a single-file program
+        // with default options — like `tsc foo.ts`. It must NOT be loaded as a tsconfig:
+        // parsing a `.ts` as JSON yields a garbage config, and downstream a corrupt lib
+        // binderResult (its `sourceFile.text` no longer matching its statement positions)
+        // that crashes the checker with a StringIndexOutOfBounds.
+        val isBareSourceFile = !vfs.isDirectory(absPath) &&
+            !absPath.endsWith(".json") && vfs.exists(absPath)
+        val configPath = if (isBareSourceFile) absPath else resolveConfigPath(absPath)
+        val config = if (isBareSourceFile) {
+            LoadedTsConfig(
+                options = CompilerOptions(),
+                configDir = PathUtil.dirname(absPath),
+                include = emptyList(),
+                exclude = emptyList(),
+                files = listOf(PathUtil.normalize(absPath)),
+                customConditions = emptyList(),
+            )
+        } else {
+            TsConfigLoader(vfs).load(configPath)
+        }
         val resolver = ModuleResolver(vfs, config.customConditions)
 
         val allowJs = config.options.allowJs
