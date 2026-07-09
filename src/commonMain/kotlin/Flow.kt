@@ -668,8 +668,10 @@ class FlowGraphBuilder {
         bindStatement(stmt.tryBlock)
         val tryEnd = currentFlow
 
-        val finallyJoin = newBranchLabel()
-        joinAntecedent(finallyJoin, tryEnd)
+        // Normal-completion join (try's normal end + catch's normal end): the flow
+        // that continues AFTER the whole statement.
+        val normalJoin = newBranchLabel()
+        joinAntecedent(normalJoin, tryEnd)
 
         if (stmt.catchClause != null) {
             // Catch entry: pre-try flow (any throw point during try)
@@ -678,13 +680,30 @@ class FlowGraphBuilder {
                 bindAssignmentTarget(catchVar.name, catchVar)
             }
             bindStatement(stmt.catchClause.block)
-            joinAntecedent(finallyJoin, currentFlow)
+            joinAntecedent(normalJoin, currentFlow)
         }
 
-        currentFlow = finishBranchLabel(finallyJoin)
+        val normalCompletion = finishBranchLabel(normalJoin)
 
         if (stmt.finallyBlock != null) {
+            // The finally block runs on EVERY exit path, including an EARLY throw
+            // from the try/catch (before their normal completion). Its entry flow
+            // therefore joins the pre-try flow (exceptional early exit) with the
+            // normal completion. WITHOUT the pre-try antecedent, a try that always
+            // returns/throws makes the normal completion unreachable, so every read
+            // in finally washes to `never` → spurious TS2339 on cleanup code
+            // (checker.ts checkGrammarRegularExpressionLiteral's scanner reset).
+            val finallyEntry = newBranchLabel()
+            joinAntecedent(finallyEntry, preTry)
+            joinAntecedent(finallyEntry, normalCompletion)
+            currentFlow = finishBranchLabel(finallyEntry)
             bindStatement(stmt.finallyBlock)
+            // After the finally completes normally, control resumes at the try/catch's
+            // normal completion — NOT the finally's exceptional-inclusive flow (which
+            // would widen away the try/catch narrowing for the statements that follow).
+            currentFlow = normalCompletion
+        } else {
+            currentFlow = normalCompletion
         }
     }
 
