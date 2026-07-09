@@ -87113,11 +87113,15 @@ interface DataView {
             // subtype matters.
             val sourceType = if ((expr is Identifier || expr is PropertyAccessExpression) &&
                 (targetType is Type.Interface || targetType is Type.Reference ||
-                    targetType is Type.Object || targetType is Type.Union)) {
+                    targetType is Type.Object || targetType is Type.Union ||
+                    targetType is Type.Intersection)) {
                 // Round 438: a UNION return target (`SourceFile | undefined`) is the
                 // symmetric partner of the assignment-path union gate — a returned
                 // reference guard-narrowed to a subtype of a union member must relate
                 // (suppression-only: substituted only when it makes the return relate).
+                // Round 456: an INTERSECTION target (branded `number & {__…Brand}` —
+                // builder.ts's `return fileId` after `if (fileId === undefined) { fileId
+                // = … }`) mirrors the assignment-path intersection gate, same FP-safety.
                 val narrowed = getNarrowedTypeForReference(sourceTypeRaw, expr)
                 if (narrowed !== sourceTypeRaw && checkTypeRelatedTo(narrowed, targetType, assignableRelation)) narrowed
                 else sourceTypeRaw
@@ -88138,8 +88142,13 @@ interface DataView {
                     // its wider `Node` type and FP'd the missing-property error). Union
                     // targets are equally FP-safe: the narrowed type is substituted only
                     // when it makes the relation pass, so a genuine widening still fires.
+                    // Round 456: an INTERSECTION target (a branded string/number like
+                    // `Path = string & {__pathBrand}` — resolutionCache.ts
+                    // `fileOrDirectoryPath = updatedPath` after `if (!updatedPath) return`,
+                    // builder.ts `fileId`) is equally FP-safe under the same
+                    // relation-passes gate.
                     val sourceType = if ((expr.right is Identifier || expr.right is PropertyAccessExpression) &&
-                        (tt is Type.Interface || tt is Type.Reference || tt is Type.Union)) {
+                        (tt is Type.Interface || tt is Type.Reference || tt is Type.Union || tt is Type.Intersection)) {
                         val narrowed = getNarrowedTypeForReference(sourceTypeRaw, expr.right)
                         if (narrowed !== sourceTypeRaw && checkTypeRelatedTo(narrowed, tt, assignableRelation)) narrowed
                         else sourceTypeRaw
