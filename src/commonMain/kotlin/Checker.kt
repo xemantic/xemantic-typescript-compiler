@@ -97006,7 +97006,23 @@ interface DataView {
         val nullishBits = TypeFlags.Null or TypeFlags.Undefined
         fun hasNullish(t: Type) = t.flags.hasAny(nullishBits) ||
             (t is Type.Union && t.types.any { it.flags.hasAny(nullishBits) })
-        return hasNullish(raw) && !hasNullish(narrowed)
+        if (hasNullish(raw) && !hasNullish(narrowed)) return true
+        // Round 459: a nullish-FREE strict MEMBER-SUBSET narrow of a union source is
+        // equally safe — relations are monotone for union sources (if the raw union
+        // relates, any member subset relates), so accepting it can only SUPPRESS a
+        // false mismatch, never manufacture one. tsc's readConfigFile returns
+        // `{ config: {}, error: textOrDiagnostic }` in the `isString(textOrDiagnostic)`
+        // FALSE branch — `string | Diagnostic` narrowed to `Diagnostic` is not a
+        // nullish strip, so the round-438 gate rejected it → FP against
+        // `{ config?: any; error?: Diagnostic }` (commandLineParser.ts:2269). The
+        // round-438 shadowing hazard (an inner same-named const over-narrowing to
+        // `undefined`) stays excluded: a nullish narrowed type never qualifies.
+        if (raw is Type.Union && !hasNullish(narrowed)) {
+            val rawIds = raw.types.map { it.id }.toSet()
+            val members = if (narrowed is Type.Union) narrowed.types else listOf(narrowed)
+            if (members.size < raw.types.size && members.all { it.id in rawIds }) return true
+        }
+        return false
     }
 
     private fun getTypeOfObjectLiteral(expr: ObjectLiteralExpression): Type {
