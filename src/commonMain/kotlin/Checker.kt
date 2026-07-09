@@ -100562,6 +100562,25 @@ interface DataView {
             leftType.target.symbol?.name.let { it == "Array" || it == "ReadonlyArray" }) {
             return leftType
         }
+        // Round 459: a UNION target whose sole non-nullish member is Array-family —
+        // the default-init idiom on a NULLABLE array property/local:
+        // `(label.antecedent || (label.antecedent = [])).push(antecedent)` (tsc's
+        // binder.ts addAntecedent; `antecedent: FlowNode[] | undefined`). The `[]`
+        // RHS types as the array member, so the `||` result collapses to ONE array
+        // type (the member instance is shared → identity-dedups) and `.push`
+        // resolves a single signature instead of a two-differing-sigs union → the
+        // spurious TS2349 disappears. Same FP-safety as the base rule: `[]` is
+        // assignable to any array type, so the result is only more precise.
+        if (right is ArrayLiteralExpression && right.elements.isEmpty() && leftType is Type.Union) {
+            val nonNullish = leftType.types.filter {
+                !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)
+            }
+            val sole = nonNullish.singleOrNull()
+            if (sole is Type.Reference &&
+                sole.target.symbol?.name.let { it == "Array" || it == "ReadonlyArray" }) {
+                return sole
+            }
+        }
         return getTypeOfExpression(right)
     }
 
@@ -100603,7 +100622,20 @@ interface DataView {
             SyntaxKind.InstanceOfKeyword, SyntaxKind.InKeyword -> booleanType
 
             // Assignment → type of left
-            SyntaxKind.Equals -> contextualAssignmentRhsType(leftType, right)
+            SyntaxKind.Equals -> {
+                // Round 459: an assignment TARGET types against its DECLARED type, never
+                // the flow-narrowed read (M1.9) — inside `(x.p || (x.p = []))` the
+                // right-operand read of `x.p` is narrowed to the falsy `undefined`, which
+                // defeated the round-408 empty-`[]` contextual rule for PROPERTY targets
+                // (tsc's binder.ts `(label.antecedent || (label.antecedent = [])).push(…)`
+                // → the receiver union kept `any[]` → two differing push sigs → spurious
+                // TS2349). Recompute the RAW (un-narrowed) type for a PropertyAccess
+                // target when the RHS is a fresh empty array literal.
+                val declaredLeft = if (left is PropertyAccessExpression &&
+                    right is ArrayLiteralExpression && right.elements.isEmpty())
+                    computeRawTypeOfPropertyAccess(left) else leftType
+                contextualAssignmentRhsType(declaredLeft, right)
+            }
             SyntaxKind.PlusEquals, SyntaxKind.MinusEquals,
             SyntaxKind.AsteriskEquals, SyntaxKind.SlashEquals,
             SyntaxKind.PercentEquals, SyntaxKind.AsteriskAsteriskEquals,
