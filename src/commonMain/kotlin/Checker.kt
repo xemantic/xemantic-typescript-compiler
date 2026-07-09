@@ -120699,7 +120699,18 @@ interface DataView {
     private fun propertyAccessNarrowedNonNull(pa: PropertyAccessExpression, propType: Type): Boolean {
         val withUndef = getUnionType(listOf(propType, undefinedType))
         val narrowed = try { getNarrowedTypeForReference(withUndef, pa) } catch (_: Exception) { return false }
-        return !typeIncludesUndefined(narrowed)
+        if (!typeIncludesUndefined(narrowed)) return true
+        // Round 454: the plain narrower washes a reference back to its declared type at a
+        // loop's FlowLoopLabel (back-edge safety), so a guard BEFORE a loop
+        // (`if (host.directoryExists && host.getDirectories) { … for (…) { if
+        // (host.directoryExists(root)) … } }`, tsc moduleNameResolver.ts) did not suppress
+        // the optional-member-invoke TS2722 inside the loop. Retry with the loop-entry-following
+        // variant (follows antecedent[0], so the pre-loop narrowing flows in) — suppression-only,
+        // so proving non-null MORE only removes FPs (mirrors emitTs18048ForClosureCaptured…).
+        val loopNarrowed = try {
+            getNarrowedTypeForReferenceFollowLoopEntry(withUndef, pa)
+        } catch (_: Exception) { return false }
+        return !typeIncludesUndefined(loopNarrowed)
     }
 
     private fun checkSingleCallExpressionTypes(expr: CallExpression, source: String, fileName: String) {
