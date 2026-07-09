@@ -5398,7 +5398,13 @@ class Parser(
 
     private fun parseBinaryExpression(minPrec: Int): Expression {
         var left = parseUnaryExpression()
-        left = parseExpressionSuffix(left)
+        // NOTE: `as`/`satisfies` are handled by the precedence-respecting loop below
+        // (they have precedence 7 — the loop attaches them only when `7 > minPrec`).
+        // A greedy `parseExpressionSuffix(left)` call here used to attach them to the
+        // bare unary operand BEFORE the binary loop, IGNORING precedence, so a right
+        // operand `a + b as T` mis-parsed as `a + (b as T)` instead of tsc's `(a + b)
+        // as T` — the whole `+` result is the cast source (binder.ts's
+        // `tokenToString(op) + operand.text as __String` FP'd `string ⊄ __String`).
         while (true) {
             val prec = getBinaryOperatorPrecedence(token)
             if (prec <= minPrec) break
@@ -5442,32 +5448,6 @@ class Parser(
             )
         }
         return left
-    }
-
-    private fun parseExpressionSuffix(expr: Expression): Expression {
-        // Handle 'as' and 'satisfies' that appear after binary expressions
-        return when (token) {
-            AsKeyword -> {
-                nextToken()
-                val type = parseType()
-                parseExpressionSuffix(AsExpression(expression = expr, type = type, tightEnd = scanner.getPrevTokenEnd(), pos = expr.pos, end = getEnd()))
-            }
-
-            SatisfiesKeyword -> {
-                nextToken()
-                val type = parseType()
-                parseExpressionSuffix(
-                    SatisfiesExpression(
-                        expression = expr,
-                        type = type,
-                        pos = expr.pos,
-                        end = getEnd()
-                    )
-                )
-            }
-
-            else -> expr
-        }
     }
 
     private fun getBinaryOperatorPrecedence(
