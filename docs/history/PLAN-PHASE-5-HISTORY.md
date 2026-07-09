@@ -1,3 +1,72 @@
+**Round 442 (2026-07-08) — TypeParam-constraint arg + overloaded-callback arity + the
+module-file-local-variable/type global-leak (Blocker #3): FIVE bounded fixes. Compiler profile
+197 → 190 (−7), and the leak fixes GENERALIZE MASSIVELY across the big profiles:
+services 1,030 → 591 (−439), server 1,314 → 887 (−427), harness 1,603 → 1,118 (−485). Suite
+9,492 → 9,504 (+12 local across 4 test files, 0 regressions); 5 fix commits. Compiler diffed
+via the `--listAll` `comm` loop as strictly by-position removals.**
+- **Baseline @ HEAD (round 441): compiler 197.** Bucketed the `--listAll`: the clean bounded veins
+  were (a) `K`/`T` (constrained TypeParam) → `string` param ×3, (b) the overloaded-callback arity ×2,
+  and — found only by bucketing the SERVICES profile — (c) TS2339 on `NavigationBarNode` ×279 (!).
+- **Fix 1 (TypeParam-constraint arg, M3.1, −4 compiler TS2345): `checkArgumentsAgainstSignature`
+  bails when a bare-TypeParam arg's declared constraint is assignable to a concrete primitive param.**
+  tsc's rule (a type param relates to X iff its constraint does). The relation engine deliberately
+  has NO general `source is Type.TypeParam && target !is Type.TypeParam` branch (39+ cycle-regression
+  gate — CLAUDE.md), so this is a per-site bail-out mirroring round 441's `checkConstraintsForTypeArgs`.
+  Uses the RAW constraint (NOT `getApparentType`, which wraps a bare `string` constraint into the
+  String interface — not assignable to primitive `string`). Gated to a constrained TP (an unconstrained
+  `T` still fires). `readPackageJsonField<K extends keyof PackageJson>` → `hasProperty(json, fieldName)`;
+  `changeExtension<T extends string | Path>` → `changeAnyExtension`; + the `IncludeTypeSpaceImports`
+  TP-vs-boolean case (5 negative/positive local tests).
+- **Fix 2 (overloaded-callback arity, M3.1, −2 compiler TS2345): `allowArityMismatch` uses the MIN
+  minArgumentCount across an overloaded arg's call sigs.** An overloaded function passed as a callback
+  is arity-incompatible with a single-sig target only when EVERY overload needs more args than the
+  target provides (tsc picks a matching overload). `tryCast(x, isAssignmentExpression)` — 1st overload
+  2 required, 2nd's 2nd param OPTIONAL (minArgumentCount 1) — no longer reports 'too few arguments'
+  against the 1-param `(value: TIn) => value is TOut` target (es2015.ts decorator IIFE ×2). Single-sig
+  args unaffected (minOf == first).
+- **Fixes 3+4 (module-file-local var global-leak, Blocker #3 — THE big one): a top-level `let/var/const`
+  in a MODULE file leaks into `globals` and shadows every OTHER file's local of the same name.**
+  ROOT CAUSE (found by bucketing services TS2339×404 → `NavigationBarNode`×279): navigationBar.ts's
+  module-level `let parent: NavigationBarNode` merged into `globals`, so every other file's local
+  `parent` — a block-scoped const (`const parent = errorLocation.parent` in checker.ts) or a nested-fn
+  param (`function maybeEmitExpression(next, parent: BinaryExpression)` in emitter.ts), both invisible
+  to our scope machinery per B83.5 — resolved to `NavigationBarNode` → FP TS2339 on `.left`/`.pos`/
+  `.operatorToken` and FP TS2345 when passed as an arg. Built `moduleFileLocalVarNames` (after the merge)
+  = names EXCLUSIVELY module-file-local variables MINUS any competing global meaning (script-file
+  top-level decl, or a function/class/interface/enum/type-alias/namespace of that name anywhere), so a
+  name in the set can only be a cross-file conflation. Bail `checkMemberAccessMissing` (TS2339) AND
+  `checkArgumentsAgainstSignature`'s per-arg loop (TS2345) for such a bare-Identifier receiver/arg
+  UNLESS `currentFileLocals?.get(name) != null` (it IS this file's own module var — keeps firing).
+  FP-safe by construction (a cross-file bare module var is TS2304 in real tsc, never TS2339/TS2345).
+  services TS2339 404 → 129 (NavNode 279 → 9), TS2345 197 → 44 (NavNode-as-arg 153 → 10); compiler −1
+  (utilities.ts:6325 `getIndentString(indent)` — the round-440-flagged 'wrong-callee single', actually
+  a module-var leak). 3 local tests (cross-file positive + same-file negative control + arg-check positive).
+- **Fix 5 (TYPE-position analog of the leak, Blocker #3, −13 services TS2314): a file's OWN
+  non-generic Class/Interface/TypeAlias declaration shadows a cross-file same-named GENERIC type.**
+  `getTypeParamInfo` iterates ALL files' locals and returns the first generic match, so
+  convertToAsyncFunction.ts's non-generic `interface Transformer` lost to types.ts's `type
+  Transformer<T>` → FP TS2314 "requires 1 type argument" (×14). `checkTypeArgCount` bails via a new
+  AST-based `fileDeclaresNonGenericType(fileName, name)` (scans the file's own top-level statements —
+  pollution-proof, since the merged `globals`/first-file symbol carries BOTH declarations); a same-file
+  GENERIC decl returns false so its real arity still applies. Strictly 14 TS2314 removed / 1 TS2322
+  added (convertToAsyncFunction.ts:166 — a pre-existing object-literal-vs-local-interface M3 relation
+  gap unmasked once `Transformer` correctly resolves to the local interface). NOTE the FP requires the
+  file to have a local decl (so `scope.has(name)` is true and the arity check runs at all) — a bare
+  cross-file generic with NO local shadow is scope-gated out and never fired TS2314 to begin with.
+- **LESSON / MEASURED DEAD-END: a broader `getTypeOfIdentifier` variant (return anyType for these names
+  in the globals fallback) was tried and REVERTED — it took services TS2345 197 → 44 too but broke
+  cross-file initializer inference / redeclare / `.d.ts` emit → 5 corpus regressions (es6Import*,
+  typePredicateInLoop, checkJsdoc*, structurally*Imports*). Identifier typing feeds emit/redeclare paths
+  that need the real cross-file type; only the two DIAGNOSTIC emission sites are safe to suppress. The
+  suite gate caught it — the property-access + arg-check bails are the safe subset.**
+- **META / next-agent:** the module-var-leak fix is the highest-yield single fix in many rounds
+  (−426/−427/−485 on services/server/harness). The remaining big-profile buckets: services TS2322×220
+  / TS2345×44 / TS2339×120 (SourceFileLike×44, Type×20 — deeper narrowing on big AST-node unions,
+  the M1.4 territory), TS2314 `Generic type 'Transformer' requires 1 type argument` ×14 (a generic-arity
+  gap — `Transformer<T>` used bare where tsc has a default), TS2564×17 / TS2664×10 (fresh bounded
+  buckets not yet triaged). The compiler profile (190) is genuinely mined out for CLEAN bounded veins —
+  bucket the SERVICES/SERVER profile to find the next generalizable family.
+
 **Round 441 (2026-07-08) — TS2344 constraint-chain + assertNever exhaustiveness burn-down:
 THREE bounded fixes take the compiler profile 205 → 197 (−8). Suite 9,482 → 9,492 (+10 local across
 2 test files, 0 regressions); 3 fix commits. All diffed via the `--listAll` `comm` loop as

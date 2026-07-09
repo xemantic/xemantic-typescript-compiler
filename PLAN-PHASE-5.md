@@ -39,6 +39,57 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
+**Round 452 (2026-07-09) — bounded FP burn-down: TWO fixes, both GENERAL parser/checker
+correctness that reproduce minimally (unlike the recent whole-program Blocker #3 families).
+Dashboard: compiler 177 → 176 (−1), services 282 → 280 (−2), server 488 → 485 (−3), harness
+704 → 701 (−3). Suite 9,619 → 9,628 (+9 local across 2 new test files, 0 regressions); 2 fix
+commits (4c47c918 string-index / 0db79740 tuple).**
+- **Fix 1 (4c47c918, string-index element access):** a numeric-literal element access on a
+  STRING-typed receiver — `(arr[i])[0]` where the inner element access is typed `string`
+  (tsc's own jsTyping.ts `pathComponents[pathComponents.length - 3][0] === "@"`) — FP-fired
+  "Property '0' does not exist on type 'string'." The B292 bail in the element-access
+  missing-member path (checkMemberAccessMissing's caller ~118808) suppressed only NON-numeric
+  string keys (`s["s"]`); a numeric-literal key `[0]` (and a numeric-looking string key
+  `["0"]`) fell through to the missing-member check. A plain identifier receiver `str[0]`
+  resolved elsewhere, but an element-access-typed receiver reached this path. Element access on
+  a string primitive is never TS2339 in tsc (String has a numeric index sig; the TS2339
+  property-existence path is property-access only), so broadening the bail to any literal key
+  is FP-safe. Cleared jsTyping.ts:258 (services/server/harness).
+- **Fix 2 (0db79740, optional-tuple assignability):** `return emptyArray as []` against an
+  all-optional tuple `readonly [kind?: T, specifiers?: T, …]` (tsc's own moduleSpecifiers.ts)
+  FP-fired TS2739 "Type '[]' is missing … 0, 1, 2". The parser DISCARDS a tuple element's `?`
+  token AND label from the element node (no NamedTupleMember/OptionalType is produced — `[T?]`'s
+  `?` is eaten by parseType's trailing-`?` JSDoc-recovery), so the resolved tuple Type marked
+  every numbered member REQUIRED and its `length` a fixed literal. Fix spans parser + checker:
+  (a) the parser records per-element optionality on the new `TupleType.elementOptional` metadata
+  field — a named `?` (`[a?: T]`) in the labeled branch, an unnamed `[T?]` bridged via the
+  `tupleElementConsumedOptionalMarker` flag set where the recovery consumes it (read+reset per
+  element so a nested tuple's marker does not leak); (b) `getTupleType` marks optional members
+  in the new `optionalTupleMemberIds` side-channel (consulted by `isOptionalProperty`, since
+  tuple member symbols carry no declaration) and sets an optional-containing tuple's `length`
+  to the union `minLength..maxLength` (so `[]`'s length 0 relates to `[a?, b?]`'s `0 | 1 | 2`).
+  FP-safe: a required-leading `[a, b?]` and an all-required `[a, b]` still error; no element
+  node kind changes, so no type-node walker is affected. Cleared moduleSpecifiers.ts:344 (all
+  profiles — src/compiler is shared).
+- **INVESTIGATED & REVERTED (dashboard no-op):** the `(x || (x = [])).push(v)` empty-array /
+  UNION-target contextual typing (round-408 gap for property/union targets). Extending
+  `contextualAssignmentRhsType` to pick an Array-family member from a union target fixed the
+  IDENTIFIER inline case `(x || (x = [])).push(v)`, but the real tsc-source FPs are PROPERTY
+  targets (binder.ts:1375 `(label.antecedent || (label.antecedent = [])).push(antecedent)`) and
+  the `??=` IIFE-call-return case (core.ts:2135) — both resolve the `.push`/call receiver in the
+  call-type pass via a path the fix doesn't reach (the split `const r = …; r.push()` form IS
+  fixed, confirming the `||` result typing works, but the inline call FP persists). 0 dashboard
+  FPs cleared → reverted to avoid churn. The inline-property-receiver call-type resolution is
+  the follow-up if this family resurfaces.
+- **NEXT (services @ 280, all deep/whole-program or M3.4):** deep-M3 TS2322×154 fragments
+  (`Type 'X' is not assignable to type 'Y'`, max bucket 5 — Node[]/generic-fn-identity/
+  SourceFileLike-conflation); the whole-program cross-file `declare module` augmentation
+  method-guard family (`isUnion()`/`isStringLiteral()`, Blocker #3); the `length = end - start;
+  length - 5` cross-statement reassignment arithmetic-narrowing residual (parser.ts:8911 /
+  core.ts:6639, M3.4 — the arithmetic pass has no reassignment narrowing); the evolving-let
+  `indexInfos` CFA cluster (TS2454 + TS7034 + TS7005, symbolDisplay.ts).
+
+
 **Round 451 (2026-07-09) — bounded FP burn-down: FOUR fixes, one a GENERAL parser correctness
 fix that reproduces minimally. Dashboard: compiler 178 → 177 (−1), tsc-cli 179, jsTyping 176,
 deprecatedCompat 179, typingsInstallerCore 176, services 291 → 282 (−9), server 498 → 488 (−10),
@@ -586,76 +637,6 @@ TS2339 129→85 (SourceFileLike 44→0).**
   case needs B83.5 nested-interface resolution + the reverted array-element enabler). TS2339×85 residual
   buckets: `Type`×20, `Info`×12, `RefactorContext`/`CodeFixContextBase`/`ExportInfoMap` — likely more
   module-file-local-type-alias/interface conflations (same Blocker #3 family — bucket + probe each).**
-
-**Round 442 (2026-07-08) — TypeParam-constraint arg + overloaded-callback arity + the
-module-file-local-variable/type global-leak (Blocker #3): FIVE bounded fixes. Compiler profile
-197 → 190 (−7), and the leak fixes GENERALIZE MASSIVELY across the big profiles:
-services 1,030 → 591 (−439), server 1,314 → 887 (−427), harness 1,603 → 1,118 (−485). Suite
-9,492 → 9,504 (+12 local across 4 test files, 0 regressions); 5 fix commits. Compiler diffed
-via the `--listAll` `comm` loop as strictly by-position removals.**
-- **Baseline @ HEAD (round 441): compiler 197.** Bucketed the `--listAll`: the clean bounded veins
-  were (a) `K`/`T` (constrained TypeParam) → `string` param ×3, (b) the overloaded-callback arity ×2,
-  and — found only by bucketing the SERVICES profile — (c) TS2339 on `NavigationBarNode` ×279 (!).
-- **Fix 1 (TypeParam-constraint arg, M3.1, −4 compiler TS2345): `checkArgumentsAgainstSignature`
-  bails when a bare-TypeParam arg's declared constraint is assignable to a concrete primitive param.**
-  tsc's rule (a type param relates to X iff its constraint does). The relation engine deliberately
-  has NO general `source is Type.TypeParam && target !is Type.TypeParam` branch (39+ cycle-regression
-  gate — CLAUDE.md), so this is a per-site bail-out mirroring round 441's `checkConstraintsForTypeArgs`.
-  Uses the RAW constraint (NOT `getApparentType`, which wraps a bare `string` constraint into the
-  String interface — not assignable to primitive `string`). Gated to a constrained TP (an unconstrained
-  `T` still fires). `readPackageJsonField<K extends keyof PackageJson>` → `hasProperty(json, fieldName)`;
-  `changeExtension<T extends string | Path>` → `changeAnyExtension`; + the `IncludeTypeSpaceImports`
-  TP-vs-boolean case (5 negative/positive local tests).
-- **Fix 2 (overloaded-callback arity, M3.1, −2 compiler TS2345): `allowArityMismatch` uses the MIN
-  minArgumentCount across an overloaded arg's call sigs.** An overloaded function passed as a callback
-  is arity-incompatible with a single-sig target only when EVERY overload needs more args than the
-  target provides (tsc picks a matching overload). `tryCast(x, isAssignmentExpression)` — 1st overload
-  2 required, 2nd's 2nd param OPTIONAL (minArgumentCount 1) — no longer reports 'too few arguments'
-  against the 1-param `(value: TIn) => value is TOut` target (es2015.ts decorator IIFE ×2). Single-sig
-  args unaffected (minOf == first).
-- **Fixes 3+4 (module-file-local var global-leak, Blocker #3 — THE big one): a top-level `let/var/const`
-  in a MODULE file leaks into `globals` and shadows every OTHER file's local of the same name.**
-  ROOT CAUSE (found by bucketing services TS2339×404 → `NavigationBarNode`×279): navigationBar.ts's
-  module-level `let parent: NavigationBarNode` merged into `globals`, so every other file's local
-  `parent` — a block-scoped const (`const parent = errorLocation.parent` in checker.ts) or a nested-fn
-  param (`function maybeEmitExpression(next, parent: BinaryExpression)` in emitter.ts), both invisible
-  to our scope machinery per B83.5 — resolved to `NavigationBarNode` → FP TS2339 on `.left`/`.pos`/
-  `.operatorToken` and FP TS2345 when passed as an arg. Built `moduleFileLocalVarNames` (after the merge)
-  = names EXCLUSIVELY module-file-local variables MINUS any competing global meaning (script-file
-  top-level decl, or a function/class/interface/enum/type-alias/namespace of that name anywhere), so a
-  name in the set can only be a cross-file conflation. Bail `checkMemberAccessMissing` (TS2339) AND
-  `checkArgumentsAgainstSignature`'s per-arg loop (TS2345) for such a bare-Identifier receiver/arg
-  UNLESS `currentFileLocals?.get(name) != null` (it IS this file's own module var — keeps firing).
-  FP-safe by construction (a cross-file bare module var is TS2304 in real tsc, never TS2339/TS2345).
-  services TS2339 404 → 129 (NavNode 279 → 9), TS2345 197 → 44 (NavNode-as-arg 153 → 10); compiler −1
-  (utilities.ts:6325 `getIndentString(indent)` — the round-440-flagged 'wrong-callee single', actually
-  a module-var leak). 3 local tests (cross-file positive + same-file negative control + arg-check positive).
-- **Fix 5 (TYPE-position analog of the leak, Blocker #3, −13 services TS2314): a file's OWN
-  non-generic Class/Interface/TypeAlias declaration shadows a cross-file same-named GENERIC type.**
-  `getTypeParamInfo` iterates ALL files' locals and returns the first generic match, so
-  convertToAsyncFunction.ts's non-generic `interface Transformer` lost to types.ts's `type
-  Transformer<T>` → FP TS2314 "requires 1 type argument" (×14). `checkTypeArgCount` bails via a new
-  AST-based `fileDeclaresNonGenericType(fileName, name)` (scans the file's own top-level statements —
-  pollution-proof, since the merged `globals`/first-file symbol carries BOTH declarations); a same-file
-  GENERIC decl returns false so its real arity still applies. Strictly 14 TS2314 removed / 1 TS2322
-  added (convertToAsyncFunction.ts:166 — a pre-existing object-literal-vs-local-interface M3 relation
-  gap unmasked once `Transformer` correctly resolves to the local interface). NOTE the FP requires the
-  file to have a local decl (so `scope.has(name)` is true and the arity check runs at all) — a bare
-  cross-file generic with NO local shadow is scope-gated out and never fired TS2314 to begin with.
-- **LESSON / MEASURED DEAD-END: a broader `getTypeOfIdentifier` variant (return anyType for these names
-  in the globals fallback) was tried and REVERTED — it took services TS2345 197 → 44 too but broke
-  cross-file initializer inference / redeclare / `.d.ts` emit → 5 corpus regressions (es6Import*,
-  typePredicateInLoop, checkJsdoc*, structurally*Imports*). Identifier typing feeds emit/redeclare paths
-  that need the real cross-file type; only the two DIAGNOSTIC emission sites are safe to suppress. The
-  suite gate caught it — the property-access + arg-check bails are the safe subset.**
-- **META / next-agent:** the module-var-leak fix is the highest-yield single fix in many rounds
-  (−426/−427/−485 on services/server/harness). The remaining big-profile buckets: services TS2322×220
-  / TS2345×44 / TS2339×120 (SourceFileLike×44, Type×20 — deeper narrowing on big AST-node unions,
-  the M1.4 territory), TS2314 `Generic type 'Transformer' requires 1 type argument` ×14 (a generic-arity
-  gap — `Transformer<T>` used bare where tsc has a default), TS2564×17 / TS2664×10 (fresh bounded
-  buckets not yet triaged). The compiler profile (190) is genuinely mined out for CLEAN bounded veins —
-  bucket the SERVICES/SERVER profile to find the next generalizable family.
-
 
 **M2 — Real-lib migration (staged; decompose further at start)**
 
