@@ -40,10 +40,19 @@ which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the b
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
 **Round 456 (2026-07-09) — Array/ReadonlyArray `find` type-guard overload + NonNull-identifier
-undefined-strip + a build-warning cleanup; ONE broad relation rule investigated & reverted.
-Dashboard: compiler 132 → 127 (−5, TS2322 56 → 51); services 230 → 223 (−7, generalizes cleanly,
-no new FP). Suite 9,666 → 9,675 (+9 local, 0 regressions); 3 commits (860046fc find / 042e2551
-nonnull / 54e644db warning).**
+undefined-strip + branded-intersection flow-narrowing + a build-warning cleanup; ONE broad relation
+rule investigated & reverted. Dashboard: compiler 132 → 125 (−7, TS2322 56 → 49); services 230 → 221
+(−9, all generalize cleanly, no new FP). Suite 9,666 → 9,678 (+12 local, 0 regressions); 4 commits
+(860046fc find / 042e2551 nonnull / 3ad1ae4d branded-intersection / 54e644db warning).**
+- **Fix 1c (3ad1ae4d, branded-intersection flow-narrowing; compiler −2, services −2):** the
+  assignment-RHS (round 410/438) and return-path (round 413/438) flow-narrowing gates covered
+  Interface/Reference/Object/Union targets but excluded `Type.Intersection`, so a reference narrowed
+  non-nullish (`if (!x) return` / `if (x === undefined) { x = … }`) assigned/returned against a BRANDED
+  intersection (`Path = string & {__pathBrand}`, `IncrementalBuildInfoFileId = number & {__…Brand}`)
+  kept its wider `X | undefined` type → FP `X | undefined ⊄ X`. Added `Type.Intersection` to both gates;
+  FP-safe by construction (unchanged: the narrowed type is substituted only when it makes the relation
+  pass). Cleared resolutionCache.ts:1518 (`fileOrDirectoryPath = updatedPath`) + builder.ts:1394
+  (`return fileId`). Corpus green.
 - **Fix 1b (042e2551, NonNull-identifier undefined-strip; compiler −4, services −6):**
   `getTypeOfExpression(NonNullExpression)` kept the union for a bare-identifier `x!` — only
   `undefined!`/`null!` → never and a `<call>()!` all-concrete union stripped (round 439). So
@@ -80,7 +89,7 @@ nonnull / 54e644db warning).**
   signature selection wherever inference under-resolves a TypeParam arg — exactly CLAUDE.md's standing
   warning against the broad rule. If retried: apply as a PER-SITE bail at the assignment/return TS2322
   EMISSION only (not the shared engine), or fix the upstream `getPathFromPathComponents` inference first.
-- **NEXT (compiler @ 127, ~84 real excl. TS2591×43 offline-node):** TransformerFactory<T>
+- **NEXT (compiler @ 125, ~82 real excl. TS2591×43 offline-node):** TransformerFactory<T>
   generic-type-alias-of-fn relation (M3.3 — the alias `(context) => Transformer<T>` doesn't
   instantiate its fn-type body; whole-program, minimal repro clean); the exhaustive-switch
   `assertNever(reason)` enum-union residual (programDiagnostics.ts's `ReferencedFile` → `never` in the
