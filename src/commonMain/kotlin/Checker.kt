@@ -442,6 +442,22 @@ class Checker(
     private var currentShadowedNames: MutableSet<String> = mutableSetOf()
 
     /**
+     * Round 460 (program.ts findSourceFileWorker): names declared by TWO OR MORE
+     * block-scoped (`let`/`const`) declarations within ONE function body. Two same-named
+     * `let`/`const` declarations can only legally coexist in DIFFERENT blocks, but
+     * `currentLocalTypes` is block-UNAWARE and first-decl-wins — so a read after the
+     * blocks (`return file;`) resolves to whichever declaration the walk saw FIRST
+     * (tsc's `const file = filesByName.get(path)` → `SourceFile | false | undefined`
+     * inside an if-block vs the function-level `const file = host.getSourceFile(…)` →
+     * FP TS2322 at the return). Such names register anyType at body entry
+     * (suppression-only) and `checkVarDeclAssignability` skips re-recording them.
+     * Loop-HEADER declarations (`for (const x of …)`) are excluded from the count —
+     * they are per-iteration scoped and handled by scoped snapshot/restore machinery.
+     * Saved/restored with `currentLocalTypes` in `checkFunctionBody`.
+     */
+    private var ambiguousBlockLocalNames: MutableSet<String> = mutableSetOf()
+
+    /**
      * M1.9: DECLARED (pre-narrowing) types for names the assignability walk narrowed via
      * an if-condition (`if (x !== undefined)` overwrites `currentLocalTypes[x]` for the
      * then-branch so READS see the narrowed type). An assignment TARGET must be checked
@@ -82374,6 +82390,58 @@ interface DataView {
         }
     }
 
+    /** Round 460: see [ambiguousBlockLocalNames]. Counts Identifier-named `let`/`const`
+     *  declarations at every statement depth of a function body (NOT descending into
+     *  nested function-likes — their bodies get their own scan; NOT counting
+     *  for/for-in/for-of HEADER declarations, which are per-iteration scoped), and
+     *  registers names declared ≥2 times as anyType (block-scoping ambiguity the flat
+     *  first-decl-wins `currentLocalTypes` cannot represent). Suppression-only. */
+    private fun applyAmbiguousBlockScopedLocals(statements: List<Statement>, paramNames: Set<String>) {
+        val counts = mutableMapOf<String, Int>()
+        fun countDecls(list: VariableDeclarationList) {
+            if (list.flags == SyntaxKind.VarKeyword) return
+            for (d in list.declarations) {
+                val nm = (d.name as? Identifier)?.text ?: continue
+                counts[nm] = (counts[nm] ?: 0) + 1
+            }
+        }
+        fun walk(s: Statement?) {
+            when (s) {
+                null -> {}
+                is VariableStatement -> countDecls(s.declarationList)
+                is Block -> for (st in s.statements) walk(st)
+                is IfStatement -> { walk(s.thenStatement); walk(s.elseStatement) }
+                is ForStatement -> walk(s.statement)
+                is ForInStatement -> walk(s.statement)
+                is ForOfStatement -> walk(s.statement)
+                is WhileStatement -> walk(s.statement)
+                is DoStatement -> walk(s.statement)
+                is LabeledStatement -> walk(s.statement)
+                is TryStatement -> {
+                    for (st in s.tryBlock.statements) walk(st)
+                    s.catchClause?.block?.statements?.forEach { walk(it) }
+                    s.finallyBlock?.statements?.forEach { walk(it) }
+                }
+                is SwitchStatement -> for (c in s.caseBlock) {
+                    val stmts = when (c) {
+                        is CaseClause -> c.statements
+                        is DefaultClause -> c.statements
+                        else -> emptyList()
+                    }
+                    for (st in stmts) walk(st)
+                }
+                else -> {}
+            }
+        }
+        for (s in statements) walk(s)
+        for ((nm, count) in counts) {
+            if (count < 2 || nm in paramNames) continue
+            ambiguousBlockLocalNames.add(nm)
+            currentLocalTypes[nm] = anyType
+            currentLocalDeclTypeNodes.remove(nm)
+        }
+    }
+
     private fun checkFunctionBody(
         body: Block?, returnTypeNode: TypeNode?, parameters: List<Parameter>,
         funcTypeParams: List<TypeParameter>?,
@@ -82397,7 +82465,14 @@ interface DataView {
             currentLocalDeclTypeNodes = currentLocalDeclTypeNodes.toMutableMap()
             val savedShadowed = currentShadowedNames
             currentShadowedNames = currentShadowedNames.toMutableSet()
-            applyBodyLocalShadowing(it.statements, parameters.mapNotNull { p -> (p.name as? Identifier)?.text }.toSet())
+            val savedAmbiguous = ambiguousBlockLocalNames
+            ambiguousBlockLocalNames = mutableSetOf()
+            val bodyParamNames = parameters.mapNotNull { p -> (p.name as? Identifier)?.text }.toSet()
+            applyBodyLocalShadowing(it.statements, bodyParamNames)
+            // Round 460: AFTER shadowing (so the ambiguity override wins) register names
+            // with ≥2 block-scoped declarations as anyType — the flat first-decl-wins
+            // currentLocalTypes cannot know which block's binding a later read refers to.
+            applyAmbiguousBlockScopedLocals(it.statements, bodyParamNames)
             // Round 454: a body-NESTED `function NAME(...)` shadows a same-named outer/global
             // binding (B83.5-unbound). Registering it as anyType in currentLocalTypes makes
             // `getTypeOfIdentifier` (which the return-check `getReturnTypeOfCallExpression` and
@@ -82513,6 +82588,7 @@ interface DataView {
             currentLocalTypes = savedLocalTypes
             currentLocalDeclTypeNodes = savedLocalDeclNodes
             currentShadowedNames = savedShadowed
+            ambiguousBlockLocalNames = savedAmbiguous
         }
     }
 
@@ -84888,6 +84964,10 @@ interface DataView {
             // returning void, we want `x = 5` later to fire TS2322. Filter void
             // only when source is null/undefined identifier (already handled).
             val isFromCall = init is CallExpression
+            // Round 460: a name with ≥2 block-scoped declarations stays anyType — recording
+            // THIS declaration's inferred type would make later reads (possibly governed by
+            // a DIFFERENT block's binding) resolve to the wrong type.
+            if (name.text in ambiguousBlockLocalNames) return
             if (inferred !== anyType && inferred !== errorType &&
                 !inferred.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) &&
                 (isFromCall || !inferred.flags.hasAny(TypeFlags.Void))) {
@@ -84912,7 +84992,11 @@ interface DataView {
         // (isAssignableTo's top gate treats any "&"-string as unknown → assignable).
         val declaredTypeStr = resolveSimpleTypeName(typeAnnotation)
             ?: intersectionTypeNameForVarTypes(typeAnnotation)
-        if (declaredTypeStr != null) varTypes[name.text] = declaredTypeStr
+        // Round 460: skip the block-UNAWARE string map too for ambiguous names (absent
+        // entries behave permissively in every consumer).
+        if (declaredTypeStr != null && name.text !in ambiguousBlockLocalNames) {
+            varTypes[name.text] = declaredTypeStr
+        }
 
         // Populate local type map for Type engine identifier resolution.
         // First-decl wins: when multiple declarations of the same name exist
@@ -84930,8 +85014,9 @@ interface DataView {
         }
         // Round 459: record the annotation NODE too (same first-wins rule) — AST-based
         // consumers (arrayLiteralSatisfiesTupleTarget in the assignment path) need the
-        // declared tuple node, which the resolved Type collapses.
-        if (currentLocalDeclTypeNodes[name.text] == null) {
+        // declared tuple node, which the resolved Type collapses. Round 460: skip for
+        // block-scoping-ambiguous names (the node may belong to a different block's binding).
+        if (currentLocalDeclTypeNodes[name.text] == null && name.text !in ambiguousBlockLocalNames) {
             currentLocalDeclTypeNodes[name.text] = typeAnnotation
         }
 
