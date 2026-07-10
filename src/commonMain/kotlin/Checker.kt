@@ -94599,6 +94599,29 @@ interface DataView {
                 (rhs as? CallExpression)?.let { call ->
                     resolvedCallReturnTypeForFlow(call)?.let { return it }
                 }
+                // Round 463: a plain `=` with a bare-IDENTIFIER RHS filters the
+                // antecedent union by the RHS's resolved (non-flow, cheap) type —
+                // `result = node` where node is the enclosing fn's
+                // ClassStaticBlockDeclaration param narrows the declared
+                // `VisitResult<T> = T | readonly Node[]` union to T, so the later
+                // `result = [staticBlock, result]` array element reads the narrowed
+                // member (tsc esDecorators.ts:1485). Mirrors the literal-RHS branch:
+                // narrowUnionByRhsAssignment only ever REFINES a union (member
+                // identity preserved for the subset gates; non-union antecedents and
+                // unrelatable RHS types return unchanged). NON-UNION RHS only: a
+                // UNION-typed RHS routed through the LENIENT member relation
+                // (enum-member `.kind`s resolve `any`, the round-423 lesson) filtered
+                // a JsxCallLike union to its property-poorest member and suppressed a
+                // pinned TS2339 (the AliasedConditionAndUnionPredicateTest
+                // reassignment control caught it).
+                (rhs as? Identifier)?.let { id ->
+                    val t = try { getTypeOfIdentifier(id) } catch (_: Exception) { null }
+                    if (t != null && t !== anyType && t !== errorType && t !== unknownType &&
+                        t !is Type.Union
+                    ) {
+                        return narrowUnionByRhsAssignment(antecedent, t)
+                    }
+                }
             }
         }
         return antecedent
