@@ -85807,7 +85807,7 @@ interface DataView {
         // bidirectional contextual-typing rule and produces the correct source
         // display for TS2322 (`Type '"z"'` vs `Type 'string'`).
         val rawSourceTypeRaw = if (propTypeContainsLiteral(targetType)) {
-            literalTypeOfExpression(init) ?: getTypeOfExpression(init)
+            literalTypeOfExpression(init, isArrayLikeReference(targetType)) ?: getTypeOfExpression(init)
         } else {
             getTypeOfExpression(init)
         }
@@ -87962,7 +87962,7 @@ interface DataView {
                 if (expr != null) {
                     val widened = getTypeOfExpression(expr)
                     if (propTypeContainsLiteral(targetType)) {
-                        literalTypeOfExpression(expr) ?: widened
+                        literalTypeOfExpression(expr, isArrayLikeReference(targetType)) ?: widened
                     } else widened
                 } else undefinedType
             } finally {
@@ -89115,7 +89115,7 @@ interface DataView {
                     // preserve the literal instead of widening to the primitive (matches
                     // TypeScript's bidirectional contextual-typing rule).
                     val sourceTypeRaw = if (propTypeContainsLiteral(tt)) {
-                        literalTypeOfExpression(expr.right) ?: getTypeOfExpression(expr.right)
+                        literalTypeOfExpression(expr.right, isArrayLikeReference(tt)) ?: getTypeOfExpression(expr.right)
                     } else {
                         getTypeOfExpression(expr.right)
                     }
@@ -98966,7 +98966,13 @@ interface DataView {
      * Extract a literal Type from an expression (string/number/boolean/null/undefined).
      * Returns null for non-literal expressions — narrowing only applies to literal comparisons.
      */
-    private fun literalTypeOfExpression(expr: Expression): Type? = when (expr) {
+    /** Round 471: true when [t] is an Array/ReadonlyArray reference — the contexts in
+     *  which a fresh array literal's elements are contextually typed by the element type. */
+    private fun isArrayLikeReference(t: Type): Boolean =
+        t is Type.Reference &&
+            (t.target.symbol?.name == "Array" || t.target.symbol?.name == "ReadonlyArray")
+
+    private fun literalTypeOfExpression(expr: Expression, arrayCtx: Boolean = false): Type? = when (expr) {
         is StringLiteralNode -> Type.StringLiteral(expr.text)
         is NoSubstitutionTemplateLiteralNode -> Type.StringLiteral(expr.text)
         is NumericLiteralNode -> Type.NumberLiteral(expr.text.toDoubleOrNull() ?: return null)
@@ -98981,17 +98987,52 @@ interface DataView {
             "undefined" -> undefinedType
             else -> null
         }
-        // ConditionalExpression with two literal-typed branches: return union of literals
-        // so contextual literal preservation (e.g. `const x: 0 | 1 = cond ? 0 : 1`) sees the
-        // narrow source type instead of widening through `getTypeOfExpression`.
+        // ConditionalExpression with a literal-typed branch: return the union of the
+        // branch types with literals preserved, so contextual literal preservation
+        // (e.g. `const x: 0 | 1 = cond ? 0 : 1`) sees the narrow source type instead
+        // of widening through `getTypeOfExpression`. Round 471: only ONE branch needs
+        // to be literal — the other falls back to its regular type (tsc types a
+        // ternary as the union of contextually-typed branch types; organizeImports'
+        // `pref.typeOrder ? [pref.typeOrder] : ["last", "inline", "first"]`).
         is ConditionalExpression -> {
-            val t = literalTypeOfExpression(expr.whenTrue)
-            val f = literalTypeOfExpression(expr.whenFalse)
-            if (t != null && f != null) getUnionType(listOf(t, f)) else null
+            val t = literalTypeOfExpression(expr.whenTrue, arrayCtx)
+            val f = literalTypeOfExpression(expr.whenFalse, arrayCtx)
+            if (t == null && f == null) null else {
+                val tt = t ?: getTypeOfExpression(expr.whenTrue)
+                val ff = f ?: getTypeOfExpression(expr.whenFalse)
+                if (tt === errorType || ff === errorType) null
+                else if (tt === ff) tt
+                else getUnionType(listOf(tt, ff))
+            }
         }
-        is ParenthesizedExpression -> literalTypeOfExpression(expr.expression)
+        // Round 471: a fresh ARRAY LITERAL keeps its elements' literal types when the
+        // contextual target's element type contains literals (tsc contextual typing —
+        // `const ops: readonly Op[] = ["a", "b"]` stays `("a" | "b")[]`, not
+        // `string[]`; tsc services.ts invalidOperationsInPartialSemanticMode).
+        // Requires ≥1 literal element (otherwise null — no behavior change); spreads
+        // and empty arrays bail. Elements dedupe structurally like getTypeOfArrayLiteral.
+        is ArrayLiteralExpression -> run {
+            // Only in an ARRAY-LIKE contextual position ([arrayCtx]) — a literal target
+            // like `const n4: 0 = [0]` provides no element context, so the array widens
+            // (tsc assignmentIndexedToPrimitives displays `number[]`, not `0[]`).
+            if (!arrayCtx) return@run null
+            if (expr.elements.isEmpty() || expr.elements.any { it is SpreadElement }) return@run null
+            var sawLiteral = false
+            val elems = mutableListOf<Type>()
+            for (el in expr.elements) {
+                val lt = literalTypeOfExpression(el, arrayCtx)
+                val t = if (lt != null) { sawLiteral = true; lt } else getTypeOfExpression(el)
+                if (t === errorType) return@run null
+                if (elems.none { it === t || ts2403Identical(it, t, 0) == Ts2403Cmp.IDENTICAL }) {
+                    elems.add(t)
+                }
+            }
+            if (!sawLiteral) null
+            else getArrayType(if (elems.size == 1) elems[0] else getUnionType(elems))
+        }
+        is ParenthesizedExpression -> literalTypeOfExpression(expr.expression, arrayCtx)
         // B70.5: `expr!` (non-null assertion) preserves literal type — `(0 as const)!` is `0`.
-        is NonNullExpression -> literalTypeOfExpression(expr.expression)
+        is NonNullExpression -> literalTypeOfExpression(expr.expression, arrayCtx)
         // `expr as const` preserves the literal — `0 as const` is `0`, not `number`.
         // Other `as T` casts don't preserve (the cast intentionally changes the type),
         // so only the `const` keyword form is treated as literal-preserving here.
@@ -102421,6 +102462,13 @@ interface DataView {
                 TypeFlags.BooleanLiteral or TypeFlags.BigIntLiteral
         ) -> true
         propType is Type.Union -> propType.types.any { propTypeContainsLiteral(it) }
+        // Round 471: an Array/ReadonlyArray target whose ELEMENT type contains literals
+        // is a literal-preserving position — a fresh array literal's elements are
+        // contextually typed by the element type (`readonly Op[] = ["a", "b"]` keeps
+        // the element literals; pairs with literalTypeOfExpression's ArrayLiteral arm).
+        propType is Type.Reference &&
+            (propType.target.symbol?.name == "Array" || propType.target.symbol?.name == "ReadonlyArray") ->
+            propType.resolvedTypeArguments?.firstOrNull()?.let { propTypeContainsLiteral(it) } == true
         // Round 435d: a bare TYPE PARAMETER whose CONSTRAINT contains literals is a
         // literal-preserving inference position (tsc keeps literal candidates when the
         // TP's constraint includes literal types) — `readPackageJsonPathField<K extends
@@ -131309,7 +131357,7 @@ interface DataView {
                 val srcDecl = if (fresh != null && propTypeContainsLiteral(targetPropType))
                     sourceProp.valueDeclaration as? PropertyAssignment else null
                 val lit = if (srcDecl != null && srcDecl.pos in fresh!!)
-                    literalTypeOfExpression(srcDecl.initializer) else null
+                    literalTypeOfExpression(srcDecl.initializer, isArrayLikeReference(targetPropType)) else null
                 if (lit == null || !checkTypeRelatedTo(lit, targetPropType, relation)) return false
             }
         }
@@ -131538,7 +131586,14 @@ interface DataView {
         fun emitForValue(valuePosNode: Node, valueExpr: Expression, applicable: IndexInfo) {
             val indexValueType = applicable.type
             if (indexValueTrivial(indexValueType)) return
-            val valueType = getTypeOfExpression(valueExpr)
+            // Round 471: a literal value keeps its literal type against a
+            // literal-containing index value type (contextual typing — the element
+            // walk of `readonly Op[] = ["a", "b"]` reaches here once the outer
+            // relation passes with the literal-preserved source).
+            val valueType = if (propTypeContainsLiteral(indexValueType))
+                literalTypeOfExpression(valueExpr, isArrayLikeReference(indexValueType))
+                    ?: getTypeOfExpression(valueExpr)
+            else getTypeOfExpression(valueExpr)
             if (valueType === anyType || valueType === unknownType || valueType === errorType) return
             val idxDecl = applicable.declaration ?: return
             val idxPos = idxDecl.pos
@@ -132860,7 +132915,13 @@ interface DataView {
                 elem !is BigIntLiteralNode && elem !is PrefixUnaryExpression &&
                 !(elem is Identifier && elem.text in setOf("true", "false", "null", "undefined"))
             ) continue
-            val elemType = getTypeOfExpression(elem)
+            // Round 471: a literal element keeps its literal type against a
+            // literal-containing element target (tsc contextual typing — a correct
+            // literal element passes, a wrong one displays as its literal `"q"`).
+            val elemType = if (propTypeContainsLiteral(elementType))
+                literalTypeOfExpression(elem, isArrayLikeReference(elementType))
+                    ?: getTypeOfExpression(elem)
+            else getTypeOfExpression(elem)
             if (elemType === anyType || elemType === errorType) continue
             if (!checkTypeRelatedTo(elemType, elementType, assignableRelation)) {
                 val displaySource = typeToString(elemType)
