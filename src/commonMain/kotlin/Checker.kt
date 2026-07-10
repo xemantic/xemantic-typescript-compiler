@@ -86979,7 +86979,22 @@ interface DataView {
         return when (t) {
             // A nameless TypeParam cannot be one of the enclosing fn's own (those are
             // matched by name) — treat as foreign (un-inferred callee TP).
-            is Type.TypeParam -> (t.symbol?.name ?: return true) !in ownTpNames
+            is Type.TypeParam -> {
+                val nm = t.symbol?.name ?: return true
+                if (nm !in ownTpNames) return true
+                // Round 462: same NAME, mismatched constraint SHAPE = a DIFFERENT
+                // (callee-own, un-inferred) TP that merely shares the name — tsc's
+                // getUpToDateStatusWorker<T extends BuilderProgram> returns
+                // forEachKey(...)'s UNCONSTRAINED `T | undefined`; the name-based
+                // membership test wrongly claimed it own, so the foreign-TP bail
+                // never fired and the bare T FP'd TS2322 (tsbuildPublic.ts:1778).
+                // Scoped to names with a KNOWN enclosing declaration — sig-own TP
+                // names (added to ownTpNames by the caller, absent from
+                // currentTypeParamDecls) keep the pure name test, preserving the
+                // round-431e generic-function-VALUE pins.
+                val ownDecl = currentTypeParamDecls[nm]
+                ownDecl != null && (ownDecl.constraint == null) != (t.constraint == null)
+            }
             is Type.Union -> t.types.any { typeContainsForeignTypeParam(it, ownTpNames, depth + 1) }
             is Type.Intersection -> t.types.any { typeContainsForeignTypeParam(it, ownTpNames, depth + 1) }
             is Type.Reference -> t.resolvedTypeArguments?.any { typeContainsForeignTypeParam(it, ownTpNames, depth + 1) } == true
