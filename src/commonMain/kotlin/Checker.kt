@@ -98763,7 +98763,24 @@ interface DataView {
                     // under an outer `if (!affected)`, would otherwise over-narrow to `undefined`).
                     val shRaw = getTypeOfExpression(prop.name)
                     val shNarrowed = getNarrowedTypeForReference(shRaw, prop.name)
-                    val propType = if (objLitValueNullishStrip(shRaw, shNarrowed)) shNarrowed else shRaw
+                    // Round 468: the round-462 contextual narrow-DOWN acceptance extends to
+                    // SHORTHAND values — `return { variableDeclaration, … }` after an
+                    // early-return `if (!isVariableDeclaration(variableDeclaration)) return;`
+                    // narrows Node DOWN to VariableDeclaration (tsc
+                    // convertArrowFunctionOrFunctionExpression's getVariableInfo). Same
+                    // monotone per-property rule: accept the narrowed value ONLY when it
+                    // relates to the contextual property type and the raw does NOT — the
+                    // substitution can only make the member relation pass (suppression-only;
+                    // the round-438 shadowing hazard stays excluded because an over-narrow
+                    // to `undefined` relates only where the raw would too).
+                    val shCtx = ctxObj?.members?.get(name)?.let { getTypeOfSymbol(it) }
+                    val shCtxUsable = shCtx != null && shCtx !== anyType && shCtx !== errorType
+                    val shCtxAcceptsNarrow = shNarrowed !== shRaw && shNarrowed !== neverType &&
+                        shCtxUsable && shRaw !== anyType && shRaw !== errorType &&
+                        checkTypeRelatedTo(shNarrowed, shCtx!!, assignableRelation) &&
+                        !checkTypeRelatedTo(shRaw, shCtx, assignableRelation)
+                    val propType = if (objLitValueNullishStrip(shRaw, shNarrowed) || shCtxAcceptsNarrow)
+                        shNarrowed else shRaw
                     val sym = Symbol(SymbolFlags.Property, name)
                     sym.declarations.add(prop)
                     sym.valueDeclaration = prop
