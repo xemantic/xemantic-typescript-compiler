@@ -79077,6 +79077,14 @@ interface DataView {
             // forEachChild(node, cb)` typing as `T | undefined`) — same foreign-TP
             // rule as checkReturnAssignability's gate.
             if (typeContainsForeignTypeParam(branchType, typeParams)) { allVerified = false; continue }
+            // Round 468 (Blocker #3): an object-literal ARM whose target is a conflated
+            // file-local interface (`cond ? { node } : undefined` vs `Info | undefined`
+            // — tsc fixExpectedComma's getInfo / importTracker's getExportInfo) — same
+            // rule as the direct-return path in checkReturnAssignability: tsc checks
+            // against the FILE-LOCAL interface, so the merged siblings' "missing"
+            // members are a conflation artifact. Verified arm; suppression-only.
+            if (inner is ObjectLiteralExpression &&
+                objectLiteralMatchesConflatedFileLocalInterface(inner, targetType, fileName)) continue
             // Round 446: an array-literal ARM matching a variadic-tuple member of the
             // target (`cond ? [Diagnostics.X, a] : [Diagnostics.Y]` vs
             // DiagnosticOrDiagnosticAndArguments) — same array→tuple-union rule as the
@@ -87803,14 +87811,32 @@ interface DataView {
             // convertExport.ts) — the RIGHT object literal checks against the
             // conflated file-local interface, the LEFT operand's non-falsy type must
             // relate to the target on its own (`{ error: string } ⊂ RefactorErrorInfo`).
+            // Round 468: the `&&` mirror — `return sides && { identifiers: sides,
+            // isCompleteFix }` (tsc addMissingAwait.ts): the result is falsy(LEFT) |
+            // RIGHT, so the LEFT's NULLISH members must relate (a definitely-truthy
+            // member — array/object — contributes nothing to the falsy remainder; a
+            // possibly-falsy primitive member keeps the standard path firing).
             // Suppression-only: either side failing keeps the standard path firing.
             run {
                 val bin = expr as? BinaryExpression ?: return@run
-                if (bin.operator != SyntaxKind.BarBar && bin.operator != SyntaxKind.QuestionQuestion) return@run
+                val isAndAnd = bin.operator == SyntaxKind.AmpersandAmpersand
+                if (bin.operator != SyntaxKind.BarBar && bin.operator != SyntaxKind.QuestionQuestion &&
+                    !isAndAnd) return@run
                 val rightObj = unwrapParens(bin.right) as? ObjectLiteralExpression ?: return@run
                 if (!objectLiteralMatchesConflatedFileLocalInterface(rightObj, targetType, fileName)) return@run
                 val leftT = getTypeOfExpression(bin.left)
                 if (leftT === anyType || leftT === errorType) return@run
+                if (isAndAnd) {
+                    val members = if (leftT is Type.Union) leftT.types else listOf(leftT)
+                    val falsyRemainder = members.filter { !isDefinitelyTruthyMember(it) }
+                    // A possibly-falsy NON-nullish member (string/number/boolean) would
+                    // survive into the result type — stay conservative, keep firing.
+                    if (falsyRemainder.any {
+                            !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)
+                        }) return@run
+                    if (falsyRemainder.all { checkTypeRelatedTo(it, targetType, assignableRelation) }) return
+                    return@run
+                }
                 val leftNonFalsy = if (leftT is Type.Union) {
                     val kept = leftT.types.filter {
                         !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)
