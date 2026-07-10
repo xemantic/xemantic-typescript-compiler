@@ -1238,6 +1238,14 @@ class Checker(
      *  init-order trap. */
     private var nestedTypeAliasByNameCache: MutableMap<String, TypeAliasDeclaration?>? = null
 
+    /** Round 464: the VARIABLE sibling of [nestedTypeAliasByNameCache] — program-wide map
+     *  name → the UNIQUELY-named VariableDeclaration (any nesting depth), or `null` when
+     *  ambiguous. A closure var like tsc checker.ts's `var anyType =
+     *  createIntrinsicType(TypeFlags.Any, "any")` is B83.5-unbound, so a flow classifier
+     *  needing its declared/initializer shape has no scope path to it. Built once, lazily
+     *  (see [uniqueNestedVarDeclByName]); declared before `init` per the init-order trap. */
+    private var nestedVarDeclByNameCache: MutableMap<String, VariableDeclaration?>? = null
+
     /** M3.2 (round 431): lexical scope stack for the implicit-any (TS7006) walker —
      *  one map per enclosing function-like, name → declared annotation TypeNode (null
      *  value = declared UNTYPED, which must keep TS7006 firing on `x = arrow` per the
@@ -82743,6 +82751,20 @@ interface DataView {
                             } else resolvedType
                             currentLocalTypes[paramName.text] = effectiveType
                         }
+                    } else if (paramType == null && paramName is Identifier && param.initializer is Identifier) {
+                        // Round 464: an UN-ANNOTATED param defaulted from an ANNOTATED
+                        // PRECEDING sibling param (`initialType = declaredType` — tsc
+                        // checker.ts getFlowTypeOfReference) types as the sibling's
+                        // annotation (tsc infers the param type from its initializer).
+                        val sibName = (param.initializer as Identifier).text
+                        val sib = parameters.takeWhile { it !== param }
+                            .firstOrNull { (it.name as? Identifier)?.text == sibName }
+                        sib?.type?.let { tn ->
+                            val t = try { getTypeFromTypeNode(tn) } catch (_: Exception) { null }
+                            if (t != null && t !== anyType && t !== errorType) {
+                                currentLocalTypes[paramName.text] = t
+                            }
+                        }
                     }
                 }
             } finally {
@@ -94725,6 +94747,12 @@ interface DataView {
             // Type`) proves the assigned reference non-nullish. Conservative: any
             // uncertainty returns false → no narrowing.
             is CallExpression -> callRhsHasNonNullishReturnAnnotation(rhs)
+            // Round 464: a ternary is non-nullish iff BOTH arms are — tsc
+            // getTypeAtFlowNode's `type = flags & BranchLabel ?
+            // getTypeAtFlowBranchLabel(flow) : getTypeAtFlowLoopLabel(flow)`
+            // (both arms return the non-nullish FlowType alias).
+            is ConditionalExpression ->
+                rhsIsDefinitelyNonNullish(rhs.whenTrue) && rhsIsDefinitelyNonNullish(rhs.whenFalse)
             // Round 450: `a || b` and `a ?? b` are non-nullish iff the RIGHT operand
             // is non-nullish — `a || b` evaluates to `a` when a is truthy (⟹ non-nullish)
             // or to `b`; `a ?? b` to `NonNullable<a>` or `b`. Either way the result is
@@ -94848,7 +94876,16 @@ interface DataView {
             }
             else -> return false
         }
-        if (ret == null) return false
+        if (ret == null) {
+            // Round 464: an UN-ANNOTATED callee proves non-nullishness from its body
+            // returns (bounded, conservative): every `return <expr>` must classify
+            // non-nullish — a bare `return;`, no returns at all, or any statement
+            // kind that could hide a return we cannot see, all fail. tsc's own
+            // `convertAutoToAny(type: Type) { return type === autoType ? anyType :
+            // type === autoArrayType ? anyArrayType : type; }` (checker.ts).
+            return decl is FunctionDeclaration && tps.isNullOrEmpty() &&
+                calleeBodyReturnsNonNullishForFlow(decl)
+        }
         val tpNames = tps?.map { it.name.text }?.toSet() ?: emptySet()
         // Round 461: the `Debug.checkDefined` shape — a bare OWN-TP return `T` where
         // some parameter is annotated `T | undefined` / `T | null | undefined` proves
@@ -94864,6 +94901,98 @@ interface DataView {
             return true
         }
         return typeNodeDefinitelyNonNullish(ret, tpNames, depth = 0)
+    }
+
+    /** Round 464: bounded body-return scan for an UN-ANNOTATED flow callee — true
+     *  iff every reachable `return <expr>` classifies non-nullish. Conservative:
+     *  a bare `return;`, zero returns, or any statement kind that could conceal a
+     *  return (loops / switch / try / labeled) fails. Ternary leaves resolve
+     *  param identifiers via the callee's OWN annotations (never the caller's
+     *  same-named bindings), other identifiers via the cheap [getTypeOfIdentifier]
+     *  (a narrowing-only classifier — a wrong resolution can only suppress). */
+    private fun calleeBodyReturnsNonNullishForFlow(decl: FunctionDeclaration): Boolean {
+        val body = decl.body ?: return false
+        val paramAnns = HashMap<String, TypeNode>()
+        for (p in decl.parameters) {
+            val n = (p.name as? Identifier)?.text ?: continue
+            val t = p.type ?: continue
+            paramAnns[n] = t
+        }
+        val returns = ArrayList<Expression>()
+        if (!collectReturnExprsForFlow(body.statements, returns, IntArray(1) { 64 })) return false
+        if (returns.isEmpty()) return false
+        return returns.all { retExprNonNullishForFlow(it, paramAnns, depth = 0) }
+    }
+
+    /** Companion of [calleeBodyReturnsNonNullishForFlow]: collect every return
+     *  expression, failing (false) on a bare `return;` or an opaque statement kind. */
+    private fun collectReturnExprsForFlow(
+        stmts: List<Statement>, out: MutableList<Expression>, budget: IntArray,
+    ): Boolean {
+        for (s in stmts) {
+            if (--budget[0] < 0) return false
+            when (s) {
+                is ReturnStatement -> out.add(s.expression ?: return false)
+                is Block -> if (!collectReturnExprsForFlow(s.statements, out, budget)) return false
+                is IfStatement -> {
+                    if (!collectReturnExprsForFlow(listOf(s.thenStatement), out, budget)) return false
+                    s.elseStatement?.let { if (!collectReturnExprsForFlow(listOf(it), out, budget)) return false }
+                }
+                // Statement kinds that cannot CONTAIN a return of THIS function:
+                is ExpressionStatement, is VariableStatement, is EmptyStatement,
+                is ThrowStatement, is BreakStatement, is ContinueStatement,
+                is FunctionDeclaration, is ClassDeclaration, is InterfaceDeclaration,
+                is TypeAliasDeclaration, is EnumDeclaration -> {}
+                // Anything else (loops / switch / try / labeled / with) could hide
+                // a return — conservative fail.
+                else -> return false
+            }
+        }
+        return true
+    }
+
+    /** Companion of [calleeBodyReturnsNonNullishForFlow]: classify one return
+     *  expression, with ternaries recursed so their identifier LEAVES resolve
+     *  through the callee's own param annotations first. */
+    private fun retExprNonNullishForFlow(
+        e: Expression, paramAnns: Map<String, TypeNode>, depth: Int,
+    ): Boolean {
+        if (depth > 6) return false
+        var x = e
+        while (x is ParenthesizedExpression) x = x.expression
+        return when (x) {
+            is ConditionalExpression ->
+                retExprNonNullishForFlow(x.whenTrue, paramAnns, depth + 1) &&
+                    retExprNonNullishForFlow(x.whenFalse, paramAnns, depth + 1)
+            is Identifier -> {
+                val ann = paramAnns[x.text]
+                if (ann != null) typeNodeDefinitelyNonNullish(ann, emptySet(), depth + 1)
+                else {
+                    val t = try { getTypeOfIdentifier(x) } catch (_: Exception) { null }
+                    if (t != null && t !== anyType && t !== errorType && t !== unknownType &&
+                        !typeIncludesUndefined(t) && !typeIncludesNull(t)
+                    ) true
+                    else {
+                        // A B83.5-unbound closure var (`var anyType =
+                        // createIntrinsicType(…)` — tsc checker.ts) resolves through
+                        // the program-wide unique-name map: its annotation, or its
+                        // call-initializer's return annotation, or the initializer's
+                        // own syntactic shape.
+                        val vd = uniqueNestedVarDeclByName(x.text)
+                        val vdt = vd?.type
+                        val vdi = vd?.initializer
+                        when {
+                            vd == null -> false
+                            vdt != null -> typeNodeDefinitelyNonNullish(vdt, emptySet(), depth + 1)
+                            vdi is CallExpression -> callRhsHasNonNullishReturnAnnotation(vdi)
+                            vdi != null -> rhsIsDefinitelyNonNullish(vdi)
+                            else -> false
+                        }
+                    }
+                }
+            }
+            else -> rhsIsDefinitelyNonNullish(x)
+        }
     }
 
     /** Round 461: is [t] a union of exactly a bare reference to [tpName] plus ≥1
@@ -95063,11 +95192,26 @@ interface DataView {
                         // `globals` carry the REAL declaration. Restricted to
                         // interface/class/enum (non-nullish regardless of WHICH file's
                         // same-named declaration the name-keyed lookup hits); a
-                        // TypeAliasDeclaration through this fallback would re-open the
-                        // round-443 cross-file alias-conflation trap, so it stays out.
-                        globals[name]?.declarations?.any {
+                        // conflatable TypeAliasDeclaration through this fallback would
+                        // re-open the round-443 cross-file alias-conflation trap.
+                        val gdecls = globals[name]?.declarations ?: return false
+                        if (gdecls.any {
                             it is InterfaceDeclaration || it is ClassDeclaration || it is EnumDeclaration
-                        } == true
+                        }) return true
+                        // Round 464: an UNAMBIGUOUS barrel-imported type alias — exactly
+                        // ONE TypeAliasDeclaration program-wide and no same-named
+                        // interface (`name !in conflatedTypeAliasFiles` excludes the
+                        // round-443 shape by construction; interface/class/enum decls
+                        // already returned true above) — recurses into its body:
+                        // `FlowType = Type | IncompleteType` (tsc types.ts) proves
+                        // non-nullish for every `…: FlowType` callee annotation. The
+                        // merged declarations list is POLLUTED with the importers'
+                        // ImportSpecifiers (the mergeSymbolTable gotcha), so the gate
+                        // counts TypeAliasDeclarations only, not list size.
+                        val aliases = gdecls.filterIsInstance<TypeAliasDeclaration>()
+                        if (aliases.size == 1 && name !in conflatedTypeAliasFiles) {
+                            typeNodeDefinitelyNonNullish(aliases[0].type, tpNames, depth + 1)
+                        } else false
                     }
                 }
             }
@@ -96212,6 +96356,33 @@ interface DataView {
             }
             else -> {}
         }
+    }
+
+    /** Round 464: see [nestedVarDeclByNameCache]. */
+    private fun uniqueNestedVarDeclByName(name: String): VariableDeclaration? {
+        val cache = nestedVarDeclByNameCache ?: run {
+            val collected = HashMap<String, MutableList<VariableDeclaration>>()
+            val fnSink = HashMap<String, MutableList<FunctionDeclaration>>()
+            val work = ArrayDeque<List<Node>>()
+            for (result in binderResults) work.addLast(result.sourceFile.statements)
+            while (work.isNotEmpty()) {
+                for (node in work.removeLast()) {
+                    if (node is VariableStatement) {
+                        for (d in node.declarationList.declarations) {
+                            (d.name as? Identifier)?.text?.let { n ->
+                                collected.getOrPut(n) { mutableListOf() }.add(d)
+                            }
+                        }
+                    }
+                    collectFnDeclNode(node, fnSink, work)
+                }
+            }
+            val out = HashMap<String, VariableDeclaration?>()
+            for ((nm, decls) in collected) out[nm] = decls.singleOrNull()
+            nestedVarDeclByNameCache = out
+            out
+        }
+        return cache[name]
     }
 
     /** Round 460: see [nestedTypeAliasByNameCache]. */
@@ -116413,6 +116584,29 @@ interface DataView {
                 ) {
                     currentLocalTypes[paramName.text] = inferred
                 }
+            } else if (paramType == null && paramName is Identifier && param.initializer is Identifier &&
+                run {
+                    // Round 464: an UN-ANNOTATED parameter defaulted from an ANNOTATED
+                    // PRECEDING sibling param (`initialType = declaredType` — tsc
+                    // checker.ts getFlowTypeOfReference) types as that sibling's
+                    // annotation (tsc infers the param type from its initializer).
+                    // Falls through to the round-453 shadow branch when the sibling
+                    // doesn't resolve cleanly.
+                    val sibName = (param.initializer as Identifier).text
+                    val sib = parameters.takeWhile { it !== param }
+                        .firstOrNull { (it.name as? Identifier)?.text == sibName }
+                    val sibType = sib?.type?.let { tn ->
+                        try { getTypeFromTypeNode(tn) } catch (_: Exception) { null }
+                    }
+                    if (sibType != null && sibType !== anyType && sibType !== errorType &&
+                        !isTpReferencingFnType(sibType)
+                    ) {
+                        currentLocalTypes[paramName.text] = sibType
+                        true
+                    } else false
+                }
+            ) {
+                // handled in the guard above
             } else if (paramName is Identifier) {
                 // Round 453: an un-annotated parameter (no type annotation, and a
                 // non-function default or no default) is implicitly `any` — and must
