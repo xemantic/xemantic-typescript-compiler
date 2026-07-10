@@ -87798,6 +87798,28 @@ interface DataView {
                 objectLiteralMatchesConflatedFileLocalInterface(expr, targetType, fileName)) {
                 return
             }
+            // Round 467 — the round-445 note's prescribed `||`-nested extension:
+            // `return noSymbolError(node.name) || { exportNode, exportName, … }` (tsc
+            // convertExport.ts) — the RIGHT object literal checks against the
+            // conflated file-local interface, the LEFT operand's non-falsy type must
+            // relate to the target on its own (`{ error: string } ⊂ RefactorErrorInfo`).
+            // Suppression-only: either side failing keeps the standard path firing.
+            run {
+                val bin = expr as? BinaryExpression ?: return@run
+                if (bin.operator != SyntaxKind.BarBar && bin.operator != SyntaxKind.QuestionQuestion) return@run
+                val rightObj = unwrapParens(bin.right) as? ObjectLiteralExpression ?: return@run
+                if (!objectLiteralMatchesConflatedFileLocalInterface(rightObj, targetType, fileName)) return@run
+                val leftT = getTypeOfExpression(bin.left)
+                if (leftT === anyType || leftT === errorType) return@run
+                val leftNonFalsy = if (leftT is Type.Union) {
+                    val kept = leftT.types.filter {
+                        !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)
+                    }
+                    if (kept.isEmpty()) return
+                    if (kept.size == 1) kept[0] else getUnionType(kept)
+                } else leftT
+                if (checkTypeRelatedTo(leftNonFalsy, targetType, assignableRelation)) return
+            }
             // A `return { ...anyExpr, ... }` — an object literal spreading an any/unresolved
             // type — is typed `any` by tsc (the spread poisons the object), so it cannot be
             // "missing" required target properties (the spread may provide them). Runs after
