@@ -39,10 +39,10 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
-**Round 467 (2026-07-10, same session as 466) — the services burn-down starts: THREE bounded
-fixes. Dashboard: services 126 → 116 (−10; TS7006 7 → 1, TS2339 8 → 6, TS2322 40 → 38); every
-step verified strictly-removals by listAll diff. Suite 9,863 → 9,872 (+9 local across 3 new test
-files, 0 regressions); 3 fix commits (d9f0ecab / cfa323d0 / 843f8ce9).**
+**Round 467 (2026-07-10, same session as 466) — the services burn-down starts: FOUR bounded
+fixes. Dashboard: services 126 → 111 (−15; TS7006 7 → 1, TS2339 8 → 6, TS2322 40 → 33); every
+step verified strictly-removals by listAll diff. Suite 9,863 → 9,875 (+12 local across 4 new test
+files, 0 regressions); 4 fix commits (d9f0ecab / cfa323d0 / 843f8ce9 / f06586f8).**
 - **Fix 1 (d9f0ecab, TS7006 array-element ctx + nested-interface annotation retry; 126 → 120):**
   the round-443 revert closed — checkImplicitAnyInExpr's ArrayLiteral branch now propagates the
   array's ELEMENT type into elements (object literals get member fn context, arrows the
@@ -65,17 +65,24 @@ files, 0 regressions); 3 fix commits (d9f0ecab / cfa323d0 / 843f8ce9).**
   "")[]): T[]` had no accepting gate, so the bare-`T[]` overload won and bound T WITH undefined
   (smartSelection.ts:336 `(SyntaxList | Node | undefined)[]` vs `readonly Node[]` ×2). The
   candidate is the arg's element union minus members assignable to a droppable.
-- **NEXT (services @ 116, ~70 real):** organizeImports ×3 (heterogeneous: `??`-RHS literal
+- **Fix 4 (f06586f8, guard-narrowed array-literal returns, M3.4; 116 → 111, −5):**
+  `narrowedArrayLiteralType` re-types an array literal from its flow-narrowed
+  Identifier/PropertyAccess elements; the direct-return path and the ternary-arm path substitute
+  it ONLY when it makes the return relation pass (monotone) — getTypeOfArrayLiteral's own
+  element narrowing deliberately accepts only nullish strips (round 459's shadowing hazard), so
+  `if (isThrowStatement(node)) return [node];` built `Node[]` vs
+  `readonly ThrowStatement[] | undefined`. The 2 targeted documentHighlights.ts sites PLUS
+  jsDoc.ts:238 and extractSymbol.ts ×2 generalized.
+- **NEXT (services @ 111, ~65 real):** organizeImports ×3 (heterogeneous: `??`-RHS literal
   widening in a contextual position at 954; ternary-arm array-literal member context at 216;
-  destructured-member `??` write at 115); documentHighlights ×3 (`return [node]` after a guard
-  needs a contextual array-element narrow-DOWN, + a `Node` vs `SourceFile` arg); the
-  conflated-Info return-ternary family (convertExport ×3 / importTracker ×2 / findAllReferences
-  ×2 / signatureHelp / fixExpectedComma / inlineVariable / convertToOptionalChain — union-source
-  `{ error } | { … }` returns against `X | RefactorErrorInfo | undefined`); the services.ts
-  objlit giants (ObjectAllocator / CompletionEntry / EmitTextWriter TS2740); mapCode.ts:55
-  flatten (gate-(k) candidate needs a probe — the arg display resolves but T stays raw);
-  stringCompletions `.types`/`.value` on `Type` (public-API `isUnion()`/`isStringLiteral()`
-  this-guard modeling).**
+  destructured-member `??` write at 115); documentHighlights:193 (`Node` vs `SourceFile` arg);
+  the conflated-Info return-ternary family (convertExport ×3 / importTracker ×2 /
+  findAllReferences ×2 / signatureHelp / fixExpectedComma / inlineVariable /
+  convertToOptionalChain — union-source `{ error } | { … }` returns against
+  `X | RefactorErrorInfo | undefined`); the services.ts objlit giants (ObjectAllocator /
+  CompletionEntry / EmitTextWriter TS2740); mapCode.ts:55 flatten (gate-(k) candidate needs a
+  probe — the arg display resolves but T stays raw); stringCompletions `.types`/`.value` on
+  `Type` (public-API `isUnion()`/`isStringLiteral()` this-guard modeling).**
 
 **Round 466 (2026-07-10) — Blocker #2 landed for the compiler profile: map-callback return
 inference through nested functions clears builder.ts:2390, the LAST real compiler FP. Dashboard:
