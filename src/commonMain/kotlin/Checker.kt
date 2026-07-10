@@ -87334,8 +87334,21 @@ interface DataView {
             // 16.0: contextual typing — set return type as context for arrow/function
             // return expressions so their params get typed from the expected signature.
             val savedContextual = contextualType
-            val useCtx = targetType is Type.Object && (expr is ArrowFunction || expr is FunctionExpression)
-            if (useCtx) contextualType = targetType
+            // Round 462: ObjectLiteralExpression included (mirrors the call-arg path's
+            // B83.4g) — getTypeOfObjectLiteral's per-property contextual machinery needs
+            // the target to accept a guard-narrowed property VALUE (`return { class:
+            // node.parent.parent, … }` after `isClassLike(node.parent.parent)`, tsc
+            // utilities.ts:7458). A `Result | undefined` union target contributes its
+            // SOLE non-nullish object member as the context.
+            val objLitCtx = if (expr is ObjectLiteralExpression) {
+                targetType as? Type.Object
+                    ?: (targetType as? Type.Union)?.types
+                        ?.filter { !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) }
+                        ?.singleOrNull() as? Type.Object
+            } else null
+            val useCtx = (targetType is Type.Object &&
+                (expr is ArrowFunction || expr is FunctionExpression)) || objLitCtx != null
+            if (useCtx) contextualType = objLitCtx ?: targetType
             // 17.70: contextual literal preservation for return-statement source —
             // mirrors 17.66 (var-decl init) / 17.67 (call arg). When return type
             // contains literal types and the return expression is a literal,
@@ -97617,12 +97630,35 @@ interface DataView {
                             // expressions in flow context, but getTypeOfIdentifier does not consult
                             // narrowing, so `specs = append(specs, x); return { moduleSpecifiers:
                             // specs }` kept `specs`'s wider `string[] | undefined` (tsc's
-                            // moduleSpecifiers.ts). PropertyAccess values already narrow inside
-                            // getTypeOfExpression. NULLISH-STRIP-gated (objLitValueNullishStrip) to
-                            // avoid the shadowing / narrow-DOWN hazards.
-                            val narrowed = if (prop.initializer is Identifier)
-                                getNarrowedTypeForReference(raw, prop.initializer) else raw
-                            if (objLitValueNullishStrip(raw, narrowed)) narrowed else raw
+                            // moduleSpecifiers.ts). PropertyAccess values narrow inside
+                            // getTypeOfExpression for UNION receivers only — the explicit narrow
+                            // below covers the non-union narrow-DOWN (round 462). NULLISH-STRIP-
+                            // gated (objLitValueNullishStrip) to avoid the shadowing / narrow-DOWN
+                            // hazards — EXCEPT (round 462) when the contextual property type
+                            // accepts the narrowed value: `{ class: node.parent.parent }` after
+                            // `isClassLike(node.parent.parent)` narrows Node DOWN to
+                            // ClassLikeDeclaration (tsc utilities.ts:7458) — the substitute-only-
+                            // when-the-relation-passes monotone rule, per-property.
+                            // PERF: the PropertyAccess flow walk runs ONLY when the raw type
+                            // already FAILS its contextual property (an unconditional walk on
+                            // every objlit PropertyAccess value program-wide measured +352%
+                            // self-compile time); relations are cached, walks are not.
+                            val ctxUsable = propCtx != null && propCtx !== anyType &&
+                                propCtx !== errorType
+                            val narrowed = when {
+                                prop.initializer is Identifier ->
+                                    getNarrowedTypeForReference(raw, prop.initializer)
+                                prop.initializer is PropertyAccessExpression && ctxUsable &&
+                                    raw !== anyType && raw !== errorType &&
+                                    !checkTypeRelatedTo(raw, propCtx, assignableRelation) ->
+                                    getNarrowedTypeForReference(raw, prop.initializer)
+                                else -> raw
+                            }
+                            val ctxAcceptsNarrow = narrowed !== raw && narrowed !== neverType &&
+                                ctxUsable &&
+                                checkTypeRelatedTo(narrowed, propCtx, assignableRelation) &&
+                                !checkTypeRelatedTo(raw, propCtx, assignableRelation)
+                            if (objLitValueNullishStrip(raw, narrowed) || ctxAcceptsNarrow) narrowed else raw
                         }
                     } finally {
                         if (useCtx) contextualType = savedCtx
