@@ -136874,7 +136874,9 @@ interface DataView {
     /** Handle TypeOperator nodes (keyof, unique, readonly). */
     private fun getTypeFromTypeOperator(node: TypeOperator): Type {
         return when (node.operator) {
-            SyntaxKind.KeyOfKeyword -> getKeyofType(getTypeFromTypeNode(node.type))
+            SyntaxKind.KeyOfKeyword ->
+                keyofTypeQueryEnumMemberNames(node.type)
+                    ?: getKeyofType(getTypeFromTypeNode(node.type))
             SyntaxKind.UniqueKeyword -> esSymbolType // unique symbol
             SyntaxKind.ReadonlyKeyword -> {
                 // `readonly T[]` shorthand: route to globalReadonlyArrayType so the
@@ -137255,6 +137257,49 @@ interface DataView {
      * Get the keyof type for a type: produces a union of string literal types for each
      * property name. e.g., `keyof { a: number; b: string }` → `"a" | "b"`.
      */
+    /**
+     * Round 470: `keyof typeof <Enum>` resolves to the union of the enum's member-NAME
+     * string literals — `typeof Enum` (the enum OBJECT in value position) otherwise
+     * resolves to anyType, so `keyof` washed to `string | number | symbol` and
+     * `PatternMatchKind[k] as keyof typeof PatternMatchKind` FP'd against a literal
+     * union (tsc navigateTo.ts). A barrel-imported enum alias resolves through the
+     * memoized [resolveImportedEnumSymbol] (never the general resolveAlias — the
+     * round-409 TS2315-flood gotcha). Conservative bails (→ null → prior behavior):
+     * non-Identifier exprName, unresolvable name, a namespace/clodule/variable merge
+     * (value members beyond the enum members), computed/numeric member names. The
+     * merged global symbol's declarations list is POLLUTED with importing files'
+     * ImportSpecifiers (the mergeSymbolTable gotcha), so the merge test checks for
+     * specific value-declaration kinds rather than "anything non-enum".
+     */
+    private fun keyofTypeQueryEnumMemberNames(operand: TypeNode): Type? {
+        val tq = operand as? TypeQuery ?: return null
+        val name = (tq.exprName as? Identifier)?.text ?: return null
+        var sym = currentFileLocals?.get(name) ?: globals[name] ?: return null
+        if (!sym.flags.hasAny(SymbolFlags.Enum) && sym.flags.hasAny(SymbolFlags.Alias)) {
+            sym = resolveImportedEnumSymbol(sym, mutableSetOf()) ?: return null
+        }
+        if (!sym.flags.hasAny(SymbolFlags.Enum)) return null
+        if (sym.declarations.any {
+                it is ModuleDeclaration || it is ClassDeclaration ||
+                    it is FunctionDeclaration || it is VariableDeclaration
+            }) return null
+        val names = mutableListOf<String>()
+        var sawEnumDecl = false
+        for (decl in sym.declarations) {
+            if (decl !is EnumDeclaration) continue
+            sawEnumDecl = true
+            for (m in decl.members) {
+                when (val n = m.name) {
+                    is Identifier -> names.add(n.text)
+                    is StringLiteralNode -> names.add(n.text)
+                    else -> return null
+                }
+            }
+        }
+        if (!sawEnumDecl || names.isEmpty()) return null
+        return getUnionType(names.map { Type.StringLiteral(it) })
+    }
+
     private fun getKeyofType(type: Type): Type {
         // keyof any = string | number | symbol (tsc keyofConstraintType). errorType
         // stays conservative as `string` (its keyof is never displayed/checked meaningfully).
