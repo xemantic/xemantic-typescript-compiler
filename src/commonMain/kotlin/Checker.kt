@@ -87353,6 +87353,93 @@ interface DataView {
     }
 
     /**
+     * Round 468 (Blocker #3): a returned object literal whose target interface is
+     * FILE-LOCAL (declared in [fileName]) and NOT necessarily conflated itself, but has a
+     * MEMBER whose declared type NAMES a conflated interface X that this file also
+     * declares — tsc importTracker's `ExportedSymbol { kind; symbol; exportInfo:
+     * ExportInfo }` where `ExportInfo` is conflated with convertExport.ts's own. The
+     * NESTED object-literal value checks against the file-local X (AST-side, exact);
+     * every OTHER provided member must relate to its resolved declared type (any/error
+     * pass); all required members must be provided; no excess. True only when ≥1 nested
+     * conflated member was actually checked (otherwise the standard paths own the
+     * verdict). Conservative bails (heritage, methods, index sigs, non-identifier
+     * keys) → false → keeps firing. Suppression-only.
+     */
+    /**
+     * Round 468 (Blocker #3): the ARG variant of the conflated-interface rule — the
+     * param annotation names a CONFLATED interface (declared in ≥2 module files; the
+     * merged symbol carries every file's members) that the CALLING file merely
+     * IMPORTS, so the round-445 "this file declares its own X" gate never holds. The
+     * annotation really resolves to ONE declaring file's interface (tsc
+     * findAllReferences passes `{ exportingModuleSymbol, exportKind }` to
+     * importTracker's `ExportInfo` param, conflated with convertExport.ts's own), so
+     * an object literal that EXACTLY satisfies (required + no-excess) SOME declaring
+     * file's version is accepted. A mismatch against the true target is a false
+     * NEGATIVE here, never a false positive — the conservative direction for
+     * Blocker-#3 suppressions. Suppression-only.
+     */
+    private fun objectLiteralMatchesSomeConflatedDeclaration(
+        obj: ObjectLiteralExpression, t: Type,
+    ): Boolean {
+        if (conflatedInterfaceFiles.isEmpty()) return false
+        val name = (t as? Type.Interface)?.symbol?.name ?: return false
+        val files = conflatedInterfaceFiles[name] ?: return false
+        return files.any { objectLiteralExactlySatisfiesFileLocalInterface(obj, name, it) }
+    }
+
+    private fun objectLiteralMatchesViaNestedConflatedMember(
+        obj: ObjectLiteralExpression, t: Type, fileName: String,
+    ): Boolean {
+        if (conflatedInterfaceFiles.isEmpty()) return false
+        val iface = (t as? Type.Interface)
+            ?: ((t as? Type.Union)?.types
+                ?.filter { !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) }
+                ?.singleOrNull() as? Type.Interface) ?: return false
+        val name = iface.symbol?.name ?: return false
+        val stmts = binderResults.firstOrNull { it.sourceFile.fileName == fileName }
+            ?.sourceFile?.statements ?: return false
+        val decl = stmts.filterIsInstance<InterfaceDeclaration>()
+            .firstOrNull { it.name.text == name } ?: return false
+        if (!decl.heritageClauses.isNullOrEmpty()) return false
+        val memberNodes = HashMap<String, Pair<TypeNode?, Boolean>>()
+        for (m in decl.members) {
+            when (m) {
+                is PropertyDeclaration ->
+                    (m.name as? Identifier)?.text?.let { memberNodes[it] = m.type to m.questionToken }
+                else -> return false // methods / index / call sigs — out of scope
+            }
+        }
+        var sawNestedConflated = false
+        val provided = HashSet<String>()
+        for (p in obj.properties) {
+            val (nm, value) = when (p) {
+                is PropertyAssignment -> ((p.name as? Identifier)?.text ?: return false) to p.initializer
+                is ShorthandPropertyAssignment -> p.name.text to p.name
+                else -> return false
+            }
+            val (tn, _) = memberNodes[nm] ?: return false // excess property
+            provided.add(nm)
+            val refName = ((tn as? TypeReference)?.typeName as? Identifier)?.text
+            val innerObj = value as? ObjectLiteralExpression
+            if (innerObj != null && refName != null &&
+                conflatedInterfaceFiles[refName]?.contains(fileName) == true) {
+                if (!objectLiteralExactlySatisfiesFileLocalInterface(innerObj, refName, fileName)) return false
+                sawNestedConflated = true
+            } else {
+                val mt = tn?.let { getTypeFromTypeNodeSafe(it) } ?: return false
+                if (mt === anyType || mt === errorType) continue
+                val vt = getTypeOfExpression(value)
+                if (vt === anyType || vt === errorType) continue
+                if (!checkTypeRelatedTo(vt, mt, assignableRelation)) return false
+            }
+        }
+        for ((nm, pair) in memberNodes) {
+            if (!pair.second && nm !in provided) return false
+        }
+        return sawNestedConflated
+    }
+
+    /**
      * True when [obj] has a spread `...x` whose type is `any`/error (unresolved). tsc types
      * an object literal that spreads `any` as `any` (the spread poisons the whole object), so
      * missing-required-property checks must not fire — the spread could provide them. Our
@@ -87824,6 +87911,13 @@ interface DataView {
             // and BEFORE the coarse missing-property / relation paths. Suppression-only.
             if (expr is ObjectLiteralExpression &&
                 objectLiteralMatchesConflatedFileLocalInterface(expr, targetType, fileName)) {
+                return
+            }
+            // Round 468 (Blocker #3): the NESTED-member variant — the target interface is
+            // file-local but a MEMBER's declared type names a conflated interface this
+            // file also declares (importTracker's ExportedSymbol.exportInfo: ExportInfo).
+            if (expr is ObjectLiteralExpression &&
+                objectLiteralMatchesViaNestedConflatedMember(expr, targetType, fileName)) {
                 return
             }
             // Round 467 — the round-445 note's prescribed `||`-nested extension:
