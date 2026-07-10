@@ -48553,7 +48553,18 @@ interface DataView {
             }
             is ForOfStatement -> {
                 checkArgCountInExpr(stmt.expression, funcParams, classCtorParams, source, fileName)
-                checkArgCountInStatement(stmt.statement, funcParams, classCtorParams, source, fileName)
+                // Round 468: the loop VAR's binding names — incl. destructured elements,
+                // `for (const { parse, body } of nodeKinds)` (tsc mapCode.ts, whose
+                // file-level 2-param `function parse` the element shadows) — shadow
+                // same-named outer/file-level functions for calls in the body.
+                // Removal-only (no new checks → FN-safe), mirroring the M1.11
+                // body-local shadowing rule.
+                val loopNames = mutableSetOf<String>()
+                (stmt.initializer as? VariableDeclarationList)?.declarations?.forEach {
+                    collectBindingNames(it.name, loopNames)
+                }
+                val inner = if (loopNames.any { it in funcParams }) funcParams - loopNames else funcParams
+                checkArgCountInStatement(stmt.statement, inner, classCtorParams, source, fileName)
             }
             is WhileStatement -> {
                 checkArgCountInExpr(stmt.expression, funcParams, classCtorParams, source, fileName)
