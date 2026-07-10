@@ -100263,6 +100263,8 @@ interface DataView {
             // `flatten<T>(array: T[][] | readonly (T | readonly T[] | undefined)[])`;
             // an array-of-array arg binds tp from its inner element type.
             if (!isRest && tps.any { unionHasDoubleArrayOfTp(pt, it) }) continue
+            // (l) round 466 (M3.1): `(tp | <droppable falsy/nullish>)[]` — tsc compact.
+            if (!isRest && tps.any { arrayOfTpUnionDroppables(pt, it) != null }) continue
             // (c) fully concrete — must not mention ANY of our TPs
             if (tps.any { typeMentionsTypeParam(pt, it) }) return null
         }
@@ -100340,7 +100342,10 @@ interface DataView {
                 // (k) round 460: union param with a `tp[][]` member (flatten anchor).
                 val isDblArrT = !isRest && !isBareT && !isRestT && !isArrayT && !isObjLitOfT &&
                     unionMode == 0 && !isPredT && unionHasDoubleArrayOfTp(pt, tp)
-                if (!isBareT && !isRestT && !isArrayT && !isObjLitOfT && !isFnTypedOfT && unionMode == 0 && !isPredT && !isDblArrT) continue
+                // (l) round 466: `(tp | <droppable falsy/nullish>)[]` — compact anchor.
+                val arrUnionDrops = if (!isRest && !isBareT && !isRestT && !isArrayT && !isObjLitOfT &&
+                    unionMode == 0 && !isPredT && !isDblArrT) arrayOfTpUnionDroppables(pt, tp) else null
+                if (!isBareT && !isRestT && !isArrayT && !isObjLitOfT && !isFnTypedOfT && unionMode == 0 && !isPredT && !isDblArrT && arrUnionDrops == null) continue
                 fun isNamedLikeAtom(t: Type): Boolean =
                     t is Type.Interface || t is Type.Reference || t is Type.Intrinsic ||
                         t.flags.hasAny(
@@ -100379,6 +100384,27 @@ interface DataView {
                         val ok = isNamedLikeAtom(widened) ||
                             (widened is Type.Union && widened.types.all { isNamedLikeAtom(it) }) ||
                             (widened is Type.Object && widened.symbol?.flags?.hasAny(SymbolFlags.Enum) == true)
+                        if (!ok) continue
+                        candidates.add(Candidate(ai, widened, null))
+                        continue
+                    }
+                    // (l) round 466: `(tp | droppables)[]` param — the candidate is the
+                    // arg's element union MINUS members assignable to a droppable
+                    // (`compact([a, b, undefined])` binds T without the undefined).
+                    // Soft-skip anything that isn't a clean array arg.
+                    if (arrUnionDrops != null) {
+                        val rawArg = getTypeOfExpression(arg)
+                        val elem = arrayRefElement(rawArg) ?: continue
+                        if (elem === anyType || elem === errorType) continue
+                        val members = (elem as? Type.Union)?.types ?: listOf(elem)
+                        val kept = members.filter { m ->
+                            m !== anyType && m !== errorType &&
+                                arrUnionDrops.none { d -> checkTypeRelatedTo(m, d, assignableRelation) }
+                        }
+                        if (kept.isEmpty()) continue
+                        val widened = widenType(if (kept.size == 1) kept[0] else getUnionType(kept))
+                        val ok = isNamedLikeAtom(widened) ||
+                            (widened is Type.Union && widened.types.all { isNamedLikeAtom(it) })
                         if (!ok) continue
                         candidates.add(Candidate(ai, widened, null))
                         continue
@@ -101409,6 +101435,34 @@ interface DataView {
         if (name != "Array" && name != "ReadonlyArray") return false
         val args0 = type.resolvedTypeArguments ?: return false
         return args0.size == 1 && args0[0] === tp
+    }
+
+    /** Round 466 (M3.1): an ARRAY param whose element is a union of exactly one
+     *  bare [tp] plus only DROPPABLE members (nullish / falsy literals) — tsc
+     *  core.ts `compact<T>(array: (T | undefined | null | false | 0 | "")[]): T[]`.
+     *  Returns the droppable member list (possibly empty is NOT possible — a bare
+     *  `T[]` is the plain isArrayOfTypeParam shape), else null. The candidate is
+     *  the arg's element union MINUS members assignable to a droppable, so
+     *  `compact([a, b, undefined])` binds T without the undefined. */
+    private fun arrayOfTpUnionDroppables(pt: Type, tp: Type.TypeParam): List<Type>? {
+        if (pt !is Type.Reference) return null
+        val name = pt.target.symbol?.name
+        if (name != "Array" && name != "ReadonlyArray") return null
+        val elem = pt.resolvedTypeArguments?.singleOrNull() ?: return null
+        val u = elem as? Type.Union ?: return null
+        var sawTp = false
+        val drops = mutableListOf<Type>()
+        for (m in u.types) {
+            when {
+                m === tp -> { if (sawTp) return null; sawTp = true }
+                m.flags.hasAny(TypeFlags.Undefined or TypeFlags.Null) ||
+                    m.flags.hasAny(
+                        TypeFlags.StringLiteral or TypeFlags.NumberLiteral or TypeFlags.BooleanLiteral
+                    ) -> drops.add(m)
+                else -> return null
+            }
+        }
+        return if (sawTp && drops.isNotEmpty()) drops else null
     }
 
     /** Round 460 (M3.1): a UNION param with a `tp[][]` member — tsc core.ts
