@@ -91379,23 +91379,6 @@ interface DataView {
         return true
     }
 
-    /** B50.1: True for alias body types that are function-shaped: `FunctionType`,
-     *  `ConstructorType`, `ParenthesizedType` around one of those, or `TypeLiteral`
-     *  whose ONLY members are call signatures. The B50.1 substitution skips these
-     *  because the comparison engine compares them via callSignatures, where
-     *  un-inferred TypeParams (from generic function-call return-types) collide
-     *  with the now-concrete alias args — producing FP TS2322. */
-    private fun isFunctionTypeAliasBody(t: TypeNode): Boolean {
-        return when (t) {
-            is FunctionType, is ConstructorType -> true
-            is ParenthesizedType -> isFunctionTypeAliasBody(t.type)
-            is TypeLiteral -> t.members.isNotEmpty() && t.members.all { m ->
-                m is MethodDeclaration && (m.name as? Identifier)?.text == ""
-            }
-            else -> false
-        }
-    }
-
     /**
      * B116: materialize the member-set utility types `Pick<T,K>` / `Omit<T,K>` directly
      * (no embedded-lib definitions needed). Returns a fresh `Type.Object` whose members
@@ -91635,20 +91618,20 @@ interface DataView {
             // errorType because the body was resolved without a type-param scope push).
             // Recursion guarded by depth limit; circular aliases bail to errorType.
             //
-            // Gate: skip FunctionType / ConstructorType / TypeLiteral-with-only-call-sigs
-            // aliases (e.g. `Mapper<T,U> = (x:T)=>U`). Instantiating those into concrete
-            // function types lets the relation engine fire FP TS2322 when a generic
-            // function-call result (whose TypeParams are still un-inferred) is compared
-            // against them — generic argument inference (Blocker #2) is not yet
-            // implemented, so the inferred T/U would otherwise resolve to errorType
-            // and silently pass. Object/Union/Intersection alias bodies are safe.
+            // FunctionType / ConstructorType / call-sig-only-TypeLiteral alias bodies
+            // (`TransformerFactory<T> = (context) => Transformer<T>`) substitute like
+            // any other body since round 463 — the historical B50.1 skip existed because
+            // un-inferred generic-call-result sources FP'd against the substituted
+            // concrete targets, but the round-431 foreign-TP source gates at the
+            // emission sites now bail those out (measured: corpus green + compiler
+            // profile strictly-removals; un-substituted, the alias body's inner `T`
+            // stays an unbound TypeParam that fails the relation instead).
             if (symbol.flags.hasAny(SymbolFlags.TypeAlias)) {
                 val typeArgs = node.typeArguments
                 if (!typeArgs.isNullOrEmpty()) {
                     val decl = symbol.declarations.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration
                     val declTPs = decl?.typeParameters
-                    if (decl != null && !declTPs.isNullOrEmpty() && declTPs.size == typeArgs.size &&
-                        !isFunctionTypeAliasBody(decl.type)
+                    if (decl != null && !declTPs.isNullOrEmpty() && declTPs.size == typeArgs.size
                     ) {
                         val resolvedArgs = typeArgs.map { getTypeFromTypeNode(it) }
                         if (resolvedArgs.none { it === errorType }) {
