@@ -99084,12 +99084,80 @@ interface DataView {
                 if (i >= expr.arguments.size) break
                 val guardTpName = predicateCallbackParamGuardTpName(p.type, tpNames) ?: continue
                 val tpType = tps.firstOrNull { it.symbol?.name == guardTpName } ?: continue
-                val argTarget = predicateTargetTypeOfGuardExpr(expr.arguments[i]) ?: continue
+                val argTarget = predicateTargetTypeOfGuardExpr(expr.arguments[i])
+                    ?: inferDiscriminantArrowPredicateTarget(expr.arguments[i], expr)
+                    ?: continue
                 val mapper = createTypeMapper(listOf(tpType), listOf(argTarget))
                 return instantiateType(rt, mapper)
             }
         }
         return null
+    }
+
+    /** Round 463: TS 5.5-style INFERRED type predicate, bounded slice — a
+     *  single-expression discriminant arrow `x => !x.prop` / `x => x.prop` passed in
+     *  a guard-overload callback position infers `x is <matching union members>` when
+     *  the iterated element type is a union whose EVERY member declares `prop` with a
+     *  boolean-LITERAL annotation (`scoped: false` vs `scoped: true` — tsc's
+     *  `filter(getEmitHelpers(sf), helper => !helper.scoped)`, factory/utilities.ts:713,
+     *  where tsc 5.5 infers `helper is UnscopedEmitHelper`). Null on ANY uncertainty:
+     *  annotated arrows, non-discriminant shapes, a member lacking the property or
+     *  carrying a non-literal annotation, a filter that keeps nothing/everything. */
+    private fun inferDiscriminantArrowPredicateTarget(arg: Expression, call: CallExpression): Type? {
+        val arrow = arg as? ArrowFunction ?: return null
+        if (arrow.type != null) return null
+        if (arrow.parameters.size != 1) return null
+        val paramName = (arrow.parameters[0].name as? Identifier)?.text ?: return null
+        val body = arrow.body as? Expression ?: return null
+        var wantFalse = false
+        val access: PropertyAccessExpression = when {
+            body is PrefixUnaryExpression && body.operator == SyntaxKind.Exclamation &&
+                body.operand is PropertyAccessExpression -> {
+                wantFalse = true
+                body.operand as PropertyAccessExpression
+            }
+            body is PropertyAccessExpression -> body
+            else -> return null
+        }
+        if ((access.expression as? Identifier)?.text != paramName) return null
+        if (access.questionDotToken) return null
+        val propName = access.name.text
+        // The iterated element union: the first other argument typing as an array
+        // (possibly a nullish-union member — `readonly T[] | undefined`).
+        var elementUnion: Type.Union? = null
+        for (a in call.arguments) {
+            if (a === arg) continue
+            val t = try { getTypeOfExpression(a) } catch (_: Exception) { null } ?: continue
+            val arrayT = when {
+                t is Type.Reference && (t.target.symbol?.name == "Array" || t.target.symbol?.name == "ReadonlyArray") -> t
+                t is Type.Union -> t.types.firstOrNull { m ->
+                    m is Type.Reference && (m.target.symbol?.name == "Array" || m.target.symbol?.name == "ReadonlyArray")
+                } as? Type.Reference
+                else -> null
+            } ?: continue
+            elementUnion = arrayT.resolvedTypeArguments?.firstOrNull() as? Type.Union ?: return null
+            break
+        }
+        val members = elementUnion?.types ?: return null
+        val kept = mutableListOf<Type>()
+        for (m in members) {
+            val propSym = getPropertyOfType(m, propName) ?: return null
+            val ann = (propSym.declarations.firstOrNull() as? PropertyDeclaration)?.type as? LiteralType
+                ?: return null
+            // The parser produces Identifier nodes for `true`/`false` (the
+            // KEYWORD_IDENTIFIERS convention), not TrueKeyword/FalseKeyword kinds.
+            val lit = ann.literal
+            val litText = when {
+                lit.kind == SyntaxKind.TrueKeyword -> "true"
+                lit.kind == SyntaxKind.FalseKeyword -> "false"
+                lit is Identifier && (lit.text == "true" || lit.text == "false") -> lit.text
+                else -> return null
+            }
+            val isFalse = litText == "false"
+            if (if (wantFalse) isFalse else !isFalse) kept.add(m)
+        }
+        if (kept.isEmpty() || kept.size == members.size) return null
+        return if (kept.size == 1) kept[0] else getUnionType(kept)
     }
 
     /** If [t] is a callback type `(…) => x is <TP>` whose predicate targets a type
