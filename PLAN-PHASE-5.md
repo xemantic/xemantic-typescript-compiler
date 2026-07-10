@@ -39,11 +39,12 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
-**Round 462 (2026-07-10) — narrowing-consumer burn-down: THREE fixes, all GENERAL M3.4
-flow-narrowing reach, two found by INSTRUMENTED whole-program probes (minimal repros clean or
-misleading). Dashboard: compiler 79 → 75 (−4; TS2322 19 → 17, TS2345 4 → 2), services 165 → 157
-(−8 cross-profile). Suite 9,782 → 9,790 (+8 local across 3 new test files, 0 regressions);
-3 fix commits (a4c8b186 / 9810df0f / f6e2456f).**
+**Round 462 (2026-07-10) — probe-driven burn-down: SIX fixes; FOUR needed instrumented
+whole-program probes (minimal repros clean or misleading — XPROBE prints + a stack-trace probe on
+the Diagnostic constructor). Dashboard: compiler 79 → 72 (−7; TS2322 19 → 15, TS2345 4 → 2,
+TS2339 3 → 2), services 165 → 154 (−11 cross-profile). Suite 9,782 → 9,794 (+12 local across 5
+new test files, 0 regressions); 6 fix commits (a4c8b186 / 9810df0f / f6e2456f / e2e99396 /
+99181256).**
 - **Fix 1 (a4c8b186, call-arg narrow-DOWN gate; compiler 79 → 77):** the round-428b/429c/438
   branch required the narrowed type to refine the DECLARED type (`n <: declared`) — but tsc's
   getNarrowedType(assumeTrue) legitimately narrows to a guard target OUTSIDE the declared
@@ -72,19 +73,44 @@ misleading). Dashboard: compiler 79 → 75 (−4; TS2322 19 → 17, TS2345 4 →
   discriminant narrowing can't complete: checker.ts:45139/binder.ts:2498), and a non-nullish
   union tail KEEPS the round-424 nullish-strip (dropping it regressed transformers/utilities.ts:643).
   Verified strictly-removal by listAll diff.
+- **Fix 4 (e2e99396, ambiguous block locals in the PROPERTY-ACCESS pass; 75 → 74):** the round-460
+  rule (≥2 block-scoped decls of one name in ONE body → anyType) ran only in the assignability
+  pass; the property-access pass has its own three body-entry sites. moduleNameResolver.ts's
+  loadModuleFromTargetExportOrImport has `const result = nodeModuleNameResolverWorker(...)`
+  (ResolvedModuleWithFailedLookupLocations) in one block and the recursive SearchResult `const
+  result` in another — first-decl-wins made `result.value` (2823) FP TS2339 on the wrong block's
+  type. Root-caused by TWO probes (a getTypeOfIdentifier-origin print falsified the
+  inherited-entry hypothesis; the B136-recording print found the same-body sibling block).
+- **Fix 5 (f6e2456f follow-up in the same commit as fix 3's gates):** see fix 3's measured gates.
+- **Fix 6 (99181256, constraint-shape foreign-TP gate; 74 → 72, −2):** typeContainsForeignTypeParam
+  matched own TPs by NAME, so a CALLEE's un-inferred TP sharing the name was claimed own —
+  `getUpToDateStatusWorker<T extends BuilderProgram>` returning forEachKey's UNCONSTRAINED
+  `T | undefined` never hit the foreign-TP bail → bare-T TS2322 (tsbuildPublic.ts:1778, pinned by
+  a temporary stack-trace probe on the Diagnostic constructor after the return-path gate looked
+  correct). A same-named TP with a mismatched constraint SHAPE (own constrained vs instance
+  unconstrained, or vice versa) is now foreign; scoped to names present in currentTypeParamDecls
+  so signature-own TP names keep the pure name test (round-431e pins). ALSO cleared
+  transformer.ts:271 (the memoize objlit member — same collision, previously scouted
+  "whole-program-only").
 - **Probe finding (checkConditionalReturnBranches instrumentation):** utilities.ts:5085's
   emission does NOT come from the ternary-arm branch (its narrow related fine both times) — the
   ternary-arm TS2322 anchor at 5085:49 was the DIRECT `return parent.parent` shape, mis-read from
   the earlier scout. Lesson repeated: verify the emitting SITE with a probe before theorizing.
-- **NEXT (compiler @ 75, ~29 real excl. TS2591×43 + TS2304×2 `global` + TS2584 console):**
-  moduleNameResolver.ts:2823 (`result.value` — `result` types as ResolvedModuleWithFailedLookupLocations
-  from an UNKNOWN source; the nested-fn callee + no module-level `result` rule out the obvious
-  paths — needs a getTypeOfIdentifier-origin probe); the big-objlit M3 family (transformer.ts:271 /
-  moduleNameResolver.ts:1300 / emitter.ts:1277 / checker.ts:6640); tsbuildPublic.ts:1778
-  return-path T; program.ts:1220 (checkDefined RETURN TYPE resolution); factory/utilities.ts:713
-  EmitHelper.importName; es2020.ts:91 Exclude-narrowing at whole-program scale; typeSerializer.ts:603;
-  `string → __String` branding (builder.ts:2390); utilities.ts:9042 mapped-type-unknowable-keys
-  excess bail; checker.ts:29132 evolving-let FlowType.**
+- **Scouted with findings:** factory/utilities.ts:713 (`helper.importName`) needs TS 5.5 INFERRED
+  TYPE PREDICATES — `filter(helpers, helper => !helper.scoped)` selects the guard overload only
+  because tsc infers `helper is UnscopedEmitHelper` from the boolean-literal discriminant arrow;
+  a bounded slice would infer predicates for single-expression discriminant arrows in
+  filter-family calls.
+- **NEXT (compiler @ 72, ~26 real excl. TS2591×43 + TS2304×2 `global` + TS2584 console):**
+  the big-objlit M3 family remnant (moduleNameResolver.ts:1300 / emitter.ts:1277 /
+  checker.ts:6640); TransformerFactory ×3 (transformer.ts:83/98/100); inferred type predicates
+  (factory/utilities.ts:713); program.ts:1220 (checkDefined RETURN TYPE resolution);
+  es2020.ts:91 Exclude-narrowing at whole-program scale; typeSerializer.ts:603 (switch-narrowed
+  generic clone chain); `string → __String` branding (builder.ts:2390); utilities.ts:9042
+  mapped-type-unknowable-keys excess bail; checker.ts:29132 evolving-let FlowType;
+  checker.ts:21170 TS18048 restrictiveInstantiation self-write; esDecorators ×2 /
+  taggedTemplate:50 / namedEvaluation:434 / parser.ts:9581 / factory/utilities.ts:1688
+  (transformer-family intersections + cast-instantiation identity, M3).**
 
 **Round 461 (2026-07-10) — bounded FP burn-down: FIVE fixes, all GENERAL checker/flow correctness
 that reproduce minimally. Dashboard: compiler 88 → 79 (−9; TS2322 25 → 19, TS2345 6 → 4),
