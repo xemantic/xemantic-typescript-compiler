@@ -120608,7 +120608,21 @@ interface DataView {
             }
             val nm = (nameNode as? Identifier)?.text ?: continue
             if (nm in paramNames) continue
-            if (currentLocalTypes.containsKey(nm)) currentLocalTypes[nm] = anyType
+            if (currentLocalTypes.containsKey(nm)) {
+                currentLocalTypes[nm] = anyType
+            } else if (globals.containsKey(nm)) {
+                // Round 463: an Identifier local (incl. a for-of/for-in loop-header
+                // const, B83.5-unbound) whose name collides with a GLOBAL binding —
+                // typically a cross-file exported function merged into globals — must
+                // not resolve through globals in arg position: moduleSpecifiers.ts's
+                // `for (const patternText of paths[key])` resolved core.ts's
+                // `function patternText(): string` → FP TS2345 '() => string' vs
+                // 'string'. The side set is consulted AFTER currentLocalTypes in
+                // getTypeOfIdentifier, so a concrete later recording still wins;
+                // otherwise anyType (suppression-only). Mirrors round 455's
+                // registerNestedGlobalShadowName discipline.
+                currentParamBindingNames.add(nm)
+            }
         }
     }
 
