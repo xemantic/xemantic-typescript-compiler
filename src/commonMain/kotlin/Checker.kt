@@ -88861,8 +88861,16 @@ interface DataView {
                     while (narrowRef is BinaryExpression && narrowRef.operator == SyntaxKind.Equals) {
                         narrowRef = narrowRef.right
                     }
+                    // Round 468: an ENUM target (a Type.Object whose symbol carries the
+                    // Enum flag — `let quotePreference: QuotePreference; if (… &&
+                    // oldFileQuotePreference !== undefined) quotePreference =
+                    // oldFileQuotePreference;`, tsc importFixes.ts writeFixes) is
+                    // equally FP-safe under the same relation-passes gate.
+                    val ttIsEnumObject = tt is Type.Object &&
+                        tt.symbol?.flags?.hasAny(SymbolFlags.Enum) == true
                     val sourceType = if ((narrowRef is Identifier || narrowRef is PropertyAccessExpression) &&
-                        (tt is Type.Interface || tt is Type.Reference || tt is Type.Union || tt is Type.Intersection)) {
+                        (tt is Type.Interface || tt is Type.Reference || tt is Type.Union ||
+                            tt is Type.Intersection || ttIsEnumObject)) {
                         val narrowed = getNarrowedTypeForReference(sourceTypeRaw, narrowRef)
                         if (narrowed !== sourceTypeRaw && checkTypeRelatedTo(narrowed, tt, assignableRelation)) narrowed
                         else sourceTypeRaw
@@ -102848,6 +102856,18 @@ interface DataView {
                     leftType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) {
                     null // pure-nullish left → the right operand only
                 } else narrowByExcludingNullUndefined(leftType)
+                // Round 468: a LITERAL right operand whose literal type is a member of
+                // the left's nullish-stripped literal union is ABSORBED —
+                // getTypeOfExpression widens the bare literal to its primitive, so
+                // `preferences?.organizeImportsTypeOrder ?? "last"` FP'd as
+                // `string | "last" | "inline" | "first"` against the
+                // OrganizeImportsTypeOrder union (tsc organizeImports.ts). Monotone:
+                // the result only ever gets NARROWER (drops the widened primitive).
+                val rightLit = literalTypeOfExpression(right)
+                if (leftKept != null && rightLit != null && rightLit !== rightT &&
+                    checkTypeRelatedTo(rightLit, leftKept, assignableRelation)) {
+                    return leftKept
+                }
                 when {
                     leftKept == null -> rightT
                     leftKept === rightT -> leftKept
@@ -129085,7 +129105,14 @@ interface DataView {
                                 sigHasOnlySimpleTypes((targetPropType).callSignatures!!.first()) &&
                                 sigHasOnlySimpleTypes((sourcePropType).callSignatures!!.first())
                             if (!bothSimple && !bothFuncSimple) continue
-                            if (checkTypeRelatedTo(sourcePropType, targetPropType, assignableRelation)) continue
+                            // Round 468: an OPTIONAL target member widens to `T | undefined`
+                            // for a nullish-containing source — `suffix: cond ? \";\" :
+                            // undefined` vs `suffix?: string` is legal (tsc
+                            // returnValueCorrect.ts / textChanges options). The round-351
+                            // widenOptionalTargetPropType rule at its SIXTH site.
+                            if (checkTypeRelatedTo(sourcePropType,
+                                    widenOptionalTargetPropType(targetPropType, targetProp, sourcePropType),
+                                    assignableRelation)) continue
                             val displaySource = typeToString(getWidenedLiteralType(sourcePropType))
                             val displayTargetProp = typeToString(getWidenedLiteralType(targetPropType))
                             val (kline, kchar) = getLineAndCharacterOfPosition(source, keyPos)
