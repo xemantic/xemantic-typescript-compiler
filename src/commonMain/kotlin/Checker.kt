@@ -119298,6 +119298,14 @@ interface DataView {
             when (stmt) {
                 is VariableStatement -> for (d in stmt.declarationList.declarations) {
                     val n = d.name as? Identifier ?: continue
+                    // Round 463: an ANNOTATED declaration's type is its annotation, not
+                    // the initializer literal — `const result: ExtendsResult = { options:
+                    // {} }` (tsc commandLineParser.ts) otherwise displays/keys the bare
+                    // literal shape and FP's TS7053 on annotation-declared optional
+                    // members (`result[propertyName]` for include/exclude/files), even
+                    // when the access-site `result` is a DIFFERENT binding (a nested
+                    // fn's annotated param). Let the normal typed path own it.
+                    if (d.type != null) continue
                     val init = d.initializer as? ObjectLiteralExpression ?: continue
                     if (n.text == name && d.pos < beforePos && d.pos > bestPos) { best = init; bestPos = d.pos }
                 }
