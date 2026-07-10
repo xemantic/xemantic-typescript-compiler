@@ -87979,6 +87979,12 @@ interface DataView {
             // return relate; a genuine mismatch keeps the raw type and still fires. Gated
             // to a named object target — the shape where a redefined-required-member
             // subtype matters.
+            // Round 470: when a flow-narrowing substitution below VERIFIED the return
+            // relation, the verdict is precise — set this flag so the engine block
+            // early-returns instead of falling to the string fallback (which cannot
+            // resolve e.g. an `unknown` param narrowed by `typeof target === "string"`
+            // and re-FP'd — tsc stringCompletions.ts getPatternFromFirstMatchingCondition).
+            var sourceNarrowVerified = false
             val sourceType = if ((expr is Identifier || expr is PropertyAccessExpression) &&
                 (targetType is Type.Interface || targetType is Type.Reference ||
                     targetType is Type.Object || targetType is Type.Union ||
@@ -87991,16 +87997,29 @@ interface DataView {
                 // builder.ts's `return fileId` after `if (fileId === undefined) { fileId
                 // = … }`) mirrors the assignment-path intersection gate, same FP-safety.
                 val narrowed = getNarrowedTypeForReference(sourceTypeRaw, expr)
-                if (narrowed !== sourceTypeRaw && checkTypeRelatedTo(narrowed, targetType, assignableRelation)) narrowed
-                else sourceTypeRaw
+                // Round 470 second arm: the IF-ARM machinery (M1.9) may have ALREADY
+                // overwritten currentLocalTypes with the branch-narrowed type (so
+                // `narrowed === sourceTypeRaw` here) — a name present in
+                // narrowedDeclaredTypes is exactly that state. When the engine relation
+                // passes on it, the verdict is equally precise (the string fallback's
+                // varTypes still holds the DECLARED "unknown" and would FP).
+                if (narrowed === sourceTypeRaw && expr is Identifier &&
+                    expr.text in narrowedDeclaredTypes &&
+                    checkTypeRelatedTo(sourceTypeRaw, targetType, assignableRelation)) {
+                    sourceNarrowVerified = true
+                }
+                if (narrowed !== sourceTypeRaw && checkTypeRelatedTo(narrowed, targetType, assignableRelation)) {
+                    sourceNarrowVerified = true; narrowed
+                } else sourceTypeRaw
             } else if (expr is ArrayLiteralExpression) {
                 // Round 467 (M3.4): an array-literal return whose reference elements
                 // were guard-narrowed (`if (isThrowStatement(node)) return [node];` vs
                 // `readonly ThrowStatement[] | undefined` — documentHighlights.ts).
                 // Same monotone rule: substituted only when it makes the return relate.
                 val narrowed = narrowedArrayLiteralType(expr)
-                if (narrowed != null && checkTypeRelatedTo(narrowed, targetType, assignableRelation)) narrowed
-                else sourceTypeRaw
+                if (narrowed != null && checkTypeRelatedTo(narrowed, targetType, assignableRelation)) {
+                    sourceNarrowVerified = true; narrowed
+                } else sourceTypeRaw
             } else if (expr is BinaryExpression &&
                 (expr.operator == SyntaxKind.BarBar || expr.operator == SyntaxKind.QuestionQuestion) &&
                 (expr.left is Identifier || expr.left is PropertyAccessExpression)) {
@@ -88015,8 +88034,9 @@ interface DataView {
                 val leftNarrowed = getNarrowedTypeForReference(leftRaw, expr.left)
                 if (leftNarrowed !== leftRaw) {
                     val recombined = combineBinaryTypes(expr.operator, leftNarrowed, expr.right, expr.left)
-                    if (checkTypeRelatedTo(recombined, targetType, assignableRelation)) recombined
-                    else sourceTypeRaw
+                    if (checkTypeRelatedTo(recombined, targetType, assignableRelation)) {
+                        sourceNarrowVerified = true; recombined
+                    } else sourceTypeRaw
                 } else sourceTypeRaw
             } else sourceTypeRaw
             // M3.1 (round 431c): a source containing a FOREIGN type parameter — one
@@ -88029,6 +88049,13 @@ interface DataView {
             // an OWN-TP source (fn<T>(x: T): number { return x }) keeps checking
             // (corpus-pinned), as does everything TP-free.
             if (typeContainsForeignTypeParam(sourceType, typeParams)) return
+            // Round 470: precise-verdict early return for a flow-narrowing-VERIFIED
+            // source (see the flag above) — the engine already confirmed the NARROWED
+            // source relates; the string fallback would re-check the un-narrowed
+            // varTypes string (`unknown` vs `string | undefined`) and FP. Gated to the
+            // substituted-and-verified slice per the checkReturnAssignability gotcha
+            // (never a blanket engine-confirmed return).
+            if (sourceNarrowVerified) return
             // B87.1 (round 73): async-generic-return — `async function f<T>(...):
             // Promise<T>` returning a value whose (awaited) type is a UNION that
             // includes the bare unconstrained type parameter T PLUS other (non-
