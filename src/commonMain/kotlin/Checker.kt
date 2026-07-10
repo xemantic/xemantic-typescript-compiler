@@ -545,6 +545,10 @@ class Checker(
      *  which is exactly what the gate replicates. Populated after the globals merge. */
     private var conflatedInterfaceFiles: Map<String, Set<String>> = emptyMap()
 
+    /** Round 471: top-level interface names declared in ≥1 MODULE file (see the
+     *  conflatedInterfaceFiles build). */
+    private var moduleInterfaceNames: Set<String> = emptySet()
+
     /** Param name → enum display name for params typed as a type parameter constrained
      *  to an enum (`function f<B extends E>(p: B)` → `p` → `E`). Populated by pure symbol
      *  lookup at function-body entry; consulted ONLY by [enumTypedReceiverDisplay] for the
@@ -1553,6 +1557,11 @@ class Checker(
                 }
             }
             conflatedInterfaceFiles = ifaceFiles.filterValues { it.size >= 2 }
+            // Round 471: names of top-level interfaces declared in ANY module file —
+            // consulted by isLibPhantomMemberOfModuleInterface (a lib+module-interface
+            // merge is a conflation artifact; tsc never merges a module-scoped
+            // interface with the same-named lib global).
+            moduleInterfaceNames = ifaceFiles.keys.toSet()
         }
         // 1b. Merge module augmentation exports into target module symbols
         mergeModuleAugmentations()
@@ -112017,6 +112026,10 @@ interface DataView {
                     // truly "missing". Mirrors the filter in `propertiesRelatedTo` /
                     // `collectMissingProperties`.
                     if (propName in OBJECT_PROTOTYPE_PROPERTIES) continue
+                    // Round 471: lib-phantom member of a lib+module-interface merge
+                    // (SymbolObject implements Symbol — tsc services.ts vs es2019's
+                    // `description`); see isLibPhantomMemberOfModuleInterface.
+                    if (isLibPhantomMemberOfModuleInterface(ifaceType, propName)) continue
                     if (propName !in classMemberNames &&
                         !isOptionalProperty(ifaceProp) &&
                         !isStaticOnlyProperty(ifaceProp)) {
@@ -131365,6 +131378,11 @@ interface DataView {
                 val protoType = if (targetName == "length") numberType else stringType
                 if (checkTypeRelatedTo(protoType, targetPropType, relation)) continue
             }
+            // Round 471: a lib-phantom member of a lib+module-interface merge (Symbol's
+            // es2019 `description` vs tsc compiler/types.ts's `interface Symbol`) is a
+            // conflation artifact — skip it in the relation (suppression-only; see
+            // isLibPhantomMemberOfModuleInterface).
+            if (isLibPhantomMemberOfModuleInterface(target, targetName)) continue
             // Check if property is optional (question mark in declaration)
             val isOptional = isOptionalProperty(targetProp)
             val sourceProp = sourceMembers[targetName]
@@ -132021,6 +132039,26 @@ interface DataView {
         }
     }
 
+    /** Round 471: true when [propName] on [targetType] is contributed ONLY by LIB
+     *  declarations while the interface is ALSO declared top-level in a MODULE file
+     *  (`Symbol` — tsc compiler/types.ts vs lib es2019's `description`). tsc never
+     *  merges a module-scoped interface with the same-named lib global (the module's
+     *  import shadows it), so the lib members are phantom for code written against
+     *  the module interface. Skipping them in missing-member verdicts is FN-not-FP
+     *  (a file genuinely meaning the LIB interface loses a real missing-member
+     *  error, accepted). Script-file lib augmentations (`interface Array<T>` in a
+     *  non-module file) do NOT trip the gate — those merges are real. */
+    private fun isLibPhantomMemberOfModuleInterface(targetType: Type, propName: String): Boolean {
+        val obj = targetType as? Type.Object ?: return false
+        val sym = obj.symbol ?: return false
+        if (sym.name !in moduleInterfaceNames) return false
+        if (sym.declarations.none { it in builtinLibDecls }) return false
+        if (sym.declarations.none { it is InterfaceDeclaration && it !in builtinLibDecls }) return false
+        val prop = obj.members?.get(propName) ?: return false
+        return prop.declarations.isNotEmpty() &&
+            prop.declarations.all { it in builtinLibMemberDecls }
+    }
+
     private fun collectMissingProperties(sourceType: Type, targetType: Type): List<String> {
         if (sourceType !is Type.Object || targetType !is Type.Object) return emptyList()
         resolveStructuredTypeMembers(sourceType)
@@ -132057,6 +132095,7 @@ interface DataView {
                     }
                 }
             if ((prop.name !in sourceMembers || srcStaticOnly) && !isPrototypeProp) {
+                if (isLibPhantomMemberOfModuleInterface(targetType, prop.name)) continue
                 missing.add(prop.name)
             }
         }
@@ -135942,6 +135981,7 @@ interface DataView {
                 val targetPropType = getPropertyTypeForRelation(target, targetProp)
                 if (checkTypeRelatedTo(srcIndex.type, targetPropType, assignableRelation)) continue
             }
+            if (isLibPhantomMemberOfModuleInterface(target, targetProp.name)) continue
             lastChainMissingPropSymbol = targetProp
             return targetProp
         }
