@@ -128713,6 +128713,15 @@ interface DataView {
                 if (useCtx) contextualType = savedContextual
             }
             if (argType === anyType || argType === errorType) continue
+            // Round 468 (M3.1): a CALL-EXPRESSION arg whose type carries an un-inferred
+            // FOREIGN type param — a generic callee's un-substituted result, e.g.
+            // `fixIdToRegistration.get(cast(context.fixId, isString))` typing as the
+            // bare `TOut` (tsc codeFixProvider.ts) — is unjudgeable; tsc infers the
+            // callee's TP from its own args/context. Same rule as the overload
+            // helpers' overloadArgSkippable and the round-431 return/assignment
+            // foreign-TP gates. Gated to CallExpression args so an own-TP
+            // identifier/parameter arg keeps its checks (corpus-pinned TP-vs-TP rules).
+            if (arg is CallExpression && typeContainsForeignTypeParam(argType, emptySet())) continue
             // 16.0: contextual typing for array literal arguments — check each
             // element against the parameter's array element type. Catches
             // `foo([1, "a"])` where foo takes `number[]`.
