@@ -1246,6 +1246,25 @@ class Checker(
      *  (see [uniqueNestedVarDeclByName]); declared before `init` per the init-order trap. */
     private var nestedVarDeclByNameCache: MutableMap<String, VariableDeclaration?>? = null
 
+    /** Round 466 (Blocker #2): recursion guard + first-touch memo for
+     *  [tryNestedFnCallReturnType] — a nested fn's single-return body may itself call
+     *  another nested fn (`toFilePath` → `filePaths[…]` whose initializer calls
+     *  `toPathInBuildInfoDirectory`). The memo is keyed by declaration node with
+     *  first-touch-wins semantics (the standard cache discipline here); body-inferred
+     *  entries depend mildly on the first caller's local-type context, which is the
+     *  enclosing function for every legal call site (a nested fn is not callable from
+     *  outside it). Declared before `init` per the init-order trap. */
+    private var nestedFnReturnDepth = 0
+    private val nestedFnCallReturnMemo = HashMap<FunctionDeclaration, Type?>()
+
+    /** Round 466 (Blocker #2): nested-fn call returns resolve ONLY while re-typing a
+     *  callback BODY for callback-return-TP inference. Enabling them program-wide was
+     *  MEASURED at net +8 on the compiler profile (giant object literals' arrow members
+     *  and property-write receivers gained concrete types that ride M3 relation gaps —
+     *  checker.ts createTypeChecker literal, getNodeLinks writes, classFields
+     *  getPrivateIdentifierEnvironment). Declared before `init` per the init-order trap. */
+    private var inInferenceBodyTyping = false
+
     /** M3.2 (round 431): lexical scope stack for the implicit-any (TS7006) walker —
      *  one map per enclosing function-like, name → declared annotation TypeNode (null
      *  value = declared UNTYPED, which must keep TS7006 firing on `x = arrow` per the
@@ -41306,7 +41325,7 @@ interface ReadonlyArray<T> {
     every(predicate: (value: T, index: number, array: T[]) => unknown): boolean;
     some(predicate: (value: T, index: number, array: T[]) => boolean): boolean;
     forEach(callbackfn: (value: T, index: number, array: T[]) => void): void;
-    map(callbackfn: (value: T, index: number, array: T[]) => any): any[];
+    map<U>(callbackfn: (value: T, index: number, array: T[]) => U): U[];
     filter<S extends T>(predicate: (value: T, index: number, array: T[]) => value is S, thisArg?: any): S[];
     filter(predicate: (value: T, index: number, array: T[]) => unknown): T[];
     reduce(callbackfn: (previousValue: T, currentValue: T, currentIndex: number, array: T[]) => T): T;
@@ -96525,6 +96544,141 @@ interface DataView {
         return cache[name]
     }
 
+    /** Round 466 (Blocker #2): the full same-name declaration cluster for [name],
+     *  ensuring the nested-function walk has run (the clusters are populated as a
+     *  side effect of [buildNestedFunctionMap]). */
+    private fun nestedFunctionClusterByName(name: String): List<FunctionDeclaration>? {
+        if (nestedFunctionByNameCache == null) nestedFunctionByNameCache = buildNestedFunctionMap()
+        return nestedFunctionClustersCache?.get(name)
+    }
+
+    /** Round 466 (Blocker #2): a CALL to a body-NESTED function types its return —
+     *  the TYPE-path sibling of M1.12's flow-only guard resolution. The binder never
+     *  binds nested `function NAME` declarations (B83.5), so the Identifier callee
+     *  resolves to anyType and every such call was untyped (`toFilePath(value[0])` in
+     *  tsc builder.ts — the last real compiler-profile FP's root). Gated to a name
+     *  with NO other binding anywhere (currentLocalTypes / currentParamBindingNames /
+     *  file locals / globals all miss — any hit means the anyType verdict was a
+     *  deliberate shadow bail, not a resolution gap; note a nested fn is not even
+     *  callable from outside its enclosing function, so free variables in its body
+     *  legitimately resolve against the caller's local-type context). An AMBIGUOUS
+     *  name (≥2 decls) resolves only when EVERY declaration yields the same return
+     *  type (all-candidates-agree — tsc builder.ts declares
+     *  `toPathInBuildInfoDirectory` twice, both returning `toPath(…) = Path`). */
+    private fun tryNestedFnCallReturnType(callee: Identifier): Type? {
+        val name = callee.text
+        if (currentLocalTypes.containsKey(name) || name in currentParamBindingNames) return null
+        if (currentFileLocals?.get(name) != null || globals[name] != null) return null
+        if (nestedFnReturnDepth >= 3) return null
+        val cluster = nestedFunctionClusterByName(name) ?: return null
+        if (cluster.isEmpty()) return null
+        nestedFnReturnDepth++
+        try {
+            var agreed: Type? = null
+            for (decl in cluster) {
+                val rt = nestedFnDeclReturnTypeForCall(decl) ?: return null
+                if (agreed == null) agreed = rt
+                else if (rt !== agreed &&
+                    !(checkTypeRelatedTo(rt, agreed, assignableRelation) &&
+                        checkTypeRelatedTo(agreed, rt, assignableRelation))
+                ) return null
+            }
+            return agreed
+        } finally {
+            nestedFnReturnDepth--
+        }
+    }
+
+    /** Round 466 (Blocker #2): re-type a callback BODY expression for
+     *  callback-return-TP inference with nested-fn call returns enabled (see
+     *  [inInferenceBodyTyping]). A heterogeneous ARRAY-LITERAL body yields anyType
+     *  (no candidate): its element-UNION array type is wrong whenever the consumer
+     *  expects a TUPLE, which tsc gets via contextual typing we don't model —
+     *  builder.ts's `map(key => [toFileId(key), toFileIdListId(…)])` must stay
+     *  un-inferred rather than bind `U := (FileId | FileIdListId)[]`. */
+    private fun retypeInferenceBodyExpr(expr: Expression): Type {
+        val saved = inInferenceBodyTyping
+        inInferenceBodyTyping = true
+        val t = try {
+            getTypeOfExpression(expr)
+        } finally {
+            inInferenceBodyTyping = saved
+        }
+        if (expr is ArrayLiteralExpression && arrayRefElement(t) is Type.Union) return anyType
+        return t
+    }
+
+    /** Round 466 (Blocker #2): the RETURN type a NAMED-function callback argument
+     *  supplies to callback-return-TP inference (`fileNames.map(toPathInBuildInfoDirectory)`
+     *  → U := the named fn's return). A body-NESTED name resolves through
+     *  [tryNestedFnCallReturnType] (all its gates apply — incl. all-candidates-agree
+     *  for ambiguous names); a BOUND function value falls back to its single
+     *  non-generic call signature's resolved return. Null on any uncertainty. */
+    private fun namedFnCallbackReturnType(arg: Expression): Type? {
+        val id = arg as? Identifier ?: return null
+        tryNestedFnCallReturnType(id)?.let { return it }
+        val t = getTypeOfExpression(id)
+        if (t is Type.Object && t !is Type.Interface && t !is Type.Reference) {
+            val sig = t.callSignatures?.singleOrNull() ?: return null
+            if (!sig.typeParameters.isNullOrEmpty()) return null
+            val rt = sig.resolvedReturnType ?: return null
+            return if (rt === anyType || rt === errorType) null else rt
+        }
+        return null
+    }
+
+    /** The return type a CALL to [decl] produces: the annotation when present
+     *  (a non-asserts predicate is boolean at the call site), else a SINGLE-return
+     *  body inference with the declaration's own annotated params scoped in (an
+     *  un-annotated param registers as a binding so it reads anyType rather than a
+     *  same-named outer binding). Conservative: any statement shape that could hide
+     *  a second return (if/loop/switch/try/block) bails; async/generator bodies bail
+     *  (their value is wrapped). Body-inferred results are memoized first-touch by
+     *  declaration node. */
+    private fun nestedFnDeclReturnTypeForCall(decl: FunctionDeclaration): Type? {
+        val ann = decl.type
+        if (ann != null) {
+            if (ann is TypePredicate) return if (ann.assertsModifier) null else booleanType
+            val t = getTypeFromTypeNode(ann)
+            return if (t === errorType || t === anyType) null else t
+        }
+        nestedFnCallReturnMemo[decl]?.let { return it }
+        if (decl in nestedFnCallReturnMemo) return null
+        if (ModifierFlag.Async in decl.modifiers || decl.asteriskToken) return null
+        val body = decl.body ?: return null
+        var ret: ReturnStatement? = null
+        for (s in body.statements) {
+            when (s) {
+                is ReturnStatement -> { if (ret != null) return null; ret = s }
+                is ExpressionStatement, is VariableStatement, is FunctionDeclaration -> {}
+                else -> return null
+            }
+        }
+        val retExpr = ret?.expression ?: return null
+        val savedLocalTypes = currentLocalTypes
+        currentLocalTypes = currentLocalTypes.toMutableMap()
+        val savedParamBindings = currentParamBindingNames
+        currentParamBindingNames = currentParamBindingNames.toMutableSet()
+        val savedInInference = inInferenceBodyTyping
+        inInferenceBodyTyping = true
+        val result = try {
+            for (p in decl.parameters) {
+                val pn = (p.name as? Identifier)?.text ?: continue
+                val pt = p.type?.let { tn -> getTypeFromTypeNode(tn).takeIf { it !== errorType } }
+                if (pt != null) currentLocalTypes[pn] = pt
+                else { currentLocalTypes.remove(pn); currentParamBindingNames.add(pn) }
+            }
+            val t = getTypeOfExpression(retExpr)
+            if (t === anyType || t === errorType) null else t
+        } finally {
+            currentLocalTypes = savedLocalTypes
+            currentParamBindingNames = savedParamBindings
+            inInferenceBodyTyping = savedInInference
+        }
+        nestedFnCallReturnMemo[decl] = result
+        return result
+    }
+
     /** Program-wide walk collecting every FunctionDeclaration (any nesting depth) into a
      *  name → decl map; a name seen ≥2 times maps to null (ambiguous). Iterative worklist
      *  (deep nesting-safe). Descends statement containers, function/method/accessor bodies,
@@ -99436,6 +99590,39 @@ interface DataView {
         if (callee is ArrowFunction && callee.type != null) {
             return getTypeFromTypeNode(callee.type)
         }
+        // Round 466 (Blocker #2, inference-body-scoped): a BARREL-IMPORTED Identifier
+        // callee — the file's own binding is an import ALIAS, which getCalleeType
+        // deliberately skips, so resolution falls to the merged `globals` where a
+        // same-named NESTED fn from another file can win (builder.ts's `toPath(…)`
+        // resolved to tsbuild's 2-param `toPath(state, fileName)`). Lexically the
+        // import IS the binding: resolve it through the flow-only barrel-aware
+        // resolver (memoized) and use the target's ANNOTATED return. Un-annotated
+        // targets fall through (no cross-file body inference here).
+        if (inInferenceBodyTyping && callee is Identifier && expr.typeArguments.isNullOrEmpty() &&
+            !currentLocalTypes.containsKey(callee.text) && callee.text !in currentParamBindingNames) {
+            val fileSym = currentFileLocals?.get(callee.text)
+            if (fileSym != null && fileSym.flags.hasAny(SymbolFlags.Alias) &&
+                fileSym.declarations.any { it is ImportSpecifier }) {
+                val d = resolveImportedFunctionLikeDecl(fileSym, mutableSetOf())
+                // NON-generic, NON-overload, no-explicit-type-args targets only: a
+                // generic fn's return annotation references its own TPs (garbage
+                // without the TP scope), and a resolved BODYLESS decl is one
+                // OVERLOAD signature of a cluster — `sortAndDeduplicate`'s
+                // non-generic `(array: readonly string[]): SortedReadonlyArray<string>`
+                // overload manufactured an FP for the explicitly-instantiated call.
+                val ann = when (d) {
+                    is FunctionDeclaration ->
+                        d.type.takeIf { d.typeParameters.isNullOrEmpty() && d.body != null }
+                    is MethodDeclaration ->
+                        d.type.takeIf { d.typeParameters.isNullOrEmpty() && d.body != null }
+                    else -> null
+                }
+                if (ann != null && ann !is TypePredicate) {
+                    getTypeFromTypeNode(ann).takeIf { it !== errorType && it !== anyType }
+                        ?.let { return it }
+                }
+            }
+        }
         val calleeType = when (callee) {
             is Identifier -> getTypeOfIdentifier(callee)
             is PropertyAccessExpression -> getTypeOfPropertyAccess(callee)
@@ -99460,6 +99647,16 @@ interface DataView {
             // path (the round-409 TS2315-flood hazard).
             if (callee is PropertyAccessExpression) {
                 tryBarrelCheckDefinedReturn(expr, callee)?.let { return it }
+            }
+            // Round 466 (Blocker #2): an Identifier callee naming a body-NESTED
+            // function (B83.5-unbound, no other binding anywhere) types its return
+            // from the program-wide nested-fn map — annotated return, or a
+            // single-return body inference (all-candidates-agree for ambiguous
+            // names). INFERENCE-BODY-SCOPED (see the inInferenceBodyTyping field
+            // note — the program-wide version measured net +8 on the compiler
+            // profile). See tryNestedFnCallReturnType.
+            if (callee is Identifier && inInferenceBodyTyping) {
+                tryNestedFnCallReturnType(callee)?.let { return it }
             }
             return anyType
         }
@@ -99956,7 +100153,24 @@ interface DataView {
         // pass logic) and run inline per-TP. Restructure prepares for B83.4b+ where
         // pass-2 will consult pass-1's partial mapper to back-propagate inferred
         // anchor TPs into un-annotated lambda param-type inference.
-        for (tp in tps) {
+        // Round 466 (Blocker #2): gather ANCHOR-able TPs first (stable otherwise) —
+        // a TP whose only source is a callback-RETURN position (pass 2's otherTp
+        // branches) needs the callback's PARAM TPs bound before its own gathering
+        // runs. `arrayToMap<K, V1, V2>` declares K first, but K binds from
+        // `(value: V1) => K | undefined`'s re-typed body, which needs V1 := element.
+        val orderedTps = tps.sortedBy { tp ->
+            val hasAnchor = params.withIndex().any { (pi, p) ->
+                if (pi >= args.size) return@any false
+                val pt = getTypeOfSymbol(p)
+                pt === tp || isArrayOfTypeParam(pt, tp) ||
+                    isAnonymousObjectWithTypeParamMembers(pt, tpsSet) ||
+                    nullableUnionOfTpMode(pt, tp) != 0 ||
+                    unionHasDoubleArrayOfTp(pt, tp) ||
+                    predicatePositionTpOf(p, tps) === tp
+            }
+            if (hasAnchor) 0 else 1
+        }
+        for (tp in orderedTps) {
             val candidates = mutableListOf<Candidate>()
             // Round 440: track whether this TP had an `any`-typed arg soft-skipped at a
             // return-type site — if it's the ONLY reason the candidate list ends up empty,
@@ -100216,7 +100430,10 @@ interface DataView {
                         TypeFlags.StringLiteral or TypeFlags.NumberLiteral or
                         TypeFlags.BooleanLiteral or TypeFlags.BigIntLiteral or
                         TypeFlags.UniqueESSymbol or TypeFlags.EnumLiteral
-                    )
+                    ) ||
+                    // Round 466: a branded intersection (`string & { __pathBrand }` —
+                    // tsc's Path) is a legitimate callback-return candidate.
+                    isBrandedNamedLikeIntersection(t)
             for (i in params.indices) {
                 if (i >= args.size) break
                 val pt = getTypeOfSymbol(params[i])
@@ -100271,7 +100488,13 @@ interface DataView {
                     // mention), every callback param type concrete (no TP mention), lambda
                     // param count matches the callback's, all params un-annotated
                     // Identifier names, no rest params, `tp` not yet anchored.
-                    if (fnObj != null && callbackSig != null && callbackReturn === tp &&
+                    if (fnObj != null && callbackSig != null &&
+                        // Round 466: `tp | undefined` callback returns qualify like bare
+                        // tp (a nullish body value contributes nothing to the binding).
+                        (callbackReturn === tp || (callbackReturn is Type.Union &&
+                            callbackReturn.types.all {
+                                it === tp || it.flags.hasAny(TypeFlags.Undefined or TypeFlags.Null)
+                            } && callbackReturn.types.any { it === tp })) &&
                         otherTp == null && mapperPairs.none { it.first === tp } &&
                         callbackSig.parameters.isNotEmpty() &&
                         fnObj !is Type.Interface && fnObj !is Type.Reference &&
@@ -100291,6 +100514,23 @@ interface DataView {
                         }
                         if (concreteOk) {
                             val arg = args[i]
+                            // Round 466 (Blocker #2): a NAMED-function callback arg
+                            // (`fileNames.map(toPathInBuildInfoDirectory)`) contributes
+                            // the named fn's RETURN type as the candidate for the
+                            // return-position TP — the Identifier sibling of the
+                            // arrow-body re-typing below. Resolution + all-candidates-
+                            // agree gating live in namedFnCallbackReturnType.
+                            if (arg is Identifier) {
+                                val nfr = namedFnCallbackReturnType(arg)
+                                if (nfr != null &&
+                                    !nfr.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) {
+                                    val widened = widenType(nfr)
+                                    if (isNamedLikeAtom(widened) ||
+                                        (widened is Type.Union && widened.types.all { isNamedLikeAtom(it) })) {
+                                        candidates.add(Candidate(i, widened, null))
+                                    }
+                                }
+                            }
                             val (argParamsLocal, argBody) = when (arg) {
                                 is ArrowFunction -> arg.parameters to arg.body
                                 is FunctionExpression -> arg.parameters to arg.body
@@ -100334,7 +100574,7 @@ interface DataView {
                                             currentLocalTypes[name] = sigParamTypes[idx]
                                         }
                                         val bodyType = try {
-                                            getTypeOfExpression(effectiveBodyExpr)
+                                            retypeInferenceBodyExpr(effectiveBodyExpr)
                                         } finally {
                                             currentLocalTypes = savedLocalTypes
                                         }
@@ -100440,7 +100680,7 @@ interface DataView {
                                         }
                                         currentInferenceMapper = newMapper
                                         val bodyType = try {
-                                            getTypeOfExpression(effectiveBodyExpr)
+                                            retypeInferenceBodyExpr(effectiveBodyExpr)
                                         } finally {
                                             currentLocalTypes = savedLocalTypes
                                             currentInferenceMapper = savedMapper
@@ -100522,7 +100762,7 @@ interface DataView {
                                     newMapper[otherTp] = otherTpMapped
                                     currentInferenceMapper = newMapper
                                     val bodyType = try {
-                                        getTypeOfExpression(effectiveBodyExpr)
+                                        retypeInferenceBodyExpr(effectiveBodyExpr)
                                     } finally {
                                         currentLocalTypes = savedLocalTypes
                                         currentInferenceMapper = savedMapper
@@ -101220,8 +101460,25 @@ interface DataView {
             if (tps.any { typeMentionsTypeParam(spt, it) }) return null
         }
         val rt = sig.resolvedReturnType ?: return null
-        // Return type must be exactly a bare TP from tps.
-        return if (rt is Type.TypeParam && rt in tps) rt else null
+        // Return type must be exactly a bare TP from tps — or (round 466) the
+        // nullable union `tp | undefined` (tsc's `makeKey: (value) => K | undefined`
+        // shape: a nullish body value simply contributes nothing to K).
+        if (rt is Type.TypeParam && rt in tps) return rt
+        (rt as? Type.Union)?.let { u ->
+            var found: Type.TypeParam? = null
+            for (m in u.types) {
+                when {
+                    m.flags.hasAny(TypeFlags.Undefined or TypeFlags.Null) -> {}
+                    m is Type.TypeParam && m in tps -> {
+                        if (found != null) return null
+                        found = m
+                    }
+                    else -> return null
+                }
+            }
+            if (found != null) return found
+        }
+        return null
     }
 
     /**
@@ -101426,6 +101683,29 @@ interface DataView {
     }
 
     /** True if [type] structurally references [tp] (recurses into Reference/Union/Intersection). */
+    /** Round 466 (Blocker #2): a BRANDED intersection (`string & { __pathBrand: any }`
+     *  — tsc's `Path`) counts as a named-like inference candidate: at least one
+     *  member is itself named-like and every other member is a plain anonymous
+     *  object (the brand). Named/complex intersections stay rejected. */
+    private fun isBrandedNamedLikeIntersection(t: Type): Boolean {
+        if (t !is Type.Intersection) return false
+        var sawNamed = false
+        for (m in t.types) {
+            when {
+                m is Type.Interface || m is Type.Reference || m is Type.Intrinsic ||
+                    m.flags.hasAny(
+                        TypeFlags.StringLiteral or TypeFlags.NumberLiteral or
+                            TypeFlags.BooleanLiteral or TypeFlags.BigIntLiteral or
+                            TypeFlags.UniqueESSymbol or TypeFlags.EnumLiteral
+                    ) -> sawNamed = true
+                m is Type.Object && m.symbol == null &&
+                    m.callSignatures.isNullOrEmpty() && m.constructSignatures.isNullOrEmpty() -> {}
+                else -> return false
+            }
+        }
+        return sawNamed
+    }
+
     private fun typeMentionsTypeParam(type: Type, tp: Type.TypeParam): Boolean {
         return when (type) {
             is Type.TypeParam -> type === tp
