@@ -94634,6 +94634,19 @@ interface DataView {
                 ) {
                     return narrowByExcludingNullUndefined(declaredType)
                 }
+                // Round 465: the RHS is a call to an UN-ANNOTATED (possibly nested,
+                // B83.5-unbound) function — `({ referencedName, name } =
+                // visitReferencedPropertyName(member.name))` (tsc esDecorators.ts) —
+                // so the member type above is unresolvable. Prove the member
+                // non-nullish from the callee's body instead: every return must be
+                // an object literal carrying the member with a non-nullish value
+                // (values resolve through the callee's own params and body-local
+                // const decls, never the caller's same-named bindings).
+                if (memberT == null &&
+                    destructuredMemberNonNullishFromCalleeBody(left, node.right, name)
+                ) {
+                    return narrowByExcludingNullUndefined(declaredType)
+                }
                 return antecedent
             }
         }
@@ -95021,20 +95034,37 @@ interface DataView {
 
     /** Companion of [calleeBodyReturnsNonNullishForFlow]: classify one return
      *  expression, with ternaries recursed so their identifier LEAVES resolve
-     *  through the callee's own param annotations first. */
+     *  through the callee's own param annotations first. [bodyDecls] (round 465)
+     *  maps a callee-body-local const/let name to ALL its declarations within the
+     *  callee body — an identifier leaf found there proves non-nullish iff EVERY
+     *  declaration does (annotation or initializer), and takes precedence over
+     *  [getTypeOfIdentifier], which would resolve the CALLER's same-named binding
+     *  during a flow walk. */
     private fun retExprNonNullishForFlow(
         e: Expression, paramAnns: Map<String, TypeNode>, depth: Int,
+        bodyDecls: Map<String, List<VariableDeclaration>> = emptyMap(),
     ): Boolean {
         if (depth > 6) return false
         var x = e
         while (x is ParenthesizedExpression) x = x.expression
         return when (x) {
             is ConditionalExpression ->
-                retExprNonNullishForFlow(x.whenTrue, paramAnns, depth + 1) &&
-                    retExprNonNullishForFlow(x.whenFalse, paramAnns, depth + 1)
+                retExprNonNullishForFlow(x.whenTrue, paramAnns, depth + 1, bodyDecls) &&
+                    retExprNonNullishForFlow(x.whenFalse, paramAnns, depth + 1, bodyDecls)
             is Identifier -> {
                 val ann = paramAnns[x.text]
+                val locals = bodyDecls[x.text]
                 if (ann != null) typeNodeDefinitelyNonNullish(ann, emptySet(), depth + 1)
+                else if (!locals.isNullOrEmpty()) locals.all { vd ->
+                    val vdt = vd.type
+                    val vdi = vd.initializer
+                    when {
+                        vdt != null -> typeNodeDefinitelyNonNullish(vdt, emptySet(), depth + 1)
+                        vdi is CallExpression -> callRhsHasNonNullishReturnAnnotation(vdi)
+                        vdi != null -> rhsIsDefinitelyNonNullish(vdi)
+                        else -> false
+                    }
+                }
                 else {
                     val t = try { getTypeOfIdentifier(x) } catch (_: Exception) { null }
                     if (t != null && t !== anyType && t !== errorType && t !== unknownType &&
@@ -95060,6 +95090,84 @@ interface DataView {
                 }
             }
             else -> rhsIsDefinitelyNonNullish(x)
+        }
+    }
+
+    /** Round 465: collect every VariableDeclaration in a callee body, walking the
+     *  SAME statement-kind whitelist as [collectReturnExprsForFlow] — since that
+     *  collector REJECTS any body containing an opaque statement kind, a body that
+     *  passed it yields a COMPLETE map of the const/let decls a return expression
+     *  can lexically reference (nested function-likes introduce their own scopes
+     *  and are skipped by both). */
+    private fun collectBodyVarDeclsForFlow(
+        stmts: List<Statement>, out: MutableMap<String, MutableList<VariableDeclaration>>, budget: IntArray,
+    ) {
+        for (s in stmts) {
+            if (--budget[0] < 0) return
+            when (s) {
+                is VariableStatement -> for (d in s.declarationList.declarations) {
+                    val n = (d.name as? Identifier)?.text ?: continue
+                    out.getOrPut(n) { mutableListOf() }.add(d)
+                }
+                is Block -> collectBodyVarDeclsForFlow(s.statements, out, budget)
+                is IfStatement -> {
+                    collectBodyVarDeclsForFlow(listOf(s.thenStatement), out, budget)
+                    s.elseStatement?.let { collectBodyVarDeclsForFlow(listOf(it), out, budget) }
+                }
+                else -> {}
+            }
+        }
+    }
+
+    /** Round 465: the destructured-member analog of
+     *  [calleeBodyReturnsNonNullishForFlow] — for `({ x, y } = call())` where the
+     *  callee is an UN-ANNOTATED (possibly nested) function whose return type is
+     *  unresolvable, prove the destructured member bound to [name] non-nullish by
+     *  scanning the callee's body: every return must be an OBJECT LITERAL carrying
+     *  the member with a non-nullish value (tsc esDecorators.ts
+     *  `visitReferencedPropertyName`'s three `return { referencedName, name }`
+     *  sites, each a `factory.create…`-initialized const). Conservative: a return
+     *  that is not an object literal, a return missing the member, or any
+     *  unresolvable value fails. */
+    private fun destructuredMemberNonNullishFromCalleeBody(
+        target: Expression, rhs: Expression, name: String,
+    ): Boolean {
+        val call = rhs as? CallExpression ?: return false
+        if (call.questionDotToken) return false
+        val propName = (target as? ObjectLiteralExpression)?.properties?.firstNotNullOfOrNull { p ->
+            when (p) {
+                is ShorthandPropertyAssignment -> if (p.name.text == name) p.name.text else null
+                is PropertyAssignment -> if ((p.initializer as? Identifier)?.text == name)
+                    getPropertyKeyName(p.name) else null
+                else -> null
+            }
+        } ?: return false
+        val decl = resolveFlowCalleeDecl(call, call.expression) as? FunctionDeclaration ?: return false
+        if (decl.type != null || !decl.typeParameters.isNullOrEmpty()) return false
+        val body = decl.body ?: return false
+        val returns = ArrayList<Expression>()
+        if (!collectReturnExprsForFlow(body.statements, returns, IntArray(1) { 64 })) return false
+        if (returns.isEmpty()) return false
+        val paramAnns = HashMap<String, TypeNode>()
+        for (p in decl.parameters) {
+            val n = (p.name as? Identifier)?.text ?: continue
+            val t = p.type ?: continue
+            paramAnns[n] = t
+        }
+        val bodyDecls = HashMap<String, MutableList<VariableDeclaration>>()
+        collectBodyVarDeclsForFlow(body.statements, bodyDecls, IntArray(1) { 64 })
+        return returns.all { r ->
+            var x = r
+            while (x is ParenthesizedExpression) x = x.expression
+            val ol = x as? ObjectLiteralExpression ?: return false
+            val v: Expression = ol.properties.firstNotNullOfOrNull { p ->
+                when (p) {
+                    is ShorthandPropertyAssignment -> if (p.name.text == propName) p.name else null
+                    is PropertyAssignment -> if (getPropertyKeyName(p.name) == propName) p.initializer else null
+                    else -> null
+                }
+            } ?: return false
+            retExprNonNullishForFlow(v, paramAnns, depth = 0, bodyDecls = bodyDecls)
         }
     }
 
