@@ -85425,9 +85425,25 @@ interface DataView {
         // a literal). Object/Interface/Reference targets still use the raw
         // type — narrowing into those would interact with structural-
         // comparison gaps and is deferred.
-        val sourceType = if ((init is Identifier || init is PropertyAccessExpression) &&
-            isNarrowableTarget(targetType)) {
-            getNarrowedTypeForReference(rawSourceType, init)
+        // Round 461: named-object / union / intersection targets get the SAME
+        // relation-passes-gated narrowing the assignment path (round 410/438/456)
+        // and return path (round 413/438) already have — substitute the narrowed
+        // type only when it is a STRICT improvement that makes the relation pass,
+        // so a genuine widening init keeps the raw type and still fires
+        // (suppression-only, FP-safe by monotonicity). tsc parser.ts:6245:
+        // `let expression: PropertyAccessExpression | Identifier | ThisExpression
+        // = initialExpression;` after an `if (isJsxNamespacedName(initialExpression))
+        // return` guard removed the JsxNamespacedName member.
+        val sourceType = if (init is Identifier || init is PropertyAccessExpression) {
+            if (isNarrowableTarget(targetType)) {
+                getNarrowedTypeForReference(rawSourceType, init)
+            } else if (targetType is Type.Interface || targetType is Type.Reference ||
+                targetType is Type.Union || targetType is Type.Intersection) {
+                val narrowed = getNarrowedTypeForReference(rawSourceType, init)
+                if (narrowed !== rawSourceType &&
+                    checkTypeRelatedTo(narrowed, targetType, assignableRelation)) narrowed
+                else rawSourceType
+            } else rawSourceType
         } else rawSourceType
         // round 431e: same foreign-TP rule as checkReturnAssignability's gate — an
         // un-inferred generic call initializer (`const p: () => Printer =
@@ -130969,8 +130985,17 @@ interface DataView {
         if (elem is SpreadElement) return false
         val slotType = getTypeFromTypeNodeSafe(slotNode) ?: return true
         if (slotType === anyType || slotType === errorType || slotType is Type.TypeParam) return true
-        val elemType = getTypeOfExpression(elem)
+        var elemType = getTypeOfExpression(elem)
         if (elemType === anyType || elemType === errorType) return true
+        // Round 461: a guard-narrowed reference element — `isString(x) ? [x] : x[0]`
+        // narrows x to string inside the true arm, so the element must check its
+        // NARROWED type against the slot (tsc builder.ts getNewEmitSignature's
+        // `[oldEmitSignature]` vs `[signature: string]`). Monotone-safe: narrowing
+        // only refines, and this helper's verdict only SUPPRESSES a confident match.
+        if (elem is Identifier || elem is PropertyAccessExpression) {
+            val narrowed = getNarrowedTypeForReference(elemType, elem)
+            if (narrowed !== elemType && narrowed !== neverType) elemType = narrowed
+        }
         if (!canUseTypeEngine(elemType, slotType)) return true
         return checkTypeRelatedTo(elemType, slotType, assignableRelation)
     }
