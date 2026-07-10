@@ -39,12 +39,12 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
-**Round 460 (2026-07-09/10) — bounded FP burn-down: EIGHT fixes (7 dashboard wins + 1
-repro-pinned capability), all GENERAL checker/flow correctness. Dashboard: compiler 103 → 91
-(−12; TS2322 33 → 28, TS2345 11 → 6, TS2454 1 → 0, TS2363 1 → 0), services 194 → 178 (−16
-cross-profile, measured once at session end). Suite 9,731 → 9,758 (+27 local across 8 new test
-files, 0 regressions); 7 fix commits (9973bf9d / 4c00e5f1 / fcec70f7 / c35e24cb / 739d16ef /
-f2d67ef9 / 2c03d8f9).**
+**Round 460 (2026-07-09/10) — bounded FP burn-down: TEN fixes (9 dashboard wins + 1
+repro-pinned capability), all GENERAL checker/flow correctness. Dashboard: compiler 103 → 88
+(−15; TS2322 33 → 25, TS2345 11 → 6, TS2454 1 → 0, TS2363 1 → 0), services 194 → 178 (−16
+cross-profile, measured at fix 8). Suite 9,731 → 9,762 (+31 local across 10 new test files,
+0 regressions); 9 fix commits (9973bf9d / 4c00e5f1 / fcec70f7 / c35e24cb / 739d16ef /
+f2d67ef9 / 2c03d8f9 / a0765dd6 / f1849a01).**
 - **Fix 1 (9973bf9d, block-scoping-ambiguous locals; compiler 103 → 100):** the round-459 NEXT
   item with root cause pre-diagnosed. A name with ≥2 block-scoped (`let`/`const`) declarations in
   ONE function body can only refer to DIFFERENT blocks' bindings, but the flat first-decl-wins
@@ -99,19 +99,33 @@ f2d67ef9 / 2c03d8f9).**
   resolveNameHelper's nested `isSelfReferenceLocation(node): node is SelfReferenceLocation` (the
   alias is declared INSIDE the function) never narrowed → `lastSelfReferenceLocation = location`
   FP'd TS2322 (utilities.ts:11856).
+- **Fix 9 (a0765dd6, chained assignment RHS; 91 → 90):** `location = node = value` evaluates to
+  the ULTIMATE RHS value, but the round-410/438 assignment-path narrowing gate only accepted a
+  bare Identifier/PropertyAccess RHS — transformers/destructuring.ts:113's chain inside
+  `if (isDestructuringAssignment(value))` kept the declared `Expression | undefined` → FP vs
+  TextRange. The gate now unwraps the `=` right-spine before narrowing.
+- **Fix 10 (f1849a01, this-param signature alignment; 90 → 88):** `getTypeOfFunction` zipped the
+  this-DROPPED paramSymbols against the this-KEPT decl.parameters — every param type shifted by
+  one for a `this`-param function (core.ts's `multiMapAdd<K, V>(this: MultiMap<K, V>, key: K,
+  value: V)` built `(key: MultiMap<K, V>, value: K)` → FP TS2322 ×2 at `map.add = multiMapAdd`).
+  A this-param function now resolves each symbol's type from its own valueDeclaration, and `this`
+  no longer counts toward minArgumentCount. LOAD-BEARING: functions WITHOUT a this param KEEP the
+  legacy positional zip — a leading BINDING-PATTERN param is also dropped from paramSymbols
+  (round-446 gotcha), and the shift keeps sig.parameters[i] carrying decl.parameters[i]'s type,
+  which the call-site arg alignment relies on (an unconditional valueDeclaration-based resolution
+  regressed 19 sites: moduleSpecifiers getModuleSpecifierPreferences et al). Aligning properly
+  needs placeholder symbols for pattern params — a queued follow-up with real blast radius.
 - **Scouted, whole-program-only (deferred with findings):** tsbuildPublic.ts:594 TS7006
   (`parseConfigFileHost.onUnRecoverableConfigFileDiagnostic = d => …` — the PropertyAccess
   assignment-target context EXISTS and a faithful generic destructured-receiver repro compiles
   clean; the real gap is cross-barrel); moduleSpecifiers.ts:929 (round-459 finding stands).
-- **NEXT (compiler @ 91, ~45 real excl. TS2591×43 + TS2304×2 `global` + TS2584 console):**
+- **NEXT (compiler @ 88, ~42 real excl. TS2591×43 + TS2304×2 `global` + TS2584 console):**
   program.ts:1220 needs `Debug.checkDefined(<call>)` cross-barrel generic-return inference to feed
-  the (now-landed) destructuring narrowing; transformers/destructuring.ts:113 is a CHAINED
-  assignment `location = node = value` needing the inner `=`'s guard-narrowed RHS type;
-  transformers/es2015.ts:2730 needs element-access segments (`declarations[0].initializer`) in the
+  the (now-landed) destructuring narrowing; transformers/transformers/es2015.ts:2730 needs element-access segments (`declarations[0].initializer`) in the
   narrowing reference-path machinery (getReferencePath has no `[0]` support — core change, assess
   blast radius); utilities.ts:4066 isPropertyNameLiteral &&-guard (probe); TransformerFactory
   whole-program probe (round-457 finding); `string → __String` branding (builderState/builder);
-  core.ts:1544/1545 MultiMap this-param methods; the big objlit-vs-interface returns
+  the binding-pattern placeholder-symbol signature alignment (unblocks the round-446 family properly); the big objlit-vs-interface returns
   (parser.ts:1865, emitter.ts:1277, transformer.ts:271, moduleNameResolver.ts:1300 — likely one
   M3 family); utilities.ts:12338/tsbuildPublic.ts:1778 = the round-456 REVERTED TypeParam-constraint
   relation rule family (needs the per-site emission bail variant).
