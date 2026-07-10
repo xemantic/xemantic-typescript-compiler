@@ -88836,6 +88836,19 @@ interface DataView {
                         return
                     }
                     if (canUse && !isAssignable) {
+                        // M3.1 (round 461): a bare TypeParam SOURCE whose declared
+                        // constraint chain reaches a type assignable to the target is
+                        // itself assignable (tsc: a type param relates to X iff its
+                        // constraint does). The relation engine deliberately has NO
+                        // general TypeParam-source rule (39+ cycle gate; the round-456
+                        // broad attempt perturbed overload selection) — per-site
+                        // emission bail only, mirroring round 442's arg-check bail.
+                        // (`currentClassContainer = node` where `node: T extends
+                        // ClassLikeDeclaration`; `clone = worker(...)` returning bare T.)
+                        if (sourceType is Type.TypeParam &&
+                            bareTpConstraintRelatesTo(sourceType, tt)) {
+                            return
+                        }
                         // B496: cross-typed-array assignment is owned by the dedicated
                         // checkTypedArrayCrossAssignment walker (correct TS2322 via the
                         // [Symbol.toStringTag] mismatch). Our embedded typed-array interfaces
@@ -135859,6 +135872,30 @@ interface DataView {
         is UnionType -> c.types.isNotEmpty() && c.types.all { tpConstraintNodeReachesTp(it, tgt, depth) }
         is ParenthesizedType -> tpConstraintNodeReachesTp(c.type, tgt, depth)
         else -> false
+    }
+
+    /** M3.1 (round 461): does a bare TypeParam SOURCE's resolved constraint CHAIN reach a
+     *  concrete type assignable to [target]? tsc's rule: a type parameter relates to X iff
+     *  its constraint does (`T extends C` → `t: T` is assignable to `C`). The relation
+     *  engine deliberately has NO general TypeParam-source rule (the 39+ cycle-regression
+     *  gate; the round-456 broad attempt was net-zero because overload arg-matching shares
+     *  checkTypeRelatedTo and mis-selected signatures wherever inference under-resolves a
+     *  TypeParam arg) — so this is consulted ONLY at TS2322 EMISSION sites (assignment /
+     *  var-decl / return), as a suppression bail. An unconstrained TP returns false, so
+     *  genuine `T`-to-concrete errors keep firing. Cycle-guarded (`T extends T`). */
+    private fun bareTpConstraintRelatesTo(tp: Type.TypeParam, target: Type): Boolean {
+        var c: Type? = tp.constraint
+        var depth = 0
+        val seen = mutableSetOf<Int>()
+        while (c != null && depth < 8 && seen.add(c.id)) {
+            if (c !is Type.TypeParam) {
+                if (c === errorType || c === anyType) return false
+                return checkTypeRelatedTo(c, target, assignableRelation)
+            }
+            c = c.constraint
+            depth++
+        }
+        return false
     }
 
     /** B212b: is a constraint NODE assignable to a union of tp names? A ref part
