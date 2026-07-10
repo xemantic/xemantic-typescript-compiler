@@ -14320,8 +14320,7 @@ class Checker(
             is ArrayLiteralExpression -> target.elements.any { el ->
                 when (el) {
                     is SpreadElement -> (el.expression as? Identifier)?.text == varName
-                    is Expression -> destructuringLeafOrNestedHasName(el, varName, depth)
-                    else -> false
+                    else -> destructuringLeafOrNestedHasName(el, varName, depth)
                 }
             }
             else -> false
@@ -94021,6 +94020,23 @@ interface DataView {
             val receiverPath = getReferencePath(expr.expression) ?: return null
             "$receiverPath.${expr.name.text}"
         }
+        // Round 461: an element access with a LITERAL index is a narrowable reference
+        // in tsc (isMatchingReference accepts string/numeric-literal argumentExpressions):
+        // `decls[0].initializer` guarded by `!!decls[0].initializer` narrows. The `[N]`
+        // segment syntax cannot collide with a property segment (`.` separated), so every
+        // path-string consumer compares consistently. Root extraction sites must use
+        // [flowPathRoot] (splits on '[' too), not bare substringBefore('.').
+        is ElementAccessExpression -> {
+            val idx = when (val arg = expr.argumentExpression) {
+                is NumericLiteralNode -> arg.text
+                is StringLiteralNode -> arg.text
+                else -> null
+            }
+            if (idx == null) null else {
+                val receiverPath = getReferencePath(expr.expression) ?: return null
+                "$receiverPath[$idx]"
+            }
+        }
         // `(x)` and `(x).prop` should narrow identically to `x` / `x.prop` — the parens
         // are syntactic noise. Skip synthetic-paren instantiation-expression markers,
         // since those represent a separate semantic op the narrower shouldn't merge.
@@ -94053,8 +94069,10 @@ interface DataView {
             if (++visits > 512) return true
             val expr = work.removeLast()
             val path = getReferencePath(expr)
+            // Round 461: '[' is a segment boundary too — a mention of `x` (or `x[0]`)
+            // counts for walked path `x[0].y`.
             if (path != null &&
-                (path == name || path.startsWith("$name.") || name.startsWith("$path."))
+                (path == name || pathPrefixOf(name, path) || pathPrefixOf(path, name))
             ) return true
             when (expr) {
                 is BinaryExpression -> { work.addLast(expr.left); work.addLast(expr.right) }
@@ -94090,9 +94108,22 @@ interface DataView {
      *   - the root identifier must not be reassigned at/after the closure
      *     (non-const → `isPastLastAssignment` false).
      */
+    /** Round 461: the ROOT binding name of a reference path — paths may now contain
+     *  literal-index element-access segments (`x[0].y`), so root extraction must split
+     *  on '[' as well as '.' (a bare substringBefore('.') would yield "x[0]", silently
+     *  missing every root-name comparison against binder/localNames sets). */
+    private fun flowPathRoot(name: String): String =
+        name.substringBefore('.').substringBefore('[')
+
+    /** Round 461: is [prefix] a proper path-prefix of [whole] at a segment boundary
+     *  ('.' property or '[' element-access)? */
+    private fun pathPrefixOf(whole: String, prefix: String): Boolean =
+        whole.length > prefix.length && whole.startsWith(prefix) &&
+            (whole[prefix.length] == '.' || whole[prefix.length] == '[')
+
     private fun outerFlowForCapturedName(flowNode: FlowStart, name: String): FlowNode? {
         val outer = flowNode.outerFlow ?: return null
-        val root = name.substringBefore('.')
+        val root = flowPathRoot(name)
         if (root == "this" || root == "super" || root == "arguments") return null
         if (root in flowNode.localNames) return null
         if (root in flowNode.reassignedAfterNames) return null
@@ -94127,6 +94158,10 @@ interface DataView {
                 else when (val left = node.left) {
                     is Identifier -> left.text == name
                     is PropertyAccessExpression -> getReferencePath(left) == name
+                    // Round 461: a literal-index element-access WRITE (`x[0] = …`)
+                    // gates the walk for the matching `x[0]`(.suffix) path — without
+                    // this the write is pass-through and stale narrowing survives.
+                    is ElementAccessExpression -> name.indexOf('[') >= 0 && getReferencePath(left) == name
                     else -> false
                 }
             }
@@ -94446,6 +94481,11 @@ interface DataView {
                             getReferencePath(left) == name
                         if (matches) node.right else null
                     }
+                    // Round 461: literal-index element-access target (`x[0] = rhs`) —
+                    // exact-path match, mirroring the PropertyAccess arm (cheap
+                    // bracket pre-gate before the path build).
+                    is ElementAccessExpression ->
+                        if (name.indexOf('[') >= 0 && getReferencePath(left) == name) node.right else null
                     else -> null
                 }
             }
@@ -94940,7 +94980,7 @@ interface DataView {
     private fun aliasedConditionInitializer(expr: Identifier, name: String): Expression? {
         val start = currentFlowGraph?.nodeToFlow?.get(nodeKey(expr)) ?: return null
         val aliasName = expr.text
-        val rootOfName = name.substringBefore('.')
+        val rootOfName = flowPathRoot(name)
         val key = AliasedCondKey(start, aliasName, rootOfName)
         aliasedConditionInitCache[key]?.let { return it }
         if (key in aliasedConditionInitCache) return null // memoized negative
