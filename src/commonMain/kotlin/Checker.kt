@@ -122495,7 +122495,18 @@ interface DataView {
         for (s in statements) shadowCallTypesLocalDecls(s, paramNames)
     }
 
-    private fun shadowCallTypesDeclList(declarations: List<VariableDeclaration>, paramNames: Set<String>) {
+    private fun shadowCallTypesDeclList(
+        declarations: List<VariableDeclaration>,
+        paramNames: Set<String>,
+        // Round 470: a let/const in a NESTED block that collides with a PARAM is a
+        // genuine block-scoped shadow (tsc importFixes.ts: param `namedImports:
+        // readonly Import[]` vs the else-block's `const namedImports =
+        // factory.createNamedImports(…)` — the arg read resolved to the PARAM type →
+        // FP TS2345). The flat map can't know which binding a read refers to →
+        // anyType (suppression-only). A TOP-LEVEL body decl keeps the param-wins
+        // skip (functionArgShadowing: a body `var x` REDECLARES the param).
+        nestedLetConst: Boolean = false,
+    ) {
         for (d in declarations) {
             // M3.1 (round 436): a DESTRUCTURED local (`const { version, major } =
             // parsePartial(text)` — tsc's semver.ts; `const { sourceFile, start, length }
@@ -122521,7 +122532,13 @@ interface DataView {
                 continue
             }
             val nm = (nameNode as? Identifier)?.text ?: continue
-            if (nm in paramNames) continue
+            if (nm in paramNames) {
+                if (nestedLetConst) {
+                    currentLocalTypes[nm] = anyType
+                    currentParamBindingNames.add(nm)
+                }
+                continue
+            }
             if (currentLocalTypes.containsKey(nm)) {
                 currentLocalTypes[nm] = anyType
             } else if (globals.containsKey(nm)) {
@@ -122540,34 +122557,39 @@ interface DataView {
         }
     }
 
-    private fun shadowCallTypesLocalDecls(s: Statement?, paramNames: Set<String>) {
+    private fun shadowCallTypesLocalDecls(s: Statement?, paramNames: Set<String>, nested: Boolean = false) {
+        // [nested] = inside a block/if/loop/try/switch — a let/const there that collides
+        // with a PARAM is a genuine block-scoped shadow (see shadowCallTypesDeclList).
+        fun listNestedLetConst(list: VariableDeclarationList): Boolean =
+            nested && list.flags != SyntaxKind.VarKeyword
         when (s) {
             null -> {}
-            is VariableStatement -> shadowCallTypesDeclList(s.declarationList.declarations, paramNames)
-            is Block -> for (st in s.statements) shadowCallTypesLocalDecls(st, paramNames)
+            is VariableStatement -> shadowCallTypesDeclList(
+                s.declarationList.declarations, paramNames, listNestedLetConst(s.declarationList))
+            is Block -> for (st in s.statements) shadowCallTypesLocalDecls(st, paramNames, nested = true)
             is IfStatement -> {
-                shadowCallTypesLocalDecls(s.thenStatement, paramNames)
-                shadowCallTypesLocalDecls(s.elseStatement, paramNames)
+                shadowCallTypesLocalDecls(s.thenStatement, paramNames, nested = true)
+                shadowCallTypesLocalDecls(s.elseStatement, paramNames, nested = true)
             }
             is ForStatement -> {
                 (s.initializer as? VariableDeclarationList)?.let { shadowCallTypesDeclList(it.declarations, paramNames) }
-                shadowCallTypesLocalDecls(s.statement, paramNames)
+                shadowCallTypesLocalDecls(s.statement, paramNames, nested = true)
             }
             is ForInStatement -> {
                 (s.initializer as? VariableDeclarationList)?.let { shadowCallTypesDeclList(it.declarations, paramNames) }
-                shadowCallTypesLocalDecls(s.statement, paramNames)
+                shadowCallTypesLocalDecls(s.statement, paramNames, nested = true)
             }
             is ForOfStatement -> {
                 (s.initializer as? VariableDeclarationList)?.let { shadowCallTypesDeclList(it.declarations, paramNames) }
-                shadowCallTypesLocalDecls(s.statement, paramNames)
+                shadowCallTypesLocalDecls(s.statement, paramNames, nested = true)
             }
-            is WhileStatement -> shadowCallTypesLocalDecls(s.statement, paramNames)
-            is DoStatement -> shadowCallTypesLocalDecls(s.statement, paramNames)
-            is LabeledStatement -> shadowCallTypesLocalDecls(s.statement, paramNames)
+            is WhileStatement -> shadowCallTypesLocalDecls(s.statement, paramNames, nested = true)
+            is DoStatement -> shadowCallTypesLocalDecls(s.statement, paramNames, nested = true)
+            is LabeledStatement -> shadowCallTypesLocalDecls(s.statement, paramNames, nested)
             is TryStatement -> {
-                for (st in s.tryBlock.statements) shadowCallTypesLocalDecls(st, paramNames)
-                s.catchClause?.block?.statements?.forEach { shadowCallTypesLocalDecls(it, paramNames) }
-                s.finallyBlock?.statements?.forEach { shadowCallTypesLocalDecls(it, paramNames) }
+                for (st in s.tryBlock.statements) shadowCallTypesLocalDecls(st, paramNames, nested = true)
+                s.catchClause?.block?.statements?.forEach { shadowCallTypesLocalDecls(it, paramNames, nested = true) }
+                s.finallyBlock?.statements?.forEach { shadowCallTypesLocalDecls(it, paramNames, nested = true) }
             }
             is SwitchStatement -> for (c in s.caseBlock) {
                 val stmts = when (c) {
@@ -122575,7 +122597,7 @@ interface DataView {
                     is DefaultClause -> c.statements
                     else -> emptyList()
                 }
-                for (st in stmts) shadowCallTypesLocalDecls(st, paramNames)
+                for (st in stmts) shadowCallTypesLocalDecls(st, paramNames, nested = true)
             }
             else -> {}
         }
