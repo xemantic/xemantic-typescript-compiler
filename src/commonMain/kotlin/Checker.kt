@@ -96691,8 +96691,17 @@ interface DataView {
                         ?.takeIf { it.flags.hasAny(SymbolFlags.Enum) }
                         ?.let { canonicalEnumSymbol(it) } ?: return null
                     val values = enumValues[enumSym.id] ?: return null
-                    if (values.isNotEmpty() &&
-                        values.keys.all { "${enumSym.id}#$it" in enumKeys }
+                    // Round 471: exhaustion compares VALUE domains, not member names —
+                    // an ALIAS member (`NameContainsNonURISafeCharacters =
+                    // NameContainsInvalidCharacters`, tsc jsTyping.ts) shares a covered
+                    // member's value, and tsc's case narrowing removes every member
+                    // with that value. A name is covered directly (its key is a case)
+                    // or via a covered member with an EQUAL value.
+                    val coveredNames = values.keys.filter { "${enumSym.id}#$it" in enumKeys }.toSet()
+                    val coveredValues = coveredNames.mapNotNull { values[it] }.toSet()
+                    if (values.isNotEmpty() && values.all { (nm, v) ->
+                            nm in coveredNames || v in coveredValues
+                        }
                     ) return neverType
                     return null
                 }
