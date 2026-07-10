@@ -95279,6 +95279,17 @@ interface DataView {
      *  unresolvable/`any`. */
     private fun resolvedCallReturnTypeForFlow(call: CallExpression): Type? {
         if (call.questionDotToken) return null
+        // Round 470: an optional-chained CALLEE (`factory?.make(t)`) short-circuits to
+        // undefined — the return annotation proves nothing (previously masked: the
+        // nullable union receiver never resolved the method before
+        // resolvePropertyMethodDecl's non-nullish-member fallback).
+        run {
+            var c: Expression = call.expression
+            while (c is PropertyAccessExpression) {
+                if (c.questionDotToken) return null
+                c = c.expression
+            }
+        }
         val decl = resolveFlowCalleeDecl(call, call.expression) ?: return null
         val (ret, tps) = when (decl) {
             is FunctionDeclaration -> decl.type to decl.typeParameters
@@ -96426,8 +96437,19 @@ interface DataView {
      * directly declared on the receiver's interface/class.
      */
     private fun resolvePropertyMethodDecl(access: PropertyAccessExpression): Node? {
-        val recvType = getTypeOfExpression(access.expression)
+        var recvType = getTypeOfExpression(access.expression)
         if (recvType === anyType || recvType === errorType) return null
+        // Round 470: a nullish-containing UNION receiver resolves through its SOLE
+        // non-nullish member — `type.isUnion()` where `type: Type | undefined` (the
+        // declared type; reaching the call means the receiver was non-nullish, and the
+        // guarded flow state isn't visible here). A multi-member non-nullish union
+        // still bails (tsc narrows a union-receiver method guard only when EVERY
+        // constituent has a matching predicate — typePredicatesInUnion3). This
+        // resolver feeds flow narrowing only → suppression-safe.
+        if (recvType is Type.Union) {
+            recvType = recvType.types.filterNot { isNullishConstituent(it) }
+                .singleOrNull() ?: return null
+        }
         val propName = access.name.text
         val sym = getPropertyOfType(recvType, propName) ?: return null
         return sym.valueDeclaration ?: sym.declarations.firstOrNull { it is MethodDeclaration }
@@ -97684,9 +97706,25 @@ interface DataView {
             // method UNAMBIGUOUSLY. For a UNION receiver, tsc narrows only if EVERY constituent has
             // a matching type predicate (typePredicatesInUnion3: `Type1 | Type2` where
             // `Type2.predicate(): boolean` is NOT a guard, so `val.predicate()` is not a narrowing
-            // guard); `resolveFlowCalleeDecl` found only ONE member's method, so bail on a union to
-            // stay FP-safe — suppression-only means a bail is a harmless false-negative, never an FP.
-            if (t is Type.Union) return t
+            // guard); `resolveFlowCalleeDecl` found only ONE member's method. Round 470 RELAXES the
+            // blanket union bail: when every non-nullish constituent resolves the method to the
+            // SAME declaration [decl] (the guard is INHERITED into each member — a mid-walk branch
+            // join like `guard() && cond && read` unions the negative arm's base type with the
+            // positive arm's narrowed subtype, tsc stringCompletions' `type.isStringLiteral() &&
+            // !(type.flags & …) && … type.value`), the general union narrowing below applies.
+            // Any member resolving a DIFFERENT (or no) declaration keeps the bail — the
+            // typePredicatesInUnion3 corpus pin.
+            if (t is Type.Union) {
+                val methodName = (callee as? PropertyAccessExpression)?.name?.text
+                val allShareGuard = methodName != null && t.types.all { m ->
+                    isNullishConstituent(m) || run {
+                        val app = try { getApparentType(m) } catch (_: Exception) { return@run false }
+                        val s = getPropertyOfType(app, methodName) ?: return@run false
+                        s.valueDeclaration === decl || s.declarations.any { it === decl }
+                    }
+                }
+                if (!allShareGuard) return t
+            }
             argPath = calleeReceiverPath ?: return t
             paramAnnotation = null
         } else {
