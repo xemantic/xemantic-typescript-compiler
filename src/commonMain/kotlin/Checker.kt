@@ -126656,6 +126656,18 @@ interface DataView {
             }
             return allSigs
         }
+        // Round 471: an INTERSECTION's call signatures are the concatenation of its
+        // constituents' (tsc getSignaturesOfStructuredType) — a `Fn & Fn` member of a
+        // union callee previously read as "has no call signatures" and FP'd TS2349
+        // (tsc textChanges.ts `token.getStart(...)` / callHierarchy.ts, where the
+        // augmentation merge yields intersection-shaped getStart members).
+        if (type is Type.Intersection) {
+            val allSigs = mutableListOf<Signature>()
+            for (constituent in type.types) {
+                allSigs.addAll(getCallSignaturesOfType(constituent))
+            }
+            return allSigs
+        }
         return emptyList()
     }
 
