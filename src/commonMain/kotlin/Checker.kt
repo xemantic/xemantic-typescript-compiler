@@ -120418,10 +120418,31 @@ interface DataView {
             if (fd.body == null) continue
             val name = fd.name?.text ?: continue
             if (currentLocalTypes[name] != null) continue
-            if (currentFileLocals?.containsKey(name) == true || globals.containsKey(name)) {
+            // Round 461: a NAMESPACE-member collision counts too — getTypeOfIdentifier
+            // resolves through lookupInInferenceNamespace BEFORE globals, so a nested
+            // `function currentNode(position) {...}` inside a fn whose enclosing
+            // `namespace Parser` ALSO exports a (differently-shaped) `currentNode`
+            // resolved the shorthand `{ currentNode }` to the namespace one → FP
+            // TS2322 (tsc parser.ts reparseTopLevelAwait's SyntaxCursor). Presence
+            // check only (no getTypeOfSymbol — first-touch cache-poisoning hazard).
+            if (currentFileLocals?.containsKey(name) == true || globals.containsKey(name) ||
+                nameInEnclosingNamespaceExports(name)) {
                 currentLocalTypes[name] = anyType
             }
         }
+    }
+
+    /** Round 461: is [name] bound in any enclosing inference-namespace's exports?
+     *  Symbol-PRESENCE only — never resolves a type (a shadow pre-scan runs at every
+     *  function-body entry; resolving members there would poison first-touch type
+     *  caches, the documented B420 hazard). */
+    private fun nameInEnclosingNamespaceExports(name: String): Boolean {
+        var current: Symbol? = inferenceNamespaceStack.lastOrNull() ?: return false
+        while (current != null && current.flags.hasAny(SymbolFlags.Module)) {
+            if (current.exports?.containsKey(name) == true) return true
+            current = current.parent
+        }
+        return false
     }
 
     /** M3.1 (round 429): body-local declarations SHADOW an INHERITED binding for the
