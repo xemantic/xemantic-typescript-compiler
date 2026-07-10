@@ -80179,7 +80179,7 @@ interface DataView {
             currentFunctionParams.firstOrNull { (it.name as? Identifier)?.text == id.text }
                 ?.type?.let { getTypeFromTypeNode(it) }
                 ?: localConstCallInitType(id.text)
-        } ?: getTypeOfExpression(recv)
+        } ?: paramMemberChainType(recv) ?: getTypeOfExpression(recv)
         // Round 424b: an anyType receiver is no longer an immediate bail — a `this`
         // receiver (deliberately anyType, B101) re-types through an `asserts value
         // is T` call in the narrowing walk below (tsc DebugTypeMapper:
@@ -80276,6 +80276,28 @@ interface DataView {
             keys.addAll(enumSwitchKeysFromTypeNode(a) ?: enumMemberKeysOfTypeNode(a) ?: return null)
         }
         return keys.ifEmpty { null }
+    }
+
+    /**
+     * Round 470: the declared type of `<param>.<member>` — the CFA pass has no param
+     * scope in getTypeOfExpression, so a property-access RECEIVER rooted at a
+     * parameter resolves through the param's ANNOTATION and the member's declared
+     * type (`switch (constructorDeclaration.parent.kind)` where the param is
+     * `ValidConstructor { parent: ClassDeclaration | (ClassExpression & {…}) }` —
+     * tsc convertParamsToDestructuredObject getClassNames). Null on any
+     * uncertainty → the caller falls through to prior behavior (FP-safe: this
+     * feeds the exhaustiveness proof, which only SUPPRESSES TS2366).
+     */
+    private fun paramMemberChainType(recv: Expression): Type? {
+        val pa = recv as? PropertyAccessExpression ?: return null
+        if (pa.questionDotToken) return null
+        val rootId = pa.expression as? Identifier ?: return null
+        val p = currentFunctionParams.firstOrNull { (it.name as? Identifier)?.text == rootId.text }
+            ?: return null
+        val ann = p.type ?: return null
+        val rootType = getTypeFromTypeNode(ann)
+        if (rootType === anyType || rootType === errorType) return null
+        return resolveMemberPropertyType(rootType, pa.name.text)
     }
 
     /**
