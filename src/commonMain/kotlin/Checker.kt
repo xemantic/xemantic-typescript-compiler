@@ -94703,19 +94703,55 @@ interface DataView {
             }
         }
         val decl = resolveFlowCalleeDecl(call, call.expression) ?: return false
-        val (ret, tps) = when (decl) {
-            is FunctionDeclaration -> decl.type to decl.typeParameters
-            is MethodDeclaration -> decl.type to decl.typeParameters
+        val (ret, tps, params) = when (decl) {
+            is FunctionDeclaration -> Triple(decl.type, decl.typeParameters, decl.parameters)
+            is MethodDeclaration -> Triple(decl.type, decl.typeParameters, decl.parameters)
             is VariableDeclaration -> when (val init = decl.initializer) {
-                is ArrowFunction -> init.type to init.typeParameters
-                is FunctionExpression -> init.type to init.typeParameters
+                is ArrowFunction -> Triple(init.type, init.typeParameters, init.parameters)
+                is FunctionExpression -> Triple(init.type, init.typeParameters, init.parameters)
                 else -> return false
             }
             else -> return false
         }
         if (ret == null) return false
         val tpNames = tps?.map { it.name.text }?.toSet() ?: emptySet()
+        // Round 461: the `Debug.checkDefined` shape — a bare OWN-TP return `T` where
+        // some parameter is annotated `T | undefined` / `T | null | undefined` proves
+        // the call non-nullish: inference binds T to the argument's NON-nullish part
+        // (the annotation's explicit nullish constituents absorb the argument's), and
+        // the function's contract is to return the defined value. Gated to calls
+        // WITHOUT explicit type arguments (an explicit `checkDefined<X | undefined>`
+        // rebinds T nullish). The syntactic classifier below deliberately bails on
+        // own-TP returns, so this is its narrow complement.
+        val retTpName = ((ret as? TypeReference)?.typeName as? Identifier)?.text
+        if (retTpName != null && retTpName in tpNames && call.typeArguments.isNullOrEmpty() &&
+            params.any { p -> paramAnnotationIsTpPlusNullish(p.type, retTpName) }) {
+            return true
+        }
         return typeNodeDefinitelyNonNullish(ret, tpNames, depth = 0)
+    }
+
+    /** Round 461: is [t] a union of exactly a bare reference to [tpName] plus ≥1
+     *  `undefined` / `null` keyword member (`T | undefined`, `T | null | undefined`)?
+     *  The checkDefined-shape parameter test — see the caller. */
+    private fun paramAnnotationIsTpPlusNullish(t: TypeNode?, tpName: String): Boolean {
+        val u = (t as? UnionType) ?: return false
+        var sawTp = false
+        var sawNullish = false
+        for (m in u.types) {
+            val inner = if (m is ParenthesizedType) m.type else m
+            when {
+                inner is TypeReference && (inner.typeName as? Identifier)?.text == tpName &&
+                    inner.typeArguments.isNullOrEmpty() -> sawTp = true
+                inner is KeywordTypeNode &&
+                    (inner.kind == SyntaxKind.UndefinedKeyword || inner.kind == SyntaxKind.NullKeyword) ->
+                    sawNullish = true
+                inner is LiteralType && inner.literal.kind == SyntaxKind.NullKeyword ->
+                    sawNullish = true
+                else -> return false
+            }
+        }
+        return sawTp && sawNullish
     }
 
     /**
