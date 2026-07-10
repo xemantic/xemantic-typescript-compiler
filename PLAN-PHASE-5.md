@@ -39,6 +39,78 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
+**Round 465 (2026-07-10) — bounded FP burn-down to the LAST real compiler FP: SEVEN fixes across
+8 sites. Dashboard: compiler 55 → 47 (−8; TS2322 6 → 1, TS2345/TS2339/TS2349 → 0), services
+139 → 127 (−12 cross-profile). Suite 9,836 → 9,855 (+19 local across 7 new test files, 0
+regressions); 7 fix commits (5b589394 / 97263c21 / 6102e8ed / 9a7d2b35 / 20894a34 / f521582c /
+ba0a4e5a). Bench: self 28.3 s (normal band).**
+- **Fix 1 (5b589394, union-in-intersection kind-reduction; 55 → 54):** a property read on
+  `Union & Interface` reduces the union constituent's members by `.kind` disjointness
+  (typeGuardMemberDisjoint) against the sibling constituents before folding, so
+  `(NamedEvaluation & BinaryExpression).left` resolves through the surviving
+  `AssignmentExpression & { left: Identifier }` members to Identifier, not BinaryExpression's
+  wide Expression (namedEvaluation.ts:434 TS2345). COMPANION: the intersection contribution
+  fold dedupes by Type.id — a self-intersection `Expression & Expression` made downstream arg
+  checks bail where the plain type correctly fires (pinned by a negative control).
+- **Fix 2 (97263c21, destructured member from callee body, M3.4; 54 → 53):**
+  `({ referencedName, name } = visitReferencedPropertyName(member.name))` — the RHS calls a
+  NESTED un-annotated fn, so the round-460 overwrite narrowing kept the antecedent. New
+  destructuredMemberNonNullishFromCalleeBody: every callee return must be an object literal
+  carrying the member with a non-nullish value; identifier values resolve through the callee's
+  OWN params + body-local const decls (the new bodyDecls map in retExprNonNullishForFlow —
+  getTypeOfIdentifier would resolve the CALLER's same-named nullable binding during the walk).
+  Cleared esDecorators.ts:1309 (the round-464 'two more mechanism layers' item — one layer
+  sufficed).
+- **Fix 3 (6102e8ed, intersection shared-member rule, M3.1; 53 → 51, TWO sites):**
+  intersectionMergedContradictsTarget's first-decl-wins merge was wrong whenever a later
+  constituent REFINES a member — tsc gives a multiply-declared member the INTERSECTION of the
+  declared types, so contradiction now requires EVERY declaration to fail (any relating
+  declaration proves the intersected member relates). Cleared parser.ts:9581 AND
+  factory/utilities.ts:1688 — **the round-461 'whole-program-only' verdict was WRONG: the pair
+  reproduces single-file once the interface itself declares the shared member** (`node as
+  AssignmentExpression<EqualsToken> & { readonly left: GeneratedIdentifier }` vs its own
+  annotation; bisected by deleting AssignmentExpression's own `left`).
+- **Fix 4 (9a7d2b35, fn-AWARE generic member instantiation, M3.1; 51 → 50):** instantiateType
+  no-ops fn-shaped objects (the documented gotcha), so a generic member's fn-typed RETURN kept
+  the raw outer T: `select(index): ((node: T) => T) | undefined` as
+  OrdinalParentheizerRuleSelector<TypeNode> failed its conforming initializer (emitter.ts:1277;
+  Diagnostic-init stack probe located the emission, member-shape bisection V3–V6 isolated the
+  method-return + fn-property-nested-fn shapes). New instantiateTypeFnAware /
+  instantiateSignatureFnAware (fresh instances, never mutation, sig TPs preserved) wired at
+  resolveGenericPropertyTypeWorker's MethodDeclaration RETURN and
+  substituteOuterTypeArgsInSignature's return/params.
+- **Fix 5 (20894a34, concise-arrow captured narrowing, M3.4 × B464; 50 → 49):**
+  getTypeOfArrowFunction's concise-body branch now consults
+  getNarrowedTypeForReferenceFollowLoopEntry for a bare-reference nullable-union body —
+  the B464 flow-into-closures continuation (reassigned-after gates) proves
+  `packageJsonInfoCache ??= create…; return { getPackageJsonInfoCache: () =>
+  packageJsonInfoCache }` non-nullish. Accepted ONLY as an EXACT nullish strip (member-id set
+  equality with narrowByExcludingNullUndefined). Cleared moduleNameResolver.ts:1300.
+- **Fix 6 (f521582c, Exclude-filter kind disjointness, M3.4; 49 → 48):** probe-confirmed the
+  round-457 `asserts node is Exclude<T, U>` branch REACHED es2020.ts flattenChain with
+  uType=NonNullChain resolved and union=4 — but kept=0: enum-member kinds resolve `any`, so the
+  lenient relation related EVERY brand-intersection member (PropertyAccessChain =
+  PropertyAccessExpression & { _optionalChainBrand }) to NonNullChain. The filter now keeps a
+  member whose kind keys are provably disjoint (the round-423 narrowByCallPredicate lesson).
+  Cleared es2020.ts:91 — the round-457 'whole-program resolution scale' diagnosis was actually
+  the lenient relation, visible only where member types resolve fully.
+- **Fix 7 (ba0a4e5a, IIFE-const fn calls, M3.4; 48 → 47):**
+  callRhsHasNonNullishReturnAnnotation's VariableDeclaration branch gains a CallExpression case
+  — iifeReturnedFunctionTriple resolves `const f = (() => { return g; function g(…): R {…}
+  })()` (no-arg IIFE, block body, first top-level return naming a same-block nested fn or an
+  inline fn) to the returned function's annotation, so `uiComparerCaseSensitive ??=
+  createUIStringComparer(uiLocale); return uiComparerCaseSensitive(a, b)` proves the callee
+  non-nullish. Cleared core.ts:2135 TS2349 (the round-463 'hard' item — the classifier angle
+  made it bounded).
+- **NEXT: compiler @ 47 = ONE real FP + 46 env-legit (TS2591×43 require / TS2304×2 global /
+  TS2584 console).** builder.ts:2390 is the genuine Blocker #2 chain: arrayToMap's K := Path
+  needs the makeKey callback's return through nested `toFilePath` → element access on
+  `filePaths = buildInfo.fileNames?.map(toPathInBuildInfoDirectory)` → Array.map return
+  inference from a NAMED-fn callback whose name is AMBIGUOUS (2 decls, both un-annotated
+  returning `toPath(…)` = Path) — needs map-callback return inference + all-candidates-agree
+  ambiguous-fn resolution. Then the services profile burn-down (127).**
+
+
 **Round 464 (2026-07-10) — bounded FP burn-down: SIX fixes. Dashboard: compiler 61 → 55 (−6;
 TS2322 10 → 6, TS2362 → 0, TS7006 → 0), services 154 → 139 (−15 cross-profile). Suite 9,817 →
 9,836 (+19 local across 7 new test files, 0 regressions); 6 fix commits (ecf6290d / 44e1b2ff /
@@ -684,71 +756,6 @@ branded-intersection / 6330194e iterable-iterator / 54e644db warning).**
   `assertNever(reason)` enum-union residual (programDiagnostics.ts's `ReferencedFile` → `never` in the
   default, round 441 deep); the `OptionalChain.questionDotToken` Exclude<>-narrowing (es2020.ts — needs
   `Exclude<>` materialization + `assertNotNode` narrowing); `string → __String` branding (whole-program).
-
-**Round 455 (2026-07-09) — global-shadow anyType + widenType tuple shape + ReadonlyArray filter
-guard + generic-identity-fn assignability: FOUR fixes, all GENERAL correctness that reproduce
-minimally. Dashboard: compiler 153 → 132 (−21, TS2322 77 → 56); shared checker/lib so they generalize
-to every profile. Suite 9,654 → 9,666 (+12 local across 4 new test files, 0 regressions); 4 fix
-commits (4e94a4e1 / b90d79f1 / 7d82a0aa / aada9e31).**
-- **Fix 1 (4e94a4e1, body-local shadows a global function; TS2322 −7):** `applyBodyLocalShadowing`
-  (the return/argument-assignability pass) recorded an un-annotated top-level local shadowing an outer
-  binding by REMOVING it from `currentLocalTypes` (round 351), so a value-position use (`return clone`)
-  fell through `getTypeOfIdentifier` to the outer binding. When that outer binding is a GLOBAL (an
-  exported fn merged into globals — core.ts's `clone<T>(object: T): T`, `identity<T>`) the reference
-  resolved to the generic function ITSELF → FP `'<T>(object: T) => T' is not assignable to type
-  'Identifier' / 'Node | undefined' / …`. Two coupled changes (both suppression-only): (a) an
-  un-annotated `inGlobals && !inLocal` shadow now registers `currentLocalTypes[nm] = anyType` (a
-  concrete inferred local still wins, checked first; a file-level VAR shadow keeps round 351's
-  remove-and-re-infer); (b) `applyBodyLocalShadowing` descends into nested blocks (if/loop/try/switch,
-  `applyNestedGlobalShadow`, anyType-only, GLOBAL collisions only — never a concrete annotation type,
-  which would leak the block-local shape function-wide) so `const clone=…;return clone` inside an `if`
-  resolves. Cleared nodeFactory.ts cloneIdentifier/clonePrivateIdentifier, checker.ts:15679,
-  expressionToTypeNode.ts:535 (round-454's documented unmasked gap), plus the builder.ts `create`/`map`
-  and checker.ts `length` object-literal-factory shadows (bonus).
-- **Fix 2 (b90d79f1, widenType preserves tuple shape; TS2322 −8):** `widenType`'s Type.Object branch
-  rebuilt a tuple WITHOUT copying `tupleElementTypes` and widened its `length` LITERAL (`2 → number`),
-  turning `[SF, FR]` into a `{ 0: SF; 1: FR; length: number; [x: number]: SF | FR }` object that no
-  longer related to a tuple target (`length: number ⊄ 2`). tsc's own `map(arr, x => [a, b])` idiom whose
-  result flows through a generic wrapper (`concatenate(...)`) and is assigned to a `[A, B][]` variable
-  FP-fired TS2322 (declarations.ts/builder.ts/destructuring.ts ×8). widenType now widens a tuple's
-  ELEMENT types only + rebuilds via `buildTupleFromTypes` (length literal + tupleElementTypes +
-  per-element optionality preserved); no element widens → tuple returned untouched. Strictly more
-  precise. NOTE the var-decl path already passed (contextual tuple typing); only the ASSIGNMENT path
-  (which widens the RHS) hit the lossy rebuild — that's why it reproduced only as an assignment.
-- **Fix 3 (7d82a0aa, ReadonlyArray.filter/every type-predicate overload; TS2322 −3):** the embedded
-  `ReadonlyArray<T>.filter`/`every` lacked the `filter<S extends T>(…): S[]` overload that `Array<T>`
-  already carried, so `roArr.filter(isFoo)` returned the base `T[]` — utilitiesPublic.ts
-  `getJSDocTagsWorker(...).filter(isJSDocParameterTag)` (a `readonly JSDocTag[]`) FP-fired
-  `'JSDocTag[]' ⊄ 'readonly JSDocParameterTag[]'` (×3). Added the overload (and `every`), so
-  `tryInferPredicateOverloadReturn` (round 439) infers S from the guard's predicate target. Lib change →
-  full corpus blast-radius gate clean.
-- **Fix 4 (generic-identity-fn → concrete-fn assignability; TS2322 −3):** `signatureRelatedTo` already
-  pinned source type params from the target's param positions for the source-generic/target-non-generic
-  case (17.10d — `identity<T>(x: T): T` vs `(fileName: string) => string` pins T := string), but did NOT
-  substitute those pins into the source RETURN type, so the return `T` FP-rejected against the concrete
-  target return `string`. tsc's core.ts `createGetCanonicalFileName` (`return useCS ? identity :
-  toFileNameLowerCase` → `GetCanonicalFileName`) and sourcemap.ts `identitySourceMapConsumer` FP-fired
-  TS2322, plus the construct-sig variant parser.ts:1737 (`new <TKind extends SyntaxKind>(…): Token<TKind>`
-  → `new (…): Node`). The return type is now instantiated with the pins (`tpAssignments` by id + a
-  `tpAssignByName` fallback — TypeParam interning is per-AST-position (B199), so the return's `T` may
-  carry a different id than the param's) before the covariant compare. Correctness preserved: `identity`
-  vs `(x: string) => number` still fails (pinned return `string ⊄ number`). Relation-engine change →
-  full corpus gate clean.
-- **INVESTIGATED, deferred (whole-program-only or deep M3, confirmed via minimal repro):** the
-  `isPropertyNameLiteral(name) && …` TS2345 Expression→Identifier narrowing is 0-error in isolation (a
-  whole-program alias/merge issue); the generic-identity-fn `<T>(x: T) => T` → concrete-fn assignability
-  (core.ts:2378 `identity` → `GetCanonicalFileName`, sourcemap.ts:820) is a genuine M3.1 generic-signature
-  relation; the `Type | IncompleteType` `.type` access is a specialized `flags === 0` enum-domain
-  narrowing; the `assertNever(reason)` exhaustive-switch residual (programDiagnostics.ts) needs the
-  enum-union `ReferencedFile` to narrow to `never` in the default (round 441 family).
-- **NEXT (compiler @ 132):** the `TransformerFactory<T>` generic-type-alias-of-fn relation ×3 (M3.3 —
-  `(context) => (x) => x` vs the alias `(context) => Transformer<T>`; likely a generic type-alias
-  instantiation gap); the exhaustive-switch enum-union `assertNever`/`assertType<never>` residuals
-  (programDiagnostics.ts's `ReferencedFile` union → `never` in the default, round 441 family);
-  `string → __String` branding (whole-program); the `.map` DIRECT array-literal-in-assignment
-  contextual tuple typing (assignment path lacks the var-decl array-literal-vs-tuple handling).
-
-
 
 
 ### Post-v1 backlog — the "any TypeScript project" horizon (parked 2026-07-03)

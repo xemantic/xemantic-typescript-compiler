@@ -1,3 +1,66 @@
+**Round 455 (2026-07-09) — global-shadow anyType + widenType tuple shape + ReadonlyArray filter
+guard + generic-identity-fn assignability: FOUR fixes, all GENERAL correctness that reproduce
+minimally. Dashboard: compiler 153 → 132 (−21, TS2322 77 → 56); shared checker/lib so they generalize
+to every profile. Suite 9,654 → 9,666 (+12 local across 4 new test files, 0 regressions); 4 fix
+commits (4e94a4e1 / b90d79f1 / 7d82a0aa / aada9e31).**
+- **Fix 1 (4e94a4e1, body-local shadows a global function; TS2322 −7):** `applyBodyLocalShadowing`
+  (the return/argument-assignability pass) recorded an un-annotated top-level local shadowing an outer
+  binding by REMOVING it from `currentLocalTypes` (round 351), so a value-position use (`return clone`)
+  fell through `getTypeOfIdentifier` to the outer binding. When that outer binding is a GLOBAL (an
+  exported fn merged into globals — core.ts's `clone<T>(object: T): T`, `identity<T>`) the reference
+  resolved to the generic function ITSELF → FP `'<T>(object: T) => T' is not assignable to type
+  'Identifier' / 'Node | undefined' / …`. Two coupled changes (both suppression-only): (a) an
+  un-annotated `inGlobals && !inLocal` shadow now registers `currentLocalTypes[nm] = anyType` (a
+  concrete inferred local still wins, checked first; a file-level VAR shadow keeps round 351's
+  remove-and-re-infer); (b) `applyBodyLocalShadowing` descends into nested blocks (if/loop/try/switch,
+  `applyNestedGlobalShadow`, anyType-only, GLOBAL collisions only — never a concrete annotation type,
+  which would leak the block-local shape function-wide) so `const clone=…;return clone` inside an `if`
+  resolves. Cleared nodeFactory.ts cloneIdentifier/clonePrivateIdentifier, checker.ts:15679,
+  expressionToTypeNode.ts:535 (round-454's documented unmasked gap), plus the builder.ts `create`/`map`
+  and checker.ts `length` object-literal-factory shadows (bonus).
+- **Fix 2 (b90d79f1, widenType preserves tuple shape; TS2322 −8):** `widenType`'s Type.Object branch
+  rebuilt a tuple WITHOUT copying `tupleElementTypes` and widened its `length` LITERAL (`2 → number`),
+  turning `[SF, FR]` into a `{ 0: SF; 1: FR; length: number; [x: number]: SF | FR }` object that no
+  longer related to a tuple target (`length: number ⊄ 2`). tsc's own `map(arr, x => [a, b])` idiom whose
+  result flows through a generic wrapper (`concatenate(...)`) and is assigned to a `[A, B][]` variable
+  FP-fired TS2322 (declarations.ts/builder.ts/destructuring.ts ×8). widenType now widens a tuple's
+  ELEMENT types only + rebuilds via `buildTupleFromTypes` (length literal + tupleElementTypes +
+  per-element optionality preserved); no element widens → tuple returned untouched. Strictly more
+  precise. NOTE the var-decl path already passed (contextual tuple typing); only the ASSIGNMENT path
+  (which widens the RHS) hit the lossy rebuild — that's why it reproduced only as an assignment.
+- **Fix 3 (7d82a0aa, ReadonlyArray.filter/every type-predicate overload; TS2322 −3):** the embedded
+  `ReadonlyArray<T>.filter`/`every` lacked the `filter<S extends T>(…): S[]` overload that `Array<T>`
+  already carried, so `roArr.filter(isFoo)` returned the base `T[]` — utilitiesPublic.ts
+  `getJSDocTagsWorker(...).filter(isJSDocParameterTag)` (a `readonly JSDocTag[]`) FP-fired
+  `'JSDocTag[]' ⊄ 'readonly JSDocParameterTag[]'` (×3). Added the overload (and `every`), so
+  `tryInferPredicateOverloadReturn` (round 439) infers S from the guard's predicate target. Lib change →
+  full corpus blast-radius gate clean.
+- **Fix 4 (generic-identity-fn → concrete-fn assignability; TS2322 −3):** `signatureRelatedTo` already
+  pinned source type params from the target's param positions for the source-generic/target-non-generic
+  case (17.10d — `identity<T>(x: T): T` vs `(fileName: string) => string` pins T := string), but did NOT
+  substitute those pins into the source RETURN type, so the return `T` FP-rejected against the concrete
+  target return `string`. tsc's core.ts `createGetCanonicalFileName` (`return useCS ? identity :
+  toFileNameLowerCase` → `GetCanonicalFileName`) and sourcemap.ts `identitySourceMapConsumer` FP-fired
+  TS2322, plus the construct-sig variant parser.ts:1737 (`new <TKind extends SyntaxKind>(…): Token<TKind>`
+  → `new (…): Node`). The return type is now instantiated with the pins (`tpAssignments` by id + a
+  `tpAssignByName` fallback — TypeParam interning is per-AST-position (B199), so the return's `T` may
+  carry a different id than the param's) before the covariant compare. Correctness preserved: `identity`
+  vs `(x: string) => number` still fails (pinned return `string ⊄ number`). Relation-engine change →
+  full corpus gate clean.
+- **INVESTIGATED, deferred (whole-program-only or deep M3, confirmed via minimal repro):** the
+  `isPropertyNameLiteral(name) && …` TS2345 Expression→Identifier narrowing is 0-error in isolation (a
+  whole-program alias/merge issue); the generic-identity-fn `<T>(x: T) => T` → concrete-fn assignability
+  (core.ts:2378 `identity` → `GetCanonicalFileName`, sourcemap.ts:820) is a genuine M3.1 generic-signature
+  relation; the `Type | IncompleteType` `.type` access is a specialized `flags === 0` enum-domain
+  narrowing; the `assertNever(reason)` exhaustive-switch residual (programDiagnostics.ts) needs the
+  enum-union `ReferencedFile` to narrow to `never` in the default (round 441 family).
+- **NEXT (compiler @ 132):** the `TransformerFactory<T>` generic-type-alias-of-fn relation ×3 (M3.3 —
+  `(context) => (x) => x` vs the alias `(context) => Transformer<T>`; likely a generic type-alias
+  instantiation gap); the exhaustive-switch enum-union `assertNever`/`assertType<never>` residuals
+  (programDiagnostics.ts's `ReferencedFile` union → `never` in the default, round 441 family);
+  `string → __String` branding (whole-program); the `.map` DIRECT array-literal-in-assignment
+  contextual tuple typing (assignment path lacks the var-decl array-literal-vs-tuple handling).
+
 **Round 451 (2026-07-09) — bounded FP burn-down: FOUR fixes, one a GENERAL parser correctness
 fix that reproduces minimally. Dashboard: compiler 178 → 177 (−1), tsc-cli 179, jsTyping 176,
 deprecatedCompat 179, typingsInstallerCore 176, services 291 → 282 (−9), server 498 → 488 (−10),
