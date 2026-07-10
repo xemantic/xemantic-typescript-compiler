@@ -96339,7 +96339,24 @@ interface DataView {
                 if (segOptional) return t
                 cur = segType
             }
-            return if (!typeMayBeNullish(cur)) narrowByExcludingNullUndefined(t) else t
+            // Round 462: SUBSTITUTE the resolved tail type — tsc re-types `x.y` from
+            // the NARROWED x, so after `isComputedPropertyName(parent)` the access
+            // `parent.parent` is ComputedPropertyName's declared `parent: Declaration`,
+            // not Node's (utilities.ts:5085 `return parent.parent`). NON-UNION tails
+            // only: a union tail (`name: BindingName`) needs the DOWNSTREAM guards to
+            // keep narrowing it, and where our discriminant model can't, the precise
+            // union FIRES where the old wide type stayed silent (measured: checker.ts
+            // 45139 `.elements` on BindingName + binder.ts:2498 — net +1 without the
+            // gate). A non-nullish UNION tail keeps the round-424 minimal claim
+            // (strip nullish from the antecedent — dropping it regressed
+            // transformers/utilities.ts:643's `member.name` arg); a nullish tail
+            // proves nothing.
+            return when {
+                typeMayBeNullish(cur) || cur === anyType || cur === errorType ||
+                    cur === neverType -> t
+                cur !is Type.Union -> cur
+                else -> narrowByExcludingNullUndefined(t)
+            }
         }
         // B481: GENERIC type-guard inference. For `isPlainResponse<T>(value: T | {data:T}): value is T`,
         // the predicate target `T` is a function type-param; resolving it without bindings yields
