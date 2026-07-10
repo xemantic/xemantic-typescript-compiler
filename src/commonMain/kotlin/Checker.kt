@@ -91672,9 +91672,18 @@ interface DataView {
                             // Cycle-break to errorType so the OUTER members drive variance/relation
                             // via the normal structural engine (matching tsc's lazy resolution,
                             // which ignores the recursive position). Gated to `TypeLiteral` bodies
-                            // so indexed-access (`{...}[T]`, limitDeepInstantiations — legitimately
-                            // expects TS2589), union, and mapped recursive aliases are untouched.
-                            if (decl.type is TypeLiteral && symbol.id in aliasObjLiteralInstantiationStack) {
+                            // — and, since round 463, DEFERRED-POSITION UNION bodies: tsc's
+                            // `WrappedExpression<T> = OuterExpression & { expression:
+                            // WrappedExpression<T> } | T` is a recursive generic UNION alias whose
+                            // self-reference sits in a property position (lazily resolvable), and
+                            // its eager expansion depth-bailed → spurious TS2589 (utilities.ts:5553
+                            // NamedEvaluation). A union member that is an INDEXED-ACCESS or MAPPED
+                            // type FORCES evaluation through the recursion (`N<T,K> = T | { [P in
+                            // K]: N<T,K> }[K]` — recursivelyExpandingUnionNoStackoverflow expects
+                            // TS2589+TS2615), so such bodies keep the eager depth-bail; so do
+                            // indexed-access bodies (`{...}[T]`, limitDeepInstantiations).
+                            if ((decl.type is TypeLiteral || unionBodyIsDeferredPositionOnly(decl.type)) &&
+                                symbol.id in aliasObjLiteralInstantiationStack) {
                                 return errorType
                             }
                             if (typeAliasResolutionDepth >= 10) {
@@ -91697,7 +91706,9 @@ interface DataView {
                                 }
                                 currentTypeAliasArgs = argMap
                                 typeAliasResolutionDepth++
-                                if (decl.type is TypeLiteral) aliasObjLiteralInstantiationStack.addLast(symbol.id)
+                                if (decl.type is TypeLiteral || decl.type is UnionType) aliasObjLiteralInstantiationStack.addLast(symbol.id)
+                                // (a UnionType body is pushed unconditionally — the pop below
+                                // matches; the cycle-break above re-checks deferability)
                                 val result = getTypeFromTypeNode(decl.type)
                                 // B50.2: register alias-display info so typeToString
                                 // renders `Foo<string>` instead of the structural form.
@@ -91725,7 +91736,7 @@ interface DataView {
                             } finally {
                                 currentTypeAliasArgs = saved
                                 typeAliasResolutionDepth--
-                                if (decl.type is TypeLiteral) aliasObjLiteralInstantiationStack.removeLast()
+                                if (decl.type is TypeLiteral || decl.type is UnionType) aliasObjLiteralInstantiationStack.removeLast()
                             }
                         }
                     }
@@ -91764,6 +91775,21 @@ interface DataView {
         }
         // Not found — return errorType (TS2304 handles the diagnostic separately)
         return errorType
+    }
+
+    /** Round 463: is [body] a UnionType whose every member is a DEFERRED-position
+     *  shape (a recursive self-reference inside such a member is lazily resolvable
+     *  in tsc, so the cycle-break may return errorType for it without losing a
+     *  legitimate depth error)? An INDEXED-ACCESS or MAPPED member FORCES evaluation
+     *  through the recursion — tsc genuinely errors TS2589 on
+     *  `N<T,K> = T | { [P in K]: N<T,K> }[K]` (recursivelyExpandingUnionNoStackoverflow),
+     *  so such unions keep the eager depth-bail. */
+    private fun unionBodyIsDeferredPositionOnly(body: TypeNode): Boolean {
+        if (body !is UnionType) return false
+        return body.types.none { m ->
+            val inner = if (m is ParenthesizedType) m.type else m
+            inner is IndexedAccessType || inner is MappedType
+        }
     }
 
     /** Get the declared type of a symbol (class, interface, enum, type alias, etc.). */
