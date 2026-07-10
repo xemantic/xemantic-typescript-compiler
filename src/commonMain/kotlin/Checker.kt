@@ -88404,9 +88404,18 @@ interface DataView {
                     // `fileOrDirectoryPath = updatedPath` after `if (!updatedPath) return`,
                     // builder.ts `fileId`) is equally FP-safe under the same
                     // relation-passes gate.
-                    val sourceType = if ((expr.right is Identifier || expr.right is PropertyAccessExpression) &&
+                    // Round 460: a CHAINED assignment RHS (`location = node = value`)
+                    // evaluates to the ultimate RHS value — narrow THAT reference (tsc
+                    // destructuring.ts flattenDestructuring's `location = node = value`
+                    // where `value` is guard-narrowed to DestructuringAssignment; the
+                    // outer RHS is a BinaryExpression the plain gate skipped).
+                    var narrowRef: Expression = expr.right
+                    while (narrowRef is BinaryExpression && narrowRef.operator == SyntaxKind.Equals) {
+                        narrowRef = narrowRef.right
+                    }
+                    val sourceType = if ((narrowRef is Identifier || narrowRef is PropertyAccessExpression) &&
                         (tt is Type.Interface || tt is Type.Reference || tt is Type.Union || tt is Type.Intersection)) {
-                        val narrowed = getNarrowedTypeForReference(sourceTypeRaw, expr.right)
+                        val narrowed = getNarrowedTypeForReference(sourceTypeRaw, narrowRef)
                         if (narrowed !== sourceTypeRaw && checkTypeRelatedTo(narrowed, tt, assignableRelation)) narrowed
                         else sourceTypeRaw
                     } else sourceTypeRaw
