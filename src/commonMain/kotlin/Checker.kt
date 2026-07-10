@@ -134395,11 +134395,21 @@ interface DataView {
     private fun intersectionMergedContradictsTarget(
         source: Type.Intersection, target: Type.Object, relation: Relation,
     ): Boolean {
-        val mergedMembers = mutableMapOf<String, Symbol>()
+        // Round 465: a member declared by MULTIPLE constituents has the INTERSECTION
+        // of the declared types in tsc (`AssignmentExpression<EqualsToken> & { left:
+        // GeneratedIdentifier }` has left: LeftHandSideExpression & GeneratedIdentifier
+        // = GeneratedIdentifier) — so a contradiction holds only when EVERY
+        // constituent's declaration fails the target: if ANY declaration relates, the
+        // intersected member type (a subtype of each declaration) relates too. The old
+        // first-decl-wins merge FP'd the tsc cast idiom `node as AE<EqualsToken> &
+        // { left: GeneratedIdentifier }` against its own annotation (factory/
+        // utilities.ts:1688, parser.ts:9581) — the interface's WIDE `left` shadowed
+        // the TypeLiteral's refinement.
+        val mergedMembers = mutableMapOf<String, MutableList<Symbol>>()
         for (c in source.types) {
             if (c is Type.Object) {
                 resolveStructuredTypeMembers(c)
-                c.members?.forEach { (n, s) -> if (n !in mergedMembers) mergedMembers[n] = s }
+                c.members?.forEach { (n, s) -> mergedMembers.getOrPut(n) { mutableListOf() }.add(s) }
             }
         }
         if (mergedMembers.isEmpty()) return false
@@ -134407,11 +134417,21 @@ interface DataView {
         val targetProps = target.properties ?: return false
         for (targetProp in targetProps) {
             if (targetProp.name.isEmpty() || targetProp.name in OBJECT_PROTOTYPE_PROPERTIES) continue
-            val sourceProp = mergedMembers[targetProp.name] ?: continue // missing → not a contradiction here
-            val srcType = getTypeOfSymbol(sourceProp)
-            val tgtType = widenOptionalTargetPropType(getTypeOfSymbol(targetProp), targetProp, srcType)
-            if (srcType === errorType || tgtType === errorType || srcType === anyType || tgtType === anyType) continue
-            if (!checkTypeRelatedTo(srcType, tgtType, relation)) return true
+            val sourceProps = mergedMembers[targetProp.name] ?: continue // missing → not a contradiction here
+            var anyRelatesOrUncertain = false
+            for (sourceProp in sourceProps) {
+                val srcType = getTypeOfSymbol(sourceProp)
+                val tgtType = widenOptionalTargetPropType(getTypeOfSymbol(targetProp), targetProp, srcType)
+                if (srcType === errorType || tgtType === errorType || srcType === anyType || tgtType === anyType) {
+                    anyRelatesOrUncertain = true
+                    break
+                }
+                if (checkTypeRelatedTo(srcType, tgtType, relation)) {
+                    anyRelatesOrUncertain = true
+                    break
+                }
+            }
+            if (!anyRelatesOrUncertain) return true
         }
         return false
     }
