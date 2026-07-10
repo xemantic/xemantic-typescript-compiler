@@ -94674,6 +94674,20 @@ interface DataView {
                 // a JsxCallLike union to its property-poorest member and suppressed a
                 // pinned TS2339 (the AliasedConditionAndUnionPredicateTest
                 // reassignment control caught it).
+                // Round 464: a plain `=` with a PROPERTY-ACCESS RHS mirrors the
+                // Identifier arm — `end = importLiteral.end` (tsc program.ts
+                // getReferencedFileLocation) resolves the member's declared type and
+                // filters the antecedent union by it. Same gates: non-union resolved
+                // type only (the round-463 lenient-member-relation lesson).
+                (rhs as? PropertyAccessExpression)?.let { pa ->
+                    if (pa.questionDotToken) return@let
+                    val t = try { getTypeOfPropertyAccess(pa) } catch (_: Exception) { null }
+                    if (t != null && t !== anyType && t !== errorType && t !== unknownType &&
+                        t !is Type.Union
+                    ) {
+                        return narrowUnionByRhsAssignment(antecedent, t)
+                    }
+                }
                 (rhs as? Identifier)?.let { id ->
                     val t = try { getTypeOfIdentifier(id) } catch (_: Exception) { null }
                     if (t != null && t !== anyType && t !== errorType && t !== unknownType &&
@@ -94993,6 +95007,26 @@ interface DataView {
             }
             else -> rhsIsDefinitelyNonNullish(x)
         }
+    }
+
+    /** Round 464: the checkDefined-SHAPE return type for a BARREL-imported
+     *  namespace-member call (`Debug.checkDefined(x)` where the callee is
+     *  `<T>(value: T | undefined | null, …): T`) — the argument's type with
+     *  nullish members stripped. Null on any shape mismatch (explicit type
+     *  args, non-TP return, param not `T`-plus-nullish, unresolvable arg). */
+    private fun tryBarrelCheckDefinedReturn(expr: CallExpression, callee: PropertyAccessExpression): Type? {
+        if (expr.arguments.isEmpty() || !expr.typeArguments.isNullOrEmpty()) return null
+        if (expr.questionDotToken || callee.questionDotToken) return null
+        val decl = resolveNamespaceMemberFnDecl(callee) as? FunctionDeclaration ?: return null
+        val ret = decl.type as? TypeReference ?: return null
+        val retTp = (ret.typeName as? Identifier)?.text ?: return null
+        if (decl.typeParameters?.none { it.name.text == retTp } != false) return null
+        val p0 = decl.parameters.firstOrNull() ?: return null
+        if (!paramAnnotationIsTpPlusNullish(p0.type, retTp)) return null
+        val argT = try { getTypeOfExpression(expr.arguments[0]) } catch (_: Exception) { return null }
+        if (argT === anyType || argT === errorType || argT === unknownType) return null
+        val stripped = narrowByExcludingNullUndefined(argT)
+        return stripped.takeIf { !typeHasNullishConstituent(it) && it !== neverType }
     }
 
     /** Round 461: is [t] a union of exactly a bare reference to [tpName] plus ≥1
@@ -99175,7 +99209,22 @@ interface DataView {
             is ElementAccessExpression -> getTypeOfElementAccess(callee)
             else -> return anyType
         }
-        if (calleeType === anyType || calleeType === errorType) return anyType
+        if (calleeType === anyType || calleeType === errorType) {
+            // Round 464: a BARREL-imported namespace member call in the
+            // checkDefined SHAPE (`Debug.checkDefined(program.getSourceFileByPath(…))`
+            // — tsc program.ts getReferencedFileLocation) resolves its return as the
+            // argument's type with nullish stripped: the receiver `Debug` is an
+            // unresolvable Alias through the general path, so the flow-only
+            // namespace-member resolver recovers the declaration and the
+            // `<T>(value: T | undefined | null, …): T` contract binds T to the
+            // argument's non-nullish part. Shape-gated (same rule as the round-461
+            // flow classifier) so no general barrel resolution leaks into the type
+            // path (the round-409 TS2315-flood hazard).
+            if (callee is PropertyAccessExpression) {
+                tryBarrelCheckDefinedReturn(expr, callee)?.let { return it }
+            }
+            return anyType
+        }
         if (calleeType !is Type.Object) return anyType
         resolveStructuredTypeMembers(calleeType)
         val sigs = calleeType.callSignatures
