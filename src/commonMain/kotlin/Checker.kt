@@ -79007,6 +79007,36 @@ interface DataView {
      *  1 = every leaf branch individually verified assignable (caller returns —
      *  round 436g: a guard-NARROWED arm passes here while the aggregated
      *  whole-ternary union re-fails on the un-narrowed member), 2 = emitted. */
+    /** Round 467 (M3.4): re-type an ARRAY LITERAL from its flow-narrowed reference
+     *  elements — `if (isThrowStatement(node)) return [node];` builds `Node[]`
+     *  because getTypeOfArrayLiteral's element narrowing deliberately accepts only
+     *  nullish strips (round 459's shadowing hazard), so a guard narrow-DOWN never
+     *  applies. Consumers substitute the result ONLY when it makes their relation
+     *  pass (monotone / suppression-only). Null when nothing narrowed or an element
+     *  is unsuitable (spread / any / error). */
+    private fun narrowedArrayLiteralType(arr: ArrayLiteralExpression): Type? {
+        if (arr.elements.isEmpty()) return null
+        var anyNarrowed = false
+        val elemTypes = mutableListOf<Type>()
+        for (el in arr.elements) {
+            if (el is SpreadElement) return null
+            val raw = getTypeOfExpression(el)
+            if (el is Identifier || el is PropertyAccessExpression) {
+                val n = getNarrowedTypeForReferenceFollowLoopEntry(raw, el)
+                if (n !== raw && n !== neverType && n !== anyType && n !== errorType) {
+                    anyNarrowed = true
+                    elemTypes.add(n)
+                    continue
+                }
+            }
+            if (raw === anyType || raw === errorType) return null
+            elemTypes.add(raw)
+        }
+        if (!anyNarrowed) return null
+        val elem = if (elemTypes.size == 1) elemTypes[0] else getUnionType(elemTypes.distinct())
+        return getArrayType(elem)
+    }
+
     private fun checkConditionalReturnBranches(
         expr: Expression?,
         targetType: Type,
@@ -79053,6 +79083,13 @@ interface DataView {
             // direct-return path in checkReturnAssignability.
             if (inner is ArrayLiteralExpression &&
                 arrayLiteralSatisfiesTupleTarget(inner, targetNode, currentFileLocals)) continue
+            // Round 467 (M3.4): an array-literal ARM whose reference elements were
+            // guard-narrowed (`isBreakOrContinueStatement(node) ? [node] : …` vs
+            // `readonly BreakOrContinueStatement[] | undefined`) — monotone retry,
+            // same rule as the direct-return path below.
+            if (inner is ArrayLiteralExpression &&
+                narrowedArrayLiteralType(inner)
+                    ?.let { checkTypeRelatedTo(it, targetType, assignableRelation) } == true) continue
             // Round 436g (M3.4): a guard-gated ternary ARM narrows by the condition —
             // `return isNamedTupleMember(m) || isParameter(m) ? m : undefined` types
             // the true arm as the guard targets (tsc utilities.ts's
@@ -87600,6 +87637,14 @@ interface DataView {
                 // = … }`) mirrors the assignment-path intersection gate, same FP-safety.
                 val narrowed = getNarrowedTypeForReference(sourceTypeRaw, expr)
                 if (narrowed !== sourceTypeRaw && checkTypeRelatedTo(narrowed, targetType, assignableRelation)) narrowed
+                else sourceTypeRaw
+            } else if (expr is ArrayLiteralExpression) {
+                // Round 467 (M3.4): an array-literal return whose reference elements
+                // were guard-narrowed (`if (isThrowStatement(node)) return [node];` vs
+                // `readonly ThrowStatement[] | undefined` — documentHighlights.ts).
+                // Same monotone rule: substituted only when it makes the return relate.
+                val narrowed = narrowedArrayLiteralType(expr)
+                if (narrowed != null && checkTypeRelatedTo(narrowed, targetType, assignableRelation)) narrowed
                 else sourceTypeRaw
             } else sourceTypeRaw
             // M3.1 (round 431c): a source containing a FOREIGN type parameter — one
