@@ -1219,6 +1219,16 @@ class Checker(
      *  init-order trap (the narrowing walk runs during checking). */
     private var nestedFunctionByNameCache: MutableMap<String, FunctionDeclaration?>? = null
 
+    /** Round 463: the full same-name clusters behind [nestedFunctionByNameCache] —
+     *  populated by the same [buildNestedFunctionMap] walk. A name with ≥2 declarations
+     *  is ambiguous for the unique-decl consumers, but an OVERLOAD cluster in the
+     *  "nullish-mirror" idiom (`f(x: T, …): R;` / `f(x: T | undefined, …): R |
+     *  undefined;` + impl — tsc's `instantiateType`) is still precisely analyzable:
+     *  tsc picks the FIRST applicable overload, and the only applicability dimension
+     *  between the two mirror signatures is argument nullishness. Declared before
+     *  `init` per the init-order trap. */
+    private var nestedFunctionClustersCache: MutableMap<String, List<FunctionDeclaration>>? = null
+
     /** Round 460: the type-alias sibling of [nestedFunctionByNameCache] — program-wide map
      *  name → the UNIQUELY-named TypeAliasDeclaration (any nesting depth), or `null` when
      *  ambiguous. A FUNCTION-BODY-local `type X = …` is B83.5-unbound, so an assert target
@@ -94729,7 +94739,8 @@ interface DataView {
                 else -> break
             }
         }
-        val decl = resolveFlowCalleeDecl(call, call.expression) ?: return false
+        val decl = resolveFlowCalleeDecl(call, call.expression)
+            ?: return nullishMirrorOverloadNonNullish(call)
         val (ret, tps, params) = when (decl) {
             is FunctionDeclaration -> Triple(decl.type, decl.typeParameters, decl.parameters)
             is MethodDeclaration -> Triple(decl.type, decl.typeParameters, decl.parameters)
@@ -94782,6 +94793,138 @@ interface DataView {
     }
 
     /**
+     * Round 463: the NULLISH-MIRROR overload idiom — a nested overload cluster
+     * `f(x: T, …): R;` / `f(x: T | undefined, …): R | undefined;` (+ impl), tsc's
+     * `instantiateType`/`instantiateTypes` shape. The unique-decl resolver maps
+     * such a name to null (ambiguous), so `type.restrictiveInstantiation =
+     * instantiateType(type, mapper)` never narrowed the property path → FP
+     * TS18048 on the next read (checker.ts:21170). tsc picks the FIRST applicable
+     * overload; between the two mirror signatures the ONLY applicability dimension
+     * is argument nullishness (the shape test rejects any other difference), so a
+     * provably non-nullish argument at every conditional position selects the
+     * FIRST-declared (non-nullish) signature. Conservative: any uncertainty —
+     * shape mismatch, unprovable arg, TPs, explicit type args — returns false.
+     */
+    private fun nullishMirrorOverloadNonNullish(call: CallExpression): Boolean {
+        val name = (call.expression as? Identifier)?.text ?: return false
+        if (!call.typeArguments.isNullOrEmpty()) return false
+        if (nestedFunctionByNameCache == null) {
+            nestedFunctionByNameCache = buildNestedFunctionMap()
+        }
+        val cluster = nestedFunctionClustersCache?.get(name) ?: return false
+        val sigs = cluster.filter { it.body == null }.sortedBy { it.pos }
+        val impls = cluster.filter { it.body != null }
+        if (sigs.size != 2 || impls.size > 1) return false
+        val first = sigs[0]
+        val second = sigs[1]
+        if (!first.typeParameters.isNullOrEmpty() || !second.typeParameters.isNullOrEmpty()) return false
+        val retFirst = first.type ?: return false
+        val retSecond = second.type ?: return false
+        // The FIRST-declared signature must be the non-nullish side (if the nullish
+        // one is declared first, tsc matches IT first for any argument).
+        if (!typeNodeIsNullishWidening(retFirst, retSecond)) return false
+        if (first.parameters.size != second.parameters.size) return false
+        val conditionalParams = mutableListOf<Int>()
+        for (i in first.parameters.indices) {
+            if (first.parameters[i].questionToken != second.parameters[i].questionToken ||
+                first.parameters[i].dotDotDotToken != second.parameters[i].dotDotDotToken
+            ) return false
+            val pa = first.parameters[i].type ?: return false
+            val pb = second.parameters[i].type ?: return false
+            when {
+                typeNodesStructurallyEqual(pa, pb) -> {}
+                typeNodeIsNullishWidening(pa, pb) -> conditionalParams.add(i)
+                else -> return false
+            }
+        }
+        if (conditionalParams.isEmpty()) return false
+        for (i in conditionalParams) {
+            val arg = call.arguments.getOrNull(i) ?: return false
+            if (!argProvablyNonNullish(arg)) return false
+        }
+        return typeNodeDefinitelyNonNullish(retFirst, emptySet(), depth = 0)
+    }
+
+    /** Round 463: is [wide] exactly [narrow] plus ≥1 `undefined`/`null` keyword union
+     *  member (the nullish-mirror widening), with [narrow] itself nullish-free? */
+    private fun typeNodeIsNullishWidening(narrow: TypeNode, wide: TypeNode): Boolean {
+        fun isNullishMember(t: TypeNode): Boolean {
+            val inner = if (t is ParenthesizedType) t.type else t
+            return (inner is KeywordTypeNode &&
+                (inner.kind == SyntaxKind.UndefinedKeyword || inner.kind == SyntaxKind.NullKeyword)) ||
+                (inner is LiteralType && inner.literal.kind == SyntaxKind.NullKeyword)
+        }
+        fun membersOf(t: TypeNode): List<TypeNode> {
+            val inner = if (t is ParenthesizedType) t.type else t
+            return if (inner is UnionType) inner.types else listOf(inner)
+        }
+        val narrowMembers = membersOf(narrow)
+        if (narrowMembers.any { isNullishMember(it) }) return false
+        val wideMembers = membersOf(wide)
+        val wideNonNullish = wideMembers.filter { !isNullishMember(it) }
+        if (wideNonNullish.size == wideMembers.size) return false // no nullish added
+        if (wideNonNullish.size != narrowMembers.size) return false
+        for (i in narrowMembers.indices) {
+            if (!typeNodesStructurallyEqual(narrowMembers[i], wideNonNullish[i])) return false
+        }
+        return true
+    }
+
+    /** Round 463: minimal structural TypeNode equality for the nullish-mirror shape
+     *  test — keywords, entity-name references (+ type args), arrays, unions,
+     *  literals, `keyof`-style operators, parens. Anything else compares UNEQUAL
+     *  (conservative: the mirror test then rejects the cluster). */
+    private fun typeNodesStructurallyEqual(a: TypeNode, b: TypeNode): Boolean {
+        val x = if (a is ParenthesizedType) a.type else a
+        val y = if (b is ParenthesizedType) b.type else b
+        return when {
+            x is KeywordTypeNode && y is KeywordTypeNode -> x.kind == y.kind
+            x is TypeReference && y is TypeReference -> {
+                fun nameText(n: Node?): String? = when (n) {
+                    is Identifier -> n.text
+                    is QualifiedName -> nameText(n.left)?.let { l -> (n.right as? Identifier)?.text?.let { r -> "$l.$r" } }
+                    else -> null
+                }
+                val xa = x.typeArguments ?: emptyList()
+                val ya = y.typeArguments ?: emptyList()
+                nameText(x.typeName) != null && nameText(x.typeName) == nameText(y.typeName) &&
+                    xa.size == ya.size && xa.indices.all { typeNodesStructurallyEqual(xa[it], ya[it]) }
+            }
+            x is ArrayType && y is ArrayType -> typeNodesStructurallyEqual(x.elementType, y.elementType)
+            x is UnionType && y is UnionType ->
+                x.types.size == y.types.size &&
+                    x.types.indices.all { typeNodesStructurallyEqual(x.types[it], y.types[it]) }
+            x is TypeOperator && y is TypeOperator ->
+                x.operator == y.operator && typeNodesStructurallyEqual(x.type, y.type)
+            x is LiteralType && y is LiteralType -> {
+                val lx = x.literal
+                val ly = y.literal
+                lx.kind == ly.kind && when {
+                    lx is StringLiteralNode && ly is StringLiteralNode -> lx.text == ly.text
+                    lx is NumericLiteralNode && ly is NumericLiteralNode -> lx.text == ly.text
+                    else -> lx.kind == SyntaxKind.NullKeyword || lx.kind == SyntaxKind.TrueKeyword ||
+                        lx.kind == SyntaxKind.FalseKeyword
+                }
+            }
+            else -> false
+        }
+    }
+
+    /** Round 463: is [arg] provably non-nullish at the call site? The structural
+     *  classifier first; a bare Identifier additionally resolves through the cheap
+     *  non-flow [getTypeOfIdentifier] (params/locals maps — no flow re-entry). */
+    private fun argProvablyNonNullish(arg: Expression): Boolean {
+        if (rhsIsDefinitelyNonNullish(arg)) return true
+        if (arg is Identifier) {
+            val t = try { getTypeOfIdentifier(arg) } catch (_: Exception) { return false }
+            return t !== anyType && t !== errorType && t !== unknownType &&
+                !t.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void) &&
+                !typeIncludesUndefined(t) && !typeIncludesNull(t)
+        }
+        return false
+    }
+
+    /**
      * Syntactic (no type resolution) classifier: is [t] provably non-nullish?
      * Bails FALSE on anything uncertain — unresolvable names, the enclosing
      * callee's own type parameters ([tpNames]), alias recursion past depth 8,
@@ -94812,11 +94955,23 @@ interface DataView {
                 val name = (t.typeName as? Identifier)?.text ?: return false
                 if (name in tpNames) return false
                 val sym = currentFileLocals?.get(name) ?: globals[name] ?: return false
-                val d = sym.declarations.firstOrNull() ?: return false
-                when (d) {
+                when (val d = sym.declarations.firstOrNull() ?: return false) {
                     is InterfaceDeclaration, is ClassDeclaration, is EnumDeclaration -> true
                     is TypeAliasDeclaration -> typeNodeDefinitelyNonNullish(d.type, tpNames, depth + 1)
-                    else -> false
+                    else -> {
+                        // Round 463: a barrel-imported name (`import { Type } from
+                        // "./_namespaces/ts.js"`) resolves to an Alias whose declaration
+                        // is the ImportSpecifier — the general resolveAlias cannot follow
+                        // the ESM `.js` barrel (round-409 landmine), but the merged
+                        // `globals` carry the REAL declaration. Restricted to
+                        // interface/class/enum (non-nullish regardless of WHICH file's
+                        // same-named declaration the name-keyed lookup hits); a
+                        // TypeAliasDeclaration through this fallback would re-open the
+                        // round-443 cross-file alias-conflation trap, so it stays out.
+                        globals[name]?.declarations?.any {
+                            it is InterfaceDeclaration || it is ClassDeclaration || it is EnumDeclaration
+                        } == true
+                    }
                 }
             }
             else -> false
@@ -95905,6 +96060,11 @@ interface DataView {
                 decls.size == 1 -> decls[0]
                 else -> decls.singleOrNull { it.type is TypePredicate }
             }
+        }
+        // Round 463: retain the full clusters for the nullish-mirror overload
+        // analysis (see nestedFunctionClustersCache).
+        nestedFunctionClustersCache = HashMap<String, List<FunctionDeclaration>>().apply {
+            for ((nm, decls) in collected) put(nm, decls)
         }
         return out
     }
