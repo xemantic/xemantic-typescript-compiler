@@ -131686,8 +131686,9 @@ interface DataView {
                         elemType is Type.StringLiteral || elemType is Type.NumberLiteral ||
                         elemType is Type.BigIntLiteral
                     if (!elemIsPrimitive) continue
-                    // null/undefined/void → skip (strictNullChecks variance)
-                    if (elemType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void or TypeFlags.Any)) continue
+                    // null/undefined/void → skip (strictNullChecks variance);
+                    // never (e.g. `undefined!`, B282) is assignable to EVERYTHING.
+                    if (elemType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void or TypeFlags.Any or TypeFlags.Never)) continue
                     // Primitive can never be assignable to a non-empty object type.
                     // Widen literal types for display (TypeScript convention).
                     val displaySource = typeToString(getWidenedLiteralType(elemType))
