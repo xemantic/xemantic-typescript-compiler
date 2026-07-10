@@ -39,6 +39,35 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
+**Round 469 (2026-07-10, same session as 468) — two deeper Blocker-#3/flow rules. Dashboard:
+services 90 → 86 (−4); both steps strictly-removals by listAll diff. Suite 9,914 → 9,920
+(+6 local across 2 new test files, 0 regressions); 2 fix commits (429785e8 / 7af1415f).**
+- **Fix 15 (429785e8, type-alias-SHADOWED interface targets, Blocker #3; 90 → 87):** round 443's
+  SourceFileLike conflation closed for the OBJLIT-TARGET direction — importTracker's
+  `type SourceFileLike` wins the last-wins Interface+TypeAlias merge, so annotations in OTHER
+  files resolve to the bogus alias union. tsc's true target is the MERGED interface: the
+  compiler/types.ts base PLUS services' `declare module` AUGMENTATION members (the cross-file
+  augmentation member merge our symbol tables don't model).
+  objectLiteralSatisfiesMergedConflatedAliasInterface assembles the merged member table AST-side
+  (top-level + module-augmentation `interface X`; required = required anywhere) and demands full
+  required coverage + no excess; hooked into the return AND var-decl paths. Cleared
+  sourcemaps:232, textChanges:1339 + convertToAsyncFunction:166 as a bonus (Transformer is the
+  same shape).
+- **Fix 16 (7af1415f, closure-assigned definite assignment; 87 → 86):** a name assigned inside
+  a NESTED function-like can be assigned at any time relative to an outer read (fn decls hoist,
+  closures run first) — tsc's definite-assignment never fires for it (formatting.ts
+  formatSpanWorker's `previousRange`, assigned only inside the nested processRange/processPair
+  helpers, read in the trailing-edit block ABOVE their declarations). Both TS2454 passes (the
+  SET-based checkUsesOfUninitialized driver AND the flow-graph runFlowTS2454OnFunction — the
+  round-450 two-pass gotcha in action: the first cut fixed only the flow pass and the set pass
+  kept firing) remove closure-assigned candidates via a shared collectClosureAssignedNames
+  (AST-based, reusing B78.2's collectAllAssignmentsAnywhere on nested bodies). **PERF LANDMINE
+  (caught pre-commit): the first cut text-scanned every nested container range per STATEMENT —
+  the services bench went 42 s → 5-min timeout on checker.ts's ~3000 nested fns; the AST
+  pre-pass restored the normal band (42.4 s).** Straight-line use-before-assign keeps firing
+  (negative controls pinned).
+- **NEXT (services @ 86, 40 real):** unchanged from the round-468 list minus the four cleared.**
+
 **Round 468 (2026-07-10) — the conflated-interface family closed out + contextual narrow-DOWN
 completions: FOURTEEN fixes in 12 commits. Dashboard: services 108 → 90 (−18; TS2322 30 → 18,
 TS2345 12 → 9, TS2339 6 → 5, TS2554/TS2739 → 0; 44 real excl. TS2591×43 + TS2304×2 `global` +
