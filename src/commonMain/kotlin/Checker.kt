@@ -98741,6 +98741,18 @@ interface DataView {
                                     raw !== anyType && raw !== errorType &&
                                     !checkTypeRelatedTo(raw, propCtx, assignableRelation) ->
                                     getNarrowedTypeForReference(raw, prop.initializer)
+                                // Round 468: an ARRAY-LITERAL value whose reference elements
+                                // were guard-narrowed (`occurrences: [condition]` after
+                                // `isPropertyAccessExpression(condition) || isIdentifier(condition)`
+                                // — tsc convertToOptionalChainExpression; `nodes: [current]`
+                                // after the isBinaryExpression early return —
+                                // convertStringOrTemplateLiteral's treeToArray). Same perf
+                                // gate: only when the raw type already FAILS the contextual
+                                // property; accepted below only via ctxAcceptsNarrow (monotone).
+                                prop.initializer is ArrayLiteralExpression && ctxUsable &&
+                                    raw !== anyType && raw !== errorType &&
+                                    !checkTypeRelatedTo(raw, propCtx, assignableRelation) ->
+                                    narrowedArrayLiteralType(prop.initializer) ?: raw
                                 else -> raw
                             }
                             val ctxAcceptsNarrow = narrowed !== raw && narrowed !== neverType &&
