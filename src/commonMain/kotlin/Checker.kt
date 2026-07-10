@@ -102438,6 +102438,27 @@ interface DataView {
                 return if (contributed.size == 1) contributed[0] else getIntersectionType(contributed)
             }
         }
+        // Round 468: a NUMERIC key resolves through an ARRAY-LIKE constituent's number
+        // index — `diag[0]` after `isArray(diag)` intersects each union member with
+        // `readonly unknown[]` (tsc utilities.ts diagnosticToString), and the named
+        // property lookup above misses index signatures. Element type via the Array
+        // reference arg or a resolved number index signature.
+        if (propName.toIntOrNull() != null) {
+            fun numericElem(t: Type): Type? {
+                val app = try { getApparentType(t) } catch (_: Exception) { return null }
+                if (app is Type.Reference &&
+                    app.target.symbol?.name.let { it == "Array" || it == "ReadonlyArray" })
+                    return app.resolvedTypeArguments?.firstOrNull()
+                if (app is Type.Object) {
+                    try { resolveStructuredTypeMembers(app) } catch (_: Exception) { return null }
+                    app.numberIndexInfo?.let { return it.type }
+                }
+                return null
+            }
+            if (apparent is Type.Intersection) {
+                for (c in apparent.types) numericElem(c)?.let { return it }
+            } else numericElem(apparent)?.let { return it }
+        }
         return null
     }
 
