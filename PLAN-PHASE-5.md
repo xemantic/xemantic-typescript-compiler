@@ -39,6 +39,42 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
+**Round 466 (2026-07-10) — Blocker #2 landed for the compiler profile: map-callback return
+inference through nested functions clears builder.ts:2390, the LAST real compiler FP. Dashboard:
+compiler 47 → 46 (**ZERO real FPs — all 46 are env-legit TS2591×43 require / TS2304×2 `global` /
+TS2584 console, waiting on real @types/node**), services 127 → 126 — both listAll diffs are
+EXACTLY the one removal. Suite 9,855 → 9,863 (+8 local in MapCallbackReturnInferenceTest, 0
+regressions); 1 fix commit (e12b905b). Bench: self ~28 s (normal band).**
+- **The chain (one FP, five mechanisms):** `arrayToMap(diagnostics, value => toFilePath(value[0]),
+  value => value[1])` must select the generic `Map<K, V2>` overload with K := Path, which needs the
+  arrow body typed through: `toFilePath` (UNIQUE nested fn, un-annotated) → `filePaths[fileId - 1]`
+  → `filePaths = buildInfo.fileNames?.map(toPathInBuildInfoDirectory)` (AMBIGUOUS 2-decl nested
+  callback) → both bodies `return toPath(…)` (BARREL-imported, and the merged-globals `toPath`
+  resolves to tsbuild's same-named 2-param NESTED fn — the round-440 pollution family).
+- **Mechanisms landed (all in tryInferSingleTypeParamFromArgs / getReturnTypeOfCallExpression):**
+  (a) NAMED-function callback args bind a return-position TP from the fn's return type, with
+  all-candidates-agree resolution for ambiguous nested names (`namedFnCallbackReturnType`);
+  (b) `tryNestedFnCallReturnType` — a call to a body-nested fn types its return (annotated, or
+  single-return body inference with the decl's own params scoped; depth 3; first-touch memo);
+  (c) a barrel-imported Identifier callee resolves through the flow-only import resolver INSIDE
+  inference bodies (lexical import beats polluted globals); (d) ReadonlyArray.map is now generic
+  (mirrors Array.map — corpus-green); (e) callback-return positions accept `K | undefined`,
+  anchor-able TPs gather before callback-return TPs, and branded intersections
+  (`string & {__pathBrand}`) count as named-like candidates.
+- **Measured gates (each violated cut produced a real FP on the profile):** the nested-fn return
+  capability is INFERENCE-BODY-SCOPED (`inInferenceBodyTyping`) — the program-wide version was
+  net +8 (checker.ts createTypeChecker objlit, getNodeLinks property writes, classFields receiver,
+  commandLineParser objlit: concrete types riding M3 relation gaps); the barrel-callee pre-step is
+  gated NON-generic (`SortedReadonlyArray<T>` resolves garbage without the TP scope) + BODIED
+  (a bodyless decl is one OVERLOAD of a cluster — `sortAndDeduplicate`'s non-generic overload) +
+  no-explicit-type-args; a heterogeneous ARRAY-LITERAL callback body contributes NO candidate
+  (tsc contextually tuple-types it — builder.ts:1332 `map(key => [toFileId(key), …])`).
+- **Tooling trap (CLAUDE.md gotcha added):** `pkill -9 -f KotlinCompileDaemon` KILLS THE INVOKING
+  SHELL — the -f pattern matches the bash -c command line itself (the pgrep self-match gotcha's
+  pkill variant); several compound commands silently died mid-chain. Use `'KotlinCompile[D]aemon'`.
+- **NEXT: the services profile burn-down (126 — TS2322×40 / TS2345×12 / TS2339×8 / TS7006×7 …),
+  then server (last measured 402 at round 458) / harness (615). v1 = all 8 profiles at zero FPs.**
+
 **Round 465 (2026-07-10) — bounded FP burn-down to the LAST real compiler FP: SEVEN fixes across
 8 sites. Dashboard: compiler 55 → 47 (−8; TS2322 6 → 1, TS2345/TS2339/TS2349 → 0), services
 139 → 127 (−12 cross-profile). Suite 9,836 → 9,855 (+19 local across 7 new test files, 0
@@ -690,73 +726,6 @@ correctness that reproduces minimally. Dashboard: compiler 124 → 121 (−3, TS
     call-type pass via a path `contextualAssignmentRhsType` doesn't reach; property/`??=`-IIFE targets.
   - services missing-property TS2740/TS2741 (`Node` → `Expression`/`PropertyAccessExpression`,
     `_expressionBrand`): brand-narrowing against conflated Node/Expression types (whole-program).
-
-**Round 456 (2026-07-09) — Array/ReadonlyArray `find` type-guard overload + NonNull-identifier
-undefined-strip + branded-intersection flow-narrowing + IterableIterator heritage + a build-warning
-cleanup; ONE broad relation rule investigated & reverted. Dashboard: compiler 132 → 124 (−8, TS2322
-56 → 49, TS2353 2 → 1); services 230 → 220 (−10, all generalize cleanly, no new FP). Suite 9,666 →
-9,681 (+15 local, 0 regressions); 5 commits (860046fc find / 042e2551 nonnull / 3ad1ae4d
-branded-intersection / 6330194e iterable-iterator / 54e644db warning).**
-- **Fix 1d (6330194e, IterableIterator heritage; compiler −1, services −1):** the embedded
-  `IterableIterator<T>` was an EMPTY interface `{ }`, so an interface `extends IterableIterator<T>`
-  inherited none of `next()`/`return?()`/`throw?()` (they live on `Iterator<T>`) — an object literal
-  supplying `next()` against such a target FP-fired TS2353 "'next' does not exist in type
-  'MappingsDecoder'" (sourcemap.ts `MappingsDecoder extends IterableIterator<Mapping>` decoder literal).
-  `IterableIterator<T>` now `extends Iterator<T>` (as in the real lib.es2015.iterable);
-  ArrayIterator/MapIterator/SetIterator left empty (not heritage targets in tsc's sources → minimal
-  blast radius). Corpus green (lib change — the critical gate).
-- **Fix 1c (3ad1ae4d, branded-intersection flow-narrowing; compiler −2, services −2):** the
-  assignment-RHS (round 410/438) and return-path (round 413/438) flow-narrowing gates covered
-  Interface/Reference/Object/Union targets but excluded `Type.Intersection`, so a reference narrowed
-  non-nullish (`if (!x) return` / `if (x === undefined) { x = … }`) assigned/returned against a BRANDED
-  intersection (`Path = string & {__pathBrand}`, `IncrementalBuildInfoFileId = number & {__…Brand}`)
-  kept its wider `X | undefined` type → FP `X | undefined ⊄ X`. Added `Type.Intersection` to both gates;
-  FP-safe by construction (unchanged: the narrowed type is substituted only when it makes the relation
-  pass). Cleared resolutionCache.ts:1518 (`fileOrDirectoryPath = updatedPath`) + builder.ts:1394
-  (`return fileId`). Corpus green.
-- **Fix 1b (042e2551, NonNull-identifier undefined-strip; compiler −4, services −6):**
-  `getTypeOfExpression(NonNullExpression)` kept the union for a bare-identifier `x!` — only
-  `undefined!`/`null!` → never and a `<call>()!` all-concrete union stripped (round 439). So
-  `writer = _writer!` (emitter.ts, `_writer: EmitTextWriter | undefined`) and `currentFlow =
-  preSwitchCaseFlow!` (binder.ts, `FlowNode | undefined`) FP-fired `X | undefined ⊄ X`. Extended the
-  round-439 strip to `expr.expression is Identifier` with the SAME all-concrete gate
-  (`types.none { typeContainsUnresolvedTypeParam }`). Property-access `.x!` (the object-literal-vs-
-  interface member-precision gap the round-407 note documents) and TP-carrying operands stay deferred
-  — a bare Identifier is a simple reference and cannot expose the `.x!` object-literal gap. Cleared
-  binder.ts:1748/1768, checker.ts:5791 (`(Symbol | undefined)[]` → `Symbol[] | undefined`),
-  emitter.ts:1417; transformer.ts:271's pre-existing object-literal-vs-TransformationContext FP only
-  shifts a member display (not a new FP). Corpus green (core-path change — the critical gate).
-- **Fix 1 (860046fc, `find`/`findLast` type-predicate overload; TS2322 −1 compiler, −1 services):**
-  the embedded `Array<T>`/`ReadonlyArray<T>` `find`/`findLast` had only the general
-  `(predicate: … => unknown): T | undefined` signature, so `arr.find(isFoo)` returned the base element
-  type. Added the type-predicate overload `find<S extends T>(predicate: (value: T, …) => value is S,
-  thisArg?): S | undefined` (mirrors round 455's filter/every), so `tryInferPredicateOverloadReturn`
-  (round 439) refines the result — cleared utilities.ts:8276 `getClassLikeDeclarationOfSymbol`
-  (`symbol.declarations?.find(isClassLike)`). **Adding an OVERLOAD to an EXISTING method (not a new
-  member name) does NOT shift "and N more" missing-property counts** — corpus green. Generalizes across
-  profiles (`.find(isX)`/`.findLast(isX)` are pervasive in tsc's own source).
-- **Fix 2 (54e644db, build-warning cleanup):** removed a redundant `as TypeOfExpression` cast
-  (round 451 typeof-switch exhaustiveness, Checker.kt:79547) Kotlin flagged "No cast needed"
-  (`stmt.expression` is already smart-cast). The build must stay warning-clean.
-- **INVESTIGATED & REVERTED — the broad relation-engine `source is Type.TypeParam` → relate-its-
-  constraint-chain rule (cycle-guarded for `T extends T`).** MEASURED net-zero A/B on BOTH compiler and
-  services: it fixed exactly one assignment FP (utilities.ts:12338 `getSynthesizedDeepCloneWithReplacements
-  <T extends Node>` — `T` assigned to a `Node | undefined` local) but INTRODUCED one via OVERLOAD
-  SELECTION — a bare un-inferred `T extends string` (from `getPathFromPathComponents<T extends string>`,
-  whose `readonly T[]`-from-`PathPathComponents` inference our engine leaves un-substituted) now matched
-  `ensureTrailingDirectorySeparator`'s `(path: string)` overload instead of `(path: Path)`, returning
-  `string` → FP `string ⊄ string & {__pathBrand}` at moduleNameResolver.ts:2933. The rule is SOUND
-  (T <: constraint <: target) but overload arg-matching shares `checkTypeRelatedTo`, so it perturbs
-  signature selection wherever inference under-resolves a TypeParam arg — exactly CLAUDE.md's standing
-  warning against the broad rule. If retried: apply as a PER-SITE bail at the assignment/return TS2322
-  EMISSION only (not the shared engine), or fix the upstream `getPathFromPathComponents` inference first.
-- **NEXT (compiler @ 124, ~81 real excl. TS2591×43 offline-node):** TransformerFactory<T>
-  generic-type-alias-of-fn relation (M3.3 — the alias `(context) => Transformer<T>` doesn't
-  instantiate its fn-type body; whole-program, minimal repro clean); the exhaustive-switch
-  `assertNever(reason)` enum-union residual (programDiagnostics.ts's `ReferencedFile` → `never` in the
-  default, round 441 deep); the `OptionalChain.questionDotToken` Exclude<>-narrowing (es2020.ts — needs
-  `Exclude<>` materialization + `assertNotNode` narrowing); `string → __String` branding (whole-program).
-
 
 ### Post-v1 backlog — the "any TypeScript project" horizon (parked 2026-07-03)
 
