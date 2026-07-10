@@ -86088,6 +86088,12 @@ interface DataView {
             // the file-local interface still falls through and fires).
             if (init is ObjectLiteralExpression &&
                 objectLiteralMatchesConflatedFileLocalInterface(init, targetType, fileName)) return
+            // Round 468b (Blocker #3): the annotation names a type-alias-SHADOWED
+            // interface (round 443's SourceFileLike) — check against the MERGED
+            // interface (base + module-augmentation members) AST-side (textChanges.ts's
+            // `const file: SourceFileLike = { text, getLineAndCharacterOfPosition }`).
+            if (init is ObjectLiteralExpression &&
+                objectLiteralSatisfiesMergedConflatedAliasInterface(init, typeAnnotation, fileName)) return
             // B69.7: Widen literal source for display when target type doesn't
             // contain literal members (mirrors B69.5 in checkAssignmentExpression).
             // `var b: Boolean = true` displays as `Type 'boolean' is not
@@ -87379,6 +87385,73 @@ interface DataView {
      * keys) → false → keeps firing. Suppression-only.
      */
     /**
+     * Round 468b (Blocker #3): the target annotation names X ∈ [conflatedTypeAliasFiles]
+     * (a `type X` alias in one module file SHADOWS the real `interface X` via the
+     * last-wins Interface+TypeAlias merge — round 443's SourceFileLike), and this file
+     * is NOT the alias's own, so tsc's true target is the MERGED interface: the base
+     * `interface X` declaration(s) PLUS `declare module` augmentation members (services'
+     * `declare module "../compiler/types.js" { interface SourceFileLike {
+     * getLineAndCharacterOfPosition(...) } }` — the cross-file augmentation MEMBER merge
+     * our symbol tables do not model). Assemble the merged member table AST-side from
+     * every top-level and module-augmentation `interface X`, then require the object
+     * literal to cover all required members with no excess. Conservative bails
+     * (heritage, index sigs, none found) keep firing. Suppression-only — tsc's
+     * sourcemaps.ts createSourceFileLike / textChanges.ts `const file: SourceFileLike =
+     * { text, getLineAndCharacterOfPosition }`.
+     */
+    private fun objectLiteralSatisfiesMergedConflatedAliasInterface(
+        obj: ObjectLiteralExpression, annotationNode: TypeNode?, fileName: String,
+    ): Boolean {
+        if (conflatedTypeAliasFiles.isEmpty()) return false
+        val name = ((annotationNode as? TypeReference)?.typeName as? Identifier)?.text ?: return false
+        val aliasFiles = conflatedTypeAliasFiles[name] ?: return false
+        if (fileName in aliasFiles) return false // own-file: the round-444/447 rules own it
+        val memberOptional = HashMap<String, Boolean>()
+        var found = false
+        var bail = false
+        fun scanIface(iface: InterfaceDeclaration) {
+            if (!iface.heritageClauses.isNullOrEmpty()) { bail = true; return }
+            found = true
+            for (m in iface.members) {
+                val (nm, opt) = when (m) {
+                    is PropertyDeclaration -> (m.name as? Identifier)?.text to m.questionToken
+                    is MethodDeclaration -> (m.name as? Identifier)?.text to m.questionToken
+                    is IndexSignature -> { bail = true; return }
+                    else -> null to true
+                }
+                if (nm != null) memberOptional[nm] = (memberOptional[nm] ?: true) && opt
+            }
+        }
+        for (br in binderResults) {
+            for (stmt in br.sourceFile.statements) {
+                when {
+                    stmt is InterfaceDeclaration && stmt.name.text == name -> scanIface(stmt)
+                    stmt is ModuleDeclaration && stmt.name is StringLiteralNode ->
+                        (stmt.body as? ModuleBlock)?.statements?.forEach { s ->
+                            if (s is InterfaceDeclaration && s.name.text == name) scanIface(s)
+                        }
+                }
+                if (bail) return false
+            }
+        }
+        if (!found) return false
+        val provided = HashSet<String>()
+        for (p in obj.properties) {
+            val nm = when (p) {
+                is PropertyAssignment -> (p.name as? Identifier)?.text
+                is ShorthandPropertyAssignment -> p.name.text
+                is MethodDeclaration -> (p.name as? Identifier)?.text
+                is GetAccessor -> (p.name as? Identifier)?.text
+                is SetAccessor -> (p.name as? Identifier)?.text
+                else -> null
+            } ?: return false
+            if (nm !in memberOptional) return false // excess vs the merged member set
+            provided.add(nm)
+        }
+        return memberOptional.all { (nm, opt) -> opt || nm in provided }
+    }
+
+    /**
      * Round 468 (Blocker #3): the ARG variant of the conflated-interface rule — the
      * param annotation names a CONFLATED interface (declared in ≥2 module files; the
      * merged symbol carries every file's members) that the CALLING file merely
@@ -87931,6 +88004,13 @@ interface DataView {
             // file also declares (importTracker's ExportedSymbol.exportInfo: ExportInfo).
             if (expr is ObjectLiteralExpression &&
                 objectLiteralMatchesViaNestedConflatedMember(expr, targetType, fileName)) {
+                return
+            }
+            // Round 468b (Blocker #3): the annotation names a type-alias-SHADOWED
+            // interface (round 443's SourceFileLike) — check the objlit against the
+            // MERGED interface (base + module-augmentation members) AST-side.
+            if (expr is ObjectLiteralExpression &&
+                objectLiteralSatisfiesMergedConflatedAliasInterface(expr, returnTypeNode, fileName)) {
                 return
             }
             // Round 467 — the round-445 note's prescribed `||`-nested extension:
