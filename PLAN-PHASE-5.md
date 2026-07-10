@@ -39,12 +39,12 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
-**Round 470b (2026-07-10, the services burn-down continues) — TEN bounded fixes across 8 commits
+**Round 470b (2026-07-10, the services burn-down continues) — ELEVEN bounded fixes across 9 commits
 (a PARALLEL session's perf commit — round 470 below — was rebased in mid-stream). Dashboard:
-services 86 → 73 (−13; every step strictly-removals by listAll diff; bench row 39.8 s self,
-−7.8% riding the perf commit). Suite 9,920 → 9,955 (+35 local across 8 new test files, 0
+services 86 → 72 (−14; every step strictly-removals by listAll diff; bench row 39.8 s self,
+−7.8% riding the perf commit). Suite 9,920 → 9,958 (+38 local across 9 new test files, 0
 regressions); commits 4df5b318 / b7c5b152 / 51a2c96c / c3c6813d / 13240cb2 / 03364f91 /
-1c8cd83a / e23b1d79.**
+1c8cd83a / e23b1d79 + the fix-10 commit.**
 - **Fix 1 (4df5b318, keyof typeof Enum):** `typeof Enum` washes to anyType so `keyof` gave
   `string | number | symbol` — keyofTypeQueryEnumMemberNames builds the member-NAME literal union
   (barrel aliases via the memoized flow-only resolveImportedEnumSymbol; the merged symbol's
@@ -80,6 +80,14 @@ regressions); commits 4df5b318 / b7c5b152 / 51a2c96c / c3c6813d / 13240cb2 / 033
   (`case SyntaxKind.MethodDeclaration: … fd.name` — the guard tests the SIBLING `.kind`, so the
   path-keyed access narrowing can't see it). Cleared convertParamsToDestructuredObject:475 +
   fixUnreferenceableDecoratorMetadata:70.
+- **Fix 10 (flow-verified return precise verdict):** a flow-narrowing-VERIFIED return source
+  early-returns from the engine block instead of falling to the STRING fallback (the round-436c
+  trap) — `if (typeof target === "string") return target;` with `target: unknown` had the engine
+  pass (the M1.9 if-arm machinery had already overwritten currentLocalTypes to `string`) but the
+  varTypes string still said "unknown" and re-FP'd. TWO precise-verdict arms: the substitution
+  sites set a `sourceNarrowVerified` flag, and a name present in narrowedDeclaredTypes whose
+  raw resolved type relates counts too (PROBE470 found raw was ALREADY `string`). Never a blanket
+  engine-confirmed return. Cleared stringCompletions:1133.
 - **Scouted, deferred with findings:** symbolDisplay:917/935 TS7034/7005 is tsc's TWO-PART
   evolving-any model (declaration-site TS7034 + per-reference auto-flow via
   isPastLastAssignment/flowContainer-extension, tsc checker.ts ~30260/31170) — a faithful fix
@@ -88,14 +96,14 @@ regressions); commits 4df5b318 / b7c5b152 / 51a2c96c / c3c6813d / 13240cb2 / 033
   inferred from the keySelector RETURN (generic inference). textChanges:706/callHierarchy:263
   TS2349 look like augmentation-merge method resolution (Blocker #3 deep). completions:2237 +
   documentHighlights:193 need probes (fn-typed-param sig alignment suspected for the latter).
-- **NEXT (services @ 73, 27 real):** the objlit giants (services.ts:1327 ObjectAllocator /
+- **NEXT (services @ 72, 26 real):** the objlit giants (services.ts:1327 ObjectAllocator /
   completions:1922/2299/2391 / importFixes:316/374 / signatureHelp:379 / findAllReferences:1000 —
   nested objlit member context, likely one family); organizeImports:115/216 (optional-member
   reads need `| undefined`, broad); program.ts:1088 ResolutionLoader<T>; services.ts:1585
-  string[] vs keyof-literal-union (Object.keys typing); stringCompletions:1133 `unknown` narrowing
-  through `for (const condition in target)`; fixMissingTypeAnnotationOnExports:452 ×2 (Node vs
-  Expression brand); services.ts:656/725 SymbolObject implements Symbol (TS2420); mapCode:55
-  flatten gate-(k) probe; jsTyping:414 barrel assertNever; emitter:994 whole-program probe.**
+  string[] vs keyof-literal-union (Object.keys typing); fixMissingTypeAnnotationOnExports:452 ×2
+  (Node vs Expression brand); services.ts:656/725 SymbolObject implements Symbol (TS2420);
+  mapCode:55 flatten gate-(k) probe; jsTyping:414 barrel assertNever; emitter:994 whole-program
+  probe; symbolDisplay TS7034/7005 (needs the evolving-type model — see the deferral above).**
 
 **Round 470 (2026-07-10, user-directed 3-way benchmark + profile session, M5) — `localTypeAliasIndex`
 (Tier 1): [findLocalTypeAlias]'s per-call whole-file AST rescan replaced by an eager per-file
