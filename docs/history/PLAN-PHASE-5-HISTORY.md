@@ -1,3 +1,75 @@
+**Round 458 (2026-07-09) — logical/ternary operand narrowing + try/finally flow fix +
+fresh-objlit interface-target retry + a P0 single-file-CLI crash fix. FOUR fixes, all GENERAL
+checker/flow/driver correctness that reproduce minimally. Dashboard: compiler 121 → 116 (−5),
+services 217 → 210 (−7), server 407 → 402 (−5), harness 620 → 615 (−5), tsc-cli 118, jsTyping 115,
+deprecatedCompat 118, typingsInstallerCore 115. Suite 9,690 → 9,706 (+16 local across 4 test files,
+0 regressions); 4 fix commits (a8571636 / 4eb423e7 / b2143c9e / eec58c6a).**
+- **Fix 4 (eec58c6a, P0 — `xtsc foo.ts` crashed on ANY bare source-file argument, even
+  `const x = 1;`):** discovered mid-session via a probe; per the P0 mandate, fixed before wrapping.
+  The bare `.ts` was passed straight into TsConfigLoader (`resolveConfigPath` treats any
+  non-directory as a tsconfig), parsed as JSON → garbage config → a corrupt lib binderResult whose
+  `sourceFile.text` mismatched its statement positions → StringIndexOutOfBounds in
+  `checkMultiBaseInStatement` (`source.substring` at a lib position ~22995 indexed into the 295-char
+  user file). Two narrower guards were tried first (a statement-span bounds check; a merged-decl
+  in-source filter) — NEITHER stopped the crash (the position mismatch is in the binderResult
+  itself, not the cross-file merge), pointing to the ROOT fix: `ProjectCompiler.build` now detects a
+  non-`.json` existing-FILE argument and builds it as a single-file program with default options
+  (like `tsc foo.ts`): the file is the sole root in a synthesized `LoadedTsConfig(files = [it])`,
+  its relative imports are still walked into the program, and type checking works normally.
+  Directory/tsconfig arguments untouched (compiler profile confirmed unchanged at 116). +3 local
+  (SingleFileBuildTest: clean compile, real-error reporting, relative-import walk).
+- **Fix 1 (a8571636, logical/ternary operand narrowing):** `combineBinaryTypes` narrows the
+  `||`/`&&` RIGHT operand, and the `ConditionalExpression` typing narrows the TRUE/FALSE branches,
+  by the governing condition via a new `narrowOperandByCondition` → `applyConditionNarrowing` (pure
+  AST, no flow graph). tsc's binder places a FlowCondition on the operand (`A && B` under "A true";
+  `A || B` and a ternary FALSE branch under "A false"; a ternary TRUE branch under "A true"); our
+  `getTypeOfExpression` was flow-unaware for bare references, so `insertComment === undefined ||
+  insertComment` typed `boolean | undefined` (→ FP TS2322 against `boolean`; services.ts commenting
+  logic) and `cond ? ref : …` kept the un-narrowed branch. Fires only for a pure
+  Identifier/PropertyAccess operand (`getReferencePath`); FP-safe (type unchanged when the condition
+  doesn't mention the operand path). Cleared services.ts:2891/2976, rename.ts:192, checker.ts:51198
+  (accessor-`kind` discriminant → the object-literal `{firstAccessor, …, setAccessor, getAccessor}`
+  now matches `AllAccessorDeclarations`). Compiler net 0: the 51198 win is offset by exposing
+  checker.ts:11321, a Blocker-#3 `name`→DeclarationName whole-program conflation the cleaner
+  (undefined-stripped) narrowing surfaces (the relation now checks the wrongly-typed reference the
+  coarse union masked). CAVEAT: RETURN-position ternaries/logicals go through the SEPARATE
+  `checkConditionalReturnBranches` (per-branch), untouched by this.
+- **Fix 2 (4eb423e7, try/finally flow):** `bindTryStatement` made the finally block's entry flow the
+  join of ONLY the try/catch NORMAL completion, so a try that always `return`s/throws left that
+  completion unreachable → every read in the finally washed to `never` → spurious TS2339 on cleanup
+  code. tsc's `checkGrammarRegularExpressionLiteral` resets `scanner` in its finally after a `try {…
+  return; }`; our `scanner` washed to `never` → FP TS2339 on `scanner.setText`/`setOnError`
+  (checker.ts:33288/33289). Fix: a two-label structure — the finally block's entry joins the pre-try
+  flow (exceptional early exit) + the normal completion, while the flow AFTER the whole statement
+  stays the normal completion (so the finally's exceptional-inclusive entry can't widen away the
+  try/catch narrowing for the following statements). compiler 121 → 119 (−2), no services regression.
+  CLAUDE.md gotcha added (do NOT collapse the two-label structure).
+- **Fix 3 (b2143c9e, fresh-objlit interface-target retry):** the round-448 return-path
+  fresh-object-literal literal retry (recover a returned object literal's un-widened literal property
+  per PropertyAssignment via `freshObjLitRange` so `propertiesRelatedTo` relates it) was gated to
+  `Type.Union` targets only. A fresh object literal returned against an INTERFACE (or anonymous
+  object) with a literal(-union) member hit the same widening — `return { kind: "ambient", … }` vs
+  `interface ModuleSpecifierResult { kind: "node_modules" | … | "ambient"; … }` widened `kind` to
+  `string` → FP TS2322. Broadened the gate to `Type.Interface`/`Type.Object`. Suppression-only (the
+  retry returns only when the relation then PASSES within the fresh scope → a wrong literal / missing
+  property still fires; negative controls pinned). Cleared moduleSpecifiers.ts:399/507,
+  sourcemap.ts:323 (RawSourceMap). compiler 119 → 116, services 214 → 210. NOTE the var-decl and
+  assignment fresh-objlit paths already apply `withFreshObjLitSource` for all targets — only the
+  return path carried the union-only gate.
+- **INVESTIGATED, deferred (array-literal→tuple ASSIGNMENT, checker.ts:22621/22927,
+  esnextAnd2015.ts:248):** `lastSkippedInfo = [source, target]` → `[Type, Type]`; `relatedInfo =
+  [info]` → `[X, ...X[]]`. The `arrayLiteralSatisfiesTupleTarget` helper (round 446, return path)
+  handles these shapes, but the targets are function-body-local `let`s (B83.5-unbound), so the
+  assignment walk has NO declaration-node map to feed the helper the tuple type NODE (it knows the
+  local only by resolved type, which collapses the tuple rest). Needs local-declaration-node plumbing
+  into the assignment walk (a `currentLocalDeclTypeNodes` map populated alongside `currentLocalTypes`)
+  — a broader infra change that also unblocks other AST-based checks for function-body locals.
+- **NEXT (compiler @ 116):** the array-literal→tuple assignment plumbing above; the
+  `TransformerFactory<T>` generic-type-alias-of-fn relation (M3.3, whole-program — minimal repro
+  clean); the `assertNever(reason)` exhaustive-switch enum-union residual (programDiagnostics.ts,
+  round 441 — the guarded `ReferencedFile` union must resolve with readable enum `.kind` members);
+  `string → __String` branding (whole-program).
+
 **Round 457 (2026-07-09) — parser `as`/`satisfies` precedence bug. ONE fix, GENERAL parser
 correctness that reproduces minimally. Dashboard: compiler 124 → 121 (−3, TS2322 49 → 46); services
 220 → 217 (−3); the fix generalizes to any `<binary> as T` right-operand cast. Suite 9,681 → 9,686

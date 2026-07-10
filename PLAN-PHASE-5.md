@@ -39,6 +39,59 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
+**Round 468 (2026-07-10) — the conflated-interface family closed out + contextual narrow-DOWN
+completions: FOURTEEN fixes in 12 commits. Dashboard: services 108 → 90 (−18; TS2322 30 → 18,
+TS2345 12 → 9, TS2339 6 → 5, TS2554/TS2739 → 0; 44 real excl. TS2591×43 + TS2304×2 `global` +
+TS2584 console); every step verified strictly-removals by listAll diff. Suite 9,877 → 9,914
+(+37 local across 12 new test files, 0 regressions).**
+- **Conflated-interface variants (Blocker #3, fixes 1/2/6/7):** the round-445 rule now covers a
+  TERNARY arm (checkConditionalReturnBranches; fixExpectedComma:57 + importTracker:758), an
+  `&&`-nested right operand (the result is falsy(LEFT)|RIGHT — nullish LEFT members must relate,
+  definitely-truthy members contribute nothing; addMissingAwait:251), the VAR-DECL path
+  (convertToEsModule:130), a NESTED member whose declared type names a conflated interface the
+  file also declares (objectLiteralMatchesViaNestedConflatedMember — importTracker:644
+  ExportedSymbol.exportInfo), and the ARG position where the calling file merely IMPORTS the
+  conflated name (objectLiteralMatchesSomeConflatedDeclaration: exact satisfaction of SOME
+  declaring file's version, FN-not-FP direction; findAllReferences:1316).
+- **Contextual narrow-DOWN completions (M3.4, fixes 3/4/5):** the round-462 monotone
+  ctxAcceptsNarrow rule extends to SHORTHAND values (convertArrowFn:258 getVariableInfo) and
+  ARRAY-LITERAL property values via narrowedArrayLiteralType (convertToOptionalChain:157 +
+  convertStringOrTemplateLiteral:157); the return-path objlit CONTEXT reaches `&&`/`||`/`??`-nested
+  right operands (contextualType is live while the binary evaluates — inlineVariable:163).
+- **Nullish/literal triple (fixes 8-10, one commit):** `??`-literal ABSORB in combineBinaryTypes
+  (a literal right ∈ the left's nullish-stripped literal union drops the widened primitive —
+  organizeImports:954); the arg per-prop leaf routes through widenOptionalTargetPropType (SIXTH
+  site — returnValueCorrect:264); the assignment-RHS narrowing gate accepts ENUM-object targets
+  (importFixes:572 QuotePreference + services:1641 LanguageServiceMode as a bonus).
+- **Fix 11 (lib):** RegExpConstructor mirrors the real es5 TWO-OVERLOAD shape (`new(pattern:
+  RegExp | string)` + `new(pattern: string, flags?)`) — a single union param went SILENT on
+  `new RegExp(42)` (non-simple param skips the conservative arg check); the overload shape keeps
+  it erroring as TS2769 (services:2876 `new RegExp(/\S/)` cleared).
+- **Fix 12 (M1.11):** for-of loop-var binding names (incl. destructured elements) shadow
+  same-named functions in the arity walker — mapCode.ts's `for (const { parse, body } of
+  nodeKinds)` vs the file's own 2-param `function parse` FP'd TS2554.
+- **Fix 13 (M3.1):** a CALL-EXPRESSION arg carrying an un-inferred FOREIGN TP skips the
+  single-sig arg check (the overloadArgSkippable rule at the single-sig site; gated to call args
+  so own-TP identifier args keep corpus-pinned checks — codeFixProvider:94 `cast(...)` → TOut).
+- **Fix 14 (M1.12):** a NUMERIC key resolves through an ARRAY-LIKE intersection constituent's
+  number index in resolveMemberPropertyType — `Array.isArray(diag) ? diag[0] : …` intersects
+  union members with `readonly unknown[]` (utilities:4062).
+- **Scouted, deferred with findings:** organizeImports:115/216 need optional-member READS to
+  include `| undefined` (the round-424 optionality-is-a-symbol-attribute gap — broad);
+  emitter.ts:994 `transformed[0]` is whole-program-only (minimal repro clean — probe);
+  fixUnreferenceableDecoratorMetadata:70 + convertParamsToDestructuredObject:475 are
+  kind-discriminant narrowing not reaching property-access args (probe); jsTyping:414 is the
+  known-hard barrel assertNever family; signatureHelp:379 needs nested-union-member objlit
+  context; findAllReferences:1000 needs array→objlit→nested-objlit ctx propagation.
+- **Cross-profile (measured at session end, accumulated since the round-458 measurement):**
+  server 485 → 275 (−210), harness 701 → 481 (−220), compiler stays 46 (zero real FPs —
+  all env-legit). TSV rows recorded for services/compiler/server/harness.
+- **NEXT (services @ 90, 44 real):** the services.ts objlit giants (ObjectAllocator ×2 /
+  CompletionEntry / EmitTextWriter TS2740); completions:1922/2237/2299/2391; importFixes:316/374
+  (ImportFixWithModuleSpecifier); stringCompletions `.types`/`.value` public-API this-guards;
+  sourcemaps:212/232 + textChanges:1339 (SourceFileLike objlits); symbolDisplay:917/935
+  TS7034/7005; formatting:572 TS2454; utilities:1750 TS2538; goToDefinition:513.**
+
 **Round 467 (2026-07-10, same session as 466) — the services burn-down starts: FIVE bounded
 fixes. Dashboard: services 126 → 108 (−18; TS7006 7 → 1, TS2339 8 → 6, TS2322 40 → 30); every
 step verified strictly-removals by listAll diff. Suite 9,863 → 9,877 (+14 local across 5 new test
@@ -650,78 +703,6 @@ commits (b68d6487 / e6b6d990 / 435d7220 / bef95f36 / 4139b47a / 6c630b54 / d209b
   deep); utilities.ts:9978/9972 flatten (M3.1 generic inference); `string → __String` branding
   (whole-program); moduleSpecifiers.ts:929 for-of element mis-inference (whole-program-only —
   minimal repro clean).
-
-**Round 458 (2026-07-09) — logical/ternary operand narrowing + try/finally flow fix +
-fresh-objlit interface-target retry + a P0 single-file-CLI crash fix. FOUR fixes, all GENERAL
-checker/flow/driver correctness that reproduce minimally. Dashboard: compiler 121 → 116 (−5),
-services 217 → 210 (−7), server 407 → 402 (−5), harness 620 → 615 (−5), tsc-cli 118, jsTyping 115,
-deprecatedCompat 118, typingsInstallerCore 115. Suite 9,690 → 9,706 (+16 local across 4 test files,
-0 regressions); 4 fix commits (a8571636 / 4eb423e7 / b2143c9e / eec58c6a).**
-- **Fix 4 (eec58c6a, P0 — `xtsc foo.ts` crashed on ANY bare source-file argument, even
-  `const x = 1;`):** discovered mid-session via a probe; per the P0 mandate, fixed before wrapping.
-  The bare `.ts` was passed straight into TsConfigLoader (`resolveConfigPath` treats any
-  non-directory as a tsconfig), parsed as JSON → garbage config → a corrupt lib binderResult whose
-  `sourceFile.text` mismatched its statement positions → StringIndexOutOfBounds in
-  `checkMultiBaseInStatement` (`source.substring` at a lib position ~22995 indexed into the 295-char
-  user file). Two narrower guards were tried first (a statement-span bounds check; a merged-decl
-  in-source filter) — NEITHER stopped the crash (the position mismatch is in the binderResult
-  itself, not the cross-file merge), pointing to the ROOT fix: `ProjectCompiler.build` now detects a
-  non-`.json` existing-FILE argument and builds it as a single-file program with default options
-  (like `tsc foo.ts`): the file is the sole root in a synthesized `LoadedTsConfig(files = [it])`,
-  its relative imports are still walked into the program, and type checking works normally.
-  Directory/tsconfig arguments untouched (compiler profile confirmed unchanged at 116). +3 local
-  (SingleFileBuildTest: clean compile, real-error reporting, relative-import walk).
-- **Fix 1 (a8571636, logical/ternary operand narrowing):** `combineBinaryTypes` narrows the
-  `||`/`&&` RIGHT operand, and the `ConditionalExpression` typing narrows the TRUE/FALSE branches,
-  by the governing condition via a new `narrowOperandByCondition` → `applyConditionNarrowing` (pure
-  AST, no flow graph). tsc's binder places a FlowCondition on the operand (`A && B` under "A true";
-  `A || B` and a ternary FALSE branch under "A false"; a ternary TRUE branch under "A true"); our
-  `getTypeOfExpression` was flow-unaware for bare references, so `insertComment === undefined ||
-  insertComment` typed `boolean | undefined` (→ FP TS2322 against `boolean`; services.ts commenting
-  logic) and `cond ? ref : …` kept the un-narrowed branch. Fires only for a pure
-  Identifier/PropertyAccess operand (`getReferencePath`); FP-safe (type unchanged when the condition
-  doesn't mention the operand path). Cleared services.ts:2891/2976, rename.ts:192, checker.ts:51198
-  (accessor-`kind` discriminant → the object-literal `{firstAccessor, …, setAccessor, getAccessor}`
-  now matches `AllAccessorDeclarations`). Compiler net 0: the 51198 win is offset by exposing
-  checker.ts:11321, a Blocker-#3 `name`→DeclarationName whole-program conflation the cleaner
-  (undefined-stripped) narrowing surfaces (the relation now checks the wrongly-typed reference the
-  coarse union masked). CAVEAT: RETURN-position ternaries/logicals go through the SEPARATE
-  `checkConditionalReturnBranches` (per-branch), untouched by this.
-- **Fix 2 (4eb423e7, try/finally flow):** `bindTryStatement` made the finally block's entry flow the
-  join of ONLY the try/catch NORMAL completion, so a try that always `return`s/throws left that
-  completion unreachable → every read in the finally washed to `never` → spurious TS2339 on cleanup
-  code. tsc's `checkGrammarRegularExpressionLiteral` resets `scanner` in its finally after a `try {…
-  return; }`; our `scanner` washed to `never` → FP TS2339 on `scanner.setText`/`setOnError`
-  (checker.ts:33288/33289). Fix: a two-label structure — the finally block's entry joins the pre-try
-  flow (exceptional early exit) + the normal completion, while the flow AFTER the whole statement
-  stays the normal completion (so the finally's exceptional-inclusive entry can't widen away the
-  try/catch narrowing for the following statements). compiler 121 → 119 (−2), no services regression.
-  CLAUDE.md gotcha added (do NOT collapse the two-label structure).
-- **Fix 3 (b2143c9e, fresh-objlit interface-target retry):** the round-448 return-path
-  fresh-object-literal literal retry (recover a returned object literal's un-widened literal property
-  per PropertyAssignment via `freshObjLitRange` so `propertiesRelatedTo` relates it) was gated to
-  `Type.Union` targets only. A fresh object literal returned against an INTERFACE (or anonymous
-  object) with a literal(-union) member hit the same widening — `return { kind: "ambient", … }` vs
-  `interface ModuleSpecifierResult { kind: "node_modules" | … | "ambient"; … }` widened `kind` to
-  `string` → FP TS2322. Broadened the gate to `Type.Interface`/`Type.Object`. Suppression-only (the
-  retry returns only when the relation then PASSES within the fresh scope → a wrong literal / missing
-  property still fires; negative controls pinned). Cleared moduleSpecifiers.ts:399/507,
-  sourcemap.ts:323 (RawSourceMap). compiler 119 → 116, services 214 → 210. NOTE the var-decl and
-  assignment fresh-objlit paths already apply `withFreshObjLitSource` for all targets — only the
-  return path carried the union-only gate.
-- **INVESTIGATED, deferred (array-literal→tuple ASSIGNMENT, checker.ts:22621/22927,
-  esnextAnd2015.ts:248):** `lastSkippedInfo = [source, target]` → `[Type, Type]`; `relatedInfo =
-  [info]` → `[X, ...X[]]`. The `arrayLiteralSatisfiesTupleTarget` helper (round 446, return path)
-  handles these shapes, but the targets are function-body-local `let`s (B83.5-unbound), so the
-  assignment walk has NO declaration-node map to feed the helper the tuple type NODE (it knows the
-  local only by resolved type, which collapses the tuple rest). Needs local-declaration-node plumbing
-  into the assignment walk (a `currentLocalDeclTypeNodes` map populated alongside `currentLocalTypes`)
-  — a broader infra change that also unblocks other AST-based checks for function-body locals.
-- **NEXT (compiler @ 116):** the array-literal→tuple assignment plumbing above; the
-  `TransformerFactory<T>` generic-type-alias-of-fn relation (M3.3, whole-program — minimal repro
-  clean); the `assertNever(reason)` exhaustive-switch enum-union residual (programDiagnostics.ts,
-  round 441 — the guarded `ReferencedFile` union must resolve with readable enum `.kind` members);
-  `string → __String` branding (whole-program).
 
 ### Post-v1 backlog — the "any TypeScript project" horizon (parked 2026-07-03)
 
