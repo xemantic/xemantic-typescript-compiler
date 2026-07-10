@@ -1308,6 +1308,14 @@ class Checker(
      *  [popImplicitAnyScope]. Declared before `init` (init-order trap). */
     private val implicitAnyScopeDestructures = ArrayDeque<HashMap<String, Pair<Expression, String>>>()
 
+    /** Round 470: the ENCLOSING CLASS's members for the implicit-any walker — set
+     *  around [checkImplicitAnyInClassElement] (save/restore) so a `this.prop =
+     *  <arrow>` assignment target resolves its contextual type from the class
+     *  property's annotation (`this.skipTrivia = skipTrivia || (pos => pos)` where
+     *  `skipTrivia?: ((pos: number) => number) | undefined` — tsc services.ts
+     *  SourceMapSourceObject). Declared before `init` (init-order trap). */
+    private var implicitAnyEnclosingClassMembers: List<ClassElement>? = null
+
     /** Round 435c: the enclosing-namespace stack for the implicit-any walker —
      *  pushed at [checkImplicitAnyInStatements]'s ModuleDeclaration branch (the
      *  namespace's merged binder symbol), consulted by
@@ -21489,6 +21497,21 @@ class Checker(
         fileName: String,
         siblings: List<ClassElement> = emptyList(),
     ) {
+        val savedEnclosingClass = implicitAnyEnclosingClassMembers
+        implicitAnyEnclosingClassMembers = siblings.ifEmpty { savedEnclosingClass }
+        try {
+            checkImplicitAnyInClassElementCore(element, source, fileName, siblings)
+        } finally {
+            implicitAnyEnclosingClassMembers = savedEnclosingClass
+        }
+    }
+
+    private fun checkImplicitAnyInClassElementCore(
+        element: ClassElement,
+        source: String,
+        fileName: String,
+        siblings: List<ClassElement>,
+    ) {
         when (element) {
             is MethodDeclaration -> {
                 checkParamsForImplicitAny(element.parameters, source, fileName)
@@ -21872,9 +21895,21 @@ class Checker(
             }
         }
         is PropertyAccessExpression -> {
-            val recvT = resolveAssignTargetCtxTypeForImplicitAny(left.expression)
-                ?: getTypeOfExpression(left.expression).takeIf { it !== anyType && it !== errorType }
-            recvT?.let { lookupPropertyTypeForCtx(it, left.name.text) }
+            // Round 470: a `this.prop` target resolves through the ENCLOSING class's
+            // own property annotation (`this.skipTrivia = skipTrivia || (pos => pos)`
+            // — getTypeOfExpression(this) is deliberately anyType per B101).
+            val thisPropAnn = if ((left.expression as? Identifier)?.text == "this") {
+                implicitAnyEnclosingClassMembers?.firstOrNull {
+                    it is PropertyDeclaration && (it.name as? Identifier)?.text == left.name.text
+                }?.let { (it as PropertyDeclaration).type }
+            } else null
+            if (thisPropAnn != null) {
+                getTypeFromTypeNodeSafeNsAware(thisPropAnn)
+            } else {
+                val recvT = resolveAssignTargetCtxTypeForImplicitAny(left.expression)
+                    ?: getTypeOfExpression(left.expression).takeIf { it !== anyType && it !== errorType }
+                recvT?.let { lookupPropertyTypeForCtx(it, left.name.text) }
+            }
         }
         is ParenthesizedExpression -> resolveAssignTargetCtxTypeForImplicitAny(left.expression)
         else -> null
