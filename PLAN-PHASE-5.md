@@ -39,6 +39,68 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
+**Round 464 (2026-07-10) — bounded FP burn-down: FIVE fixes. Dashboard: compiler 61 → 56 (−5;
+TS2322 10 → 7, TS2362 → 0, TS7006 → 0), services 154 → 140 (−14 cross-profile). Suite 9,817 →
+9,833 (+16 local across 6 new test files, 0 regressions); 5 fix commits (ecf6290d / 44e1b2ff /
+6fcf7cda / f1e48c81 / 2d843068).**
+- **Fix 1 (ecf6290d, barrel-enum member non-nullish; 61 → 59):** `receiverResolvesToRealEnum`
+  only followed the general resolveAlias (can't follow ESM-`.js` + `export *` barrels), so
+  `flags = flags || NodeBuilderFlags.None` (tsc checker.ts withContext) never proved `flags`
+  non-nullish — TS2362 at checker.ts:6639 AND TS2322 at 6640 (the objlit shorthand member) with
+  ONE root cause. Falls back to the flow-only `resolveImportedEnumSymbol` (round 411, memoized),
+  mirroring `resolveEnumSymbolForDiscriminant`. Reproduced minimally (3-file barrel repro).
+- **Fix 2 (44e1b2ff, generic inference from flow-narrowed args, M3.4 × M3.1; 59 → 58):**
+  `tryInferSingleTypeParamFromArgs` bound T from `getTypeOfExpression`'s DECLARED type — a
+  switch-narrowed union arg bound T to the full union (`const name = cloneNode(node)` under
+  `case SyntaxKind.Identifier:` → return FP'd `EntityName ⊄ SerializedEntityName`,
+  typeSerializer.ts:603). Gated: union-declared bare Identifier/PropertyAccess args, narrowed
+  type must be a non-never/any refinement still relating to the declared type — inference only
+  gets MORE precise. Shared-inference change → full corpus + strictly-removals listAll gates.
+- **Fix 3 (6fcf7cda, TS7006 destructured-source context, M3.2; 58 → 57):** a THIRD parallel
+  implicit-any scope stack (`implicitAnyScopeDestructures`: element name → source expr +
+  property name, push/pop ONLY via push/popImplicitAnyScope) lets an assignment target rooted
+  at a destructured local (`const { parseConfigFileHost } = state; parseConfigFileHost.on… =
+  d => …`, tsbuildPublic.ts:594) resolve its contextual type from the source's declared member.
+  Top-level elements only (nested/rest unrecorded — bounded).
+- **Fix 4 (f1e48c81, flow non-nullish cluster; 57 → 56):** FOUR coupled pieces clear
+  getTypeAtFlowNode's `return type;` (checker.ts:29132, `let type: FlowType | undefined`
+  assigned in every branch): (a) ternary RHS non-nullish iff BOTH arms; (b)
+  typeNodeDefinitelyNonNullish's globals fallback accepts an UNAMBIGUOUS barrel type ALIAS and
+  recurses its body — gate counts TypeAliasDeclarations, NEVER list size (the merged
+  declarations list is polluted with importers' ImportSpecifiers); (c) an un-annotated param
+  DEFAULTED from an annotated PRECEDING sibling (`initialType = declaredType`) types as the
+  sibling's annotation (checkFunctionBody + populateParameterLocalTypes); (d) an UN-ANNOTATED
+  callee proves non-nullish from a bounded body-return scan (bare `return;`/opaque statements
+  fail; ternary identifier leaves resolve via the callee's own params → getTypeOfIdentifier →
+  the new program-wide `uniqueNestedVarDeclByName` — tsc's `convertAutoToAny` whose leaves are
+  `var anyType = createIntrinsicType(…)` closure vars). Diagnosed by an XPROBE cascade
+  (Diagnostic-init stack probe → checkReturnAssignability entry → narrowByAssignmentRhs
+  per-branch); **TOOLING TRAP (CLAUDE.md gotcha added): the bench files are CRLF, so python
+  text-mode offsets understate checker positions by one per line — 3 probe iterations lost to
+  ranges that silently missed.**
+- **Fix 5 (2d843068, barrel checkDefined returns + PA-RHS narrowing; dashboard-neutral,
+  repro-pinned):** `Debug.checkDefined(x)` through the barrel resolves its RETURN as the arg
+  minus nullish (`tryBarrelCheckDefinedReturn`, shape-gated like the round-461 flow classifier
+  — no general barrel resolution in the type path, the round-409 TS2315-flood hazard);
+  `narrowByAssignmentRhs` gains a PropertyAccess-RHS arm mirroring the round-463 Identifier arm
+  (`end = importLiteral.end`). program.ts:1220's chain source improves `{ file: any; … }` →
+  `{ file: SourceFile; … }`; the site itself still FPs because the pos/end objlit-VALUE
+  narrowing needs a contextual type and the round-462 return-path objlit context only accepts a
+  union target's SOLE non-nullish object member — this target has TWO
+  (`ReferenceFileLocation | SyntheticReferenceFileLocation`). Next layer scoped.
+- **Deferred with findings:** esDecorators.ts:1309 needs destructured-member-from-un-annotated-
+  nested-callee resolution PLUS method-calls-on-destructured-receivers (`factory` is itself
+  destructured from `context`) — two more mechanism layers on the fix-3/fix-4 machinery;
+  builder.ts:2390 needs callback-RETURN inference through an un-annotated same-file fn
+  (Blocker #2); namedEvaluation.ts:434 needs `(Union & Interface).left` kind-discriminant
+  member reduction (tsc reduces union members whose `kind` conflicts with the interface's).
+- **NEXT (compiler @ 56, ~10 real excl. TS2591×43 + TS2304×2 `global` + TS2584 console):**
+  program.ts:1220 (multi-member-union objlit context); emitter.ts:1277 (select-return);
+  moduleNameResolver.ts:1300 (getPackageJsonInfoCache `| undefined` member);
+  esDecorators.ts:1309; namedEvaluation.ts:434 (kind-reduction); parser.ts:9581 /
+  factory/utilities.ts:1688 (cast-instantiation identity, M3); builder.ts:2390 (Blocker #2);
+  es2020.ts:91 + core.ts:2135 (known-hard).**
+
 **Round 463 (2026-07-10) — bounded FP burn-down: NINE fixes — minimal-repro fixes, one measured
 UN-GATE of a historical skip, and two new flow-narrowing mechanisms. Dashboard: compiler 72 → 61
 (−11; TS2322 15 → 10, TS2339 2 → 1, TS2345 2 → 1, TS2353/TS7053/TS18048/TS2589 all → 0). Suite
@@ -674,62 +736,6 @@ commits (4e94a4e1 / b90d79f1 / 7d82a0aa / aada9e31).**
   `string → __String` branding (whole-program); the `.map` DIRECT array-literal-in-assignment
   contextual tuple typing (assignment path lacks the var-decl array-literal-vs-tuple handling).
 
-**Round 454 (2026-07-09) — nested-function-shadow generalization + flow-narrowing + method-param
-bivariance: FIVE fixes. Dashboard: compiler 170 → 153 (−17); services 275 → 251 (−24, the fixes
-generalize). Suite 9,642 → 9,654 (+12 local across 5 new test files, 0 regressions); 5 fix commits
-(0df21c9b / a0c0f3d8 / d4e93ead / 3eb6c99b / a505ce0a).**
-- **Fix 1 (0df21c9b, nested-fn shadow in arrow/fn-expr bodies; TS2345 ×3):** `shadowNestedFunctionNames`
-  (anyType-bails a body-nested `function NAME` colliding with an outer/global binding, B83.5 —
-  suppression-only, round 429) ran ONLY for FunctionDeclaration bodies in the call-types walker. tsc's
-  program.ts nests `function createDiagnosticForNodeArray(nodes, message)` inside the
-  `runWithCancellationToken(() => { … })` ARROW body, shadowing utilities.ts's exported 3-param
-  `createDiagnosticForNodeArray(sourceFile, nodes, message)`; a sibling-nested `walkArray`'s call
-  FP-checked `nodes` (NodeArray) against `sourceFile` (SourceFile) → TS2345 ×3 (program.ts:3152/
-  3182/3194). Added the call to the ArrowFunction (Block body) + FunctionExpression branches.
-- **Fix 2 (a0c0f3d8, cast narrowing; TS2345 −1):** an assignment `x = expr as T` produces a value of the
-  cast TARGET T. `rhsIsDefinitelyNonNullish` unwrapped the `as`/`<T>` cast to its inner and classified
-  THAT, so `Object.create(Array.prototype) as NodeArray<Node>` (debug.ts) inside `if (!nodeArrayProto)`
-  kept the falsy-guard `undefined` narrowing → the next `attachNodeArrayDebugInfoWorker(proto)` FP'd
-  TS2345. New `castTargetIsNonNullish`: a cast to a concrete non-nullish target re-narrows to
-  declared-minus-nullish; a nullable/any/unknown target still falls through to the inner shape.
-- **Fix 3 (d4e93ead, TS2722 loop-entry; −1):** the optional-member-invoke "possibly undefined"
-  suppression used only the plain narrower, which washes at a loop's FlowLoopLabel. tsc's
-  moduleNameResolver.ts guards optional host methods BEFORE a loop — `if (host.directoryExists &&
-  host.getDirectories) { for (…) { if (host.directoryExists(root)) … } }` — so `host.directoryExists(root)`
-  FP'd inside; `propertyAccessNarrowedNonNull` now retries with the loop-entry-following variant
-  (mirrors emitTs18048ForClosureCaptured…). Suppression-only.
-- **Fix 4 (3eb6c99b, nested-fn shadow in checkFunctionBody; TS2322 89 → 78, TS2740 1 → 0):** the
-  RETURN/argument-assignability pass now applies `shadowNestedFunctionNames` too (`getTypeOfIdentifier`,
-  which `getReturnTypeOfCallExpression` consults, resolves a call to a nested function as anyType rather
-  than a same-named merged-globals EXPORTED function). tsc's builderState.ts nests
-  `create(forward, reverse, deleted): ManyToManyPathMap` shadowing the exported `create(newProgram:
-  Program, …): BuilderState`, so `return create(new Map, new Map, undefined)` FP'd TS2740+TS2345. The
-  pervasive object-literal-factory pattern `{ clear, create, … }` (shorthand → nested fn) was poisoned the
-  same way — the shorthand resolved to a global's wrong signature and broke the object's assignability to
-  its target interface (~13 cases across moduleNameResolver/sys/resolutionCache/emitter/nodeFactory).
-- **Fix 5 (a505ce0a, object-literal METHOD-param bivariance; TS2322 −1 + fixes an unmasked FP):** a method
-  member (method syntax) compares its params BIVARIANTLY vs an interface target (tsc — `strictFunctionTypes`
-  never applies to methods), but our object-literal-vs-interface relation (`propertiesRelatedTo`) compared
-  function-typed members contravariantly. `propertiesRelatedTo` now retries a failed member comparison via
-  `methodSignaturesBivariantlyRelated` (the same helper as TS2416/TS2430) when BOTH members are methods —
-  suppression-only, FP-safe by construction (a method-param bivariance match is not an error in tsc), a
-  function-typed PROPERTY stays contravariant. Cleared checker.ts:6310 (`const x:
-  SyntacticTypeNodeBuilderResolver = { canReuseTypeNodeAnnotation(…, symbol: Symbol, …) {…} }` vs interface
-  `symbol: Symbol | undefined`) — one of the two fix-4 unmasked gaps, and a general correctness win. Corpus
-  green (relation-engine change — the critical gate).
-- **UNMASKED (one remaining, documented, not manufactured):** fix 4's more-correct resolution exposed two
-  latent gaps; fix 5 cleared the first (method-param bivariance). The remaining one: expressionToTypeNode.ts:535
-  — an un-annotated block-scoped `const clone = resolver.markNodeReuse(…)` shadowing the global
-  `clone<T>(object: T): T` resolves to the GLOBAL in the return check, because `applyBodyLocalShadowing`
-  does NOT descend into if-blocks and un-annotated shadowing locals are removed from currentLocalTypes (→
-  fall to globals). Needs a broad, careful applyBodyLocalShadowing fix; corpus green.
-- **NEXT (compiler @ 153):** the expressionToTypeNode.ts:535 unmasked gap (applyBodyLocalShadowing if-block
-  descent); TS2322×77 deep-M3 relation (generic-fn-identity `<T>(object: T) => T`, `.map`-returns-tuple-array
-  M3.2, whole-program conflation); TS2353 sourcemap getter/method excess + utilities.ts mapped-type-key
-  eval (M3.3); TS2349 `(x || (x = [])).push()` inline-property-receiver; factory/utilities.ts:713 tsc-5.5
-  inferred type predicates (`helper => !helper.scoped` → `helper is UnscopedEmitHelper`); moduleNameResolver.ts:2823
-  `.value` union-return; checker.ts:21170 restrictiveInstantiation overload-selection TS18048; the three
-  `assertType<never>(node)` big-AST-union exhaustive-switch residuals (round 441 deep).
 
 
 
