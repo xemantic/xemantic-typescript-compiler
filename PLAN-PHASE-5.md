@@ -39,6 +39,53 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
+**Round 462 (2026-07-10) — narrowing-consumer burn-down: THREE fixes, all GENERAL M3.4
+flow-narrowing reach, two found by INSTRUMENTED whole-program probes (minimal repros clean or
+misleading). Dashboard: compiler 79 → 75 (−4; TS2322 19 → 17, TS2345 4 → 2), services 165 → 157
+(−8 cross-profile). Suite 9,782 → 9,790 (+8 local across 3 new test files, 0 regressions);
+3 fix commits (a4c8b186 / 9810df0f / f6e2456f).**
+- **Fix 1 (a4c8b186, call-arg narrow-DOWN gate; compiler 79 → 77):** the round-428b/429c/438
+  branch required the narrowed type to refine the DECLARED type (`n <: declared`) — but tsc's
+  getNarrowedType(assumeTrue) legitimately narrows to a guard target OUTSIDE the declared
+  hierarchy (isPropertyNameLiteral's PropertyNameLiteral union contains JsxNamespacedName, which
+  does not extend Expression), so a genuine narrow was rejected → the wide Expression FP'd TS2345
+  ×2 (utilities.ts:4066 isSameEntityName). An XPROBE on the real bench project showed
+  refines=false / matchesParam=true — the shape does NOT reproduce minimally (the conservative
+  union-param gate skips small repros). The gate now also accepts a narrowed type that makes the
+  PARAM relation pass (the standard monotone rule).
+- **Fix 2 (9810df0f, objlit property-value contextual narrow-DOWN; 77 → 76):** `return { class:
+  node.parent.parent, … }` after `isClassLike(node.parent.parent)` kept the wide Node — the
+  round-438 nullish-strip gate alone rejects narrow-DOWNs (utilities.ts:7458). Two pieces:
+  checkReturnAssignability provides the objlit CONTEXT (a union target contributes its sole
+  non-nullish object member — mirrors the call-arg B83.4g), and getTypeOfObjectLiteral's value
+  narrowing extends to PropertyAccess initializers when the contextual property accepts the
+  narrow and rejects the raw. **PERF LANDMINE (measured + fixed pre-commit): an unconditional
+  getNarrowedTypeForReference on every objlit PropertyAccess value program-wide cost +352%
+  self-compile time (28.9 s → 130.5 s) — the walk now runs only when the raw type FAILS the
+  cached contextual-property relation (31.4 s, normal band).**
+- **Fix 3 (f6e2456f, prefix-path guard tail substitution; 76 → 75):** the round-424 prefix-path
+  branch (guard on a RECEIVER prefix of the walked path) made only the drop-nullish claim; tsc
+  re-types `x.y` from the NARROWED x — `isComputedPropertyName(parent)` makes `parent.parent`
+  ComputedPropertyName's declared `parent: Declaration` (utilities.ts:5085). Now substitutes the
+  resolved tail, with TWO measured gates: NON-UNION tails only (an ungated cut was net +1 — a
+  precise union tail like `BindingName` fires where the wide type stayed silent when downstream
+  discriminant narrowing can't complete: checker.ts:45139/binder.ts:2498), and a non-nullish
+  union tail KEEPS the round-424 nullish-strip (dropping it regressed transformers/utilities.ts:643).
+  Verified strictly-removal by listAll diff.
+- **Probe finding (checkConditionalReturnBranches instrumentation):** utilities.ts:5085's
+  emission does NOT come from the ternary-arm branch (its narrow related fine both times) — the
+  ternary-arm TS2322 anchor at 5085:49 was the DIRECT `return parent.parent` shape, mis-read from
+  the earlier scout. Lesson repeated: verify the emitting SITE with a probe before theorizing.
+- **NEXT (compiler @ 75, ~29 real excl. TS2591×43 + TS2304×2 `global` + TS2584 console):**
+  moduleNameResolver.ts:2823 (`result.value` — `result` types as ResolvedModuleWithFailedLookupLocations
+  from an UNKNOWN source; the nested-fn callee + no module-level `result` rule out the obvious
+  paths — needs a getTypeOfIdentifier-origin probe); the big-objlit M3 family (transformer.ts:271 /
+  moduleNameResolver.ts:1300 / emitter.ts:1277 / checker.ts:6640); tsbuildPublic.ts:1778
+  return-path T; program.ts:1220 (checkDefined RETURN TYPE resolution); factory/utilities.ts:713
+  EmitHelper.importName; es2020.ts:91 Exclude-narrowing at whole-program scale; typeSerializer.ts:603;
+  `string → __String` branding (builder.ts:2390); utilities.ts:9042 mapped-type-unknowable-keys
+  excess bail; checker.ts:29132 evolving-let FlowType.**
+
 **Round 461 (2026-07-10) — bounded FP burn-down: FIVE fixes, all GENERAL checker/flow correctness
 that reproduce minimally. Dashboard: compiler 88 → 79 (−9; TS2322 25 → 19, TS2345 6 → 4),
 services 178 → 165 (−13 cross-profile, measured after all five). Suite 9,762 → 9,782 (+20 local
