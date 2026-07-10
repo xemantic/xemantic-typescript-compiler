@@ -114782,7 +114782,15 @@ interface DataView {
                     currentShadowedNames = currentShadowedNames.toMutableSet()
                     try {
                         populateParameterLocalTypes(stmt.parameters)
-                        applyBodyLocalShadowing(body.statements, stmt.parameters.mapNotNull { p -> (p.name as? Identifier)?.text }.toSet())
+                        val fdParamNames = stmt.parameters.mapNotNull { p -> (p.name as? Identifier)?.text }.toSet()
+                        applyBodyLocalShadowing(body.statements, fdParamNames)
+                        // Round 462: ambiguous block-scoped locals register anyType in THIS
+                        // pass too (the round-460 rule ran only in the assignability pass) —
+                        // moduleNameResolver.ts's loadModuleFromTargetExportOrImport has
+                        // `const result` in TWO different blocks (RMWFLL at 2766, the
+                        // recursive SearchResult at 2821); first-decl-wins made
+                        // `result.value` FP TS2339 on the wrong block's type.
+                        applyAmbiguousBlockScopedLocals(body.statements, fdParamNames)
                         checkPropertyAccessInStatements(body.statements, source, fileName, enclosingClassType = null)
                     } finally {
                         currentLocalTypes = savedLocalTypes
@@ -115262,7 +115270,10 @@ interface DataView {
                 // shadows an outer `const exportInfo: ExportInfoMap`; without this the reads
                 // resolved to ExportInfoMap → FP TS2339). Mirrors checkFunctionBody's call.
                 (expr.body as? Block)?.let { b ->
-                    applyBodyLocalShadowing(b.statements, expr.parameters.mapNotNull { p -> (p.name as? Identifier)?.text }.toSet())
+                    expr.parameters.mapNotNull { p -> (p.name as? Identifier)?.text }.toSet().let { pn ->
+                        applyBodyLocalShadowing(b.statements, pn)
+                        applyAmbiguousBlockScopedLocals(b.statements, pn)
+                    }
                 }
                 // 16.0: contextual param inference for un-annotated arrow parameters
                 val ctxType = contextualType
@@ -115433,7 +115444,10 @@ interface DataView {
                 }
                 // Round 447: nested function-expression body's own `let/const x` shadows an
                 // outer same-named binding (mirrors the ArrowFunction branch above).
-                applyBodyLocalShadowing(expr.body.statements, expr.parameters.mapNotNull { p -> (p.name as? Identifier)?.text }.toSet())
+                expr.parameters.mapNotNull { p -> (p.name as? Identifier)?.text }.toSet().let { pn ->
+                    applyBodyLocalShadowing(expr.body.statements, pn)
+                    applyAmbiguousBlockScopedLocals(expr.body.statements, pn)
+                }
                 val savedCtx = contextualType
                 contextualType = null
                 try {
