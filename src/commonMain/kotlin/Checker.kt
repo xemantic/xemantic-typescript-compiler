@@ -1260,6 +1260,16 @@ class Checker(
      *  so the two stacks stay index-aligned. Declared before `init` (init-order trap). */
     private val implicitAnyScopeInits = ArrayDeque<HashMap<String, Expression>>()
 
+    /** Round 464: DESTRUCTURED locals in the implicit-any walker — a
+     *  `const { parseConfigFileHost } = state` element maps its name to the
+     *  destructuring SOURCE expression + the property name, so an assignment
+     *  target rooted at the element (`parseConfigFileHost.onUnRecoverable… =
+     *  d => …`, tsc tsbuildPublic.ts) resolves its contextual type from the
+     *  source's declared member instead of the unbound-local anyType. Third
+     *  parallel stack — pushed/popped ONLY via [pushImplicitAnyScope]/
+     *  [popImplicitAnyScope]. Declared before `init` (init-order trap). */
+    private val implicitAnyScopeDestructures = ArrayDeque<HashMap<String, Pair<Expression, String>>>()
+
     /** Round 435c: the enclosing-namespace stack for the implicit-any walker —
      *  pushed at [checkImplicitAnyInStatements]'s ModuleDeclaration branch (the
      *  namespace's merged binder symbol), consulted by
@@ -15784,6 +15794,7 @@ class Checker(
             currentFileLocals = result.locals
             implicitAnyScopes.clear() // per-file hygiene (every push pops via finally; belt-and-braces)
             implicitAnyScopeInits.clear()
+            implicitAnyScopeDestructures.clear()
             implicitAnyNsStack.clear()
             try {
                 checkImplicitAnyInStatements(result.sourceFile.statements, source, fileName)
@@ -21100,6 +21111,22 @@ class Checker(
                                 }
                             } else {
                                 collectBindingNamesForImplicitAny(dn, scope)
+                                // Round 464: record each TOP-LEVEL object-destructured
+                                // element's source + property name so an assignment
+                                // target rooted at the element resolves its contextual
+                                // type from the source's declared member (nested
+                                // patterns / rest elements stay unrecorded — bounded).
+                                val dInit = decl.initializer
+                                if (dn is ObjectBindingPattern && dInit != null) {
+                                    implicitAnyScopeDestructures.lastOrNull()?.let { dmap ->
+                                        for (el in dn.elements) {
+                                            val inner = el.name as? Identifier ?: continue
+                                            if (inner.text.isEmpty() || el.dotDotDotToken) continue
+                                            val prop = (el.propertyName as? Identifier)?.text ?: inner.text
+                                            dmap[inner.text] = dInit to prop
+                                        }
+                                    }
+                                }
                             }
                         }
                         // TS7005: Variable implicitly has an 'any' type (ambient/declare declarations only)
@@ -21528,12 +21555,14 @@ class Checker(
         }
         implicitAnyScopes.addLast(m)
         implicitAnyScopeInits.addLast(HashMap())
+        implicitAnyScopeDestructures.addLast(HashMap())
     }
 
-    /** Round 435c: pops BOTH parallel scope stacks — the only legal pop. */
+    /** Round 435c: pops the parallel scope stacks — the only legal pop. */
     private fun popImplicitAnyScope() {
         implicitAnyScopes.removeLast()
         implicitAnyScopeInits.removeLast()
+        implicitAnyScopeDestructures.removeLast()
     }
 
     /** Round 435c: [getTypeFromTypeNodeSafe] with the implicit-any walker's enclosing
@@ -21662,6 +21691,15 @@ class Checker(
                     // declared-untyped-without-initializer stays null (TS7006 stands).
                     ?: implicitAnyScopeInits.getOrNull(foundIdx)?.get(left.text)
                         ?.let { initializerCtxTypeForImplicitAny(it) }
+                    // Round 464: a destructured element resolves from the SOURCE's
+                    // declared member (`const { parseConfigFileHost } = state` —
+                    // state's annotation member, tsc tsbuildPublic.ts:594).
+                    ?: implicitAnyScopeDestructures.getOrNull(foundIdx)?.get(left.text)
+                        ?.let { (src, prop) ->
+                            val recvT = resolveAssignTargetCtxTypeForImplicitAny(src)
+                                ?: getTypeOfExpression(src).takeIf { it !== anyType && it !== errorType }
+                            recvT?.let { lookupPropertyTypeForCtx(it, prop) }
+                        }
             } else {
                 val sym = currentFileLocals?.get(left.text) ?: globals[left.text]
                 val vd = sym?.declarations?.firstOrNull { it is VariableDeclaration } as? VariableDeclaration
