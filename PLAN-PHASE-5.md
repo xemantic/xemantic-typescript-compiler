@@ -39,6 +39,30 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
+**Round 470 (2026-07-10, user-directed 3-way benchmark + profile session, M5) — `localTypeAliasIndex`
+(Tier 1): [findLocalTypeAlias]'s per-call whole-file AST rescan replaced by an eager per-file
+first-wins DFS index (Checker.kt, declared before `init` per the init-order trap). Self-compile
+(compiler profile) wall 23.5 s → 18.6 s median of 3 (−21%), diagnostics byte-unchanged (46).
+Suite 9,920 → 9,925 (+5 local, LocalTypeAliasIndexTest, 0 regressions).**
+- JFR profile (scripts/aggregate_jfr.py, 1,211 samples @ stackdepth=1024): Checker 74% inclusive
+  (Parser 4% / Transformer 4% / Scanner 1.4%). `findLocalTypeAlias$scan` was the #1 SELF-time
+  method (~10% of samples incl. callers): `discUnionParamMembers` (the TS2488 exhaustive-default
+  never-destructure walker) called it for EVERY bare-TypeReference-annotated param of every
+  function → O(fileSize × functions × params) on checker.ts. Remaining hot after the fix, for a
+  future M5 session: stdlib collection churn ~30% of samples (per-function-body map snapshot
+  COPIES — `HashMap.putMapEntries` via checkFunctionBody / spread2698Stmt / the arithmetic+
+  call-types walkers — a layered-scope or mark/pop-log refactor target), flow walkers ~12%
+  (already budget/memo-optimized), property-access pass ~8%.
+- 3-way benchmark (same materialized `tsc-project-637d5746`, identical tsconfig, 3 cold runs each,
+  macOS arm64 8-core): **tsgo 7.0.0-dev 1.3 s / 546 MB; original tsc 6.0.3 (JS) 6.6 s / 654 MB;
+  xtsc post-fix 18.6 s / ~1.2 GB** (pre-fix 23.5 s; was ~3.6× JS-tsc, now ~2.8×). tsc and tsgo
+  agree BYTE-IDENTICALLY on 65 env-legit errors (offline, no @types/node); xtsc emits 46 of the
+  same family — **0 FPs, 19 FNs** on this profile. JFR shows ONE application thread does all
+  compiling (user/wall ≈ 2.8 is GC/JIT) — M5.4 parallelism is the other ~3× of the tsgo gap.
+- Incidental finding (not fixed): `scanExhaustiveSwitchDefault` does not descend ModuleDeclaration
+  bodies, so the TS2488 walker never fires inside namespaces (pre-existing; the index covers
+  namespace-nested ALIASES like the replaced scan did).
+
 **Round 469 (2026-07-10, same session as 468) — two deeper Blocker-#3/flow rules. Dashboard:
 services 90 → 86 (−4); both steps strictly-removals by listAll diff. Suite 9,914 → 9,920
 (+6 local across 2 new test files, 0 regressions); 2 fix commits (429785e8 / 7af1415f).**

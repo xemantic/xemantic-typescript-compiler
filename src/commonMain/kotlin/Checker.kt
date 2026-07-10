@@ -1361,6 +1361,41 @@ class Checker(
             }
         }
 
+    /** Per-file first-wins index of nested (B83.5-unbound) type-alias declarations,
+     *  replacing [findLocalTypeAlias]'s per-call whole-file rescan — the scan was the
+     *  hottest single method of the tsc-source self-compile (~10% of samples: the
+     *  never-destructure walker re-scanned the file for EVERY type-annotated parameter
+     *  of every function). One DFS per file in exactly the scan's visit order
+     *  (statements → function bodies → blocks → namespace blocks → if-branches),
+     *  first-wins per name, so lookups are byte-identical to the replaced scan. Built
+     *  EAGERLY from the frozen [binderResults] and never mutated afterwards — read-only
+     *  shareable across future parallel checker workers (Tier 1 in
+     *  docs/parallel-caching.md; do NOT make this lazily-extended). Declared before
+     *  `init` per the init-order trap. */
+    private val localTypeAliasIndex: Map<String, Map<String, TypeAliasDeclaration>> =
+        buildMap {
+            for (result in binderResults) {
+                val index = HashMap<String, TypeAliasDeclaration>()
+                fun scan(stmts: List<Statement>) {
+                    for (s in stmts) {
+                        when (s) {
+                            is TypeAliasDeclaration -> if (s.name.text !in index) index[s.name.text] = s
+                            is FunctionDeclaration -> s.body?.let { scan(it.statements) }
+                            is Block -> scan(s.statements)
+                            is ModuleDeclaration -> (s.body as? ModuleBlock)?.let { scan(it.statements) }
+                            is IfStatement -> {
+                                (s.thenStatement as? Block)?.let { scan(it.statements) }
+                                (s.elseStatement as? Block)?.let { scan(it.statements) }
+                            }
+                            else -> {}
+                        }
+                    }
+                }
+                scan(result.sourceFile.statements)
+                if (index.isNotEmpty()) put(result.sourceFile.fileName, index)
+            }
+        }
+
     /** Round 425: memo for [canonicalEnumSymbol] — an enum reaches the discriminant-key
      *  builders by several resolution paths (the program-global merged instance vs a
      *  file-LOCAL instance reached via `currentFileLocals`/the barrel resolver), and the
@@ -127796,34 +127831,15 @@ interface DataView {
     }
 
     /**
-     * DFS the file's statements (including function / module / block bodies) for a
-     * `type <name> = ...` declaration. Used by [arrayElementUnionAlias] to resolve a
-     * function-local discriminated-union alias that the binder never bound. First match
-     * (innermost-DFS) wins — FP-safe because the consuming check requires the alias body
-     * to be a literal-discriminated union with a matching array-literal assignment.
+     * A `type <name> = ...` declaration anywhere in the file (including function /
+     * module / block bodies — the binder never binds those, B83.5), first match in
+     * DFS order, served from the eager [localTypeAliasIndex]. Used by
+     * [arrayElementUnionAlias] and [discUnionParamMembers] to resolve a function-local
+     * discriminated-union alias. FP-safe because the consuming check requires the alias
+     * body to be a literal-discriminated union with a matching array-literal assignment.
      */
-    private fun findLocalTypeAlias(name: String, fileName: String): TypeAliasDeclaration? {
-        val r = fileResults[fileName] ?: return null
-        var found: TypeAliasDeclaration? = null
-        fun scan(stmts: List<Statement>) {
-            for (s in stmts) {
-                if (found != null) return
-                when (s) {
-                    is TypeAliasDeclaration -> if (s.name.text == name) { found = s; return }
-                    is FunctionDeclaration -> s.body?.let { scan(it.statements) }
-                    is Block -> scan(s.statements)
-                    is ModuleDeclaration -> (s.body as? ModuleBlock)?.let { scan(it.statements) }
-                    is IfStatement -> {
-                        (s.thenStatement as? Block)?.let { scan(it.statements) }
-                        (s.elseStatement as? Block)?.let { scan(it.statements) }
-                    }
-                    else -> {}
-                }
-            }
-        }
-        scan(r.sourceFile.statements)
-        return found
-    }
+    private fun findLocalTypeAlias(name: String, fileName: String): TypeAliasDeclaration? =
+        localTypeAliasIndex[fileName]?.get(name)
 
     private fun tryEmitContraAliasUnionSigPropertyMismatch(
         sigIn: Signature, args: List<Expression>, source: String, fileName: String,
