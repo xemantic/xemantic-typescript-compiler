@@ -128899,6 +128899,14 @@ interface DataView {
                                 missing.add(targetProp)
                             }
                         }
+                        // Round 468 (Blocker #3): the "missing" members may be a
+                        // conflation artifact — the param names a conflated interface
+                        // the calling file imports, and the objlit exactly satisfies
+                        // some declaring file's version. Suppression-only.
+                        if (missing.isNotEmpty() &&
+                            objectLiteralMatchesSomeConflatedDeclaration(arg, paramType)) {
+                            missing.clear()
+                        }
                         if (missing.isNotEmpty()) {
                             val argDisplay = typeToString(argType)
                             val argStart = arg.pos
