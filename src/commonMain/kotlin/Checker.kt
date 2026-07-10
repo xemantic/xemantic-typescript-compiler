@@ -11782,9 +11782,28 @@ class Checker(
         // are local declarations that take precedence over the outer-scope binding.
         uninitialized.removeAll(preInitialized)
 
+        // Round 469: a name assigned inside a NESTED function-like of this list can be
+        // assigned at any time relative to an outer read (function declarations hoist;
+        // the closure may run first) — tsc's definite-assignment never fires for it
+        // (tsc formatting.ts formatSpanWorker's `previousRange`, assigned only inside
+        // the nested processRange/processPair helpers, read in the trailing-edit
+        // block ABOVE their declarations). One AST pre-pass: collect this scope's
+        // uninitialized candidates, then their closure-nested assignments via the
+        // B78.2 collectAllAssignmentsAnywhere walker. Removal-only — straight-line
+        // use-before-assign with no closure assignment keeps firing.
+        val closureAssigned = mutableSetOf<String>()
+        run {
+            val allCandidates = mutableSetOf<String>()
+            for (s in statements) collectUninitializedVars(s, allCandidates, preInitialized, fileLocals)
+            if (allCandidates.isNotEmpty()) {
+                for (s in statements) collectClosureAssignedNames(s, allCandidates, closureAssigned)
+            }
+        }
+
         for (stmt in statements) {
             // Collect variable declarations that are uninitialized
             collectUninitializedVars(stmt, uninitialized, preInitialized, fileLocals)
+            if (closureAssigned.isNotEmpty()) uninitialized.removeAll(closureAssigned)
 
             // Check for uses of uninitialized variables in this statement
             if (uninitialized.isNotEmpty()) {
@@ -13429,6 +13448,37 @@ class Checker(
         }
     }
 
+    /**
+     * Round 469: collect names from [candidates] assigned INSIDE a nested
+     * function-like of [stmt] — a statement-level FunctionDeclaration body (also
+     * under blocks/ifs) or an arrow/fn-expr variable initializer's block body. The
+     * bodies are walked with the B78.2 [collectAllAssignmentsAnywhere] (which itself
+     * descends into deeper nesting). Used to REMOVE definite-assignment candidates:
+     * a closure assignment can run at any time relative to an outer read, so tsc's
+     * analysis never fires TS2454 for such a name.
+     */
+    private fun collectClosureAssignedNames(
+        stmt: Statement, candidates: Set<String>, found: MutableSet<String>,
+    ) {
+        when (stmt) {
+            is FunctionDeclaration -> stmt.body?.statements?.forEach {
+                collectAllAssignmentsAnywhere(it, candidates, found)
+            }
+            is Block -> stmt.statements.forEach { collectClosureAssignedNames(it, candidates, found) }
+            is IfStatement -> {
+                collectClosureAssignedNames(stmt.thenStatement, candidates, found)
+                stmt.elseStatement?.let { collectClosureAssignedNames(it, candidates, found) }
+            }
+            is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                val init = d.initializer
+                val b = (init as? ArrowFunction)?.body as? Block
+                    ?: (init as? FunctionExpression)?.body
+                b?.statements?.forEach { collectAllAssignmentsAnywhere(it, candidates, found) }
+            }
+            else -> {}
+        }
+    }
+
     private fun runFlowTS2454OnFunction(
         body: Block, parameters: List<Parameter>, source: String, fileName: String,
         emitted: MutableSet<Int>, fileLocals: SymbolTable?,
@@ -13436,6 +13486,18 @@ class Checker(
         val preInit = collectParamNames(parameters)
         val uninitialized = mutableSetOf<String>()
         collectAllUninitVarsInFunction(body.statements, uninitialized, preInit, fileLocals)
+        // Round 469: a name assigned inside a NESTED function-like can be assigned at
+        // any time relative to an outer read (the closure may run first) — tsc's
+        // definite-assignment analysis never fires for it (tsc formatting.ts
+        // formatSpanWorker's `previousRange`, assigned only inside the nested
+        // processRange/processPair helpers, read in the trailing-edit block).
+        // Removal-only (straight-line used-before-assigned reads with no closure
+        // assignment keep firing).
+        if (uninitialized.isNotEmpty()) {
+            val closureAssigned = mutableSetOf<String>()
+            for (s in body.statements) collectClosureAssignedNames(s, uninitialized, closureAssigned)
+            uninitialized.removeAll(closureAssigned)
+        }
         if (uninitialized.isNotEmpty()) {
             for (s in body.statements) {
                 walkStmtForFlowTS2454(s, uninitialized, source, fileName, emitted, inUncheckedBody = false)
