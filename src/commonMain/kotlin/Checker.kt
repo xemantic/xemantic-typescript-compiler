@@ -90254,8 +90254,12 @@ interface DataView {
                                     if (!bodyHasReturnValue(it)) voidType else null
                                 }
                                 ?: anyType
+                            // Round 465: fn-AWARE — a method's fn-typed return
+                            // (`select(index): ((node: T) => T) | undefined`) must
+                            // substitute the outer T; plain instantiateType no-ops
+                            // fn-shaped objects (emitter.ts selector FP).
                             val returnType = if (rawReturn === errorType) anyType
-                                             else instantiateType(rawReturn, mapper)
+                                             else instantiateTypeFnAware(rawReturn, mapper)
                             val params = md.parameters.mapNotNull { p ->
                                 val pName = (p.name as? Identifier)?.text ?: return@mapNotNull null
                                 if (pName == "this") return@mapNotNull null
@@ -134981,6 +134985,72 @@ interface DataView {
         rawType.constructSignatures = rawType.constructSignatures?.map { substituteOuterTypeArgsInSignature(it, mapper) }
     }
 
+    /**
+     * Round 465: like [instantiateType] but DESCENDS into anonymous FUNCTION-SHAPED
+     * `Type.Object`s (call/construct signatures) and unions containing them —
+     * [instantiateType] deliberately no-ops those (see the CLAUDE.md gotcha), which
+     * left a generic interface member's fn-typed RETURN carrying the raw outer
+     * TypeParam through the relation: `interface Sel<T> { select(index: number):
+     * ((node: T) => T) | undefined }` instantiated as `Sel<TypeNode>` kept `T` in the
+     * method's return, failing a conforming object literal (tsc emitter.ts
+     * OrdinalParentheizerRuleSelector). Mints FRESH objects (never mutates), preserves
+     * identity when nothing changes, and preserves signature type parameters.
+     */
+    private fun instantiateTypeFnAware(type: Type, mapper: TypeMapper): Type {
+        return when {
+            type is Type.Union -> {
+                val mapped = type.types.map { instantiateTypeFnAware(it, mapper) }
+                if (mapped.zip(type.types).all { (a, b) -> a === b }) type else getUnionType(mapped)
+            }
+            type is Type.Object && type !is Type.Interface && type !is Type.Reference &&
+                type.symbol == null && type.tupleElementTypes == null &&
+                (!type.callSignatures.isNullOrEmpty() || !type.constructSignatures.isNullOrEmpty()) -> {
+                val newCall = type.callSignatures?.map { instantiateSignatureFnAware(it, mapper) }
+                val newCtor = type.constructSignatures?.map { instantiateSignatureFnAware(it, mapper) }
+                val unchanged =
+                    (newCall == null || newCall.zip(type.callSignatures!!).all { (a, b) -> a === b }) &&
+                        (newCtor == null || newCtor.zip(type.constructSignatures!!).all { (a, b) -> a === b })
+                if (unchanged) type
+                else Type.Object().also { o ->
+                    o.callSignatures = newCall
+                    o.constructSignatures = newCtor
+                    o.members = type.members
+                    o.properties = type.properties
+                    o.stringIndexInfo = type.stringIndexInfo
+                    o.numberIndexInfo = type.numberIndexInfo
+                }
+            }
+            else -> instantiateType(type, mapper)
+        }
+    }
+
+    /** Companion of [instantiateTypeFnAware]: [instantiateSignature] with fn-aware
+     *  param/return instantiation and signature type parameters PRESERVED (the sig
+     *  stays generic at the use site); returns the SAME instance when nothing maps. */
+    private fun instantiateSignatureFnAware(sig: Signature, mapper: TypeMapper): Signature {
+        val newReturnType = sig.resolvedReturnType?.let { instantiateTypeFnAware(it, mapper) }
+        val newParams = sig.parameters.map { param ->
+            val paramType = getTypeOfSymbol(param)
+            val instantiated = instantiateTypeFnAware(paramType, mapper)
+            if (instantiated !== paramType) {
+                val newParam = Symbol(param.flags, param.name)
+                newParam.declarations.addAll(param.declarations)
+                newParam.valueDeclaration = param.valueDeclaration
+                symbolTypes[newParam.id] = instantiated
+                newParam
+            } else param
+        }
+        val paramsChanged = newParams.zip(sig.parameters).any { (a, b) -> a !== b }
+        if (!paramsChanged && newReturnType === sig.resolvedReturnType) return sig
+        return Signature(
+            declaration = sig.declaration,
+            typeParameters = sig.typeParameters,
+            parameters = newParams,
+            resolvedReturnType = newReturnType ?: sig.resolvedReturnType,
+            minArgumentCount = sig.minArgumentCount,
+        )
+    }
+
     private fun substituteOuterTypeArgsInSignature(sig: Signature, mapper: TypeMapper): Signature {
         // Mutate sig's typeParameter constraints/defaults in place — they reference the
         // outer interface's TypeParams (e.g. `<T extends S>` where S is the outer one),
@@ -134990,10 +135060,13 @@ interface DataView {
             tp.constraint = tp.constraint?.let { instantiateType(it, mapper) }
             tp.default = tp.default?.let { instantiateType(it, mapper) }
         }
-        val newReturnType = sig.resolvedReturnType?.let { instantiateType(it, mapper) }
+        // Round 465: fn-AWARE return/param instantiation — a NESTED fn type inside the
+        // sig (`get: (index: number) => ((node: T) => T) | undefined`) otherwise keeps
+        // the raw outer TypeParam (instantiateType no-ops fn-shaped objects).
+        val newReturnType = sig.resolvedReturnType?.let { instantiateTypeFnAware(it, mapper) }
         val newParams = sig.parameters.map { param ->
             val paramType = getTypeOfSymbol(param)
-            val instantiated = instantiateType(paramType, mapper)
+            val instantiated = instantiateTypeFnAware(paramType, mapper)
             if (instantiated !== paramType) {
                 val newParam = Symbol(param.flags, param.name)
                 newParam.declarations.addAll(param.declarations)
