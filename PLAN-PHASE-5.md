@@ -39,10 +39,10 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
-**Round 467 (2026-07-10, same session as 466) — the services burn-down starts: FOUR bounded
-fixes. Dashboard: services 126 → 111 (−15; TS7006 7 → 1, TS2339 8 → 6, TS2322 40 → 33); every
-step verified strictly-removals by listAll diff. Suite 9,863 → 9,875 (+12 local across 4 new test
-files, 0 regressions); 4 fix commits (d9f0ecab / cfa323d0 / 843f8ce9 / f06586f8).**
+**Round 467 (2026-07-10, same session as 466) — the services burn-down starts: FIVE bounded
+fixes. Dashboard: services 126 → 108 (−18; TS7006 7 → 1, TS2339 8 → 6, TS2322 40 → 30); every
+step verified strictly-removals by listAll diff. Suite 9,863 → 9,877 (+14 local across 5 new test
+files, 0 regressions); 5 fix commits (d9f0ecab / cfa323d0 / 843f8ce9 / f06586f8 / e1c54010).**
 - **Fix 1 (d9f0ecab, TS7006 array-element ctx + nested-interface annotation retry; 126 → 120):**
   the round-443 revert closed — checkImplicitAnyInExpr's ArrayLiteral branch now propagates the
   array's ELEMENT type into elements (object literals get member fn context, arrows the
@@ -73,13 +73,19 @@ files, 0 regressions); 4 fix commits (d9f0ecab / cfa323d0 / 843f8ce9 / f06586f8)
   `if (isThrowStatement(node)) return [node];` built `Node[]` vs
   `readonly ThrowStatement[] | undefined`. The 2 targeted documentHighlights.ts sites PLUS
   jsDoc.ts:238 and extractSymbol.ts ×2 generalized.
-- **NEXT (services @ 111, ~65 real):** organizeImports ×3 (heterogeneous: `??`-RHS literal
+- **Fix 5 (e1c54010, `||`-nested conflated objlit returns, Blocker #3; 111 → 108):** the
+  round-445 note's prescribed extension — `return noSymbolError(name) || { exportNode, … }`
+  (convertExport.ts ×3): the RIGHT object literal routes through
+  objectLiteralMatchesConflatedFileLocalInterface (this file's OWN `interface ExportInfo`, not
+  the cross-file merged pollution), the LEFT operand's non-falsy type must relate on its own;
+  `??` covered too. Suppression-only.
+- **NEXT (services @ 108, ~62 real):** organizeImports ×3 (heterogeneous: `??`-RHS literal
   widening in a contextual position at 954; ternary-arm array-literal member context at 216;
   destructured-member `??` write at 115); documentHighlights:193 (`Node` vs `SourceFile` arg);
-  the conflated-Info return-ternary family (convertExport ×3 / importTracker ×2 /
+  the conflated-Info return family residual (importTracker ×2 /
   findAllReferences ×2 / signatureHelp / fixExpectedComma / inlineVariable /
-  convertToOptionalChain — union-source `{ error } | { … }` returns against
-  `X | RefactorErrorInfo | undefined`); the services.ts objlit giants (ObjectAllocator /
+  convertToOptionalChain — objlit-with-any-members / nested-shape variants the round-447
+  strict check rejects); the services.ts objlit giants (ObjectAllocator /
   CompletionEntry / EmitTextWriter TS2740); mapCode.ts:55 flatten (gate-(k) candidate needs a
   probe — the arg display resolves but T stays raw); stringCompletions `.types`/`.value` on
   `Type` (public-API `isUnion()`/`isStringLiteral()` this-guard modeling).**
