@@ -91008,6 +91008,26 @@ interface DataView {
         }
     }
 
+    /** Round 471: true when [propSym] is an object-literal member whose value was an
+     *  OPTIONAL-member property read (`{ typeOrder: preferences.organizeImportsTypeOrder }`
+     *  where `typeOrder?:` is optional) — tsc types such a member `T | undefined`, but
+     *  optionality is a symbol attribute our member typing drops (the round-424 gap).
+     *  Consulted by the property-WRITE relation only (widening the write target with
+     *  `| undefined` is suppression-only). */
+    private fun objLitMemberValueWasOptionalRead(propSym: Symbol): Boolean {
+        if (!strictNullChecks) return false
+        val pa = (propSym.valueDeclaration ?: propSym.declarations.firstOrNull())
+            as? PropertyAssignment ?: return false
+        var init: Expression = pa.initializer
+        while (init is ParenthesizedExpression) init = init.expression
+        val access = init as? PropertyAccessExpression ?: return false
+        val recvType = getTypeOfExpression(access.expression)
+        if (recvType !is Type.Object) return false
+        resolveStructuredTypeMembers(recvType)
+        val sym = recvType.members?.get(access.name.text) ?: return false
+        return isOptionalProperty(sym)
+    }
+
     /**
      * 16.0: Check assignability of value to a property access target like `x.prop = value`.
      * Resolves x's type, looks up the property symbol, gets its declared type, and emits
@@ -91169,7 +91189,16 @@ interface DataView {
         // or a non-optional prop (see widenOptionalTargetPropType). The null/undefined
         // bail above used the UNWIDENED `pt` (so a `null` source to `field?: number`
         // still falls through to the failing relation here).
-        val ptForRel = targetPropSym?.let { widenOptionalTargetPropType(pt, it, valueType) } ?: pt
+        val ptForRel0 = targetPropSym?.let { widenOptionalTargetPropType(pt, it, valueType) } ?: pt
+        // Round 471: an object-literal member whose value was an OPTIONAL-member read
+        // (`const comparer = { typeOrder: preferences.organizeImportsTypeOrder }`) is
+        // `T | undefined` in tsc — optionality is a symbol attribute our member typing
+        // drops (the round-424 gap), so a later write `comparer.typeOrder = <X |
+        // undefined>` FP'd. Widen the WRITE target only (suppression-only: adding
+        // `| undefined` can only accept more). tsc organizeImports.ts:115.
+        val ptForRel = if (targetPropSym != null && !typeIncludesUndefined(ptForRel0) &&
+            objLitMemberValueWasOptionalRead(targetPropSym)
+        ) getUnionType(listOf(ptForRel0, undefinedType)) else ptForRel0
         if (!canUseTypeEngine(valueType, ptForRel)) return
         lastMissingIndexSigKind = null
         if (checkTypeRelatedTo(valueType, ptForRel, assignableRelation)) return
