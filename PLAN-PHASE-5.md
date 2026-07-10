@@ -39,6 +39,71 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
+**Round 461 (2026-07-10) — bounded FP burn-down: FIVE fixes, all GENERAL checker/flow correctness
+that reproduce minimally. Dashboard: compiler 88 → 79 (−9; TS2322 25 → 19, TS2345 6 → 4),
+services 178 → 165 (−13 cross-profile, measured after all five). Suite 9,762 → 9,782 (+20 local
+across 5 new test files, 0 regressions); 5 fix commits (c863d04b / 72c3abc5 / b20a695e /
+f8cbd1e6 / 1f3726f2).**
+- **Fix 1 (c863d04b, TypeParam-source constraint bail, M3.1; compiler 88 → 86):** the round-456
+  reverted broad rule landed as the prescribed per-site EMISSION bail — `bareTpConstraintRelatesTo`
+  (constraint-chain walk, cycle-guarded for `T extends T`, unconstrained → false) suppresses the
+  assignment-path TS2322 when a bare-TypeParam source's constraint chain relates to the target
+  (mirrors round 442's arg-check bail; no shared-engine change → no overload-selection
+  perturbation). Cleared transformers/classFields.ts:1800 (`currentClassContainer = node`, `node: T
+  extends ClassLikeDeclaration`) + utilities.ts:12338 (`clone = getSynthesizedDeepCloneWorker(...)`
+  returning bare `T extends Node` — the callee's T shares the enclosing fn's TP name, so the
+  foreign-TP gate deliberately passes it). tsbuildPublic.ts:1778 (return path) does NOT reproduce
+  minimally — stays.
+- **Fix 2 (72c3abc5, element-access reference paths, M3.4; 86 → 85):** an element access with a
+  LITERAL index is a narrowable reference (tsc isMatchingReference) — `getReferencePath` gains an
+  ElementAccessExpression arm serializing `recv[N]` segments, so
+  `!!node.declarationList.declarations[0].initializer && getInternalEmitFlags(<same path>)`
+  narrows (transformers/es2015.ts:2730). Companions: exact-path ElementAccess target arms in
+  flowAssignmentMightNarrow + narrowByAssignmentRhs; `flowPathRoot` (splits on '[' too) for the
+  root-name comparisons; `pathPrefixOf` boundary tests in argMentionsReferencePath. Also cleaned
+  two pre-existing round-460 warnings the recompile surfaced.
+- **Fix 3 (b20a695e, namespace-member nested-fn shadow; 85 → 82, −3):** `shadowNestedFunctionNames`'
+  collision gate also consults the enclosing inference-namespace exports (new
+  `nameInEnclosingNamespaceExports`, symbol-presence only) — parser.ts:1865's
+  `syntaxCursor = { currentNode }` shorthand referenced the body-nested
+  `currentNode(position): Node` but resolved to namespace Parser's
+  `currentNode(parsingContext, pos?): Node | undefined` via lookupInInferenceNamespace (which runs
+  BEFORE globals in getTypeOfIdentifier). Generalized beyond the pinned site (−3).
+- **Fix 4 (f8cbd1e6, checkDefined-shape non-nullish, M3.4; 82 → 81):** a call whose resolved
+  callee returns a bare OWN-TP `T` with some param annotated `T | undefined` (/`| null`) proves
+  non-nullish (tsc Debug.checkDefined — inference binds T to the arg's non-nullish part); wired
+  into callRhsHasNonNullishReturnAnnotation, gated to no-explicit-type-args (a control pins
+  `checkDefined<X | undefined>` staying nullable). Cleared program.ts:4041 (`sourceFile =
+  Debug.checkDefined(commandLine.options.configFile)` at an if/else join; the callee resolves
+  through the barrel via the flow-only resolvers).
+- **Fix 5 (1f3726f2, var-decl + tuple-slot narrowing consumers, M3.4; 81 → 79):**
+  (a) checkVarDeclAssignability gets the assignment/return paths' relation-passes-gated narrowing
+  for named-object/union/intersection targets (parser.ts:6245 — `let expression: PropertyAccess |
+  Identifier | ThisExpression = initialExpression` after a negative isJsxNamespacedName guard);
+  (b) `elementAssignableToSlot` (round-446 array→variadic-tuple AST check) narrows a reference
+  element — builder.ts:518's `isString(old) ? [old] : old[0]` vs `EmitSignature = string |
+  [signature: string]`.
+- **Scouted, whole-program-only (deferred with findings, all minimal repros CLEAN):**
+  transformer.ts:271's `getEmitHelperFactory: memoize(...)` member (the foreign-TP gate walks
+  anonymous-object members and a faithful single-file memoize repro passes — the real gap is
+  whole-program); utilities.ts:4066 isPropertyNameLiteral &&-guard (faithful single-file repro
+  passes — the PropertyNameLiteral alias union's whole-program resolution is the suspect);
+  parser.ts:9581 displays the SAME union on both sides (`& { expression: SerializedEntityName }` vs
+  the inline union it aliases — alias-display/conflation flavor); factory/utilities.ts:1688 casts
+  to `AssignmentExpression<EqualsToken>` but the cast resolves `PunctuationToken<any>` (generic
+  instantiation identity, M3).
+- **NEXT (compiler @ 79, ~33 real excl. TS2591×43 + TS2304×2 `global` + TS2584 console):** the
+  whole-program probe batch (instrument narrowByCallPredicate on the real bench project for
+  utilities.ts:4066/5085, es2020.ts:91, factory/utilities.ts:713); tsbuildPublic.ts:1778 return-path
+  T (extend the fix-1 bail to the return emission after probing why the narrowed `T | undefined`
+  reaches it); the big-objlit M3 family (transformer.ts:271 / moduleNameResolver.ts:1300 /
+  emitter.ts:1277 / checker.ts:6640); program.ts:1220 (needs the checkDefined call's RETURN TYPE
+  resolved — the non-nullish flag alone doesn't type `file`, so `file.referencedFiles[index]`'s
+  members stay unresolvable for the round-460 destructuring narrowing); typeSerializer.ts:603
+  (switch-narrowed generic clone chain, M3.1); `string → __String` branding (builder.ts:2390);
+  utilities.ts:9042 TS2353 (mapped type keyed `keyof T & …` with un-inferred T — the excess check
+  needs an unknowable-key-domain bail).**
+
 **Round 460 (2026-07-09/10) — bounded FP burn-down: TEN fixes (9 dashboard wins + 1
 repro-pinned capability), all GENERAL checker/flow correctness. Dashboard: compiler 103 → 88
 (−15; TS2322 33 → 25, TS2345 11 → 6, TS2454 1 → 0, TS2363 1 → 0), services 194 → 178 (−16
@@ -620,116 +685,6 @@ commits (4c47c918 string-index / 0db79740 tuple).**
   `indexInfos` CFA cluster (TS2454 + TS7034 + TS7005, symbolDisplay.ts).
 
 
-**Round 451 (2026-07-09) — bounded FP burn-down: FOUR fixes, one a GENERAL parser correctness
-fix that reproduces minimally. Dashboard: compiler 178 → 177 (−1), tsc-cli 179, jsTyping 176,
-deprecatedCompat 179, typingsInstallerCore 176, services 291 → 282 (−9), server 498 → 488 (−10),
-harness 715 → 704 (−11). Suite 9,619 corpus green / 0 fail / 3 skip + 14 local across 4 new test
-files; 4 fix commits (dfb5b2c2 / cebd023d / a00c798b / fd7700ee).**
-- **Fix 1 (dfb5b2c2, PARSER — type-predicate keyword-subject; the general one):** a user type-guard
-  whose PARAMETER is named with a type keyword — the pervasive `function isTransientSymbol(symbol:
-  Symbol): symbol is TransientSymbol` in tsc's own sources — never narrowed, so
-  `if (isTransientSymbol(sym)) sym.links` FP'd TS2339. The predicate SUBJECT is grammatically a
-  parameter NAME, but the parser reaches it via `parseType`, which turns a keyword-like name
-  (`symbol`/`string`/`object`/…) into a `KeywordTypeNode` instead of an Identifier, so the checker's
-  `predicateParamName` extraction (which handles Identifier/TypeReference/ThisType) returned null and
-  the guard was silently ignored. Fix in `parsePrimaryTypeOrHigher`'s predicate branch: when the
-  parsed subject is a KeywordTypeNode and `is` follows, rebuild it as an `Identifier` from the keyword
-  text (`keywordTypeKindText`). The asserts path already handled this via `isIdentifier()`. Cleared the
-  isTransientSymbol(symbol) family (symbolDisplay ×4 / signatureHelp ×1). **KEY: this REPRODUCES
-  minimally** (a single-file `declare function isD(symbol: Base): symbol is Derived; if (isD(x))
-  x.links` FP'd) — the round-450 note wrongly grouped it with the deferred whole-program family. The
-  companion `isUnion()`/`isStringLiteral()` cross-file `declare module` augmentation method-guard
-  (Type.types/Type.value) was re-confirmed genuinely whole-program-only (a minimal 2-file `declare
-  module` augmentation repro is CLEAN) — Blocker #3, still deferred.
-- **Fix 2 (cebd023d, LIB Object.entries):** `entries(o: any): any[]` → `entries<T>(o: any): any[]` so
-  tsc's `Object.entries<string>(result.config)` (jsTyping) type-checks (was TS2558 "Expected 0 type
-  arguments, but got 1"). Return kept `any[]` for zero downstream-inference change.
-- **Fix 3 (a00c798b, CFA typeof-switch exhaustiveness):** `switch (typeof value)` covering the
-  subject union's ACTUAL possible tags (`value: string | number | PseudoBigInt` → string/number/object)
-  is exhaustive (tsc narrows the subject to `never` after them), so a value-returning function needs
-  no trailing return — tsc's own utilities.ts `hasValue` FP'd TS2366. The CFA check previously only
-  recognized a switch covering ALL 8 typeof strings; it now also accepts the subject's own tag set
-  (new `typeofTagsOfType` / `typeofSwitchSubjectType`, subject resolved from the param annotation via
-  `currentFunctionParams` — `getTypeOfExpression` returns `any` for a param in the CFA pass). FP-safe:
-  bails to null on any uncertain constituent (any/unknown/type-param/enum). Only the TS2366/TS7030
-  path — the separate TS7027 `isDefinitelyTerminating` stays strict.
-- **Fix 4 (fd7700ee, LIB Set set-ops):** the ES2024/ES2025 Set methods (union/intersection/…,
-  lib.es2025.collection.d.ts in the pinned tsc) are now LIB_MIN_TARGET-gated at ESNext (our top
-  ScriptTarget — no ES2025): absent at the self-compile's es2020 lib (where tsc's core.ts
-  `const set: Set<T> = { has, add, … }` shim satisfies Set, was TS2740 "missing union, …"), present at
-  the setMethods test's @target esnext. No corpus `Set<>` missing-property display and tsc calls none
-  of the methods → nothing shifts. Cleared core.ts across ALL profiles (compiler-file family).
-- **NEXT (services @ 282, all deferred/whole-program):** the `isUnion()`/`isStringLiteral()` cross-file
-  augmentation method-guard family (Type.types ×3 / Type.value, Blocker #3); the `isTransientSymbol(
-  symbol.links.target)` CHAIN residuals (property-access-path narrowing); deep-M3 TS2322×154 fragments
-  (max bucket 3); the `[] → all-optional-tuple` TS2739 (moduleSpecifiers.ts — tuple-element optionality,
-  needs the annotation AST node); the `.map`-returns-tuple-array contextual-return M3.2 slice.
-
-**Round 450 (2026-07-09) — bounded FP burn-down: FIVE suppression-only / soundness fixes,
-all cleanly reproducible in isolated repros + locally tested (5 new test files, 20 tests).
-Dashboard: compiler 183 → 178 (−5), services 310 → 291 (−19), server 518 → 498 (−20),
-harness 735 → 715 (−20). Suite 9,605 corpus green / 0 fail / 3 skip; 6 fix commits
-(21f41105 / 2da83a26 / 4d443ae9 / 2c202d67 / 134f9d7a / 4ad6f1b7).**
-- **Fix 1 (21f41105, boolean-literal assign; TS2322 −3 services):** a `true`/`false` literal
-  assigned to a literal-boolean local (`let isSnippet: true | undefined; isSnippet = true`,
-  completions.ts). A boolean literal parses as an `Identifier` (literalTypeOfExpression), so it
-  was NOT covered by the `tryCatchFinallyControlFlow` guard that skips the legacy varTypes
-  string-fallback for numeric/string/bigint literal RHS — the fallback widens `true`→"boolean"
-  and `isAssignableTo("boolean", "true | undefined")` fails even though the engine already
-  validated it (keeping the literal via propTypeContainsLiteral). Extend the guard to
-  `true`/`false`. FP-safe (canUse && isAssignable gate); negative controls fire via the engine.
-- **Fix 2 (2da83a26, leaked-module-var assignment TARGET; TS2740 −3 + TS2322 −3 services,
-  compiler −2; Blocker #3):** `parent = parent.parent` inside a NESTED block where
-  `let parent = node.parent` shadows navigationBar.ts's module-level `let parent: NavigationBarNode`
-  (leaked into globals per round 442). applyBodyLocalShadowing only scans function-body TOP-LEVEL
-  statements, so a nested `let parent` isn't in currentShadowedNames — the assignment target then
-  resolved to the leaked `NavigationBarNode` annotation and FP'd TS2740 ('Node' missing its props).
-  Skip the globals lookup in the assignment-target resolution for a moduleFileLocalVarNames name
-  not owned by this file (currentFileLocals). FP-safe (a cross-file leaked var is TS2304 in tsc);
-  the own-file binding is still checked.
-- **Fix 3 (4d443ae9, `x = x || DEFAULT` narrowing; TS2345 −4 services):** the default-init idiom
-  `maximumLength = maximumLength || defaultMaximumTruncationLength` (utilities.ts) didn't narrow a
-  `T | undefined` reference to non-nullish `T`. `rhsIsDefinitelyNonNullish` (consulted by
-  narrowByAssignmentRhs → narrowByExcludingNullUndefined(declaredType), round 416) didn't classify
-  a `||`/`??` RHS. `a || b`/`a ?? b` are non-nullish iff the RIGHT operand is; the right operand is
-  usually a const/local reference so its type is resolved and nullish-checked. FP-safe: a nullish
-  right operand keeps the reference nullable (pinned by a control).
-- **Fix 4 (2c202d67, `while (true)` definite-assignment; TS2454 −2 compiler / −2 services):** a
-  `while (true)` loop's only normal exit is a `break`, so a var assigned before EVERY exiting break
-  is definitely assigned after it (scanner.ts scanTemplateAndSetTokenValue idiom). The set-based
-  `markAssignments` had no WhileStatement case; add a constant-true case backed by a sound
-  single-variable definite-assignment walk (sequential flow, if/else join, abrupt break/return/
-  throw/continue). Bails conservatively on any labeled break/continue or a try/labeled statement
-  that could hide an exiting break; nested loops/switch opaque. Only `while (true)`. Controls: a
-  non-assigning break, `while (cond)`, and a break-in-try all keep firing.
-- **Fix 5 (134f9d7a, for-of/for-in shadow; TS2454 −1 compiler / −1 services):** a `for (const X
-  of/in …)` loop variable shadowing an outer uninitialized `let X` and bound each iteration
-  (generators.ts `let variable; for (const variable of decls) { …variable.name… }`). The
-  flow-based used-before-assigned pass descended into the loop body with the outer var still in
-  its set — drop loop-declared names (incl. binding patterns) when descending (mirrors the
-  catch-body shadowing skip). Controls: outer read outside the loop, and a non-shadowing for-of,
-  both fire.
-- **Fix 6 (4ad6f1b7, destructured-const shadow of a leaked module var; TS2339 −3 services;
-  Blocker #3):** `const { parent } = node` shadowing a module-file `let parent:
-  NavigationBarNode` (leaked into globals per round 442) is not bound (B83.5), so a body read
-  of `parent` resolved to the leaked outer decl and FP'd `parent.operatorToken` (navigationBar.ts
-  getFunctionOrClassName). applyBodyLocalShadowing handled only a simple `let x`; it now also
-  registers a `const { … } = init` object pattern's binding names as shadowed and records each
-  from the destructured property type of `init` (getPropertyOfType), so the shadowed-name bail
-  suppresses a valid destructured-type member access and a following user type-guard
-  (`isBinExpr(parent)`) narrows the right type. FP-safe: a genuinely-missing member still fires
-  (through the module-var fallback — display divergence only, not an FP).
-- **INVESTIGATED & DEFERRED (do not re-chase minimally):** the `Symbol.links` (isTransientSymbol
-  narrow-DOWN ×5), `Node → NavigationBarNode` TS2339 (navigationBar.ts's own `const { parent } =
-  node` destructured-shadow of the module var, B83.5), and `Node → PropertyAccessExpression` TS2740
-  (fixMissingCallParentheses) families all PASS in isolated multi-file repros (incl. barrel imports)
-  — they need whole-program conflation/leak context; instrument the services profile, not a minimal
-  repro. The `.map`-returns-tuple-array TS2322 (`map(refs, f => [sf, f])` vs `readonly [A,B][]`)
-  needs contextual return inference (M3.2). The last `indexInfos` TS2454 is the flow graph's
-  if-else-both-assign-then-loop gap.
-- **NEXT (services @ 294):** the whole-program narrow-DOWN family (Symbol.links / Type.types) via
-  services-profile instrumentation, the `.map` contextual-return M3.2 slice, deep-M3 TS2322/TS2345
-  relation fragments.
 
 ### Post-v1 backlog — the "any TypeScript project" horizon (parked 2026-07-03)
 
