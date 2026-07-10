@@ -128359,6 +128359,26 @@ interface DataView {
         // source.valueDeclaration)` (tsc checker.ts mergeSymbol, ×24 self-compile).
         // Same suppression the TS2722 optional-member-invoke path uses.
         if (propertyAccessNarrowedNonNull(arg, propType)) return false
+        // Round 470: a SIBLING-DISCRIMINANT-narrowed receiver may declare the member
+        // REQUIRED (`case SyntaxKind.MethodDeclaration: … getSymbolForContextualType(
+        // functionDeclaration.name, …)` — FunctionDeclaration's `name?` made the
+        // merged member optional, but the narrowed MethodDeclaration requires it).
+        // When EVERY member of the narrowed receiver declares the property
+        // non-optional, the access cannot be undefined → suppress.
+        run {
+            val recvRaw = try { getTypeOfExpression(arg.expression) } catch (_: Exception) { return@run }
+            if (recvRaw === anyType || recvRaw === errorType) return@run
+            val narrowed = getNarrowedTypeForReference(recvRaw, arg.expression)
+            if (narrowed === recvRaw || narrowed === neverType || narrowed === anyType) return@run
+            val app = try { getApparentType(narrowed) } catch (_: Exception) { return@run }
+            fun requiredOn(t: Type): Boolean {
+                val p = try { getPropertyOfType(getApparentType(t), arg.name.text) }
+                    catch (_: Exception) { null }
+                return p != null && !isOptionalProperty(p)
+            }
+            val allRequired = if (app is Type.Union) app.types.all { requiredOn(it) } else requiredOn(app)
+            if (allRequired) return false
+        }
         val tgtDisp = typeToString(paramType)
         val srcDisp = "${typeToString(propType)} | undefined"
         val start = arg.pos
