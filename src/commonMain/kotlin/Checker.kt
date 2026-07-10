@@ -135074,7 +135074,18 @@ interface DataView {
         // Collect all keys from the constraint
         var keys = when (constraintType) {
             is Type.StringLiteral -> listOf(constraintType.value)
-            is Type.Union -> constraintType.types.mapNotNull { (it as? Type.StringLiteral)?.value }
+            // Round 463: a union with ANY non-string-literal constituent has an
+            // UNKNOWABLE key domain — `[K in keyof T & Keys | StrictKeys]` with T
+            // un-inferred (tsc's createComputedCompilerOptions) resolved only the
+            // StrictKeys members, and the partial domain manufactured an
+            // excess-property TS2353 on a genuinely-valid key (utilities.ts:9042).
+            // Bail to anyType like the non-literal `else` branch instead of
+            // silently enumerating the partial set.
+            is Type.Union -> {
+                val lits = constraintType.types.map { it as? Type.StringLiteral }
+                if (lits.any { it == null }) return anyType
+                lits.map { it!!.value }
+            }
             else -> return anyType // Can't enumerate keys for non-literal constraints
         }
         if (keys.isEmpty()) return anyType
