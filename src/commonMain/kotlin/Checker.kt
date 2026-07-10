@@ -96026,6 +96026,41 @@ interface DataView {
         if (switchExpr is Identifier && switchExpr.text == "true") {
             return narrowBySwitchOnTrue(t, flowNode, name)
         }
+        // Round 466: `switch (typeof <ref>) { case "object": … }` — the subject is a
+        // TypeOfExpression over the walked reference; each clause narrows by its tag
+        // via narrowByTypeOfGuard (positive for the matched range's tags — unioned
+        // for a multi-case fallthrough group — negative for the cases BEFORE the
+        // range; a default in range narrows negatively by EVERY case tag). Any
+        // non-string-literal case bails (conservative). tsc completions.ts's
+        // `switch (typeof type.value) { case "object": type.value.negative … }`
+        // (`string | number | PseudoBigInt` → PseudoBigInt).
+        if (switchExpr is TypeOfExpression) {
+            if (getReferencePath(switchExpr.expression) != name) return null
+            val clauses = flowNode.switchStatement.caseBlock
+            val tags = ArrayList<String?>(clauses.size)
+            for (clause in clauses) {
+                when (clause) {
+                    is CaseClause -> tags.add((clause.expression as? StringLiteralNode)?.text ?: return null)
+                    else -> tags.add(null)
+                }
+            }
+            var result = t
+            for (i in 0 until minOf(flowNode.clauseStart, tags.size)) {
+                tags[i]?.let { result = narrowByTypeOfGuard(result, it, isMatch = false) }
+            }
+            val rangeTags = (flowNode.clauseStart until minOf(flowNode.clauseEnd, tags.size)).map { tags[it] }
+            if (rangeTags.isEmpty()) return result
+            if (rangeTags.any { it == null }) {
+                // A default in the range: reaching it means NO case matched.
+                for (tag in tags) tag?.let { result = narrowByTypeOfGuard(result, it, isMatch = false) }
+                return result
+            }
+            val narrowed = rangeTags.filterNotNull().map { narrowByTypeOfGuard(result, it, isMatch = true) }
+            if (narrowed.size == 1) return narrowed[0]
+            val members = LinkedHashSet<Type>()
+            for (n in narrowed) if (n is Type.Union) members.addAll(n.types) else members.add(n)
+            return if (members.isEmpty()) result else getUnionType(members.toList())
+        }
         val subjectPath = getReferencePath(switchExpr) ?: return null
         // round 43 iter10: discriminant-parent narrowing — `switch (x.kind) { case "a": ... }`
         // narrows x (the receiver) by filtering union members whose `kind` property is
