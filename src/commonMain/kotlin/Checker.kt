@@ -86066,6 +86066,15 @@ interface DataView {
         // precise per-key TS2741 (with TS6500) — suppress the coarse whole-init TS2322
         // chain that would otherwise double-report the same `something.a.b.thing` failure.
         if (canUse && !isAssignable && !nestedMissingEmitted) {
+            // Round 468 (Blocker #3): the VAR-DECL variant of the round-445 return-path
+            // rule — `const identifiers: Identifiers = { original: …, additional: … }`
+            // where `interface Identifiers` is CONFLATED across module files (tsc
+            // convertToEsModule.ts vs addMissingAwait.ts each declare their own): tsc
+            // checks against the FILE-LOCAL interface, so the merged siblings' members
+            // are a conflation artifact. Suppression-only (a genuine mismatch against
+            // the file-local interface still falls through and fires).
+            if (init is ObjectLiteralExpression &&
+                objectLiteralMatchesConflatedFileLocalInterface(init, targetType, fileName)) return
             // B69.7: Widen literal source for display when target type doesn't
             // contain literal members (mirrors B69.5 in checkAssignmentExpression).
             // `var b: Boolean = true` displays as `Type 'boolean' is not
