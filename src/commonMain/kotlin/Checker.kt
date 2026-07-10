@@ -98962,7 +98962,31 @@ interface DataView {
                         ?: anyType
                     // Widen concise-body `=> undefined` literal to `any` (mirrors variable-initializer widening).
                     body is Identifier && body.text == "undefined" -> anyType
-                    else -> getTypeOfExpression(body as Expression) // concise body: () => expr
+                    else -> {
+                        val bt = getTypeOfExpression(body as Expression) // concise body: () => expr
+                        // Round 465: a concise-body arrow returning a CAPTURED nullable
+                        // reference consults flow narrowing at the body's flow node — the
+                        // B464 flow-into-closures continuation (FlowStart.outerFlow with
+                        // its reassigned-after gates) proves tsc's
+                        // `packageJsonInfoCache ??= create…; return { getPackageJsonInfoCache:
+                        // () => packageJsonInfoCache }` non-nullish (moduleNameResolver.ts).
+                        // Accepted ONLY as a nullish STRIP (the round-438 objLitValue rule):
+                        // the narrowed member set must be exactly the declared minus its
+                        // nullish constituents — a narrow-DOWN or shadowing hazard keeps
+                        // the declared type.
+                        if (bt is Type.Union && currentFlowGraph != null &&
+                            bt.types.any { it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) } &&
+                            getReferencePath(body) != null
+                        ) {
+                            val narrowed = getNarrowedTypeForReferenceFollowLoopEntry(bt, body)
+                            val stripped = narrowByExcludingNullUndefined(bt)
+                            val nIds = (if (narrowed is Type.Union) narrowed.types else listOf(narrowed))
+                                .map { it.id }.toSet()
+                            val sIds = (if (stripped is Type.Union) stripped.types else listOf(stripped))
+                                .map { it.id }.toSet()
+                            if (narrowed !== bt && nIds == sIds) stripped else bt
+                        } else bt
+                    }
                 }
             } finally {
                 currentLocalTypes = savedLocalTypes
