@@ -41522,7 +41522,9 @@ interface RegExp {
     toString(): string;
 }
 interface RegExpConstructor {
+    new(pattern: RegExp | string): RegExp;
     new(pattern: string, flags?: string): RegExp;
+    (pattern: RegExp | string): RegExp;
     (pattern: string, flags?: string): RegExp;
     readonly prototype: RegExp;
 }
