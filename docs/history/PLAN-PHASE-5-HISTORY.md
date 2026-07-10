@@ -4384,3 +4384,102 @@ shared `diagnose()` helper (CompilerTestSupport.kt) + the `should`/`have` idiom.
 - CLAUDE.md: testing-conventions entry added under "Test assertion gotchas" so future
   agents write new local tests in the new style (main's rounds 435/436 tests were
   written old-style in parallel — exactly the drift the entry prevents).
+
+**Round 453 (2026-07-09) — bounded FP burn-down: THREE fixes, all GENERAL checker correctness
+that reproduce minimally. Dashboard: compiler 176 → 170 (−6), tsc-cli 179 → 172, jsTyping 176 →
+169, deprecatedCompat 179 → 172, typingsInstallerCore 176 → 169, services 280 → 275 (−5), server
+485 → 479 (−6), harness 701 → 695 (−6). Suite 9,628 → 9,642 (+14 local across 3 new test files,
+0 regressions); 3 fix commits (9f53366d / 1246458a / df18ce2f).**
+- **Fix 1 (9f53366d, arithmetic reassignment/guard narrowing; M3.4):** a `number | undefined`
+  reference proven non-nullish by a CROSS-STATEMENT reassignment (`length = end - start; length - 5`
+  — tsc parser.ts `parseJSDocCommentWorker`) or an enclosing guard (`if (m !== undefined) indent += m`)
+  was still rejected as an arithmetic operand (TS2362/TS2363/TS2365) — the arithmetic pass had no
+  flow narrowing (only the `x!` NonNull + `arithTruthyNarrowedNames` `&&`/ternary strips). Two coupled
+  changes: (a) `arithOperandType` runs a SCOPED flow-narrowing walk (`arithFlowNarrowedNonNullish`) for
+  a bare Identifier / PropertyAccess operand — `currentFlowGraph` set ONLY around the walk (setting it
+  pass-wide makes getTypeOfExpression's union-receiver path flow-aware and regressed 78 tests, per the
+  gotcha), using the flow-narrowed type only when it PROVES non-nullish; (b) `rhsIsDefinitelyNonNullish`
+  classifies arithmetic / bitwise / shift / relational / equality / `+` BinaryExpressions AND
+  enum-member value accesses (`Flags.None`, incl. imported enums via resolveAlias) as non-nullish, so
+  the reassignment idioms narrow the assigned reference. FP-safe (narrowing only removes union
+  members). Cleared parser.ts:8911. **Barrel-imported enums** (checker.ts:6639's `NodeBuilderFlags`
+  from `_namespaces/ts.js`) stay — resolveAlias can't follow the ESM `.js` barrel (known-hard).
+- **Fix 2 (1246458a, optional-target `= undefined`; TS2322):** `<ident> = undefined` where the target's
+  DECLARED type includes undefined — an OPTIONAL parameter `x?: T` (effective `T | undefined`, B85.1a)
+  or a `T | undefined` local — FP-fired TS2322. The identifier-target assignment check resolves the
+  target from the string `varTypes` map, which drops the `?` (resolveSimpleTypeName → "T"); the
+  type-engine `currentLocalTypes` (and its pre-narrowing `narrowedDeclaredTypes`) carries the correct
+  `T | undefined`. Bail when the RHS is literally `undefined`, `!exactOptionalPropertyTypes`, and the
+  declared engine type includes undefined — the identifier-target analog of round 448's
+  `this.optionalProp = undefined`. Cleared generators.ts (`leadingElement = undefined`),
+  checker.ts:19908 (`aliasSymbol = undefined`), nodeFactory.ts:1331. FP-safe (a non-optional `x: T`
+  target keeps firing).
+- **Fix 3 (df18ce2f, un-annotated param shadows a leaked module var; TS2345):** program.ts's
+  `const indent = "    "` (module const, string) is SHADOWED by `flattenDiagnosticMessageText(diag,
+  newLine, indent = 0)`'s param, but `populateParameterLocalTypes` registered annotated (case 1) and
+  function-default (case 2) params only, leaving an un-annotated non-function-default param
+  unregistered — so the recursive arg `indent` resolved to the leaked const's `string` → FP TS2345
+  (program.ts:832). Now an un-annotated Identifier param is added to `currentParamBindingNames`
+  (getTypeOfIdentifier → anyType) AND, when a same-named entry is inherited in `currentLocalTypes`
+  (checked BEFORE the set), overrides it with anyType (mirrors the binding-pattern branch).
+  Un-annotated-only — an ANNOTATED shadowing param is still type-checked (negative control).
+- **INVESTIGATED & REVERTED (dashboard no-op):** the varTypes-side (return-path) shadow override for
+  fix 3 — the assignment/return walk's string `varTypes` resolves a shadowed-param return via a path
+  the `innerTypes` override didn't reach, and the return-path shadowed-param TS2322 is not a confirmed
+  dashboard FP (only my synthetic repro). Reverted to keep the change to the proven type-engine side.
+- **NEXT (compiler @ 170, TS2591×43 env-legit offline node stub → real ≈127):** TS2322×93 deep-M3
+  relation (mostly whole-program contextual inference — `__String` branding, generic-fn identity,
+  SourceFileLike conflation); the TS2353 getter/method object-literal excess (sourcemap.ts
+  MappingsDecoder) + mapped-type-key eval (utilities.ts createComputedCompilerOptions, M3.3); TS2349
+  `(x || (x = [])).push()` inline-property-receiver (binder.ts:1375 / core.ts:2135 — the round-452
+  deferred family); the evolving-let `indexInfos` CFA cluster (TS2454 + TS7034 + TS7005).
+
+**Round 452 (2026-07-09) — bounded FP burn-down: TWO fixes, both GENERAL parser/checker
+correctness that reproduce minimally (unlike the recent whole-program Blocker #3 families).
+Dashboard: compiler 177 → 176 (−1), services 282 → 280 (−2), server 488 → 485 (−3), harness
+704 → 701 (−3). Suite 9,619 → 9,628 (+9 local across 2 new test files, 0 regressions); 2 fix
+commits (4c47c918 string-index / 0db79740 tuple).**
+- **Fix 1 (4c47c918, string-index element access):** a numeric-literal element access on a
+  STRING-typed receiver — `(arr[i])[0]` where the inner element access is typed `string`
+  (tsc's own jsTyping.ts `pathComponents[pathComponents.length - 3][0] === "@"`) — FP-fired
+  "Property '0' does not exist on type 'string'." The B292 bail in the element-access
+  missing-member path (checkMemberAccessMissing's caller ~118808) suppressed only NON-numeric
+  string keys (`s["s"]`); a numeric-literal key `[0]` (and a numeric-looking string key
+  `["0"]`) fell through to the missing-member check. A plain identifier receiver `str[0]`
+  resolved elsewhere, but an element-access-typed receiver reached this path. Element access on
+  a string primitive is never TS2339 in tsc (String has a numeric index sig; the TS2339
+  property-existence path is property-access only), so broadening the bail to any literal key
+  is FP-safe. Cleared jsTyping.ts:258 (services/server/harness).
+- **Fix 2 (0db79740, optional-tuple assignability):** `return emptyArray as []` against an
+  all-optional tuple `readonly [kind?: T, specifiers?: T, …]` (tsc's own moduleSpecifiers.ts)
+  FP-fired TS2739 "Type '[]' is missing … 0, 1, 2". The parser DISCARDS a tuple element's `?`
+  token AND label from the element node (no NamedTupleMember/OptionalType is produced — `[T?]`'s
+  `?` is eaten by parseType's trailing-`?` JSDoc-recovery), so the resolved tuple Type marked
+  every numbered member REQUIRED and its `length` a fixed literal. Fix spans parser + checker:
+  (a) the parser records per-element optionality on the new `TupleType.elementOptional` metadata
+  field — a named `?` (`[a?: T]`) in the labeled branch, an unnamed `[T?]` bridged via the
+  `tupleElementConsumedOptionalMarker` flag set where the recovery consumes it (read+reset per
+  element so a nested tuple's marker does not leak); (b) `getTupleType` marks optional members
+  in the new `optionalTupleMemberIds` side-channel (consulted by `isOptionalProperty`, since
+  tuple member symbols carry no declaration) and sets an optional-containing tuple's `length`
+  to the union `minLength..maxLength` (so `[]`'s length 0 relates to `[a?, b?]`'s `0 | 1 | 2`).
+  FP-safe: a required-leading `[a, b?]` and an all-required `[a, b]` still error; no element
+  node kind changes, so no type-node walker is affected. Cleared moduleSpecifiers.ts:344 (all
+  profiles — src/compiler is shared).
+- **INVESTIGATED & REVERTED (dashboard no-op):** the `(x || (x = [])).push(v)` empty-array /
+  UNION-target contextual typing (round-408 gap for property/union targets). Extending
+  `contextualAssignmentRhsType` to pick an Array-family member from a union target fixed the
+  IDENTIFIER inline case `(x || (x = [])).push(v)`, but the real tsc-source FPs are PROPERTY
+  targets (binder.ts:1375 `(label.antecedent || (label.antecedent = [])).push(antecedent)`) and
+  the `??=` IIFE-call-return case (core.ts:2135) — both resolve the `.push`/call receiver in the
+  call-type pass via a path the fix doesn't reach (the split `const r = …; r.push()` form IS
+  fixed, confirming the `||` result typing works, but the inline call FP persists). 0 dashboard
+  FPs cleared → reverted to avoid churn. The inline-property-receiver call-type resolution is
+  the follow-up if this family resurfaces.
+- **NEXT (services @ 280, all deep/whole-program or M3.4):** deep-M3 TS2322×154 fragments
+  (`Type 'X' is not assignable to type 'Y'`, max bucket 5 — Node[]/generic-fn-identity/
+  SourceFileLike-conflation); the whole-program cross-file `declare module` augmentation
+  method-guard family (`isUnion()`/`isStringLiteral()`, Blocker #3); the `length = end - start;
+  length - 5` cross-statement reassignment arithmetic-narrowing residual (parser.ts:8911 /
+  core.ts:6639, M3.4 — the arithmetic pass has no reassignment narrowing); the evolving-let
+  `indexInfos` CFA cluster (TS2454 + TS7034 + TS7005, symbolDisplay.ts).
