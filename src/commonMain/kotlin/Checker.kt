@@ -102601,6 +102601,15 @@ interface DataView {
                 for (c in apparent.types) numericElem(c)?.let { return it }
             } else numericElem(apparent)?.let { return it }
         }
+        // Round 470: a member with a STRING INDEX SIGNATURE provides every named
+        // property (tsc resolves the access through the index signature) —
+        // `settingsOrHost.getCompilationSettings` on `CompilerOptions |
+        // MinimalResolutionCacheHost` resolves via CompilerOptions'
+        // `[option: string]: …` (tsc documentRegistry.ts).
+        if (apparent is Type.Object) {
+            try { resolveStructuredTypeMembers(apparent) } catch (_: Exception) { return null }
+            apparent.stringIndexInfo?.type?.let { return it }
+        }
         return null
     }
 
