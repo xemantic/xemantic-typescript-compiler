@@ -1077,7 +1077,10 @@ class FlowGraphBuilder {
             // shape inside a PropertyAssignment.initializer).
             is BinaryExpression -> if (target.operator == SyntaxKind.Equals) {
                 bindExpression(target.right)
-                bindAssignmentTarget(target.left, target.left)
+                // Round 460: keep threading the enclosing declarationNode (this arm is
+                // only reached when the destructuring recursion bottoms out on a
+                // default-value shape — see the comment above).
+                bindAssignmentTarget(target.left, declarationNode)
             }
             is ObjectBindingPattern -> {
                 for (element in target.elements) {
@@ -1110,40 +1113,40 @@ class FlowGraphBuilder {
             // is registered for the binding, so the future top-level TS2454 walker
             // would FP-emit on subsequent reads.
             //
-            // For each leaf, we recurse with the leaf's underlying target as BOTH
-            // arguments — i.e. the `declarationNode` we ultimately attach to the
-            // FlowAssignment is the leaf Identifier (or nested destructuring root),
-            // not a wrapper like SpreadElement / PropertyAssignment /
-            // ShorthandPropertyAssignment / SpreadAssignment. The walker's
-            // `flowAssignmentTargetsName` only recognizes a small set of node
-            // kinds (Identifier / VariableDeclaration / Parameter / BindingElement /
-            // BinaryExpression); routing wrappers through it would silently miss
-            // every destructuring assignment.
+            // Round 460: each leaf recurses with the ENCLOSING [declarationNode]
+            // (the whole `({a, b} = X)` BinaryExpression) so the narrowing walker can
+            // see the destructuring RHS — `flowAssignmentTargetsName`'s
+            // BinaryExpression arm walks pattern LHSes for the name via
+            // `destructuringAssignTargetHasName`. (The pre-460 convention attached
+            // the leaf Identifier, which carried no RHS and left destructuring
+            // assignments narrowing-invisible: program.ts getReferencedFileLocation's
+            // `({ pos, end } = file.referencedFiles[i])` never narrowed `pos` →
+            // FP TS2322 at the final return.)
             is ArrayLiteralExpression -> {
                 for (element in target.elements) {
                     when (element) {
                         is OmittedExpression -> { /* `[, x]` — skip elision */ }
-                        is SpreadElement -> bindAssignmentTarget(element.expression, element.expression)
+                        is SpreadElement -> bindAssignmentTarget(element.expression, declarationNode)
                         is BinaryExpression -> if (element.operator == SyntaxKind.Equals) {
                             // `[a = 1, ...]` — default value reads (RHS), then `a` is the target
                             bindExpression(element.right)
-                            bindAssignmentTarget(element.left, element)
+                            bindAssignmentTarget(element.left, declarationNode)
                         } else {
-                            bindAssignmentTarget(element, element)
+                            bindAssignmentTarget(element, declarationNode)
                         }
-                        else -> bindAssignmentTarget(element, element)
+                        else -> bindAssignmentTarget(element, declarationNode)
                     }
                 }
             }
             is ObjectLiteralExpression -> {
                 for (prop in target.properties) {
                     when (prop) {
-                        is PropertyAssignment -> bindAssignmentTarget(prop.initializer, prop.initializer)
+                        is PropertyAssignment -> bindAssignmentTarget(prop.initializer, declarationNode)
                         is ShorthandPropertyAssignment -> {
                             prop.objectAssignmentInitializer?.let { bindExpression(it) }
-                            bindAssignmentTarget(prop.name, prop.name)
+                            bindAssignmentTarget(prop.name, declarationNode)
                         }
-                        is SpreadAssignment -> bindAssignmentTarget(prop.expression, prop.expression)
+                        is SpreadAssignment -> bindAssignmentTarget(prop.expression, declarationNode)
                         else -> { /* computed names, methods, accessors — not assignment targets */ }
                     }
                 }

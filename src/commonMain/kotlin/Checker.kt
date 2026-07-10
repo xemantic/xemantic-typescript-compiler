@@ -14252,11 +14252,99 @@ class Checker(
             }
             is Parameter -> (node.name as? Identifier)?.text == varName
             is BindingElement -> (node.name as? Identifier)?.text == varName
-            is BinaryExpression -> (node.left as? Identifier)?.text == varName
+            // Round 460: a destructuring ASSIGNMENT's FlowAssignment now carries the
+            // WHOLE `({a, b} = X)` BinaryExpression (Flow.kt threads declarationNode
+            // through the literal arms so the narrowing walker can see the RHS) — walk
+            // the pattern LHS for the name. A bare literal node (for-of destructuring
+            // targets, `for ([a, b] of pairs)`) is walked the same way.
+            is BinaryExpression -> (node.left as? Identifier)?.text == varName ||
+                node.left.let {
+                    (it is ObjectLiteralExpression || it is ArrayLiteralExpression) &&
+                        destructuringAssignTargetHasName(it, varName, 0)
+                }
+            is ObjectLiteralExpression -> destructuringAssignTargetHasName(node, varName, 0)
+            is ArrayLiteralExpression -> destructuringAssignTargetHasName(node, varName, 0)
             is Identifier -> node.text == varName // ++x / x++ pattern
             else -> false
         }
     }
+
+    /** Round 460: the resolved type of the member [name] binds to in a destructuring
+     *  ASSIGNMENT `({ a, b: name } = rhs)` / `([name] = rhs)` — null when unresolvable
+     *  (callers keep the conservative antecedent). Top-level pattern positions only. */
+    private fun destructuredMemberTypeForFlow(target: Expression, rhs: Expression, name: String): Type? {
+        val rhsT = try { getTypeOfExpression(rhs) } catch (_: Exception) { null } ?: return null
+        if (rhsT === anyType || rhsT === errorType) return null
+        return when (target) {
+            is ObjectLiteralExpression -> {
+                val propName = target.properties.firstNotNullOfOrNull { p ->
+                    when (p) {
+                        is ShorthandPropertyAssignment -> if (p.name.text == name) p.name.text else null
+                        is PropertyAssignment -> if ((p.initializer as? Identifier)?.text == name)
+                            getPropertyKeyName(p.name) else null
+                        else -> null
+                    }
+                } ?: return null
+                val sym = try { getPropertyOfType(getApparentType(rhsT), propName) }
+                    catch (_: Exception) { null } ?: return null
+                try { getTypeOfSymbol(sym) } catch (_: Exception) { null }
+            }
+            is ArrayLiteralExpression -> {
+                val idx = target.elements.indexOfFirst { (it as? Identifier)?.text == name }
+                if (idx < 0) return null
+                (rhsT as? Type.Object)?.tupleElementTypes?.getOrNull(idx)
+                    ?: arrayRefElement(rhsT)
+            }
+            else -> null
+        }
+    }
+
+    /** True when [t] is or contains a null/undefined constituent. */
+    private fun typeHasNullishConstituent(t: Type): Boolean =
+        t.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) ||
+            (t is Type.Union && t.types.any { it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) })
+
+    /** Round 460: does a destructuring-ASSIGNMENT target literal (`{a, b: c}` / `[x, y]`)
+     *  bind [varName] at any nesting depth? */
+    private fun destructuringAssignTargetHasName(target: Expression, varName: String, depth: Int): Boolean {
+        if (depth > 6) return false
+        return when (target) {
+            is ObjectLiteralExpression -> target.properties.any { p ->
+                when (p) {
+                    is ShorthandPropertyAssignment -> p.name.text == varName
+                    is PropertyAssignment -> destructuringLeafOrNestedHasName(p.initializer, varName, depth)
+                    is SpreadAssignment -> (p.expression as? Identifier)?.text == varName
+                    else -> false
+                }
+            }
+            is ArrayLiteralExpression -> target.elements.any { el ->
+                when (el) {
+                    is SpreadElement -> (el.expression as? Identifier)?.text == varName
+                    is Expression -> destructuringLeafOrNestedHasName(el, varName, depth)
+                    else -> false
+                }
+            }
+            else -> false
+        }
+    }
+
+    /** One destructuring-assignment element position: a bare Identifier leaf, a
+     *  default-value form `<target> = <default>` whose LHS may itself be a NESTED
+     *  pattern (`{ skills: { primary: primaryA = "x" } = {} }` — the for-of corpus
+     *  shape that caught the first cut), or a nested pattern literal. */
+    private fun destructuringLeafOrNestedHasName(el: Expression, varName: String, depth: Int): Boolean =
+        when (el) {
+            is Identifier -> el.text == varName
+            is BinaryExpression -> el.operator == SyntaxKind.Equals &&
+                ((el.left as? Identifier)?.text == varName ||
+                    el.left.let {
+                        (it is ObjectLiteralExpression || it is ArrayLiteralExpression) &&
+                            destructuringAssignTargetHasName(it, varName, depth + 1)
+                    })
+            is ObjectLiteralExpression, is ArrayLiteralExpression ->
+                destructuringAssignTargetHasName(el, varName, depth + 1)
+            else -> false
+        }
 
     /**
      * Patterns whose true-branch implies [varName] is definitely assigned:
@@ -94265,6 +94353,29 @@ interface DataView {
         if (flowAssignmentTargetsName(node, name)) {
             getLiteralRhsTypeForAssignment(node)?.let { return narrowUnionByRhsAssignment(antecedent, it) }
         }
+        // Round 460: a destructuring ASSIGNMENT `({ pos, end } = refs(i))` OVERWRITES each
+        // pattern name (tsc program.ts getReferencedFileLocation's switch cases assign
+        // `({ pos, end } = file.referencedFiles[index])` — the final `return { file, pos,
+        // end, packageId }` needs `pos: number`, not the declared `number | undefined`).
+        // When the destructured MEMBER's type resolves nullish-FREE, the post-state is the
+        // declared type with nullish excluded (the round-416 overwrite rule); anything
+        // unresolvable keeps the conservative antecedent pass-through. Gated behind the
+        // pattern-contains-name pre-check, so the RHS type resolution runs only for
+        // genuine destructuring overwrites of the walked name (services-perf discipline).
+        if (node is BinaryExpression && node.operator == SyntaxKind.Equals) {
+            val left = node.left
+            if ((left is ObjectLiteralExpression || left is ArrayLiteralExpression) &&
+                destructuringAssignTargetHasName(left, name, 0)
+            ) {
+                val memberT = destructuredMemberTypeForFlow(left, node.right, name)
+                if (memberT != null && memberT !== anyType && memberT !== errorType &&
+                    !typeHasNullishConstituent(memberT)
+                ) {
+                    return narrowByExcludingNullUndefined(declaredType)
+                }
+                return antecedent
+            }
+        }
         val rhs: Expression? = when (node) {
             is VariableDeclaration ->
                 if ((node.name as? Identifier)?.text == name) node.initializer else null
@@ -95119,7 +95230,20 @@ interface DataView {
             // enumMemberKeysOfTypeNode) AND covered — a partial/unreadable annotation keeps
             // the conservative null.
             if (t !is Type.Union) {
-                if (matchesDirectly) return null
+                if (matchesDirectly) {
+                    // Round 460b: a DIRECT enum-typed subject (`switch (kind)` where
+                    // kind's type is a bare enum) exhausted by enum-member cases
+                    // covering EVERY member narrows to never — `default:
+                    // Debug.assertNever(kind)` is legal. Same canonical-key space.
+                    val enumSym = (t as? Type.Object)?.symbol
+                        ?.takeIf { it.flags.hasAny(SymbolFlags.Enum) }
+                        ?.let { canonicalEnumSymbol(it) } ?: return null
+                    val values = enumValues[enumSym.id] ?: return null
+                    if (values.isNotEmpty() &&
+                        values.keys.all { "${enumSym.id}#$it" in enumKeys }
+                    ) return neverType
+                    return null
+                }
                 val discriminant = discriminantName ?: return null
                 val litKeys = litTypes.mapNotNull { literalDiscriminantKeyOfType(it) }
                 if (litKeys.size != litTypes.size) return null
@@ -96072,7 +96196,7 @@ interface DataView {
         // TypeReference resolution), and resolve the target with them. FP-safe: narrowing only
         // refines a union (removes members) → suppresses downstream errors, never adds them.
         val tpNames = typeParams?.mapNotNull { (it.name).text }?.toSet() ?: emptySet()
-        val targetType: Type = if (tpNames.isNotEmpty() && paramAnnotation != null) {
+        var targetType: Type = if (tpNames.isNotEmpty() && paramAnnotation != null) {
             val bindings = mutableMapOf<String, Type>()
             collectPredicateTpBindings(paramAnnotation, t, tpNames, bindings)
             if (bindings.isEmpty()) {
@@ -96087,7 +96211,14 @@ interface DataView {
         } else {
             getTypeFromTypeNode(targetTypeNode)
         }
-        if (targetType === errorType || targetType === anyType) return t
+        if (targetType === errorType || targetType === anyType) {
+            // Round 460: a FUNCTION-BODY-local alias predicate target (B83.5-unbound —
+            // tsc utilities.ts resolveNameHelper's nested `isSelfReferenceLocation(node):
+            // node is SelfReferenceLocation` where the alias is declared inside the
+            // enclosing function) or an Exclude-bearing union — same member-wise
+            // resolver as the assert path; null keeps the no-narrowing fallback.
+            targetType = resolveAssertTargetTypeNode(targetTypeNode) ?: return t
+        }
         if (t is Type.Union) {
             if (isMatch) {
                 // Positive branch — tsc `getNarrowedType` (assumeTrue): for each constituent
