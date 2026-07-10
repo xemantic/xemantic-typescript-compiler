@@ -94957,6 +94957,12 @@ interface DataView {
             is VariableDeclaration -> when (val init = decl.initializer) {
                 is ArrowFunction -> Triple(init.type, init.typeParameters, init.parameters)
                 is FunctionExpression -> Triple(init.type, init.typeParameters, init.parameters)
+                // Round 465: the IIFE-const fn pattern — `const createUIStringComparer =
+                // (() => { return createIntlCollatorStringComparer; function …(…):
+                // Comparer<string> {…} })()` (tsc core.ts). The const's VALUE is the
+                // IIFE's returned function-like; classify a call through it by that
+                // function's own annotation.
+                is CallExpression -> iifeReturnedFunctionTriple(init) ?: return false
                 else -> return false
             }
             else -> return false
@@ -94986,6 +94992,38 @@ interface DataView {
             return true
         }
         return typeNodeDefinitelyNonNullish(ret, tpNames, depth = 0)
+    }
+
+    /** Round 465: `const f = (() => { return g; function g(…): R {…} })()` — the
+     *  IIFE-const fn pattern (tsc core.ts createUIStringComparer). Resolves the
+     *  IIFE's returned function-like's (type, typeParameters, parameters) so a call
+     *  through the const classifies by that function's own annotation. Null on
+     *  anything but a NO-ARG IIFE whose block body's first top-level return yields
+     *  a same-block nested FunctionDeclaration (by name) or an inline fn. */
+    private fun iifeReturnedFunctionTriple(
+        init: CallExpression,
+    ): Triple<TypeNode?, List<TypeParameter>?, List<Parameter>>? {
+        if (init.arguments.isNotEmpty() || init.questionDotToken) return null
+        var c: Expression = init.expression
+        while (c is ParenthesizedExpression) c = c.expression
+        val body = when (c) {
+            is ArrowFunction -> c.body as? Block
+            is FunctionExpression -> c.body
+            else -> null
+        } ?: return null
+        val ret = body.statements.firstNotNullOfOrNull { (it as? ReturnStatement)?.expression }
+            ?: return null
+        return when (ret) {
+            is Identifier -> {
+                val fd = body.statements.firstNotNullOfOrNull { s ->
+                    (s as? FunctionDeclaration)?.takeIf { it.name?.text == ret.text }
+                } ?: return null
+                Triple(fd.type, fd.typeParameters, fd.parameters)
+            }
+            is ArrowFunction -> Triple(ret.type, ret.typeParameters, ret.parameters)
+            is FunctionExpression -> Triple(ret.type, ret.typeParameters, ret.parameters)
+            else -> null
+        }
     }
 
     /** Round 464: bounded body-return scan for an UN-ANNOTATED flow callee — true
