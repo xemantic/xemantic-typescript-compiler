@@ -103276,10 +103276,27 @@ interface DataView {
                     }
                     else -> leftType
                 }
+                // Round 471: tsc's truthy facts map a `boolean` member of the KEPT left
+                // to `true` (`preferences.includeCompletionsWithSnippetText || undefined`
+                // is `true | undefined` — tsc completions.ts). Gated: skipped when the
+                // RIGHT side is boolean-like, so `boolA || boolB` stays `boolean` (tsc
+                // reduces `true | boolean` by subsumption, which getUnionType does not).
+                val rightHasBoolean = rightT === booleanType || rightT === trueType ||
+                    rightT === falseType ||
+                    (rightT is Type.Union && rightT.types.any {
+                        it === booleanType || it === trueType || it === falseType
+                    })
+                val leftMapped: Type? = when {
+                    rightHasBoolean -> leftKept
+                    leftKept === booleanType -> trueType
+                    leftKept is Type.Union && leftKept.types.any { it === booleanType } ->
+                        getUnionType(leftKept.types.map { if (it === booleanType) trueType else it })
+                    else -> leftKept
+                }
                 when {
-                    leftKept == null -> rightT
-                    leftKept === rightT -> leftKept
-                    else -> getUnionType(listOf(leftKept, rightT))
+                    leftMapped == null -> rightT
+                    leftMapped === rightT -> leftMapped
+                    else -> getUnionType(listOf(leftMapped, rightT))
                 }
             }
             SyntaxKind.QuestionQuestion -> {
