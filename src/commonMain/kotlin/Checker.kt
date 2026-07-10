@@ -88001,6 +88001,23 @@ interface DataView {
                 val narrowed = narrowedArrayLiteralType(expr)
                 if (narrowed != null && checkTypeRelatedTo(narrowed, targetType, assignableRelation)) narrowed
                 else sourceTypeRaw
+            } else if (expr is BinaryExpression &&
+                (expr.operator == SyntaxKind.BarBar || expr.operator == SyntaxKind.QuestionQuestion) &&
+                (expr.left is Identifier || expr.left is PropertyAccessExpression)) {
+                // Round 470 (M3.4): a returned `X || undefined` / `X ?? y` whose LEFT
+                // reference was guard-narrowed (`if (isString(c)) return …; if (c !==
+                // undefined) return c || undefined;` — tsc sourcemaps.ts: `c` narrows
+                // `string | DocumentPositionMapper | undefined` → DocumentPositionMapper,
+                // but getTypeOfExpression combines from the DECLARED left type). Recombine
+                // with the narrowed left; substituted only when it makes the return
+                // relate (monotone, suppression-only).
+                val leftRaw = getTypeOfExpression(expr.left)
+                val leftNarrowed = getNarrowedTypeForReference(leftRaw, expr.left)
+                if (leftNarrowed !== leftRaw) {
+                    val recombined = combineBinaryTypes(expr.operator, leftNarrowed, expr.right, expr.left)
+                    if (checkTypeRelatedTo(recombined, targetType, assignableRelation)) recombined
+                    else sourceTypeRaw
+                } else sourceTypeRaw
             } else sourceTypeRaw
             // M3.1 (round 431c): a source containing a FOREIGN type parameter — one
             // that is NOT among the enclosing function's own [typeParams] — is an
