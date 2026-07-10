@@ -127022,8 +127022,18 @@ interface DataView {
                     // union-arg emission path and manufacture an FP where the declared
                     // interface previously stayed silent.
                     val n = getNarrowedTypeForReference(ctxApplied, arg)
+                    // Round 462: the refinement gate `n <: declared` under-accepts —
+                    // tsc's getNarrowedType(assumeTrue) legitimately narrows to a guard
+                    // target that is NOT a declared-type subtype (isPropertyNameLiteral's
+                    // PropertyNameLiteral union contains JsxNamespacedName, which does not
+                    // extend Expression), so a genuine narrow was rejected and the wide
+                    // declared type FP'd (utilities.ts:4066 isSameEntityName). Also accept
+                    // the narrowed type when it makes the PARAM relation pass — the same
+                    // substitute-only-when-the-relation-passes monotone rule the
+                    // assignment/return/var-decl gates use (pure suppression).
                     if (n !== ctxApplied && n !== neverType &&
-                        checkTypeRelatedTo(n, ctxApplied, assignableRelation)) n else ctxApplied
+                        (checkTypeRelatedTo(n, ctxApplied, assignableRelation) ||
+                            checkTypeRelatedTo(n, paramType, assignableRelation))) n else ctxApplied
                 } else ctxApplied
             } finally {
                 if (useCtx) contextualType = savedContextual
