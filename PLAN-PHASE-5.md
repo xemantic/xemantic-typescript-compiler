@@ -39,10 +39,10 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
-**Round 464 (2026-07-10) — bounded FP burn-down: FIVE fixes. Dashboard: compiler 61 → 56 (−5;
-TS2322 10 → 7, TS2362 → 0, TS7006 → 0), services 154 → 140 (−14 cross-profile). Suite 9,817 →
-9,833 (+16 local across 6 new test files, 0 regressions); 5 fix commits (ecf6290d / 44e1b2ff /
-6fcf7cda / f1e48c81 / 2d843068).**
+**Round 464 (2026-07-10) — bounded FP burn-down: SIX fixes. Dashboard: compiler 61 → 55 (−6;
+TS2322 10 → 6, TS2362 → 0, TS7006 → 0), services 154 → 139 (−15 cross-profile). Suite 9,817 →
+9,836 (+19 local across 7 new test files, 0 regressions); 6 fix commits (ecf6290d / 44e1b2ff /
+6fcf7cda / f1e48c81 / 2d843068 / 6fe6406d).**
 - **Fix 1 (ecf6290d, barrel-enum member non-nullish; 61 → 59):** `receiverResolvesToRealEnum`
   only followed the general resolveAlias (can't follow ESM-`.js` + `export *` barrels), so
   `flags = flags || NodeBuilderFlags.None` (tsc checker.ts withContext) never proved `flags`
@@ -94,8 +94,20 @@ TS2322 10 → 7, TS2362 → 0, TS7006 → 0), services 154 → 140 (−14 cross-
   builder.ts:2390 needs callback-RETURN inference through an un-annotated same-file fn
   (Blocker #2); namedEvaluation.ts:434 needs `(Union & Interface).left` kind-discriminant
   member reduction (tsc reduces union members whose `kind` conflicts with the interface's).
-- **NEXT (compiler @ 56, ~10 real excl. TS2591×43 + TS2304×2 `global` + TS2584 console):**
-  program.ts:1220 (multi-member-union objlit context); emitter.ts:1277 (select-return);
+- **Fix 6 (destructured-const element typing + multi-member-union objlit context; 56 → 55):**
+  `recordDestructuredConstElementTypes` types a destructured const's TOP-LEVEL elements from the
+  source's declared members (`const { kind, index } = ref` — B83.5-unbound, so `index` was anyType
+  and `file.referencedFiles[index]` resolved any, defeating the pos/end destructuring-overwrite
+  narrowing; the probe cascade showed the ELEMENT-ACCESS INDEX, not the receiver, was the leak).
+  Conservative: absent names only, non-union/any sources, no defaults/rest/nested; **FUNCTION-shaped
+  member types stay unrecorded** — recording them rode the fn-type relation's M3 gaps
+  (tsbuildPublic.ts:767 unmasked on the first cut; the detector must resolveStructuredTypeMembers
+  and check union constituents, the fn types arrive lazily-membered / `| undefined`-wrapped).
+  PLUS `selectUnionMemberByObjLitKeys`: a MULTI-object-member union return target contributes the
+  SINGLE constituent whose members cover every objlit property name as the contextual type.
+  program.ts:1220 CLEARED (56 → 55, strictly removals by listAll diff).
+- **NEXT (compiler @ 55, ~9 real excl. TS2591×43 + TS2304×2 `global` + TS2584 console):**
+  emitter.ts:1277 (select-return);
   moduleNameResolver.ts:1300 (getPackageJsonInfoCache `| undefined` member);
   esDecorators.ts:1309; namedEvaluation.ts:434 (kind-reduction); parser.ts:9581 /
   factory/utilities.ts:1688 (cast-instantiation identity, M3); builder.ts:2390 (Blocker #2);
