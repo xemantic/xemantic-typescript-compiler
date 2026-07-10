@@ -96269,7 +96269,17 @@ interface DataView {
                 if (uType != null) break
             }
             val excluded = uType ?: return@run
-            val kept = union.types.filter { !checkTypeRelatedTo(it, excluded, assignableRelation) }
+            // Round 465: `.kind`-key DISJOINTNESS beats the relation (the round-423
+            // lesson, mirrored from narrowByCallPredicate) — enum-member kinds resolve
+            // `any`, so the lenient relation related EVERY OptionalChain member to the
+            // brand-intersection NonNullChain (`NonNullExpression & { _optionalChainBrand }`)
+            // and the filter kept nothing (es2020.ts flattenChain, probe-confirmed
+            // union=4/kept=0). A member whose kind keys are provably disjoint from the
+            // excluded type's is KEPT regardless of the relation verdict.
+            val kept = union.types.filter { m ->
+                typeGuardMemberDisjoint(m, excluded) ||
+                    !checkTypeRelatedTo(m, excluded, assignableRelation)
+            }
             if (kept.size < union.types.size && kept.isNotEmpty()) {
                 return if (kept.size == 1) kept[0] else getUnionType(kept)
             }
