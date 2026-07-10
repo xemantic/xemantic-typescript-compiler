@@ -39,6 +39,83 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
+**Round 460 (2026-07-09/10) — bounded FP burn-down: EIGHT fixes (7 dashboard wins + 1
+repro-pinned capability), all GENERAL checker/flow correctness. Dashboard: compiler 103 → 91
+(−12; TS2322 33 → 28, TS2345 11 → 6, TS2454 1 → 0, TS2363 1 → 0), services 194 → 178 (−16
+cross-profile, measured once at session end). Suite 9,731 → 9,758 (+27 local across 8 new test
+files, 0 regressions); 7 fix commits (9973bf9d / 4c00e5f1 / fcec70f7 / c35e24cb / 739d16ef /
+f2d67ef9 / 2c03d8f9).**
+- **Fix 1 (9973bf9d, block-scoping-ambiguous locals; compiler 103 → 100):** the round-459 NEXT
+  item with root cause pre-diagnosed. A name with ≥2 block-scoped (`let`/`const`) declarations in
+  ONE function body can only refer to DIFFERENT blocks' bindings, but the flat first-decl-wins
+  `currentLocalTypes` made every later read resolve to whichever decl the walk saw first —
+  program.ts findSourceFileWorker's three `const file` made `return file;` read the if-block's
+  `SourceFile | false | undefined` → FP TS2322. `applyAmbiguousBlockScopedLocals` registers such
+  names anyType at body entry (`ambiguousBlockLocalNames`; loop-header decls excluded);
+  `checkVarDeclAssignability` skips re-recording them in all three maps. BONUS: also cleared
+  checker.ts:11321 (round-458's "Blocker-#3 name→DeclarationName conflation" was actually this)
+  and utilitiesPublic.ts:991 — the family was mis-attributed to whole-program conflation.
+- **Fix 2 (4c00e5f1, exhaustive-switch never family; 100 → 97):** all three `Debug.assertNever` /
+  `assertType<never>` sites had DIFFERENT root causes: (a) programDiagnostics.ts:346 — a NON-union
+  switch subject (single interface after `isReferencedFile(reason)` guard) whose `.kind` is an
+  enum-member-union ALIAS fully covered by cases → `narrowBySwitchClause`'s default branch now
+  exhausts it to never; (b) declarations/diagnostics.ts:702 — `Debug.type<T>(node)` where T is a
+  FUNCTION-BODY-local alias (B83.5-unbound) → new `uniqueNestedTypeAliasByName` program-wide map
+  (type-alias sibling of buildNestedFunctionMap); (c) utilities.ts:12082 — HasInferredType contains
+  `Exclude<VariableLikeDeclaration, JsxAttribute | EnumMember>` (no union distribution → member
+  resolved anyType, poisoning the union) → new `resolveAssertTargetTypeNode` resolves member-wise
+  and evaluates lib Exclude (keep members NOT assignable to U). All flow-only.
+- **Fix 3 (fcec70f7, flatten double-array anchor, M3.1; 97 → 95):** `flatten<T>(array: T[][] |
+  readonly (T | readonly T[] | undefined)[])` — a union param with a `tp[][]` member is now an
+  inference ANCHOR (gate (k)); an array-of-array arg binds T from its inner element (enum elements
+  accepted). Cleared utilities.ts:9972/9978; the explicit-type-arg control proved the relation
+  passes once T binds.
+- **Fix 4 (c35e24cb, TS2454 captured reads; 95 → 94):** `isAssignedAtFlow` returned false at the
+  closure's FlowStart, so an expression-bodied arrow's captured read never saw the enclosing
+  function's assignments (checker.ts:14106 `filter(…, info => !findIndexInfo(indexInfos, …))` after
+  an if/else assigning indexInfos on both branches). It now follows `FlowStart.outerFlow` (closures
+  only, localNames-gated; OR-semantics → suppression-only; never-assigned captured reads still fire).
+- **Fix 5 (739d16ef, nested destructured global shadow; 94 → 93):** `registerNestedGlobalShadowDecls`
+  now registers binding-PATTERN element names — checker.ts:37376's nested `const { start, length } =
+  getDiagnosticSpanForCallNode(…)` shadowing core.ts's `length` fn (`diagnostic.length = length`
+  FP'd fn-vs-number).
+- **Fix 6 (f2d67ef9, arithmetic-pass module-var-leak arm; 93 → 92):** the round-442 family —
+  `arithOperandType` bails a bare-Identifier operand whose name ∈ moduleFileLocalVarNames (own-file
+  + currentLocalTypes gates): program.ts's module `const indent = "    "` poisoned parser.ts's
+  body-local `let indent` → `margin - indent` FP'd TS2363 (parser.ts:8974).
+- **Fix 7 (2c03d8f9, destructuring-assignment overwrite narrowing — dashboard-neutral capability,
+  repro-pinned):** `({ pos, end } = refs(i))` now OVERWRITES pattern names in the narrowing walk:
+  Flow.kt threads the ENCLOSING BinaryExpression through the literal target arms (was the leaf
+  Identifier — no RHS visible), `flowAssignmentTargetsName` walks pattern LHSes via
+  `destructuringAssignTargetHasName` (nested default-value patterns REQUIRED — the
+  sourceMapValidationDestructuringForOf… corpus pin caught the first flat-only cut), and
+  `narrowByAssignmentRhs` strips nullish from the declared type when the destructured member
+  resolves nullish-free. Companion: a DIRECT enum-typed switch subject with all members covered
+  exhausts to never in the default clause. The real program.ts:1220 stays FP — its `file` local is
+  `Debug.checkDefined(program.getSourceFileByPath(…))` (cross-barrel generic inference), so the RHS
+  type doesn't resolve; mechanism verified by repro + 5 local tests.
+- **Fix 8 (2c03d8f9 same commit, function-local-alias predicate target; 92 → 91):**
+  `narrowByCallPredicate` falls back to `resolveAssertTargetTypeNode` — utilities.ts
+  resolveNameHelper's nested `isSelfReferenceLocation(node): node is SelfReferenceLocation` (the
+  alias is declared INSIDE the function) never narrowed → `lastSelfReferenceLocation = location`
+  FP'd TS2322 (utilities.ts:11856).
+- **Scouted, whole-program-only (deferred with findings):** tsbuildPublic.ts:594 TS7006
+  (`parseConfigFileHost.onUnRecoverableConfigFileDiagnostic = d => …` — the PropertyAccess
+  assignment-target context EXISTS and a faithful generic destructured-receiver repro compiles
+  clean; the real gap is cross-barrel); moduleSpecifiers.ts:929 (round-459 finding stands).
+- **NEXT (compiler @ 91, ~45 real excl. TS2591×43 + TS2304×2 `global` + TS2584 console):**
+  program.ts:1220 needs `Debug.checkDefined(<call>)` cross-barrel generic-return inference to feed
+  the (now-landed) destructuring narrowing; transformers/destructuring.ts:113 is a CHAINED
+  assignment `location = node = value` needing the inner `=`'s guard-narrowed RHS type;
+  transformers/es2015.ts:2730 needs element-access segments (`declarations[0].initializer`) in the
+  narrowing reference-path machinery (getReferencePath has no `[0]` support — core change, assess
+  blast radius); utilities.ts:4066 isPropertyNameLiteral &&-guard (probe); TransformerFactory
+  whole-program probe (round-457 finding); `string → __String` branding (builderState/builder);
+  core.ts:1544/1545 MultiMap this-param methods; the big objlit-vs-interface returns
+  (parser.ts:1865, emitter.ts:1277, transformer.ts:271, moduleNameResolver.ts:1300 — likely one
+  M3 family); utilities.ts:12338/tsbuildPublic.ts:1778 = the round-456 REVERTED TypeParam-constraint
+  relation rule family (needs the per-site emission bail variant).
+
 **Round 459 (2026-07-09) — bounded FP burn-down: EIGHT fixes, all GENERAL checker correctness
 that reproduce minimally. Dashboard: compiler 116 → 103 (−13; TS2322 43 → 33, TS2339 5 → 3,
 TS2349 2 → 0), services 210 → 194 (−16 measured at fix 7; TS2322 94 → 81, TS2345 29 → 25,
