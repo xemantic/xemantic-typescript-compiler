@@ -1,3 +1,58 @@
+**Round 457 (2026-07-09) — parser `as`/`satisfies` precedence bug. ONE fix, GENERAL parser
+correctness that reproduces minimally. Dashboard: compiler 124 → 121 (−3, TS2322 49 → 46); services
+220 → 217 (−3); the fix generalizes to any `<binary> as T` right-operand cast. Suite 9,681 → 9,686
+(+5 local, 0 regressions); 1 fix commit (22b37a95).**
+- **Root cause:** `parseBinaryExpression` (Parser.kt:5399) called a greedy `parseExpressionSuffix(left)`
+  right after the unary operand, gluing `as`/`satisfies` to the bare RIGHT operand of a binary op
+  BEFORE the precedence-respecting binary loop. `as`/`satisfies` have precedence 7 — LOWER than
+  additive (`+`/`-` = 9) and multiplicative (`*`/`/`/`%` = 10) — so a trailing cast must bind the WHOLE
+  binary result. `a + b as T` was mis-parsed as `a + (b as T)` instead of tsc's `(a + b) as T`.
+- **Fix:** removed the greedy `parseExpressionSuffix(left)` call; the binary loop (which attaches
+  `as`/`satisfies` only when `7 > minPrec`) is now the sole handler; `parseExpressionSuffix` is dead
+  and deleted. The parallel `parseBinaryExpressionRest` loop (7833) already handled the LEFT-operand
+  `as` correctly with the same `prec <= minPrec` break — this only fixed the right-operand path.
+- **Trip site:** binder.ts `getDeclarationName` returns `tokenToString(op) + operand.text as __String`
+  and `"arg" + index as __String` — the whole `+` is the cast source (→ `__String`, assignable to the
+  declared `__String | undefined`); the wrong parse yielded `string + __String` = `string` → FP
+  `string ⊄ __String | undefined` (binder.ts ×2 + utilities.ts ×1). Cleared by the fix.
+- **Local pin:** `AsExpressionPrecedenceTest` (5 tests) — the exact binder.ts shape, a
+  multiplicative variant, a `satisfies` smoke, and a negative control (`a + (b as T)` = `string`,
+  still fires TS2322 — the fix does not blanket-suppress right-operand casts).
+- **Second item (b8fd350d, `asserts node is Exclude<T, U>` narrowing — DASHBOARD-NEUTRAL capability
+  extension per the round-411 precedent):** `narrowByAssertCall` gained an `Exclude<T, U>` branch
+  (tsc's `Debug.assertNotNode`) beside the `NonNullable<T>` special-case. After the call the walked
+  union drops members assignable to U (bound from the sibling `test` arg's predicate target via
+  `predicateTargetTypeOfGuardExpr`); suppression-only / FP-safe. Verified end-to-end by a FAITHFUL
+  barrel + guard + loop + intersection repro (all pass), so the narrowing is correct — but the one
+  compiler site (es2020.ts:91 `chain.questionDotToken` after `Debug.assertNotNode(chain,
+  isNonNullChain)`) stays FP: instrumented isolation shows the mechanism works, so the real site is
+  blocked by a WHOLE-PROGRAM resolution/relation scale issue (the huge `_namespaces/ts.js` barrel
+  Debug resolution, or `OptionalChain`/`NonNullChain` conflation), NOT the narrowing. `AssertNotNode
+  ExcludeNarrowingTest` (4 tests) pins direct/loop/intersection exclusion + a precise-exclusion
+  negative control. Follow-up: instrument `resolveNamespaceMemberFnDecl`/`checkTypeRelatedTo` on the
+  real es2020 profile to unblock the dashboard site.
+- **NEXT (compiler @ 121):** the remaining compiler FPs are ALL deep M3 / whole-program — the
+  bounded surgical pool for the compiler profile is dry (every family scouted this round). Confirmed
+  findings for the next agent:
+  - `TransformerFactory<T>` (×3 compiler + ×3 services): NOT a generic-alias-instantiation gap — the
+    substitution path (Checker.kt:91386 `getTypeFromTypeNode(decl.type)` WITH `currentTypeAliasArgs`)
+    DOES process a FunctionType alias body, and a minimal repro (`type Transformer<T> = (n:T)=>T;
+    type TransformerFactory<T> = (c:number)=>Transformer<T>; return src`) compiles CLEAN. The real
+    FP is a WHOLE-PROGRAM conflation (Blocker #3 family — `TransformerFactory`/`Transformer`/
+    `SourceFile`/`Bundle` resolve differently in the full program); needs an instrumented probe on
+    the real profile, NOT the M3.3 generic-alias angle.
+  - `checker.ts:28630` `flowType.flags === 0 ? flowType.type` on `Type | IncompleteType`: numeric-
+    literal-`0` discriminant narrowing where the member discriminants are an enum (`Type.flags:
+    TypeFlags`) vs a literal `0` (`IncompleteType.flags`) — deep discriminant narrowing.
+  - `es2020.ts:91` `chain.questionDotToken`: needs `Debug.assertNotNode(x, guard)` NEGATIVE-exclude
+    assert narrowing (`asserts x is Exclude<T, U>`) — new narrowing machinery for a tsc idiom.
+  - `services.ts:2891/2976` `boolean | false` target: `||`-RHS flow narrowing gap (`a === undefined
+    || a` should narrow `a` to non-undefined) + union normalization (`boolean | false` → `boolean`).
+  - `(x || (x = [])).push()` TS2349 (core.ts/binder.ts): round 452 reverted — receiver typed in the
+    call-type pass via a path `contextualAssignmentRhsType` doesn't reach; property/`??=`-IIFE targets.
+  - services missing-property TS2740/TS2741 (`Node` → `Expression`/`PropertyAccessExpression`,
+    `_expressionBrand`): brand-narrowing against conflated Node/Expression types (whole-program).
+
 **Round 456 (2026-07-09) — Array/ReadonlyArray `find` type-guard overload + NonNull-identifier
 undefined-strip + branded-intersection flow-narrowing + IterableIterator heritage + a build-warning
 cleanup; ONE broad relation rule investigated & reverted. Dashboard: compiler 132 → 124 (−8, TS2322
