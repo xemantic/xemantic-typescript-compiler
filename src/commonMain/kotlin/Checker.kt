@@ -92355,12 +92355,36 @@ interface DataView {
                     ?: decl.body?.let { if (bodyHasNoReturn(it)) voidType else null }
                     ?: decl.body?.let { inferReturnTypeFromBody(it) }
                     ?: anyType
-                // Resolve parameter types eagerly within the type param scope
+                // Resolve parameter types eagerly within the type param scope.
                 paramSymbols = getParameterSymbols(decl.parameters)
-                for ((pi, param) in paramSymbols.withIndex()) {
-                    if (pi < decl.parameters.size) {
-                        decl.parameters[pi].type?.let { typeNode ->
+                val hasThisParam = (decl.parameters.firstOrNull()?.name as? Identifier)?.text == "this"
+                if (hasThisParam) {
+                    // Round 460: getParameterSymbols DROPS the `this` pseudo-parameter,
+                    // so the positional zip below shifted every param type by one for a
+                    // this-param function (core.ts's `multiMapAdd<K, V>(this:
+                    // MultiMap<K, V>, key: K, value: V)` displayed `key: MultiMap<K, V>,
+                    // value: K` → FP TS2322 at `map.add = multiMapAdd`). Resolve each
+                    // symbol's type from its OWN valueDeclaration instead.
+                    for (param in paramSymbols) {
+                        (param.valueDeclaration as? Parameter)?.type?.let { typeNode ->
                             symbolTypes[param.id] = getTypeFromTypeNode(typeNode)
+                        }
+                    }
+                } else {
+                    // Legacy positional zip — DELIBERATELY kept for functions without a
+                    // `this` param: a BINDING-PATTERN param is also dropped from
+                    // paramSymbols (round-446 gotcha), and the positional shift keeps
+                    // sig.parameters[i] carrying decl.parameters[i]'s type, which is what
+                    // the call-site arg alignment relies on for leading destructured
+                    // params (moduleSpecifiers.ts getModuleSpecifierPreferences — a
+                    // valueDeclaration-based resolution here regressed 19 sites).
+                    // Aligning properly means synthesizing placeholder symbols for
+                    // pattern params (blast radius) — deferred.
+                    for ((pi, param) in paramSymbols.withIndex()) {
+                        if (pi < decl.parameters.size) {
+                            decl.parameters[pi].type?.let { typeNode ->
+                                symbolTypes[param.id] = getTypeFromTypeNode(typeNode)
+                            }
                         }
                     }
                 }
@@ -92372,8 +92396,11 @@ interface DataView {
                 typeParameters = typeParams,
                 parameters = paramSymbols,
                 resolvedReturnType = returnType,
+                // Round 460: a `this` pseudo-parameter is not a call argument — do not
+                // count it toward the required arity.
                 minArgumentCount = decl.parameters.count {
-                    !it.questionToken && !it.dotDotDotToken && it.initializer == null
+                    !it.questionToken && !it.dotDotDotToken && it.initializer == null &&
+                        (it.name as? Identifier)?.text != "this"
                 },
             )
         } } finally {
