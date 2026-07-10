@@ -1238,6 +1238,17 @@ class Checker(
      *  init-order trap. */
     private var nestedTypeAliasByNameCache: MutableMap<String, TypeAliasDeclaration?>? = null
 
+    /** Round 466: the INTERFACE sibling of [nestedTypeAliasByNameCache] — program-wide map
+     *  name → the UNIQUELY-named InterfaceDeclaration (any nesting depth), or `null` when
+     *  ambiguous. A FUNCTION-BODY-local `interface X { … }` is B83.5-unbound, so a var
+     *  annotation `X[]` resolves to any and the TS7006 walker loses the contextual type
+     *  (tsc inferFromUsage.ts's `interface Priority` → `const priorities: Priority[]`
+     *  with fn-typed members). Built lazily; declared before `init` per the init-order
+     *  trap. The declared-type memo keys by declaration node (a fresh synthetic symbol
+     *  per call would re-mint types). */
+    private var nestedInterfaceByNameCache: MutableMap<String, InterfaceDeclaration?>? = null
+    private val nestedInterfaceTypeMemo = HashMap<InterfaceDeclaration, Type>()
+
     /** Round 464: the VARIABLE sibling of [nestedTypeAliasByNameCache] — program-wide map
      *  name → the UNIQUELY-named VariableDeclaration (any nesting depth), or `null` when
      *  ambiguous. A closure var like tsc checker.ts's `var anyType =
@@ -21209,7 +21220,10 @@ class Checker(
                             // type and propagate it into the literal so nested arrow values
                             // whose slot is a union-with-primitive-and-function can suppress
                             // TS7006 (B6.1 — `contextualOverloadListFromUnionWithPrimitive*`).
-                            val annotatedType = decl.type?.let { getTypeFromTypeNodeSafeNsAware(it) }
+                            // Round 466: with a nested-interface retry for a bare `X`/`X[]`
+                            // annotation naming a B83.5-unbound function-body-local interface
+                            // (inferFromUsage.ts's `const priorities: Priority[]`).
+                            val annotatedType = decl.type?.let { resolveImplicitAnyCtxAnnotation(it) }
                             // When the var decl has a type annotation AND the initializer
                             // is an arrow/function expression, the params are contextually
                             // typed by the annotation. Suppress TS7006 by setting
@@ -21606,6 +21620,33 @@ class Checker(
         } finally {
             inferenceNamespaceStack.removeLast()
         }
+    }
+
+    /** Round 466: annotation resolution for the TS7006 walker's contextual type —
+     *  the standard ns-aware resolution, with a NESTED-INTERFACE retry when a bare
+     *  `X` / `X[]` annotation names a B83.5-unbound function-body-local interface
+     *  (the binder never binds block/body-scoped declarations, so `Priority[]`
+     *  resolves to `Array<any>` and the walker loses the member fn types —
+     *  inferFromUsage.ts's `const priorities: Priority[] = [{ high: t => …, … }]`,
+     *  TS7006 ×6). A name bound anywhere / ambiguous / generic keeps the direct
+     *  result (see [nestedInterfaceCtxType]'s gates). */
+    private fun resolveImplicitAnyCtxAnnotation(node: TypeNode): Type? {
+        val direct = getTypeFromTypeNodeSafeNsAware(node)
+        if (direct != null && direct !== anyType && direct !== errorType) {
+            // an `X[]` that resolved to Array<any/error> still deserves the retry
+            val needRetry = node is ArrayType &&
+                arrayRefElement(direct).let { it == null || it === anyType || it === errorType }
+            if (!needRetry) return direct
+        }
+        val bareName = when (node) {
+            is ArrayType -> (node.elementType as? TypeReference)
+                ?.takeIf { it.typeArguments.isNullOrEmpty() }
+                ?.typeName as? Identifier
+            is TypeReference -> if (node.typeArguments.isNullOrEmpty()) node.typeName as? Identifier else null
+            else -> null
+        }?.text ?: return direct
+        val nested = nestedInterfaceCtxType(bareName) ?: return direct
+        return if (node is ArrayType) getArrayType(nested) else nested
     }
 
     /** Round 435c: the contextual type a declared-by-INITIALIZER local provides to a
@@ -22223,9 +22264,23 @@ class Checker(
                 // Bare arrows directly in arrays stay un-propagated because TypeScript itself
                 // cannot resolve their param types when the array's contextual type is a
                 // union (`Record<string,F1> | Array<F2>` — see contextualSignatureInArrayElement*).
+                // Round 466: an OBJECT-LITERAL element receives the array's ELEMENT type as
+                // its contextual type, so its fn-typed member slots suppress TS7006
+                // (`const priorities: Priority[] = [{ high: t => …, low: t => … }]`).
+                // A UNION contextual type yields NO element type here (arrayRefElement
+                // is Array/ReadonlyArray-Reference-only), so the pinned
+                // contextualSignatureInArrayElement* rule (arrows in union-typed
+                // arrays keep TS7006) is preserved; an arrow element under a DIRECT
+                // `Cb[]` annotation is suppressed via the callable-arity path.
+                val elemCtx = contextualType?.let { arrayRefElement(it) }
+                    ?.takeIf { it !== anyType && it !== errorType }
                 expr.elements.forEach { el ->
                     val ctx = if (el is ArrowFunction || el is FunctionExpression) false else contextuallyTyped
-                    checkImplicitAnyInExpr(el, source, fileName, ctx)
+                    checkImplicitAnyInExpr(
+                        el, source, fileName, ctx,
+                        contextualType = elemCtx,
+                        ctxViaUnionWithPrimitive = ctxViaUnionWithPrimitive,
+                    )
                 }
             }
             else -> {}
@@ -96758,6 +96813,47 @@ interface DataView {
             }
             else -> {}
         }
+    }
+
+    /** Round 466: see [nestedInterfaceByNameCache]. */
+    private fun uniqueNestedInterfaceByName(name: String): InterfaceDeclaration? {
+        val cache = nestedInterfaceByNameCache ?: run {
+            val collected = HashMap<String, MutableList<InterfaceDeclaration>>()
+            val fnSink = HashMap<String, MutableList<FunctionDeclaration>>()
+            val work = ArrayDeque<List<Node>>()
+            for (result in binderResults) work.addLast(result.sourceFile.statements)
+            while (work.isNotEmpty()) {
+                for (node in work.removeLast()) {
+                    if (node is InterfaceDeclaration) {
+                        collected.getOrPut(node.name.text) { mutableListOf() }.add(node)
+                    } else {
+                        collectFnDeclNode(node, fnSink, work)
+                    }
+                }
+            }
+            val out = HashMap<String, InterfaceDeclaration?>()
+            for ((nm, decls) in collected) out[nm] = decls.singleOrNull()
+            nestedInterfaceByNameCache = out
+            out
+        }
+        return cache[name]
+    }
+
+    /** Round 466: the declared type of a UNIQUE body-nested non-generic interface,
+     *  via a transient synthetic symbol (never published to binder tables — the
+     *  B83.5 surgical pattern), memoized by declaration node. Null when the name is
+     *  bound elsewhere (a real binding wins), ambiguous, or generic. */
+    private fun nestedInterfaceCtxType(name: String): Type? {
+        if (currentFileLocals?.get(name) != null || globals[name] != null) return null
+        val decl = uniqueNestedInterfaceByName(name) ?: return null
+        if (!decl.typeParameters.isNullOrEmpty()) return null
+        nestedInterfaceTypeMemo[decl]?.let { return it }
+        val sym = Symbol(SymbolFlags.Interface, name)
+        sym.declarations.add(decl)
+        val t = getDeclaredTypeOfSymbol(sym)
+        if (t === anyType || t === errorType) return null
+        nestedInterfaceTypeMemo[decl] = t
+        return t
     }
 
     /** Round 464: see [nestedVarDeclByNameCache]. */
