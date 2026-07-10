@@ -87597,7 +87597,18 @@ interface DataView {
             // node.parent.parent, … }` after `isClassLike(node.parent.parent)`, tsc
             // utilities.ts:7458). A `Result | undefined` union target contributes its
             // SOLE non-nullish object member as the context.
-            val objLitCtx = if (expr is ObjectLiteralExpression) {
+            // Round 468: the context also reaches an objlit nested as the RIGHT operand
+            // of a returned `&&`/`||`/`??` — `return references && { references,
+            // declaration: parent, … }` (tsc inlineVariable's getInliningInfo): tsc
+            // distributes the contextual type through logical operands, and the nested
+            // objlit's guard-narrowed property values need the per-property context.
+            val ctxObjLit = (expr as? ObjectLiteralExpression)
+                ?: (expr as? BinaryExpression)?.takeIf {
+                    it.operator == SyntaxKind.AmpersandAmpersand ||
+                        it.operator == SyntaxKind.BarBar ||
+                        it.operator == SyntaxKind.QuestionQuestion
+                }?.let { unwrapParens(it.right) as? ObjectLiteralExpression }
+            val objLitCtx = if (ctxObjLit != null) {
                 targetType as? Type.Object
                     ?: ((targetType as? Type.Union)?.types
                         ?.filter { !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) }
@@ -87610,7 +87621,7 @@ interface DataView {
                     // the ReferenceFileLocation context so the pos/end shorthand values
                     // flow-narrow (tsc program.ts:1220). Ambiguous/spread → null.
                     ?: (targetType as? Type.Union)?.let { u ->
-                        selectUnionMemberByObjLitKeys(u, expr)
+                        selectUnionMemberByObjLitKeys(u, ctxObjLit)
                     }
             } else null
             val useCtx = (targetType is Type.Object &&
