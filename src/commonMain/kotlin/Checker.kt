@@ -94759,7 +94759,17 @@ interface DataView {
         var sym = currentFileLocals?.get(name) ?: globals[name] ?: return false
         // An imported enum (`import { NodeBuilderFlags } from "./types"`) is an
         // Alias in this file's locals — follow it to the EnumDeclaration.
-        if (sym.flags.hasAny(SymbolFlags.Alias)) sym = resolveAlias(sym)
+        if (sym.flags.hasAny(SymbolFlags.Alias)) {
+            sym = resolveAlias(sym)
+            // Round 464: a BARREL-imported enum (`import { NodeBuilderFlags } from
+            // "./_namespaces/ts.js"`) stays an unresolved Alias through the general
+            // resolveAlias (the ESM `.js` + `export *` gotcha) — fall back to the
+            // FLOW-ONLY barrel resolver, same as resolveEnumSymbolForDiscriminant.
+            // This is a narrowing-only classifier → FP-safe (only ever suppresses).
+            if (sym.flags.hasAny(SymbolFlags.Alias)) {
+                sym = resolveImportedEnumSymbol(sym, mutableSetOf()) ?: return false
+            }
+        }
         return sym.flags.hasAny(SymbolFlags.Enum) &&
             sym.declarations.any { it is EnumDeclaration }
     }
