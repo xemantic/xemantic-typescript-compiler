@@ -101597,14 +101597,45 @@ interface DataView {
             val contributed = mutableListOf<Type>()
             for (c in objectType.types) {
                 val app = getApparentType(c)
+                // Round 465 (namedEvaluation kind-reduction): a UNION constituent of the
+                // intersection (`NamedEvaluation & BinaryExpression` where NamedEvaluation
+                // is a union of kind-discriminated intersections) contributes the property
+                // only after its members are REDUCED by `.kind` disjointness against the
+                // SIBLING constituents — tsc reduces `(A | B) & C` members whose literal
+                // `kind` contradicts C's, so `node.left` on the example resolves through
+                // the surviving `AssignmentExpression & { left: Identifier }` members to
+                // `Identifier`, not BinaryExpression's wide `Expression`. Conservative:
+                // fires only when the reduction actually removed members, kept ≥1 survivor,
+                // and EVERY survivor resolves the property (any unreadable kind on either
+                // side makes typeGuardMemberDisjoint false → no reduction → prior behavior).
+                if (app is Type.Union) {
+                    val siblings = objectType.types.filter { it !== c }.map { getApparentType(it) }
+                    val reduced = app.types.filter { m ->
+                        siblings.none { s -> typeGuardMemberDisjoint(m, s) }
+                    }
+                    if (reduced.isNotEmpty() && reduced.size < app.types.size) {
+                        val pts = reduced.map { resolveMemberPropertyType(it, propName) }
+                        if (pts.all { it != null }) {
+                            @Suppress("UNCHECKED_CAST")
+                            val nn = pts as List<Type>
+                            contributed.add(if (nn.size == 1) nn[0] else getUnionType(nn))
+                        }
+                    }
+                    continue
+                }
                 val p = getPropertyOfType(app, propName) ?: continue
                 contributed.add(
                     if (app is Type.Reference) resolveGenericPropertyType(app, p) ?: getTypeOfSymbol(p)
                     else getTypeOfSymbol(p)
                 )
             }
-            if (contributed.isNotEmpty()) {
-                return if (contributed.size == 1) contributed[0] else getIntersectionType(contributed)
+            // Round 465: dedupe by Type.id — the union-reduction contribution above can
+            // resolve to the SAME interface instance a sibling contributes (both cached by
+            // symbol id), and a self-intersection `Expression & Expression` makes downstream
+            // arg checks bail where the plain type correctly fires.
+            val distinct = contributed.distinctBy { it.id }
+            if (distinct.isNotEmpty()) {
+                return if (distinct.size == 1) distinct[0] else getIntersectionType(distinct)
             }
             // no constituent has the property → fall through to anyType
         }
