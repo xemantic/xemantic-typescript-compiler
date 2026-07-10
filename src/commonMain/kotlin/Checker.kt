@@ -84891,6 +84891,42 @@ interface DataView {
         return false
     }
 
+    /** Round 464b: see the caller — types top-level object-destructured elements
+     *  from the source's declared members. Optional members widen with undefined;
+     *  any collision with an existing entry, a union/any source, defaults, rest,
+     *  or nested patterns are all skipped (conservative, first-decl-wins). */
+    private fun recordDestructuredConstElementTypes(pattern: ObjectBindingPattern, init: Expression?) {
+        if (init == null) return
+        val initT = try { getTypeOfExpression(init) } catch (_: Exception) { return }
+        if (initT === anyType || initT === errorType || initT === unknownType || initT is Type.Union) return
+        val apparent = try { getApparentType(initT) } catch (_: Exception) { return }
+        for (el in pattern.elements) {
+            val inner = el.name as? Identifier ?: continue
+            if (inner.text.isEmpty() || el.dotDotDotToken || el.initializer != null) continue
+            if (currentLocalTypes.containsKey(inner.text)) continue
+            if (inner.text in ambiguousBlockLocalNames) continue
+            val propName = (el.propertyName as? Identifier)?.text ?: inner.text
+            val sym = try { getPropertyOfType(apparent, propName) } catch (_: Exception) { null } ?: continue
+            val t = try { getTypeOfSymbol(sym) } catch (_: Exception) { null } ?: continue
+            if (t === anyType || t === errorType) continue
+            // FUNCTION-shaped member types stay unrecorded: re-checking a
+            // destructured fn value against its interface target rides the
+            // fn-type relation's M3 gaps (tsbuildPublic.ts's
+            // changeCompilerHostLikeToUseCache elements FP'd when recorded) —
+            // data members are the safe, high-value subset. A fn member may
+            // arrive lazily-membered or wrapped `| undefined` — resolve + check
+            // union constituents.
+            fun fnShaped(x: Type): Boolean = (x as? Type.Object)?.let { o ->
+                try { resolveStructuredTypeMembers(o) } catch (_: Exception) {}
+                !o.callSignatures.isNullOrEmpty() || !o.constructSignatures.isNullOrEmpty()
+            } == true
+            if (fnShaped(t) || (t is Type.Union && t.types.any { fnShaped(it) })) continue
+            val eff = if (isOptionalProperty(sym) && !typeIncludesUndefined(t))
+                getUnionType(listOf(t, undefinedType)) else t
+            currentLocalTypes[inner.text] = eff
+        }
+    }
+
     private fun checkVarDeclAssignability(
         decl: VariableDeclaration, source: String, fileName: String,
         varTypes: MutableMap<String, String>, typeParams: Set<String>
@@ -84908,6 +84944,14 @@ interface DataView {
             (decl.initializer as? ObjectLiteralExpression)?.let {
                 checkBindingPatternExcessProperties(name, it, source, fileName)
             }
+            // Round 464b: record each TOP-LEVEL element's member type into
+            // currentLocalTypes — a destructured const (`const { kind, index } = ref`)
+            // is B83.5-unbound, so a later use of `index` resolved anyType and every
+            // consumer bailed (tsc program.ts getReferencedFileLocation: the anyType
+            // `index` made `file.referencedFiles[index]` any, defeating the
+            // destructuring-overwrite narrowing for pos/end). Conservative: absent
+            // names only (first-decl-wins), non-union sources, no defaults/rest.
+            recordDestructuredConstElementTypes(name, decl.initializer)
         }
         if (name !is Identifier) return
 
@@ -87427,9 +87471,19 @@ interface DataView {
             // SOLE non-nullish object member as the context.
             val objLitCtx = if (expr is ObjectLiteralExpression) {
                 targetType as? Type.Object
-                    ?: (targetType as? Type.Union)?.types
+                    ?: ((targetType as? Type.Union)?.types
                         ?.filter { !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) }
-                        ?.singleOrNull() as? Type.Object
+                        ?.singleOrNull() as? Type.Object)
+                    // Round 464b: a MULTI-object-member union target selects the
+                    // constituent whose members cover every objlit property NAME
+                    // (tsc's contextual-type distribution picks the matching member) —
+                    // `return { file, pos, end, packageId }` vs `ReferenceFileLocation |
+                    // SyntheticReferenceFileLocation` (Synthetic lacks pos/end) yields
+                    // the ReferenceFileLocation context so the pos/end shorthand values
+                    // flow-narrow (tsc program.ts:1220). Ambiguous/spread → null.
+                    ?: (targetType as? Type.Union)?.let { u ->
+                        selectUnionMemberByObjLitKeys(u, expr)
+                    }
             } else null
             val useCtx = (targetType is Type.Object &&
                 (expr is ArrowFunction || expr is FunctionExpression)) || objLitCtx != null
@@ -131748,6 +131802,31 @@ interface DataView {
     /** For an object-literal value, pick the single non-Array object-like constituent of a
      *  (possibly union) target member type — e.g. `Bar | Bar[]` → `Bar`. Returns null when
      *  ambiguous / no object constituent / the type is itself an Array. */
+    /** Round 464b: from a union's ≥2 object members, the SINGLE one whose members
+     *  cover every property NAME of [ol] (tsc's contextual-type distribution picks
+     *  the matching member). Spread/computed properties or an ambiguous/empty match
+     *  → null (no context — conservative). */
+    private fun selectUnionMemberByObjLitKeys(u: Type.Union, ol: ObjectLiteralExpression): Type.Object? {
+        val names = ol.properties.map { p ->
+            when (p) {
+                is ShorthandPropertyAssignment -> p.name.text
+                is PropertyAssignment -> getPropertyKeyName(p.name) ?: return null
+                else -> return null
+            }
+        }
+        if (names.isEmpty()) return null
+        val objs = u.types.mapNotNull { it as? Type.Object }
+            .filter { !(it is Type.Reference && it.target.symbol?.name == "Array") }
+        if (objs.size < 2) return null
+        val matching = objs.filter { o ->
+            try {
+                resolveStructuredTypeMembers(o)
+                names.all { n -> getPropertyOfType(o, n) != null }
+            } catch (_: Exception) { false }
+        }
+        return matching.singleOrNull()
+    }
+
     private fun selectObjectConstituentForObjectLiteral(t: Type): Type.Object? {
         fun isArrayRef(x: Type) = x is Type.Reference && x.target.symbol?.name == "Array"
         if (isArrayRef(t)) return null
