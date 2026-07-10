@@ -39,6 +39,64 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
+**Round 470b (2026-07-10, the services burn-down continues) — TEN bounded fixes across 8 commits
+(a PARALLEL session's perf commit — round 470 below — was rebased in mid-stream). Dashboard:
+services 86 → 73 (−13; every step strictly-removals by listAll diff; bench row 39.8 s self,
+−7.8% riding the perf commit). Suite 9,920 → 9,955 (+35 local across 8 new test files, 0
+regressions); commits 4df5b318 / b7c5b152 / 51a2c96c / c3c6813d / 13240cb2 / 03364f91 /
+1c8cd83a / e23b1d79.**
+- **Fix 1 (4df5b318, keyof typeof Enum):** `typeof Enum` washes to anyType so `keyof` gave
+  `string | number | symbol` — keyofTypeQueryEnumMemberNames builds the member-NAME literal union
+  (barrel aliases via the memoized flow-only resolveImportedEnumSymbol; the merged symbol's
+  declarations are POLLUTED with ImportSpecifiers, so the value-merge bail tests specific kinds,
+  never "anything non-enum"). Cleared navigateTo:188.
+- **Fix 2 (b7c5b152, union member with string index sig):** resolveMemberPropertyType falls back
+  to the apparent Type.Object's stringIndexInfo value — `settingsOrHost.getCompilationSettings` on
+  `CompilerOptions | MinimalResolutionCacheHost` resolves through CompilerOptions' index sig
+  (fixes BOTH the emission and property-TYPE sites, the round-419 lesson). Cleared
+  documentRegistry:222.
+- **Fix 3 (51a2c96c, TS2366 param-member discriminant):** paramMemberChainType resolves a switch
+  receiver `<param>.parent` through the param's annotation (the CFA pass has no param scope), so
+  `switch (constructorDeclaration.parent.kind)` over `ClassDeclaration | (ClassExpression & {…})`
+  proves exhaustive. Cleared convertParamsToDestructuredObject:683.
+- **Fixes 4+5 (c3c6813d, this-guard pair):** resolvePropertyMethodDecl resolves a NULLISH union
+  receiver through its sole non-nullish member, and the round-444 this-guard UNION bail is relaxed
+  to a shared-decl test (a `guard() && cond && read` branch join unions base + subtype, both
+  inheriting the guard). COMPANION caught by the local negative pin: resolvedCallReturnTypeForFlow
+  bails on an optional-chained CALLEE (`factory?.make(t)`). Cleared stringCompletions:641/642 ×3
+  + goToDefinition:513.
+- **Fix 6 (13240cb2, this.prop assignment ctx):** the implicit-any walker tracks the enclosing
+  class's members so `this.skipTrivia = skipTrivia || (pos => pos)` resolves the arrow's context
+  from the property annotation (getTypeOfExpression(this) is anyType per B101). Cleared
+  services.ts:1318 TS7006.
+- **Fix 7 (03364f91, OR-return left narrowing):** a returned `X || undefined` / `X ?? y`
+  recombines with the guard-narrowed LEFT reference via combineBinaryTypes (monotone). Cleared
+  sourcemaps:212.
+- **Fix 8 (1c8cd83a, nested-block const shadows param, M1.11):** a let/const in a NESTED block
+  colliding with a PARAM registers anyType in the call-types walker (top-level body decls keep the
+  param-wins redeclaration rule — functionArgShadowing). Cleared importFixes:1967/1970 ×2.
+- **Fix 9 (e23b1d79, sibling-discriminant optional-member arg):** the optional-member-arg TS2345
+  emitter suppresses when the discriminant-NARROWED receiver declares the member REQUIRED
+  (`case SyntaxKind.MethodDeclaration: … fd.name` — the guard tests the SIBLING `.kind`, so the
+  path-keyed access narrowing can't see it). Cleared convertParamsToDestructuredObject:475 +
+  fixUnreferenceableDecoratorMetadata:70.
+- **Scouted, deferred with findings:** symbolDisplay:917/935 TS7034/7005 is tsc's TWO-PART
+  evolving-any model (declaration-site TS7034 + per-reference auto-flow via
+  isPastLastAssignment/flowContainer-extension, tsc checker.ts ~30260/31170) — a faithful fix
+  needs the evolving-type model, not a walker tweak (static derivation could NOT reproduce why
+  f9/f10 error while symbolDisplay doesn't). utilities:1750 TS2538 needs binarySearchKey's U
+  inferred from the keySelector RETURN (generic inference). textChanges:706/callHierarchy:263
+  TS2349 look like augmentation-merge method resolution (Blocker #3 deep). completions:2237 +
+  documentHighlights:193 need probes (fn-typed-param sig alignment suspected for the latter).
+- **NEXT (services @ 73, 27 real):** the objlit giants (services.ts:1327 ObjectAllocator /
+  completions:1922/2299/2391 / importFixes:316/374 / signatureHelp:379 / findAllReferences:1000 —
+  nested objlit member context, likely one family); organizeImports:115/216 (optional-member
+  reads need `| undefined`, broad); program.ts:1088 ResolutionLoader<T>; services.ts:1585
+  string[] vs keyof-literal-union (Object.keys typing); stringCompletions:1133 `unknown` narrowing
+  through `for (const condition in target)`; fixMissingTypeAnnotationOnExports:452 ×2 (Node vs
+  Expression brand); services.ts:656/725 SymbolObject implements Symbol (TS2420); mapCode:55
+  flatten gate-(k) probe; jsTyping:414 barrel assertNever; emitter:994 whole-program probe.**
+
 **Round 470 (2026-07-10, user-directed 3-way benchmark + profile session, M5) — `localTypeAliasIndex`
 (Tier 1): [findLocalTypeAlias]'s per-call whole-file AST rescan replaced by an eager per-file
 first-wins DFS index (Checker.kt, declared before `init` per the init-order trap). Self-compile
