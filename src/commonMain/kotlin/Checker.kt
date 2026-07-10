@@ -99610,7 +99610,23 @@ interface DataView {
                         candidates.add(Candidate(ai, neverType, null))
                         continue
                     }
-                    val rawArgType0 = getTypeOfExpression(arg)
+                    val rawArgType0Declared = getTypeOfExpression(arg)
+                    // Round 464 (M3.4 × M3.1): a bare Identifier/PropertyAccess arg whose
+                    // DECLARED type is a union infers from its flow-NARROWED type (tsc
+                    // infers from narrowed arg types) — `const name = cloneNode(node)`
+                    // inside `switch (node.kind) { case SyntaxKind.Identifier: … }` binds
+                    // T := Identifier, not the declared EntityName union (tsc
+                    // typeSerializer.ts serializeEntityNameAsExpression). Gated to
+                    // union-declared reference args + a strict non-never refinement that
+                    // still relates to the declared type, so inference only ever gets
+                    // MORE precise; a null flow graph is a no-op inside the narrower.
+                    val rawArgType0 = if (rawArgType0Declared is Type.Union &&
+                        (arg is Identifier || arg is PropertyAccessExpression)) {
+                        val n = getNarrowedTypeForReference(rawArgType0Declared, arg)
+                        if (n !== rawArgType0Declared && n !== neverType && n !== errorType &&
+                            n !== anyType && checkTypeRelatedTo(n, rawArgType0Declared, assignableRelation)) n
+                        else rawArgType0Declared
+                    } else rawArgType0Declared
                     // M3.1 (round 428): a UNION arg in an Array<tp> / union-of-tp param
                     // position contributes its single non-nullish member (`Statement[] |
                     // undefined` → `Statement[]` — tsc's `x = append(x, item)` idiom).
