@@ -98221,6 +98221,10 @@ interface DataView {
             // `!isJsxOpeningFragment(node)` collapsed JsxCallLike to `never`).
             return getUnionType(t.types.filter {
                 typeGuardMemberDisjoint(it, targetType) ||
+                    // Round 472: a member whose `.kind` DOMAIN exceeds the target's
+                    // provably has surviving values — keep it (see the single-type
+                    // negative branch below; same enum-any over-acceptance).
+                    kindDomainProvesNotSubtype(it, targetTypeNode) ||
                     !checkTypeRelatedTo(it, targetType, assignableRelation)
             })
         }
@@ -98243,7 +98247,117 @@ interface DataView {
                 else -> targetType
             }
         }
-        return if (checkTypeRelatedTo(t, targetType, assignableRelation)) neverType else t
+        // Round 472: the negative branch collapses to `never` only when t is GENUINELY
+        // a subtype — our relation over-accepts a wide AST-node interface against a
+        // brand-kinded union (`Node <: Modifier` "holds" because KeywordToken<TKind>'s
+        // enum-member `kind` resolves to `any`), so `!isModifier(node)` washed `node`
+        // to never and every later use in the false branch FP'd (tsc completions.ts
+        // isModifierLike → the :2237 identifierToKeywordKind(node) TS2345). A t whose
+        // declared `.kind` DOMAIN has keys outside the target's domain provably has
+        // surviving values (tsc keeps it) → keep t.
+        return if (checkTypeRelatedTo(t, targetType, assignableRelation) &&
+            !kindDomainProvesNotSubtype(t, targetTypeNode)) neverType else t
+    }
+
+    /** Round 472: true when [t]'s declared `.kind` key DOMAIN provably exceeds the
+     *  guard target's — [t] then has values outside the target, so it is NOT a
+     *  subtype, whatever the (enum-any over-accepting) structural relation claims.
+     *  Unlike [discriminantKindKeys] the domain readers accept a BARE-enum
+     *  annotation (`kind: SyntaxKind` → the whole member set) and — node-side —
+     *  a generic token-like reference (`ModifierToken<SyntaxKind.AbstractKeyword>`)
+     *  whose `kind` member is inherited through generic `extends` levels with the
+     *  type-arg NODES threaded through TP positions (the resolved arg TYPE is `any`
+     *  for an enum member, so only the nodes can decide). Any unreadable side →
+     *  false (callers keep the structural verdict). */
+    private fun kindDomainProvesNotSubtype(t: Type, targetNode: TypeNode): Boolean {
+        val tk = kindDomainKeysOfType(t) ?: return false
+        val tgk = kindDomainKeysFromTypeNode(targetNode, 0) ?: return false
+        return tk.any { it !in tgk }
+    }
+
+    private fun kindDomainKeysOfType(x: Type): Set<String>? {
+        val members = if (x is Type.Union) x.types else listOf(x)
+        val keys = mutableSetOf<String>()
+        for (m in members) {
+            val ann = discriminantPropAnnotation(m, "kind") ?: return null
+            val k = enumMemberKeysOfTypeNode(ann) ?: enumSwitchKeysFromTypeNode(ann) ?: return null
+            keys.addAll(k)
+        }
+        return keys.ifEmpty { null }
+    }
+
+    /** The `.kind` key domain of a type NODE: unions distribute (all members must
+     *  read), parameterless aliases unfold, and a generic interface reference reads
+     *  its `kind` member — own or inherited via `extends` — substituting bare-TP
+     *  annotations with the reference's type-arg NODES. */
+    private fun kindDomainKeysFromTypeNode(node: TypeNode?, depth: Int): Set<String>? {
+        if (node == null || depth > 12) return null
+        when (node) {
+            is ParenthesizedType -> return kindDomainKeysFromTypeNode(node.type, depth + 1)
+            is UnionType -> {
+                val keys = mutableSetOf<String>()
+                for (m in node.types) keys.addAll(kindDomainKeysFromTypeNode(m, depth + 1) ?: return null)
+                return keys.ifEmpty { null }
+            }
+            is TypeReference -> {
+                enumMemberKeysOfTypeNode(node)?.let { return it }
+                enumSwitchKeysFromTypeNode(node)?.let { return it }
+                val tn = node.typeName as? Identifier ?: return null
+                val sym = kindDomainTypeDeclSymbol(tn.text) ?: return null
+                (sym.declarations.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration)?.let { alias ->
+                    // Parameterless alias only — a generic alias would need arg
+                    // threading through its body (not needed for the token family).
+                    if (!node.typeArguments.isNullOrEmpty() || !alias.typeParameters.isNullOrEmpty()) return null
+                    return kindDomainKeysFromTypeNode(alias.type, depth + 1)
+                }
+                val iface = sym.declarations.firstOrNull { it is InterfaceDeclaration } as? InterfaceDeclaration
+                    ?: return null
+                return ifaceKindDomainKeys(iface, node.typeArguments, depth + 1)
+            }
+            else -> return null
+        }
+    }
+
+    /** The symbol whose declarations carry the ACTUAL type declaration for [name] —
+     *  a file-local hit that is only an import ALIAS (ImportSpecifier declarations,
+     *  no TypeAlias/Interface) falls through to the merged globals entry, which
+     *  accumulated the declaring file's declarations. */
+    private fun kindDomainTypeDeclSymbol(name: String): Symbol? {
+        val local = currentFileLocals?.get(name)
+        if (local?.declarations?.any { it is TypeAliasDeclaration || it is InterfaceDeclaration } == true) return local
+        return globals[name] ?: local
+    }
+
+    /** [kindDomainKeysFromTypeNode]'s interface walker: the `kind` member's keys,
+     *  own-first then the `extends` chain, threading [argNodes] through bare-TP
+     *  annotation/heritage-arg positions (`ModifierToken<SyntaxKind.X>` →
+     *  `KeywordToken<TKind=X>` → `Token<TKind=X> { kind: TKind }` → X's key). */
+    private fun ifaceKindDomainKeys(iface: InterfaceDeclaration, argNodes: List<TypeNode>?, depth: Int): Set<String>? {
+        if (depth > 12) return null
+        fun substitute(ann: TypeNode): TypeNode? {
+            val nm = ((ann as? TypeReference)?.typeName as? Identifier)?.text ?: return ann
+            val idx = iface.typeParameters?.indexOfFirst { it.name.text == nm } ?: -1
+            return if (idx >= 0) argNodes?.getOrNull(idx) else ann
+        }
+        val kindMember = iface.members.firstOrNull {
+            it is PropertyDeclaration && (it.name as? Identifier)?.text == "kind"
+        } as? PropertyDeclaration
+        if (kindMember?.type != null) {
+            val eff = substitute(kindMember.type) ?: return null
+            return kindDomainKeysFromTypeNode(eff, depth + 1)
+        }
+        for (clause in iface.heritageClauses.orEmpty()) {
+            if (clause.token != SyntaxKind.ExtendsKeyword) continue
+            for (base in clause.types) {
+                val baseName = (base.expression as? Identifier)?.text ?: continue
+                val baseSym = kindDomainTypeDeclSymbol(baseName) ?: continue
+                val baseIface = baseSym.declarations.firstOrNull { it is InterfaceDeclaration } as? InterfaceDeclaration
+                    ?: continue
+                val baseArgs = base.typeArguments?.map { substitute(it) ?: return null }
+                ifaceKindDomainKeys(baseIface, baseArgs, depth + 1)?.let { return it }
+            }
+        }
+        return null
     }
 
     /**
@@ -118326,6 +118440,23 @@ interface DataView {
                         // generic function bodies.
                         if (!isTpReferencingFnType(resolvedType)) {
                             currentLocalTypes[paramName.text] = resolvedType
+                        } else {
+                            // Round 472: the gate must still SHADOW the name — left
+                            // unregistered, a callee named like a cross-file top-level
+                            // function resolves through merged globals to the WRONG
+                            // signature (documentHighlights' nested useParent has a
+                            // fn-typed param `getNodes: (node: T, sourceFile) => …`
+                            // while fixAwaitInSyncFunction declares a top-level
+                            // `function getNodes(sourceFile, start)` → the call
+                            // `getNodes(node, sourceFile)` FP'd TS2345 against the
+                            // codefix's params). The side set yields anyType from
+                            // getCalleeType/getTypeOfIdentifier BEFORE the globals
+                            // fallback; calls to the param stay owned by
+                            // checkFnTypedParamCalls (AST-side, unaffected).
+                            currentParamBindingNames.add(paramName.text)
+                            if (currentLocalTypes.containsKey(paramName.text)) {
+                                currentLocalTypes[paramName.text] = anyType
+                            }
                         }
                     }
                 }
