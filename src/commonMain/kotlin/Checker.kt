@@ -62567,6 +62567,14 @@ interface DataView {
          *  indeterminate (implicit-any) type → flagged (controlFlowNoImplicitAny f9/f10). */
         var lastAssignmentPos = -1
         var conditionalDepth = 0
+        /** Round 472: depth of enclosing `if` regions whose condition TRUTHY-TESTS the
+         *  variable (`if (… && indexInfos)` / `if (x !== undefined)`) — inside them the
+         *  variable is provably assigned (undefined is falsy), so a captured read is
+         *  legitimately typed by the evolved assignments and tsc reports nothing
+         *  (symbolDisplay.ts:935 `indexInfos.forEach((info, i) => … indexInfos.length …)`
+         *  inside `if (… && indexInfos)`). An UNGUARDED captured read keeps firing
+         *  (controlFlowNoImplicitAny f9/f10 pin). */
+        var guardDepth = 0
     }
 
     private fun ulProcessScope(stmts: List<Statement>, source: String, fileName: String) {
@@ -62636,7 +62644,12 @@ interface DataView {
             is IfStatement -> {
                 ulScanExpr(stmt.expression, name, inNested, st)
                 st.conditionalDepth++
+                // Round 472: a condition truthy-testing the variable proves it assigned
+                // for the THEN region (see UlState.guardDepth).
+                val proves = ulCondProvesAssigned(stmt.expression, name)
+                if (proves) st.guardDepth++
                 ulScanStmt(stmt.thenStatement, name, inNested, st)
+                if (proves) st.guardDepth--
                 stmt.elseStatement?.let { ulScanStmt(it, name, inNested, st) }
                 st.conditionalDepth--
             }
@@ -63221,11 +63234,33 @@ interface DataView {
 
     private var currentUlSource: String? = null
 
+    /** Round 472: true when an `if` condition TRUTHY-proves [name] assigned in the
+     *  then-region — a bare `name` conjunct (`if (flags & X && indexInfos)`), or a
+     *  `name !== undefined` / `name != null` test. Conservative: anything else false. */
+    private fun ulCondProvesAssigned(cond: Expression, name: String): Boolean = when (cond) {
+        is Identifier -> cond.text == name
+        is ParenthesizedExpression -> ulCondProvesAssigned(cond.expression, name)
+        is BinaryExpression -> when (cond.operator) {
+            SyntaxKind.AmpersandAmpersand ->
+                ulCondProvesAssigned(cond.left, name) || ulCondProvesAssigned(cond.right, name)
+            SyntaxKind.ExclamationEqualsEquals, SyntaxKind.ExclamationEquals -> {
+                val l = cond.left
+                val r = cond.right
+                val nullish = { e: Expression -> e is Identifier && (e.text == "undefined" || e.text == "null") }
+                (l is Identifier && l.text == name && nullish(r)) ||
+                    (r is Identifier && r.text == name && nullish(l))
+            }
+            else -> false
+        }
+        else -> false
+    }
+
     private fun ulScanExpr(expr: Expression?, name: String, inNested: Boolean, st: UlState) {
         if (expr == null || st.suppressed) return
         when (expr) {
             is Identifier -> if (expr.text == name) {
-                if (inNested) st.capturedReads.add(expr.pos) else { /* same-scope read: flow-determined, fine */ }
+                if (inNested && st.guardDepth == 0) st.capturedReads.add(expr.pos)
+                // same-scope / truthy-guarded reads: flow-determined, fine
             }
             is BinaryExpression -> {
                 val lhs = expr.left
@@ -63260,7 +63295,7 @@ interface DataView {
             is ObjectLiteralExpression -> for (p in expr.properties) {
                 when (p) {
                     is PropertyAssignment -> ulScanExpr(p.initializer, name, inNested, st)
-                    is ShorthandPropertyAssignment -> if (p.name.text == name && inNested) st.capturedReads.add(p.name.pos)
+                    is ShorthandPropertyAssignment -> if (p.name.text == name && inNested && st.guardDepth == 0) st.capturedReads.add(p.name.pos)
                     is SpreadAssignment -> ulScanExpr(p.expression, name, inNested, st)
                     else -> {}
                 }

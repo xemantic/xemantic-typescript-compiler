@@ -39,13 +39,13 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
-**Round 472 (2026-07-11, the services burn-down — every remaining real services FP but ONE family
-cleared) — SIX fixes in 5 commits (15c1ff56 / ada176fd / 255a92f6 / 36f98fbf / + the emitter-994+
-program-1088 commit). Dashboard: services 56 → 48 (−8; TS2322 3 → 0, TS2345 2 → 0, TS2740 → 0,
-TS2538 → 0, TS2339 → 0 — the remaining 48 = TS2591×43 + TS2304×2 `global` + TS2584 console, all
-env-legit offline artifacts, + symbolDisplay's TS7034/TS7005 evolving-any pair, the LAST real
-family). Every fix verified strictly-removals by per-position listAll diff; suite 10,003 / 0
-failing (+16 local across 6 new test files). Compiler profile unchanged (46, zero real).**
+**Round 472 (2026-07-11, the services burn-down — SERVICES REACHES ZERO REAL FPs) — SEVEN fixes
+in 6 commits (15c1ff56 / ada176fd / 255a92f6 / 36f98fbf / c09dc08b / + the truthy-guard commit).
+Dashboard: services 56 → 46 (−10; TS2322 3 → 0, TS2345 2 → 0, TS2740/TS2538/TS2339/TS7034/TS7005
+→ 0 — the remaining 46 = TS2591×43 + TS2304×2 `global` + TS2584 console, ALL env-legit offline
+artifacts). The SECOND profile at zero real FPs, matching compiler. Every fix verified
+strictly-removals by per-position listAll diff; suite 10,009 / 0 failing (+21 local across 8 new
+test files). Compiler profile unchanged (46, zero real).**
 - **Fix 1 (15c1ff56, nested-objlit contextual distribution):** getTypeOfObjectLiteral's ctxObj now
   resolves a UNION contextual type (sole non-nullish object member → NEW
   selectUnionMemberByObjLitDiscriminant via the round-411 canonical `symId#member` key space →
@@ -94,12 +94,20 @@ failing (+16 local across 6 new test files). Compiler profile unchanged (46, zer
 - **Cross-profile at session end:** server 275 → 232 (−43), harness 481 → 429 (−52) — the six
   fixes generalize; bench rows appended (services 40.9 s self, +1.7% vs the round-471b band —
   no perf regression).
-- **NEXT (services @ 48, ONE real family):** symbolDisplay:917/935 TS7034/TS7005 needs tsc's
-  TWO-PART evolving-any model (round-470b finding stands — declaration-site TS7034 + per-reference
-  auto-flow via isPastLastAssignment; the conditional assignment at :922 flows into the forEach
-  closure read at :935 because it is PAST the last assignment, so tsc uses the final evolved
-  `IndexInfo[] | undefined`). Then the server (@232) / harness (@429) burn-downs — same
-  listAll-diff workflow on their own residuals.**
+- **Fix 7 (the LAST real services FP — symbolDisplay:917/935 TS7034/TS7005): the truthy-guard
+  rule, NOT the full evolving-any model.** A captured read of an auto-typed `let x;` inside an
+  `if` whose condition TRUTHY-TESTS the variable (`if (flags & Sig && indexInfos)` /
+  `x !== undefined`) is provably assigned (undefined is falsy) — the closure-position flow
+  inside the guard carries the evolved non-undefined type, so tsc reports nothing.
+  `ulCondProvesAssigned` + `UlState.guardDepth` gate the capturedReads recording; an UNGUARDED
+  captured read keeps firing (controlFlowNoImplicitAny f9/f10 — re-derived from the reference
+  baselines this round: BOTH the nested function decl AND the stored arrow error in tsc, so
+  "past the last assignment" alone is NOT the suppressor; the guard is).
+  **SERVICES @ 46 — ZERO REAL FPs** (TS2591×43 + TS2304×2 `global` + TS2584 console, all
+  env-legit offline artifacts) — the SECOND profile at zero real, matching compiler.
+- **NEXT:** re-baseline the small profiles (tsc-cli/jsTyping/deprecatedCompat/typingsInstallerCore
+  — stale at round-451 rows, should now be near-46) and burn down server (@232) / harness (@429)
+  with the same listAll-diff workflow. v1 exit = all 8 profiles at zero real FPs.**
 
 **Round 471 (2026-07-10/11, the services burn-down continues) — NINE bounded fixes in 9 commits
 (63287e70 / 3f5166da / 3766ef73 / 8524afe4 / 093df3f1 / 39b0fddf / c7781e76 / f9a81674 / bd70f5d6). Dashboard: services 72 → 56 (−16; TS2322 12 → 3, TS2345 5 → 2, TS2349 2 → 0, TS2741 2 → 0,
