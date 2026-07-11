@@ -549,6 +549,10 @@ class Checker(
      *  conflatedInterfaceFiles build). */
     private var moduleInterfaceNames: Set<String> = emptySet()
 
+    /** Round 471b: per-symbol-id memo for [isLibPhantomMemberOfModuleInterface] —
+     *  null = not a mixed lib+module interface; else the lib-phantom member names. */
+    private val libPhantomMembersCache: MutableMap<Int, Set<String>?> = HashMap()
+
     /** Param name → enum display name for params typed as a type parameter constrained
      *  to an enum (`function f<B extends E>(p: B)` → `p` → `E`). Populated by pure symbol
      *  lookup at function-body entry; consulted ONLY by [enumTypedReceiverDisplay] for the
@@ -1223,10 +1227,18 @@ class Checker(
      *  init-order trap (the narrowing walk runs during checking). */
     private var nestedFunctionByNameCache: MutableMap<String, FunctionDeclaration?>? = null
 
-    /** Round 471: file of each collected nested FunctionDeclaration (populated by
-     *  [buildNestedFunctionMap]) — consulted by the same-file nested-guard shadow rule
-     *  in [resolveFlowCalleeDecl]. */
-    private var nestedFnDeclFiles: MutableMap<FunctionDeclaration, String> = HashMap()
+    /** Round 471: per-name FILE lists aligned with [nestedFunctionClustersCache]'s
+     *  cluster order (populated by [buildNestedFunctionMap]) — consulted by the
+     *  same-file nested-guard shadow rule in [resolveFlowCalleeDecl]. NEVER key a
+     *  map/set by a FunctionDeclaration: AST nodes are data classes, so hashing
+     *  deep-hashes the whole body subtree (a node-keyed map here cost the services
+     *  self-compile +10 s, round 471b). */
+    private var nestedFnClusterFiles: MutableMap<String, MutableList<String>> = HashMap()
+
+    /** Round 471: the file whose statements [buildNestedFunctionMap] is currently
+     *  walking (null outside the build — other collectFnDeclNode callers skip the
+     *  file recording). */
+    private var nestedFnCollectFile: String? = null
 
     /** Round 463: the full same-name clusters behind [nestedFunctionByNameCache] —
      *  populated by the same [buildNestedFunctionMap] walk. A name with ≥2 declarations
@@ -97304,13 +97316,16 @@ interface DataView {
                     else if (globalsHitNonGuard) {
                         // The unique predicate-bearing nested decl in the CURRENT file
                         // (from the full cluster — the program-wide unique winner is
-                        // null when several files nest same-named guards).
-                        nestedFunctionClusterByName(callee.text)
-                            ?.filter {
-                                it.type is TypePredicate &&
-                                    nestedFnDeclFiles[it] == currentCheckFileName
+                        // null when several files nest same-named guards). Files come
+                        // from the cluster-order-aligned nestedFnClusterFiles list.
+                        val cluster = nestedFunctionClusterByName(callee.text)
+                        val files = nestedFnClusterFiles[callee.text]
+                        cluster?.withIndex()
+                            ?.filter { (i, d) ->
+                                d.type is TypePredicate &&
+                                    files?.getOrNull(i) == currentCheckFileName
                             }
-                            ?.singleOrNull() ?: direct
+                            ?.singleOrNull()?.value ?: direct
                     } else direct
                 }
             }
@@ -97473,19 +97488,18 @@ interface DataView {
      *  — the places a `function NAME(...)` statement can appear. */
     private fun buildNestedFunctionMap(): MutableMap<String, FunctionDeclaration?> {
         val collected = HashMap<String, MutableList<FunctionDeclaration>>()
-        // Round 471: per-file batches so each collected decl records its FILE
-        // (nestedFnDeclFiles — the same-file nested-guard shadow rule needs it).
+        // Round 471: per-file batches so each collected decl records its FILE into the
+        // order-aligned nestedFnClusterFiles lists (via nestedFnCollectFile — see the
+        // field docs for why a node-keyed map is forbidden here).
         for (result in binderResults) {
-            val fn = result.sourceFile.fileName
+            nestedFnCollectFile = result.sourceFile.fileName
             val work = ArrayDeque<List<Node>>()
             work.addLast(result.sourceFile.statements)
             while (work.isNotEmpty()) {
                 for (node in work.removeLast()) collectFnDeclNode(node, collected, work)
             }
-            for (decls in collected.values) {
-                for (d in decls) if (d !in nestedFnDeclFiles) nestedFnDeclFiles[d] = fn
-            }
         }
+        nestedFnCollectFile = null
         // Round 424b: a name COLLISION resolves to the unique TypePredicate-bearing
         // declaration when there is exactly one (an OVERLOAD cluster like Debug's
         // `type<T>(value: unknown): asserts value is T;` + its annotation-less impl
@@ -97512,7 +97526,12 @@ interface DataView {
     ) {
         when (node) {
             is FunctionDeclaration -> {
-                node.name?.text?.let { nm -> out.getOrPut(nm) { mutableListOf() }.add(node) }
+                node.name?.text?.let { nm ->
+                    out.getOrPut(nm) { mutableListOf() }.add(node)
+                    nestedFnCollectFile?.let { f ->
+                        nestedFnClusterFiles.getOrPut(nm) { mutableListOf() }.add(f)
+                    }
+                }
                 node.body?.let { work.addLast(it.statements) }
             }
             is MethodDeclaration -> node.body?.let { work.addLast(it.statements) }
@@ -101172,6 +101191,11 @@ interface DataView {
                         // mapCode.ts) — the raw `TextSpan[][] | undefined` soft-skipped
                         // the anchor and T stayed unbound while the arg CHECK narrowed,
                         // FP-firing TS2345. Nullish-strip-gated (monotone).
+                        // Round 471: a `&&`-guarded nullable arg reads its flow-narrowed
+                        // type (`focusLocations && flatten(focusLocations)`, tsc
+                        // mapCode.ts) — the raw `TextSpan[][] | undefined` soft-skipped
+                        // the anchor and T stayed unbound while the arg CHECK narrowed,
+                        // FP-firing TS2345. Nullish-strip-gated (monotone).
                         val rawArg0 = getTypeOfExpression(arg)
                         val rawArg = if (arg is Identifier || arg is PropertyAccessExpression) {
                             val narrowed = getNarrowedTypeForReference(rawArg0, arg)
@@ -101193,6 +101217,7 @@ interface DataView {
                     // (`compact([a, b, undefined])` binds T without the undefined).
                     // Soft-skip anything that isn't a clean array arg.
                     if (arrUnionDrops != null) {
+                        // Round 471: same flow-narrowed arg read as the (k) anchor above.
                         // Round 471: same flow-narrowed arg read as the (k) anchor above.
                         val rawArg0 = getTypeOfExpression(arg)
                         val rawArg = if (arg is Identifier || arg is PropertyAccessExpression) {
@@ -131525,8 +131550,14 @@ interface DataView {
             // Round 471: a lib-phantom member of a lib+module-interface merge (Symbol's
             // es2019 `description` vs tsc compiler/types.ts's `interface Symbol`) is a
             // conflation artifact — skip it in the relation (suppression-only; see
-            // isLibPhantomMemberOfModuleInterface).
-            if (isLibPhantomMemberOfModuleInterface(target, targetName)) continue
+            // isLibPhantomMemberOfModuleInterface). PERF (round 471b): gated to a
+            // CLASS-instance source — the class-implements-module-interface family
+            // (SymbolObject → Symbol) — because an unconditional skip removes the
+            // missing-prop EARLY EXIT from every relation against the merged
+            // interface and re-runs full member-type comparisons (services
+            // self-compile 39 s → 77 s, measured).
+            if (source.symbol?.flags?.hasAny(SymbolFlags.Class) == true &&
+                isLibPhantomMemberOfModuleInterface(target, targetName)) continue
             // Check if property is optional (question mark in declaration)
             val isOptional = isOptionalProperty(targetProp)
             val sourceProp = sourceMembers[targetName]
@@ -132195,12 +132226,23 @@ interface DataView {
     private fun isLibPhantomMemberOfModuleInterface(targetType: Type, propName: String): Boolean {
         val obj = targetType as? Type.Object ?: return false
         val sym = obj.symbol ?: return false
-        if (sym.name !in moduleInterfaceNames) return false
-        if (sym.declarations.none { it in builtinLibDecls }) return false
-        if (sym.declarations.none { it is InterfaceDeclaration && it !in builtinLibDecls }) return false
-        val prop = obj.members?.get(propName) ?: return false
-        return prop.declarations.isNotEmpty() &&
-            prop.declarations.all { it in builtinLibMemberDecls }
+        // Round 471b perf: memoized per SYMBOL id — the un-memoized declaration scans
+        // in propertiesRelatedTo's per-prop loop doubled the services self-compile
+        // (39 s → 77 s). null = not a mixed lib+module interface (the common case).
+        val phantom = libPhantomMembersCache.getOrPut(sym.id) {
+            when {
+                sym.name !in moduleInterfaceNames -> null
+                sym.declarations.none { it in builtinLibDecls } -> null
+                sym.declarations.none { it is InterfaceDeclaration && it !in builtinLibDecls } -> null
+                else -> obj.members
+                    ?.filterValues { p ->
+                        p.declarations.isNotEmpty() &&
+                            p.declarations.all { it in builtinLibMemberDecls }
+                    }
+                    ?.keys ?: emptySet()
+            }
+        }
+        return phantom != null && propName in phantom
     }
 
     private fun collectMissingProperties(sourceType: Type, targetType: Type): List<String> {
