@@ -88493,6 +88493,45 @@ interface DataView {
                 // unions / function-typed sources (those have their own elaboration
                 // paths) and for Type.Reference sources (handled by class/interface
                 // structural elaboration elsewhere).
+                // Round 472: a return annotation that is a GENERIC REFERENCE whose type
+                // args include the fn's OWN TPs (`ResolutionLoader<T, …>`) compares
+                // those args covariantly against the source's concrete args and fails
+                // even when every legal instantiation relates (the TP is used
+                // CONTRAVARIANTLY inside the interface — tsc's variance analysis
+                // accepts `createTypeReferenceResolutionLoader<T extends FileReference
+                // | string>` returning a getter typed with the constraint itself,
+                // program.ts:1088). Retry with each own TP bound to its declared
+                // CONSTRAINT — a pass means the mismatch is confined to own-TP
+                // positions satisfiable at the constraint → bail (FN-not-FP; a bare-TP
+                // target `(): T` is excluded by the head-name gate, and an
+                // unconstrained TP contributes no binding so `(): Container<T>` with
+                // a genuinely wrong source still fails).
+                if (returnTypeNode is TypeReference && !returnTypeNode.typeArguments.isNullOrEmpty() &&
+                    typeParams.isNotEmpty() &&
+                    (returnTypeNode.typeName as? Identifier)?.text !in typeParams) {
+                    val bindings = mutableMapOf<String, Type>()
+                    for (nm in typeParams) {
+                        val c = currentTypeParamDecls[nm]?.constraint ?: continue
+                        val ct = try { getTypeFromTypeNode(c) } catch (_: Exception) { continue }
+                        if (ct !== anyType && ct !== errorType) bindings[nm] = ct
+                    }
+                    if (bindings.isNotEmpty()) {
+                        val savedArgs = currentTypeAliasArgs
+                        val savedScope = currentTypeParamScope
+                        val retryTarget = try {
+                            currentTypeAliasArgs = (savedArgs ?: emptyMap()) + bindings
+                            if (savedScope != null) currentTypeParamScope = savedScope - bindings.keys
+                            getTypeFromTypeNode(returnTypeNode)
+                        } finally {
+                            currentTypeAliasArgs = savedArgs
+                            currentTypeParamScope = savedScope
+                        }
+                        if (retryTarget !== anyType && retryTarget !== errorType &&
+                            checkTypeRelatedTo(sourceType, retryTarget, assignableRelation)) {
+                            return
+                        }
+                    }
+                }
                 if (sourceType is Type.Object && targetType is Type.Object &&
                     sourceType.callSignatures.isNullOrEmpty() &&
                     targetType.callSignatures.isNullOrEmpty() &&
@@ -120417,6 +120456,13 @@ interface DataView {
             // is authoritative): member absent → TS2339 with the instantiated display.
             if (objectExpr is PropertyAccessExpression && recvType is Type.Reference && propName.isNotEmpty() &&
                 propName !in RUNTIME_PROPERTIES &&
+                // Round 472: an Array/ReadonlyArray reference answers a numeric key
+                // (`transform.transformed[0]` — a numeric ELEMENT access routed here
+                // with propName "0") via its numeric INDEX SIGNATURE, not a member —
+                // the lib Array InterfaceDeclaration passes every gate below (single
+                // decl, no heritage, no Class flag) and FP'd TS2339 "Property '0'"
+                // (tsc emitter.ts:994).
+                !isArrayLikeReference(recvType) &&
                 !propertyAccessChainIsNamespaceQualified(objectExpr)) {
                 val tsym = recvType.target.symbol
                 val ifaceDecls = tsym?.declarations?.filterIsInstance<InterfaceDeclaration>()
