@@ -1,3 +1,40 @@
+**Round 466 (2026-07-10) — Blocker #2 landed for the compiler profile: map-callback return
+inference through nested functions clears builder.ts:2390, the LAST real compiler FP. Dashboard:
+compiler 47 → 46 (**ZERO real FPs — all 46 are env-legit TS2591×43 require / TS2304×2 `global` /
+TS2584 console, waiting on real @types/node**), services 127 → 126 — both listAll diffs are
+EXACTLY the one removal. Suite 9,855 → 9,863 (+8 local in MapCallbackReturnInferenceTest, 0
+regressions); 1 fix commit (e12b905b). Bench: self ~28 s (normal band).**
+- **The chain (one FP, five mechanisms):** `arrayToMap(diagnostics, value => toFilePath(value[0]),
+  value => value[1])` must select the generic `Map<K, V2>` overload with K := Path, which needs the
+  arrow body typed through: `toFilePath` (UNIQUE nested fn, un-annotated) → `filePaths[fileId - 1]`
+  → `filePaths = buildInfo.fileNames?.map(toPathInBuildInfoDirectory)` (AMBIGUOUS 2-decl nested
+  callback) → both bodies `return toPath(…)` (BARREL-imported, and the merged-globals `toPath`
+  resolves to tsbuild's same-named 2-param NESTED fn — the round-440 pollution family).
+- **Mechanisms landed (all in tryInferSingleTypeParamFromArgs / getReturnTypeOfCallExpression):**
+  (a) NAMED-function callback args bind a return-position TP from the fn's return type, with
+  all-candidates-agree resolution for ambiguous nested names (`namedFnCallbackReturnType`);
+  (b) `tryNestedFnCallReturnType` — a call to a body-nested fn types its return (annotated, or
+  single-return body inference with the decl's own params scoped; depth 3; first-touch memo);
+  (c) a barrel-imported Identifier callee resolves through the flow-only import resolver INSIDE
+  inference bodies (lexical import beats polluted globals); (d) ReadonlyArray.map is now generic
+  (mirrors Array.map — corpus-green); (e) callback-return positions accept `K | undefined`,
+  anchor-able TPs gather before callback-return TPs, and branded intersections
+  (`string & {__pathBrand}`) count as named-like candidates.
+- **Measured gates (each violated cut produced a real FP on the profile):** the nested-fn return
+  capability is INFERENCE-BODY-SCOPED (`inInferenceBodyTyping`) — the program-wide version was
+  net +8 (checker.ts createTypeChecker objlit, getNodeLinks property writes, classFields receiver,
+  commandLineParser objlit: concrete types riding M3 relation gaps); the barrel-callee pre-step is
+  gated NON-generic (`SortedReadonlyArray<T>` resolves garbage without the TP scope) + BODIED
+  (a bodyless decl is one OVERLOAD of a cluster — `sortAndDeduplicate`'s non-generic overload) +
+  no-explicit-type-args; a heterogeneous ARRAY-LITERAL callback body contributes NO candidate
+  (tsc contextually tuple-types it — builder.ts:1332 `map(key => [toFileId(key), …])`).
+- **Tooling trap (CLAUDE.md gotcha added):** `pkill -9 -f KotlinCompileDaemon` KILLS THE INVOKING
+  SHELL — the -f pattern matches the bash -c command line itself (the pgrep self-match gotcha's
+  pkill variant); several compound commands silently died mid-chain. Use `'KotlinCompile[D]aemon'`.
+- **NEXT: the services profile burn-down (126 — TS2322×40 / TS2345×12 / TS2339×8 / TS7006×7 …),
+  then server (last measured 402 at round 458) / harness (615). v1 = all 8 profiles at zero FPs.**
+
+
 **Round 465 (2026-07-10) — bounded FP burn-down to the LAST real compiler FP: SEVEN fixes across
 8 sites. Dashboard: compiler 55 → 47 (−8; TS2322 6 → 1, TS2345/TS2339/TS2349 → 0), services
 139 → 127 (−12 cross-profile). Suite 9,836 → 9,855 (+19 local across 7 new test files, 0

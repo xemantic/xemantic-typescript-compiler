@@ -39,6 +39,66 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
+**Round 475 (2026-07-11, the SERVER burn-down continues) — FIFTEEN fixes in 3 commits
+(f1e2589a / 258aae3d / ccc33547). Dashboard: server 77 → 54 (−23; real FPs 31 → 8 excl.
+TS2591×43 + TS2304×2 `global` + TS2584), harness 255 → 225 (−30 riding, TSV rows recorded),
+services re-verified UNCHANGED at its 46 env-legit floor. Suite 10,045 → 10,075 (+30 local
+across 5 new test files, 0 regressions).**
+- **Fix batch 1 (f1e2589a, the completions `Request` family ×8, Blocker #3):** the round-474
+  "needs a probe first" verdict DISSOLVED into a minimal 2-file repro (protocol `interface
+  Request` + completions-local `type Request = <union of inline type literals>`) — no probe
+  needed. Three coupled extensions: `returnSourceSatisfiesFileLocalAliasBody` iterates EVERY
+  union member of the return annotation (was sole-non-nullish); TypeLiteral alias-body
+  constituents check via the new `objectLiteralExactlySatisfiesTypeLiteralNode`; and
+  checkMemberAccessMissing's union branch suppresses when a MULTI-member receiver union
+  contains an own-file conflated alias member (the chimera makes discriminant narrowing
+  unmodelable) and the property exists on some member/alias constituent.
+- **Fix batch 2 (258aae3d, nine families):** arg-path spread-of-any (session:1469);
+  `registerBindingPatternParamLocals` — binding-pattern params register element names in the
+  assignability pass with annotation member types (optional → `| undefined`), closing the
+  destructured-SHORTHAND cross-file fn leak (editorServices:2852 `enable`, session:4063
+  `isWriteAccess` — the round-473 residual); `getReturnTypeOfNewExpression`'s
+  constructor-interface branch gated to NON-class callees (class instances DO carry
+  constructSignatures inherited-first, so `new ConfiguredProject(...)` typed as `Project` —
+  project:2764, editorServices:2897/3428); `A && B` = falsy(A) | B via isDefinitelyFalsyMember
+  (root-caused from the 2 builder.ts FPs the binding-pattern fix unmasked — `let oldState =
+  oldProgram && oldProgram.state` had dropped `| undefined`); TS2391 optional bodyless methods;
+  TS2416 mutable literal-override widening; TS2564 ctor switch clauses; property-init
+  foreign-TP bail (maybeBind, project:564); rhsIsDefinitelyNonNullish returns true for a
+  NonNullExpression RHS outright (project:1694 — the unwrap-and-descend classified by the
+  INNER call's nullable annotation).
+- **Fix batch 3 (ccc33547, four families):** `<literal-union> || "literal"` keeps the right
+  literal when the kept left is all string-literals (editorServices:2848);
+  resolveMemberPropertyType UNION-root arm — `(A|B).p = A.p | B.p` (union-annotated param
+  member switch; repro clean, the REAL utilities:7827 stays — barrel-imported interfaces need
+  a probe); REST-param targets provide unbounded args (server/utilities:30);
+  conflatedInterfaceFiles extended to cross-file CLASS X + `interface X` merges (canMerge
+  Class+Interface makes it a chimera — scriptVersionCache's `class TextChange`) + the
+  round-468 ARG-side objectLiteralMatchesSomeConflatedDeclaration rule wired into the RETURN
+  path (services/utilities:2353).
+- **Also landed (repro-verified, real site deferred):** const-string discriminant keys in the
+  objlit-vs-union member selection (enumMemberKeysOfTypeNode TypeQuery arm +
+  bare-Identifier const value arm) — the minimal eventName repro passes; the real
+  editorServices:1253 additionally involves protocol.ts's same-named conflated event
+  interfaces.
+- **Process notes:** (a) the round-474 probe-first verdicts keep dissolving into minimal
+  repros — ALWAYS try the 2-file repro before instrumenting; (b) one interim regression
+  (2 builder.ts FPs from the binding-pattern registration) was caught by the per-step listAll
+  diff and root-caused to the missing `&&` falsy rule IN the same batch — the diff-per-step
+  discipline pays; (c) a `java` CLI run during a background gradle compile dies SILENTLY
+  (classes clobbered mid-load) — sequence them.
+- **NEXT (server @ 54, 8 real):** compiler/utilities:7827 TS2366 (probe — the minimal
+  union-param switch repro is clean; barrel-imported CompilerOptions/PrinterOptions or the
+  cross-file enum differ); jsTyping:81/88 SafeList ×2 (probe — why the alias body
+  `ReadonlyMap<string, string>` resolves errorType at the call site; suspect the structural
+  nodeTypes collision); editorServices:1253 (conflated event interfaces + const-string
+  discriminant interplay); session:475 (repro clean — real site involves the protocol
+  namespace-qualified conflated `Event`... probe) + session:3994 (chimera-spread, known);
+  typingInstallerAdapter:224 (case-body read AFTER a while loop — suspect the FlowLoopLabel
+  wash) + :233 (callee resolved to a UNION of the two watchTypingLocations methods → B516
+  intersected param `never` — probe the callee resolution). Then harness (@225 —
+  TS2339×66/TS2322×16/TS7006×15 on harness-only files).**
+
 **Round 474 (2026-07-11, the SERVER burn-down continues) — EIGHT fixes in 4 commits
 (8c65858a / dc105f56 / 5134ea7c / + the literal-write commit). Dashboard: server 104 → 77 (−27;
 real FPs 58 → 31 excl. TS2591×43 + TS2304×2 `global` + TS2584), harness 299 → 255 (−44 riding
@@ -555,42 +615,6 @@ files, 0 regressions); 5 fix commits (d9f0ecab / cfa323d0 / 843f8ce9 / f06586f8 
   CompletionEntry / EmitTextWriter TS2740); mapCode.ts:55 flatten (gate-(k) candidate needs a
   probe — the arg display resolves but T stays raw); stringCompletions `.types`/`.value` on
   `Type` (public-API `isUnion()`/`isStringLiteral()` this-guard modeling).**
-
-**Round 466 (2026-07-10) — Blocker #2 landed for the compiler profile: map-callback return
-inference through nested functions clears builder.ts:2390, the LAST real compiler FP. Dashboard:
-compiler 47 → 46 (**ZERO real FPs — all 46 are env-legit TS2591×43 require / TS2304×2 `global` /
-TS2584 console, waiting on real @types/node**), services 127 → 126 — both listAll diffs are
-EXACTLY the one removal. Suite 9,855 → 9,863 (+8 local in MapCallbackReturnInferenceTest, 0
-regressions); 1 fix commit (e12b905b). Bench: self ~28 s (normal band).**
-- **The chain (one FP, five mechanisms):** `arrayToMap(diagnostics, value => toFilePath(value[0]),
-  value => value[1])` must select the generic `Map<K, V2>` overload with K := Path, which needs the
-  arrow body typed through: `toFilePath` (UNIQUE nested fn, un-annotated) → `filePaths[fileId - 1]`
-  → `filePaths = buildInfo.fileNames?.map(toPathInBuildInfoDirectory)` (AMBIGUOUS 2-decl nested
-  callback) → both bodies `return toPath(…)` (BARREL-imported, and the merged-globals `toPath`
-  resolves to tsbuild's same-named 2-param NESTED fn — the round-440 pollution family).
-- **Mechanisms landed (all in tryInferSingleTypeParamFromArgs / getReturnTypeOfCallExpression):**
-  (a) NAMED-function callback args bind a return-position TP from the fn's return type, with
-  all-candidates-agree resolution for ambiguous nested names (`namedFnCallbackReturnType`);
-  (b) `tryNestedFnCallReturnType` — a call to a body-nested fn types its return (annotated, or
-  single-return body inference with the decl's own params scoped; depth 3; first-touch memo);
-  (c) a barrel-imported Identifier callee resolves through the flow-only import resolver INSIDE
-  inference bodies (lexical import beats polluted globals); (d) ReadonlyArray.map is now generic
-  (mirrors Array.map — corpus-green); (e) callback-return positions accept `K | undefined`,
-  anchor-able TPs gather before callback-return TPs, and branded intersections
-  (`string & {__pathBrand}`) count as named-like candidates.
-- **Measured gates (each violated cut produced a real FP on the profile):** the nested-fn return
-  capability is INFERENCE-BODY-SCOPED (`inInferenceBodyTyping`) — the program-wide version was
-  net +8 (checker.ts createTypeChecker objlit, getNodeLinks property writes, classFields receiver,
-  commandLineParser objlit: concrete types riding M3 relation gaps); the barrel-callee pre-step is
-  gated NON-generic (`SortedReadonlyArray<T>` resolves garbage without the TP scope) + BODIED
-  (a bodyless decl is one OVERLOAD of a cluster — `sortAndDeduplicate`'s non-generic overload) +
-  no-explicit-type-args; a heterogeneous ARRAY-LITERAL callback body contributes NO candidate
-  (tsc contextually tuple-types it — builder.ts:1332 `map(key => [toFileId(key), …])`).
-- **Tooling trap (CLAUDE.md gotcha added):** `pkill -9 -f KotlinCompileDaemon` KILLS THE INVOKING
-  SHELL — the -f pattern matches the bash -c command line itself (the pgrep self-match gotcha's
-  pkill variant); several compound commands silently died mid-chain. Use `'KotlinCompile[D]aemon'`.
-- **NEXT: the services profile burn-down (126 — TS2322×40 / TS2345×12 / TS2339×8 / TS7006×7 …),
-  then server (last measured 402 at round 458) / harness (615). v1 = all 8 profiles at zero FPs.**
 
 
 ### Post-v1 backlog — the "any TypeScript project" horizon (parked 2026-07-03)
