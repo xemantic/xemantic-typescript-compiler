@@ -1255,6 +1255,11 @@ class Checker(
      *  `init` per the init-order trap. */
     private val importedNamespaceSymCache = HashMap<Int, Symbol?>()
 
+    /** Round 474 (Blocker #3): memo for [importedCalleeFunctionType], keyed
+     *  `"file|name"` (null = no collision / unresolvable — keep the globals path).
+     *  Declared before `init` per the init-order trap. */
+    private val importedCalleeFnTypeCache = HashMap<String, Type?>()
+
     /** M1.12 (round 418): program-wide map name → the UNIQUELY-named FunctionDeclaration
      *  (any nesting depth), or `null` when the name is ambiguous (declared in ≥2 places).
      *  tsc's giant closures (`createTypeChecker`, …) declare their type guards
@@ -93045,7 +93050,7 @@ interface DataView {
                 // Store sentinel in cache first to prevent circular type alias StackOverflow
                 declaredTypes[symbol.id] = errorType
                 val decl = symbol.declarations.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration
-                val resolved = if (decl != null) getTypeFromTypeNode(decl.type) else errorType
+                val resolved = if (decl != null) resolveTypeAliasBodyWithOwnerContext(symbol, decl) else errorType
                 declaredTypes[symbol.id] = resolved
                 // B50.4: register alias-name display for non-generic type aliases
                 // whose body resolved to a NEW Type.Object (NOT Union/Intersection).
@@ -93453,6 +93458,94 @@ interface DataView {
     }
 
     /**
+     * Round 474 (Blocker #3): the FUNCTION sibling of [importedTopLevelVarAnnotationType]
+     * — resolve an imported CALLEE through its OWN identity-matched import + `.js`
+     * barrel `export *` chain to the declaring file's own top-level FunctionDeclaration
+     * set, and build the callee type from THOSE declarations. Fires ONLY on a genuine
+     * cross-file collision: the merged `globals` symbol's valueDeclaration is a
+     * different declaration than the import target's (executeCommandLine.ts's
+     * compiler-barrel `formatMessage` vs server/session.ts's `formatMessage(msg,
+     * logger: Logger, …)` — the merged winner is file-order-dependent). Non-collision
+     * resolutions return null so the established globals path stays byte-identical.
+     */
+    private fun importedCalleeFunctionType(name: String, aliasSymbol: Symbol): Type? {
+        val file = currentCheckFileName ?: return null
+        val key = "$file|$name"
+        if (importedCalleeFnTypeCache.containsKey(key)) return importedCalleeFnTypeCache[key]
+        val result = computeImportedCalleeFunctionType(name, aliasSymbol, file)
+        importedCalleeFnTypeCache[key] = result
+        return result
+    }
+
+    private fun computeImportedCalleeFunctionType(name: String, aliasSymbol: Symbol, file: String): Type? {
+        for (decl in aliasSymbol.declarations) {
+            if (decl !is ImportSpecifier) continue
+            val originalName = decl.propertyName?.text ?: decl.name.text
+            // Identity-match the CURRENT file's own import of this specifier — a
+            // first-processed file's locals symbol is polluted with other files'
+            // ImportSpecifiers by mergeSymbolTable (the enclosingImportIndex gotcha).
+            val entry = enclosingImportsOf(decl).firstOrNull { (f, stmt) ->
+                f == file &&
+                    (stmt.importClause?.namedBindings as? NamedImports)?.elements?.any { it === decl } == true
+            } ?: continue
+            val (contextFile, importDecl) = entry
+            val spec = (importDecl.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+            val targetFile = resolveModuleSpecifier(spec, importDecl)
+                ?: resolveAliasJsModuleSpecifier(spec, contextFile)
+                ?: continue
+            val tr = fileResults[targetFile] ?: continue
+            val fnDecls = computeExportedFnDeclsThroughStars(tr.sourceFile, originalName, mutableSetOf(), 0)
+                ?: continue
+            if (fnDecls.isEmpty()) continue
+            // Collision gate: only override when the merged globals winner is NOT one
+            // of the import target's own declarations.
+            val globalsDecl = globals[name]?.valueDeclaration
+            if (globalsDecl != null && fnDecls.any { it === globalsDecl }) continue
+            val transient = Symbol(SymbolFlags.Function, originalName).also { s ->
+                s.declarations.addAll(fnDecls)
+                s.valueDeclaration = fnDecls.first()
+            }
+            val t = getTypeOfSymbol(transient)
+            if (t !== anyType && t !== errorType) return t
+        }
+        return null
+    }
+
+    /** The FUNCTION sibling of [computeExportedVarDeclThroughStars]: the declaring
+     *  file's own exported top-level FunctionDeclaration set (all overloads, one
+     *  file) for [name], following `export *` chains. Null = unknowable. */
+    private fun computeExportedFnDeclsThroughStars(
+        file: SourceFile, name: String, visited: MutableSet<String>, depth: Int,
+    ): List<FunctionDeclaration>? {
+        if (!visited.add(file.fileName)) return null
+        if (depth > 64) return null
+        if (name in moduleNamedExportsOf(file)) {
+            val own = file.statements.filterIsInstance<FunctionDeclaration>().filter {
+                it.name?.text == name && ModifierFlag.Export in it.modifiers
+            }
+            return own.ifEmpty { null }
+        }
+        for (stmt in file.statements) {
+            if (stmt !is ExportDeclaration) continue
+            val spec = (stmt.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+            when (val clause = stmt.exportClause) {
+                null -> {
+                    val target = resolveBarrelStarTarget(spec, file.fileName) ?: continue
+                    computeExportedFnDeclsThroughStars(target, name, visited, depth + 1)?.let { return it }
+                }
+                is NamedExports -> {
+                    val match = clause.elements.find { it.name.text == name } ?: continue
+                    val orig = match.propertyName?.text ?: name
+                    val target = resolveBarrelStarTarget(spec, file.fileName) ?: continue
+                    computeExportedFnDeclsThroughStars(target, orig, visited, depth + 1)?.let { return it }
+                }
+                else -> {}
+            }
+        }
+        return null
+    }
+
+    /**
      * Round 473 (Blocker #3, the server-profile protocol.ts family): the PER-FILE view of
      * a CONFLATED top-level interface. tsc scopes each module's `interface X` to that
      * module; our mergeSymbolTable chimeras every same-named module interface into one
@@ -93499,6 +93592,7 @@ interface DataView {
             is UnionType -> node.types.any { isConflatedInterfaceRefNode(it, depth + 1) }
             is IntersectionType -> node.types.any { isConflatedInterfaceRefNode(it, depth + 1) }
             is ParenthesizedType -> isConflatedInterfaceRefNode(node.type, depth + 1)
+            is TypeOperator -> isConflatedInterfaceRefNode(node.type, depth + 1)
             is TypeLiteral -> node.members.any { m ->
                 (m as? PropertyDeclaration)?.type?.let { isConflatedInterfaceRefNode(it, depth + 1) } == true
             }
@@ -93623,6 +93717,67 @@ interface DataView {
             if (leaf in files) return perFileInterfaceType(name, leaf)
         }
         return null
+    }
+
+    /**
+     * Round 474: resolve a type-alias BODY with the alias's DECLARING file threaded as
+     * [conflatedOwnerFile] when the body references a CONFLATED interface name — a type
+     * alias's body resolves in its declaring file's lexical scope (tsc semantics), so
+     * `type RangeToExtract = { errors: readonly Diagnostic[] }` in extractSymbol.ts must
+     * see extractSymbol's IMPORTED per-file `Diagnostic` view, never the merged chimera
+     * a lazy null-context first touch would bake into [declaredTypes]. The declaring
+     * file is recovered by IDENTITY-matching the declaration in [localTypeAliasIndex]
+     * (a same-named alias in another file is a different node). No conflated reference
+     * in the body → the plain resolution, byte-identical.
+     */
+    private fun resolveTypeAliasBodyWithOwnerContext(symbol: Symbol, decl: TypeAliasDeclaration): Type {
+        if (conflatedInterfaceFiles.isEmpty()) return getTypeFromTypeNode(decl.type)
+        val names = HashSet<String>()
+        collectConflatedRefNames(decl.type, names, 0)
+        if (names.isEmpty()) return getTypeFromTypeNode(decl.type)
+        val owner = localTypeAliasIndex.entries.firstOrNull { (_, m) -> m[symbol.name] === decl }?.key
+            ?: return getTypeFromTypeNode(decl.type)
+        // The owner file DECLARING one of the referenced conflated interfaces itself
+        // (importTracker.ts's own `interface AmbientModuleDeclaration` inside its leaked
+        // `type SourceFileLike = SourceFile | AmbientModuleDeclaration`) keeps the
+        // merged-chimera status quo — the round-443 leaked-alias suppression ecology
+        // (display-keyed) depends on it, and threading the own-file view there regressed
+        // the whole SourceFileLike family (+41 server FPs, measured round 474).
+        if (names.any { owner in (conflatedInterfaceFiles[it] ?: emptySet()) })
+            return getTypeFromTypeNode(decl.type)
+        val saved = conflatedOwnerFile
+        conflatedOwnerFile = owner
+        return try {
+            getTypeFromTypeNode(decl.type)
+        } finally {
+            conflatedOwnerFile = saved
+        }
+    }
+
+    /** Collect the CONFLATED interface names referenced by [node] (the name-yielding
+     *  sibling of [isConflatedInterfaceRefNode] — same shapes, same depth bound). */
+    private fun collectConflatedRefNames(node: TypeNode, out: MutableSet<String>, depth: Int) {
+        if (depth > 4) return
+        when (node) {
+            is TypeReference -> {
+                when (val tn = node.typeName) {
+                    is Identifier -> if (tn.text in conflatedInterfaceFiles) out.add(tn.text)
+                    is QualifiedName -> if (tn.right.text in conflatedInterfaceFiles) out.add(tn.right.text)
+                    else -> {}
+                }
+                node.typeArguments?.forEach { collectConflatedRefNames(it, out, depth + 1) }
+            }
+            is ArrayType -> collectConflatedRefNames(node.elementType, out, depth + 1)
+            is UnionType -> node.types.forEach { collectConflatedRefNames(it, out, depth + 1) }
+            is IntersectionType -> node.types.forEach { collectConflatedRefNames(it, out, depth + 1) }
+            is ParenthesizedType -> collectConflatedRefNames(node.type, out, depth + 1)
+            is TypeOperator -> collectConflatedRefNames(node.type, out, depth + 1)
+            is TypeLiteral -> node.members.forEach { m ->
+                (m as? PropertyDeclaration)?.type?.let { collectConflatedRefNames(it, out, depth + 1) }
+            }
+            is TupleType -> node.elements.forEach { collectConflatedRefNames(it, out, depth + 1) }
+            else -> {}
+        }
     }
 
     /** Get the type of a variable or property from its declaration. */
@@ -127644,6 +127799,19 @@ interface DataView {
                         val type = getTypeOfSymbol(symbol)
                         if (type !== anyType && type !== errorType) return type
                     }
+                    // Round 474 (Blocker #3): a barrel-IMPORTED callee resolves through
+                    // its OWN import when the merged `globals` winner is a DIFFERENT
+                    // same-named function from another subproject —
+                    // executeCommandLine.ts's compiler-barrel `formatMessage(message:
+                    // DiagnosticMessage, …)` vs server/session.ts's `formatMessage(msg,
+                    // logger: Logger, …)`: the merged symbol's valueDeclaration is
+                    // file-order-dependent, so args were checked against the wrong
+                    // file's signature. Gated to a genuine collision (globals resolves
+                    // to a declaration NOT among the import target's own) — the
+                    // non-collision path stays byte-identical through globals.
+                    if (symbol.flags.hasAny(SymbolFlags.Alias)) {
+                        importedCalleeFunctionType(expr.text, symbol)?.let { return it }
+                    }
                 }
                 val symbol = globals[expr.text] ?: return anyType
                 getTypeOfSymbol(symbol)
@@ -138372,7 +138540,20 @@ interface DataView {
         return when (node.operator) {
             SyntaxKind.KeyOfKeyword ->
                 keyofTypeQueryEnumMemberNames(node.type)
-                    ?: getKeyofType(getTypeFromTypeNode(node.type))
+                    ?: run {
+                        val operand = getTypeFromTypeNode(node.type)
+                        // Round 474 (Blocker #3): `keyof X` where X is an alias-SHADOWED
+                        // interface (protocol.ts's `type FormatCodeSettings =
+                        // ChangePropertyTypes<…>` wins the last-wins Interface+TypeAlias
+                        // merge over services/types.ts's interface; the alias body is
+                        // unmodeled → anyType → keyof gave `string | number | symbol`,
+                        // FP'ing every `hasProperty(map, optionName)` arg). Recover the
+                        // literal key union AST-side from the interface declaration.
+                        if (operand === anyType) {
+                            keyofShadowedInterfaceKeyUnion(node.type)?.let { return it }
+                        }
+                        getKeyofType(operand)
+                    }
             SyntaxKind.UniqueKeyword -> esSymbolType // unique symbol
             SyntaxKind.ReadonlyKeyword -> {
                 // `readonly T[]` shorthand: route to globalReadonlyArrayType so the
@@ -138794,6 +138975,72 @@ interface DataView {
         }
         if (!sawEnumDecl || names.isEmpty()) return null
         return getUnionType(names.map { Type.StringLiteral(it) })
+    }
+
+    /**
+     * Round 474 (Blocker #3, the rules.ts `keyof FormatCodeSettings` family): when a
+     * `keyof X` operand resolved to anyType because a `type X` in one file SHADOWED the
+     * `interface X` of another via the last-wins Interface+TypeAlias merge
+     * ([conflatedTypeAliasFiles]), recover tsc's literal key union from the interface
+     * declaration AST-side (own + `extends`-inherited member names, same-file bases
+     * first). Conservative: a non-unique declaring file, an index signature, a
+     * non-Identifier/call-signature member name, or an unresolvable base bails to null
+     * (→ the `keyof any` status quo).
+     */
+    private fun keyofShadowedInterfaceKeyUnion(node: TypeNode): Type? {
+        val ref = node as? TypeReference ?: return null
+        if (ref.typeArguments != null) return null
+        val name = (ref.typeName as? Identifier)?.text ?: return null
+        if (name !in conflatedTypeAliasFiles) return null
+        val file = interfaceDeclFilesAll[name]?.singleOrNull() ?: return null
+        val names = LinkedHashSet<String>()
+        if (!collectInterfaceKeyNamesAst(file, name, names, HashSet(), 0)) return null
+        if (names.isEmpty()) return null
+        return getUnionType(names.map { Type.StringLiteral(it) })
+    }
+
+    /** AST-side member-NAME enumeration for [keyofShadowedInterfaceKeyUnion]: the
+     *  top-level `interface [name]` declarations in [file], plus `extends` bases
+     *  (same-file first, else their unique [interfaceDeclFilesAll] file). Returns
+     *  false = unknowable (index signature / computed name / unresolvable base). */
+    private fun collectInterfaceKeyNamesAst(
+        file: String, name: String, out: MutableSet<String>,
+        visited: MutableSet<String>, depth: Int,
+    ): Boolean {
+        if (depth > 8) return false
+        if (!visited.add("$file|$name")) return true
+        val stmts = fileResults[file]?.sourceFile?.statements ?: return false
+        val decls = stmts.filterIsInstance<InterfaceDeclaration>().filter { it.name.text == name }
+        if (decls.isEmpty()) return false
+        for (decl in decls) {
+            for (m in decl.members) {
+                when (m) {
+                    is IndexSignature -> return false
+                    is PropertyDeclaration -> {
+                        val mn = (m.name as? Identifier)?.text ?: return false
+                        out.add(mn)
+                    }
+                    is MethodDeclaration -> {
+                        val mn = (m.name as? Identifier)?.text ?: return false
+                        // Call/construct signatures parse as methods named ""/"new"
+                        // (the interface-signature gotcha) — they contribute no key.
+                        if (mn.isNotEmpty() && mn != "new") out.add(mn)
+                    }
+                    else -> return false
+                }
+            }
+            for (clause in decl.heritageClauses ?: emptyList()) {
+                if (clause.token != SyntaxKind.ExtendsKeyword) continue
+                for (typeExpr in clause.types) {
+                    val baseName = (typeExpr.expression as? Identifier)?.text ?: return false
+                    val baseFile = if (
+                        stmts.any { it is InterfaceDeclaration && it.name.text == baseName }
+                    ) file else interfaceDeclFilesAll[baseName]?.singleOrNull() ?: return false
+                    if (!collectInterfaceKeyNamesAst(baseFile, baseName, out, visited, depth + 1)) return false
+                }
+            }
+        }
+        return true
     }
 
     private fun getKeyofType(type: Type): Type {
