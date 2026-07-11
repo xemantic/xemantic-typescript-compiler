@@ -86404,6 +86404,18 @@ interface DataView {
                 ))
                 return
             }
+            // Round 472: a `const w: T = { ...anyExpr, … }` — an object literal
+            // spreading an any/unresolved value — is typed `any` by tsc (the spread
+            // poisons the whole object; the round-445 return-path rule), so neither
+            // missing-property nor the coarse TS2322 can fire: the spread may provide
+            // anything. tsc completions.ts:2391 `{ ...baseWriter, write: … }` vs
+            // EmitTextWriter, where baseWriter comes from an unresolvable `.js`-barrel
+            // namespace-member call. Var-decl sibling of the checkReturnAssignability
+            // bail; placed after the per-property drills above so a genuine explicit-
+            // prop mismatch caught there still fires.
+            if ((init as? ObjectLiteralExpression)?.let { objectLiteralHasUnresolvedSpread(it) } == true) {
+                return
+            }
             val (line, character) = getLineAndCharacterOfPosition(source, name.pos)
             // Compute outer-level missing properties directly. `lastMissingPropertyName`
             // can leak from inner comparisons (e.g. `IToken[]` vs `IStateToken[]` —
