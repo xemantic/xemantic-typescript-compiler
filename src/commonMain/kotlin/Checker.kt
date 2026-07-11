@@ -87977,9 +87977,21 @@ interface DataView {
                         selectUnionMemberByObjLitKeys(u, ctxObjLit)
                     }
             } else null
+            // Round 472: a returned ARRAY literal vs an array-like target (or a union
+            // whose sole non-nullish member is one) provides the array reference as
+            // context — getTypeOfArrayLiteral distributes the element type to objlit
+            // elements (findAllReferences.ts:1000 `return [{ definition: …, … }]` vs
+            // `readonly SymbolAndEntries[] | undefined`).
+            val arrLitCtx = (expr as? ArrayLiteralExpression)?.let {
+                (targetType as? Type.Reference)?.takeIf { r -> isArrayLikeReference(r) }
+                    ?: ((targetType as? Type.Union)?.types
+                        ?.filter { m -> !m.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) }
+                        ?.singleOrNull() as? Type.Reference)?.takeIf { r -> isArrayLikeReference(r) }
+            }
             val useCtx = (targetType is Type.Object &&
-                (expr is ArrowFunction || expr is FunctionExpression)) || objLitCtx != null
-            if (useCtx) contextualType = objLitCtx ?: targetType
+                (expr is ArrowFunction || expr is FunctionExpression)) || objLitCtx != null ||
+                arrLitCtx != null
+            if (useCtx) contextualType = objLitCtx ?: arrLitCtx ?: targetType
             // 17.70: contextual literal preservation for return-statement source —
             // mirrors 17.66 (var-decl init) / 17.67 (call arg). When return type
             // contains literal types and the return expression is a literal,
@@ -99354,7 +99366,25 @@ interface DataView {
         // function parameters get inferred from the contextual call signature.
         // Without this, `b3 = { f: (n) => 0 }` displays the source as `{ f: (n: any) => any }`
         // instead of `{ f: (n: number) => number }`.
-        val ctxObj = (contextualType as? Type.Object)?.also {
+        // Round 472: a UNION contextual type resolves to an object member — the sole
+        // non-nullish object member, else the discriminant-selected member (an objlit
+        // `{ kind: InvocationKind.Call, … }` vs a kind-discriminated union picks the
+        // matching constituent, tsc's contextual-type distribution — signatureHelp's
+        // CallInvocation / findAllReferences' Definition), else the key-coverage
+        // selection. Previously a union context yielded NO per-property context at all.
+        val ctxObj = when (val ctx = contextualType) {
+            is Type.Object -> ctx
+            is Type.Union -> {
+                val nonNullish = ctx.types.filter {
+                    !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)
+                }
+                (nonNullish.singleOrNull() as? Type.Object)
+                    ?.takeIf { !(it is Type.Reference && it.target.symbol?.name == "Array") }
+                    ?: selectUnionMemberByObjLitDiscriminant(ctx, expr)
+                    ?: selectUnionMemberByObjLitKeys(ctx, expr)
+            }
+            else -> null
+        }?.also {
             resolveStructuredTypeMembers(it)
         }
         for (prop in expr.properties) {
@@ -99371,8 +99401,14 @@ interface DataView {
                         getTypeOfSymbol(sym)
                     }
                     val savedCtx = contextualType
+                    // Round 472: a NESTED object-literal value inherits the property's
+                    // contextual type (tsc distributes context through object literals) —
+                    // required for the union-discriminant selection + guard-narrowed-value
+                    // acceptance to reach `invocation: { kind: InvocationKind.Call,
+                    // node: parent }` (signatureHelp.ts:379).
                     val useCtx = propCtx != null && propCtx !== anyType && propCtx !== errorType &&
-                        (prop.initializer is ArrowFunction || prop.initializer is FunctionExpression)
+                        (prop.initializer is ArrowFunction || prop.initializer is FunctionExpression ||
+                            prop.initializer is ObjectLiteralExpression)
                     if (useCtx) contextualType = propCtx
                     val propType = try {
                         // A recovered `name: lhs = rhs` member (assignment as the VALUE —
@@ -100010,11 +100046,24 @@ interface DataView {
     /** Get the type of an array literal expression. */
     private fun getTypeOfArrayLiteral(expr: ArrayLiteralExpression): Type {
         if (expr.elements.isEmpty()) return getArrayType(anyType) // empty array → any[] (B87.6)
+        // Round 472: a contextual Array/ReadonlyArray type distributes its ELEMENT type
+        // to object-literal elements (tsc's contextual-type distribution) — a returned
+        // `[{ definition: { type: DefinitionKind.X, file: node }, … }]` vs
+        // `readonly SymbolAndEntries[]` needs the element context for the nested
+        // discriminant selection + guard-narrowed values (findAllReferences.ts:1000).
+        val elemCtx = (contextualType as? Type.Reference)
+            ?.takeIf { isArrayLikeReference(it) }
+            ?.resolvedTypeArguments?.firstOrNull()
+            ?.takeIf { it !== anyType && it !== errorType }
         // Infer element type as union of all element types
         val elementTypes = mutableListOf<Type>()
         for (el in expr.elements) {
             if (el is SpreadElement) return anyType // spread not yet supported
-            val raw = getTypeOfExpression(el)
+            val raw = if (elemCtx != null && el is ObjectLiteralExpression) {
+                val savedCtx = contextualType
+                contextualType = elemCtx
+                try { getTypeOfExpression(el) } finally { contextualType = savedCtx }
+            } else getTypeOfExpression(el)
             // Round 459: an ELEMENT that is a flow-narrowed bare Identifier reads its
             // narrowed type — the array-literal sibling of round 438's object-literal
             // property-value narrowing. tsc's builderState.ts `if (!sourceFile) return
@@ -133520,6 +133569,39 @@ interface DataView {
             } catch (_: Exception) { false }
         }
         return matching.singleOrNull()
+    }
+
+    /** Round 472: from a union's ≥2 object members, the SINGLE one whose declared
+     *  DISCRIMINANT property matches the object literal's enum-member / string-literal
+     *  value — `{ kind: InvocationKind.Call, node }` vs the CallInvocation |
+     *  TypeArgsInvocation | ContextualInvocation union selects CallInvocation via the
+     *  round-411 canonical `symId#member` key space (enum-member types resolve to
+     *  `any`, so the resolved property type cannot decide this; the DECLARED
+     *  annotation can). No usable discriminant / ambiguous → null (conservative). */
+    private fun selectUnionMemberByObjLitDiscriminant(u: Type.Union, ol: ObjectLiteralExpression): Type.Object? {
+        val objs = u.types.mapNotNull { it as? Type.Object }
+            .filter { !(it is Type.Reference && it.target.symbol?.name == "Array") }
+        if (objs.size < 2) return null
+        var candidates: List<Type.Object> = objs
+        var usedDiscriminant = false
+        for (p in ol.properties) {
+            val pa = p as? PropertyAssignment ?: continue
+            val name = getPropertyKeyName(pa.name) ?: continue
+            val valueKey = enumMemberKeyOfExpr(pa.initializer)
+                ?: literalTypeOfExpression(pa.initializer)?.let { literalDiscriminantKeyOfType(it) }
+                ?: continue
+            val filtered = candidates.filter { m ->
+                val keys = enumMemberKeysOfTypeNode(discriminantPropAnnotation(m, name))
+                keys != null && valueKey in keys
+            }
+            // A property whose key matches NO member's declared keys is not a usable
+            // discriminant here (could be a non-discriminant enum-valued member) — skip
+            // it rather than emptying the candidate set.
+            if (filtered.isEmpty()) continue
+            usedDiscriminant = true
+            candidates = filtered
+        }
+        return if (usedDiscriminant) candidates.singleOrNull() else null
     }
 
     private fun selectObjectConstituentForObjectLiteral(t: Type): Type.Object? {
