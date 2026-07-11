@@ -101074,7 +101074,16 @@ interface DataView {
                     // anything that isn't a clean array-of-array of a named-like
                     // (or enum) element.
                     if (isDblArrT) {
-                        val rawArg = getTypeOfExpression(arg)
+                        // Round 471: a `&&`-guarded nullable arg reads its flow-narrowed
+                        // type (`focusLocations && flatten(focusLocations)`, tsc
+                        // mapCode.ts) — the raw `TextSpan[][] | undefined` soft-skipped
+                        // the anchor and T stayed unbound while the arg CHECK narrowed,
+                        // FP-firing TS2345. Nullish-strip-gated (monotone).
+                        val rawArg0 = getTypeOfExpression(arg)
+                        val rawArg = if (arg is Identifier || arg is PropertyAccessExpression) {
+                            val narrowed = getNarrowedTypeForReference(rawArg0, arg)
+                            if (objLitValueNullishStrip(rawArg0, narrowed)) narrowed else rawArg0
+                        } else rawArg0
                         val inner = arrayRefElement(rawArg) ?: continue
                         val elem = arrayRefElement(inner) ?: continue
                         if (elem === anyType || elem === errorType) continue
@@ -101091,7 +101100,12 @@ interface DataView {
                     // (`compact([a, b, undefined])` binds T without the undefined).
                     // Soft-skip anything that isn't a clean array arg.
                     if (arrUnionDrops != null) {
-                        val rawArg = getTypeOfExpression(arg)
+                        // Round 471: same flow-narrowed arg read as the (k) anchor above.
+                        val rawArg0 = getTypeOfExpression(arg)
+                        val rawArg = if (arg is Identifier || arg is PropertyAccessExpression) {
+                            val narrowed = getNarrowedTypeForReference(rawArg0, arg)
+                            if (objLitValueNullishStrip(rawArg0, narrowed)) narrowed else rawArg0
+                        } else rawArg0
                         val elem = arrayRefElement(rawArg) ?: continue
                         if (elem === anyType || elem === errorType) continue
                         val members = (elem as? Type.Union)?.types ?: listOf(elem)
