@@ -1223,6 +1223,11 @@ class Checker(
      *  init-order trap (the narrowing walk runs during checking). */
     private var nestedFunctionByNameCache: MutableMap<String, FunctionDeclaration?>? = null
 
+    /** Round 471: file of each collected nested FunctionDeclaration (populated by
+     *  [buildNestedFunctionMap]) — consulted by the same-file nested-guard shadow rule
+     *  in [resolveFlowCalleeDecl]. */
+    private var nestedFnDeclFiles: MutableMap<FunctionDeclaration, String> = HashMap()
+
     /** Round 463: the full same-name clusters behind [nestedFunctionByNameCache] —
      *  populated by the same [buildNestedFunctionMap] walk. A name with ≥2 declarations
      *  is ambiguous for the unique-decl consumers, but an OVERLOAD cluster in the
@@ -97190,7 +97195,31 @@ interface DataView {
                 // name resolves to null (→ no narrowing, conservative), and narrowing only
                 // ever refines/removes union members / narrows a single type to a strict
                 // subtype — it cannot manufacture a wrong diagnostic from a mis-resolved guard.
-                else direct ?: uniqueFunctionDeclByName(callee.text)
+                // Round 471: a nested SAME-FILE guard shadows a same-named cross-file
+                // global fn (tsc fixMissingTypeAnnotationOnExports' nested
+                // `isConstAssertion(location): location is AssertionExpression` vs
+                // compiler/utilities' exported non-guard `isConstAssertion`): tsc
+                // scoping resolves the call to the nested decl, so the global's
+                // boolean return silently killed the narrowing. Gated: the resolved
+                // decl came from merged GLOBALS (the file's own locals missed), it is
+                // NOT predicate-bearing, and the nested map's unique candidate IS a
+                // TypePredicate-bearing decl in the CURRENT file. Flow-only.
+                else {
+                    val globalsHitNonGuard = currentFileLocals?.get(callee.text) == null &&
+                        direct is FunctionDeclaration && direct.type !is TypePredicate
+                    if (direct == null) uniqueFunctionDeclByName(callee.text)
+                    else if (globalsHitNonGuard) {
+                        // The unique predicate-bearing nested decl in the CURRENT file
+                        // (from the full cluster — the program-wide unique winner is
+                        // null when several files nest same-named guards).
+                        nestedFunctionClusterByName(callee.text)
+                            ?.filter {
+                                it.type is TypePredicate &&
+                                    nestedFnDeclFiles[it] == currentCheckFileName
+                            }
+                            ?.singleOrNull() ?: direct
+                    } else direct
+                }
             }
             is PropertyAccessExpression ->
                 resolvePropertyMethodDecl(callee) ?: resolveNamespaceMemberFnDecl(callee)
@@ -97351,10 +97380,18 @@ interface DataView {
      *  — the places a `function NAME(...)` statement can appear. */
     private fun buildNestedFunctionMap(): MutableMap<String, FunctionDeclaration?> {
         val collected = HashMap<String, MutableList<FunctionDeclaration>>()
-        val work = ArrayDeque<List<Node>>()
-        for (result in binderResults) work.addLast(result.sourceFile.statements)
-        while (work.isNotEmpty()) {
-            for (node in work.removeLast()) collectFnDeclNode(node, collected, work)
+        // Round 471: per-file batches so each collected decl records its FILE
+        // (nestedFnDeclFiles — the same-file nested-guard shadow rule needs it).
+        for (result in binderResults) {
+            val fn = result.sourceFile.fileName
+            val work = ArrayDeque<List<Node>>()
+            work.addLast(result.sourceFile.statements)
+            while (work.isNotEmpty()) {
+                for (node in work.removeLast()) collectFnDeclNode(node, collected, work)
+            }
+            for (decls in collected.values) {
+                for (d in decls) if (d !in nestedFnDeclFiles) nestedFnDeclFiles[d] = fn
+            }
         }
         // Round 424b: a name COLLISION resolves to the unique TypePredicate-bearing
         // declaration when there is exactly one (an OVERLOAD cluster like Debug's
