@@ -128040,7 +128040,21 @@ interface DataView {
      */
     private fun overloadNarrowedArgType(arg: Expression, raw: Type): Type {
         if (arg !is Identifier && arg !is PropertyAccessExpression) return raw
-        if (raw is Type.Union) return getNarrowedTypeForReference(raw, arg)
+        if (raw is Type.Union) {
+            val n = getNarrowedTypeForReference(raw, arg)
+            // Round 476: a read AFTER a loop inside a switch case washes back to the
+            // declared union at FlowLoopLabel — retry with the loop-entry-following
+            // variant when the plain walk didn't narrow (STRUCTURAL wash gate, the
+            // round-424 lesson: `&&`/`||` branch labels MINT a fresh identical union).
+            // tsc typingInstallerAdapter's ActionSet case reads `response` after its
+            // requestQueue while-loop. Suppression-only (narrowing refines arg types).
+            if (n is Type.Union && n.types.size == raw.types.size &&
+                n.types.mapTo(HashSet()) { it.id } == raw.types.mapTo(HashSet()) { it.id }
+            ) {
+                return getNarrowedTypeForReferenceFollowLoopEntry(raw, arg)
+            }
+            return n
+        }
         // `boolean` is not modeled as `true | false`, so a guard-narrowed boolean
         // (`if (!allowAmbiguity) … parseParametersWorker(flags, allowAmbiguity)` against
         // overloads on literal `true`/`false` params — tsc's own parser.ts) can't refine

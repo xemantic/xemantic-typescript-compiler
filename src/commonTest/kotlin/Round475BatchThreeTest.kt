@@ -256,4 +256,39 @@ class Round475BatchThreeTest {
             have(any { it.code == 2322 })
         }
     }
+
+    @Test
+    fun `switch-case narrowing survives a loop before the overloaded call - no TS2769`() {
+        // The plain flow walk washes at FlowLoopLabel; the overload arg path retries
+        // with the loop-entry-following variant (tsc typingInstallerAdapter ActionSet).
+        diagnose(
+            """
+            interface SetTypings { readonly kind: "set"; typings: string[]; }
+            interface InvalidateTypings { readonly kind: "invalidate"; project: string; }
+            type Response = SetTypings | InvalidateTypings;
+            declare function updateTypings(response: SetTypings): void;
+            declare function updateTypings(response: SetTypings | InvalidateTypings): void;
+            declare const queue: string[];
+            declare function schedule(name: string): void;
+            export function handle(response: Response): void {
+                switch (response.kind) {
+                    case "set": {
+                        while (queue.length > 0) {
+                            const item = queue.pop();
+                            if (item) {
+                                schedule(item);
+                                break;
+                            }
+                        }
+                        updateTypings(response);
+                        break;
+                    }
+                }
+            }
+            """
+        ) should {
+            have(none { it.code == 2769 })
+            have(none { it.code == 2345 })
+        }
+    }
 }
