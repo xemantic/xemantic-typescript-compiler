@@ -211,4 +211,49 @@ class Round475BatchThreeTest {
             have(any { it.code == 2739 || it.code == 2741 || it.code == 2322 })
         }
     }
+
+    @Test
+    fun `conflated alias with un-modeled body - return is unknowable, no TS2322`() {
+        // jsTyping's `type SafeList = ReadonlyMap<string, string>` (ReadonlyMap has no
+        // modeled interface) loses the merge to editorServices' `interface SafeList` —
+        // the body is unresolvable, so the verdict is unknowable (FN-not-FP).
+        compile(
+            """
+            // @strict: true
+
+            // @Filename: editorServices.ts
+            export interface SafeList { name: string; }
+
+            // @Filename: jsTyping.ts
+            export type SafeList = ReadonlyMap<string, string>;
+            export function loadSafeList(): SafeList {
+                return new Map<string, string>();
+            }
+            """
+        ) should {
+            have(none { it.code == 2322 })
+            have(none { it.code == 2739 })
+            have(none { it.code == 2741 })
+        }
+    }
+
+    @Test
+    fun `negative control - conflated alias with a RESOLVABLE failing body still fires`() {
+        compile(
+            """
+            // @strict: true
+
+            // @Filename: editorServices.ts
+            export interface SafeList { name: string; }
+
+            // @Filename: jsTyping.ts
+            export type SafeList = string;
+            export function loadSafeList(): SafeList {
+                return 42;
+            }
+            """
+        ) should {
+            have(any { it.code == 2322 })
+        }
+    }
 }

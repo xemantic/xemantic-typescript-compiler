@@ -88196,7 +88196,14 @@ interface DataView {
                 ?.takeIf { d -> fileResults[fileName]?.sourceFile?.statements?.any { it === d } == true }
                 ?: continue
             val bodyT = getTypeFromTypeNode(aliasDecl.type)
-            if (bodyT === anyType || bodyT === errorType) continue
+            // Round 476: an UNRESOLVABLE file-local alias body makes tsc's verdict
+            // UNKNOWABLE while our resolved target is the known-wrong merged chimera —
+            // suppress rather than check against it. jsTyping's `type SafeList =
+            // ReadonlyMap<string, string>` (ReadonlyMap is un-modeled: a KNOWN_GLOBALS
+            // name with no interface, so the body resolves error/any) vs editorServices'
+            // `interface SafeList`. FN-not-FP: only reached when THIS file's `type X`
+            // lost the conflated merge, exactly where our target is wrong.
+            if (bodyT === anyType || bodyT === errorType) return true
             val srcT = cachedSrc ?: getTypeOfExpression(expr).also { cachedSrc = it }
             if (srcT === anyType || srcT === errorType) return false
             if (checkTypeRelatedTo(srcT, bodyT, assignableRelation)) return true
