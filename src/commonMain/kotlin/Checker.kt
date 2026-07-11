@@ -88077,25 +88077,29 @@ interface DataView {
         expr: Expression, returnTypeNode: TypeNode?, fileName: String,
     ): Boolean {
         if (conflatedTypeAliasFiles.isEmpty() || returnTypeNode == null) return false
-        var core: TypeNode = returnTypeNode
-        if (core is UnionType) {
-            core = core.types.singleOrNull { t ->
-                !(t is KeywordTypeNode && (t.kind == SyntaxKind.UndefinedKeyword || t.kind == SyntaxKind.NullKeyword))
-            } ?: return false
+        // Round 475: iterate EVERY union member, not just a sole non-nullish one — the
+        // completions.ts return annotation `CompletionData | Request | undefined` carries
+        // the conflated `type Request` as ONE member among several; the source relating
+        // to ANY own-file conflated alias body suffices (union-target semantics).
+        val candidates: List<TypeNode> =
+            (returnTypeNode as? UnionType)?.types ?: listOf(returnTypeNode)
+        var cachedSrc: Type? = null
+        for (cand in candidates) {
+            val ref = cand as? TypeReference ?: continue
+            if (ref.typeArguments != null) continue
+            val name = (ref.typeName as? Identifier)?.text ?: continue
+            val files = conflatedTypeAliasFiles[name] ?: continue
+            if (fileName !in files) continue
+            val aliasDecl = localTypeAliasIndex[fileName]?.get(name)
+                ?.takeIf { d -> fileResults[fileName]?.sourceFile?.statements?.any { it === d } == true }
+                ?: continue
+            val bodyT = getTypeFromTypeNode(aliasDecl.type)
+            if (bodyT === anyType || bodyT === errorType) continue
+            val srcT = cachedSrc ?: getTypeOfExpression(expr).also { cachedSrc = it }
+            if (srcT === anyType || srcT === errorType) return false
+            if (checkTypeRelatedTo(srcT, bodyT, assignableRelation)) return true
         }
-        val ref = core as? TypeReference ?: return false
-        if (ref.typeArguments != null) return false
-        val name = (ref.typeName as? Identifier)?.text ?: return false
-        val files = conflatedTypeAliasFiles[name] ?: return false
-        if (fileName !in files) return false
-        val aliasDecl = localTypeAliasIndex[fileName]?.get(name)
-            ?.takeIf { d -> fileResults[fileName]?.sourceFile?.statements?.any { it === d } == true }
-            ?: return false
-        val bodyT = getTypeFromTypeNode(aliasDecl.type)
-        if (bodyT === anyType || bodyT === errorType) return false
-        val srcT = getTypeOfExpression(expr)
-        if (srcT === anyType || srcT === errorType) return false
-        return checkTypeRelatedTo(srcT, bodyT, assignableRelation)
+        return false
     }
 
     private fun objectLiteralMatchesConflatedFileLocalTypeAlias(
@@ -88133,16 +88137,22 @@ interface DataView {
             val aliasDecl = stmts.filterIsInstance<TypeAliasDeclaration>()
                 .firstOrNull { it.name.text == name } ?: continue
             val memberNames = LinkedHashSet<String>()
+            val literalConstituents = mutableListOf<TypeLiteral>()
             fun collectAliasMembers(t: TypeNode?) {
                 when (t) {
                     is UnionType -> t.types.forEach { collectAliasMembers(it) }
                     is ParenthesizedType -> collectAliasMembers(t.type)
                     is TypeReference -> (t.typeName as? Identifier)?.text?.let { memberNames.add(it) }
+                    // Round 475: the alias body's constituents may be inline TYPE LITERALS
+                    // (completions.ts's `type Request = | { readonly kind: … } | …`) — check
+                    // the object literal against each directly.
+                    is TypeLiteral -> literalConstituents.add(t)
                     else -> {}
                 }
             }
             collectAliasMembers(aliasDecl.type)
             if (memberNames.any { objectLiteralExactlySatisfiesFileLocalInterface(obj, it, fileName) }) return true
+            if (literalConstituents.any { objectLiteralExactlySatisfiesTypeLiteralNode(obj, it) }) return true
         }
         return false
     }
@@ -88173,6 +88183,46 @@ interface DataView {
                 else -> {}
             }
         }
+        val provided = HashSet<String>()
+        for (p in obj.properties) {
+            val nm = when (p) {
+                is PropertyAssignment -> (p.name as? Identifier)?.text
+                is ShorthandPropertyAssignment -> p.name.text
+                is MethodDeclaration -> (p.name as? Identifier)?.text
+                is GetAccessor -> (p.name as? Identifier)?.text
+                is SetAccessor -> (p.name as? Identifier)?.text
+                else -> null
+            } ?: return false
+            provided.add(nm)
+            if (!hasIndexSig && nm !in memberOptional) return false // excess
+        }
+        for ((nm, optional) in memberOptional) {
+            if (!optional && nm !in provided) return false
+        }
+        return true
+    }
+
+    /**
+     * Round 475: the TypeLiteral-constituent sibling of
+     * [objectLiteralExactlySatisfiesFileLocalInterface] — a conflated alias body may be a
+     * union of INLINE type literals (completions.ts's `type Request`). Name-coverage only
+     * (required-provided + no excess); an index signature disables the excess rule.
+     * Conservative: any non-simple member/property shape returns false (→ keeps firing).
+     */
+    private fun objectLiteralExactlySatisfiesTypeLiteralNode(
+        obj: ObjectLiteralExpression, tl: TypeLiteral,
+    ): Boolean {
+        val memberOptional = HashMap<String, Boolean>()
+        var hasIndexSig = false
+        for (m in tl.members) {
+            when (m) {
+                is PropertyDeclaration -> (m.name as? Identifier)?.text?.let { memberOptional[it] = m.questionToken }
+                is MethodDeclaration -> (m.name as? Identifier)?.text?.let { memberOptional[it] = m.questionToken }
+                is IndexSignature -> hasIndexSig = true
+                else -> {}
+            }
+        }
+        if (memberOptional.isEmpty() && !hasIndexSig) return false
         val provided = HashSet<String>()
         for (p in obj.properties) {
             val nm = when (p) {
@@ -120780,6 +120830,28 @@ interface DataView {
                     // (`Info | undefined`), accessed in the `type X`-declaring file.
                     val soleDisplay = nonNullish.singleOrNull()?.let { try { typeToString(it) } catch (_: Exception) { null } }
                     if (soleDisplay != null && aliasOwnFileHasProp(soleDisplay)) return
+                    // Round 475 direction: a MULTI-member union CONTAINING an own-file conflated
+                    // alias member (completions.ts's `completionData: CompletionData | Request`
+                    // where `type Request` lost the last-wins merge to protocol.ts's interface).
+                    // The chimera member makes the union's composition AND its discriminant
+                    // narrowing unmodelable (tsc narrows `completionData.kind !== Data` down to
+                    // CompletionData; our chimera has no `kind`). Suppress when the property
+                    // exists on SOME member or on any file-local alias-body constituent — a name
+                    // missing EVERYWHERE (a genuine typo) still fires.
+                    if (nonNullish.size >= 2) {
+                        val memberDisplays = nonNullish.map {
+                            try { typeToString(it) } catch (_: Exception) { null }
+                        }
+                        val hasOwnFileChimeraMember = memberDisplays.any { d ->
+                            d != null && conflatedTypeAliasFiles[d]?.contains(fileName) == true
+                        }
+                        if (hasOwnFileChimeraMember) {
+                            val propSomewhere = nonNullish.any { m ->
+                                try { getPropertyOfType(m, propName) != null } catch (_: Exception) { false }
+                            } || memberDisplays.any { d -> d != null && aliasOwnFileHasProp(d) }
+                            if (propSomewhere) return
+                        }
+                    }
                 }
                 null -> {}
                 // A non-union receiver whose display is the conflated name — the wrong sibling
