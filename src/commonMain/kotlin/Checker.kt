@@ -15477,6 +15477,19 @@ class Checker(
                     }
                 }
                 is Block -> collectConstructorAssignments(stmt.statements, assigned)
+                // Round 475: a ctor-body `switch` assigning the property in its clauses
+                // (tsc server project.ts's serverMode switch sets languageServiceEnabled
+                // in every case, with an assertNever default). Same permissive any-path
+                // rule as the IfStatement arm above.
+                is SwitchStatement -> {
+                    for (clause in stmt.caseBlock) {
+                        when (clause) {
+                            is CaseClause -> collectConstructorAssignments(clause.statements, assigned)
+                            is DefaultClause -> collectConstructorAssignments(clause.statements, assigned)
+                            else -> {}
+                        }
+                    }
+                }
                 else -> {}
             }
         }
@@ -47568,9 +47581,14 @@ interface DataView {
                     } else {
                         methodsWithBody[key] = member
                     }
-                } else if (member.body == null && ModifierFlag.Abstract !in member.modifiers) {
+                } else if (member.body == null && ModifierFlag.Abstract !in member.modifiers &&
+                    !member.questionToken
+                ) {
                     // Overload without body (node EXISTENCE — a missing-block body suppresses
-                    // the final rule, same as the file-level walker) — check for missing impl
+                    // the final rule, same as the file-level walker) — check for missing impl.
+                    // Round 475: an OPTIONAL method (`useSourceOfProjectReferenceRedirect?():
+                    // boolean;` — tsc server project.ts) is a declaration, never an overload
+                    // signature: tsc requires no implementation for it.
                     val implResult = findMethodImplementation(members, i, name)
                     when (implResult) {
                         is ImplResult.Found -> {} // Same name follows
@@ -83390,6 +83408,17 @@ interface DataView {
                                 currentLocalTypes[paramName.text] = t
                             }
                         }
+                    } else if (paramName is ObjectBindingPattern || paramName is ArrayBindingPattern) {
+                        // Round 475: a BINDING-PATTERN param previously registered NOTHING in
+                        // this pass, so a destructured element name read in the body — e.g. an
+                        // object-literal SHORTHAND value (`return { enable, … }` in tsc's
+                        // convertTypeAcquisition / referenceEntryToReferencesResponseItem) —
+                        // fell through getTypeOfIdentifier to the merged globals and resolved
+                        // a same-named CROSS-FILE function → FP TS2322. Register each element:
+                        // the annotation member's type when resolvable (optional member →
+                        // `| undefined`, a default initializer keeps the bare type), else
+                        // anyType (suppression-only).
+                        registerBindingPatternParamLocals(paramName, paramType)
                     }
                 }
             } finally {
@@ -83415,6 +83444,61 @@ interface DataView {
             currentShadowedNames = savedShadowed
             ambiguousBlockLocalNames = savedAmbiguous
         }
+    }
+
+    /**
+     * Round 475: register a binding-pattern parameter's element names into
+     * [currentLocalTypes] for the assignability pass. Each object-pattern element gets
+     * the ANNOTATION member's resolved type (an optional member without a default reads
+     * as `T | undefined` — optionality is a symbol attribute, the round-424 gotcha);
+     * anything unresolvable (rest elements, nested patterns' leaves, array elements,
+     * union annotations) registers anyType — a strictly-suppression fallback that stops
+     * the name falling through to a same-named merged-globals binding.
+     */
+    private fun registerBindingPatternParamLocals(pattern: Expression, annotation: TypeNode?) {
+        val annType = annotation?.let {
+            try { getTypeFromTypeNode(it) } catch (_: Exception) { null }
+        }?.takeIf { it !== anyType && it !== errorType }
+        fun register(p: Expression, memberSource: Type?) {
+            when (p) {
+                is ObjectBindingPattern -> for (el in p.elements) {
+                    val nm = el.name
+                    if (nm is ObjectBindingPattern || nm is ArrayBindingPattern) {
+                        register(nm, null)
+                        continue
+                    }
+                    val bound = (nm as? Identifier)?.text ?: continue
+                    var t: Type? = null
+                    if (memberSource != null && !el.dotDotDotToken) {
+                        val propName = (el.propertyName as? Identifier)?.text ?: bound
+                        val sym = try { getPropertyOfType(memberSource, propName) } catch (_: Exception) { null }
+                        if (sym != null) {
+                            var mt = try { getTypeOfSymbol(sym) } catch (_: Exception) { null }
+                            if (mt != null && mt !== errorType) {
+                                if (mt !== anyType && isOptionalProperty(sym) && el.initializer == null &&
+                                    !typeIncludesUndefined(mt)
+                                ) {
+                                    mt = getUnionType(listOf(mt, undefinedType))
+                                }
+                                t = mt
+                            }
+                        }
+                    }
+                    currentLocalTypes[bound] = t ?: anyType
+                }
+                is ArrayBindingPattern -> for (el in p.elements) {
+                    val binding = el as? BindingElement ?: continue
+                    val nm = binding.name
+                    if (nm is ObjectBindingPattern || nm is ArrayBindingPattern) {
+                        register(nm, null)
+                        continue
+                    }
+                    (nm as? Identifier)?.text?.let { currentLocalTypes[it] = anyType }
+                }
+                else -> {}
+            }
+        }
+        register(pattern, annType)
     }
 
     /**
@@ -87581,6 +87665,12 @@ interface DataView {
             diagnostics.size > initialDiagsBeforeElemCheck) {
             return
         }
+        // Round 431e-family (round 475): a class-property initializer whose inferred type
+        // carries an UN-INFERRED foreign TypeParam is OUR generic-inference gap, not a
+        // user error (`createHash: ((data: string) => string) | undefined =
+        // maybeBind(host, host.createHash)` — the call result keeps `A`/`R` raw; tsc
+        // server project.ts). Mirrors the property-write path's empty own-TP set.
+        if (typeContainsForeignTypeParam(sourceType, emptySet())) return
         if (canUse && !checkTypeRelatedTo(sourceType, targetType, assignableRelation)) {
             val displaySource = typeToString(sourceType)
             val displayTarget = formatTypeForDisplay(typeAnnotation) ?: typeToString(targetType)
@@ -96522,7 +96612,12 @@ interface DataView {
                 is AsExpression -> if (castTargetIsNonNullish(rhs.type)) return true else rhs.expression
                 is TypeAssertionExpression -> if (castTargetIsNonNullish(rhs.type)) return true else rhs.expression
                 is SatisfiesExpression -> rhs.expression
-                is NonNullExpression -> rhs.expression
+                // Round 475: `X!` asserts NonNullable regardless of X's shape — tsc types
+                // the assignment RHS as NonNullable<typeof X>, so the assigned reference
+                // is non-nullish afterward (`value.info = getScriptInfo(f)!;
+                // value.info.isAttached(…)` — tsc server project.ts:1693). The prior
+                // unwrap-and-descend classified by the INNER call's nullable annotation.
+                is NonNullExpression -> return true
                 else -> break
             }
         }
@@ -100040,6 +100135,16 @@ interface DataView {
             is LiteralType -> {
                 val lit = literalTypeOfExpression(node.literal) ?: return null
                 return literalDiscriminantKeyOfType(lit)?.let { setOf(it) }
+            }
+            // Round 475: `p: typeof X` where X is an unambiguous top-level const string —
+            // the member-ANNOTATION sibling of [typeQueryConstStringLiteral], needed by
+            // readers that reach annotations through this key builder (the objlit-vs-union
+            // member selection: `{ eventName: CloseFileWatcherEvent, data: { id } }` vs
+            // the ProjectServiceEvent union, tsc editorServices.ts).
+            is TypeQuery -> {
+                val nm = (node.exprName as? Identifier)?.text ?: return null
+                val value = topLevelConstStringValues[nm] ?: return null
+                return setOf("lit:s:$value")
             }
             else -> return null
         }
@@ -104046,15 +104151,20 @@ interface DataView {
             // 16.4gi: "Constructor interface" pattern — `declare var Object: ObjectConstructor`
             // where `interface ObjectConstructor { new(): Object }`. The new-expression's
             // return type is the construct signature's return type, not the constructor
-            // interface itself. Class instance types (also Type.Interface) don't have
-            // construct signatures (see CLAUDE.md "Class construct signatures are static-side
-            // only"), so they fall through to `return calleeType` unchanged.
+            // interface itself. Round 475: a CLASS instance type is EXCLUDED — since the
+            // resolveInterfaceMembers ctor-sig population, a class instance DOES carry
+            // constructSignatures (own ctor + INHERITED-FIRST base ctors), so `new
+            // ConfiguredProject(...)` took sigs[0] = the BASE Project ctor's return and
+            // typed the instance as the BASE (tsc server project.ts / editorServices ×3).
+            // A class callee's new-expr type is the instance type itself — fall through.
             if (typeArgs.isNullOrEmpty()) {
-                resolveStructuredTypeMembers(calleeType)
-                val sigs = calleeType.constructSignatures
-                if (!sigs.isNullOrEmpty()) {
-                    val ret = sigs[0].resolvedReturnType
-                    if (ret != null && ret !== errorType) return ret
+                if (calleeType.symbol?.flags?.hasAny(SymbolFlags.Class) != true) {
+                    resolveStructuredTypeMembers(calleeType)
+                    val sigs = calleeType.constructSignatures
+                    if (!sigs.isNullOrEmpty()) {
+                        val ret = sigs[0].resolvedReturnType
+                        if (ret != null && ret !== errorType) return ret
+                    }
                 }
             } else if (typeParams.isNullOrEmpty()) {
                 // M1.7b: EXPLICIT type args on a constructor-interface callee.
@@ -104597,8 +104707,23 @@ interface DataView {
             SyntaxKind.AmpersandAmpersand -> {
                 // `A && B` evaluates B under "A is true" — narrow a reference operand.
                 val rawRightT = getTypeOfExpression(right)
-                if (left != null) narrowOperandByCondition(rawRightT, right, left, conditionIsTrue = true)
-                else rawRightT
+                val rightT = if (left != null) {
+                    narrowOperandByCondition(rawRightT, right, left, conditionIsTrue = true)
+                } else rawRightT
+                // Round 475: tsc types `A && B` as falsy(A) | B — the left's definitely-
+                // falsy members flow through (`let oldState = oldProgram && oldProgram
+                // .state` is `ReusableBuilderProgramState | undefined`, so a later
+                // `oldState = undefined` is legal — tsc builder.ts createBuilderProgram).
+                // Bounded to the [isDefinitelyFalsyMember] set (nullish + false/0/""
+                // literals — the `||` branch's exact complement); the string→""/number→0
+                // primitive decomposition is deliberately not modeled.
+                val falsyMembers = when {
+                    leftType is Type.Union -> leftType.types.filter { isDefinitelyFalsyMember(it) }
+                    isDefinitelyFalsyMember(leftType) -> listOf(leftType)
+                    else -> emptyList()
+                }
+                if (falsyMembers.isEmpty() || rightT === anyType || rightT === errorType) rightT
+                else getUnionType(falsyMembers + rightT)
             }
             SyntaxKind.BarBar -> {
                 // `A || B` evaluates B under "A is false" — narrow a reference operand
@@ -115719,7 +115844,22 @@ interface DataView {
                         // legal bivariantly (services.ts NodeObject/TokenOrIdentifierObject).
                         // Retry per-site with bivariant params when both members are methods.
                         (member is MethodDeclaration && baseDecl is MethodDeclaration &&
-                            methodSignaturesBivariantlyRelated(derivedType, basePropTypeForRel))
+                            methodSignaturesBivariantlyRelated(derivedType, basePropTypeForRel)) ||
+                        // Round 475: a MUTABLE un-annotated literal-initialized property WIDENS
+                        // in tsc (`override initialLoadPending = true` vs base
+                        // `initialLoadPending = false` — both are `boolean`; tsc server
+                        // project.ts ConfiguredProject). When BOTH declarations are
+                        // annotation-less non-readonly PropertyDeclarations with initializers,
+                        // compare the widened literal types.
+                        (member is PropertyDeclaration && member.type == null &&
+                            member.initializer != null && ModifierFlag.Readonly !in member.modifiers &&
+                            baseDecl is PropertyDeclaration && baseDecl.type == null &&
+                            baseDecl.initializer != null && ModifierFlag.Readonly !in baseDecl.modifiers &&
+                            checkTypeRelatedTo(
+                                getWidenedLiteralType(derivedType),
+                                getWidenedLiteralType(basePropTypeForRel),
+                                assignableRelation,
+                            ))
 
                     if (!assignable || isPredicateMismatch || isGenericConstraintMismatch) {
                         val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
@@ -130853,7 +130993,13 @@ interface DataView {
                         }
                         if (protoOverrideEmitted) return
                     }
-                    if (argType is Type.Object) {
+                    // Round 475 (session.ts:1469): an object-literal arg SPREADING an
+                    // any/error-typed value (`{ file: fileName, ...range }` where the
+                    // callback param `range` is un-typed) is `any` in tsc — the spread
+                    // poisons the whole literal, so it can never be "missing" required
+                    // props. The ARG-path sibling of the round-445 return-path and
+                    // round-472 var-decl spread-of-any rules.
+                    if (argType is Type.Object && !objectLiteralHasUnresolvedSpread(arg)) {
                         val missing = mutableListOf<Symbol>()
                         for (targetProp in paramType.properties!!) {
                             if (isOptionalProperty(targetProp)) continue
@@ -134821,6 +134967,10 @@ interface DataView {
             val name = getPropertyKeyName(pa.name) ?: continue
             val valueKey = enumMemberKeyOfExpr(pa.initializer)
                 ?: literalTypeOfExpression(pa.initializer)?.let { literalDiscriminantKeyOfType(it) }
+                // Round 475: a bare-Identifier const-string value (`eventName:
+                // CloseFileWatcherEvent`) — the objlit-selection sibling of the round-473
+                // `case <constIdent>:` rule.
+                ?: constStringCaseLiteralType(pa.initializer)?.let { literalDiscriminantKeyOfType(it) }
                 ?: continue
             val filtered = candidates.filter { m ->
                 val keys = enumMemberKeysOfTypeNode(discriminantPropAnnotation(m, name))
