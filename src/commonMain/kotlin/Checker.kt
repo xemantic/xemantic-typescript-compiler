@@ -560,6 +560,10 @@ class Checker(
      *  consult it during the init-run passes. */
     private val nsQualifiedAliasCache = HashMap<String, TypeAliasDeclaration?>()
 
+    /** Round 477: memo for [resolveNamespaceMemberFnDecl]'s `import * as ns` branch,
+     *  key `"aliasSymId|member"` (null = doesn't resolve). Declared before `init`. */
+    private val nsImportMemberFnCache = HashMap<String, Node?>()
+
     /** Round 473 (Blocker #3, the server-profile protocol.ts family): interface name →
      *  ALL module files declaring it top-level (the un-filtered companion of
      *  [conflatedInterfaceFiles]) — used to derive a HERITAGE context file: a derived
@@ -22035,6 +22039,13 @@ class Checker(
                     } as? MethodDeclaration)?.type
                     if (ret != null) return getTypeFromTypeNodeSafeNsAware(ret)
                 }
+                // Round 477: `const compilerHost = ts.createCompilerHostWorker(…)` — a
+                // namespace-import-qualified callee's return annotation types the local,
+                // so `compilerHost.getSourceFile = (fileName, …) => …` arrows inherit
+                // the CompilerHost member context (tsc harness incrementalUtils).
+                (resolveNamespaceMemberFnDecl(pa) as? FunctionDeclaration)?.type
+                    ?.takeIf { it !is TypePredicate }
+                    ?.let { ret -> return getTypeFromTypeNodeSafeNsAware(ret) }
                 if (pa.name.text != "get") return null
                 val recv = pa.expression as? Identifier ?: return null
                 val recvAnn = implicitAnyScopeAnnOf(recv.text) ?: return null
@@ -96789,6 +96800,74 @@ interface DataView {
             }
             else -> null
         }
+        // Round 477 (tsc getAssignmentReducedType — the fourslash reassignment idiom):
+        // `expected = typeof expected === "string" ? { name: expected } : expected` —
+        // the RHS can no longer be the tested primitive, so the post-assignment type
+        // drops the tag's members from the DECLARED union (the replacement arm is an
+        // object literal — non-primitive by construction; the pass-through arm is the
+        // reference itself, contributing only the surviving members). Must run BEFORE
+        // the non-nullish overwrite branch below (a both-arms-non-nullish ternary would
+        // reset to the FULL declared union there). Gated: `typeof <name> ===/!== "tag"`
+        // condition, bare-reference pass-through arm, object-literal replacement arm;
+        // an unchanged/never reduction keeps the conservative fallthrough.
+        if (node is BinaryExpression && node.operator == SyntaxKind.Equals) {
+            (rhs as? ConditionalExpression)?.let { tern ->
+                val cond = unwrapParensExpr(tern.condition) as? BinaryExpression ?: return@let
+                val isEq = cond.operator == SyntaxKind.EqualsEqualsEquals ||
+                    cond.operator == SyntaxKind.EqualsEquals
+                val isNeq = cond.operator == SyntaxKind.ExclamationEqualsEquals ||
+                    cond.operator == SyntaxKind.ExclamationEquals
+                if (!isEq && !isNeq) return@let
+                val typeofSide = (cond.left as? TypeOfExpression)
+                    ?: (cond.right as? TypeOfExpression) ?: return@let
+                if ((unwrapParensExpr(typeofSide.expression) as? Identifier)?.text != name) return@let
+                val other = if (cond.left === typeofSide) cond.right else cond.left
+                val tag = (unwrapParensExpr(other) as? StringLiteralNode)?.text ?: return@let
+                // The arm taken when the typeof test SELECTS the tag replaces it;
+                // the other arm must be the bare reference (pass-through).
+                val replacedArm = unwrapParensExpr(if (isEq) tern.whenTrue else tern.whenFalse)
+                val keptArm = unwrapParensExpr(if (isEq) tern.whenFalse else tern.whenTrue)
+                if ((keptArm as? Identifier)?.text != name) return@let
+                if (replacedArm !is ObjectLiteralExpression) return@let
+                val reduced = narrowByTypeOfGuard(declaredType, tag, isMatch = false)
+                if (reduced !== declaredType && reduced !== neverType) return reduced
+            }
+            // Round 477 (the guarded-reassignment sibling): a plain `=` with an
+            // OBJECT-LITERAL RHS can no longer hold the declared union's PRIMITIVE or
+            // nullish members (tsc getAssignmentReducedType) — `if (typeof source ===
+            // "string") source = { files: …, … };` joins [objlit] ∪ [non-string] after
+            // the if, so post-if member reads are legal (tsc evaluatorImpl). Drops only
+            // definitely-primitive/nullish members; object-ish/any/TP members stay.
+            if (rhs is ObjectLiteralExpression && declaredType is Type.Union) {
+                val kept = declaredType.types.filter { m ->
+                    !(isNullishConstituent(m) || m === stringType || m === numberType ||
+                        m === booleanType || m is Type.StringLiteral || m is Type.NumberLiteral)
+                }
+                if (kept.isNotEmpty() && kept.size < declaredType.types.size) {
+                    return if (kept.size == 1) kept[0] else getUnionType(kept)
+                }
+            }
+            // The ARRAY-LITERAL sibling: `if (!ts.isArray(expected)) expected =
+            // [expected];` (tsc fourslash verifyCompletionsAreExactly) — the
+            // post-assignment type keeps only ARRAY-LIKE members (Array/ReadonlyArray
+            // references, tuples, and intersections containing one — the
+            // `readonly T[] & { plus }` brand).
+            if (rhs is ArrayLiteralExpression && declaredType is Type.Union) {
+                fun arrayLike(m: Type): Boolean = when {
+                    m is Type.Reference &&
+                        m.target.symbol?.name in setOf("Array", "ReadonlyArray") -> true
+                    m is Type.Object && m.tupleElementTypes != null -> true
+                    m is Type.Intersection -> m.types.any { c ->
+                        c is Type.Reference && c.target.symbol?.name in setOf("Array", "ReadonlyArray")
+                    }
+                    else -> false
+                }
+                val kept = declaredType.types.filter { arrayLike(it) }
+                if (kept.isNotEmpty() && kept.size < declaredType.types.size) {
+                    return if (kept.size == 1) kept[0] else getUnionType(kept)
+                }
+            }
+        }
         if (rhs != null && rhsIsDefinitelyNonNullish(rhs)) {
             // Round 416: an assignment OVERWRITES the reference, so its post-state is the
             // DECLARED type with nullish excluded (tsc `getAssignmentReducedType(declared,
@@ -99135,6 +99214,43 @@ interface DataView {
     private fun resolveNamespaceMemberFnDecl(callee: PropertyAccessExpression): Node? {
         val recvIdent = callee.expression as? Identifier ?: return null
         val recvSym = currentFileLocals?.get(recvIdent.text) ?: globals[recvIdent.text] ?: return null
+        // Round 477: an `import * as ns from "spec"` receiver (tsc harness's
+        // `import * as ts from "./_namespaces/ts.js"` calling
+        // `ts.isDocumentRegistryEntry(entry)`) — resolveAlias never resolves a
+        // NamespaceImport alias (the round-444 gap) and the ImportSpecifier-keyed
+        // sibling resolvers skip it, so the guard silently never narrowed. Resolve the
+        // import's target FILE and look the member up through its locals + `export *`
+        // chain (flow-only, memoized — the resolution repeats per flow-condition visit).
+        if (recvSym.flags.hasAny(SymbolFlags.Alias)) {
+            val memoKey = "${recvSym.id}|${callee.name.text}"
+            if (nsImportMemberFnCache.containsKey(memoKey)) {
+                nsImportMemberFnCache[memoKey]?.let { return it }
+            } else {
+                var computed: Node? = null
+                for (decl in recvSym.declarations) {
+                    val imp = decl as? ImportDeclaration ?: continue
+                    if (imp.importClause?.namedBindings !is NamespaceImport) continue
+                    val spec = (imp.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+                    val contextFile = currentCheckFileName
+                        ?: binderResults.firstOrNull { r -> r.sourceFile.statements.any { it === imp } }
+                            ?.sourceFile?.fileName
+                    val targetFile = resolveModuleSpecifier(spec, imp)
+                        ?: resolveAliasJsModuleSpecifier(spec, contextFile)
+                        ?: continue
+                    val tr = fileResults[targetFile] ?: continue
+                    val member = tr.locals[callee.name.text]
+                        ?: resolveExportedSymbolThroughStars(tr.sourceFile, callee.name.text)
+                        ?: continue
+                    val fnDecls = member.declarations.filterIsInstance<FunctionDeclaration>()
+                    computed = fnDecls.firstOrNull { it.type is TypePredicate }
+                        ?: member.valueDeclaration as? FunctionDeclaration
+                        ?: fnDecls.firstOrNull()
+                    if (computed != null) break
+                }
+                nsImportMemberFnCache[memoKey] = computed
+                computed?.let { return it }
+            }
+        }
         val moduleFlags = SymbolFlags.Module or SymbolFlags.NamespaceModule or SymbolFlags.ValueModule
         val resolved = if (recvSym.flags.hasAny(SymbolFlags.Alias)) {
             val viaGeneral = resolveAlias(recvSym)
@@ -119504,6 +119620,15 @@ interface DataView {
                 if (memberName == propName && isMemberPrivate(member)) {
                     val enclosingName = (enclosingClassType as? Type.Object)?.symbol?.name
                     if (enclosingName == classSymbol.name) return false // access within same class
+                    // Round 477: private accessibility is LEXICAL — a function nested
+                    // inside a class METHOD is within the class (fourslash's
+                    // textWithContext reading TestState.nLinesContext); the
+                    // enclosing-class threading resets at nested-function boundaries
+                    // (this-rebinding), so fall back to a same-file position-containment
+                    // test against the declaring class declaration.
+                    if (fileResults[fileName]?.sourceFile?.statements?.any { it === decl } == true &&
+                        expr.pos >= decl.pos && expr.pos < decl.end
+                    ) return false
                     val displayName = getClassNameWithTypeParams(classSymbol)
                     emitTS2341(expr, propName, displayName, source, fileName)
                     return true
