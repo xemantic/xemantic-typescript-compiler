@@ -1,3 +1,309 @@
+**Round 462 (2026-07-10) — probe-driven burn-down: SIX fixes; FOUR needed instrumented
+whole-program probes (minimal repros clean or misleading — XPROBE prints + a stack-trace probe on
+the Diagnostic constructor). Dashboard: compiler 79 → 72 (−7; TS2322 19 → 15, TS2345 4 → 2,
+TS2339 3 → 2), services 165 → 154 (−11 cross-profile). Suite 9,782 → 9,794 (+12 local across 5
+new test files, 0 regressions); 6 fix commits (a4c8b186 / 9810df0f / f6e2456f / e2e99396 /
+99181256).**
+- **Fix 1 (a4c8b186, call-arg narrow-DOWN gate; compiler 79 → 77):** the round-428b/429c/438
+  branch required the narrowed type to refine the DECLARED type (`n <: declared`) — but tsc's
+  getNarrowedType(assumeTrue) legitimately narrows to a guard target OUTSIDE the declared
+  hierarchy (isPropertyNameLiteral's PropertyNameLiteral union contains JsxNamespacedName, which
+  does not extend Expression), so a genuine narrow was rejected → the wide Expression FP'd TS2345
+  ×2 (utilities.ts:4066 isSameEntityName). An XPROBE on the real bench project showed
+  refines=false / matchesParam=true — the shape does NOT reproduce minimally (the conservative
+  union-param gate skips small repros). The gate now also accepts a narrowed type that makes the
+  PARAM relation pass (the standard monotone rule).
+- **Fix 2 (9810df0f, objlit property-value contextual narrow-DOWN; 77 → 76):** `return { class:
+  node.parent.parent, … }` after `isClassLike(node.parent.parent)` kept the wide Node — the
+  round-438 nullish-strip gate alone rejects narrow-DOWNs (utilities.ts:7458). Two pieces:
+  checkReturnAssignability provides the objlit CONTEXT (a union target contributes its sole
+  non-nullish object member — mirrors the call-arg B83.4g), and getTypeOfObjectLiteral's value
+  narrowing extends to PropertyAccess initializers when the contextual property accepts the
+  narrow and rejects the raw. **PERF LANDMINE (measured + fixed pre-commit): an unconditional
+  getNarrowedTypeForReference on every objlit PropertyAccess value program-wide cost +352%
+  self-compile time (28.9 s → 130.5 s) — the walk now runs only when the raw type FAILS the
+  cached contextual-property relation (31.4 s, normal band).**
+- **Fix 3 (f6e2456f, prefix-path guard tail substitution; 76 → 75):** the round-424 prefix-path
+  branch (guard on a RECEIVER prefix of the walked path) made only the drop-nullish claim; tsc
+  re-types `x.y` from the NARROWED x — `isComputedPropertyName(parent)` makes `parent.parent`
+  ComputedPropertyName's declared `parent: Declaration` (utilities.ts:5085). Now substitutes the
+  resolved tail, with TWO measured gates: NON-UNION tails only (an ungated cut was net +1 — a
+  precise union tail like `BindingName` fires where the wide type stayed silent when downstream
+  discriminant narrowing can't complete: checker.ts:45139/binder.ts:2498), and a non-nullish
+  union tail KEEPS the round-424 nullish-strip (dropping it regressed transformers/utilities.ts:643).
+  Verified strictly-removal by listAll diff.
+- **Fix 4 (e2e99396, ambiguous block locals in the PROPERTY-ACCESS pass; 75 → 74):** the round-460
+  rule (≥2 block-scoped decls of one name in ONE body → anyType) ran only in the assignability
+  pass; the property-access pass has its own three body-entry sites. moduleNameResolver.ts's
+  loadModuleFromTargetExportOrImport has `const result = nodeModuleNameResolverWorker(...)`
+  (ResolvedModuleWithFailedLookupLocations) in one block and the recursive SearchResult `const
+  result` in another — first-decl-wins made `result.value` (2823) FP TS2339 on the wrong block's
+  type. Root-caused by TWO probes (a getTypeOfIdentifier-origin print falsified the
+  inherited-entry hypothesis; the B136-recording print found the same-body sibling block).
+- **Fix 5 (f6e2456f follow-up in the same commit as fix 3's gates):** see fix 3's measured gates.
+- **Fix 6 (99181256, constraint-shape foreign-TP gate; 74 → 72, −2):** typeContainsForeignTypeParam
+  matched own TPs by NAME, so a CALLEE's un-inferred TP sharing the name was claimed own —
+  `getUpToDateStatusWorker<T extends BuilderProgram>` returning forEachKey's UNCONSTRAINED
+  `T | undefined` never hit the foreign-TP bail → bare-T TS2322 (tsbuildPublic.ts:1778, pinned by
+  a temporary stack-trace probe on the Diagnostic constructor after the return-path gate looked
+  correct). A same-named TP with a mismatched constraint SHAPE (own constrained vs instance
+  unconstrained, or vice versa) is now foreign; scoped to names present in currentTypeParamDecls
+  so signature-own TP names keep the pure name test (round-431e pins). ALSO cleared
+  transformer.ts:271 (the memoize objlit member — same collision, previously scouted
+  "whole-program-only").
+- **Probe finding (checkConditionalReturnBranches instrumentation):** utilities.ts:5085's
+  emission does NOT come from the ternary-arm branch (its narrow related fine both times) — the
+  ternary-arm TS2322 anchor at 5085:49 was the DIRECT `return parent.parent` shape, mis-read from
+  the earlier scout. Lesson repeated: verify the emitting SITE with a probe before theorizing.
+- **Scouted with findings:** factory/utilities.ts:713 (`helper.importName`) needs TS 5.5 INFERRED
+  TYPE PREDICATES — `filter(helpers, helper => !helper.scoped)` selects the guard overload only
+  because tsc infers `helper is UnscopedEmitHelper` from the boolean-literal discriminant arrow;
+  a bounded slice would infer predicates for single-expression discriminant arrows in
+  filter-family calls.
+- **NEXT (compiler @ 72, ~26 real excl. TS2591×43 + TS2304×2 `global` + TS2584 console):**
+  the big-objlit M3 family remnant (moduleNameResolver.ts:1300 / emitter.ts:1277 /
+  checker.ts:6640); TransformerFactory ×3 (transformer.ts:83/98/100); inferred type predicates
+  (factory/utilities.ts:713); program.ts:1220 (checkDefined RETURN TYPE resolution);
+  es2020.ts:91 Exclude-narrowing at whole-program scale; typeSerializer.ts:603 (switch-narrowed
+  generic clone chain); `string → __String` branding (builder.ts:2390); utilities.ts:9042
+  mapped-type-unknowable-keys excess bail; checker.ts:29132 evolving-let FlowType;
+  checker.ts:21170 TS18048 restrictiveInstantiation self-write; esDecorators ×2 /
+  taggedTemplate:50 / namedEvaluation:434 / parser.ts:9581 / factory/utilities.ts:1688
+  (transformer-family intersections + cast-instantiation identity, M3).**
+
+**Round 461 (2026-07-10) — bounded FP burn-down: FIVE fixes, all GENERAL checker/flow correctness
+that reproduce minimally. Dashboard: compiler 88 → 79 (−9; TS2322 25 → 19, TS2345 6 → 4),
+services 178 → 165 (−13 cross-profile, measured after all five). Suite 9,762 → 9,782 (+20 local
+across 5 new test files, 0 regressions); 5 fix commits (c863d04b / 72c3abc5 / b20a695e /
+f8cbd1e6 / 1f3726f2).**
+- **Fix 1 (c863d04b, TypeParam-source constraint bail, M3.1; compiler 88 → 86):** the round-456
+  reverted broad rule landed as the prescribed per-site EMISSION bail — `bareTpConstraintRelatesTo`
+  (constraint-chain walk, cycle-guarded for `T extends T`, unconstrained → false) suppresses the
+  assignment-path TS2322 when a bare-TypeParam source's constraint chain relates to the target
+  (mirrors round 442's arg-check bail; no shared-engine change → no overload-selection
+  perturbation). Cleared transformers/classFields.ts:1800 (`currentClassContainer = node`, `node: T
+  extends ClassLikeDeclaration`) + utilities.ts:12338 (`clone = getSynthesizedDeepCloneWorker(...)`
+  returning bare `T extends Node` — the callee's T shares the enclosing fn's TP name, so the
+  foreign-TP gate deliberately passes it). tsbuildPublic.ts:1778 (return path) does NOT reproduce
+  minimally — stays.
+- **Fix 2 (72c3abc5, element-access reference paths, M3.4; 86 → 85):** an element access with a
+  LITERAL index is a narrowable reference (tsc isMatchingReference) — `getReferencePath` gains an
+  ElementAccessExpression arm serializing `recv[N]` segments, so
+  `!!node.declarationList.declarations[0].initializer && getInternalEmitFlags(<same path>)`
+  narrows (transformers/es2015.ts:2730). Companions: exact-path ElementAccess target arms in
+  flowAssignmentMightNarrow + narrowByAssignmentRhs; `flowPathRoot` (splits on '[' too) for the
+  root-name comparisons; `pathPrefixOf` boundary tests in argMentionsReferencePath. Also cleaned
+  two pre-existing round-460 warnings the recompile surfaced.
+- **Fix 3 (b20a695e, namespace-member nested-fn shadow; 85 → 82, −3):** `shadowNestedFunctionNames`'
+  collision gate also consults the enclosing inference-namespace exports (new
+  `nameInEnclosingNamespaceExports`, symbol-presence only) — parser.ts:1865's
+  `syntaxCursor = { currentNode }` shorthand referenced the body-nested
+  `currentNode(position): Node` but resolved to namespace Parser's
+  `currentNode(parsingContext, pos?): Node | undefined` via lookupInInferenceNamespace (which runs
+  BEFORE globals in getTypeOfIdentifier). Generalized beyond the pinned site (−3).
+- **Fix 4 (f8cbd1e6, checkDefined-shape non-nullish, M3.4; 82 → 81):** a call whose resolved
+  callee returns a bare OWN-TP `T` with some param annotated `T | undefined` (/`| null`) proves
+  non-nullish (tsc Debug.checkDefined — inference binds T to the arg's non-nullish part); wired
+  into callRhsHasNonNullishReturnAnnotation, gated to no-explicit-type-args (a control pins
+  `checkDefined<X | undefined>` staying nullable). Cleared program.ts:4041 (`sourceFile =
+  Debug.checkDefined(commandLine.options.configFile)` at an if/else join; the callee resolves
+  through the barrel via the flow-only resolvers).
+- **Fix 5 (1f3726f2, var-decl + tuple-slot narrowing consumers, M3.4; 81 → 79):**
+  (a) checkVarDeclAssignability gets the assignment/return paths' relation-passes-gated narrowing
+  for named-object/union/intersection targets (parser.ts:6245 — `let expression: PropertyAccess |
+  Identifier | ThisExpression = initialExpression` after a negative isJsxNamespacedName guard);
+  (b) `elementAssignableToSlot` (round-446 array→variadic-tuple AST check) narrows a reference
+  element — builder.ts:518's `isString(old) ? [old] : old[0]` vs `EmitSignature = string |
+  [signature: string]`.
+- **Scouted, whole-program-only (deferred with findings, all minimal repros CLEAN):**
+  transformer.ts:271's `getEmitHelperFactory: memoize(...)` member (the foreign-TP gate walks
+  anonymous-object members and a faithful single-file memoize repro passes — the real gap is
+  whole-program); utilities.ts:4066 isPropertyNameLiteral &&-guard (faithful single-file repro
+  passes — the PropertyNameLiteral alias union's whole-program resolution is the suspect);
+  parser.ts:9581 displays the SAME union on both sides (`& { expression: SerializedEntityName }` vs
+  the inline union it aliases — alias-display/conflation flavor); factory/utilities.ts:1688 casts
+  to `AssignmentExpression<EqualsToken>` but the cast resolves `PunctuationToken<any>` (generic
+  instantiation identity, M3).
+- **NEXT (compiler @ 79, ~33 real excl. TS2591×43 + TS2304×2 `global` + TS2584 console):** the
+  whole-program probe batch (instrument narrowByCallPredicate on the real bench project for
+  utilities.ts:4066/5085, es2020.ts:91, factory/utilities.ts:713); tsbuildPublic.ts:1778 return-path
+  T (extend the fix-1 bail to the return emission after probing why the narrowed `T | undefined`
+  reaches it); the big-objlit M3 family (transformer.ts:271 / moduleNameResolver.ts:1300 /
+  emitter.ts:1277 / checker.ts:6640); program.ts:1220 (needs the checkDefined call's RETURN TYPE
+  resolved — the non-nullish flag alone doesn't type `file`, so `file.referencedFiles[index]`'s
+  members stay unresolvable for the round-460 destructuring narrowing); typeSerializer.ts:603
+  (switch-narrowed generic clone chain, M3.1); `string → __String` branding (builder.ts:2390);
+  utilities.ts:9042 TS2353 (mapped type keyed `keyof T & …` with un-inferred T — the excess check
+  needs an unknowable-key-domain bail).**
+
+**Round 460 (2026-07-09/10) — bounded FP burn-down: TEN fixes (9 dashboard wins + 1
+repro-pinned capability), all GENERAL checker/flow correctness. Dashboard: compiler 103 → 88
+(−15; TS2322 33 → 25, TS2345 11 → 6, TS2454 1 → 0, TS2363 1 → 0), services 194 → 178 (−16
+cross-profile, measured at fix 8). Suite 9,731 → 9,762 (+31 local across 10 new test files,
+0 regressions); 9 fix commits (9973bf9d / 4c00e5f1 / fcec70f7 / c35e24cb / 739d16ef /
+f2d67ef9 / 2c03d8f9 / a0765dd6 / f1849a01).**
+- **Fix 1 (9973bf9d, block-scoping-ambiguous locals; compiler 103 → 100):** the round-459 NEXT
+  item with root cause pre-diagnosed. A name with ≥2 block-scoped (`let`/`const`) declarations in
+  ONE function body can only refer to DIFFERENT blocks' bindings, but the flat first-decl-wins
+  `currentLocalTypes` made every later read resolve to whichever decl the walk saw first —
+  program.ts findSourceFileWorker's three `const file` made `return file;` read the if-block's
+  `SourceFile | false | undefined` → FP TS2322. `applyAmbiguousBlockScopedLocals` registers such
+  names anyType at body entry (`ambiguousBlockLocalNames`; loop-header decls excluded);
+  `checkVarDeclAssignability` skips re-recording them in all three maps. BONUS: also cleared
+  checker.ts:11321 (round-458's "Blocker-#3 name→DeclarationName conflation" was actually this)
+  and utilitiesPublic.ts:991 — the family was mis-attributed to whole-program conflation.
+- **Fix 2 (4c00e5f1, exhaustive-switch never family; 100 → 97):** all three `Debug.assertNever` /
+  `assertType<never>` sites had DIFFERENT root causes: (a) programDiagnostics.ts:346 — a NON-union
+  switch subject (single interface after `isReferencedFile(reason)` guard) whose `.kind` is an
+  enum-member-union ALIAS fully covered by cases → `narrowBySwitchClause`'s default branch now
+  exhausts it to never; (b) declarations/diagnostics.ts:702 — `Debug.type<T>(node)` where T is a
+  FUNCTION-BODY-local alias (B83.5-unbound) → new `uniqueNestedTypeAliasByName` program-wide map
+  (type-alias sibling of buildNestedFunctionMap); (c) utilities.ts:12082 — HasInferredType contains
+  `Exclude<VariableLikeDeclaration, JsxAttribute | EnumMember>` (no union distribution → member
+  resolved anyType, poisoning the union) → new `resolveAssertTargetTypeNode` resolves member-wise
+  and evaluates lib Exclude (keep members NOT assignable to U). All flow-only.
+- **Fix 3 (fcec70f7, flatten double-array anchor, M3.1; 97 → 95):** `flatten<T>(array: T[][] |
+  readonly (T | readonly T[] | undefined)[])` — a union param with a `tp[][]` member is now an
+  inference ANCHOR (gate (k)); an array-of-array arg binds T from its inner element (enum elements
+  accepted). Cleared utilities.ts:9972/9978; the explicit-type-arg control proved the relation
+  passes once T binds.
+- **Fix 4 (c35e24cb, TS2454 captured reads; 95 → 94):** `isAssignedAtFlow` returned false at the
+  closure's FlowStart, so an expression-bodied arrow's captured read never saw the enclosing
+  function's assignments (checker.ts:14106 `filter(…, info => !findIndexInfo(indexInfos, …))` after
+  an if/else assigning indexInfos on both branches). It now follows `FlowStart.outerFlow` (closures
+  only, localNames-gated; OR-semantics → suppression-only; never-assigned captured reads still fire).
+- **Fix 5 (739d16ef, nested destructured global shadow; 94 → 93):** `registerNestedGlobalShadowDecls`
+  now registers binding-PATTERN element names — checker.ts:37376's nested `const { start, length } =
+  getDiagnosticSpanForCallNode(…)` shadowing core.ts's `length` fn (`diagnostic.length = length`
+  FP'd fn-vs-number).
+- **Fix 6 (f2d67ef9, arithmetic-pass module-var-leak arm; 93 → 92):** the round-442 family —
+  `arithOperandType` bails a bare-Identifier operand whose name ∈ moduleFileLocalVarNames (own-file
+  + currentLocalTypes gates): program.ts's module `const indent = "    "` poisoned parser.ts's
+  body-local `let indent` → `margin - indent` FP'd TS2363 (parser.ts:8974).
+- **Fix 7 (2c03d8f9, destructuring-assignment overwrite narrowing — dashboard-neutral capability,
+  repro-pinned):** `({ pos, end } = refs(i))` now OVERWRITES pattern names in the narrowing walk:
+  Flow.kt threads the ENCLOSING BinaryExpression through the literal target arms (was the leaf
+  Identifier — no RHS visible), `flowAssignmentTargetsName` walks pattern LHSes via
+  `destructuringAssignTargetHasName` (nested default-value patterns REQUIRED — the
+  sourceMapValidationDestructuringForOf… corpus pin caught the first flat-only cut), and
+  `narrowByAssignmentRhs` strips nullish from the declared type when the destructured member
+  resolves nullish-free. Companion: a DIRECT enum-typed switch subject with all members covered
+  exhausts to never in the default clause. The real program.ts:1220 stays FP — its `file` local is
+  `Debug.checkDefined(program.getSourceFileByPath(…))` (cross-barrel generic inference), so the RHS
+  type doesn't resolve; mechanism verified by repro + 5 local tests.
+- **Fix 8 (2c03d8f9 same commit, function-local-alias predicate target; 92 → 91):**
+  `narrowByCallPredicate` falls back to `resolveAssertTargetTypeNode` — utilities.ts
+  resolveNameHelper's nested `isSelfReferenceLocation(node): node is SelfReferenceLocation` (the
+  alias is declared INSIDE the function) never narrowed → `lastSelfReferenceLocation = location`
+  FP'd TS2322 (utilities.ts:11856).
+- **Fix 9 (a0765dd6, chained assignment RHS; 91 → 90):** `location = node = value` evaluates to
+  the ULTIMATE RHS value, but the round-410/438 assignment-path narrowing gate only accepted a
+  bare Identifier/PropertyAccess RHS — transformers/destructuring.ts:113's chain inside
+  `if (isDestructuringAssignment(value))` kept the declared `Expression | undefined` → FP vs
+  TextRange. The gate now unwraps the `=` right-spine before narrowing.
+- **Fix 10 (f1849a01, this-param signature alignment; 90 → 88):** `getTypeOfFunction` zipped the
+  this-DROPPED paramSymbols against the this-KEPT decl.parameters — every param type shifted by
+  one for a `this`-param function (core.ts's `multiMapAdd<K, V>(this: MultiMap<K, V>, key: K,
+  value: V)` built `(key: MultiMap<K, V>, value: K)` → FP TS2322 ×2 at `map.add = multiMapAdd`).
+  A this-param function now resolves each symbol's type from its own valueDeclaration, and `this`
+  no longer counts toward minArgumentCount. LOAD-BEARING: functions WITHOUT a this param KEEP the
+  legacy positional zip — a leading BINDING-PATTERN param is also dropped from paramSymbols
+  (round-446 gotcha), and the shift keeps sig.parameters[i] carrying decl.parameters[i]'s type,
+  which the call-site arg alignment relies on (an unconditional valueDeclaration-based resolution
+  regressed 19 sites: moduleSpecifiers getModuleSpecifierPreferences et al). Aligning properly
+  needs placeholder symbols for pattern params — a queued follow-up with real blast radius.
+- **Scouted, whole-program-only (deferred with findings):** tsbuildPublic.ts:594 TS7006
+  (`parseConfigFileHost.onUnRecoverableConfigFileDiagnostic = d => …` — the PropertyAccess
+  assignment-target context EXISTS and a faithful generic destructured-receiver repro compiles
+  clean; the real gap is cross-barrel); moduleSpecifiers.ts:929 (round-459 finding stands).
+- **NEXT (compiler @ 88, ~42 real excl. TS2591×43 + TS2304×2 `global` + TS2584 console):**
+  program.ts:1220 needs `Debug.checkDefined(<call>)` cross-barrel generic-return inference to feed
+  the (now-landed) destructuring narrowing; transformers/transformers/es2015.ts:2730 needs element-access segments (`declarations[0].initializer`) in the
+  narrowing reference-path machinery (getReferencePath has no `[0]` support — core change, assess
+  blast radius); utilities.ts:4066 isPropertyNameLiteral &&-guard (probe); TransformerFactory
+  whole-program probe (round-457 finding); `string → __String` branding (builderState/builder);
+  the binding-pattern placeholder-symbol signature alignment (unblocks the round-446 family properly); the big objlit-vs-interface returns
+  (parser.ts:1865, emitter.ts:1277, transformer.ts:271, moduleNameResolver.ts:1300 — likely one
+  M3 family); utilities.ts:12338/tsbuildPublic.ts:1778 = the round-456 REVERTED TypeParam-constraint
+  relation rule family (needs the per-site emission bail variant).
+
+**Round 459 (2026-07-09) — bounded FP burn-down: EIGHT fixes, all GENERAL checker correctness
+that reproduce minimally. Dashboard: compiler 116 → 103 (−13; TS2322 43 → 33, TS2339 5 → 3,
+TS2349 2 → 0), services 210 → 194 (−16 measured at fix 7; TS2322 94 → 81, TS2345 29 → 25,
+TS2339 13 → 11). Suite 9,706 → 9,731 (+25 local across 8 new test files, 0 regressions); 8 fix
+commits (b68d6487 / e6b6d990 / 435d7220 / bef95f36 / 4139b47a / 6c630b54 / d209b138 / 47cb985f).**
+- **Fix 1 (b68d6487, array-literal→tuple ASSIGNMENT; compiler −3):** the round-458 NEXT item.
+  New `currentLocalDeclTypeNodes` map records body-local annotation NODES alongside
+  `currentLocalTypes` (first-decl-wins; saved/restored in checkFunctionBody) so
+  `checkAssignmentExpression` can feed the DECLARED tuple node to the round-446
+  `arrayLiteralSatisfiesTupleTarget` helper for an ArrayLiteralExpression RHS (body locals are
+  B83.5-unbound and the resolved Type collapses the rest slot). Cleared checker.ts:22621/22927
+  (`lastSkippedInfo = [source, target]`, `relatedInfo = [info]`), esnextAnd2015.ts:248. The map is
+  general infra — any new body-local AST-shape check should read it.
+- **Fix 2 (e6b6d990, enum-member-literal overload selection; compiler −1):** an enum-member param
+  (`kind: SyntaxKind.NamedImports`) resolves to anyType, so an enum-member ARG matched EVERY
+  overload and the FIRST won — `parseNamedImportsOrExports(SyntaxKind.NamedExports)` (parser.ts:8717)
+  returned the NamedImports overload's type → FP TS2322. `resolveCallOverload` now compares the param
+  annotation's canonical enum-member key set (round-411 key space) against the arg's key AST-side.
+- **Fix 3 (435d7220, array-element flow narrowing + Array.isArray; compiler −2):**
+  (a) `getTypeOfArrayLiteral` narrows a bare-Identifier ELEMENT via getNarrowedTypeForReference —
+  the array sibling of round 438's objlit-value narrowing, same nullish-strip gate — clearing
+  builderState.ts:388 (`if (!sourceFile) return emptyArray; … return [sourceFile]`);
+  (b) `applyConditionNarrowing` gains `Array.isArray(x)` (covers BOTH the round-458 AST path and the
+  flow FlowCondition path; the embedded lib deliberately has no ArrayConstructor so the predicate
+  can't resolve via declarations) — clearing utilities.ts:8757 (chainDiagnosticMessages'
+  `details === undefined || Array.isArray(details) ? details : [details]`). The isArray.ts corpus pin
+  (a USE-BEFORE-ASSIGNED file-level var keeps its DECLARED type in tsc — the TS2454 rule; its
+  baseline expects the ELSE branch un-narrowed) is honored by skipping the narrowing for a bare
+  identifier resolving to a file-level var with no initializer — the first gate run caught this
+  as the session's only (fixed-before-commit) corpus regression.
+- **Fix 4 (bef95f36, objLitValueNullishStrip union-member-subset):** the gate on flow-narrowed
+  objlit property values / array elements also accepts a nullish-FREE strict MEMBER-SUBSET narrow of
+  a union source — monotone-safe (if the raw union relates, any member subset relates → can only
+  suppress). Cleared commandLineParser.ts:2269 (readConfigFile's `isString(x) ? … : { config: {},
+  error: x }` — `string | Diagnostic` → `Diagnostic` is not a nullish strip). The round-438
+  shadowing hazard stays excluded (a nullish narrowed type never qualifies).
+- **Fix 5 (4139b47a, numeric-literal vs enum-domain discriminant):** `narrowByDiscriminantProperty`
+  compares a NUMERIC-literal RHS against an enum-typed discriminant's VALUE domain (enumValues via
+  canonicalEnumSymbol): `flowType.flags === 0` drops `Type` (TypeFlags has no 0-valued member),
+  keeping IncompleteType — tsc's getTypeFromFlowType/isIncomplete (checker.ts:28630 TS2339 +
+  the 29132 TS2322 cascade). An enum WITH a matching value does not narrow (negative control).
+- **Fix 6 (d209b138, tuple-union element access; TS2339):** `value[1]` on a receiver NARROWED to
+  `[FileId] | [FileId, BuilderFileEmit]` (builder.ts:2242 toBuilderFileEmit) — tsc resolves union
+  element access per-member with undefined for out-of-bounds members. The element-access
+  missing-member path bails for a numeric key in bounds for SOME member of an all-tuples union;
+  the bail tests the NARROWED receiver (the DECLARED type still carries the guard-removed FileId).
+- **Fix 7 (6c630b54, nullable-array default-init push on PROPERTY targets; TS2349 2 → 0):**
+  `(label.antecedent || (label.antecedent = [])).push(antecedent)` (binder.ts:1375; core.ts:2135
+  cleared too). Root cause found by tracing: inside the `||` right operand the read of `x.p` is
+  flow-narrowed to the falsy `undefined`, so the round-408 empty-`[]` contextual rule never saw the
+  array type. Two coupled rules: combineBinaryTypes' Equals arm recomputes the RAW property type for
+  a PropertyAccess target with a fresh empty-array RHS (an assignment TARGET types against its
+  DECLARED type — M1.9); contextualAssignmentRhsType accepts a UNION target whose sole non-nullish
+  member is Array-family. The local wrong-arg control pins that the receiver collapses to the
+  PRECISE `string[]` (an `any[]` would accept the bad arg). This closes the round-452
+  "inline-property-receiver" deferral.
+- **Fix 8 (47cb985f, truthy ASSIGNMENT condition; compiler 104 → 103):** `while (child =
+  tryParse(() => …))` — the assignment evaluates to the assigned value, so the body sees `child`
+  truthy; tsc's parser JSDoc loops declare `let child: Tag | … | false` and the `false` member
+  otherwise survived every discriminant filter (a primitive literal member has no `.kind` — the
+  enum-key filter conservatively keeps it) → FP TS2322 at parser.ts:9638. `applyConditionNarrowing`
+  gains a `SyntaxKind.Equals` arm (LHS is the walked reference → narrowByTruthiness; the false
+  branch falsy-narrows symmetrically), covering both the flow FlowCondition and the round-458 AST
+  paths.
+- **NEXT (compiler @ 103, ~57 real excl. TS2591×43 + TS2304×2 `global` + TS2584 console env-legit):**
+  the TransformerFactory<T> whole-program conflation probe (transformer.ts:83/98/100 — round-457
+  finding: NOT a generic-alias gap, needs an instrumented probe); program.ts:3705 — ROOT CAUSE FOUND
+  (no probe needed): findSourceFileWorker has TWO block-scoped `const file` decls
+  (`filesByName.get(path)` → `SourceFile | false | undefined`, declared FIRST inside an if-block,
+  vs the outer `host.getSourceFile(…)`) colliding in the block-UNAWARE first-decl-wins
+  `currentLocalTypes`, so `return file;` reads the wrong binding's type — the B83.5/block-scoping
+  family, needs block-aware local types or a scoped bail; program.ts:1220 (switch-exhaustive +
+  destructuring-assignment definite assignment); the `assertNever` never-param family ×3 (round 441
+  deep); utilities.ts:9978/9972 flatten (M3.1 generic inference); `string → __String` branding
+  (whole-program); moduleSpecifiers.ts:929 for-of element mis-inference (whole-program-only —
+  minimal repro clean).
+
 **Round 458 (2026-07-09) — logical/ternary operand narrowing + try/finally flow fix +
 fresh-objlit interface-target retry + a P0 single-file-CLI crash fix. FOUR fixes, all GENERAL
 checker/flow/driver correctness that reproduce minimally. Dashboard: compiler 121 → 116 (−5),
