@@ -79563,6 +79563,12 @@ interface DataView {
             // members are a conflation artifact. Verified arm; suppression-only.
             if (inner is ObjectLiteralExpression &&
                 objectLiteralMatchesConflatedFileLocalInterface(inner, targetType, fileName)) continue
+            // Round 474 (session.ts toFileSpanWithContext): an object-literal ARM that
+            // SPREADS an any/error-typed value is `any` in tsc (the spread poisons the
+            // whole object — the round-445 rule, extended to the ternary-arm path):
+            // `context ? { ...fileSpan, contextStart: …, contextEnd: … } : fileSpan`
+            // where fileSpan's type is unresolvable here.
+            if (inner is ObjectLiteralExpression && objectLiteralHasUnresolvedSpread(inner)) continue
             // Round 446: an array-literal ARM matching a variadic-tuple member of the
             // target (`cond ? [Diagnostics.X, a] : [Diagnostics.Y]` vs
             // DiagnosticOrDiagnosticAndArguments) — same array→tuple-union rule as the
@@ -100297,8 +100303,12 @@ interface DataView {
      */
     private fun narrowUnionByLiteral(t: Type, literalType: Type, keep: Boolean): Type {
         if (t !is Type.Union) {
-            // For non-union, narrowing-by-literal still applies for the keep=false case
-            // (e.g., `s: string` and `s !== "x"` doesn't change `s`'s type).
+            // Round 474: a POSITIVE equality against a literal narrows a bare supertype
+            // primitive to the literal (tsc narrowTypeByEquality — `base ===
+            // "tsconfig.json"` narrows `string` to the literal; server/utilities.ts's
+            // getBaseConfigFileName ternary). The keep=false case stays unchanged
+            // (removing one literal from an infinite primitive domain is a no-op).
+            if (keep && isLiteralAssignableToMember(literalType, t)) return literalType
             return t
         }
         return if (keep) {
