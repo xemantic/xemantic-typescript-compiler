@@ -83302,7 +83302,7 @@ interface DataView {
                         // PRECEDING sibling param (`initialType = declaredType` — tsc
                         // checker.ts getFlowTypeOfReference) types as the sibling's
                         // annotation (tsc infers the param type from its initializer).
-                        val sibName = (param.initializer as Identifier).text
+                        val sibName = param.initializer.text
                         val sib = parameters.takeWhile { it !== param }
                             .firstOrNull { (it.name as? Identifier)?.text == sibName }
                         sib?.type?.let { tn ->
@@ -96711,7 +96711,7 @@ interface DataView {
             x is TypeReference && y is TypeReference -> {
                 fun nameText(n: Node?): String? = when (n) {
                     is Identifier -> n.text
-                    is QualifiedName -> nameText(n.left)?.let { l -> (n.right as? Identifier)?.text?.let { r -> "$l.$r" } }
+                    is QualifiedName -> nameText(n.left)?.let { l -> n.right.text.let { r -> "$l.$r" } }
                     else -> null
                 }
                 val xa = x.typeArguments ?: emptyList()
@@ -100272,7 +100272,7 @@ interface DataView {
                     val shCtxUsable = shCtx != null && shCtx !== anyType && shCtx !== errorType
                     val shCtxAcceptsNarrow = shNarrowed !== shRaw && shNarrowed !== neverType &&
                         shCtxUsable && shRaw !== anyType && shRaw !== errorType &&
-                        checkTypeRelatedTo(shNarrowed, shCtx!!, assignableRelation) &&
+                        checkTypeRelatedTo(shNarrowed, shCtx, assignableRelation) &&
                         !checkTypeRelatedTo(shRaw, shCtx, assignableRelation)
                     val propType = if (objLitValueNullishStrip(shRaw, shNarrowed) || shCtxAcceptsNarrow)
                         shNarrowed else shRaw
@@ -101598,7 +101598,7 @@ interface DataView {
             body is PrefixUnaryExpression && body.operator == SyntaxKind.Exclamation &&
                 body.operand is PropertyAccessExpression -> {
                 wantFalse = true
-                body.operand as PropertyAccessExpression
+                body.operand
             }
             body is PropertyAccessExpression -> body
             else -> return null
@@ -119116,7 +119116,7 @@ interface DataView {
                     // annotation (tsc infers the param type from its initializer).
                     // Falls through to the round-453 shadow branch when the sibling
                     // doesn't resolve cleanly.
-                    val sibName = (param.initializer as Identifier).text
+                    val sibName = param.initializer.text
                     val sib = parameters.takeWhile { it !== param }
                         .firstOrNull { (it.name as? Identifier)?.text == sibName }
                     val sibType = sib?.type?.let { tn ->
