@@ -1668,6 +1668,7 @@ class Checker(
         // (see [conflatedInterfaceFiles]). Record which module files declare each such X.
         run {
             val ifaceFiles = HashMap<String, MutableSet<String>>()
+            val classFiles = HashMap<String, MutableSet<String>>()
             for (result in binderResults) {
                 val fn = result.sourceFile.fileName
                 val stmts = result.sourceFile.statements
@@ -1675,10 +1676,21 @@ class Checker(
                 for (stmt in stmts) {
                     if (stmt is InterfaceDeclaration) {
                         ifaceFiles.getOrPut(stmt.name.text) { HashSet() }.add(fn)
+                    } else if (stmt is ClassDeclaration) {
+                        stmt.name?.text?.let { classFiles.getOrPut(it) { HashSet() }.add(fn) }
                     }
                 }
             }
-            conflatedInterfaceFiles = ifaceFiles.filterValues { it.size >= 2 }
+            // Round 475: a top-level module-file CLASS X merging (canMerge Class+Interface)
+            // with a DIFFERENT module file's `interface X` is the same conflation — the
+            // merged instance type demands the class's members everywhere the interface is
+            // meant (scriptVersionCache's `class TextChange` vs services types.ts's
+            // `interface TextChange`). The map keeps only the INTERFACE-declaring files
+            // (consumers check satisfaction against those declarations).
+            conflatedInterfaceFiles = ifaceFiles.filterKeys { name ->
+                val ifs = ifaceFiles[name] ?: return@filterKeys false
+                ifs.size >= 2 || classFiles[name]?.any { it !in ifs } == true
+            }
             interfaceDeclFilesAll = ifaceFiles
             // Round 471: names of top-level interfaces declared in ANY module file —
             // consulted by isLibPhantomMemberOfModuleInterface (a lib+module-interface
@@ -88749,6 +88761,15 @@ interface DataView {
                 objectLiteralMatchesViaNestedConflatedMember(expr, targetType, fileName)) {
                 return
             }
+            // Round 475 (Blocker #3): the RETURN sibling of the round-468 ARG rule — the
+            // returning file only IMPORTS the conflated name (services/utilities.ts's
+            // createTextChange returns `{ span, newText }` vs `TextChange`, whose merged
+            // instance demands scriptVersionCache's same-named CLASS members). Exact
+            // satisfaction of ANY declaring file's interface version; FN-not-FP direction.
+            if (expr is ObjectLiteralExpression &&
+                objectLiteralMatchesSomeConflatedDeclaration(expr, targetType)) {
+                return
+            }
             // Round 468b (Blocker #3): the annotation names a type-alias-SHADOWED
             // interface (round 443's SourceFileLike) — check the objlit against the
             // MERGED interface (base + module-augmentation members) AST-side.
@@ -104288,6 +104309,23 @@ interface DataView {
                 return if (contributed.size == 1) contributed[0] else getIntersectionType(contributed)
             }
         }
+        // Round 475: a UNION root resolves `(A | B).p` as `A.p | B.p` when EVERY member
+        // resolves the property (getPropertyOfType has no Union branch — the round-419
+        // gotcha). A nullish member keeps the conservative null (`.p` is illegal on it).
+        // Needed by paramMemberChainType for a union-annotated param's member switch
+        // (`switch (options.newLine)` where options: CompilerOptions | PrinterOptions —
+        // tsc utilities.ts getNewLineCharacter).
+        if (apparent is Type.Union) {
+            val parts = mutableListOf<Type>()
+            for (c in apparent.types) {
+                if (c.flags.hasAny(TypeFlags.Undefined or TypeFlags.Null or TypeFlags.Void)) return null
+                val t = resolveMemberPropertyType(c, propName) ?: return null
+                parts.add(t)
+            }
+            if (parts.isNotEmpty()) {
+                return if (parts.size == 1) parts[0] else getUnionType(parts)
+            }
+        }
         // Round 468: a NUMERIC key resolves through an ARRAY-LIKE constituent's number
         // index — `diag[0]` after `isArray(diag)` intersects each union member with
         // `readonly unknown[]` (tsc utilities.ts diagnosticToString), and the named
@@ -104765,10 +104803,24 @@ interface DataView {
                         getUnionType(leftKept.types.map { if (it === booleanType) trueType else it })
                     else -> leftKept
                 }
+                // Round 475: a string-LITERAL right operand keeps its literal type when
+                // the kept left is all string-literals — tsc's fresh literal joins the
+                // union (`getBaseConfigFileName(…) || "other"` is `"tsconfig.json" |
+                // "jsconfig.json" | "other"`, NOT `… | string`; tsc editorServices
+                // telemetry configFileName). Same gate style as the boolean truthy-facts
+                // rule above; a non-literal left keeps the widened primitive.
+                val rightEff = run {
+                    val leftAllStringLits = leftMapped == null ||
+                        leftMapped is Type.StringLiteral ||
+                        (leftMapped is Type.Union && leftMapped.types.all { it is Type.StringLiteral })
+                    if (leftAllStringLits && rightT === stringType) {
+                        literalTypeOfExpression(right) as? Type.StringLiteral ?: rightT
+                    } else rightT
+                }
                 when {
-                    leftMapped == null -> rightT
-                    leftMapped === rightT -> leftMapped
-                    else -> getUnionType(listOf(leftMapped, rightT))
+                    leftMapped == null -> rightEff
+                    leftMapped === rightEff -> leftMapped
+                    else -> getUnionType(listOf(leftMapped, rightEff))
                 }
             }
             SyntaxKind.QuestionQuestion -> {
@@ -135825,10 +135877,15 @@ interface DataView {
         // method members. Default false — every other caller keeps strict variance.
         bivariantParams: Boolean = false,
     ): Boolean {
-        // Source requires more args than target provides → incompatible
+        // Source requires more args than target provides → incompatible.
+        // Round 475: a REST-param target provides UNBOUNDED args (`(...args: any[]) =>
+        // void` accepts a 3-required-param source — tsc host.setTimeout callbacks,
+        // server utilities.ts ThrottledOperations.run), so the arity gate is skipped.
         val sourceParams = source.parameters
         val targetParams = target.parameters
-        if (source.minArgumentCount > targetParams.size) return false
+        val targetHasRestParam =
+            (targetParams.lastOrNull()?.valueDeclaration as? Parameter)?.dotDotDotToken == true
+        if (!targetHasRestParam && source.minArgumentCount > targetParams.size) return false
         // 17.10d: Light type-param inference for the SOURCE-generic, TARGET-non-generic
         // case. When source has type parameters and target doesn't, treat source's
         // TypeParam-typed param positions as "wildcards" pinned to the target's
@@ -136099,7 +136156,11 @@ interface DataView {
         // — matches `signatureLengthMismatchCall`-style baselines for TS2345 with
         // function args. Take this branch BEFORE per-param comparison since the
         // arity gap is more fundamental than any individual param-type mismatch.
-        if (sourceSig.minArgumentCount > targetSig.parameters.size) {
+        // Round 475: a REST-param target never has an arity gap (mirrors the
+        // signatureRelatedTo gate).
+        val elabTargetHasRest =
+            (targetSig.parameters.lastOrNull()?.valueDeclaration as? Parameter)?.dotDotDotToken == true
+        if (!elabTargetHasRest && sourceSig.minArgumentCount > targetSig.parameters.size) {
             return listOf(
                 "  Target signature provides too few arguments. Expected ${sourceSig.parameters.size} or more, but got ${targetSig.parameters.size}."
             )
