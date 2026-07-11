@@ -21917,6 +21917,18 @@ class Checker(
                 getTypeOfExpression(init).takeIf { it !== anyType && it !== errorType }
             init is CallExpression -> {
                 val pa = init.expression as? PropertyAccessExpression ?: return null
+                // Round 474 (the editorServices `info.sourceFileLike = {…}` family):
+                // `const info = this.method(…)` — the ENCLOSING class's own method
+                // return annotation types the local (getTypeOfExpression(this) is
+                // deliberately anyType per B101, so the general receiver typing never
+                // resolves it), letting the objlit written to `info.sourceFileLike`
+                // inherit ScriptInfo's member context.
+                if ((pa.expression as? Identifier)?.text == "this") {
+                    val ret = (implicitAnyEnclosingClassMembers?.firstOrNull {
+                        it is MethodDeclaration && (it.name as? Identifier)?.text == pa.name.text
+                    } as? MethodDeclaration)?.type
+                    if (ret != null) return getTypeFromTypeNodeSafeNsAware(ret)
+                }
                 if (pa.name.text != "get") return null
                 val recv = pa.expression as? Identifier ?: return null
                 val recvAnn = implicitAnyScopeAnnOf(recv.text) ?: return null
@@ -22040,12 +22052,57 @@ class Checker(
             } else {
                 val recvT = resolveAssignTargetCtxTypeForImplicitAny(left.expression)
                     ?: getTypeOfExpression(left.expression).takeIf { it !== anyType && it !== errorType }
-                recvT?.let { lookupPropertyTypeForCtx(it, left.name.text) }
-                    ?: namespaceMemberVarAnnotationCtx(left)
+                // Round 474 (the editorServices `info.sourceFileLike = {…}` family): the
+                // target member's declared annotation names a CONFLATED alias-shadowed
+                // interface (`sourceFileLike?: SourceFileLike` — importTracker's leaked
+                // `type SourceFileLike` union shadows the real interface), so the resolved
+                // context is WRONG and the objlit's member arrows FP'd TS7006. Signal
+                // "ctx unknowable" — tsc HAS a contextual type here, we just can't model
+                // it; the assignment arm suppresses instead of propagating garbage.
+                if (recvT != null && implicitAnyMemberAnnotationConflated(recvT, left.name.text)) {
+                    implicitAnyCtxUnknowable = true
+                    null
+                } else {
+                    recvT?.let { lookupPropertyTypeForCtx(it, left.name.text) }
+                        ?: namespaceMemberVarAnnotationCtx(left)
+                }
             }
         }
         is ParenthesizedExpression -> resolveAssignTargetCtxTypeForImplicitAny(left.expression)
         else -> null
+    }
+
+    /** Round 474: set by [resolveAssignTargetCtxTypeForImplicitAny] when the
+     *  assignment target's member ANNOTATION names a conflated alias-shadowed
+     *  interface — the context exists in tsc but is unknowable here; the
+     *  assignment arm reads+resets it and suppresses instead of propagating the
+     *  wrong resolved type. */
+    private var implicitAnyCtxUnknowable = false
+
+    /** Round 474: does [recvT]'s member [propName] carry a declared annotation that
+     *  is a bare reference to a conflated alias-shadowed interface name (a key of
+     *  [conflatedTypeAliasFiles] — `type SourceFileLike` in one file vs
+     *  `interface SourceFileLike` in another; the last-wins merge resolves the
+     *  WRONG one)? Nullish-union wrappers (`SourceFileLike | undefined`) count. */
+    private fun implicitAnyMemberAnnotationConflated(recvT: Type, propName: String): Boolean {
+        if (conflatedTypeAliasFiles.isEmpty()) return false
+        // getPropertyOfType has NO Union branch (the round-419 gotcha) — a nullish
+        // union receiver (`ScriptInfo | undefined` from a guarded this-method call)
+        // resolves the member through each object constituent.
+        val propSym = if (recvT is Type.Union)
+            recvT.types.firstNotNullOfOrNull { m ->
+                if (m is Type.Object) getPropertyOfType(m, propName) else null
+            } ?: return false
+        else getPropertyOfType(recvT, propName) ?: return false
+        val ann = (propSym.declarations.firstOrNull { it is PropertyDeclaration } as? PropertyDeclaration)
+            ?.type ?: return false
+        val core: TypeNode = if (ann is UnionType) {
+            ann.types.singleOrNull { t ->
+                !(t is KeywordTypeNode && (t.kind == SyntaxKind.UndefinedKeyword || t.kind == SyntaxKind.NullKeyword))
+            } ?: return false
+        } else ann
+        val name = ((core as? TypeReference)?.typeName as? Identifier)?.text ?: return false
+        return name in conflatedTypeAliasFiles
     }
 
     /** Round 472: `ns.Sub.member = { … }` — a namespace-IMPORT root (`import * as
@@ -22543,10 +22600,21 @@ class Checker(
                             // Resolve the LHS type ONLY when the RHS can consume a fn
                             // context (bounds first-touch resolution-order changes and
                             // per-assignment cost to the shapes that need it).
+                            implicitAnyCtxUnknowable = false
                             val lhsT = if (rhsCanConsumeFnCtx(current.right))
                                 resolveAssignTargetCtxTypeForImplicitAny(current.left) else null
-                            checkImplicitAnyInExpr(current.right, source, fileName,
-                                contextualType = lhsT, ctxViaAssignment = lhsT != null)
+                            if (implicitAnyCtxUnknowable) {
+                                // Round 474: the target member's annotation names a
+                                // conflated alias-shadowed interface — tsc HAS a
+                                // contextual type here; treat the RHS as contextually
+                                // typed rather than propagate the wrong resolution.
+                                implicitAnyCtxUnknowable = false
+                                checkImplicitAnyInExpr(current.right, source, fileName,
+                                    contextuallyTyped = true)
+                            } else {
+                                checkImplicitAnyInExpr(current.right, source, fileName,
+                                    contextualType = lhsT, ctxViaAssignment = lhsT != null)
+                            }
                             leftTyped = false; leftType = null; leftAssign = false
                         }
                         SyntaxKind.BarBar, SyntaxKind.QuestionQuestion -> {
@@ -87989,6 +88057,41 @@ interface DataView {
      * node — the merged symbol's `declarations` list is polluted by mergeSymbolTable). FP-safe:
      * an object matching NO constituent still fires. Suppression-only.
      */
+    /**
+     * Round 474 (the jsTyping `SafeList` family): does the return annotation name a
+     * conflated `type X` declared in THIS file, whose TRUE file-local alias BODY the
+     * returned value's type relates to? The merged last-wins symbol resolved a sibling
+     * file's `interface X` instead (`type SafeList = ReadonlyMap<string, string>` in
+     * jsTyping.ts vs editorServices.ts's `interface SafeList`), so `return new Map(…)`
+     * FP'd against the WRONG member table. Unwraps a nullish union annotation
+     * (`SafeList | undefined`). Conservative: generic refs, non-top-level aliases,
+     * unresolvable bodies, and non-relating sources all return false (→ fires).
+     */
+    private fun returnSourceSatisfiesFileLocalAliasBody(
+        expr: Expression, returnTypeNode: TypeNode?, fileName: String,
+    ): Boolean {
+        if (conflatedTypeAliasFiles.isEmpty() || returnTypeNode == null) return false
+        var core: TypeNode = returnTypeNode
+        if (core is UnionType) {
+            core = core.types.singleOrNull { t ->
+                !(t is KeywordTypeNode && (t.kind == SyntaxKind.UndefinedKeyword || t.kind == SyntaxKind.NullKeyword))
+            } ?: return false
+        }
+        val ref = core as? TypeReference ?: return false
+        if (ref.typeArguments != null) return false
+        val name = (ref.typeName as? Identifier)?.text ?: return false
+        val files = conflatedTypeAliasFiles[name] ?: return false
+        if (fileName !in files) return false
+        val aliasDecl = localTypeAliasIndex[fileName]?.get(name)
+            ?.takeIf { d -> fileResults[fileName]?.sourceFile?.statements?.any { it === d } == true }
+            ?: return false
+        val bodyT = getTypeFromTypeNode(aliasDecl.type)
+        if (bodyT === anyType || bodyT === errorType) return false
+        val srcT = getTypeOfExpression(expr)
+        if (srcT === anyType || srcT === errorType) return false
+        return checkTypeRelatedTo(srcT, bodyT, assignableRelation)
+    }
+
     private fun objectLiteralMatchesConflatedFileLocalTypeAlias(
         obj: ObjectLiteralExpression, targetType: Type, returnTypeNode: TypeNode?, fileName: String,
     ): Boolean {
@@ -88148,6 +88251,13 @@ interface DataView {
         // is assignable to a union containing itself in every tsc mode.
         if (returnUnionSyntacticallyContainsLiteral(returnTypeNode, expr)) return
 
+        // Round 474 (the jsTyping `SafeList` family): the return annotation names a
+        // conflated `type X` THIS FILE declares (`type SafeList = ReadonlyMap<string,
+        // string>` vs editorServices' `interface SafeList` — the last-wins
+        // Interface+TypeAlias merge resolves the WRONG one), and the returned value
+        // relates to the TRUE file-local alias BODY. Suppression-only; a source
+        // failing the body still falls through to the normal checking paths.
+        if (expr != null && returnSourceSatisfiesFileLocalAliasBody(expr, returnTypeNode, fileName)) return
 
         // If the declared return type is a TypeReference with a QualifiedName whose
         // leftmost is unresolvable AND has a spelling-suggestion target (meaning
