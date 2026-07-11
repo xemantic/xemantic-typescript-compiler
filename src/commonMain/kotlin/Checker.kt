@@ -92568,6 +92568,20 @@ interface DataView {
                             val cacheKey = "${symbol.id}|${resolvedArgs.joinToString(",") { it.id.toString() }}"
                             substitutionResultCache[cacheKey]?.let { return it }
                             val saved = currentTypeAliasArgs
+                            // Round 472: the alias's OWN type-parameter NAMES must not
+                            // resolve through the ENCLOSING type-param scope inside the
+                            // body — currentTypeParamScope is consulted BEFORE
+                            // currentTypeAliasArgs in getTypeFromTypeReference, so a
+                            // callee TP named like an alias TP CAPTURED the body's
+                            // reference (`binarySearchKey<T, U>(…, keyComparer:
+                            // Comparer<U>)` where `Comparer<T> = (a: T, b: T) => …` —
+                            // the body's `a: T` resolved to the CALLEE's T, so the
+                            // anchor mapper's T→Node binding typed the comparer callback
+                            // param as Node → FP TS2538 `children[middle]`, tsc
+                            // utilities.ts:1750). Shadow exactly the alias's own TP
+                            // names; every other scope entry stays visible (a nested
+                            // sig-own TP re-pushes onto the scope inside and still wins).
+                            val savedScope = currentTypeParamScope
                             try {
                                 val argMap = mutableMapOf<String, Type>()
                                 saved?.let { argMap.putAll(it) }
@@ -92575,6 +92589,9 @@ interface DataView {
                                     argMap[declTPs[i].name.text] = resolvedArgs[i]
                                 }
                                 currentTypeAliasArgs = argMap
+                                if (savedScope != null && declTPs.any { it.name.text in savedScope }) {
+                                    currentTypeParamScope = savedScope - declTPs.map { it.name.text }.toSet()
+                                }
                                 typeAliasResolutionDepth++
                                 if (decl.type is TypeLiteral || decl.type is UnionType) aliasObjLiteralInstantiationStack.addLast(symbol.id)
                                 // (a UnionType body is pushed unconditionally — the pop below
@@ -92605,6 +92622,7 @@ interface DataView {
                                 return result
                             } finally {
                                 currentTypeAliasArgs = saved
+                                currentTypeParamScope = savedScope
                                 typeAliasResolutionDepth--
                                 if (decl.type is TypeLiteral || decl.type is UnionType) aliasObjLiteralInstantiationStack.removeLast()
                             }
