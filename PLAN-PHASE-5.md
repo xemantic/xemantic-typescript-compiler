@@ -39,6 +39,35 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
+**Round 476 (2026-07-11, same session as 475) — TWO more server fixes in 2 commits
+(b4bbf29c / 2e568f9e). Dashboard: server 54 → 51 (real FPs 8 → 5). Suite 10,075 → 10,078
+(+3 local, 0 regressions).**
+- **Fix 1 (b4bbf29c, jsTyping SafeList ×2):** the round-474 probe verdict resolved in one
+  println probe — `globals["ReadonlyMap"]` is NULL (a KNOWN_GLOBALS name with NO modeled
+  interface), so jsTyping's `type SafeList = ReadonlyMap<string, string>` body resolves
+  errorType. `returnSourceSatisfiesFileLocalAliasBody` treats an UNRESOLVABLE file-local
+  alias body as UNKNOWABLE and suppresses (the resolved target is the known-wrong merged
+  chimera; FN-not-FP — only reached in the conflation context, and a resolvable failing
+  body still fires per the negative pin). The PROPER fix (model ReadonlyMap in the
+  embedded lib) is a lib change with the "and N more" count-shift trap — deferred.
+- **Fix 2 (2e568f9e, typingInstallerAdapter:224):** `overloadNarrowedArgType`'s union path
+  retries with `getNarrowedTypeForReferenceFollowLoopEntry` when the plain walk washed
+  back to the declared union at a FlowLoopLabel (STRUCTURAL wash gate — branch labels
+  mint fresh identical unions, the round-424 lesson). The ActionSet case reads `response`
+  AFTER its requestQueue while-loop, so the switch-case narrowing was lost and both
+  updateTypingsForProject overloads FP-rejected. Un-narrowed union args vs a narrower
+  single overload turn out to be a PRE-EXISTING conservative FN (couldn't pin a small
+  negative control — the dashboard diff is the both-directions evidence).
+- **NEXT (server @ 51, 5 real):** compiler/utilities:7827 TS2366 (minimal union-param
+  switch repro is CLEAN — the real site's barrel-imported CompilerOptions/PrinterOptions
+  or cross-file NewLineKind differ; probe); editorServices:1253 TS2353 + session:475
+  TS2322 (both repro clean minimally — the real sites involve protocol.ts's same-named
+  conflated event/Event interfaces; probe the emission with the Diagnostic-init trick);
+  session:3994 (TextSpan chimera-spread, known deep); typingInstallerAdapter:233 (the
+  callee resolves to a UNION of Project's and ProjectService's watchTypingLocations →
+  B516 combined sig intersects params to `never` — probe how `this.projectService`
+  resolves). Then harness (@225 — TS2339×66/TS2322×16/TS7006×15).**
+
 **Round 475 (2026-07-11, the SERVER burn-down continues) — FIFTEEN fixes in 3 commits
 (f1e2589a / 258aae3d / ccc33547). Dashboard: server 77 → 54 (−23; real FPs 31 → 8 excl.
 TS2591×43 + TS2304×2 `global` + TS2584), harness 255 → 225 (−30 riding, TSV rows recorded),
@@ -565,116 +594,3 @@ TS2584 console); every step verified strictly-removals by listAll diff. Suite 9,
   sourcemaps:212/232 + textChanges:1339 (SourceFileLike objlits); symbolDisplay:917/935
   TS7034/7005; formatting:572 TS2454; utilities:1750 TS2538; goToDefinition:513.**
 
-**Round 467 (2026-07-10, same session as 466) — the services burn-down starts: FIVE bounded
-fixes. Dashboard: services 126 → 108 (−18; TS7006 7 → 1, TS2339 8 → 6, TS2322 40 → 30); every
-step verified strictly-removals by listAll diff. Suite 9,863 → 9,877 (+14 local across 5 new test
-files, 0 regressions); 5 fix commits (d9f0ecab / cfa323d0 / 843f8ce9 / f06586f8 / e1c54010).**
-- **Fix 1 (d9f0ecab, TS7006 array-element ctx + nested-interface annotation retry; 126 → 120):**
-  the round-443 revert closed — checkImplicitAnyInExpr's ArrayLiteral branch now propagates the
-  array's ELEMENT type into elements (object literals get member fn context, arrows the
-  callable-arity suppression; a UNION contextual type yields NO element type, preserving the
-  pinned contextualSignatureInArrayElement* rule). The round-443 blocker fell to
-  `uniqueNestedInterfaceByName` + `nestedInterfaceCtxType` (transient synthetic symbol, memoized
-  by decl; gates: unbound-anywhere + unique + non-generic) feeding
-  `resolveImplicitAnyCtxAnnotation`'s bare-`X`/`X[]` retry — inferFromUsage.ts's function-body
-  `interface Priority` + `const priorities: Priority[] = [{ high: t => …, low: t => … }]` ×6.
-- **Fix 2 (cfa323d0, `switch (typeof ref)` clause narrowing, M3.4; 120 → 118):**
-  narrowBySwitchClause gains a TypeOfExpression subject arm — each clause narrows the walked
-  reference by its string tag via narrowByTypeOfGuard (positive for the matched range's tags,
-  negative for prior cases, negative-by-all for a default; non-string-literal cases bail). The
-  round-425 "object"-tag verdict already did the filtering — only the switch-subject arm was
-  missing (completions.ts:1477 `type.value.negative` on `string | number | PseudoBigInt` under
-  `case "object":`, TS2339 ×2).
-- **Fix 3 (843f8ce9, inference gate (l) — the compact idiom, M3.1; 118 → 116):** an
-  Array/ReadonlyArray param whose element union is exactly one bare TP plus DROPPABLE members
-  (nullish / falsy literals) — core.ts `compact<T>(array: (T | undefined | null | false | 0 |
-  "")[]): T[]` had no accepting gate, so the bare-`T[]` overload won and bound T WITH undefined
-  (smartSelection.ts:336 `(SyntaxList | Node | undefined)[]` vs `readonly Node[]` ×2). The
-  candidate is the arg's element union minus members assignable to a droppable.
-- **Fix 4 (f06586f8, guard-narrowed array-literal returns, M3.4; 116 → 111, −5):**
-  `narrowedArrayLiteralType` re-types an array literal from its flow-narrowed
-  Identifier/PropertyAccess elements; the direct-return path and the ternary-arm path substitute
-  it ONLY when it makes the return relation pass (monotone) — getTypeOfArrayLiteral's own
-  element narrowing deliberately accepts only nullish strips (round 459's shadowing hazard), so
-  `if (isThrowStatement(node)) return [node];` built `Node[]` vs
-  `readonly ThrowStatement[] | undefined`. The 2 targeted documentHighlights.ts sites PLUS
-  jsDoc.ts:238 and extractSymbol.ts ×2 generalized.
-- **Fix 5 (e1c54010, `||`-nested conflated objlit returns, Blocker #3; 111 → 108):** the
-  round-445 note's prescribed extension — `return noSymbolError(name) || { exportNode, … }`
-  (convertExport.ts ×3): the RIGHT object literal routes through
-  objectLiteralMatchesConflatedFileLocalInterface (this file's OWN `interface ExportInfo`, not
-  the cross-file merged pollution), the LEFT operand's non-falsy type must relate on its own;
-  `??` covered too. Suppression-only.
-- **NEXT (services @ 108, ~62 real):** organizeImports ×3 (heterogeneous: `??`-RHS literal
-  widening in a contextual position at 954; ternary-arm array-literal member context at 216;
-  destructured-member `??` write at 115); documentHighlights:193 (`Node` vs `SourceFile` arg);
-  the conflated-Info return family residual (importTracker ×2 /
-  findAllReferences ×2 / signatureHelp / fixExpectedComma / inlineVariable /
-  convertToOptionalChain — objlit-with-any-members / nested-shape variants the round-447
-  strict check rejects); the services.ts objlit giants (ObjectAllocator /
-  CompletionEntry / EmitTextWriter TS2740); mapCode.ts:55 flatten (gate-(k) candidate needs a
-  probe — the arg display resolves but T stays raw); stringCompletions `.types`/`.value` on
-  `Type` (public-API `isUnion()`/`isStringLiteral()` this-guard modeling).**
-
-
-### Post-v1 backlog — the "any TypeScript project" horizon (parked 2026-07-03)
-
-The top-to-bottom loop SKIPS this section until v1 (the 8 tsc-source profiles at zero
-FPs) lands. None of these block self-compiling tsc. Each returns to the live queue
-when v1 lands — or earlier if a live item genuinely needs one (promote per protocol,
-with a session note saying why). Item IDs are stable; session notes reference them.
-
-- [ ] **M2.4 DOM libs as an opt-in set** (dom.generated.d.ts is 1 MB+ — measure the
-  parse/bind cost; ties into the shared-snapshot design). tsc's sources don't
-  reference DOM — post-v1.
-- [ ] **M3.0 Conformance generator extension.** Extend `generateTypeScriptTests` with
-  a per-category allowlist for `tests/cases/conformance/` (5,907 files; keep all tsgo
-  set-B filters). Start with the categories matching M3.1 (types/typeParameters,
-  types/typeRelationships, expressions/functions). Each category lands only when its
-  failures are triaged into queue items — never leave a category half-red without
-  notes. Owner approval (2026-07-02) stands; optionally pull in early as an extra
-  regression net if an M3 campaign wants the coverage.
-- [ ] **M3.5 Per-file scopes** (Blocker #3: stop merging all file locals into
-  `globals`; per-file scope construction with explicit import visibility). Revisit
-  before v1 ONLY if dashboard FPs trace to cross-file scope conflation on tsc sources.
-- [ ] **M4.1 Full nodenext resolution**: package.json `exports`/`imports` maps,
-  symlink/realpath (pnpm layouts), `typesVersions`, package self-references. (The tsc
-  repo itself uses relative imports + @types — unused for v1.)
-- [ ] **M4.2 Real declaration emitter.** `.d.ts` output for arbitrary code (the corpus
-  strips most `.d.ts` sections, so almost none exists today; `declaration: true` is
-  table stakes for "any project"). Test bed: conformance decl baselines + self-compile
-  d.ts diffing. Pull into v1 only if the owner defines "fully compile tsc" to include
-  declaration output.
-- [ ] **M4.3 JSX end-to-end** (`jsx: react-jsx`/`react`/`preserve` transforms on real
-  React-shaped code).
-- [ ] **M4.4 External sourcemaps** (`.js.map` files; inline maps exist).
-- [ ] **M4.5 Decision point**: project references / composite / incremental scope
-  (tsgo supports them; needed for large monorepos — decide build vs defer with owner).
-- [ ] **M4.6 `package.json "type": "module"` module-format detection in
-  `ProjectCompiler`** (found compiling zod, 2026-07-07): under `module: NodeNext`
-  with a `"type": "module"` package.json, real tsc emits ESM but we emit CJS — the
-  `collectPackageJsonTypes` machinery exists only for the multi-file TEST-source path
-  and is not wired into the on-disk project pipeline. Repro: zod (see M4.7); the
-  emitted CJS only runs in a `"type": "commonjs"` context. Unused for v1 (the
-  tsc-source bench project has no package.json → CJS default is correct there).
-- [ ] **M4.7 zod as a second dashboard profile** (validated 2026-07-07, round 432
-  session note): shallow-clone `github.com/colinhacks/zod`, compile
-  `packages/zod/src` (107 files, ~31k LOC) via a `tsconfig.xtsc.json` extending zod's
-  real `.configs/tsconfig.base.json` (strict, exactOptionalPropertyTypes,
-  noUnusedLocals, NodeNext), include `src/**/*.ts`, exclude tests/benchmarks — real
-  tsc 6.0.3 reports 0 errors on it, so every xtsc diagnostic is an FP. Baseline
-  2026-07-07: 1,665 FPs (top: TS7006×447 contextual params, TS2694×284 namespace
-  members via `export *` barrels, TS7029×211 switch-fallthrough, TS2344×182), 0
-  crashes, all 107 files emit, output passes a runtime smoke test. Complements the
-  tsc-source profiles: stresses generic method chaining + noFallthroughCasesInSwitch,
-  which tsc's own source doesn't.
-
-### Offline asset inventory (verified 2026-07-02)
-
-- `typescript-repo` object DB is complete (sparse checkout, full objects): any
-  `src/**` path extractable via `git archive HEAD <path>`; `src/lib/` holds the 110
-  real lib `.d.ts` files; `tests/cases/conformance/` holds 5,907 `.ts`/`.tsx` cases.
-- Node/tsc/tsgo are NOT currently installed — differential testing (M0 optional) and
-  real `@types/node` (M1.3) wait for network.
-- The benchmark project cache lives under `build/bench/` (cheap to rebuild); results
-  TSVs under `bench/` (gitignored, machine-specific).
