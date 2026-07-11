@@ -39,10 +39,11 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
-**Round 474 (2026-07-11, the SERVER burn-down continues) — SEVEN fixes in 3 commits
-(8c65858a / dc105f56 / 5134ea7c). Dashboard: server 104 → 78 (−26; real FPs 58 → 32
-excl. TS2591×43 + TS2304×2 `global` + TS2584), every step strictly-removals by listAll diff at
-the ~46 s normal band. Suite 10,024 → 10,042 (+18 local across 7 new test files, 0 regressions).**
+**Round 474 (2026-07-11, the SERVER burn-down continues) — EIGHT fixes in 4 commits
+(8c65858a / dc105f56 / 5134ea7c / + the literal-write commit). Dashboard: server 104 → 77 (−27;
+real FPs 58 → 31 excl. TS2591×43 + TS2304×2 `global` + TS2584), harness 299 → 255 (−44 riding
+the same fixes, TSV rows recorded), every step strictly-removals by listAll diff at the ~46 s
+normal band. Suite 10,024 → 10,045 (+21 local across 8 new test files, 0 regressions).**
 - **Fix 1 (extractSymbol.ts ×7 + goToDefinition, Blocker #3):** a type-alias BODY referencing a
   CONFLATED interface name resolves in its DECLARING file's view
   (`resolveTypeAliasBodyWithOwnerContext`, identity-matched via localTypeAliasIndex) + the
@@ -83,6 +84,11 @@ the ~46 s normal band. Suite 10,024 → 10,042 (+18 local across 7 new test file
   supertype primitive to the literal (tsc narrowTypeByEquality) — narrowUnionByLiteral's
   non-union branch returned the primitive unchanged, so `base === "tsconfig.json" || base ===
   "jsconfig.json" ? base : undefined` FP'd `string` vs the literal-union return.
+- **Fix 8 (project.ts:2286):** a LITERAL property write whose literal the target's declared
+  union annotation SYNTACTICALLY contains is always legal (`this.autoImportProviderHost =
+  false` vs `AutoImportProviderProject | false | undefined`) — BOTH this-prop write paths
+  (the varTypes string path and checkPropertyAccessAssignment) widened the literal first;
+  both now consult the round-436c syntactic membership proof.
 - **MEASURED & REVERTED (the completions `Request` theory):** resolving a conflated name to the
   ctx file's OWN top-level `type` alias inside conflatedPerFileInterfaceType cleared NOTHING
   (the Request FPs come through a different path) and added 3 returnValueCorrect.ts
@@ -92,11 +98,11 @@ the ~46 s normal band. Suite 10,024 → 10,042 (+18 local across 7 new test file
   died; the suspected in-flight OOM was actually the perf regression of the then-unbisected
   fix-1 (164 s run) — bisecting the two coupled edits found the TypeOperator arm clean and the
   threading responsible for both the +41 and the slowdown.
-- **NEXT (server @ 78, 32 real):** completions Request/CompletionData ×8 (probe the emission
+- **NEXT (server @ 77, 31 real):** completions Request/CompletionData ×8 (probe the emission
   path first — the reverted theory shows it is NOT the bare-name TypeReference resolution);
   session.ts residual (475 `protocol.Event` qualified conflated-alias, 3994 chimera-spread,
   4063 shorthand leak, 1469); project.ts ×8 (399 TS2564, 470/471 TS2391, 564, 1694 TS18048,
-  2286 literal-false widening, 2764 new-expr base, 2914 TS2416); editorServices residual ×5;
+  2764 new-expr base, 2914 TS2416); editorServices residual ×5;
   jsTyping SafeList ReadonlyMap-errorType probe; typingInstallerAdapter ×2; compiler/utilities
   :7827 TS2366; services/utilities:2353. Then harness (last 299).**
 
