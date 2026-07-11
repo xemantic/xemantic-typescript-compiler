@@ -21935,10 +21935,36 @@ class Checker(
                 val recvT = resolveAssignTargetCtxTypeForImplicitAny(left.expression)
                     ?: getTypeOfExpression(left.expression).takeIf { it !== anyType && it !== errorType }
                 recvT?.let { lookupPropertyTypeForCtx(it, left.name.text) }
+                    ?: namespaceMemberVarAnnotationCtx(left)
             }
         }
         is ParenthesizedExpression -> resolveAssignTargetCtxTypeForImplicitAny(left.expression)
         else -> null
+    }
+
+    /** Round 472: `ns.Sub.member = { … }` — a namespace-IMPORT root (`import * as
+     *  ts from "./barrel.js"`) types as any (the `.js` barrel never resolves), so
+     *  the general receiver typing above fails. The SUB-namespace is a top-level
+     *  namespace merged into globals; read the member's declared annotation from
+     *  its exports (tsc tsc.ts:7 `ts.Debug.loggingHost = { log(_level, s) {…} }`
+     *  against `LoggingHost | undefined`). Implicit-any-walker-only. */
+    private fun namespaceMemberVarAnnotationCtx(left: PropertyAccessExpression): Type? {
+        val recv = left.expression as? PropertyAccessExpression ?: return null
+        val rootIdent = recv.expression as? Identifier ?: return null
+        val rootSym = currentFileLocals?.get(rootIdent.text) ?: globals[rootIdent.text] ?: return null
+        if (!rootSym.flags.hasAny(SymbolFlags.Alias)) return null
+        // A namespace-import alias's declaration is the whole ImportDeclaration —
+        // gate on its clause carrying a NamespaceImport binding named like the root.
+        val isNsImport = rootSym.declarations.any {
+            it is NamespaceImport ||
+                (it is ImportDeclaration && it.importClause?.namedBindings is NamespaceImport)
+        }
+        if (!isNsImport) return null
+        val moduleFlags = SymbolFlags.Module or SymbolFlags.NamespaceModule or SymbolFlags.ValueModule
+        val nsSym = globals[recv.name.text]?.takeIf { it.flags.hasAny(moduleFlags) } ?: return null
+        val member = nsSym.exports?.get(left.name.text) ?: return null
+        val vd = member.declarations.firstOrNull { it is VariableDeclaration } as? VariableDeclaration ?: return null
+        return vd.type?.let { getTypeFromTypeNodeSafeNsAware(it) }
     }
 
     /**
@@ -22031,6 +22057,13 @@ class Checker(
                 rhsCanConsumeFnCtx(rhs.left) || rhsCanConsumeFnCtx(rhs.right)
             SyntaxKind.AmpersandAmpersand, SyntaxKind.Comma -> rhsCanConsumeFnCtx(rhs.right)
             else -> false
+        }
+        // Round 472: an object literal with fn-shaped members consumes ctx too —
+        // `ts.Debug.loggingHost = { log(_level, s) {…} }` needs the LHS's declared
+        // LoggingHost to contextually type the method params (tsc tsc.ts:7).
+        is ObjectLiteralExpression -> rhs.properties.any {
+            it is MethodDeclaration ||
+                (it is PropertyAssignment && rhsCanConsumeFnCtx(it.initializer))
         }
         else -> false
     }
@@ -22157,6 +22190,16 @@ class Checker(
      * rule). This is what types the factory idiom
      * `const checker: TypeChecker = { isUndefinedSymbol: symbol => … }`.
      */
+    /** Round 472: the contextual signature's RETURN type — a single callable sig's
+     *  resolvedReturnType (via the same [callableSignaturesForCtx] resolution as the
+     *  arity rule). Null when 0/≥2 sigs or an unusable return; used to thread context
+     *  into an arrow's EXPRESSION body (`overloads => ({ bind: binder => … })`). */
+    private fun contextualSigReturnTypeForCtx(type: Type?): Type? {
+        val sigs = callableSignaturesForCtx(type) ?: return null
+        val rt = sigs.singleOrNull()?.resolvedReturnType ?: return null
+        return if (rt === anyType || rt === errorType) null else rt
+    }
+
     private fun contextualCallableArity(type: Type?): Int? {
         // M3.2 (round 431): signatures resolved via callableSignaturesForCtx — sees
         // through a Union with a single callable member (`WriteFileCallback |
@@ -22219,7 +22262,16 @@ class Checker(
                 try {
                     when (val body = expr.body) {
                         is Block -> checkImplicitAnyInStatements(body.statements, source, fileName, returnCtxAnnotation = expr.type)
-                        is Expression -> checkImplicitAnyInExpr(body, source, fileName)
+                        // Round 472: an EXPRESSION body inherits the contextual
+                        // signature's RETURN type — a builder chain `overload:
+                        // overloads => ({ bind: binder => ({ … }) })` against
+                        // `OverloadBuilder` contextually types each nested returned
+                        // objlit's fn members, so `binder`/`deprecations` are not
+                        // implicit any (tsc deprecations.ts buildOverload).
+                        is Expression -> checkImplicitAnyInExpr(
+                            body, source, fileName,
+                            contextualType = contextualSigReturnTypeForCtx(contextualType),
+                        )
                         else -> {}
                     }
                 } finally {
@@ -41570,6 +41622,8 @@ interface ObjectConstructor {
     readonly prototype: Object;
     getPrototypeOf(o: any): any;
     setPrototypeOf(o: any, proto: object | null): any;
+    getOwnPropertyDescriptor(o: any, p: string): PropertyDescriptor | undefined;
+    getOwnPropertyDescriptors(o: any): any;
     getOwnPropertyNames(o: any): string[];
     create(o: any, properties?: any): any;
     defineProperty(o: any, p: string, attributes: PropertyDescriptor & ThisType<any>): any;

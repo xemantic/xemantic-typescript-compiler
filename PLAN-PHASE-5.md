@@ -105,9 +105,22 @@ test files). Compiler profile unchanged (46, zero real).**
   "past the last assignment" alone is NOT the suppressor; the guard is).
   **SERVICES @ 46 — ZERO REAL FPs** (TS2591×43 + TS2304×2 `global` + TS2584 console, all
   env-legit offline artifacts) — the SECOND profile at zero real, matching compiler.
-- **NEXT:** re-baseline the small profiles (tsc-cli/jsTyping/deprecatedCompat/typingsInstallerCore
-  — stale at round-451 rows, should now be near-46) and burn down server (@232) / harness (@429)
-  with the same listAll-diff workflow. v1 exit = all 8 profiles at zero real FPs.**
+- **Fixes 8–10 (same session): tsc-cli + deprecatedCompat to zero real too — SIX of eight
+  profiles at zero real FPs.** The small-profile re-baseline showed tsc-cli @48 (TS7006×2) and
+  deprecatedCompat @49 (TS7006×2 + TS2339×1); all three cleared: (8) the embedded lib's
+  ObjectConstructor gains `getOwnPropertyDescriptor(s)` — the members were simply absent, and
+  even under real libs the embedded `libGlobals` copy is consulted (deprecations.ts:82); the
+  plural rides the existing es2017 LIB_MIN_TARGET entry. (9) An arrow's EXPRESSION body inherits
+  the contextual signature's RETURN type (`contextualSigReturnTypeForCtx`) — the builder chain
+  `overload: overloads => ({ bind: binder => ({ … }) })` contextually types each nested returned
+  objlit's fn members (deprecations.ts:144/146). (10) `rhsCanConsumeFnCtx` accepts an objlit
+  with fn-shaped members, and `namespaceMemberVarAnnotationCtx` resolves a `ns.Sub.member = {…}`
+  target's declared annotation through the merged globals when the root is a namespace import
+  whose declaration is the whole ImportDeclaration (tsc.ts:7 `ts.Debug.loggingHost =
+  { log(_level, s) {…} }`).
+- **NEXT:** burn down server (@230) / harness (@427) with the same listAll-diff workflow —
+  their top codes (TS2322×87/TS2339×42 server; TS2339×109/TS2322×102 harness) are
+  services-family shapes on server/harness-only files. v1 exit = all 8 profiles at zero real.**
 
 **Round 471 (2026-07-10/11, the services burn-down continues) — NINE bounded fixes in 9 commits
 (63287e70 / 3f5166da / 3766ef73 / 8524afe4 / 093df3f1 / 39b0fddf / c7781e76 / f9a81674 / bd70f5d6). Dashboard: services 72 → 56 (−16; TS2322 12 → 3, TS2345 5 → 2, TS2349 2 → 0, TS2741 2 → 0,
