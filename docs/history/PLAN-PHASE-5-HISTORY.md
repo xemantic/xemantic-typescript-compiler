@@ -1,3 +1,74 @@
+**Round 465 (2026-07-10) — bounded FP burn-down to the LAST real compiler FP: SEVEN fixes across
+8 sites. Dashboard: compiler 55 → 47 (−8; TS2322 6 → 1, TS2345/TS2339/TS2349 → 0), services
+139 → 127 (−12 cross-profile). Suite 9,836 → 9,855 (+19 local across 7 new test files, 0
+regressions); 7 fix commits (5b589394 / 97263c21 / 6102e8ed / 9a7d2b35 / 20894a34 / f521582c /
+ba0a4e5a). Bench: self 28.3 s (normal band).**
+- **Fix 1 (5b589394, union-in-intersection kind-reduction; 55 → 54):** a property read on
+  `Union & Interface` reduces the union constituent's members by `.kind` disjointness
+  (typeGuardMemberDisjoint) against the sibling constituents before folding, so
+  `(NamedEvaluation & BinaryExpression).left` resolves through the surviving
+  `AssignmentExpression & { left: Identifier }` members to Identifier, not BinaryExpression's
+  wide Expression (namedEvaluation.ts:434 TS2345). COMPANION: the intersection contribution
+  fold dedupes by Type.id — a self-intersection `Expression & Expression` made downstream arg
+  checks bail where the plain type correctly fires (pinned by a negative control).
+- **Fix 2 (97263c21, destructured member from callee body, M3.4; 54 → 53):**
+  `({ referencedName, name } = visitReferencedPropertyName(member.name))` — the RHS calls a
+  NESTED un-annotated fn, so the round-460 overwrite narrowing kept the antecedent. New
+  destructuredMemberNonNullishFromCalleeBody: every callee return must be an object literal
+  carrying the member with a non-nullish value; identifier values resolve through the callee's
+  OWN params + body-local const decls (the new bodyDecls map in retExprNonNullishForFlow —
+  getTypeOfIdentifier would resolve the CALLER's same-named nullable binding during the walk).
+  Cleared esDecorators.ts:1309 (the round-464 'two more mechanism layers' item — one layer
+  sufficed).
+- **Fix 3 (6102e8ed, intersection shared-member rule, M3.1; 53 → 51, TWO sites):**
+  intersectionMergedContradictsTarget's first-decl-wins merge was wrong whenever a later
+  constituent REFINES a member — tsc gives a multiply-declared member the INTERSECTION of the
+  declared types, so contradiction now requires EVERY declaration to fail (any relating
+  declaration proves the intersected member relates). Cleared parser.ts:9581 AND
+  factory/utilities.ts:1688 — **the round-461 'whole-program-only' verdict was WRONG: the pair
+  reproduces single-file once the interface itself declares the shared member** (`node as
+  AssignmentExpression<EqualsToken> & { readonly left: GeneratedIdentifier }` vs its own
+  annotation; bisected by deleting AssignmentExpression's own `left`).
+- **Fix 4 (9a7d2b35, fn-AWARE generic member instantiation, M3.1; 51 → 50):** instantiateType
+  no-ops fn-shaped objects (the documented gotcha), so a generic member's fn-typed RETURN kept
+  the raw outer T: `select(index): ((node: T) => T) | undefined` as
+  OrdinalParentheizerRuleSelector<TypeNode> failed its conforming initializer (emitter.ts:1277;
+  Diagnostic-init stack probe located the emission, member-shape bisection V3–V6 isolated the
+  method-return + fn-property-nested-fn shapes). New instantiateTypeFnAware /
+  instantiateSignatureFnAware (fresh instances, never mutation, sig TPs preserved) wired at
+  resolveGenericPropertyTypeWorker's MethodDeclaration RETURN and
+  substituteOuterTypeArgsInSignature's return/params.
+- **Fix 5 (20894a34, concise-arrow captured narrowing, M3.4 × B464; 50 → 49):**
+  getTypeOfArrowFunction's concise-body branch now consults
+  getNarrowedTypeForReferenceFollowLoopEntry for a bare-reference nullable-union body —
+  the B464 flow-into-closures continuation (reassigned-after gates) proves
+  `packageJsonInfoCache ??= create…; return { getPackageJsonInfoCache: () =>
+  packageJsonInfoCache }` non-nullish. Accepted ONLY as an EXACT nullish strip (member-id set
+  equality with narrowByExcludingNullUndefined). Cleared moduleNameResolver.ts:1300.
+- **Fix 6 (f521582c, Exclude-filter kind disjointness, M3.4; 49 → 48):** probe-confirmed the
+  round-457 `asserts node is Exclude<T, U>` branch REACHED es2020.ts flattenChain with
+  uType=NonNullChain resolved and union=4 — but kept=0: enum-member kinds resolve `any`, so the
+  lenient relation related EVERY brand-intersection member (PropertyAccessChain =
+  PropertyAccessExpression & { _optionalChainBrand }) to NonNullChain. The filter now keeps a
+  member whose kind keys are provably disjoint (the round-423 narrowByCallPredicate lesson).
+  Cleared es2020.ts:91 — the round-457 'whole-program resolution scale' diagnosis was actually
+  the lenient relation, visible only where member types resolve fully.
+- **Fix 7 (ba0a4e5a, IIFE-const fn calls, M3.4; 48 → 47):**
+  callRhsHasNonNullishReturnAnnotation's VariableDeclaration branch gains a CallExpression case
+  — iifeReturnedFunctionTriple resolves `const f = (() => { return g; function g(…): R {…}
+  })()` (no-arg IIFE, block body, first top-level return naming a same-block nested fn or an
+  inline fn) to the returned function's annotation, so `uiComparerCaseSensitive ??=
+  createUIStringComparer(uiLocale); return uiComparerCaseSensitive(a, b)` proves the callee
+  non-nullish. Cleared core.ts:2135 TS2349 (the round-463 'hard' item — the classifier angle
+  made it bounded).
+- **NEXT: compiler @ 47 = ONE real FP + 46 env-legit (TS2591×43 require / TS2304×2 global /
+  TS2584 console).** builder.ts:2390 is the genuine Blocker #2 chain: arrayToMap's K := Path
+  needs the makeKey callback's return through nested `toFilePath` → element access on
+  `filePaths = buildInfo.fileNames?.map(toPathInBuildInfoDirectory)` → Array.map return
+  inference from a NAMED-fn callback whose name is AMBIGUOUS (2 decls, both un-annotated
+  returning `toPath(…)` = Path) — needs map-callback return inference + all-candidates-agree
+  ambiguous-fn resolution. Then the services profile burn-down (127).**
+
 **Round 464 (2026-07-10) — bounded FP burn-down: SIX fixes. Dashboard: compiler 61 → 55 (−6;
 TS2322 10 → 6, TS2362 → 0, TS7006 → 0), services 154 → 139 (−15 cross-profile). Suite 9,817 →
 9,836 (+19 local across 7 new test files, 0 regressions); 6 fix commits (ecf6290d / 44e1b2ff /

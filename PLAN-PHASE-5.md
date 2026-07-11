@@ -39,6 +39,67 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
+**Round 474 (2026-07-11, the SERVER burn-down continues) — SEVEN fixes in 3 commits
+(8c65858a / dc105f56 / 5134ea7c). Dashboard: server 104 → 78 (−26; real FPs 58 → 32
+excl. TS2591×43 + TS2304×2 `global` + TS2584), every step strictly-removals by listAll diff at
+the ~46 s normal band. Suite 10,024 → 10,042 (+18 local across 7 new test files, 0 regressions).**
+- **Fix 1 (extractSymbol.ts ×7 + goToDefinition, Blocker #3):** a type-alias BODY referencing a
+  CONFLATED interface name resolves in its DECLARING file's view
+  (`resolveTypeAliasBodyWithOwnerContext`, identity-matched via localTypeAliasIndex) + the
+  `isConflatedInterfaceRefNode` TypeOperator arm (`readonly Diagnostic[]` cached a
+  chimera-element resolution in nodeTypes — plain `Diagnostic[]` worked, the readonly wrapper
+  didn't: the missing-arm tell). **MEASURED DEAD-END folded into the gate: UNRESTRICTED owner
+  threading regressed +41 server FPs and 3.4× wall (104 → 145, 48 → 164 s) — an owner file that
+  itself DECLARES one of the referenced conflated interfaces (importTracker's own
+  `interface AmbientModuleDeclaration` inside its leaked `type SourceFileLike` union) must keep
+  the merged-chimera status quo; the round-443 display-keyed suppression ecology depends on it.**
+- **Fix 2 (executeCommandLine.ts ×4, Blocker #3):** an imported CALLEE colliding with an
+  unrelated same-named exported function (`formatMessage` compiler vs server/session) resolves
+  through its OWN identity-matched import + `export *` chain (`importedCalleeFunctionType`, the
+  fn sibling of round 473's `importedTopLevelVarAnnotationType`); gated to a genuine collision
+  (globals valueDeclaration ∉ the import target's own decls) so non-collision paths stay
+  byte-identical. Negative pin: a wrong arg against the CORRECT signature still fires.
+- **Fix 3 (rules.ts ×5):** `keyof X` where a `type X` SHADOWED the `interface X` via the
+  last-wins Interface+TypeAlias merge (protocol.ts's `ChangePropertyTypes<…>` aliases → anyType
+  → `keyof any` = `string | number | symbol`) recovers the literal key union AST-side
+  (`keyofShadowedInterfaceKeyUnion`, own + extends-inherited names; bails on index signatures /
+  unresolvable bases). The invalid-key positive control proves the union is real.
+- **Fix 4 (editorServices.ts ×4 TS7006):** a body local initialized from a `this.<method>(…)`
+  call types from the ENCLOSING class's own method return annotation (the implicit-any walker's
+  this-call arm — `getTypeOfExpression(this)` is anyType per B101), PAIRED with the
+  ctx-unknowable rule: a target member ANNOTATION naming a conflated alias-shadowed interface
+  (`sourceFileLike?: SourceFileLike`) marks the RHS contextually typed instead of propagating
+  the wrong resolution. The union-receiver gate needed explicit member resolution
+  (getPropertyOfType has NO Union branch — the round-419 gotcha, found by probe).
+- **Fix 5 (completions.ts:1251):** a return annotation naming a conflated `type X` THIS file
+  declares checks against the TRUE file-local alias BODY
+  (`returnSourceSatisfiesFileLocalAliasBody`). jsTyping:81/88 (the SafeList target) STAY: the
+  alias body `ReadonlyMap<string, string>` resolves errorType at this call site while ReadonlyMap
+  resolves fine program-wide — a resolution residual needing a probe.
+- **Fix 6 (session.ts 1827/1907/2424):** a ternary ARM spreading an any/error-typed value is
+  `any` in tsc — the round-445 spread-poison rule extended to checkConditionalReturnBranches.
+  session:3994 stays (its spread resolves to the conflated-TextSpan chimera, not any).
+- **Fix 7 (server/utilities.ts:83):** a POSITIVE equality against a literal narrows a BARE
+  supertype primitive to the literal (tsc narrowTypeByEquality) — narrowUnionByLiteral's
+  non-union branch returned the primitive unchanged, so `base === "tsconfig.json" || base ===
+  "jsconfig.json" ? base : undefined` FP'd `string` vs the literal-union return.
+- **MEASURED & REVERTED (the completions `Request` theory):** resolving a conflated name to the
+  ctx file's OWN top-level `type` alias inside conflatedPerFileInterfaceType cleared NOTHING
+  (the Request FPs come through a different path) and added 3 returnValueCorrect.ts
+  `'Info | undefined' ⊄ 'Info | undefined'` identity-mismatch FPs — the round-444/445 Info
+  first-touch ecology. The completions Request/CompletionData ×8 family needs a probe first.
+- **Session note:** the session was restored mid-flight (`--continue`) after the harness process
+  died; the suspected in-flight OOM was actually the perf regression of the then-unbisected
+  fix-1 (164 s run) — bisecting the two coupled edits found the TypeOperator arm clean and the
+  threading responsible for both the +41 and the slowdown.
+- **NEXT (server @ 78, 32 real):** completions Request/CompletionData ×8 (probe the emission
+  path first — the reverted theory shows it is NOT the bare-name TypeReference resolution);
+  session.ts residual (475 `protocol.Event` qualified conflated-alias, 3994 chimera-spread,
+  4063 shorthand leak, 1469); project.ts ×8 (399 TS2564, 470/471 TS2391, 564, 1694 TS18048,
+  2286 literal-false widening, 2764 new-expr base, 2914 TS2416); editorServices residual ×5;
+  jsTyping SafeList ReadonlyMap-errorType probe; typingInstallerAdapter ×2; compiler/utilities
+  :7827 TS2366; services/utilities:2353. Then harness (last 299).**
+
 **Round 473 (2026-07-11, the SERVER burn-down — the three big conflation families) — THREE fixes
 in 2 commits (ad660db5 / ef8107f5). Dashboard: server 227 → 104 (−123; real FPs 181 → 58 excl.
 TS2591×43 + TS2304×2 `global` + TS2584), harness 429 → 299 (−130 riding the same fixes);
@@ -524,78 +585,6 @@ regressions); 1 fix commit (e12b905b). Bench: self ~28 s (normal band).**
   pkill variant); several compound commands silently died mid-chain. Use `'KotlinCompile[D]aemon'`.
 - **NEXT: the services profile burn-down (126 — TS2322×40 / TS2345×12 / TS2339×8 / TS7006×7 …),
   then server (last measured 402 at round 458) / harness (615). v1 = all 8 profiles at zero FPs.**
-
-**Round 465 (2026-07-10) — bounded FP burn-down to the LAST real compiler FP: SEVEN fixes across
-8 sites. Dashboard: compiler 55 → 47 (−8; TS2322 6 → 1, TS2345/TS2339/TS2349 → 0), services
-139 → 127 (−12 cross-profile). Suite 9,836 → 9,855 (+19 local across 7 new test files, 0
-regressions); 7 fix commits (5b589394 / 97263c21 / 6102e8ed / 9a7d2b35 / 20894a34 / f521582c /
-ba0a4e5a). Bench: self 28.3 s (normal band).**
-- **Fix 1 (5b589394, union-in-intersection kind-reduction; 55 → 54):** a property read on
-  `Union & Interface` reduces the union constituent's members by `.kind` disjointness
-  (typeGuardMemberDisjoint) against the sibling constituents before folding, so
-  `(NamedEvaluation & BinaryExpression).left` resolves through the surviving
-  `AssignmentExpression & { left: Identifier }` members to Identifier, not BinaryExpression's
-  wide Expression (namedEvaluation.ts:434 TS2345). COMPANION: the intersection contribution
-  fold dedupes by Type.id — a self-intersection `Expression & Expression` made downstream arg
-  checks bail where the plain type correctly fires (pinned by a negative control).
-- **Fix 2 (97263c21, destructured member from callee body, M3.4; 54 → 53):**
-  `({ referencedName, name } = visitReferencedPropertyName(member.name))` — the RHS calls a
-  NESTED un-annotated fn, so the round-460 overwrite narrowing kept the antecedent. New
-  destructuredMemberNonNullishFromCalleeBody: every callee return must be an object literal
-  carrying the member with a non-nullish value; identifier values resolve through the callee's
-  OWN params + body-local const decls (the new bodyDecls map in retExprNonNullishForFlow —
-  getTypeOfIdentifier would resolve the CALLER's same-named nullable binding during the walk).
-  Cleared esDecorators.ts:1309 (the round-464 'two more mechanism layers' item — one layer
-  sufficed).
-- **Fix 3 (6102e8ed, intersection shared-member rule, M3.1; 53 → 51, TWO sites):**
-  intersectionMergedContradictsTarget's first-decl-wins merge was wrong whenever a later
-  constituent REFINES a member — tsc gives a multiply-declared member the INTERSECTION of the
-  declared types, so contradiction now requires EVERY declaration to fail (any relating
-  declaration proves the intersected member relates). Cleared parser.ts:9581 AND
-  factory/utilities.ts:1688 — **the round-461 'whole-program-only' verdict was WRONG: the pair
-  reproduces single-file once the interface itself declares the shared member** (`node as
-  AssignmentExpression<EqualsToken> & { readonly left: GeneratedIdentifier }` vs its own
-  annotation; bisected by deleting AssignmentExpression's own `left`).
-- **Fix 4 (9a7d2b35, fn-AWARE generic member instantiation, M3.1; 51 → 50):** instantiateType
-  no-ops fn-shaped objects (the documented gotcha), so a generic member's fn-typed RETURN kept
-  the raw outer T: `select(index): ((node: T) => T) | undefined` as
-  OrdinalParentheizerRuleSelector<TypeNode> failed its conforming initializer (emitter.ts:1277;
-  Diagnostic-init stack probe located the emission, member-shape bisection V3–V6 isolated the
-  method-return + fn-property-nested-fn shapes). New instantiateTypeFnAware /
-  instantiateSignatureFnAware (fresh instances, never mutation, sig TPs preserved) wired at
-  resolveGenericPropertyTypeWorker's MethodDeclaration RETURN and
-  substituteOuterTypeArgsInSignature's return/params.
-- **Fix 5 (20894a34, concise-arrow captured narrowing, M3.4 × B464; 50 → 49):**
-  getTypeOfArrowFunction's concise-body branch now consults
-  getNarrowedTypeForReferenceFollowLoopEntry for a bare-reference nullable-union body —
-  the B464 flow-into-closures continuation (reassigned-after gates) proves
-  `packageJsonInfoCache ??= create…; return { getPackageJsonInfoCache: () =>
-  packageJsonInfoCache }` non-nullish. Accepted ONLY as an EXACT nullish strip (member-id set
-  equality with narrowByExcludingNullUndefined). Cleared moduleNameResolver.ts:1300.
-- **Fix 6 (f521582c, Exclude-filter kind disjointness, M3.4; 49 → 48):** probe-confirmed the
-  round-457 `asserts node is Exclude<T, U>` branch REACHED es2020.ts flattenChain with
-  uType=NonNullChain resolved and union=4 — but kept=0: enum-member kinds resolve `any`, so the
-  lenient relation related EVERY brand-intersection member (PropertyAccessChain =
-  PropertyAccessExpression & { _optionalChainBrand }) to NonNullChain. The filter now keeps a
-  member whose kind keys are provably disjoint (the round-423 narrowByCallPredicate lesson).
-  Cleared es2020.ts:91 — the round-457 'whole-program resolution scale' diagnosis was actually
-  the lenient relation, visible only where member types resolve fully.
-- **Fix 7 (ba0a4e5a, IIFE-const fn calls, M3.4; 48 → 47):**
-  callRhsHasNonNullishReturnAnnotation's VariableDeclaration branch gains a CallExpression case
-  — iifeReturnedFunctionTriple resolves `const f = (() => { return g; function g(…): R {…}
-  })()` (no-arg IIFE, block body, first top-level return naming a same-block nested fn or an
-  inline fn) to the returned function's annotation, so `uiComparerCaseSensitive ??=
-  createUIStringComparer(uiLocale); return uiComparerCaseSensitive(a, b)` proves the callee
-  non-nullish. Cleared core.ts:2135 TS2349 (the round-463 'hard' item — the classifier angle
-  made it bounded).
-- **NEXT: compiler @ 47 = ONE real FP + 46 env-legit (TS2591×43 require / TS2304×2 global /
-  TS2584 console).** builder.ts:2390 is the genuine Blocker #2 chain: arrayToMap's K := Path
-  needs the makeKey callback's return through nested `toFilePath` → element access on
-  `filePaths = buildInfo.fileNames?.map(toPathInBuildInfoDirectory)` → Array.map return
-  inference from a NAMED-fn callback whose name is AMBIGUOUS (2 decls, both un-annotated
-  returning `toPath(…)` = Path) — needs map-callback return inference + all-candidates-agree
-  ambiguous-fn resolution. Then the services profile burn-down (127).**
-
 
 
 ### Post-v1 backlog — the "any TypeScript project" horizon (parked 2026-07-03)
