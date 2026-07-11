@@ -89610,6 +89610,15 @@ interface DataView {
                             bareTpConstraintRelatesTo(sourceType, tt)) {
                             return
                         }
+                        // Round 471: a spread of a target-typed value + target-declared
+                        // extras (tsc importFixes.ts `fix = { ...fix, ...(cond ? {} :
+                        // { addAsTypeOnly }) }`) — our spread merge keeps only the
+                        // GUARANTEED props (B426), so the relation misses the spread's
+                        // full member set. Suppression-only.
+                        if (expr.right is ObjectLiteralExpression &&
+                            objectLiteralSpreadOfTargetSatisfies(expr.right, tt)) {
+                            return
+                        }
                         // B496: cross-typed-array assignment is owned by the dedicated
                         // checkTypedArrayCrossAssignment walker (correct TS2322 via the
                         // [Symbol.toStringTag] mismatch). Our embedded typed-array interfaces
@@ -91020,6 +91029,90 @@ interface DataView {
             }
             else -> null
         }
+    }
+
+    /** Round 471: `x = { ...y, extra, ...(cond ? {} : { extra2 }) }` where y's
+     *  (flow-narrowed) type relates to the target and every EXTRA key is declared in
+     *  SOME member of the target (union) with a relating value type — tsc types the
+     *  spread result as y's type overlaid with declared extras, so the assignment is
+     *  legal (importFixes.ts `fix = { ...fix, ...(addAsTypeOnly === undefined ? {} :
+     *  { addAsTypeOnly }) }`). Conservative: any unrecognized property shape, a
+     *  non-relating spread, or an undeclared/non-relating extra returns false (the
+     *  standard emission then fires). */
+    private fun objectLiteralSpreadOfTargetSatisfies(
+        objlit: ObjectLiteralExpression, targetType: Type,
+    ): Boolean {
+        var sawRelatingSpread = false
+        val extras = mutableListOf<Pair<String, Expression>>()
+        fun collectArm(arm: Expression): Boolean {
+            var a = arm
+            while (a is ParenthesizedExpression) a = a.expression
+            val ol = a as? ObjectLiteralExpression ?: return false
+            for (ap in ol.properties) {
+                when (ap) {
+                    is PropertyAssignment -> {
+                        val nm = (ap.name as? Identifier)?.text ?: return false
+                        extras.add(nm to ap.initializer)
+                    }
+                    is ShorthandPropertyAssignment -> extras.add(ap.name.text to ap.name)
+                    else -> return false
+                }
+            }
+            return true
+        }
+        for (prop in objlit.properties) {
+            when (prop) {
+                is SpreadAssignment -> {
+                    var e = prop.expression
+                    while (e is ParenthesizedExpression) e = e.expression
+                    if (e is ConditionalExpression) {
+                        if (!collectArm(e.whenTrue) || !collectArm(e.whenFalse)) return false
+                    } else {
+                        val raw = getTypeOfExpression(e)
+                        val t = if (e is Identifier || e is PropertyAccessExpression) {
+                            val narrowed = getNarrowedTypeForReference(raw, e)
+                            if (narrowed !== raw &&
+                                checkTypeRelatedTo(narrowed, targetType, assignableRelation)
+                            ) narrowed else raw
+                        } else raw
+                        if (t === anyType || t === errorType) return false
+                        if (!checkTypeRelatedTo(t, targetType, assignableRelation)) return false
+                        sawRelatingSpread = true
+                    }
+                }
+                is PropertyAssignment -> {
+                    val nm = (prop.name as? Identifier)?.text ?: return false
+                    extras.add(nm to prop.initializer)
+                }
+                is ShorthandPropertyAssignment -> extras.add(prop.name.text to prop.name)
+                else -> return false
+            }
+        }
+        if (!sawRelatingSpread) return false
+        val members = (targetType as? Type.Union)?.types ?: listOf(targetType)
+        for ((key, valueExpr) in extras) {
+            var ok = false
+            for (m in members) {
+                val obj = m as? Type.Object ?: continue
+                resolveStructuredTypeMembers(obj)
+                val sym = obj.members?.get(key) ?: continue
+                val declType = getTypeOfSymbol(sym)
+                if (declType === anyType || declType === errorType) { ok = true; break }
+                // A conditional spread's arm value is guard-narrowed by the ternary
+                // condition (`addAsTypeOnly === undefined ? {} : { addAsTypeOnly }`) —
+                // read the flow-narrowed type, nullish-strip-gated.
+                val vt0 = getTypeOfExpression(valueExpr)
+                val vt = if (valueExpr is Identifier || valueExpr is PropertyAccessExpression) {
+                    val n = getNarrowedTypeForReference(vt0, valueExpr)
+                    if (objLitValueNullishStrip(vt0, n)) n else vt0
+                } else vt0
+                if (vt === anyType || vt === errorType ||
+                    checkTypeRelatedTo(vt, widenOptionalTargetPropType(declType, sym, vt), assignableRelation)
+                ) { ok = true; break }
+            }
+            if (!ok) return false
+        }
+        return true
     }
 
     /** Round 471: true when [propSym] is an object-literal member whose value was an
