@@ -1,3 +1,76 @@
+**Round 463 (2026-07-10) — bounded FP burn-down: NINE fixes — minimal-repro fixes, one measured
+UN-GATE of a historical skip, and two new flow-narrowing mechanisms. Dashboard: compiler 72 → 61
+(−11; TS2322 15 → 10, TS2339 2 → 1, TS2345 2 → 1, TS2353/TS7053/TS18048/TS2589 all → 0). Suite
+9,794 → 9,817 (+23 local across 9 new test files, 0 regressions); 9 fix commits (6075703a / 610bf2a0 / fd3a7003 / 78001791 / 9a55bd1a / 8e6ec34c / 83f27992 / cac642c6 / 181a850a).**
+- **Fix 1 (6075703a, never array element):** `checkArrayLiteralElementExcessProps`'
+  primitive-element-vs-object branch skipped Null/Undefined/Void/Any but not NEVER — `[undefined!]`
+  (never per B282) vs `Expression[]` FP'd TS2322 (taggedTemplate.ts:50). TypeFlags.Never added.
+- **Fix 2 (610bf2a0, fn-type alias instantiation UN-GATE; with fix 1: 72 → 68):** the historical
+  B50.1 skip (FunctionType/ConstructorType/call-sig-only-TypeLiteral alias bodies never substitute)
+  left `TransformerFactory<SourceFile | Bundle>`'s body `T` an UNBOUND TypeParam that FAILS the
+  relation against a concrete conforming source (`return transformModule` ×3, transformer.ts:83/98/
+  100 — whole-program-only: small programs resolve the unbound T to errorType and pass vacuously;
+  found by probing the resolved target's call-sig structure). The skip's historical FP hazard is
+  covered by the round-431 foreign-TP source gates. Measured: corpus green + strictly-removals.
+  `isFunctionTypeAliasBody` deleted; the CLAUDE.md gotcha prescribing the gate REWRITTEN.
+- **Fix 3 (fd3a7003, Identifier body-local vs merged-globals shadow, call-types pass; 68 → 67):**
+  `shadowCallTypesDeclList`'s Identifier branch only overrode an INHERITED currentLocalTypes entry —
+  a for-of loop-header `const patternText` colliding with core.ts's exported `function patternText`
+  resolved through globals in arg position → TS2345 `'() => string'` vs `'string'`
+  (moduleSpecifiers.ts:929, the long-standing scouted item). Global-colliding Identifier locals now
+  register into currentParamBindingNames (anyType; a concrete recording still wins).
+- **Fix 4 (78001791, mapped-type unknowable key domain; 67 → 66):** `getTypeFromMappedType`'s
+  union-constraint enumeration used mapNotNull, silently DROPPING non-string-literal constituents —
+  `[K in keyof T & CompilerOptionKeys | StrictOptionName]` with T un-inferred enumerated only the
+  strict keys and the PARTIAL domain manufactured excess TS2353 (utilities.ts:9042). Any
+  non-enumerable constituent now bails the whole mapped type to anyType.
+- **Fix 5 (9a55bd1a, annotated-decl skip in nearestPrecedingObjectLiteralDecl; 66 → 65):** the B290
+  element-access receiver-shape recovery matched ANNOTATED decls, keying the noImplicitAny index
+  checks off the initializer literal — `const result: ExtendsResult = { options: {} }` made
+  `result[propertyName]` FP TS7053 even though the access-site `result` was the nested fn's
+  annotated param (commandLineParser.ts:3466). Annotated decls skip to the typed path.
+- **Fix 6 (8e6ec34c, NULLISH-MIRROR overload pairs in flow narrowing, M3.4; 65 → 64):** the
+  round-424 documented overload-cluster deferral closed for `f(x: T, …): R;` / `f(x: T | undefined,
+  …): R | undefined;` (+ impl — tsc instantiateType): tsc picks the FIRST applicable overload, and
+  between mirror sigs the ONLY applicability dimension is arg nullishness, so a provably
+  non-nullish arg selects the first (non-nullish) sig (`nullishMirrorOverloadNonNullish`;
+  buildNestedFunctionMap retains full clusters). PAIRED: typeNodeDefinitelyNonNullish falls back to
+  merged globals for a barrel-imported Alias, interface/class/enum ONLY (TypeAlias would re-open
+  the round-443 conflation trap). Cleared checker.ts:21170 TS18048; nullable-arg and
+  nullish-FIRST-order negative controls pinned.
+- **Fix 7 (83f27992, deferred-position recursive UNION alias cycle-break; 64 → 63):**
+  `WrappedExpression<T> = OuterExpression & { expression: WrappedExpression<T> } | T` depth-bailed →
+  spurious TS2589 (utilities.ts:5553). The B57 lazy cycle-break extends to UNION bodies whose every
+  member is deferred-position (`unionBodyIsDeferredPositionOnly`) — an INDEXED-ACCESS/MAPPED member
+  FORCES evaluation, and the first ungated cut regressed exactly that corpus pin
+  (recursivelyExpandingUnionNoStackoverflow expects TS2589+TS2615).
+- **Fix 8 (cac642c6, TS 5.5 INFERRED TYPE PREDICATES, bounded slice; 63 → 62):**
+  `filter(getEmitHelpers(sf), helper => !helper.scoped)` — a single-expression boolean-literal-
+  discriminant arrow in a guard-overload callback position infers `helper is UnscopedEmitHelper`
+  (`inferDiscriminantArrowPredicateTarget` in tryInferPredicateOverloadReturn); without it the
+  non-guard overload returned the full union and `.importName` FP'd TS2339
+  (factory/utilities.ts:713, the round-462 scouted finding). TRAP: LiteralType `true`/`false`
+  literals parse as Identifier nodes (KEYWORD_IDENTIFIERS), not TrueKeyword/FalseKeyword kinds —
+  the first cut silently bailed on every member.
+- **Fix 9 (identifier-RHS assignment narrowing, M3.4; 62 → 61):** a plain `=` with a bare-Identifier
+  RHS filters the antecedent union by the RHS's resolved type (`narrowUnionByRhsAssignment`, member
+  identity preserved for the round-459 subset gates) — `result = node` narrows `VisitResult<T> =
+  T | readonly Node[]` to T so the later `result = [staticBlock, result]` array element reads the
+  member (esDecorators.ts:1485). NON-UNION RHS only: a union RHS routed through the LENIENT member
+  relation (enum-member kinds resolve `any`, round-423) filtered a JsxCallLike union to its
+  property-poorest member — caught by the AliasedConditionAndUnionPredicateTest reassignment
+  control on the first full-suite run, gated before commit.
+- **NEXT (compiler @ 61, ~15 real excl. TS2591×43 + TS2304×2 `global` + TS2584 console):** the
+  big-objlit M3 family (moduleNameResolver.ts:1300 / emitter.ts:1277 / checker.ts:6640);
+  program.ts:1220 (checkDefined RETURN TYPE resolution); esDecorators.ts:1309 (destructured
+  referencedName union); typeSerializer.ts:603 (switch-case narrowing must feed generic clone-chain
+  inference); parser.ts:9581 / factory/utilities.ts:1688 (cast-instantiation identity, M3);
+  builder.ts:2390 `string → __String` branding; checker.ts:29132 evolving-let FlowType;
+  namedEvaluation.ts:434; es2020.ts:91 (Exclude at whole-program scale); core.ts:2135 (scouted:
+  needs IIFE-const return inference — the `??=` RHS `createUIStringComparer(uiLocale)` calls a
+  `const = (() => {…})()` whose type we cannot resolve, hard); tsbuildPublic.ts:594 TS7006
+  (cross-barrel); checker.ts:6639 TS2362 (barrel enum, known-hard).**
+
 **Round 462 (2026-07-10) — probe-driven burn-down: SIX fixes; FOUR needed instrumented
 whole-program probes (minimal repros clean or misleading — XPROBE prints + a stack-trace probe on
 the Diagnostic constructor). Dashboard: compiler 79 → 72 (−7; TS2322 19 → 15, TS2345 4 → 2,

@@ -39,6 +39,68 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
+**Round 472 (2026-07-11, the services burn-down — every remaining real services FP but ONE family
+cleared) — SIX fixes in 5 commits (15c1ff56 / ada176fd / 255a92f6 / 36f98fbf / + the emitter-994+
+program-1088 commit). Dashboard: services 56 → 48 (−8; TS2322 3 → 0, TS2345 2 → 0, TS2740 → 0,
+TS2538 → 0, TS2339 → 0 — the remaining 48 = TS2591×43 + TS2304×2 `global` + TS2584 console, all
+env-legit offline artifacts, + symbolDisplay's TS7034/TS7005 evolving-any pair, the LAST real
+family). Every fix verified strictly-removals by per-position listAll diff; suite 10,003 / 0
+failing (+16 local across 6 new test files). Compiler profile unchanged (46, zero real).**
+- **Fix 1 (15c1ff56, nested-objlit contextual distribution):** getTypeOfObjectLiteral's ctxObj now
+  resolves a UNION contextual type (sole non-nullish object member → NEW
+  selectUnionMemberByObjLitDiscriminant via the round-411 canonical `symId#member` key space →
+  key-coverage); a nested ObjectLiteralExpression VALUE inherits the property's contextual type;
+  array-literal ELEMENTS inherit the contextual array's element type (+ the return path provides
+  the array ref for a returned array literal). The guard-narrowed values (`node: parent` after
+  isJsxOpeningLikeElement, `file: node` after isSourceFile) then ride the existing monotone
+  ctxAcceptsNarrow. Cleared signatureHelp:379 + findAllReferences:1000 — BOTH reproduced in
+  minimal single-file repros (no probe needed).
+- **Fix 2 (ada176fd, any-spread var-decl objlit):** the round-445 spread-poisons-to-any rule
+  existed only on the RETURN path — the var-decl missing-prop/coarse emission now bails too.
+  Cleared completions:2391 (`{ ...baseWriter, … }` vs EmitTextWriter, baseWriter from an
+  unresolvable `.js`-barrel namespace call).
+- **Fix 3 (255a92f6, alias-TP name capture):** `currentTypeParamScope` is consulted BEFORE
+  `currentTypeAliasArgs`, so inside an alias substitution a callee TP named like an alias TP
+  captured the body's reference — `binarySearchKey<T, U>(…, keyComparer: Comparer<U>)` with
+  `Comparer<T> = (a: T, b: T) => Comparison` resolved the body's `a: T` to the CALLEE's T, and
+  the anchor mapper's T→Node2 binding typed the comparer callback param as Node2 → FP TS2538 on
+  `children[middle]`. The substitution now shadows exactly its own TP names out of the scope.
+  Cleared utilities:1750.
+- **Fix 4 (36f98fbf, two guard-resolution fixes):** (a) a TP-referencing fn-typed PARAM skipped
+  by the B516 gate now still registers in currentParamBindingNames — unshadowed, the call
+  resolved through merged globals to a same-named cross-file top-level fn (documentHighlights'
+  `getNodes` vs fixAwaitInSyncFunction's; reproduced 3-file). (b) a NEGATIVE guard branch
+  (`!isModifier(node)`) collapsed `node` to never — the relation over-accepts `Node <: Modifier`
+  (enum-any) — `kindDomainProvesNotSubtype` reads declared `.kind` DOMAINS (bare-enum = whole
+  member set; generic token refs thread type-arg NODES through `extends` levels) and keeps t
+  when its domain exceeds the target's. Cleared completions:2237.
+- **Fix 5 (emitter:994 + program:1088):** (a) checkMemberAccessMissing's knockout single-interface
+  branch now bails for Array/ReadonlyArray references — under REAL LIBS (`lib: es2020`, the bench
+  tsconfig) a numeric element access `transform.transformed[0]` reached it with propName "0" and
+  the lib Array InterfaceDeclaration passed every gate (the "whole-program-only" verdict was just
+  the missing real-libs flag — `w.items[0]` reproduces in 3 lines with the bench tsconfig).
+  (b) checkReturnAssignability retries a failing generic-REFERENCE target whose type args include
+  the fn's OWN TPs with each TP bound to its declared CONSTRAINT — tsc's variance analysis accepts
+  the contravariant-TP-usage shape (createTypeReferenceResolutionLoader returning a getter typed
+  with the constraint itself); suppression-only, FN-not-FP; bare-TP targets excluded by the
+  head-name/no-args gate.
+- **Probe technique that unblocked the batch:** a temporary `init {}` block in the Diagnostic data
+  class keyed on (code, start, fileName) printing `Exception().stackTraceToString()` — found the
+  emitting walker in one services run each time (remember Checker.kt frame line numbers wrap
+  mod 65536). Lesson: of the four "whole-program probe needed" verdicts, THREE dissolved into
+  reproducible factors (cross-file name collision ×1, real libs ×1, enum-any negative wash ×1) —
+  try a name-collision file and the bench tsconfig's `"lib": ["es2020"]` before believing a
+  whole-program verdict.
+- **Cross-profile at session end:** server 275 → 232 (−43), harness 481 → 429 (−52) — the six
+  fixes generalize; bench rows appended (services 40.9 s self, +1.7% vs the round-471b band —
+  no perf regression).
+- **NEXT (services @ 48, ONE real family):** symbolDisplay:917/935 TS7034/TS7005 needs tsc's
+  TWO-PART evolving-any model (round-470b finding stands — declaration-site TS7034 + per-reference
+  auto-flow via isPastLastAssignment; the conditional assignment at :922 flows into the forEach
+  closure read at :935 because it is PAST the last assignment, so tsc uses the final evolved
+  `IndexInfo[] | undefined`). Then the server (@232) / harness (@429) burn-downs — same
+  listAll-diff workflow on their own residuals.**
+
 **Round 471 (2026-07-10/11, the services burn-down continues) — NINE bounded fixes in 9 commits
 (63287e70 / 3f5166da / 3766ef73 / 8524afe4 / 093df3f1 / 39b0fddf / c7781e76 / f9a81674 / bd70f5d6). Dashboard: services 72 → 56 (−16; TS2322 12 → 3, TS2345 5 → 2, TS2349 2 → 0, TS2741 2 → 0,
 TS2420 1 → 0; 10 real left excl. TS2591×43 + TS2304×2 `global` + TS2584 console); every fix
@@ -526,79 +588,6 @@ TS2322 10 → 6, TS2362 → 0, TS7006 → 0), services 154 → 139 (−15 cross-
   esDecorators.ts:1309; namedEvaluation.ts:434 (kind-reduction); parser.ts:9581 /
   factory/utilities.ts:1688 (cast-instantiation identity, M3); builder.ts:2390 (Blocker #2);
   es2020.ts:91 + core.ts:2135 (known-hard).**
-
-**Round 463 (2026-07-10) — bounded FP burn-down: NINE fixes — minimal-repro fixes, one measured
-UN-GATE of a historical skip, and two new flow-narrowing mechanisms. Dashboard: compiler 72 → 61
-(−11; TS2322 15 → 10, TS2339 2 → 1, TS2345 2 → 1, TS2353/TS7053/TS18048/TS2589 all → 0). Suite
-9,794 → 9,817 (+23 local across 9 new test files, 0 regressions); 9 fix commits (6075703a / 610bf2a0 / fd3a7003 / 78001791 / 9a55bd1a / 8e6ec34c / 83f27992 / cac642c6 / 181a850a).**
-- **Fix 1 (6075703a, never array element):** `checkArrayLiteralElementExcessProps`'
-  primitive-element-vs-object branch skipped Null/Undefined/Void/Any but not NEVER — `[undefined!]`
-  (never per B282) vs `Expression[]` FP'd TS2322 (taggedTemplate.ts:50). TypeFlags.Never added.
-- **Fix 2 (610bf2a0, fn-type alias instantiation UN-GATE; with fix 1: 72 → 68):** the historical
-  B50.1 skip (FunctionType/ConstructorType/call-sig-only-TypeLiteral alias bodies never substitute)
-  left `TransformerFactory<SourceFile | Bundle>`'s body `T` an UNBOUND TypeParam that FAILS the
-  relation against a concrete conforming source (`return transformModule` ×3, transformer.ts:83/98/
-  100 — whole-program-only: small programs resolve the unbound T to errorType and pass vacuously;
-  found by probing the resolved target's call-sig structure). The skip's historical FP hazard is
-  covered by the round-431 foreign-TP source gates. Measured: corpus green + strictly-removals.
-  `isFunctionTypeAliasBody` deleted; the CLAUDE.md gotcha prescribing the gate REWRITTEN.
-- **Fix 3 (fd3a7003, Identifier body-local vs merged-globals shadow, call-types pass; 68 → 67):**
-  `shadowCallTypesDeclList`'s Identifier branch only overrode an INHERITED currentLocalTypes entry —
-  a for-of loop-header `const patternText` colliding with core.ts's exported `function patternText`
-  resolved through globals in arg position → TS2345 `'() => string'` vs `'string'`
-  (moduleSpecifiers.ts:929, the long-standing scouted item). Global-colliding Identifier locals now
-  register into currentParamBindingNames (anyType; a concrete recording still wins).
-- **Fix 4 (78001791, mapped-type unknowable key domain; 67 → 66):** `getTypeFromMappedType`'s
-  union-constraint enumeration used mapNotNull, silently DROPPING non-string-literal constituents —
-  `[K in keyof T & CompilerOptionKeys | StrictOptionName]` with T un-inferred enumerated only the
-  strict keys and the PARTIAL domain manufactured excess TS2353 (utilities.ts:9042). Any
-  non-enumerable constituent now bails the whole mapped type to anyType.
-- **Fix 5 (9a55bd1a, annotated-decl skip in nearestPrecedingObjectLiteralDecl; 66 → 65):** the B290
-  element-access receiver-shape recovery matched ANNOTATED decls, keying the noImplicitAny index
-  checks off the initializer literal — `const result: ExtendsResult = { options: {} }` made
-  `result[propertyName]` FP TS7053 even though the access-site `result` was the nested fn's
-  annotated param (commandLineParser.ts:3466). Annotated decls skip to the typed path.
-- **Fix 6 (8e6ec34c, NULLISH-MIRROR overload pairs in flow narrowing, M3.4; 65 → 64):** the
-  round-424 documented overload-cluster deferral closed for `f(x: T, …): R;` / `f(x: T | undefined,
-  …): R | undefined;` (+ impl — tsc instantiateType): tsc picks the FIRST applicable overload, and
-  between mirror sigs the ONLY applicability dimension is arg nullishness, so a provably
-  non-nullish arg selects the first (non-nullish) sig (`nullishMirrorOverloadNonNullish`;
-  buildNestedFunctionMap retains full clusters). PAIRED: typeNodeDefinitelyNonNullish falls back to
-  merged globals for a barrel-imported Alias, interface/class/enum ONLY (TypeAlias would re-open
-  the round-443 conflation trap). Cleared checker.ts:21170 TS18048; nullable-arg and
-  nullish-FIRST-order negative controls pinned.
-- **Fix 7 (83f27992, deferred-position recursive UNION alias cycle-break; 64 → 63):**
-  `WrappedExpression<T> = OuterExpression & { expression: WrappedExpression<T> } | T` depth-bailed →
-  spurious TS2589 (utilities.ts:5553). The B57 lazy cycle-break extends to UNION bodies whose every
-  member is deferred-position (`unionBodyIsDeferredPositionOnly`) — an INDEXED-ACCESS/MAPPED member
-  FORCES evaluation, and the first ungated cut regressed exactly that corpus pin
-  (recursivelyExpandingUnionNoStackoverflow expects TS2589+TS2615).
-- **Fix 8 (cac642c6, TS 5.5 INFERRED TYPE PREDICATES, bounded slice; 63 → 62):**
-  `filter(getEmitHelpers(sf), helper => !helper.scoped)` — a single-expression boolean-literal-
-  discriminant arrow in a guard-overload callback position infers `helper is UnscopedEmitHelper`
-  (`inferDiscriminantArrowPredicateTarget` in tryInferPredicateOverloadReturn); without it the
-  non-guard overload returned the full union and `.importName` FP'd TS2339
-  (factory/utilities.ts:713, the round-462 scouted finding). TRAP: LiteralType `true`/`false`
-  literals parse as Identifier nodes (KEYWORD_IDENTIFIERS), not TrueKeyword/FalseKeyword kinds —
-  the first cut silently bailed on every member.
-- **Fix 9 (identifier-RHS assignment narrowing, M3.4; 62 → 61):** a plain `=` with a bare-Identifier
-  RHS filters the antecedent union by the RHS's resolved type (`narrowUnionByRhsAssignment`, member
-  identity preserved for the round-459 subset gates) — `result = node` narrows `VisitResult<T> =
-  T | readonly Node[]` to T so the later `result = [staticBlock, result]` array element reads the
-  member (esDecorators.ts:1485). NON-UNION RHS only: a union RHS routed through the LENIENT member
-  relation (enum-member kinds resolve `any`, round-423) filtered a JsxCallLike union to its
-  property-poorest member — caught by the AliasedConditionAndUnionPredicateTest reassignment
-  control on the first full-suite run, gated before commit.
-- **NEXT (compiler @ 61, ~15 real excl. TS2591×43 + TS2304×2 `global` + TS2584 console):** the
-  big-objlit M3 family (moduleNameResolver.ts:1300 / emitter.ts:1277 / checker.ts:6640);
-  program.ts:1220 (checkDefined RETURN TYPE resolution); esDecorators.ts:1309 (destructured
-  referencedName union); typeSerializer.ts:603 (switch-case narrowing must feed generic clone-chain
-  inference); parser.ts:9581 / factory/utilities.ts:1688 (cast-instantiation identity, M3);
-  builder.ts:2390 `string → __String` branding; checker.ts:29132 evolving-let FlowType;
-  namedEvaluation.ts:434; es2020.ts:91 (Exclude at whole-program scale); core.ts:2135 (scouted:
-  needs IIFE-const return inference — the `??=` RHS `createUIStringComparer(uiLocale)` calls a
-  `const = (() => {…})()` whose type we cannot resolve, hard); tsbuildPublic.ts:594 TS7006
-  (cross-barrel); checker.ts:6639 TS2362 (barrel enum, known-hard).**
 
 ### Post-v1 backlog — the "any TypeScript project" horizon (parked 2026-07-03)
 
