@@ -39,6 +39,67 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
+**Round 473 (2026-07-11, the SERVER burn-down — the three big conflation families) — THREE fixes
+in 2 commits (ad660db5 / ef8107f5). Dashboard: server 227 → 104 (−123; real FPs 181 → 58 excl.
+TS2591×43 + TS2304×2 `global` + TS2584), harness 429 → 299 (−130 riding the same fixes);
+services and compiler UNCHANGED at their env-legit floors (46 each — the zero-real profiles did
+not regress). Suite 10,013 → 10,024 (+11 local across 3 new test files, 0 regressions); server
+self-compile 43.6 → 48.6 s (+11% — the conflated-name nodeTypes bypass; acceptable, noted for M5).**
+- **Fix 1 (ad660db5a, const-string discriminants — session/typingInstallerAdapter/editorServices
+  ~35 FPs):** tsc's jsTyping/shared.ts idiom discriminates unions on CONST-typed strings
+  (`switch (response.kind) { case EventTypesRegistry: … }` + `eventName: typeof
+  ProjectsUpdatedInBackgroundEvent` members). FOUR coupled pieces: the Binder MERGES
+  Variable+TypeAlias (the `type ActionSet = "action::set"` + `const ActionSet: ActionSet`
+  same-name pair — the const previously OVERWROTE the alias symbol, so every `kind: ActionSet`
+  annotation resolved errorType and the narrowing filters kept every member); the NEW
+  program-wide `topLevelConstStringValues` index (unambiguous top-level const strings;
+  value-space competitors POISON, type-space aliases/interfaces don't compete) feeds
+  `constStringCaseLiteralType` in narrowBySwitchClause + the default-exhaustiveness block +
+  narrowByDiscriminantProperty; `typeQueryConstStringLiteral` recovers `typeof <const>` member
+  annotations that widened to string/any in both discriminant filters; and
+  checkMemberAccessMissing gained the SIBLING-discriminant suppression (`switch
+  (event.eventName)` narrows the BASE `event` and projects `.data` — the walked path
+  "event.data" is invisible to the FlowSwitchClause).
+- **Fix 2 (ad660db5b, per-import barrel VAR resolution — the `emptyArray` family, 29 FPs,
+  Blocker #3):** compiler files importing core.ts's `emptyArray: never[]` through
+  `./_namespaces/ts.js` resolved server/utilitiesPublic.ts's `emptyArray:
+  SortedReadonlyArray<never>` — the merged globals symbol's winner is FILE-ORDER-DEPENDENT.
+  `importedTopLevelVarAnnotationType` (getTypeOfSymbolWorker's Alias branch ONLY — the
+  round-409 resolveAlias-flood rationale stands) resolves the alias through its OWN
+  ImportDeclaration (IDENTITY-matched in the structural index — same-shaped specifiers live in
+  files whose barrels resolve DIFFERENTLY) + the new `computeExportedVarDeclThroughStars`
+  (FILE-AST star following — the merged symbol's declarations list is polluted, so symbol-side
+  resolution can't pick the right file's decl).
+- **Fix 3 (ef8107f5, per-file views of CONFLATED interfaces — the protocol.ts family, ~64 FPs,
+  Blocker #3):** `interface Diagnostic`/`TextSpan`/`HighlightSpan`/`Request` declared in BOTH
+  server/protocol.ts and compiler-or-services types.ts merge into a chimera. References now
+  resolve the per-file view their context selects (see the commit message + the CLAUDE.md
+  gotcha for the FIVE coupled pieces: conflatedPerFileInterfaceType with the
+  defer-to-general-resolver rule pinned by errorWithSameNameType; the transient-symbol
+  perFileInterfaceType; heritage context threading; the isConflatedInterfaceRefNode nodeTypes
+  bypass incl. COMPOSITE nodes; the conflatedCtxMissing no-cache flag + conflatedOwnerFile
+  member-annotation context; the conflatedMergedPairRelated relation/arg-emitter bails).
+  The round-468 `&&`-return arm now EMITS the falsy-remainder error directly (tsc types
+  `count && obj` as `0 | {…}`) — the chimera-era coarse path had reported it by accident
+  (the negative control was pinning an accidental mechanism).
+- **Lessons:** (a) the `nodeTypes` cache is keyed by the STRUCTURAL node — same-shaped
+  annotation nodes in DIFFERENT files collide, which the per-file resolution exposed (bypass
+  for conflated names, including composites: TypeLiteral members resolve EAGERLY in
+  getTypeFromTypeLiteral); (b) a Diagnostic-init probe on a 4-file repro beats armchair
+  resolution-tracing — three rounds of wrong valueDeclaration theories fell to one
+  `XPROBE-ID` print showing `globals=SortedReadonlyArray<never>`; (c) fn types cache their
+  shell EAGERLY (B198), so null-context param annotations stay chimeras — that's what the
+  relation-level conflatedMergedPairRelated bail is for.
+- **Residual (documented):** session.ts:4063 resurfaced with a different display — a
+  destructured-param SHORTHAND (`isWriteAccess`) leaking to a same-named cross-file function
+  in the return-objlit path (previously masked by spread-of-any); the round-429
+  currentParamBindingNames shadowing does not reach this pass's shorthand-value typing.
+- **NEXT (server @ 104, 58 real):** session.ts:4063 (the shorthand leak above); the remaining
+  session.ts objlit targets (Event/EmitOutput/QuickInfo/RefactorEditInfo — union-of-protocol
+  targets); completions.ts Request/CompletionData ×9; editorServices ×9; project.ts ×8;
+  rules.ts keyof ×5; executeCommandLine Logger ×4. Then harness (@ 299 — its own files +
+  TS2339×69/TS2345×37 tail).**
+
 **Round 472 (2026-07-11, the services burn-down — SERVICES REACHES ZERO REAL FPs) — SEVEN fixes
 in 6 commits (15c1ff56 / ada176fd / 255a92f6 / 36f98fbf / c09dc08b / + the truthy-guard commit).
 Dashboard: services 56 → 46 (−10; TS2322 3 → 0, TS2345 2 → 0, TS2740/TS2538/TS2339/TS7034/TS7005
@@ -536,79 +597,6 @@ ba0a4e5a). Bench: self 28.3 s (normal band).**
   ambiguous-fn resolution. Then the services profile burn-down (127).**
 
 
-**Round 464 (2026-07-10) — bounded FP burn-down: SIX fixes. Dashboard: compiler 61 → 55 (−6;
-TS2322 10 → 6, TS2362 → 0, TS7006 → 0), services 154 → 139 (−15 cross-profile). Suite 9,817 →
-9,836 (+19 local across 7 new test files, 0 regressions); 6 fix commits (ecf6290d / 44e1b2ff /
-6fcf7cda / f1e48c81 / 2d843068 / 6fe6406d).**
-- **Fix 1 (ecf6290d, barrel-enum member non-nullish; 61 → 59):** `receiverResolvesToRealEnum`
-  only followed the general resolveAlias (can't follow ESM-`.js` + `export *` barrels), so
-  `flags = flags || NodeBuilderFlags.None` (tsc checker.ts withContext) never proved `flags`
-  non-nullish — TS2362 at checker.ts:6639 AND TS2322 at 6640 (the objlit shorthand member) with
-  ONE root cause. Falls back to the flow-only `resolveImportedEnumSymbol` (round 411, memoized),
-  mirroring `resolveEnumSymbolForDiscriminant`. Reproduced minimally (3-file barrel repro).
-- **Fix 2 (44e1b2ff, generic inference from flow-narrowed args, M3.4 × M3.1; 59 → 58):**
-  `tryInferSingleTypeParamFromArgs` bound T from `getTypeOfExpression`'s DECLARED type — a
-  switch-narrowed union arg bound T to the full union (`const name = cloneNode(node)` under
-  `case SyntaxKind.Identifier:` → return FP'd `EntityName ⊄ SerializedEntityName`,
-  typeSerializer.ts:603). Gated: union-declared bare Identifier/PropertyAccess args, narrowed
-  type must be a non-never/any refinement still relating to the declared type — inference only
-  gets MORE precise. Shared-inference change → full corpus + strictly-removals listAll gates.
-- **Fix 3 (6fcf7cda, TS7006 destructured-source context, M3.2; 58 → 57):** a THIRD parallel
-  implicit-any scope stack (`implicitAnyScopeDestructures`: element name → source expr +
-  property name, push/pop ONLY via push/popImplicitAnyScope) lets an assignment target rooted
-  at a destructured local (`const { parseConfigFileHost } = state; parseConfigFileHost.on… =
-  d => …`, tsbuildPublic.ts:594) resolve its contextual type from the source's declared member.
-  Top-level elements only (nested/rest unrecorded — bounded).
-- **Fix 4 (f1e48c81, flow non-nullish cluster; 57 → 56):** FOUR coupled pieces clear
-  getTypeAtFlowNode's `return type;` (checker.ts:29132, `let type: FlowType | undefined`
-  assigned in every branch): (a) ternary RHS non-nullish iff BOTH arms; (b)
-  typeNodeDefinitelyNonNullish's globals fallback accepts an UNAMBIGUOUS barrel type ALIAS and
-  recurses its body — gate counts TypeAliasDeclarations, NEVER list size (the merged
-  declarations list is polluted with importers' ImportSpecifiers); (c) an un-annotated param
-  DEFAULTED from an annotated PRECEDING sibling (`initialType = declaredType`) types as the
-  sibling's annotation (checkFunctionBody + populateParameterLocalTypes); (d) an UN-ANNOTATED
-  callee proves non-nullish from a bounded body-return scan (bare `return;`/opaque statements
-  fail; ternary identifier leaves resolve via the callee's own params → getTypeOfIdentifier →
-  the new program-wide `uniqueNestedVarDeclByName` — tsc's `convertAutoToAny` whose leaves are
-  `var anyType = createIntrinsicType(…)` closure vars). Diagnosed by an XPROBE cascade
-  (Diagnostic-init stack probe → checkReturnAssignability entry → narrowByAssignmentRhs
-  per-branch); **TOOLING TRAP (CLAUDE.md gotcha added): the bench files are CRLF, so python
-  text-mode offsets understate checker positions by one per line — 3 probe iterations lost to
-  ranges that silently missed.**
-- **Fix 5 (2d843068, barrel checkDefined returns + PA-RHS narrowing; dashboard-neutral,
-  repro-pinned):** `Debug.checkDefined(x)` through the barrel resolves its RETURN as the arg
-  minus nullish (`tryBarrelCheckDefinedReturn`, shape-gated like the round-461 flow classifier
-  — no general barrel resolution in the type path, the round-409 TS2315-flood hazard);
-  `narrowByAssignmentRhs` gains a PropertyAccess-RHS arm mirroring the round-463 Identifier arm
-  (`end = importLiteral.end`). program.ts:1220's chain source improves `{ file: any; … }` →
-  `{ file: SourceFile; … }`; the site itself still FPs because the pos/end objlit-VALUE
-  narrowing needs a contextual type and the round-462 return-path objlit context only accepts a
-  union target's SOLE non-nullish object member — this target has TWO
-  (`ReferenceFileLocation | SyntheticReferenceFileLocation`). Next layer scoped.
-- **Deferred with findings:** esDecorators.ts:1309 needs destructured-member-from-un-annotated-
-  nested-callee resolution PLUS method-calls-on-destructured-receivers (`factory` is itself
-  destructured from `context`) — two more mechanism layers on the fix-3/fix-4 machinery;
-  builder.ts:2390 needs callback-RETURN inference through an un-annotated same-file fn
-  (Blocker #2); namedEvaluation.ts:434 needs `(Union & Interface).left` kind-discriminant
-  member reduction (tsc reduces union members whose `kind` conflicts with the interface's).
-- **Fix 6 (destructured-const element typing + multi-member-union objlit context; 56 → 55):**
-  `recordDestructuredConstElementTypes` types a destructured const's TOP-LEVEL elements from the
-  source's declared members (`const { kind, index } = ref` — B83.5-unbound, so `index` was anyType
-  and `file.referencedFiles[index]` resolved any, defeating the pos/end destructuring-overwrite
-  narrowing; the probe cascade showed the ELEMENT-ACCESS INDEX, not the receiver, was the leak).
-  Conservative: absent names only, non-union/any sources, no defaults/rest/nested; **FUNCTION-shaped
-  member types stay unrecorded** — recording them rode the fn-type relation's M3 gaps
-  (tsbuildPublic.ts:767 unmasked on the first cut; the detector must resolveStructuredTypeMembers
-  and check union constituents, the fn types arrive lazily-membered / `| undefined`-wrapped).
-  PLUS `selectUnionMemberByObjLitKeys`: a MULTI-object-member union return target contributes the
-  SINGLE constituent whose members cover every objlit property name as the contextual type.
-  program.ts:1220 CLEARED (56 → 55, strictly removals by listAll diff).
-- **NEXT (compiler @ 55, ~9 real excl. TS2591×43 + TS2304×2 `global` + TS2584 console):**
-  emitter.ts:1277 (select-return);
-  moduleNameResolver.ts:1300 (getPackageJsonInfoCache `| undefined` member);
-  esDecorators.ts:1309; namedEvaluation.ts:434 (kind-reduction); parser.ts:9581 /
-  factory/utilities.ts:1688 (cast-instantiation identity, M3); builder.ts:2390 (Blocker #2);
-  es2020.ts:91 + core.ts:2135 (known-hard).**
 
 ### Post-v1 backlog — the "any TypeScript project" horizon (parked 2026-07-03)
 

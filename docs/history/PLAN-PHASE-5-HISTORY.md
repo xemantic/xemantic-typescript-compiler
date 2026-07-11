@@ -1,3 +1,77 @@
+**Round 464 (2026-07-10) — bounded FP burn-down: SIX fixes. Dashboard: compiler 61 → 55 (−6;
+TS2322 10 → 6, TS2362 → 0, TS7006 → 0), services 154 → 139 (−15 cross-profile). Suite 9,817 →
+9,836 (+19 local across 7 new test files, 0 regressions); 6 fix commits (ecf6290d / 44e1b2ff /
+6fcf7cda / f1e48c81 / 2d843068 / 6fe6406d).**
+- **Fix 1 (ecf6290d, barrel-enum member non-nullish; 61 → 59):** `receiverResolvesToRealEnum`
+  only followed the general resolveAlias (can't follow ESM-`.js` + `export *` barrels), so
+  `flags = flags || NodeBuilderFlags.None` (tsc checker.ts withContext) never proved `flags`
+  non-nullish — TS2362 at checker.ts:6639 AND TS2322 at 6640 (the objlit shorthand member) with
+  ONE root cause. Falls back to the flow-only `resolveImportedEnumSymbol` (round 411, memoized),
+  mirroring `resolveEnumSymbolForDiscriminant`. Reproduced minimally (3-file barrel repro).
+- **Fix 2 (44e1b2ff, generic inference from flow-narrowed args, M3.4 × M3.1; 59 → 58):**
+  `tryInferSingleTypeParamFromArgs` bound T from `getTypeOfExpression`'s DECLARED type — a
+  switch-narrowed union arg bound T to the full union (`const name = cloneNode(node)` under
+  `case SyntaxKind.Identifier:` → return FP'd `EntityName ⊄ SerializedEntityName`,
+  typeSerializer.ts:603). Gated: union-declared bare Identifier/PropertyAccess args, narrowed
+  type must be a non-never/any refinement still relating to the declared type — inference only
+  gets MORE precise. Shared-inference change → full corpus + strictly-removals listAll gates.
+- **Fix 3 (6fcf7cda, TS7006 destructured-source context, M3.2; 58 → 57):** a THIRD parallel
+  implicit-any scope stack (`implicitAnyScopeDestructures`: element name → source expr +
+  property name, push/pop ONLY via push/popImplicitAnyScope) lets an assignment target rooted
+  at a destructured local (`const { parseConfigFileHost } = state; parseConfigFileHost.on… =
+  d => …`, tsbuildPublic.ts:594) resolve its contextual type from the source's declared member.
+  Top-level elements only (nested/rest unrecorded — bounded).
+- **Fix 4 (f1e48c81, flow non-nullish cluster; 57 → 56):** FOUR coupled pieces clear
+  getTypeAtFlowNode's `return type;` (checker.ts:29132, `let type: FlowType | undefined`
+  assigned in every branch): (a) ternary RHS non-nullish iff BOTH arms; (b)
+  typeNodeDefinitelyNonNullish's globals fallback accepts an UNAMBIGUOUS barrel type ALIAS and
+  recurses its body — gate counts TypeAliasDeclarations, NEVER list size (the merged
+  declarations list is polluted with importers' ImportSpecifiers); (c) an un-annotated param
+  DEFAULTED from an annotated PRECEDING sibling (`initialType = declaredType`) types as the
+  sibling's annotation (checkFunctionBody + populateParameterLocalTypes); (d) an UN-ANNOTATED
+  callee proves non-nullish from a bounded body-return scan (bare `return;`/opaque statements
+  fail; ternary identifier leaves resolve via the callee's own params → getTypeOfIdentifier →
+  the new program-wide `uniqueNestedVarDeclByName` — tsc's `convertAutoToAny` whose leaves are
+  `var anyType = createIntrinsicType(…)` closure vars). Diagnosed by an XPROBE cascade
+  (Diagnostic-init stack probe → checkReturnAssignability entry → narrowByAssignmentRhs
+  per-branch); **TOOLING TRAP (CLAUDE.md gotcha added): the bench files are CRLF, so python
+  text-mode offsets understate checker positions by one per line — 3 probe iterations lost to
+  ranges that silently missed.**
+- **Fix 5 (2d843068, barrel checkDefined returns + PA-RHS narrowing; dashboard-neutral,
+  repro-pinned):** `Debug.checkDefined(x)` through the barrel resolves its RETURN as the arg
+  minus nullish (`tryBarrelCheckDefinedReturn`, shape-gated like the round-461 flow classifier
+  — no general barrel resolution in the type path, the round-409 TS2315-flood hazard);
+  `narrowByAssignmentRhs` gains a PropertyAccess-RHS arm mirroring the round-463 Identifier arm
+  (`end = importLiteral.end`). program.ts:1220's chain source improves `{ file: any; … }` →
+  `{ file: SourceFile; … }`; the site itself still FPs because the pos/end objlit-VALUE
+  narrowing needs a contextual type and the round-462 return-path objlit context only accepts a
+  union target's SOLE non-nullish object member — this target has TWO
+  (`ReferenceFileLocation | SyntheticReferenceFileLocation`). Next layer scoped.
+- **Deferred with findings:** esDecorators.ts:1309 needs destructured-member-from-un-annotated-
+  nested-callee resolution PLUS method-calls-on-destructured-receivers (`factory` is itself
+  destructured from `context`) — two more mechanism layers on the fix-3/fix-4 machinery;
+  builder.ts:2390 needs callback-RETURN inference through an un-annotated same-file fn
+  (Blocker #2); namedEvaluation.ts:434 needs `(Union & Interface).left` kind-discriminant
+  member reduction (tsc reduces union members whose `kind` conflicts with the interface's).
+- **Fix 6 (destructured-const element typing + multi-member-union objlit context; 56 → 55):**
+  `recordDestructuredConstElementTypes` types a destructured const's TOP-LEVEL elements from the
+  source's declared members (`const { kind, index } = ref` — B83.5-unbound, so `index` was anyType
+  and `file.referencedFiles[index]` resolved any, defeating the pos/end destructuring-overwrite
+  narrowing; the probe cascade showed the ELEMENT-ACCESS INDEX, not the receiver, was the leak).
+  Conservative: absent names only, non-union/any sources, no defaults/rest/nested; **FUNCTION-shaped
+  member types stay unrecorded** — recording them rode the fn-type relation's M3 gaps
+  (tsbuildPublic.ts:767 unmasked on the first cut; the detector must resolveStructuredTypeMembers
+  and check union constituents, the fn types arrive lazily-membered / `| undefined`-wrapped).
+  PLUS `selectUnionMemberByObjLitKeys`: a MULTI-object-member union return target contributes the
+  SINGLE constituent whose members cover every objlit property name as the contextual type.
+  program.ts:1220 CLEARED (56 → 55, strictly removals by listAll diff).
+- **NEXT (compiler @ 55, ~9 real excl. TS2591×43 + TS2304×2 `global` + TS2584 console):**
+  emitter.ts:1277 (select-return);
+  moduleNameResolver.ts:1300 (getPackageJsonInfoCache `| undefined` member);
+  esDecorators.ts:1309; namedEvaluation.ts:434 (kind-reduction); parser.ts:9581 /
+  factory/utilities.ts:1688 (cast-instantiation identity, M3); builder.ts:2390 (Blocker #2);
+  es2020.ts:91 + core.ts:2135 (known-hard).**
+
 **Round 463 (2026-07-10) — bounded FP burn-down: NINE fixes — minimal-repro fixes, one measured
 UN-GATE of a historical skip, and two new flow-narrowing mechanisms. Dashboard: compiler 72 → 61
 (−11; TS2322 15 → 10, TS2339 2 → 1, TS2345 2 → 1, TS2353/TS7053/TS18048/TS2589 all → 0). Suite
