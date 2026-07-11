@@ -90504,7 +90504,18 @@ interface DataView {
                     val undefinedToOptional = exprType == "undefined" &&
                         !options.exactOptionalPropertyTypes &&
                         thisPropertyIsOptional(propName)
-                    if (!undefinedToOptional && exprType != null && !isAssignableTo(exprType, declaredType)) {
+                    // Round 474 (project.ts `this.autoImportProviderHost = false`): a
+                    // LITERAL write whose literal the class property's declared union
+                    // annotation SYNTACTICALLY contains is always legal — the string
+                    // path widened the literal (false → boolean) before its relation.
+                    val literalUnionMember = returnUnionSyntacticallyContainsLiteral(
+                        (currentClassForThis?.members?.firstOrNull {
+                            it is PropertyDeclaration && (it.name as? Identifier)?.text == propName
+                        } as? PropertyDeclaration)?.type,
+                        expr.right,
+                    )
+                    if (!undefinedToOptional && !literalUnionMember &&
+                        exprType != null && !isAssignableTo(exprType, declaredType)) {
                         // Squiggle spans "this.prop" (the entire PropertyAccessExpression)
                         val squiggleStart = target.expression.pos
                         val squiggleLength = target.name.pos + target.name.text.length - squiggleStart
@@ -91692,6 +91703,13 @@ interface DataView {
             propType = resolved
         }
         val pt = propType
+        // Round 474 (project.ts `this.autoImportProviderHost = false`): a LITERAL
+        // write whose literal the target's declared union annotation SYNTACTICALLY
+        // contains is always legal — the engine widens the literal (false → boolean)
+        // before the relation. Reuses the round-436c syntactic membership proof.
+        val declAnn = (targetPropSym?.declarations?.firstOrNull { it is PropertyDeclaration }
+            as? PropertyDeclaration)?.type
+        if (returnUnionSyntacticallyContainsLiteral(declAnn, value)) return
         val valueType = getTypeOfExpression(value)
         if (valueType === anyType || valueType === errorType) return
         // round 431e: foreign-TP gate (see checkReturnAssignability) — an un-inferred
