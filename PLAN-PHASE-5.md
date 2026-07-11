@@ -39,6 +39,65 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
+**Round 477 (2026-07-11 — SERVER REACHES ZERO REAL FPs, SEVEN of eight profiles) — FIVE
+fixes, server 51 → 46 (real FPs 5 → 0; the remaining 46 = TS2591×43 + TS2304×2 `global` +
+TS2584 console, all env-legit offline artifacts). All five residuals were CONFLATION-family
+(Blocker #3) on server/protocol.ts vs compiler/jsTyping declarations.**
+- **Fix A (utilities:7827 TS2366):** a same-named `const enum NewLineKind` in protocol.ts
+  (Crlf/Lf) AND compiler types.ts (CarriageReturnLineFeed/LineFeed) merges into a 4-member
+  chimera, so the switch covering the complete compiler pair read non-exhaustive. THREE
+  coupled pieces: `conflatedEnumFileSubsets` (per-file member-name sets keyed by the merged
+  symbol id) relaxes the exhaustiveness comparison (`coveredExhaustsConflatedEnumSubset` —
+  covering ONE file's complete member set is exhaustive; real tsc never merges module-scoped
+  enums); `unionDiscriminantKeysFromAnnotation` — the AST-side fallback when the union
+  members are ALSO alias-shadowed (protocol's `type CompilerOptions = ChangePropertyTypes<…>`
+  shadows the interface via last-wins → the resolved member is any/error and the
+  resolved-type walk bails), resolving each member via `interfaceDeclsForCurrentFileView`
+  (own decl, else the import followed through `.js` barrels); and `checkImplicitReturns` now
+  sets `currentCheckFileName` per file — it was STALE from whatever pass ran before, so
+  conflation-aware resolution in that pass silently used the wrong file.
+- **Fix B (editorServices:1253 TS2353→TS2345):** four pieces: `annotationAgrees` (the
+  topLevelConstStringValues builder) accepts a namespace-import-QUALIFIED alias annotation
+  (`const CloseFileWatcherEvent: protocol.CloseFileWatcherEventName = "closeFileWatcher"` was
+  POISONED out of the index); `enumMemberKeysOfTypeNode`'s QualifiedName arm falls back to
+  `resolveNamespaceQualifiedTypeAlias` so `eventName: protocol.XEventName` member annotations
+  yield `lit:s:` keys; `checkExcessProperties`' UNION nested descent drills the
+  DISCRIMINANT-matched constituent (tsc getMatchingUnionConstituentForObjectLiteral — was
+  first-with-the-prop, so `data: { id }` checked against LargeFileReferencedEvent's data);
+  the then-morphed missing-props TS2345 (the chimera demands protocol's `event`/`body`)
+  needed the round-468 `objectLiteralMatchesSomeConflatedDeclaration` rule in the union-arg
+  structural gate.
+- **Fix C (session:475 TS2322):** a QUALIFIED `ns.Name` naming an interface SHADOWED by a
+  same-named `type Name` alias in a DIFFERENT module file (session's own `type Event` vs
+  protocol's `interface Event`) resolves through the namespace import to the target module's
+  per-file view (`conflatedPerFileInterfaceType` gains a filesOverride param fed by
+  `interfaceDeclFilesAll`; QUALIFIED-only so bare refs keep the round-443/444 ecology).
+  PAIRED with the `isConflatedInterfaceRefNode` QualifiedName-arm extension (nodeTypes bypass
+  — a null-context first touch would cache the alias resolution) and a precise-verdict early
+  return in checkReturnAssignability (`qualifiedAliasShadowedTarget` + engine-confirmed
+  fresh-literal pass — the STRING fallback re-resolves "Event" by bare name to the shadowing
+  alias and re-FP'd; the round-436c trap).
+- **Fix D (session:3994 TS2322):** `objectLiteralSpreadsConflatedInterface` — an objlit
+  SPREADING a conflated-interface-typed value is unknowable (the spread source's fn-return
+  shell cached the chimera eagerly, B198; `{ ...textSpan, contextStart, contextEnd }` mixed
+  compiler's `{start: number, length}` into protocol's `{start: Location, end}`); wired at
+  the ternary-arm + direct-return paths. Suppression-only.
+- **Fix E (typingInstallerAdapter:233 TS2345):** the round-476 "B516 never-param / callee
+  union" theory was WRONG — the Diagnostic-init probe showed the emission is the DEFAULT
+  clause's `assertType<never>(response)` (line 233 IS the default clause): the
+  default-exhaustiveness never fired because EVERY member's `kind: ActionSet`-style
+  annotation read null — the CHECKING file only IMPORTS the merged const+type-alias names,
+  so `currentFileLocals["ActionSet"]` is an IMPORT alias whose declarations are
+  ImportSpecifiers and the bare-alias arm of enumMemberKeysOfTypeNode bailed.
+  Fall to the merged GLOBALS symbol's TypeAliasDeclaration (mergeSymbolTable's addAll keeps
+  the declaring file's alias in the polluted list).
+- **Process:** the round-472 probe technique earned its keep twice (the XP233B stack
+  falsified round 476's theory in one run; XP233C found the null keys in one more); one
+  self-inflicted incident — a `--rerun-tasks` warnings check launched DURING the chain's
+  MainKt run clobbered its classes (the documented NoClassDefFoundError gotcha), costing one
+  re-run.
+- **NEXT: harness (@225 last measured) — the LAST profile for v1.**
+
 **Round 476 (2026-07-11, same session as 475) — TWO more server fixes in 2 commits
 (b4bbf29c / 2e568f9e). Dashboard: server 54 → 51 (real FPs 8 → 5). Suite 10,075 → 10,078
 (+3 local, 0 regressions).**
