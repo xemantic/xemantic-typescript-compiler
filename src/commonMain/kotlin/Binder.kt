@@ -440,6 +440,14 @@ class Binder(private val options: CompilerOptions) {
         // (`class B extends A` where A is both interface and constructor var).
         if (existing.hasAny(SymbolFlags.Variable) && incoming.hasAny(SymbolFlags.Interface)) return true
         if (existing.hasAny(SymbolFlags.Interface) && incoming.hasAny(SymbolFlags.Variable)) return true
+        // Variable + TypeAlias (round 473): `type ActionSet = "action::set"` + `export const
+        // ActionSet: ActionSet = "action::set"` — tsc's jsTyping/shared.ts idiom. Disjoint
+        // type/value spaces, same rationale as Variable + Interface: without the merge the
+        // const OVERWRITES the alias symbol, `kind: ActionSet` member annotations resolve
+        // through a Variable-only symbol to errorType, and discriminated-union narrowing
+        // over such members silently dies.
+        if (existing.hasAny(SymbolFlags.Variable) && incoming.hasAny(SymbolFlags.TypeAlias)) return true
+        if (existing.hasAny(SymbolFlags.TypeAlias) && incoming.hasAny(SymbolFlags.Variable)) return true
         // Enum + Enum (merge across declarations)
         if (existing.hasAny(SymbolFlags.Enum) && incoming.hasAny(SymbolFlags.Enum)) return true
         // var + var (re-declarations allowed)

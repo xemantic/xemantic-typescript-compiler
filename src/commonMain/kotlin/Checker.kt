@@ -1362,6 +1362,69 @@ class Checker(
      *  containsKey, not getOrPut. Declared before `init` per the init-order trap. */
     private val moduleSpecifierCache = HashMap<String, String?>()
 
+    /** Round 473 (M3.4, the tsc server profile's const-string discriminant family):
+     *  program-wide UNAMBIGUOUS top-level `const X = "literal"` values, name → string.
+     *  tsc's jsTyping/shared.ts + server/editorServices.ts discriminate unions on
+     *  imported const-typed strings (`switch (response.kind) { case EventTypesRegistry:
+     *  … }` where `export const EventTypesRegistry: EventTypesRegistry =
+     *  "event::typesRegistry"`, and `eventName: typeof ProjectsUpdatedInBackgroundEvent`
+     *  members) — the case expression is a bare Identifier the literal-narrowing paths
+     *  can't read, and the barrel import is unresolvable by [resolveAlias], so the
+     *  narrowing walkers consult this index instead. A name qualifies only when EVERY
+     *  top-level VALUE-space declaration of it program-wide is a const with the SAME
+     *  string-literal initializer whose annotation (if any) provably agrees — a
+     *  LiteralType of the same value, or a bare TypeReference to a same-file type alias
+     *  whose body is that LiteralType (`const ActionSet: ActionSet = "action::set"`).
+     *  Any other value-space declaration (function/class/enum/namespace/let/var/
+     *  different-or-unverifiable const) POISONS the name (type-space declarations —
+     *  interfaces/type aliases — do not compete). Local shadows inside function bodies
+     *  are not visible here (accepted risk, suite-gated). Built EAGERLY from the frozen
+     *  [binderResults]; declared before `init` per the init-order trap. */
+    private val topLevelConstStringValues: Map<String, String> = run {
+        val values = HashMap<String, String>()
+        val poisoned = HashSet<String>()
+        for (result in binderResults) {
+            // Same-file type aliases first — const annotations may reference them.
+            val fileAliases = HashMap<String, TypeAliasDeclaration>()
+            for (stmt in result.sourceFile.statements) {
+                if (stmt is TypeAliasDeclaration && stmt.name.text !in fileAliases) {
+                    fileAliases[stmt.name.text] = stmt
+                }
+            }
+            fun annotationAgrees(ann: TypeNode?, value: String): Boolean {
+                if (ann == null) return true
+                if (ann is LiteralType) return (ann.literal as? StringLiteralNode)?.text == value
+                val aliasName = ((ann as? TypeReference)?.typeName as? Identifier)?.text ?: return false
+                val body = fileAliases[aliasName]?.type as? LiteralType ?: return false
+                return (body.literal as? StringLiteralNode)?.text == value
+            }
+            for (stmt in result.sourceFile.statements) {
+                when (stmt) {
+                    is VariableStatement -> for (d in stmt.declarationList.declarations) {
+                        val nm = (d.name as? Identifier)?.text ?: continue
+                        if (nm in poisoned) continue
+                        val lit = (d.initializer as? StringLiteralNode)?.text
+                        if (stmt.declarationList.flags == SyntaxKind.ConstKeyword && lit != null &&
+                            annotationAgrees(d.type, lit) && (values[nm] ?: lit) == lit
+                        ) {
+                            values[nm] = lit
+                        } else {
+                            poisoned.add(nm); values.remove(nm)
+                        }
+                    }
+                    is FunctionDeclaration -> stmt.name?.text?.let { poisoned.add(it); values.remove(it) }
+                    is ClassDeclaration -> stmt.name?.text?.let { poisoned.add(it); values.remove(it) }
+                    is EnumDeclaration -> { poisoned.add(stmt.name.text); values.remove(stmt.name.text) }
+                    is ModuleDeclaration -> (stmt.name as? Identifier)?.text?.let {
+                        poisoned.add(it); values.remove(it)
+                    }
+                    else -> {}
+                }
+            }
+        }
+        values
+    }
+
     /** Perf (round 432, eager-immutable round 434): program-wide index ImportSpecifier →
      *  the (fileName, ImportDeclaration) statements whose NamedImports CONTAIN a
      *  structurally-equal specifier, in binderResults/statement encounter order. Replaces
@@ -38576,6 +38639,50 @@ class Checker(
         val result = computeExportedSymbolThroughStars(file, name, mutableSetOf(), 0)
         starExportSymbolCache[cacheKey] = result
         return result
+    }
+
+    /** Round 473 (Blocker #3, the server-profile `emptyArray` conflation): the FILE-AST
+     *  companion of [computeExportedSymbolThroughStars] for VARIABLE targets — returns the
+     *  leaf file's OWN top-level exported VariableDeclaration for [name], so the caller
+     *  reads the annotation from the RIGHT file's declaration. The merged globals symbol's
+     *  `declarations` list is polluted with every same-named file's decls (compiler/core.ts
+     *  `emptyArray: never[]` vs server/utilitiesPublic.ts `emptyArray:
+     *  SortedReadonlyArray<never>`), so symbol-side resolution picks a file-order-dependent
+     *  winner; the AST walk cannot. Same cycle/depth discipline as the symbol variant. */
+    private fun computeExportedVarDeclThroughStars(
+        file: SourceFile, name: String, visited: MutableSet<String>, depth: Int,
+    ): VariableDeclaration? {
+        if (!visited.add(file.fileName)) return null
+        if (depth > 64) return null
+        if (name in moduleNamedExportsOf(file)) {
+            for (stmt in file.statements) {
+                if (stmt !is VariableStatement || ModifierFlag.Export !in stmt.modifiers) continue
+                for (d in stmt.declarationList.declarations) {
+                    if ((d.name as? Identifier)?.text == name) return d
+                }
+            }
+            // Exported here but not as a variable — fn/class/enum targets keep their
+            // established resolution paths.
+            return null
+        }
+        for (stmt in file.statements) {
+            if (stmt !is ExportDeclaration) continue
+            val spec = (stmt.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+            when (val clause = stmt.exportClause) {
+                null -> {
+                    val target = resolveBarrelStarTarget(spec, file.fileName) ?: continue
+                    computeExportedVarDeclThroughStars(target, name, visited, depth + 1)?.let { return it }
+                }
+                is NamedExports -> {
+                    val match = clause.elements.find { it.name.text == name } ?: continue
+                    val orig = match.propertyName?.text ?: name
+                    val target = resolveBarrelStarTarget(spec, file.fileName) ?: continue
+                    computeExportedVarDeclThroughStars(target, orig, visited, depth + 1)?.let { return it }
+                }
+                else -> {}
+            }
+        }
+        return null
     }
 
     private fun computeExportedSymbolThroughStars(
@@ -93181,11 +93288,50 @@ interface DataView {
                 // matching tsc's export-default rule).
                 else defaultImportObjectLiteralExpr(symbol)?.let { lit ->
                     inferTypeFromInitializer(lit)
-                } ?: anyType
+                } ?: importedTopLevelVarAnnotationType(symbol) ?: anyType
             }
             flags.hasAny(SymbolFlags.TypeParameter) -> getDeclaredTypeOfSymbol(symbol)
             else -> anyType
         }
+    }
+
+    /**
+     * Round 473 (Blocker #3, the server-profile `emptyArray` conflation): TYPE-PATH-ONLY
+     * resolution of an otherwise-unresolvable import alias to a top-level ANNOTATED
+     * variable, following ESM `.js` barrels — the same machinery (and the same round-409
+     * rationale for NOT touching the general [resolveAlias]) as the flow-only resolvers.
+     * Without it, the identifier falls to the merged-globals symbol, whose winner is
+     * FILE-ORDER-DEPENDENT when ≥2 module files declare the same top-level var name —
+     * compiler files importing core.ts's `emptyArray: never[]` through
+     * `./_namespaces/ts.js` resolved server/utilitiesPublic.ts's `emptyArray:
+     * SortedReadonlyArray<never>` instead (29 server-profile FPs). The alias's OWN
+     * ImportDeclaration is IDENTITY-matched among the structural index entries — the
+     * same-named specifier exists in files whose barrels resolve DIFFERENTLY (checker.ts
+     * imports `emptyArray` from the compiler barrel; session.ts from ts.server's).
+     * ANNOTATED VAR targets only: fn/class/enum value positions and initializer-inferred
+     * consts keep their established paths. Result is cached per alias id by
+     * [getTypeOfSymbol]'s worker cache.
+     */
+    private fun importedTopLevelVarAnnotationType(aliasSymbol: Symbol): Type? {
+        for (decl in aliasSymbol.declarations) {
+            if (decl !is ImportSpecifier) continue
+            val originalName = decl.propertyName?.text ?: decl.name.text
+            val entry = enclosingImportsOf(decl).firstOrNull { (_, stmt) ->
+                (stmt.importClause?.namedBindings as? NamedImports)?.elements?.any { it === decl } == true
+            } ?: continue
+            val (contextFile, importDecl) = entry
+            val spec = (importDecl.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+            val targetFile = resolveModuleSpecifier(spec, importDecl)
+                ?: resolveAliasJsModuleSpecifier(spec, contextFile)
+                ?: continue
+            val tr = fileResults[targetFile] ?: continue
+            val d = computeExportedVarDeclThroughStars(tr.sourceFile, originalName, mutableSetOf(), 0)
+                ?: continue
+            val ann = d.type ?: continue
+            val t = getTypeFromTypeNode(ann)
+            if (t !== anyType && t !== errorType) return t
+        }
+        return null
     }
 
     /** Get the type of a variable or property from its declaration. */
@@ -96956,6 +97102,7 @@ interface DataView {
             for (clause in all) {
                 if (clause !is CaseClause) continue
                 val lit = literalTypeOfExpression(clause.expression)
+                    ?: constStringCaseLiteralType(clause.expression)
                 if (lit != null) litTypes.add(lit)
                 else enumKeys.add(enumMemberKeyOfExpr(clause.expression) ?: return null)
             }
@@ -97047,6 +97194,7 @@ interface DataView {
                 when (clause) {
                     is CaseClause -> {
                         val lit = literalTypeOfExpression(clause.expression)
+                            ?: constStringCaseLiteralType(clause.expression)
                         if (lit != null) literalTypes.add(lit)
                         else enumMemberKeyOfExpr(clause.expression)?.let { caseEnumKeys.add(it) }
                     }
@@ -97114,7 +97262,14 @@ interface DataView {
             val discriminant = discriminantName ?: return null
             t.types.filter { member ->
                 val propSym = getPropertyOfType(member, discriminant) ?: return@filter true
-                val propType = getTypeOfSymbol(propSym)
+                var propType = getTypeOfSymbol(propSym)
+                // Round 473: `eventName: typeof <constString>` widens/washes (`string`
+                // via getTypeFromTypeQuery, or anyType cross-file) — recover the literal
+                // from the annotation AST so the member discriminates instead of being
+                // conservatively kept.
+                if (propType === stringType || propType === anyType || propType === errorType) {
+                    typeQueryConstStringLiteral(propSym)?.let { propType = it }
+                }
                 if (propType === anyType || propType === errorType) true
                 else literalTypes.any { lit -> checkTypeRelatedTo(lit, propType, assignableRelation) }
             }
@@ -98916,6 +99071,7 @@ interface DataView {
         }
 
         val literalType = literalTypeOfExpression(literalSide)
+            ?: constStringCaseLiteralType(literalSide)
         if (literalType == null) {
             // No literal/enum member-filtering possible — but the optional-chain receiver
             // proof above still narrows (drops nullish) on its own.
@@ -98931,7 +99087,12 @@ interface DataView {
             if (apparent !is Type.Object) return@filter true
             val propSym = getPropertyOfType(apparent, propName)
                 ?: return@filter true
-            val propType = getTypeOfSymbol(propSym)
+            var propType = getTypeOfSymbol(propSym)
+            // Round 473: recover a `typeof <constString>` discriminant annotation that
+            // widened/washed — see the narrowBySwitchClause filter's twin recovery.
+            if (propType === stringType || propType === anyType || propType === errorType) {
+                typeQueryConstStringLiteral(propSym)?.let { propType = it }
+            }
             if (propType === anyType || propType === errorType || propType === unknownType) return@filter true
             // Round 425: the two rules below reason about what a RESOLVED property type
             // can equal — but property OPTIONALITY is a symbol attribute NOT folded into
@@ -99151,6 +99312,31 @@ interface DataView {
 
     /** An enum-member EXPRESSION `Enum.Member` (through parens) → `"symId#Member"`, else null.
      *  The member must actually exist on the resolved enum (guards against a non-enum `A.B`). */
+    /** Round 473: a bare-Identifier discriminant case/comparison side that resolves to an
+     *  UNAMBIGUOUS top-level const string ([topLevelConstStringValues]) reads as that
+     *  string-literal type — `case EventTypesRegistry:` narrows like
+     *  `case "event::typesRegistry":` (tsc typingInstallerAdapter/editorServices). */
+    private fun constStringCaseLiteralType(expr: Expression): Type? {
+        val name = (unwrapParensExpr(expr) as? Identifier)?.text ?: return null
+        val value = topLevelConstStringValues[name] ?: return null
+        return Type.StringLiteral(value)
+    }
+
+    /** Round 473: a discriminant property SYMBOL declared `p: typeof X` where X is an
+     *  unambiguous top-level const string — the resolved type widens to `string` (our
+     *  [getTypeFromTypeQuery] widening), so the discriminant filters recover the literal
+     *  from the annotation AST (`eventName: typeof ProjectsUpdatedInBackgroundEvent`,
+     *  tsc's ProjectServiceEvent union). */
+    private fun typeQueryConstStringLiteral(propSym: Symbol): Type? {
+        for (decl in propSym.declarations) {
+            val ann = (decl as? PropertyDeclaration)?.type as? TypeQuery ?: continue
+            val nm = (ann.exprName as? Identifier)?.text ?: continue
+            val value = topLevelConstStringValues[nm] ?: continue
+            return Type.StringLiteral(value)
+        }
+        return null
+    }
+
     private fun enumMemberKeyOfExpr(expr: Expression): String? {
         val pa = unwrapParensExpr(expr) as? PropertyAccessExpression ?: return null
         val enumIdent = (pa.expression as? Identifier)?.text ?: return null
@@ -120108,6 +120294,44 @@ interface DataView {
                 // inference loops after `isTupleType(constraint)`, checker.ts).
                 // Suppression-only, so following antecedent[0] is safe here.
                 if (suppresses(getNarrowedTypeForReferenceFollowLoopEntry(raw, objectExpr))) return
+            }
+        }
+
+        // Round 473 (the server-profile ProjectServiceEvent/TypingInstallerResponse family):
+        // a SIBLING-discriminant switch/if narrows the BASE of the receiver, not the
+        // receiver itself — `switch (event.eventName) { case ProjectsUpdatedInBackgroundEvent:
+        // event.data.openFiles }` reads reference "event.data", whose path the
+        // FlowSwitchClause (subject "event.eventName") cannot narrow. Narrow the BASE
+        // identifier by ITS OWN flow (the flow at the access position — the base
+        // identifier itself often has no recorded flow node, the round-412 lesson) and
+        // project the accessed member over the narrowed base: when every projected
+        // member type resolves [propName], suppress. Suppression-only + strict-subtype
+        // gated, mirroring the round-418 block above.
+        if (currentFlowGraph != null && !isThisAccess && objectExpr is PropertyAccessExpression) {
+            val baseExpr = objectExpr.expression
+            val memberName = objectExpr.name.text
+            val basePath = if (baseExpr is Identifier) baseExpr.text else null
+            if (basePath != null && memberName.isNotEmpty()) {
+                val baseRaw = getTypeOfExpression(baseExpr)
+                val flow = getFlowAt(baseExpr) ?: getFlowAt(objectExpr)
+                if (baseRaw is Type.Union && flow != null) {
+                    val narrowedBase = flowWalkWithTripCheck(baseExpr) {
+                        narrowTypeFromFlow(baseRaw, flow, basePath, NarrowSeen(), depth = 0)
+                    } ?: baseRaw
+                    if (narrowedBase !== baseRaw && narrowedBase !== neverType &&
+                        narrowedBase !== anyType && narrowedBase !== errorType &&
+                        checkTypeRelatedTo(narrowedBase, baseRaw, assignableRelation)
+                    ) {
+                        val baseMembers =
+                            if (narrowedBase is Type.Union) narrowedBase.types else listOf(narrowedBase)
+                        if (baseMembers.isNotEmpty() && baseMembers.all { bm ->
+                                val memberType = resolveMemberPropertyType(bm, memberName)
+                                memberType != null && (memberType === anyType ||
+                                    resolveMemberPropertyType(memberType, propName) != null)
+                            }
+                        ) return
+                    }
+                }
             }
         }
 
