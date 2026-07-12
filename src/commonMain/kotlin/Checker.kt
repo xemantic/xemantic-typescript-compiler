@@ -418,7 +418,10 @@ class Checker(
 
     /** Local variable types populated during TS2322 checking — enables getTypeOfIdentifier
      *  to resolve function-scoped variable types from their type annotations. */
-    private var currentLocalTypes: MutableMap<String, Type> = mutableMapOf()
+    // Perf: HashMap not LinkedHashMap — this is a pure lookup map (name → type); its
+    // iteration order is never consumed, and it is COPIED per function-body scope entry,
+    // so LinkedHashMap's afterNodeInsertion + ordered-copy overhead is pure waste.
+    private var currentLocalTypes: MutableMap<String, Type> = HashMap()
 
     /**
      * Round 459: annotation type NODES for function-body locals, populated alongside
@@ -428,7 +431,8 @@ class Checker(
      * variadic tuple's rest slot per the getTupleType gotcha) cannot recover it from
      * symbols. Saved/restored with `currentLocalTypes` in `checkFunctionBody`.
      */
-    private var currentLocalDeclTypeNodes: MutableMap<String, TypeNode> = mutableMapOf()
+    // Perf: HashMap (order unused, copied per scope entry) — see [currentLocalTypes].
+    private var currentLocalDeclTypeNodes: MutableMap<String, TypeNode> = HashMap()
 
     /**
      * Names that a function-body-local variable declaration SHADOWS from an inherited
@@ -439,7 +443,8 @@ class Checker(
      * an outer var — rare), so the blast radius is minimal. Saved/restored per function
      * body in BOTH the assignability and property-access passes.
      */
-    private var currentShadowedNames: MutableSet<String> = mutableSetOf()
+    // Perf: HashSet (order unused, copied per scope entry) — see [currentLocalTypes].
+    private var currentShadowedNames: MutableSet<String> = HashSet()
 
     /**
      * Round 460 (program.ts findSourceFileWorker): names declared by TWO OR MORE
@@ -505,7 +510,8 @@ class Checker(
      *  in [checkSinglePropertyAccess] so a destructured param shadows a same-named
      *  file-level `var x = call(...)`. Saved/restored alongside `currentLocalTypes`
      *  at function-body entry. NOT used for type resolution — membership-only. */
-    private var currentParamBindingNames: MutableSet<String> = mutableSetOf()
+    // Perf: HashSet (order unused, copied per scope entry) — see [currentLocalTypes].
+    private var currentParamBindingNames: MutableSet<String> = HashSet()
 
     /** Blocker #3 (round 442): names that are EXCLUSIVELY top-level `let`/`var`/`const`
      *  VARIABLE declarations in MODULE files — with NO other global meaning (no
@@ -1449,7 +1455,11 @@ class Checker(
      *  file with per-call string stripping. Negative results (null) are the hot case
      *  (ESM `.js` barrel specifiers, deliberately unresolvable) so they are cached via
      *  containsKey, not getOrPut. Declared before `init` per the init-order trap. */
-    private val moduleSpecifierCache = HashMap<String, String?>()
+    // Perf: values are non-null; [UNRESOLVED_MODULE_SPEC] sentinel encodes a computed
+    // null result so every lookup (incl. the hot unresolvable case) is a SINGLE map get
+    // instead of containsKey + get. Never a real filename (no ` ` in resolutions).
+    private val UNRESOLVED_MODULE_SPEC = " <unresolved-module-specifier>"
+    private val moduleSpecifierCache = HashMap<String, String>()
 
     /** Round 473 (M3.4, the tsc server profile's const-string discriminant family):
      *  program-wide UNAMBIGUOUS top-level `const X = "literal"` values, name → string.
@@ -6902,11 +6912,12 @@ class Checker(
      */
     private fun resolveModuleSpecifier(specifier: String, contextNode: Node? = null): String? {
         // Perf (round 432): pure function of the specifier ([fileResults]/[options] are
-        // fixed; contextNode is unused) — memoized incl. null results via containsKey
-        // (getOrPut would recompute the hot unresolvable-specifier case every call).
-        if (moduleSpecifierCache.containsKey(specifier)) return moduleSpecifierCache[specifier]
+        // fixed; contextNode is unused) — memoized incl. null results (round 432 note:
+        // getOrPut would recompute the hot unresolvable-specifier case every call).
+        // Single-lookup via the sentinel (round 483): null is the hot result.
+        moduleSpecifierCache[specifier]?.let { return if (it === UNRESOLVED_MODULE_SPEC) null else it }
         val result = computeModuleSpecifier(specifier)
-        moduleSpecifierCache[specifier] = result
+        moduleSpecifierCache[specifier] = result ?: UNRESOLVED_MODULE_SPEC
         return result
     }
 
@@ -28776,7 +28787,7 @@ class Checker(
             }
 
             val savedLocals = currentLocalTypes
-            currentLocalTypes = mutableMapOf()
+            currentLocalTypes = HashMap()
             try {
                 walker.stmts(result.sourceFile.statements)
             } finally {
@@ -30215,7 +30226,7 @@ class Checker(
         // (without `| undefined`) so `(x || 0)` evaluates to `number`,
         // matching TypeScript's narrowed view of the truthy branch.
         val savedLocalTypes = currentLocalTypes
-        currentLocalTypes = currentLocalTypes.toMutableMap()
+        currentLocalTypes = HashMap(currentLocalTypes)
         currentLocalTypes[paramName] = rawParamType
         try {
             for (decl in decls) {
@@ -56940,8 +56951,8 @@ interface DataView {
                     // `c` is readonly → TS2540. Save/restore mirrors the property-access walker.
                     val savedLocalTypes = currentLocalTypes
                     val savedParamBindings = currentParamBindingNames
-                    currentLocalTypes = currentLocalTypes.toMutableMap()
-                    currentParamBindingNames = currentParamBindingNames.toMutableSet()
+                    currentLocalTypes = HashMap(currentLocalTypes)
+                    currentParamBindingNames = HashSet(currentParamBindingNames)
                     try {
                         populateParameterLocalTypes(stmt.parameters)
                         checkConstAssignmentInStatements(body.statements, source, fileName, mutableMapOf())
@@ -70826,7 +70837,7 @@ interface DataView {
                                 }
                                 // Populate currentLocalTypes with parameter types so
                                 // assertion-walker can resolve `<T>param` source.
-                                currentLocalTypes = currentLocalTypes.toMutableMap()
+                                currentLocalTypes = HashMap(currentLocalTypes)
                                 for (param in m.parameters) {
                                     val paramName = param.name as? Identifier ?: continue
                                     val paramType = param.type ?: continue
@@ -82282,7 +82293,7 @@ interface DataView {
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
             val varTypes = mutableMapOf<String, String>()
-            currentLocalTypes = mutableMapOf()
+            currentLocalTypes = HashMap()
             currentFileLocals = result.locals
             currentCheckFileName = fileName
             currentFlowGraph = result.flowGraph
@@ -82426,7 +82437,7 @@ interface DataView {
                     val narrowedNN = extractNullNarrowing(stmt.expression)
                     if (narrowedNN != null) {
                         val savedLocalTypesNN = currentLocalTypes
-                        currentLocalTypes = currentLocalTypes.toMutableMap()
+                        currentLocalTypes = HashMap(currentLocalTypes)
                         // M1.9: record the DECLARED type so assignment TARGETS inside the
                         // then-branch check against it, not the narrowed read type.
                         val savedDeclaredNN = narrowedDeclaredTypes
@@ -82499,7 +82510,7 @@ interface DataView {
                             is Constructor -> member.body?.let { body ->
                                 val ctorTypes = varTypes.toMutableMap()
                                 val savedLocalTypes = currentLocalTypes
-                                currentLocalTypes = currentLocalTypes.toMutableMap()
+                                currentLocalTypes = HashMap(currentLocalTypes)
                                 // Populate this.prop types from class property declarations
                                 for (m in stmt.members) {
                                     if (m is PropertyDeclaration) {
@@ -82562,7 +82573,7 @@ interface DataView {
                                 member.body?.let { body ->
                                     val setterTypes = varTypes.toMutableMap()
                                     val savedLocalTypes = currentLocalTypes
-                                    currentLocalTypes = currentLocalTypes.toMutableMap()
+                                    currentLocalTypes = HashMap(currentLocalTypes)
                                     for (m in stmt.members) {
                                         if (m is PropertyDeclaration) {
                                             val propType = m.type?.let { resolveSimpleTypeName(it) }
@@ -83761,11 +83772,11 @@ interface DataView {
             val innerTypes = varTypes.toMutableMap()
             // Save outer local types and create inner scope copy
             val savedLocalTypes = currentLocalTypes
-            currentLocalTypes = currentLocalTypes.toMutableMap()
+            currentLocalTypes = HashMap(currentLocalTypes)
             val savedLocalDeclNodes = currentLocalDeclTypeNodes
-            currentLocalDeclTypeNodes = currentLocalDeclTypeNodes.toMutableMap()
+            currentLocalDeclTypeNodes = HashMap(currentLocalDeclTypeNodes)
             val savedShadowed = currentShadowedNames
-            currentShadowedNames = currentShadowedNames.toMutableSet()
+            currentShadowedNames = HashSet(currentShadowedNames)
             val savedAmbiguous = ambiguousBlockLocalNames
             ambiguousBlockLocalNames = mutableSetOf()
             val bodyParamNames = parameters.mapNotNull { p -> (p.name as? Identifier)?.text }.toSet()
@@ -84261,7 +84272,7 @@ interface DataView {
         val savedClassForThis = currentClassForThis
         currentClassForThis = null
         val savedLocal = currentLocalTypes
-        currentLocalTypes = currentLocalTypes.toMutableMap().apply { put("this", thisType) }
+        currentLocalTypes = HashMap(currentLocalTypes).apply { put("this", thisType) }
         try {
             checkFunctionBody(body, returnTypeNode, parameters, funcTypeParams, source, fileName, varTypes, typeParams, isAsync = isAsync, isGenerator = isGenerator)
         } finally {
@@ -84303,7 +84314,7 @@ interface DataView {
                 val narrowed = extractNullNarrowing(stmt.expression)
                 if (narrowed != null) {
                     val savedLocalTypes = currentLocalTypes
-                    currentLocalTypes = currentLocalTypes.toMutableMap()
+                    currentLocalTypes = HashMap(currentLocalTypes)
                     val (varName, narrowedType) = narrowed
                     // M1.9: record the DECLARED type so assignment TARGETS inside the
                     // then-branch check against it, not the narrowed read type.
@@ -96894,8 +96905,12 @@ interface DataView {
      * hazard — they keep the old consume-depth behavior).
      */
     private fun flowCallMightNarrow(node: CallExpression, name: String): Boolean =
-        node.arguments.any { argMentionsReferencePath(it, name) } &&
-            flowCalleeMayHaveAssertEffects(node)
+        // Perf: test the cheap, per-walk-MEMOIZED callee-effects predicate FIRST — a
+        // non-assert callee (the vast majority of flow calls) short-circuits and skips
+        // the O(arg-tree) [argMentionsReferencePath] scan entirely. `&&` is commutative
+        // for the result; both operands are side-effect-free (only idempotent memo fill).
+        flowCalleeMayHaveAssertEffects(node) &&
+            node.arguments.any { argMentionsReferencePath(it, name) }
 
     /**
      * Round 426b: could [narrowByAssertCall] possibly narrow through this call — i.e.
@@ -99334,9 +99349,9 @@ interface DataView {
         }
         val retExpr = ret?.expression ?: return null
         val savedLocalTypes = currentLocalTypes
-        currentLocalTypes = currentLocalTypes.toMutableMap()
+        currentLocalTypes = HashMap(currentLocalTypes)
         val savedParamBindings = currentParamBindingNames
-        currentParamBindingNames = currentParamBindingNames.toMutableSet()
+        currentParamBindingNames = HashSet(currentParamBindingNames)
         val savedInInference = inInferenceBodyTyping
         inInferenceBodyTyping = true
         val result = try {
@@ -102301,7 +102316,7 @@ interface DataView {
             // (save/restore) so `inferReturnTypeFromBody` resolves body identifiers
             // referencing the params to their concrete (annotated or contextual) types.
             val savedLocalTypes = currentLocalTypes
-            currentLocalTypes = currentLocalTypes.toMutableMap()
+            currentLocalTypes = HashMap(currentLocalTypes)
             try {
                 for (p in params) {
                     if (p.name.isEmpty()) continue
@@ -103798,7 +103813,7 @@ interface DataView {
                                     }
                                     if (effectiveBodyExpr != null) {
                                         val savedLocalTypes = currentLocalTypes
-                                        currentLocalTypes = currentLocalTypes.toMutableMap()
+                                        currentLocalTypes = HashMap(currentLocalTypes)
                                         for ((idx, name) in lpNames.withIndex()) {
                                             currentLocalTypes[name] = sigParamTypes[idx]
                                         }
@@ -103890,7 +103905,7 @@ interface DataView {
                                     }
                                     if (effectiveBodyExpr != null) {
                                         val savedLocalTypes = currentLocalTypes
-                                        currentLocalTypes = currentLocalTypes.toMutableMap()
+                                        currentLocalTypes = HashMap(currentLocalTypes)
                                         for ((idx, name) in lpNames.withIndex()) {
                                             currentLocalTypes[name] = slotMapped[idx]
                                         }
@@ -103978,7 +103993,7 @@ interface DataView {
                                 }
                                 if (effectiveBodyExpr != null) {
                                     val savedLocalTypes = currentLocalTypes
-                                    currentLocalTypes = currentLocalTypes.toMutableMap()
+                                    currentLocalTypes = HashMap(currentLocalTypes)
                                     currentLocalTypes[lpName] = otherTpMapped
                                     // B86.1b-3 (single-param): publish the same TP→mapped binding to
                                     // currentInferenceMapper so any nested ArrowFunction body re-typing
@@ -119305,10 +119320,10 @@ interface DataView {
                     val savedParamBindings = currentParamBindingNames
                     val savedEnumParams = currentEnumConstrainedParams
                     val savedShadowed = currentShadowedNames
-                    currentLocalTypes = currentLocalTypes.toMutableMap()
-                    currentParamBindingNames = currentParamBindingNames.toMutableSet()
+                    currentLocalTypes = HashMap(currentLocalTypes)
+                    currentParamBindingNames = HashSet(currentParamBindingNames)
                     currentEnumConstrainedParams = collectEnumConstrainedParams(stmt.typeParameters, stmt.parameters)
-                    currentShadowedNames = currentShadowedNames.toMutableSet()
+                    currentShadowedNames = HashSet(currentShadowedNames)
                     try {
                         populateParameterLocalTypes(stmt.parameters)
                         val fdParamNames = stmt.parameters.mapNotNull { p -> (p.name as? Identifier)?.text }.toSet()
@@ -119574,9 +119589,9 @@ interface DataView {
                     val savedLocalTypes = currentLocalTypes
                     val savedParamBindings = currentParamBindingNames
                     val savedShadowed = currentShadowedNames
-                    currentLocalTypes = currentLocalTypes.toMutableMap()
-                    currentParamBindingNames = currentParamBindingNames.toMutableSet()
-                    currentShadowedNames = currentShadowedNames.toMutableSet()
+                    currentLocalTypes = HashMap(currentLocalTypes)
+                    currentParamBindingNames = HashSet(currentParamBindingNames)
+                    currentShadowedNames = HashSet(currentShadowedNames)
                     try {
                         populateParameterLocalTypes(member.parameters)
                         // Round 479: a method-body local must shadow a same-named leaked
@@ -119600,9 +119615,9 @@ interface DataView {
                     val savedLocalTypes = currentLocalTypes
                     val savedParamBindings = currentParamBindingNames
                     val savedShadowed = currentShadowedNames
-                    currentLocalTypes = currentLocalTypes.toMutableMap()
-                    currentParamBindingNames = currentParamBindingNames.toMutableSet()
-                    currentShadowedNames = currentShadowedNames.toMutableSet()
+                    currentLocalTypes = HashMap(currentLocalTypes)
+                    currentParamBindingNames = HashSet(currentParamBindingNames)
+                    currentShadowedNames = HashSet(currentShadowedNames)
                     try {
                         populateParameterLocalTypes(member.parameters)
                         val ctorParamNames = member.parameters.mapNotNull { p -> (p.name as? Identifier)?.text }.toSet()
@@ -119624,8 +119639,8 @@ interface DataView {
                 member.body?.let { body ->
                     val savedLocalTypes = currentLocalTypes
                     val savedParamBindings = currentParamBindingNames
-                    currentLocalTypes = currentLocalTypes.toMutableMap()
-                    currentParamBindingNames = currentParamBindingNames.toMutableSet()
+                    currentLocalTypes = HashMap(currentLocalTypes)
+                    currentParamBindingNames = HashSet(currentParamBindingNames)
                     try {
                         populateParameterLocalTypes(member.parameters)
                         checkPropertyAccessInStatements(body.statements, source, fileName, classType)
@@ -119829,9 +119844,9 @@ interface DataView {
                 val savedLocalTypes = currentLocalTypes
                 val savedParamBindings = currentParamBindingNames
                 val savedArrowShadowed = currentShadowedNames
-                currentLocalTypes = currentLocalTypes.toMutableMap()
-                currentParamBindingNames = currentParamBindingNames.toMutableSet()
-                currentShadowedNames = currentShadowedNames.toMutableSet()
+                currentLocalTypes = HashMap(currentLocalTypes)
+                currentParamBindingNames = HashSet(currentParamBindingNames)
+                currentShadowedNames = HashSet(currentShadowedNames)
                 populateParameterLocalTypes(expr.parameters)
                 // Round 447: a Block-bodied nested arrow's own `let/const x` shadows an outer
                 // same-named binding for reads INSIDE it — record the inner annotation into
@@ -119966,9 +119981,9 @@ interface DataView {
                 val savedLocalTypes = currentLocalTypes
                 val savedParamBindings = currentParamBindingNames
                 val savedFnExprShadowed = currentShadowedNames
-                currentLocalTypes = currentLocalTypes.toMutableMap()
-                currentParamBindingNames = currentParamBindingNames.toMutableSet()
-                currentShadowedNames = currentShadowedNames.toMutableSet()
+                currentLocalTypes = HashMap(currentLocalTypes)
+                currentParamBindingNames = HashSet(currentParamBindingNames)
+                currentShadowedNames = HashSet(currentShadowedNames)
                 // 16.0: shadow outer vars with unannotated function-expression params
                 // so `(s: string) => ... || function (s) { s.aaa }` does not falsely
                 // type the inner `s` from the outer scope.
@@ -125726,8 +125741,8 @@ interface DataView {
                 stmt.body?.let { body ->
                     val savedLocalTypes = currentLocalTypes
                     val savedParamBindings = currentParamBindingNames
-                    currentLocalTypes = currentLocalTypes.toMutableMap()
-                    currentParamBindingNames = currentParamBindingNames.toMutableSet()
+                    currentLocalTypes = HashMap(currentLocalTypes)
+                    currentParamBindingNames = HashSet(currentParamBindingNames)
                     // B516: push the function's OWN type parameters onto currentTypeParamScope
                     // (mirroring the ClassDeclaration branch below) so a generic function body's
                     // param/var annotations referencing `T` resolve to a TypeParam-with-constraint
@@ -125843,8 +125858,8 @@ interface DataView {
                                     val savedLocalTypes = currentLocalTypes
                                     val savedParamBindings = currentParamBindingNames
                                     val savedSuperBaseType = currentSuperBaseType
-                                    currentLocalTypes = currentLocalTypes.toMutableMap()
-                                    currentParamBindingNames = currentParamBindingNames.toMutableSet()
+                                    currentLocalTypes = HashMap(currentLocalTypes)
+                                    currentParamBindingNames = HashSet(currentParamBindingNames)
                                     currentSuperBaseType = baseInstanceType
                                     // 17.21: Static methods don't see class TypeParams (TypeScript
                                     // emits TS2302 for any reference). Pop the class scope while
@@ -125906,8 +125921,8 @@ interface DataView {
                                     val savedParamBindings = currentParamBindingNames
                                     val savedSuperBaseSig = currentSuperBaseSig
                                     val savedSuperBaseType = currentSuperBaseType
-                                    currentLocalTypes = currentLocalTypes.toMutableMap()
-                                    currentParamBindingNames = currentParamBindingNames.toMutableSet()
+                                    currentLocalTypes = HashMap(currentLocalTypes)
+                                    currentParamBindingNames = HashSet(currentParamBindingNames)
                                     currentSuperBaseSig = baseSig
                                     currentSuperBaseType = baseInstanceType
                                     try {
@@ -125999,8 +126014,8 @@ interface DataView {
         }
         val savedLocalTypes = currentLocalTypes
         val savedParamBindings = currentParamBindingNames
-        currentLocalTypes = currentLocalTypes.toMutableMap()
-        currentParamBindingNames = currentParamBindingNames.toMutableSet()
+        currentLocalTypes = HashMap(currentLocalTypes)
+        currentParamBindingNames = HashSet(currentParamBindingNames)
         try {
             populateParameterLocalTypes(params)
             for ((i, p) in params.withIndex()) {
@@ -126093,7 +126108,7 @@ interface DataView {
                     } else objThisType
                     if (effThis == null) { checkCallTypesInStatements(body.statements, source, fileName); return }
                     val saved = currentLocalTypes
-                    currentLocalTypes = currentLocalTypes.toMutableMap()
+                    currentLocalTypes = HashMap(currentLocalTypes)
                     currentLocalTypes["this"] = effThis
                     try { checkCallTypesInStatements(body.statements, source, fileName) }
                     finally { currentLocalTypes = saved }
@@ -126123,8 +126138,8 @@ interface DataView {
                 // non-colliding param already resolved to anyType via the scope-miss path).
                 val savedLocals = currentLocalTypes
                 val savedBindings = currentParamBindingNames
-                currentLocalTypes = currentLocalTypes.toMutableMap()
-                currentParamBindingNames = currentParamBindingNames.toMutableSet()
+                currentLocalTypes = HashMap(currentLocalTypes)
+                currentParamBindingNames = HashSet(currentParamBindingNames)
                 val ownNames = mutableSetOf<String>()
                 for (p in expr.parameters) collectBindingNames(p.name, ownNames)
                 for (n in ownNames) currentLocalTypes[n] = anyType
@@ -126151,8 +126166,8 @@ interface DataView {
                 // branch above.
                 val savedLocals = currentLocalTypes
                 val savedBindings = currentParamBindingNames
-                currentLocalTypes = currentLocalTypes.toMutableMap()
-                currentParamBindingNames = currentParamBindingNames.toMutableSet()
+                currentLocalTypes = HashMap(currentLocalTypes)
+                currentParamBindingNames = HashSet(currentParamBindingNames)
                 val ownNames = mutableSetOf<String>()
                 for (p in expr.parameters) collectBindingNames(p.name, ownNames)
                 for (n in ownNames) currentLocalTypes[n] = anyType
@@ -129432,8 +129447,8 @@ interface DataView {
         if (colliding.isEmpty()) { body(); return }
         val savedBindings = currentParamBindingNames
         val savedLocals = currentLocalTypes
-        currentParamBindingNames = currentParamBindingNames.toMutableSet().also { it.addAll(colliding) }
-        currentLocalTypes = currentLocalTypes.toMutableMap().also { m -> colliding.forEach { m.remove(it) } }
+        currentParamBindingNames = HashSet(currentParamBindingNames).also { it.addAll(colliding) }
+        currentLocalTypes = HashMap(currentLocalTypes).also { m -> colliding.forEach { m.remove(it) } }
         try {
             body()
         } finally {
@@ -140879,8 +140894,8 @@ interface DataView {
         filtered.firstOrNull { it.flags.hasAny(TypeFlags.Any) }?.let { return it }
         // Single type — no union needed
         if (filtered.size == 1) return filtered[0]
-        // Deduplicate by type identity (by id)
-        val seen = mutableSetOf<Int>()
+        // Deduplicate by type identity (by id). HashSet: membership only, result sorted below.
+        val seen = HashSet<Int>()
         val deduped = filtered.filter { seen.add(it.id) }
         if (deduped.size == 1) return deduped[0]
         // Sort by TypeFlags value to match TypeScript's display order
@@ -153863,7 +153878,7 @@ interface DataView {
             // locals into currentLocalTypes (so `const t = true; x >= t` can resolve
             // `t`); restore afterwards so entries never leak across files.
             val savedLocalTypes = currentLocalTypes
-            currentLocalTypes = currentLocalTypes.toMutableMap()
+            currentLocalTypes = HashMap(currentLocalTypes)
             try {
                 checkArithmeticInStatements(result.sourceFile.statements, source, fileName)
             }
@@ -154111,7 +154126,7 @@ interface DataView {
                     ?.declarations?.singleOrNull()?.name as? Identifier)?.text
                 if (forInVar != null) {
                     val savedLoopTypes = currentLocalTypes
-                    currentLocalTypes = currentLocalTypes.toMutableMap()
+                    currentLocalTypes = HashMap(currentLocalTypes)
                     currentLocalTypes[forInVar] = stringType
                     try { checkArithmeticInStatement(stmt.statement, source, fileName) }
                     finally { currentLocalTypes = savedLoopTypes }
@@ -154152,7 +154167,7 @@ interface DataView {
             is FunctionDeclaration -> {
                 stmt.body?.let { body ->
                     val savedLocalTypes = currentLocalTypes
-                    currentLocalTypes = currentLocalTypes.toMutableMap()
+                    currentLocalTypes = HashMap(currentLocalTypes)
                     // 17.73: Push function type parameters during param-annotation
                     // resolution so refs like `t: T` resolve to Type.TypeParam(T)
                     // instead of errorType. Required for TS2367 narrow extension
@@ -154174,7 +154189,7 @@ interface DataView {
                     when (member) {
                         is MethodDeclaration -> member.body?.let { body ->
                             val savedLocalTypes = currentLocalTypes
-                            currentLocalTypes = currentLocalTypes.toMutableMap()
+                            currentLocalTypes = HashMap(currentLocalTypes)
                             try {
                                 val savedScope = pushFunctionTypeParamsScope(member.typeParameters)
                                 try {
@@ -154189,7 +154204,7 @@ interface DataView {
                         }
                         is Constructor -> member.body?.let { body ->
                             val savedLocalTypes = currentLocalTypes
-                            currentLocalTypes = currentLocalTypes.toMutableMap()
+                            currentLocalTypes = HashMap(currentLocalTypes)
                             try {
                                 populateParameterLocalTypes(member.parameters)
                                 checkArithmeticInStatements(body.statements, source, fileName)
@@ -154302,7 +154317,7 @@ interface DataView {
             }
             is ArrowFunction -> {
                 val savedLocalTypes = currentLocalTypes
-                currentLocalTypes = currentLocalTypes.toMutableMap()
+                currentLocalTypes = HashMap(currentLocalTypes)
                 val savedScope = pushFunctionTypeParamsScope(expr.typeParameters)
                 val ctxFn = contextualType
                 try {
@@ -154325,7 +154340,7 @@ interface DataView {
             }
             is FunctionExpression -> {
                 val savedLocalTypes = currentLocalTypes
-                currentLocalTypes = currentLocalTypes.toMutableMap()
+                currentLocalTypes = HashMap(currentLocalTypes)
                 val savedScope = pushFunctionTypeParamsScope(expr.typeParameters)
                 val ctxFn = contextualType
                 try {

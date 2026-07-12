@@ -39,6 +39,45 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
+**Round 483 (2026-07-12) — M5.1 performance, checker hot-path micro-opts (branch
+`perf/hoist-kind-domain-target-keys`, squash-merged).** Started from a fresh compiler-profile
+JFR (the flat post-482 profile). Three byte-identical changes, compiler self-compile still 46
+diagnostics, full corpus suite green 10,160 / 0.
+- **Change 1 — LinkedHashMap → HashMap on order-independent hot maps.** Kotlin's
+  `mutableMapOf()`/`mutableSetOf()` return LinkedHashMap/LinkedHashSet, which pay
+  `afterNodeInsertion` on every put and an ordered copy on construction. The per-function-body
+  scope structures `currentLocalTypes` / `currentLocalDeclTypeNodes` / `currentShadowedNames` /
+  `currentParamBindingNames` are copied on every scope entry and their iteration order is never
+  consumed (verified: zero `.keys/.values/.entries/.forEach/iterator` usages across all
+  references), and `getUnionType`'s dedup set is membership-only with the result sorted before
+  use — convert all to plain HashMap/HashSet. Profile: `LinkedHashMap.afterNodeInsertion`
+  **5.0% → 0.6% self**, `LinkedHashIterator.nextNode` 1.5% → 0.7%.
+- **Change 2 — `flowCallMightNarrow` gate order.** It tested the O(arg-tree)
+  `argMentionsReferencePath` scan FIRST on every flow call, then the callee-effects predicate.
+  Swap the `&&`: `flowCalleeMayHaveAssertEffects` is per-walk memoized (`narrowWalkDeclCache`)
+  and returns false for the vast majority of flow calls (non-assert callees), short-circuiting
+  before the scan; `&&` is commutative for the result and both operands only fill idempotent
+  memos. Profile: `argMentionsReferencePath` **1.9% self → out of top-90**;
+  `flowCallMightNarrow` inclusive 2.5% → 1.0%.
+- **Change 3 — single-lookup `resolveModuleSpecifier` memo.** It did `containsKey` + `get`
+  (two map lookups) per hit and null is the hot result; encode null with a sentinel so the
+  memo is one `get`. Profile: getNode-from-`resolveModuleSpecifier` 26 → 7 samples.
+- **Merge note:** this session's fourth planned item — hoisting the target `.kind`-domain out
+  of the negative type-guard filter — was landed INDEPENDENTLY by round 482 (`b72ebcf2`, which
+  also added the `kindDomainKeysOfType` memo). On merging main into the branch, that hunk
+  conflicted and was resolved to main's version (strictly better), so the squash contributes
+  only changes 1–3.
+- **Verification:** every change confirmed byte-identical by the full corpus suite (10,160/0)
+  and the unchanged 46-diagnostic compiler self-compile, then measured against a re-recorded
+  JFR (the profile shifts after each fix, so each was re-profiled). Wall-clock on the dev box
+  was too noise-dominated (±4 s on a 78-file `noEmit`) to read a single-file delta — the
+  sample-fraction reductions are the signal; the savings compound on the larger services/server
+  profiles (more/larger discriminated unions and scope entries).
+- **NEXT M5 leads (unchanged from 482):** the node-keyed AST scans need file+node-identity
+  keying (round-481 (e) hazard); `checkMemberAccessMissing` (~4.7% self); the residual
+  scope-map COPY cost (`HashMap.putMapEntries` — a copy-on-write / layered-scope redesign,
+  higher risk).
+
 **Round 482 (2026-07-12) — M5.1 performance, first post-v1 perf items after the mandatory
 fresh JFR pass.** Two commits (b72ebcf2, 5b5d4f75), both byte-identical. The fresh round-482
 harness JFR (45.8 s / 3,620 samples) confirmed the round-481 flat profile with the
