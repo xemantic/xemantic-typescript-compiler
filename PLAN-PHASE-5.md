@@ -70,8 +70,15 @@ diagnostics, `--listAll` diff empty vs a stash-built BEFORE binary):
   usually non-null, so a single `get()` covers the common path, falling back to
   `containsKey` only to disambiguate a legitimately-cached null. Mirrors round 483's
   resolveModuleSpecifier single-lookup.
+- **Fix 4 — `checkMultiBaseInStatement` occOf scan skip** (`3c40908e`): the TS2320
+  same-generic-base check ran `occOf` (an O(source) `<`-bracket-match scan) for every base
+  of a 2+-base interface, then grouped by name. Only a RECURRING base name can produce
+  TS2320, so group by the cheap base name first and run occOf only for names appearing 2+
+  times — the common `interface X extends A, B` case (distinct names, pervasive in tsc's
+  Node hierarchy) skips the scan. `occOf`'s lambda was the #6 self-time frame (13 samples).
+  +3 local `MultiBaseTs2320OccOfTest`.
 - **Verification:** all byte-identical (46-diagnostic `--listAll` diff empty); full corpus
-  suite green 10,180 → 10,187 (+7 local across 2 test files, 0 regressions). Clean
+  suite green 10,180 → 10,190 (+10 local across 3 test files, 0 regressions). Clean
   same-machine wall-clock A/B (daemon stopped, `pkill KotlinCompile[D]aemon`, 4.7 GB free,
   3 runs each, self-reported `time:`): BEFORE (round 487 fd4769c2) median 25.70 s vs AFTER
   (this session) 25.17 s ≈ **2.1%** (best-case 24.90 vs 25.70 ≈ 3.1%), consistent across
