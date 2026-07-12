@@ -39,6 +39,35 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
+**Round 484 (2026-07-12) — EP emit parity: three-way bench + emit diff + EP.3 landed
+(owner-authorized "output parity, including reported errors").**
+- **Three-way bench** (`compiler` profile, 78 files / 194,702 LOC, cold wall, emit): xtsc
+  26,893 ms (self 26,769) vs JS `tsc@6.0.3` 10,161 ms (median of 3) vs `tsgo@7.0-dev`
+  2,124 ms. xtsc ≈2.6× behind JS tsc, ≈12.7× behind tsgo — the M5 frontier. All three
+  agree diagnostically: only env-legit offline `@types/node` errors (tsc/tsgo 65, xtsc
+  46 — xtsc suppresses more of the same family), zero real FPs, 78/78 emitted.
+- **Emit-byte diff** (new `scripts/emit-diff-tsc.sh`, xtsc vs `tsc@6.0.3`, SEPARATE
+  outDirs): 8/78 byte-identical, 70/78 differ — but NONE are miscompiles (xtsc output is
+  runnable). Three systematic families explain nearly all changed lines: (1) cross-module
+  const-enum inlining — xtsc keeps `mod.Enum.Member`, tsc inlines `VALUE /* Enum.Member */`
+  (xtsc inlines 8,695 reads, tsc 18,118 — the ~9,400 gap is cross-module; utilities.js
+  3,091→225 residual once normalized); (2) multi-line expression printer formatting
+  (operator/`:` line-end vs line-start); (3) `||=`/`&&=`/`??=` not downleveled at es2020
+  (xtsc 299 vs tsc 15). Version confound noted (npm tsc ≠ pinned commit; the 3 families
+  are version-stable, the small emitHelpers.js residual is version noise).
+- **EP.3 landed** — `Transformer.downlevelLogicalAssignment` (gate `effectiveTarget <
+  ES2021` in the binary-spine collector + `transformBinaryExpressionSpecial` dispatch):
+  `a ||= b` → `a || (a = b)`, `&&=`/`??=` likewise; side-effecting property/element
+  receivers captured into temps with tsc-faithful naming (`(_a = obj())[_b = key()] ||
+  (_a[_b] = 6)` — the element KEY capture is bare inside `[]`, only the receiver is
+  parenthesized). Corpus has ZERO logical-assign files → pinned by the new
+  `LogicalAssignmentDownlevelTest` (7 cases). Known residual: sub-ES2020 `??=` keeps a
+  native `??`. Full suite green 10,167 / 0 (was 10,160 + 7 local).
+- Queue: added the **EP milestone** (EP.3 done; EP.2 printer formatting, EP.1
+  cross-module const-enum, EP.0 dashboard-wire the gate — sequenced cheap-first). Pre-
+  existing (not this change): 5 `Checker.kt` compiler warnings on HEAD — the
+  "warning-clean" invariant has drifted; flagged for a separate cleanup.
+
 **Round 483 (2026-07-12) — M5.1 performance, checker hot-path micro-opts (branch
 `perf/hoist-kind-domain-target-keys`, squash-merged).** Started from a fresh compiler-profile
 JFR (the flat post-482 profile). Three byte-identical changes, compiler self-compile still 46
@@ -616,6 +645,44 @@ M1–M3 campaign items still unchecked in the history file (M2.2/M2.3/M3.1–M3.
 hit their re-scoped v1 acceptance bar — "the shapes tsc's source uses" — when the
 burn-down reached zero real FPs; reviving their full-completeness form is a
 backlog-horizon decision, not queue debt.)
+
+**EP — Emit parity (owner-authorized 2026-07-12: "output parity, including reported errors").**
+The offline v1 DoD checked emit COMPLETENESS (all files emitted, exit 0) but not
+emit-BYTE parity with tsc. The round-483 emit diff (`scripts/emit-diff-tsc.sh`, xtsc
+vs npm `tsc@6.0.3` on the `compiler` profile) found 8/78 byte-identical, 70/78
+differing — but **none are miscompiles**; xtsc's output is semantically correct and
+runnable. Three systematic families explain nearly all changed lines (sequenced
+cheap-first to shrink the diff before tackling the hard cross-file one):
+
+- [x] **EP.3 Logical/nullish-assignment downleveling** (`||=`/`&&=`/`??=` below
+  ES2021). DONE round 484 (2026-07-12): `Transformer.downlevelLogicalAssignment` —
+  `a ||= b` → `a || (a = b)` etc., with side-effecting property/element receivers
+  captured into temps (`(_a = obj())[_b = key()] || (_a[_b] = 6)`, tsc-faithful temp
+  naming). ~284 sites in the compiler profile. Gated `effectiveTarget < ES2021`;
+  corpus has ZERO files exercising these operators so it's pinned by
+  `LogicalAssignmentDownlevelTest` only. KNOWN RESIDUAL: a `??=` target BELOW ES2020
+  keeps a native `??` (not further downleveled — ES2020 is the tested/dashboard
+  target); close when a sub-ES2020 `??=` case appears.
+- [ ] **EP.2 Multi-line expression printer formatting.** Match tsc's operator/`:`
+  placement (line-end vs line-start) and indentation when wrapping long
+  `||`/`&&`/ternary chains. Mechanical Emitter work, no cross-file dependency, but
+  HIGHER corpus-regression risk (touches the printer that the green corpus pins) —
+  do it with the emit-diff gate in place and verify the full suite after each step.
+- [ ] **EP.1 Cross-module const-enum inlining** (highest impact, ~93% of the changed
+  lines in files like utilities.js). xtsc inlines SAME-FILE const enums but keeps
+  `mod.Enum.Member` for const enums imported across modules; tsc inlines to
+  `VALUE /* Enum.Member */` (numeric AND string-valued). Needs the checker to resolve
+  imported const-enum values whole-program. Biggest/hardest (cross-file), collapses
+  most of the diff. NOTE: xtsc's form still RUNS (preserveConstEnums keeps the enum
+  objects) — this is byte-fidelity, not correctness.
+- [ ] **EP.0 Wire the emit-diff gate into the dashboard.** `scripts/emit-diff-tsc.sh`
+  exists (reports identical/differing + family signals). Ideal reference is a tsc
+  BUILT AT THE PINNED COMMIT (npm tsc adds version noise to the small residual tail,
+  esp. emitHelpers.js helper bodies); decide whether to build+cache the pinned tsc or
+  accept the version-stable family signals. Re-run after EP.2/EP.1 to track the diff
+  shrinking.
+
+Session note (round 484) has the full family breakdown + methodology.
 
 **M5 — Performance (starts at v1 compliance — the 8 tsc-source profiles compile clean)**
 
