@@ -99223,7 +99223,12 @@ interface DataView {
     private fun resolveFlowCalleeDecl(expr: CallExpression, callee: Expression): Node? {
         val useCache = narrowLiveDepth > 0
         val key = nodeKey(expr)
-        if (useCache && narrowWalkDeclCache.containsKey(key)) return narrowWalkDeclCache[key]
+        if (useCache) {
+            // M5.2 perf: single map lookup on the common cached-non-null hit; only fall
+            // back to containsKey to disambiguate a legitimately-cached null decl.
+            val cached = narrowWalkDeclCache[key]
+            if (cached != null || narrowWalkDeclCache.containsKey(key)) return cached
+        }
         val decl: Node? = when (callee) {
             is Identifier -> {
                 val symbol = currentFileLocals?.get(callee.text) ?: globals[callee.text]
@@ -139154,16 +139159,24 @@ interface DataView {
     }
 
     private fun isOptionalProperty(symbol: Symbol): Boolean {
+        // M5.2 perf: check the declaration path FIRST — the overwhelming majority of
+        // symbols carry a declaration, and only DECLARATION-LESS tuple-member symbols
+        // (created by [buildTupleFromTypes], never merged with any declared symbol) are
+        // ever in [optionalTupleMemberIds]. Their globally-unique ids can never collide
+        // with a declared symbol's, so skipping the set lookup for a declared symbol is
+        // byte-identical — and avoids a HashSet lookup on every isOptionalProperty call.
+        val decl = symbol.valueDeclaration ?: symbol.declarations.firstOrNull()
+        if (decl != null) {
+            return when (decl) {
+                is PropertyDeclaration -> decl.questionToken
+                is Parameter -> decl.questionToken
+                is MethodDeclaration -> decl.questionToken
+                else -> false
+            }
+        }
         // Round 452: an optional tuple element (`[kind?: T]`) has a declaration-less member
         // symbol; its optionality lives in the side-channel [optionalTupleMemberIds].
-        if (symbol.id in optionalTupleMemberIds) return true
-        val decl = symbol.valueDeclaration ?: symbol.declarations.firstOrNull() ?: return false
-        return when (decl) {
-            is PropertyDeclaration -> decl.questionToken
-            is Parameter -> decl.questionToken
-            is MethodDeclaration -> decl.questionToken
-            else -> false
-        }
+        return symbol.id in optionalTupleMemberIds
     }
 
     /**
