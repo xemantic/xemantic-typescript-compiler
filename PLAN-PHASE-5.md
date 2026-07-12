@@ -79,7 +79,7 @@ accumulated name set) that is quadratic LinkedHashSet churn.
   clear top walker (5.1% self, 6.5% inclusive; `checkPropertyAccessInExpr` 8.8% inclusive
   → `checkSinglePropertyAccess` 7.5% → `checkMemberAccessMissing`) — audit its per-access
   work for a real wall-clock lever, not just allocation churn.
-- **Fix 2 (commit `be5c0a2b`) — memoize `getLineAndCharacterOfPosition` (a
+- **Fix 2 (commit `fe01237d`) — memoize `getLineAndCharacterOfPosition` (a
   reduce-redundant-WORK lever, not allocation):** it was an O(position) linear newline
   scan from index 0 on EVERY call — on tsc's ~1.5 MB checker.ts a position near the end
   is ~1.5 M char comparisons per call, run per-diagnostic + in several walker position
@@ -94,7 +94,7 @@ accumulated name set) that is quadratic LinkedHashSet churn.
   this held.** +2 local `LineAndCharacterMemoTest` (offset-independent: two identical
   errors N lines apart → exactly an N-line gap + identical column, deep into a large
   source). Suite 10,171 → 10,173.
-- **Also this session (commit `1f744df5`) — restored the warning-clean invariant:**
+- **Also this session (commit `724fa2bb`) — restored the warning-clean invariant:**
   round 484 flagged 5 drifted `Checker.kt` compiler warnings; all fixed (redundant
   `?.`/cast/`else`, each verified to drop no load-bearing smart-cast or side effect —
   e.g. 129367/129374's `when (arg)` blocks are exhaustive because the function opens
