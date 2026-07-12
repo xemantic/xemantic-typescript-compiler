@@ -100082,12 +100082,15 @@ interface DataView {
             // structural relation over-accepts it (enum-member kinds resolve to `any`,
             // so every AST-node member looked assignable to the property-poorest one —
             // `!isJsxOpeningFragment(node)` collapsed JsxCallLike to `never`).
+            // Perf: the target's `.kind` key domain is loop-invariant — derive it once,
+            // not once per union member (Node/SyntaxKind unions have hundreds).
+            val negTargetKindKeys = kindDomainKeysFromTypeNode(targetTypeNode, 0)
             return getUnionType(t.types.filter {
                 typeGuardMemberDisjoint(it, targetType) ||
                     // Round 472: a member whose `.kind` DOMAIN exceeds the target's
                     // provably has surviving values — keep it (see the single-type
                     // negative branch below; same enum-any over-acceptance).
-                    kindDomainProvesNotSubtype(it, targetTypeNode) ||
+                    kindDomainProvesNotSubtype(it, negTargetKindKeys) ||
                     // Round 480: tsc's assumeFalse filter uses the SUBTYPE relation,
                     // in which a MISSING source property fails an OPTIONAL target
                     // property (assignability passes) — vfsUtil's FileInode is
@@ -100163,9 +100166,16 @@ interface DataView {
      *  type-arg NODES threaded through TP positions (the resolved arg TYPE is `any`
      *  for an enum member, so only the nodes can decide). Any unreadable side →
      *  false (callers keep the structural verdict). */
-    private fun kindDomainProvesNotSubtype(t: Type, targetNode: TypeNode): Boolean {
+    private fun kindDomainProvesNotSubtype(t: Type, targetNode: TypeNode): Boolean =
+        kindDomainProvesNotSubtype(t, kindDomainKeysFromTypeNode(targetNode, 0))
+
+    /** Perf: overload taking the target's already-derived `.kind` key domain, so a
+     *  per-union-member negative-filter loop computes the loop-INVARIANT target domain
+     *  ONCE instead of once per member (tsc's `Node`/`SyntaxKind` unions have hundreds
+     *  of members). Byte-identical to the [TypeNode] overload. */
+    private fun kindDomainProvesNotSubtype(t: Type, targetKeys: Set<String>?): Boolean {
+        val tgk = targetKeys ?: return false
         val tk = kindDomainKeysOfType(t) ?: return false
-        val tgk = kindDomainKeysFromTypeNode(targetNode, 0) ?: return false
         return tk.any { it !in tgk }
     }
 
