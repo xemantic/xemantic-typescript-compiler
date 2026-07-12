@@ -99886,6 +99886,12 @@ interface DataView {
                     // provably has surviving values — keep it (see the single-type
                     // negative branch below; same enum-any over-acceptance).
                     kindDomainProvesNotSubtype(it, targetTypeNode) ||
+                    // Round 480: tsc's assumeFalse filter uses the SUBTYPE relation,
+                    // in which a MISSING source property fails an OPTIONAL target
+                    // property (assignability passes) — vfsUtil's FileInode is
+                    // assignable to DirectoryInode (every difference optional) but
+                    // NOT a subtype (no `links`), so `!isDirectory(node)` keeps it.
+                    missingVsOptionalProvesNotSubtype(it, targetType) ||
                     !checkTypeRelatedTo(it, targetType, assignableRelation)
             })
         }
@@ -99917,7 +99923,32 @@ interface DataView {
         // declared `.kind` DOMAIN has keys outside the target's domain provably has
         // surviving values (tsc keeps it) → keep t.
         return if (checkTypeRelatedTo(t, targetType, assignableRelation) &&
-            !kindDomainProvesNotSubtype(t, targetTypeNode)) neverType else t
+            !kindDomainProvesNotSubtype(t, targetTypeNode) &&
+            !missingVsOptionalProvesNotSubtype(t, targetType)) neverType else t
+    }
+
+    /**
+     * Round 480 (tsc subtype vs assignability): the negative type-guard filter uses
+     * tsc's SUBTYPE relation, in which a MISSING source property FAILS against an
+     * OPTIONAL target property — so a union member that merely lacks the target's
+     * optional distinguishers is NOT dropped by `!guard(x)`. True when [m] lacks a
+     * property [target] declares OPTIONAL (no index-sig escape hatch). Keep-only:
+     * a true verdict retains a member the assignable filter would have dropped.
+     */
+    private fun missingVsOptionalProvesNotSubtype(m: Type, target: Type): Boolean {
+        val tObj = target as? Type.Object ?: return false
+        val mApp = try { getApparentType(m) } catch (_: Exception) { return false }
+        val mObj = mApp as? Type.Object ?: return false
+        try {
+            resolveStructuredTypeMembers(tObj)
+            resolveStructuredTypeMembers(mObj)
+        } catch (_: Exception) { return false }
+        if (mObj.stringIndexInfo != null) return false
+        val tProps = tObj.properties ?: return false
+        return tProps.any { tp ->
+            tp.name !in OBJECT_PROTOTYPE_PROPERTIES && isOptionalProperty(tp) &&
+                (try { getPropertyOfType(mApp, tp.name) } catch (_: Exception) { null }) == null
+        }
     }
 
     /** Round 472: true when [t]'s declared `.kind` key DOMAIN provably exceeds the
@@ -102046,7 +102077,15 @@ interface DataView {
                     if (pt !== anyType && pt !== errorType) currentLocalTypes[p.name] = pt
                 }
                 when {
-                    body is Block && !hasReturnWithExpression(body) -> voidType
+                    // Round 480 (tsc): a block body with NO returns whose EVERY path
+                    // throws/diverges infers `never`, not void — `import: _id => {
+                    // throw new Error("…"); }` vs `import(id): Promise<…>`
+                    // (evaluatorImpl.ts SystemModuleContext). bodyAlwaysReturns with
+                    // zero return statements ⇔ all paths terminate abruptly.
+                    body is Block && !hasReturnWithExpression(body) ->
+                        if (body.statements.isNotEmpty() && !blockHasAnyReturn(body) &&
+                            bodyAlwaysReturns(body.statements)
+                        ) neverType else voidType
                     // B52.4: Infer return type from simple `return <literal>` patterns so an
                     // un-annotated arrow `(n) => { return 0; }` in an object literal whose
                     // target is `{ f(n: number): number }` displays as `(n: number) => number`
@@ -102294,34 +102333,39 @@ interface DataView {
     private fun hasReturnWithExpression(block: Block): Boolean =
         block.statements.any { stmtHasReturnWithExpr(it) }
 
+    /** Round 480: any return AT ALL (incl. bare `return;`) — a body with a bare
+     *  return can complete normally-ish, so it must NOT infer `never`. */
+    private fun blockHasAnyReturn(block: Block): Boolean =
+        block.statements.any { stmtHasReturnWithExpr(it, requireExpr = false) }
+
     /** Recursive: does any statement contain a `return <expr>`, descending through
      *  control-flow constructs (if/else, loops, switch, try, labeled, with, blocks)
      *  but NOT into nested function-likes (they have their own return scope)? A
      *  function whose value-returns are all nested in if/else is NOT void-returning,
      *  so the top-level-only scan previously mis-inferred its return type as `void`
      *  (e.g. a sort comparator `(a,b)=>{ if(...)return 1; else return -1; }`). */
-    private fun stmtHasReturnWithExpr(stmt: Statement): Boolean = when (stmt) {
-        is ReturnStatement -> stmt.expression != null
-        is Block -> stmt.statements.any { stmtHasReturnWithExpr(it) }
-        is IfStatement -> stmtHasReturnWithExpr(stmt.thenStatement) ||
-            (stmt.elseStatement?.let { stmtHasReturnWithExpr(it) } ?: false)
-        is ForStatement -> stmtHasReturnWithExpr(stmt.statement)
-        is ForInStatement -> stmtHasReturnWithExpr(stmt.statement)
-        is ForOfStatement -> stmtHasReturnWithExpr(stmt.statement)
-        is WhileStatement -> stmtHasReturnWithExpr(stmt.statement)
-        is DoStatement -> stmtHasReturnWithExpr(stmt.statement)
-        is LabeledStatement -> stmtHasReturnWithExpr(stmt.statement)
-        is WithStatement -> stmtHasReturnWithExpr(stmt.statement)
+    private fun stmtHasReturnWithExpr(stmt: Statement, requireExpr: Boolean = true): Boolean = when (stmt) {
+        is ReturnStatement -> !requireExpr || stmt.expression != null
+        is Block -> stmt.statements.any { stmtHasReturnWithExpr(it, requireExpr) }
+        is IfStatement -> stmtHasReturnWithExpr(stmt.thenStatement, requireExpr) ||
+            (stmt.elseStatement?.let { stmtHasReturnWithExpr(it, requireExpr) } ?: false)
+        is ForStatement -> stmtHasReturnWithExpr(stmt.statement, requireExpr)
+        is ForInStatement -> stmtHasReturnWithExpr(stmt.statement, requireExpr)
+        is ForOfStatement -> stmtHasReturnWithExpr(stmt.statement, requireExpr)
+        is WhileStatement -> stmtHasReturnWithExpr(stmt.statement, requireExpr)
+        is DoStatement -> stmtHasReturnWithExpr(stmt.statement, requireExpr)
+        is LabeledStatement -> stmtHasReturnWithExpr(stmt.statement, requireExpr)
+        is WithStatement -> stmtHasReturnWithExpr(stmt.statement, requireExpr)
         is SwitchStatement -> stmt.caseBlock.any { clause ->
             when (clause) {
-                is CaseClause -> clause.statements.any { stmtHasReturnWithExpr(it) }
-                is DefaultClause -> clause.statements.any { stmtHasReturnWithExpr(it) }
+                is CaseClause -> clause.statements.any { stmtHasReturnWithExpr(it, requireExpr) }
+                is DefaultClause -> clause.statements.any { stmtHasReturnWithExpr(it, requireExpr) }
                 else -> false
             }
         }
-        is TryStatement -> stmt.tryBlock.statements.any { stmtHasReturnWithExpr(it) } ||
-            (stmt.catchClause?.block?.statements?.any { stmtHasReturnWithExpr(it) } ?: false) ||
-            (stmt.finallyBlock?.statements?.any { stmtHasReturnWithExpr(it) } ?: false)
+        is TryStatement -> stmt.tryBlock.statements.any { stmtHasReturnWithExpr(it, requireExpr) } ||
+            (stmt.catchClause?.block?.statements?.any { stmtHasReturnWithExpr(it, requireExpr) } ?: false) ||
+            (stmt.finallyBlock?.statements?.any { stmtHasReturnWithExpr(it, requireExpr) } ?: false)
         else -> false
     }
 
@@ -128976,6 +129020,13 @@ interface DataView {
                 params[i].declarations.any { d -> d is Parameter && d.questionToken }) continue
             if (overloadArgSkippable(argType, params[i], paramType)) continue
             if (!checkTypeRelatedTo(argType, paramType, assignableRelation)) {
+                // Round 480: an inline arrow/fn-expr arg whose every RETURN is a
+                // string literal ∈ the param's literal-union return is contextually
+                // valid — tsc contextually types the returns from the param's
+                // signature, so the literals never widen to `string`
+                // (`this._walk(path, true, (err, res) => { … return "retry"; …
+                // return "throw"; })` vs `(…) => "retry" | "throw"`, vfsUtil.ts).
+                if (argFnLiteralReturnsSatisfyParam(arg, paramType)) continue
                 // B70.15: Bivariant fallback for function-vs-function under @strict: false.
                 // Also try reverse direction; if param accepts arg's shape going either way,
                 // count as match. Only fires for anonymous function-typed Type.Object pairs
@@ -128993,6 +129044,61 @@ interface DataView {
             }
         }
         return true
+    }
+
+    /**
+     * Round 480: does the inline arrow/fn-expr [arg] satisfy a fn-typed [paramType]
+     * whose single call signature returns a STRING-LITERAL union, by every returned
+     * expression being a string literal in that union? tsc's contextual return
+     * typing keeps such literals un-widened; our inference widens them to `string`
+     * and FP-rejects. Accept-only (suppresses a reject); a block body must
+     * always-return (a fall-through path would add `undefined`, which the union
+     * lacks by construction here).
+     */
+    private fun argFnLiteralReturnsSatisfyParam(arg: Expression, paramType: Type): Boolean {
+        if (arg !is ArrowFunction && arg !is FunctionExpression) return false
+        val pObj = paramType as? Type.Object ?: return false
+        if (pObj is Type.Interface || pObj is Type.Reference) return false
+        resolveStructuredTypeMembers(pObj)
+        val pSig = pObj.callSignatures?.singleOrNull() ?: return false
+        val ret = pSig.resolvedReturnType ?: return false
+        val allowed = mutableSetOf<String>()
+        fun collectAllowed(t: Type): Boolean = when (t) {
+            is Type.StringLiteral -> { allowed.add(t.value); true }
+            is Type.Union -> t.types.all { collectAllowed(it) }
+            else -> false
+        }
+        if (!collectAllowed(ret) || allowed.isEmpty()) return false
+        val argParams = when (arg) {
+            is ArrowFunction -> arg.parameters
+            is FunctionExpression -> arg.parameters
+            else -> return false
+        }
+        if (argParams.size > pSig.parameters.size) return false
+        if (argParams.any { it.type != null }) return false // annotated params keep the plain relation
+        val body = when (arg) {
+            is ArrowFunction -> arg.body
+            is FunctionExpression -> arg.body
+            else -> return false
+        }
+        return when (body) {
+            is Block -> {
+                if (!bodyAlwaysReturns(body.statements)) return false
+                val rets = mutableListOf<Expression?>()
+                collectReturnExpressions(body.statements, rets)
+                rets.isNotEmpty() && rets.all { r ->
+                    var e = r ?: return@all false
+                    while (e is ParenthesizedExpression) e = e.expression
+                    (e as? StringLiteralNode)?.text in allowed
+                }
+            }
+            is Expression -> {
+                var e: Expression = body
+                while (e is ParenthesizedExpression) e = e.expression
+                (e as? StringLiteralNode)?.text in allowed
+            }
+            else -> false
+        }
     }
 
     /**
@@ -132184,6 +132290,18 @@ interface DataView {
                             if (checkTypeRelatedTo(sourcePropType,
                                     widenOptionalTargetPropType(targetPropType, targetProp, sourcePropType),
                                     assignableRelation)) continue
+                            // Round 480: a FRESH object-literal member keeps its literal
+                            // type against a literal-expecting target member — the widened
+                            // `string` FP'd `type: "file"` vs `type: "file"` as
+                            // 'string' ⊄ 'string' (fourslash organizeImports/
+                            // getCombinedCodeFix args). The B326 keep-the-literal rule at
+                            // this per-property arg leaf.
+                            if (propTypeContainsLiteral(targetPropType)) {
+                                val lit = valueNode?.let { literalTypeOfExpression(it) }
+                                if (lit != null && checkTypeRelatedTo(lit,
+                                        widenOptionalTargetPropType(targetPropType, targetProp, lit),
+                                        assignableRelation)) continue
+                            }
                             val displaySource = typeToString(getWidenedLiteralType(sourcePropType))
                             val displayTargetProp = typeToString(getWidenedLiteralType(targetPropType))
                             val (kline, kchar) = getLineAndCharacterOfPosition(source, keyPos)
@@ -136896,6 +137014,15 @@ interface DataView {
                     if (!checkTypeRelatedTo(t, sourceRestElement, relation) &&
                         !checkTypeRelatedTo(sourceRestElement, t, relation)) return false
                 }
+                continue
+            }
+            // Round 480: a source rest whose ELEMENT is any/error/TypeParam (the
+            // shapes sourceRestElement's takeIf rejects) accepts ANY target params —
+            // `(...args: any[]) => void` is assignable to `(project: Project) =>
+            // void` (tsc harness incrementalUtils.ts withIncrementalVerifierCallbacks);
+            // without this the position compared the ARRAY type (`Project <: any[]`
+            // contravariantly) and failed.
+            if (sourceIsRest && i == sourceParams.size - 1 && !targetLastIsRest) {
                 continue
             }
             val sourceParamType = sourceParamTypeRaw
