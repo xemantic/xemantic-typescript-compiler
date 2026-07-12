@@ -93982,6 +93982,17 @@ interface DataView {
         ) {
             perFileInterfaceType(baseExpr.text, contextFile)?.let { return it }
         }
+        // Round 480: the derived file may merely IMPORT the conflated base —
+        // `ServerHost extends System` (server/types.ts) must inherit compiler/
+        // sys.ts's interface view, not the chimera polluted by fakesHosts'
+        // `class System` members (vfs/output/exitCode demanded from every
+        // ServerHost implementer). Follows the ctx file's own ImportSpecifier
+        // through the barrel star chain to the declaring leaf.
+        if (contextFile != null && baseExpr is Identifier) {
+            conflatedInterfaceFiles[baseExpr.text]?.let { files ->
+                conflatedPerFileViewForContext(baseExpr.text, contextFile, files)?.let { return it }
+            }
+        }
         // B100: `class C extends (X as new () => T)` — the base is an AsExpression
         // (usually paren-wrapped) whose asserted type is a CONSTRUCTOR type; the
         // class's instance type is that construct signature's RETURN type `T`. Mirrors
@@ -94293,6 +94304,29 @@ interface DataView {
         return globals[mergedSym.name] === mergedSym
     }
 
+    /** Round 480: is [target] the MERGED chimera of a conflated name whose PER-FILE
+     *  view sits in [source]'s base chain? The derived-interface sibling of
+     *  [conflatedMergedPairRelated] — our per-file heritage resolution makes the
+     *  derived instance carry the per-file base while bare-name annotations still
+     *  resolve the chimera; tsc would have resolved both to one module's interface. */
+    private fun conflatedChimeraTargetSourceHasPerFileBase(
+        source: Type.Interface, target: Type.Interface,
+    ): Boolean {
+        val tSym = target.symbol ?: return false
+        if (tSym.name.isEmpty() || tSym.name !in conflatedInterfaceFiles) return false
+        if (tSym.id in perFileInterfaceSymbolFile) return false
+        if (globals[tSym.name] !== tSym) return false
+        val seen = HashSet<Int>()
+        fun walk(t: Type?): Boolean {
+            val ti = t as? Type.Interface ?: return false
+            if (!seen.add(ti.id)) return false
+            val sy = ti.symbol
+            if (sy != null && sy.name == tSym.name && sy.id in perFileInterfaceSymbolFile) return true
+            return ti.baseTypes?.any { walk(it) } == true
+        }
+        return walk(source)
+    }
+
     /** Round 473: does [node] reference a conflated interface name (directly or nested
      *  in a shallow composite — TypeLiteral members resolve EAGERLY in
      *  getTypeFromTypeLiteral, baking the reference into the composite's type)? Such
@@ -94493,14 +94527,23 @@ interface DataView {
             conflatedCtxMissing = true
             return null
         }
+        return conflatedPerFileViewForContext(name, ctxFile, files)
+    }
+
+    /** Round 480: the bare-name context selection of [conflatedPerFileInterfaceType],
+     *  extracted so HERITAGE resolution can use it for a derived file that merely
+     *  IMPORTS the conflated base (`ServerHost extends System` in server/types.ts —
+     *  System's declaring file is compiler/sys.ts, reached through the ts barrel). */
+    private fun conflatedPerFileViewForContext(name: String, ctxFile: String, files: Set<String>): Type? {
         if (ctxFile in files) return perFileInterfaceType(name, ctxFile)
         val localSym = fileResults[ctxFile]?.locals?.get(name) ?: return null
         if (!localSym.flags.hasAny(SymbolFlags.Alias)) return null
         for (decl in localSym.declarations) {
             if (decl !is ImportSpecifier) continue
             val originalName = decl.propertyName?.text ?: decl.name.text
-            val entry = enclosingImportsOf(decl).firstOrNull { (_, stmt) ->
-                (stmt.importClause?.namedBindings as? NamedImports)?.elements?.any { it === decl } == true
+            val entry = enclosingImportsOf(decl).firstOrNull { (f, stmt) ->
+                f == ctxFile &&
+                    (stmt.importClause?.namedBindings as? NamedImports)?.elements?.any { it === decl } == true
             } ?: continue
             val (contextFile, importDecl) = entry
             val spec = (importDecl.moduleSpecifier as? StringLiteralNode)?.text ?: continue
@@ -132721,7 +132764,12 @@ interface DataView {
             // emitter compares member sets directly (no checkTypeRelatedTo), so it
             // needs the same bail as the relation entry.
             val argIsConflatedTwin = argType is Type.Interface && paramType is Type.Interface &&
-                conflatedInterfaceFiles.isNotEmpty() && conflatedMergedPairRelated(argType, paramType)
+                conflatedInterfaceFiles.isNotEmpty() &&
+                (conflatedMergedPairRelated(argType, paramType) ||
+                    // Round 480: the DERIVED sibling — the arg's base chain carries the
+                    // per-file view of the chimera param's name (ParseConfigFileHost →
+                    // per-file ParseConfigHost, passed to a chimera ParseConfigHost param).
+                    conflatedChimeraTargetSourceHasPerFileBase(argType, paramType))
             if (!isRestParam && !argIsConflatedTwin &&
                 (argIsRefForArgCheck || argIsDistinctNamedClass || argIsThisAnonObj || argIsAnonObjBag) &&
                 paramType is Type.Interface && paramType.symbol != null) {
@@ -133592,6 +133640,15 @@ interface DataView {
         // mismatch (two different per-file views) keeps the structural comparison.
         if (source is Type.Interface && target is Type.Interface &&
             conflatedInterfaceFiles.isNotEmpty() && conflatedMergedPairRelated(source, target)
+        ) return true
+        // Round 480: the DERIVED sibling of the pair above — a source whose BASE
+        // CHAIN contains a per-file view of the target's conflated name, against
+        // the merged chimera of that name (`ParseConfigFileHost` — whose heritage
+        // now resolves the per-file `ParseConfigHost` — passed to a chimera-typed
+        // `host: ParseConfigHost` param). Same artifact rationale, same leniency.
+        if (source is Type.Interface && target is Type.Interface &&
+            conflatedInterfaceFiles.isNotEmpty() &&
+            conflatedChimeraTargetSourceHasPerFileBase(source, target)
         ) return true
         // Fast check
         if (isSimpleTypeRelatedTo(source, target)) return true
