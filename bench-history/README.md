@@ -4,3 +4,4 @@ Three-way compile bench — **xtsc** vs the reference JS **tsc** vs the native *
 
 | Date | xtsc rev | xtsc | tsc | tsgo | xtsc/tsc | xtsc/tsgo | xtsc err | Run |
 |---|---|---:|---:|---:|---:|---:|---:|---|
+| 2026-07-12 | [`b152ff68d5e6`](https://github.com/xemantic/xemantic-typescript-compiler/commit/b152ff68d5e69371dafdcd9c00f1c86afb46b802) | 32.49s | 14.21s | 2.55s | 2.3× | 12.8× | 47 | [report](runs/20260712T172656Z-b152ff68d5e6.md) |
