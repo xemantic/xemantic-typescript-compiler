@@ -1,0 +1,102 @@
+# Three-way compile bench (xtsc vs reference JS tsc vs native tsgo) on the pinned
+# TypeScript `compiler` profile. Publishes a per-run Markdown report under
+# bench-history/runs/ and prepends a row to bench-history/README.md so performance
+# and compliance improvements are observable across runs.
+name: Bench
+
+on:
+  workflow_dispatch:
+    inputs:
+      tsc_spec:
+        description: 'npm spec for the reference JS tsc'
+        default: 'typescript@5'
+      tsgo_spec:
+        description: 'npm spec for the native tsgo (@typescript/native-preview, or typescript@7 once native ships there)'
+        default: '@typescript/native-preview@latest'
+      label:
+        description: 'optional note stored in the report'
+        default: ''
+  push:
+    branches: [main]
+    # Loop guard: the bot commits results under bench-history/, which must not
+    # re-trigger this workflow. (The result commit is also tagged [skip ci].)
+    paths-ignore:
+      - 'bench-history/**'
+
+# Let each push queue rather than cancel, so every merge gets a data point; the
+# push step rebases to absorb a concurrent run's commit.
+concurrency:
+  group: bench-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install reference compilers (tsc, tsgo)
+        id: refs
+        env:
+          # ${{ }} evaluated by GitHub into env values (no bash quote-breakout / injection).
+          TSC_SPEC: ${{ github.event.inputs.tsc_spec || 'typescript@5' }}
+          TSGO_SPEC: ${{ github.event.inputs.tsgo_spec || '@typescript/native-preview@latest' }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/bench-tools" && cd "$RUNNER_TEMP/bench-tools"
+          npm init -y >/dev/null 2>&1
+          npm install --no-audit --no-fund "$TSC_SPEC" "$TSGO_SPEC"
+          echo "tsc=$PWD/node_modules/.bin/tsc"   >> "$GITHUB_OUTPUT"
+          echo "tsgo=$PWD/node_modules/.bin/tsgo" >> "$GITHUB_OUTPUT"
+          "$PWD/node_modules/.bin/tsc"  --version
+          "$PWD/node_modules/.bin/tsgo" --version
+
+      - name: Run 3-way bench
+        env:
+          BENCH_RUNNER: 'ubuntu-latest, JDK 21 (GitHub-hosted, shared)'
+          TSC_BIN: ${{ steps.refs.outputs.tsc }}
+          TSGO_BIN: ${{ steps.refs.outputs.tsgo }}
+          BENCH_LABEL: ${{ github.event.inputs.label || format('push {0}', github.sha) }}
+        run: |
+          scripts/bench-3way.sh \
+            --tsc  "$TSC_BIN" \
+            --tsgo "$TSGO_BIN" \
+            --project compiler \
+            --xtsc-iters 1 --ref-iters 3 \
+            --label "$BENCH_LABEL"
+
+      - name: Commit results
+        run: |
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          # Stage first, then check the staged diff — the new run .md is untracked,
+          # so a plain `git diff` would miss it.
+          git add bench-history/
+          if git diff --cached --quiet -- bench-history/; then
+            echo "no bench-history changes"; exit 0
+          fi
+          git commit -m "chore(bench): 3-way run @ ${GITHUB_SHA::12} [skip ci]"
+          for attempt in 1 2 3; do
+            if git pull --rebase --autostash origin "$GITHUB_REF_NAME" \
+               && git push origin "HEAD:$GITHUB_REF_NAME"; then exit 0; fi
+            echo "push attempt $attempt failed; retrying"; sleep $((attempt * 5))
+          done
+          echo "error: could not push bench results after retries" >&2; exit 1

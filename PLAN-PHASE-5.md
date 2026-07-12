@@ -39,6 +39,25 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
+**Round 485 (2026-07-12) — CI perf/compliance dashboard: `Bench` GitHub Action
+(owner-requested).** New `.github/workflows/bench.yml` + `scripts/bench-3way.sh`
+compile the pinned TypeScript `compiler` profile with xtsc, reference JS tsc, and
+native tsgo, then publish a per-run Markdown report under `bench-history/runs/` and
+prepend a row to `bench-history/README.md` (index, newest-first) so wall-clock /
+throughput / error trends are observable across commits. Trigger: push-to-main
+(owner's choice) + `workflow_dispatch` (tsc/tsgo npm specs are inputs, default
+`typescript@5` / `@typescript/native-preview@latest`; report records resolved
+versions). Loop-guarded: `paths-ignore: bench-history/**` + the bot's result commit
+is `[skip ci]` + pushes `HEAD:main` with rebase-retry. `bench-history/` is a NEW
+tracked dir (the existing `/bench/` is gitignored machine-local TSV). Gotchas
+hit + fixed while building: an UNQUOTED python heredoc ran every backtick in the
+Markdown as command substitution (→ quoted `<<'PYEOF'` + values via `export`/`os.environ`);
+`git diff --quiet` misses the untracked new report (→ `git add` then `--cached`);
+tsgo `--version` is "Version X" (→ `awk '{print $NF}'`). Local macOS validation
+(busy box): xtsc 23.7s/46 vs tsc@6.0.3 6.5s/65 vs tsgo@7.0-dev 1.35s/65 — CI on
+Linux GNU-grep gets real self/err too. NEXT: the EP.2/EP.1 emit-parity families, or
+resume M5.
+
 **Round 484 (2026-07-12) — EP emit parity: three-way bench + emit diff + EP.3 landed
 (owner-authorized "output parity, including reported errors").**
 - **Three-way bench** (`compiler` profile, 78 files / 194,702 LOC, cold wall, emit): xtsc
