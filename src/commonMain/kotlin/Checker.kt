@@ -111270,8 +111270,20 @@ interface DataView {
                         if (args.isEmpty()) return null
                         return Triple(name, args, "$name<${args.joinToString(", ")}>")
                     }
-                    val occs = baseTypeExprs.mapNotNull { occOf(it) }
-                    for ((bname, group) in occs.groupBy { it.first }) {
+                    // M5.1 perf: occOf does an O(source) `<`-scan per base, but only a base
+                    // NAME that recurs can produce this TS2320. Group by the cheap base name
+                    // first and run occOf ONLY for names appearing 2+ times — the common
+                    // distinct-base-names case (`interface X extends A, B`) skips the scan
+                    // entirely. Byte-identical: a single-occurrence name's occOf group was
+                    // always size < 2 and skipped below (occOf is side-effect-free).
+                    fun baseName(te: ExpressionWithTypeArguments): String? = when (val be = te.expression) {
+                        is Identifier -> be.text
+                        is ParenthesizedExpression -> (be.expression as? Identifier)?.text
+                        else -> null
+                    }
+                    for ((bname, sameName) in baseTypeExprs.groupBy { baseName(it) }) {
+                        if (bname == null || sameName.size < 2) continue
+                        val group = sameName.mapNotNull { occOf(it) }
                         if (group.size < 2) continue
                         val o1 = group[0]
                         val o2 = group.firstOrNull { it.second != o1.second } ?: continue
