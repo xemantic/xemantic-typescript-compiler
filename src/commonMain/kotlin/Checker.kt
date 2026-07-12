@@ -724,6 +724,14 @@ class Checker(
      *  "unreadable" (the function's public contract returns null for it). */
     private val discriminantKindKeysCache = HashMap<Int, Set<String>>()
 
+    /** Round 482 (M5.1 perf): memo for [kindDomainKeysOfType] by Type.id — same
+     *  empty-set-encodes-unreadable contract as [discriminantKindKeysCache], and same
+     *  cross-path determinism guarantee (its `kind`-annotation readers canonicalize
+     *  enum symbols via [canonicalEnumSymbol]). The top set-churn source on the harness
+     *  profile: a union like `Node` is guard-narrowed at many read sites, and each call
+     *  re-scanned every member's annotation + built fresh mutable sets. */
+    private val kindDomainKeysOfTypeCache = HashMap<Int, Set<String>>()
+
     /** Pre-built per-file type maps: fileName → (name → Type). Built once during init,
      *  contains types for all file-level annotated declarations. Used by getTypeOfIdentifier
      *  to resolve file-level identifiers across all checker passes. */
@@ -100082,12 +100090,15 @@ interface DataView {
             // structural relation over-accepts it (enum-member kinds resolve to `any`,
             // so every AST-node member looked assignable to the property-poorest one —
             // `!isJsxOpeningFragment(node)` collapsed JsxCallLike to `never`).
+            // Round 482 (M5.1 perf): the target's `.kind` key domain is invariant across
+            // members — compute it ONCE instead of re-scanning `targetTypeNode` per member.
+            val targetKindDomain = kindDomainKeysFromTypeNode(targetTypeNode, 0)
             return getUnionType(t.types.filter {
                 typeGuardMemberDisjoint(it, targetType) ||
                     // Round 472: a member whose `.kind` DOMAIN exceeds the target's
                     // provably has surviving values — keep it (see the single-type
                     // negative branch below; same enum-any over-acceptance).
-                    kindDomainProvesNotSubtype(it, targetTypeNode) ||
+                    kindDomainKeysExceed(it, targetKindDomain) ||
                     // Round 480: tsc's assumeFalse filter uses the SUBTYPE relation,
                     // in which a MISSING source property fails an OPTIONAL target
                     // property (assignability passes) — vfsUtil's FileInode is
@@ -100163,21 +100174,33 @@ interface DataView {
      *  type-arg NODES threaded through TP positions (the resolved arg TYPE is `any`
      *  for an enum member, so only the nodes can decide). Any unreadable side →
      *  false (callers keep the structural verdict). */
-    private fun kindDomainProvesNotSubtype(t: Type, targetNode: TypeNode): Boolean {
+    private fun kindDomainProvesNotSubtype(t: Type, targetNode: TypeNode): Boolean =
+        kindDomainKeysExceed(t, kindDomainKeysFromTypeNode(targetNode, 0))
+
+    /** [kindDomainProvesNotSubtype]'s core with the target's key domain PRE-COMPUTED,
+     *  so a per-union-member filter can hoist the (node-scanning) target read out of
+     *  the loop instead of recomputing it once per member (round 482, M5.1 perf). */
+    private fun kindDomainKeysExceed(t: Type, targetKeys: Set<String>?): Boolean {
+        if (targetKeys == null) return false
         val tk = kindDomainKeysOfType(t) ?: return false
-        val tgk = kindDomainKeysFromTypeNode(targetNode, 0) ?: return false
-        return tk.any { it !in tgk }
+        return tk.any { it !in targetKeys }
     }
 
     private fun kindDomainKeysOfType(x: Type): Set<String>? {
+        kindDomainKeysOfTypeCache[x.id]?.let { return it.ifEmpty { null } }
         val members = if (x is Type.Union) x.types else listOf(x)
         val keys = mutableSetOf<String>()
+        var failed = false
         for (m in members) {
-            val ann = discriminantPropAnnotation(m, "kind") ?: return null
-            val k = enumMemberKeysOfTypeNode(ann) ?: enumSwitchKeysFromTypeNode(ann) ?: return null
+            val ann = discriminantPropAnnotation(m, "kind")
+            val k = ann?.let { enumMemberKeysOfTypeNode(it) ?: enumSwitchKeysFromTypeNode(it) }
+            if (k == null) { failed = true; break }
             keys.addAll(k)
         }
-        return keys.ifEmpty { null }
+        // Encode "unreadable" as an empty cached set (public contract returns null).
+        val result = if (failed) emptySet<String>() else keys
+        kindDomainKeysOfTypeCache[x.id] = result
+        return result.ifEmpty { null }
     }
 
     /** The `.kind` key domain of a type NODE: unions distribute (all members must
