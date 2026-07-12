@@ -140934,6 +140934,36 @@ interface DataView {
     /** Construct a union type from a list of constituent types, with basic normalization. */
     private fun getUnionType(types: List<Type>): Type {
         if (types.isEmpty()) return neverType
+        // M5.2 fast paths for the overwhelmingly common tiny inputs (the pervasive
+        // `T | undefined` shape and single-element calls) — byte-identical to the
+        // general path below but skips its 4 intermediate list + 1 set allocations.
+        // Only taken when NO member needs flattening (none is a Union); anything with
+        // a nested union falls through to the general path unchanged.
+        if (types.size == 1) {
+            val t = types[0]
+            if (t !is Type.Union) return if (t.flags.hasAny(TypeFlags.Never)) neverType else t
+        } else if (types.size == 2) {
+            val a = types[0]
+            val b = types[1]
+            if (a !is Type.Union && b !is Type.Union) {
+                val aNever = a.flags.hasAny(TypeFlags.Never)
+                val bNever = b.flags.hasAny(TypeFlags.Never)
+                when {
+                    aNever && bNever -> return neverType
+                    aNever -> return b
+                    bNever -> return a
+                    else -> {
+                        // Any constituent → the union is that any (first-in-order wins).
+                        if (a.flags.hasAny(TypeFlags.Any)) return a
+                        if (b.flags.hasAny(TypeFlags.Any)) return b
+                        if (a.id == b.id) return a
+                        // Match the stable sort-by-flags-value of the general path.
+                        return if (a.flags.value <= b.flags.value) Type.Union(listOf(a, b))
+                        else Type.Union(listOf(b, a))
+                    }
+                }
+            }
+        }
         // Flatten nested unions
         val flattened = mutableListOf<Type>()
         for (type in types) {
