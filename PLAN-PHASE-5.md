@@ -79,6 +79,13 @@ accumulated name set) that is quadratic LinkedHashSet churn.
   clear top walker (5.1% self, 6.5% inclusive; `checkPropertyAccessInExpr` 8.8% inclusive
   → `checkSinglePropertyAccess` 7.5% → `checkMemberAccessMissing`) — audit its per-access
   work for a real wall-clock lever, not just allocation churn.
+- **Also this session (commit `1f744df5`) — restored the warning-clean invariant:**
+  round 484 flagged 5 drifted `Checker.kt` compiler warnings; all fixed (redundant
+  `?.`/cast/`else`, each verified to drop no load-bearing smart-cast or side effect —
+  e.g. 129367/129374's `when (arg)` blocks are exhaustive because the function opens
+  with `if (arg !is ArrowFunction && arg !is FunctionExpression) return false`).
+  `compileKotlinJvm compileTestKotlinJvm --rerun-tasks` is 0-`w:` again; diagnostics
+  byte-identical; suite green.
 
 **Round 485 (2026-07-12) — CI perf/compliance dashboard: `Bench` GitHub Action
 (owner-requested).** New `.github/workflows/bench.yml` + `scripts/bench-3way.sh`
