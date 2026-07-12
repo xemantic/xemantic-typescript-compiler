@@ -20975,7 +20975,7 @@ class Checker(
             }
             is LabeledStatement -> visitExpandoStmt(s.statement, inNestedFn, cands, declared, shadowed, source, fileName)
             is FunctionDeclaration -> {
-                val inner = shadowed + collectExpandoFnLocals(s.parameters, s.body)
+                val inner = HashSet(shadowed).also { it.addAll(collectExpandoFnLocals(s.parameters, s.body)) }
                 s.parameters.forEach { visitExpandoExpr(it.initializer, true, cands, declared, inner, source, fileName) }
                 s.body?.statements?.forEach { visitExpandoStmt(it, true, cands, declared, inner, source, fileName) }
             }
@@ -21023,12 +21023,12 @@ class Checker(
             is YieldExpression -> visitExpandoExpr(e.expression, inNestedFn, cands, declared, shadowed, source, fileName)
             is AwaitExpression -> visitExpandoExpr(e.expression, inNestedFn, cands, declared, shadowed, source, fileName)
             is FunctionExpression -> {
-                val inner = shadowed + collectExpandoFnLocals(e.parameters, e.body) + (e.name?.text?.let { setOf(it) } ?: emptySet())
+                val inner = HashSet(shadowed).also { s -> s.addAll(collectExpandoFnLocals(e.parameters, e.body)); e.name?.text?.let { s.add(it) } }
                 e.parameters.forEach { visitExpandoExpr(it.initializer, true, cands, declared, inner, source, fileName) }
                 e.body.statements.forEach { visitExpandoStmt(it, true, cands, declared, inner, source, fileName) }
             }
             is ArrowFunction -> {
-                val inner = shadowed + collectExpandoFnLocals(e.parameters, e.body)
+                val inner = HashSet(shadowed).also { it.addAll(collectExpandoFnLocals(e.parameters, e.body)) }
                 e.parameters.forEach { visitExpandoExpr(it.initializer, true, cands, declared, inner, source, fileName) }
                 when (val b = e.body) {
                     is Block -> b.statements.forEach { visitExpandoStmt(it, true, cands, declared, inner, source, fileName) }
@@ -45950,7 +45950,7 @@ interface DataView {
         // constructorWithIncompleteTypeAnnotation's VARIABLES() method).
         var effValues = valueNames
         run {
-            val declared = mutableSetOf<String>()
+            val declared = HashSet<String>()
             collectHoistedVarNamesFromStmts(statements, declared)
             for (s in statements) when (s) {
                 is VariableStatement -> for (d in s.declarationList.declarations) {
@@ -45969,7 +45969,7 @@ interface DataView {
                 else -> {}
             }
             if (declared.isNotEmpty() && !valueNames.containsAll(declared)) {
-                effValues = valueNames + declared
+                effValues = HashSet(valueNames).also { it.addAll(declared) }
             }
         }
         for (stmt in statements) {
@@ -46013,10 +46013,10 @@ interface DataView {
             is FunctionDeclaration -> {
                 // Collect type parameters as type-only within this function
                 // But exclude names that are also parameter names (parameter shadows type param)
-                val innerTypeOnly = typeOnlyNames.toMutableSet()
+                val innerTypeOnly = HashSet(typeOnlyNames)
                 stmt.typeParameters?.forEach { innerTypeOnly.add(it.name.text) }
                 // Remove parameter names — they are values, not types
-                val innerValues = valueNames.toMutableSet()
+                val innerValues = HashSet(valueNames)
                 for (p in stmt.parameters) {
                     addParamBindingNamesToValues(p.name, innerTypeOnly, innerValues)
                 }
@@ -46063,13 +46063,13 @@ interface DataView {
                 for (member in stmt.members) {
                     when (member) {
                         is MethodDeclaration -> {
-                            val innerTypeOnly = typeOnlyNames.toMutableSet()
+                            val innerTypeOnly = HashSet(typeOnlyNames)
                             member.typeParameters?.forEach { innerTypeOnly.add(it.name.text) }
                             // iter18 B86.11: register method parameter binding names as
                             // values so a parameter named `N` shadows an outer
                             // namespace-only `N` and doesn't trigger spurious TS2708
                             // / TS2693 inside the method body.
-                            val innerValues = valueNames.toMutableSet()
+                            val innerValues = HashSet(valueNames)
                             for (p in member.parameters) {
                                 addParamBindingNamesToValues(p.name, innerTypeOnly, innerValues)
                             }
@@ -46079,8 +46079,8 @@ interface DataView {
                             member.body?.let { checkTypeAsValueInStatements(it.statements, source, fileName, innerTypeOnly, innerValues, namespaceOnlyNames) }
                         }
                         is Constructor -> {
-                            val innerTypeOnly = typeOnlyNames.toMutableSet()
-                            val innerValues = valueNames.toMutableSet()
+                            val innerTypeOnly = HashSet(typeOnlyNames)
+                            val innerValues = HashSet(valueNames)
                             for (p in member.parameters) {
                                 addParamBindingNamesToValues(p.name, innerTypeOnly, innerValues)
                             }
@@ -46120,11 +46120,11 @@ interface DataView {
                 // `namespaceOnlyNames` so e.g. `namespace N { N; }` does NOT fire
                 // TS2708 on the inner `N`.
                 val selfName = (stmt.name as? Identifier)?.text
-                val innerValueNames = valueNames.toMutableSet().also {
+                val innerValueNames = HashSet(valueNames).also {
                     if (selfName != null) it.add(selfName)
                 }
-                val innerTypeOnlyNames = typeOnlyNames.toMutableSet()
-                val innerNamespaceOnlyNames = namespaceOnlyNames.toMutableSet().also {
+                val innerTypeOnlyNames = HashSet(typeOnlyNames)
+                val innerNamespaceOnlyNames = HashSet(namespaceOnlyNames).also {
                     if (selfName != null) it.remove(selfName)
                 }
                 for (s in body.statements) {
@@ -46314,8 +46314,8 @@ interface DataView {
             // Descend into function/arrow bodies — type-as-value checks apply inside
             // IIFE-style `(function() { new ForwardLibType; })` patterns.
             is FunctionExpression -> {
-                val innerTypeOnly = typeOnlyNames.toMutableSet()
-                val innerValues = valueNames.toMutableSet()
+                val innerTypeOnly = HashSet(typeOnlyNames)
+                val innerValues = HashSet(valueNames)
                 for (p in expr.parameters) {
                     addParamBindingNamesToValues(p.name, innerTypeOnly, innerValues)
                 }
@@ -46327,8 +46327,8 @@ interface DataView {
                 checkTypeAsValueInStatements(expr.body.statements, source, fileName, innerTypeOnly, innerValues, namespaceOnlyNames)
             }
             is ArrowFunction -> {
-                val innerTypeOnly = typeOnlyNames.toMutableSet()
-                val innerValues = valueNames.toMutableSet()
+                val innerTypeOnly = HashSet(typeOnlyNames)
+                val innerValues = HashSet(valueNames)
                 for (p in expr.parameters) {
                     addParamBindingNamesToValues(p.name, innerTypeOnly, innerValues)
                 }
@@ -46359,8 +46359,8 @@ interface DataView {
                         (prop.name as? ComputedPropertyName)?.let {
                             checkTypeAsValueInExpr(it.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
                         }
-                        val innerTypeOnly = typeOnlyNames.toMutableSet()
-                        val innerValues = valueNames.toMutableSet()
+                        val innerTypeOnly = HashSet(typeOnlyNames)
+                        val innerValues = HashSet(valueNames)
                         for (p in prop.parameters) {
                             addParamBindingNamesToValues(p.name, innerTypeOnly, innerValues)
                         }
