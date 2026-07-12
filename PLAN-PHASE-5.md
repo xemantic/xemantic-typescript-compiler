@@ -39,6 +39,56 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
+**Round 488 (2026-07-12) — M5.1/M5.2: three byte-identical hot-path allocation /
+map-lookup reductions from a fresh JFR (~2.1% wall-clock).** Mandatory fresh
+compiler-profile JFR (26.4 s / 2,014 samples, post-487): with the scope-name-set
+copy family cleared, the top self-time was `HashMap.getNode` (5.5%, scattered across
+resolveFlowCalleeDecl/aliasedConditionInitializer/getTypeOfSymbol/getTypeOfIdentifier/
+isOptionalProperty), `checkMemberAccessMissing` (5.3% self / 7.0% incl — the top
+walker), then the HashMap/HashSet put/copy family (`putVal` 3.3%, `putMapEntries` 2.4%,
+`HashSet.add` 4.1% incl). Three commits, each byte-identical (compiler-profile 46
+diagnostics, `--listAll` diff empty vs a stash-built BEFORE binary):
+- **Fix 1 — `getUnionType` tiny-input fast paths** (`6258836b`): the general path
+  allocates 4 intermediate lists + 1 HashSet per call; the dominant inputs are size-1
+  and size-2 (the pervasive `T | undefined`, `??` results, nullable narrowing). Added
+  size-1 / size-2 fast paths that skip flatten/filter/dedup/sort when no member is a
+  nested union — preserving the stable sort-by-flags-value, never filtering, any
+  absorption, and id dedup exactly. +4 local `GetUnionTypeFastPathTest` (observable via
+  inferred array-element unions — the target side of a mismatch renders annotations
+  syntactically, bypassing getUnionType).
+- **Fix 2 — `isOptionalProperty` reorder** (`3329561c`): tested the declaration-less
+  tuple-member side set (`optionalTupleMemberIds`) FIRST on every call. Only
+  `buildTupleFromTypes`' synthetic declaration-less symbols are ever in that set and
+  their globally-unique ids can never collide with a declared symbol's, so check the
+  declaration path first (the overwhelming majority) and hit the set only for a
+  declaration-less symbol. +3 local `IsOptionalPropertyReorderTest` (both branches +
+  negative). **INVARIANT for future agents: never add a declaration-BEARING symbol's id
+  to `optionalTupleMemberIds` — the reorder assumes the set holds only declaration-less
+  tuple members.**
+- **Fix 3 — single-lookup flow-callee cache** (`3329561c`, same commit): `resolveFlowCalleeDecl`
+  did `containsKey(key)` then `[key]` (two lookups per cached hit); resolved callees are
+  usually non-null, so a single `get()` covers the common path, falling back to
+  `containsKey` only to disambiguate a legitimately-cached null. Mirrors round 483's
+  resolveModuleSpecifier single-lookup.
+- **Verification:** all byte-identical (46-diagnostic `--listAll` diff empty); full corpus
+  suite green 10,180 → 10,187 (+7 local across 2 test files, 0 regressions). Clean
+  same-machine wall-clock A/B (daemon stopped, `pkill KotlinCompile[D]aemon`, 4.7 GB free,
+  3 runs each, self-reported `time:`): BEFORE (round 487 fd4769c2) median 25.70 s vs AFTER
+  (this session) 25.17 s ≈ **2.1%** (best-case 24.90 vs 25.70 ≈ 3.1%), consistent across
+  runs. A modest real win from cutting per-call allocations + map lookups on the
+  property-access / flow-narrowing / union-construction hot paths.
+- **NEXT M5 lead (unchanged):** `checkMemberAccessMissing` (5.3% self / 7.0% incl) remains
+  the top single WALKER — it runs for EVERY property access and does heavy eager narrowing/
+  type-resolution work (getTypeOfExpression + getNarrowedTypeForReference + checkTypeRelatedTo
+  in several suppression blocks) BEFORE determining whether the member is even missing.
+  A common-case early-out (member present on the receiver's apparent type → return before
+  the flow-suppression blocks) is the biggest remaining lever, but it's a 700+-line
+  correctness-critical function — attempt with the `--listAll` byte gate + full suite, and
+  decompose carefully. Also standing: the `checkFunctionBody` per-body scope-map copies
+  (`putMapEntries`, ~15 samples — currentLocalTypes/currentLocalDeclTypeNodes/currentShadowedNames
+  copied O(scope size) at every nested function; a layered/copy-on-write redesign like
+  ScopeNameSet would eliminate it but touches many read/write sites).
+
 **Round 487 (2026-07-12) — M5.1/M5.2: eliminate the scope-name-set COPY in the
 type-as-value + expando walkers (two byte-identical commits, ~2.1% wall-clock).**
 Commits `c580231a` (type-as-value) + `250be2a7` (expando). A mandatory fresh
