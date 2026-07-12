@@ -151,4 +151,50 @@ class ScopeNameSetLayeringTest {
             have(none { it.code == 2693 })
         }
     }
+
+    // --- expando walker (`shadowed`) — round 487 replaced its per-nested-function
+    // `HashSet(parent)` copy with a parent-CHAIN `ChainedNameSet` (no copy; membership
+    // walks the chain). These pin the chain's membership + isolation invariants.
+
+    @Test
+    fun `an outer expando shadow suppresses TS2339 at a deeper nested read via the chain`() {
+        // `make` is an expando candidate. `outer`'s parameter `make` shadows it; the
+        // chain must carry that shadow down into `deep` so `make.missing` there reads
+        // the parameter, not the candidate — no TS2339. A dropped chain link re-fires.
+        diagnose(
+            """
+            function make() {}
+            make.count = 0;
+            function outer(make: any) {
+                function deep() {
+                    make.missing;
+                }
+            }
+            """.trimIndent()
+        ) should {
+            have(none { it.code == 2339 })
+        }
+    }
+
+    @Test
+    fun `an expando shadow in one nested function does not leak into a sibling`() {
+        // `a`'s parameter `make: any` shadows the candidate inside `a` (no TS2339
+        // there, and `any.missing` raises no real property error either), but `b` — a
+        // sibling with no such shadow — must still fire the expando TS2339 on its own
+        // `make.missing`. A shared/aliased chain layer would leak `a`'s shadow into `b`.
+        diagnose(
+            """
+            function make() {}
+            make.count = 0;
+            function a(make: any) {
+                make.missing;
+            }
+            function b() {
+                make.missing;
+            }
+            """.trimIndent()
+        ) should {
+            have(count { it.code == 2339 && "'missing'" in it.message } == 1)
+        }
+    }
 }

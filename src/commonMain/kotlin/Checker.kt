@@ -20870,7 +20870,7 @@ class Checker(
             for (stmt in sf.statements) collectExpandoDecls(stmt, candidates, declared)
             val source = sf.text
             for (stmt in sf.statements) {
-                visitExpandoStmt(stmt, false, candidates, declared, HashSet(), source, fileName)
+                visitExpandoStmt(stmt, false, candidates, declared, ChainedNameSet.EMPTY, source, fileName)
             }
         }
     }
@@ -20955,7 +20955,7 @@ class Checker(
     }
 
     /** Collect parameter + top-level-body local names that would shadow a candidate inside a function-like. */
-    private fun collectExpandoFnLocals(params: List<Parameter>, body: Node?): Set<String> {
+    private fun collectExpandoFnLocals(params: List<Parameter>, body: Node?): MutableSet<String> {
         val s = HashSet<String>()
         for (p in params) (p.name as? Identifier)?.text?.let { s.add(it) }
         val stmts = (body as? Block)?.statements ?: return s
@@ -20968,8 +20968,31 @@ class Checker(
         return s
     }
 
+    /**
+     * Read-only parent-chain name set for the expando (TS2339) walker's `shadowed`
+     * set. The base is empty and each nested function contributes only its own locals,
+     * so [child] links a new layer WITHOUT copying the accumulated ancestors (round
+     * 487 — the former `HashSet(parent)` copies were the walker's whole set-allocation
+     * cost, ~1% of compiler-profile samples). Membership walks the chain; the walker
+     * consults it only for a property access whose receiver is a top-level expando
+     * candidate (rare), so the walk cost is negligible while the per-nested-function
+     * copy is eliminated entirely.
+     */
+    private class ChainedNameSet private constructor(
+        private val own: Set<String>,
+        private val parent: ChainedNameSet?,
+    ) {
+        operator fun contains(name: String): Boolean {
+            var c: ChainedNameSet? = this
+            while (c != null) { if (name in c.own) return true; c = c.parent }
+            return false
+        }
+        fun child(own: Set<String>): ChainedNameSet = ChainedNameSet(own, this)
+        companion object { val EMPTY = ChainedNameSet(emptySet(), null) }
+    }
+
     /** Pass 2: emit TS2339 for nested-function accesses of undeclared expando props. */
-    private fun visitExpandoStmt(s: Statement?, inNestedFn: Boolean, cands: Set<String>, declared: Map<String, HashSet<String>>, shadowed: Set<String>, source: String, fileName: String) {
+    private fun visitExpandoStmt(s: Statement?, inNestedFn: Boolean, cands: Set<String>, declared: Map<String, HashSet<String>>, shadowed: ChainedNameSet, source: String, fileName: String) {
         when (s) {
             null -> {}
             is ExpressionStatement -> visitExpandoExpr(s.expression, inNestedFn, cands, declared, shadowed, source, fileName)
@@ -21001,7 +21024,7 @@ class Checker(
             }
             is LabeledStatement -> visitExpandoStmt(s.statement, inNestedFn, cands, declared, shadowed, source, fileName)
             is FunctionDeclaration -> {
-                val inner = HashSet(shadowed).also { it.addAll(collectExpandoFnLocals(s.parameters, s.body)) }
+                val inner = shadowed.child(collectExpandoFnLocals(s.parameters, s.body))
                 s.parameters.forEach { visitExpandoExpr(it.initializer, true, cands, declared, inner, source, fileName) }
                 s.body?.statements?.forEach { visitExpandoStmt(it, true, cands, declared, inner, source, fileName) }
             }
@@ -21009,7 +21032,7 @@ class Checker(
         }
     }
 
-    private fun visitExpandoExpr(e: Expression?, inNestedFn: Boolean, cands: Set<String>, declared: Map<String, HashSet<String>>, shadowed: Set<String>, source: String, fileName: String) {
+    private fun visitExpandoExpr(e: Expression?, inNestedFn: Boolean, cands: Set<String>, declared: Map<String, HashSet<String>>, shadowed: ChainedNameSet, source: String, fileName: String) {
         when (e) {
             null -> {}
             is PropertyAccessExpression -> {
@@ -21049,12 +21072,12 @@ class Checker(
             is YieldExpression -> visitExpandoExpr(e.expression, inNestedFn, cands, declared, shadowed, source, fileName)
             is AwaitExpression -> visitExpandoExpr(e.expression, inNestedFn, cands, declared, shadowed, source, fileName)
             is FunctionExpression -> {
-                val inner = HashSet(shadowed).also { s -> s.addAll(collectExpandoFnLocals(e.parameters, e.body)); e.name?.text?.let { s.add(it) } }
+                val inner = shadowed.child(collectExpandoFnLocals(e.parameters, e.body).also { own -> e.name?.text?.let { own.add(it) } })
                 e.parameters.forEach { visitExpandoExpr(it.initializer, true, cands, declared, inner, source, fileName) }
                 e.body.statements.forEach { visitExpandoStmt(it, true, cands, declared, inner, source, fileName) }
             }
             is ArrowFunction -> {
-                val inner = HashSet(shadowed).also { it.addAll(collectExpandoFnLocals(e.parameters, e.body)) }
+                val inner = shadowed.child(collectExpandoFnLocals(e.parameters, e.body))
                 e.parameters.forEach { visitExpandoExpr(it.initializer, true, cands, declared, inner, source, fileName) }
                 when (val b = e.body) {
                     is Block -> b.statements.forEach { visitExpandoStmt(it, true, cands, declared, inner, source, fileName) }
