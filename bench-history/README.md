@@ -4,6 +4,7 @@ Three-way compile bench — **xtsc** vs the reference JS **tsc** vs the native *
 
 | Date | xtsc rev | xtsc | tsc | tsgo | xtsc/tsc | xtsc/tsgo | xtsc err | Run |
 |---|---|---:|---:|---:|---:|---:|---:|---|
+| 2026-07-12 | [`8068025990b4`](https://github.com/xemantic/xemantic-typescript-compiler/commit/8068025990b42b0ddbfd3a7b356d5c57bdea18cd) | 25.06s | 11.20s | 2.14s | 2.2× | 11.7× | 47 | [report](runs/20260712T184500Z-8068025990b4.md) |
 | 2026-07-12 | [`f4b60e346e52`](https://github.com/xemantic/xemantic-typescript-compiler/commit/f4b60e346e52170f09876e2c608d63ebe94088b9) | 27.98s | 13.73s | 2.51s | 2.0× | 11.1× | 47 | [report](runs/20260712T183322Z-f4b60e346e52.md) |
 | 2026-07-12 | [`4f32ae651309`](https://github.com/xemantic/xemantic-typescript-compiler/commit/4f32ae65130951b07091d869e3a94e94756e134c) | 31.01s | 13.58s | 2.44s | 2.3× | 12.7× | 47 | [report](runs/20260712T174308Z-4f32ae651309.md) |
 | 2026-07-12 | [`b152ff68d5e6`](https://github.com/xemantic/xemantic-typescript-compiler/commit/b152ff68d5e69371dafdcd9c00f1c86afb46b802) | 32.49s | 14.21s | 2.55s | 2.3× | 12.8× | 47 | [report](runs/20260712T172656Z-b152ff68d5e6.md) |
