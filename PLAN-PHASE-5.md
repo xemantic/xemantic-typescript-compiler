@@ -39,6 +39,59 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
+**Round 487 (2026-07-12) — M5.1/M5.2: eliminate the scope-name-set COPY in the
+type-as-value + expando walkers (two byte-identical commits, ~2.1% wall-clock).**
+Commits `c580231a` (type-as-value) + `250be2a7` (expando). A mandatory fresh
+compiler-profile JFR (26.8 s / 2,044 samples, post-486 flat profile) put the
+type-as-value (TS2693/TS2708) + expando (TS2339) walker family at the TOP of the
+remaining allocation churn — `--callers-of HashSet.<init>` and `AbstractCollection.addAll`
+both → `checkTypeAsValueInStatement` (38) / `checkTypeAsValueInStatements` (27-28) /
+`visitExpandoStmt` (21) / `checkTypeAsValueInExpr` (8); `--callers-of HashMap.put` the
+same four (61 of 232 samples ≈ 26%). Root cause: round 486 converted these copies from
+LinkedHashSet to HashSet (removed `afterNodeInsertion`) but the COPY itself remained —
+each nested function/class/method copies the enclosing scope's file-level name sets via
+`HashSet(parent)`, and on tsc's own checker.ts (one `createTypeChecker`, hundreds of
+nested functions, a ~1000-name file-level `typeOnlyNames`) that is quadratic copying.
+- **Fix 1 (type-as-value):** a two-level `ScopeNameSet` — a shared, never-copied
+  file-level BASE plus a small per-scope OVERLAY that `child()` copies alone. Membership
+  is `base∪overlay` (depth-independent, ≤2 lookups; `if (overlay.isEmpty()) name in base`
+  fast path for the common file-level case), NOT a parent-chain walk. Two facts the walker
+  already had make this exact: every type-only / namespace-only read is value-gated
+  (`name !in valueNames && name in typeOnlyNames` — enumerated all 6 read sites) and every
+  scope grows the sets purely additively inward, so the former per-scope `remove` (a param
+  or namespace self-name shadowing an outer type name) is subsumed by the value overlay —
+  the structure is add / contains only. `addParamBindingNamesToValues` (add-and-remove) is
+  replaced by a generic `forEachParamBindingName(name) { … }` visitor used by both the
+  plain-set hoisting collector and the scope-set callers.
+- **Fix 2 (expando):** the expando `shadowed` set is DIFFERENT — its base is EMPTY and it
+  only accumulates each nested function's own locals, and it is read RARELY (only for a
+  property access whose receiver is a top-level expando candidate). So a base+overlay does
+  not help (the whole set is overlay → `child()` still copies it); a parent CHAIN does:
+  `ChainedNameSet.child(locals)` links a new layer WITHOUT copying the ancestors, and
+  `contains` walks the chain (cheap given the rare checks). `collectExpandoFnLocals` now
+  returns `MutableSet` so the FunctionExpression case can add its own name to the fresh
+  layer. `ChainedNameSet.EMPTY` (companion val — not an instance field, so the init-order
+  gotcha does not apply) seeds the top-level walk.
+- **Verification:** BOTH commits byte-identical (compiler-profile 46 diagnostics,
+  per-position `--listAll` diff empty vs a stash-built BEFORE binary). Full corpus suite
+  green 10,173 → 10,180 (+7 local `ScopeNameSetLayeringTest`). Clean same-machine
+  wall-clock A/B (daemon stopped, `pkill KotlinCompile[D]aemon`, ≥5 GB free, 3 runs each,
+  self-reported `time:`; commit 1): BEFORE (HashSet copy) median 26.23 s vs AFTER
+  (ScopeNameSet) 25.67 s — ~2.1% (best-case 26.17 → 25.37 = 3.0%). A REAL wall-clock win,
+  unlike round 486's neutral LinkedHashSet swap, because the COPY is eliminated (not just
+  its per-element overhead). Commit 2 (expando) is a ~1% allocation contributor → sub-noise
+  wall-clock, reported as allocation discipline. AFTER JFR (both commits): the whole family
+  is gone from the top self-time — `checkTypeAsValueInStatement` (was 5.1% self, #2) and
+  `LinkedHashMap.afterNodeInsertion` (2.3%) no longer in the top-16; `HashMap.put` 3.7% →
+  2.4%; run wall 26.8 → 25.9 s. Recordings `$SCRATCH/r487-compiler.jfr` (before) +
+  `$SCRATCH/r487-after.jfr` (after), session-local.
+- **NEXT M5 lead (fresh JFR):** with the set-copy family cleared, the top self-time is now
+  `HashMap.getNode` (5.5% — scattered: `aliasedConditionInitializer` / `isOptionalProperty`
+  / `getTypeFromTypeNode` / `getTypeOfIdentifier`) and `checkMemberAccessMissing` (4.6%
+  self / 6.3% incl, the top WALKER, under `checkSinglePropertyAccess` →
+  `checkPropertyAccessInExpr` 8.4% incl). Audit `checkMemberAccessMissing`'s per-access
+  work for a real wall-clock lever (the round-486 NEXT, still standing).
+
 **Round 486 (2026-07-12) — M5.1/M5.2 allocation discipline: HashSet for per-scope
 name-set copies in the type-as-value + expando walkers (byte-identical).** Commit
 `9ec344e6`. A fresh compiler-profile JFR (28 s / 2,097 samples, post-483 flat profile)
@@ -456,283 +509,6 @@ files, 0 regressions).**
   fourslash 829/839 (`.definitions` on a union), 1946 (`string | Range`), 4045 (`Refactor
   .actions`); incrementalUtils TS18048 ×2; editorServices 1461 TS2774 (`this.host.realpath`
   optional-method truthiness) + 3212.**
-
-**Round 477 (2026-07-11 — SERVER REACHES ZERO REAL FPs, SEVEN of eight profiles) — FIVE
-fixes, server 51 → 46 (real FPs 5 → 0; the remaining 46 = TS2591×43 + TS2304×2 `global` +
-TS2584 console, all env-legit offline artifacts). All five residuals were CONFLATION-family
-(Blocker #3) on server/protocol.ts vs compiler/jsTyping declarations.**
-- **Fix A (utilities:7827 TS2366):** a same-named `const enum NewLineKind` in protocol.ts
-  (Crlf/Lf) AND compiler types.ts (CarriageReturnLineFeed/LineFeed) merges into a 4-member
-  chimera, so the switch covering the complete compiler pair read non-exhaustive. THREE
-  coupled pieces: `conflatedEnumFileSubsets` (per-file member-name sets keyed by the merged
-  symbol id) relaxes the exhaustiveness comparison (`coveredExhaustsConflatedEnumSubset` —
-  covering ONE file's complete member set is exhaustive; real tsc never merges module-scoped
-  enums); `unionDiscriminantKeysFromAnnotation` — the AST-side fallback when the union
-  members are ALSO alias-shadowed (protocol's `type CompilerOptions = ChangePropertyTypes<…>`
-  shadows the interface via last-wins → the resolved member is any/error and the
-  resolved-type walk bails), resolving each member via `interfaceDeclsForCurrentFileView`
-  (own decl, else the import followed through `.js` barrels); and `checkImplicitReturns` now
-  sets `currentCheckFileName` per file — it was STALE from whatever pass ran before, so
-  conflation-aware resolution in that pass silently used the wrong file.
-- **Fix B (editorServices:1253 TS2353→TS2345):** four pieces: `annotationAgrees` (the
-  topLevelConstStringValues builder) accepts a namespace-import-QUALIFIED alias annotation
-  (`const CloseFileWatcherEvent: protocol.CloseFileWatcherEventName = "closeFileWatcher"` was
-  POISONED out of the index); `enumMemberKeysOfTypeNode`'s QualifiedName arm falls back to
-  `resolveNamespaceQualifiedTypeAlias` so `eventName: protocol.XEventName` member annotations
-  yield `lit:s:` keys; `checkExcessProperties`' UNION nested descent drills the
-  DISCRIMINANT-matched constituent (tsc getMatchingUnionConstituentForObjectLiteral — was
-  first-with-the-prop, so `data: { id }` checked against LargeFileReferencedEvent's data);
-  the then-morphed missing-props TS2345 (the chimera demands protocol's `event`/`body`)
-  needed the round-468 `objectLiteralMatchesSomeConflatedDeclaration` rule in the union-arg
-  structural gate.
-- **Fix C (session:475 TS2322):** a QUALIFIED `ns.Name` naming an interface SHADOWED by a
-  same-named `type Name` alias in a DIFFERENT module file (session's own `type Event` vs
-  protocol's `interface Event`) resolves through the namespace import to the target module's
-  per-file view (`conflatedPerFileInterfaceType` gains a filesOverride param fed by
-  `interfaceDeclFilesAll`; QUALIFIED-only so bare refs keep the round-443/444 ecology).
-  PAIRED with the `isConflatedInterfaceRefNode` QualifiedName-arm extension (nodeTypes bypass
-  — a null-context first touch would cache the alias resolution) and a precise-verdict early
-  return in checkReturnAssignability (`qualifiedAliasShadowedTarget` + engine-confirmed
-  fresh-literal pass — the STRING fallback re-resolves "Event" by bare name to the shadowing
-  alias and re-FP'd; the round-436c trap).
-- **Fix D (session:3994 TS2322):** `objectLiteralSpreadsConflatedInterface` — an objlit
-  SPREADING a conflated-interface-typed value is unknowable (the spread source's fn-return
-  shell cached the chimera eagerly, B198; `{ ...textSpan, contextStart, contextEnd }` mixed
-  compiler's `{start: number, length}` into protocol's `{start: Location, end}`); wired at
-  the ternary-arm + direct-return paths. Suppression-only.
-- **Fix E (typingInstallerAdapter:233 TS2345):** the round-476 "B516 never-param / callee
-  union" theory was WRONG — the Diagnostic-init probe showed the emission is the DEFAULT
-  clause's `assertType<never>(response)` (line 233 IS the default clause): the
-  default-exhaustiveness never fired because EVERY member's `kind: ActionSet`-style
-  annotation read null — the CHECKING file only IMPORTS the merged const+type-alias names,
-  so `currentFileLocals["ActionSet"]` is an IMPORT alias whose declarations are
-  ImportSpecifiers and the bare-alias arm of enumMemberKeysOfTypeNode bailed.
-  Fall to the merged GLOBALS symbol's TypeAliasDeclaration (mergeSymbolTable's addAll keeps
-  the declaring file's alias in the polluted list).
-- **Process:** the round-472 probe technique earned its keep twice (the XP233B stack
-  falsified round 476's theory in one run; XP233C found the null keys in one more); one
-  self-inflicted incident — a `--rerun-tasks` warnings check launched DURING the chain's
-  MainKt run clobbered its classes (the documented NoClassDefFoundError gotcha), costing one
-  re-run.
-- **NEXT: harness (@225 last measured) — the LAST profile for v1.**
-
-**Round 476 (2026-07-11, same session as 475) — TWO more server fixes in 2 commits
-(b4bbf29c / 2e568f9e). Dashboard: server 54 → 51 (real FPs 8 → 5). Suite 10,075 → 10,078
-(+3 local, 0 regressions).**
-- **Fix 1 (b4bbf29c, jsTyping SafeList ×2):** the round-474 probe verdict resolved in one
-  println probe — `globals["ReadonlyMap"]` is NULL (a KNOWN_GLOBALS name with NO modeled
-  interface), so jsTyping's `type SafeList = ReadonlyMap<string, string>` body resolves
-  errorType. `returnSourceSatisfiesFileLocalAliasBody` treats an UNRESOLVABLE file-local
-  alias body as UNKNOWABLE and suppresses (the resolved target is the known-wrong merged
-  chimera; FN-not-FP — only reached in the conflation context, and a resolvable failing
-  body still fires per the negative pin). The PROPER fix (model ReadonlyMap in the
-  embedded lib) is a lib change with the "and N more" count-shift trap — deferred.
-- **Fix 2 (2e568f9e, typingInstallerAdapter:224):** `overloadNarrowedArgType`'s union path
-  retries with `getNarrowedTypeForReferenceFollowLoopEntry` when the plain walk washed
-  back to the declared union at a FlowLoopLabel (STRUCTURAL wash gate — branch labels
-  mint fresh identical unions, the round-424 lesson). The ActionSet case reads `response`
-  AFTER its requestQueue while-loop, so the switch-case narrowing was lost and both
-  updateTypingsForProject overloads FP-rejected. Un-narrowed union args vs a narrower
-  single overload turn out to be a PRE-EXISTING conservative FN (couldn't pin a small
-  negative control — the dashboard diff is the both-directions evidence).
-- **NEXT (server @ 51, 5 real):** compiler/utilities:7827 TS2366 (minimal union-param
-  switch repro is CLEAN — the real site's barrel-imported CompilerOptions/PrinterOptions
-  or cross-file NewLineKind differ; probe); editorServices:1253 TS2353 + session:475
-  TS2322 (both repro clean minimally — the real sites involve protocol.ts's same-named
-  conflated event/Event interfaces; probe the emission with the Diagnostic-init trick);
-  session:3994 (TextSpan chimera-spread, known deep); typingInstallerAdapter:233 (the
-  callee resolves to a UNION of Project's and ProjectService's watchTypingLocations →
-  B516 combined sig intersects params to `never` — probe how `this.projectService`
-  resolves). Then harness (@225 — TS2339×66/TS2322×16/TS7006×15).**
-
-**Round 475 (2026-07-11, the SERVER burn-down continues) — FIFTEEN fixes in 3 commits
-(f1e2589a / 258aae3d / ccc33547). Dashboard: server 77 → 54 (−23; real FPs 31 → 8 excl.
-TS2591×43 + TS2304×2 `global` + TS2584), harness 255 → 225 (−30 riding, TSV rows recorded),
-services re-verified UNCHANGED at its 46 env-legit floor. Suite 10,045 → 10,075 (+30 local
-across 5 new test files, 0 regressions).**
-- **Fix batch 1 (f1e2589a, the completions `Request` family ×8, Blocker #3):** the round-474
-  "needs a probe first" verdict DISSOLVED into a minimal 2-file repro (protocol `interface
-  Request` + completions-local `type Request = <union of inline type literals>`) — no probe
-  needed. Three coupled extensions: `returnSourceSatisfiesFileLocalAliasBody` iterates EVERY
-  union member of the return annotation (was sole-non-nullish); TypeLiteral alias-body
-  constituents check via the new `objectLiteralExactlySatisfiesTypeLiteralNode`; and
-  checkMemberAccessMissing's union branch suppresses when a MULTI-member receiver union
-  contains an own-file conflated alias member (the chimera makes discriminant narrowing
-  unmodelable) and the property exists on some member/alias constituent.
-- **Fix batch 2 (258aae3d, nine families):** arg-path spread-of-any (session:1469);
-  `registerBindingPatternParamLocals` — binding-pattern params register element names in the
-  assignability pass with annotation member types (optional → `| undefined`), closing the
-  destructured-SHORTHAND cross-file fn leak (editorServices:2852 `enable`, session:4063
-  `isWriteAccess` — the round-473 residual); `getReturnTypeOfNewExpression`'s
-  constructor-interface branch gated to NON-class callees (class instances DO carry
-  constructSignatures inherited-first, so `new ConfiguredProject(...)` typed as `Project` —
-  project:2764, editorServices:2897/3428); `A && B` = falsy(A) | B via isDefinitelyFalsyMember
-  (root-caused from the 2 builder.ts FPs the binding-pattern fix unmasked — `let oldState =
-  oldProgram && oldProgram.state` had dropped `| undefined`); TS2391 optional bodyless methods;
-  TS2416 mutable literal-override widening; TS2564 ctor switch clauses; property-init
-  foreign-TP bail (maybeBind, project:564); rhsIsDefinitelyNonNullish returns true for a
-  NonNullExpression RHS outright (project:1694 — the unwrap-and-descend classified by the
-  INNER call's nullable annotation).
-- **Fix batch 3 (ccc33547, four families):** `<literal-union> || "literal"` keeps the right
-  literal when the kept left is all string-literals (editorServices:2848);
-  resolveMemberPropertyType UNION-root arm — `(A|B).p = A.p | B.p` (union-annotated param
-  member switch; repro clean, the REAL utilities:7827 stays — barrel-imported interfaces need
-  a probe); REST-param targets provide unbounded args (server/utilities:30);
-  conflatedInterfaceFiles extended to cross-file CLASS X + `interface X` merges (canMerge
-  Class+Interface makes it a chimera — scriptVersionCache's `class TextChange`) + the
-  round-468 ARG-side objectLiteralMatchesSomeConflatedDeclaration rule wired into the RETURN
-  path (services/utilities:2353).
-- **Also landed (repro-verified, real site deferred):** const-string discriminant keys in the
-  objlit-vs-union member selection (enumMemberKeysOfTypeNode TypeQuery arm +
-  bare-Identifier const value arm) — the minimal eventName repro passes; the real
-  editorServices:1253 additionally involves protocol.ts's same-named conflated event
-  interfaces.
-- **Process notes:** (a) the round-474 probe-first verdicts keep dissolving into minimal
-  repros — ALWAYS try the 2-file repro before instrumenting; (b) one interim regression
-  (2 builder.ts FPs from the binding-pattern registration) was caught by the per-step listAll
-  diff and root-caused to the missing `&&` falsy rule IN the same batch — the diff-per-step
-  discipline pays; (c) a `java` CLI run during a background gradle compile dies SILENTLY
-  (classes clobbered mid-load) — sequence them.
-- **NEXT (server @ 54, 8 real):** compiler/utilities:7827 TS2366 (probe — the minimal
-  union-param switch repro is clean; barrel-imported CompilerOptions/PrinterOptions or the
-  cross-file enum differ); jsTyping:81/88 SafeList ×2 (probe — why the alias body
-  `ReadonlyMap<string, string>` resolves errorType at the call site; suspect the structural
-  nodeTypes collision); editorServices:1253 (conflated event interfaces + const-string
-  discriminant interplay); session:475 (repro clean — real site involves the protocol
-  namespace-qualified conflated `Event`... probe) + session:3994 (chimera-spread, known);
-  typingInstallerAdapter:224 (case-body read AFTER a while loop — suspect the FlowLoopLabel
-  wash) + :233 (callee resolved to a UNION of the two watchTypingLocations methods → B516
-  intersected param `never` — probe the callee resolution). Then harness (@225 —
-  TS2339×66/TS2322×16/TS7006×15 on harness-only files).**
-
-**Round 474 (2026-07-11, the SERVER burn-down continues) — EIGHT fixes in 4 commits
-(8c65858a / dc105f56 / 5134ea7c / + the literal-write commit). Dashboard: server 104 → 77 (−27;
-real FPs 58 → 31 excl. TS2591×43 + TS2304×2 `global` + TS2584), harness 299 → 255 (−44 riding
-the same fixes, TSV rows recorded), every step strictly-removals by listAll diff at the ~46 s
-normal band. Suite 10,024 → 10,045 (+21 local across 8 new test files, 0 regressions).**
-- **Fix 1 (extractSymbol.ts ×7 + goToDefinition, Blocker #3):** a type-alias BODY referencing a
-  CONFLATED interface name resolves in its DECLARING file's view
-  (`resolveTypeAliasBodyWithOwnerContext`, identity-matched via localTypeAliasIndex) + the
-  `isConflatedInterfaceRefNode` TypeOperator arm (`readonly Diagnostic[]` cached a
-  chimera-element resolution in nodeTypes — plain `Diagnostic[]` worked, the readonly wrapper
-  didn't: the missing-arm tell). **MEASURED DEAD-END folded into the gate: UNRESTRICTED owner
-  threading regressed +41 server FPs and 3.4× wall (104 → 145, 48 → 164 s) — an owner file that
-  itself DECLARES one of the referenced conflated interfaces (importTracker's own
-  `interface AmbientModuleDeclaration` inside its leaked `type SourceFileLike` union) must keep
-  the merged-chimera status quo; the round-443 display-keyed suppression ecology depends on it.**
-- **Fix 2 (executeCommandLine.ts ×4, Blocker #3):** an imported CALLEE colliding with an
-  unrelated same-named exported function (`formatMessage` compiler vs server/session) resolves
-  through its OWN identity-matched import + `export *` chain (`importedCalleeFunctionType`, the
-  fn sibling of round 473's `importedTopLevelVarAnnotationType`); gated to a genuine collision
-  (globals valueDeclaration ∉ the import target's own decls) so non-collision paths stay
-  byte-identical. Negative pin: a wrong arg against the CORRECT signature still fires.
-- **Fix 3 (rules.ts ×5):** `keyof X` where a `type X` SHADOWED the `interface X` via the
-  last-wins Interface+TypeAlias merge (protocol.ts's `ChangePropertyTypes<…>` aliases → anyType
-  → `keyof any` = `string | number | symbol`) recovers the literal key union AST-side
-  (`keyofShadowedInterfaceKeyUnion`, own + extends-inherited names; bails on index signatures /
-  unresolvable bases). The invalid-key positive control proves the union is real.
-- **Fix 4 (editorServices.ts ×4 TS7006):** a body local initialized from a `this.<method>(…)`
-  call types from the ENCLOSING class's own method return annotation (the implicit-any walker's
-  this-call arm — `getTypeOfExpression(this)` is anyType per B101), PAIRED with the
-  ctx-unknowable rule: a target member ANNOTATION naming a conflated alias-shadowed interface
-  (`sourceFileLike?: SourceFileLike`) marks the RHS contextually typed instead of propagating
-  the wrong resolution. The union-receiver gate needed explicit member resolution
-  (getPropertyOfType has NO Union branch — the round-419 gotcha, found by probe).
-- **Fix 5 (completions.ts:1251):** a return annotation naming a conflated `type X` THIS file
-  declares checks against the TRUE file-local alias BODY
-  (`returnSourceSatisfiesFileLocalAliasBody`). jsTyping:81/88 (the SafeList target) STAY: the
-  alias body `ReadonlyMap<string, string>` resolves errorType at this call site while ReadonlyMap
-  resolves fine program-wide — a resolution residual needing a probe.
-- **Fix 6 (session.ts 1827/1907/2424):** a ternary ARM spreading an any/error-typed value is
-  `any` in tsc — the round-445 spread-poison rule extended to checkConditionalReturnBranches.
-  session:3994 stays (its spread resolves to the conflated-TextSpan chimera, not any).
-- **Fix 7 (server/utilities.ts:83):** a POSITIVE equality against a literal narrows a BARE
-  supertype primitive to the literal (tsc narrowTypeByEquality) — narrowUnionByLiteral's
-  non-union branch returned the primitive unchanged, so `base === "tsconfig.json" || base ===
-  "jsconfig.json" ? base : undefined` FP'd `string` vs the literal-union return.
-- **Fix 8 (project.ts:2286):** a LITERAL property write whose literal the target's declared
-  union annotation SYNTACTICALLY contains is always legal (`this.autoImportProviderHost =
-  false` vs `AutoImportProviderProject | false | undefined`) — BOTH this-prop write paths
-  (the varTypes string path and checkPropertyAccessAssignment) widened the literal first;
-  both now consult the round-436c syntactic membership proof.
-- **MEASURED & REVERTED (the completions `Request` theory):** resolving a conflated name to the
-  ctx file's OWN top-level `type` alias inside conflatedPerFileInterfaceType cleared NOTHING
-  (the Request FPs come through a different path) and added 3 returnValueCorrect.ts
-  `'Info | undefined' ⊄ 'Info | undefined'` identity-mismatch FPs — the round-444/445 Info
-  first-touch ecology. The completions Request/CompletionData ×8 family needs a probe first.
-- **Session note:** the session was restored mid-flight (`--continue`) after the harness process
-  died; the suspected in-flight OOM was actually the perf regression of the then-unbisected
-  fix-1 (164 s run) — bisecting the two coupled edits found the TypeOperator arm clean and the
-  threading responsible for both the +41 and the slowdown.
-- **NEXT (server @ 77, 31 real):** completions Request/CompletionData ×8 (probe the emission
-  path first — the reverted theory shows it is NOT the bare-name TypeReference resolution);
-  session.ts residual (475 `protocol.Event` qualified conflated-alias, 3994 chimera-spread,
-  4063 shorthand leak, 1469); project.ts ×8 (399 TS2564, 470/471 TS2391, 564, 1694 TS18048,
-  2764 new-expr base, 2914 TS2416); editorServices residual ×5;
-  jsTyping SafeList ReadonlyMap-errorType probe; typingInstallerAdapter ×2; compiler/utilities
-  :7827 TS2366; services/utilities:2353. Then harness (last 299).**
-
-**Round 473 (2026-07-11, the SERVER burn-down — the three big conflation families) — THREE fixes
-in 2 commits (ad660db5 / ef8107f5). Dashboard: server 227 → 104 (−123; real FPs 181 → 58 excl.
-TS2591×43 + TS2304×2 `global` + TS2584), harness 429 → 299 (−130 riding the same fixes);
-services and compiler UNCHANGED at their env-legit floors (46 each — the zero-real profiles did
-not regress). Suite 10,013 → 10,024 (+11 local across 3 new test files, 0 regressions); server
-self-compile 43.6 → 48.6 s (+11% — the conflated-name nodeTypes bypass; acceptable, noted for M5).**
-- **Fix 1 (ad660db5a, const-string discriminants — session/typingInstallerAdapter/editorServices
-  ~35 FPs):** tsc's jsTyping/shared.ts idiom discriminates unions on CONST-typed strings
-  (`switch (response.kind) { case EventTypesRegistry: … }` + `eventName: typeof
-  ProjectsUpdatedInBackgroundEvent` members). FOUR coupled pieces: the Binder MERGES
-  Variable+TypeAlias (the `type ActionSet = "action::set"` + `const ActionSet: ActionSet`
-  same-name pair — the const previously OVERWROTE the alias symbol, so every `kind: ActionSet`
-  annotation resolved errorType and the narrowing filters kept every member); the NEW
-  program-wide `topLevelConstStringValues` index (unambiguous top-level const strings;
-  value-space competitors POISON, type-space aliases/interfaces don't compete) feeds
-  `constStringCaseLiteralType` in narrowBySwitchClause + the default-exhaustiveness block +
-  narrowByDiscriminantProperty; `typeQueryConstStringLiteral` recovers `typeof <const>` member
-  annotations that widened to string/any in both discriminant filters; and
-  checkMemberAccessMissing gained the SIBLING-discriminant suppression (`switch
-  (event.eventName)` narrows the BASE `event` and projects `.data` — the walked path
-  "event.data" is invisible to the FlowSwitchClause).
-- **Fix 2 (ad660db5b, per-import barrel VAR resolution — the `emptyArray` family, 29 FPs,
-  Blocker #3):** compiler files importing core.ts's `emptyArray: never[]` through
-  `./_namespaces/ts.js` resolved server/utilitiesPublic.ts's `emptyArray:
-  SortedReadonlyArray<never>` — the merged globals symbol's winner is FILE-ORDER-DEPENDENT.
-  `importedTopLevelVarAnnotationType` (getTypeOfSymbolWorker's Alias branch ONLY — the
-  round-409 resolveAlias-flood rationale stands) resolves the alias through its OWN
-  ImportDeclaration (IDENTITY-matched in the structural index — same-shaped specifiers live in
-  files whose barrels resolve DIFFERENTLY) + the new `computeExportedVarDeclThroughStars`
-  (FILE-AST star following — the merged symbol's declarations list is polluted, so symbol-side
-  resolution can't pick the right file's decl).
-- **Fix 3 (ef8107f5, per-file views of CONFLATED interfaces — the protocol.ts family, ~64 FPs,
-  Blocker #3):** `interface Diagnostic`/`TextSpan`/`HighlightSpan`/`Request` declared in BOTH
-  server/protocol.ts and compiler-or-services types.ts merge into a chimera. References now
-  resolve the per-file view their context selects (see the commit message + the CLAUDE.md
-  gotcha for the FIVE coupled pieces: conflatedPerFileInterfaceType with the
-  defer-to-general-resolver rule pinned by errorWithSameNameType; the transient-symbol
-  perFileInterfaceType; heritage context threading; the isConflatedInterfaceRefNode nodeTypes
-  bypass incl. COMPOSITE nodes; the conflatedCtxMissing no-cache flag + conflatedOwnerFile
-  member-annotation context; the conflatedMergedPairRelated relation/arg-emitter bails).
-  The round-468 `&&`-return arm now EMITS the falsy-remainder error directly (tsc types
-  `count && obj` as `0 | {…}`) — the chimera-era coarse path had reported it by accident
-  (the negative control was pinning an accidental mechanism).
-- **Lessons:** (a) the `nodeTypes` cache is keyed by the STRUCTURAL node — same-shaped
-  annotation nodes in DIFFERENT files collide, which the per-file resolution exposed (bypass
-  for conflated names, including composites: TypeLiteral members resolve EAGERLY in
-  getTypeFromTypeLiteral); (b) a Diagnostic-init probe on a 4-file repro beats armchair
-  resolution-tracing — three rounds of wrong valueDeclaration theories fell to one
-  `XPROBE-ID` print showing `globals=SortedReadonlyArray<never>`; (c) fn types cache their
-  shell EAGERLY (B198), so null-context param annotations stay chimeras — that's what the
-  relation-level conflatedMergedPairRelated bail is for.
-- **Residual (documented):** session.ts:4063 resurfaced with a different display — a
-  destructured-param SHORTHAND (`isWriteAccess`) leaking to a same-named cross-file function
-  in the return-objlit path (previously masked by spread-of-any); the round-429
-  currentParamBindingNames shadowing does not reach this pass's shorthand-value typing.
-- **NEXT (server @ 104, 58 real):** session.ts:4063 (the shorthand leak above); the remaining
-  session.ts objlit targets (Event/EmitOutput/QuickInfo/RefactorEditInfo — union-of-protocol
-  targets); completions.ts Request/CompletionData ×9; editorServices ×9; project.ts ×8;
-  rules.ts keyof ×5; executeCommandLine Logger ×4. Then harness (@ 299 — its own files +
-  TS2339×69/TS2345×37 tail).**
-
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
