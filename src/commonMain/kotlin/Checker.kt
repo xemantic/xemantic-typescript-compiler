@@ -1441,7 +1441,11 @@ class Checker(
      *  file with per-call string stripping. Negative results (null) are the hot case
      *  (ESM `.js` barrel specifiers, deliberately unresolvable) so they are cached via
      *  containsKey, not getOrPut. Declared before `init` per the init-order trap. */
-    private val moduleSpecifierCache = HashMap<String, String?>()
+    // Perf: values are non-null; [UNRESOLVED_MODULE_SPEC] sentinel encodes a computed
+    // null result so every lookup (incl. the hot unresolvable case) is a SINGLE map get
+    // instead of containsKey + get. Never a real filename (no ` ` in resolutions).
+    private val UNRESOLVED_MODULE_SPEC = " <unresolved-module-specifier>"
+    private val moduleSpecifierCache = HashMap<String, String>()
 
     /** Round 473 (M3.4, the tsc server profile's const-string discriminant family):
      *  program-wide UNAMBIGUOUS top-level `const X = "literal"` values, name → string.
@@ -6894,11 +6898,12 @@ class Checker(
      */
     private fun resolveModuleSpecifier(specifier: String, contextNode: Node? = null): String? {
         // Perf (round 432): pure function of the specifier ([fileResults]/[options] are
-        // fixed; contextNode is unused) — memoized incl. null results via containsKey
-        // (getOrPut would recompute the hot unresolvable-specifier case every call).
-        if (moduleSpecifierCache.containsKey(specifier)) return moduleSpecifierCache[specifier]
+        // fixed; contextNode is unused) — memoized incl. null results (round 432 note:
+        // getOrPut would recompute the hot unresolvable-specifier case every call).
+        // Single-lookup via the sentinel (round 435): null is the hot result.
+        moduleSpecifierCache[specifier]?.let { return if (it === UNRESOLVED_MODULE_SPEC) null else it }
         val result = computeModuleSpecifier(specifier)
-        moduleSpecifierCache[specifier] = result
+        moduleSpecifierCache[specifier] = result ?: UNRESOLVED_MODULE_SPEC
         return result
     }
 
@@ -96886,8 +96891,12 @@ interface DataView {
      * hazard — they keep the old consume-depth behavior).
      */
     private fun flowCallMightNarrow(node: CallExpression, name: String): Boolean =
-        node.arguments.any { argMentionsReferencePath(it, name) } &&
-            flowCalleeMayHaveAssertEffects(node)
+        // Perf: test the cheap, per-walk-MEMOIZED callee-effects predicate FIRST — a
+        // non-assert callee (the vast majority of flow calls) short-circuits and skips
+        // the O(arg-tree) [argMentionsReferencePath] scan entirely. `&&` is commutative
+        // for the result; both operands are side-effect-free (only idempotent memo fill).
+        flowCalleeMayHaveAssertEffects(node) &&
+            node.arguments.any { argMentionsReferencePath(it, name) }
 
     /**
      * Round 426b: could [narrowByAssertCall] possibly narrow through this call — i.e.
