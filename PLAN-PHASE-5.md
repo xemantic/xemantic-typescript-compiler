@@ -39,6 +39,52 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
+**Round 479 (2026-07-12 — the harness burn-down continues) — SEVENTEEN fixes across 3
+commits (0a5668b2 / 982431aa / 08cb0bab). Dashboard: harness 145 → 109 (−36; real ~14 left
+excl. env-legit + harnessGlobals×3 reclassified likely-env-legit); every step zero-additions
+by per-position listAll diff; all seven other profiles re-verified at 46. Suite 10,098 →
+10,132 (+34 local, 13 new/extended test files, 0 regressions); harness self −7.2% (TSV row).**
+- **Conflation family (the big one):** `conflatedPerFileInterfaceType`'s QualifiedName arm
+  gains (a) an ImportSpecifier branch — a namespace imported by NAME through a barrel
+  (`import { protocol } from "./_namespaces/ts.server.js"` → the star chain →
+  `export { protocol }` of an `import * as protocol` → its module → the interface's
+  declaring leaf; client.ts protocol.TextSpan/Location ×5) — and (b) the NamespaceImport
+  branch follows a BARREL target's `export *` chain to the leaf (`ts.ParseConfigHost`
+  through harness `_namespaces/ts.js` vs fakesHosts' `class ParseConfigHost` chimera;
+  cleared the ParseConfigHost/TS2740/TS2739/TS7053/Classification family ×5).
+- **Namespace-import aliases ARE namespaces:** checkTypeNameResolved bails TS2833/TS2702
+  for an `import * as X` alias (symbolIsNamespaceImportAlias) — a case-differing sibling
+  namespace manufactured "Did you mean 'Compiler'?" ×4; and an import-equals alias to a
+  ns-member (`export import parse = ts.getPathComponents`) resolves the CALLEE through its
+  own target (importEqualsNamespaceMemberCalleeType), never a same-named merged-globals fn.
+- **Module-scope isolation on cross-file merge walkers:** TS2433 (namespace-split) and
+  TS2475 (const-enum use) gate on isModuleFile — two module files' same-named decls never
+  merge in real tsc (namespace Debug vs class Debug; const enum State vs class State).
+- **Narrowing/CFA:** the narrowed-single-Object TS2339 emission bails on index signatures
+  (CompilerSettings ×3); a closure that is an ARGUMENT of a call rooted at `root?.` is
+  non-nullish inside (incrementalUtils ×2, closureGuardedByOptionalChainRoot); property-
+  access `.x!` strips nullish under the round-456 all-concrete gate (8-profile A/B clean —
+  the historical deferral's hazard is covered by the M3 machinery landed since).
+- **Smaller families:** ctor var-decl-nested `this.x =` assignments count for TS2564 (×3 +
+  chains); ANY-optional-decl member truthiness for TS2774 (the System class+interface
+  chimera pollutes isOptionalProperty's first-decl read); statement-position `yield x;`
+  draws no TS7057 (tsc expressionResultIsUnused); bare specifiers never resolve RELATIVE
+  under nodenext (TS1192 'path' → src/compiler/path.ts); for-of loop vars shadow in the
+  call-types walker (evaluatorImpl); extends+implements-same-class TS2720 skip (bare-args
+  gated — the ungated cut regressed extendAndImplementTheSameBaseType2, caught by the
+  suite); `new Function(...)()` is an untyped call (tsc isUntypedFunctionCall); method/ctor
+  bodies run applyBodyLocalShadowing in the property-access pass (the round-447 trap —
+  fourslash Refactor.actions ×4 via refactorProvider's leaked `const refactors` Map).
+- **REVERTED:** TS7006 suppression for arrows assigned to an any-typed receiver's member —
+  contradicts the round-464 pin (an any contextual type provides NO contextual signature →
+  tsc fires); harnessGlobals ×3 reclassified likely-env-legit (chai unresolvable offline).
+- **NEXT (harness @109, ~14 real):** the ParseConfigHost/ServerHost RELATION residuals
+  (services:1790 objlit vs ParseConfigFileHost, editorServices:3212, harnessLanguageService
+  754/758 — the System/ServerHost chimera on the relation side, not resolution); vfsUtil
+  TS2769 ×2 + :860 symlink-on-never; documentsUtil:30 reduce-accumulator overload
+  selection; fourslash 636/3411 'string' vs 'string' identity displays; evaluatorImpl:337
+  (throw-only arrow infers void, tsc infers never); incrementalUtils:656; harnessIO:379.**
+
 **Round 478 (2026-07-11, same session as 477 — the HARNESS burn-down begins) — FIVE fixes,
 harness 217 → 145 (−72; TS2339 66 → 13, TS7006 15 → 4, TS2341 6 → 0; every step
 zero-additions by per-position diff). Suite 10,090 → 10,098 (+8 local across 2 new test
@@ -613,85 +659,4 @@ Suite 9,920 → 9,925 (+5 local, LocalTypeAliasIndexTest, 0 regressions).**
   bodies, so the TS2488 walker never fires inside namespaces (pre-existing; the index covers
   namespace-nested ALIASES like the replaced scan did).
 
-**Round 469 (2026-07-10, same session as 468) — two deeper Blocker-#3/flow rules. Dashboard:
-services 90 → 86 (−4); both steps strictly-removals by listAll diff. Suite 9,914 → 9,920
-(+6 local across 2 new test files, 0 regressions); 2 fix commits (429785e8 / 7af1415f).**
-- **Fix 15 (429785e8, type-alias-SHADOWED interface targets, Blocker #3; 90 → 87):** round 443's
-  SourceFileLike conflation closed for the OBJLIT-TARGET direction — importTracker's
-  `type SourceFileLike` wins the last-wins Interface+TypeAlias merge, so annotations in OTHER
-  files resolve to the bogus alias union. tsc's true target is the MERGED interface: the
-  compiler/types.ts base PLUS services' `declare module` AUGMENTATION members (the cross-file
-  augmentation member merge our symbol tables don't model).
-  objectLiteralSatisfiesMergedConflatedAliasInterface assembles the merged member table AST-side
-  (top-level + module-augmentation `interface X`; required = required anywhere) and demands full
-  required coverage + no excess; hooked into the return AND var-decl paths. Cleared
-  sourcemaps:232, textChanges:1339 + convertToAsyncFunction:166 as a bonus (Transformer is the
-  same shape).
-- **Fix 16 (7af1415f, closure-assigned definite assignment; 87 → 86):** a name assigned inside
-  a NESTED function-like can be assigned at any time relative to an outer read (fn decls hoist,
-  closures run first) — tsc's definite-assignment never fires for it (formatting.ts
-  formatSpanWorker's `previousRange`, assigned only inside the nested processRange/processPair
-  helpers, read in the trailing-edit block ABOVE their declarations). Both TS2454 passes (the
-  SET-based checkUsesOfUninitialized driver AND the flow-graph runFlowTS2454OnFunction — the
-  round-450 two-pass gotcha in action: the first cut fixed only the flow pass and the set pass
-  kept firing) remove closure-assigned candidates via a shared collectClosureAssignedNames
-  (AST-based, reusing B78.2's collectAllAssignmentsAnywhere on nested bodies). **PERF LANDMINE
-  (caught pre-commit): the first cut text-scanned every nested container range per STATEMENT —
-  the services bench went 42 s → 5-min timeout on checker.ts's ~3000 nested fns; the AST
-  pre-pass restored the normal band (42.4 s).** Straight-line use-before-assign keeps firing
-  (negative controls pinned).
-- **NEXT (services @ 86, 40 real):** unchanged from the round-468 list minus the four cleared.**
-
-**Round 468 (2026-07-10) — the conflated-interface family closed out + contextual narrow-DOWN
-completions: FOURTEEN fixes in 12 commits. Dashboard: services 108 → 90 (−18; TS2322 30 → 18,
-TS2345 12 → 9, TS2339 6 → 5, TS2554/TS2739 → 0; 44 real excl. TS2591×43 + TS2304×2 `global` +
-TS2584 console); every step verified strictly-removals by listAll diff. Suite 9,877 → 9,914
-(+37 local across 12 new test files, 0 regressions).**
-- **Conflated-interface variants (Blocker #3, fixes 1/2/6/7):** the round-445 rule now covers a
-  TERNARY arm (checkConditionalReturnBranches; fixExpectedComma:57 + importTracker:758), an
-  `&&`-nested right operand (the result is falsy(LEFT)|RIGHT — nullish LEFT members must relate,
-  definitely-truthy members contribute nothing; addMissingAwait:251), the VAR-DECL path
-  (convertToEsModule:130), a NESTED member whose declared type names a conflated interface the
-  file also declares (objectLiteralMatchesViaNestedConflatedMember — importTracker:644
-  ExportedSymbol.exportInfo), and the ARG position where the calling file merely IMPORTS the
-  conflated name (objectLiteralMatchesSomeConflatedDeclaration: exact satisfaction of SOME
-  declaring file's version, FN-not-FP direction; findAllReferences:1316).
-- **Contextual narrow-DOWN completions (M3.4, fixes 3/4/5):** the round-462 monotone
-  ctxAcceptsNarrow rule extends to SHORTHAND values (convertArrowFn:258 getVariableInfo) and
-  ARRAY-LITERAL property values via narrowedArrayLiteralType (convertToOptionalChain:157 +
-  convertStringOrTemplateLiteral:157); the return-path objlit CONTEXT reaches `&&`/`||`/`??`-nested
-  right operands (contextualType is live while the binary evaluates — inlineVariable:163).
-- **Nullish/literal triple (fixes 8-10, one commit):** `??`-literal ABSORB in combineBinaryTypes
-  (a literal right ∈ the left's nullish-stripped literal union drops the widened primitive —
-  organizeImports:954); the arg per-prop leaf routes through widenOptionalTargetPropType (SIXTH
-  site — returnValueCorrect:264); the assignment-RHS narrowing gate accepts ENUM-object targets
-  (importFixes:572 QuotePreference + services:1641 LanguageServiceMode as a bonus).
-- **Fix 11 (lib):** RegExpConstructor mirrors the real es5 TWO-OVERLOAD shape (`new(pattern:
-  RegExp | string)` + `new(pattern: string, flags?)`) — a single union param went SILENT on
-  `new RegExp(42)` (non-simple param skips the conservative arg check); the overload shape keeps
-  it erroring as TS2769 (services:2876 `new RegExp(/\S/)` cleared).
-- **Fix 12 (M1.11):** for-of loop-var binding names (incl. destructured elements) shadow
-  same-named functions in the arity walker — mapCode.ts's `for (const { parse, body } of
-  nodeKinds)` vs the file's own 2-param `function parse` FP'd TS2554.
-- **Fix 13 (M3.1):** a CALL-EXPRESSION arg carrying an un-inferred FOREIGN TP skips the
-  single-sig arg check (the overloadArgSkippable rule at the single-sig site; gated to call args
-  so own-TP identifier args keep corpus-pinned checks — codeFixProvider:94 `cast(...)` → TOut).
-- **Fix 14 (M1.12):** a NUMERIC key resolves through an ARRAY-LIKE intersection constituent's
-  number index in resolveMemberPropertyType — `Array.isArray(diag) ? diag[0] : …` intersects
-  union members with `readonly unknown[]` (utilities:4062).
-- **Scouted, deferred with findings:** organizeImports:115/216 need optional-member READS to
-  include `| undefined` (the round-424 optionality-is-a-symbol-attribute gap — broad);
-  emitter.ts:994 `transformed[0]` is whole-program-only (minimal repro clean — probe);
-  fixUnreferenceableDecoratorMetadata:70 + convertParamsToDestructuredObject:475 are
-  kind-discriminant narrowing not reaching property-access args (probe); jsTyping:414 is the
-  known-hard barrel assertNever family; signatureHelp:379 needs nested-union-member objlit
-  context; findAllReferences:1000 needs array→objlit→nested-objlit ctx propagation.
-- **Cross-profile (measured at session end, accumulated since the round-458 measurement):**
-  server 485 → 275 (−210), harness 701 → 481 (−220), compiler stays 46 (zero real FPs —
-  all env-legit). TSV rows recorded for services/compiler/server/harness.
-- **NEXT (services @ 90, 44 real):** the services.ts objlit giants (ObjectAllocator ×2 /
-  CompletionEntry / EmitTextWriter TS2740); completions:1922/2237/2299/2391; importFixes:316/374
-  (ImportFixWithModuleSpecifier); stringCompletions `.types`/`.value` public-API this-guards;
-  sourcemaps:212/232 + textChanges:1339 (SourceFileLike objlits); symbolDisplay:917/935
-  TS7034/7005; formatting:572 TS2454; utilities:1750 TS2538; goToDefinition:513.**
 
