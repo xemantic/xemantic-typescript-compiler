@@ -6509,6 +6509,8 @@ class Transformer(
                     options.effectiveTarget < ScriptTarget.ES2016
                 QuestionQuestion ->
                     options.effectiveTarget < ScriptTarget.ES2020
+                BarBarEquals, AmpersandAmpersandEquals, QuestionQuestionEquals ->
+                    options.effectiveTarget < ScriptTarget.ES2021
                 else -> false
             }
             if (needsSpecial) break
@@ -6534,6 +6536,14 @@ class Transformer(
      * Handles BinaryExpression with special operators that need downleveling.
      */
     private fun transformBinaryExpressionSpecial(expr: BinaryExpression): Expression {
+        // Downlevel logical assignment (||=, &&=, ??=) for targets below ES2021.
+        // Handled before the generic left/right transform below so the LHS
+        // receiver/key temps are allocated in tsc's order (before the RHS).
+        if ((expr.operator == BarBarEquals || expr.operator == AmpersandAmpersandEquals ||
+                expr.operator == QuestionQuestionEquals) &&
+            options.effectiveTarget < ScriptTarget.ES2021) {
+            return downlevelLogicalAssignment(expr)
+        }
         val left = transformExpression(expr.left)
         val right = transformExpression(expr.right)
         // Downlevel `**` to `Math.pow(left, right)` for targets below ES2016
@@ -6617,6 +6627,99 @@ class Transformer(
         }
         return expr.copy(left = left, right = right)
     }
+
+    /**
+     * Downlevels a logical assignment (`a ||= b`, `a &&= b`, `a ??= b`) to the
+     * short-circuiting read/write form tsc emits below ES2021:
+     *   `a ||= b`  ->  `a || (a = b)`
+     *   `a &&= b`  ->  `a && (a = b)`
+     *   `a ??= b`  ->  `a ?? (a = b)`
+     * A property/element-access target whose receiver (or element key) is not a
+     * trivially copiable expression is captured into a temp so it is evaluated
+     * once, mirroring tsc's `transformLogicalAssignment`
+     * (`(_a = obj).prop || (_a.prop = b)`, `(_a = obj)[_b = k] ?? (_a[_b] = b)`).
+     *
+     * NOTE: for a `??=` target below ES2020 the produced `??` is not further
+     * downleveled here (native at ES2020, which is the tested/dashboard target);
+     * a sub-ES2020 `??=` is a known residual — see the emit-parity queue item.
+     */
+    private fun downlevelLogicalAssignment(expr: BinaryExpression): Expression {
+        val binOp = when (expr.operator) {
+            BarBarEquals -> SyntaxKind.BarBar
+            AmpersandAmpersandEquals -> SyntaxKind.AmpersandAmpersand
+            else -> SyntaxKind.QuestionQuestion // QuestionQuestionEquals
+        }
+        val readTarget: Expression
+        val writeTarget: Expression
+        when (val rawLeft = expr.left) {
+            is PropertyAccessExpression -> {
+                val recv = transformExpression(rawLeft.expression)
+                if (isSimpleCopiableExpr(recv)) {
+                    readTarget = rawLeft.copy(expression = recv)
+                    writeTarget = rawLeft.copy(expression = recv)
+                } else {
+                    val t = nextTempVarName()
+                    hoistedVarScopes.lastOrNull()?.add(t)
+                    readTarget = rawLeft.copy(expression = parenAssign(t, recv))
+                    writeTarget = rawLeft.copy(expression = syntheticId(t))
+                }
+            }
+            is ElementAccessExpression -> {
+                val recv = transformExpression(rawLeft.expression)
+                val key = transformExpression(rawLeft.argumentExpression)
+                val recvRead: Expression
+                val recvWrite: Expression
+                if (isSimpleCopiableExpr(recv)) {
+                    recvRead = recv; recvWrite = recv
+                } else {
+                    val t = nextTempVarName()
+                    hoistedVarScopes.lastOrNull()?.add(t)
+                    recvRead = parenAssign(t, recv); recvWrite = syntheticId(t)
+                }
+                val keyRead: Expression
+                val keyWrite: Expression
+                if (isSimpleCopiableExpr(key)) {
+                    keyRead = key; keyWrite = key
+                } else {
+                    val t = nextTempVarName()
+                    hoistedVarScopes.lastOrNull()?.add(t)
+                    // The key capture sits inside `[...]`, which already delimits it,
+                    // so tsc emits a BARE `_b = key()` (no parens), unlike the receiver.
+                    keyRead = BinaryExpression(
+                        left = syntheticId(t), operator = Equals, right = key, pos = -1, end = -1,
+                    )
+                    keyWrite = syntheticId(t)
+                }
+                readTarget = rawLeft.copy(expression = recvRead, argumentExpression = keyRead)
+                writeTarget = rawLeft.copy(expression = recvWrite, argumentExpression = keyWrite)
+            }
+            else -> {
+                val t = transformExpression(rawLeft)
+                readTarget = t
+                writeTarget = t
+            }
+        }
+        val right = transformExpression(expr.right)
+        val assign = ParenthesizedExpression(
+            expression = BinaryExpression(left = writeTarget, operator = Equals, right = right, pos = -1, end = -1),
+            pos = -1, end = -1,
+        )
+        return BinaryExpression(left = readTarget, operator = binOp, right = assign, pos = -1, end = -1)
+    }
+
+    /** `(temp = value)` — the receiver/key capture used by [downlevelLogicalAssignment]. */
+    private fun parenAssign(tempName: String, value: Expression): ParenthesizedExpression =
+        ParenthesizedExpression(
+            expression = BinaryExpression(
+                left = syntheticId(tempName), operator = Equals, right = value, pos = -1, end = -1,
+            ),
+            pos = -1, end = -1,
+        )
+
+    /** A value with no side effects that is safe to reference more than once (tsc "copiable"). */
+    private fun isSimpleCopiableExpr(e: Expression): Boolean =
+        e is Identifier || e is StringLiteralNode || e is NumericLiteralNode ||
+            e is BigIntLiteralNode || e is NoSubstitutionTemplateLiteralNode
 
     /**
      * Transforms an expression, stripping TypeScript-only constructs.
