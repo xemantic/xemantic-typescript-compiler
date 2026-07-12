@@ -4954,6 +4954,23 @@ class Checker(
         }
     }
 
+    /** Round 479: names of const enums declared TOP-LEVEL in SCRIPT (non-module)
+     *  files — the only cross-file const enums a module file may reference bare
+     *  (ambient globals). Lazily built once. */
+    private var scriptFileConstEnumNamesCache: Set<String>? = null
+    private fun scriptFileConstEnumNames(): Set<String> {
+        scriptFileConstEnumNamesCache?.let { return it }
+        val names = HashSet<String>()
+        for (r in binderResults) {
+            if (isModuleFile(r.sourceFile.statements)) continue
+            for (st in r.sourceFile.statements) {
+                if (st is EnumDeclaration && ModifierFlag.Const in st.modifiers) names.add(st.name.text)
+            }
+        }
+        scriptFileConstEnumNamesCache = names
+        return names
+    }
+
     /** Position right after the closing backtick of a template literal that starts at [start]. */
     private fun constEnumTemplateEnd(source: String, start: Int): Int {
         var i = start + 1 // skip opening backtick
@@ -5029,8 +5046,16 @@ class Checker(
     }
 
     private fun walkConstEnumUsageStmt(stmt: Statement, result: BinderResult, source: String, fileName: String) {
+        // Round 479: a MODULE file can only reference a const enum it declares or
+        // imports (both land in result.locals) or a SCRIPT-declared ambient global —
+        // NEVER another module file's const enum leaked through mergeSymbolTable
+        // (fourslashImpl's module-scoped `const enum State` made findAllReferences'
+        // namespace-nested `class State` — B83.5-unbound, so the locals lookup
+        // misses — FP TS2475 at `new State(...)`).
+        val checkFileIsModule = isModuleFile(result.sourceFile.statements)
         val isConstEnumName = { id: Identifier ->
-            val s = result.locals[id.text] ?: globals[id.text]
+            val s = result.locals[id.text]
+                ?: globals[id.text]?.takeIf { !checkFileIsModule || id.text in scriptFileConstEnumNames() }
             s != null && resolveAlias(s).flags.hasAny(SymbolFlags.ConstEnum)
         }
         // Walk a value expression. `asValue` = true when the expression occupies a value
@@ -37568,7 +37593,14 @@ class Checker(
                 val moduleName = (specifier as? StringLiteralNode)?.text ?: continue
                 // Fall back to extension-mapping relative resolution so a runtime `.mjs`/`.cjs`
                 // specifier (nodenext) resolves to its `.mts`/`.d.mts`/`.cts` declaration sibling.
-                var resolvedFile = resolveModuleSpecifier(moduleName)
+                // Round 479: a BARE specifier under nodenext NEVER resolves relative —
+                // node module kinds use node_modules lookup only (the B235 block below),
+                // while classic/node10 keep the permissive relative fallback. Without the
+                // gate, harnessIO.ts's `import pathModule from "path"` (the node builtin)
+                // "resolved" to src/compiler/path.ts and FP'd TS1192.
+                val bareSpec = !moduleName.startsWith(".") && !moduleName.startsWith("/")
+                var resolvedFile = if (bareSpec && options.effectiveModule.isNodeNext) null
+                else resolveModuleSpecifier(moduleName)
                     ?: resolveRelativeIncludingIndex(moduleName, fileName)
                 // B235: a BARE specifier resolving into node_modules whose nearest
                 // package.json declares "type": "module" is an ESM-format target — no
@@ -94160,6 +94192,43 @@ interface DataView {
         return null
     }
 
+    /**
+     * Round 479: resolve an import-equals alias to a namespace-import member —
+     * `export import parse = ts.getPathComponents` where `ts` is `import * as ts`
+     * (harness vpathUtil.ts). The general resolveAlias cannot follow a
+     * NamespaceImport (round 444), so the callee previously fell to the merged
+     * `globals` and picked an unrelated same-named function. Resolves via the
+     * round-478 namespace-member resolver on a synthetic access node; a target
+     * that exists but cannot be resolved bails to anyType (suppression-only —
+     * strictly better than checking args against the WRONG signature). Memoized
+     * via [importedCalleeFnTypeCache] under a distinct key prefix.
+     */
+    private fun importEqualsNamespaceMemberCalleeType(name: String, aliasSymbol: Symbol): Type? {
+        val file = currentCheckFileName ?: return null
+        val key = "$file|ieq|$name"
+        if (importedCalleeFnTypeCache.containsKey(key)) return importedCalleeFnTypeCache[key]
+        val result = run {
+            val ieq = aliasSymbol.declarations.firstOrNull { it is ImportEqualsDeclaration }
+                as? ImportEqualsDeclaration ?: return@run null
+            val qn = ieq.moduleReference as? QualifiedName ?: return@run null
+            val left = qn.left as? Identifier ?: return@run null
+            val leftSym = currentFileLocals?.get(left.text) ?: return@run null
+            if (!leftSym.flags.hasAny(SymbolFlags.Alias) ||
+                !symbolIsNamespaceImportAlias(leftSym, left.text)
+            ) return@run null
+            val synth = PropertyAccessExpression(expression = left, name = qn.right, pos = qn.pos, end = qn.end)
+            val fd = resolveNamespaceMemberFnDecl(synth) as? FunctionDeclaration ?: return@run anyType
+            val transient = Symbol(SymbolFlags.Function, qn.right.text).also { sy ->
+                sy.declarations.add(fd)
+                sy.valueDeclaration = fd
+            }
+            val t = getTypeOfSymbol(transient)
+            if (t !== errorType) t else anyType
+        }
+        importedCalleeFnTypeCache[key] = result
+        return result
+    }
+
     /** The FUNCTION sibling of [computeExportedVarDeclThroughStars]: the declaring
      *  file's own exported top-level FunctionDeclaration set (all overloads, one
      *  file) for [name], following `export *` chains. Null = unknowable. */
@@ -94365,6 +94434,19 @@ interface DataView {
                 val targetFile = resolveAliasJsModuleSpecifier(spec, currentCheckFileName)
                     ?: continue
                 if (targetFile in files) return perFileInterfaceType(name, targetFile)
+                // Round 479: the namespace import may target a BARREL
+                // (`import * as ts from "./_namespaces/ts.js"` — harness files),
+                // not the declaring file itself — follow the barrel's `export *`
+                // chain to the interface's declaring leaf (harnessIO's
+                // `ts.ParseConfigHost` vs fakesHosts' `class ParseConfigHost`
+                // chimera: the compiler interface is the per-file target).
+                val targetSource = fileResults[targetFile]?.sourceFile
+                if (targetSource != null) {
+                    val leaf = computeExportedInterfaceFileThroughStars(
+                        targetSource, name, mutableSetOf(), 0,
+                    )
+                    if (leaf != null && leaf in files) return perFileInterfaceType(name, leaf)
+                }
             }
             // Round 479: the namespace itself imported by NAME through a barrel —
             // harness/client.ts's `import { protocol } from "./_namespaces/ts.server.js"`,
@@ -96005,7 +96087,13 @@ interface DataView {
                     // gap) and a TP-carrying operand (the generic-inference gap) keep the
                     // deferred union behavior the round-407 note documents. A bare Identifier
                     // is a simple reference, so it cannot expose the `.x!` object-literal gap.
-                    (expr.expression is CallExpression || expr.expression is Identifier) &&
+                    // Round 479: PROPERTY-ACCESS `.x!` operands strip too under the same
+                    // all-concrete gate (`start: diagnostic.start!` — fourslashImpl's
+                    // realizeDiagnostic; the historical object-literal member-precision
+                    // hazard is covered by the M3.1/M3.4 machinery landed since — full
+                    // 8-profile A/B verified strictly-removals).
+                    (expr.expression is CallExpression || expr.expression is Identifier ||
+                        expr.expression is PropertyAccessExpression) &&
                         t.types.none { typeContainsUnresolvedTypeParam(it) } ->
                         narrowByExcludingNullUndefined(t)
                     else -> t
@@ -114056,6 +114144,27 @@ interface DataView {
                 if (baseIfaceName == classNameRaw && typeExpr.typeArguments.isNullOrEmpty()) {
                     continue@typeExprLoop
                 }
+                // Round 479: `class C extends B implements B` — implementing the class
+                // it EXTENDS is trivially satisfied (every member is inherited); this
+                // walker's missing-member collection reads OWN members only, so it FP'd
+                // TS2720 on harnessLanguageService's NativeLanguageServiceHost
+                // (`extends LanguageServiceAdapterHost implements ts.LanguageServiceHost,
+                // LanguageServiceAdapterHost`).
+                // Gated to BARE (no type args) on BOTH sides — `extends C<string>
+                // implements C<number>` must keep firing (extendAndImplementTheSameBaseType2).
+                val extendsBareBaseNames = classDecl.heritageClauses
+                    ?.filter { it.token == SyntaxKind.ExtendsKeyword }
+                    ?.flatMap { hc -> hc.types.mapNotNull { t ->
+                        if (!t.typeArguments.isNullOrEmpty()) return@mapNotNull null
+                        when (val tn = t.expression) {
+                            is Identifier -> tn.text
+                            is PropertyAccessExpression -> tn.name.text
+                            else -> null
+                        }
+                    } } ?: emptyList()
+                if (typeExpr.typeArguments.isNullOrEmpty() && baseIfaceName in extendsBareBaseNames) {
+                    continue@typeExprLoop
+                }
                 val ifaceSymbol = when (val tn = typeExpr.expression) {
                     is PropertyAccessExpression -> resolveHeritageBaseSymbol(tn)
                     else -> globals[baseIfaceName]
@@ -125260,10 +125369,14 @@ interface DataView {
                 checkCallTypesInStatement(stmt.statement, source, fileName)
             }
             is ForInStatement -> {
-                checkCallTypesInStatement(stmt.statement, source, fileName)
+                withForLoopVarShadow(stmt.initializer) {
+                    checkCallTypesInStatement(stmt.statement, source, fileName)
+                }
             }
             is ForOfStatement -> {
-                checkCallTypesInStatement(stmt.statement, source, fileName)
+                withForLoopVarShadow(stmt.initializer) {
+                    checkCallTypesInStatement(stmt.statement, source, fileName)
+                }
             }
             is WhileStatement -> {
                 checkCallTypesInExpr(stmt.expression, source, fileName)
@@ -126880,7 +126993,15 @@ interface DataView {
             if (!firedTs6234 && (calleeType is Type.Object || calleeType is Type.Interface)) {
                 var core: Expression = calleeExpr
                 while (core is ParenthesizedExpression) core = core.expression
-                if (core is NewExpression) {
+                // Round 479 (tsc isUntypedFunctionCall): a value of the global lib
+                // `Function` type IS callable — the call is untyped and returns any
+                // (`new Function("…")()`, fourslashImpl.ts verifyEval). A USER class
+                // named Function keeps firing (its decls are not lib decls).
+                val isGlobalFunctionType = (calleeType as? Type.Object)?.symbol?.let { sy ->
+                    sy.name == "Function" && sy.declarations.isNotEmpty() &&
+                        sy.declarations.all { it in builtinLibDecls }
+                } == true
+                if (core is NewExpression && !isGlobalFunctionType) {
                     val displayType = typeToString(getApparentType(calleeType))
                     val start = calleeExpr.pos
                     val length = expressionTrueEnd(calleeExpr) - start
@@ -128904,6 +129025,40 @@ interface DataView {
         }
     }
 
+    /**
+     * Round 479: a for-of/for-in LOOP VARIABLE shadows a same-named outer/global
+     * binding for the loop body's call-type resolution — evaluatorImpl.ts's
+     * `for (const symbolName of symbolNames)` at file TOP LEVEL otherwise
+     * resolved arg-position `symbolName` through merged `globals` to
+     * compiler/utilitiesPublic's `function symbolName(symbol: Symbol): string`
+     * → FP TS2345. Registers the binding names into [currentParamBindingNames]
+     * (→ anyType, suppression-only) ONLY when the name collides with an outer
+     * binding (globals / an inherited currentLocalTypes entry) — non-colliding
+     * loop vars keep their pre-existing resolution paths. Scoped (save/restore).
+     */
+    private inline fun withForLoopVarShadow(initializer: Node?, body: () -> Unit) {
+        val nameSet = mutableSetOf<String>()
+        (initializer as? VariableDeclarationList)?.declarations?.forEach { d ->
+            collectBindingIdentifierNames(d.name, nameSet)
+        }
+        val names = nameSet.toList()
+        val colliding = names.filter { nm ->
+            nm !in currentParamBindingNames &&
+                (globals[nm] != null || currentLocalTypes.containsKey(nm))
+        }
+        if (colliding.isEmpty()) { body(); return }
+        val savedBindings = currentParamBindingNames
+        val savedLocals = currentLocalTypes
+        currentParamBindingNames = currentParamBindingNames.toMutableSet().also { it.addAll(colliding) }
+        currentLocalTypes = currentLocalTypes.toMutableMap().also { m -> colliding.forEach { m.remove(it) } }
+        try {
+            body()
+        } finally {
+            currentParamBindingNames = savedBindings
+            currentLocalTypes = savedLocals
+        }
+    }
+
     private fun getCalleeType(expr: Expression): Type {
         return when (expr) {
             is Identifier -> {
@@ -128965,6 +129120,12 @@ interface DataView {
                     // non-collision path stays byte-identical through globals.
                     if (symbol.flags.hasAny(SymbolFlags.Alias)) {
                         importedCalleeFunctionType(expr.text, symbol)?.let { return it }
+                        // Round 479: an import-equals alias to a namespace-import
+                        // member (`export import parse = ts.getPathComponents`,
+                        // harness vpathUtil.ts) resolves through its OWN target —
+                        // never the same-named merged-globals function (`parse(path)`
+                        // FP'd against a cross-file `parse(sourceFile: SourceFile)`).
+                        importEqualsNamespaceMemberCalleeType(expr.text, symbol)?.let { return it }
                     }
                 }
                 val symbol = globals[expr.text] ?: return anyType

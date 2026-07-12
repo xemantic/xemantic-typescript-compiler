@@ -92,6 +92,23 @@ class BarrelNamespaceSpecifierViewTest {
     }
 
     @Test
+    fun `direct namespace import of a barrel follows star exports to the leaf`() {
+        diagnose(
+            decls + """
+
+            // @filename: client.ts
+            import * as protocol from "./nsinner.js";
+            declare function lineOffsetToPosition(lineOffset: protocol.Location): number;
+            export function decodeSpan(span: protocol.TextSpan): number {
+                return lineOffsetToPosition(span.start) + lineOffsetToPosition(span.end);
+            }
+            """.trimIndent(),
+        ) should {
+            have(none { it.code == 2339 || it.code == 2345 || it.code == 2322 })
+        }
+    }
+
+    @Test
     fun `negative control - a property absent from the per-file view still fires`() {
         diagnose(
             decls + """
