@@ -122401,7 +122401,19 @@ interface DataView {
                 (objectExpr is PropertyAccessExpression && getReferencePath(objectExpr) != null))
         ) {
             val raw = getTypeOfExpression(objectExpr)
-            if (raw !is Type.Union && raw !== anyType && raw !== errorType && raw !== neverType) {
+            // Round 489 (M5.1 perf): this block SUPPRESSES a would-be TS2339 by narrowing
+            // `raw` DOWN to a strict subtype that HAS the property. If `raw` ALREADY resolves
+            // the property (on itself or its apparent type — exactly what the main check at
+            // the tail of this function consults for a concrete non-union receiver), no TS2339
+            // can fire below, so the two expensive flow-narrowing walks are pure waste — skip
+            // them. Behavior-preserving: a concrete property-present receiver emits nothing
+            // either way (a member-table lookup is far cheaper than two flow walks per access).
+            if (raw !is Type.Union && raw !== anyType && raw !== errorType && raw !== neverType &&
+                !(try {
+                    getPropertyOfType(raw, propName) != null ||
+                        getPropertyOfType(getApparentType(raw), propName) != null
+                } catch (_: Exception) { false })
+            ) {
                 // Round 423: a union-TARGET guard (`x is CallExpression | NewExpression`)
                 // narrows a single-type receiver to a UNION — the access is safe iff
                 // EVERY member resolves the property (intersection members fold via
