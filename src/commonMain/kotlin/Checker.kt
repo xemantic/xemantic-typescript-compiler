@@ -431,7 +431,8 @@ class Checker(
      * variadic tuple's rest slot per the getTupleType gotcha) cannot recover it from
      * symbols. Saved/restored with `currentLocalTypes` in `checkFunctionBody`.
      */
-    private var currentLocalDeclTypeNodes: MutableMap<String, TypeNode> = mutableMapOf()
+    // Perf: HashMap (order unused, copied per scope entry) — see [currentLocalTypes].
+    private var currentLocalDeclTypeNodes: MutableMap<String, TypeNode> = HashMap()
 
     /**
      * Names that a function-body-local variable declaration SHADOWS from an inherited
@@ -442,7 +443,8 @@ class Checker(
      * an outer var — rare), so the blast radius is minimal. Saved/restored per function
      * body in BOTH the assignability and property-access passes.
      */
-    private var currentShadowedNames: MutableSet<String> = mutableSetOf()
+    // Perf: HashSet (order unused, copied per scope entry) — see [currentLocalTypes].
+    private var currentShadowedNames: MutableSet<String> = HashSet()
 
     /**
      * Round 460 (program.ts findSourceFileWorker): names declared by TWO OR MORE
@@ -508,7 +510,8 @@ class Checker(
      *  in [checkSinglePropertyAccess] so a destructured param shadows a same-named
      *  file-level `var x = call(...)`. Saved/restored alongside `currentLocalTypes`
      *  at function-body entry. NOT used for type resolution — membership-only. */
-    private var currentParamBindingNames: MutableSet<String> = mutableSetOf()
+    // Perf: HashSet (order unused, copied per scope entry) — see [currentLocalTypes].
+    private var currentParamBindingNames: MutableSet<String> = HashSet()
 
     /** Blocker #3 (round 442): names that are EXCLUSIVELY top-level `let`/`var`/`const`
      *  VARIABLE declarations in MODULE files — with NO other global meaning (no
@@ -56941,7 +56944,7 @@ interface DataView {
                     val savedLocalTypes = currentLocalTypes
                     val savedParamBindings = currentParamBindingNames
                     currentLocalTypes = HashMap(currentLocalTypes)
-                    currentParamBindingNames = currentParamBindingNames.toMutableSet()
+                    currentParamBindingNames = HashSet(currentParamBindingNames)
                     try {
                         populateParameterLocalTypes(stmt.parameters)
                         checkConstAssignmentInStatements(body.statements, source, fileName, mutableMapOf())
@@ -83763,9 +83766,9 @@ interface DataView {
             val savedLocalTypes = currentLocalTypes
             currentLocalTypes = HashMap(currentLocalTypes)
             val savedLocalDeclNodes = currentLocalDeclTypeNodes
-            currentLocalDeclTypeNodes = currentLocalDeclTypeNodes.toMutableMap()
+            currentLocalDeclTypeNodes = HashMap(currentLocalDeclTypeNodes)
             val savedShadowed = currentShadowedNames
-            currentShadowedNames = currentShadowedNames.toMutableSet()
+            currentShadowedNames = HashSet(currentShadowedNames)
             val savedAmbiguous = ambiguousBlockLocalNames
             ambiguousBlockLocalNames = mutableSetOf()
             val bodyParamNames = parameters.mapNotNull { p -> (p.name as? Identifier)?.text }.toSet()
@@ -99340,7 +99343,7 @@ interface DataView {
         val savedLocalTypes = currentLocalTypes
         currentLocalTypes = HashMap(currentLocalTypes)
         val savedParamBindings = currentParamBindingNames
-        currentParamBindingNames = currentParamBindingNames.toMutableSet()
+        currentParamBindingNames = HashSet(currentParamBindingNames)
         val savedInInference = inInferenceBodyTyping
         inInferenceBodyTyping = true
         val result = try {
@@ -119305,9 +119308,9 @@ interface DataView {
                     val savedEnumParams = currentEnumConstrainedParams
                     val savedShadowed = currentShadowedNames
                     currentLocalTypes = HashMap(currentLocalTypes)
-                    currentParamBindingNames = currentParamBindingNames.toMutableSet()
+                    currentParamBindingNames = HashSet(currentParamBindingNames)
                     currentEnumConstrainedParams = collectEnumConstrainedParams(stmt.typeParameters, stmt.parameters)
-                    currentShadowedNames = currentShadowedNames.toMutableSet()
+                    currentShadowedNames = HashSet(currentShadowedNames)
                     try {
                         populateParameterLocalTypes(stmt.parameters)
                         val fdParamNames = stmt.parameters.mapNotNull { p -> (p.name as? Identifier)?.text }.toSet()
@@ -119574,8 +119577,8 @@ interface DataView {
                     val savedParamBindings = currentParamBindingNames
                     val savedShadowed = currentShadowedNames
                     currentLocalTypes = HashMap(currentLocalTypes)
-                    currentParamBindingNames = currentParamBindingNames.toMutableSet()
-                    currentShadowedNames = currentShadowedNames.toMutableSet()
+                    currentParamBindingNames = HashSet(currentParamBindingNames)
+                    currentShadowedNames = HashSet(currentShadowedNames)
                     try {
                         populateParameterLocalTypes(member.parameters)
                         // Round 479: a method-body local must shadow a same-named leaked
@@ -119600,8 +119603,8 @@ interface DataView {
                     val savedParamBindings = currentParamBindingNames
                     val savedShadowed = currentShadowedNames
                     currentLocalTypes = HashMap(currentLocalTypes)
-                    currentParamBindingNames = currentParamBindingNames.toMutableSet()
-                    currentShadowedNames = currentShadowedNames.toMutableSet()
+                    currentParamBindingNames = HashSet(currentParamBindingNames)
+                    currentShadowedNames = HashSet(currentShadowedNames)
                     try {
                         populateParameterLocalTypes(member.parameters)
                         val ctorParamNames = member.parameters.mapNotNull { p -> (p.name as? Identifier)?.text }.toSet()
@@ -119624,7 +119627,7 @@ interface DataView {
                     val savedLocalTypes = currentLocalTypes
                     val savedParamBindings = currentParamBindingNames
                     currentLocalTypes = HashMap(currentLocalTypes)
-                    currentParamBindingNames = currentParamBindingNames.toMutableSet()
+                    currentParamBindingNames = HashSet(currentParamBindingNames)
                     try {
                         populateParameterLocalTypes(member.parameters)
                         checkPropertyAccessInStatements(body.statements, source, fileName, classType)
@@ -119829,8 +119832,8 @@ interface DataView {
                 val savedParamBindings = currentParamBindingNames
                 val savedArrowShadowed = currentShadowedNames
                 currentLocalTypes = HashMap(currentLocalTypes)
-                currentParamBindingNames = currentParamBindingNames.toMutableSet()
-                currentShadowedNames = currentShadowedNames.toMutableSet()
+                currentParamBindingNames = HashSet(currentParamBindingNames)
+                currentShadowedNames = HashSet(currentShadowedNames)
                 populateParameterLocalTypes(expr.parameters)
                 // Round 447: a Block-bodied nested arrow's own `let/const x` shadows an outer
                 // same-named binding for reads INSIDE it — record the inner annotation into
@@ -119966,8 +119969,8 @@ interface DataView {
                 val savedParamBindings = currentParamBindingNames
                 val savedFnExprShadowed = currentShadowedNames
                 currentLocalTypes = HashMap(currentLocalTypes)
-                currentParamBindingNames = currentParamBindingNames.toMutableSet()
-                currentShadowedNames = currentShadowedNames.toMutableSet()
+                currentParamBindingNames = HashSet(currentParamBindingNames)
+                currentShadowedNames = HashSet(currentShadowedNames)
                 // 16.0: shadow outer vars with unannotated function-expression params
                 // so `(s: string) => ... || function (s) { s.aaa }` does not falsely
                 // type the inner `s` from the outer scope.
@@ -125718,7 +125721,7 @@ interface DataView {
                     val savedLocalTypes = currentLocalTypes
                     val savedParamBindings = currentParamBindingNames
                     currentLocalTypes = HashMap(currentLocalTypes)
-                    currentParamBindingNames = currentParamBindingNames.toMutableSet()
+                    currentParamBindingNames = HashSet(currentParamBindingNames)
                     // B516: push the function's OWN type parameters onto currentTypeParamScope
                     // (mirroring the ClassDeclaration branch below) so a generic function body's
                     // param/var annotations referencing `T` resolve to a TypeParam-with-constraint
@@ -125835,7 +125838,7 @@ interface DataView {
                                     val savedParamBindings = currentParamBindingNames
                                     val savedSuperBaseType = currentSuperBaseType
                                     currentLocalTypes = HashMap(currentLocalTypes)
-                                    currentParamBindingNames = currentParamBindingNames.toMutableSet()
+                                    currentParamBindingNames = HashSet(currentParamBindingNames)
                                     currentSuperBaseType = baseInstanceType
                                     // 17.21: Static methods don't see class TypeParams (TypeScript
                                     // emits TS2302 for any reference). Pop the class scope while
@@ -125898,7 +125901,7 @@ interface DataView {
                                     val savedSuperBaseSig = currentSuperBaseSig
                                     val savedSuperBaseType = currentSuperBaseType
                                     currentLocalTypes = HashMap(currentLocalTypes)
-                                    currentParamBindingNames = currentParamBindingNames.toMutableSet()
+                                    currentParamBindingNames = HashSet(currentParamBindingNames)
                                     currentSuperBaseSig = baseSig
                                     currentSuperBaseType = baseInstanceType
                                     try {
@@ -125991,7 +125994,7 @@ interface DataView {
         val savedLocalTypes = currentLocalTypes
         val savedParamBindings = currentParamBindingNames
         currentLocalTypes = HashMap(currentLocalTypes)
-        currentParamBindingNames = currentParamBindingNames.toMutableSet()
+        currentParamBindingNames = HashSet(currentParamBindingNames)
         try {
             populateParameterLocalTypes(params)
             for ((i, p) in params.withIndex()) {
@@ -126115,7 +126118,7 @@ interface DataView {
                 val savedLocals = currentLocalTypes
                 val savedBindings = currentParamBindingNames
                 currentLocalTypes = HashMap(currentLocalTypes)
-                currentParamBindingNames = currentParamBindingNames.toMutableSet()
+                currentParamBindingNames = HashSet(currentParamBindingNames)
                 val ownNames = mutableSetOf<String>()
                 for (p in expr.parameters) collectBindingNames(p.name, ownNames)
                 for (n in ownNames) currentLocalTypes[n] = anyType
@@ -126143,7 +126146,7 @@ interface DataView {
                 val savedLocals = currentLocalTypes
                 val savedBindings = currentParamBindingNames
                 currentLocalTypes = HashMap(currentLocalTypes)
-                currentParamBindingNames = currentParamBindingNames.toMutableSet()
+                currentParamBindingNames = HashSet(currentParamBindingNames)
                 val ownNames = mutableSetOf<String>()
                 for (p in expr.parameters) collectBindingNames(p.name, ownNames)
                 for (n in ownNames) currentLocalTypes[n] = anyType
@@ -129423,7 +129426,7 @@ interface DataView {
         if (colliding.isEmpty()) { body(); return }
         val savedBindings = currentParamBindingNames
         val savedLocals = currentLocalTypes
-        currentParamBindingNames = currentParamBindingNames.toMutableSet().also { it.addAll(colliding) }
+        currentParamBindingNames = HashSet(currentParamBindingNames).also { it.addAll(colliding) }
         currentLocalTypes = HashMap(currentLocalTypes).also { m -> colliding.forEach { m.remove(it) } }
         try {
             body()
