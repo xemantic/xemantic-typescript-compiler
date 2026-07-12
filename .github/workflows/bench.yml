@@ -9,7 +9,7 @@ on:
     inputs:
       tsc_spec:
         description: 'npm spec for the reference JS tsc'
-        default: 'typescript@5'
+        default: 'typescript@6'
       tsgo_spec:
         description: 'npm spec for the native tsgo (@typescript/native-preview, or typescript@7 once native ships there)'
         default: '@typescript/native-preview@latest'
@@ -36,29 +36,29 @@ jobs:
   bench:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - name: Set up JDK 21
-        uses: actions/setup-java@v4
+      - name: Set up JDK 26
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: '21'
+          java-version: '26'
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v6
 
       - name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: '20'
+          node-version: '22'
 
       - name: Install reference compilers (tsc, tsgo)
         id: refs
         env:
           # ${{ }} evaluated by GitHub into env values (no bash quote-breakout / injection).
-          TSC_SPEC: ${{ github.event.inputs.tsc_spec || 'typescript@5' }}
+          TSC_SPEC: ${{ github.event.inputs.tsc_spec || 'typescript@6' }}
           TSGO_SPEC: ${{ github.event.inputs.tsgo_spec || '@typescript/native-preview@latest' }}
         run: |
           mkdir -p "$RUNNER_TEMP/bench-tools" && cd "$RUNNER_TEMP/bench-tools"
@@ -71,7 +71,7 @@ jobs:
 
       - name: Run 3-way bench
         env:
-          BENCH_RUNNER: 'ubuntu-latest, JDK 21 (GitHub-hosted, shared)'
+          BENCH_RUNNER: 'ubuntu-latest, JDK 26 (GitHub-hosted, shared)'
           TSC_BIN: ${{ steps.refs.outputs.tsc }}
           TSGO_BIN: ${{ steps.refs.outputs.tsgo }}
           BENCH_LABEL: ${{ github.event.inputs.label || format('push {0}', github.sha) }}

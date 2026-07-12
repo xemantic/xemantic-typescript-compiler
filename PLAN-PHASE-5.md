@@ -46,8 +46,10 @@ native tsgo, then publish a per-run Markdown report under `bench-history/runs/` 
 prepend a row to `bench-history/README.md` (index, newest-first) so wall-clock /
 throughput / error trends are observable across commits. Trigger: push-to-main
 (owner's choice) + `workflow_dispatch` (tsc/tsgo npm specs are inputs, default
-`typescript@5` / `@typescript/native-preview@latest`; report records resolved
-versions). Loop-guarded: `paths-ignore: bench-history/**` + the bot's result commit
+`typescript@6` — the released JS line; 7.0 is native tsgo — / `@typescript/native-preview@latest`;
+report records resolved versions). Runner: JDK 26 (temurin, setup-java@v5) so the CI
+numbers match the JDK-26 dev box; action majors current (checkout@v7, setup-gradle@v6,
+setup-node@v6/Node 22). Loop-guarded: `paths-ignore: bench-history/**` + the bot's result commit
 is `[skip ci]` + pushes `HEAD:main` with rebase-retry. `bench-history/` is a NEW
 tracked dir (the existing `/bench/` is gitignored machine-local TSV). Gotchas
 hit + fixed while building: an UNQUOTED python heredoc ran every backtick in the
