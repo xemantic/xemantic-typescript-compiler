@@ -120853,6 +120853,18 @@ interface DataView {
         // receiver — a single allocation-free pass (was `.filter{}.maxByOrNull{}`, which
         // built a throwaway list per call; a niche 1.6%-self emitter on the harness JFR).
         if (graph.closureStarts.isEmpty()) return false
+        // Round 489 (M5.1 perf): resolve the receiver type BEFORE the O(closureStarts) scan
+        // below. This emitter only ever fires when the (narrowed) receiver type is a union
+        // containing `undefined`, and `getNarrowedTypeForReferenceFollowLoopEntry` only ever
+        // SUBSETS the raw type (it refines/removes constituents, never adds `undefined`). So a
+        // receiver whose raw type is concrete (not a `T | undefined` union) can never fire —
+        // bail here, skipping the innermost-closure scan (hundreds of closures per access on a
+        // big source like checker.ts) for the common concrete-typed receiver. The captured-`var`
+        // case resolves to `anyType` (B467, recovered below via the closure's enclosingVarDecls),
+        // so `anyType` must NOT bail — it needs the closure. Behavior-preserving: the concrete
+        // path returns false here exactly as the post-scan `narrowed` check would.
+        var raw = try { getTypeOfExpression(recv) } catch (_: Exception) { return false }
+        if (raw !== anyType && (raw !is Type.Union || raw.types.none { it === undefinedType })) return false
         var found: FlowStart? = null
         var bestPos = -1
         for (cs in graph.closureStarts) {
@@ -120877,7 +120889,6 @@ interface DataView {
                 if (closureGuardedByOptionalChainRoot(c, root, graphSource)) return false
             }
         }
-        var raw = try { getTypeOfExpression(recv) } catch (_: Exception) { return false }
         // B467: a function-body `var`/`let` captured in a nested closure does not resolve
         // its declared annotation type through the closure scope (getTypeOfExpression →
         // any), unlike a parameter. When the receiver is a captured `var` with a known
