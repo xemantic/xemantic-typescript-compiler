@@ -1267,6 +1267,14 @@ class Checker(
      *  init-order trap would leave a post-init field null during checking. */
     private val starExportSymbolCache = HashMap<String, Symbol?>()
 
+    /** M5 (round 481): top-level memo for [resolveExportedVarDeclThroughStars]. */
+    private val starExportVarDeclCache = HashMap<String, VariableDeclaration?>()
+
+    /** M5 (round 481): memo for [getTypeParamInfo] (keyed by forTypePosition + name,
+     *  a pure function of the frozen binder tables). Declared before `init` — it is
+     *  consulted during init via isUnresolvedGenericType / checkTypeArgCount. */
+    private val typeParamInfoCache = HashMap<String, TypeParamInfo?>()
+
     /** M3.4 (round 413): per-file memo of [getModuleNamedExports] (fileName →
      *  exported-name set) so [computeExportedSymbolThroughStars]'s leaf gate is
      *  cheap under the barrel star-chain recursion (a big barrel re-scans dozens of
@@ -39054,6 +39062,21 @@ class Checker(
         return result
     }
 
+    /** M5 (round 481): memoized top-level wrapper for [computeExportedVarDeclThroughStars]
+     *  (Tier 2, keyed "<file> <name>", stored null = not found) — the sibling of
+     *  [resolveExportedSymbolThroughStars]. `importedTopLevelVarAnnotationType` (the
+     *  emptyArray conflation path) called it uncached per alias, and the star-chain
+     *  AST walk showed up at ~1% self in the harness JFR. Only the TOP-LEVEL result is
+     *  cached (a recursion-internal sub-result is incomplete for its own file, per the
+     *  moduleStarExportsCache visited-set gotcha). */
+    private fun resolveExportedVarDeclThroughStars(file: SourceFile, name: String): VariableDeclaration? {
+        val cacheKey = "${file.fileName} $name"
+        if (starExportVarDeclCache.containsKey(cacheKey)) return starExportVarDeclCache[cacheKey]
+        val result = computeExportedVarDeclThroughStars(file, name, mutableSetOf(), 0)
+        starExportVarDeclCache[cacheKey] = result
+        return result
+    }
+
     /** Round 473 (Blocker #3, the server-profile `emptyArray` conflation): the FILE-AST
      *  companion of [computeExportedSymbolThroughStars] for VARIABLE targets — returns the
      *  leaf file's OWN top-level exported VariableDeclaration for [name], so the caller
@@ -42838,6 +42861,20 @@ interface DataView {
     }
 
     private fun getTypeParamInfo(name: String, forTypePosition: Boolean = false): TypeParamInfo? {
+        // M5 (round 481): pure over (name, forTypePosition) — it scans `result.locals`
+        // for EVERY binderResult twice + globals, all frozen (no `currentFileLocals`
+        // context). checkTypeArgCount / isUnresolvedGenericType probe it per generic
+        // reference, so the full-program double scan showed at ~1.7% self in the harness
+        // JFR. Tier-2 memo; a stored `TypeParamInfo?` distinguishes "computed-null" from
+        // "absent" via the two maps' presence keys.
+        val cacheKey = if (forTypePosition) "T|$name" else "V|$name"
+        if (typeParamInfoCache.containsKey(cacheKey)) return typeParamInfoCache[cacheKey]
+        val computed = computeTypeParamInfo(name, forTypePosition)
+        typeParamInfoCache[cacheKey] = computed
+        return computed
+    }
+
+    private fun computeTypeParamInfo(name: String, forTypePosition: Boolean): TypeParamInfo? {
         // Check binder symbols first (user-declared types)
         for (result in binderResults) {
             val symbol = result.locals[name] ?: continue
@@ -94233,7 +94270,7 @@ interface DataView {
                 ?: resolveAliasJsModuleSpecifier(spec, contextFile)
                 ?: continue
             val tr = fileResults[targetFile] ?: continue
-            val d = computeExportedVarDeclThroughStars(tr.sourceFile, originalName, mutableSetOf(), 0)
+            val d = resolveExportedVarDeclThroughStars(tr.sourceFile, originalName)
                 ?: continue
             val ann = d.type ?: continue
             val t = getTypeFromTypeNode(ann)
