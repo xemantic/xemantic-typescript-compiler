@@ -1,3 +1,86 @@
+**Round 472 (2026-07-11, the services burn-down — SERVICES REACHES ZERO REAL FPs) — SEVEN fixes
+in 6 commits (15c1ff56 / ada176fd / 255a92f6 / 36f98fbf / c09dc08b / + the truthy-guard commit).
+Dashboard: services 56 → 46 (−10; TS2322 3 → 0, TS2345 2 → 0, TS2740/TS2538/TS2339/TS7034/TS7005
+→ 0 — the remaining 46 = TS2591×43 + TS2304×2 `global` + TS2584 console, ALL env-legit offline
+artifacts). The SECOND profile at zero real FPs, matching compiler. Every fix verified
+strictly-removals by per-position listAll diff; suite 10,009 / 0 failing (+21 local across 8 new
+test files). Compiler profile unchanged (46, zero real).**
+- **Fix 1 (15c1ff56, nested-objlit contextual distribution):** getTypeOfObjectLiteral's ctxObj now
+  resolves a UNION contextual type (sole non-nullish object member → NEW
+  selectUnionMemberByObjLitDiscriminant via the round-411 canonical `symId#member` key space →
+  key-coverage); a nested ObjectLiteralExpression VALUE inherits the property's contextual type;
+  array-literal ELEMENTS inherit the contextual array's element type (+ the return path provides
+  the array ref for a returned array literal). The guard-narrowed values (`node: parent` after
+  isJsxOpeningLikeElement, `file: node` after isSourceFile) then ride the existing monotone
+  ctxAcceptsNarrow. Cleared signatureHelp:379 + findAllReferences:1000 — BOTH reproduced in
+  minimal single-file repros (no probe needed).
+- **Fix 2 (ada176fd, any-spread var-decl objlit):** the round-445 spread-poisons-to-any rule
+  existed only on the RETURN path — the var-decl missing-prop/coarse emission now bails too.
+  Cleared completions:2391 (`{ ...baseWriter, … }` vs EmitTextWriter, baseWriter from an
+  unresolvable `.js`-barrel namespace call).
+- **Fix 3 (255a92f6, alias-TP name capture):** `currentTypeParamScope` is consulted BEFORE
+  `currentTypeAliasArgs`, so inside an alias substitution a callee TP named like an alias TP
+  captured the body's reference — `binarySearchKey<T, U>(…, keyComparer: Comparer<U>)` with
+  `Comparer<T> = (a: T, b: T) => Comparison` resolved the body's `a: T` to the CALLEE's T, and
+  the anchor mapper's T→Node2 binding typed the comparer callback param as Node2 → FP TS2538 on
+  `children[middle]`. The substitution now shadows exactly its own TP names out of the scope.
+  Cleared utilities:1750.
+- **Fix 4 (36f98fbf, two guard-resolution fixes):** (a) a TP-referencing fn-typed PARAM skipped
+  by the B516 gate now still registers in currentParamBindingNames — unshadowed, the call
+  resolved through merged globals to a same-named cross-file top-level fn (documentHighlights'
+  `getNodes` vs fixAwaitInSyncFunction's; reproduced 3-file). (b) a NEGATIVE guard branch
+  (`!isModifier(node)`) collapsed `node` to never — the relation over-accepts `Node <: Modifier`
+  (enum-any) — `kindDomainProvesNotSubtype` reads declared `.kind` DOMAINS (bare-enum = whole
+  member set; generic token refs thread type-arg NODES through `extends` levels) and keeps t
+  when its domain exceeds the target's. Cleared completions:2237.
+- **Fix 5 (emitter:994 + program:1088):** (a) checkMemberAccessMissing's knockout single-interface
+  branch now bails for Array/ReadonlyArray references — under REAL LIBS (`lib: es2020`, the bench
+  tsconfig) a numeric element access `transform.transformed[0]` reached it with propName "0" and
+  the lib Array InterfaceDeclaration passed every gate (the "whole-program-only" verdict was just
+  the missing real-libs flag — `w.items[0]` reproduces in 3 lines with the bench tsconfig).
+  (b) checkReturnAssignability retries a failing generic-REFERENCE target whose type args include
+  the fn's OWN TPs with each TP bound to its declared CONSTRAINT — tsc's variance analysis accepts
+  the contravariant-TP-usage shape (createTypeReferenceResolutionLoader returning a getter typed
+  with the constraint itself); suppression-only, FN-not-FP; bare-TP targets excluded by the
+  head-name/no-args gate.
+- **Probe technique that unblocked the batch:** a temporary `init {}` block in the Diagnostic data
+  class keyed on (code, start, fileName) printing `Exception().stackTraceToString()` — found the
+  emitting walker in one services run each time (remember Checker.kt frame line numbers wrap
+  mod 65536). Lesson: of the four "whole-program probe needed" verdicts, THREE dissolved into
+  reproducible factors (cross-file name collision ×1, real libs ×1, enum-any negative wash ×1) —
+  try a name-collision file and the bench tsconfig's `"lib": ["es2020"]` before believing a
+  whole-program verdict.
+- **Cross-profile at session end:** server 275 → 232 (−43), harness 481 → 429 (−52) — the six
+  fixes generalize; bench rows appended (services 40.9 s self, +1.7% vs the round-471b band —
+  no perf regression).
+- **Fix 7 (the LAST real services FP — symbolDisplay:917/935 TS7034/TS7005): the truthy-guard
+  rule, NOT the full evolving-any model.** A captured read of an auto-typed `let x;` inside an
+  `if` whose condition TRUTHY-TESTS the variable (`if (flags & Sig && indexInfos)` /
+  `x !== undefined`) is provably assigned (undefined is falsy) — the closure-position flow
+  inside the guard carries the evolved non-undefined type, so tsc reports nothing.
+  `ulCondProvesAssigned` + `UlState.guardDepth` gate the capturedReads recording; an UNGUARDED
+  captured read keeps firing (controlFlowNoImplicitAny f9/f10 — re-derived from the reference
+  baselines this round: BOTH the nested function decl AND the stored arrow error in tsc, so
+  "past the last assignment" alone is NOT the suppressor; the guard is).
+  **SERVICES @ 46 — ZERO REAL FPs** (TS2591×43 + TS2304×2 `global` + TS2584 console, all
+  env-legit offline artifacts) — the SECOND profile at zero real, matching compiler.
+- **Fixes 8–10 (same session): tsc-cli + deprecatedCompat to zero real too — SIX of eight
+  profiles at zero real FPs.** The small-profile re-baseline showed tsc-cli @48 (TS7006×2) and
+  deprecatedCompat @49 (TS7006×2 + TS2339×1); all three cleared: (8) the embedded lib's
+  ObjectConstructor gains `getOwnPropertyDescriptor(s)` — the members were simply absent, and
+  even under real libs the embedded `libGlobals` copy is consulted (deprecations.ts:82); the
+  plural rides the existing es2017 LIB_MIN_TARGET entry. (9) An arrow's EXPRESSION body inherits
+  the contextual signature's RETURN type (`contextualSigReturnTypeForCtx`) — the builder chain
+  `overload: overloads => ({ bind: binder => ({ … }) })` contextually types each nested returned
+  objlit's fn members (deprecations.ts:144/146). (10) `rhsCanConsumeFnCtx` accepts an objlit
+  with fn-shaped members, and `namespaceMemberVarAnnotationCtx` resolves a `ns.Sub.member = {…}`
+  target's declared annotation through the merged globals when the root is a namespace import
+  whose declaration is the whole ImportDeclaration (tsc.ts:7 `ts.Debug.loggingHost =
+  { log(_level, s) {…} }`).
+- **NEXT:** burn down server (@230) / harness (@427) with the same listAll-diff workflow —
+  their top codes (TS2322×87/TS2339×42 server; TS2339×109/TS2322×102 harness) are
+  services-family shapes on server/harness-only files. v1 exit = all 8 profiles at zero real.**
+
 **Round 471 (2026-07-10/11, the services burn-down continues) — NINE bounded fixes in 9 commits
 (63287e70 / 3f5166da / 3766ef73 / 8524afe4 / 093df3f1 / 39b0fddf / c7781e76 / f9a81674 / bd70f5d6). Dashboard: services 72 → 56 (−16; TS2322 12 → 3, TS2345 5 → 2, TS2349 2 → 0, TS2741 2 → 0,
 TS2420 1 → 0; 10 real left excl. TS2591×43 + TS2304×2 `global` + TS2584 console); every fix
