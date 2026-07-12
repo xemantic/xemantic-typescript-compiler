@@ -1246,6 +1246,14 @@ class Checker(
      *  `checkImportConflictsWithLocal` runs during init and would otherwise see it null. */
     private val barrelTypeOnlyMemo = HashMap<String, Boolean>()
 
+    /** M5 (round 481): memo for [resolveBarrelStarTarget] — a pure function of
+     *  (fromFile, spec) over the frozen [fileResults] (Tier 2, worker-local). The
+     *  un-memoized chain resolveBarrelStarTarget → resolveModuleSpecifierRelative →
+     *  normalizePath was ~5% of the harness JFR profile (every star-chain walk
+     *  re-resolved every hop). Stored null = unresolvable. Declared before `init`
+     *  (star-chain walkers run during init). */
+    private val barrelStarTargetCache = HashMap<String, SourceFile?>()
+
     /** M3.4 (round 409): memo for [resolveExportedSymbolThroughStars] (keyed
      *  "<barrelFile> <name>" → target Symbol, a stored null means "not found /
      *  unresolvable"). The missing half of M1.1: [getModuleExportsFollowingStars]
@@ -160796,11 +160804,15 @@ interface DataView {
      *  fallback used across the star-following helpers) to a bound source-file name. */
     private fun resolveBarrelStarTarget(spec: String, fromFile: String): SourceFile? {
         if (!spec.startsWith("./") && !spec.startsWith("../")) return null
+        val key = "$fromFile|$spec"
+        barrelStarTargetCache[key]?.let { return it }
+        if (barrelStarTargetCache.containsKey(key)) return null
         val resolved = resolveModuleSpecifierRelative(spec, fromFile)
             ?: (if (spec.endsWith(".js")) resolveModuleSpecifierRelative(spec.removeSuffix(".js"), fromFile) else null)
             ?: (if (spec.endsWith(".jsx")) resolveModuleSpecifierRelative(spec.removeSuffix(".jsx"), fromFile) else null)
-            ?: return null
-        return fileResults[resolved]?.sourceFile
+        val result = resolved?.let { fileResults[it]?.sourceFile }
+        barrelStarTargetCache[key] = result
+        return result
     }
 
     /**
