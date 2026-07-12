@@ -15573,6 +15573,14 @@ class Checker(
                         collectConstructorAssignments(listOf(it), assigned)
                     }
                 }
+                // Round 479: a this-assignment nested in a var-decl INITIALIZER —
+                // `const js = this.js = new SortedMap(...)` (tsc harness
+                // compilerImpl.ts CompilationResult ctor) — assigns the property.
+                is VariableStatement -> {
+                    for (d in stmt.declarationList.declarations) {
+                        d.initializer?.let { collectThisAssignment(it, assigned) }
+                    }
+                }
                 is Block -> collectConstructorAssignments(stmt.statements, assigned)
                 // Round 475: a ctor-body `switch` assigning the property in its clauses
                 // (tsc server project.ts's serverMode switch sets languageServiceEnabled
@@ -15603,6 +15611,8 @@ class Checker(
                             assigned.add(left.name.text)
                         }
                     }
+                    // `this.a = this.b = x` — the right side may be another assignment.
+                    collectThisAssignment(expr.right, assigned)
                 }
             }
             is CommaListExpression -> {
@@ -16577,7 +16587,20 @@ class Checker(
             }
             is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkYield7057Stmts(it.statements, inGen, source, fileName) }
             is Block -> walkYield7057Stmts(stmt.statements, inGen, source, fileName)
-            is ExpressionStatement -> walkYield7057Expr(stmt.expression, inGen, source, fileName)
+            is ExpressionStatement -> {
+                // Round 479 (tsc checkYieldExpression: `noImplicitAny &&
+                // !expressionResultIsUnused(node)`): a statement-position `yield x;`
+                // discards the yield's RESULT, so the implicit-any result draws no
+                // TS7057 (harness typeWriter.ts forEachASTNode). Only the operand
+                // is walked.
+                var e: Expression = stmt.expression
+                while (e is ParenthesizedExpression) e = e.expression
+                if (e is YieldExpression) {
+                    e.expression?.let { walkYield7057Expr(it, inGen, source, fileName) }
+                } else {
+                    walkYield7057Expr(stmt.expression, inGen, source, fileName)
+                }
+            }
             is VariableStatement -> for (d in stmt.declarationList.declarations) d.initializer?.let { walkYield7057Expr(it, inGen, source, fileName) }
             is ReturnStatement -> stmt.expression?.let { walkYield7057Expr(it, inGen, source, fileName) }
             is ThrowStatement -> stmt.expression?.let { walkYield7057Expr(it, inGen, source, fileName) }
@@ -28867,6 +28890,13 @@ class Checker(
         // Skip ambient namespaces (declare keyword): TypeScript allows ambient
         // declarations to be split across files.
         if (ModifierFlag.Declare in stmt.modifiers) return
+        // Round 479: a MODULE file's top-level namespace never merges with another
+        // file's class/function in real tsc (module scopes are isolated) — the
+        // merged `globals` symbol is a mergeSymbolTable conflation artifact
+        // (compiler/debug.ts `namespace Debug` vs harness fourslashInterfaceImpl's
+        // unrelated `class Debug`). Only SCRIPT-file namespaces can genuinely merge
+        // cross-file.
+        if (isModuleFile(fileResults[fileName]?.sourceFile?.statements ?: emptyList())) return
         val mergedSym = globals[nameNode.text] ?: return
         if (!mergedSym.flags.hasAny(SymbolFlags.Class or SymbolFlags.Function)) return
         // Find the class/function declaration's source file.
@@ -28883,6 +28913,9 @@ class Checker(
         val (mergedFileName, _) = resolveDeclarationSourceFile(mergedDecl.pos)
         if (mergedFileName == null) return
         if (mergedFileName == fileName) return  // same file — no error
+        // Round 479: the class/function side must be script-scoped too (a module
+        // file's class is invisible to a script-file namespace in real tsc).
+        if (isModuleFile(fileResults[mergedFileName]?.sourceFile?.statements ?: emptyList())) return
         val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
         diagnostics.add(Diagnostic(
             message = "A namespace declaration cannot be in a different file from a class or function with which it is merged.",
@@ -44436,7 +44469,18 @@ interface DataView {
             } catch (_: Exception) { return null }
             // Honor optional class properties / interface members: `foo?: T`
             // adds undefined to the property type for nullish-detection purposes.
-            if (isOptionalProperty(prop)) {
+            // Round 479: ANY optional declaration counts — a cross-file
+            // class+interface merge (harness fakesHosts `class System { realpath() }`
+            // vs compiler sys.ts `interface System { realpath?() }`) pollutes the
+            // merged prop's declarations, and isOptionalProperty reads only the
+            // first; for THIS nullish-detection purpose any-optional is the
+            // conservative (suppressing) direction — tsc resolves the un-merged
+            // interface member, which is optional.
+            if (isOptionalProperty(prop) || prop.declarations.any { d ->
+                    (d as? MethodDeclaration)?.questionToken == true ||
+                        (d as? PropertyDeclaration)?.questionToken == true
+                }
+            ) {
                 t = getUnionType(listOf(t, undefinedType))
             }
         }
@@ -119131,14 +119175,25 @@ interface DataView {
                 member.body?.let { body ->
                     val savedLocalTypes = currentLocalTypes
                     val savedParamBindings = currentParamBindingNames
+                    val savedShadowed = currentShadowedNames
                     currentLocalTypes = currentLocalTypes.toMutableMap()
                     currentParamBindingNames = currentParamBindingNames.toMutableSet()
+                    currentShadowedNames = currentShadowedNames.toMutableSet()
                     try {
                         populateParameterLocalTypes(member.parameters)
+                        // Round 479: a method-body local must shadow a same-named leaked
+                        // module var / global in this pass too (the round-447 rule was
+                        // applied to FunctionDeclaration/arrow/fn-expr bodies only) —
+                        // fourslashImpl's `let refactors = …` otherwise resolved to
+                        // refactorProvider.ts's leaked `Map<string, Refactor>` and the
+                        // forEach callback param typed as `Refactor`.
+                        val mdParamNames = member.parameters.mapNotNull { p -> (p.name as? Identifier)?.text }.toSet()
+                        applyBodyLocalShadowing(body.statements, mdParamNames)
                         checkPropertyAccessInStatements(body.statements, source, fileName, effectiveClassType)
                     } finally {
                         currentLocalTypes = savedLocalTypes
                         currentParamBindingNames = savedParamBindings
+                        currentShadowedNames = savedShadowed
                     }
                 }
             }
@@ -119146,14 +119201,19 @@ interface DataView {
                 member.body?.let { body ->
                     val savedLocalTypes = currentLocalTypes
                     val savedParamBindings = currentParamBindingNames
+                    val savedShadowed = currentShadowedNames
                     currentLocalTypes = currentLocalTypes.toMutableMap()
                     currentParamBindingNames = currentParamBindingNames.toMutableSet()
+                    currentShadowedNames = currentShadowedNames.toMutableSet()
                     try {
                         populateParameterLocalTypes(member.parameters)
+                        val ctorParamNames = member.parameters.mapNotNull { p -> (p.name as? Identifier)?.text }.toSet()
+                        applyBodyLocalShadowing(body.statements, ctorParamNames)
                         checkPropertyAccessInStatements(body.statements, source, fileName, classType)
                     } finally {
                         currentLocalTypes = savedLocalTypes
                         currentParamBindingNames = savedParamBindings
+                        currentShadowedNames = savedShadowed
                     }
                 }
             }
@@ -120285,6 +120345,18 @@ interface DataView {
             .maxByOrNull { it.container!!.pos } ?: return false
         // Receiver must be CAPTURED — not one of the closure's own params/locals.
         if (root in closure.localNames) return false
+        // Round 479: a closure that is an ARGUMENT of a call whose callee chain is
+        // rooted at `root?.` executes only when `root` is non-nullish —
+        // `program?.getSourceFiles().slice().sort().forEach(f => { program.x })`
+        // (tsc harness incrementalUtils.ts getProgramStructure). tsc binds
+        // optional-chain conditions into the arguments' flow; our Flow.kt does not
+        // model chains, so bail here (suppression-only, FP-safe).
+        val graphSource = graph.sourceFile
+        if (graphSource != null) {
+            closure.container?.let { c ->
+                if (closureGuardedByOptionalChainRoot(c, root, graphSource)) return false
+            }
+        }
         var raw = try { getTypeOfExpression(recv) } catch (_: Exception) { return false }
         // B467: a function-body `var`/`let` captured in a nested closure does not resolve
         // its declared annotation type through the closure scope (getTypeOfExpression →
@@ -120315,6 +120387,119 @@ interface DataView {
             start = recv.pos, length = root.length,
         ))
         return true
+    }
+
+    /**
+     * Round 479: is [closureNode] contained (by range) in an ARGUMENT of some
+     * CallExpression whose callee chain's leftmost link is `[root]?.` — i.e.
+     * `root?.a().b.forEach(closure)`? Argument evaluation implies the optional
+     * chain did not short-circuit, so `root` is non-nullish while the closure
+     * runs. Iterative worklist (never recurse a BinaryExpression left spine —
+     * the binderBinaryExpressionStress rule).
+     */
+    private fun closureGuardedByOptionalChainRoot(
+        closureNode: Node, root: String, sourceFile: SourceFile,
+    ): Boolean {
+        val work = ArrayDeque<Node>()
+        for (s in sourceFile.statements) {
+            if (closureNode.pos >= s.pos && closureNode.end <= s.end) work.add(s)
+        }
+        while (work.isNotEmpty()) {
+            val n = work.removeLast()
+            if (closureNode.pos < n.pos || closureNode.end > n.end) continue
+            if (n is CallExpression &&
+                n.arguments.any { a -> closureNode.pos >= a.pos && closureNode.end <= a.end }
+            ) {
+                // Walk the callee chain leftward; the link whose receiver IS the
+                // bare root Identifier must carry the `?.`.
+                var e: Expression = n.expression
+                var guarded = false
+                loop@ while (true) {
+                    when (e) {
+                        is PropertyAccessExpression -> {
+                            if ((e.expression as? Identifier)?.text == root && e.questionDotToken) guarded = true
+                            e = e.expression
+                        }
+                        is ElementAccessExpression -> {
+                            if ((e.expression as? Identifier)?.text == root && e.questionDotToken) guarded = true
+                            e = e.expression
+                        }
+                        is CallExpression -> e = e.expression
+                        is ParenthesizedExpression -> e = e.expression
+                        is NonNullExpression -> e = e.expression
+                        else -> break@loop
+                    }
+                }
+                if (guarded) return true
+            }
+            for (c in nodeChildrenForRangeWalk(n)) {
+                if (closureNode.pos >= c.pos && closureNode.end <= c.end) work.add(c)
+            }
+        }
+        return false
+    }
+
+    /** Children of [n] relevant for the range-containment walk above — statements,
+     *  expressions, and function bodies; iterative-friendly (returns a list). */
+    private fun nodeChildrenForRangeWalk(n: Node): List<Node> = when (n) {
+        is ExpressionStatement -> listOf(n.expression)
+        is VariableStatement -> n.declarationList.declarations.mapNotNull { it.initializer }
+        is ReturnStatement -> listOfNotNull(n.expression)
+        is IfStatement -> listOfNotNull(n.expression, n.thenStatement, n.elseStatement)
+        is Block -> n.statements
+        is ForStatement -> listOfNotNull(n.initializer, n.condition, n.incrementor, n.statement)
+        is ForInStatement -> listOfNotNull(n.expression, n.statement)
+        is ForOfStatement -> listOfNotNull(n.expression, n.statement)
+        is WhileStatement -> listOfNotNull(n.expression, n.statement)
+        is DoStatement -> listOfNotNull(n.statement, n.expression)
+        is SwitchStatement -> n.caseBlock.flatMap {
+            when (it) {
+                is CaseClause -> it.statements + listOfNotNull(it.expression)
+                is DefaultClause -> it.statements
+                else -> emptyList()
+            }
+        }
+        is TryStatement -> listOfNotNull(n.tryBlock, n.catchClause?.block, n.finallyBlock)
+        is LabeledStatement -> listOf(n.statement)
+        is FunctionDeclaration -> listOfNotNull(n.body)
+        is ClassDeclaration -> n.members
+        is ModuleDeclaration -> (n.body as? ModuleBlock)?.statements ?: emptyList()
+        is MethodDeclaration -> listOfNotNull(n.body)
+        is Constructor -> listOfNotNull(n.body)
+        is GetAccessor -> listOfNotNull(n.body)
+        is SetAccessor -> listOfNotNull(n.body)
+        is PropertyDeclaration -> listOfNotNull(n.initializer)
+        is ArrowFunction -> listOfNotNull(n.body)
+        is FunctionExpression -> listOfNotNull(n.body)
+        is CallExpression -> n.arguments + n.expression
+        is NewExpression -> (n.arguments ?: emptyList()) + n.expression
+        is PropertyAccessExpression -> listOf(n.expression)
+        is ElementAccessExpression -> listOf(n.expression, n.argumentExpression)
+        is BinaryExpression -> listOf(n.left, n.right)
+        is ConditionalExpression -> listOf(n.condition, n.whenTrue, n.whenFalse)
+        is ParenthesizedExpression -> listOf(n.expression)
+        is PrefixUnaryExpression -> listOf(n.operand)
+        is PostfixUnaryExpression -> listOf(n.operand)
+        is AwaitExpression -> listOf(n.expression)
+        is NonNullExpression -> listOf(n.expression)
+        is AsExpression -> listOf(n.expression)
+        is SatisfiesExpression -> listOf(n.expression)
+        is TypeAssertionExpression -> listOf(n.expression)
+        is ObjectLiteralExpression -> n.properties.mapNotNull {
+            when (it) {
+                is PropertyAssignment -> it.initializer
+                is ShorthandPropertyAssignment -> it.objectAssignmentInitializer
+                is MethodDeclaration -> it.body
+                is GetAccessor -> it.body
+                is SetAccessor -> it.body
+                is SpreadAssignment -> it.expression
+                else -> null
+            }
+        }
+        is ArrayLiteralExpression -> n.elements
+        is SpreadElement -> listOf(n.expression)
+        is TemplateExpression -> n.templateSpans.map { it.expression }
+        else -> emptyList()
     }
 
     private fun checkSinglePropertyAccess(
