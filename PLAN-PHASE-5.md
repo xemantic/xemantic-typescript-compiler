@@ -79,6 +79,21 @@ accumulated name set) that is quadratic LinkedHashSet churn.
   clear top walker (5.1% self, 6.5% inclusive; `checkPropertyAccessInExpr` 8.8% inclusive
   → `checkSinglePropertyAccess` 7.5% → `checkMemberAccessMissing`) — audit its per-access
   work for a real wall-clock lever, not just allocation churn.
+- **Fix 2 (commit `be5c0a2b`) — memoize `getLineAndCharacterOfPosition` (a
+  reduce-redundant-WORK lever, not allocation):** it was an O(position) linear newline
+  scan from index 0 on EVERY call — on tsc's ~1.5 MB checker.ts a position near the end
+  is ~1.5 M char comparisons per call, run per-diagnostic + in several walker position
+  computations (0.9% self / 1.9% inclusive). Build a per-source line-start offset table
+  once (memoized by the stable `sourceFile.text` String — JVM String.hashCode cached +
+  equals short-circuits on identity → O(1) lookups after the first per file) and
+  binary-search the greatest offset ≤ min(position, len). Byte-for-byte equivalent
+  result (line/col unchanged for all 46 diagnostics — the sorted diff is empty).
+  `lineStartsCache` declared before `init` (the function runs during init via diagnostic
+  emission). **Same-session A/B (daemon stopped, 4 runs, self `time:`): BEFORE (linear)
+  median 26.75 s vs AFTER (memo) median 26.41 s — ~1.3% faster, matching the ~0.9% self
+  this held.** +2 local `LineAndCharacterMemoTest` (offset-independent: two identical
+  errors N lines apart → exactly an N-line gap + identical column, deep into a large
+  source). Suite 10,171 → 10,173.
 - **Also this session (commit `1f744df5`) — restored the warning-clean invariant:**
   round 484 flagged 5 drifted `Checker.kt` compiler warnings; all fixed (redundant
   `?.`/cast/`else`, each verified to drop no load-bearing smart-cast or side effect —
