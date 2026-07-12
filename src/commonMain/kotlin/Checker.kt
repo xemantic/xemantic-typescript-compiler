@@ -120759,12 +120759,20 @@ interface DataView {
         if (root == "this" || root == "super" || root == "arguments") return false
         val graph = currentFlowGraph ?: return false
         // Innermost closure (Arrow/FunctionExpression) lexically containing the receiver.
-        val closure = graph.closureStarts
-            .filter { cs ->
-                val c = cs.container
-                c != null && recv.pos >= c.pos && recv.pos < c.end
+        // Round 482 (M5.1 perf): this runs for EVERY property-access with an Identifier
+        // receiver — a single allocation-free pass (was `.filter{}.maxByOrNull{}`, which
+        // built a throwaway list per call; a niche 1.6%-self emitter on the harness JFR).
+        if (graph.closureStarts.isEmpty()) return false
+        var found: FlowStart? = null
+        var bestPos = -1
+        for (cs in graph.closureStarts) {
+            val c = cs.container ?: continue
+            if (recv.pos >= c.pos && recv.pos < c.end && c.pos > bestPos) {
+                bestPos = c.pos
+                found = cs
             }
-            .maxByOrNull { it.container!!.pos } ?: return false
+        }
+        val closure = found ?: return false
         // Receiver must be CAPTURED — not one of the closure's own params/locals.
         if (root in closure.localNames) return false
         // Round 479: a closure that is an ARGUMENT of a call whose callee chain is
