@@ -738,6 +738,17 @@ class Checker(
      *  re-scanned every member's annotation + built fresh mutable sets. */
     private val kindDomainKeysOfTypeCache = HashMap<Int, Set<String>>()
 
+    /** Round 486 (M5.1 perf): per-source line-start offsets for
+     *  [getLineAndCharacterOfPosition], which was an O(position) linear newline scan
+     *  from index 0 on every call — on a ~1.5 MB source file (tsc's checker.ts) a
+     *  position near the end is ~1.5 M char comparisons per call, and it runs
+     *  per-diagnostic + in several walker position computations. Keyed by the source
+     *  String (the stable per-file `sourceFile.text` reference; JVM String.hashCode is
+     *  cached and equals short-circuits on identity, so lookups are O(1) after the first
+     *  per file). Built lazily; a binary search over the offsets replaces the scan.
+     *  Declared before `init` — the function runs during init (diagnostic emission). */
+    private val lineStartsCache = HashMap<String, IntArray>()
+
     /** Pre-built per-file type maps: fileName → (name → Type). Built once during init,
      *  contains types for all file-level annotated declarations. Used by getTypeOfIdentifier
      *  to resolve file-level identifiers across all checker passes. */
@@ -12013,16 +12024,31 @@ class Checker(
     /**
      * Compute 1-based line and character for a position in source text.
      */
-    private fun getLineAndCharacterOfPosition(source: String, position: Int): Pair<Int, Int> {
-        var line = 1
-        var lineStart = 0
-        for (i in 0 until position.coerceAtMost(source.length)) {
-            if (source[i] == '\n') {
-                line++
-                lineStart = i + 1
-            }
+    /** Line-start offsets for `source` = [0] followed by (i+1) for each `\n` at index i.
+     *  Memoized per source String (init-order: [lineStartsCache] is declared before init). */
+    private fun lineStartsFor(source: String): IntArray =
+        lineStartsCache.getOrPut(source) {
+            val starts = ArrayList<Int>()
+            starts.add(0)
+            for (i in source.indices) if (source[i] == '\n') starts.add(i + 1)
+            starts.toIntArray()
         }
-        return line to (position - lineStart + 1)
+
+    private fun getLineAndCharacterOfPosition(source: String, position: Int): Pair<Int, Int> {
+        // Byte-for-byte equivalent to the former linear scan: line = 1 + (# of `\n` in
+        // [0, min(position, len))), lineStart = index after that last `\n`, character
+        // uses the ORIGINAL (un-coerced) position. Binary-search the greatest lineStart
+        // offset <= min(position, len) instead of scanning from 0.
+        val bound = position.coerceAtMost(source.length)
+        val starts = lineStartsFor(source)
+        var lo = 0
+        var hi = starts.size - 1
+        var idx = 0
+        while (lo <= hi) {
+            val mid = (lo + hi) ushr 1
+            if (starts[mid] <= bound) { idx = mid; lo = mid + 1 } else { hi = mid - 1 }
+        }
+        return (idx + 1) to (position - starts[idx] + 1)
     }
 
     /** Inverse of getLineAndCharacterOfPosition: 1-based (line, col) → char offset in `source`. */
