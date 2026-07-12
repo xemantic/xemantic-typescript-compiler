@@ -40,7 +40,7 @@ which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the b
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
 **Round 480 (2026-07-12, same session as 479) — SIX fixes in 1 commit (629561bb). Dashboard:
-harness 109 → 102 (~8 real left); every step zero-additions by per-position diff; all seven
+harness 109 → 100 with the 480b heritage batch (ddad6077): an imported conflated heritage base resolves per-file (conflatedPerFileViewForContext) + the derived-vs-chimera bails (conflatedChimeraTargetSourceHasPerFileBase, relation entry + arg emitter — the first cut manufactured 2 ParseConfigFileHost FPs, caught by per-position diff). ~5 real left; every step zero-additions by per-position diff; all seven
 other profiles hold their 46 floors. Suite 10,132 → 10,142 (+10 local across 5 new test
 files, 0 regressions); bench row +2.1% self (noise band).**
 - **Never-inference:** a no-return block body whose every path THROWS infers `never`
@@ -64,16 +64,17 @@ files, 0 regressions); bench row +2.1% self (noise band).**
 - **Any-element source REST params accept-all:** signatureRelatedTo's B196 expansion
   rejected `(...args: any[]) => void` → `(project: Project) => void` by comparing the ARRAY
   type contravariantly when the element gate returned null (incrementalUtils:656).
-- **NEXT (harness @102, ~8 real):** documentsUtil:30 (reduce<U> accumulator contextual
-  typing — both overloads arity-applicable so B476 bails, yet `meta` typed as T; probe);
-  harnessIO:379 (as-cast member assignment ctx — minimal repro passes, whole-program only);
-  harnessLanguageService:754 (SessionServerHost vs ServerHost — the System class+interface
-  chimera on the RELATION side; probe the failing member chain) + :758 (spread of
-  barrel-unresolvable `nullTypingsInstaller` in a NESTED objlit member — needs the
-  round-445 unresolved-spread bail at checkNestedObjLitPropTypes); fourslash:1214
-  ('array' vs ArrayOrSingle<…> union); editorServices:3212 + services:1790 (ParseConfigHost
-  family relation residuals — the resolution side landed round 479, these two fail
-  elsewhere); harnessGlobals ×3 (pending a real-tsc check — likely env-legit).**
+- **NEXT (harness @100, 5 real + harnessGlobals×3 likely-env-legit):** documentsUtil:30
+  (reduce<U> accumulator contextual typing — both overloads arity-applicable so B476
+  bails, yet `meta` typed as T; probe); harnessIO:379 (as-cast member assignment ctx —
+  minimal repro passes, whole-program only; probe); harnessLanguageService:758 (spread of
+  barrel-unresolvable `nullTypingsInstaller` in a var-decl objlit MEMBER value — the
+  emission is emitPerPropertyMismatchesForObjectLiteral per the probe; needs the
+  round-445 unresolved-spread bail there); fourslash:1214 ('array' vs ArrayOrSingle<…>
+  union — the "array" display suggests an un-typed array literal vs an alias union);
+  editorServices:3212 (CachedDirectoryStructureHost vs chimera ParseConfigHost param —
+  no heritage link, tsc satisfies STRUCTURALLY; the arg emitter would need to compare
+  against the per-file view when the param is a chimera).**
 
 **Round 479 (2026-07-12 — the harness burn-down continues) — SEVENTEEN fixes across 3
 commits (0a5668b2 / 982431aa / 08cb0bab). Dashboard: harness 145 → 109 (−36; real ~14 left
