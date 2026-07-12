@@ -80,10 +80,31 @@ tests across 5 new files, 0 regressions).
   crashes/hangs/OOMs (compiler 78/78, tsc-cli 80/80, jsTyping 84/84, deprecatedCompat
   81/81, typingsInstallerCore 88/88, services 252/252, server 274/274, harness 312/312
   via the bench row — self 50.5 s, +0.9% noise band, RSS 1.89 GB).
-- **NEXT (post-v1):** M5 (performance) is the directive's second half and starts now;
-  byte-correct emit diffing vs real tsc stays network-gated (needs node + typescript).
-  Candidate follow-ups: delete superseded pin walkers; re-audit the env-legit floors
-  once a node-types story exists.**
+- **M5.1 fresh JFR pass (same session, harness profile, 50.5 s / 4,070 samples) — the
+  round-434 "flat profile" verdict still holds (top self = HashMap.getNode 6.4%), with
+  these ranked leads:** (a) **HashMap/HashSet churn ~20%+ inclusive aggregate**
+  (getNode 9.2%, put 7.8%, HashSet.add 6.9%, putVal 5.4% — the flow-walk memos and
+  per-walk set copies; M5.2 territory); (b) **checkMemberAccessMissing 8.6% inclusive
+  / 4.1% self** — the single biggest walker; (c) **the barrel-star resolution chain
+  resolveBarrelStarTarget → resolveModuleSpecifierRelative → normalizePath ~5%**
+  (every star-chain walk re-resolved every hop) — **FIXED same session:
+  `barrelStarTargetCache` (Tier-2 pure memo over frozen fileResults), byte-identical
+  diagnostics, harness self 50.5 → 46.2 s (−8.5%, bench row)**; (d) the discriminant key-domain AST
+  scans `kindDomainKeysFromTypeNode` + `enumSwitchKeysFromTypeNode` ~6% combined
+  (per-node memo candidates); (e) display-string building (typeToString 3.4% +
+  joinTo/split ~3.5%); (f) `emitTs18048ForClosureCapturedUndefinedReceiver` 1.3%
+  self (a niche emitter — audit its per-node work). `findSymbolInExports` 2.7% self
+  and `getTypeParamInfo` 1.7% self are smaller flat-profile entries. Caller
+  attribution: normalizePath ← resolveModuleSpecifierRelative (137/188);
+  resolveModuleSpecifierRelative ← resolveBarrelStarTarget (82 direct + 117
+  deep-recursion truncated); checkMemberAccessMissing ← checkSinglePropertyAccess
+  (254/351). Recording: `$SCRATCH/r481-harness.jfr` (session-local; rerun per the
+  docs/parallel-caching.md how-to — the profile shifts after every fix).
+- **NEXT (post-v1):** M5 continues — next leads per the JFR ranking above (M5.2
+  allocation discipline / the flow-walk memo churn first); byte-correct emit diffing
+  vs real tsc stays network-gated (needs node + typescript). Candidate follow-ups:
+  delete superseded pin walkers; re-audit the env-legit floors once a node-types
+  story exists.**
 
 **Round 480 (2026-07-12, same session as 479) — SIX fixes in 1 commit (629561bb). Dashboard:
 harness 109 → 100 with the 480b heritage batch (ddad6077): an imported conflated heritage base resolves per-file (conflatedPerFileViewForContext) + the derived-vs-chimera bails (conflatedChimeraTargetSourceHasPerFileBase, relation entry + arg emitter — the first cut manufactured 2 ParseConfigFileHost FPs, caught by per-position diff). ~5 real left; every step zero-additions by per-position diff; all seven
