@@ -133,68 +133,6 @@ files, 0 regressions); 5 fix commits (d9f0ecab / cfa323d0 / 843f8ce9 / f06586f8 
   `Type` (public-API `isUnion()`/`isStringLiteral()` this-guard modeling).**
 
 
-### Post-v1 backlog — the "any TypeScript project" horizon (parked 2026-07-03)
-
-The top-to-bottom loop SKIPS this section until v1 (the 8 tsc-source profiles at zero
-FPs) lands. None of these block self-compiling tsc. Each returns to the live queue
-when v1 lands — or earlier if a live item genuinely needs one (promote per protocol,
-with a session note saying why). Item IDs are stable; session notes reference them.
-
-- [ ] **M2.4 DOM libs as an opt-in set** (dom.generated.d.ts is 1 MB+ — measure the
-  parse/bind cost; ties into the shared-snapshot design). tsc's sources don't
-  reference DOM — post-v1.
-- [ ] **M3.0 Conformance generator extension.** Extend `generateTypeScriptTests` with
-  a per-category allowlist for `tests/cases/conformance/` (5,907 files; keep all tsgo
-  set-B filters). Start with the categories matching M3.1 (types/typeParameters,
-  types/typeRelationships, expressions/functions). Each category lands only when its
-  failures are triaged into queue items — never leave a category half-red without
-  notes. Owner approval (2026-07-02) stands; optionally pull in early as an extra
-  regression net if an M3 campaign wants the coverage.
-- [ ] **M3.5 Per-file scopes** (Blocker #3: stop merging all file locals into
-  `globals`; per-file scope construction with explicit import visibility). Revisit
-  before v1 ONLY if dashboard FPs trace to cross-file scope conflation on tsc sources.
-- [ ] **M4.1 Full nodenext resolution**: package.json `exports`/`imports` maps,
-  symlink/realpath (pnpm layouts), `typesVersions`, package self-references. (The tsc
-  repo itself uses relative imports + @types — unused for v1.)
-- [ ] **M4.2 Real declaration emitter.** `.d.ts` output for arbitrary code (the corpus
-  strips most `.d.ts` sections, so almost none exists today; `declaration: true` is
-  table stakes for "any project"). Test bed: conformance decl baselines + self-compile
-  d.ts diffing. Pull into v1 only if the owner defines "fully compile tsc" to include
-  declaration output.
-- [ ] **M4.3 JSX end-to-end** (`jsx: react-jsx`/`react`/`preserve` transforms on real
-  React-shaped code).
-- [ ] **M4.4 External sourcemaps** (`.js.map` files; inline maps exist).
-- [ ] **M4.5 Decision point**: project references / composite / incremental scope
-  (tsgo supports them; needed for large monorepos — decide build vs defer with owner).
-- [ ] **M4.6 `package.json "type": "module"` module-format detection in
-  `ProjectCompiler`** (found compiling zod, 2026-07-07): under `module: NodeNext`
-  with a `"type": "module"` package.json, real tsc emits ESM but we emit CJS — the
-  `collectPackageJsonTypes` machinery exists only for the multi-file TEST-source path
-  and is not wired into the on-disk project pipeline. Repro: zod (see M4.7); the
-  emitted CJS only runs in a `"type": "commonjs"` context. Unused for v1 (the
-  tsc-source bench project has no package.json → CJS default is correct there).
-- [ ] **M4.7 zod as a second dashboard profile** (validated 2026-07-07, round 432
-  session note): shallow-clone `github.com/colinhacks/zod`, compile
-  `packages/zod/src` (107 files, ~31k LOC) via a `tsconfig.xtsc.json` extending zod's
-  real `.configs/tsconfig.base.json` (strict, exactOptionalPropertyTypes,
-  noUnusedLocals, NodeNext), include `src/**/*.ts`, exclude tests/benchmarks — real
-  tsc 6.0.3 reports 0 errors on it, so every xtsc diagnostic is an FP. Baseline
-  2026-07-07: 1,665 FPs (top: TS7006×447 contextual params, TS2694×284 namespace
-  members via `export *` barrels, TS7029×211 switch-fallthrough, TS2344×182), 0
-  crashes, all 107 files emit, output passes a runtime smoke test. Complements the
-  tsc-source profiles: stresses generic method chaining + noFallthroughCasesInSwitch,
-  which tsc's own source doesn't.
-
-### Offline asset inventory (verified 2026-07-02)
-
-- `typescript-repo` object DB is complete (sparse checkout, full objects): any
-  `src/**` path extractable via `git archive HEAD <path>`; `src/lib/` holds the 110
-  real lib `.d.ts` files; `tests/cases/conformance/` holds 5,907 `.ts`/`.tsx` cases.
-- Node/tsc/tsgo are NOT currently installed — differential testing (M0 optional) and
-  real `@types/node` (M1.3) wait for network.
-- The benchmark project cache lives under `build/bench/` (cheap to rebuild); results
-  TSVs under `bench/` (gitignored, machine-specific).
-
 **Round 466 (2026-07-10) — Blocker #2 landed for the compiler profile: map-callback return
 inference through nested functions clears builder.ts:2390, the LAST real compiler FP. Dashboard:
 compiler 47 → 46 (**ZERO real FPs — all 46 are env-legit TS2591×43 require / TS2304×2 `global` /
@@ -1597,36 +1535,6 @@ each item still decomposes into a multi-session campaign — read PLAN-PHASE-4.m
   the compiler profile never hit it (co-located asserts). Perf: self-compile 72 → 92 s (extra
   narrowing; M5). LESSON: verify a "walk hits the cap" claim by instrumenting the truncation, NOT
   by inferring from a file's node count.**
-**M5 — Performance (starts at v1 compliance — the 8 tsc-source profiles compile clean)**
-
-- [ ] **M5.1 Profiling grid**: JFR/async-profiler over the project corpus (cold CLI,
-  warm in-process via BenchMain, RSS); publish flamegraph findings in a session note
-  before optimizing anything. **Partially done early (rounds 432–434, branch
-  `perf/flow-import-resolution`, owner-directed): two JFR rounds removed the four
-  dominant hotspots — self-compile ~593 → ~20 s, zod 6 → 3.5 s, byte-identical
-  diagnostics. Tooling: `scripts/aggregate_jfr.py`; method + remaining flat-profile
-  leads + tsc/tsgo comparison: `docs/parallel-caching.md`. A FRESH JFR pass is
-  mandatory before the next perf item — the profile shifts after every fix.**
-- [ ] **M5.2 Allocation discipline in the relation engine** (type interning /
-  canonicalization — replace the documented fresh-mint caps like the
-  `getPropertyTypeForRelation` depth bound with proper sharing).
-- [ ] **M5.3 Cache effectiveness under scope contexts** (today `nodeTypes` is bypassed
-  whenever any resolution context is active = recompute on every generic-heavy path).
-- [ ] **M5.4 Parallel per-file checking** via the existing-but-unused `CheckerPool`
-  (LinkStore side-tables already keep binder output immutable for this).
-  **Design decided (2026-07-07, owner discussion): share-nothing workers à la tsgo —
-  NO shared/concurrent maps; cache-tier rules, determinism requirements, the phased
-  plan (share-nothing → shared frozen lib slice → single-flight pure computations),
-  and the evaluated-and-declined cachemap dependency are all in
-  `docs/parallel-caching.md`. Read it BEFORE starting this item.**
-- [ ] **M5.5 Incremental compilation** (`.tsbuildinfo`-style reuse; the M2.1 shared
-  lib snapshot is the first piece).
-- [ ] **M5.6 Native target re-enable + tune** (linuxX64 was disabled in c7e3535f;
-  native already wins <10 kLOC — fix the big-input inversion, likely GC/allocation).
-- [ ] **M5.7 Numeric targets** (proposed; confirm with owner at M5 start): warm ≥ tsc
-  throughput on 500k-LOC real code; cold CLI ≤ 1.5× tsc on medium projects; RSS ≤ tsc;
-  stretch: approach tsgo on native.
-
 **Round 446 (2026-07-08) — array-literal→variadic-tuple-in-union returns + nested Array<X>-in-Array<Y>
 covariant relation + destructured-param method arity: THREE bounded fixes. Dashboard: compiler 188 →
 185 (−3), services 399 → 373 (−26), server 623 → 589 (−34), harness 868 → 806 (−62). Suite 9,540 →
