@@ -58,6 +58,22 @@ tsgo `--version` is "Version X" (→ `awk '{print $NF}'`). Local macOS validatio
 Linux GNU-grep gets real self/err too. NEXT: the EP.2/EP.1 emit-parity families, or
 resume M5.
 
+Also this session (owner-requested build-tooling check): **Gradle 9.5.1 → 9.6.1**
+(wrapper bumped, `compileKotlinJvm`+`compileTestKotlinJvm` and the full suite green
+10,167/0 — committed; build-tool only, no xtsc-runtime effect). **javaTarget 17 → 26
+experiment — MEASURED, NOT committed.** Target 26 compiles under Kotlin 2.4 (jvmTarget
+26 supported) and the dev box already RUNS on JDK 26, so the runtime JIT/GC of 26 is
+already in every bench number — a *bytecode-target* bump changes the class-file
+version + min-JDK, not runtime speed. A/B self-compile (3 runs each, JDK 26 both):
+target26 median 23.3s vs target17 median 25.8s (~10% apparent) — but 3 noisy samples
+on a busy box measured sequentially (26 first), so box-load drift dominates and a
+target-only bump rarely moves runtime >1–2%; treat as inconclusive/likely noise.
+DECISION: keep javaTarget=17 — this artifact is published to Maven Central as a
+multiplatform LIBRARY, and min-JDK 26 (non-LTS) would exclude ~all consumers (17/21/25
+LTS) + break the reusable CI workflow + bench.yml's JDK 21. Revisit only if xtsc ships
+as a standalone bundled-JRE binary (min-JDK moot) AND the gain is confirmed on a quiet
+box / warm BenchMain.
+
 **Round 484 (2026-07-12) — EP emit parity: three-way bench + emit diff + EP.3 landed
 (owner-authorized "output parity, including reported errors").**
 - **Three-way bench** (`compiler` profile, 78 files / 194,702 LOC, cold wall, emit): xtsc
