@@ -107,13 +107,21 @@ tests across 5 new files, 0 regressions).
   (254/351); findSymbolInExports ← findSymbolInAllNamespaceScopes (143/143);
   resolveConstEnumMemberAccess ← Transformer.transformExpression (118/131). Recording:
   `$SCRATCH/r481-harness.jfr` (session-local; rerun per the docs/parallel-caching.md
-  how-to — the profile shifts after every fix). Net M5.1 same-session gain: harness
-  self 50.5 → 45.0 s (−11%), diagnostics byte-identical.
+  how-to — the profile shifts after every fix). **FOUR Tier-2 memos landed same session
+  (all byte-identical diagnostics, full suite green): `barrelStarTargetCache`,
+  `namespaceScopeSymbolCache`, `typeParamInfoCache` (getTypeParamInfo — full-program
+  binder-table double scan per generic ref), `starExportVarDeclCache`
+  (resolveExportedVarDeclThroughStars — the emptyArray conflation path). Net harness
+  self 50.5 → 44.8 s (−11.3%). LESSON re-confirmed: a Tier-2 memo field consulted
+  during init (getTypeParamInfo runs via collectUninitializedVars) MUST be declared
+  BEFORE `init` — the first getTypeParamInfo cut NPE'd on a null cache field; the
+  crash surfaced as `COUNT=0` on the whole profile (a run-wide crash, not a diff).**
 - **NEXT (post-v1):** M5 continues — the remaining flat-profile leads are HashMap/HashSet
   churn in the flow-walk memos (M5.2 allocation discipline) and the discriminant
-  key-domain per-node AST scans (a per-node memo). byte-correct emit diffing vs real
-  tsc stays network-gated (needs node + typescript). Candidate follow-ups: delete
-  superseded pin walkers; re-audit the env-legit floors once a node-types story exists.**
+  key-domain per-node AST scans (context-sensitive on `currentFileLocals`, so a
+  file-keyed memo, not a pure one). byte-correct emit diffing vs real tsc stays
+  network-gated (needs node + typescript). Candidate follow-ups: delete superseded pin
+  walkers; re-audit the env-legit floors once a node-types story exists.**
 
 **Round 480 (2026-07-12, same session as 479) — SIX fixes in 1 commit (629561bb). Dashboard:
 harness 109 → 100 with the 480b heritage batch (ddad6077): an imported conflated heritage base resolves per-file (conflatedPerFileViewForContext) + the derived-vs-chimera bails (conflatedChimeraTargetSourceHasPerFileBase, relation entry + arg emitter — the first cut manufactured 2 ParseConfigFileHost FPs, caught by per-position diff). ~5 real left; every step zero-additions by per-position diff; all seven
