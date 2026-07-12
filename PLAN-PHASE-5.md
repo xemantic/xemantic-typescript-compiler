@@ -39,14 +39,15 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
-**Round 482 (2026-07-12) — M5.1 performance, first post-v1 perf item after the mandatory
-fresh JFR pass.** One commit (b72ebcf2). The fresh round-482 harness JFR (45.8 s / 3,620
-samples) confirmed the round-481 flat profile with the discriminant `.kind` key-domain
-family as the top set-churn source: `--callers-of AbstractCollection.addAll` and
-`HashSet.add` both put `kindDomainKeysOfType` at the top (~29 `addAll` + ~24 `HashSet.add`
-samples), because a union like `Node` is guard-narrowed at many read sites and each call
-re-scanned every member's `.kind` annotation and built fresh mutable sets.
-- **Fix (byte-identical, two behavior-preserving moves):**
+**Round 482 (2026-07-12) — M5.1 performance, first post-v1 perf items after the mandatory
+fresh JFR pass.** Two commits (b72ebcf2, 5b5d4f75), both byte-identical. The fresh round-482
+harness JFR (45.8 s / 3,620 samples) confirmed the round-481 flat profile with the
+discriminant `.kind` key-domain family as the top set-churn source: `--callers-of
+AbstractCollection.addAll` and `HashSet.add` both put `kindDomainKeysOfType` at the top
+(~29 `addAll` + ~24 `HashSet.add` samples), because a union like `Node` is guard-narrowed
+at many read sites and each call re-scanned every member's `.kind` annotation and built
+fresh mutable sets.
+- **Fix 1 (byte-identical, two behavior-preserving moves):**
   - Memoize `kindDomainKeysOfType` by Type.id (new `kindDomainKeysOfTypeCache`, mirroring
     `discriminantKindKeysCache` exactly — empty-set encodes "unreadable", and the same
     `canonicalEnumSymbol` cross-path determinism guarantee its `.kind`-annotation readers
@@ -55,12 +56,22 @@ re-scanned every member's `.kind` annotation and built fresh mutable sets.
     `kindDomainProvesNotSubtype(member, targetNode)` was re-scanning `targetTypeNode` once
     per union member; new `kindDomainKeysExceed(t, targetKeys)` takes the pre-computed
     domain so the filter computes it once per narrowing call.
-- **Verification:** harness diagnostics byte-identical (95, per-position `--listAll` diff
-  empty vs HEAD); full corpus suite green 10,155 → 10,157 (+2 local
+- **Verification (fix 1):** harness diagnostics byte-identical (95, per-position `--listAll`
+  diff empty vs HEAD); full corpus suite green 10,155 → 10,157 (+2 local
   KindDomainMemoConsistencyTest — repeated negative guards on the same union with different
   targets narrow independently, no stale cross-site memo contamination; + the negative
   control that a genuine subtype still collapses); clean same-machine A/B (3 runs each,
   daemon up) harness self **44.35 → 41.5 s (−6.4%)**; bench TSV row 41.1 s, 95 errors.
+- **Fix 2 (`emitTs18048ForClosureCapturedUndefinedReceiver`, 1.6% self):** this emitter runs
+  for EVERY property-access with an Identifier receiver and built a throwaway filtered list
+  per call (`.filter{}.maxByOrNull{}`) to find the innermost lexically-containing closure.
+  Replaced with an allocation-free single-pass max-`container.pos` scan + an empty-
+  closureStarts early bail. Byte-identical (harness 95, listAll diff empty); suite
+  10,157 → 10,160 (+3 local ClosureCapturedInnermostSelectionTest — the innermost-closure
+  selection the single pass must preserve: fires for a captured maybe-undefined receiver in
+  the inner of two nested closures, suppresses with an inner-closure guard, bails for the
+  inner closure's own local); bench row 41.1 → 40.8 s (−0.6%, allocation reduction near the
+  noise band but consistently in the right direction).
 - **NEXT M5 leads (from this JFR):** the node-keyed AST scans `kindDomainKeysFromTypeNode`
   / `enumSwitchKeysFromTypeNode` / `enumMemberKeysOfTypeNode` (3.7% / 3.1% / 2.3% inclusive)
   are the deeper cost but need file + node-identity keying — the round-481 (e) hazard (pos
