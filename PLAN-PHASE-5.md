@@ -39,6 +39,42 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
+**Round 480 (2026-07-12, same session as 479) — SIX fixes in 1 commit (629561bb). Dashboard:
+harness 109 → 102 (~8 real left); every step zero-additions by per-position diff; all seven
+other profiles hold their 46 floors. Suite 10,132 → 10,142 (+10 local across 5 new test
+files, 0 regressions); bench row +2.1% self (noise band).**
+- **Never-inference:** a no-return block body whose every path THROWS infers `never`
+  (tsc fall-off-never; gated on blockHasAnyReturn so a bare `return;` keeps void) —
+  evaluatorImpl's `import: _id => { throw … }` vs `import(id): Promise<…>`.
+- **Contextual literal returns:** allArgumentsMatch accepts an inline arrow arg whose every
+  RETURN is a string literal ∈ the param's literal-union return
+  (argFnLiteralReturnsSatisfyParam; block bodies must always-return) — vfsUtil `_walk`
+  callbacks widened `"retry"`/`"throw"` to string and FP-rejected BOTH overloads (TS2769 ×2).
+- **Fresh literals at the per-prop ARG leaf:** the B326 keep-the-literal rule applied where
+  an objlit arg's member is drilled per-property (`type: "file"` vs `type: "file"` displayed
+  as 'string' ⊄ 'string', fourslash organizeImports/getCombinedCodeFix).
+- **tsc's SUBTYPE rule in negative narrowing (the vfsUtil symlink-never family):**
+  `missingVsOptionalProvesNotSubtype` — a union member LACKING a property the guard target
+  declares OPTIONAL is not a subtype (tsc assumeFalse uses the subtype relation, where
+  missing-vs-optional FAILS; assignability passes) → `!isDirectory(node)` keeps
+  FileInode/SymlinkInode, whose only differences from DirectoryInode are optional props.
+  Wired into BOTH the union filter and the single-type negative return; the
+  structurally-identical corpus pin (instanceofWithStructurallyIdenticalTypes — no optional
+  distinguishers) is unaffected.
+- **Any-element source REST params accept-all:** signatureRelatedTo's B196 expansion
+  rejected `(...args: any[]) => void` → `(project: Project) => void` by comparing the ARRAY
+  type contravariantly when the element gate returned null (incrementalUtils:656).
+- **NEXT (harness @102, ~8 real):** documentsUtil:30 (reduce<U> accumulator contextual
+  typing — both overloads arity-applicable so B476 bails, yet `meta` typed as T; probe);
+  harnessIO:379 (as-cast member assignment ctx — minimal repro passes, whole-program only);
+  harnessLanguageService:754 (SessionServerHost vs ServerHost — the System class+interface
+  chimera on the RELATION side; probe the failing member chain) + :758 (spread of
+  barrel-unresolvable `nullTypingsInstaller` in a NESTED objlit member — needs the
+  round-445 unresolved-spread bail at checkNestedObjLitPropTypes); fourslash:1214
+  ('array' vs ArrayOrSingle<…> union); editorServices:3212 + services:1790 (ParseConfigHost
+  family relation residuals — the resolution side landed round 479, these two fail
+  elsewhere); harnessGlobals ×3 (pending a real-tsc check — likely env-legit).**
+
 **Round 479 (2026-07-12 — the harness burn-down continues) — SEVENTEEN fixes across 3
 commits (0a5668b2 / 982431aa / 08cb0bab). Dashboard: harness 145 → 109 (−36; real ~14 left
 excl. env-legit + harnessGlobals×3 reclassified likely-env-legit); every step zero-additions
@@ -568,95 +604,5 @@ files, 0 regressions).**
   whole-program probe batch (emitter:994 / program.ts:1088 / completions:2237 /
   documentHighlights:193); symbolDisplay:917/935 evolving-any (needs the model — round-470b
   finding); utilities:1750 TS2538 (keySelector-return generic inference).**
-
-**Round 470b (2026-07-10, the services burn-down continues) — ELEVEN bounded fixes across 9 commits
-(a PARALLEL session's perf commit — round 470 below — was rebased in mid-stream). Dashboard:
-services 86 → 72 (−14; every step strictly-removals by listAll diff; bench row 39.8 s self,
-−7.8% riding the perf commit). Suite 9,920 → 9,958 (+38 local across 9 new test files, 0
-regressions); commits 4df5b318 / b7c5b152 / 51a2c96c / c3c6813d / 13240cb2 / 03364f91 /
-1c8cd83a / e23b1d79 + the fix-10 commit.**
-- **Fix 1 (4df5b318, keyof typeof Enum):** `typeof Enum` washes to anyType so `keyof` gave
-  `string | number | symbol` — keyofTypeQueryEnumMemberNames builds the member-NAME literal union
-  (barrel aliases via the memoized flow-only resolveImportedEnumSymbol; the merged symbol's
-  declarations are POLLUTED with ImportSpecifiers, so the value-merge bail tests specific kinds,
-  never "anything non-enum"). Cleared navigateTo:188.
-- **Fix 2 (b7c5b152, union member with string index sig):** resolveMemberPropertyType falls back
-  to the apparent Type.Object's stringIndexInfo value — `settingsOrHost.getCompilationSettings` on
-  `CompilerOptions | MinimalResolutionCacheHost` resolves through CompilerOptions' index sig
-  (fixes BOTH the emission and property-TYPE sites, the round-419 lesson). Cleared
-  documentRegistry:222.
-- **Fix 3 (51a2c96c, TS2366 param-member discriminant):** paramMemberChainType resolves a switch
-  receiver `<param>.parent` through the param's annotation (the CFA pass has no param scope), so
-  `switch (constructorDeclaration.parent.kind)` over `ClassDeclaration | (ClassExpression & {…})`
-  proves exhaustive. Cleared convertParamsToDestructuredObject:683.
-- **Fixes 4+5 (c3c6813d, this-guard pair):** resolvePropertyMethodDecl resolves a NULLISH union
-  receiver through its sole non-nullish member, and the round-444 this-guard UNION bail is relaxed
-  to a shared-decl test (a `guard() && cond && read` branch join unions base + subtype, both
-  inheriting the guard). COMPANION caught by the local negative pin: resolvedCallReturnTypeForFlow
-  bails on an optional-chained CALLEE (`factory?.make(t)`). Cleared stringCompletions:641/642 ×3
-  + goToDefinition:513.
-- **Fix 6 (13240cb2, this.prop assignment ctx):** the implicit-any walker tracks the enclosing
-  class's members so `this.skipTrivia = skipTrivia || (pos => pos)` resolves the arrow's context
-  from the property annotation (getTypeOfExpression(this) is anyType per B101). Cleared
-  services.ts:1318 TS7006.
-- **Fix 7 (03364f91, OR-return left narrowing):** a returned `X || undefined` / `X ?? y`
-  recombines with the guard-narrowed LEFT reference via combineBinaryTypes (monotone). Cleared
-  sourcemaps:212.
-- **Fix 8 (1c8cd83a, nested-block const shadows param, M1.11):** a let/const in a NESTED block
-  colliding with a PARAM registers anyType in the call-types walker (top-level body decls keep the
-  param-wins redeclaration rule — functionArgShadowing). Cleared importFixes:1967/1970 ×2.
-- **Fix 9 (e23b1d79, sibling-discriminant optional-member arg):** the optional-member-arg TS2345
-  emitter suppresses when the discriminant-NARROWED receiver declares the member REQUIRED
-  (`case SyntaxKind.MethodDeclaration: … fd.name` — the guard tests the SIBLING `.kind`, so the
-  path-keyed access narrowing can't see it). Cleared convertParamsToDestructuredObject:475 +
-  fixUnreferenceableDecoratorMetadata:70.
-- **Fix 10 (flow-verified return precise verdict):** a flow-narrowing-VERIFIED return source
-  early-returns from the engine block instead of falling to the STRING fallback (the round-436c
-  trap) — `if (typeof target === "string") return target;` with `target: unknown` had the engine
-  pass (the M1.9 if-arm machinery had already overwritten currentLocalTypes to `string`) but the
-  varTypes string still said "unknown" and re-FP'd. TWO precise-verdict arms: the substitution
-  sites set a `sourceNarrowVerified` flag, and a name present in narrowedDeclaredTypes whose
-  raw resolved type relates counts too (PROBE470 found raw was ALREADY `string`). Never a blanket
-  engine-confirmed return. Cleared stringCompletions:1133.
-- **Scouted, deferred with findings:** symbolDisplay:917/935 TS7034/7005 is tsc's TWO-PART
-  evolving-any model (declaration-site TS7034 + per-reference auto-flow via
-  isPastLastAssignment/flowContainer-extension, tsc checker.ts ~30260/31170) — a faithful fix
-  needs the evolving-type model, not a walker tweak (static derivation could NOT reproduce why
-  f9/f10 error while symbolDisplay doesn't). utilities:1750 TS2538 needs binarySearchKey's U
-  inferred from the keySelector RETURN (generic inference). textChanges:706/callHierarchy:263
-  TS2349 look like augmentation-merge method resolution (Blocker #3 deep). completions:2237 +
-  documentHighlights:193 need probes (fn-typed-param sig alignment suspected for the latter).
-- **NEXT (services @ 72, 26 real):** the objlit giants (services.ts:1327 ObjectAllocator /
-  completions:1922/2299/2391 / importFixes:316/374 / signatureHelp:379 / findAllReferences:1000 —
-  nested objlit member context, likely one family); organizeImports:115/216 (optional-member
-  reads need `| undefined`, broad); program.ts:1088 ResolutionLoader<T>; services.ts:1585
-  string[] vs keyof-literal-union (Object.keys typing); fixMissingTypeAnnotationOnExports:452 ×2
-  (Node vs Expression brand); services.ts:656/725 SymbolObject implements Symbol (TS2420);
-  mapCode:55 flatten gate-(k) probe; jsTyping:414 barrel assertNever; emitter:994 whole-program
-  probe; symbolDisplay TS7034/7005 (needs the evolving-type model — see the deferral above).**
-
-**Round 470 (2026-07-10, user-directed 3-way benchmark + profile session, M5) — `localTypeAliasIndex`
-(Tier 1): [findLocalTypeAlias]'s per-call whole-file AST rescan replaced by an eager per-file
-first-wins DFS index (Checker.kt, declared before `init` per the init-order trap). Self-compile
-(compiler profile) wall 23.5 s → 18.6 s median of 3 (−21%), diagnostics byte-unchanged (46).
-Suite 9,920 → 9,925 (+5 local, LocalTypeAliasIndexTest, 0 regressions).**
-- JFR profile (scripts/aggregate_jfr.py, 1,211 samples @ stackdepth=1024): Checker 74% inclusive
-  (Parser 4% / Transformer 4% / Scanner 1.4%). `findLocalTypeAlias$scan` was the #1 SELF-time
-  method (~10% of samples incl. callers): `discUnionParamMembers` (the TS2488 exhaustive-default
-  never-destructure walker) called it for EVERY bare-TypeReference-annotated param of every
-  function → O(fileSize × functions × params) on checker.ts. Remaining hot after the fix, for a
-  future M5 session: stdlib collection churn ~30% of samples (per-function-body map snapshot
-  COPIES — `HashMap.putMapEntries` via checkFunctionBody / spread2698Stmt / the arithmetic+
-  call-types walkers — a layered-scope or mark/pop-log refactor target), flow walkers ~12%
-  (already budget/memo-optimized), property-access pass ~8%.
-- 3-way benchmark (same materialized `tsc-project-637d5746`, identical tsconfig, 3 cold runs each,
-  macOS arm64 8-core): **tsgo 7.0.0-dev 1.3 s / 546 MB; original tsc 6.0.3 (JS) 6.6 s / 654 MB;
-  xtsc post-fix 18.6 s / ~1.2 GB** (pre-fix 23.5 s; was ~3.6× JS-tsc, now ~2.8×). tsc and tsgo
-  agree BYTE-IDENTICALLY on 65 env-legit errors (offline, no @types/node); xtsc emits 46 of the
-  same family — **0 FPs, 19 FNs** on this profile. JFR shows ONE application thread does all
-  compiling (user/wall ≈ 2.8 is GC/JIT) — M5.4 parallelism is the other ~3× of the tsgo gap.
-- Incidental finding (not fixed): `scanExhaustiveSwitchDefault` does not descend ModuleDeclaration
-  bodies, so the TS2488 walker never fires inside namespaces (pre-existing; the index covers
-  namespace-nested ALIASES like the replaced scan did).
 
 
