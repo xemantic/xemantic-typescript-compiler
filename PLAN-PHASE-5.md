@@ -89,22 +89,31 @@ tests across 5 new files, 0 regressions).
   resolveBarrelStarTarget → resolveModuleSpecifierRelative → normalizePath ~5%**
   (every star-chain walk re-resolved every hop) — **FIXED same session:
   `barrelStarTargetCache` (Tier-2 pure memo over frozen fileResults), byte-identical
-  diagnostics, harness self 50.5 → 46.2 s (−8.5%, bench row)**; (d) the discriminant key-domain AST
-  scans `kindDomainKeysFromTypeNode` + `enumSwitchKeysFromTypeNode` ~6% combined
-  (per-node memo candidates); (e) display-string building (typeToString 3.4% +
-  joinTo/split ~3.5%); (f) `emitTs18048ForClosureCapturedUndefinedReceiver` 1.3%
-  self (a niche emitter — audit its per-node work). `findSymbolInExports` 2.7% self
-  and `getTypeParamInfo` 1.7% self are smaller flat-profile entries. Caller
-  attribution: normalizePath ← resolveModuleSpecifierRelative (137/188);
+  diagnostics, harness self 50.5 → 46.2 s (−8.5%, bench row)**; (d) **the symbol-lookup
+  family `findSymbolInAllNamespaceScopes` → `findSymbolInExports` ~7% inclusive** — the
+  Transformer probes `resolveConstEnumMemberAccess` for EVERY dotted expression chain,
+  and any head resolving nowhere (a B83.5-unbound function-body local) fell through
+  `resolveNamePath` to a full-program recursive namespace scan — **FIXED same session:
+  `namespaceScopeSymbolCache` (Tier-2 memo keyed by name; stored null = not found),
+  byte-identical diagnostics, harness self 46.2 → 45.0 s (a further −2.6%)**; (e) the
+  discriminant key-domain AST scans `kindDomainKeysFromTypeNode` +
+  `enumSwitchKeysFromTypeNode` ~6% combined (per-node memo candidates); (f)
+  display-string building (typeToString 3.4% + joinTo/split ~3.5%); (g)
+  `emitTs18048ForClosureCapturedUndefinedReceiver` 1.3% self (a niche emitter — audit
+  its per-node work). `getTypeParamInfo` 1.7% self is a smaller flat-profile entry.
+  Caller attribution: normalizePath ← resolveModuleSpecifierRelative (137/188);
   resolveModuleSpecifierRelative ← resolveBarrelStarTarget (82 direct + 117
   deep-recursion truncated); checkMemberAccessMissing ← checkSinglePropertyAccess
-  (254/351). Recording: `$SCRATCH/r481-harness.jfr` (session-local; rerun per the
-  docs/parallel-caching.md how-to — the profile shifts after every fix).
-- **NEXT (post-v1):** M5 continues — next leads per the JFR ranking above (M5.2
-  allocation discipline / the flow-walk memo churn first); byte-correct emit diffing
-  vs real tsc stays network-gated (needs node + typescript). Candidate follow-ups:
-  delete superseded pin walkers; re-audit the env-legit floors once a node-types
-  story exists.**
+  (254/351); findSymbolInExports ← findSymbolInAllNamespaceScopes (143/143);
+  resolveConstEnumMemberAccess ← Transformer.transformExpression (118/131). Recording:
+  `$SCRATCH/r481-harness.jfr` (session-local; rerun per the docs/parallel-caching.md
+  how-to — the profile shifts after every fix). Net M5.1 same-session gain: harness
+  self 50.5 → 45.0 s (−11%), diagnostics byte-identical.
+- **NEXT (post-v1):** M5 continues — the remaining flat-profile leads are HashMap/HashSet
+  churn in the flow-walk memos (M5.2 allocation discipline) and the discriminant
+  key-domain per-node AST scans (a per-node memo). byte-correct emit diffing vs real
+  tsc stays network-gated (needs node + typescript). Candidate follow-ups: delete
+  superseded pin walkers; re-audit the env-legit floors once a node-types story exists.**
 
 **Round 480 (2026-07-12, same session as 479) — SIX fixes in 1 commit (629561bb). Dashboard:
 harness 109 → 100 with the 480b heritage batch (ddad6077): an imported conflated heritage base resolves per-file (conflatedPerFileViewForContext) + the derived-vs-chimera bails (conflatedChimeraTargetSourceHasPerFileBase, relation entry + arg emitter — the first cut manufactured 2 ParseConfigFileHost FPs, caught by per-position diff). ~5 real left; every step zero-additions by per-position diff; all seven

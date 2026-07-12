@@ -1254,6 +1254,10 @@ class Checker(
      *  (star-chain walkers run during init). */
     private val barrelStarTargetCache = HashMap<String, SourceFile?>()
 
+    /** M5 (round 481): memo for [findSymbolInAllNamespaceScopes] (Tier 2 — see its
+     *  KDoc). Declared before `init` per the init-order gotcha. */
+    private val namespaceScopeSymbolCache = HashMap<String, Symbol?>()
+
     /** M3.4 (round 409): memo for [resolveExportedSymbolThroughStars] (keyed
      *  "<barrelFile> <name>" → target Symbol, a stored null means "not found /
      *  unresolvable"). The missing half of M1.1: [getModuleExportsFollowingStars]
@@ -6813,13 +6817,23 @@ class Checker(
     /**
      * Search all namespace export scopes in all binder results for a symbol with the given name.
      * Used when a name is only in a namespace scope (e.g., import alias inside a namespace body).
+     *
+     * M5 (round 481): memoized (Tier 2 — a pure function of the frozen binder tables;
+     * stored null = not found). The Transformer probes resolveConstEnumMemberAccess for
+     * EVERY dotted expression chain, and a head that resolves nowhere (any function-body
+     * local — B83.5-unbound) fell through resolveNamePath to this full-program recursive
+     * scan; ~7% of the harness JFR profile sat in this family.
      */
     private fun findSymbolInAllNamespaceScopes(name: String): Symbol? {
+        namespaceScopeSymbolCache[name]?.let { return it }
+        if (namespaceScopeSymbolCache.containsKey(name)) return null
+        var found: Symbol? = null
         for (br in binderResults) {
-            val found = findSymbolInExports(name, br.locals)
-            if (found != null) return found
+            found = findSymbolInExports(name, br.locals)
+            if (found != null) break
         }
-        return null
+        namespaceScopeSymbolCache[name] = found
+        return found
     }
 
     private fun findSymbolInExports(name: String, scope: SymbolTable): Symbol? {
