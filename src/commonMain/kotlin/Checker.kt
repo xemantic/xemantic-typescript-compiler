@@ -26052,6 +26052,19 @@ class Checker(
                             }
                         }
                         if (leftSym != null && !leftSym.flags.hasAny(SymbolFlags.Module)) {
+                            // Round 479: an `import * as X from "…"` alias IS a namespace in
+                            // type positions (`X.Type`), but the binder gives it only
+                            // SymbolFlags.Alias (its declaration is the whole ImportDeclaration;
+                            // resolveAlias never resolves NamespaceImport aliases — round 444).
+                            // Without this bail a case-differing sibling namespace triggers a
+                            // bogus TS2833 (harnessIO's `compiler.CompilationResult` vs the
+                            // `Compiler` namespace: "Did you mean 'Compiler'?").
+                            if (leftSym.flags.hasAny(SymbolFlags.Alias) &&
+                                symbolIsNamespaceImportAlias(leftSym, lname)
+                            ) {
+                                checkQualifiedNameExports(name, source, fileName)
+                                return
+                            }
                             val candidates = collectNamespaceNames(fileName)
                             val suggestion = getSpellingSuggestionFromNames(lname, candidates)
                             if (suggestion != null) {
@@ -26248,6 +26261,20 @@ class Checker(
             relatedInformation = listOfNotNull(relatedInfo),
         ))
     }
+
+    /**
+     * Round 479: is [sym] an alias created by `import * as name from "…"`? The binder
+     * declares such an alias with the whole ImportDeclaration as its declaration node
+     * (the NamespaceImport lives inside `importClause.namedBindings`), so identifying
+     * the shape requires drilling into the clause — and matching the bound [name],
+     * because a default import (`import name from "…"`) also records the whole
+     * ImportDeclaration as its declaration.
+     */
+    private fun symbolIsNamespaceImportAlias(sym: Symbol, name: String): Boolean =
+        sym.declarations.any { d ->
+            d is ImportDeclaration &&
+                (d.importClause?.namedBindings as? NamespaceImport)?.name?.text == name
+        }
 
     /** Emit TS2503: "Cannot find namespace 'X'." */
     private fun emitTS2503(name: String, node: Node, source: String, fileName: String) {
@@ -94295,6 +94322,44 @@ interface DataView {
                     ?: continue
                 if (targetFile in files) return perFileInterfaceType(name, targetFile)
             }
+            // Round 479: the namespace itself imported by NAME through a barrel —
+            // harness/client.ts's `import { protocol } from "./_namespaces/ts.server.js"`,
+            // where the barrel chain re-exports server/_namespaces/ts.server.ts's
+            // `import * as protocol from "./ts.server.protocol.js"; export { protocol };`.
+            // Follow the ImportSpecifier through the star chain to the namespace-import
+            // alias, then the alias's own module through ITS star exports to the
+            // interface's declaring leaf (protocol.ts). Same defer/null discipline as
+            // the NamespaceImport arm above.
+            for (decl in nsSym.declarations) {
+                if (decl !is ImportSpecifier) continue
+                val originalName = decl.propertyName?.text ?: decl.name.text
+                val entry = enclosingImportsOf(decl).firstOrNull { (_, stmt) ->
+                    (stmt.importClause?.namedBindings as? NamedImports)?.elements?.any { it === decl } == true
+                } ?: continue
+                val (contextFile, importDecl) = entry
+                val barrelSpec = (importDecl.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+                val barrelFile = resolveModuleSpecifier(barrelSpec, importDecl)
+                    ?: resolveAliasJsModuleSpecifier(barrelSpec, contextFile) ?: continue
+                val barrel = fileResults[barrelFile]?.sourceFile ?: continue
+                val nsAlias = resolveExportedSymbolThroughStars(barrel, originalName) ?: continue
+                val nsImportDecl = nsAlias.declarations.firstOrNull { d ->
+                    d is ImportDeclaration &&
+                        (d.importClause?.namedBindings as? NamespaceImport)?.name?.text == originalName
+                } as? ImportDeclaration ?: continue
+                // The declaring file of the namespace-import (needed as the relative-
+                // resolution context): the file whose locals hold THIS alias symbol.
+                val nsDeclFile = fileResults.entries.firstOrNull { (_, r) ->
+                    r.locals[originalName] === nsAlias
+                }?.key ?: continue
+                val nsSpec = (nsImportDecl.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+                val nsFile = resolveModuleSpecifier(nsSpec, nsImportDecl)
+                    ?: resolveAliasJsModuleSpecifier(nsSpec, nsDeclFile) ?: continue
+                val nsSource = fileResults[nsFile]?.sourceFile ?: continue
+                val leaf = if (nsFile in files) nsFile
+                else computeExportedInterfaceFileThroughStars(nsSource, name, mutableSetOf(), 0)
+                    ?: continue
+                if (leaf in files) return perFileInterfaceType(name, leaf)
+            }
             if (currentCheckFileName == null) conflatedCtxMissing = true
             return null
         }
@@ -122431,7 +122496,16 @@ interface DataView {
                         narrowed.baseTypes != null && narrowed.baseTypes!!.isNotEmpty()
                     if (!skipForBaseTypes) {
                         resolveStructuredTypeMembers(narrowed)
-                        if (getPropertyOfType(narrowed, propName) == null) {
+                        // Round 479: an index signature provides EVERY (string-index) /
+                        // numeric (number-index) property — `settings.typeScriptVersion`
+                        // on `interface CompilerSettings { [name: string]: string }` is
+                        // legal, so a narrowed single-interface receiver with an index
+                        // sig never draws TS2339 (tsc resolves the access to the index
+                        // value type). The un-narrowed path already has this bail; the
+                        // narrowed-single-Object emission missed it.
+                        val indexSigProvides = narrowed.stringIndexInfo != null ||
+                            (narrowed.numberIndexInfo != null && isNumericLiteralName(propName))
+                        if (!indexSigProvides && getPropertyOfType(narrowed, propName) == null) {
                             val narrowedDisplay = typeToString(narrowed)
                             val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
                             diagnostics.add(Diagnostic(
