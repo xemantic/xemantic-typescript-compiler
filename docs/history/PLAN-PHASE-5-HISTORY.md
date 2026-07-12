@@ -1,3 +1,92 @@
+**Round 479 (2026-07-12 — the harness burn-down continues) — SEVENTEEN fixes across 3
+commits (0a5668b2 / 982431aa / 08cb0bab). Dashboard: harness 145 → 109 (−36; real ~14 left
+excl. env-legit + harnessGlobals×3 reclassified likely-env-legit); every step zero-additions
+by per-position listAll diff; all seven other profiles re-verified at 46. Suite 10,098 →
+10,132 (+34 local, 13 new/extended test files, 0 regressions); harness self −7.2% (TSV row).**
+- **Conflation family (the big one):** `conflatedPerFileInterfaceType`'s QualifiedName arm
+  gains (a) an ImportSpecifier branch — a namespace imported by NAME through a barrel
+  (`import { protocol } from "./_namespaces/ts.server.js"` → the star chain →
+  `export { protocol }` of an `import * as protocol` → its module → the interface's
+  declaring leaf; client.ts protocol.TextSpan/Location ×5) — and (b) the NamespaceImport
+  branch follows a BARREL target's `export *` chain to the leaf (`ts.ParseConfigHost`
+  through harness `_namespaces/ts.js` vs fakesHosts' `class ParseConfigHost` chimera;
+  cleared the ParseConfigHost/TS2740/TS2739/TS7053/Classification family ×5).
+- **Namespace-import aliases ARE namespaces:** checkTypeNameResolved bails TS2833/TS2702
+  for an `import * as X` alias (symbolIsNamespaceImportAlias) — a case-differing sibling
+  namespace manufactured "Did you mean 'Compiler'?" ×4; and an import-equals alias to a
+  ns-member (`export import parse = ts.getPathComponents`) resolves the CALLEE through its
+  own target (importEqualsNamespaceMemberCalleeType), never a same-named merged-globals fn.
+- **Module-scope isolation on cross-file merge walkers:** TS2433 (namespace-split) and
+  TS2475 (const-enum use) gate on isModuleFile — two module files' same-named decls never
+  merge in real tsc (namespace Debug vs class Debug; const enum State vs class State).
+- **Narrowing/CFA:** the narrowed-single-Object TS2339 emission bails on index signatures
+  (CompilerSettings ×3); a closure that is an ARGUMENT of a call rooted at `root?.` is
+  non-nullish inside (incrementalUtils ×2, closureGuardedByOptionalChainRoot); property-
+  access `.x!` strips nullish under the round-456 all-concrete gate (8-profile A/B clean —
+  the historical deferral's hazard is covered by the M3 machinery landed since).
+- **Smaller families:** ctor var-decl-nested `this.x =` assignments count for TS2564 (×3 +
+  chains); ANY-optional-decl member truthiness for TS2774 (the System class+interface
+  chimera pollutes isOptionalProperty's first-decl read); statement-position `yield x;`
+  draws no TS7057 (tsc expressionResultIsUnused); bare specifiers never resolve RELATIVE
+  under nodenext (TS1192 'path' → src/compiler/path.ts); for-of loop vars shadow in the
+  call-types walker (evaluatorImpl); extends+implements-same-class TS2720 skip (bare-args
+  gated — the ungated cut regressed extendAndImplementTheSameBaseType2, caught by the
+  suite); `new Function(...)()` is an untyped call (tsc isUntypedFunctionCall); method/ctor
+  bodies run applyBodyLocalShadowing in the property-access pass (the round-447 trap —
+  fourslash Refactor.actions ×4 via refactorProvider's leaked `const refactors` Map).
+- **REVERTED:** TS7006 suppression for arrows assigned to an any-typed receiver's member —
+  contradicts the round-464 pin (an any contextual type provides NO contextual signature →
+  tsc fires); harnessGlobals ×3 reclassified likely-env-legit (chai unresolvable offline).
+- **NEXT (harness @109, ~14 real):** the ParseConfigHost/ServerHost RELATION residuals
+  (services:1790 objlit vs ParseConfigFileHost, editorServices:3212, harnessLanguageService
+  754/758 — the System/ServerHost chimera on the relation side, not resolution); vfsUtil
+  TS2769 ×2 + :860 symlink-on-never; documentsUtil:30 reduce-accumulator overload
+  selection; fourslash 636/3411 'string' vs 'string' identity displays; evaluatorImpl:337
+  (throw-only arrow infers void, tsc infers never); incrementalUtils:656; harnessIO:379.**
+
+**Round 478 (2026-07-11, same session as 477 — the HARNESS burn-down begins) — FIVE fixes,
+harness 217 → 145 (−72; TS2339 66 → 13, TS7006 15 → 4, TS2341 6 → 0; every step
+zero-additions by per-position diff). Suite 10,090 → 10,098 (+8 local across 2 new test
+files, 0 regressions).**
+- **Fix 1+2 (tsc getAssignmentReducedType — the fourslash reassignment idioms, ~37 FPs):**
+  `narrowByAssignmentRhs` gains THREE assignment-reduction arms, all placed BEFORE the
+  round-416 non-nullish reset (a both-arms-non-nullish ternary would otherwise reset to the
+  FULL declared union first): (a) `x = typeof x === "tag" ? { … } : x` (both condition
+  orders) drops the tag's members via narrowByTypeOfGuard when the pass-through arm is the
+  bare reference and the replacement arm an object literal; (b) a plain OBJECT-LITERAL RHS
+  drops the declared union's primitive/nullish members (`if (typeof source === "string")
+  source = { files: … };` — evaluatorImpl); (c) an ARRAY-LITERAL RHS keeps only array-like
+  members (Array/ReadonlyArray refs, tuples, intersections containing one — `if
+  (!ts.isArray(expected)) expected = [expected];` incl. the `readonly T[] & {plus}` brand).
+- **Fix 3 (lexical private access, TS2341 ×6):** `checkStaticPrivateMemberAccess` accepts a
+  same-file access POSITIONALLY inside the declaring class declaration — a function nested
+  in a class method reads the class's static privates legally (fourslash
+  `TestState.nLinesContext` inside `textWithContext`); the enclosing-class threading resets
+  at nested-function boundaries (this-rebinding), which is right for `this` but wrong for
+  lexical accessibility.
+- **Fix 4 (`import * as ns` guards, TS2339 ×16):** `resolveNamespaceMemberFnDecl` gains a
+  NamespaceImport branch — resolveAlias never resolves namespace-import aliases (round 444)
+  and the ImportSpecifier-keyed flow resolvers skip them, so
+  `ts.isDocumentRegistryEntry(entry)` through the harness `.js` barrel silently never
+  narrowed. Resolve the import's own specifier → target file → locals + `export *` chain;
+  memoized (`nsImportMemberFnCache`, declared before `init`). REPRO LESSON: the free-fn
+  receiver variant "passed" because `entry` was silently UNTYPED (resolution failure reads
+  as success) — the interface-METHOD receiver variant typed it and exposed the guard; when
+  a repro "passes", confirm the types actually RESOLVED before believing it.
+- **Fix 5 (namespace-callee locals, TS7006 ×11):** the same resolver feeds
+  `initializerCtxTypeForImplicitAny`'s namespace-callee arm — `const compilerHost =
+  ts.createCompilerHostWorker(…)` types the local from the callee's return annotation, so
+  `compilerHost.getSourceFile = (fileName, …) => …` arrow params inherit the CompilerHost
+  member context.
+- **NEXT (harness @ 145, ~55 real):** harnessIO `CompilerSettings` index-sig ×3 (namespace-
+  nested interface with a string index sig — the TS2339 should be suppressed) + TS2833
+  `compiler.CompilationResult` ns-import-in-TYPE-position ×4 (the type-position sibling of
+  fix 4); client.ts protocol `Location` ×5 (conflation family); compilerImpl TS2564 ×3;
+  fourslash 829/839 (`.definitions` on a union), 1946 (`string | Range`), 4045 (`Refactor
+  .actions`); incrementalUtils TS18048 ×2; editorServices 1461 TS2774 (`this.host.realpath`
+  optional-method truthiness) + 3212.**
+
+
 **Round 477 (2026-07-11 — SERVER REACHES ZERO REAL FPs, SEVEN of eight profiles) — FIVE
 fixes, server 51 → 46 (real FPs 5 → 0; the remaining 46 = TS2591×43 + TS2304×2 `global` +
 TS2584 console, all env-legit offline artifacts). All five residuals were CONFLATION-family
