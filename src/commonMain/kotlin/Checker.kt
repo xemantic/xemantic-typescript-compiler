@@ -114457,15 +114457,15 @@ interface DataView {
                 // Gated to BARE (no type args) on BOTH sides — `extends C<string>
                 // implements C<number>` must keep firing (extendAndImplementTheSameBaseType2).
                 val extendsBareBaseNames = classDecl.heritageClauses
-                    ?.filter { it.token == SyntaxKind.ExtendsKeyword }
-                    ?.flatMap { hc -> hc.types.mapNotNull { t ->
+                    .filter { it.token == SyntaxKind.ExtendsKeyword }
+                    .flatMap { hc -> hc.types.mapNotNull { t ->
                         if (!t.typeArguments.isNullOrEmpty()) return@mapNotNull null
                         when (val tn = t.expression) {
                             is Identifier -> tn.text
                             is PropertyAccessExpression -> tn.name.text
                             else -> null
                         }
-                    } } ?: emptyList()
+                    } }
                 if (typeExpr.typeArguments.isNullOrEmpty() && baseIfaceName in extendsBareBaseNames) {
                     continue@typeExprLoop
                 }
@@ -127333,7 +127333,7 @@ interface DataView {
                 // `Function` type IS callable — the call is untyped and returns any
                 // (`new Function("…")()`, fourslashImpl.ts verifyEval). A USER class
                 // named Function keeps firing (its decls are not lib decls).
-                val isGlobalFunctionType = (calleeType as? Type.Object)?.symbol?.let { sy ->
+                val isGlobalFunctionType = calleeType.symbol?.let { sy ->
                     sy.name == "Function" && sy.declarations.isNotEmpty() &&
                         sy.declarations.all { it in builtinLibDecls }
                 } == true
@@ -129364,14 +129364,12 @@ interface DataView {
         val argParams = when (arg) {
             is ArrowFunction -> arg.parameters
             is FunctionExpression -> arg.parameters
-            else -> return false
         }
         if (argParams.size > pSig.parameters.size) return false
         if (argParams.any { it.type != null }) return false // annotated params keep the plain relation
         val body = when (arg) {
             is ArrowFunction -> arg.body
             is FunctionExpression -> arg.body
-            else -> return false
         }
         return when (body) {
             is Block -> {
@@ -132589,7 +132587,7 @@ interface DataView {
                             // getCombinedCodeFix args). The B326 keep-the-literal rule at
                             // this per-property arg leaf.
                             if (propTypeContainsLiteral(targetPropType)) {
-                                val lit = valueNode?.let { literalTypeOfExpression(it) }
+                                val lit = literalTypeOfExpression(valueNode)
                                 if (lit != null && checkTypeRelatedTo(lit,
                                         widenOptionalTargetPropType(targetPropType, targetProp, lit),
                                         assignableRelation)) continue
