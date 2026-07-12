@@ -22228,8 +22228,24 @@ class Checker(
                     implicitAnyCtxUnknowable = true
                     null
                 } else {
-                    recvT?.let { lookupPropertyTypeForCtx(it, left.name.text) }
+                    val direct = recvT?.let { lookupPropertyTypeForCtx(it, left.name.text) }
                         ?: namespaceMemberVarAnnotationCtx(left)
+                    if (direct == null) {
+                        // Round 481: an AS-CAST receiver whose TYPE declares the member
+                        // as a method/fn-typed property AST-side — harnessIO's `(result
+                        // as CompileFilesResult).repeat = newOptions => …`, where the
+                        // namespace-nested alias's intersection mixes a barrel-
+                        // unresolvable qualified name so the RESOLVED receiver poisons
+                        // to any. tsc HAS a contextual signature here; signal
+                        // ctx-unknowable so the RHS is treated as contextually typed.
+                        var e: Expression = left.expression
+                        while (e is ParenthesizedExpression) e = e.expression
+                        val castT = (e as? AsExpression)?.type ?: (e as? TypeAssertionExpression)?.type
+                        if (castT != null && castTypeDeclaresFnMember(castT, left.name.text)) {
+                            implicitAnyCtxUnknowable = true
+                        }
+                    }
+                    direct
                 }
             }
         }
@@ -22243,6 +22259,61 @@ class Checker(
      *  assignment arm reads+resets it and suppresses instead of propagating the
      *  wrong resolved type. */
     private var implicitAnyCtxUnknowable = false
+
+    /** Round 481: does an AS-CAST's TYPE NODE declare [member] as a method or
+     *  fn-typed property, AST-side (through parens/intersections and a bare
+     *  type-alias reference — incl. NAMESPACE-NESTED aliases, which no file-local
+     *  index carries)? Consulted only to SUPPRESS TS7006 when the resolved
+     *  receiver type is unavailable (FN-not-FP). */
+    private fun castTypeDeclaresFnMember(node: TypeNode, member: String, depth: Int = 0): Boolean {
+        if (depth > 6) return false
+        return when (node) {
+            is TypeLiteral -> node.members.any { m ->
+                when (m) {
+                    is MethodDeclaration -> (m.name as? Identifier)?.text == member
+                    is PropertyDeclaration -> (m.name as? Identifier)?.text == member &&
+                        (m.type is FunctionType || (m.type as? ParenthesizedType)?.type is FunctionType)
+                    else -> false
+                }
+            }
+            is IntersectionType -> node.types.any { castTypeDeclaresFnMember(it, member, depth + 1) }
+            is ParenthesizedType -> castTypeDeclaresFnMember(node.type, member, depth + 1)
+            is TypeReference -> {
+                if (!node.typeArguments.isNullOrEmpty()) return false
+                val nm = (node.typeName as? Identifier)?.text ?: return false
+                val decl = uniqueTypeAliasInclNamespaces(nm) ?: return false
+                castTypeDeclaresFnMember(decl.type, member, depth + 1)
+            }
+            else -> false
+        }
+    }
+
+    /** Round 481: the program-wide UNIQUELY-named type alias, descending into
+     *  namespace bodies (a namespace-nested alias is in no file-local index).
+     *  Ambiguous names → null (conservative). */
+    private fun uniqueTypeAliasInclNamespaces(name: String): TypeAliasDeclaration? {
+        var found: TypeAliasDeclaration? = null
+        fun scan(stmts: List<Statement>): Boolean { // returns false on ambiguity
+            for (s in stmts) {
+                when (s) {
+                    is TypeAliasDeclaration -> if (s.name.text == name) {
+                        if (found != null && found !== s) return false
+                        found = s
+                    }
+                    is ModuleDeclaration -> {
+                        val body = s.body as? ModuleBlock ?: continue
+                        if (!scan(body.statements)) return false
+                    }
+                    else -> {}
+                }
+            }
+            return true
+        }
+        for (result in binderResults) {
+            if (!scan(result.sourceFile.statements)) return null
+        }
+        return found
+    }
 
     /** Round 474: does [recvT]'s member [propName] carry a declared annotation that
      *  is a bare reference to a conflated alias-shadowed interface name (a key of
@@ -94327,6 +94398,35 @@ interface DataView {
         return walk(source)
     }
 
+    /** Round 481: the STRUCTURAL sibling of [conflatedChimeraTargetSourceHasPerFileBase] —
+     *  a source with NO heritage link to the conflated name that nevertheless satisfies
+     *  SOME declaring file's per-file view of the chimera target (editorServices'
+     *  `CachedDirectoryStructureHost` vs the `ParseConfigHost` chimera: the fakesHosts
+     *  `class ParseConfigHost` merge demands a required `getCurrentDirectory` where the
+     *  compiler interface's — the view tsc resolves — is optional). Name-presence +
+     *  relation against each per-file view; any-view-satisfies is FN-not-FP (tsc would
+     *  have resolved the annotation to exactly one module's interface). */
+    private fun sourceSatisfiesConflatedTargetPerFileView(source: Type.Interface, target: Type.Interface): Boolean {
+        val tSym = target.symbol ?: return false
+        if (tSym.name.isEmpty()) return false
+        val files = conflatedInterfaceFiles[tSym.name] ?: return false
+        if (tSym.id in perFileInterfaceSymbolFile) return false
+        if (globals[tSym.name] !== tSym) return false
+        // A same-named source is the twin/derived artifact family — owned by the
+        // sibling helpers above.
+        if (source.symbol?.name == tSym.name) return false
+        for (f in files) {
+            val view = perFileInterfaceType(tSym.name, f) as? Type.Interface ?: continue
+            if (view === target) continue
+            resolveStructuredTypeMembers(source)
+            resolveStructuredTypeMembers(view)
+            if (collectMissingProperties(source, view).isEmpty() &&
+                checkTypeRelatedTo(source, view, assignableRelation)
+            ) return true
+        }
+        return false
+    }
+
     /** Round 473: does [node] reference a conflated interface name (directly or nested
      *  in a shallow composite — TypeLiteral members resolve EAGERLY in
      *  getTypeFromTypeLiteral, baking the reference into the composite's type)? Such
@@ -101534,7 +101634,14 @@ interface DataView {
                     // (`{ id, ...thingProvidingLabel }` no longer FP's "label missing"). Additive +
                     // conservative: only adds props not already explicit; spreading nullish is a
                     // no-op so union spreads filter nullish constituents in spreadGuaranteedProps.
-                    val st = try { getTypeOfExpression(prop.expression) } catch (_: Exception) { continue }
+                    val st = try { getTypeOfExpression(prop.expression) } catch (_: Exception) { return anyType }
+                    // Round 481: tsc types an object literal that spreads `any`/error as `any`
+                    // (the spread poisons the whole object — the round-445 rule, now applied at
+                    // the TYPE level so every consumer agrees: the partial {explicit-props} type
+                    // FP'd both the per-property leaf AND the coarse var-decl relation for
+                    // `typingsInstaller: { ...nullTypingsInstaller, globalTypingsCacheLocation }`
+                    // nested in harnessLanguageService's SessionOptions literal).
+                    if (st === anyType || st === errorType) return anyType
                     for ((pn, psym) in spreadGuaranteedProps(st)) {
                         if (members[pn] == null) {
                             // Round 449: COPY the spread source's member into a FRESH symbol OWNED
@@ -102917,7 +103024,13 @@ interface DataView {
      * Basic overload resolution: try each signature in order, return the first that matches
      * the call's argument count. If argument types are available, prefer the best type match.
      */
-    private fun resolveCallOverload(signatures: List<Signature>, args: List<Expression>): Signature? {
+    private fun resolveCallOverload(
+        signatures: List<Signature>, args: List<Expression>,
+        // Round 481: strictSelect returns null instead of the arity-fallbacks —
+        // callers that need a DEFINITIVE type-based winner (the contextual-typing
+        // branch) must not adopt a guessed overload.
+        strictSelect: Boolean = false,
+    ): Signature? {
         val argCount = args.size
         // First pass: find overloads matching by arity
         val arityMatches = signatures.filter { sig ->
@@ -102925,6 +103038,7 @@ interface DataView {
             argCount >= sig.minArgumentCount && argCount <= maxParams
         }
         if (arityMatches.isEmpty()) {
+            if (strictSelect) return null
             // No arity match — try with rest parameters (last param is rest)
             val restMatches = signatures.filter { sig ->
                 val lastParam = sig.parameters.lastOrNull()
@@ -102958,6 +103072,12 @@ interface DataView {
                 if (!allMatch) break
                 val paramType = getTypeOfSymbol(sig.parameters[i])
                 if (paramType === anyType || paramType === errorType) continue
+                // Round 481: an UN-INFERRED bare TypeParam param (`initialValue: U` in
+                // Array.reduce's generic overload) matches any arg — tsc INFERS U from
+                // it; the relation engine has no concrete-source-vs-TypeParam-target
+                // rule, so without this the generic overload was always rejected and
+                // the first arity match won (typing reduce's accumulator as T).
+                if (paramType is Type.TypeParam) continue
                 // Prefer the non-widened literal type so a string/number-literal arg can
                 // select a specialized literal-param overload (e.g. createElement('canvas')
                 // → the `(tagName: 'canvas'): Derived1` overload, not the `(tagName: string)`
@@ -102973,7 +103093,7 @@ interface DataView {
             if (allMatch) return sig
         }
         // No type match — return first arity match
-        return arityMatches[0]
+        return if (strictSelect) null else arityMatches[0]
     }
 
     /**
@@ -119546,7 +119666,31 @@ interface DataView {
                             } else null
                         }
                     } else {
-                        expr.arguments.mapIndexed { i, _ ->
+                        // Round 481: tsc contextually types a callback arg by the overload
+                        // that arg-matching SELECTS, not blindly by the first — Array.reduce's
+                        // `(cb, initialValue: T)` overload must lose to `<U>(cb, initialValue:
+                        // U)` when the initial value is not a T (documentsUtil's
+                        // `.reduce((meta, key) => meta.set(…), new Map())` typed `meta` as
+                        // string). strictSelect yields only a DEFINITIVE type-based winner;
+                        // ambiguity (or a first-overload win) keeps the legacy
+                        // every-overload-callable heuristic byte-identical.
+                        val chosen = resolveCallOverload(sigs, expr.arguments, strictSelect = true)
+                        if (chosen != null && chosen !== sigs[0]) {
+                            val inferMapper: TypeMapper? =
+                                if (expr.typeArguments.isNullOrEmpty() && !chosen.typeParameters.isNullOrEmpty()) {
+                                    tryInferSingleTypeParamFromArgs(chosen, expr.arguments, forReturnType = true)
+                                        ?: tryInferAnchorTypeParamsForContext(chosen, expr.arguments)
+                                } else null
+                            expr.arguments.mapIndexed { i, _ ->
+                                if (i < chosen.parameters.size) {
+                                    val ptRaw = getTypeOfSymbol(chosen.parameters[i])
+                                    val pt = if (inferMapper != null && ptRaw !== anyType && ptRaw !== errorType) {
+                                        instantiateContextualParamType(ptRaw, inferMapper)
+                                    } else ptRaw
+                                    if (pt === anyType || pt === errorType) null else pt
+                                } else null
+                            }
+                        } else expr.arguments.mapIndexed { i, _ ->
                             val candidates = sigs.mapNotNull { sig ->
                                 if (i < sig.parameters.size) {
                                     val pt = getTypeOfSymbol(sig.parameters[i])
@@ -132769,7 +132913,11 @@ interface DataView {
                     // Round 480: the DERIVED sibling — the arg's base chain carries the
                     // per-file view of the chimera param's name (ParseConfigFileHost →
                     // per-file ParseConfigHost, passed to a chimera ParseConfigHost param).
-                    conflatedChimeraTargetSourceHasPerFileBase(argType, paramType))
+                    conflatedChimeraTargetSourceHasPerFileBase(argType, paramType) ||
+                    // Round 481: the STRUCTURAL sibling — no heritage link, but the arg
+                    // satisfies some declaring file's per-file view of the chimera
+                    // (CachedDirectoryStructureHost vs chimera ParseConfigHost).
+                    sourceSatisfiesConflatedTargetPerFileView(argType, paramType))
             if (!isRestParam && !argIsConflatedTwin &&
                 (argIsRefForArgCheck || argIsDistinctNamedClass || argIsThisAnonObj || argIsAnonObjBag) &&
                 paramType is Type.Interface && paramType.symbol != null) {
@@ -133649,6 +133797,14 @@ interface DataView {
         if (source is Type.Interface && target is Type.Interface &&
             conflatedInterfaceFiles.isNotEmpty() &&
             conflatedChimeraTargetSourceHasPerFileBase(source, target)
+        ) return true
+        // Round 481: the STRUCTURAL sibling — a source with no heritage link that
+        // satisfies some declaring file's per-file view of the chimera target
+        // (CachedDirectoryStructureHost vs the chimera ParseConfigHost — tsc relates
+        // them structurally against the ONE interface it resolves). FN-not-FP.
+        if (source is Type.Interface && target is Type.Interface &&
+            conflatedInterfaceFiles.isNotEmpty() &&
+            sourceSatisfiesConflatedTargetPerFileView(source, target)
         ) return true
         // Fast check
         if (isSimpleTypeRelatedTo(source, target)) return true
@@ -141352,6 +141508,40 @@ interface DataView {
         else -> false
     }
 
+    /** Round 481: is a union-member DISPLAY string (resolveSimpleTypeName's UnionType
+     *  encoding carries NO "@" prefix) a named TYPE ALIAS whose body is array-ish?
+     *  The string layer cannot see alias bodies: `ArrayOrSingle<T> = T | readonly
+     *  T[]` accepts an array literal (fourslash `expected = [expected]`).
+     *  Suppression-only (a permissive true just skips the string-layer TS2322);
+     *  interfaces — even Array-extending ones — stay firing (their extra members
+     *  make a bare array literal a genuine tsc error). */
+    private fun namedUnionMemberCouldAcceptArray(member: String): Boolean {
+        val base = member.substringBefore('<').removePrefix("readonly ").trim()
+        if (base.isEmpty() || !base[0].isLetter() || !base[0].isUpperCase()) return false
+        if (base == "Array" || base == "ReadonlyArray") return true
+        val sym = currentFileLocals?.get(base) ?: globals[base] ?: return false
+        for (decl in sym.declarations) {
+            if (decl is TypeAliasDeclaration && typeNodeContainsArrayIsh(decl.type, 0)) return true
+        }
+        return false
+    }
+
+    private fun typeNodeContainsArrayIsh(t: TypeNode, depth: Int): Boolean {
+        if (depth > 4) return false
+        return when (t) {
+            is ArrayType -> true
+            is TupleType -> true
+            is TypeOperator -> typeNodeContainsArrayIsh(t.type, depth + 1)
+            is ParenthesizedType -> typeNodeContainsArrayIsh(t.type, depth + 1)
+            is UnionType -> t.types.any { typeNodeContainsArrayIsh(it, depth + 1) }
+            is TypeReference -> {
+                val n = (t.typeName as? Identifier)?.text
+                n == "Array" || n == "ReadonlyArray"
+            }
+            else -> false
+        }
+    }
+
     private fun isAssignableTo(sourceType: String, targetType: String, typeParams: Set<String> = emptySet()): Boolean {
         if (sourceType == targetType) return true
         // B250: "&"-prefixed intersection encodings participate only in the dedicated
@@ -141399,7 +141589,13 @@ interface DataView {
                     (sourceType == "array" && (
                         it.endsWith("[]") ||
                         (it.startsWith("[") && it.endsWith("]")) ||
-                        it.startsWith("@Array<") || it.startsWith("@ReadonlyArray<")))
+                        it.startsWith("@Array<") || it.startsWith("@ReadonlyArray<") ||
+                        // Round 481: a NAMED member (union members are DISPLAY strings,
+                        // no "@") whose alias body or interface heritage is array-ish is
+                        // unknowable at the string layer (`ArrayOrSingle<T> = T |
+                        // readonly T[]`; `interface X extends ReadonlyArray<T>` —
+                        // fourslash `expected = [expected]` vs `ArrayOrSingle<…> | …`).
+                        namedUnionMemberCouldAcceptArray(it)))
             }
         }
         // For named types (TypeReference, prefixed with "@"), we can only confidently say
