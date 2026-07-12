@@ -45771,6 +45771,48 @@ interface DataView {
         }
     }
 
+    /**
+     * Two-level name set for the type-as-value (TS2693/TS2708) walker: a shared,
+     * never-copied [base] (the file-level type-only / value / namespace-only names)
+     * plus a small per-scope [overlay] of names a nested function/class/param
+     * introduces. [child] copies only the tiny overlay, so descending into a nested
+     * scope no longer copies the large file-level base (round 487 — the base copy was
+     * the top allocation churn on tsc's own checker.ts: one `createTypeChecker` with
+     * hundreds of nested functions, each `HashSet(parent)`-copying a ~1000-name
+     * file-level set). Membership is base∪overlay = depth-independent (≤2 lookups),
+     * NOT a parent-chain walk.
+     *
+     * Every read of the type-only / namespace-only sets is value-gated
+     * (`name !in valueNames && name in typeOnlyNames`) and every scope grows the sets
+     * purely additively inward, so the former per-scope `remove` (a param / namespace
+     * self-name shadowing an outer type-only name) is subsumed by the value overlay —
+     * this structure is add / contains only.
+     */
+    private class ScopeNameSet private constructor(
+        private val base: Set<String>,
+        private val overlay: HashSet<String>,
+    ) {
+        constructor(base: Set<String>) : this(base, HashSet())
+        fun add(name: String) { overlay.add(name) }
+        fun addAll(names: Collection<String>) { overlay.addAll(names) }
+        operator fun contains(name: String): Boolean =
+            if (overlay.isEmpty()) name in base else name in overlay || name in base
+        fun containsAll(names: Collection<String>): Boolean = names.all { it in this }
+        fun child(): ScopeNameSet = ScopeNameSet(base, HashSet(overlay))
+    }
+
+    /** Recursively visit every local name a parameter/variable binding introduces. */
+    private fun forEachParamBindingName(name: Node, action: (String) -> Unit) {
+        when (name) {
+            is Identifier -> action(name.text)
+            is ObjectBindingPattern -> for (element in name.elements) forEachParamBindingName(element.name, action)
+            is ArrayBindingPattern -> for (element in name.elements) {
+                if (element is BindingElement) forEachParamBindingName(element.name, action)
+            }
+            else -> {}
+        }
+    }
+
     private fun checkTypeUsedAsValue() {
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
@@ -45954,7 +45996,8 @@ interface DataView {
             }
             currentForwardLibTypeNames = forwardLibTypeNames
             try {
-                checkTypeAsValueInStatements(result.sourceFile.statements, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
+                checkTypeAsValueInStatements(result.sourceFile.statements, source, fileName,
+                    ScopeNameSet(typeOnlyNames), ScopeNameSet(valueNames), ScopeNameSet(namespaceOnlyNames))
             } finally {
                 currentForwardLibTypeNames = emptySet()
             }
@@ -45965,9 +46008,9 @@ interface DataView {
         statements: List<Statement>,
         source: String,
         fileName: String,
-        typeOnlyNames: Set<String>,
-        valueNames: Set<String> = emptySet(),
-        namespaceOnlyNames: Set<String> = emptySet(),
+        typeOnlyNames: ScopeNameSet,
+        valueNames: ScopeNameSet = ScopeNameSet(emptySet()),
+        namespaceOnlyNames: ScopeNameSet = ScopeNameSet(emptySet()),
     ) {
         // Hoist the statement list's OWN value declarations (vars at any depth — they are
         // function-scoped — plus directly-declared let/const/function/class/enum names) so a
@@ -45986,7 +46029,7 @@ interface DataView {
                     // Identifier names + binding-pattern element names both count.
                     when (val nm = d.name) {
                         is Identifier -> declared.add(nm.text)
-                        else -> addParamBindingNamesToValues(nm, declared, declared)
+                        else -> forEachParamBindingName(nm) { declared.add(it) }
                     }
                 }
                 is FunctionDeclaration -> s.name?.text?.let { declared.add(it) }
@@ -45995,7 +46038,7 @@ interface DataView {
                 else -> {}
             }
             if (declared.isNotEmpty() && !valueNames.containsAll(declared)) {
-                effValues = HashSet(valueNames).also { it.addAll(declared) }
+                effValues = valueNames.child().also { it.addAll(declared) }
             }
         }
         for (stmt in statements) {
@@ -46007,9 +46050,9 @@ interface DataView {
         stmt: Statement,
         source: String,
         fileName: String,
-        typeOnlyNames: Set<String>,
-        valueNames: Set<String> = emptySet(),
-        namespaceOnlyNames: Set<String> = emptySet(),
+        typeOnlyNames: ScopeNameSet,
+        valueNames: ScopeNameSet = ScopeNameSet(emptySet()),
+        namespaceOnlyNames: ScopeNameSet = ScopeNameSet(emptySet()),
     ) {
         when (stmt) {
             is ExpressionStatement -> checkTypeAsValueInExpr(stmt.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
@@ -46039,12 +46082,12 @@ interface DataView {
             is FunctionDeclaration -> {
                 // Collect type parameters as type-only within this function
                 // But exclude names that are also parameter names (parameter shadows type param)
-                val innerTypeOnly = HashSet(typeOnlyNames)
+                val innerTypeOnly = typeOnlyNames.child()
                 stmt.typeParameters?.forEach { innerTypeOnly.add(it.name.text) }
-                // Remove parameter names — they are values, not types
-                val innerValues = HashSet(valueNames)
+                // Register parameter names as values — they shadow same-named type names
+                val innerValues = valueNames.child()
                 for (p in stmt.parameters) {
-                    addParamBindingNamesToValues(p.name, innerTypeOnly, innerValues)
+                    forEachParamBindingName(p.name) { innerValues.add(it) }
                 }
                 // B86.9c: walk parameter default initializers AFTER binding names are
                 // registered so self-referential defaults `function f(x = x) {}` resolve
@@ -46089,15 +46132,15 @@ interface DataView {
                 for (member in stmt.members) {
                     when (member) {
                         is MethodDeclaration -> {
-                            val innerTypeOnly = HashSet(typeOnlyNames)
+                            val innerTypeOnly = typeOnlyNames.child()
                             member.typeParameters?.forEach { innerTypeOnly.add(it.name.text) }
                             // iter18 B86.11: register method parameter binding names as
                             // values so a parameter named `N` shadows an outer
                             // namespace-only `N` and doesn't trigger spurious TS2708
                             // / TS2693 inside the method body.
-                            val innerValues = HashSet(valueNames)
+                            val innerValues = valueNames.child()
                             for (p in member.parameters) {
-                                addParamBindingNamesToValues(p.name, innerTypeOnly, innerValues)
+                                forEachParamBindingName(p.name) { innerValues.add(it) }
                             }
                             for (p in member.parameters) {
                                 p.initializer?.let { checkTypeAsValueInExpr(it, source, fileName, innerTypeOnly, innerValues, namespaceOnlyNames) }
@@ -46105,10 +46148,10 @@ interface DataView {
                             member.body?.let { checkTypeAsValueInStatements(it.statements, source, fileName, innerTypeOnly, innerValues, namespaceOnlyNames) }
                         }
                         is Constructor -> {
-                            val innerTypeOnly = HashSet(typeOnlyNames)
-                            val innerValues = HashSet(valueNames)
+                            val innerTypeOnly = typeOnlyNames.child()
+                            val innerValues = valueNames.child()
                             for (p in member.parameters) {
-                                addParamBindingNamesToValues(p.name, innerTypeOnly, innerValues)
+                                forEachParamBindingName(p.name) { innerValues.add(it) }
                             }
                             for (p in member.parameters) {
                                 p.initializer?.let { checkTypeAsValueInExpr(it, source, fileName, innerTypeOnly, innerValues, namespaceOnlyNames) }
@@ -46146,13 +46189,13 @@ interface DataView {
                 // `namespaceOnlyNames` so e.g. `namespace N { N; }` does NOT fire
                 // TS2708 on the inner `N`.
                 val selfName = (stmt.name as? Identifier)?.text
-                val innerValueNames = HashSet(valueNames).also {
+                val innerValueNames = valueNames.child().also {
+                    // Adding the namespace's own name to values masks it out of the
+                    // value-gated namespaceOnly read (no explicit `remove` needed).
                     if (selfName != null) it.add(selfName)
                 }
-                val innerTypeOnlyNames = HashSet(typeOnlyNames)
-                val innerNamespaceOnlyNames = HashSet(namespaceOnlyNames).also {
-                    if (selfName != null) it.remove(selfName)
-                }
+                val innerTypeOnlyNames = typeOnlyNames.child()
+                val innerNamespaceOnlyNames = namespaceOnlyNames.child()
                 for (s in body.statements) {
                     when (s) {
                         is ClassDeclaration -> s.name?.text?.let { innerValueNames.add(it) }
@@ -46201,7 +46244,7 @@ interface DataView {
      * value-side flags (Class/Variable/Function) — those are valid `extends` targets.
      */
     private fun tryClassifyExtendsInterface(
-        expr: Expression, valueNames: Set<String>,
+        expr: Expression, valueNames: ScopeNameSet,
     ): Pair<Identifier, String>? {
         // Walk the property-access chain leftward, collecting names.
         val names = mutableListOf<String>()
@@ -46244,9 +46287,9 @@ interface DataView {
         expr: Expression,
         source: String,
         fileName: String,
-        typeOnlyNames: Set<String>,
-        valueNames: Set<String> = emptySet(),
-        namespaceOnlyNames: Set<String> = emptySet(),
+        typeOnlyNames: ScopeNameSet,
+        valueNames: ScopeNameSet = ScopeNameSet(emptySet()),
+        namespaceOnlyNames: ScopeNameSet = ScopeNameSet(emptySet()),
     ) {
         when (expr) {
             is Identifier -> {
@@ -46340,10 +46383,10 @@ interface DataView {
             // Descend into function/arrow bodies — type-as-value checks apply inside
             // IIFE-style `(function() { new ForwardLibType; })` patterns.
             is FunctionExpression -> {
-                val innerTypeOnly = HashSet(typeOnlyNames)
-                val innerValues = HashSet(valueNames)
+                val innerTypeOnly = typeOnlyNames.child()
+                val innerValues = valueNames.child()
                 for (p in expr.parameters) {
-                    addParamBindingNamesToValues(p.name, innerTypeOnly, innerValues)
+                    forEachParamBindingName(p.name) { innerValues.add(it) }
                 }
                 // B86.9b: walk parameter default initializers AFTER binding names are
                 // registered so self-referential defaults `(x = x) =>` resolve correctly.
@@ -46353,10 +46396,10 @@ interface DataView {
                 checkTypeAsValueInStatements(expr.body.statements, source, fileName, innerTypeOnly, innerValues, namespaceOnlyNames)
             }
             is ArrowFunction -> {
-                val innerTypeOnly = HashSet(typeOnlyNames)
-                val innerValues = HashSet(valueNames)
+                val innerTypeOnly = typeOnlyNames.child()
+                val innerValues = valueNames.child()
                 for (p in expr.parameters) {
-                    addParamBindingNamesToValues(p.name, innerTypeOnly, innerValues)
+                    forEachParamBindingName(p.name) { innerValues.add(it) }
                 }
                 // B86.9b: walk parameter default initializers AFTER binding names are
                 // registered so self-referential defaults `(x = x) =>` resolve correctly.
@@ -46385,10 +46428,10 @@ interface DataView {
                         (prop.name as? ComputedPropertyName)?.let {
                             checkTypeAsValueInExpr(it.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
                         }
-                        val innerTypeOnly = HashSet(typeOnlyNames)
-                        val innerValues = HashSet(valueNames)
+                        val innerTypeOnly = typeOnlyNames.child()
+                        val innerValues = valueNames.child()
                         for (p in prop.parameters) {
-                            addParamBindingNamesToValues(p.name, innerTypeOnly, innerValues)
+                            forEachParamBindingName(p.name) { innerValues.add(it) }
                         }
                         prop.body?.let { checkTypeAsValueInStatements(it.statements, source, fileName, innerTypeOnly, innerValues, namespaceOnlyNames) }
                     }
@@ -46434,40 +46477,6 @@ interface DataView {
             }
             is CommaListExpression -> for (e in expr.elements) {
                 checkTypeAsValueInExpr(e, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
-            }
-            else -> {}
-        }
-    }
-
-    /**
-     * Walk a parameter binding (Identifier / ObjectBindingPattern / ArrayBindingPattern)
-     * and register every introduced local-name in [innerValues] so subsequent body checks
-     * don't flag them as type-as-value misuses. Each registered name is also removed from
-     * [innerTypeOnly] (the parameter binding shadows any same-named outer type-only symbol).
-     * Mirrors [addBindingName] but populates the type-as-value walker's name sets instead
-     * of a [NameScope].
-     */
-    private fun addParamBindingNamesToValues(
-        name: Node,
-        innerTypeOnly: MutableSet<String>,
-        innerValues: MutableSet<String>,
-    ) {
-        when (name) {
-            is Identifier -> {
-                innerTypeOnly.remove(name.text)
-                innerValues.add(name.text)
-            }
-            is ObjectBindingPattern -> {
-                for (element in name.elements) {
-                    addParamBindingNamesToValues(element.name, innerTypeOnly, innerValues)
-                }
-            }
-            is ArrayBindingPattern -> {
-                for (element in name.elements) {
-                    if (element is BindingElement) {
-                        addParamBindingNamesToValues(element.name, innerTypeOnly, innerValues)
-                    }
-                }
             }
             else -> {}
         }
