@@ -39,6 +39,52 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
+**Round 481 (2026-07-12) — HARNESS REACHES ZERO REAL FPs: ALL EIGHT PROFILES AT ZERO REAL
+FALSE POSITIVES — the v1 FP exit criterion is met.** FIVE fixes in 1 commit (b77b1afc),
+harness 100 → 95 (the remaining 95 = TS2591×66 process/require + TS2304×10
+BufferEncoding/global + TS2584×6 console + TS2503×6 + TS2593 `it` + harnessGlobals
+TS7006×3 chai + `Error.captureStackTrace` TS2339×2 + a BufferEncoding-consequence
+TS2322 — ALL env-legit offline artifacts). Zero additions by per-position diff; all
+seven other profiles re-verified at their 46 floors. Suite 10,142 → 10,155 (+11 local
+tests across 5 new files, 0 regressions).
+- **Spread-of-any poisons at the TYPE level:** getTypeOfObjectLiteral returns `anyType`
+  when a spread's type is any/error (tsc semantics) — harnessLanguageService:758's
+  `typingsInstaller: { ...nullTypingsInstaller, globalTypingsCacheLocation }` FP'd the
+  per-property leaf, and suppressing only the leaf UNMASKED the coarse whole-object
+  relation at the var decl (same-position masking); the type-level rule makes every
+  consumer agree. The round-445/472 per-site bails stay as guards.
+- **Chimera structural sibling:** `sourceSatisfiesConflatedTargetPerFileView` (relation
+  entry + missing-props arg emitter) — a source with NO heritage link relates to a
+  chimera target when it satisfies SOME declaring file's per-file view
+  (editorServices:3212 CachedDirectoryStructureHost vs ParseConfigHost, whose fakesHosts
+  class merge demanded a required getCurrentDirectory; optional on the interface tsc sees).
+- **String-layer union members are display strings (no `@`):** a named member falls to
+  the bottom `return false` — `namedUnionMemberCouldAcceptArray` resolves a TYPE-ALIAS
+  member's body for array-ish forms (`ArrayOrSingle<T> = T | readonly T[]`) so
+  fourslashImpl:1214's `expected = [expected]` relates; Array-EXTENDING interfaces
+  deliberately keep firing (their extra members make a bare literal a genuine error —
+  the first cut's heritage arm failed its own negative control).
+- **Overload contextual selection:** resolveCallOverload treats an un-inferred bare
+  TypeParam param as matching (tsc infers it), and the property-access pass's
+  multi-overload contextual branch adopts the overload arg-matching SELECTS
+  (strictSelect — definitive winners only, and only when ≠ sigs[0], keeping the legacy
+  heuristic byte-identical otherwise) — documentsUtil:30's `.reduce((meta, key) =>
+  meta.set(…), new Map())` typed `meta` as string via the first overload's callback.
+- **As-cast member context:** `castTypeDeclaresFnMember` + `uniqueTypeAliasInclNamespaces`
+  — an as-cast receiver whose TYPE declares the assigned member as a method AST-side
+  signals ctx-unknowable (round-474 mechanism) when the resolved receiver poisons to any
+  (harnessIO:379's `(result as CompileFilesResult).repeat = newOptions => …`; the
+  namespace-nested alias intersects a barrel-unresolvable `compiler.CompilationResult`).
+- **Emit/crash legs verified same session — the OFFLINE-VERIFIABLE v1 DEFINITION OF DONE
+  IS FULLY MET:** all eight profiles emit every program file with exit 0, no
+  crashes/hangs/OOMs (compiler 78/78, tsc-cli 80/80, jsTyping 84/84, deprecatedCompat
+  81/81, typingsInstallerCore 88/88, services 252/252, server 274/274, harness 312/312
+  via the bench row — self 50.5 s, +0.9% noise band, RSS 1.89 GB).
+- **NEXT (post-v1):** M5 (performance) is the directive's second half and starts now;
+  byte-correct emit diffing vs real tsc stays network-gated (needs node + typescript).
+  Candidate follow-ups: delete superseded pin walkers; re-audit the env-legit floors
+  once a node-types story exists.**
+
 **Round 480 (2026-07-12, same session as 479) — SIX fixes in 1 commit (629561bb). Dashboard:
 harness 109 → 100 with the 480b heritage batch (ddad6077): an imported conflated heritage base resolves per-file (conflatedPerFileViewForContext) + the derived-vs-chimera bails (conflatedChimeraTargetSourceHasPerFileBase, relation entry + arg emitter — the first cut manufactured 2 ParseConfigFileHost FPs, caught by per-position diff). ~5 real left; every step zero-additions by per-position diff; all seven
 other profiles hold their 46 floors. Suite 10,132 → 10,142 (+10 local across 5 new test
@@ -522,88 +568,3 @@ test files). Compiler profile unchanged (46, zero real).**
 - **NEXT:** burn down server (@230) / harness (@427) with the same listAll-diff workflow —
   their top codes (TS2322×87/TS2339×42 server; TS2339×109/TS2322×102 harness) are
   services-family shapes on server/harness-only files. v1 exit = all 8 profiles at zero real.**
-
-**Round 471 (2026-07-10/11, the services burn-down continues) — NINE bounded fixes in 9 commits
-(63287e70 / 3f5166da / 3766ef73 / 8524afe4 / 093df3f1 / 39b0fddf / c7781e76 / f9a81674 / bd70f5d6). Dashboard: services 72 → 56 (−16; TS2322 12 → 3, TS2345 5 → 2, TS2349 2 → 0, TS2741 2 → 0,
-TS2420 1 → 0; 10 real left excl. TS2591×43 + TS2304×2 `global` + TS2584 console); every fix
-repro-verified both directions before landing. Suite 9,958 → 9,987 (+29 local across 8 new test
-files, 0 regressions).**
-- **Fix A (63287e70, array-literal literal elements):** a fresh array literal keeps its elements'
-  literal types in ARRAY-LIKE contextual positions — literalTypeOfExpression's new
-  ArrayLiteralExpression arm gated on the `arrayCtx` flag (an ungated arm regressed
-  assignmentIndexedToPrimitives: `const n4: 0 = [0]` must stay `number[]`), the
-  one-literal-arm ConditionalExpression relaxation, propTypeContainsLiteral's Array/ReadonlyArray
-  Reference arm, and the same rule in the per-element walkers (a wrong literal element now
-  displays as its literal `"q"` like tsc). Cleared services.ts:1585 + organizeImports:216 +
-  (bonus, with C/E) services.ts:1327 ObjectAllocator and completions:1922.
-- **Fix B (3f5166da, optional-read objlit write target):** an objlit member whose value was an
-  OPTIONAL-member read is `T | undefined` in tsc (the round-424 optionality-is-a-symbol-attribute
-  gap) — objLitMemberValueWasOptionalRead widens the WRITE target only. Cleared organizeImports:115.
-- **Fix C (3766ef73, boolean || truthy facts):** `preferences.includeCompletionsWithSnippetText ||
-  undefined` is `true | undefined` (tsc getTypeWithFacts Truthy); gated when the RIGHT side is
-  boolean-like so `boolA || boolB` stays `boolean` (our getUnionType has no subsumption).
-  Cleared completions:2299.
-- **Fix D (8524afe4, enum VALUE-domain exhaustion):** an enum ALIAS member
-  (`NameContainsNonURISafeCharacters = NameContainsInvalidCharacters`) counts as covered when a
-  covered member has an EQUAL value — tsc's case narrowing removes every member with that value.
-  Cleared jsTyping:414 (the barrel-assertNever family's last member).
-- **Fix E (093df3f1, intersection call signatures):** getCallSignaturesOfType concatenates a
-  Type.Intersection's constituents' sigs (tsc getSignaturesOfStructuredType) — a `Fn & Fn` union
-  member read as non-callable and FP'd TS2349. Cleared textChanges:706 + callHierarchy:263.
-- **Fix F (39b0fddf, lib-phantom members, Blocker #3):** a module file's own top-level
-  `interface Symbol` merges with the same-named LIB global, demanding es2019's `description` —
-  isLibPhantomMemberOfModuleInterface (moduleInterfaceNames + lib-only prop declarations) skips
-  such members in propertiesRelatedTo / collectMissingProperties / getMissingRequiredPropertySymbol
-  / the TS2420 loop. FN-not-FP; script-file lib augmentations don't trip the gate. Cleared
-  services.ts:656 (TS2420) + :725 (TS2345).
-- **Fix G (c7781e76, nested guard shadows global, M1.11):** fixMissingTypeAnnotationOnExports
-  nests `isConstAssertion(location): location is AssertionExpression` while compiler/utilities
-  exports a NON-guard `isConstAssertion` — the merged-globals hit killed the narrowing.
-  resolveFlowCalleeDecl prefers the unique predicate-bearing nested decl of the CURRENT file
-  (nestedFnDeclFiles, per-file batches in buildNestedFunctionMap) over a non-predicate globals
-  hit; the negative pin proves the guard fires (the still-firing error displays the NARROWED
-  type). Cleared fixMissingTypeAnnotationOnExports:452 ×2.
-- **Fix H (f9a81674, flow-narrowed inference anchors, M3.1):** `focusLocations &&
-  flatten(focusLocations)` read the RAW nullable union for inference (the (k) tp[][] anchor
-  soft-skipped, T unbound) while the arg CHECK narrowed — the (k)/(l) anchors now read
-  Identifier/PropertyAccess args' flow-narrowed type under the objLitValueNullishStrip gate.
-  The negative pin proves T binds (the return relates as TextSpan[] and fails string[]).
-  Cleared mapCode:55.
-- **Fix I (spread-of-target + declared extras):** `fix = { ...fix, ...(addAsTypeOnly ===
-  undefined ? {} : { addAsTypeOnly }) }` FP'd — the B426 spread merge keeps only GUARANTEED props.
-  objectLiteralSpreadOfTargetSatisfies suppresses at the assignment path when a spread's
-  (flow-narrowed) type relates to the target and every extra key is declared in SOME target union
-  member with a relating value type (conditional-spread arm values read their flow-narrowed type).
-  Undeclared keys / wrong-typed extras keep firing. Cleared importFixes:316 + :374.
-- **Scouted, deferred with findings:** completions:2237 (a faithful nested-fn repro with
-  isIdentifier + identifierToKeywordKind passes — whole-program probe needed);
-  program.ts:1088 ResolutionLoader<T> (a faithful generic-loader repro passes — probe);
-  emitter:994 `transformed[0]` (round-468 finding stands — probe); signatureHelp:379 +
-  findAllReferences:1000 (+ the completions family) = ONE family: a nested objlit member with an
-  ENUM-member discriminant (`invocation: { kind: InvocationKind.Call, node }`) vs a
-  kind-discriminated union member — needs the round-411 canonical-key space wired into
-  objlit-vs-union member selection; importFixes:316/374 = `fix = { ...fix, ...(cond ? {} :
-  { extra }) }` — a spread-of-target-typed-value + target-declared extras rule (design sketched:
-  first spread's narrowed type relates to target + every extra key declared in SOME union member
-  with a relating value type); symbolDisplay:917/935 TS7034/7005 (the evolving-any model, round-470b
-  finding stands); utilities:1750 TS2538 (binarySearchKey keySelector-return inference).
-- **Round 471b PERF episode (same session, caught by the bench row): the nine fixes had doubled
-  the services self-compile (39 → 92 s) — bisected to TWO independent costs, both fixed, final
-  41.5 s at the same 56 diagnostics.** (1) Fix G's `HashMap<FunctionDeclaration, String>` file map:
-  AST nodes are data classes, so every lookup DEEP-HASHED the whole function subtree, quadratically
-  re-checked per file (+10 s alone) → replaced by cluster-order-aligned file LISTS written during
-  the per-file walk (see the new CLAUDE.md Kotlin-idioms gotcha). (2) Fix F's propertiesRelatedTo
-  hook removed the missing-prop EARLY EXIT from every relation against a lib+module-merged
-  interface (Symbol), re-running full member-type comparisons (39 → 77 s measured at the F commit)
-  → the relation-hook skip is now gated to a CLASS-instance source (the SymbolObject family —
-  exactly the FP's shape) and the phantom-member sets are memoized per symbol id
-  (libPhantomMembersCache). Lesson recorded: run the bench row BEFORE the docs commit, not after
-  the round wraps.
-- **NEXT (services @ 56, 10 real):** the nested-objlit enum-discriminant family
-  (signatureHelp:379 / findAllReferences:1000); completions:2391 TS2740 EmitTextWriter (objlit of
-  any-typed fn members vs a 22-member interface — probe why the missing-set lists 18); the
-  whole-program probe batch (emitter:994 / program.ts:1088 / completions:2237 /
-  documentHighlights:193); symbolDisplay:917/935 evolving-any (needs the model — round-470b
-  finding); utilities:1750 TS2538 (keySelector-return generic inference).**
-
-
