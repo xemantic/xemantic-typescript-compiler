@@ -6080,6 +6080,30 @@ class Checker(
     }
 
     /**
+     * INV.3(c)(i): the NODE-keyed per-file consult — a `globals[name]` consult
+     * made per-file-correct for a name READ FROM AN AST NODE. The round-503
+     * measurement: ~82% of conflated traffic resolves names from FOREIGN nodes
+     * (types.ts's union-member `.kind` annotations, read by the discriminant/
+     * kind-domain narrowing machinery) while checking a DIFFERENT file — tsc
+     * resolves such an annotation in its OWNING file's scope, so the owning
+     * file is the correct key there, never `currentCheckFileName` (keying by
+     * the checking file would silently kill the narrowing wherever that file
+     * does not import the name). Resolution: [owningSourceFile] via the
+     * INV.2(a) parent chain, then [globalsForFile] under that file's
+     * visibility — so a name visible in the owning file returns the legacy
+     * merged-globals INSTANCE (byte-identical flips), and null means the name
+     * has no meaning even where the node lives. An UNINDEXED node (data-class
+     * `copy()` / Transformer-synthesized / detached subtree) has no owner —
+     * degrade to the legacy merged consult, mirroring [globalsForFile]'s
+     * unknown-file degradation. `internal` for direct-construction tests;
+     * unconsumed by checker paths until INV.3(c)(ii).
+     */
+    internal fun lookupPerFileForNode(node: Node, name: String): Symbol? {
+        val owner = owningSourceFile(node) ?: return globals[name]
+        return globalsForFile(owner.fileName, name)
+    }
+
+    /**
      * 17.33: scan all parsed files to populate [umdGlobalNames] (from
      * `export as namespace X;` in .d.ts files) and [moduleFiles] (any file
      * with imports/exports OR — for .js/.jsx — a top-level `require(...)`

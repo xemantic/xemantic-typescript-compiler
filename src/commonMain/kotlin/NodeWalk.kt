@@ -452,3 +452,22 @@ fun indexSourceFile(sourceFile: SourceFile) {
     }
     sourceFile.nodeCount = nextId
 }
+
+/**
+ * INV.3(c)(i): the [SourceFile] owning [node], via the INV.2(a) parent chain
+ * stamped by [indexSourceFile]. Null for an UNINDEXED node — a data-class
+ * `copy()` / Transformer-synthesized node (their `parent` links are never
+ * stamped) or any detached subtree — so callers can degrade to their legacy
+ * behavior. The hop bound is a defensive guard: stamped chains are acyclic by
+ * construction (preorder over a tree), but a corrupted link must not hang the
+ * lookup.
+ */
+fun owningSourceFile(node: Node): SourceFile? {
+    var cur: Node? = node
+    var hops = 0
+    while (cur != null && hops++ < 4096) {
+        if (cur is SourceFile) return cur
+        cur = (cur as NodeBase).parent
+    }
+    return null
+}
