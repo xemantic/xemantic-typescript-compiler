@@ -59,6 +59,45 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 498 (2026-07-13, same session as 497) — INV.2(c) phase (ii) LANDED:
+block-scope containers + class/interface/alias/enum scopes — INV.2(c) is
+COMPLETE.** The lexical binder now covers tsc's `IsBlockScopedContainer` set
+and the remaining containers: every `Block` that is NOT a function-like's
+immediate body (the body shares the function scope — tsc `getContainerFlags`),
+`for`/`for-in`/`for-of` headers (header `let`/`const` in the for scope, the
+body block a child scope under it), `CatchClause` (binds the catch variable,
+destructuring patterns included; the catch block chains under it), and
+`SwitchStatement` standing in for tsc's CaseBlock — our AST has NO CaseBlock
+node, so the switch statement owns the case-block scope and its EXPRESSION is
+routed to the OUTER scope by hand (pushed last so sibling visit order stays
+source order, which the first-wins merge semantics rely on). Class
+declarations/expressions get scopes (type params; a named class EXPRESSION's
+self-name binds inside only; class decorators walk under the OUTER scope),
+interfaces/type aliases get type-param scopes, and enums get member-sibling
+scopes (`enum E { A = 1, B = A }`): a main-bound enum ALIASES its merged
+`exports`; a nested (B83.5-unbound) enum binds scope-space members ALSO
+published onto the scope symbol's `exports` — gated `id ≤ −2` so a MAIN
+symbol's exports are never touched. **The design dividend: phase (i)'s
+`isDirectBodyChild` gates for block-scoped declarations DISSOLVE into a plain
+`scope.existing == null` test — once every block-scope container owns a fresh
+scope, the current scope IS the correct binding target everywhere (file/module
+level stays skipped via the aliasing `existing`); `var` gains the real
+`varHoistTarget` walk-up (nearest function-like/file/module boundary).**
+Block-nested function declarations bind to the BLOCK (strict/module
+semantics — the non-strict hoisting divergence is documented in the KDoc).
+Verification: suite green 10,245 → 10,251 (+6; Inv2LexicalScopeTest now 20 —
+the phase-(i) negative controls FLIPPED to positive location asserts:
+if-block let/class/function in the block scope chained to the fn scope,
+for-header `let` in its for scope while the sibling `var` header hoists,
+catch destructuring, switch case-clause declarations, nested-bare-block
+chains, fn-body-block/ModuleBlock negative controls, class/iface/alias
+type-param scopes, main-vs-nested enum aliasing with the exports identity
+check); `--listAll` byte-identical vs the round-497 binary; interleaved wall
+B/A ×6 both orders NEUTRAL (medians 26,712 before / 26,526 after — after
+faster on medians, slower on means via one outlier; noise). Tables remain
+UNCONSUMED until INV.4/INV.2(d). NEXT: INV.2(d) — B83.5 dissolution pilots
+(convert 1–2 checker transient-symbol sites to consume the new tables).
+
 **Round 497 (2026-07-13) — INV.2(c) phase (i) LANDED: additive lexical binding
 for function-like containers.** The Binder gained a second pass
 (`bindLexicalScopes`, run after conventional binding) that walks the whole
@@ -415,63 +454,6 @@ via checker.ts, and the full corpus suite pins the narrowing corner cases):
   there — the lever is bigger on services / harness). Attempt with the `--listAll` byte gate
   on all three profiles + the full suite, and decompose carefully.
 
-**Round 488 (2026-07-12) — M5.1/M5.2: three byte-identical hot-path allocation /
-map-lookup reductions from a fresh JFR (~2.1% wall-clock).** Mandatory fresh
-compiler-profile JFR (26.4 s / 2,014 samples, post-487): with the scope-name-set
-copy family cleared, the top self-time was `HashMap.getNode` (5.5%, scattered across
-resolveFlowCalleeDecl/aliasedConditionInitializer/getTypeOfSymbol/getTypeOfIdentifier/
-isOptionalProperty), `checkMemberAccessMissing` (5.3% self / 7.0% incl — the top
-walker), then the HashMap/HashSet put/copy family (`putVal` 3.3%, `putMapEntries` 2.4%,
-`HashSet.add` 4.1% incl). Three commits, each byte-identical (compiler-profile 46
-diagnostics, `--listAll` diff empty vs a stash-built BEFORE binary):
-- **Fix 1 — `getUnionType` tiny-input fast paths** (`6258836b`): the general path
-  allocates 4 intermediate lists + 1 HashSet per call; the dominant inputs are size-1
-  and size-2 (the pervasive `T | undefined`, `??` results, nullable narrowing). Added
-  size-1 / size-2 fast paths that skip flatten/filter/dedup/sort when no member is a
-  nested union — preserving the stable sort-by-flags-value, never filtering, any
-  absorption, and id dedup exactly. +4 local `GetUnionTypeFastPathTest` (observable via
-  inferred array-element unions — the target side of a mismatch renders annotations
-  syntactically, bypassing getUnionType).
-- **Fix 2 — `isOptionalProperty` reorder** (`3329561c`): tested the declaration-less
-  tuple-member side set (`optionalTupleMemberIds`) FIRST on every call. Only
-  `buildTupleFromTypes`' synthetic declaration-less symbols are ever in that set and
-  their globally-unique ids can never collide with a declared symbol's, so check the
-  declaration path first (the overwhelming majority) and hit the set only for a
-  declaration-less symbol. +3 local `IsOptionalPropertyReorderTest` (both branches +
-  negative). **INVARIANT for future agents: never add a declaration-BEARING symbol's id
-  to `optionalTupleMemberIds` — the reorder assumes the set holds only declaration-less
-  tuple members.**
-- **Fix 3 — single-lookup flow-callee cache** (`3329561c`, same commit): `resolveFlowCalleeDecl`
-  did `containsKey(key)` then `[key]` (two lookups per cached hit); resolved callees are
-  usually non-null, so a single `get()` covers the common path, falling back to
-  `containsKey` only to disambiguate a legitimately-cached null. Mirrors round 483's
-  resolveModuleSpecifier single-lookup.
-- **Fix 4 — `checkMultiBaseInStatement` occOf scan skip** (`3c40908e`): the TS2320
-  same-generic-base check ran `occOf` (an O(source) `<`-bracket-match scan) for every base
-  of a 2+-base interface, then grouped by name. Only a RECURRING base name can produce
-  TS2320, so group by the cheap base name first and run occOf only for names appearing 2+
-  times — the common `interface X extends A, B` case (distinct names, pervasive in tsc's
-  Node hierarchy) skips the scan. `occOf`'s lambda was the #6 self-time frame (13 samples).
-  +3 local `MultiBaseTs2320OccOfTest`.
-- **Verification:** all byte-identical (46-diagnostic `--listAll` diff empty); full corpus
-  suite green 10,180 → 10,190 (+10 local across 3 test files, 0 regressions). Clean
-  same-machine wall-clock A/B (daemon stopped, `pkill KotlinCompile[D]aemon`, 4.7 GB free,
-  3 runs each, self-reported `time:`): BEFORE (round 487 fd4769c2) median 25.70 s vs AFTER
-  (this session) 25.17 s ≈ **2.1%** (best-case 24.90 vs 25.70 ≈ 3.1%), consistent across
-  runs. A modest real win from cutting per-call allocations + map lookups on the
-  property-access / flow-narrowing / union-construction hot paths.
-- **NEXT M5 lead (unchanged):** `checkMemberAccessMissing` (5.3% self / 7.0% incl) remains
-  the top single WALKER — it runs for EVERY property access and does heavy eager narrowing/
-  type-resolution work (getTypeOfExpression + getNarrowedTypeForReference + checkTypeRelatedTo
-  in several suppression blocks) BEFORE determining whether the member is even missing.
-  A common-case early-out (member present on the receiver's apparent type → return before
-  the flow-suppression blocks) is the biggest remaining lever, but it's a 700+-line
-  correctness-critical function — attempt with the `--listAll` byte gate + full suite, and
-  decompose carefully. Also standing: the `checkFunctionBody` per-body scope-map copies
-  (`putMapEntries`, ~15 samples — currentLocalTypes/currentLocalDeclTypeNodes/currentShadowedNames
-  copied O(scope size) at every nested function; a layered/copy-on-write redesign like
-  ScopeNameSet would eliminate it but touches many read/write sites).
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 (Restored 2026-07-12, round 481 — the queue/backlog/inventory sections had been
@@ -593,7 +575,7 @@ interrupt the arc).
     validated; the mass-migration targets are the HOT maps (walk memos, INV.4
     per-node type cache), not more cold tables. `nodeTypes` rejected as pilot
     (structural cross-file keying — INV.5 territory).
-  - [ ] **INV.2(c) Full lexical binding, additive.** Scope symbols from a SEPARATE
+  - [x] **INV.2(c) Full lexical binding, additive.** Scope symbols from a SEPARATE
     id space (never the global `nextId` sequence — the reshuffle hazard); existing
     `locals`/`globals` byte-unchanged; new tables unconsumed until INV.4.
     - (i) DONE round 497 (2026-07-13): function-like containers —
@@ -607,10 +589,23 @@ interrupt the arc).
       ids ≤ −2; a delta-probe test pins zero global-id consumption. Suite +14
       (Inv2LexicalScopeTest), listAll byte-identical, interleaved wall
       position-balanced +0.8% (noise band).
-    - (ii) PENDING: block-scope containers (nested blocks, for-headers, catch
-      clauses, case blocks) + class scopes (type params, named class-expression
-      self-name, enum-member sibling scope); the phase-(i) negative controls in
-      Inv2LexicalScopeTest pin the boundary and flip consciously.
+    - (ii) DONE round 498 (2026-07-13, same session): block-scope containers —
+      every Block that is not a function-like's immediate body, for/for-in/for-of
+      headers, CatchClause (binds the catch variable, destructuring included),
+      SwitchStatement standing in for tsc's CaseBlock (our AST has none — the
+      switch EXPRESSION routes to the OUTER scope by hand) — plus class scopes
+      (type params; named class-expression self-name; class decorators outer),
+      interface/type-alias scopes (type params), and enum scopes (aliasing
+      main-bound exports; nested enums bind scope-space members also published
+      on the scope symbol's exports, gated `id ≤ −2` so main symbols stay
+      untouched). Design dividend: the phase-(i) `isDirectBodyChild` gates for
+      block-scoped declarations DISSOLVE into `scope.existing == null` (every
+      fresh scope IS the correct nearest block-scope container); `var` gains the
+      real `varHoistTarget` walk-up. Block-nested function declarations use
+      strict/module semantics (bind to the block). Suite +6 (20 total in
+      Inv2LexicalScopeTest — the phase-(i) negative controls flipped to
+      positive location asserts), listAll byte-identical, interleaved wall ×6
+      both orders neutral.
   - [ ] **INV.2(d) B83.5 dissolution pilots.** Convert 1–2 checker sites that
     synthesize transient symbols for unbound block-scoped decls (e.g.
     `checkPropertyAccessInStatement`'s ClassDeclaration branch) to consume the
