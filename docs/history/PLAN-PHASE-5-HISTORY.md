@@ -1,3 +1,45 @@
+**Round 501 (2026-07-13, same session as 500) — INV.3(b) phase (i) LANDED:
+the per-file resolution primitive, additive and unconsumed.**
+`lookupPerFile(fileName, name)` (internal) — the lookup the (c) family flips
+will substitute for conflated `globals[name]` consults: the file's
+`perFileScope` table (own locals ▸ script-file globals ▸ lib), with an
+ImportSpecifier-alias own-local resolved onward through the NEW
+`resolveImportedSymbolGeneral` — the kind-AGNOSTIC generalization of the
+flow-only resolver skeleton (ESM-`.js` strip via `resolveAliasJsModuleSpecifier`,
+`export *` barrels via `resolveExportedSymbolThroughStars` — whose
+NamedExports arm turns out to cover RENAMED re-exports too — plus
+re-import/re-export alias hops, `visited`-guarded, memoized in
+`importedSymbolGeneralCache`). ADDITIVE by design: the three kind-specific
+legacy variants (fn/namespace/enum) stay untouched — their
+per-declaration kind-filter-then-continue semantics differ subtly from
+first-resolved-symbol, so delegation would not be behavior-preserving; they
+become deletion candidates when their consumers migrate. Never wired into the
+general `resolveAlias` (the round-409 TS2315-flood gotcha). **The trap that
+cost the round its debugging time: `mergeSymbolTable` FLAG pollution.** The
+first cut hopped on `sym.flags.hasAny(Alias)` — but a barrel-imported name's
+TARGET symbol (types.ts's `interface Foo`) ACQUIRES the Alias bit when the
+importing file's alias merges onto it in `globals` (`existing.flags |=`), so
+the resolver hopped INTO the real declaration symbol, found no
+ImportSpecifier, and returned null for every import. The fix is the
+isValueExport gotcha applied to alias hopping: decide by DECLARATIONS
+(`isImportBindingDecl` — ImportSpecifier / ImportDeclaration /
+ImportEqualsDeclaration), never flags; a symbol with any real declaration IS
+the resolution target. Contract documented in the KDoc: for an imported name
+the primitive returns the SAME symbol instance the conflated globals lookup
+returned (what makes (c) flips byte-identical); unresolvable/unsupported
+alias kinds (default imports, `import * as ns`, `import =`) degrade to the
+alias symbol itself; null strictly means "no per-file meaning" (the leak).
+Pinned by Inv3PerFileLookupTest — the first local test to construct a
+`Checker(options, binderResults)` DIRECTLY (internal visibility), asserting
+symbol IDENTITY against the declaring file's binder locals over
+direct-`.js` / plain-barrel / renamed-re-export / own-local / script-global /
+lib shapes plus the foreign-module-local-is-null and alias-degradation
+negative controls; fixture files must be PATH-shaped (`/proj/c.ts`) — flat
+corpus-style names defeat directory-relative specifier resolution. Suite
+green 10,260 → 10,266 (+6); the primitive is unconsumed by any checker path
+(behavior provably unchanged; listAll spot-check clean). NEXT: INV.3(b)(ii)
+— the pilot consumer at the (a)-measured lowest-risk site.
+
 **Round 500 (2026-07-13) — INV.3 DECOMPOSED into (a)–(d) + INV.3(a) LANDED:
 the conflation-dependency instrumentation and its first measurement.**
 Decomposition facts verified in-code before writing the sub-items: the queue's

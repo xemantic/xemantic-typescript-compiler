@@ -59,6 +59,41 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 509 (2026-07-13, same session as 508) — INV.3(c)(iv) leg 2 LANDED +
+re-measure: the (c) migration is COMPLETE, INV.3(d) unlocked.** The four
+remaining sites node-keyed: `getTypeFromBaseTypeExpression`'s Identifier
+fallback (the PropertyAccess last-segment fallback stays legacy, mirroring
+getTypeFromTypeReference's QualifiedName convention),
+`emitTs2345ForBareTpArgToConstrainedTpParam`,
+`getOverloadImplementationRelated` (keyed by the overload DECL's own name
+node — a top-level decl's file always declares the name so the merged
+instance is byte-identical; a nested/B83.5-unbound or foreign-collision name
+no longer hands TS2793 a wrong-file impl pointer from the polluted merged
+declarations list), and `calleeReturnAnnotationForImplicitAny` (the
+`uniqueFunctionDeclByName` fallback still covers program-wide-UNIQUE names —
+only ambiguous foreign names change, yielding no annotation instead of the
+merged list's first pick). Verified: suite green 10,311 → 10,316 (+5
+Inv3TypePositionLeg2NodeKeyTest — 2 leak-kills FAIL on the post-leg-1
+checker via stash: an UNIMPORTED foreign heritage base grafting members
+manufactured TS2741 on `const d: D = {}` (post-flip only the correct TS2304
+on the base name remains), and an unimported foreign `take<T extends
+string>` callee manufactured TS2345+TS2208 about an invisible constraint;
+3 preservation controls: imported base + cross-file SCRIPT base keep the
+real TS2741, own-file constrained callee keeps TS2345); `--listAll`
+byte-identical on compiler AND services (46/46 — diffed against the leg-1
+captures, which are HEAD's own outputs). RE-MEASURE (`--passTiming`,
+compiler profile): **CONFLATED 6,165 → 917** (−85%; cumulative from the
+pre-migration 157k → −99.4%), total keyed lookups 2.36M → 2.06M, 97 names
+across 9 passes (top: checkCallExpressionTypes 318 /
+checkTypeAssignability 284 / checkPropertyAccess 273), and the by-NAME table
+(`diag` 140, `clone` 135, `map` 73, `length` 45, `factory` 38, `min`,
+`isIdentifier`, …) is exactly the shadow-detection ecology's
+"does a merged global collide" consults (`registerNestedGlobalShadow*`/
+`applyBodyLocalShadowing`/`shadowNestedFunctionNames`) + tiny tails — the
+deliberately-legacy INV.3(d) scope, per the round-507b prediction. Bench row
+appended. NEXT: INV.3(d) — retire the merge + delete the conflation ecology,
+walker-by-walker, each deletion suite- and listAll-gated.
+
 **Round 508 (2026-07-13) — INV.3(c)(iv) leg 1 LANDED: `resolveTypeNameToSymbol`'s
 Identifier branch + `typeNodeDefinitelyNonNullish`'s two fallbacks node-keyed
 JOINTLY (the round-507c order constraint).** The general type-resolution flip:
@@ -413,48 +448,6 @@ mirrored-sites-flip-together); `lookupPerFile`'s KDoc re-pointed at
 `globalsForFile` as the consumer-facing wrapper. NEXT: INV.3(c) — flip
 resolution families onto the primitive in the (a) tables' order, per-site.
 
-**Round 501 (2026-07-13, same session as 500) — INV.3(b) phase (i) LANDED:
-the per-file resolution primitive, additive and unconsumed.**
-`lookupPerFile(fileName, name)` (internal) — the lookup the (c) family flips
-will substitute for conflated `globals[name]` consults: the file's
-`perFileScope` table (own locals ▸ script-file globals ▸ lib), with an
-ImportSpecifier-alias own-local resolved onward through the NEW
-`resolveImportedSymbolGeneral` — the kind-AGNOSTIC generalization of the
-flow-only resolver skeleton (ESM-`.js` strip via `resolveAliasJsModuleSpecifier`,
-`export *` barrels via `resolveExportedSymbolThroughStars` — whose
-NamedExports arm turns out to cover RENAMED re-exports too — plus
-re-import/re-export alias hops, `visited`-guarded, memoized in
-`importedSymbolGeneralCache`). ADDITIVE by design: the three kind-specific
-legacy variants (fn/namespace/enum) stay untouched — their
-per-declaration kind-filter-then-continue semantics differ subtly from
-first-resolved-symbol, so delegation would not be behavior-preserving; they
-become deletion candidates when their consumers migrate. Never wired into the
-general `resolveAlias` (the round-409 TS2315-flood gotcha). **The trap that
-cost the round its debugging time: `mergeSymbolTable` FLAG pollution.** The
-first cut hopped on `sym.flags.hasAny(Alias)` — but a barrel-imported name's
-TARGET symbol (types.ts's `interface Foo`) ACQUIRES the Alias bit when the
-importing file's alias merges onto it in `globals` (`existing.flags |=`), so
-the resolver hopped INTO the real declaration symbol, found no
-ImportSpecifier, and returned null for every import. The fix is the
-isValueExport gotcha applied to alias hopping: decide by DECLARATIONS
-(`isImportBindingDecl` — ImportSpecifier / ImportDeclaration /
-ImportEqualsDeclaration), never flags; a symbol with any real declaration IS
-the resolution target. Contract documented in the KDoc: for an imported name
-the primitive returns the SAME symbol instance the conflated globals lookup
-returned (what makes (c) flips byte-identical); unresolvable/unsupported
-alias kinds (default imports, `import * as ns`, `import =`) degrade to the
-alias symbol itself; null strictly means "no per-file meaning" (the leak).
-Pinned by Inv3PerFileLookupTest — the first local test to construct a
-`Checker(options, binderResults)` DIRECTLY (internal visibility), asserting
-symbol IDENTITY against the declaring file's binder locals over
-direct-`.js` / plain-barrel / renamed-re-export / own-local / script-global /
-lib shapes plus the foreign-module-local-is-null and alias-degradation
-negative controls; fixture files must be PATH-shaped (`/proj/c.ts`) — flat
-corpus-style names defeat directory-relative specifier resolution. Suite
-green 10,260 → 10,266 (+6); the primitive is unconsumed by any checker path
-(behavior provably unchanged; listAll spot-check clean). NEXT: INV.3(b)(ii)
-— the pilot consumer at the (a)-measured lowest-risk site.
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 (Restored 2026-07-12, round 481 — the queue/backlog/inventory sections had been
@@ -712,7 +705,9 @@ interrupt the arc).
       (Inv3GlobalsForFileTest — both leak-kill tests FAIL on the pre-flip
       checker, verified via stash; five preservation controls pass on
       both); `--listAll` byte-identical on compiler AND services.
-  - [ ] **INV.3(c) Flip resolution families onto the primitive** — decomposed
+  - [x] **INV.3(c) Flip resolution families onto the primitive** — COMPLETE
+    round 509 (all four sub-items landed; conflated 157k → 917, the residue
+    being the INV.3(d)-scoped shadow ecology). Decomposed
     round 503 from a MEASURED per-site attribution (a temporary 1:200
     stack-sampling probe on the classifier's CONFLATED branch, ~790 samples,
     probe reverted — evidence in the round-503 session note). The guessed
@@ -843,16 +838,24 @@ interrupt the arc).
       Suite +9 (Inv3TypePositionNodeKeyTest — 3 leak-kills FAIL pre-flip via
       stash: the flow TS18048, annotation-position TS2322, TS2315; 6
       preservation controls pass both sides); `--listAll` byte-identical on
-      compiler AND services. REMAINING leg 2: getTypeFromBaseTypeExpression's
-      Identifier fallback (~440; keep the PropertyAccess last-segment
-      fallback legacy — it mirrors getTypeFromTypeReference's QualifiedName
-      convention) + the tiny value tail
-      (emitTs2345ForBareTpArgToConstrainedTpParam,
-      getOverloadImplementationRelated — node-key by the DECL's own name
-      Identifier, killing the nested-fn foreign-impl-pointer case,
-      calleeReturnAnnotationForImplicitAny), then re-run the instrumented
-      measurement; conflated-by-pass should approach zero, unlocking
-      INV.3(d).
+      compiler AND services. Leg 2 DONE round 509 (2026-07-13) — **(iv) and
+      the whole (c) migration COMPLETE**: getTypeFromBaseTypeExpression's
+      Identifier fallback (PropertyAccess last-segment fallback kept legacy —
+      the QualifiedName convention), emitTs2345ForBareTpArgToConstrainedTpParam,
+      getOverloadImplementationRelated (keyed by the overload DECL's own name
+      node — a nested/foreign collision no longer hands TS2793 a wrong-file
+      impl pointer), calleeReturnAnnotationForImplicitAny (the
+      uniqueFunctionDeclByName fallback still covers program-wide-unique
+      names). Suite +5 (Inv3TypePositionLeg2NodeKeyTest — 2 leak-kills FAIL
+      pre-flip via stash: a leaked foreign heritage base grafting members
+      manufactured TS2741 on `const d: D = {}`, a leaked foreign
+      constrained-TP callee manufactured TS2345; 3 preservation controls);
+      listAll byte-identical on compiler AND services. RE-MEASURE (compiler
+      profile): CONFLATED 6,165 → **917** (−85%; from the pre-migration 157k
+      → −99.4%), 97 names / 9 passes, top 318/284/273 — the residue is the
+      deliberately-legacy shadow-detection ecology (`diag`/`clone`/`map`/
+      `factory` collision questions) + tiny tails, i.e. INV.3(d)'s scope.
+      INV.3(d) is UNLOCKED.
   - [ ] **INV.3(d) Retire the merge + delete the ecology.** Stop merging
     module-file locals into `globals`; delete `moduleFileLocalVarNames`,
     `conflatedTypeAliasFiles`, `conflatedInterfaceFiles`,
