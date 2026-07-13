@@ -39,6 +39,42 @@ rounds 430–432, renumbered at merge — the branch ran in PARALLEL with main's
 which own those numbers. The perf rounds' FP baselines (1,148 / 1,665) are the branch's pre-merge
 numbers; main's concurrent M3.1/M3.2 work independently took the compiler profile to 482.)*
 
+**Re-scope (2026-07-13, owner — round 490): M5 becomes the staged ARCHITECTURE
+INVERSION arc (INV.0–INV.7).** The owner reviewed the round-490 architecture
+analysis ("question every decision; cross-check tsc/tsgo") and directed: follow the
+recommendation, rescope towards the overall goal. Full analysis + phase design:
+**`docs/ARCHITECTURE-RETHINK.md`** — read it before ANY M5/INV item. Headline: the
+flat-profile micro-opt mode (rounds 482–489, 1–3%/round) is CLOSED; the measured
+cost is a multiplier (~512 sequential full-program checker passes × uncached
+`getTypeOfExpression` × context-bypassed `nodeTypes` × per-pass scope re-derivation
+× non-interned unions), and the fix is the tsc-shaped inversion: bind-everything →
+per-file scopes → single-pass demand-driven checking with per-node caches →
+canonical type identity/mappers → share-nothing parallel checkers. Owner-approved
+same directive: **kotlinx-coroutines-core as a commonMain dependency** (within the
+kotlinx.* rule) for the Flow-based concurrent front-end (read+UTF-8→UTF-16 decode on
+`Dispatchers.IO`, parse on `Dispatchers.Default`, bounded `flatMapMerge` = the
+owner's measured microbench win) and later the parallel checker/emit phases —
+streams live at the I/O boundaries; the checker core stays demand-driven
+memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the INV
+items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
+M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
+
+**Round 490 (2026-07-13) — the architecture analysis behind the rescope (no code
+change).** Verified in-code: Checker.init dispatches ~512 passes (523 call sites,
+1,700 lines); 575 `for (result in binderResults)` loops; 1,005 `check*` functions;
+`getTypeOfExpression` (321 call sites) has NO cache; `nodeTypes` bypassed whenever
+any resolution context is active (Checker.kt ~93091); unions un-interned;
+`resolveGenericPropertyType` depth-capped at 4 to avoid OOM. Cross-checked tsc
+(single-walk pull-based checker, NodeLinks/SymbolLinks memoization, interned
+unions/instantiations, mapper-based instantiation, flow type cached per reference)
+and tsgo 7.0 RC (native + parallel parse/bind/emit + 4 share-nothing checker
+workers, `--checkers`; matches docs/parallel-caching.md). Key comparison: tsc does
+MORE semantic work per node yet runs the compiler profile in 10.2 s vs our ~25 s —
+the walker architecture, not micro-inefficiency, is the bottleneck (rounds 432–434's
+30× from structural fixes vs rounds 482–489's ~10% combined from micro-opts confirm
+the response curve). Deliverables: `docs/ARCHITECTURE-RETHINK.md` + this queue
+restructure + CLAUDE.md mission pointer.
+
 **Round 489 (2026-07-12) — M5.1: two byte-identical per-property-access hot-path
 reductions from a fresh JFR (~2.9% wall-clock).** Mandatory fresh compiler-profile JFR
 (25.5 s / 1,961 samples, post-488): `checkMemberAccessMissing` at the clear top (5.7%
@@ -584,35 +620,71 @@ cheap-first to shrink the diff before tackling the hard cross-file one):
 
 Session note (round 484) has the full family breakdown + methodology.
 
-**M5 — Performance (starts at v1 compliance — the 8 tsc-source profiles compile clean)**
+**INV — the M5 architecture-inversion arc (re-scoped 2026-07-13, owner; supersedes
+M5.1–M5.7 — mapping and full design in `docs/ARCHITECTURE-RETHINK.md`, READ IT FIRST).**
+Ground rules for every INV item: corpus suite green + 8-profile FP floors unchanged +
+`--listAll` byte-diff empty for behavior-preserving steps + a bench TSV row per landed
+item; decompose into the smallest standalone suite-gated commits; micro-opt rounds
+against the flat profile are CLOSED (only an INV.0-evidenced ≥5% single lever may
+interrupt the arc).
 
-- [ ] **M5.1 Profiling grid**: JFR/async-profiler over the project corpus (cold CLI,
-  warm in-process via BenchMain, RSS); publish flamegraph findings in a session note
-  before optimizing anything. **Partially done early (rounds 432–434, branch
-  `perf/flow-import-resolution`, owner-directed): two JFR rounds removed the four
-  dominant hotspots — self-compile ~593 → ~20 s, zod 6 → 3.5 s, byte-identical
-  diagnostics. Tooling: `scripts/aggregate_jfr.py`; method + remaining flat-profile
-  leads + tsc/tsgo comparison: `docs/parallel-caching.md`. A FRESH JFR pass is
-  mandatory before the next perf item — the profile shifts after every fix.**
-- [ ] **M5.2 Allocation discipline in the relation engine** (type interning /
-  canonicalization — replace the documented fresh-mint caps like the
-  `getPropertyTypeForRelation` depth bound with proper sharing).
-- [ ] **M5.3 Cache effectiveness under scope contexts** (today `nodeTypes` is bypassed
-  whenever any resolution context is active = recompute on every generic-heavy path).
-- [ ] **M5.4 Parallel per-file checking** via the existing-but-unused `CheckerPool`
-  (LinkStore side-tables already keep binder output immutable for this).
-  **Design decided (2026-07-07, owner discussion): share-nothing workers à la tsgo —
-  NO shared/concurrent maps; cache-tier rules, determinism requirements, the phased
-  plan (share-nothing → shared frozen lib slice → single-flight pure computations),
-  and the evaluated-and-declined cachemap dependency are all in
-  `docs/parallel-caching.md`. Read it BEFORE starting this item.**
-- [ ] **M5.5 Incremental compilation** (`.tsbuildinfo`-style reuse; the M2.1 shared
-  lib snapshot is the first piece).
-- [ ] **M5.6 Native target re-enable + tune** (linuxX64 was disabled in c7e3535f;
-  native already wins <10 kLOC — fix the big-input inversion, likely GC/allocation).
-- [ ] **M5.7 Numeric targets** (proposed; confirm with owner at M5 start): warm ≥ tsc
-  throughput on 500k-LOC real code; cold CLI ≤ 1.5× tsc on medium projects; RSS ≤ tsc;
-  stretch: approach tsgo on native.
+- [ ] **INV.0 Instrument the multiplier.** Per-pass wall-time table behind an opt-in
+  flag: a `pass("name") { … }` wrapper around Checker.init's ~512 dispatch calls
+  (accumulator fields declared BEFORE `init` — the documented Kotlin init-order trap;
+  wrap the plain `checkFoo()` lines mechanically, conditionals by hand), plus counters:
+  `getTypeOfExpression` invocations vs distinct expression nodes, `nodeTypes`
+  cacheable-vs-bypassed ratio, narrowing walks launched per consumer family. Publish
+  the sorted pass-time table in a session note — it is the INV.4 migration worklist
+  and the honest baseline. Gate: instrumentation off by default, byte-identical.
+- [ ] **INV.1 Concurrent front-end — the owner's Flow beachhead (owner-approved
+  kotlinx-coroutines-core dependency, 2026-07-13).** Sub-steps: (a) add the dep + a
+  behavior-identical sequential `Flow` refactor of project file loading; (b) read +
+  UTF-8→UTF-16 decode on `Dispatchers.IO`, scan+parse on `Dispatchers.Default`,
+  bounded `flatMapMerge` (backpressure = bounded in-flight files); the BINDER STAYS
+  SEQUENTIAL in file order — global `nextSymbolId` allocation order is load-bearing
+  (~350-test reshuffle on drift); (c) determinism verification: corpus + `--listAll`
+  byte-diff over 3 runs; (d) bench rows (compiler + harness). Expected ~1–2 s on big
+  profiles now, more on the 500k-LOC horizon; derisks the coroutine foundation INV.6
+  needs. Verify the parser has no hidden shared mutable state before enabling
+  parallelism (internSalt stamping is per-file pure).
+- [ ] **INV.2 Bind the world.** Full lexical binding — function bodies + block scopes
+  (dissolves B83.5), container/parent chain, per-file `nodeId` for array-indexed side
+  tables (attacks the `HashMap.getNode` top JFR entry; unlocks the file+node-identity
+  memo keying rounds 481–482 were blocked on). Scope symbols allocate from a SEPARATE
+  id space (no boundary-test reshuffle). Additive: existing walkers keep working; their
+  scope hacks become deletable in INV.4.
+- [ ] **INV.3 Per-file scoping.** Consume `buildPerFileScopes` (built round 17.32a,
+  never consumed); module files resolve own-locals + imports + true globals; retire the
+  `mergeSymbolTable` globals conflation for module files; delete the conflation
+  ecology walker-by-walker (`moduleFileLocalVarNames`, `conflatedTypeAliasFiles`,
+  `conflatedInterfaceFiles`, `conflatedEnumFileSubsets`, per-file interface views,
+  chimera bails — each deletion suite- and listAll-gated, each removes hot-path work
+  from `checkMemberAccessMissing`). Also lays the cross-file value-resolution
+  groundwork EP.1 needs.
+- [ ] **INV.4 Single-pass check spine.** `checkSourceFileOnce` per-node dispatch;
+  migrate walker families in INV.0's cost order — every migration deletes a full-tree
+  pass and its private scope machinery. Once ONE authoritative walk state exists, land
+  the two things that are unsound today: a per-node expression-type cache, and flow
+  narrowing folded into reference typing once (collapsing the rounds-408–479
+  per-consumer wiring). The long middle — plan as many small items; corpus + listAll
+  gate every family move.
+- [ ] **INV.5 Canonical types + explicit instantiation** (absorbs M5.2/M5.3). Intern
+  unions/intersections by sorted member-id key; literal interning; explicit mapper
+  objects replace the ambient `currentTypeAliasArgs`/TP-scope contexts; instantiated
+  members cached ON the `Type.Reference` (delete `resolveGenericPropertyType`
+  fresh-minting + its depth-4 OOM cap); `nodeTypes` keyed (node, mapper) — always
+  valid; then open `canUseTypeEngine`'s generic gate and DELETE superseded pin walkers.
+- [ ] **INV.6 Parallelism** (absorbs M5.4). Share-nothing checker workers per
+  `docs/parallel-caching.md` (trivially partitionable once INV.4 gives a per-file
+  check entry); parallel emit on Default + IO write sink; deterministic partition +
+  merge via the existing diagnostic sort. Structured concurrency from INV.1.
+- [ ] **INV.7 Productization** (absorbs M5.5/M5.6). Native re-enable (the big-input
+  GC inversion should largely dissolve post INV.4/5); watch mode driven by a
+  file-event Flow; `.tsbuildinfo`-style incremental reuse.
+
+Numeric targets (proposed, doc § 6): post INV.4/5 single-threaded compiler profile
+≤ 10 s (≈ JS tsc) + harness RSS ≤ 1 GB; post INV.6 compiler ≤ 5 s on 4 cores;
+INV.7 stretch: native cold ≤ 2× tsgo.
 
 ### Post-v1 backlog — the "any TypeScript project" horizon (parked 2026-07-03)
 
