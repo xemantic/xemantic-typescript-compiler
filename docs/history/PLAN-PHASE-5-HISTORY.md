@@ -1,3 +1,31 @@
+**Round 499 (2026-07-13, same session as 497/498) — INV.2(d) LANDED: the first
+lexical-table CONSUMER — INV.2 "bind the world" is COMPLETE.** The canonical
+B83.5 transient-symbol site (`checkPropertyAccessInStatement`'s
+ClassDeclaration branch: a block-scoped class is invisible to the conventional
+binder, so the `this.X` member check synthesized a fresh
+`Symbol(SymbolFlags.Class, …)` per visit) now resolves the class through the
+INV.2(c) tables: `currentLexicalScopes` (a per-file checker field set in
+`checkPropertyAccess`, declared BEFORE `init` per the init-order gotcha) +
+`lexicalScopeSymbol(node, name)` — a parent-chain walk to the nearest scope
+binding the name, gated `flags.hasAny(Class)`, with the legacy synthesis kept
+as the unindexed-tree fallback. This is the resolution primitive INV.4 will
+generalize. **Fidelity + a real fix:** diagnostics are byte-identical on the
+compiler AND services listAll A/Bs (46/46 each), the corpus suite is green,
+AND a block-level `interface B { extra } class B { m() { this.extra } }`
+merge no longer FPs TS2339 — the lexical symbol carries BOTH declarations
+(canMerge Class+Interface), which the class-only transient never saw
+(measured: the pre-pilot checker emitted the false TS2339; the new
+Inv2LexicalConsumerTest pins both directions plus the TS2551
+spelling-suggestion variant, proving the lexically-resolved type feeds the
+full member machinery). Investigation notes: the OTHER two
+`Symbol(SymbolFlags.Class, …)` syntheses are NOT convertible — the B511
+clodule recovery's class is main-bound then OVERWRITTEN by last-wins (in
+neither table), and the classExpressionAssignment display synthesis names an
+anonymous ClassExpression (never a scope binding); a probe also recorded that
+this pass's traversal does not descend `while` bodies (pre-existing, both
+code paths — the tests use `if`/`for` shapes). Suite 10,251 → 10,255 (+4).
+NEXT: INV.3 per-file scoping.
+
 **Round 498 (2026-07-13, same session as 497) — INV.2(c) phase (ii) LANDED:
 block-scope containers + class/interface/alias/enum scopes — INV.2(c) is
 COMPLETE.** The lexical binder now covers tsc's `IsBlockScopedContainer` set

@@ -59,6 +59,27 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 507c (2026-07-13, same session as 507/507b) — INV.3(c)(iv) first cut
+ATTEMPTED and REVERTED (unpinnable, not regressing): the
+`typeNodeDefinitelyNonNullish` fallbacks alone have NO observable.** The flip
+compiled, all preservation controls passed, but the leak-kill could not be
+made to FAIL pre-flip OR fire post-flip: for every constructible shape the
+narrowing survives through `resolvedCallReturnTypeForFlow`'s assignment-reset
+arm, which resolves the SAME return annotation via `getTypeFromTypeNode` →
+`resolveTypeNameToSymbol`'s still-legacy globals fallback — the syntactic
+classifier's leak is fully shadowed by the general-resolution leak (they
+consult the same merged map; the classifier's extra power — barrel-imported
+alias bodies — is exactly the case the visibility probe PRESERVES, so no
+kill shape exists there either). Landing an unpinnable flip would break the
+(c)-migration's stash-verified leak-kill discipline, so the code was
+reverted and the ORDER CONSTRAINT written into the (iv) queue item:
+`resolveTypeNameToSymbol`'s Identifier fallback must flip FIRST (or jointly
+in one commit) — it is also the highest-risk site (general type resolution:
+nodeTypes caching, first-touch poisoning, the round-473/474 conflation
+ecology) and needs fresh context + the full battery. The joint observable
+and its verified preservation fixtures are recorded in the queue item. No
+tree change; suite state carries over (10,302 / 0 / 3).
+
 **Round 507b (2026-07-13, same session as 507) — INV.3(c)(iii) phase 3
 LANDED: `getTypeOfIdentifier`'s globals fallback node-keyed — (iii) is
 COMPLETE.** The round-442 measured dead-end (by-NAME nulling of the fallback
@@ -437,34 +458,6 @@ and a grep trap recorded in CLAUDE.md (Checker.kt trips grep's binary
 heuristic — source greps need `-a` too; it silently produced the stale claim).
 NEXT: INV.3(b) — the per-file resolution primitive.
 
-**Round 499 (2026-07-13, same session as 497/498) — INV.2(d) LANDED: the first
-lexical-table CONSUMER — INV.2 "bind the world" is COMPLETE.** The canonical
-B83.5 transient-symbol site (`checkPropertyAccessInStatement`'s
-ClassDeclaration branch: a block-scoped class is invisible to the conventional
-binder, so the `this.X` member check synthesized a fresh
-`Symbol(SymbolFlags.Class, …)` per visit) now resolves the class through the
-INV.2(c) tables: `currentLexicalScopes` (a per-file checker field set in
-`checkPropertyAccess`, declared BEFORE `init` per the init-order gotcha) +
-`lexicalScopeSymbol(node, name)` — a parent-chain walk to the nearest scope
-binding the name, gated `flags.hasAny(Class)`, with the legacy synthesis kept
-as the unindexed-tree fallback. This is the resolution primitive INV.4 will
-generalize. **Fidelity + a real fix:** diagnostics are byte-identical on the
-compiler AND services listAll A/Bs (46/46 each), the corpus suite is green,
-AND a block-level `interface B { extra } class B { m() { this.extra } }`
-merge no longer FPs TS2339 — the lexical symbol carries BOTH declarations
-(canMerge Class+Interface), which the class-only transient never saw
-(measured: the pre-pilot checker emitted the false TS2339; the new
-Inv2LexicalConsumerTest pins both directions plus the TS2551
-spelling-suggestion variant, proving the lexically-resolved type feeds the
-full member machinery). Investigation notes: the OTHER two
-`Symbol(SymbolFlags.Class, …)` syntheses are NOT convertible — the B511
-clodule recovery's class is main-bound then OVERWRITTEN by last-wins (in
-neither table), and the classExpressionAssignment display synthesis names an
-anonymous ClassExpression (never a scope binding); a probe also recorded that
-this pass's traversal does not descend `while` bodies (pre-existing, both
-code paths — the tests use `if`/`for` shapes). Suite 10,251 → 10,255 (+4).
-NEXT: INV.3 per-file scoping.
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 (Restored 2026-07-12, round 481 — the queue/backlog/inventory sections had been
@@ -827,10 +820,29 @@ interrupt the arc).
       getOverloadImplementationRelated, calleeReturnAnnotationForImplicitAny
       — fold into (iv)'s re-measure).
     - (iv) **Flip the type-position tail** (typeRef.resolve.ident ~1.9k,
-      typeNodeDefinitelyNonNullish's globals fallback — the round-424
-      barrel-alias fallback already restricted to interface/class/enum) and
-      re-run the instrumented measurement; conflated-by-pass should
-      approach zero, unlocking INV.3(d).
+      typeNodeDefinitelyNonNullish's two fallbacks ~2.7k,
+      getTypeFromBaseTypeExpression ← resolveBaseTypesLazy ~440, + the tiny
+      value tail folded in from (iii): emitTs2345ForBareTpArgToConstrainedTpParam,
+      getOverloadImplementationRelated, calleeReturnAnnotationForImplicitAny)
+      and re-run the instrumented measurement; conflated-by-pass should
+      approach zero, unlocking INV.3(d). ORDER CONSTRAINT measured round 507c
+      (attempted typeNodeDefinitelyNonNullish alone, REVERTED unpinnable):
+      its leak is FULLY SHADOWED by the general-resolution leak — for any
+      constructible shape, `resolvedCallReturnTypeForFlow`'s assignment-reset
+      arm resolves the same annotation through `getTypeFromTypeNode` →
+      `resolveTypeNameToSymbol`'s still-legacy globals fallback and strips
+      nullish anyway, so the classifier flip has NO observable and cannot
+      carry a leak-kill test. Flip `resolveTypeNameToSymbol`'s Identifier
+      fallback FIRST (or jointly in one commit) — that is also the
+      highest-risk site (general type resolution: nodeTypes caching,
+      first-touch poisoning, the round-473/474 conflation ecology sits on
+      it), so it needs the full battery + fresh context. The
+      typeNodeDefinitelyNonNullish observable once joint: an UNIMPORTED
+      foreign alias return-annotation (`x = get2(); return x;` vs
+      `string | undefined` declared) stops stripping nullish → the return
+      TS2322 fires; preservation controls: imported alias / own-file alias /
+      imported interface (all `none {2322}` — verified passing on the
+      reverted attempt's fixtures).
   - [ ] **INV.3(d) Retire the merge + delete the ecology.** Stop merging
     module-file locals into `globals`; delete `moduleFileLocalVarNames`,
     `conflatedTypeAliasFiles`, `conflatedInterfaceFiles`,
