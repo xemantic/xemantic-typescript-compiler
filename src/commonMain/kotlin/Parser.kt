@@ -156,7 +156,7 @@ class Parser(
             text = source,
             end = source.length,
             moduleSpecifiers = moduleSpecifiers.toList(),
-        )
+        ).also { indexSourceFile(it) }
     }
 
     fun getDiagnostics(): List<Diagnostic> = diagnostics.toList()
@@ -3311,7 +3311,9 @@ class Parser(
         )
     }
 
-    private fun parsePropertyName() = when (token) {
+    // Explicit return type: the branches' LUB degraded once the node classes gained the
+    // common NodeBase superclass (INV.2(a)) — inference would approximate to Any.
+    private fun parsePropertyName(): NameNode = when (token) {
         StringLiteral -> parseStringLiteral()
         NumericLiteral -> parseNumericLiteral()
         BigIntLiteral -> {

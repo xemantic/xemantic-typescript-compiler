@@ -43,6 +43,23 @@ sealed interface Node {
     val trailingComments: List<Comment>?
 }
 
+/**
+ * INV.2(a): identity/navigation base class extended by every AST node class.
+ *
+ * [nodeId] is a dense per-file preorder index and [parent] the tree parent, both
+ * stamped by [indexSourceFile] (invoked at the end of [Parser.parse]); −1/null =
+ * unindexed. Base-class `var`s are excluded from data-class `equals`/`hashCode`/
+ * `copy`/`toString`, so structural node keys behave exactly as before and a
+ * Transformer `copy()` correctly yields an UNINDEXED node (synthesized trees are
+ * never implicitly indexed). Deliberately does NOT implement [Node]: that would
+ * add a non-sealed direct subtype to the sealed hierarchy and break exhaustive
+ * `when` over [Node]. Access from a [Node]-typed reference via `(node as NodeBase)`.
+ */
+abstract class NodeBase {
+    var nodeId: Int = -1
+    var parent: Node? = null
+}
+
 data class Comment(
     val kind: SyntaxKind,
     val text: String,
@@ -92,8 +109,13 @@ data class SourceFile(
      * comments, and regex literals can never contribute (unlike a text scan).
      */
     val moduleSpecifiers: List<String> = emptyList(),
-) : Node {
+) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.SourceFile
+
+    /** INV.2(a): number of nodes stamped by [indexSourceFile] (= max nodeId + 1);
+     *  sizes array-indexed per-file side tables. Body property — excluded from
+     *  data-class `equals`/`hashCode`/`copy` like [TypeParameter.internSalt]. */
+    var nodeCount: Int = 0
 }
 
 // ===========================================================================
@@ -111,7 +133,7 @@ data class Block(
     override val trailingComments: List<Comment>? = null,
     /** Source position of the closing `}` token. */
     val closeBracePos: Int = -1,
-) : Statement {
+) : NodeBase(), Statement {
     override val kind: SyntaxKind = SyntaxKind.Block
 }
 
@@ -120,7 +142,7 @@ data class EmptyStatement(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Statement {
+) : NodeBase(), Statement {
     override val kind: SyntaxKind = SyntaxKind.EmptyStatement
 }
 
@@ -133,7 +155,7 @@ data class VariableStatement(
     override val trailingComments: List<Comment>? = null,
     /** Inline comments between the last declaration and `;` (e.g. `/*number*/` in `var z = x.then() /*number*/;`). */
     val preSemicolonComments: List<Comment>? = null,
-) : Statement {
+) : NodeBase(), Statement {
     override val kind: SyntaxKind = SyntaxKind.VariableStatement
 }
 
@@ -145,7 +167,7 @@ data class ExpressionStatement(
     override val trailingComments: List<Comment>? = null,
     /** Inline comments between the expression and `;` (e.g. `/*3*/` in `Array /*3*/;`). */
     val preSemicolonComments: List<Comment>? = null,
-) : Statement {
+) : NodeBase(), Statement {
     override val kind: SyntaxKind = SyntaxKind.ExpressionStatement
 }
 
@@ -163,7 +185,7 @@ data class IfStatement(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Statement {
+) : NodeBase(), Statement {
     override val kind: SyntaxKind = SyntaxKind.IfStatement
 }
 
@@ -180,7 +202,7 @@ data class DoStatement(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Statement {
+) : NodeBase(), Statement {
     override val kind: SyntaxKind = SyntaxKind.DoStatement
 }
 
@@ -195,7 +217,7 @@ data class WhileStatement(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Statement {
+) : NodeBase(), Statement {
     override val kind: SyntaxKind = SyntaxKind.WhileStatement
 }
 
@@ -218,7 +240,7 @@ data class ForStatement(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Statement {
+) : NodeBase(), Statement {
     override val kind: SyntaxKind = SyntaxKind.ForStatement
 }
 
@@ -236,7 +258,7 @@ data class ForInStatement(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Statement {
+) : NodeBase(), Statement {
     override val kind: SyntaxKind = SyntaxKind.ForInStatement
 }
 
@@ -255,7 +277,7 @@ data class ForOfStatement(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Statement {
+) : NodeBase(), Statement {
     override val kind: SyntaxKind = SyntaxKind.ForOfStatement
 }
 
@@ -267,7 +289,7 @@ data class ContinueStatement(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Statement {
+) : NodeBase(), Statement {
     override val kind: SyntaxKind = SyntaxKind.ContinueStatement
 }
 
@@ -279,7 +301,7 @@ data class BreakStatement(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Statement {
+) : NodeBase(), Statement {
     override val kind: SyntaxKind = SyntaxKind.BreakStatement
 }
 
@@ -289,7 +311,7 @@ data class ReturnStatement(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Statement {
+) : NodeBase(), Statement {
     override val kind: SyntaxKind = SyntaxKind.ReturnStatement
 }
 
@@ -304,7 +326,7 @@ data class WithStatement(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Statement {
+) : NodeBase(), Statement {
     override val kind: SyntaxKind = SyntaxKind.WithStatement
 }
 
@@ -320,7 +342,7 @@ data class SwitchStatement(
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
     val closingComments: List<Comment>? = null,
-) : Statement {
+) : NodeBase(), Statement {
     override val kind: SyntaxKind = SyntaxKind.SwitchStatement
 }
 
@@ -335,7 +357,7 @@ data class LabeledStatement(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Statement {
+) : NodeBase(), Statement {
     override val kind: SyntaxKind = SyntaxKind.LabeledStatement
 }
 
@@ -347,7 +369,7 @@ data class ThrowStatement(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Statement {
+) : NodeBase(), Statement {
     override val kind: SyntaxKind = SyntaxKind.ThrowStatement
 }
 
@@ -364,7 +386,7 @@ data class TryStatement(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Statement {
+) : NodeBase(), Statement {
     override val kind: SyntaxKind = SyntaxKind.TryStatement
 }
 
@@ -373,7 +395,7 @@ data class DebuggerStatement(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Statement {
+) : NodeBase(), Statement {
     override val kind: SyntaxKind = SyntaxKind.DebuggerStatement
 }
 
@@ -382,7 +404,7 @@ data class NotEmittedStatement(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Statement {
+) : NodeBase(), Statement {
     override val kind: SyntaxKind = SyntaxKind.NotEmittedStatement
 }
 
@@ -396,7 +418,7 @@ data class RawStatement(
     override val end: Int = -1,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Statement {
+) : NodeBase(), Statement {
     override val kind: SyntaxKind = SyntaxKind.NotEmittedStatement // reuse kind for simplicity
 }
 
@@ -418,7 +440,7 @@ data class FunctionDeclaration(
     override val trailingComments: List<Comment>? = null,
     /** True when the parameter list ABORTED (tsc abortParsingList) — the ts-transform elides the whole declaration (reachabilityChecksNoCrash1); other zero-width-missing-body recoveries still print `{ }` (reservedWords3). */
     val signatureAborted: Boolean = false,
-) : Declaration {
+) : NodeBase(), Declaration {
     override val kind: SyntaxKind = SyntaxKind.FunctionDeclaration
 }
 
@@ -434,7 +456,7 @@ data class ClassDeclaration(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Declaration {
+) : NodeBase(), Declaration {
     override val kind: SyntaxKind = SyntaxKind.ClassDeclaration
 }
 
@@ -448,7 +470,7 @@ data class InterfaceDeclaration(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Declaration {
+) : NodeBase(), Declaration {
     override val kind: SyntaxKind = SyntaxKind.InterfaceDeclaration
 }
 
@@ -461,7 +483,7 @@ data class TypeAliasDeclaration(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Declaration {
+) : NodeBase(), Declaration {
     override val kind: SyntaxKind = SyntaxKind.TypeAliasDeclaration
 }
 
@@ -473,7 +495,7 @@ data class EnumDeclaration(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Declaration {
+) : NodeBase(), Declaration {
     override val kind: SyntaxKind = SyntaxKind.EnumDeclaration
 }
 
@@ -485,7 +507,7 @@ data class ModuleDeclaration(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Declaration {
+) : NodeBase(), Declaration {
     override val kind: SyntaxKind = SyntaxKind.ModuleDeclaration
 }
 
@@ -505,7 +527,7 @@ data class ImportDeclaration(
      *  per inter-token boundary in source/emit order; null entries for empty boundaries. Captured by
      *  the parser, replayed by the emitter (importExportInternalComments). Null when no internal comments. */
     val internalComments: List<List<Comment>?>? = null,
-) : Declaration {
+) : NodeBase(), Declaration {
     override val kind: SyntaxKind = SyntaxKind.ImportDeclaration
 }
 
@@ -518,7 +540,7 @@ data class ImportEqualsDeclaration(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Declaration {
+) : NodeBase(), Declaration {
     override val kind: SyntaxKind = SyntaxKind.ImportEqualsDeclaration
 }
 
@@ -538,7 +560,7 @@ data class ExportDeclaration(
     /** Comments INTERNAL to the export (between `export`/clause/`from`/specifier tokens), one entry per
      *  inter-token boundary in source/emit order; see [ImportDeclaration.internalComments]. */
     val internalComments: List<List<Comment>?>? = null,
-) : Declaration {
+) : NodeBase(), Declaration {
     override val kind: SyntaxKind = SyntaxKind.ExportDeclaration
 }
 
@@ -558,7 +580,7 @@ data class ExportAssignment(
     /** Comments INTERNAL to `export default <expr>` (after `export`, after `default`, before `;`),
      *  one entry per inter-token boundary; see [ImportDeclaration.internalComments]. */
     val internalComments: List<List<Comment>?>? = null,
-) : Declaration {
+) : NodeBase(), Declaration {
     override val kind: SyntaxKind = SyntaxKind.ExportAssignment
 }
 
@@ -579,7 +601,7 @@ data class VariableDeclaration(
     val initializerLeadingTrailingComments: List<Comment>? = null,
     /** True when [type] was synthesized from a leading primitive JSDoc `@type {...}` comment in a JS file. */
     val typeFromJSDoc: Boolean = false,
-) : Declaration {
+) : NodeBase(), Declaration {
     override val kind: SyntaxKind = SyntaxKind.VariableDeclaration
 }
 
@@ -590,7 +612,7 @@ data class VariableDeclarationList(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Node {
+) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.VariableDeclarationList
 }
 
@@ -606,7 +628,7 @@ data class Identifier(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Expression {
+) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.Identifier
     /** The text to emit: [rawText] if set (preserves \uXXXX escapes), otherwise [text]. */
     val emitText: String get() = rawText ?: text
@@ -623,7 +645,7 @@ data class StringLiteralNode(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Expression {
+) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.StringLiteral
 }
 
@@ -633,7 +655,7 @@ data class NumericLiteralNode(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Expression {
+) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.NumericLiteral
 }
 
@@ -643,7 +665,7 @@ data class BigIntLiteralNode(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Expression {
+) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.BigIntLiteral
 }
 
@@ -653,7 +675,7 @@ data class RegularExpressionLiteralNode(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Expression {
+) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.RegularExpressionLiteral
 }
 
@@ -664,7 +686,7 @@ data class NoSubstitutionTemplateLiteralNode(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Expression {
+) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.NoSubstitutionTemplateLiteral
 }
 
@@ -676,7 +698,7 @@ data class TemplateExpression(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Expression {
+) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.TemplateExpression
 }
 
@@ -687,7 +709,7 @@ data class TemplateSpan(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Node {
+) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.TemplateSpan
 }
 
@@ -709,7 +731,7 @@ data class ArrayLiteralExpression(
      * emitted after the comma, not before it.
      */
     val postCommaComments: List<List<Comment>?>? = null,
-) : Expression {
+) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.ArrayLiteralExpression
 }
 
@@ -723,7 +745,7 @@ data class ObjectLiteralExpression(
     override val trailingComments: List<Comment>? = null,
     /** Source position of the closing `}` token. */
     val closeBracePos: Int = -1,
-) : Expression {
+) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.ObjectLiteralExpression
 }
 
@@ -752,7 +774,7 @@ data class PropertyAccessExpression(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Expression {
+) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.PropertyAccessExpression
 }
 
@@ -770,7 +792,7 @@ data class ElementAccessExpression(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Expression {
+) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.ElementAccessExpression
 }
 
@@ -787,7 +809,7 @@ data class CallExpression(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Expression {
+) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.CallExpression
 }
 
@@ -803,7 +825,7 @@ data class NewExpression(
     /** Type arguments that appear BEFORE the constructor expression (e.g. `new <T>Expr`).
      *  TypeScript keeps these in JS output (unlike trailing type args which are erased). */
     val leadingTypeArguments: List<TypeNode>? = null,
-) : Expression {
+) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.NewExpression
 }
 
@@ -815,7 +837,7 @@ data class TaggedTemplateExpression(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Expression {
+) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.TaggedTemplateExpression
 }
 
@@ -828,7 +850,7 @@ data class TypeAssertionExpression(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Expression {
+) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.TypeAssertionExpression
 }
 
@@ -860,7 +882,7 @@ data class ParenthesizedExpression(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Expression {
+) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.ParenthesizedExpression
 }
 
@@ -876,7 +898,7 @@ data class FunctionExpression(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Expression {
+) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.FunctionExpression
 }
 
@@ -892,7 +914,7 @@ data class ArrowFunction(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Expression {
+) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.ArrowFunction
 }
 
@@ -902,7 +924,7 @@ data class DeleteExpression(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Expression {
+) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.DeleteExpression
 }
 
@@ -912,7 +934,7 @@ data class TypeOfExpression(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Expression {
+) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.TypeOfExpression
 }
 
@@ -922,7 +944,7 @@ data class VoidExpression(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Expression {
+) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.VoidExpression
 }
 
@@ -933,7 +955,7 @@ data class AwaitExpression(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Expression {
+) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.AwaitExpression
 }
 
@@ -944,7 +966,7 @@ data class PrefixUnaryExpression(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Expression {
+) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.PrefixUnaryExpression
 }
 
@@ -955,7 +977,7 @@ data class PostfixUnaryExpression(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Expression {
+) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.PostfixUnaryExpression
 }
 
@@ -977,7 +999,7 @@ data class BinaryExpression(
      *  one extra indent level (tsc's ES-decorators `return _a = class {…}, (() => {…})(), _a;` form).
      *  Set only on the OUTERMOST comma node of the chain. */
     val multiLineComma: Boolean = false,
-) : Expression {
+) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.BinaryExpression
 }
 
@@ -989,7 +1011,7 @@ data class ConditionalExpression(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Expression {
+) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.ConditionalExpression
 }
 
@@ -1002,7 +1024,7 @@ data class YieldExpression(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Expression {
+) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.YieldExpression
 }
 
@@ -1012,7 +1034,7 @@ data class SpreadElement(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Expression {
+) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.SpreadElement
 }
 
@@ -1027,7 +1049,7 @@ data class ClassExpression(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Expression {
+) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.ClassExpression
 }
 
@@ -1041,7 +1063,7 @@ data class AsExpression(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Expression {
+) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.AsExpression
 }
 
@@ -1051,7 +1073,7 @@ data class NonNullExpression(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Expression {
+) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.NonNullExpression
 }
 
@@ -1062,7 +1084,7 @@ data class SatisfiesExpression(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Expression {
+) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.SatisfiesExpression
 }
 
@@ -1073,7 +1095,7 @@ data class MetaProperty(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Expression {
+) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.MetaProperty
 }
 
@@ -1082,7 +1104,7 @@ data class OmittedExpression(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Expression {
+) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.OmittedExpression
 }
 
@@ -1099,7 +1121,7 @@ data class CommaListExpression(
     override val end: Int = -1,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Expression {
+) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.Unknown
 }
 
@@ -1220,7 +1242,7 @@ data class PropertyDeclaration(
     override val trailingComments: List<Comment>? = null,
     /** True when [type] was synthesized from a leading JSDoc `@type {...}` comment in a JS file. */
     val typeFromJSDoc: Boolean = false,
-) : ClassElement {
+) : NodeBase(), ClassElement {
     override val kind: SyntaxKind = SyntaxKind.PropertyDeclaration
 }
 
@@ -1238,7 +1260,7 @@ data class MethodDeclaration(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : ClassElement {
+) : NodeBase(), ClassElement {
     override val kind: SyntaxKind = SyntaxKind.MethodDeclaration
 }
 
@@ -1251,7 +1273,7 @@ data class Constructor(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : ClassElement {
+) : NodeBase(), ClassElement {
     override val kind: SyntaxKind = SyntaxKind.ConstructorDeclaration
 }
 
@@ -1268,7 +1290,7 @@ data class GetAccessor(
     override val trailingComments: List<Comment>? = null,
     /** True end of a bodyless accessor (right after `)` / return type / `;`) — tsc's accessor.end for checkGrammarAccessor's TS1005 at end-1. -1 when a body is present. */
     val bodylessEnd: Int = -1,
-) : ClassElement {
+) : NodeBase(), ClassElement {
     override val kind: SyntaxKind = SyntaxKind.GetAccessor
 }
 
@@ -1285,7 +1307,7 @@ data class SetAccessor(
     override val trailingComments: List<Comment>? = null,
     /** True end of a bodyless accessor (right after `)` / return type / `;`) — tsc's accessor.end for checkGrammarAccessor's TS1005 at end-1. -1 when a body is present. */
     val bodylessEnd: Int = -1,
-) : ClassElement {
+) : NodeBase(), ClassElement {
     override val kind: SyntaxKind = SyntaxKind.SetAccessor
 }
 
@@ -1297,7 +1319,7 @@ data class IndexSignature(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : ClassElement {
+) : NodeBase(), ClassElement {
     override val kind: SyntaxKind = SyntaxKind.IndexSignature
 }
 
@@ -1306,7 +1328,7 @@ data class SemicolonClassElement(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : ClassElement {
+) : NodeBase(), ClassElement {
     override val kind: SyntaxKind = SyntaxKind.SemicolonClassElement
 }
 
@@ -1316,7 +1338,7 @@ data class ClassStaticBlockDeclaration(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : ClassElement {
+) : NodeBase(), ClassElement {
     override val kind: SyntaxKind = SyntaxKind.ClassStaticBlockDeclaration
 }
 
@@ -1331,7 +1353,7 @@ data class TypeReference(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : TypeNode {
+) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.TypeReference
 }
 
@@ -1343,7 +1365,7 @@ data class FunctionType(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : TypeNode {
+) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.FunctionType
 }
 
@@ -1356,7 +1378,7 @@ data class ConstructorType(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : TypeNode {
+) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.ConstructorType
 }
 
@@ -1367,7 +1389,7 @@ data class TypeQuery(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : TypeNode {
+) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.TypeQuery
 }
 
@@ -1377,7 +1399,7 @@ data class TypeLiteral(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : TypeNode {
+) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.TypeLiteral
 }
 
@@ -1387,7 +1409,7 @@ data class ArrayType(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : TypeNode {
+) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.ArrayType
 }
 
@@ -1402,7 +1424,7 @@ data class TupleType(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : TypeNode {
+) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.TupleType
 }
 
@@ -1412,7 +1434,7 @@ data class UnionType(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : TypeNode {
+) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.UnionType
 }
 
@@ -1422,7 +1444,7 @@ data class IntersectionType(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : TypeNode {
+) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.IntersectionType
 }
 
@@ -1435,7 +1457,7 @@ data class ConditionalType(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : TypeNode {
+) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.ConditionalType
 }
 
@@ -1446,7 +1468,7 @@ data class IndexedAccessType(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : TypeNode {
+) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.IndexedAccessType
 }
 
@@ -1464,7 +1486,7 @@ data class MappedType(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : TypeNode {
+) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.MappedType
 }
 
@@ -1474,7 +1496,7 @@ data class LiteralType(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : TypeNode {
+) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.LiteralType
 }
 
@@ -1485,7 +1507,7 @@ data class TemplateLiteralType(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : TypeNode {
+) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.TemplateLiteralType
 }
 
@@ -1496,7 +1518,7 @@ data class TemplateLiteralTypeSpan(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : TypeNode {
+) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.TemplateLiteralTypeSpan
 }
 
@@ -1506,7 +1528,7 @@ data class ParenthesizedType(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : TypeNode {
+) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.ParenthesizedType
 }
 
@@ -1518,7 +1540,7 @@ data class TypePredicate(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : TypeNode {
+) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.TypePredicate
 }
 
@@ -1529,7 +1551,7 @@ data class TypeOperator(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : TypeNode {
+) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.TypeOperator
 }
 
@@ -1539,7 +1561,7 @@ data class RestType(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : TypeNode {
+) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.RestType
 }
 
@@ -1552,7 +1574,7 @@ data class NamedTupleMember(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : TypeNode {
+) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.NamedTupleMember
 }
 
@@ -1562,7 +1584,7 @@ data class OptionalType(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : TypeNode {
+) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.OptionalType
 }
 
@@ -1575,7 +1597,7 @@ data class ImportType(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : TypeNode {
+) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.ImportType
 }
 
@@ -1584,7 +1606,7 @@ data class ThisType(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : TypeNode {
+) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.ThisType
 }
 
@@ -1594,7 +1616,7 @@ data class InferType(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : TypeNode {
+) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.InferType
 }
 
@@ -1604,7 +1626,7 @@ data class KeywordTypeNode(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : TypeNode
+) : NodeBase(), TypeNode
 
 // ===========================================================================
 // Supporting types
@@ -1636,7 +1658,7 @@ data class Parameter(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Node {
+) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.Parameter
 }
 
@@ -1646,7 +1668,7 @@ data class Decorator(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Node {
+) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.Decorator
 }
 
@@ -1657,7 +1679,7 @@ data class HeritageClause(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Node {
+) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.HeritageClause
 }
 
@@ -1668,7 +1690,7 @@ data class ExpressionWithTypeArguments(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Node {
+) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.ExpressionWithTypeArguments
 }
 
@@ -1679,7 +1701,7 @@ data class EnumMember(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Node {
+) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.EnumMember
 }
 
@@ -1699,7 +1721,7 @@ data class TypeParameter(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Node {
+) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.TypeParameter
 
     /**
@@ -1724,7 +1746,7 @@ data class QualifiedName(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Node {
+) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.QualifiedName
 }
 
@@ -1739,7 +1761,7 @@ data class PropertyAssignment(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Node {
+) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.PropertyAssignment
 }
 
@@ -1750,7 +1772,7 @@ data class ShorthandPropertyAssignment(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Node {
+) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.ShorthandPropertyAssignment
 }
 
@@ -1760,7 +1782,7 @@ data class SpreadAssignment(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Node {
+) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.SpreadAssignment
 }
 
@@ -1770,7 +1792,7 @@ data class ComputedPropertyName(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Expression {
+) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.ComputedPropertyName
 }
 
@@ -1781,7 +1803,7 @@ data class ObjectBindingPattern(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Expression {
+) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.ObjectBindingPattern
 }
 
@@ -1792,7 +1814,7 @@ data class ArrayBindingPattern(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Expression {
+) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.ArrayBindingPattern
 }
 
@@ -1805,7 +1827,7 @@ data class BindingElement(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Node {
+) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.BindingElement
 }
 
@@ -1820,7 +1842,7 @@ data class CaseClause(
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
     val labelTrailingComments: List<Comment>? = null,
-) : Node {
+) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.CaseClause
 }
 
@@ -1833,7 +1855,7 @@ data class DefaultClause(
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
     val labelTrailingComments: List<Comment>? = null,
-) : Node {
+) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.DefaultClause
 }
 
@@ -1848,7 +1870,7 @@ data class CatchClause(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Node {
+) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.CatchClause
 }
 
@@ -1858,7 +1880,7 @@ data class ModuleBlock(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Node {
+) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.ModuleBlock
 }
 
@@ -1868,7 +1890,7 @@ data class NamespaceImport(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Node {
+) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.NamespaceImport
 }
 
@@ -1878,7 +1900,7 @@ data class NamedImports(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Node {
+) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.NamedImports
 }
 
@@ -1890,7 +1912,7 @@ data class ImportSpecifier(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Node {
+) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.ImportSpecifier
 }
 
@@ -1900,7 +1922,7 @@ data class NamespaceExport(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Node {
+) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.NamespaceExport
 }
 
@@ -1910,7 +1932,7 @@ data class NamedExports(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Node {
+) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.NamedExports
 }
 
@@ -1922,7 +1944,7 @@ data class ExportSpecifier(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Node {
+) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.ExportSpecifier
 }
 
@@ -1934,7 +1956,7 @@ data class ImportClause(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Node {
+) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.ImportClause
 }
 
@@ -1944,7 +1966,7 @@ data class ExternalModuleReference(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Node {
+) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.ExternalModuleReference
 }
 
@@ -1959,7 +1981,7 @@ data class JsxAttribute(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Node {
+) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.JsxAttribute
 }
 
@@ -1969,7 +1991,7 @@ data class JsxSpreadAttribute(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Node {
+) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.JsxSpreadAttribute
 }
 
@@ -1980,7 +2002,7 @@ data class JsxOpeningElement(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Node {
+) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.JsxOpeningElement
 }
 
@@ -1990,7 +2012,7 @@ data class JsxClosingElement(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Node {
+) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.JsxClosingElement
 }
 
@@ -2002,7 +2024,7 @@ data class JsxElement(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Expression {
+) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.JsxElement
 }
 
@@ -2013,7 +2035,7 @@ data class JsxSelfClosingElement(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Expression {
+) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.JsxSelfClosingElement
 }
 
@@ -2023,7 +2045,7 @@ data class JsxText(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Node {
+) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.JsxText
 }
 
@@ -2033,7 +2055,7 @@ data class JsxExpressionContainer(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Node {
+) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.JsxExpression
 }
 
@@ -2043,6 +2065,6 @@ data class JsxFragment(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : Expression {
+) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.JsxFragment
 }
