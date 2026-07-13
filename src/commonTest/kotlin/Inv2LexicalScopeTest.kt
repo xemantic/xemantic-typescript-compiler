@@ -114,7 +114,7 @@ class Inv2LexicalScopeTest {
     }
 
     @Test
-    fun `nested-block var hoists into the function scope while block-scoped declarations wait for phase ii`() {
+    fun `nested-block var hoists into the function scope while block-scoped declarations bind into their blocks`() {
         val result = bind(
             """
             function f(cond: boolean) {
@@ -135,11 +135,191 @@ class Inv2LexicalScopeTest {
         val forVarOk = scope.symbols["i"]?.flags?.hasAny(SymbolFlags.FunctionScopedVariable) == true
         val catchVarOk = scope.symbols["inCatch"]?.flags?.hasAny(SymbolFlags.FunctionScopedVariable) == true
         have(hoistedOk && forVarOk && catchVarOk)
-        // Phase (ii) territory — pinned unbound so the boundary is flipped consciously:
-        // nested-block let/class/function, for-header let, the catch variable itself.
-        val phaseTwoNames = listOf("blockLet", "BlockClass", "blockFn", "j", "err")
-        val phaseTwoBound = phaseTwoNames.filter { it in scope.symbols }
-        assertEquals(emptyList(), phaseTwoBound, "phase (ii) declarations must not be bound by phase (i)")
+        // Phase (ii): block-scoped declarations bind into their OWN containers,
+        // never leaking into the function scope.
+        val blockScopedNames = listOf("blockLet", "BlockClass", "blockFn", "j", "err")
+        val leakedIntoFn = blockScopedNames.filter { it in scope.symbols }
+        assertEquals(emptyList(), leakedIntoFn, "block-scoped declarations must not leak into the function scope")
+        val nodes = descendants(result.sourceFile)
+        val ifBlock = nodes.filterIsInstance<IfStatement>().single().thenStatement
+        val ifScope = assertNotNull(result.scopeOf(ifBlock), "if-body block must own a scope")
+        assertEquals(setOf("blockLet", "BlockClass", "blockFn"), ifScope.symbols.keys)
+        val letIsBlockScoped = ifScope.symbols["blockLet"]?.flags?.hasAny(SymbolFlags.BlockScopedVariable) == true
+        val fnIsFunction = ifScope.symbols["blockFn"]?.flags?.hasAny(SymbolFlags.Function) == true
+        have(letIsBlockScoped && fnIsFunction)
+        val ifScopeChainsToFn = ifScope.parent === scope
+        have(ifScopeChainsToFn)
+        // For-header: `var i` hoisted to the fn scope, its FOR scope stays empty;
+        // `let j` binds into ITS for scope.
+        val forScopes = nodes.filterIsInstance<ForStatement>().map { assertNotNull(result.scopeOf(it)) }
+        assertEquals(2, forScopes.size)
+        assertEquals(emptySet<String>(), forScopes[0].symbols.keys)
+        assertEquals(setOf("j"), forScopes[1].symbols.keys)
+        // The catch variable binds into the catch scope (block-scoped).
+        val catchScope = assertNotNull(result.scopeOf(nodes.filterIsInstance<CatchClause>().single()))
+        assertEquals(setOf("err"), catchScope.symbols.keys)
+        val errIsBlockScoped = catchScope.symbols["err"]?.flags?.hasAny(SymbolFlags.BlockScopedVariable) == true
+        have(errIsBlockScoped)
+    }
+
+    @Test
+    fun `case clauses bind into the switch scope and nested blocks chain`() {
+        val result = bind(
+            """
+            function f(x: number) {
+              switch (x) {
+                case 1:
+                  let caseLet = 1;
+                  function caseFn() {}
+                  break;
+                default:
+                  const caseConst = 2;
+              }
+              {
+                let outer = 1;
+                {
+                  let inner = 2;
+                }
+              }
+            }
+            """
+        )
+        val fnScope = result.functionScope("f")
+        val nodes = descendants(result.sourceFile)
+        val switchScope = assertNotNull(result.scopeOf(nodes.filterIsInstance<SwitchStatement>().single()))
+        assertEquals(setOf("caseLet", "caseFn", "caseConst"), switchScope.symbols.keys)
+        val switchChainsToFn = switchScope.parent === fnScope
+        have(switchChainsToFn)
+        // Nested bare blocks: each owns a scope, chained inner → outer → fn.
+        val fnBody = nodes.filterIsInstance<FunctionDeclaration>().first { it.name?.text == "f" }.body
+        val bareBlocks = nodes.filterIsInstance<Block>().filter { it !== fnBody && result.scopeOf(it) != null }
+        val outerBlock = bareBlocks.first { result.scopeOf(it)!!.symbols.containsKey("outer") }
+        val innerBlock = bareBlocks.first { result.scopeOf(it)!!.symbols.containsKey("inner") }
+        val innerChainsThroughOuter = result.scopeOf(innerBlock)!!.parent === result.scopeOf(outerBlock)
+        val outerChainsToFn = result.scopeOf(outerBlock)!!.parent === fnScope
+        have(innerChainsThroughOuter && outerChainsToFn)
+    }
+
+    @Test
+    fun `negative control - function body blocks and module blocks own no separate scope`() {
+        val result = bind(
+            """
+            namespace N {
+              export function f() { let x = 1; }
+            }
+            """
+        )
+        val nodes = descendants(result.sourceFile)
+        val fn = nodes.filterIsInstance<FunctionDeclaration>().single()
+        val bodyScopeIsNull = result.scopeOf(assertNotNull(fn.body)) == null
+        have(bodyScopeIsNull)
+        val moduleBlockScopeIsNull = result.scopeOf(nodes.filterIsInstance<ModuleBlock>().single()) == null
+        have(moduleBlockScopeIsNull)
+        // x binds into the FUNCTION scope (the body block shares it).
+        val xInFnScope = "x" in result.functionScope("f").symbols
+        have(xInFnScope)
+    }
+
+    @Test
+    fun `class scopes hold type params and the class expression self-name with members chaining through`() {
+        val result = bind(
+            """
+            class C<T> {
+              m(x: T) { let mv = x; }
+            }
+            const E = class Named<U> { n() { return Named; } };
+            """
+        )
+        val nodes = descendants(result.sourceFile)
+        val classScope = assertNotNull(result.scopeOf(nodes.filterIsInstance<ClassDeclaration>().single()))
+        assertEquals(setOf("T"), classScope.symbols.keys)
+        val classChainsToRoot = classScope.parent === result.scopeOf(result.sourceFile)
+        have(classChainsToRoot)
+        val methodM = nodes.filterIsInstance<MethodDeclaration>().first { (it.name as? Identifier)?.text == "m" }
+        val mChainsThroughClass = assertNotNull(result.scopeOf(methodM)).parent === classScope
+        have(mChainsThroughClass)
+        val exprScope = assertNotNull(result.scopeOf(nodes.filterIsInstance<ClassExpression>().single()))
+        assertEquals(setOf("Named", "U"), exprScope.symbols.keys)
+        val selfIsClass = exprScope.symbols["Named"]?.flags?.hasAny(SymbolFlags.Class) == true
+        val uIsTypeParam = exprScope.symbols["U"]?.flags?.hasAny(SymbolFlags.TypeParameter) == true
+        have(selfIsClass && uIsTypeParam)
+        val namedLeaks = "Named" in result.locals || "Named" in assertNotNull(result.scopeOf(result.sourceFile)).symbols
+        have(!namedLeaks)
+    }
+
+    @Test
+    fun `interface and type alias scopes hold their type params`() {
+        val result = bind(
+            """
+            interface I<T extends object> { p: T }
+            type A<K, V = K> = Map<K, V>;
+            """
+        )
+        val nodes = descendants(result.sourceFile)
+        val ifaceScope = assertNotNull(result.scopeOf(nodes.filterIsInstance<InterfaceDeclaration>().single()))
+        assertEquals(setOf("T"), ifaceScope.symbols.keys)
+        val aliasScope = assertNotNull(result.scopeOf(nodes.filterIsInstance<TypeAliasDeclaration>().single()))
+        assertEquals(setOf("K", "V"), aliasScope.symbols.keys)
+        val allTypeParams = (ifaceScope.symbols.values + aliasScope.symbols.values)
+            .all { it.flags.hasAny(SymbolFlags.TypeParameter) }
+        have(allTypeParams)
+    }
+
+    @Test
+    fun `enum scopes expose member names - aliased for main-bound enums and scope-space for nested ones`() {
+        val result = bind(
+            """
+            enum Top { A = 1, B = A }
+            function f() {
+              enum Nested { X = 1, Y = X }
+            }
+            """
+        )
+        val nodes = descendants(result.sourceFile)
+        val enums = nodes.filterIsInstance<EnumDeclaration>()
+        val topDecl = enums.first { it.name.text == "Top" }
+        val topScope = assertNotNull(result.scopeOf(topDecl))
+        // Main-bound enum: the scope ALIASES the main symbol's exports (identity).
+        val topAliasesMainExports = topScope.existing === assertNotNull(result.locals["Top"]).exports
+        have(topAliasesMainExports)
+        assertEquals(emptySet<String>(), topScope.symbols.keys)
+        // Nested enum: scope-space members, published on the scope symbol's exports.
+        val nestedDecl = enums.first { it.name.text == "Nested" }
+        val nestedScope = assertNotNull(result.scopeOf(nestedDecl))
+        assertEquals(setOf("X", "Y"), nestedScope.symbols.keys)
+        val fnScope = result.functionScope("f")
+        val nestedSymbol = assertNotNull(fnScope.symbols["Nested"])
+        val nestedIdIsScopeSpace = nestedSymbol.id <= -2
+        have(nestedIdIsScopeSpace)
+        val nestedExportKeys: Set<String> = assertNotNull(nestedSymbol.exports).keys
+        assertEquals(setOf("X", "Y"), nestedExportKeys)
+        val memberParentIsEnum = nestedScope.symbols["X"]?.parent === nestedSymbol
+        have(memberParentIsEnum)
+        val membersAreScopeSpace = nestedScope.symbols.values.all { it.id <= -2 }
+        have(membersAreScopeSpace)
+    }
+
+    @Test
+    fun `catch destructuring and for-of headers bind block-scoped into their own scopes`() {
+        val result = bind(
+            """
+            function f(pairs: [string, number][]) {
+              try {} catch ({ message, stack: [s] }) {}
+              for (const [k, v] of pairs) { let bodyLocal = k; }
+            }
+            """
+        )
+        val nodes = descendants(result.sourceFile)
+        val catchScope = assertNotNull(result.scopeOf(nodes.filterIsInstance<CatchClause>().single()))
+        assertEquals(setOf("message", "s"), catchScope.symbols.keys)
+        val forOf = nodes.filterIsInstance<ForOfStatement>().single()
+        val forScope = assertNotNull(result.scopeOf(forOf))
+        assertEquals(setOf("k", "v"), forScope.symbols.keys)
+        // The loop BODY block owns a child scope under the for scope.
+        val bodyScope = assertNotNull(result.scopeOf(forOf.statement))
+        assertEquals(setOf("bodyLocal"), bodyScope.symbols.keys)
+        val bodyChainsThroughFor = bodyScope.parent === forScope
+        have(bodyChainsThroughFor)
     }
 
     @Test

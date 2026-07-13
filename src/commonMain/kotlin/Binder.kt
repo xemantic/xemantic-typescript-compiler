@@ -524,25 +524,36 @@ class Binder(private val options: CompilerOptions) {
     // -----------------------------------------------------------------------
 
     /**
-     * INV.2(c) phase (i): full-tree lexical binding for FUNCTION-LIKE containers
-     * (tsc `IsContainer`), run AFTER conventional binding, writing ONLY to new
-     * structures — [LexicalScope]s keyed by owner `nodeId` and symbols from the
-     * separate negative id space ([Symbol.scopeSymbol]). Conventional binder
-     * output (`locals`, [nodeToSymbol], the global symbol-id sequence) stays
-     * byte-unchanged; the tables are UNCONSUMED until INV.4.
+     * INV.2(c): full-tree lexical binding, run AFTER conventional binding,
+     * writing ONLY to new structures — [LexicalScope]s keyed by owner `nodeId`
+     * and symbols from the separate negative id space ([Symbol.scopeSymbol]).
+     * Conventional binder output (`locals`, [nodeToSymbol], the global
+     * symbol-id sequence) stays byte-unchanged; the tables are UNCONSUMED
+     * until INV.4.
      *
-     * Scope owners in phase (i): the [SourceFile] root (aliasing file locals),
-     * [ModuleDeclaration] (aliasing the merged namespace `exports`, one chained
-     * level per dotted segment — the checker's B512 rule), and the seven
-     * function-like kinds plus [ClassStaticBlockDeclaration] (fresh tables:
-     * type params, params — `this` params excluded — a named function
-     * expression's self-name, body-top-level declarations, and `var`s hoisted
-     * from any block depth). Phase (ii) adds block-scope containers (nested
-     * blocks, for-headers, catch clauses, case blocks) and class scopes; until
-     * then nested-block `let`/`const`/`class`/`function` declarations stay
-     * unbound here, and decorators nested inside Parameter nodes walk under the
-     * function scope (the function-like's own decorators correctly walk under
-     * the OUTER scope).
+     * Scope owners — phase (i), tsc `IsContainer`: the [SourceFile] root
+     * (aliasing file locals), [ModuleDeclaration] (aliasing the merged
+     * namespace `exports`, one chained level per dotted segment — the
+     * checker's B512 rule), and the seven function-like kinds plus
+     * [ClassStaticBlockDeclaration] (fresh tables: type params, params —
+     * `this` params excluded — a named function expression's self-name,
+     * body-top-level declarations, and `var`s hoisted to the nearest
+     * function/file/module boundary from any block depth). Phase (ii), tsc
+     * `IsBlockScopedContainer` + the remaining containers: every [Block] that
+     * is NOT a function-like's immediate body (the body shares the function's
+     * scope — tsc `getContainerFlags`), `for`/`for-in`/`for-of` headers,
+     * [CatchClause] (binding the catch variable), [SwitchStatement] standing
+     * in for tsc's CaseBlock (the switch EXPRESSION routes to the OUTER
+     * scope), class scopes (type params; a named class EXPRESSION's
+     * self-name), interface / type-alias scopes (type params), and enum
+     * scopes (member names resolve bare in sibling initializers — aliasing
+     * the main-bound `exports`, or scope-space members for nested enums).
+     * Block-scoped declarations (`let`/`const`/`class`/`interface`/`type`/
+     * `enum`/`function` — function declarations use strict/module semantics,
+     * binding to the block) land in the nearest fresh scope; a name the main
+     * binder already bound in an aliased container is skipped. Decorators of
+     * a function-like/class walk under the OUTER scope (parameter decorators
+     * walk under the function scope — a known refinement).
      *
      * ITERATIVE (parallel explicit stacks) by project rule — binary chains far
      * beyond corpus depth exist and [Binder] must work off the deep-stack
@@ -580,12 +591,12 @@ class Binder(private val options: CompilerOptions) {
             val scope = scopeStack.removeAt(scopeStack.size - 1)
             when (node) {
                 is FunctionDeclaration -> {
-                    // The function's NAME binds into the enclosing scope when that
-                    // scope is a fresh function scope and this statement sits at its
-                    // body top level. File/module level is the main binder's own
-                    // (reached via `existing`); block-nested function declarations
-                    // are phase (ii) block-scope territory.
-                    if (scope.existing == null && node.name != null && isDirectBodyChild(node, scope)) {
+                    // The function's NAME binds into the enclosing fresh scope
+                    // (function body, nested block, case clause — strict/module
+                    // semantics: block-nested function declarations bind to the
+                    // block). File/module level is the main binder's own,
+                    // reached via `existing`.
+                    if (scope.existing == null && node.name != null) {
                         declareLexical(scope, node.name.text, SymbolFlags.Function, node)
                     }
                     val fnScope = newLexicalScope(node, scope, scopes)
@@ -637,31 +648,88 @@ class Binder(private val options: CompilerOptions) {
                     bindLexicalVariableList(node, scope)
                     pushChildren(node, scope)
                 }
+                is Block -> {
+                    // A function-like's immediate body shares the function's scope
+                    // (tsc getContainerFlags); every other block is a block-scope
+                    // container.
+                    val parent = node.parent
+                    val isFunctionBody = parent is FunctionDeclaration || parent is FunctionExpression ||
+                        parent is ArrowFunction || parent is MethodDeclaration || parent is Constructor ||
+                        parent is GetAccessor || parent is SetAccessor || parent is ClassStaticBlockDeclaration
+                    pushChildren(node, if (isFunctionBody) scope else newLexicalScope(node, scope, scopes))
+                }
+                is ForStatement -> pushChildren(node, newLexicalScope(node, scope, scopes))
+                is ForInStatement -> pushChildren(node, newLexicalScope(node, scope, scopes))
+                is ForOfStatement -> pushChildren(node, newLexicalScope(node, scope, scopes))
+                is CatchClause -> {
+                    val catchScope = newLexicalScope(node, scope, scopes)
+                    node.variableDeclaration?.let {
+                        bindLexicalBindingName(it.name, SymbolFlags.BlockScopedVariable, it, catchScope)
+                    }
+                    pushChildren(node, catchScope)
+                }
+                is SwitchStatement -> {
+                    // tsc's block-scope container here is the CaseBlock; our AST has
+                    // no CaseBlock node, so the SwitchStatement owns the scope and
+                    // the switch EXPRESSION is routed to the OUTER scope by hand
+                    // (pushed LAST so it pops FIRST — sibling visit order stays
+                    // source order, which the first-wins merge semantics rely on).
+                    val caseScope = newLexicalScope(node, scope, scopes)
+                    for (i in node.caseBlock.indices.reversed()) {
+                        nodeStack.add(node.caseBlock[i])
+                        scopeStack.add(caseScope)
+                    }
+                    nodeStack.add(node.expression)
+                    scopeStack.add(scope)
+                }
                 is ClassDeclaration -> {
-                    if (scope.existing == null && node.name != null && isDirectBodyChild(node, scope)) {
+                    if (scope.existing == null && node.name != null) {
                         declareLexical(scope, node.name.text, SymbolFlags.Class, node)
                     }
-                    pushChildren(node, scope)
+                    val classScope = newLexicalScope(node, scope, scopes)
+                    bindLexicalTypeParameters(node.typeParameters, classScope)
+                    pushChildren(node, classScope, decoratorScope = scope)
+                }
+                is ClassExpression -> {
+                    val classScope = newLexicalScope(node, scope, scopes)
+                    // A named class expression's name is visible only inside its own body.
+                    node.name?.let { declareLexical(classScope, it.text, SymbolFlags.Class, node) }
+                    bindLexicalTypeParameters(node.typeParameters, classScope)
+                    pushChildren(node, classScope, decoratorScope = scope)
                 }
                 is InterfaceDeclaration -> {
-                    if (scope.existing == null && isDirectBodyChild(node, scope)) {
+                    if (scope.existing == null) {
                         declareLexical(scope, node.name.text, SymbolFlags.Interface, node)
                     }
-                    pushChildren(node, scope)
+                    val ifaceScope = newLexicalScope(node, scope, scopes)
+                    bindLexicalTypeParameters(node.typeParameters, ifaceScope)
+                    pushChildren(node, ifaceScope)
                 }
                 is TypeAliasDeclaration -> {
-                    if (scope.existing == null && isDirectBodyChild(node, scope)) {
+                    if (scope.existing == null) {
                         declareLexical(scope, node.name.text, SymbolFlags.TypeAlias, node)
                     }
-                    pushChildren(node, scope)
+                    val aliasScope = newLexicalScope(node, scope, scopes)
+                    bindLexicalTypeParameters(node.typeParameters, aliasScope)
+                    pushChildren(node, aliasScope)
                 }
                 is EnumDeclaration -> {
-                    if (scope.existing == null && isDirectBodyChild(node, scope)) {
+                    var enumSymbol = nodeToSymbol[nodeKey(node)]
+                    if (scope.existing == null) {
                         val flags = if (ModifierFlag.Const in node.modifiers) SymbolFlags.ConstEnum
                                     else SymbolFlags.RegularEnum
-                        declareLexical(scope, node.name.text, flags, node)
+                        declareLexical(scope, node.name.text, flags, node)?.let { enumSymbol = it }
                     }
-                    pushChildren(node, scope)
+                    // Member names resolve BARE inside sibling member initializers
+                    // (`enum E { A = 1, B = A }`) — the enum scope provides them:
+                    // aliasing the main binder's exports for a conventionally-bound
+                    // enum, scope-space members (also published onto the SCOPE
+                    // symbol's exports for `E.A`-style consumers) for a nested one.
+                    val mainExports = enumSymbol?.takeIf { it.id >= 1 }?.exports
+                    val enumScope = LexicalScope(node, scope, existing = mainExports)
+                    if (node.nodeId >= 0) scopes[node.nodeId] = enumScope
+                    bindLexicalEnumMembers(node, enumSymbol, enumScope)
+                    pushChildren(node, enumScope)
                 }
                 else -> pushChildren(node, scope)
             }
@@ -715,28 +783,42 @@ class Binder(private val options: CompilerOptions) {
     }
 
     /**
-     * Phase (i) variable rules: `var` hoists into the nearest function-like /
-     * file / module scope from ANY block depth — skipping only a
+     * Variable rules: `var` hoists to the nearest function-like / file /
+     * module scope ([varHoistTarget]) from ANY block depth — skipping only a
      * VariableStatement DIRECTLY at file/module top level, which the main
      * binder already owns (reached via [LexicalScope.existing]). `let`/`const`
-     * bind only at a fresh function scope's body top level (a function body
-     * block is NOT a block-scope container — tsc `getContainerFlags`);
-     * nested-block and for-header block-scoped declarations are phase (ii).
+     * bind into the CURRENT scope, which with phase (ii)'s block-scope
+     * containers is always the correct nearest block-scope container — a
+     * file/module-level declaration (the main binder's own) is skipped via
+     * the aliasing `existing` table.
      */
     private fun bindLexicalVariableList(list: VariableDeclarationList, scope: LexicalScope) {
-        val governing = list.parent
         if (list.flags == SyntaxKind.VarKeyword) {
+            val target = varHoistTarget(scope)
+            val governing = list.parent
             val mainBinderOwns = governing is VariableStatement &&
-                scope.existing != null && isDirectBodyChild(governing, scope)
+                target.existing != null && isDirectBodyChild(governing, target)
             if (mainBinderOwns) return
             for (decl in list.declarations) {
-                bindLexicalBindingName(decl.name, SymbolFlags.FunctionScopedVariable, decl, scope)
+                bindLexicalBindingName(decl.name, SymbolFlags.FunctionScopedVariable, decl, target)
             }
         } else {
             if (scope.existing != null) return
-            if (governing !is VariableStatement || !isDirectBodyChild(governing, scope)) return
             for (decl in list.declarations) {
                 bindLexicalBindingName(decl.name, SymbolFlags.BlockScopedVariable, decl, scope)
+            }
+        }
+    }
+
+    /** The nearest enclosing `var`-hoisting boundary: function-like, file, or module scope. */
+    private fun varHoistTarget(scope: LexicalScope): LexicalScope {
+        var current = scope
+        while (true) {
+            when (current.owner) {
+                is SourceFile, is ModuleDeclaration, is FunctionDeclaration, is FunctionExpression,
+                is ArrowFunction, is MethodDeclaration, is Constructor, is GetAccessor,
+                is SetAccessor, is ClassStaticBlockDeclaration -> return current
+                else -> current = current.parent ?: return current
             }
         }
     }
@@ -748,6 +830,39 @@ class Binder(private val options: CompilerOptions) {
             is SourceFile -> parent === owner
             is ModuleDeclaration -> parent is ModuleBlock && parent.parent === owner
             else -> parent is Block && parent.parent === owner
+        }
+    }
+
+    /**
+     * Mirror of the main binder's enum-member binding for the LEXICAL enum
+     * scope. For a main-bound enum every member hits the `existing` skip
+     * (aliased exports); for a lexically-bound nested enum the scope-space
+     * member symbols are ALSO published onto the (scope-space, id ≤ −2)
+     * enum symbol's `exports` — a MAIN symbol's exports are never touched.
+     */
+    private fun bindLexicalEnumMembers(
+        decl: EnumDeclaration,
+        enumSymbol: Symbol?,
+        enumScope: LexicalScope,
+    ) {
+        for (member in decl.members) {
+            val memberName = when (val n = member.name) {
+                is Identifier -> n.text
+                is StringLiteralNode -> n.text
+                is NumericLiteralNode -> n.text
+                is ComputedPropertyName -> when (val e = n.expression) {
+                    is StringLiteralNode -> e.text
+                    is NumericLiteralNode -> e.text
+                    else -> continue
+                }
+                else -> continue
+            }
+            val memberSymbol = declareLexical(enumScope, memberName, SymbolFlags.EnumMember, member) ?: continue
+            if (enumSymbol != null && enumSymbol.id <= -2) {
+                memberSymbol.parent = enumSymbol
+                val exports = enumSymbol.exports ?: symbolTable().also { enumSymbol.exports = it }
+                exports[memberName] = memberSymbol
+            }
         }
     }
 
