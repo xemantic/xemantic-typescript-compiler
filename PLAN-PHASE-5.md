@@ -59,6 +59,44 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 497 (2026-07-13) — INV.2(c) phase (i) LANDED: additive lexical binding
+for function-like containers.** The Binder gained a second pass
+(`bindLexicalScopes`, run after conventional binding) that walks the whole
+tree ITERATIVELY (parallel explicit node/scope stacks — a 30k-term binary
+chain binds on a plain thread) and builds `BinderResult.lexicalScopes`:
+per-nodeId `LexicalScope` tables. Container design: the SourceFile root
+ALIASES file locals and a ModuleDeclaration aliases its merged namespace
+`exports` — one chained scope level per dotted segment, mirroring the
+checker's B512 rule, with outer segments recovered via `symbol.parent` —
+while the seven function-like kinds plus `ClassStaticBlockDeclaration` get
+FRESH tables holding type params, params (binding patterns recursed; `this`
+params excluded — tsc never binds them into locals), a named function
+expression's self-name, body-top-level declarations (the function body block
+is NOT a block-scope container, tsc `getContainerFlags`), and `var`s hoisted
+from ANY block depth (also into file/module scopes for block-nested vars the
+main binder's statement-only walk never saw). The function-like's own
+decorators walk under the OUTER scope. **The reshuffle firewall: scope
+symbols come from `Symbol.scopeSymbol` — a SEPARATE negative id space
+(≤ −2, own counter) — so the global `nextId` sequence is untouched;
+`declareLexical` mirrors `declareSymbol`'s merge semantics (canMerge reuse,
+B505 Class+Class first-wins, param+var redeclaration merge) but never writes
+`nodeToSymbol` or the aliased existing tables (a name the main binder
+already bound is SKIPPED — attaching the extra declaration would mutate the
+shared symbol).** Phase (ii) is deliberately unbound and PINNED by negative
+controls: nested-block let/const/class/function, for-header let, catch
+variables, case blocks, class scopes. Verification: suite green
+10,231 → 10,245 (+14 `Inv2LexicalScopeTest` — flags per decl kind, hoisting,
+root-aliasing identity, binding patterns, the zero-global-id-consumption
+DELTA PROBE (two binds of identical top-level shape, one with rich bodies,
+must consume equal global-id counts), namespace chain identity, plain-thread
+deep chain, unindexed-tree guard, rich-fixture smoke); `--listAll`
+byte-identical vs the stash-built BEFORE binary (46 diagnostics, compiler
+profile); interleaved wall B/A ×6 with BOTH orders: a consistent
+second-position-slower artifact appears in each order — position-balanced
+means 26,328 vs 26,550 ms (+0.8%), inside the documented drift band. Tables
+UNCONSUMED until INV.4/INV.2(d). NEXT: INV.2(c)(ii) block-scope containers +
+class scopes, then INV.2(d) B83.5 dissolution pilots.
+
 **Round 496 (2026-07-13, same session as 495) — INV.2(b) LANDED: the pilot
 nodeId-array side table — `FlowGraph.flowAt`.** The first consumer of INV.2(a)'s
 identity fields: `FlowGraph` carries `flowById`/`nodeById` arrays sized
@@ -434,59 +472,6 @@ diagnostics, `--listAll` diff empty vs a stash-built BEFORE binary):
   copied O(scope size) at every nested function; a layered/copy-on-write redesign like
   ScopeNameSet would eliminate it but touches many read/write sites).
 
-**Round 487 (2026-07-12) — M5.1/M5.2: eliminate the scope-name-set COPY in the
-type-as-value + expando walkers (two byte-identical commits, ~2.1% wall-clock).**
-Commits `c580231a` (type-as-value) + `250be2a7` (expando). A mandatory fresh
-compiler-profile JFR (26.8 s / 2,044 samples, post-486 flat profile) put the
-type-as-value (TS2693/TS2708) + expando (TS2339) walker family at the TOP of the
-remaining allocation churn — `--callers-of HashSet.<init>` and `AbstractCollection.addAll`
-both → `checkTypeAsValueInStatement` (38) / `checkTypeAsValueInStatements` (27-28) /
-`visitExpandoStmt` (21) / `checkTypeAsValueInExpr` (8); `--callers-of HashMap.put` the
-same four (61 of 232 samples ≈ 26%). Root cause: round 486 converted these copies from
-LinkedHashSet to HashSet (removed `afterNodeInsertion`) but the COPY itself remained —
-each nested function/class/method copies the enclosing scope's file-level name sets via
-`HashSet(parent)`, and on tsc's own checker.ts (one `createTypeChecker`, hundreds of
-nested functions, a ~1000-name file-level `typeOnlyNames`) that is quadratic copying.
-- **Fix 1 (type-as-value):** a two-level `ScopeNameSet` — a shared, never-copied
-  file-level BASE plus a small per-scope OVERLAY that `child()` copies alone. Membership
-  is `base∪overlay` (depth-independent, ≤2 lookups; `if (overlay.isEmpty()) name in base`
-  fast path for the common file-level case), NOT a parent-chain walk. Two facts the walker
-  already had make this exact: every type-only / namespace-only read is value-gated
-  (`name !in valueNames && name in typeOnlyNames` — enumerated all 6 read sites) and every
-  scope grows the sets purely additively inward, so the former per-scope `remove` (a param
-  or namespace self-name shadowing an outer type name) is subsumed by the value overlay —
-  the structure is add / contains only. `addParamBindingNamesToValues` (add-and-remove) is
-  replaced by a generic `forEachParamBindingName(name) { … }` visitor used by both the
-  plain-set hoisting collector and the scope-set callers.
-- **Fix 2 (expando):** the expando `shadowed` set is DIFFERENT — its base is EMPTY and it
-  only accumulates each nested function's own locals, and it is read RARELY (only for a
-  property access whose receiver is a top-level expando candidate). So a base+overlay does
-  not help (the whole set is overlay → `child()` still copies it); a parent CHAIN does:
-  `ChainedNameSet.child(locals)` links a new layer WITHOUT copying the ancestors, and
-  `contains` walks the chain (cheap given the rare checks). `collectExpandoFnLocals` now
-  returns `MutableSet` so the FunctionExpression case can add its own name to the fresh
-  layer. `ChainedNameSet.EMPTY` (companion val — not an instance field, so the init-order
-  gotcha does not apply) seeds the top-level walk.
-- **Verification:** BOTH commits byte-identical (compiler-profile 46 diagnostics,
-  per-position `--listAll` diff empty vs a stash-built BEFORE binary). Full corpus suite
-  green 10,173 → 10,180 (+7 local `ScopeNameSetLayeringTest`). Clean same-machine
-  wall-clock A/B (daemon stopped, `pkill KotlinCompile[D]aemon`, ≥5 GB free, 3 runs each,
-  self-reported `time:`; commit 1): BEFORE (HashSet copy) median 26.23 s vs AFTER
-  (ScopeNameSet) 25.67 s — ~2.1% (best-case 26.17 → 25.37 = 3.0%). A REAL wall-clock win,
-  unlike round 486's neutral LinkedHashSet swap, because the COPY is eliminated (not just
-  its per-element overhead). Commit 2 (expando) is a ~1% allocation contributor → sub-noise
-  wall-clock, reported as allocation discipline. AFTER JFR (both commits): the whole family
-  is gone from the top self-time — `checkTypeAsValueInStatement` (was 5.1% self, #2) and
-  `LinkedHashMap.afterNodeInsertion` (2.3%) no longer in the top-16; `HashMap.put` 3.7% →
-  2.4%; run wall 26.8 → 25.9 s. Recordings `$SCRATCH/r487-compiler.jfr` (before) +
-  `$SCRATCH/r487-after.jfr` (after), session-local.
-- **NEXT M5 lead (fresh JFR):** with the set-copy family cleared, the top self-time is now
-  `HashMap.getNode` (5.5% — scattered: `aliasedConditionInitializer` / `isOptionalProperty`
-  / `getTypeFromTypeNode` / `getTypeOfIdentifier`) and `checkMemberAccessMissing` (4.6%
-  self / 6.3% incl, the top WALKER, under `checkSinglePropertyAccess` →
-  `checkPropertyAccessInExpr` 8.4% incl). Audit `checkMemberAccessMissing`'s per-access
-  work for a real wall-clock lever (the round-486 NEXT, still standing).
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 (Restored 2026-07-12, round 481 — the queue/backlog/inventory sections had been
@@ -608,12 +593,24 @@ interrupt the arc).
     validated; the mass-migration targets are the HOT maps (walk memos, INV.4
     per-node type cache), not more cold tables. `nodeTypes` rejected as pilot
     (structural cross-file keying — INV.5 territory).
-  - [ ] **INV.2(c) Full lexical binding, additive.** Binder descends into function
-    bodies/blocks binding block-scoped decls into NEW per-node scope tables;
-    scope symbols from a SEPARATE id space (do NOT touch the global `nextId`
-    sequence for existing symbols — the reshuffle hazard); existing
+  - [ ] **INV.2(c) Full lexical binding, additive.** Scope symbols from a SEPARATE
+    id space (never the global `nextId` sequence — the reshuffle hazard); existing
     `locals`/`globals` byte-unchanged; new tables unconsumed until INV.4.
-    Sub-decompose on entry (function bodies first, then blocks).
+    - (i) DONE round 497 (2026-07-13): function-like containers —
+      `bindLexicalScopes` (Binder.kt) walks the whole tree iteratively after
+      conventional binding, building per-nodeId `LexicalScope`s
+      (`BinderResult.lexicalScopes`): SourceFile root aliases file locals,
+      ModuleDeclaration aliases the merged exports (chained per dotted segment,
+      the B512 rule), the 7 function-like kinds + static blocks get fresh tables
+      (type params, params minus `this`, fn-expr self-name, body-top-level
+      decls, `var`s hoisted from any block depth). `Symbol.scopeSymbol` mints
+      ids ≤ −2; a delta-probe test pins zero global-id consumption. Suite +14
+      (Inv2LexicalScopeTest), listAll byte-identical, interleaved wall
+      position-balanced +0.8% (noise band).
+    - (ii) PENDING: block-scope containers (nested blocks, for-headers, catch
+      clauses, case blocks) + class scopes (type params, named class-expression
+      self-name, enum-member sibling scope); the phase-(i) negative controls in
+      Inv2LexicalScopeTest pin the boundary and flip consciously.
   - [ ] **INV.2(d) B83.5 dissolution pilots.** Convert 1–2 checker sites that
     synthesize transient symbols for unbound block-scoped decls (e.g.
     `checkPropertyAccessInStatement`'s ClassDeclaration branch) to consume the

@@ -1,3 +1,56 @@
+**Round 487 (2026-07-12) — M5.1/M5.2: eliminate the scope-name-set COPY in the
+type-as-value + expando walkers (two byte-identical commits, ~2.1% wall-clock).**
+Commits `c580231a` (type-as-value) + `250be2a7` (expando). A mandatory fresh
+compiler-profile JFR (26.8 s / 2,044 samples, post-486 flat profile) put the
+type-as-value (TS2693/TS2708) + expando (TS2339) walker family at the TOP of the
+remaining allocation churn — `--callers-of HashSet.<init>` and `AbstractCollection.addAll`
+both → `checkTypeAsValueInStatement` (38) / `checkTypeAsValueInStatements` (27-28) /
+`visitExpandoStmt` (21) / `checkTypeAsValueInExpr` (8); `--callers-of HashMap.put` the
+same four (61 of 232 samples ≈ 26%). Root cause: round 486 converted these copies from
+LinkedHashSet to HashSet (removed `afterNodeInsertion`) but the COPY itself remained —
+each nested function/class/method copies the enclosing scope's file-level name sets via
+`HashSet(parent)`, and on tsc's own checker.ts (one `createTypeChecker`, hundreds of
+nested functions, a ~1000-name file-level `typeOnlyNames`) that is quadratic copying.
+- **Fix 1 (type-as-value):** a two-level `ScopeNameSet` — a shared, never-copied
+  file-level BASE plus a small per-scope OVERLAY that `child()` copies alone. Membership
+  is `base∪overlay` (depth-independent, ≤2 lookups; `if (overlay.isEmpty()) name in base`
+  fast path for the common file-level case), NOT a parent-chain walk. Two facts the walker
+  already had make this exact: every type-only / namespace-only read is value-gated
+  (`name !in valueNames && name in typeOnlyNames` — enumerated all 6 read sites) and every
+  scope grows the sets purely additively inward, so the former per-scope `remove` (a param
+  or namespace self-name shadowing an outer type name) is subsumed by the value overlay —
+  the structure is add / contains only. `addParamBindingNamesToValues` (add-and-remove) is
+  replaced by a generic `forEachParamBindingName(name) { … }` visitor used by both the
+  plain-set hoisting collector and the scope-set callers.
+- **Fix 2 (expando):** the expando `shadowed` set is DIFFERENT — its base is EMPTY and it
+  only accumulates each nested function's own locals, and it is read RARELY (only for a
+  property access whose receiver is a top-level expando candidate). So a base+overlay does
+  not help (the whole set is overlay → `child()` still copies it); a parent CHAIN does:
+  `ChainedNameSet.child(locals)` links a new layer WITHOUT copying the ancestors, and
+  `contains` walks the chain (cheap given the rare checks). `collectExpandoFnLocals` now
+  returns `MutableSet` so the FunctionExpression case can add its own name to the fresh
+  layer. `ChainedNameSet.EMPTY` (companion val — not an instance field, so the init-order
+  gotcha does not apply) seeds the top-level walk.
+- **Verification:** BOTH commits byte-identical (compiler-profile 46 diagnostics,
+  per-position `--listAll` diff empty vs a stash-built BEFORE binary). Full corpus suite
+  green 10,173 → 10,180 (+7 local `ScopeNameSetLayeringTest`). Clean same-machine
+  wall-clock A/B (daemon stopped, `pkill KotlinCompile[D]aemon`, ≥5 GB free, 3 runs each,
+  self-reported `time:`; commit 1): BEFORE (HashSet copy) median 26.23 s vs AFTER
+  (ScopeNameSet) 25.67 s — ~2.1% (best-case 26.17 → 25.37 = 3.0%). A REAL wall-clock win,
+  unlike round 486's neutral LinkedHashSet swap, because the COPY is eliminated (not just
+  its per-element overhead). Commit 2 (expando) is a ~1% allocation contributor → sub-noise
+  wall-clock, reported as allocation discipline. AFTER JFR (both commits): the whole family
+  is gone from the top self-time — `checkTypeAsValueInStatement` (was 5.1% self, #2) and
+  `LinkedHashMap.afterNodeInsertion` (2.3%) no longer in the top-16; `HashMap.put` 3.7% →
+  2.4%; run wall 26.8 → 25.9 s. Recordings `$SCRATCH/r487-compiler.jfr` (before) +
+  `$SCRATCH/r487-after.jfr` (after), session-local.
+- **NEXT M5 lead (fresh JFR):** with the set-copy family cleared, the top self-time is now
+  `HashMap.getNode` (5.5% — scattered: `aliasedConditionInitializer` / `isOptionalProperty`
+  / `getTypeFromTypeNode` / `getTypeOfIdentifier`) and `checkMemberAccessMissing` (4.6%
+  self / 6.3% incl, the top WALKER, under `checkSinglePropertyAccess` →
+  `checkPropertyAccessInExpr` 8.4% incl). Audit `checkMemberAccessMissing`'s per-access
+  work for a real wall-clock lever (the round-486 NEXT, still standing).
+
 **Round 486 (2026-07-12) — M5.1/M5.2 allocation discipline: HashSet for per-scope
 name-set copies in the type-as-value + expando walkers (byte-identical).** Commit
 `9ec344e6`. A fresh compiler-profile JFR (28 s / 2,097 samples, post-483 flat profile)
