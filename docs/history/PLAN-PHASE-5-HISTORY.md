@@ -1,3 +1,19 @@
+**Round 490 (2026-07-13) — the architecture analysis behind the rescope (no code
+change).** Verified in-code: Checker.init dispatches ~512 passes (523 call sites,
+1,700 lines); 575 `for (result in binderResults)` loops; 1,005 `check*` functions;
+`getTypeOfExpression` (321 call sites) has NO cache; `nodeTypes` bypassed whenever
+any resolution context is active (Checker.kt ~93091); unions un-interned;
+`resolveGenericPropertyType` depth-capped at 4 to avoid OOM. Cross-checked tsc
+(single-walk pull-based checker, NodeLinks/SymbolLinks memoization, interned
+unions/instantiations, mapper-based instantiation, flow type cached per reference)
+and tsgo 7.0 RC (native + parallel parse/bind/emit + 4 share-nothing checker
+workers, `--checkers`; matches docs/parallel-caching.md). Key comparison: tsc does
+MORE semantic work per node yet runs the compiler profile in 10.2 s vs our ~25 s —
+the walker architecture, not micro-inefficiency, is the bottleneck (rounds 432–434's
+30× from structural fixes vs rounds 482–489's ~10% combined from micro-opts confirm
+the response curve). Deliverables: `docs/ARCHITECTURE-RETHINK.md` + this queue
+restructure + CLAUDE.md mission pointer.
+
 **Round 489 (2026-07-12) — M5.1: two byte-identical per-property-access hot-path
 reductions from a fresh JFR (~2.9% wall-clock).** Mandatory fresh compiler-profile JFR
 (25.5 s / 1,961 samples, post-488): `checkMemberAccessMissing` at the clear top (5.7%
