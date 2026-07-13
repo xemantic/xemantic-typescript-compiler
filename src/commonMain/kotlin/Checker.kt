@@ -633,6 +633,13 @@ class Checker(
      *  variables) without going through globals (which may have merge conflicts). */
     private var currentFileLocals: SymbolTable? = null
 
+    /** INV.2(d): the current file's lexical scope tables ([BinderResult.lexicalScopes]),
+     *  set per file by [checkPropertyAccess]. Consulted by [lexicalScopeSymbol] to resolve
+     *  block-scoped declarations the conventional binder never bound (B83.5) — replacing
+     *  per-site transient-symbol synthesis walker by walker. Declared BEFORE `init`
+     *  (checker passes run during init — the Kotlin init-order gotcha). */
+    private var currentLexicalScopes: Map<Int, LexicalScope>? = null
+
     /** Set during [checkTypeUsedAsValue] per file. Names in this set are forward-declarable
      *  lib types (Promise, Symbol, …) that the user declared as interfaces but the active
      *  @lib excludes the introducing es2015+ lib. Used by [emitTS2693] to switch to TS2585
@@ -119338,14 +119345,39 @@ interface DataView {
             currentFileLocals = result.locals
             currentCheckFileName = fileName
             currentFlowGraph = result.flowGraph
+            currentLexicalScopes = result.lexicalScopes
             checkPropertyAccessInStatements(
                 result.sourceFile.statements, source, fileName,
                 enclosingClassType = null
             )
             currentFlowGraph = null
+            currentLexicalScopes = null
         }
         currentFileLocals = null
         currentCheckFileName = null
+    }
+
+    /**
+     * INV.2(d): resolve [name] from the lexical scope tables by walking [node]'s
+     * parent chain to the nearest enclosing scope that binds it. Returns null when
+     * the tables are absent (no per-file context, or an unindexed hand-built tree)
+     * or the name is nowhere lexically bound — callers keep their legacy fallback.
+     * Note this consults only the NEW bindings ([LexicalScope.symbols], the
+     * negative id space); names the main binder bound resolve through the
+     * pre-existing paths, so consumers see lexical symbols exactly where they
+     * previously synthesized transients (B83.5 shapes).
+     */
+    private fun lexicalScopeSymbol(node: Node, name: String): Symbol? {
+        val scopes = currentLexicalScopes ?: return null
+        if (scopes.isEmpty()) return null
+        var cursor = (node as NodeBase).parent
+        while (cursor != null) {
+            val base = cursor as NodeBase
+            val symbol = scopes[base.nodeId]?.symbols?.get(name)
+            if (symbol != null) return symbol
+            cursor = base.parent
+        }
+        return null
     }
 
     private fun checkPropertyAccessInStatements(
@@ -119380,15 +119412,23 @@ interface DataView {
                     }
                     if (symbol == null) symbol = globals[stmt.name.text]
                     // B83.5: block-scoped classes (declared inside `while`/`for`/etc.
-                    // bodies) are NOT bound by the binder — `bindStatement` only
-                    // descends into namespace bodies, not block statements. To
+                    // bodies) are NOT bound by the conventional binder — `bindStatement`
+                    // only descends into namespace bodies, not block statements. To
                     // restore TS2339/TS2551 checking for `this.X` accesses inside
                     // such classes (anonymousClassExpression2_ts shape: `while (0) {
-                    // class B { methodB() { this.methodA; /*err*/ } } }`), synthesize
-                    // a transient Symbol that points at the AST declaration and let
-                    // `getDeclaredTypeOfClassOrInterface` build the Type.Interface
-                    // from it. The synthetic symbol is never published to the binder's
-                    // tables — used only for this check pass.
+                    // class B { methodB() { this.methodA; /*err*/ } } }`), resolve the
+                    // class through the INV.2(c) lexical scope tables — the INV.2(d)
+                    // pilot consumer, replacing the old per-visit transient-Symbol
+                    // synthesis. The lexical symbol carries the same declaration (plus
+                    // any legal block-level class+interface merge) and its stable
+                    // scope-space id lets getDeclaredTypeOfSymbol cache the type.
+                    if (symbol == null) {
+                        symbol = lexicalScopeSymbol(stmt, stmt.name.text)
+                            ?.takeIf { it.flags.hasAny(SymbolFlags.Class) }
+                    }
+                    // Fallback (unindexed hand-built trees, or a non-class lexical
+                    // binding shadowing the name): the legacy transient synthesis,
+                    // never published to the binder's tables.
                     if (symbol == null) {
                         val syn = Symbol(SymbolFlags.Class, stmt.name.text)
                         syn.declarations.add(stmt)
