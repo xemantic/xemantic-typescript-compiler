@@ -59,6 +59,48 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 495 (2026-07-13) — INV.2(a) LANDED: AST identity foundations.** All 138
+node data classes now extend `NodeBase` (`var nodeId = -1`, `var parent: Node? =
+null`; deliberately NOT implementing `Node` — a non-sealed direct subtype would
+break exhaustive `when` over `Node`); base-class vars sit outside data-class
+`equals`/`hashCode`/`copy`, so structural node keys are byte-identical and a
+Transformer `copy()` yields an UNINDEXED node; `SourceFile.nodeCount` body var.
+New `NodeWalk.kt`: the canonical generic `forEachChild(node) {}` (every
+node-typed primary-constructor property of all ~139 kinds; exhaustive sealed
+`when`, so a new node CLASS fails compilation until added) + `indexSourceFile`
+stamping dense PREORDER nodeIds (SourceFile = 0; a subtree = a contiguous id
+range) + parents + nodeCount at the end of `Parser.parse()` — ITERATIVE
+explicit-stack (crawl parses run on Dispatchers.Default OFF the deep-stack
+thread; a recursive indexer would overflow exactly there). Fields are inert
+until INV.2(b) consumes them. **Verification:** suite green 10,218 → 10,228
+(+10 local: `Inv2NodeIndexTest` — dense preorder + parent chains + copy-
+unindexed + a 30k-term chain indexed on a PLAIN thread (measured nodeCount
+60,009 exact via jshell) + negative control; `ForEachChildOracleTest` — the
+jvmTest REFLECTION oracle diffing forEachChild against data-class componentN
+properties per node, over the kind-dense fixture + JSX fixture + directly-
+constructed parser-unreachable kinds + ALL 78 real tsc compiler sources,
+>100k nodes, identity-set AND multiset-size agreement); `--listAll`
+byte-identical vs the stash-built BEFORE on the compiler profile (46
+diagnostics; wall 25.67 → 25.73 s — the indexing walk is noise-level);
+bench row 25,430 ms self / 840 MB RSS (−2.5%/−62 MB vs previous row = box
+noise band; the per-node nodeId+parent fields cost ~16 MB on ~1M nodes,
+invisible in RSS).
+**Migration surprises (both now CLAUDE.md gotchas):** (1) the shared
+superclass changed Kotlin LUB inference — `parsePropertyName`'s inferred
+return type degraded to `Any` (14 downstream type errors; ONE explicit return
+type fixed all; the silently-compiling `Any` variant is exactly what the
+suite + listAll gates cover). (2) power-assert renders every captured
+subexpression's toString on FAILURE — a failing `have(sourceFile.nodeCount >
+…)` STACK-OVERFLOWED rendering the 30k-deep tree, and the oracle's `have`
+OOM'd building a node-list diagram, masking the real messages; both tests
+rewritten render-safe (int/boolean locals, plain `fail()`), after which the
+initial sweep "failure" did not reproduce (deterministic green incl. the full
+suite — the run-1 verdict is attributed to the assertion-machinery path, not
+a forEachChild gap). NEXT: INV.2(b) — migrate ONE hot pos-keyed side table
+(Flow's `nodeToFlow` or the checker's `nodeTypes`, per INV.0 evidence) to a
+nodeId-indexed array; measure the `HashMap.getNode` JFR delta before mass
+migration.
+
 **Round 494 (2026-07-13) — INV.1(e) LANDED: the double parse is dead — the core
 reuses the crawl's parses.** The crawl full-parsed every file for specifiers and
 `compileParsed` parsed everything again; now ONE parse per file serves both.
@@ -478,43 +520,6 @@ accumulated name set) that is quadratic LinkedHashSet churn.
   `compileKotlinJvm compileTestKotlinJvm --rerun-tasks` is 0-`w:` again; diagnostics
   byte-identical; suite green.
 
-**Round 485 (2026-07-12) — CI perf/compliance dashboard: `Bench` GitHub Action
-(owner-requested).** New `.github/workflows/bench.yml` + `scripts/bench-3way.sh`
-compile the pinned TypeScript `compiler` profile with xtsc, reference JS tsc, and
-native tsgo, then publish a per-run Markdown report under `bench-history/runs/` and
-prepend a row to `bench-history/README.md` (index, newest-first) so wall-clock /
-throughput / error trends are observable across commits. Trigger: push-to-main
-(owner's choice) + `workflow_dispatch` (tsc/tsgo npm specs are inputs, default
-`typescript@6` — the released JS line; 7.0 is native tsgo — / `@typescript/native-preview@latest`;
-report records resolved versions). Runner: JDK 26 (temurin, setup-java@v5) so the CI
-numbers match the JDK-26 dev box; action majors current (checkout@v7, setup-gradle@v6,
-setup-node@v6/Node 22). Loop-guarded: `paths-ignore: bench-history/**` + the bot's result commit
-is `[skip ci]` + pushes `HEAD:main` with rebase-retry. `bench-history/` is a NEW
-tracked dir (the existing `/bench/` is gitignored machine-local TSV). Gotchas
-hit + fixed while building: an UNQUOTED python heredoc ran every backtick in the
-Markdown as command substitution (→ quoted `<<'PYEOF'` + values via `export`/`os.environ`);
-`git diff --quiet` misses the untracked new report (→ `git add` then `--cached`);
-tsgo `--version` is "Version X" (→ `awk '{print $NF}'`). Local macOS validation
-(busy box): xtsc 23.7s/46 vs tsc@6.0.3 6.5s/65 vs tsgo@7.0-dev 1.35s/65 — CI on
-Linux GNU-grep gets real self/err too. NEXT: the EP.2/EP.1 emit-parity families, or
-resume M5.
-
-Also this session (owner-requested build-tooling check): **Gradle 9.5.1 → 9.6.1**
-(wrapper bumped, `compileKotlinJvm`+`compileTestKotlinJvm` and the full suite green
-10,167/0 — committed; build-tool only, no xtsc-runtime effect). **javaTarget 17 → 26
-experiment — MEASURED, NOT committed.** Target 26 compiles under Kotlin 2.4 (jvmTarget
-26 supported) and the dev box already RUNS on JDK 26, so the runtime JIT/GC of 26 is
-already in every bench number — a *bytecode-target* bump changes the class-file
-version + min-JDK, not runtime speed. A/B self-compile (3 runs each, JDK 26 both):
-target26 median 23.3s vs target17 median 25.8s (~10% apparent) — but 3 noisy samples
-on a busy box measured sequentially (26 first), so box-load drift dominates and a
-target-only bump rarely moves runtime >1–2%; treat as inconclusive/likely noise.
-DECISION: keep javaTarget=17 — this artifact is published to Maven Central as a
-multiplatform LIBRARY, and min-JDK 26 (non-LTS) would exclude ~all consumers (17/21/25
-LTS) + break the reusable CI workflow + bench.yml's JDK 21. Revisit only if xtsc ships
-as a standalone bundled-JRE binary (min-JDK moot) AND the gain is confirmed on a quiet
-box / warm BenchMain.
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 (Restored 2026-07-12, round 481 — the queue/backlog/inventory sections had been
@@ -617,20 +622,16 @@ interrupt the arc).
   GLOBAL companion `nextId++` (Types.kt:116–127, the ~350-test reshuffle anchor);
   `nodeKey` is the cross-file-colliding `(pos<<32)|end`). Work the sub-items in
   order, one commit each:
-  - [ ] **INV.2(a) AST identity foundations.** `abstract class NodeBase`
-    (`var nodeId = -1`, `var parent: Node? = null` — base-class vars are IGNORED
-    by data-class `copy()`/`equals()`, so structural node keys stay byte-identical
-    and a Transformer `copy()` correctly yields an unindexed node) + the ~138
-    mechanical `NodeBase(), ` supertype edits; generic `forEachChild(node) {}`
-    (the 139-kind child enumeration — the one hard deliverable: a missed child
-    position silently exempts a subtree, cf. the MappedType-constraint gotcha);
-    post-parse `indexSourceFile` stamping dense per-file nodeIds + parents +
-    `nodeCount`, invoked from `Parser.parse()` (linear, behavior-free — fields
-    inert until consumed). PIN: a jvmTest REFLECTION oracle (data-class property
-    scan is JVM-only but tests run on JVM) walking every `Node`/`List<Node>`
-    property and asserting forEachChild reaches the identical node set on a rich
-    fixture + real tsc sources; parent-chain-reaches-SourceFile invariant; suite +
-    `--listAll` byte-diff.
+  - [x] **INV.2(a) AST identity foundations.** DONE round 495 (2026-07-13):
+    `NodeBase` (nodeId/parent, NOT implementing Node — preserves sealed-`when`
+    exhaustiveness) + 138 supertype edits + `SourceFile.nodeCount`; canonical
+    `forEachChild` (exhaustive sealed `when`) + iterative preorder
+    `indexSourceFile` hooked into `Parser.parse()`. Pinned by the jvmTest
+    reflection oracle (`ForEachChildOracleTest` — componentN diff over fixtures +
+    all 78 real tsc sources) + `Inv2NodeIndexTest` (dense preorder / parent
+    chains / copy-unindexed / 30k-chain-on-plain-thread). Suite +10 (10,228),
+    `--listAll` byte-identical, wall neutral. Gotchas: NodeBase LUB trap +
+    power-assert node-toString trap.
   - [ ] **INV.2(b) Pilot consumer.** Migrate ONE hot pos-keyed side table (pick by
     INV.0 evidence — Flow's `nodeToFlow` or the checker's `nodeTypes`) to a
     nodeId-indexed array; byte-diff + suite gate; measure the `HashMap.getNode`
