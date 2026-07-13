@@ -1,3 +1,53 @@
+**Round 500 (2026-07-13) — INV.3 DECOMPOSED into (a)–(d) + INV.3(a) LANDED:
+the conflation-dependency instrumentation and its first measurement.**
+Decomposition facts verified in-code before writing the sub-items: the queue's
+"buildPerFileScopes never consumed" was STALE — `perFileScope` is consumed at
+4 sites (the 17.32b–e flips); the honest migration surface is the ~400 keyed
+`globals` consults (373 `globals[` + 22 `in globals` + 8 explicit), and import
+aliases free-ride on the conflation because the general `resolveAlias` cannot
+follow ESM-`.js`/`export *` barrels/NamespaceImports (the flow-only resolvers
+can; the general fallback measured a TS2315×466 flood at round 409 — (b) must
+unify them into a primitive consumed only by per-file lookup). **The (a)
+mechanism:** `globals` is constructed as `InstrumentedSymbolTable` (get/
+containsKey report to an installable hook; LinkedHashMap backing preserved so
+iteration order is byte-identical; interface delegation does not forward
+equals/hashCode — identity semantics, documented) ONLY when `--passTiming` is
+on at construction; `installGlobalsLookupClassifier` (init step 1b2, after the
+globals membership settles) classifies each lookup against the per-file model:
+TRUE_GLOBAL (no module file declares the name) / SHARED (module + lib/script/
+augmentation — presence legit, symbol polluted: the chimera dimension) /
+OWN_LOCAL (pure module name, current file's own local via `currentFileLocals`)
+/ CONFLATED (pure module name, definitely foreign — the worklist proper) /
+UNSCOPED (no file context at the site — also an INV.4 datum) / MISS, with
+per-name + per-pass tables for conflated/unscoped in the dump.
+**The measurement (compiler profile, 78 files): total 2,711,601 keyed lookups —
+miss 1,937,514 (71%!), ownLocal 530,127, CONFLATED 157,060, unscoped 71,820,
+trueGlobal 12,148, shared 2,932. Services profile (252 files): total 4,918,242
+— miss 3,881,879 (79%), ownLocal 702,793, CONFLATED 216,888 (845 names),
+unscoped 97,116, shared 3,989.** Reading: (1) the merged map is probed as a
+maybe-fallback everywhere — 71–79% of consults find nothing; (2) conflated
+traffic is REMARKABLY concentrated: 608/845 names — the top names are all
+compiler/types.ts type names (JSDocFunctionType 21.5k, FunctionTypeNode 17.9k,
+ConstructorTypeNode 17.8k, factory 12.1k, MappedTypeNode 7.6k …) reached
+through `_namespaces/ts.ts` barrel imports, i.e. TYPE-space alias free-riding
+— services adds VALUE-space leaks (`parent` 4.5k, `error` 4.1k — the round-442
+`moduleFileLocalVarNames` family) — and 14–15 passes, of which
+checkPropertyAccess (66.5k/92.0k) + checkCallExpressionTypes (55.0k/73.0k) +
+checkTypeAssignability (28.9k/41.5k) carry 95–96% and are exactly INV.0's
+top-3 wall-time passes (4.05 s / 1.99 s / 2.31 s of the 22.1 s init); (3)
+ownLocal (the majority of legitimate hits) flips to per-file scope trivially;
+(4) unscoped concentrates in checkUnresolvedNames (25.7k) + outside-dispatch
+(13.4k); (5) SHARED is tiny even on services (4.0k) — the chimera ecology's
+cost is per-lookup bail CHECKS on hot paths, not hit volume. Verification: suite green 10,255 → 10,260 (+5 Inv3GlobalsLookupTest —
+on/off diagnostic parity over a module-leak + shared-name + script-global
+probe, the class-accounting invariant total == Σclasses, leak-name presence in
+the worklist tables, InstrumentedSymbolTable hook/delegation/order contracts,
+dump gating); `--listAll` byte-identical BEFORE vs AFTER (off-mode, compiler
+profile); bench row in band. Also fixed en route: the stale INV.3 queue claim,
+and a grep trap recorded in CLAUDE.md (Checker.kt trips grep's binary
+heuristic — source greps need `-a` too; it silently produced the stale claim).
+NEXT: INV.3(b) — the per-file resolution primitive.
+
 **Round 499 (2026-07-13, same session as 497/498) — INV.2(d) LANDED: the first
 lexical-table CONSUMER — INV.2 "bind the world" is COMPLETE.** The canonical
 B83.5 transient-symbol site (`checkPropertyAccessInStatement`'s

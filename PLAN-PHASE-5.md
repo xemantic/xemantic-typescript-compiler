@@ -59,6 +59,53 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 508 (2026-07-13) — INV.3(c)(iv) leg 1 LANDED: `resolveTypeNameToSymbol`'s
+Identifier branch + `typeNodeDefinitelyNonNullish`'s two fallbacks node-keyed
+JOINTLY (the round-507c order constraint).** The general type-resolution flip:
+`resolveTypeNameToSymbol`'s Identifier branch consults
+`lookupPerFileForNode(node, node.text)` — node-keyed resolution is a fixed
+property of the node, so the `nodeTypes` cache stays valid by construction —
+and the TWO call sites carrying their own trailing `?: globals[name]`
+(`getTypeFromTypeReference`, whose inferenceNamespace middle consult is
+untouched, and `checkConstraintsInTypeNode`'s TS2315 emitter) gate that
+fallback to QualifiedName: for an Identifier it was byte-redundant pre-flip
+(same key as the resolver's own lookup) and would silently RE-LEAK the
+node-keyed null post-flip — the trap is now recorded in the CLAUDE.md
+INV.3(c) entry. `typeNodeDefinitelyNonNullish`'s two merged-globals fallbacks
+consult `lookupPerFileForNode(t.typeName, name)` (currentFileLocals stays the
+first consult, the (c)(ii) convention). TWO discoveries: (1) the first full
+suite failed exactly ONE test — ThisPredicateNarrowingTest's cross-file
+augmentation pin — exposing a REAL visibility-model gap: tsc scopes a
+`declare module "<relative-spec>"` AUGMENTATION body under the augmented
+module's exports (the round-443 buildNamespaceScope rule), so the naive flip
+nulled `UnionType` inside services-style `declare module "./types.js"` blocks
+and this-predicate narrowing died; `lookupPerFileForNode` now captures the
+innermost string-named ModuleDeclaration during its parent walk and grants
+the resolved target's direct named exports (unclassified under --passTiming,
+the (c)(ii) discipline). (2) Test-design: the ADDITIVE leak-kill direction is
+SHADOWED by any-degradation — an unresolvable callee annotation degrades the
+assigned reference itself to `any` (proven with a never-declared `Zorp`
+control; also why the basic `return x` on a `T | undefined` local draws no
+TS2322 — pre-existing FN), masking every downstream narrowing consumer — so
+the flow observable uses the SUPPRESSION direction: a foreign UNIMPORTED
+NULLABLE alias return-annotation pre-flip types the assigned reference as the
+leaked union and manufactures TS18048 on a closure-captured read; post-flip
+the reference degrades to `any` and the leaked TS18048 dies (tsc-faithful:
+TS2304 → any). Verified: suite green 10,302 → 10,311 (+9
+Inv3TypePositionNodeKeyTest — 3 leak-kills FAIL on the pre-flip checker via
+stash: the flow TS18048, an annotation-position TS2322 from a leaked foreign
+`type Shape2 = { v: string }`, and a TS2315 manufactured about an unimported
+non-generic alias; 6 preservation controls pass both sides: imported/own-file
+nullable alias keep the REAL TS18048, imported non-nullish alias + imported
+interface keep the nullish-strip, imported alias annotation keeps the real
+TS2322, own-file TS2315 keeps firing); `--listAll` byte-identical on compiler
+AND services (46/46 env-legit diagnostics); bench row 28,004 ms self, +0.1%
+(dead in band), same top codes. NEXT:
+(iv) leg 2 — `getTypeFromBaseTypeExpression`'s Identifier fallback + the tiny
+value tail (emitTs2345ForBareTpArgToConstrainedTpParam,
+getOverloadImplementationRelated, calleeReturnAnnotationForImplicitAny), then
+the instrumented re-measure that unlocks INV.3(d).
+
 **Round 507c (2026-07-13, same session as 507/507b) — INV.3(c)(iv) first cut
 ATTEMPTED and REVERTED (unpinnable, not regressing): the
 `typeNodeDefinitelyNonNullish` fallbacks alone have NO observable.** The flip
@@ -407,56 +454,6 @@ corpus-style names defeat directory-relative specifier resolution. Suite
 green 10,260 → 10,266 (+6); the primitive is unconsumed by any checker path
 (behavior provably unchanged; listAll spot-check clean). NEXT: INV.3(b)(ii)
 — the pilot consumer at the (a)-measured lowest-risk site.
-
-**Round 500 (2026-07-13) — INV.3 DECOMPOSED into (a)–(d) + INV.3(a) LANDED:
-the conflation-dependency instrumentation and its first measurement.**
-Decomposition facts verified in-code before writing the sub-items: the queue's
-"buildPerFileScopes never consumed" was STALE — `perFileScope` is consumed at
-4 sites (the 17.32b–e flips); the honest migration surface is the ~400 keyed
-`globals` consults (373 `globals[` + 22 `in globals` + 8 explicit), and import
-aliases free-ride on the conflation because the general `resolveAlias` cannot
-follow ESM-`.js`/`export *` barrels/NamespaceImports (the flow-only resolvers
-can; the general fallback measured a TS2315×466 flood at round 409 — (b) must
-unify them into a primitive consumed only by per-file lookup). **The (a)
-mechanism:** `globals` is constructed as `InstrumentedSymbolTable` (get/
-containsKey report to an installable hook; LinkedHashMap backing preserved so
-iteration order is byte-identical; interface delegation does not forward
-equals/hashCode — identity semantics, documented) ONLY when `--passTiming` is
-on at construction; `installGlobalsLookupClassifier` (init step 1b2, after the
-globals membership settles) classifies each lookup against the per-file model:
-TRUE_GLOBAL (no module file declares the name) / SHARED (module + lib/script/
-augmentation — presence legit, symbol polluted: the chimera dimension) /
-OWN_LOCAL (pure module name, current file's own local via `currentFileLocals`)
-/ CONFLATED (pure module name, definitely foreign — the worklist proper) /
-UNSCOPED (no file context at the site — also an INV.4 datum) / MISS, with
-per-name + per-pass tables for conflated/unscoped in the dump.
-**The measurement (compiler profile, 78 files): total 2,711,601 keyed lookups —
-miss 1,937,514 (71%!), ownLocal 530,127, CONFLATED 157,060, unscoped 71,820,
-trueGlobal 12,148, shared 2,932. Services profile (252 files): total 4,918,242
-— miss 3,881,879 (79%), ownLocal 702,793, CONFLATED 216,888 (845 names),
-unscoped 97,116, shared 3,989.** Reading: (1) the merged map is probed as a
-maybe-fallback everywhere — 71–79% of consults find nothing; (2) conflated
-traffic is REMARKABLY concentrated: 608/845 names — the top names are all
-compiler/types.ts type names (JSDocFunctionType 21.5k, FunctionTypeNode 17.9k,
-ConstructorTypeNode 17.8k, factory 12.1k, MappedTypeNode 7.6k …) reached
-through `_namespaces/ts.ts` barrel imports, i.e. TYPE-space alias free-riding
-— services adds VALUE-space leaks (`parent` 4.5k, `error` 4.1k — the round-442
-`moduleFileLocalVarNames` family) — and 14–15 passes, of which
-checkPropertyAccess (66.5k/92.0k) + checkCallExpressionTypes (55.0k/73.0k) +
-checkTypeAssignability (28.9k/41.5k) carry 95–96% and are exactly INV.0's
-top-3 wall-time passes (4.05 s / 1.99 s / 2.31 s of the 22.1 s init); (3)
-ownLocal (the majority of legitimate hits) flips to per-file scope trivially;
-(4) unscoped concentrates in checkUnresolvedNames (25.7k) + outside-dispatch
-(13.4k); (5) SHARED is tiny even on services (4.0k) — the chimera ecology's
-cost is per-lookup bail CHECKS on hot paths, not hit volume. Verification: suite green 10,255 → 10,260 (+5 Inv3GlobalsLookupTest —
-on/off diagnostic parity over a module-leak + shared-name + script-global
-probe, the class-accounting invariant total == Σclasses, leak-name presence in
-the worklist tables, InstrumentedSymbolTable hook/delegation/order contracts,
-dump gating); `--listAll` byte-identical BEFORE vs AFTER (off-mode, compiler
-profile); bench row in band. Also fixed en route: the stale INV.3 queue claim,
-and a grep trap recorded in CLAUDE.md (Checker.kt trips grep's binary
-heuristic — source greps need `-a` too; it silently produced the stale claim).
-NEXT: INV.3(b) — the per-file resolution primitive.
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
@@ -819,30 +816,43 @@ interrupt the arc).
       tail sites (emitTs2345ForBareTpArgToConstrainedTpParam,
       getOverloadImplementationRelated, calleeReturnAnnotationForImplicitAny
       — fold into (iv)'s re-measure).
-    - (iv) **Flip the type-position tail** (typeRef.resolve.ident ~1.9k,
-      typeNodeDefinitelyNonNullish's two fallbacks ~2.7k,
-      getTypeFromBaseTypeExpression ← resolveBaseTypesLazy ~440, + the tiny
-      value tail folded in from (iii): emitTs2345ForBareTpArgToConstrainedTpParam,
-      getOverloadImplementationRelated, calleeReturnAnnotationForImplicitAny)
-      and re-run the instrumented measurement; conflated-by-pass should
-      approach zero, unlocking INV.3(d). ORDER CONSTRAINT measured round 507c
-      (attempted typeNodeDefinitelyNonNullish alone, REVERTED unpinnable):
-      its leak is FULLY SHADOWED by the general-resolution leak — for any
-      constructible shape, `resolvedCallReturnTypeForFlow`'s assignment-reset
-      arm resolves the same annotation through `getTypeFromTypeNode` →
-      `resolveTypeNameToSymbol`'s still-legacy globals fallback and strips
-      nullish anyway, so the classifier flip has NO observable and cannot
-      carry a leak-kill test. Flip `resolveTypeNameToSymbol`'s Identifier
-      fallback FIRST (or jointly in one commit) — that is also the
-      highest-risk site (general type resolution: nodeTypes caching,
-      first-touch poisoning, the round-473/474 conflation ecology sits on
-      it), so it needs the full battery + fresh context. The
-      typeNodeDefinitelyNonNullish observable once joint: an UNIMPORTED
-      foreign alias return-annotation (`x = get2(); return x;` vs
-      `string | undefined` declared) stops stripping nullish → the return
-      TS2322 fires; preservation controls: imported alias / own-file alias /
-      imported interface (all `none {2322}` — verified passing on the
-      reverted attempt's fixtures).
+    - (iv) **Flip the type-position tail**. Leg 1 DONE round 508 (2026-07-13):
+      `resolveTypeNameToSymbol`'s Identifier branch + `typeNodeDefinitelyNonNullish`'s
+      two fallbacks flipped JOINTLY per the round-507c order constraint, with
+      the two call-site trailing `?: globals[name]` fallbacks
+      (`getTypeFromTypeReference`, `checkConstraintsInTypeNode`'s TS2315
+      emitter) gated to QualifiedName — for Identifier names they were
+      byte-redundant pre-flip and would silently RE-LEAK the node-keyed null
+      post-flip (the trap now in the CLAUDE.md INV.3(c) entry). The full
+      suite caught a REAL visibility gap the flip exposed:
+      `lookupPerFileForNode` now grants a node inside a `declare module
+      "<relative-spec>"` AUGMENTATION block the augmented module's direct
+      named exports (the round-443 rule; the innermost string-named
+      ModuleDeclaration is captured during the parent walk, unclassified
+      under --passTiming) — without it the flip nulled `UnionType` inside
+      services-style `declare module "./types.js"` blocks and this-predicate
+      narrowing died (ThisPredicateNarrowingTest's augmentation pin).
+      Test-design lesson: the ADDITIVE leak-kill direction is SHADOWED by
+      any-degradation (an unresolvable callee annotation degrades the
+      assigned reference to `any` — proven with a never-declared `Zorp`
+      control — masking the TS18048/TS2322 consumers), so the flow
+      observable uses the SUPPRESSION direction: a foreign UNIMPORTED
+      NULLABLE alias return-annotation pre-flip types the reference as the
+      leaked union and manufactures TS18048 on a closure-captured read;
+      post-flip it degrades to any and the leaked TS18048 dies (tsc-faithful).
+      Suite +9 (Inv3TypePositionNodeKeyTest — 3 leak-kills FAIL pre-flip via
+      stash: the flow TS18048, annotation-position TS2322, TS2315; 6
+      preservation controls pass both sides); `--listAll` byte-identical on
+      compiler AND services. REMAINING leg 2: getTypeFromBaseTypeExpression's
+      Identifier fallback (~440; keep the PropertyAccess last-segment
+      fallback legacy — it mirrors getTypeFromTypeReference's QualifiedName
+      convention) + the tiny value tail
+      (emitTs2345ForBareTpArgToConstrainedTpParam,
+      getOverloadImplementationRelated — node-key by the DECL's own name
+      Identifier, killing the nested-fn foreign-impl-pointer case,
+      calleeReturnAnnotationForImplicitAny), then re-run the instrumented
+      measurement; conflated-by-pass should approach zero, unlocking
+      INV.3(d).
   - [ ] **INV.3(d) Retire the merge + delete the ecology.** Stop merging
     module-file locals into `globals`; delete `moduleFileLocalVarNames`,
     `conflatedTypeAliasFiles`, `conflatedInterfaceFiles`,
