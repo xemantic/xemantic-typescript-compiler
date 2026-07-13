@@ -22831,7 +22831,12 @@ class Checker(
         if (name.isEmpty()) return true
         if (name == "this" || name == "super") return true
         if (name in KEYWORD_IDENTIFIERS) return true
-        if (globals.containsKey(name)) return true
+        // INV.3(c)(iii) round 507: per-file-keyed — a foreign module file's leaked
+        // local must not make an unresolvable callee look resolvable (real tsc sees
+        // TS2304 there, and an unresolved callee provides NO contextual signature,
+        // so TS7006 legitimately fires). A lexically-visible callee still resolves
+        // through the scope checks below.
+        if (lookupPerFileForNode(callee, name) != null) return true
         if (currentFileLocals?.containsKey(name) == true) return true
         if (name in KNOWN_GLOBALS) return true
         // M3.2 (round 431): a param/body-local of an enclosing function-like resolves
@@ -92586,7 +92591,11 @@ interface DataView {
         // returns anyType (Module-flagged symbols have no Type representation),
         // which would short-circuit the existing Type.Object path.
         val nsBaseSymbol: Symbol? = when (val baseExpr = target.expression) {
-            is Identifier -> currentFileLocals?.get(baseExpr.text) ?: globals[baseExpr.text]
+            // INV.3(c)(iii) round 507: node-keyed fallback — a write through a
+            // namespace the file never imports must not resolve a foreign module
+            // file's leaked local (tsc: TS2304 territory).
+            is Identifier -> currentFileLocals?.get(baseExpr.text)
+                ?: lookupPerFileForNode(baseExpr, baseExpr.text)
             is PropertyAccessExpression -> resolvePropertyAccessToSymbol(baseExpr)
             else -> null
         }
@@ -99475,7 +99484,15 @@ interface DataView {
         }
         val decl: Node? = when (callee) {
             is Identifier -> {
-                val symbol = currentFileLocals?.get(callee.text) ?: globals[callee.text]
+                // INV.3(c)(iii) round 507: node-keyed fallback — a callee name with no
+                // per-file meaning must not resolve a foreign module file's leaked
+                // local (tsc: TS2304, no narrowing). A nested/own-file guard still
+                // resolves through the uniqueFunctionDeclByName fallback below (the
+                // nested-fn map is deliberately program-wide per B83.5), and the
+                // round-471 per-file predicate selection is preserved via
+                // currentFileNestedPredicateDecl for ambiguous clusters.
+                val symbol = currentFileLocals?.get(callee.text)
+                    ?: lookupPerFileForNode(callee, callee.text)
                 val direct = symbol?.let { it.valueDeclaration ?: it.declarations.firstOrNull() }
                 // M3.4 (round 409): an IMPORTED guard/assert (`import { isDefined }
                 // from "./_namespaces/ts.js"`) resolves to its ImportSpecifier, not a
@@ -99510,20 +99527,16 @@ interface DataView {
                 else {
                     val globalsHitNonGuard = currentFileLocals?.get(callee.text) == null &&
                         direct is FunctionDeclaration && direct.type !is TypePredicate
-                    if (direct == null) uniqueFunctionDeclByName(callee.text)
-                    else if (globalsHitNonGuard) {
-                        // The unique predicate-bearing nested decl in the CURRENT file
-                        // (from the full cluster — the program-wide unique winner is
-                        // null when several files nest same-named guards). Files come
-                        // from the cluster-order-aligned nestedFnClusterFiles list.
-                        val cluster = nestedFunctionClusterByName(callee.text)
-                        val files = nestedFnClusterFiles[callee.text]
-                        cluster?.withIndex()
-                            ?.filter { (i, d) ->
-                                d.type is TypePredicate &&
-                                    files?.getOrNull(i) == currentCheckFileName
-                            }
-                            ?.singleOrNull()?.value ?: direct
+                    if (direct == null) {
+                        // Round 507: when the per-file consult nulled a conflated name,
+                        // the round-471 per-file predicate selection still applies — an
+                        // own-file nested guard must keep narrowing even when several
+                        // files nest same-named guards (the program-wide unique winner
+                        // is null there).
+                        uniqueFunctionDeclByName(callee.text)
+                            ?: currentFileNestedPredicateDecl(callee.text)
+                    } else if (globalsHitNonGuard) {
+                        currentFileNestedPredicateDecl(callee.text) ?: direct
                     } else direct
                 }
             }
@@ -99533,6 +99546,20 @@ interface DataView {
         }
         if (useCache) narrowWalkDeclCache[key] = decl
         return decl
+    }
+
+    /** Round 471 (extracted round 507): the unique predicate-bearing nested decl in
+     *  the CURRENT file (from the full same-name cluster — the program-wide unique
+     *  winner is null when several files nest same-named guards). Files come from
+     *  the cluster-order-aligned nestedFnClusterFiles list. */
+    private fun currentFileNestedPredicateDecl(name: String): FunctionDeclaration? {
+        val cluster = nestedFunctionClusterByName(name)
+        val files = nestedFnClusterFiles[name]
+        return cluster?.withIndex()
+            ?.filter { (i, d) ->
+                d.type is TypePredicate && files?.getOrNull(i) == currentCheckFileName
+            }
+            ?.singleOrNull()?.value
     }
 
     /** M1.12 (round 418): resolve a callee NAME to the UNIQUE FunctionDeclaration anywhere
@@ -99942,7 +99969,11 @@ interface DataView {
      */
     private fun resolveNamespaceMemberFnDecl(callee: PropertyAccessExpression): Node? {
         val recvIdent = callee.expression as? Identifier ?: return null
-        val recvSym = currentFileLocals?.get(recvIdent.text) ?: globals[recvIdent.text] ?: return null
+        // INV.3(c)(iii) round 507: node-keyed fallback — a namespace receiver the
+        // file never imports must not resolve a foreign module file's leaked local
+        // (tsc: TS2304, no member resolution / narrowing).
+        val recvSym = currentFileLocals?.get(recvIdent.text)
+            ?: lookupPerFileForNode(recvIdent, recvIdent.text) ?: return null
         // Round 477: an `import * as ns from "spec"` receiver (tsc harness's
         // `import * as ts from "./_namespaces/ts.js"` calling
         // `ts.isDocumentRegistryEntry(entry)`) — resolveAlias never resolves a
@@ -105849,7 +105880,11 @@ interface DataView {
         // Fallback: try namespace/module lookup for property access
         val objExpr = expr.expression
         val nsSymbol = when (objExpr) {
-            is Identifier -> currentFileLocals?.get(objExpr.text) ?: globals[objExpr.text]
+            // INV.3(c)(iii) round 507: node-keyed fallback — a receiver name with no
+            // per-file meaning must not type members through a foreign module file's
+            // leaked namespace (tsc: TS2304 → any).
+            is Identifier -> currentFileLocals?.get(objExpr.text)
+                ?: lookupPerFileForNode(objExpr, objExpr.text)
             is PropertyAccessExpression -> {
                 // Chained access: resolve the intermediate namespace symbol
                 resolvePropertyAccessToSymbol(objExpr)
@@ -105864,10 +105899,12 @@ interface DataView {
         return anyType
     }
 
-    /** Resolve a property access expression to its symbol (for namespace chaining). */
+    /** Resolve a property access expression to its symbol (for namespace chaining).
+     *  INV.3(c)(iii) round 507: the root Identifier consult is node-keyed. */
     private fun resolvePropertyAccessToSymbol(expr: PropertyAccessExpression): Symbol? {
         val baseSymbol = when (val base = expr.expression) {
-            is Identifier -> currentFileLocals?.get(base.text) ?: globals[base.text]
+            is Identifier -> currentFileLocals?.get(base.text)
+                ?: lookupPerFileForNode(base, base.text)
             is PropertyAccessExpression -> resolvePropertyAccessToSymbol(base)
             else -> null
         }
@@ -105891,7 +105928,11 @@ interface DataView {
         var cur: Expression = expr
         while (cur is PropertyAccessExpression) cur = cur.expression
         val root = cur as? Identifier ?: return true
-        val sym = currentFileLocals?.get(root.text) ?: globals[root.text] ?: return true
+        // INV.3(c)(iii) round 507: node-keyed fallback — a leaked foreign local must
+        // not make an unresolvable root look like a plain-variable chain; it bails
+        // (return true) exactly like an unleaked unresolvable root.
+        val sym = currentFileLocals?.get(root.text)
+            ?: lookupPerFileForNode(root, root.text) ?: return true
         return sym.flags.hasAny(
             SymbolFlags.Module or SymbolFlags.NamespaceModule or SymbolFlags.ValueModule or SymbolFlags.Alias
         )
@@ -120558,7 +120599,11 @@ interface DataView {
             return false
         }
 
-        val identSymbol = globals[identName] ?: return false
+        // INV.3(c)(iii) round 507: node-keyed — a receiver name with no per-file
+        // meaning must not resolve through a foreign module file's leaked local
+        // (a private-access verdict about an invisible class/var is always bogus;
+        // real tsc sees TS2304 there).
+        val identSymbol = lookupPerFileForNode(expr.expression, identName) ?: return false
 
         if (identSymbol.flags.hasAny(SymbolFlags.Class)) {
             // Static access: C.prop — check static private members
@@ -122872,7 +122917,10 @@ interface DataView {
         // Suppress the FP TS2339 here. Corpus-unique (only `Promise` shadows a lib global as
         // a clodule); gated on the lib-merge pollution (a user-only clodule is unaffected).
         if (objectExpr is Identifier && !isThisAccess) {
-            val sym = globals[objectExpr.text]
+            // INV.3(c)(iii) round 507: node-keyed (a conflated name can never pass
+            // the lib-decl gate below — lib-visible names classify SHARED — so this
+            // is byte-identical by construction; keyed for uniformity).
+            val sym = lookupPerFileForNode(objectExpr, objectExpr.text)
             if (sym != null) {
                 val decls = sym.declarations
                 if (decls.any { it is ClassDeclaration && it !in builtinLibDecls } &&
@@ -122890,7 +122938,11 @@ interface DataView {
         // the member, or an inferred-empty type we resolve imprecisely, does NOT fire).
         if (objectExpr is Identifier && !isThisAccess &&
             propName !in OBJECT_PROTOTYPE_PROPERTIES) {
-            val recvSym = currentFileLocals?.get(objectExpr.text) ?: globals[objectExpr.text]
+            // INV.3(c)(iii) round 507: node-keyed fallback — a foreign module file's
+            // leaked `{}`/`Object`-annotated var must not supply the annotation for a
+            // receiver the checking file never imports.
+            val recvSym = currentFileLocals?.get(objectExpr.text)
+                ?: lookupPerFileForNode(objectExpr, objectExpr.text)
             val ann = recvSym?.declarations?.filterIsInstance<VariableDeclaration>()?.firstOrNull()?.type
             val emptyObjOrObjectDisplay: String? = when {
                 ann is TypeLiteral && ann.members.isEmpty() -> "{}"
@@ -129979,7 +130031,10 @@ interface DataView {
                         importEqualsNamespaceMemberCalleeType(expr.text, symbol)?.let { return it }
                     }
                 }
-                val symbol = globals[expr.text] ?: return anyType
+                // INV.3(c)(iii) round 507: node-keyed — a callee with no per-file
+                // meaning must not check args against a foreign module file's leaked
+                // signature (tsc: TS2304 → any; suppression-only).
+                val symbol = lookupPerFileForNode(expr, expr.text) ?: return anyType
                 getTypeOfSymbol(symbol)
             }
             is PropertyAccessExpression -> getTypeOfPropertyAccess(expr)
@@ -130014,11 +130069,13 @@ interface DataView {
                     else -> null
                 }
             }
-            // No own constructor — walk to base class
+            // No own constructor — walk to base class. INV.3(c)(iii) round 507:
+            // node-keyed (the ctor-visibility verdict must not come from a foreign
+            // module file's leaked base class).
             val extendsClause = classDecl.heritageClauses?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
             val baseExpr = extendsClause?.types?.firstOrNull()?.expression
             val baseIdent = baseExpr as? Identifier ?: return null
-            currentSym = globals[baseIdent.text]
+            currentSym = lookupPerFileForNode(baseIdent, baseIdent.text)
         }
         return null
     }
@@ -130037,7 +130094,8 @@ interface DataView {
             val extendsClause = classDecl.heritageClauses?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
             val baseExpr = extendsClause?.types?.firstOrNull()?.expression
             val baseIdent = baseExpr as? Identifier ?: return false
-            current = globals[baseIdent.text]
+            // INV.3(c)(iii) round 507: node-keyed (see findEffectiveConstructorVisibility).
+            current = lookupPerFileForNode(baseIdent, baseIdent.text)
         }
         return false
     }
