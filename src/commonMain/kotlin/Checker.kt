@@ -22795,7 +22795,13 @@ class Checker(
     private fun calleeReturnAnnotationForImplicitAny(init: Expression?): TypeNode? {
         val call = init as? CallExpression ?: return null
         val callee = call.expression as? Identifier ?: return null
-        val sym = currentFileLocals?.get(callee.text) ?: globals[callee.text]
+        // INV.3(c)(iv) leg 2: node-keyed fallback — an unimported foreign
+        // callee's annotation must not type the local (the
+        // uniqueFunctionDeclByName fallback below still covers program-wide
+        // UNIQUE names, so only ambiguous foreign names change: they now
+        // yield no annotation instead of the merged list's first pick).
+        val sym = currentFileLocals?.get(callee.text)
+            ?: lookupPerFileForNode(callee, callee.text)
         val fd = (sym?.declarations?.firstOrNull { it is FunctionDeclaration } as? FunctionDeclaration)
             ?: uniqueFunctionDeclByName(callee.text)
             ?: return null
@@ -71975,7 +71981,11 @@ interface DataView {
         source: String, fileName: String,
     ) {
         val callee = expr.expression as? Identifier ?: return
-        val sym = currentFileLocals?.get(callee.text) ?: globals[callee.text] ?: return
+        // INV.3(c)(iv) leg 2: node-keyed fallback — a TS2345/TS2208 verdict
+        // about an UNIMPORTED foreign callee's constraint is always bogus
+        // (real tsc: TS2304 territory).
+        val sym = currentFileLocals?.get(callee.text)
+            ?: lookupPerFileForNode(callee, callee.text) ?: return
         val fnDecl = sym.declarations.firstOrNull() as? FunctionDeclaration ?: return
         val fnTps = fnDecl.typeParameters ?: return
         if (fnTps.isEmpty()) return
@@ -94519,7 +94529,16 @@ interface DataView {
             // `lookupInstanceMemberInResolvableChain` is likewise made namespace-aware so a
             // now-resolvable base does not push the class into the conservative "has base types"
             // skip and swallow a genuinely-missing-member TS2339 (genericRecursiveImplicitConstructorErrors3).
-            is Identifier -> lookupTypeSymbolInInferenceNamespace(baseExpr.text) ?: globals[baseExpr.text]
+            // INV.3(c)(iv) leg 2: the merged-globals fallback keys by the base
+            // NAME node's owning file — a heritage base with no per-file
+            // meaning must not resolve to a foreign module file's leaked class
+            // (it would graft foreign members / manufacture TS2416 about an
+            // invisible base; real tsc sees TS2304 there). The
+            // PropertyAccessExpression arm below keeps its legacy last-segment
+            // fallback (the QualifiedName convention from
+            // getTypeFromTypeReference).
+            is Identifier -> lookupTypeSymbolInInferenceNamespace(baseExpr.text)
+                ?: lookupPerFileForNode(baseExpr, baseExpr.text)
             // A namespace-qualified base `NS.Base` (`RefactorContext extends
             // textChanges.TextChangesContext`, where `NS` is a namespace-IMPORT alias to
             // another module). `resolveHeritageBaseSymbol` resolves it via the alias's
@@ -128304,8 +128323,15 @@ interface DataView {
         val overloadDecl = sig.declaration ?: return null
         // For functions, look up the symbol by name
         if (overloadDecl is FunctionDeclaration) {
-            val name = overloadDecl.name?.text ?: return null
-            val symbol = globals[name] ?: currentFileLocals?.get(name) ?: return null
+            val nameNode = overloadDecl.name ?: return null
+            val name = nameNode.text
+            // INV.3(c)(iv) leg 2: key by the overload DECL's own name node —
+            // a top-level decl's file always declares the name (same merged
+            // instance, byte-identical); a nested (B83.5-unbound) or foreign
+            // collision no longer hands TS2793 a wrong-file impl pointer from
+            // the merged declarations list.
+            val symbol = lookupPerFileForNode(nameNode, name)
+                ?: currentFileLocals?.get(name) ?: return null
             return getImplRelatedFromDecls(symbol.declarations, source, fileName)
         }
         // For methods, find the containing class and search for sibling methods with same name
