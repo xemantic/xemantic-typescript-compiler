@@ -1333,6 +1333,12 @@ class Checker(
      *  `init` per the init-order trap. */
     private val importedNamespaceSymCache = HashMap<Int, Symbol?>()
 
+    /** INV.3(b): memo for [resolveImportedSymbolGeneral] (alias symbol id → target
+     *  Symbol, or null) — the kind-AGNOSTIC sibling of [importedGuardDeclCache] /
+     *  [importedNamespaceSymCache], serving [lookupPerFile]. Declared before `init`
+     *  per the init-order trap. */
+    private val importedSymbolGeneralCache = HashMap<Int, Symbol?>()
+
     /** Round 474 (Blocker #3): memo for [importedCalleeFunctionType], keyed
      *  `"file|name"` (null = no collision / unresolvable — keep the globals path).
      *  Declared before `init` per the init-order trap. */
@@ -5972,6 +5978,42 @@ class Checker(
             }
             PassTiming.noteGlobalsLookup(cls, name)
         }
+    }
+
+    /**
+     * INV.3(b): THE per-file resolution primitive — the lookup an INV.3(c) family
+     * flip substitutes for a conflated `globals[name]` consult. Resolution:
+     * [perFileScope]'s table for [fileName] (own top-level locals shadowing
+     * script-file globals shadowing lib — built by [buildPerFileScopes]), with an
+     * own-local IMPORT alias resolved onward through [resolveImportedSymbolGeneral]
+     * to the target module's symbol — the ESM-`.js`/`export *`-barrel following the
+     * merged `globals` used to provide for free (the round-500 measurement: the
+     * conflated traffic is almost entirely barrel-imported `types.ts` names).
+     *
+     * Returns:
+     *  - the resolved target symbol for an ImportSpecifier-declared alias local
+     *    (for a name the file imports, this is the SAME symbol instance the
+     *    conflated `globals` consult returned — which is what makes (c) flips
+     *    byte-identical for imported names);
+     *  - the alias symbol ITSELF when the import cannot be resolved (missing
+     *    module / unsupported alias kind: default imports, `import * as ns`,
+     *    `import =` — extend when a (c) flip needs them) — callers keep their
+     *    existing alias handling;
+     *  - the plain symbol for non-alias names (own declaration / script-file
+     *    global / lib);
+     *  - null when the name has NO per-file meaning — exactly the case where the
+     *    conflated lookup would have leaked a foreign module file's local.
+     *
+     * `internal` for direct construction tests (Inv3PerFileLookupTest); unconsumed
+     * by checker paths until INV.3(c).
+     */
+    internal fun lookupPerFile(fileName: String, name: String): Symbol? {
+        val scope = perFileScope[fileName] ?: return null
+        val sym = scope[name] ?: return null
+        if (sym.flags.hasAny(SymbolFlags.Alias) && sym.declarations.any { it is ImportSpecifier }) {
+            resolveImportedSymbolGeneral(sym)?.let { return it }
+        }
+        return sym
     }
 
     /**
@@ -99894,6 +99936,66 @@ interface DataView {
         }
         return null
     }
+
+    /**
+     * INV.3(b): the kind-AGNOSTIC generalization of the flow-only import-resolver
+     * skeleton ([resolveImportedFunctionLikeDecl] / [resolveImportedNamespaceSymbol] /
+     * [resolveImportedEnumSymbol]): an ImportSpecifier-declared alias resolves to the
+     * target module's exported SYMBOL whatever its kind, following ESM `.js`
+     * specifiers (which the general [resolveModuleSpecifier] deliberately won't
+     * strip) and `export *` barrels ([resolveExportedSymbolThroughStars]), hopping
+     * re-import/re-export aliases ([visited]-guarded).
+     *
+     * ADDITIVE: the three kind-specific legacy variants stay untouched — their
+     * per-declaration kind-filter-then-continue semantics differ subtly from
+     * first-resolved-symbol (a multi-declaration alias whose first decl resolves to
+     * the "wrong" kind), so delegating them here would not be behavior-preserving.
+     * They become deletion candidates when their consumers migrate to the per-file
+     * primitive (INV.3(c)/(d)). Like them, this must NEVER be wired into the general
+     * [resolveAlias] (the round-409 TS2315-flood gotcha) — its only consumer is
+     * [lookupPerFile].
+     */
+    private fun resolveImportedSymbolGeneral(aliasSymbol: Symbol, visited: MutableSet<Int> = mutableSetOf()): Symbol? {
+        val topLevel = visited.isEmpty()
+        if (topLevel && importedSymbolGeneralCache.containsKey(aliasSymbol.id)) {
+            return importedSymbolGeneralCache[aliasSymbol.id]
+        }
+        val result = computeImportedSymbolGeneral(aliasSymbol, visited)
+        if (topLevel) importedSymbolGeneralCache[aliasSymbol.id] = result
+        return result
+    }
+
+    private fun computeImportedSymbolGeneral(aliasSymbol: Symbol, visited: MutableSet<Int>): Symbol? {
+        if (!visited.add(aliasSymbol.id)) return null
+        for (decl in aliasSymbol.declarations) {
+            if (decl !is ImportSpecifier) continue
+            val originalName = decl.propertyName?.text ?: decl.name.text
+            val (contextFile, importDecl) = findEnclosingImport(decl) ?: continue
+            val spec = (importDecl.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+            val targetFile = resolveModuleSpecifier(spec, importDecl)
+                ?: resolveAliasJsModuleSpecifier(spec, contextFile)
+                ?: continue
+            val tr = fileResults[targetFile] ?: continue
+            val sym = tr.locals[originalName]
+                ?: resolveExportedSymbolThroughStars(tr.sourceFile, originalName)
+                ?: continue
+            // [mergeSymbolTable] pollutes same-named symbols' FLAGS (and
+            // declarations) across files — an Alias flag alone cannot identify
+            // an import alias (the isValueExport gotcha: scan declarations,
+            // never flags). A symbol with any non-import-binding declaration
+            // IS the resolution target.
+            if (sym.declarations.isEmpty() || sym.declarations.any { !isImportBindingDecl(it) }) return sym
+            // A pure import-binding alias — a re-import + re-export hop.
+            computeImportedSymbolGeneral(sym, visited)?.let { return it }
+        }
+        return null
+    }
+
+    /** INV.3(b): declaration kinds a pure import-alias binding carries — the
+     *  binder declares a named import with the ImportSpecifier, and default /
+     *  namespace imports with the enclosing ImportDeclaration node. */
+    private fun isImportBindingDecl(decl: Node): Boolean =
+        decl is ImportSpecifier || decl is ImportDeclaration || decl is ImportEqualsDeclaration
 
     /**
      * M3.4 (round 409): FLOW-ONLY resolution of an imported guard/assert alias
