@@ -1258,6 +1258,20 @@ class Checker(
     private var moduleOnlyGlobalNames: Set<String> = emptySet()
 
     /**
+     * INV.3(d): names with a legitimate NON-module global meaning at merge
+     * time — the step-0 lib key set plus every script-file local name. A
+     * module-file local colliding with one of these is the SHARED class of
+     * the INV.3(a) taxonomy: it KEEPS merging into [globals] in this leg
+     * (retiring SHARED merges — e.g. compiler/types.ts's `interface Symbol`
+     * riding the lib `Symbol` — needs per-file resolution at every lib-name
+     * consumer first; measured 861 FPs when retired naively, round 510).
+     * Computed at init step 0e, before the step-1 merge; consumed by
+     * [moduleLocalContributesGlobally]. Declared before `init` (the Kotlin
+     * init-order gotcha).
+     */
+    private var mergeSharedKeepNames: Set<String> = emptySet()
+
+    /**
      * 17.33: UMD global names registered via `export as namespace X;` in
      * .d.ts files. Used to upgrade TS2304 → TS2686 when an identifier
      * resolution fails AND the name is a UMD global AND the current file
@@ -1354,6 +1368,11 @@ class Checker(
      *  [importedNamespaceSymCache], serving [lookupPerFile]. Declared before `init`
      *  per the init-order trap. */
     private val importedSymbolGeneralCache = HashMap<Int, Symbol?>()
+
+    /** INV.3(d): memo for [typeSideImportFallback] — the import-shadowed-by-
+     *  value-local TYPE-space recovery. Keyed `fileName|name`; stored null =
+     *  no shadowed type import. Declared before `init`. */
+    private val typeSideImportFallbackCache = HashMap<String, Symbol?>()
 
     /** Round 474 (Blocker #3): memo for [importedCalleeFunctionType], keyed
      *  `"file|name"` (null = no collision / unresolvable — keep the globals path).
@@ -1745,9 +1764,46 @@ class Checker(
                 globalReadonlyArrayType = roType
             }
         }
-        // 1. Merge file-level symbols into globals
+        // 0d. 17.33: collect UMD globals from `export as namespace X;` in .d.ts
+        // files + module-file set for TS2304 → TS2686 upgrade. Runs BEFORE the
+        // step-1 merge since INV.3(d): [umdGlobalNames] feeds the merge's
+        // keep-predicate ([moduleLocalContributesGlobally]) — the misparsed
+        // `export as namespace X` namespace must keep merging globally.
+        collectUmdGlobalsAndModuleFiles()
+        // 0e. INV.3(d): names with a legitimate NON-module global meaning — lib
+        // globals (= the step-0 merge's key set) + script-file locals. A module
+        // local colliding with one of these is the SHARED class: its merge is
+        // what carries e.g. compiler/types.ts's `interface Symbol` members to
+        // importers whose barrel aliases the general resolver cannot follow —
+        // retiring SHARED names is a LATER leg (needs per-file resolution at
+        // every lib-name consumer). Only MODULE-ONLY names retire in this leg.
+        mergeSharedKeepNames = HashSet<String>(globals.keys).also { keep ->
+            for (result in binderResults) {
+                if (!isModuleFile(result.sourceFile.statements)) keep.addAll(result.locals.keys)
+            }
+        }
+        // 1. Merge file-level symbols into globals — INV.3(d): a MODULE file's
+        // MODULE-ONLY top-level locals (no lib/script/global-contribution
+        // meaning) are module-scoped in real tsc and no longer merge (the
+        // Blocker-#3 conflation, retired; per-file resolution via
+        // [globalsForFile]/[lookupPerFile] serves them). Still merging from
+        // module files: SHARED names (see 0e) and the deliberately-GLOBAL
+        // contributions — the `declare global` namespace, ambient
+        // `declare module "X"` symbols (definitions AND augmentation carriers —
+        // [mergeModuleAugmentations] resolves `globals[specifier]`), and the
+        // misparsed `export as namespace X` UMD namespace. Script files (incl.
+        // ambient .d.ts without module syntax) keep the full merge — their
+        // locals ARE the global namespace.
         for (result in binderResults) {
-            mergeSymbolTable(globals, result.locals)
+            if (isModuleFile(result.sourceFile.statements)) {
+                for ((name, symbol) in result.locals) {
+                    if (moduleLocalContributesGlobally(name, symbol)) {
+                        mergeSingleSymbol(globals, name, symbol)
+                    }
+                }
+            } else {
+                mergeSymbolTable(globals, result.locals)
+            }
         }
         // 1a2 (round 442, Blocker #3): compute the module-file-local-variable name set
         // (see [moduleFileLocalVarNames]). A name qualifies only if it is a top-level
@@ -1885,9 +1941,7 @@ class Checker(
         // 1c. 17.32a: build per-file scope tables (NOT YET CONSUMED — pure infra
         // foundation for future Blocker #3 substeps).
         buildPerFileScopes()
-        // 1d. 17.33: collect UMD globals from `export as namespace X;` in .d.ts
-        // files + module-file set for TS2304 → TS2686 upgrade.
-        collectUmdGlobalsAndModuleFiles()
+        // (1d moved to 0d — before the step-1 merge — for the INV.3(d) keep-predicate.)
         // 2. Compute all enum member values
         computeAllEnumValues()
         // 3. Track import references across all files
@@ -4602,23 +4656,50 @@ class Checker(
 
     private fun mergeSymbolTable(target: SymbolTable, source: SymbolTable) {
         for ((name, symbol) in source) {
-            val existing = target[name]
-            if (existing != null) {
-                // Merge: combine flags and declarations
-                existing.flags = existing.flags or symbol.flags
-                existing.declarations.addAll(symbol.declarations)
-                if (existing.valueDeclaration == null && symbol.valueDeclaration != null) {
-                    existing.valueDeclaration = symbol.valueDeclaration
-                }
-                // Merge enum exports
-                if (symbol.exports != null) {
-                    if (existing.exports == null) existing.exports = symbolTable()
-                    mergeSymbolTable(existing.exports!!, symbol.exports!!)
-                }
-            } else {
-                target[name] = symbol
-            }
+            mergeSingleSymbol(target, name, symbol)
         }
+    }
+
+    private fun mergeSingleSymbol(target: SymbolTable, name: String, symbol: Symbol) {
+        val existing = target[name]
+        if (existing != null) {
+            // Merge: combine flags and declarations
+            existing.flags = existing.flags or symbol.flags
+            existing.declarations.addAll(symbol.declarations)
+            if (existing.valueDeclaration == null && symbol.valueDeclaration != null) {
+                existing.valueDeclaration = symbol.valueDeclaration
+            }
+            // Merge enum exports
+            if (symbol.exports != null) {
+                if (existing.exports == null) existing.exports = symbolTable()
+                mergeSymbolTable(existing.exports!!, symbol.exports!!)
+            }
+        } else {
+            target[name] = symbol
+        }
+    }
+
+    /**
+     * INV.3(d): does a MODULE file's top-level local deliberately contribute to
+     * the GLOBAL namespace (and therefore keep merging into [globals] after the
+     * Blocker-#3 conflation retirement)? True for:
+     *  - the `declare global { … }` namespace binding (named `global` — its
+     *    exports are genuine global augmentations in tsc);
+     *  - an `export as namespace X` UMD namespace (the parser misparses the
+     *    construct into a `namespace X` ModuleDeclaration; [umdGlobalNames] is
+     *    regex-collected BEFORE the merge);
+     *  - any symbol declaring an ambient `declare module "spec"` (StringLiteral
+     *    name) — both standalone ambient-module definitions and augmentation
+     *    carriers; [mergeModuleAugmentations] resolves them via
+     *    `globals[specifier]`.
+     * Everything else is module-scoped in real tsc: visible only to the file
+     * itself and its importers, served by [lookupPerFile]/[globalsForFile].
+     */
+    private fun moduleLocalContributesGlobally(name: String, symbol: Symbol): Boolean {
+        if (name == "global") return true
+        if (name in umdGlobalNames) return true
+        if (name in mergeSharedKeepNames) return true
+        return symbol.declarations.any { it is ModuleDeclaration && it.name is StringLiteralNode }
     }
 
     /**
@@ -4633,7 +4714,10 @@ class Checker(
     private fun mergeModuleAugmentations() {
         val processedSpecifiers = mutableSetOf<String>()
         for (result in binderResults) {
-            collectModuleAugmentations(result.sourceFile.statements, processedSpecifiers, null)
+            collectModuleAugmentations(
+                result.sourceFile.statements, processedSpecifiers, null,
+                result.sourceFile.fileName,
+            )
         }
     }
 
@@ -4641,6 +4725,7 @@ class Checker(
         statements: List<Statement>,
         processedSpecifiers: MutableSet<String>,
         parentLookupScope: SymbolTable?,
+        declaringFileName: String,
     ) {
         for (stmt in statements) {
             if (stmt !is ModuleDeclaration) continue
@@ -4656,7 +4741,7 @@ class Checker(
             if (body is ModuleBlock) {
                 // Use this module's exports as the lookup scope for nested module decls inside body
                 val thisModuleExports = outerModuleSymbol?.exports
-                collectModuleAugmentations(body.statements, processedSpecifiers, thisModuleExports)
+                collectModuleAugmentations(body.statements, processedSpecifiers, thisModuleExports, declaringFileName)
             }
 
             if (!processedSpecifiers.add(specifier)) continue
@@ -4666,8 +4751,13 @@ class Checker(
             val augModule = outerModuleSymbol ?: continue
             val augExports = augModule.exports ?: continue
 
-            // Resolve the specifier to a target file
+            // Resolve the specifier to a target file. INV.3(d): an ESM-`.js` relative
+            // augmentation target (`declare module "../compiler/types.js"`) resolves
+            // via the .js-aware wrapper (the round-443 rule — the base resolver
+            // deliberately won't strip the extension), so the target-locals merge
+            // below fires for it and the exports stay module-scoped per-file.
             val targetFile = resolveModuleSpecifier(specifier, stmt)
+                ?: resolveModuleSpecifierRelativeJsAware(specifier, declaringFileName)
 
             // 17.130: TypeScript distinguishes "global augmentations" (no top-level export
             // statements inside the augmentation body — declarations implicitly merge) from
@@ -4717,8 +4807,16 @@ class Checker(
                             }
                         }
                     }
-                } else {
-                    // New export not yet in globals — add it
+                } else if (targetFile == null) {
+                    // New export not yet in globals — add it. INV.3(d): ONLY for an
+                    // AMBIENT (fileless) augmentation target — `globals` is its sole
+                    // visibility channel. A FILE-module augmentation's exports are
+                    // module-scoped: the target-locals merge below carries them
+                    // per-file; adding them here would resurrect the retired
+                    // conflation as an AUGMENTATION-ONLY stub that the 1b visibility
+                    // delta then marks non-module-only, making every annotation of
+                    // that name resolve to the stub (the services-profile
+                    // SourceFile/Node TS2339×5355 flood, round 510).
                     globals[exportName] = augSymbol
                 }
             }
@@ -5959,10 +6057,17 @@ class Checker(
         val moduleLocalNames = HashSet<String>()
         val nonModuleVisible = HashSet<String>(libGlobals.keys)
         for (result in binderResults) {
-            val into =
-                if (isModuleFile(result.sourceFile.statements)) moduleLocalNames
-                else nonModuleVisible
-            into.addAll(result.locals.keys)
+            if (isModuleFile(result.sourceFile.statements)) {
+                // INV.3(d): entries the retired merge deliberately KEEPS global
+                // (`declare global` / UMD / ambient-module carriers) classify as
+                // non-module-visible — same predicate as the step-1 merge.
+                for ((name, sym) in result.locals) {
+                    if (moduleLocalContributesGlobally(name, sym)) nonModuleVisible.add(name)
+                    else moduleLocalNames.add(name)
+                }
+            } else {
+                nonModuleVisible.addAll(result.locals.keys)
+            }
         }
         for (key in globals.keys) {
             if (key !in preAugmentationGlobalsKeys) nonModuleVisible.add(key)
@@ -6074,13 +6179,13 @@ class Checker(
      */
     internal fun globalsForFile(fileName: String, name: String): Symbol? {
         if (name in moduleOnlyGlobalNames && perFileScope.containsKey(fileName)) {
-            if (lookupPerFile(fileName, name) == null) return null
-            // Proven per-file-visible: under --passTiming consult UNCLASSIFIED so
-            // the conflated/own-local tables keep measuring only UN-migrated
-            // traffic — a node-keyed flip's legitimate foreign-node hit would
-            // otherwise classify CONFLATED against the CHECKING file's locals
-            // (INV.3(c)(ii)). Plain-map runs take the ordinary consult below.
-            (globals as? InstrumentedSymbolTable)?.let { return it.getUnclassified(name) }
+            // INV.3(d): the retired merge no longer puts module-only names into
+            // [globals] at all — the per-file resolution IS the symbol (the
+            // declaring file's own clean instance; an import alias resolves
+            // onward through [resolveImportedSymbolGeneral] inside
+            // [lookupPerFile]). Null exactly where the legacy merged consult
+            // would have LEAKED a foreign module file's local.
+            return lookupPerFile(fileName, name)
         }
         return globals[name]
     }
@@ -6144,11 +6249,10 @@ class Checker(
         val target = resolveModuleSpecifierRelativeJsAware(spec, owner.fileName) ?: return null
         val targetFile = fileResults[target]?.sourceFile ?: return null
         if (name !in moduleNamedExportsOf(targetFile)) return null
-        // Proven visible via the augmentation context: return the merged
-        // instance, unclassified under --passTiming (the (c)(ii) discipline —
-        // a legitimate hit must not pollute the conflated migration tables).
-        (globals as? InstrumentedSymbolTable)?.let { return it.getUnclassified(name) }
-        return globals[name]
+        // Proven visible via the augmentation context: resolve in the AUGMENTED
+        // module's own scope (INV.3(d): the merged instance no longer exists —
+        // the target file's local is the symbol tsc sees there).
+        return lookupPerFile(target, name)
     }
 
     /**
@@ -7149,12 +7253,22 @@ class Checker(
 
     private fun resolveQualifiedName(qn: QualifiedName): Symbol? {
         val left = when (val l = qn.left) {
-            is Identifier -> globals[l.text]
+            // INV.3(d): node-keyed root (was the merged `globals`) — the retired
+            // merge no longer holds module-file namespaces; an own/imported root
+            // resolves per-file to the same declaring-file instance.
+            is Identifier -> lookupPerFileForNode(l, l.text)
             is QualifiedName -> resolveQualifiedName(l)
             else -> null
-        } ?: return null
-        val resolved = resolveAlias(left)
-        return resolved.exports?.get(qn.right.text)
+        }
+        if (left != null) {
+            val resolved = resolveAlias(left)
+            resolved.exports?.get(qn.right.text)?.let { return it }
+        }
+        // INV.3(d): a namespace-IMPORT-rooted chain (`ts.DocumentRegistry`,
+        // `ts.server.Session`) — resolveAlias cannot follow NamespaceImports
+        // (round 444) and the retired merge no longer leaks the member name;
+        // resolve through the target modules' exports directly.
+        return resolveNsQualifiedFromQualifiedName(qn)
     }
 
     /**
@@ -7167,7 +7281,8 @@ class Checker(
      */
     private fun resolveQualifiedValueSymbol(expr: PropertyAccessExpression): Symbol? {
         val left = when (val l = expr.expression) {
-            is Identifier -> currentFileLocals?.get(l.text) ?: globals[l.text]
+            // INV.3(d): node-keyed fallback (was the merged `globals`).
+            is Identifier -> currentFileLocals?.get(l.text) ?: lookupPerFileForNode(l, l.text)
             is PropertyAccessExpression -> resolveQualifiedValueSymbol(l)
             else -> null
         } ?: return null
@@ -43580,9 +43695,13 @@ interface DataView {
                 // ENUM-qualified name is an enum MEMBER (a numeric-literal type), NOT the
                 // same-named generic lib type (`ThisType<T>` / `Array<T>`). Skip the arity
                 // check (FP-safe: an enum member is never a generic type constructor).
-                val directLeft = (typeName.left as? Identifier)?.text
-                if (directLeft != null) {
-                    val leftSym = currentFileLocals?.get(directLeft) ?: globals[directLeft]
+                // INV.3(d): node-keyed fallback — the pass can run with
+                // currentFileLocals unset, and the retired merge no longer holds
+                // module-file enums in `globals`.
+                val directLeftNode = typeName.left as? Identifier
+                if (directLeftNode != null) {
+                    val leftSym = currentFileLocals?.get(directLeftNode.text)
+                        ?: lookupPerFileForNode(directLeftNode, directLeftNode.text)
                     if (leftSym?.declarations?.any { it is EnumDeclaration } == true) return
                 }
             }
@@ -83917,7 +84036,13 @@ interface DataView {
                 // there). Check BOTH so the shadow is detected in either pass. A pure
                 // local (no outer binding) is left untouched (no member-access FP surface).
                 val inLocal = currentLocalTypes.containsKey(nm)
-                val inGlobals = globals.containsKey(nm)
+                // INV.3(d): the retired merge no longer leaks module-file locals into
+                // [globals] — the file's OWN top-level names + IMPORT aliases live in
+                // [currentFileLocals], which pre-retire was a subset of the merged
+                // globals (byte-identical disjunct), so the collision question keeps
+                // covering own/imported outer bindings. A FOREIGN module's name no
+                // longer collides — the per-file resolution fallbacks null it anyway.
+                val inGlobals = globals.containsKey(nm) || currentFileLocals?.containsKey(nm) == true
                 if (!inLocal && !inGlobals) continue
                 currentShadowedNames.add(nm)
                 val ann = d.type
@@ -83934,7 +84059,14 @@ interface DataView {
                     // (currentLocalTypes is checked first in getTypeOfIdentifier), so a
                     // genuinely-inferable local keeps its type. An inherited file-level VAR
                     // shadow (inLocal) keeps round 351's remove-and-re-infer behavior.
-                    if (inGlobals && !inLocal) currentLocalTypes[nm] = anyType
+                    // INV.3(d): an IMPORT-alias collision takes the anyType branch even
+                    // when inLocal — the remove-and-re-infer read would fall through to
+                    // the import target (per-file resolution now follows `.js` barrels:
+                    // deprecate.ts's body-local `const version = …` vs the barrel-imported
+                    // corePublic `const version: string` → FP `.compareTo` on string).
+                    val importCollision =
+                        currentFileLocals?.get(nm)?.declarations?.any { it is ImportSpecifier } == true
+                    if ((inGlobals && !inLocal) || importCollision) currentLocalTypes[nm] = anyType
                     else currentLocalTypes.remove(nm)
                 }
             }
@@ -84015,7 +84147,9 @@ interface DataView {
 
     private fun registerNestedGlobalShadowName(nm: String, paramNames: Set<String>) {
         if (nm in paramNames) return
-        if (globals.containsKey(nm) && !currentLocalTypes.containsKey(nm)) {
+        // INV.3(d): + currentFileLocals — see applyBodyLocalShadowing's inGlobals note.
+        val outerBound = globals.containsKey(nm) || currentFileLocals?.containsKey(nm) == true
+        if (outerBound && !currentLocalTypes.containsKey(nm)) {
             currentShadowedNames.add(nm)
             currentLocalTypes[nm] = anyType
         }
@@ -84032,7 +84166,10 @@ interface DataView {
             if (el.dotDotDotToken) continue
             val bnName = (el.name as? Identifier)?.text ?: continue
             if (bnName in paramNames) continue
-            if (!currentLocalTypes.containsKey(bnName) && !globals.containsKey(bnName)) continue
+            // INV.3(d): + currentFileLocals — see applyBodyLocalShadowing's inGlobals note.
+            if (!currentLocalTypes.containsKey(bnName) && !globals.containsKey(bnName) &&
+                currentFileLocals?.containsKey(bnName) != true
+            ) continue
             currentShadowedNames.add(bnName)
             if (!initResolved) {
                 initType = try { getTypeOfExpression(initializer) } catch (_: Exception) { null }
@@ -84361,10 +84498,12 @@ interface DataView {
                     val baseName = cls.heritageClauses.orEmpty()
                         .firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
                         ?.types?.firstOrNull()?.expression as? Identifier ?: return null
-                    return resolveClassCtorParamsForCtx(baseName.text)
+                    return resolveClassCtorParamsForCtx(baseName)
                 }
                 if (currentLocalTypes.containsKey(callee.text)) return null
-                val sym = globals[callee.text] ?: return null
+                // INV.3(d): node-keyed — the retired merge no longer leaks module
+                // locals; an own/imported callee resolves per-file identically.
+                val sym = lookupPerFileForNode(callee, callee.text) ?: return null
                 if (!sym.flags.hasAny(SymbolFlags.Function)) return null
                 val decl = sym.declarations.filterIsInstance<FunctionDeclaration>().singleOrNull() ?: return null
                 if (decl.body == null || !decl.typeParameters.isNullOrEmpty()) return null
@@ -84374,16 +84513,17 @@ interface DataView {
                 if (!expr.typeArguments.isNullOrEmpty()) return null
                 val callee = expr.expression as? Identifier ?: return null
                 if (currentLocalTypes.containsKey(callee.text)) return null
-                return resolveClassCtorParamsForCtx(callee.text)
+                return resolveClassCtorParamsForCtx(callee)
             }
             else -> return null
         }
     }
 
     /** B210: a class's unique constructor parameters (null for generic classes,
-     *  overloaded ctors, merged symbols, or no-body ctors). */
-    private fun resolveClassCtorParamsForCtx(name: String): List<Parameter>? {
-        val sym = globals[name] ?: return null
+     *  overloaded ctors, merged symbols, or no-body ctors). INV.3(d): keyed by the
+     *  name's own Identifier node (was the merged `globals`). */
+    private fun resolveClassCtorParamsForCtx(nameNode: Identifier): List<Parameter>? {
+        val sym = lookupPerFileForNode(nameNode, nameNode.text) ?: return null
         val cls = sym.declarations.filterIsInstance<ClassDeclaration>().singleOrNull() ?: return null
         if (!cls.typeParameters.isNullOrEmpty()) return null
         val ctors = cls.members.filterIsInstance<Constructor>()
@@ -88678,7 +88818,28 @@ interface DataView {
                 // currentTypeParamDecls) keep the pure name test, preserving the
                 // round-431e generic-function-VALUE pins.
                 val ownDecl = currentTypeParamDecls[nm]
-                ownDecl != null && (ownDecl.constraint == null) != (t.constraint == null)
+                if (ownDecl == null) return false
+                // Round 510 (INV.3(d) unmasking): DECLARATION identity beats the
+                // constraint-shape proxy — a callee-own TP that shares BOTH the name
+                // and the constraint shape with the enclosing fn's TP (checker.ts's
+                // `setTextRangeWorker(factory.createNodeArray(…), …)`: createNodeArray's
+                // `T extends Node` vs the enclosing `T extends Node`) is still FOREIGN
+                // (un-inferred). Interned TypeParams carry their TypeParameter
+                // declaration; a fresh-minted instance without one falls back to the
+                // round-462 shape test (conservative = today's behavior).
+                val tpDecl = t.symbol?.declarations?.firstOrNull() as? TypeParameter
+                if (tpDecl != null) return tpDecl !== ownDecl
+                // Declarations-less instance (fresh-minted, B199): the shape test
+                // decides where shapes differ (round 462); when BOTH are constrained
+                // the origin is ambiguous — default FOREIGN (a fresh-minted
+                // constrained TP nested in a Reference arg is an inference artifact:
+                // checker.ts's `setTextRangeWorker(factory.createNodeArray(…), …)`
+                // returning `NodeArray<T>` with createNodeArray's own `T extends
+                // Node` sharing the enclosing `T extends Node`'s name AND shape).
+                // Both-unconstrained stays OWN (the classic `fn<T>(x: T): number {
+                // return x }` corpus pins).
+                if (ownDecl.constraint != null && t.constraint != null) return true
+                (ownDecl.constraint == null) != (t.constraint == null)
             }
             is Type.Union -> t.types.any { typeContainsForeignTypeParam(it, ownTpNames, depth + 1) }
             is Type.Intersection -> t.types.any { typeContainsForeignTypeParam(it, ownTpNames, depth + 1) }
@@ -90115,13 +90276,17 @@ interface DataView {
 
     private fun aliasUnionContainsNullishKeyword(typeNode: TypeNode?, nullishName: String): Boolean {
         val ref = typeNode as? TypeReference ?: return false
-        val name = (ref.typeName as? Identifier)?.text ?: return false
-        val sym = currentFileLocals?.get(name) ?: globals[name] ?: return false
+        val nameNode = ref.typeName as? Identifier ?: return false
+        val name = nameNode.text
         // Round 435g: an IMPORTED alias's file-local symbol carries only the
-        // ImportSpecifier — fall through to the merged globals, where the declaring
-        // file's TypeAliasDeclaration lives (tsc's barrel-imported ResolutionMode).
+        // ImportSpecifier — fall through to the node-keyed per-file resolution,
+        // which follows the import to the declaring file's TypeAliasDeclaration
+        // (tsc's barrel-imported ResolutionMode). INV.3(d): was the merged
+        // `globals`, which no longer holds module-file aliases.
+        val perFileSym = lookupPerFileForNode(nameNode, name)
+        val sym = currentFileLocals?.get(name) ?: perFileSym ?: return false
         val aliasDecl = (sym.declarations.firstOrNull { it is TypeAliasDeclaration }
-            ?: globals[name]?.declarations?.firstOrNull { it is TypeAliasDeclaration })
+            ?: perFileSym?.declarations?.firstOrNull { it is TypeAliasDeclaration })
             as? TypeAliasDeclaration ?: return false
         val body = aliasDecl.type as? UnionType ?: return false
         val kind = if (nullishName == "undefined") SyntaxKind.UndefinedKeyword else SyntaxKind.NullKeyword
@@ -94552,7 +94717,15 @@ interface DataView {
             // inherited members (fewer missing-member TS2339); the merged-global name is
             // globally unique enough that the type-reference path has relied on it for the
             // same qualified shapes without FPs.
-            is PropertyAccessExpression -> resolveHeritageBaseSymbol(baseExpr) ?: globals[baseExpr.name.text]
+            // INV.3(d): the retired merge no longer leaks the last-segment name for
+            // module-scoped bases — resolve the namespace-qualified chain to its
+            // target MODULE file's member export directly (`textChanges` is
+            // `import * as textChanges from "./textChanges.js"`; dotted
+            // `ts.server.Session` hops the barrel re-publication); the legacy
+            // merged-global fallback stays last for kept/shared names.
+            is PropertyAccessExpression -> resolveHeritageBaseSymbol(baseExpr)
+                ?: resolveNamespaceQualifiedSymbol(baseExpr)
+                ?: globals[baseExpr.name.text]
             else -> return errorType
         } ?: return errorType
         val declared = getDeclaredTypeOfSymbol(symbol)
@@ -94710,9 +94883,11 @@ interface DataView {
             val fnDecls = computeExportedFnDeclsThroughStars(tr.sourceFile, originalName, mutableSetOf(), 0)
                 ?: continue
             if (fnDecls.isEmpty()) continue
-            // Collision gate: only override when the merged globals winner is NOT one
-            // of the import target's own declarations.
-            val globalsDecl = globals[name]?.valueDeclaration
+            // Collision gate: only override when the per-file resolution winner is
+            // NOT one of the import target's own declarations. (INV.3(d): was the
+            // merged `globals` — for the file's own import the per-file consult
+            // resolves the same declaring-file symbol the merge used to hold.)
+            val globalsDecl = globalsForFile(file, name)?.valueDeclaration
             if (globalsDecl != null && fnDecls.any { it === globalsDecl }) continue
             val transient = Symbol(SymbolFlags.Function, originalName).also { s ->
                 s.declarations.addAll(fnDecls)
@@ -96720,10 +96895,8 @@ interface DataView {
                 // branch sees it false) when the branch is a bare reference —
                 // `insertComment !== undefined ? insertComment : …` narrows the true
                 // branch to non-undefined (round 458). FP-safe via applyConditionNarrowing.
-                val trueT = narrowOperandByCondition(
-                    getTypeOfExpression(expr.whenTrue), expr.whenTrue, expr.condition, conditionIsTrue = true)
-                val falseT = narrowOperandByCondition(
-                    getTypeOfExpression(expr.whenFalse), expr.whenFalse, expr.condition, conditionIsTrue = false)
+                val trueT = ternaryBranchType(expr.whenTrue, expr.condition, conditionIsTrue = true)
+                val falseT = ternaryBranchType(expr.whenFalse, expr.condition, conditionIsTrue = false)
                 if (trueT === falseT) trueT else getUnionType(listOf(trueT, falseT))
             }
 
@@ -97107,6 +97280,27 @@ interface DataView {
     ): Type {
         val path = getReferencePath(operand) ?: return operandType
         return applyConditionNarrowing(operandType, condition, conditionIsTrue, path)
+    }
+
+    /** Round 510: type a ternary BRANCH under its condition. Beyond the round-458
+     *  bare-reference narrowing, a `X ?? Y` / `X || Y` branch narrows its LEFT
+     *  reference by the ternary condition too (tsc flow: the branch's whole
+     *  evaluation sits under the condition) — deprecatedCompat's
+     *  `typeof o.v === "string" ? new Version(o.v) : o.v ?? getDefault()` types
+     *  the false branch's `o.v` as Version, so the result has no `string` member.
+     *  FP-safe like the base rule: only ever refines. */
+    private fun ternaryBranchType(branch: Expression, condition: Expression, conditionIsTrue: Boolean): Type {
+        if (branch is BinaryExpression &&
+            (branch.operator == SyntaxKind.QuestionQuestion || branch.operator == SyntaxKind.BarBar) &&
+            (branch.left is Identifier || branch.left is PropertyAccessExpression)
+        ) {
+            val leftRaw = getTypeOfExpression(branch.left)
+            val leftNarrowed = narrowOperandByCondition(leftRaw, branch.left, condition, conditionIsTrue)
+            if (leftNarrowed !== leftRaw) {
+                return combineBinaryTypes(branch.operator, leftNarrowed, branch.right, branch.left)
+            }
+        }
+        return narrowOperandByCondition(getTypeOfExpression(branch), branch, condition, conditionIsTrue)
     }
 
     private fun getReferencePath(expr: Expression): String? = when (expr) {
@@ -123854,6 +124048,12 @@ interface DataView {
                     break
                 }
             }
+            // INV.3(d): the bare-Identifier receiver resolves node-keyed (the name is
+            // read from the CURRENT file's AST) — the merged consult leaked foreign
+            // module locals; per-file, an own/imported receiver resolves to the same
+            // declaring-file instance and a foreign name nulls (falls to the general
+            // type-based receiver path below, like any unresolvable receiver).
+            val perFileIdentSymbol = lookupPerFileForNode(objectExpr, identName)
             // Namespace-local ENUM receiver (`Color._map` where `Color` is an exported enum
             // declared in an ENCLOSING namespace, accessed unqualified inside that namespace).
             // `globals` does not hold namespace-local exports, so resolve from the enclosing-ns
@@ -123861,14 +124061,14 @@ interface DataView {
             // (var/module/class) have their own globals-rooted paths, and a pure enum skips every
             // intermediate branch below (all require Function/Class/Alias/Module flags) to reach
             // the B95e enum-receiver branch, which owns the TS2339/TS2551 emit.
-            val nsEnumShadow: Symbol? = if (enclosingNsShadow == null && globals[identName] == null) {
+            val nsEnumShadow: Symbol? = if (enclosingNsShadow == null && perFileIdentSymbol == null) {
                 propertyAccessEnclosingNamespaces.asReversed().firstNotNullOfOrNull { ns ->
                     ns.exports?.get(identName)?.takeIf {
                         it.flags.hasAny(SymbolFlags.Enum) && !it.flags.hasAny(SymbolFlags.Module)
                     }
                 }
             } else null
-            val identSymbol = enclosingNsShadow ?: globals[identName] ?: nsEnumShadow
+            val identSymbol = enclosingNsShadow ?: perFileIdentSymbol ?: nsEnumShadow
 
             if (identSymbol != null) {
                 // B240: `fn.name` where fn is a plain no-param function declaration and
@@ -126073,7 +126273,7 @@ interface DataView {
             }
             if (currentLocalTypes.containsKey(nm)) {
                 currentLocalTypes[nm] = anyType
-            } else if (globals.containsKey(nm)) {
+            } else if (globals.containsKey(nm) || currentFileLocals?.containsKey(nm) == true) {
                 // Round 463: an Identifier local (incl. a for-of/for-in loop-header
                 // const, B83.5-unbound) whose name collides with a GLOBAL binding —
                 // typically a cross-file exported function merged into globals — must
@@ -126083,7 +126283,8 @@ interface DataView {
                 // 'string'. The side set is consulted AFTER currentLocalTypes in
                 // getTypeOfIdentifier, so a concrete later recording still wins;
                 // otherwise anyType (suppression-only). Mirrors round 455's
-                // registerNestedGlobalShadowName discipline.
+                // registerNestedGlobalShadowName discipline. (INV.3(d): +
+                // currentFileLocals — own/imported names no longer sit in globals.)
                 currentParamBindingNames.add(nm)
             }
         }
@@ -136766,12 +136967,14 @@ interface DataView {
             is UnionType -> node.types.firstNotNullOfOrNull { findVariadicTupleInTarget(it, locals, depth + 1) }
             is TypeReference -> {
                 if (!node.typeArguments.isNullOrEmpty()) return null
-                val n = (node.typeName as? Identifier)?.text ?: return null
+                val nameNode = node.typeName as? Identifier ?: return null
+                val n = nameNode.text
                 // An IMPORTED alias's file-local symbol carries only the ImportSpecifier —
-                // fall through to the merged globals where the declaring file's
-                // TypeAliasDeclaration lives (mirrors aliasUnionContainsNullishKeyword).
+                // fall through to the node-keyed per-file resolution, which follows the
+                // import to the declaring file's TypeAliasDeclaration (mirrors
+                // aliasUnionContainsNullishKeyword; INV.3(d): was the merged globals).
                 val alias = (locals?.get(n)?.declarations?.firstOrNull { it is TypeAliasDeclaration }
-                    ?: globals[n]?.declarations?.firstOrNull { it is TypeAliasDeclaration })
+                    ?: lookupPerFileForNode(nameNode, n)?.declarations?.firstOrNull { it is TypeAliasDeclaration })
                     as? TypeAliasDeclaration ?: return null
                 if (!alias.typeParameters.isNullOrEmpty()) return null
                 findVariadicTupleInTarget(alias.type, locals, depth + 1)
@@ -136788,12 +136991,14 @@ interface DataView {
             is ArrayType -> node.elementType
             is ParenthesizedType -> arrayElementTypeNode(node.type, locals, depth + 1)
             is TypeReference -> {
-                val n = (node.typeName as? Identifier)?.text ?: return null
+                val nameNode = node.typeName as? Identifier ?: return null
+                val n = nameNode.text
                 if (n == "Array" || n == "ReadonlyArray") node.typeArguments?.singleOrNull()
                 else {
                     if (!node.typeArguments.isNullOrEmpty()) return null
+                    // INV.3(d): node-keyed (was the merged globals) — see above.
                     val alias = (locals?.get(n)?.declarations?.firstOrNull { it is TypeAliasDeclaration }
-                        ?: globals[n]?.declarations?.firstOrNull { it is TypeAliasDeclaration })
+                        ?: lookupPerFileForNode(nameNode, n)?.declarations?.firstOrNull { it is TypeAliasDeclaration })
                         as? TypeAliasDeclaration ?: return null
                     if (!alias.typeParameters.isNullOrEmpty()) return null
                     arrayElementTypeNode(alias.type, locals, depth + 1)
@@ -140310,9 +140515,11 @@ interface DataView {
                     "NaN", "Infinity" -> return numberType
                     "true", "false" -> return booleanType
                 }
-                // Look up in globals only — currentLocalTypes contains function-scoped
-                // variables that shouldn't be visible in type annotation positions
-                val symbol = globals[exprName.text] ?: return anyType
+                // Look up file-level names only — currentLocalTypes contains function-scoped
+                // variables that shouldn't be visible in type annotation positions.
+                // INV.3(d): node-keyed (was the merged `globals`) — `typeof X` resolves
+                // under the annotation's owning file's visibility.
+                val symbol = lookupPerFileForNode(exprName, exprName.text) ?: return anyType
                 return getTypeOfSymbolForTypeQuery(symbol)
             }
             is QualifiedName -> {
@@ -140334,7 +140541,10 @@ interface DataView {
      *  (which flattens intersections/unions). Returns null if any segment can't resolve. */
     private fun resolveTypeOfValueEntityName(name: Node): Type? = when (name) {
         is Identifier -> {
-            val sym = globals[name.text] ?: currentFileLocals?.get(name.text)
+            // INV.3(d): node-keyed (was the merged `globals` first) — the fast path
+            // keeps returning `globals` for non-module-only names, preserving the
+            // legacy globals-before-locals order for lib/script names.
+            val sym = lookupPerFileForNode(name, name.text) ?: currentFileLocals?.get(name.text)
             sym?.let { getTypeOfSymbol(it) }?.takeIf { it !== anyType && it !== errorType }
         }
         is QualifiedName -> {
@@ -141782,10 +141992,138 @@ interface DataView {
      */
     private fun resolveTypeNameToSymbol(node: Node): Symbol? {
         return when (node) {
-            is Identifier -> lookupPerFileForNode(node, node.text)
+            is Identifier -> {
+                val sym = lookupPerFileForNode(node, node.text)
+                // INV.3(d): the import-shadowed-by-value-local TYPE/VALUE split —
+                // `import { SourceMapSource }` (a type) + a same-named local
+                // `function SourceMapSource` (a value): the binder's last-wins keeps
+                // only the value in file locals, and the retired merge no longer
+                // provides the interface through `globals`. tsc resolves the TYPE
+                // space to the import; recover it from the ImportSpecifier's own
+                // recorded alias symbol when the per-file winner lacks a type side.
+                if (sym != null && !symbolHasTypeSideDeclaration(sym)) {
+                    owningSourceFile(node)?.let { owner ->
+                        typeSideImportFallback(owner, node.text)?.let { return it }
+                    }
+                }
+                sym
+            }
             is QualifiedName -> resolveQualifiedName(node)
             else -> null
         }
+    }
+
+    /** INV.3(d): does [sym] declare anything in TYPE space (or carry an alias hop
+     *  that could)? Declaration-based, never flags (the isValueExport gotcha). */
+    private fun symbolHasTypeSideDeclaration(sym: Symbol): Boolean = sym.declarations.any {
+        it is InterfaceDeclaration || it is ClassDeclaration || it is TypeAliasDeclaration ||
+            it is EnumDeclaration || it is ModuleDeclaration || it is TypeParameter ||
+            isImportBindingDecl(it)
+    }
+
+    /**
+     * INV.3(d): resolve `NS.member` where [root] is a NAMESPACE-import alias
+     * (`import * as NS from "./mod.js"`) to the target MODULE file's exported
+     * symbol [memberName] — ESM-`.js`-aware, `export *`-following. The general
+     * `resolveAlias` cannot follow NamespaceImports (round 444); the retired
+     * merge no longer provides the last-segment leak the heritage fallback rode.
+     */
+    private fun namespaceImportMemberSymbol(root: Identifier, memberName: String): Symbol? {
+        val owner = owningSourceFile(root) ?: return null
+        val rootSym = fileResults[owner.fileName]?.locals?.get(root.text) ?: return null
+        return namespaceAliasMemberSymbol(rootSym, memberName)
+    }
+
+    /** INV.3(d): resolve [memberName] from a namespace-flavored ALIAS symbol —
+     *  hopping NAMED-import re-publications (the round-479 barrel shape:
+     *  `import * as NS from …; export { NS };`) to the underlying
+     *  namespace-import, then reading the member from its target module
+     *  (`export *`-following). Context files derive from the declaration
+     *  nodes' owning files, so intermediate hops need no threading. */
+    private fun namespaceAliasMemberSymbol(alias: Symbol, memberName: String): Symbol? {
+        var cur: Symbol? = alias
+        var hops = 0
+        while (cur != null && hops++ < 5) {
+            // A namespace-import alias — resolve its target module and read the member.
+            val nsImport = cur.declarations.firstOrNull {
+                it is ImportDeclaration && it.importClause?.namedBindings is NamespaceImport
+            } as? ImportDeclaration
+            if (nsImport != null) {
+                val ctx = owningSourceFile(nsImport)?.fileName ?: return null
+                val spec = (nsImport.moduleSpecifier as? StringLiteralNode)?.text ?: return null
+                val target = resolveModuleSpecifier(spec, nsImport)
+                    ?: resolveAliasJsModuleSpecifier(spec, ctx) ?: return null
+                val tr = fileResults[target] ?: return null
+                if (memberName in moduleNamedExportsOf(tr.sourceFile)) {
+                    tr.locals[memberName]?.let { return it }
+                }
+                return resolveExportedSymbolThroughStars(tr.sourceFile, memberName)
+            }
+            // A NAMED-import alias — hop to the target module's binding for the
+            // original name.
+            val spec2 = cur.declarations.firstOrNull { it is ImportSpecifier } as? ImportSpecifier
+                ?: return null
+            val originalName = spec2.propertyName?.text ?: spec2.name.text
+            val (ctxFile, importDecl) = findEnclosingImport(spec2) ?: return null
+            val modSpec = (importDecl.moduleSpecifier as? StringLiteralNode)?.text ?: return null
+            val target = resolveModuleSpecifier(modSpec, importDecl)
+                ?: resolveAliasJsModuleSpecifier(modSpec, ctxFile) ?: return null
+            val tr = fileResults[target] ?: return null
+            cur = if (originalName in moduleNamedExportsOf(tr.sourceFile)) {
+                tr.locals[originalName] ?: resolveExportedSymbolThroughStars(tr.sourceFile, originalName)
+            } else {
+                resolveExportedSymbolThroughStars(tr.sourceFile, originalName)
+            }
+        }
+        return null
+    }
+
+    /** INV.3(d): resolve a DOTTED namespace-qualified value chain `A.B.…​.member`
+     *  (`ts.server.Logger` — `ts` a namespace-import, `server` a re-published
+     *  namespace-import) to the final member's symbol. Heritage bases use this;
+     *  null on any unresolvable segment. */
+    private fun resolveNamespaceQualifiedSymbol(pa: PropertyAccessExpression): Symbol? {
+        val prefix: Symbol? = when (val e = pa.expression) {
+            is Identifier -> owningSourceFile(e)?.let { o -> fileResults[o.fileName]?.locals?.get(e.text) }
+            is PropertyAccessExpression -> resolveNamespaceQualifiedSymbol(e)
+            else -> null
+        }
+        return prefix?.let { namespaceAliasMemberSymbol(it, pa.name.text) }
+    }
+
+    /** INV.3(d): the [resolveNamespaceQualifiedSymbol] sibling over TYPE-position
+     *  [QualifiedName] chains (`ts.DocumentRegistry`, `ts.server.Session`). */
+    private fun resolveNsQualifiedFromQualifiedName(qn: QualifiedName): Symbol? {
+        val prefix: Symbol? = when (val l = qn.left) {
+            is Identifier -> owningSourceFile(l)?.let { o -> fileResults[o.fileName]?.locals?.get(l.text) }
+            is QualifiedName -> resolveNsQualifiedFromQualifiedName(l)
+            else -> null
+        }
+        return prefix?.let { namespaceAliasMemberSymbol(it, qn.right.text) }
+    }
+
+    /** INV.3(d): resolve the TYPE side of a name whose per-file VALUE local shadowed
+     *  its own file's named import (binder last-wins) — the ImportSpecifier's alias
+     *  symbol is still recorded in the binder's nodeToSymbol; resolve it onward and
+     *  keep the result only when it genuinely has a type side. Memoized per
+     *  (file, name); null (cached) = no shadowed type import. */
+    private fun typeSideImportFallback(owner: SourceFile, name: String): Symbol? {
+        val key = owner.fileName + "|" + name
+        if (typeSideImportFallbackCache.containsKey(key)) return typeSideImportFallbackCache[key]
+        val result = run {
+            val br = fileResults[owner.fileName] ?: return@run null
+            for (stmt in owner.statements) {
+                if (stmt !is ImportDeclaration) continue
+                val named = stmt.importClause?.namedBindings as? NamedImports ?: continue
+                val spec = named.elements.firstOrNull { it.name.text == name } ?: continue
+                val alias = br.nodeToSymbol[nodeKey(spec)] ?: continue
+                return@run resolveImportedSymbolGeneral(alias)
+                    ?.takeIf { it.declarations.any { d -> !isImportBindingDecl(d) } && symbolHasTypeSideDeclaration(it) }
+            }
+            null
+        }
+        typeSideImportFallbackCache[key] = result
+        return result
     }
 
     /**
