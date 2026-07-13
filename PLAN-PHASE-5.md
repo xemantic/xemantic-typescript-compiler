@@ -59,6 +59,55 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 502 (2026-07-13, same session as 500/501) — INV.3(b)(ii) LANDED: the
+pilot consumer — INV.3(b) is COMPLETE.** The TS2315/TS2346 heritage-base
+"not generic" gate — the `checkTypeArgumentConstraints` pass, the SMALLEST
+nonzero pass in the (a) conflated-by-pass table that has DIRECT pass-local
+consults (`checkImplicitThis`/`checkEvolvingEmptyArrayImplicitAny` have none;
+`checkInterfaceMultiBaseConflicts`' mergedDecls consult is flow-changing, not
+suppression-only) — now consults `globals` through the NEW
+`globalsForFile(fileName, name)`, THE flip shape for the (c) migration:
+return the merged-globals symbol INSTANCE (what keeps a flip byte-identical
+for every legitimately visible name — substituting `lookupPerFile`'s return
+directly would change symbol identity for lib/script names, since
+`perFileScope` holds the first-occurrence script symbol while `globals`
+holds the first-declarer merged instance) whenever the name has a per-file
+meaning — a name outside `moduleOnlyGlobalNames` (lib / script-file /
+augmentation-added global), or a module-only name the file declares or
+imports, probed through `lookupPerFile` (an import alias probes non-null
+whether or not its target resolves) — and null exactly where the legacy
+consult LEAKED a foreign module file's local. Suppression-only at this site
+by construction: a conflated hit could only ever EMIT a bogus TS2315/TS2346
+(real tsc: an unresolvable heritage base is TS2304 territory, never TS2315).
+Supporting infra now always-on: init 1b2 became `computePerFileVisibility`
+(the INV.3(a) classifier's set construction hoisted out of the passTiming
+gate; publishes `moduleOnlyGlobalNames` = module-file local names MINUS
+lib/script/augmentation-visible; the classifier installs on top only when
+instrumented; the pre-augmentation key-set snapshot is now unconditional —
+one HashSet copy per program). Both mirrored consult sites flipped together
+per their kept-in-sync contract (`checkConstraintsInExprWithTypeArgs`'s
+TS2315 + `extendsClauseIsNonGeneric`'s TS2346 gate, `fileName` threaded).
+**MEASUREMENT LESSON for (c): per-PASS attribution ≠ per-SITE.** The
+post-flip instrumented run shows the pass STILL at 11 conflated with the
+total lookup count EXACTLY unchanged (2,711,601) — the pass's conflated
+traffic comes from DEEPER shared machinery (`checkConstraintsForTypeArgs` →
+`getTypeFromTypeNode`), not the direct pass-local consults, which measured
+ZERO conflated hits on the compiler profile (also why byte-identity holds
+by measurement, with the leak-kill pinned by the local tests instead). A
+hot-pass (c) flip must reason per-SITE about which consults inside the pass
+carry the conflated traffic. Verified: suite green 10,266 → 10,273 (+7
+Inv3GlobalsForFileTest — the two leak-kill tests FAIL on the pre-flip
+checker, measured via stash: bogus TS2315/TS2346 from a foreign unimported
+non-generic base; the five preservation controls pass on BOTH sides —
+own-file / imported / script-file-global bases keep firing, imported-generic
++ same-file TS2346 controls); `--listAll` byte-identical on compiler AND
+services (46/46 diagnostics each); bench row in band (26,265 ms self /
+1,062 MB, +0.2% vs previous, same 46 env-legit diagnostics). CLAUDE.md
+gotcha added (the globalsForFile-not-lookupPerFile flip rule +
+mirrored-sites-flip-together); `lookupPerFile`'s KDoc re-pointed at
+`globalsForFile` as the consumer-facing wrapper. NEXT: INV.3(c) — flip
+resolution families onto the primitive in the (a) tables' order, per-site.
+
 **Round 501 (2026-07-13, same session as 500) — INV.3(b) phase (i) LANDED:
 the per-file resolution primitive, additive and unconsumed.**
 `lookupPerFile(fileName, name)` (internal) — the lookup the (c) family flips
@@ -408,39 +457,6 @@ change the tree, so the crawl must parse with the RESOLVED options (available �
 the tsconfig loads before the crawl) and `ParsedSource` must grow a
 pre-parsed-files channel.
 
-**Round 492 (2026-07-13, same session as 491) — INV.1(a): the sequential-Flow
-beachhead landed.** kotlinx-coroutines-core was ALREADY a commonMain dependency
-(only the unused CheckerPool consumed it), so (a) reduced to the seam: new
-`runCompilerPipeline` expect/actual (JVM = `runBlocking`; common code cannot call
-runBlocking — a future JS target needs an async driver, pipeline sequential there
-anyway) + ProjectCompiler's import-graph crawl rewritten as a cold
-`Flow<Pair<path, content>>` (`crawlImportGraph`) collected through the seam —
-sequential and behavior-identical (seeds in seed order, read unconditionally;
-BFS discovery order; duplicate-seed re-reads preserved; unreadable discovered
-files skipped). The EMISSION-order contract is documented at the flow: emission
-order becomes the binder's file order → global symbol-id allocation (the
-documented ~350-test reshuffle hazard) — INV.1(b)'s concurrency must keep
-emission DETERMINISTIC (e.g. frontier-level barriers), never completion-ordered.
-**Verification:** suite green 10,203 → 10,206 (+3 local
-`Inv1SequentialCrawlOrderTest`: diamond-graph seed-then-BFS order with
-first-discovery dedup, unresolved `(importer, specifier)` attribution,
-run-to-run determinism — the INV.1(b) invariant); compiler-profile `--listAll`
-A/B vs the INV.0-only binary byte-identical at wall parity; the round-491
-"clean re-run" bench row (24,525 ms self, `+dirty`) was in fact built WITH this
-refactor — an accidental whole-profile smoke A/B at diagnostic (46) and wall
-parity. **Bench-row hygiene:** the FIRST round-491 TSV row (80,122 ms) is
-swap-polluted — the bench script's own gradle build leaves BOTH daemons resident
-on the 7.7 GB box and the -Xmx4g run swaps (the documented memory trap; the
-historical ~28–29.5 s TSV band carries mild daemon overhead, this session's
-full-suite daemon made it catastrophic); always `./gradlew --stop && pkill -9 -f
-'KotlinCompile[D]aemon'` before bench runs whose numbers will be read — the
-corrective row's label documents the pollution. **NEXT — INV.1(b):** IO decode /
-Default parse via bounded `flatMapMerge`; note for its design: the crawl's
-`extractSpecifiers` already FULL-PARSES every file and `compileParsed` parses
-everything a second time — the parallel-parse step should also evaluate reusing
-the crawl's parses (kills the double parse; changes `ParsedSource`'s input
-shape, scope it separately).
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 (Restored 2026-07-12, round 481 — the queue/backlog/inventory sections had been
@@ -643,7 +659,7 @@ interrupt the arc).
     resolve barrel-imported TYPE names; (c) starts at the three hot passes.
     Suite +5 (Inv3GlobalsLookupTest), `--listAll` byte-identical (off-mode),
     bench row in band.
-  - [ ] **INV.3(b) Per-file resolution primitive.** IN PROGRESS:
+  - [x] **INV.3(b) Per-file resolution primitive.** COMPLETE round 502:
     - (i) DONE round 501 (2026-07-13): `lookupPerFile(fileName, name)`
       (internal, unconsumed by checker paths) — perFileScope lookup with an
       ImportSpecifier-alias local resolved onward through
@@ -669,8 +685,35 @@ interrupt the arc).
       locals across direct-`.js`/barrel/renamed-re-export/own-local/
       script-global/lib shapes + the foreign-module-local null and
       alias-degradation negative controls).
-    - (ii) PENDING: pilot-consume at the (a)-measured lowest-risk site,
-      suite+listAll-gated on compiler AND services.
+    - (ii) DONE round 502 (2026-07-13): pilot consumer — the TS2315/TS2346
+      heritage-base "not generic" gate (`checkTypeArgumentConstraints`, the
+      smallest nonzero pass in the (a) conflated-by-pass table with DIRECT
+      pass-local consults) resolves through the NEW
+      `globalsForFile(fileName, name)`, THE (c) flip shape: return the
+      merged-globals INSTANCE whenever the name has a per-file meaning (a
+      non-module-only name, or a module-only name the file declares/imports
+      — probed via `lookupPerFile`; substituting the primitive's return
+      directly would change symbol identity for lib/script names), null
+      exactly where the legacy consult leaked a foreign module file's local
+      (suppression-only at this site: real tsc never emits TS2315 for an
+      unresolvable base). Supporting infra always-on: init 1b2 became
+      `computePerFileVisibility` — publishes `moduleOnlyGlobalNames`
+      (module-file local names minus lib/script/augmentation-visible), the
+      INV.3(a) classifier installs on top of the same sets. Both mirrored
+      consult sites flipped together (kept-in-sync contract); the conflated
+      branch never touches `globals`, so the `--passTiming` conflated
+      tables keep measuring only UN-migrated traffic. MEASUREMENT LESSON
+      for (c): the post-flip instrumented run shows the pass STILL at 11
+      conflated with the total lookup count EXACTLY unchanged (2,711,601)
+      — the pass's conflated traffic comes from DEEPER shared machinery
+      (`checkConstraintsForTypeArgs` → `getTypeFromTypeNode`), not the
+      direct pass-local consults, which measured ZERO conflated hits on
+      the compiler profile. Per-PASS attribution ≠ per-SITE: a hot-pass
+      (c) flip needs per-site reasoning about which consults inside the
+      pass actually carry the conflated traffic. Suite +7
+      (Inv3GlobalsForFileTest — both leak-kill tests FAIL on the pre-flip
+      checker, verified via stash; five preservation controls pass on
+      both); `--listAll` byte-identical on compiler AND services.
   - [ ] **INV.3(c) Flip resolution families onto the primitive** in (a)'s
     cost/dependency order (identifier-type globals fallback, type-reference
     globals fallback, callee resolution, heritage bases, …), each
