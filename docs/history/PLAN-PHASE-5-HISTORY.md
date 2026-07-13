@@ -1,3 +1,42 @@
+**Round 498 (2026-07-13, same session as 497) — INV.2(c) phase (ii) LANDED:
+block-scope containers + class/interface/alias/enum scopes — INV.2(c) is
+COMPLETE.** The lexical binder now covers tsc's `IsBlockScopedContainer` set
+and the remaining containers: every `Block` that is NOT a function-like's
+immediate body (the body shares the function scope — tsc `getContainerFlags`),
+`for`/`for-in`/`for-of` headers (header `let`/`const` in the for scope, the
+body block a child scope under it), `CatchClause` (binds the catch variable,
+destructuring patterns included; the catch block chains under it), and
+`SwitchStatement` standing in for tsc's CaseBlock — our AST has NO CaseBlock
+node, so the switch statement owns the case-block scope and its EXPRESSION is
+routed to the OUTER scope by hand (pushed last so sibling visit order stays
+source order, which the first-wins merge semantics rely on). Class
+declarations/expressions get scopes (type params; a named class EXPRESSION's
+self-name binds inside only; class decorators walk under the OUTER scope),
+interfaces/type aliases get type-param scopes, and enums get member-sibling
+scopes (`enum E { A = 1, B = A }`): a main-bound enum ALIASES its merged
+`exports`; a nested (B83.5-unbound) enum binds scope-space members ALSO
+published onto the scope symbol's `exports` — gated `id ≤ −2` so a MAIN
+symbol's exports are never touched. **The design dividend: phase (i)'s
+`isDirectBodyChild` gates for block-scoped declarations DISSOLVE into a plain
+`scope.existing == null` test — once every block-scope container owns a fresh
+scope, the current scope IS the correct binding target everywhere (file/module
+level stays skipped via the aliasing `existing`); `var` gains the real
+`varHoistTarget` walk-up (nearest function-like/file/module boundary).**
+Block-nested function declarations bind to the BLOCK (strict/module
+semantics — the non-strict hoisting divergence is documented in the KDoc).
+Verification: suite green 10,245 → 10,251 (+6; Inv2LexicalScopeTest now 20 —
+the phase-(i) negative controls FLIPPED to positive location asserts:
+if-block let/class/function in the block scope chained to the fn scope,
+for-header `let` in its for scope while the sibling `var` header hoists,
+catch destructuring, switch case-clause declarations, nested-bare-block
+chains, fn-body-block/ModuleBlock negative controls, class/iface/alias
+type-param scopes, main-vs-nested enum aliasing with the exports identity
+check); `--listAll` byte-identical vs the round-497 binary; interleaved wall
+B/A ×6 both orders NEUTRAL (medians 26,712 before / 26,526 after — after
+faster on medians, slower on means via one outlier; noise). Tables remain
+UNCONSUMED until INV.4/INV.2(d). NEXT: INV.2(d) — B83.5 dissolution pilots
+(convert 1–2 checker transient-symbol sites to consume the new tables).
+
 **Round 497 (2026-07-13) — INV.2(c) phase (i) LANDED: additive lexical binding
 for function-like containers.** The Binder gained a second pass
 (`bindLexicalScopes`, run after conventional binding) that walks the whole

@@ -59,6 +59,43 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 507b (2026-07-13, same session as 507) — INV.3(c)(iii) phase 3
+LANDED: `getTypeOfIdentifier`'s globals fallback node-keyed — (iii) is
+COMPLETE.** The round-442 measured dead-end (by-NAME nulling of the fallback
+broke cross-file initializer inference / redeclare / .d.ts emit — 5 corpus
+regressions) does NOT reproduce for the per-FILE flip: the visibility probe
+resolves every imported/own/script/lib name to the SAME merged instance
+(an import alias probes non-null through `resolveImportedSymbolGeneral`
+whatever its kind), so only a name with NO per-file meaning changes — it
+types as `any` instead of the foreign leaked local, which is what real tsc
+sees (TS2304 → any). Companion perf guard: `lookupPerFileForNode` gained a
+fast path — a non-module-only name resolves identically under every file's
+visibility (`globalsForFile` ignores the file for it), so it goes straight
+to `globals[name]` with NO parent-chain walk; the fallback serves ~2M
+identifier typings per self-compile and only ~126k module-only names walk
+(the pre-1b2 empty set degrades everything to the legacy consult — the
+init-order gotcha handled by construction). MEASURED: conflated 10,034 →
+6,165 (cumulative from the round-505 baseline 20,941 → 6,165, −71%);
+`factory` (3.3k, the phase-2 residue's dominant name — a function param in
+non-importing files typing through nodeFactory.ts's leaked export) is GONE;
+by-pass checkImplicitAnyParameters 2,608 → 171, checkUncalledFunctions 968
+→ 189, checkConstAssignment 206 → 131. The remaining ~6.2k = the (c)(iv)
+type-position tail (types.ts type names via typeNodeDefinitelyNonNullish /
+resolveTypeNameToSymbol / getTypeFromBaseTypeExpression) + ~500 value
+names in the deliberately-legacy shadow-detection ecology (INV.3(d) scope)
++ tiny tail sites folded into (iv)'s re-measure. Verified: suite green
+10,298 → 10,302 (+4 Inv3IdentifierTypingNodeKeyTest — the leak-kill FAILS
+on the pre-flip checker via stash: a bogus TS2322 typed a non-importing
+file's bare identifier from a foreign module's const; 3 preservation
+controls pass both sides, including the import-driven initializer-inference
+shape from the round-442 regression family); `--listAll` byte-identical on
+compiler AND services; bench row 27,972 ms self (+4.0% single-run = the
+documented box-drift band; the walk cost is bounded by the fast path).
+CLAUDE.md updated in BOTH places (the INV.3(c) entry + a clarifying line
+inside the round-442 dead-end entry so the two records don't read as
+contradicting). NEXT: (c)(iv) — the type-position tail, then the
+re-measure that unlocks INV.3(d).
+
 **Round 507 (2026-07-13) — INV.3(c)(iii) phase 2 LANDED: the bare-Identifier
 VALUE/receiver/callee cluster node-keyed (11 consults, one commit).** The
 round opened by re-running the round-503 stack-sampling probe on HEAD (1:20,
@@ -428,45 +465,6 @@ this pass's traversal does not descend `while` bodies (pre-existing, both
 code paths — the tests use `if`/`for` shapes). Suite 10,251 → 10,255 (+4).
 NEXT: INV.3 per-file scoping.
 
-**Round 498 (2026-07-13, same session as 497) — INV.2(c) phase (ii) LANDED:
-block-scope containers + class/interface/alias/enum scopes — INV.2(c) is
-COMPLETE.** The lexical binder now covers tsc's `IsBlockScopedContainer` set
-and the remaining containers: every `Block` that is NOT a function-like's
-immediate body (the body shares the function scope — tsc `getContainerFlags`),
-`for`/`for-in`/`for-of` headers (header `let`/`const` in the for scope, the
-body block a child scope under it), `CatchClause` (binds the catch variable,
-destructuring patterns included; the catch block chains under it), and
-`SwitchStatement` standing in for tsc's CaseBlock — our AST has NO CaseBlock
-node, so the switch statement owns the case-block scope and its EXPRESSION is
-routed to the OUTER scope by hand (pushed last so sibling visit order stays
-source order, which the first-wins merge semantics rely on). Class
-declarations/expressions get scopes (type params; a named class EXPRESSION's
-self-name binds inside only; class decorators walk under the OUTER scope),
-interfaces/type aliases get type-param scopes, and enums get member-sibling
-scopes (`enum E { A = 1, B = A }`): a main-bound enum ALIASES its merged
-`exports`; a nested (B83.5-unbound) enum binds scope-space members ALSO
-published onto the scope symbol's `exports` — gated `id ≤ −2` so a MAIN
-symbol's exports are never touched. **The design dividend: phase (i)'s
-`isDirectBodyChild` gates for block-scoped declarations DISSOLVE into a plain
-`scope.existing == null` test — once every block-scope container owns a fresh
-scope, the current scope IS the correct binding target everywhere (file/module
-level stays skipped via the aliasing `existing`); `var` gains the real
-`varHoistTarget` walk-up (nearest function-like/file/module boundary).**
-Block-nested function declarations bind to the BLOCK (strict/module
-semantics — the non-strict hoisting divergence is documented in the KDoc).
-Verification: suite green 10,245 → 10,251 (+6; Inv2LexicalScopeTest now 20 —
-the phase-(i) negative controls FLIPPED to positive location asserts:
-if-block let/class/function in the block scope chained to the fn scope,
-for-header `let` in its for scope while the sibling `var` header hoists,
-catch destructuring, switch case-clause declarations, nested-bare-block
-chains, fn-body-block/ModuleBlock negative controls, class/iface/alias
-type-param scopes, main-vs-nested enum aliasing with the exports identity
-check); `--listAll` byte-identical vs the round-497 binary; interleaved wall
-B/A ×6 both orders NEUTRAL (medians 26,712 before / 26,526 after — after
-faster on medians, slower on means via one outlier; noise). Tables remain
-UNCONSUMED until INV.4/INV.2(d). NEXT: INV.2(d) — B83.5 dissolution pilots
-(convert 1–2 checker transient-symbol sites to consume the new tables).
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 (Restored 2026-07-12, round 481 — the queue/backlog/inventory sections had been
@@ -806,14 +804,28 @@ interrupt the arc).
       the name's own Identifier node. Conflated 20,941 → 10,034 (−52%);
       suite +9 (Inv3ValueCalleeNodeKeyTest — 4 leak-kills FAIL pre-flip via
       stash); listAll byte-identical on compiler AND services; bench in
-      band. REMAINING phase 3: `getTypeOfIdentifier`'s globals fallback
-      (~3.2k, the receiver-typing tail — round-442 measured dead-end
-      territory: typing feeds emit/redeclare, so it needs its own battery +
-      per-consumer classification even though the visibility gate now
-      protects imports). NOT to flip: the shadow-detection ecology's
-      consults (registerNestedGlobalShadow*/applyBodyLocalShadowing/
-      shadowNestedFunctionNames ask "does a merged global collide" — they
-      die with INV.3(d)).
+      band. Phase 3 DONE round 507b (2026-07-13) — (iii) COMPLETE:
+      `getTypeOfIdentifier`'s globals fallback node-keyed (the round-442
+      by-NAME dead-end does NOT reproduce per-FILE — imports resolve
+      through the visibility probe to the same merged instance; pinned by
+      Inv3IdentifierTypingNodeKeyTest incl. the import-driven
+      initializer-inference control from the round-442 regression family),
+      plus a fast path in `lookupPerFileForNode` (non-module-only names
+      skip the parent walk — the fallback is ~2M calls/compile). Conflated
+      10,034 → 6,165 (cumulative 20,941 → 6,165, −71%); `factory` gone;
+      checkImplicitAnyParameters 2,608 → 171, checkUncalledFunctions 968 →
+      189. Suite green 10,298 → 10,302 (+4); listAll byte-identical on
+      compiler AND services; bench +4.0% single-run = the documented
+      box-drift band (~126k parent walks ≈ negligible by construction).
+      Residue ~6.2k = the (iv) type-position tail (types.ts type names
+      reached via typeNodeDefinitelyNonNullish / resolveTypeNameToSymbol /
+      getTypeFromBaseTypeExpression) + ~500 value-name lookups in the
+      shadow-detection ecology (registerNestedGlobalShadow*/
+      applyBodyLocalShadowing/shadowNestedFunctionNames ask "does a merged
+      global collide" — they die with INV.3(d), do not flip them) + tiny
+      tail sites (emitTs2345ForBareTpArgToConstrainedTpParam,
+      getOverloadImplementationRelated, calleeReturnAnnotationForImplicitAny
+      — fold into (iv)'s re-measure).
     - (iv) **Flip the type-position tail** (typeRef.resolve.ident ~1.9k,
       typeNodeDefinitelyNonNullish's globals fallback — the round-424
       barrel-alias fallback already restricted to interface/class/enum) and
