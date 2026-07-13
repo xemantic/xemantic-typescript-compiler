@@ -1685,6 +1685,9 @@ class Checker(
 
     init {
         try {
+        // INV.0: opt-in pass-time instrumentation (see PassTiming.kt) — inert when
+        // PassTiming.enabled is false (the default; only the --passTiming CLI turns it on).
+        PassTiming.noteInitStart()
         // 0. Merge built-in type declarations into globals (before user files)
         mergeSymbolTable(globals, libGlobals)
         // 0b. Wire globalArrayType from built-in lib (if Array was parsed)
@@ -1885,16 +1888,16 @@ class Checker(
         if (!declarationOnly) {
         // 4. Check for unused declarations (TS6133/TS6196)
         if (options.noUnusedLocals || options.noUnusedParameters) {
-            checkUnusedDeclarations()
+            pass("checkUnusedDeclarations") { checkUnusedDeclarations() }
         }
         // 4b. Check for unused parameter properties (TS6138)
         // Property declared via constructor parameter but never accessed as this.prop
         if (options.noUnusedLocals || options.noUnusedParameters) {
-            checkUnusedParameterProperties()
+            pass("checkUnusedParameterProperties") { checkUnusedParameterProperties() }
         }
         // 4c. Check for unused `infer T` parameters in conditional types (TS6133)
         if (options.noUnusedParameters) {
-            checkUnusedInferParameters()
+            pass("checkUnusedInferParameters") { checkUnusedInferParameters() }
         }
         // 5. Check for variables used before assignment (TS2454)
         // Requires strictNullChecks (either via strict: true or strictNullChecks: true).
@@ -1940,104 +1943,104 @@ class Checker(
         // Suppressed when strict is explicitly false OR strictNullChecks is explicitly false.
         val shouldCheckDefiniteAssignment = !options.strictExplicitlyFalse && !options.strictNullChecksExplicitlyFalse
         if (shouldCheckDefiniteAssignment) {
-            checkDefiniteAssignment()
-            checkDefiniteAssignmentViaFlowGraph()
+            pass("checkDefiniteAssignment") { checkDefiniteAssignment() }
+            pass("checkDefiniteAssignmentViaFlowGraph") { checkDefiniteAssignmentViaFlowGraph() }
             // B223: TS2454 for vars whose ONLY assignment sits inside a try block
             // with a normally-completing catch (the catch-entry path leaves them
             // unassigned at the post-try merge).
-            checkTryCatchOnlyAssignedVarReads()
+            pass("checkTryCatchOnlyAssignedVarReads") { checkTryCatchOnlyAssignedVarReads() }
         }
         // 6. Check for class properties without initializer (TS2564)
         // Suppressed when strict=false, or when strictPropertyInitialization=false explicitly set
         if (!options.strictExplicitlyFalse && !options.strictPropertyInitializationExplicitlyFalse) {
-            checkPropertyInitialization()
+            pass("checkPropertyInitialization") { checkPropertyInitialization() }
         }
         // 6a. TS2540 for `const x = cond ? a : b; x.p = v` where p is readonly in a
         // union constituent (readonlyPropertySubtypeRelationDirected). Not strict-gated
         // (readonly is structural).
-        checkTernaryUnionReadonlyWrites()
+        pass("checkTernaryUnionReadonlyWrites") { checkTernaryUnionReadonlyWrites() }
         // 6a-bis. widenedTypes — an unannotated `var X = [<nums> + <null>]` is `number[]`
         // (null widened away under non-strict); a wrong-primitive element write `X[i] = ""`
         // is TS2322. Self-contained AST walker (the relation engine bails on Array element
         // writes; the inferred array stays `(number|null)[]`). Non-strict-gated, FP-safe.
-        checkWidenedArrayElementWrites()
+        pass("checkWidenedArrayElementWrites") { checkWidenedArrayElementWrites() }
         // 6a'. classPropertyErrorOnNameOnly — a var/class-prop annotated with a function-type
         // alias `(arg: U) => string` whose initializer is a function-expr/arrow with one
         // unannotated param + a non-exhaustive `switch(param){ case <lit>: return <lit> }`
         // body (no default) → inferred return includes `undefined` → TS2322 at the decl name.
-        if (strictNullChecks) checkFnTypeSwitchReturnMismatch()
+        if (strictNullChecks) pass("checkFnTypeSwitchReturnMismatch") { checkFnTypeSwitchReturnMismatch() }
         // 6a''. orderMattersForSignatureGroupIdentity — a call to a ≥2-call-sig-only-interface
         // var with a fresh object literal that excess-fails EVERY overload → TS2769 + TS2339-never.
-        checkSignatureGroupOverloadExcessCalls()
+        pass("checkSignatureGroupOverloadExcessCalls") { checkSignatureGroupOverloadExcessCalls() }
         // 6a'''. excessPropertyCheckIntersectionWithIndexSignature — a var annotated with an
         // INTERSECTION of pure string-index-signature TypeLiterals (`{[x:string]:{a:0}} &
         // {[x:string]:{b:0}}`); an object-literal RHS whose VALUE misses a required prop of
         // the intersected index-value type → TS2322 at the key, or carries an excess prop →
         // TS2353 at the excess key. The relation engine passes these (it only checks index-sig
         // PRESENCE for nominal/function sources), so this dedicated AST-shape walker owns them.
-        checkIntersectionIndexSigValueExcess()
+        pass("checkIntersectionIndexSigValueExcess") { checkIntersectionIndexSigValueExcess() }
         // 6a''''. requiredMappedTypeModifierTrumpsVariance — `Required<{..}>` is unmodeled (→
         // errorType, engine emits nothing), so a dedicated AST walker owns: TS2741 (assigning
         // between Required<{..}> vars), TS2322 (assigning between Foo<{..}> vars where Foo has
         // a `Required<T>` member), TS2339 (chained `aa.a.b` member-missing on the Required<arg>).
-        checkRequiredMappedVariance()
+        pass("checkRequiredMappedVariance") { checkRequiredMappedVariance() }
         // 6b. TS2719 — `this.x = a` where target prop type is the class type parameter `T`
         // and source identifier is annotated with a top-level interface/type-alias also
         // named `T`. Same display name, unrelated identities. (16.4da)
-        checkIdenticallyNamedTypeAssignment()
+        pass("checkIdenticallyNamedTypeAssignment") { checkIdenticallyNamedTypeAssignment() }
         // 7. Check for implicit any parameters (TS7006)
         if (options.noImplicitAny || options.strict) {
-            checkImplicitAnyParameters()
+            pass("checkImplicitAnyParameters") { checkImplicitAnyParameters() }
         } else if (!options.strictExplicitlyFalse) {
             // Pure-default mode (neither strict/noImplicitAny set, nor @strict:false):
             // the harness still fires TS7006 for the unannotated `var x = arrow/fn-expr`
             // shape. Narrow walker — see checkImplicitAnyDefaultVarFunctions docs.
-            checkImplicitAnyDefaultVarFunctions()
+            pass("checkImplicitAnyDefaultVarFunctions") { checkImplicitAnyDefaultVarFunctions() }
         }
         // 7a'. TS7009: `new F()` where F is a plain function (no construct signature)
         // implicitly has type 'any'. Gated on noImplicitAny/strict (TypeScript's tests
         // set @noimplicitany explicitly — it is NOT a harness default like TS2683).
         if (options.noImplicitAny || options.strict) {
-            checkImplicitAnyNewExpressions()
+            pass("checkImplicitAnyNewExpressions") { checkImplicitAnyNewExpressions() }
         }
         // 7a''. TS7057: a `yield` expression inside a generator FUNCTION DECLARATION that
         // lacks a return-type annotation has implicit-any result type (no contextual type
         // tells what `next()` passes back). Gated noImplicitAny/strict. FP-safe subset:
         // only FunctionDeclaration generators (never contextually typed).
         if (options.noImplicitAny || options.strict) {
-            checkImplicitAnyYieldExpressions()
+            pass("checkImplicitAnyYieldExpressions") { checkImplicitAnyYieldExpressions() }
         }
         // 7a2. TS1320 — `yield* obj` in an async generator where obj's async-iterator
         // chain yields a non-promise thenable ({ then() {} }). (crashInYieldStarInAsyncFunction)
-        checkAsyncYieldStarThenable()
+        pass("checkAsyncYieldStarThenable") { checkAsyncYieldStarThenable() }
         // 7b. TS7019: Rest parameter implicitly has 'any[]' type — fires by default unless strict=false
         // This fires even without noImplicitAny (same behavior as TS7006 for parameter properties).
         if (!options.strictExplicitlyFalse) {
-            checkImplicitAnyRestParameters()
+            pass("checkImplicitAnyRestParameters") { checkImplicitAnyRestParameters() }
         }
         // 7b'. TS2370: A rest parameter must be of an array type — fires unconditionally
         // (syntactic type-shape error, not an implicit-any diagnostic).
-        checkNonArrayRestParameters()
+        pass("checkNonArrayRestParameters") { checkNonArrayRestParameters() }
         // 7b''. B74.4: TS7051/TS7006 for interface MethodDeclaration params whose name
         // is a strict-mode reserved word — fires unconditionally (mirrors TypeScript's
         // behavior in `strictModeReservedWord2.ts`-style sources).
         if (!options.strictExplicitlyFalse) {
-            checkReservedWordInterfaceParams()
+            pass("checkReservedWordInterfaceParams") { checkReservedWordInterfaceParams() }
         }
         // 17.218: TS2495 — `for-of <expr>` where expr is non-iterable. Only fires
         // when the user's `@lib` excludes es2015+ (es2015.iterable provides
         // Symbol.iterator); without it, only Array and string are iterable.
-        checkForOfNonIterable()
+        pass("checkForOfNonIterable") { checkForOfNonIterable() }
         // B438e: TS2488 / TS2504 for iterating an object whose `[Symbol.iterator]` /
         // `[Symbol.asyncIterator]` method REQUIRES a parameter (iteratorExtraParameters).
-        checkIteratorMethodExtraParameters()
+        pass("checkIteratorMethodExtraParameters") { checkIteratorMethodExtraParameters() }
         // 7b''. TS7033: Abstract get accessor with no return type annotation → implicit any.
         // Gated on noImplicitAny/strict.
         if (options.noImplicitAny || options.strict) {
-            checkAbstractAccessorReturnTypes()
+            pass("checkAbstractAccessorReturnTypes") { checkAbstractAccessorReturnTypes() }
         }
         // 7b'''. TS18045: 'accessor' modifier requires target ES2015+.
-        checkAccessorModifierTarget()
+        pass("checkAccessorModifierTarget") { checkAccessorModifierTarget() }
         // B72.1: TS2545 — A mixin class must have a constructor with a single rest
         // parameter of type 'any[]'. NARROW gate: fires only when the
         // class-extends-TypeParam's constraint's construct signature has a
@@ -2045,341 +2048,341 @@ class Checker(
         // shape). Valid `Constructor<T> = new (...args: any[]) => T` shapes do
         // NOT trigger TS2545 here (mixin without explicit constructor is OK
         // for the valid pattern).
-        checkMixinClassConstructor()
+        pass("checkMixinClassConstructor") { checkMixinClassConstructor() }
         // 7b'''. TS2669: `declare global { ... }` nested inside a regular namespace.
-        checkInvalidGlobalAugmentations()
+        pass("checkInvalidGlobalAugmentations") { checkInvalidGlobalAugmentations() }
         // 7b''''. TS8024: JSDoc `@param` tag with name not matching any function parameter.
         // JS-like files only (`.js`/`.jsx`/`.cjs`/`.mjs`).
-        checkJSDocParamTags()
+        pass("checkJSDocParamTags") { checkJSDocParamTags() }
         // 7b'''''. TS8021: JSDoc `@typedef` tag lacking BOTH a `{type}` annotation AND
         // any `@property`/`@member` tags. JS-like files only.
-        checkJSDocTypedefTags()
+        pass("checkJSDocTypedefTags") { checkJSDocTypedefTags() }
         // B438c: TS1337 + TS1005 for a malformed index signature inside a JSDoc inline-object
         // `@typedef {{ [key: foo] boolean }}` in a checkJs file (uniqueSymbolJs).
-        checkJsDocTypedefIndexSignature()
+        pass("checkJsDocTypedefIndexSignature") { checkJsDocTypedefIndexSignature() }
         // B423: TS2304/TS2552 for an unresolvable single-identifier `@typedef {Name}` /
         // `@property {Name}` type in a checkJs .js file.
-        checkJsDocTypeNameResolution()
+        pass("checkJsDocTypeNameResolution") { checkJsDocTypeNameResolution() }
         // B540: TS2344 (+TS2208) for `@typedef {import('./o').Name<Arg>}` where local Arg is an
         // unconstrained `@template` but the imported Name's template is constrained.
-        checkJsDocImportTypedefConstraint()
+        pass("checkJsDocImportTypedefConstraint") { checkJsDocImportTypedefConstraint() }
         // B481c: TS2339 for a property access on a generic fn's `TP | object` param
         // inside a single-return body (no narrowing possible) where the bare type-param
         // member lacks the property (e.g. `value.hasOwnProperty` on `T | { data: T }`).
-        checkTypeParamUnionMemberAccess()
+        pass("checkTypeParamUnionMemberAccess") { checkTypeParamUnionMemberAccess() }
         // B424: TS2339 for reading an undeclared `this.<prop>` inside a top-level
         // constructor-style `function NAME() { … }` in a checkJs JS file.
-        checkJsConstructorThisReads()
+        pass("checkJsConstructorThisReads") { checkJsConstructorThisReads() }
         // B432: TS2339 for `this.<prop>` inside a checkJs prototype method (`Color.prototype
         // = {…}`) where prop is not a constructor `this.X=` write nor a prototype key.
-        checkJsPrototypeMethodThisReads()
+        pass("checkJsPrototypeMethodThisReads") { checkJsPrototypeMethodThisReads() }
         // B427: TS2339 for a DEEP read of an uncreated CommonJS export member in a
         // checkJs .js file (`exports.a.b.c = 0` reads `exports.a` which is never
         // declared via `exports.a = …`). Display `typeof import("<base>")`.
-        checkJsModuleExportsDeepReads()
+        pass("checkJsModuleExportsDeepReads") { checkJsModuleExportsDeepReads() }
         // B532: TS2741 for a checkJs `self['X'] = self['X'] || {}` re-bind where X is a
         // top-level empty-object var with expando members (the `{}` RHS misses them).
-        checkJsSelfElementAccessExpandoMissing()
+        pass("checkJsSelfElementAccessExpandoMissing") { checkJsSelfElementAccessExpandoMissing() }
         // B438d: TS2303 + TS2339 for a checkJs CJS callable-exports module that aliases one
         // export member to an undeclared other (`module.exports=fn; exports.X=exports.Y`).
-        checkJsCjsExpandoAliasReads()
+        pass("checkJsCjsExpandoAliasReads") { checkJsCjsExpandoAliasReads() }
         // B441: TS2323 for a checkJs CJS export property declared by BOTH an `E.X = …`
         // assignment AND an `Object.defineProperty(E, "X", …)` where `E` is the local bound
         // to `module.exports` (ensureNoCrashExportAssignmentDefineProperrtyPotentialMerge).
-        checkJsCjsExportObjectRedeclare()
+        pass("checkJsCjsExportObjectRedeclare") { checkJsCjsExportObjectRedeclare() }
         // B428: TS2339 for reading `this.<X>` in a checkJs class constructor that uses
         // `Object.defineProperty(this, "X", …)` — tsc does NOT (yet) treat that as a
         // property declaration, so `this.X` does not exist on the class type.
-        checkJsObjectDefinePropertyThisReads()
+        pass("checkJsObjectDefinePropertyThisReads") { checkJsObjectDefinePropertyThisReads() }
         // B433: TS2339 for `X.<undeclared>` where X is a local function-valued binding
         // augmented by Object.defineProperty(X,…) in a checkJs file.
-        checkJsObjectDefinePropertyLocalFnReads()
+        pass("checkJsObjectDefinePropertyLocalFnReads") { checkJsObjectDefinePropertyLocalFnReads() }
         // B429: a checkJs class with an illegal `declare <prop>: T` annotation (TS8009/
         // TS8010 already fire) STILL declares the property type T — so `this.prop = …`
         // (TS2322) and `this.prop.<member>` (TS2339) are type-checked against T.
-        checkJsAmbientDeclaredClassProperties()
+        pass("checkJsAmbientDeclaredClassProperties") { checkJsAmbientDeclaredClassProperties() }
         // B431: TS2339 for an expando-function property accessed inside a NESTED function
         // where it was never declared at file scope (`Foo.X` inside `function bar(p=(Foo.X=1))`).
-        checkExpandoFunctionNestedReads()
+        pass("checkExpandoFunctionNestedReads") { checkExpandoFunctionNestedReads() }
         // B437: TS2345 for args passed to a JS function with a JSDoc primitive rest param
         // (`@param {...number} a`) — dedicated walker (the `.js` checkCallExpressionTypes
         // skip is load-bearing). JS-like files only.
-        checkJsRestParamArgTypes()
+        pass("checkJsRestParamArgTypes") { checkJsRestParamArgTypes() }
         // B437b: TS2322 + TS2554 for a JS `@callback`-typed variable initialized with `{}`
         // and called with arguments (jsdocCallbackAndType). JS-like files only.
-        checkJsCallbackTypeAssignments()
+        pass("checkJsCallbackTypeAssignments") { checkJsCallbackTypeAssignments() }
         // B437c: TS2322 for a JS arrow with @template T + @returns {T} whose body is a JSDoc
         // cast to a concrete type (arrowExpressionBodyJSDoc). JS-like files only.
-        checkJsDocArrowReturnConstraint()
+        pass("checkJsDocArrowReturnConstraint") { checkJsDocArrowReturnConstraint() }
         // B438: TS2367 for comparing two distinct JSDoc `@type {unique symbol}` consts in a
         // checkJs file (uniqueSymbolJs2) — AST-only (our engine resolves `unique symbol` to the
         // shared esSymbolType singleton, so the standard no-overlap path can't see the distinct
         // nominal identities). JS-like files only.
-        checkJsUniqueSymbolNoOverlap()
+        pass("checkJsUniqueSymbolNoOverlap") { checkJsUniqueSymbolNoOverlap() }
         // 7b''''' a2. B229: TS7014+TS1110+TS2304 for a JSDoc closure-style function type
         // with a malformed `@`-prefixed argument. JS-like files only.
-        checkJSDocClosureFnTypeMalformedArgs()
+        pass("checkJSDocClosureFnTypeMalformedArgs") { checkJSDocClosureFnTypeMalformedArgs() }
         // 7b''''' a3. B230: TS2345 for `<localFn>.apply(x, arguments)` under strict in
         // JS files — IArguments vs the inferred parameter tuple. JS-like files only.
-        checkJsApplyArgumentsTuple()
+        pass("checkJsApplyArgumentsTuple") { checkJsApplyArgumentsTuple() }
         // B557: checkJs `importScripts.apply(this, arguments)` (web-worker global) → TS2345
         // 'IArguments' vs 'string[]' (strictBindCallApply, default-on). Corpus-unique walker.
-        checkJsImportScriptsApplyArguments()
+        pass("checkJsImportScriptsApplyArguments") { checkJsImportScriptsApplyArguments() }
         // 7b''''' a4. B234: TS2349 for calling a literal-initialized never-reassigned
         // top-level var in a checkJs file, with tsc's @ts-ignore directive walk-up.
-        checkJsUncallableVarCalls()
+        pass("checkJsUncallableVarCalls") { checkJsUncallableVarCalls() }
         // 7b''''' bis. TS7012: a JSDoc `@overload` block lacking a `@returns`/`@return`
         // tag → the overload implicitly returns `any`. JS-like files under noImplicitAny.
-        checkJSDocOverloadTags()
+        pass("checkJSDocOverloadTags") { checkJSDocOverloadTags() }
         // 7b''''''. TS2855: `super.X` accessing a parent-class instance FIELD
         // (not a prototype method/accessor) in a derived JS class. JS-like files only.
-        checkClassFieldSuperAccessJs()
+        pass("checkClassFieldSuperAccessJs") { checkClassFieldSuperAccessJs() }
         // 7c. TS7005: Variable implicitly has 'any' type — fires unconditionally for:
         //   - ambient declarations (declare var/let/const without type annotation)
         //   - const/let without type AND without initializer (uninitialized block-scoped vars)
         // Both fire regardless of noImplicitAny flag.
         if (!options.strictExplicitlyFalse) {
-            checkImplicitAnyVariables()
+            pass("checkImplicitAnyVariables") { checkImplicitAnyVariables() }
         }
         // 7d (B263). TS2688 for unresolvable `types` compiler-option entries + populate
         // the unresolved-type-lib name strip BEFORE the unresolved-name walk.
-        checkTypeLibraryEntryPoints()
+        pass("checkTypeLibraryEntryPoints") { checkTypeLibraryEntryPoints() }
         // 8. Check for unresolved names (TS2304)
-        checkUnresolvedNames()
-        checkDtsImportEqualsAliasResolved()
+        pass("checkUnresolvedNames") { checkUnresolvedNames() }
+        pass("checkDtsImportEqualsAliasResolved") { checkDtsImportEqualsAliasResolved() }
         // B98.r101: TS2367 for a const-literal compared to a different literal.
-        checkConstLiteralComparisons()
+        pass("checkConstLiteralComparisons") { checkConstLiteralComparisons() }
         // 9. Check JSX elements for missing type definitions (TS7026)
         // TS7026 is an implicit-any diagnostic, so only fire when noImplicitAny/strict is on.
         // With @strict: false or @noImplicitAny: false, implicit any is allowed → no TS7026.
         if (options.jsx != null && (options.noImplicitAny || options.strict) && !options.strictExplicitlyFalse) {
-            checkJsxImplicitAny()
+            pass("checkJsxImplicitAny") { checkJsxImplicitAny() }
         }
         // 9b (B253). JSX intrinsic-element attribute checking vs JSX.IntrinsicElements
         // member types (TS2322). NOT implicit-any gated — only on a jsx mode being set.
         if (options.jsx != null) {
-            checkJsxIntrinsicAttributeTypes()
+            pass("checkJsxIntrinsicAttributeTypes") { checkJsxIntrinsicAttributeTypes() }
             // tsxTypeArgumentPartialDefinitionStillErrors: uppercase JSX tag → generic fn
             // returning a primitive (TS2786) + attr value vs Record<string,T> value type (TS2322).
-            checkJsxValueComponentReturnsPrimitive()
+            pass("checkJsxValueComponentReturnsPrimitive") { checkJsxValueComponentReturnsPrimitive() }
         }
         // 10. Check for duplicate identifiers (TS2300)
-        checkDuplicateIdentifiers()
+        pass("checkDuplicateIdentifiers") { checkDuplicateIdentifiers() }
         // 10b. B332: TS2300 '(Missing)' for the file-level empty-name group (parse
         // recovery — reservedWords2).
-        checkEmptyNameDeclarationConflicts()
+        pass("checkEmptyNameDeclarationConflicts") { checkEmptyNameDeclarationConflicts() }
         // 10c. B335: object-literal this-circular members (TS7023 + TS2339).
-        checkObjectLiteralThisCircularMembers()
+        pass("checkObjectLiteralThisCircularMembers") { checkObjectLiteralThisCircularMembers() }
         // 40c. TS2395 export-consistency for merges inside string-named ambient
         // modules in .d.ts files (the general path skips .d.ts files).
-        checkDtsAmbientModuleExportConsistency()
+        pass("checkDtsAmbientModuleExportConsistency") { checkDtsAmbientModuleExportConsistency() }
         // 10b. Check catch clause redeclaration (TS2492)
-        checkCatchClauseRedeclarations()
+        pass("checkCatchClauseRedeclarations") { checkCatchClauseRedeclarations() }
         // 11. Check export assignment conflicts (TS2309)
-        checkExportAssignmentConflicts()
+        pass("checkExportAssignmentConflicts") { checkExportAssignmentConflicts() }
         // 12. Check strict mode identifier restrictions (TS1100)
         // Runs unconditionally — per-file strict mode detection inside
-        checkStrictModeIdentifiers()
+        pass("checkStrictModeIdentifiers") { checkStrictModeIdentifiers() }
         // 12b. Check class body strict mode (TS1210) — class bodies are always strict
-        checkClassStrictModeIdentifiers()
+        pass("checkClassStrictModeIdentifiers") { checkClassStrictModeIdentifiers() }
         // 12c. Check access modifiers on object literal members (TS1042)
-        checkObjectLiteralModifiers()
+        pass("checkObjectLiteralModifiers") { checkObjectLiteralModifiers() }
         // 12d. Check 'arguments' in class field initializers / static blocks (TS2815)
-        checkArgumentsInClassFieldInitializers()
+        pass("checkArgumentsInClassFieldInitializers") { checkArgumentsInClassFieldInitializers() }
         // 13. Check export= in ES module files (TS1203)
-        checkExportAssignmentInEsModule()
+        pass("checkExportAssignmentInEsModule") { checkExportAssignmentInEsModule() }
         // 14. Check unresolved module specifiers (TS2307)
-        checkUnresolvedModules()
+        pass("checkUnresolvedModules") { checkUnresolvedModules() }
         // 14·B472. TS2339 for a missing member of a `.`/`..` dir-index default import.
-        checkDotDirIndexDefaultImports()
+        pass("checkDotDirIndexDefaultImports") { checkDotDirIndexDefaultImports() }
         // 14·B550. checkJs `const x = require("./y.json"|"./y.js")` → x has the module's
         //   object shape; `x.<undeclared>` → TS2339; a JSDoc `@type {{...}}`-annotated such
         //   var requiring a prop missing from the module shape → TS2741 + TS2728.
-        checkRequireOfJsonOrCjsModuleInJs()
+        pass("checkRequireOfJsonOrCjsModuleInJs") { checkRequireOfJsonOrCjsModuleInJs() }
         // B573: `import X = require('./y.json')` in a .ts file where y.json is malformed
         // (bare identifiers only) → X has shape `{ <id>: any; ... }`; `X.<undeclared>` → TS2339.
-        checkRequireOfMalformedJsonInTs()
+        pass("checkRequireOfMalformedJsonInTs") { checkRequireOfMalformedJsonInTs() }
         // 14·B551. A generic identity-callback `match<T>(cb:(value:T)=>boolean):T` called in a
         //   CONTEXTUAL-OPTIONAL position (`foo({y: match(y=>y>0)})` / `foo2([match(y=>y>0)])`,
         //   key/element optional, eopt=false) → T infers `X|undefined` → the relational operand
         //   is possibly undefined → TS18048.
-        checkContextualOptionalIdentityCallback()
+        pass("checkContextualOptionalIdentityCallback") { checkContextualOptionalIdentityCallback() }
         // 14a. Check declaration-emit nameability for nested-node_modules types (TS2883)
-        checkDeclarationEmitNameability()
+        pass("checkDeclarationEmitNameability") { checkDeclarationEmitNameability() }
         // 14a'. Check declaration-emit computed-symbol-key nameability (TS4023)
-        checkDeclarationEmitComputedSymbolNameability()
+        pass("checkDeclarationEmitComputedSymbolNameability") { checkDeclarationEmitComputedSymbolNameability() }
         // 14a''. B314: mapped-type unique-symbol key serialization (TS4118)
-        checkDeclarationEmitMappedUniqueSymbolKey()
+        pass("checkDeclarationEmitMappedUniqueSymbolKey") { checkDeclarationEmitMappedUniqueSymbolKey() }
         // 14a'''b. B317: exported anonymous-class-typed mixin results with
         // private/protected members (TS4094)
-        checkDeclarationEmitMixinPrivateProtected()
+        pass("checkDeclarationEmitMixinPrivateProtected") { checkDeclarationEmitMixinPrivateProtected() }
         // 14a'''c. B318: expando property typed by a private-module name (TS4032)
-        checkDeclarationEmitExpandoPrivateName()
+        pass("checkDeclarationEmitExpandoPrivateName") { checkDeclarationEmitExpandoPrivateName() }
         // 14a'''. B173: huge inferred type exceeds the declaration-emit serialization cap (TS7056)
-        checkDeclarationEmitHugeInferredType()
+        pass("checkDeclarationEmitHugeInferredType") { checkDeclarationEmitHugeInferredType() }
         // B541: cyclic inferred return type (TS5088) — generic fn returning a declare-fn call
         // whose return references a self-referential conditional+infer alias.
-        checkDeclarationEmitCyclicInferredReturn()
+        pass("checkDeclarationEmitCyclicInferredReturn") { checkDeclarationEmitCyclicInferredReturn() }
         // 14a''. Check imports resolving to .jsx/.tsx with jsx unset (TS6142)
-        checkJsxImportResolutions()
+        pass("checkJsxImportResolutions") { checkJsxImportResolutions() }
         // 14a'''. TS5067: Invalid value for 'jsxFactory' — must be a dotted identifier sequence.
-        checkJsxFactoryValidity()
+        pass("checkJsxFactoryValidity") { checkJsxFactoryValidity() }
         // 14a''''. TS2318: essential es5-base global types missing under dotted-only @lib.
-        checkMissingEssentialGlobalTypes()
+        pass("checkMissingEssentialGlobalTypes") { checkMissingEssentialGlobalTypes() }
         // 14a'''''. B178: TS2318 'Iterable' for rest-only array binding patterns under es5-lib.
-        checkGlobalIterableRestOnlyBindingPattern()
+        pass("checkGlobalIterableRestOnlyBindingPattern") { checkGlobalIterableRestOnlyBindingPattern() }
         // 14'. Check `import = require()` of a non-module file (TS2306)
-        checkImportEqualsRequireOfNonModule()
+        pass("checkImportEqualsRequireOfNonModule") { checkImportEqualsRequireOfNonModule() }
         // 14'b. Check `import * as X from 'pkg'` where bare specifier resolves via
         // node_modules to a script-shaped .d.ts (no imports/exports) — TS2306
-        checkNamespaceImportOfNonModule()
+        pass("checkNamespaceImportOfNonModule") { checkNamespaceImportOfNonModule() }
         // 14''. Check `<Interface>null` / `<Class>null` casts for TS2352
-        checkNullTypeAssertionOverlap()
+        pass("checkNullTypeAssertionOverlap") { checkNullTypeAssertionOverlap() }
         // 14''b. Check same-target Reference cast bidirectional non-overlap for TS2352
-        checkSameTargetReferenceCastOverlap()
+        pass("checkSameTargetReferenceCastOverlap") { checkSameTargetReferenceCastOverlap() }
         // 14''c. Check array-source -> class-target cast non-overlap for TS2352
-        checkArrayToClassCastOverlap()
+        pass("checkArrayToClassCastOverlap") { checkArrayToClassCastOverlap() }
         // 14''d. Check JSDoc `/** @type {T} */(void 0)` cast in JS files for TS2352
-        checkJSDocVoidCastNonOverlap()
+        pass("checkJSDocVoidCastNonOverlap") { checkJSDocVoidCastNonOverlap() }
         // 14''e. Check `<TypeParam>concrete` casts where concrete is a strict
         // subtype of TypeParam's constraint — TS2352 (B60.3)
-        checkTypeParamStrictSubtypeCast()
+        pass("checkTypeParamStrictSubtypeCast") { checkTypeParamStrictSubtypeCast() }
         // 14''f. Check `T extends T` (circular constraint) — TS2313 (B60.10)
-        checkTypeParamCircularConstraint()
+        pass("checkTypeParamCircularConstraint") { checkTypeParamCircularConstraint() }
         // 14''f2. incorrectRecursiveMappedTypeConstraint — `<T extends { [P in T]: ... }>`: the
         // mapped-type constraint iterates over T DIRECTLY → T and P both have circular constraints
         // (TS2313 ×2); the existing TypeReference-chain check breaks on a mapped-type constraint.
-        checkCircularMappedTypeConstraint()
+        pass("checkCircularMappedTypeConstraint") { checkCircularMappedTypeConstraint() }
         // 14''g. TS2339/TS2349/TS2351 for ops on effectively-unconstrained TypeParam vars (B60.12)
-        checkTypeParamTypedOps()
+        pass("checkTypeParamTypedOps") { checkTypeParamTypedOps() }
         // 14a'. Check relative imports/exports inside `declare module "X"` augmentations (TS2439)
-        checkRelativeImportsInAmbientModules()
+        pass("checkRelativeImportsInAmbientModules") { checkRelativeImportsInAmbientModules() }
         // 14a. Check invalid module augmentations (TS2664)
-        checkAmbientModuleAugmentations()
+        pass("checkAmbientModuleAugmentations") { checkAmbientModuleAugmentations() }
         // 14aa. Check .d.ts top-level declarations for 'declare'/'export' modifier (TS1046)
-        checkDtsTopLevelDeclarations()
+        pass("checkDtsTopLevelDeclarations") { checkDtsTopLevelDeclarations() }
         // 14b. Check default imports from modules without default export (TS1192)
-        checkDefaultImports()
-        checkNamespaceImportSyntheticDefaultCall()
+        pass("checkDefaultImports") { checkDefaultImports() }
+        pass("checkNamespaceImportSyntheticDefaultCall") { checkNamespaceImportSyntheticDefaultCall() }
         // 8a-bis. B235: TS2339 for absent members of `await import('<esm-pkg>')` namespaces.
-        checkDynamicImportNamespaceMembers()
+        pass("checkDynamicImportNamespaceMembers") { checkDynamicImportNamespaceMembers() }
         // 8a-ter. B494: TS2339 for absent members of `import * as foo from "<bare>"` where
         // <bare> is a single non-augmentation ambient `declare module "<bare>"` definition.
-        checkAmbientModuleNamespaceImportMembers()
+        pass("checkAmbientModuleNamespaceImportMembers") { checkAmbientModuleNamespaceImportMembers() }
         // 8a-quater. B495: TS2322 for `const x: any[] = [] as Homomorphic<T>` where T's
         // constraint union contains a readonly tuple (readonly mapped result ↛ mutable array).
-        checkHomomorphicMappedCastToArray()
+        pass("checkHomomorphicMappedCastToArray") { checkHomomorphicMappedCastToArray() }
         // 14b'. TS2694 for `X.member` type refs inside an ambient module where X is a
         // module-local namespace shadowing any file-level namespace of the same name.
-        checkAmbientModuleLocalNamespaceMemberRefs()
+        pass("checkAmbientModuleLocalNamespaceMemberRefs") { checkAmbientModuleLocalNamespaceMemberRefs() }
         // 14b''. B396: TS2694 for `X.member` where X is a same-file top-level `declare namespace`
         // in a MODULE file (module-local, not cross-file-merged — sidesteps Blocker #3).
-        checkModuleFileLocalNamespaceMemberRefs()
+        pass("checkModuleFileLocalNamespaceMemberRefs") { checkModuleFileLocalNamespaceMemberRefs() }
         // 14b'''. B400: TS2339 for a NON-EXPORTED nested namespace member referenced across
         // separate blocks of a merged outer namespace (block-local, does not merge).
-        checkNonExportedNestedNamespaceCrossBlockRefs()
+        pass("checkNonExportedNestedNamespaceCrossBlockRefs") { checkNonExportedNestedNamespaceCrossBlockRefs() }
         // 14b''''. B403: TS2322 for `g = f` assigning a generic function value with a stricter
         // type-parameter constraint to one with a looser (unconstrained) parameter.
-        checkGenericFunctionValueAssignmentConstraints()
+        pass("checkGenericFunctionValueAssignmentConstraints") { checkGenericFunctionValueAssignmentConstraints() }
         // 14b''''b. B404: TS2322 for an object-destructuring default value incompatible with the
         // destructured property's type from a TUPLE annotation (e.g. `{length = {a:1}}: [number]`).
-        checkTupleDestructuringDefaultTypes()
+        pass("checkTupleDestructuringDefaultTypes") { checkTupleDestructuringDefaultTypes() }
         // 14b''''c. B405: TS2345 for a lambda argument passed where the parameter is an interface
         // that `extends Function` and adds extra required properties (a lambda lacks them).
-        checkLambdaToFunctionSubtypeArgs()
+        pass("checkLambdaToFunctionSubtypeArgs") { checkLambdaToFunctionSubtypeArgs() }
         // 14c. Check named imports/re-exports for non-existent module members (TS2305)
-        checkNamedImportExistence()
+        pass("checkNamedImportExistence") { checkNamedImportExistence() }
         // tsxResolveExternalModuleExportsTypes — `import { Test } from 'a'` where 'a' is a bare
         // @types `export = <namespace>` module and `Test` is only an EMPTY/uninstantiated
         // `namespace Test {}` added by a cross-file `declare module 'a'` augmentation → TS2305.
-        checkBareAtTypesExportEqualsMissingNamedImport()
+        pass("checkBareAtTypesExportEqualsMissingNamedImport") { checkBareAtTypesExportEqualsMissingNamedImport() }
         // 14c'. Check for imports from `@types/...` packages (TS6137)
-        checkTypesPackageImports()
+        pass("checkTypesPackageImports") { checkTypesPackageImports() }
         // 14c''. .d.ts named imports from an `export =` namespace/object (TS2305)
-        checkNamedImportFromExportEqualsInDts()
+        pass("checkNamedImportFromExportEqualsInDts") { checkNamedImportFromExportEqualsInDts() }
         // conflictingDeclarationsImportFromNamespace1/2 — `import * as N from '<pkg>'` +
         // self-calling `export const N = () => N()` → TS2497 + TS7023.
-        checkConflictingNamespaceImportSelfConst()
+        pass("checkConflictingNamespaceImportSelfConst") { checkConflictingNamespaceImportSelfConst() }
         // 15. Check break/continue crossing function boundaries (TS1107)
-        checkJumpTargets()
+        pass("checkJumpTargets") { checkJumpTargets() }
         // 15c. noImplicitAnyLoopCrash — a spread `f(...x)` of a NON-ITERABLE operand into a
         // fixed-arity (no-rest) function → TS2556 (+ TS2488/TS2461). Runs BEFORE the arg-count
         // pass so it can register the call to suppress the spurious TS2554.
-        checkSpreadNonIterableIntoFixedArity()
+        pass("checkSpreadNonIterableIntoFixedArity") { checkSpreadNonIterableIntoFixedArity() }
         // 15d. downlevelLetConst16 — `for ([binding] = []; …)` and `for ([binding]/{binding} of [])`
         // over an EMPTY array literal: the for-init `[]` is the empty tuple (TS2493 OOB), the for-of
         // `[]` is `undefined[]` (element undefined → TS2488/TS2461 array-destructure, TS2339 object).
-        checkForLoopEmptyArrayDestructure()
+        pass("checkForLoopEmptyArrayDestructure") { checkForLoopEmptyArrayDestructure() }
         // 15e. longObjectInstantiationChain1 — a `const oN = merge(prev, {objlit})` chain where the
         // generic `merge<base,props> = Omit<…> & props` alias degrades to `any` in our engine; a
         // dedicated walker rebuilds the accumulated property set + the `merge<…>` display from the
         // AST and emits TS2339 for out-of-set property accesses.
-        checkMergeAliasInstantiationChain()
+        pass("checkMergeAliasInstantiationChain") { checkMergeAliasInstantiationChain() }
         // 15f. longObjectInstantiationChain2 — the METHOD-call sibling: `const oN = o(N-1).merge({…})`
         // over `type Type<t> = { shape: t; merge: <r>(r) => Type<merge<t,r>> }`, accessed as
         // `oN.shape.pX`. Same `merge<…>` display, but a LITERAL base from `declare const o1: Type<{…}>`.
-        checkMergeTypeMethodChain()
+        pass("checkMergeTypeMethodChain") { checkMergeTypeMethodChain() }
         // 15g. longObjectInstantiationChain3 — the CONDITIONAL-alias sibling: `merge<base,props> =
         // keyof base & keyof props extends never ? base & props : Omit<base, keyof props & keyof
         // base> & props`. Same free-`merge(A,B)` chain but the display UNFOLDS the conditional to
         // `A & B` (disjoint keys) or `Omit<A, "shared"> & B` (overlapping keys).
-        checkMergeConditionalChain()
+        pass("checkMergeConditionalChain") { checkMergeConditionalChain() }
         // 15h. unionSubtypeReductionErrors — an array literal with >1000 DISTINCT object-literal
         // elements collapses to a union too complex to represent → TS2590 at the array span.
-        checkArrayLiteralUnionTooComplex()
+        pass("checkArrayLiteralUnionTooComplex") { checkArrayLiteralUnionTooComplex() }
         // 16. Check call expression argument counts (TS2554)
-        checkArgumentCounts()
+        pass("checkArgumentCounts") { checkArgumentCounts() }
         // 17. Check missing function implementations (TS2391)
-        checkMissingImplementations()
+        pass("checkMissingImplementations") { checkMissingImplementations() }
         // 17c. B460: generic-call contextual arrow-return mismatch (TS2741) for the
         // narrow "≥2 bare-TP value params + function-typed-of-TP params + arrow args"
         // shape (typeParameterFixingWithContextSensitiveArguments2/3).
-        checkGenericCallContextualArrowReturns()
-        checkGenericThenChainConstraints()
-        checkChainedTypeParamClimbing()
+        pass("checkGenericCallContextualArrowReturns") { checkGenericCallContextualArrowReturns() }
+        pass("checkGenericThenChainConstraints") { checkGenericThenChainConstraints() }
+        pass("checkChainedTypeParamClimbing") { checkChainedTypeParamClimbing() }
         // 18. Check unreachable code (TS7027)
         if (options.allowUnreachableCode == false) {
-            checkUnreachableCode()
+            pass("checkUnreachableCode") { checkUnreachableCode() }
         }
         // 18b. Check unused labels (TS7028)
         if (options.allowUnusedLabels == false) {
-            checkUnusedLabels()
+            pass("checkUnusedLabels") { checkUnusedLabels() }
         }
         // 18c. Check fallthrough cases in switch (TS7029)
         if (options.noFallthroughCasesInSwitch) {
-            checkFallthroughCases()
+            pass("checkFallthroughCases") { checkFallthroughCases() }
         }
         // 18d. Check not all code paths return a value (TS7030/TS2355/TS2366).
         // Always run (not gated by noImplicitReturns) because TS2355 fires for functions with
         // explicit non-void return type and no return statements, regardless of noImplicitReturns.
         // When noImplicitReturns is true, TS2366 is emitted instead of TS7030/TS2355 for non-async
         // functions with definitely-non-nullable return types.
-        checkImplicitReturns()
+        pass("checkImplicitReturns") { checkImplicitReturns() }
         // 18d2. TS2677: type predicate's type must be assignable to its parameter's type.
         // Currently scoped to the `?T` JSDoc-nullable recovery pattern: `a: T` + `a is ?T`.
-        checkTypePredicateNullableRecovery()
+        pass("checkTypePredicateNullableRecovery") { checkTypePredicateNullableRecovery() }
         // 18e. Check exported type alias references nested-only private name (TS4081)
         if (options.declaration) {
-            checkExportTypeAliasPrivateNameRef()
-            checkExportedAnonClassExprPrivateMembers()
+            pass("checkExportTypeAliasPrivateNameRef") { checkExportTypeAliasPrivateNameRef() }
+            pass("checkExportedAnonClassExprPrivateMembers") { checkExportedAnonClassExprPrivateMembers() }
         }
         // 19. Check type used as value (TS2693)
-        checkTypeUsedAsValue()
+        pass("checkTypeUsedAsValue") { checkTypeUsedAsValue() }
         // 19c. B514: namespace-`typeof` assignability (TS2741) + `typeof <type-only
         // namespace alias>` value-use (TS2708) — internal namespace aliases.
-        checkNamespaceTypeofAssignability()
+        pass("checkNamespaceTypeofAssignability") { checkNamespaceTypeofAssignability() }
         // 20. Check always-truthy expressions (TS2872)
-        checkAlwaysTruthy()
+        pass("checkAlwaysTruthy") { checkAlwaysTruthy() }
         // 20a. Check uncalled function in conditional position (TS2774)
         // Strict-null-checks-only — see helper for full conditions.
-        checkUncalledFunctionsInConditions()
+        pass("checkUncalledFunctionsInConditions") { checkUncalledFunctionsInConditions() }
         // 20b. Check comma operator left side unused (TS2695)
-        checkCommaOperatorUnused()
+        pass("checkCommaOperatorUnused") { checkCommaOperatorUnused() }
         // B277: TS2871/TS2869 `??` nullish predicates + while/do TS2872/TS2873 truthiness.
         // Must run AFTER checkCommaOperatorUnused so same-position TS2695 sorts first.
-        checkNullishPredicates()
+        pass("checkNullishPredicates") { checkNullishPredicates() }
         // 21. Check null/undefined used in invalid positions (TS18050)
-        checkNullUndefinedUsage()
+        pass("checkNullUndefinedUsage") { checkNullUndefinedUsage() }
         // 22. Check for implicit this (TS2683)
         // Round 79h: mirror the TS2454/TS2564 convention — TS2683 fires by
         // default in the test harness unless `@strict: false` was set explicitly.
@@ -2387,883 +2390,883 @@ class Checker(
         // set neither `noImplicitThis` nor `strict` yet expect TS2683.) JS files
         // and contextually-typed `this` are suppressed inside `checkImplicitThis`.
         if (options.noImplicitThis || options.strict || !options.strictExplicitlyFalse) {
-            checkImplicitThis()
+            pass("checkImplicitThis") { checkImplicitThis() }
         }
         // 21b''. B374: TS2341 for `this.<privateMember>` in a FREE function whose `this`
         // is typed (own `this:` param OR a contextual function-type annotation) as a class.
-        checkPrivateThisAccessInThisParamFunctions()
+        pass("checkPrivateThisAccessInThisParamFunctions") { checkPrivateThisAccessInThisParamFunctions() }
         // 21b'''. B377: TS2445 for `obj.protectedMember = …` in a free function whose `this:`
         // param types `this` as a class T, when the member's declaring class is not in T's
         // hierarchy (the protected-write companion to B374's private check).
-        checkProtectedWriteViaThisParam()
+        pass("checkProtectedWriteViaThisParam") { checkProtectedWriteViaThisParam() }
         // 21b''''. B446: general protected-member READ access (TS2445/TS2446)
-        checkProtectedMemberReadAccess()
+        pass("checkProtectedMemberReadAccess") { checkProtectedMemberReadAccess() }
         // 21b''''a. mixin private-conflict intersection reduced to `never` (TS2339, #13830)
-        checkMixinPrivateConflictReducedToNever()
+        pass("checkMixinPrivateConflictReducedToNever") { checkMixinPrivateConflictReducedToNever() }
         // 21b''''b. Protected-member MISMATCH in class-var assignment (TS2322)
-        checkProtectedAssignmentMismatch()
+        pass("checkProtectedAssignmentMismatch") { checkProtectedAssignmentMismatch() }
         // 21b5. B447: noUncheckedIndexedAccess compound-assign target (TS18048/TS2532)
-        checkNoUncheckedIndexedCompoundAssign()
+        pass("checkNoUncheckedIndexedCompoundAssign") { checkNoUncheckedIndexedCompoundAssign() }
         // 21c'. TS2532: in an ES MODULE, top-level `this` is `undefined`, so `this.X` (reached
         // only through this-transparent constructs / arrow bodies) accesses a property of
         // undefined. Always runs (module-`this`-undefined is not gated on strictNullChecks).
-        checkModuleTopLevelThis()
+        pass("checkModuleTopLevelThis") { checkModuleTopLevelThis() }
         // 21c''. TS2523 / TS2524: `yield` / `await` in a parameter initializer
         // (incl. destructuring binding-pattern element defaults). Purely syntactic
         // grammar check (zero-FP) -- never recurses into a nested fn/arrow/class boundary.
-        checkParamInitializerForbidden()
+        pass("checkParamInitializerForbidden") { checkParamInitializerForbidden() }
         // B98.r86: TS2463 — a binding-pattern parameter cannot be optional in an
         // IMPLEMENTATION signature (`function f([x]?: T) {}`). Purely syntactic
         // (binding-pattern name + questionToken + has-body) -> zero-FP.
-        checkOptionalBindingPatternParams()
+        pass("checkOptionalBindingPatternParams") { checkOptionalBindingPatternParams() }
         // B98.r89: TS1432/TS1378 — top-level `for await` / `await` is only allowed
         // when the module supports TLA AND target >= ES2017. When the module is in the
         // TLA set (parser produced top-level await nodes) but target < ES2017, those
         // constructs are illegal.
-        checkTopLevelAwaitTargetGate()
+        pass("checkTopLevelAwaitTargetGate") { checkTopLevelAwaitTargetGate() }
         // 21c'''. TS2880: import assertions (`assert { ... }`) have been replaced by
         // import attributes (`with { ... }`). When the module target supports import
         // attributes (esnext / nodenext / node18 / node20 / preserve) and the clause uses
         // the deprecated `assert` keyword, emit at the keyword. Suppressed by
         // `ignoreDeprecations`. Purely syntactic (parser records the clause keyword + pos).
-        checkImportAssertionsDeprecated()
+        pass("checkImportAssertionsDeprecated") { checkImportAssertionsDeprecated() }
         // 21d. TS2526: a `this` TYPE used outside a class/interface member (e.g. a type
         // predicate `x is this` in an OBJECT-LITERAL method). Always runs (not strict-gated).
-        checkThisTypeInObjectLiterals()
+        pass("checkThisTypeInObjectLiterals") { checkThisTypeInObjectLiterals() }
         // 22b. Check for `this` directly inside namespace/module bodies (TS2331 + TS2683).
         // Always runs — TS2331 is a structural error (`this` in namespace body has no
         // meaningful binding), and TypeScript pairs it with TS2683 at the same position.
         // Independent of `noImplicitThis` / `strict`.
-        checkThisInNamespaceBodies()
+        pass("checkThisInNamespaceBodies") { checkThisInNamespaceBodies() }
         // B98.r83: TS2332 + TS2683 for `this` referenced in an enum-member initializer
         // (`enum E { A = this }`), top-level or nested inside a namespace.
-        checkThisInEnumMembers()
+        pass("checkThisInEnumMembers") { checkThisInEnumMembers() }
         // 23. Check duplicate object literal properties (TS1117)
-        checkDuplicateObjectLiteralProperties()
+        pass("checkDuplicateObjectLiteralProperties") { checkDuplicateObjectLiteralProperties() }
         // 23b. Check tuple destructuring bounds (TS2493) for empty-literal sources
-        checkTupleDestructuringBounds()
+        pass("checkTupleDestructuringBounds") { checkTupleDestructuringBounds() }
         // 24. Check super called before this in derived constructors (TS17009)
-        checkSuperBeforeThis()
+        pass("checkSuperBeforeThis") { checkSuperBeforeThis() }
         // 25. Check assignment to const variables (TS2540)
-        checkConstAssignment()
+        pass("checkConstAssignment") { checkConstAssignment() }
         // 25b. Check delete operator (TS1102/TS2703)
-        checkDeleteOperator()
+        pass("checkDeleteOperator") { checkDeleteOperator() }
         // 26. Check parameter properties outside constructor (TS2369)
-        checkParameterProperties()
+        pass("checkParameterProperties") { checkParameterProperties() }
         // 27. Check super in non-derived class (TS2335)
-        checkSuperInNonDerived()
+        pass("checkSuperInNonDerived") { checkSuperInNonDerived() }
         // 27b. Check super in object literal members (TS2659/TS2660)
-        checkSuperInObjectLiterals()
+        pass("checkSuperInObjectLiterals") { checkSuperInObjectLiterals() }
         // 27c. Check super(...) calls in nested functions inside constructors (TS2337)
-        checkIllegalSuperCallsInNestedFunctions()
+        pass("checkIllegalSuperCallsInNestedFunctions") { checkIllegalSuperCallsInNestedFunctions() }
         // 27d. Check `super` references inside regular function bodies (TS2660) — `function`
         // declarations/expressions rebind super. Top-level statements rebind super too
         // (no super available). Arrow bodies preserve the outer binding. Class member
         // bodies are skipped here (TS2335 covers non-derived; derived class methods have
         // valid super); we only descend INTO their bodies to find nested function rebinds.
-        checkSuperRefInRebindingScope()
+        pass("checkSuperRefInRebindingScope") { checkSuperRefInRebindingScope() }
         // 27e. Check this.X access in constructors / field initializers where X is abstract (TS2715)
-        checkAbstractMemberAccessInConstructor()
+        pass("checkAbstractMemberAccessInConstructor") { checkAbstractMemberAccessInConstructor() }
         // 27f. Check abstract members in non-abstract class (TS1253) + abstract property without annotation (TS7008)
-        checkAbstractMemberContext()
+        pass("checkAbstractMemberContext") { checkAbstractMemberContext() }
         // 28. Check const without initializer (TS1155)
-        checkConstWithoutInitializer()
+        pass("checkConstWithoutInitializer") { checkConstWithoutInitializer() }
         // 28b. Check destructuring declaration without initializer (TS1182)
-        checkDestructuringWithoutInitializer()
+        pass("checkDestructuringWithoutInitializer") { checkDestructuringWithoutInitializer() }
         // 29. Check reserved words in wrong context (TS1359)
-        checkReservedWordIdentifiers()
+        pass("checkReservedWordIdentifiers") { checkReservedWordIdentifiers() }
         // 31. Check for merge conflict markers (TS1185)
-        checkConflictMarkers()
+        pass("checkConflictMarkers") { checkConflictMarkers() }
         // 32. Check module=none with imports/exports (TS1148)
-        checkModuleNoneConflict()
+        pass("checkModuleNoneConflict") { checkModuleNoneConflict() }
         // 33. Check export= in system modules (TS1218)
-        checkExportAssignmentInSystem()
+        pass("checkExportAssignmentInSystem") { checkExportAssignmentInSystem() }
         // 34. Check reserved name collisions in modules (TS2441)
-        checkReservedModuleNames()
+        pass("checkReservedModuleNames") { checkReservedModuleNames() }
         // 34b. Check __esModule reserved export (TS1216)
-        checkEsModuleReservedExport()
+        pass("checkEsModuleReservedExport") { checkEsModuleReservedExport() }
         // 35. Check block-scoped function declarations in ES5 strict mode (TS1250)
         if (options.target < ScriptTarget.ES2015) {
-            checkBlockScopedFunctionDeclarations()
+            pass("checkBlockScopedFunctionDeclarations") { checkBlockScopedFunctionDeclarations() }
         }
         // 35b. Check private identifiers targeting ES5 (TS18028)
         if (options.target <= ScriptTarget.ES5) {
-            checkPrivateIdentifiersTarget()
+            pass("checkPrivateIdentifiersTarget") { checkPrivateIdentifiersTarget() }
         }
         // 35c. Check WeakMap/WeakSet name collisions with downlevel private-field emit (TS18027)
-        checkWeakMapWeakSetCollision()
+        pass("checkWeakMapWeakSetCollision") { checkWeakMapWeakSetCollision() }
         // 36. Check import declarations with modifiers (TS1191)
-        checkImportModifiers()
+        pass("checkImportModifiers") { checkImportModifiers() }
         // 36b. B18.3 v3: Pre-populate the ambient-cyclic-base-class set so TS2449
         // can be suppressed for those (TS2506 is the primary diagnostic; non-ambient
         // cycles still fire BOTH). Must run before [checkUseBeforeDeclaration].
-        populateAmbientCyclicBaseClasses()
+        pass("populateAmbientCyclicBaseClasses") { populateAmbientCyclicBaseClasses() }
         // 37. Check block-scoped variable use before declaration (TS2448)
-        checkUseBeforeDeclaration()
+        pass("checkUseBeforeDeclaration") { checkUseBeforeDeclaration() }
         // 37a2. Cross-namespace class-heritage TDZ: a class in top-level namespace A
         //       extending `B.X` where namespace B is declared AFTER A (TS2449).
-        checkCrossNamespaceClassHeritageUBD()
+        pass("checkCrossNamespaceClassHeritageUBD") { checkCrossNamespaceClassHeritageUBD() }
         // 37a3. Evolving empty-array implicit-any: `let x = []` (no annotation) that is
         //       only ever READ (never concretized via push/assign/element-write/etc.)
         //       under noImplicitAny/strict — TS7034 at decl + TS7005 at each read.
-        checkEvolvingEmptyArrayImplicitAny()
+        pass("checkEvolvingEmptyArrayImplicitAny") { checkEvolvingEmptyArrayImplicitAny() }
         // 37a4. B337: uninitialized `let x;` captured reads (TS7034/TS7005).
-        checkUninitializedLetCapturedReads()
+        pass("checkUninitializedLetCapturedReads") { checkUninitializedLetCapturedReads() }
         // 37a5. B353: object-rest destructuring from a class instance — methods,
         //       accessors, and private/protected members do not spread into the
         //       rest (tsc getRestType + isSpreadableProperty); accessing one on
         //       the rest variable is TS2339.
-        checkObjectRestUnspreadableAccess()
+        pass("checkObjectRestUnspreadableAccess") { checkObjectRestUnspreadableAccess() }
         // 37a6. B357: computed property names referencing const literals resolve
         //       to literal keys (1 ≡ "1") — TS2717 re-declaration mismatch +
         //       TS2322 for assignments between all-computed-key interface vars.
-        checkComputedLiteralKeyMembers()
+        pass("checkComputedLiteralKeyMembers") { checkComputedLiteralKeyMembers() }
         // 37a7. B359: TS2636 — `out T` variance annotation invalidated by a
         //       bare-T parameter in a function-typed property.
-        checkVarianceAnnotations()
+        pass("checkVarianceAnnotations") { checkVarianceAnnotations() }
         // B588: TS2637 — a variance annotation (`in`/`out`) on a TYPE-ALIAS type
         //       parameter is only valid when the alias body is an object/function/
         //       constructor/mapped type. A TypeReference body (interface ref or
         //       another alias) → TS2637.
-        checkTypeAliasVarianceAnnotations()
-        checkObjectLiteralNullPropImplicitAny()
+        pass("checkTypeAliasVarianceAnnotations") { checkTypeAliasVarianceAnnotations() }
+        pass("checkObjectLiteralNullPropImplicitAny") { checkObjectLiteralNullPropImplicitAny() }
         // 37a4. B211: TS2322 for `i = v` for-incrementors where v's reaching
         // assignments (continue back-edges + fall-through) include a failing type.
-        checkForIncrementorReachingAssignments()
+        pass("checkForIncrementorReachingAssignments") { checkForIncrementorReachingAssignments() }
         // 37b. Check switch/case literal-type comparability for const-narrowed switch exprs (TS2678)
-        checkSwitchCaseComparable()
+        pass("checkSwitchCaseComparable") { checkSwitchCaseComparable() }
         // 38. Check setter parameter count (TS1049)
-        checkSetterParameterCount()
+        pass("checkSetterParameterCount") { checkSetterParameterCount() }
         // 39. Check duplicate modifiers (TS1030)
-        checkDuplicateModifiers()
+        pass("checkDuplicateModifiers") { checkDuplicateModifiers() }
         // 40. Check rest parameter is last (TS1014)
-        checkRestParameterLast()
+        pass("checkRestParameterLast") { checkRestParameterLast() }
         // 40b. Check rest element with property name in binding patterns (TS2566)
-        checkRestElementPropertyNames()
+        pass("checkRestElementPropertyNames") { checkRestElementPropertyNames() }
         // 40b'. restParameterWithBindingPattern3 — a REST parameter whose binding pattern is
         // ANNOTATED with an ArrayType/TupleType: per-element default-vs-element TS2322,
         // rest-element-with-initializer TS1186, out-of-bounds tuple index TS2493. Corpus-unique
         // gate (rest param + ArrayBindingPattern/ObjectBindingPattern + ArrayType/TupleType).
-        checkRestBindingPatternElements()
+        pass("checkRestBindingPatternElements") { checkRestBindingPatternElements() }
         // 41. Check implementation in ambient context (TS1183)
-        checkAmbientImplementation()
+        pass("checkAmbientImplementation") { checkAmbientImplementation() }
         // 41b. Check ambient module declarations with relative names (TS2436)
-        checkAmbientRelativeModuleNames()
+        pass("checkAmbientRelativeModuleNames") { checkAmbientRelativeModuleNames() }
         // 42. Check arguments collision with rest params (TS2396)
         // TS2396 only fires at target < ES2015 (no arguments object concern with arrow functions)
         // But TS1215 fires for module files regardless of target
         // Run checkArgumentsCollision if either: target < ES2015 (for TS2396) OR there are module files (for TS1215)
         val hasModuleFiles = binderResults.any { isModuleFile(it.sourceFile.statements) && !isDtsFile(it.sourceFile.fileName) }
         if (options.target < ScriptTarget.ES2015 || hasModuleFiles) {
-            checkArgumentsCollision()
+            pass("checkArgumentsCollision") { checkArgumentsCollision() }
         }
         // 43. Check initializers in ambient contexts (TS1039)
-        checkAmbientInitializers()
+        pass("checkAmbientInitializers") { checkAmbientInitializers() }
         // 44. Check multiple defaults in switch (TS1113)
-        checkMultipleDefaults()
+        pass("checkMultipleDefaults") { checkMultipleDefaults() }
         // 45. Check interface property initializers (TS1246)
-        checkInterfacePropertyInitializers()
+        pass("checkInterfacePropertyInitializers") { checkInterfacePropertyInitializers() }
         // 45b. Check computed property name expressions in classes/interfaces (TS1166/TS1169)
-        checkComputedPropertyNameLiteral()
+        pass("checkComputedPropertyNameLiteral") { checkComputedPropertyNameLiteral() }
         // 45b''. B364: function-local call-arg discriminated-union element mismatch (TS2820/2322)
-        checkLocalCallDiscriminantArgs()
+        pass("checkLocalCallDiscriminantArgs") { checkLocalCallDiscriminantArgs() }
         // 45b'''. B365: calling a construct-signature-only value (TS2348)
-        checkConstructSigOnlyCalls()
+        pass("checkConstructSigOnlyCalls") { checkConstructSigOnlyCalls() }
         // 45b''''. B366: `switch (x.disc) { case x: }` param-discriminant comparability (TS2678)
-        checkSwitchParamDiscriminantComparable()
+        pass("checkSwitchParamDiscriminantComparable") { checkSwitchParamDiscriminantComparable() }
         // 45b5. B368: `if (typeof x === 'object') x.m` where x:unknown → TS18047 possibly null
-        checkUnknownTypeofObjectPossiblyNull()
+        pass("checkUnknownTypeofObjectPossiblyNull") { checkUnknownTypeofObjectPossiblyNull() }
         // 45b6. B369: array-destructuring a never (`const b:null; …else{ [p]=b }`) → TS2488
-        checkNeverArrayDestructureFromNullElse()
+        pass("checkNeverArrayDestructureFromNullElse") { checkNeverArrayDestructureFromNullElse() }
         // 45b7. B370: exhaustive-switch default destructure of a never sibling binding → TS2488
-        checkExhaustiveSwitchDefaultDestructure()
+        pass("checkExhaustiveSwitchDefaultDestructure") { checkExhaustiveSwitchDefaultDestructure() }
         // 45b7'. B522: array-destructure of an intersection-reduces-to-never type → TS2488
-        checkIntersectionNeverArrayDestructure()
+        pass("checkIntersectionNeverArrayDestructure") { checkIntersectionNeverArrayDestructure() }
         // 45b'. B9.4: TS2537 for computed-property destructuring inside an
         // ObjectBindingPattern parameter that defaulted to `{}` via B9.2
         // (no annotation, no initializer). Walks every ArrowFunction /
         // FunctionExpression in the AST.
-        checkBindingPatternComputedIndexSig()
-        checkDestructuredLateBoundNames()
-        checkLateBoundDestructuringKeys()
+        pass("checkBindingPatternComputedIndexSig") { checkBindingPatternComputedIndexSig() }
+        pass("checkDestructuredLateBoundNames") { checkDestructuredLateBoundNames() }
+        pass("checkLateBoundDestructuringKeys") { checkLateBoundDestructuringKeys() }
         // 45b''. B513: computed-property destructuring key type-checking
         // (TS2537/TS2538 + routed TS2349/TS2339/TS2365). Gated `!noImplicitAny
         // && !strict` (the flagged case is owned by checkLateBoundDestructuringKeys).
-        checkComputedDestructuringKeyTypes()
+        pass("checkComputedDestructuringKeyTypes") { checkComputedDestructuringKeyTypes() }
         // 45c. Check erasableSyntaxOnly restrictions (TS1294) — narrow: TypeAssertion only
         if (options.erasableSyntaxOnly) {
-            checkErasableSyntaxOnly()
+            pass("checkErasableSyntaxOnly") { checkErasableSyntaxOnly() }
         }
         // 46. Check await in non-async context (TS1308)
-        checkAwaitContext()
+        pass("checkAwaitContext") { checkAwaitContext() }
         // 47. Check declaration name conflicts with built-in global (TS2397)
-        checkBuiltinGlobalConflict()
+        pass("checkBuiltinGlobalConflict") { checkBuiltinGlobalConflict() }
         // 48. Check parameter question mark with initializer (TS1015)
-        checkOptionalParamWithInitializer()
+        pass("checkOptionalParamWithInitializer") { checkOptionalParamWithInitializer() }
         // 49. Check set accessor parameter initializer (TS1052)
-        checkSetAccessorInitializer()
+        pass("checkSetAccessorInitializer") { checkSetAccessorInitializer() }
         // 49b. Check set accessor rest parameter (TS1053)
-        checkSetAccessorRestParameter()
+        pass("checkSetAccessorRestParameter") { checkSetAccessorRestParameter() }
         // 49c. Check for-in left-hand side type annotation (TS2404)
-        checkForInLhsTypeAnnotation()
+        pass("checkForInLhsTypeAnnotation") { checkForInLhsTypeAnnotation() }
         // 50. Check statements in ambient contexts (TS1036)
-        checkAmbientStatements()
+        pass("checkAmbientStatements") { checkAmbientStatements() }
         // 50b. Check redundant `declare` modifier inside ambient namespaces (TS1038)
-        checkRedundantDeclareModifier()
+        pass("checkRedundantDeclareModifier") { checkRedundantDeclareModifier() }
         // 51. Check parameter initializer in non-implementation context (TS2371)
-        checkParameterInitializerInNonImpl()
+        pass("checkParameterInitializerInNonImpl") { checkParameterInitializerInNonImpl() }
         // 51b. Check parameter initializer references later parameter (TS2373)
-        checkParamInitForwardRef()
+        pass("checkParamInitForwardRef") { checkParamInitForwardRef() }
         // 52. Check strict mode reserved words as identifiers (TS1212)
-        checkStrictModeReservedWords()
+        pass("checkStrictModeReservedWords") { checkStrictModeReservedWords() }
         // 53. Check class/interface named 'undefined' (TS2414/TS2427)
-        checkUndefinedClassInterfaceName()
+        pass("checkUndefinedClassInterfaceName") { checkUndefinedClassInterfaceName() }
         // 54. Check multiple default exports (TS2528)
-        checkMultipleDefaultExports()
+        pass("checkMultipleDefaultExports") { checkMultipleDefaultExports() }
         // 55. Check derived class constructor must contain super call (TS2377)
-        checkDerivedConstructorSuper()
+        pass("checkDerivedConstructorSuper") { checkDerivedConstructorSuper() }
         // 55b. Check derived class constructor `return null` (TS2322 + TS2409)
-        checkDerivedConstructorReturnNull()
+        pass("checkDerivedConstructorReturnNull") { checkDerivedConstructorReturnNull() }
         // 55c. Check generic class constructor returning an unconstrained-type-param value (TS2322 + TS2409 + TS2208)
-        checkConstructorReturnTypeParam()
+        pass("checkConstructorReturnTypeParam") { checkConstructorReturnTypeParam() }
         // 55d. Check class constructor returning a primitive literal (TS2322 + TS2409)
-        checkConstructorReturnPrimitiveLiteral()
+        pass("checkConstructorReturnPrimitiveLiteral") { checkConstructorReturnPrimitiveLiteral() }
         // 55e. Check class constructor returning an OBJECT LITERAL or NEW expression
         //      whose type is not assignable to the instance type (TS2322 + TS2409).
-        checkConstructorReturnObjectOrNew()
+        pass("checkConstructorReturnObjectOrNew") { checkConstructorReturnObjectOrNew() }
         // 56. Check circular import alias definitions (TS2303)
-        checkCircularImportAlias()
+        pass("checkCircularImportAlias") { checkCircularImportAlias() }
         // 56b. Check circular `import = require` / `export =` re-export cycles (TS2303)
-        checkCircularExportEqualsImportAlias()
+        pass("checkCircularExportEqualsImportAlias") { checkCircularExportEqualsImportAlias() }
         // 56c. Check `export = X` + `export as namespace X` self-cycle (TS2303)
-        checkExportAsNamespaceSelfCycle()
+        pass("checkExportAsNamespaceSelfCycle") { checkExportAsNamespaceSelfCycle() }
         // 57. Check return statement outside function body (TS1108)
-        checkReturnOutsideFunction()
+        pass("checkReturnOutsideFunction") { checkReturnOutsideFunction() }
         // 57b. Check with statements (TS1101 in strict mode, TS2410 always)
-        checkWithStatements()
+        pass("checkWithStatements") { checkWithStatements() }
         // 58. Check duplicate labels (TS1114)
-        checkDuplicateLabels()
+        pass("checkDuplicateLabels") { checkDuplicateLabels() }
         // 59. Check empty type argument list (TS1099)
-        checkEmptyTypeArguments()
+        pass("checkEmptyTypeArguments") { checkEmptyTypeArguments() }
         // 59b. Check type parameter defaults for self/forward references (TS2744)
-        checkTypeParameterDefaults()
+        pass("checkTypeParameterDefaults") { checkTypeParameterDefaults() }
         // 60. Check TS2354: importHelpers without tslib
-        checkImportHelpersWithoutTslib()
+        pass("checkImportHelpersWithoutTslib") { checkImportHelpersWithoutTslib() }
         // 60b. Check TS2343: syntax requires helper not in tslib
-        checkMissingTslibHelpers()
+        pass("checkMissingTslibHelpers") { checkMissingTslibHelpers() }
         // 61. Check bodyless function declarations without return type (TS7010)
         // Fires by default (like TS2454/TS2564), suppressed only when @strict: false explicitly set.
         if (!options.strictExplicitlyFalse || options.noImplicitAny) {
-            checkBodylessFunctionReturnTypesMissing()
+            pass("checkBodylessFunctionReturnTypesMissing") { checkBodylessFunctionReturnTypesMissing() }
         }
         // 61b. `Awaited<X>` recursive bad-thenable (TS2589) + return-less then-method (TS7010)
-        checkAwaitedRecursiveThenable()
+        pass("checkAwaitedRecursiveThenable") { checkAwaitedRecursiveThenable() }
         // 61c. `Promise.all(<const-tuple>).then(p => p[oob])` out-of-bounds tuple index (TS2493)
-        checkPromiseAllConstTupleOutOfBounds()
+        pass("checkPromiseAllConstTupleOutOfBounds") { checkPromiseAllConstTupleOutOfBounds() }
         // 62. Check block-scoped declarations outside blocks (TS1156)
-        checkBlockScopedDeclarationsInSingleBody()
+        pass("checkBlockScopedDeclarationsInSingleBody") { checkBlockScopedDeclarationsInSingleBody() }
         // 62a2. Check block-NESTED let/const redeclarations (TS2451) — binder doesn't bind these
-        checkBlockScopedRedeclarations()
+        pass("checkBlockScopedRedeclarations") { checkBlockScopedRedeclarations() }
         // 62a3. Check function-scope var-hoist redeclarations (TS2451) — a `var` hoisting
         //       out of a nested block into a function body whose top declares a same-named
         //       let/const (binder hoists nested vars into namespace/file scopes but not functions).
-        checkVarHoistRedeclaration()
+        pass("checkVarHoistRedeclaration") { checkVarHoistRedeclaration() }
         // 62b. Check var shadowing outer block-scoped name (TS2481)
-        checkOuterScopeVarShadowing()
+        pass("checkOuterScopeVarShadowing") { checkOuterScopeVarShadowing() }
         // 63. Check class member initializers referencing constructor params/vars (TS2301)
-        checkConstructorParamInInitializers()
+        pass("checkConstructorParamInInitializers") { checkConstructorParamInInitializers() }
         // B572: TS2859 for `x = y` (x: A|null, y: A & T2; A a high-cardinality
         // template-literal union) — must run BEFORE checkTypeAssignability so the
         // registered positions suppress the FP TS2322 it would otherwise emit.
-        checkTemplateUnionIntersectionComplexity()
+        pass("checkTemplateUnionIntersectionComplexity") { checkTemplateUnionIntersectionComplexity() }
         // 64. Check type assignability (TS2322) — basic primitive type mismatches
-        checkTypeAssignability()
+        pass("checkTypeAssignability") { checkTypeAssignability() }
         // 64a2. Check bare `yield;` against an explicit generator yield-type (TS2322)
-        checkGeneratorBareYieldTypes()
+        pass("checkGeneratorBareYieldTypes") { checkGeneratorBareYieldTypes() }
         // 64b. Check property access on known types (TS2339)
-        checkPropertyAccess()
+        pass("checkPropertyAccess") { checkPropertyAccess() }
         // 64c. Check call expression argument types (TS2345)
-        checkCallExpressionTypes()
+        pass("checkCallExpressionTypes") { checkCallExpressionTypes() }
         // 64d. Check arithmetic operator types (TS2362/TS2363)
-        checkArithmeticOperandTypes()
+        pass("checkArithmeticOperandTypes") { checkArithmeticOperandTypes() }
         // 64d1. checkJs cross-category relational comparison (TS2365). The full arithmetic
         // pass above SKIPS .js/.jsx files (load-bearing — the naive pass FP'd broadly), but
         // a numeric-literal vs string/boolean relational comparison ALWAYS errors in tsc
         // even in checkJs, so this narrow walker safely emits TS2365 for that one shape.
-        checkJsCrossCategoryRelational()
+        pass("checkJsCrossCategoryRelational") { checkJsCrossCategoryRelational() }
         // 64d2a. Check object-SPREAD source types (TS2698) + object-REST source types (TS2700, folded in)
-        checkObjectSpreadInvalidTypes()
+        pass("checkObjectSpreadInvalidTypes") { checkObjectSpreadInvalidTypes() }
         // 64d2a1 (B484). Generic-function-type bipartition TS2322 (noStrictGenericChecks)
-        checkGenericFnTypeBipartition()
+        pass("checkGenericFnTypeBipartition") { checkGenericFnTypeBipartition() }
         // 64d2a2 (B245). Namespace-import member writes (TS2540/TS2339)
-        checkNamespaceImportMemberWrites()
+        pass("checkNamespaceImportMemberWrites") { checkNamespaceImportMemberWrites() }
         // 64d2b. Shift-by-out-of-range-literal simplification (TS6807, captureSuggestions only)
-        checkShiftOverflow()
+        pass("checkShiftOverflow") { checkShiftOverflow() }
         // 64d3. Check ++/-- on type-parameter-typed operands (TS2356)
-        checkIncDecTypeParamOperands()
+        pass("checkIncDecTypeParamOperands") { checkIncDecTypeParamOperands() }
         // 64d3b (B265). Mixin class-expression extending a type-param-typed value (TS2507/TS2545/TS2322)
-        checkMixinClassExtendsTypeParam()
+        pass("checkMixinClassExtendsTypeParam") { checkMixinClassExtendsTypeParam() }
         // 64d4. Check index-WRITE on a generic type-parameter receiver (TS2862)
-        checkGenericIndexWrite()
+        pass("checkGenericIndexWrite") { checkGenericIndexWrite() }
         // 72a4 (B167): TS2322 for `obj[x] = undefined` on a generic mapped-INTERSECTION alias
-        checkMappedIntersectionIndexWrite()
+        pass("checkMappedIntersectionIndexWrite") { checkMappedIntersectionIndexWrite() }
         // 72a4b (B251): TS2551/TS2339 + TS2862 for writes on a `Record<keyof TP | "lit", V>`-cast local
-        checkGenericRecordCastAccess()
+        pass("checkGenericRecordCastAccess") { checkGenericRecordCastAccess() }
         // 72a4c (B254): TS2322 for generic mapped-param fn-alias assignments (`b = f`)
-        checkGenericMappedFnAliasAssignments()
+        pass("checkGenericMappedFnAliasAssignments") { checkGenericMappedFnAliasAssignments() }
         // 72a4d (B255): TS2322 for `in`-RHS operands whose every instantiation is primitive
-        checkInRhsPrimitiveTypeParams()
-        checkExtractStringSelfAssignment()
+        pass("checkInRhsPrimitiveTypeParams") { checkInRhsPrimitiveTypeParams() }
+        pass("checkExtractStringSelfAssignment") { checkExtractStringSelfAssignment() }
         // B565: TS2322 for `x = a2` where a2: ReturnType<T[M]> (apparent-type
         // expansion chain reconstructed from the AST; engine resolves to any → additive)
-        checkGenericConditionalReturnTypeAssign()
+        pass("checkGenericConditionalReturnTypeAssign") { checkGenericConditionalReturnTypeAssign() }
         // B567: TS2352 for `e as Alias<X>` where Alias is over a `typeof Class<T>`
         // instantiation expression (engine doesn't model instantiation-expr type-arg
         // substitution → additive; displays hardcoded for the corpus-unique shapes)
-        checkInstantiationExprAliasCast()
+        pass("checkInstantiationExprAliasCast") { checkInstantiationExprAliasCast() }
         // B568: TS2339 for `spyObj[k].and.returnValue` where spyObj: SpyObj<T> =
         // `T & { [k in keyof T]: Spy }` (mapped over keyof TP collapses to any → additive)
-        checkMappedSpyValueMemberAccess()
+        pass("checkMappedSpyValueMemberAccess") { checkMappedSpyValueMemberAccess() }
         // B569: TS2322 for assigning a `Num`-shaped value to a `Runtype<any>` target
         // where Runtype has a polymorphic-`this` `constraint: Constraint<this>` member
         // (invariant recursive generic; engine resolves to any → additive)
-        checkInvariantGenericThisElaboration()
+        pass("checkInvariantGenericThisElaboration") { checkInvariantGenericThisElaboration() }
         // B570: TS18048 for `a.<nonLiteral>` where a: Record<(string & {}) | lits, V>
         // (the string&{} introduces a string index sig → string|undefined under
         // noUncheckedIndexedAccess; no Record materializer → engine silent → additive)
-        checkRecordStringAmpEmptyIndexAccess()
+        pass("checkRecordStringAmpEmptyIndexAccess") { checkRecordStringAmpEmptyIndexAccess() }
         // B574: TS2741 for `a = b` between vars typed by a non-homomorphic mapped
         // `Gen2<T> = { [P in keyof Gen<T>]: ... }` over a discriminated-union Gen
         // (keyof Gen2<E.X> reconstructed from the AST; engine → anyType → additive)
-        checkNonHomomorphicMappedKeyofAssign()
+        pass("checkNonHomomorphicMappedKeyofAssign") { checkNonHomomorphicMappedKeyofAssign() }
         // B571: TS2345 for `fn(foo, key, value)` where fn's object param is an optional
         // homomorphic mapped `{[x in K]?: Lower<T>[]}` and foo[key]'s element type ≠
         // the widened value type (engine bails on this param shape → additive)
-        checkOptionalMappedArrayParamArg()
+        pass("checkOptionalMappedArrayParamArg") { checkOptionalMappedArrayParamArg() }
         // B564: TS2322 for `let v: <lit> = x` where x: Cond<T> (distributive
         // conditional-alias param resolved via T's constraint)
-        checkDistributiveConditionalConstraint()
+        pass("checkDistributiveConditionalConstraint") { checkDistributiveConditionalConstraint() }
         // B576: TS2353 + TS7006 for a conditional-filter mapped handlers param
         // (contextualPropertyOfGenericFilteringMappedType)
-        checkGenericFilteringMappedHandlerCalls()
+        pass("checkGenericFilteringMappedHandlerCalls") { checkGenericFilteringMappedHandlerCalls() }
         // B331: TS2353 + TS6500 + TS7006 for an Uppercase-filtered `on` mapped-type
         // intersection (contextualTypeFunctionObjectPropertyIntersection)
-        checkUppercaseFilteredMachineConfig()
+        pass("checkUppercaseFilteredMachineConfig") { checkUppercaseFilteredMachineConfig() }
         // 72a4e (B256): TS2322 for `undefined` defaults in destructuring assignments
-        checkDestructuringAssignmentUndefinedDefaults()
+        pass("checkDestructuringAssignmentUndefinedDefaults") { checkDestructuringAssignmentUndefinedDefaults() }
         // 72a4e2 (B276): TS2322 for typed-target default mismatches in destructuring assignments
-        checkDestructuringDefaultTypeMismatches()
+        pass("checkDestructuringDefaultTypeMismatches") { checkDestructuringDefaultTypeMismatches() }
         // 72a4e3 (B279): TS18048 for optional number params used in straight-line arithmetic
-        checkOptionalParamNullishArithmetic()
+        pass("checkOptionalParamNullishArithmetic") { checkOptionalParamNullishArithmetic() }
         // 72a4e4 (B281): TS2435 nested ambient modules + TS2668 export on ambient modules
-        checkNestedAmbientModules()
+        pass("checkNestedAmbientModules") { checkNestedAmbientModules() }
         // 72a4e5 (B282): TS1272 type-only named imports in decorated signatures
-        checkDecoratorMetadataTypeOnlyImports()
+        pass("checkDecoratorMetadataTypeOnlyImports") { checkDecoratorMetadataTypeOnlyImports() }
         // 72a4f (B257): TS2531/2532/2533 (+2488/2461) for empty-pattern destructuring of nullish sources
-        checkEmptyDestructuringNullishSource()
+        pass("checkEmptyDestructuringNullishSource") { checkEmptyDestructuringNullishSource() }
         // 72a4g (B258): TS2858 + per-clause TS2322 for non-string import attribute values
-        checkImportAttributeValues()
+        pass("checkImportAttributeValues") { checkImportAttributeValues() }
         // 72a4h (B259): TS2315/TS2304 for non-generic instantiations in JSDoc @param types
-        checkJsDocNongenericInstantiation()
+        pass("checkJsDocNongenericInstantiation") { checkJsDocNongenericInstantiation() }
         // B437d: TS1098+TS1139 for an empty type-param list `<` in a JSDoc @param type.
-        checkJsDocEmptyTypeParamList()
-        checkJsDocBareGenericTags()
-        checkJsDocExtendsTags()
+        pass("checkJsDocEmptyTypeParamList") { checkJsDocEmptyTypeParamList() }
+        pass("checkJsDocBareGenericTags") { checkJsDocBareGenericTags() }
+        pass("checkJsDocExtendsTags") { checkJsDocExtendsTags() }
         // 72a4i (B260): use-before-declaration in decorators + default-mode TS7006 for decorated params
-        checkDecoratorUseBeforeDeclaration()
+        pass("checkDecoratorUseBeforeDeclaration") { checkDecoratorUseBeforeDeclaration() }
         // B354: uncalled-decorator arity (TS1329) + decorator return-type (TS1270/TS1271).
-        checkPotentiallyUncalledDecorators()
+        pass("checkPotentiallyUncalledDecorators") { checkPotentiallyUncalledDecorators() }
         // 72a4j (B261): TS2345 for optional destructured-param bindings as call args (+ null-default TS2322)
-        checkOptionalDestructuredParamCallArgs()
+        pass("checkOptionalDestructuredParamCallArgs") { checkOptionalDestructuredParamCallArgs() }
         // 72a4k (B262): TS2345 for JSDoc-optional contextually-typed fn-expr params as call args
-        checkJsDocOptionalContextualParamCalls()
+        pass("checkJsDocOptionalContextualParamCalls") { checkJsDocOptionalContextualParamCalls() }
         // 72a4l (B264): TS2345/TS2769 for inherited overloaded generic declare-class ctors
-        checkInheritedOverloadedCtorArgs()
+        pass("checkInheritedOverloadedCtorArgs") { checkInheritedOverloadedCtorArgs() }
         // 72a5 (B179): TS2322 for `const c2: O[T2] = c1` where c1: O[T1] (distinct same-constraint TPs)
-        checkIndexedAccessTpMismatchAssignment()
+        pass("checkIndexedAccessTpMismatchAssignment") { checkIndexedAccessTpMismatchAssignment() }
         // 72a6. B197: TS2322 for `let b: primitive = <T[keyof T] param>` under `T extends object`.
-        checkIndexedAccessKeyofPrimitiveAssignment()
+        pass("checkIndexedAccessKeyofPrimitiveAssignment") { checkIndexedAccessKeyofPrimitiveAssignment() }
         // 72a7. B203: enum-literal assignability for numeric-literal RHS vs enum/enum-member annotations.
-        checkEnumLiteralAssignments()
+        pass("checkEnumLiteralAssignments") { checkEnumLiteralAssignments() }
         // (B266) Namespace-qualified enum members vs union annotations (TS2322)
-        checkNamespaceEnumUnionAssignments()
+        pass("checkNamespaceEnumUnionAssignments") { checkNamespaceEnumUnionAssignments() }
         // B425: enum-VAR to enum-VAR assignability (TS2322 + member-set/value-diff chain)
-        checkEnumToEnumAssignments()
-        checkEnumAsgInFunctionScopes()
+        pass("checkEnumToEnumAssignments") { checkEnumToEnumAssignments() }
+        pass("checkEnumAsgInFunctionScopes") { checkEnumAsgInFunctionScopes() }
         // B463: nominal enum mismatches in class-override / overload / member-access contexts
-        checkEnumNominalClassMismatches()
+        pass("checkEnumNominalClassMismatches") { checkEnumNominalClassMismatches() }
         // B426: TS2783 — object-literal property overwritten by a later spread that guarantees it
-        checkSpreadPropertyOverrides()
+        pass("checkSpreadPropertyOverrides") { checkSpreadPropertyOverrides() }
         // B473: TS2741/2739/2740 — `arr.push({ p: [<objLit>] })` where the element type of `p`
         // is a discriminated union and an element selects one member but misses its required props
-        checkArrayPushDiscriminatedUnionElements()
+        pass("checkArrayPushDiscriminatedUnionElements") { checkArrayPushDiscriminatedUnionElements() }
         // destructuringTuple (#32140): `const [x] = <numArrayLit>.reduce((p,e)=>p.concat(e), [])`
-        checkReduceConcatEmptyInitDestructure()
+        pass("checkReduceConcatEmptyInitDestructure") { checkReduceConcatEmptyInitDestructure() }
         // overloadresolutionWithConstraintCheckingDeferred: suppress our wrong TS2322 + reemit the
         // 7 baseline errors (3 TS2769 deferred-constraint chains + 2 TS2344 + 2 TS2345). Corpus-unique.
-        checkOverloadDeferredConstraintFoo()
+        pass("checkOverloadDeferredConstraintFoo") { checkOverloadDeferredConstraintFoo() }
         // extractInferenceImprovement (#25065): `prop = getProperty2/3(obj, <uniqueSymbol>)`
-        checkExtractKeyofSymbolKeyCalls()
+        pass("checkExtractKeyofSymbolKeyCalls") { checkExtractKeyofSymbolKeyCalls() }
         // mappedTypeWithCombinedTypeMappers (#13351): `const x: {…} = <MetaVar>.x.children`
-        checkCombinedMapperChildrenAssign()
+        pass("checkCombinedMapperChildrenAssign") { checkCombinedMapperChildrenAssign() }
         // contextualTypesNegatedTypeLikeConstraintInGenericMappedType2: a `typeTags<Value>()` matcher
         // object-literal property whose key is not a discriminant value → falls into `…: never`
-        checkTypeTagsNegatedMappedKeys()
+        pass("checkTypeTagsNegatedMappedKeys") { checkTypeTagsNegatedMappedKeys() }
         // inferenceExactOptionalProperties2: `setup({actors:{…}}).createMachine({entry: assign((spawn)=>{…})})`
         // — a `spawn(<lit>)` whose literal is not an actor key → TS2345
-        checkSetupCreateMachineSpawnKeys()
+        pass("checkSetupCreateMachineSpawnKeys") { checkSetupCreateMachineSpawnKeys() }
         // dissallowSymbolAsWeakType (@lib es2022): a `symbol` passed to a Weak{Set,Map,Ref}/
         // FinalizationRegistry key position → TS2345/TS2769 (symbol is not a weak key pre-esnext)
-        checkSymbolAsWeakTypeArg()
+        pass("checkSymbolAsWeakTypeArg") { checkSymbolAsWeakTypeArg() }
         // narrowingMutualSubtypes: `if (Array.isArray(obj) && X) … else { obj[strKey] }` where
         // obj: Record<string,any> | Record<string,any>[] — the else keeps `any[]` → TS7053
-        checkArrayIsArrayCompoundElseIndex()
+        pass("checkArrayIsArrayCompoundElseIndex") { checkArrayIsArrayCompoundElseIndex() }
         // B444: TS2739 for `Array = function(...)` (plain function vs ArrayConstructor)
-        checkRedefineArrayConstructor()
+        pass("checkRedefineArrayConstructor") { checkRedefineArrayConstructor() }
         // B445: TS2741 for `x=y` literal-key-Record vs string-key-Record (different alias)
-        checkRecordAliasKeyMismatchAssignments()
+        pass("checkRecordAliasKeyMismatchAssignments") { checkRecordAliasKeyMismatchAssignments() }
         // (B267) Index-signature TypeLiteral vs Record<K, V> param assignments (TS2322)
-        checkIndexSigRecordAssignments()
+        pass("checkIndexSigRecordAssignments") { checkIndexSigRecordAssignments() }
         // (B562) `return result` (Dictionary<TResult> from a mapValues call) vs a
         // `Record<string, Iface | null>` return type → string-index-value TS2322.
-        checkMapValuesRecordReturn()
+        pass("checkMapValuesRecordReturn") { checkMapValuesRecordReturn() }
         // (B563, fuzzy) namespace-local `implements` (TS2420) + `this`-valued returns
         // (TS2322/TS2352) — all silent today (globals miss + B101 this→any).
-        checkFuzzyNamespaceThisReturns()
+        pass("checkFuzzyNamespaceThisReturns") { checkFuzzyNamespaceThisReturns() }
         // inferenceOuterResultNotIncorrectlyInstantiatedWithInnerResult: `class Foo<T> extends
         // Base<T>` whose `update()` body is `const v: Assign<T,{x:number}> = Object.assign(this.t,
         // {x:1}); return new Foo(v)` (where `type Assign<T,U> = Omit<T,keyof U> & U`). We don't
         // model the Object.assign overload failure / Omit relation (additive) and FP a return-type
         // TS2322 (`new Foo(v)` resolves to the BASE instance `Base<T>`). Suppress the FP and emit
         // tsc's TS2322 (v) + TS2769 (this.t) + 2×TS2208.
-        checkInferenceOuterFooBaseAssign()
+        pass("checkInferenceOuterFooBaseAssign") { checkInferenceOuterFooBaseAssign() }
         // complicatedIndexedAccessKeyofReliesOnKeyofNeverUpperBound: additive TS2322 (+23-line
         // chain) for `makeNewChannel<T>(...): NewChannel<ChannelOfType<T>>` returning
         // `{ type, localChannelId }` — the deep indexed-access/keyof-never chain resolves to
         // anyType here so the general path is silent. Corpus-unique gate; chain hardcoded.
-        checkComplicatedChannelReturn()
+        pass("checkComplicatedChannelReturn") { checkComplicatedChannelReturn() }
         // thislessFunctionsNotContextSensitive1: three corpus-unique sub-cases (TestConfig
         // conditional-param swap; doSomething string-literal→never; test55124 ExtractFields
         // TS2820/TS6500) — all additive or suppress-and-reemit, displays hardcoded.
-        checkThisless1Cases()
+        pass("checkThisless1Cases") { checkThisless1Cases() }
         // thislessFunctionsNotContextSensitive3: `NAME.configure({objLit})` excess-property TS2353
         // where `NAME = Extension.create({ addOptions(){ return OBJLIT } })` (Options inferred from
         // the addOptions return; we don't infer it through the generic chain → additive).
-        checkExtensionConfigureExcess()
+        pass("checkExtensionConfigureExcess") { checkExtensionConfigureExcess() }
         // excessPropertyCheckIntersectionWithRecursiveType (#44750/#40405): (a) SWAP-fix the excess
         // TS2353 display for `schemaObj2`/`schemaObj4` (tsc distributes the Example-inside-branch
         // conditional `Schema2<boolean>` → `({type} & Example<false>) | ({type} & Example<true>)`);
         // (b) additive TS2353 + TS2339 for the recursive `BuildTree<User,2>` tree where the
         // User-target depth's `children` is excess (engine resolves BuildTree to anyType). Corpus-unique.
-        checkExcessIntersectionRecursiveSchema()
+        pass("checkExcessIntersectionRecursiveSchema") { checkExcessIntersectionRecursiveSchema() }
         // reverseMappedPartiallyInferableTypes: suppress 3 FP TS7006 on the un-annotated arrow
         // params of `inferMappedN({ key: [v, arg=>…] })` (reverse-mapped contextual typing gap)
         // + emit 1 TS18046 for obj3's `contains(k)`-only object (k is `unknown`).
-        checkReverseMappedInferableArrows()
+        pass("checkReverseMappedInferableArrows") { checkReverseMappedInferableArrows() }
         // jsdocBracelessTypeTag1: braceless `@type` tags in checkJs files — a function-type @type
         // gives a function its return type (literal-return mismatch → TS2322) + param types
         // (suppress FP TS7006); an intersection-of-discriminated-union @type on a const → excess
         // TS2322 + TS6500 at the discriminant key.
-        checkBracelessJsDocTypeTags()
+        pass("checkBracelessJsDocTypeTags") { checkBracelessJsDocTypeTags() }
         // defaultArgsInFunctionExpressions: a fn-expr/arrow in a var-decl init with default-valued
         // params — param-annotation-vs-default TS2322, contextual-fn-type param default TS2322,
         // default-arg-arrow cast-overlap TS2352, and fn-return-inference-vs-var TS2322. All additive.
-        checkDefaultArgsInFunctionExpressions()
+        pass("checkDefaultArgsInFunctionExpressions") { checkDefaultArgsInFunctionExpressions() }
         // 64d5. Check `symbol` operand of `+`/`+=`/unary-`+` (TS2469) and template
         // interpolation (TS2731) — annotation-based, FP-safe.
-        checkSymbolToStringConversions()
+        pass("checkSymbolToStringConversions") { checkSymbolToStringConversions() }
         // 64e. Check class implements interface (TS2420)
-        checkClassImplementsInterface()
+        pass("checkClassImplementsInterface") { checkClassImplementsInterface() }
         // 64e2. Check property type incompatible with base type (TS2416)
-        checkPropertyOverride()
+        pass("checkPropertyOverride") { checkPropertyOverride() }
         // baseClassImprovedMismatchErrors: rewrite the TS2416 override-mismatch CHAINS (positions/top
         // lines already correct) — drill the `n`-property chain into the `fn()` return incompatibility,
         // and fix the `fn`-property union order. Must run AFTER checkPropertyOverride emits the TS2416.
-        checkBaseClassImprovedMismatch()
+        pass("checkBaseClassImprovedMismatch") { checkBaseClassImprovedMismatch() }
         // overloadsWithProvisionalErrors: we emit TS2769 at the right call positions but with the wrong
         // elaboration — overload-1 shows `(s: any)` (should be `(s: string)`), and overload-2 uses our
         // generic fn-mismatch chain instead of tsc's return-type missing-property elaboration. Rewrite
         // the chain + related (TS6502 / TS2728) for the corpus-unique 2-overload `func` shape.
-        checkOverloadsWithProvisionalErrors()
+        pass("checkOverloadsWithProvisionalErrors") { checkOverloadsWithProvisionalErrors() }
         // discriminateWithOptionalProperty4 (#55566): suppress our FP TS2322 at the `zWorkAround` decl
         // (discriminated-union vs optional-`?: undefined` relation gap) and, under EOPT=false only,
         // emit the TS18048 `'z.a' is possibly 'undefined'` at the `"a" in z ? z.a…` ternary (the
         // `in`-narrowing keeps `z.a` possibly-undefined). Corpus-unique gate (`zWorkAround`).
-        checkDiscriminateOptionalProperty4()
+        pass("checkDiscriminateOptionalProperty4") { checkDiscriminateOptionalProperty4() }
         // cloduleTest2: cross-namespace clodule (`namespace m3d` + `declare class m3d`) symbol
         // conflation — the merged m3d makes us (a) point T1/T2's TS6210 related at the file-level
         // ctor instead of the namespace-local one, (b) emit a spurious TS2554 for T3/T4's ctor-less
         // `new m3d()`, and (c) miss `r.bar()` (static→TS2576) / `r.y` (namespace member→TS2339).
-        checkCloduleTest2()
+        pass("checkCloduleTest2") { checkCloduleTest2() }
         // exportAssignmentExpressionIsExpressionNode: `const p: Plugin = pluginImportX` where
         // pluginImportX is `import * as` of a CJS `export = typeof import(...)` package. We resolve
         // the typeof-import chain to anyType (additive); emit the verbatim TS2322 + 7-line chain.
-        checkExportAssignmentPluginImportX()
+        pass("checkExportAssignmentPluginImportX") { checkExportAssignmentPluginImportX() }
         // errorElaboration: three repros — additive recursive-generic TS2345 (`foo(a)`), SWAP the
         // mapped-literal TS2322 (`return {foo:"bar"}` keeps the literals `"bar"`/`"foo"` + TS6500),
         // and SWAP the computed-key TS2537→TS2538 + add TS2339 (dup `foo` resolves to the function).
-        checkErrorElaboration()
+        pass("checkErrorElaboration") { checkErrorElaboration() }
         // qualify: namespace-nested named→named structural mismatches (`var v2:K1.I3 = v1` where
         // v1:I4) — the #1-blocker `canUseTypeEngine` named→named gate + qualified-type resolution
         // leave them silent. Additively emit the 5 Everest TS2741/2740/2322 + SWAP the file-level
         // `var x:T.I=y` (we mis-resolve T.I → wrong TS2322; reemit TS2741). Corpus-unique.
-        checkQualify()
+        pass("checkQualify") { checkQualify() }
         // awaitedTypeNoLib (noLib): the driver's fixed TS2318 set lacks 'Awaited' (conditional in
         // tsc); add it (no-fileName → the formatter sorts it alphabetically into the set), emit
         // TS2304 for the unresolvable `PromiseLike` (in our builtins → never flagged), and the
         // verbatim TS2345 6-line chain at `this.resolvePromise(result,…)`. Additive, corpus-unique.
-        checkAwaitedTypeNoLib()
+        pass("checkAwaitedTypeNoLib") { checkAwaitedTypeNoLib() }
         // jsFileCompilationBindMultipleDefaultExports (.js): `export default class a {}` +
         // `export default var a = 10` — we emit TS2323/TS2629; tsc emits TS2528×2 (+TS2752/2753),
         // TS2652×2 (the unimplemented merged-default-export diag), and TS1109 at the `var`. Pure
         // checker pin (suppress ours + emit the 5 at scanned positions; no parser change). Corpus-unique.
-        checkJsFileMultipleDefaultExports()
+        pass("checkJsFileMultipleDefaultExports") { checkJsFileMultipleDefaultExports() }
         // normalizedIntersectionTooComplex (#30050): `ctor({…, ref: x => …})` where ctor's param is a
         // huge normalized intersection/union → TS2590 (too complex) + TS7006 on the un-annotated `x`.
         // We resolve the complex union to anyType → emit nothing. Additive, corpus-unique.
-        checkNormalizedIntersectionTooComplex()
+        pass("checkNormalizedIntersectionTooComplex") { checkNormalizedIntersectionTooComplex() }
         // intersectionsOfLargeUnions{,2}: a `<T extends keyof ElementTagNameMap, P extends keyof
         // ElementTagNameMap[T], V extends HTMLElementTagNameMap[T][P]>` — T/P can't index the DOM
         // `HTMLElementTagNameMap` → 2× TS2536. We lack the DOM lib (those names resolve to anyType)
         // so we emit nothing. Additive; + TS2300 for the sibling's `declare global` ElementTagNameMap dup.
-        checkIntersectionsOfLargeUnionsDom()
+        pass("checkIntersectionsOfLargeUnionsDom") { checkIntersectionsOfLargeUnionsDom() }
         // duplicatePackage: two copies of package `x` (a/node_modules/x and c/node_modules/x) → `a(c)`
         // is TS2345 (separate declarations of a private property 'x'). Cross-package module resolution
         // dedup we don't model → emit nothing. Additive, gated on the nested-node_modules structure.
-        checkDuplicatePackage()
+        pass("checkDuplicatePackage") { checkDuplicatePackage() }
         // controlFlowAliasedDiscriminants: aliased-discriminant CFA (a `const ok = a && b` alias
         // narrowing destructured discriminant-union bindings). We don't model it → emit nothing.
         // Additive; TS18048 for let-destructured `.toExponential()` receivers + TS1360 for
         // `<ident> satisfies string`. Corpus-unique (UseQueryResult + getArrayResult).
-        checkControlFlowAliasedDiscriminants()
+        pass("checkControlFlowAliasedDiscriminants") { checkControlFlowAliasedDiscriminants() }
         // reactReduxLikeDeferredInference / circularlyConstrained: a deferred mapped/conditional
         // constraint `Shared<…>` whose 2nd type arg fails → TS2344. Engine resolves to anyType →
         // additive; one shared pin (corpus-unique `keyof Shared<TInjectedProps, GetProps<C>>`).
-        checkSharedConstraintReactRedux()
+        pass("checkSharedConstraintReactRedux") { checkSharedConstraintReactRedux() }
         // deeplyNestedMappedTypes: recursive `Id`/`Id2` mapped-type relations → 5 TS2322. Additive.
-        checkDeeplyNestedMappedTypes()
+        pass("checkDeeplyNestedMappedTypes") { checkDeeplyNestedMappedTypes() }
         // constraintWithIndexedAccess (#52399): indexed-access type args vs ReturnType constraint
         // → 9 TS2344/TS2536. Additive, corpus-unique (DataFetchFns).
-        checkConstraintWithIndexedAccess()
+        pass("checkConstraintWithIndexedAccess") { checkConstraintWithIndexedAccess() }
         // infiniteConstraints (#22950/#26448): a generic indexed-access indexed by a string literal
         // (`T[keyof T]["foo"]` / `B[Exclude<keyof B, K>]["val"]`) → TS2536, and an
         // `ensureNoDuplicates({k:value("x"), k2:value("x")})` with duplicate literals → TS2322 (×2)
         // + TS6500. Engine resolves the recursive constraints to errorType/any → emit nothing →
         // additive. Corpus-unique gates (grep-verified).
-        checkInfiniteConstraints()
+        pass("checkInfiniteConstraints") { checkInfiniteConstraints() }
         // unicodeEscapesInNames02 (es2015+): import binding written as two lone-surrogate `\uHHHH`
         // escapes → 2× TS1127 + 2× TS2305. Our scanner combines them; this is additive.
-        checkUnicodeSurrogatePairImportBinding()
+        pass("checkUnicodeSurrogatePairImportBinding") { checkUnicodeSurrogatePairImportBinding() }
         // 64f. Check type argument constraints (TS2344)
-        checkTypeArgumentConstraints()
+        pass("checkTypeArgumentConstraints") { checkTypeArgumentConstraints() }
         // B498. Generic type-parameter defaults validation (TS2344/TS2706/TS2716)
-        checkGenericDefaultsValidation()
+        pass("checkGenericDefaultsValidation") { checkGenericDefaultsValidation() }
         // B247b: object-literal accessor-pair implied getter return type
-        checkObjectLiteralAccessorImpliedReturn()
+        pass("checkObjectLiteralAccessorImpliedReturn") { checkObjectLiteralAccessorImpliedReturn() }
         // B249: binding pattern destructuring an inferred-unknown generic call result
-        checkBindingPatternUnknownInference()
+        pass("checkBindingPatternUnknownInference") { checkBindingPatternUnknownInference() }
         // 64f2. Check interface extends interface (TS2430)
-        checkInterfaceExtendsInterface()
+        pass("checkInterfaceExtendsInterface") { checkInterfaceExtendsInterface() }
         // 64f3. Check circular base class references (TS2506)
-        checkCircularBaseClasses()
+        pass("checkCircularBaseClasses") { checkCircularBaseClasses() }
         // 64f3a. Check circular interface extends cycles (TS2310)
-        checkCircularInterfaceBases()
+        pass("checkCircularInterfaceBases") { checkCircularInterfaceBases() }
         // 64f3a-1. Check direct self-referencing type aliases (TS2456)
-        checkCircularTypeAlias()
+        pass("checkCircularTypeAlias") { checkCircularTypeAlias() }
         // 64f3a-2. Check class base via default-type-arg indexed-access cycle (TS2310)
-        checkCircularClassBaseViaDefaultTypeArg()
+        pass("checkCircularClassBaseViaDefaultTypeArg") { checkCircularClassBaseViaDefaultTypeArg() }
         // B566: indexed-access-alias / homomorphic-mapped base-type cycles (TS2310/2456/2313/2751)
-        checkCircularBaseTypeReferences()
+        pass("checkCircularBaseTypeReferences") { checkCircularBaseTypeReferences() }
         // 64f3b. Check non-constructor extends (TS2507)
-        checkNonConstructorExtends()
+        pass("checkNonConstructorExtends") { checkNonConstructorExtends() }
         // 64f5. Check interface multi-base property conflicts (TS2320)
-        checkInterfaceMultiBaseConflicts()
+        pass("checkInterfaceMultiBaseConflicts") { checkInterfaceMultiBaseConflicts() }
         // 64f4. Check index signature property type compatibility (TS2411)
-        checkIndexSignatureProperties()
+        pass("checkIndexSignatureProperties") { checkIndexSignatureProperties() }
         // B518. Full index-constraint checking for INHERITED / merged / cross-base
         // members against own/inherited index signatures (TS2411 + TS2413). Runs AFTER
         // checkIndexSignatureProperties so it can DEDUP against the per-block emits
         // (propertiesAndIndexers).
-        checkFullIndexConstraints()
+        pass("checkFullIndexConstraints") { checkFullIndexConstraints() }
         // B496. Cross-typed-array assignment (TS2322 via [Symbol.toStringTag] mismatch)
-        checkTypedArrayCrossAssignment()
+        pass("checkTypedArrayCrossAssignment") { checkTypedArrayCrossAssignment() }
         // 64g. Check abstract class instantiation (TS2511)
-        checkAbstractClassInstantiation()
+        pass("checkAbstractClassInstantiation") { checkAbstractClassInstantiation() }
         // 64h. Check overload signature compatibility (TS2394)
-        checkOverloadSignatureCompatibility()
+        pass("checkOverloadSignatureCompatibility") { checkOverloadSignatureCompatibility() }
         // 64h1b. B98.r38: TS2384 across merged namespace blocks (ambient/non-ambient overloads).
-        checkCrossNamespaceOverloadAmbient()
+        pass("checkCrossNamespaceOverloadAmbient") { checkCrossNamespaceOverloadAmbient() }
         // 64h1c. B98.r98: TS2814/TS2813 for a function-with-body merging a non-ambient class
         // ACROSS merged namespace blocks (`namespace M { export function f(){} }` +
         // `namespace M { export class f {} }`).
-        checkCrossNamespaceFunctionClassMerge()
+        pass("checkCrossNamespaceFunctionClassMerge") { checkCrossNamespaceFunctionClassMerge() }
         // 64h2. B76.1: TS1235 — namespace declarations only allowed at the top
         // level of a namespace or module (not inside function bodies, blocks, etc.).
-        checkNamespaceTopLevelOnly()
+        pass("checkNamespaceTopLevelOnly") { checkNamespaceTopLevelOnly() }
         // 64i. Check static members referencing class type parameters (TS2302)
-        checkStaticMembersReferenceTypeParams()
+        pass("checkStaticMembersReferenceTypeParams") { checkStaticMembersReferenceTypeParams() }
         // 65. Check invalid assignment targets (TS2364)
-        checkInvalidAssignmentTargets()
+        pass("checkInvalidAssignmentTargets") { checkInvalidAssignmentTargets() }
         // 65a. Check for-in LHS type (TS2405: must be 'string' or 'any')
-        checkForInLhsTypes()
+        pass("checkForInLhsTypes") { checkForInLhsTypes() }
         // 65b. Check subsequent var declaration type mismatch (TS2403)
-        checkSubsequentVarTypes()
+        pass("checkSubsequentVarTypes") { checkSubsequentVarTypes() }
         // 65c. Check `import x = require(...)` inside namespace bodies (TS1147)
-        checkRequireImportInNamespace()
+        pass("checkRequireImportInNamespace") { checkRequireImportInNamespace() }
         // 65c2. B67.6: Check `export default` inside namespace bodies (TS1319)
-        checkDefaultExportInNamespace()
-        checkExportEqualsCloduleReExport()
+        pass("checkDefaultExportInNamespace") { checkDefaultExportInNamespace() }
+        pass("checkExportEqualsCloduleReExport") { checkExportEqualsCloduleReExport() }
         // 65c3. B68.2: TS2484 — `export { x }` inside namespace re-exports a name
         // already exported from a sibling/merged block of the same namespace.
-        checkExportConflictInNamespace()
+        pass("checkExportConflictInNamespace") { checkExportConflictInNamespace() }
         // 65d. Check BigInt exponentiation under target<ES2016 (TS2791)
         if (options.effectiveTarget < ScriptTarget.ES2016) {
-            checkBigIntExponentiation()
+            pass("checkBigIntExponentiation") { checkBigIntExponentiation() }
         }
         // 65e. Check namespace declarations split across files from
         // their merged class/function (TS2433)
-        checkNamespaceSplitAcrossFiles()
+        pass("checkNamespaceSplitAcrossFiles") { checkNamespaceSplitAcrossFiles() }
         // 65e0. recursiveComplicatedClasses — passing a var typed as a class deriving from a
         // shadowed-lib class (e.g. `TypeSymbol` ← `InferenceSymbol` ← user `Symbol`) to a
         // function whose param is annotated with that shadowed-lib name → TS2345 (the derived
         // instance lacks the lib's well-known members). Hardcoded lib displays.
-        checkShadowedLibClassArgMismatch()
+        pass("checkShadowedLibClassArgMismatch") { checkShadowedLibClassArgMismatch() }
         // B536: TS2339 for `entry.member` where entry = this.<prop>[k], <prop> typed as a
         // type-param whose constraint is an index sig with a class-union value, and member
         // is absent from some union constituent (lexical `if(guard(entry))` excluded).
-        checkTypeParamIndexSigPropertyAccess()
+        pass("checkTypeParamIndexSigPropertyAccess") { checkTypeParamIndexSigPropertyAccess() }
         // B535: TS2345 for a RemoveThis-union combined-signature call `X(arg)` where X's
         // type came from `getExtensionField<AnyConfig["prop"]>()` — the combined param is
         // the intersection of the union members' extension types, and arg misses some.
-        checkRemoveThisUnionCombinedSigCall()
+        pass("checkRemoveThisUnionCombinedSigCall") { checkRemoveThisUnionCombinedSigCall() }
         // B534: TS2322 for `x = "whatever"` where x: keyof Remapped and Remapped is a
         // distributive key-remap over an index-sig Orig (the index sig drops; the string
         // literal isn't a surviving member). Hardcoded keyof-remap display recomposition.
-        checkKeyofDistributiveRemapAssign()
+        pass("checkKeyofDistributiveRemapAssign") { checkKeyofDistributiveRemapAssign() }
         // B533: TS2345 for `f({})` where f's param is an empty user `class TemplateStringsArray`
         // that tsc merges with the lib interface (21 members) — `{}` misses them.
-        checkTemplateStringsArrayShadowArgMismatch()
+        pass("checkTemplateStringsArrayShadowArgMismatch") { checkTemplateStringsArrayShadowArgMismatch() }
         // B538 (signatureCombiningRestParameters1): TS2345 'any' not assignable to 'never'
         // for `fn(...args)` where `fn` came from iterating a mapped type whose values are
         // functions with a conditional rest param — the combined signature's param is `never`.
-        checkCombinedRestParamForOfSpreadCall()
+        pass("checkCombinedRestParamForOfSpreadCall") { checkCombinedRestParamForOfSpreadCall() }
         // B539 (unionTypeWithRecursiveSubtypeReduction3): TS2322 for `var s: <primitive> = b`
         // where `b: T`, `type T = typeof V`, and `V`'s union annotation references T back
         // (recursive typeof). Our recursive-alias errorType sentinel makes `b`=any → we emit
         // nothing; tsc expands the inner T one level then cuts to `any`.
-        checkRecursiveTypeofUnionVarDecl()
+        pass("checkRecursiveTypeofUnionVarDecl") { checkRecursiveTypeofUnionVarDecl() }
         // B542 (objectGroupBy): TS2322 'Employee' not assignable to 'PropertyKey' for a bare-param
         // keySelector `x => x` over an object-element iterable (`Object.groupBy(Set<Employee>, x=>x)`).
-        checkObjectGroupByNonKeySelector()
+        pass("checkObjectGroupByNonKeySelector") { checkObjectGroupByNonKeySelector() }
         // B543 (instantiationExpressionErrorNoCrash): TS2344+TS2635 for `ReturnType<typeof f<A>>`
         // where the instantiation supplies fewer type args than f's non-defaulted type params.
-        checkInstantiationExprArityInReturnType()
+        pass("checkInstantiationExprArityInReturnType") { checkInstantiationExprArityInReturnType() }
         // B544 (keyofIsLiteralContexualType): TS2322 for an out-of-constraint `(keyof T)[]` array
         // element, and TS2339 for a `pick(obj,[keys]).<unpicked>` member access.
-        checkKeyofConstraintArrayLiteralElements()
-        checkPickCallResultMemberAccess()
+        pass("checkKeyofConstraintArrayLiteralElements") { checkKeyofConstraintArrayLiteralElements() }
+        pass("checkPickCallResultMemberAccess") { checkPickCallResultMemberAccess() }
         // B545 (indexedAccessRelation): TS2322 for `this.setState({a:a})` (a:T) in a
         // `class C<T extends Foo, S> extends Component<S & State<T>>` — the Pick<S,K> contextual
         // type makes `a`'s expected type `(S & State<T>)["a"] | undefined`, unsatisfiable by T.
-        checkIndexedAccessRelationSetState()
+        pass("checkIndexedAccessRelationSetState") { checkIndexedAccessRelationSetState() }
         // computedPropertyBindingElementDeclarationNoCrash1 — `this.setState({ [key]: value })`
         // inside `for (const [key, value] of Object.entries(...))` → the computed-key object
         // literal is `{ [x: string]: unknown }`, missing the param type's required named props.
-        checkComputedKeyObjectLiteralArg()
+        pass("checkComputedKeyObjectLiteralArg") { checkComputedKeyObjectLiteralArg() }
         // noInferCommonPropertyCheck1 — `test<T>(a, weakArg)` where weakArg's param is a
         // NoInfer-bearing intersection (`NoInfer<T> & {prop?}` etc.); the substituted weak
         // intersection shares no property with the arg → TS2559. Additive (engine resolves
         // NoInfer<T> & {...} to errorType so the general weak path is silent).
-        checkNoInferIntersectionWeakArgs()
+        pass("checkNoInferIntersectionWeakArgs") { checkNoInferIntersectionWeakArgs() }
         // recursiveConditionalCrash4 — TS2589 for a generic conditional-type alias whose
         // nested conditional has self-references in BOTH branches (no base case → infinite).
-        checkRecursiveConditionalAliasInstantiation()
+        pass("checkRecursiveConditionalAliasInstantiation") { checkRecursiveConditionalAliasInstantiation() }
         // excessivelyLargeTupleSpread — TS2799/TS2800 when a variadic-tuple / const-array
         // spread chain (or a non-power-of-2 recursive doubling builder) produces ≥10000 elements.
-        checkExcessivelyLargeTupleSpread()
+        pass("checkExcessivelyLargeTupleSpread") { checkExcessivelyLargeTupleSpread() }
         // 65e'. duplicateIdentifiersAcrossFileBoundaries — cross-file (script) merges:
         // class in one file + function-with-body in another → TS2813/TS2814 (+TS6506);
         // class + same-named namespace in different files with a colliding member name →
         // TS2300 (+TS6203). Pure AST over binderResults (no symbol-table conflation).
-        checkCrossFileClassFunctionMerge()
-        checkCrossFileCloduleMemberConflict()
+        pass("checkCrossFileClassFunctionMerge") { checkCrossFileClassFunctionMerge() }
+        pass("checkCrossFileCloduleMemberConflict") { checkCrossFileCloduleMemberConflict() }
         // 66. Check TypeScript syntax in JavaScript files (TS8xxx)
-        checkTsSyntaxInJsFiles()
+        pass("checkTsSyntaxInJsFiles") { checkTsSyntaxInJsFiles() }
         // 67. Check export specifiers for non-local declarations (TS2661)
-        checkExportSpecifierLocality()
+        pass("checkExportSpecifierLocality") { checkExportSpecifierLocality() }
         // 68. Check import declaration conflicts with local (TS2440)
-        checkImportConflictsWithLocal()
+        pass("checkImportConflictsWithLocal") { checkImportConflictsWithLocal() }
         // 68b. B98.r17: TS2440 for `import X = ns.ref` inside a namespace conflicting with a
         //      `var X` declared in ANOTHER block of the same merged namespace.
-        checkNamespaceImportVarConflict()
+        pass("checkNamespaceImportVarConflict") { checkNamespaceImportVarConflict() }
         // 68z (B61.5h). TS1473: Import declarations only allowed at top level of module
-        checkImportNotAtTopLevel()
+        pass("checkImportNotAtTopLevel") { checkImportNotAtTopLevel() }
         // 68a. Check `export default X` where X is a type-only import under isolatedModules (TS1292)
-        checkIsolatedModulesExportDefaultIsType()
+        pass("checkIsolatedModulesExportDefaultIsType") { checkIsolatedModulesExportDefaultIsType() }
         // 68aa. Check `export import X = Y` where Y is a type-only entity under isolatedModules (TS1269)
-        checkIsolatedModulesExportImportIsType()
+        pass("checkIsolatedModulesExportImportIsType") { checkIsolatedModulesExportImportIsType() }
         // 68aa'. Check re-export of a type-only name under isolatedModules (TS1205 / TS1448)
-        checkIsolatedModulesReExportType()
+        pass("checkIsolatedModulesReExportType") { checkIsolatedModulesReExportType() }
         // 68aa''. B162: instantiated namespace in a global script file under isolatedModules (TS1280)
-        checkIsolatedModulesScriptNamespaces()
+        pass("checkIsolatedModulesScriptNamespaces") { checkIsolatedModulesScriptNamespaces() }
         // 68b. Check verbatimModuleSyntax restrictions (TS1295 / TS1484)
-        checkVerbatimModuleSyntax()
+        pass("checkVerbatimModuleSyntax") { checkVerbatimModuleSyntax() }
         // 68b2. TS2866: isolatedModules — non-type-only import of a type-only export
         // shadowing a GLOBAL VALUE that the file actually uses (B287). Runs after 68b
         // so same-position TS1295/TS1484 sort first (stable sort, insertion order).
-        checkIsolatedModulesGlobalValueShadow()
+        pass("checkIsolatedModulesGlobalValueShadow") { checkIsolatedModulesGlobalValueShadow() }
         // 68b3. TS2341/TS2445 for accessor-PAIR members with per-direction visibility
         // (B289 — setter governs assignment targets, getter governs reads).
-        checkDivergentAccessorVisibility()
+        pass("checkDivergentAccessorVisibility") { checkDivergentAccessorVisibility() }
         // 69. Check namespace used as type (TS2709)
-        checkNamespaceUsedAsType()
+        pass("checkNamespaceUsedAsType") { checkNamespaceUsedAsType() }
         // 69a'. B393: `import X = <local-namespace>` alias used as a bare type (TS2709)
         // or `X.member` where member is non-exported (TS2724) — namespace-local aliases
         // the file-scoped walker can't reach.
-        checkNamespaceAliasTypeRefs()
+        pass("checkNamespaceAliasTypeRefs") { checkNamespaceAliasTypeRefs() }
         // 69a''. B408: a namespace-local TYPE used as a namespace qualifier in type position
         // (`namespace N { interface Foo{}; var x: Foo.bar }`) → TS2702/TS2713; also `N.Foo.bar`.
-        checkTypeUsedAsNamespaceRefs()
+        pass("checkTypeUsedAsNamespaceRefs") { checkTypeUsedAsNamespaceRefs() }
         // 69b. Check bare `import("./m")` used as a type where m has no `export =` (TS1340)
-        checkImportTypeUsedAsType()
+        pass("checkImportTypeUsedAsType") { checkImportTypeUsedAsType() }
         // 70. Check property used before initialization (TS2729)
-        checkPropertyUseBeforeInit()
+        pass("checkPropertyUseBeforeInit") { checkPropertyUseBeforeInit() }
         // 71. Check downlevelIteration requirement (TS2802)
         if (options.target < ScriptTarget.ES2015 && !options.downlevelIteration) {
-            checkDownlevelIteration()
+            pass("checkDownlevelIteration") { checkDownlevelIteration() }
         }
         // 71b. Check BigInt literals at targets lower than ES2020 (TS2737)
         if (options.target < ScriptTarget.ES2020) {
-            checkBigIntLiterals()
+            pass("checkBigIntLiterals") { checkBigIntLiterals() }
         }
         // 71c. B291: bigint property names (TS1539/TS2464/TS2538/mapped-key TS2322)
-        checkBigintPropertyNames()
+        pass("checkBigintPropertyNames") { checkBigintPropertyNames() }
         // 71d. B297: string-literal args vs template-literal-type params (TS2345)
-        checkTemplateLiteralParamArgs()
+        pass("checkTemplateLiteralParamArgs") { checkTemplateLiteralParamArgs() }
         // 71e. B299: binding-pattern arrow args vs (x: T) => prim params — T falls
         // back to unknown (a binding pattern is not an inference source), TS2345.
-        checkBindingPatternInferenceFallbackArgs()
+        pass("checkBindingPatternInferenceFallbackArgs") { checkBindingPatternInferenceFallbackArgs() }
         // 71f. B300: class-EXPRESSION property overrides (TS2416 with index-sig
         // value chains) — class expressions are never bound, so the class-decl
         // override walker can't see them.
-        checkClassExpressionOverrides()
+        pass("checkClassExpressionOverrides") { checkClassExpressionOverrides() }
         // 72. Check call/new expression type argument count (TS2558)
-        checkCallTypeArgCount()
+        pass("checkCallTypeArgCount") { checkCallTypeArgCount() }
         // 72a2. B128 — calls to function-typed parameters (TS2558 type-args on a
         // 0-type-param fn type; TS2345 concrete arg vs bare unconstrained TP param).
-        checkFnTypedParamCalls()
+        pass("checkFnTypedParamCalls") { checkFnTypedParamCalls() }
         // 72a3. B218: TS2353 excess props for reverse-mapped single-object-literal
         // args (`{[K in keyof T & keyof C]: T[K]}` params — keys ⊆ keyof C).
-        checkReverseMappedExcessProps()
+        pass("checkReverseMappedExcessProps") { checkReverseMappedExcessProps() }
         // 72b. Enum member initializers may not forward-reference later members (TS2651)
-        checkEnumForwardReferences()
+        pass("checkEnumForwardReferences") { checkEnumForwardReferences() }
         // 72b2. Const-enum cluster: TS2474/2475/2476/2477/2478/2567 (AST + const-eval).
-        checkConstEnumDiagnostics()
+        pass("checkConstEnumDiagnostics") { checkConstEnumDiagnostics() }
         // 72c. Setter bodies may not return a value (TS2408)
-        checkSetterReturns()
+        pass("checkSetterReturns") { checkSetterReturns() }
         // 72d. A class's own name used in a direct member's computed property name is a
         //      TDZ use-before-declaration (TS2449)
-        checkClassNameInOwnComputedMemberNames()
+        pass("checkClassNameInOwnComputedMemberNames") { checkClassNameInOwnComputedMemberNames() }
         // 73a2. Unified cross-file identifier conflicts mixing class / type-alias with
         //       const/let (and cross-file type-alias conflicts) — hub model TS6203/TS6204.
         //       Runs BEFORE 73b so it can claim block-scoped names that also have a
         //       class/type-alias declaration (73b then skips them).
         if (binderResults.size > 1) {
-            checkCrossFileIdentifierConflicts()
+            pass("checkCrossFileIdentifierConflicts") { checkCrossFileIdentifierConflicts() }
         }
         // 73b. Check cross-file block-scoped variable redeclarations (TS2451)
         if (binderResults.size > 1) {
-            checkCrossFileBlockScopedDuplicates()
+            pass("checkCrossFileBlockScopedDuplicates") { checkCrossFileBlockScopedDuplicates() }
         }
         // 73c. Check cross-file enum-merge conflicts (TS2567 + TS6203)
         if (binderResults.size > 1) {
-            checkCrossFileEnumConflicts()
+            pass("checkCrossFileEnumConflicts") { checkCrossFileEnumConflicts() }
         }
         // 73d. Check module-augmentation enum merging with a re-exported class/etc (TS2567 + TS6203)
         if (binderResults.size > 1) {
-            checkModuleAugmentationEnumMerge()
+            pass("checkModuleAugmentationEnumMerge") { checkModuleAugmentationEnumMerge() }
         }
         // 73e. Check augmentation of a module that resolves to a non-module entity (TS2671)
         if (binderResults.size > 1) {
-            checkModuleAugmentationOfNonModuleEntity()
+            pass("checkModuleAugmentationOfNonModuleEntity") { checkModuleAugmentationOfNonModuleEntity() }
         }
         // 73f. Check cross-file merged-interface member conflicts (TS2300 + TS6203, or
         //      collapsed TS6200 + TS6201 when >= 8 names conflict)
         if (binderResults.size > 1) {
-            checkCrossFileInterfaceMemberConflicts()
+            pass("checkCrossFileInterfaceMemberConflicts") { checkCrossFileInterfaceMemberConflicts() }
         }
         // 73g. Check cross-file top-level class-vs-class conflicts (TS2300, or collapsed
         //      TS6200 + TS6201 when >= 8 names conflict)
         if (binderResults.size > 1) {
-            checkCrossFileClassConflicts()
+            pass("checkCrossFileClassConflicts") { checkCrossFileClassConflicts() }
         }
         // 73g'. B443: cross-file `declare global { namespace NS { … } }` member with a
         //       non-mergeable kind combination (a type-alias never merges) → TS2300 + TS6203.
         if (binderResults.size > 1) {
-            checkGlobalNamespaceMemberConflicts()
+            pass("checkGlobalNamespaceMemberConflicts") { checkGlobalNamespaceMemberConflicts() }
         }
         // 73g'' (B449). cross-file global `type N` (script) + `namespace N` (script) → TS2649.
         if (binderResults.size > 1) {
-            checkCrossFileTypeAliasNamespaceConflict()
+            pass("checkCrossFileTypeAliasNamespaceConflict") { checkCrossFileTypeAliasNamespaceConflict() }
         }
         // 73h. Check block-scoped export re-declared via module augmentation(s) (TS2451)
         if (binderResults.size > 1) {
-            checkCrossFileModuleAugmentationDuplicates()
+            pass("checkCrossFileModuleAugmentationDuplicates") { checkCrossFileModuleAugmentationDuplicates() }
         }
         // 73h2 (B412). A name declared in a `declare module "X"` augmentation that is ALSO
         //      re-exported into X via `export {N} from './other'` → TS2300 (type) / TS2451 (value).
         if (binderResults.size > 1) {
-            checkModuleAugmentationReexportDuplicates()
+            pass("checkModuleAugmentationReexportDuplicates") { checkModuleAugmentationReexportDuplicates() }
         }
         // 73h3 (B553). A CJS `module.exports = {objLit}` JS module's string-valued key vs a
         //      cross-file `declare module "./X"` augmentation `export const/var <name>` → TS2300.
         if (binderResults.size > 1) {
-            checkCjsExportAugmentationConflict()
+            pass("checkCjsExportAugmentationConflict") { checkCjsExportAugmentationConflict() }
         }
         // 73j. UMD global (`export as namespace X`) redeclared as a `declare global`
         //      const/let X (TS2451 + TS6203). The parser misparses `export as namespace`
         //      (no AST node), so the UMD side is found by regex; the const side via AST.
-        checkUmdGlobalVsDeclareGlobalConst()
+        pass("checkUmdGlobalVsDeclareGlobalConst") { checkUmdGlobalVsDeclareGlobalConst() }
         // 73i. Check `export * from` re-export ambiguity (TS2308) — two different modules
         //      re-exported via `export *` both directly export the same member name.
         if (binderResults.size > 1) {
-            checkExportStarAmbiguity()
+            pass("checkExportStarAmbiguity") { checkExportStarAmbiguity() }
         }
         // 74. Check module hidden by local declaration (TS2437)
-        checkModuleHiddenByLocal()
+        pass("checkModuleHiddenByLocal") { checkModuleHiddenByLocal() }
         // 75. Check export assignment expressions in ambient contexts (TS2714)
-        checkAmbientExportAssignmentExpressions()
+        pass("checkAmbientExportAssignmentExpressions") { checkAmbientExportAssignmentExpressions() }
         // 77. Check class named 'Object' with CJS/AMD/System/UMD module (TS2725)
-        checkObjectClassNameConflict()
+        pass("checkObjectClassNameConflict") { checkObjectClassNameConflict() }
         // 78. Check indexed access into type parameter whose constraint has private/protected member (TS4105)
-        checkIndexedAccessPrivateMembers()
+        pass("checkIndexedAccessPrivateMembers") { checkIndexedAccessPrivateMembers() }
         // 79. B63.30: Check parameter decorators on constructor parameters whose 2nd-param
         // signature requires `string | symbol` (not `undefined`) — emit TS1239
-        checkParameterDecoratorsOnConstructor()
+        pass("checkParameterDecoratorsOnConstructor") { checkParameterDecoratorsOnConstructor() }
         // 80. B98.r7: TS1206 "Decorators are not valid here." for parameter decorators
         // under standard (non-experimental) decorators — parameter decorators are invalid.
-        checkInvalidParameterDecorators()
+        pass("checkInvalidParameterDecorators") { checkInvalidParameterDecorators() }
         // 81. B98.r8: TS6053 "File 'X' not found." for missing `/// <reference path>` targets.
-        checkReferencePathsExist()
+        pass("checkReferencePathsExist") { checkReferencePathsExist() }
         // 82. B98.r13: TS7022 self-referential un-annotated object/array-literal variables.
-        checkRecursiveLiteralVariables()
+        pass("checkRecursiveLiteralVariables") { checkRecursiveLiteralVariables() }
         // 82a. B147: TS7022+TS7024 circular generic-callback initializer `const X = f(() => X)`.
-        checkCircularGenericCallbackVariables()
+        pass("checkCircularGenericCallbackVariables") { checkCircularGenericCallbackVariables() }
         // B336: curried-generic self-reference (TS7022 + member TS7023).
-        checkCurriedGenericSelfRefVariables()
+        pass("checkCurriedGenericSelfRefVariables") { checkCurriedGenericSelfRefVariables() }
         // 82a'. B193: TS2345 for optional-member reads of an annotated destructured param
         // passed where only `undefined` fails (`function f({skills}: Robot) { log(skills.primary) }`).
-        checkDestructuredParamOptionalMemberArgs()
+        pass("checkDestructuredParamOptionalMemberArgs") { checkDestructuredParamOptionalMemberArgs() }
         // 82a''. B221: TS18048 for tuple-rest destructured bindings at indices past
         // the tuple's guaranteed minimum length (noUncheckedIndexedAccess).
-        checkTupleRestDestructureUndefinedUse()
+        pass("checkTupleRestDestructureUndefinedUse") { checkTupleRestDestructureUndefinedUse() }
         // 82b. B148: TS2353 excess-prop for JS `/** @type {import("X").Foo} */ export default {obj}`.
-        checkJsDocTypeExportAssignment()
+        pass("checkJsDocTypeExportAssignment") { checkJsDocTypeExportAssignment() }
         // 82c. B200: TS2345 for call-of-call args against a typeof-narrowed callback param.
-        checkNarrowedTypeofCallbackCalls()
+        pass("checkNarrowedTypeofCallbackCalls") { checkNarrowedTypeofCallbackCalls() }
         // 82d. B271: empty-DOM-element-stub receivers — additive intersection emission +
         // TS2339→TS2812 rewrite when @lib is explicit without 'dom'.
-        checkEmptyDomIntersectionAccess()
+        pass("checkEmptyDomIntersectionAccess") { checkEmptyDomIntersectionAccess() }
         // unresolvableSelfReferencingAwaitedUnion (#49646/#49723/#42948): a recursive-Promise union
         // alias `X = … | Promise<X> | <other-self-ref>` is an UNRESOLVABLE Awaited<X> → `await x`
         // (x:X) is TS1062. We model neither Awaited<> nor `instanceof Function` narrowing, so we FP
@@ -3271,85 +3274,85 @@ class Checker(
         // TS2322. Corpus-unique post-hoc fixup (runs LAST so the late TS2577 is already emitted):
         // suppress our 2322/2577/2349 on the file + emit the baseline TS2322 (env, at the return
         // expr) + TS1062 ×2 (at each `await <id>`).
-        checkUnresolvableSelfReferencingAwaitedUnion()
+        pass("checkUnresolvableSelfReferencingAwaitedUnion") { checkUnresolvableSelfReferencingAwaitedUnion() }
         // genericCallAtYieldExpressionInGenericCall1: we infer a generator function arg's return
         // type as `void` (no yield/yield* element-type inference) → FP TS2345 ×7. Post-hoc fixup
         // (runs LATE so the FP TS2345 are emitted): suppress the void-Generator TS2345 + re-emit
         // the 3 baseline diags. Corpus-unique gate (`yield* inner2`).
-        checkGenericGeneratorYieldArgs()
+        pass("checkGenericGeneratorYieldArgs") { checkGenericGeneratorYieldArgs() }
         // styledComponentsInstantiaionLimitNotReached: 2 deep TS2344 react/styled-components
         // instantiation chains; we FP TS2307 (unresolved react import) + TS1100 (arguments property).
         // Suppress-and-reemit; corpus-unique gate. Chains verbatim from the baseline.
-        checkStyledComponentsInstantiationLimit()
+        pass("checkStyledComponentsInstantiationLimit") { checkStyledComponentsInstantiationLimit() }
         // disallowedBlockScopedInPresenceOfParseErrors1 (#61734): block-scoped decls as braceless
         // if-bodies. Suppress our FP TS2304/TS1434 + re-emit the 4 TS2454 + 2 TS1156. Corpus-unique.
-        checkDisallowedBlockScopedParseErrors()
+        pass("checkDisallowedBlockScopedParseErrors") { checkDisallowedBlockScopedParseErrors() }
         // staticAnonymousTypeNotReferencingTypeParameter: suppress FP TS2740 (new Array) + TS2345 +
         // re-emit TS2339 toString-on-T + 2 TS2322 null→number default params. Corpus-unique.
-        checkStaticAnonymousListWrapper()
+        pass("checkStaticAnonymousListWrapper") { checkStaticAnonymousListWrapper() }
         // mappedTypeIndexedAccessConstraint: suppress FP TS7031 (contextually-typed mapper arrow
         // params) + re-emit 5 possibly-undefined (TS18048×3/TS2532/TS2722) on mapped-indexed access.
-        checkMappedTypeIndexedAccessConstraint()
+        pass("checkMappedTypeIndexedAccessConstraint") { checkMappedTypeIndexedAccessConstraint() }
         // genericFunctionInference1: suppress 16 FP TS2322/TS2339 (unbound pipe() return vs generic-
         // fn-type targets) + re-emit the 1 TS2345 on the toKeys callback. Corpus-unique.
-        checkGenericFunctionInferencePipe()
+        pass("checkGenericFunctionInferencePipe") { checkGenericFunctionInferencePipe() }
         // inferFromGenericFunctionReturnTypes3: suppress 9 FP TS2322/TS2339/TS2693 + re-emit the 2
         // real errors (TS2345 widened-arg + TS2322 best-common-type union return). Corpus-unique.
-        checkInferFromGenericFunctionReturnTypes3()
+        pass("checkInferFromGenericFunctionReturnTypes3") { checkInferFromGenericFunctionReturnTypes3() }
         // conditionalTypeAssignabilityWhenDeferred: suppress 2 FP TS2345 (deferred-constraint
         // evaluated to never) + re-emit the 6 deferred-conditional assignability errors. Corpus-unique.
-        checkConditionalTypeAssignabilityDeferred()
+        pass("checkConditionalTypeAssignabilityDeferred") { checkConditionalTypeAssignabilityDeferred() }
         // builtinIterator: suppress FP TS2339/TS7057/TS2689 (Iterator-as-interface) + re-emit the 7
         // real errors (TS2511/2515/2416×3/2345/2322 with deep IteratorResult chains). Corpus-unique.
-        checkBuiltinIterator()
+        pass("checkBuiltinIterator") { checkBuiltinIterator() }
         // regexpExecAndMatchTypeUsages (strict): suppress + re-emit 11 possibly-undefined/eopt errors.
-        checkRegexpExecMatchTypeUsages()
+        pass("checkRegexpExecMatchTypeUsages") { checkRegexpExecMatchTypeUsages() }
         // recursiveFunctionTypes: suppress 3 FP TS2769 + re-emit TS2345/TS2394/TS2345/TS2769. Corpus-unique.
-        checkRecursiveFunctionTypes()
-        checkReverseMappedIntersectionConstraint()
-        checkRecursiveConditionalTypesPin()
-        checkObjectLiteralExcessProperties()
-        checkExcessPropertyCheckWithUnions()
-        checkComplexRecursiveCollections()
-        checkMapUpsert()
-        checkBigintWithLib()
-        checkPromisePermutations()
-        checkPromisePermutations2()
-        checkPromisePermutations3()
-        checkTupleTypesPin()
-        checkReadonlyTupleElaboration()
-        checkStrictOptionalProperties1()
-        checkInferTypePredicates()
-        checkSubclassThisTypeAssignable01()
-        checkOperationsAvailableOnPromisedType()
-        checkUnicodeIdentifierName2()
-        checkShebangError()
-        checkParseUnmatchedTypeAssertion()
-        checkTemporalPin()
-        checkAmbiguousGenericAssertion1()
-        checkInvalidLetForOfES5()
-        checkInvalidLetForOfES6()
-        checkClassUpdateTests()
-        checkParseInvalidNames()
-        checkParametersSyntaxErrorNoCrash1()
-        checkParseBigInt()
-        checkBigintWithoutLib()
-        checkInKeywordTypeguard()
-        checkUnusedLocalsAndParameters()
-        checkEs6ImportNamedImportParsingErrorPin()
-        checkBigintArbitraryIdentifierPin()
-        checkParseUnaryJsx4Pin()
-        checkControlFlowFunctionLikeCircular1Pin()
-        checkEs6ExportEqualsInteropPin()
-        checkModulePreserve4Pin()
-        checkMappedTypeAsClauseLateBoundPin()
-        checkPreserveSymlinksPin()
-        checkReexportedSymlinkReference3Pin()
-        checkUnderscoreTest1Pin()
-        checkParseImportAttributesErrorPin()
-        checkPreEmitCountMismatchPins()
-        checkMappedTypeRecursiveInferencePin()
-        applyDomLibSuggestionRewrite()
+        pass("checkRecursiveFunctionTypes") { checkRecursiveFunctionTypes() }
+        pass("checkReverseMappedIntersectionConstraint") { checkReverseMappedIntersectionConstraint() }
+        pass("checkRecursiveConditionalTypesPin") { checkRecursiveConditionalTypesPin() }
+        pass("checkObjectLiteralExcessProperties") { checkObjectLiteralExcessProperties() }
+        pass("checkExcessPropertyCheckWithUnions") { checkExcessPropertyCheckWithUnions() }
+        pass("checkComplexRecursiveCollections") { checkComplexRecursiveCollections() }
+        pass("checkMapUpsert") { checkMapUpsert() }
+        pass("checkBigintWithLib") { checkBigintWithLib() }
+        pass("checkPromisePermutations") { checkPromisePermutations() }
+        pass("checkPromisePermutations2") { checkPromisePermutations2() }
+        pass("checkPromisePermutations3") { checkPromisePermutations3() }
+        pass("checkTupleTypesPin") { checkTupleTypesPin() }
+        pass("checkReadonlyTupleElaboration") { checkReadonlyTupleElaboration() }
+        pass("checkStrictOptionalProperties1") { checkStrictOptionalProperties1() }
+        pass("checkInferTypePredicates") { checkInferTypePredicates() }
+        pass("checkSubclassThisTypeAssignable01") { checkSubclassThisTypeAssignable01() }
+        pass("checkOperationsAvailableOnPromisedType") { checkOperationsAvailableOnPromisedType() }
+        pass("checkUnicodeIdentifierName2") { checkUnicodeIdentifierName2() }
+        pass("checkShebangError") { checkShebangError() }
+        pass("checkParseUnmatchedTypeAssertion") { checkParseUnmatchedTypeAssertion() }
+        pass("checkTemporalPin") { checkTemporalPin() }
+        pass("checkAmbiguousGenericAssertion1") { checkAmbiguousGenericAssertion1() }
+        pass("checkInvalidLetForOfES5") { checkInvalidLetForOfES5() }
+        pass("checkInvalidLetForOfES6") { checkInvalidLetForOfES6() }
+        pass("checkClassUpdateTests") { checkClassUpdateTests() }
+        pass("checkParseInvalidNames") { checkParseInvalidNames() }
+        pass("checkParametersSyntaxErrorNoCrash1") { checkParametersSyntaxErrorNoCrash1() }
+        pass("checkParseBigInt") { checkParseBigInt() }
+        pass("checkBigintWithoutLib") { checkBigintWithoutLib() }
+        pass("checkInKeywordTypeguard") { checkInKeywordTypeguard() }
+        pass("checkUnusedLocalsAndParameters") { checkUnusedLocalsAndParameters() }
+        pass("checkEs6ImportNamedImportParsingErrorPin") { checkEs6ImportNamedImportParsingErrorPin() }
+        pass("checkBigintArbitraryIdentifierPin") { checkBigintArbitraryIdentifierPin() }
+        pass("checkParseUnaryJsx4Pin") { checkParseUnaryJsx4Pin() }
+        pass("checkControlFlowFunctionLikeCircular1Pin") { checkControlFlowFunctionLikeCircular1Pin() }
+        pass("checkEs6ExportEqualsInteropPin") { checkEs6ExportEqualsInteropPin() }
+        pass("checkModulePreserve4Pin") { checkModulePreserve4Pin() }
+        pass("checkMappedTypeAsClauseLateBoundPin") { checkMappedTypeAsClauseLateBoundPin() }
+        pass("checkPreserveSymlinksPin") { checkPreserveSymlinksPin() }
+        pass("checkReexportedSymlinkReference3Pin") { checkReexportedSymlinkReference3Pin() }
+        pass("checkUnderscoreTest1Pin") { checkUnderscoreTest1Pin() }
+        pass("checkParseImportAttributesErrorPin") { checkParseImportAttributesErrorPin() }
+        pass("checkPreEmitCountMismatchPins") { checkPreEmitCountMismatchPins() }
+        pass("checkMappedTypeRecursiveInferencePin") { checkMappedTypeRecursiveInferencePin() }
+        pass("applyDomLibSuggestionRewrite") { applyDomLibSuggestionRewrite() }
         // Round 426 (faithful TS2563): definite-assignment analysis respects a flow-walk
         // depth trip — tsc's flowAnalysisDisabled makes getFlowTypeOfReference return
         // errorType in the tripped container, so it reports TS2563 OR TS2454, never both.
@@ -3366,6 +3369,7 @@ class Checker(
             }
         }
         } // end if (!declarationOnly)
+        PassTiming.noteInitEnd()
         } catch (e: StackOverflowError) {
             // Boundary safety net — the ONLY catch(StackOverflowError) in the checker.
             // Per-call catches used to live inline (first silently swallowing into the
@@ -93090,8 +93094,15 @@ interface DataView {
         // DIFFERENT files collide; both reasons force a bypass for those names.
         val cacheable = currentTypeParamScope == null && inferenceNamespaceStack.isEmpty() &&
             currentTypeAliasArgs == null && !isConflatedInterfaceRefNode(node)
+        // INV.0 cacheable-vs-bypassed counters — inert unless --passTiming enabled it.
+        if (PassTiming.enabled) {
+            if (cacheable) PassTiming.typeNodeCacheable++ else PassTiming.typeNodeBypassed++
+        }
         if (cacheable) {
-            nodeTypes[node]?.let { return it }
+            nodeTypes[node]?.let {
+                if (PassTiming.enabled) PassTiming.typeNodeCacheHits++
+                return it
+            }
             // B202.2: in-progress sentinel (cacheable context only — context-sensitive
             // resolutions legitimately re-run the same node and are NOT tracked).
             // Re-entry on the SAME node is a type-level cycle: degrade to errorType
@@ -96295,6 +96306,8 @@ interface DataView {
      * expression type inference, replacing the string-based inferSimpleExprType.
      */
     private fun getTypeOfExpression(expr: Expression): Type {
+        // INV.0 recompute-factor counter — inert unless --passTiming enabled it.
+        if (PassTiming.enabled) PassTiming.noteGetTypeOfExpression(expr.pos, expr.end)
         return when (expr) {
             // Literals
             is NumericLiteralNode -> numberType
@@ -96583,6 +96596,8 @@ interface DataView {
      */
     private inline fun <T> flowWalkWithTripCheck(reference: Node, walk: () -> T): T? {
         if (isFlowAnalysisDisabledAt(reference.pos)) return null
+        // INV.0 walks-launched counter — inert unless --passTiming enabled it.
+        if (PassTiming.enabled) PassTiming.noteNarrowWalk()
         val saved = flowDepthTripped
         flowDepthTripped = false
         try {

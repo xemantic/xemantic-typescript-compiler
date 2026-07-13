@@ -44,11 +44,13 @@ fun main(args: Array<String>) {
     var project = "."
     var noEmit = false
     var listAll = false
+    var passTiming = false
     var i = 0
     while (i < args.size) {
         when (val a = args[i]) {
             "--noEmit", "--noemit" -> noEmit = true
             "--listAll", "--listall" -> listAll = true
+            "--passTiming", "--passtiming" -> passTiming = true
             "--project", "-p" -> { i++; if (i < args.size) project = args[i] }
             "--help", "-h" -> { printUsage(); return }
             else -> if (!a.startsWith("-")) project = a
@@ -59,6 +61,10 @@ fun main(args: Array<String>) {
     println("xemantic-typescript-compiler — whole-project build")
     println("project: $project${if (noEmit) "  (noEmit)" else ""}")
 
+    if (passTiming) {
+        PassTiming.reset()
+        PassTiming.enabled = true
+    }
     val (result, duration) = measureTimedValue {
         ProjectCompiler(SystemVfs).build(project, noEmit)
     }
@@ -74,6 +80,7 @@ fun main(args: Array<String>) {
 
     printDiagnostics(result.diagnostics, listAll)
     println("time:    ${duration.inWholeMilliseconds} ms")
+    if (passTiming) PassTiming.dump(::println)
     println(if (result.errorCount == 0) "OK — 0 errors" else "FAILED — ${result.errorCount} error(s)")
 }
 
@@ -107,6 +114,7 @@ private fun printUsage() {
           path / --project   directory containing tsconfig.json, or a tsconfig path (default: .)
           --noEmit           type-check only; do not write outputs
           --listAll          print every error (default: first 30) — for run-to-run FP diffing
+          --passTiming       print the INV.0 per-pass wall-time table + recompute counters
           --help, -h         show this help
         """.trimIndent()
     )
