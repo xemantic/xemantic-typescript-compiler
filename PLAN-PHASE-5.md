@@ -59,6 +59,55 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 505 (2026-07-13, same session as 500–504) — INV.3(c)(ii) LANDED: the
+kind-domain/enum-discriminant family flipped onto the node-keyed primitive.**
+The ~82% conflated family (round-503 measurement) now keys its merged-globals
+fallbacks by the NODE'S OWNING FILE: `resolveEnumSymbolForDiscriminant` and
+`kindDomainTypeDeclSymbol` thread a `keyNode` parameter (all 5 call sites pass
+the AST node the name was read from — the annotation TypeReference, the
+heritage `base`, the comparison PropertyAccess), and the alias fallbacks
+inside `enumSwitchKeysFromTypeNode`/`enumMemberKeysOfTypeNode` (incl. the
+round-477 import-alias fallback) consult `lookupPerFileForNode(node, name)`
+instead of raw `globals[name]`. `currentFileLocals` stays the FIRST consult at
+every site (own-file semantics unchanged — minimal-diff, byte-identity-first);
+the recursion into an alias BODY naturally re-keys by the body node = the
+declaring file (tsc-faithful alias-body scoping for free). Effect: a types.ts
+member annotation resolves under TYPES.TS's visibility whatever file is being
+checked — the owning file declares/imports those names, so the probe passes
+and the merged INSTANCE returns (resolution PRESERVED, the acceptance bar) —
+while a checking-file expression naming a module-only enum its file never
+imports nulls (the leak killed: real tsc sees TS2304 there and never narrows;
+killing the narrowing is FAITHFUL, and the readers' null contract is
+conservative — members kept, structural verdicts kept). Companion
+instrumentation-integrity piece: `globalsForFile`'s proven-visible branch now
+reads UNCLASSIFIED (`InstrumentedSymbolTable.getUnclassified`) under
+`--passTiming` — a node-keyed flip's legitimate foreign-node hit classifies
+CONFLATED against the CHECKING file's locals, which would have polluted the
+migration tables; the round-502 "tables measure only un-migrated traffic"
+contract now holds for node-keyed flips too. MEASURED (instrumented compiler
+profile): conflated 157k → 20,941 (−87%), total keyed lookups 2.71M → 2.36M;
+remaining top conflated names are the (c)(iii) value/callee sites (`factory`
+12k, `toPath` 500, `createDiagnosticForNode` 317, `isIdentifier` 298, `clone`
+276, `map`, `diag`) plus a types.ts type-name tail for (c)(iv)
+(NoSubstitutionTemplateLiteral 224 / NumericLiteral / BigIntLiteral /
+AccessorDeclaration ~100–133 each); by-pass: checkPropertyAccess 7,038 /
+checkCallExpressionTypes 5,743 / checkImplicitAnyParameters 2,744 /
+checkProtectedMemberReadAccess 2,198 / checkTypeAssignability 1,765.
+Verified: suite green 10,279 → 10,284 (+5 Inv3KindDomainNodeKeyTest — the
+leak-kill test FAILS on the pre-flip checker via stash: the leaked resolution
+narrowed `x.kind === Kind.A` in a file that never imports `Kind`, hiding the
+TS2339 on the un-narrowed union member; 4 preservation controls pass on BOTH
+sides: foreign-node alias annotation, imported-alias fallback,
+same-module-file, cross-file script); `--listAll` byte-identical on compiler
+AND services (46/46 env-legit each); bench row in band (27,173 ms self /
+927 MB, −0.5% vs previous, same diagnostics). Out of scope, noted:
+`canonicalEnumSymbol`'s memoized `globals[sym.name]` consult (self-guarding
+shared-decl identity check, tiny traffic — not in the round-503 family list)
+and `resolveNamespaceQualifiedTypeAlias` (currentCheckFileName-keyed
+fileResults reads, not a globals consult). CLAUDE.md gotcha extended (the
+node-keyed rule + the readers' names). NEXT: INV.3(c)(iii) — the
+current-file-keyed value/callee sites.
+
 **Round 504 (2026-07-13, same session as 500–503) — INV.3(c)(i) LANDED: the
 node-keyed resolution primitive, additive and unconsumed.** The round-503
 measurement's design consequence made concrete: `owningSourceFile(node)`
@@ -403,48 +452,6 @@ tables: it is in the hot maps the getNode samples actually sit in (walk-internal
 memos, checker caches) and ultimately INV.4's per-node expression-type cache.
 NEXT: INV.2(c) — full lexical binding, additive (function bodies first).
 
-**Round 495 (2026-07-13) — INV.2(a) LANDED: AST identity foundations.** All 138
-node data classes now extend `NodeBase` (`var nodeId = -1`, `var parent: Node? =
-null`; deliberately NOT implementing `Node` — a non-sealed direct subtype would
-break exhaustive `when` over `Node`); base-class vars sit outside data-class
-`equals`/`hashCode`/`copy`, so structural node keys are byte-identical and a
-Transformer `copy()` yields an UNINDEXED node; `SourceFile.nodeCount` body var.
-New `NodeWalk.kt`: the canonical generic `forEachChild(node) {}` (every
-node-typed primary-constructor property of all ~139 kinds; exhaustive sealed
-`when`, so a new node CLASS fails compilation until added) + `indexSourceFile`
-stamping dense PREORDER nodeIds (SourceFile = 0; a subtree = a contiguous id
-range) + parents + nodeCount at the end of `Parser.parse()` — ITERATIVE
-explicit-stack (crawl parses run on Dispatchers.Default OFF the deep-stack
-thread; a recursive indexer would overflow exactly there). Fields are inert
-until INV.2(b) consumes them. **Verification:** suite green 10,218 → 10,228
-(+10 local: `Inv2NodeIndexTest` — dense preorder + parent chains + copy-
-unindexed + a 30k-term chain indexed on a PLAIN thread (measured nodeCount
-60,009 exact via jshell) + negative control; `ForEachChildOracleTest` — the
-jvmTest REFLECTION oracle diffing forEachChild against data-class componentN
-properties per node, over the kind-dense fixture + JSX fixture + directly-
-constructed parser-unreachable kinds + ALL 78 real tsc compiler sources,
->100k nodes, identity-set AND multiset-size agreement); `--listAll`
-byte-identical vs the stash-built BEFORE on the compiler profile (46
-diagnostics; wall 25.67 → 25.73 s — the indexing walk is noise-level);
-bench row 25,430 ms self / 840 MB RSS (−2.5%/−62 MB vs previous row = box
-noise band; the per-node nodeId+parent fields cost ~16 MB on ~1M nodes,
-invisible in RSS).
-**Migration surprises (both now CLAUDE.md gotchas):** (1) the shared
-superclass changed Kotlin LUB inference — `parsePropertyName`'s inferred
-return type degraded to `Any` (14 downstream type errors; ONE explicit return
-type fixed all; the silently-compiling `Any` variant is exactly what the
-suite + listAll gates cover). (2) power-assert renders every captured
-subexpression's toString on FAILURE — a failing `have(sourceFile.nodeCount >
-…)` STACK-OVERFLOWED rendering the 30k-deep tree, and the oracle's `have`
-OOM'd building a node-list diagram, masking the real messages; both tests
-rewritten render-safe (int/boolean locals, plain `fail()`), after which the
-initial sweep "failure" did not reproduce (deterministic green incl. the full
-suite — the run-1 verdict is attributed to the assertion-machinery path, not
-a forEachChild gap). NEXT: INV.2(b) — migrate ONE hot pos-keyed side table
-(Flow's `nodeToFlow` or the checker's `nodeTypes`, per INV.0 evidence) to a
-nodeId-indexed array; measure the `HashMap.getNode` JFR delta before mass
-migration.
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 (Restored 2026-07-12, round 481 — the queue/backlog/inventory sections had been
@@ -741,10 +748,20 @@ interrupt the arc).
       merged instance; an owner without the name yields null (the leak);
       an importing owner keeps resolving; an unindexed copy degrades to
       legacy; lib names never nulled).
-    - (ii) **Flip the kind-domain/enum-discriminant family** (~82% of
-      conflated traffic) onto the node-keyed primitive — the annotation
-      node is in hand at every one of those sites; preserving resolution
-      (not nulling) is the acceptance bar, listAll byte-identity the gate.
+    - (ii) DONE round 505 (2026-07-13): the kind-domain/enum-discriminant
+      family (~82% of conflated traffic) flipped onto the node-keyed
+      primitive — `resolveEnumSymbolForDiscriminant`/`kindDomainTypeDeclSymbol`
+      thread a `keyNode` (all 5 call sites), and the alias fallbacks in
+      `enumSwitchKeysFromTypeNode`/`enumMemberKeysOfTypeNode` (incl. the
+      round-477 import-alias fallback) consult `lookupPerFileForNode(node,
+      name)`; `currentFileLocals` stays the first consult everywhere.
+      Companion: `globalsForFile`'s proven-visible branch reads UNCLASSIFIED
+      (`InstrumentedSymbolTable.getUnclassified`) under `--passTiming`, so a
+      legitimate foreign-node hit — CONFLATED against the CHECKING file's
+      locals — no longer pollutes the migration tables. Suite +5
+      (Inv3KindDomainNodeKeyTest — leak-kill FAILS pre-flip via stash;
+      4 preservation controls pass both sides); listAll byte-identical on
+      compiler AND services.
     - (iii) **Flip the current-file-keyed value/callee sites**
       (identifier.fallback, propAccess.objExpr/base/root, callee.ident,
       mam.*, pmrCheckAccess, resolveFlowCalleeDecl, isCalleeResolvable) —

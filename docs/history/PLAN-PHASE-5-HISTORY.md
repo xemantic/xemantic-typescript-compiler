@@ -1,3 +1,45 @@
+**Round 495 (2026-07-13) — INV.2(a) LANDED: AST identity foundations.** All 138
+node data classes now extend `NodeBase` (`var nodeId = -1`, `var parent: Node? =
+null`; deliberately NOT implementing `Node` — a non-sealed direct subtype would
+break exhaustive `when` over `Node`); base-class vars sit outside data-class
+`equals`/`hashCode`/`copy`, so structural node keys are byte-identical and a
+Transformer `copy()` yields an UNINDEXED node; `SourceFile.nodeCount` body var.
+New `NodeWalk.kt`: the canonical generic `forEachChild(node) {}` (every
+node-typed primary-constructor property of all ~139 kinds; exhaustive sealed
+`when`, so a new node CLASS fails compilation until added) + `indexSourceFile`
+stamping dense PREORDER nodeIds (SourceFile = 0; a subtree = a contiguous id
+range) + parents + nodeCount at the end of `Parser.parse()` — ITERATIVE
+explicit-stack (crawl parses run on Dispatchers.Default OFF the deep-stack
+thread; a recursive indexer would overflow exactly there). Fields are inert
+until INV.2(b) consumes them. **Verification:** suite green 10,218 → 10,228
+(+10 local: `Inv2NodeIndexTest` — dense preorder + parent chains + copy-
+unindexed + a 30k-term chain indexed on a PLAIN thread (measured nodeCount
+60,009 exact via jshell) + negative control; `ForEachChildOracleTest` — the
+jvmTest REFLECTION oracle diffing forEachChild against data-class componentN
+properties per node, over the kind-dense fixture + JSX fixture + directly-
+constructed parser-unreachable kinds + ALL 78 real tsc compiler sources,
+>100k nodes, identity-set AND multiset-size agreement); `--listAll`
+byte-identical vs the stash-built BEFORE on the compiler profile (46
+diagnostics; wall 25.67 → 25.73 s — the indexing walk is noise-level);
+bench row 25,430 ms self / 840 MB RSS (−2.5%/−62 MB vs previous row = box
+noise band; the per-node nodeId+parent fields cost ~16 MB on ~1M nodes,
+invisible in RSS).
+**Migration surprises (both now CLAUDE.md gotchas):** (1) the shared
+superclass changed Kotlin LUB inference — `parsePropertyName`'s inferred
+return type degraded to `Any` (14 downstream type errors; ONE explicit return
+type fixed all; the silently-compiling `Any` variant is exactly what the
+suite + listAll gates cover). (2) power-assert renders every captured
+subexpression's toString on FAILURE — a failing `have(sourceFile.nodeCount >
+…)` STACK-OVERFLOWED rendering the 30k-deep tree, and the oracle's `have`
+OOM'd building a node-list diagram, masking the real messages; both tests
+rewritten render-safe (int/boolean locals, plain `fail()`), after which the
+initial sweep "failure" did not reproduce (deterministic green incl. the full
+suite — the run-1 verdict is attributed to the assertion-machinery path, not
+a forEachChild gap). NEXT: INV.2(b) — migrate ONE hot pos-keyed side table
+(Flow's `nodeToFlow` or the checker's `nodeTypes`, per INV.0 evidence) to a
+nodeId-indexed array; measure the `HashMap.getNode` JFR delta before mass
+migration.
+
 **Round 494 (2026-07-13) — INV.1(e) LANDED: the double parse is dead — the core
 reuses the crawl's parses.** The crawl full-parsed every file for specifiers and
 `compileParsed` parsed everything again; now ONE parse per file serves both.
