@@ -6107,6 +6107,13 @@ class Checker(
      * alias fallbacks in [enumSwitchKeysFromTypeNode]/[enumMemberKeysOfTypeNode].
      */
     internal fun lookupPerFileForNode(node: Node, name: String): Symbol? {
+        // Fast path (round 507b): a non-module-only name resolves identically
+        // under EVERY file's visibility ([globalsForFile] ignores the file for
+        // it), so skip the parent-chain walk — this sits on getTypeOfIdentifier's
+        // fallback, which is consulted for ~2M identifiers per self-compile.
+        // Before init step 1b2 the set is empty → everything degrades to the
+        // legacy merged consult (same as the ownerless degradation below).
+        if (name !in moduleOnlyGlobalNames) return globals[name]
         val owner = owningSourceFile(node) ?: return globals[name]
         return globalsForFile(owner.fileName, name)
     }
@@ -96731,8 +96738,13 @@ interface DataView {
                 //   namespace M { var x: T = ...; export var y = x; }
                 // where `x` is bound in `M.exports` (not in file locals/globals).
                 lookupInInferenceNamespace(id.text)?.let { return it }
-                // Then look up symbol in globals
-                val symbol = globals[id.text]
+                // Then look up symbol in globals. INV.3(c)(iii) phase 3 (round
+                // 507b): node-keyed — a name with no per-file meaning types as
+                // `any` instead of a foreign module file's leaked local (tsc:
+                // TS2304 → any). Imports keep resolving through the visibility
+                // probe to the SAME merged instance (which is how the round-442
+                // by-NAME nulling differs — it broke import-driven typing).
+                val symbol = lookupPerFileForNode(id, id.text)
                 if (symbol != null) getTypeOfSymbol(symbol) else anyType
             }
         }
