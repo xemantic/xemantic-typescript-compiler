@@ -374,4 +374,11 @@ internal class InstrumentedSymbolTable(
         onLookup?.invoke(key, result)
         return result != null
     }
+
+    /** A keyed read WITHOUT classification — for a consult a migrated per-file
+     *  gate (`Checker.globalsForFile`) has ALREADY proven per-file-visible: the
+     *  conflated/own-local tables must keep measuring only UN-migrated traffic,
+     *  and a node-keyed flip's legitimate foreign-node hit would otherwise
+     *  classify CONFLATED against the CHECKING file's locals (INV.3(c)(ii)). */
+    fun getUnclassified(key: String): Symbol? = backing[key]
 }

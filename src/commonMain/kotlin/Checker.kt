@@ -6073,9 +6073,15 @@ class Checker(
      * the per-pass conflated tables keep measuring only UN-migrated traffic.
      */
     internal fun globalsForFile(fileName: String, name: String): Symbol? {
-        if (name in moduleOnlyGlobalNames && perFileScope.containsKey(fileName) &&
-            lookupPerFile(fileName, name) == null
-        ) return null
+        if (name in moduleOnlyGlobalNames && perFileScope.containsKey(fileName)) {
+            if (lookupPerFile(fileName, name) == null) return null
+            // Proven per-file-visible: under --passTiming consult UNCLASSIFIED so
+            // the conflated/own-local tables keep measuring only UN-migrated
+            // traffic — a node-keyed flip's legitimate foreign-node hit would
+            // otherwise classify CONFLATED against the CHECKING file's locals
+            // (INV.3(c)(ii)). Plain-map runs take the ordinary consult below.
+            (globals as? InstrumentedSymbolTable)?.let { return it.getUnclassified(name) }
+        }
         return globals[name]
     }
 
@@ -6095,8 +6101,10 @@ class Checker(
      * has no meaning even where the node lives. An UNINDEXED node (data-class
      * `copy()` / Transformer-synthesized / detached subtree) has no owner —
      * degrade to the legacy merged consult, mirroring [globalsForFile]'s
-     * unknown-file degradation. `internal` for direct-construction tests;
-     * unconsumed by checker paths until INV.3(c)(ii).
+     * unknown-file degradation. `internal` for direct-construction tests.
+     * Consumers (INV.3(c)(ii)): the kind-domain/enum-discriminant readers —
+     * [resolveEnumSymbolForDiscriminant], [kindDomainTypeDeclSymbol], and the
+     * alias fallbacks in [enumSwitchKeysFromTypeNode]/[enumMemberKeysOfTypeNode].
      */
     internal fun lookupPerFileForNode(node: Node, name: String): Symbol? {
         val owner = owningSourceFile(node) ?: return globals[name]
@@ -81569,11 +81577,14 @@ interface DataView {
                 val tn = node.typeName
                 if (tn is QualifiedName) return enumMemberKeysOfTypeNode(node)  // Enum.Member
                 if (tn is Identifier) {
-                    resolveEnumSymbolForDiscriminant(tn.text)?.let { esym ->
+                    resolveEnumSymbolForDiscriminant(tn.text, node)?.let { esym ->
                         val vals = enumValues[esym.id] ?: return null
                         return vals.keys.map { "${esym.id}#$it" }.toSet()
                     }
-                    val alias = (currentFileLocals?.get(tn.text) ?: globals[tn.text])
+                    // INV.3(c)(ii): the merged-globals fallback is keyed by the
+                    // NODE'S OWNING FILE — a foreign annotation (types.ts's
+                    // `kind: KindAlias`) resolves under types.ts's visibility.
+                    val alias = (currentFileLocals?.get(tn.text) ?: lookupPerFileForNode(node, tn.text))
                         ?.declarations?.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration
                     if (alias != null) return enumSwitchKeysFromTypeNode(alias.type)
                 }
@@ -100581,7 +100592,7 @@ interface DataView {
                 enumMemberKeysOfTypeNode(node)?.let { return it }
                 enumSwitchKeysFromTypeNode(node)?.let { return it }
                 val tn = node.typeName as? Identifier ?: return null
-                val sym = kindDomainTypeDeclSymbol(tn.text) ?: return null
+                val sym = kindDomainTypeDeclSymbol(tn.text, node) ?: return null
                 (sym.declarations.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration)?.let { alias ->
                     // Parameterless alias only — a generic alias would need arg
                     // threading through its body (not needed for the token family).
@@ -100599,11 +100610,15 @@ interface DataView {
     /** The symbol whose declarations carry the ACTUAL type declaration for [name] —
      *  a file-local hit that is only an import ALIAS (ImportSpecifier declarations,
      *  no TypeAlias/Interface) falls through to the merged globals entry, which
-     *  accumulated the declaring file's declarations. */
-    private fun kindDomainTypeDeclSymbol(name: String): Symbol? {
+     *  accumulated the declaring file's declarations. INV.3(c)(ii): that fallback
+     *  is keyed by [keyNode]'s OWNING file (the node the name was read from — a
+     *  types.ts annotation resolves under types.ts's visibility, whatever file is
+     *  being checked); a name with no meaning there returns the local (whose
+     *  missing TypeAlias/Interface decls make callers bail) instead of a leak. */
+    private fun kindDomainTypeDeclSymbol(name: String, keyNode: Node): Symbol? {
         val local = currentFileLocals?.get(name)
         if (local?.declarations?.any { it is TypeAliasDeclaration || it is InterfaceDeclaration } == true) return local
-        return globals[name] ?: local
+        return lookupPerFileForNode(keyNode, name) ?: local
     }
 
     /** [kindDomainKeysFromTypeNode]'s interface walker: the `kind` member's keys,
@@ -100628,7 +100643,7 @@ interface DataView {
             if (clause.token != SyntaxKind.ExtendsKeyword) continue
             for (base in clause.types) {
                 val baseName = (base.expression as? Identifier)?.text ?: continue
-                val baseSym = kindDomainTypeDeclSymbol(baseName) ?: continue
+                val baseSym = kindDomainTypeDeclSymbol(baseName, base) ?: continue
                 val baseIface = baseSym.declarations.firstOrNull { it is InterfaceDeclaration } as? InterfaceDeclaration
                     ?: continue
                 val baseArgs = base.typeArguments?.map { substitute(it) ?: return null }
@@ -101228,9 +101243,13 @@ interface DataView {
     // narrowing only ever removes union members.
 
     /** Resolve `enumIdent` (an enum reference by simple name) in the narrowing scope to its
-     *  canonical enum symbol, or null if it isn't an enum in scope. */
-    private fun resolveEnumSymbolForDiscriminant(enumIdent: String): Symbol? {
-        val sym = currentFileLocals?.get(enumIdent) ?: globals[enumIdent] ?: return null
+     *  canonical enum symbol, or null if it isn't an enum in scope. INV.3(c)(ii): the
+     *  merged-globals fallback is keyed by [keyNode]'s OWNING file — the node the name was
+     *  read from (a types.ts `kind: Kind.A` annotation resolves under types.ts's visibility,
+     *  a case/comparison expression under its own file's) — so a module-only name with no
+     *  meaning where the node lives no longer leaks a foreign file's local. */
+    private fun resolveEnumSymbolForDiscriminant(enumIdent: String, keyNode: Node): Symbol? {
+        val sym = currentFileLocals?.get(enumIdent) ?: lookupPerFileForNode(keyNode, enumIdent) ?: return null
         val target = resolveAlias(sym)
         if (target.flags.hasAny(SymbolFlags.Enum)) return canonicalEnumSymbol(target)
         // Barrel-imported enum (tsc's `import { UpToDateStatusType } from "./_namespaces/ts.js"`):
@@ -101337,7 +101356,7 @@ interface DataView {
         val enumIdent = (pa.expression as? Identifier)?.text ?: return null
         val member = pa.name.text
         if (member.isEmpty()) return null
-        val sym = resolveEnumSymbolForDiscriminant(enumIdent) ?: return null
+        val sym = resolveEnumSymbolForDiscriminant(enumIdent, pa) ?: return null
         if (enumValues[sym.id]?.containsKey(member) != true) return null
         return "${sym.id}#$member"
     }
@@ -101358,7 +101377,7 @@ interface DataView {
                     val enumIdent = (qn.left as? Identifier)?.text ?: return null
                     val member = qn.right.text
                     if (member.isEmpty()) return null
-                    val sym = resolveEnumSymbolForDiscriminant(enumIdent)
+                    val sym = resolveEnumSymbolForDiscriminant(enumIdent, node)
                     if (sym != null) {
                         if (enumValues[sym.id]?.containsKey(member) != true) return null
                         return setOf("${sym.id}#$member")
@@ -101377,8 +101396,13 @@ interface DataView {
                 // narrowing (its `.kind` reads as unknown) and the over-wide union FP's TS2339 on
                 // a case-body property (`ProjectReferenceFile` kept alongside
                 // `AutomaticTypeDirectiveFile`, watch.ts `reason.typeReference`).
+                // INV.3(c)(ii): both merged-globals consults below are keyed by the
+                // NODE'S OWNING FILE — a foreign annotation resolves under the file
+                // that declared it, and a module-only name with no meaning there
+                // no longer leaks a foreign file's local.
                 val aliasName = (node.typeName as? Identifier)?.text ?: return null
-                val localSym = currentFileLocals?.get(aliasName) ?: globals[aliasName] ?: return null
+                val localSym = currentFileLocals?.get(aliasName)
+                    ?: lookupPerFileForNode(node, aliasName) ?: return null
                 var aliasDecl = localSym.declarations
                     .firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration
                 // Round 477: the CHECKING file's symbol may be an IMPORT alias
@@ -101387,7 +101411,7 @@ interface DataView {
                 // symbol, whose declarations include the declaring file's
                 // TypeAliasDeclaration (the default-clause assertType<never> family).
                 if (aliasDecl == null && localSym.flags.hasAny(SymbolFlags.Alias)) {
-                    aliasDecl = globals[aliasName]?.declarations
+                    aliasDecl = lookupPerFileForNode(node, aliasName)?.declarations
                         ?.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration
                 }
                 val alias = aliasDecl ?: return null
