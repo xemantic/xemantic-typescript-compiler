@@ -25,7 +25,11 @@
 
 package com.xemantic.typescript.compiler
 
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 
 internal actual fun <T> runCompilerPipeline(block: suspend () -> T): T =
     runBlocking { block() }
+
+internal actual val pipelineIoDispatcher: CoroutineDispatcher = Dispatchers.IO

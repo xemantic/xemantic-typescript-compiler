@@ -25,6 +25,8 @@
 
 package com.xemantic.typescript.compiler
 
+import kotlinx.coroutines.CoroutineDispatcher
+
 /**
  * INV.1: bridges the synchronous compiler entry points to the coroutine-based
  * front-end pipeline (docs/ARCHITECTURE-RETHINK.md § 4 — streams at the I/O
@@ -38,3 +40,11 @@ package com.xemantic.typescript.compiler
  * single-threaded dispatchers).
  */
 internal expect fun <T> runCompilerPipeline(block: suspend () -> T): T
+
+/**
+ * INV.1(b): the dispatcher for front-end file IO (read + UTF-8→UTF-16 decode).
+ * `Dispatchers.IO` exists only on JVM/Native — common code reaches it through
+ * this expect/actual; CPU-bound pipeline work (the specifier-extraction parse)
+ * uses the common `Dispatchers.Default` directly.
+ */
+internal expect val pipelineIoDispatcher: CoroutineDispatcher

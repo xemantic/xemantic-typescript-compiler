@@ -59,6 +59,44 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 493 (2026-07-13, same session as 492) — INV.1(b)+(c)+(d): the concurrent
+front-end landed.** The crawl's per-file work now runs CONCURRENTLY per frontier:
+read + UTF-8→UTF-16 decode on `Dispatchers.IO` (new `pipelineIoDispatcher`
+expect/actual in PipelineRunner — `Dispatchers.IO` does not exist in common
+code), the specifier-extraction parse on `Dispatchers.Default`, under a bounded
+`flatMapMerge(16)` (`readAndScanBatch`, results re-ordered to INPUT order, one
+entry per occurrence; note `flatMapMerge` is `@ExperimentalCoroutinesApi` in
+coroutines 1.11.0, not `@FlowPreview` as older docs suggest). Specifier
+RESOLUTION + emission stay sequential per frontier (a frontier-level barrier),
+so emission order remains first-discovery order — the binder/symbol-id contract
+from (a) holds by construction. Parser concurrency audit (the
+ARCHITECTURE-RETHINK § 4 precondition): no top-level/companion mutable state in
+Parser/Scanner/Ast — only immutable keyword sets; `internSalt` is per-file pure.
+Observable parity with the sequential crawl for a static-during-crawl Vfs; only
+read COUNTS differ (a multiply-discovered UNREADABLE path probes once per
+frontier, not once per discovery). **Verification:** suite green 10,206 → 10,212
+(+6 local `Inv1ConcurrentCrawlTest`: wider-than-the-bound frontier order (30
+imports vs concurrency 16), cross-frontier first-discovery positions, deep-chain
+BFS, resolvable-but-unreadable discovered file skipped (NOT unresolved) with
+siblings intact, unreadable SEED enters as "", 3× build determinism); (c) 3×
+`--listAll` runs byte-identical to each other AND to the round-492 BEFORE binary
+(46 diagnostics incl. chains). **Measurement — the false-regression trap:** the
+initial batch-then-batch wall-clock read showed AFTER ~0.7 s SLOWER (+4–6 s
+user), and a `-Dkotlinx.coroutines.default.parallelism=1` probe ruled out
+concurrent-parse GC pressure — the BOX had drifted ~2 s slower across the
+session (the same BEFORE binary: 24.6 s at session start, 26.1–27.1 s two hours
+later). An INTERLEAVED A/B (B/A pairs ×3, daemons stopped) gives the valid
+read: **BEFORE median 26,804 ms vs AFTER 25,976 ms (−0.8 s, ~3%), every A run
+beating its adjacent B runs** — consistent with parallelizing the ~1–1.5 s
+extraction-parse leg on 4 cores; the front-end win grows with profile size and
+on the 500k-LOC horizon. Bench TSV row appended (d). **NEXT (queued as
+INV.1(e)):** reuse the crawl's parses in `compileParsed` to kill the double
+parse — NOT a drop-in: the core's three parse sites pass option-derived parser
+flags (`forceJsx` / `topLevelAwait` / `needsJsxFlag` / `noImplicitAny`) that
+change the tree, so the crawl must parse with the RESOLVED options (available —
+the tsconfig loads before the crawl) and `ParsedSource` must grow a
+pre-parsed-files channel.
+
 **Round 492 (2026-07-13, same session as 491) — INV.1(a): the sequential-Flow
 beachhead landed.** kotlinx-coroutines-core was ALREADY a commonMain dependency
 (only the unused CheckerPool consumed it), so (a) reduced to the seam: new
@@ -464,86 +502,6 @@ box / warm BenchMain.
   existing (not this change): 5 `Checker.kt` compiler warnings on HEAD — the
   "warning-clean" invariant has drifted; flagged for a separate cleanup.
 
-**Round 483 (2026-07-12) — M5.1 performance, checker hot-path micro-opts (branch
-`perf/hoist-kind-domain-target-keys`, squash-merged).** Started from a fresh compiler-profile
-JFR (the flat post-482 profile). Three byte-identical changes, compiler self-compile still 46
-diagnostics, full corpus suite green 10,160 / 0.
-- **Change 1 — LinkedHashMap → HashMap on order-independent hot maps.** Kotlin's
-  `mutableMapOf()`/`mutableSetOf()` return LinkedHashMap/LinkedHashSet, which pay
-  `afterNodeInsertion` on every put and an ordered copy on construction. The per-function-body
-  scope structures `currentLocalTypes` / `currentLocalDeclTypeNodes` / `currentShadowedNames` /
-  `currentParamBindingNames` are copied on every scope entry and their iteration order is never
-  consumed (verified: zero `.keys/.values/.entries/.forEach/iterator` usages across all
-  references), and `getUnionType`'s dedup set is membership-only with the result sorted before
-  use — convert all to plain HashMap/HashSet. Profile: `LinkedHashMap.afterNodeInsertion`
-  **5.0% → 0.6% self**, `LinkedHashIterator.nextNode` 1.5% → 0.7%.
-- **Change 2 — `flowCallMightNarrow` gate order.** It tested the O(arg-tree)
-  `argMentionsReferencePath` scan FIRST on every flow call, then the callee-effects predicate.
-  Swap the `&&`: `flowCalleeMayHaveAssertEffects` is per-walk memoized (`narrowWalkDeclCache`)
-  and returns false for the vast majority of flow calls (non-assert callees), short-circuiting
-  before the scan; `&&` is commutative for the result and both operands only fill idempotent
-  memos. Profile: `argMentionsReferencePath` **1.9% self → out of top-90**;
-  `flowCallMightNarrow` inclusive 2.5% → 1.0%.
-- **Change 3 — single-lookup `resolveModuleSpecifier` memo.** It did `containsKey` + `get`
-  (two map lookups) per hit and null is the hot result; encode null with a sentinel so the
-  memo is one `get`. Profile: getNode-from-`resolveModuleSpecifier` 26 → 7 samples.
-- **Merge note:** this session's fourth planned item — hoisting the target `.kind`-domain out
-  of the negative type-guard filter — was landed INDEPENDENTLY by round 482 (`b72ebcf2`, which
-  also added the `kindDomainKeysOfType` memo). On merging main into the branch, that hunk
-  conflicted and was resolved to main's version (strictly better), so the squash contributes
-  only changes 1–3.
-- **Verification:** every change confirmed byte-identical by the full corpus suite (10,160/0)
-  and the unchanged 46-diagnostic compiler self-compile, then measured against a re-recorded
-  JFR (the profile shifts after each fix, so each was re-profiled). Wall-clock on the dev box
-  was too noise-dominated (±4 s on a 78-file `noEmit`) to read a single-file delta — the
-  sample-fraction reductions are the signal; the savings compound on the larger services/server
-  profiles (more/larger discriminated unions and scope entries).
-- **NEXT M5 leads (unchanged from 482):** the node-keyed AST scans need file+node-identity
-  keying (round-481 (e) hazard); `checkMemberAccessMissing` (~4.7% self); the residual
-  scope-map COPY cost (`HashMap.putMapEntries` — a copy-on-write / layered-scope redesign,
-  higher risk).
-
-**Round 482 (2026-07-12) — M5.1 performance, first post-v1 perf items after the mandatory
-fresh JFR pass.** Two commits (b72ebcf2, 5b5d4f75), both byte-identical. The fresh round-482
-harness JFR (45.8 s / 3,620 samples) confirmed the round-481 flat profile with the
-discriminant `.kind` key-domain family as the top set-churn source: `--callers-of
-AbstractCollection.addAll` and `HashSet.add` both put `kindDomainKeysOfType` at the top
-(~29 `addAll` + ~24 `HashSet.add` samples), because a union like `Node` is guard-narrowed
-at many read sites and each call re-scanned every member's `.kind` annotation and built
-fresh mutable sets.
-- **Fix 1 (byte-identical, two behavior-preserving moves):**
-  - Memoize `kindDomainKeysOfType` by Type.id (new `kindDomainKeysOfTypeCache`, mirroring
-    `discriminantKindKeysCache` exactly — empty-set encodes "unreadable", and the same
-    `canonicalEnumSymbol` cross-path determinism guarantee its `.kind`-annotation readers
-    already carry makes a global Type.id memo safe, per the round-425 canonical-key gotcha).
-  - Hoist the target's `.kind` key domain out of the negative type-guard filter loop:
-    `kindDomainProvesNotSubtype(member, targetNode)` was re-scanning `targetTypeNode` once
-    per union member; new `kindDomainKeysExceed(t, targetKeys)` takes the pre-computed
-    domain so the filter computes it once per narrowing call.
-- **Verification (fix 1):** harness diagnostics byte-identical (95, per-position `--listAll`
-  diff empty vs HEAD); full corpus suite green 10,155 → 10,157 (+2 local
-  KindDomainMemoConsistencyTest — repeated negative guards on the same union with different
-  targets narrow independently, no stale cross-site memo contamination; + the negative
-  control that a genuine subtype still collapses); clean same-machine A/B (3 runs each,
-  daemon up) harness self **44.35 → 41.5 s (−6.4%)**; bench TSV row 41.1 s, 95 errors.
-- **Fix 2 (`emitTs18048ForClosureCapturedUndefinedReceiver`, 1.6% self):** this emitter runs
-  for EVERY property-access with an Identifier receiver and built a throwaway filtered list
-  per call (`.filter{}.maxByOrNull{}`) to find the innermost lexically-containing closure.
-  Replaced with an allocation-free single-pass max-`container.pos` scan + an empty-
-  closureStarts early bail. Byte-identical (harness 95, listAll diff empty); suite
-  10,157 → 10,160 (+3 local ClosureCapturedInnermostSelectionTest — the innermost-closure
-  selection the single pass must preserve: fires for a captured maybe-undefined receiver in
-  the inner of two nested closures, suppresses with an inner-closure guard, bails for the
-  inner closure's own local); bench row 41.1 → 40.8 s (−0.6%, allocation reduction near the
-  noise band but consistently in the right direction).
-- **NEXT M5 leads (from this JFR):** the node-keyed AST scans `kindDomainKeysFromTypeNode`
-  / `enumSwitchKeysFromTypeNode` / `enumMemberKeysOfTypeNode` (3.7% / 3.1% / 2.3% inclusive)
-  are the deeper cost but need file + node-identity keying — the round-481 (e) hazard (pos
-  collides across files; result depends on `currentFileLocals`), so a pure memo is unsafe;
-  `checkMemberAccessMissing` (9.2% inclusive / 4.3% self — the biggest walker);
-  `emitTs18048ForClosureCapturedUndefinedReceiver` 1.6% self (audit its per-node work); and
-  the broad flow-walk HashMap/HashSet churn (M5.2 allocation discipline).
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 (Restored 2026-07-12, round 481 — the queue/backlog/inventory sections had been
@@ -612,20 +570,29 @@ interrupt the arc).
   458k of 595k getTypeOfExpression calls, 84k flow walks — 68% from
   checkPropertyAccess); 474 sub-100 ms passes sum 36.5% = the multiplication tail.
   That note's cost-ordered worklist IS the INV.4 migration order.
-- [ ] **INV.1 Concurrent front-end — the owner's Flow beachhead (owner-approved
+- [x] **INV.1 Concurrent front-end — the owner's Flow beachhead (owner-approved
   kotlinx-coroutines-core dependency, 2026-07-13).** Sub-steps: (a) DONE round 492 —
   the dep was already in commonMain; landed the `runCompilerPipeline` expect/actual
   seam (JVM `runBlocking`) + the import-graph crawl as a cold sequential Flow
   (`crawlImportGraph`, ProjectCompiler) with the load-bearing emission-order
-  contract documented at the seam (suite +3, listAll A/B byte-identical); (b) read +
-  UTF-8→UTF-16 decode on `Dispatchers.IO`, scan+parse on `Dispatchers.Default`,
-  bounded `flatMapMerge` (backpressure = bounded in-flight files); the BINDER STAYS
-  SEQUENTIAL in file order — global `nextSymbolId` allocation order is load-bearing
-  (~350-test reshuffle on drift); (c) determinism verification: corpus + `--listAll`
-  byte-diff over 3 runs; (d) bench rows (compiler + harness). Expected ~1–2 s on big
-  profiles now, more on the 500k-LOC horizon; derisks the coroutine foundation INV.6
-  needs. Verify the parser has no hidden shared mutable state before enabling
-  parallelism (internSalt stamping is per-file pure).
+  contract documented at the seam (suite +3, listAll A/B byte-identical); (b) DONE
+  round 493 — read+decode on `Dispatchers.IO` (`pipelineIoDispatcher`
+  expect/actual), extraction parse on `Dispatchers.Default`, bounded
+  `flatMapMerge(16)` per frontier (`readAndScanBatch`); resolution + emission stay
+  sequential per frontier so emission stays first-discovery order (the binder stays
+  sequential; parser audited — no shared mutable state); (c) DONE round 493 —
+  corpus green (+6 local) + 3× `--listAll` byte-identical vs the (a) binary; (d)
+  DONE round 493 — interleaved A/B −0.8 s (~3%) on the compiler profile + bench
+  TSV row.
+- [ ] **INV.1(e) Kill the double parse — reuse the crawl's parses in the core.**
+  The crawl full-parses every file (`extractSpecifiers`) and `compileParsed` then
+  parses everything AGAIN. NOT a drop-in reuse (scoped separately per the round-492
+  note): the core's three `Parser(...)` sites pass option-derived parser flags
+  (`forceJsx`, `topLevelAwait`, `needsJsxFlag`, `noImplicitAny`) that change the
+  tree, so the crawl must parse with the RESOLVED options (available — the tsconfig
+  loads before the crawl) and `ParsedSource` must grow a pre-parsed-files channel
+  consumed by the multi-file path. Gate: `--listAll` byte-diff on compiler +
+  services + the full suite.
 - [ ] **INV.2 Bind the world.** Full lexical binding — function bodies + block scopes
   (dissolves B83.5), container/parent chain, per-file `nodeId` for array-indexed side
   tables (attacks the `HashMap.getNode` top JFR entry; unlocks the file+node-identity

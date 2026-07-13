@@ -25,8 +25,23 @@
 
 package com.xemantic.typescript.compiler
 
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.asFlow
+import kotlinx.coroutines.flow.flatMapMerge
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.toList
+import kotlinx.coroutines.withContext
+
+/**
+ * INV.1(b): bounded in-flight files for the concurrent read+parse batches —
+ * enough to keep the IO dispatcher busy while extraction parses saturate
+ * Default's CPU-sized pool. The bound is backpressure over the DECODE/PARSE
+ * stage only (bounded peak transient memory); the resident program is the
+ * whole loaded file set regardless.
+ */
+private const val FRONTEND_CONCURRENCY = 16
 
 /**
  * Drives a real on-disk whole-project build: loads `tsconfig.json`, expands
@@ -101,12 +116,12 @@ class ProjectCompiler(private val vfs: Vfs) {
         val typeEntries = collectTypeRootEntries(config, resolver, typeDiagnostics)
 
         // Walk the import graph from the roots, reading and resolving as we go.
-        // INV.1(a): the crawl is a cold Flow collected through the coroutine
-        // pipeline seam ([runCompilerPipeline]) — sequential and behavior-identical
-        // to the pre-Flow loop. The collected insertion order is load-bearing: it
-        // becomes the binder's file order, which fixes symbol-id allocation
-        // (docs/ARCHITECTURE-RETHINK.md § 4 determinism hazards). INV.1(b) slots
-        // concurrent read+decode / parse into this seam.
+        // INV.1: the crawl is a cold Flow collected through the coroutine pipeline
+        // seam ([runCompilerPipeline]); since (b) its per-file read+decode/parse
+        // work runs concurrently per frontier, but the collected insertion order
+        // stays deterministic — it is load-bearing: it becomes the binder's file
+        // order, which fixes symbol-id allocation (docs/ARCHITECTURE-RETHINK.md
+        // § 4 determinism hazards).
         val program = LinkedHashMap<String, String>() // path -> content
         val unresolved = mutableListOf<Pair<String, String>>()
         val seeds = rootFiles + typeEntries.filter { it !in rootFiles }
@@ -150,50 +165,96 @@ class ProjectCompiler(private val vfs: Vfs) {
         )
     }
 
+    /** A crawled file: [content] null when unreadable; [specifiers] from the extraction parse. */
+    private class CrawledFile(val path: String, val content: String?, val specifiers: Set<String>)
+
     /**
-     * INV.1(a): the import-graph crawl as a cold [Flow] of `(path, content)` in
-     * BFS discovery order — seeds first (in seed order, read unconditionally:
-     * an unreadable seed becomes ""), then each file's resolved imports
-     * breadth-first (an unreadable discovered file is skipped). Behavior-identical
-     * to the pre-Flow imperative loop, including duplicate-seed re-reads.
+     * The import-graph crawl as a cold [Flow] of `(path, content)` in BFS
+     * discovery order — seeds first (in seed order, read unconditionally: an
+     * unreadable seed becomes ""), then each file's resolved imports
+     * breadth-first (an unreadable discovered file is skipped, and stays
+     * re-probeable by a later frontier). Unresolvable bare/relative specifiers
+     * accumulate into [unresolved] as (importer, specifier).
      *
-     * The EMISSION order is the program file order the binder will see, and
-     * binder file order fixes global symbol-id allocation (the documented
-     * ~350-test reshuffle on drift) — a future concurrent version (INV.1(b))
-     * may parallelize the per-file read/decode/parse work but MUST keep the
-     * emission order deterministic (e.g. frontier-level barriers), never
-     * completion-ordered. Unresolvable bare/relative specifiers accumulate
-     * into [unresolved] as (importer, specifier).
+     * INV.1(b): each frontier's files are read+decoded / specifier-parsed
+     * CONCURRENTLY ([readAndScanBatch]), but specifier RESOLUTION and emission
+     * stay sequential per frontier (a frontier-level barrier). The EMISSION
+     * order is the program file order the binder will see, and binder file
+     * order fixes global symbol-id allocation (the documented ~350-test
+     * reshuffle on drift) — it must stay deterministic (first-discovery order),
+     * never completion-ordered. Observable outputs are identical to the
+     * sequential crawl for a Vfs that is static during the crawl; only read
+     * COUNTS can differ (a multiply-discovered unreadable path is probed once
+     * per frontier here, once per discovery there).
      */
     private fun crawlImportGraph(
         seeds: List<String>,
         resolver: ModuleResolver,
         unresolved: MutableList<Pair<String, String>>,
     ): Flow<Pair<String, String>> = flow {
-        val loaded = LinkedHashMap<String, String>() // path -> content (the dedup set)
-        val queue = ArrayDeque(seeds)
-        for (f in seeds) {
-            val content = vfs.readText(f) ?: ""
-            loaded[f] = content
-            emit(f to content)
+        val loaded = HashSet<String>() // paths already emitted (the dedup set)
+        // Frontier 0: the seeds — read per occurrence (duplicate-seed re-reads
+        // preserved); an unreadable seed still enters the program as "".
+        var frontier = readAndScanBatch(seeds)
+        for (f in frontier) {
+            loaded.add(f.path)
+            emit(f.path to (f.content ?: ""))
         }
-        while (queue.isNotEmpty()) {
-            val file = queue.removeFirst()
-            val content = loaded[file] ?: continue
-            for (spec in extractSpecifiers(file, content)) {
-                val resolved = resolver.resolve(spec, file)
-                if (resolved == null) {
-                    if (PathUtil.isBare(spec) || PathUtil.isRelative(spec)) unresolved.add(file to spec)
-                    continue
-                }
-                if (resolved !in loaded) {
-                    val rc = vfs.readText(resolved) ?: continue
-                    loaded[resolved] = rc
-                    queue.addLast(resolved)
-                    emit(resolved to rc)
+        while (frontier.isNotEmpty()) {
+            // Resolve specifiers SEQUENTIALLY in frontier order: the resolver is
+            // single-threaded state, and both the (importer, specifier) attribution
+            // order in [unresolved] and the first-discovery emission position are
+            // observable — this loop is what fixes them deterministically.
+            val discovered = ArrayList<String>()
+            val pending = HashSet<String>()
+            for (f in frontier) {
+                for (spec in f.specifiers) {
+                    val resolved = resolver.resolve(spec, f.path)
+                    if (resolved == null) {
+                        if (PathUtil.isBare(spec) || PathUtil.isRelative(spec)) unresolved.add(f.path to spec)
+                        continue
+                    }
+                    if (resolved !in loaded && pending.add(resolved)) discovered.add(resolved)
                 }
             }
+            // Read+parse the discoveries concurrently, then emit in DISCOVERY
+            // order (the emission-order contract above). An unreadable discovered
+            // file is dropped here and stays out of `loaded`, so a later frontier
+            // may re-probe it — matching the sequential crawl.
+            frontier = readAndScanBatch(discovered).filter { it.content != null }
+            for (f in frontier) {
+                loaded.add(f.path)
+                emit(f.path to f.content!!)
+            }
         }
+    }
+
+    /**
+     * INV.1(b): reads and specifier-scans [paths] concurrently — read +
+     * UTF-8→UTF-16 decode on [pipelineIoDispatcher], the extraction parse on
+     * [Dispatchers.Default], at most [FRONTEND_CONCURRENCY] files in flight
+     * (bounded [flatMapMerge] = the owner's measured pipeline shape,
+     * docs/ARCHITECTURE-RETHINK.md § 4) — and returns results in INPUT order,
+     * one entry per occurrence. Parse concurrency is safe: the Parser holds
+     * per-instance state only (no top-level/companion mutable state; the
+     * TypeParameter `internSalt` stamp is per-file pure — audited for this step).
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private suspend fun readAndScanBatch(paths: List<String>): List<CrawledFile> {
+        if (paths.isEmpty()) return emptyList()
+        val byPath = paths.asFlow()
+            .flatMapMerge(concurrency = FRONTEND_CONCURRENCY) { path ->
+                flow {
+                    val content = withContext(pipelineIoDispatcher) { vfs.readText(path) }
+                    val specifiers =
+                        if (content == null) emptySet()
+                        else withContext(Dispatchers.Default) { extractSpecifiers(path, content) }
+                    emit(CrawledFile(path, content, specifiers))
+                }
+            }
+            .toList()
+            .associateBy { it.path }
+        return paths.map { byPath.getValue(it) }
     }
 
     private fun resolveConfigPath(projectPath: String): String {

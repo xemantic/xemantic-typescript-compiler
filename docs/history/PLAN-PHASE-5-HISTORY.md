@@ -1,3 +1,83 @@
+**Round 483 (2026-07-12) — M5.1 performance, checker hot-path micro-opts (branch
+`perf/hoist-kind-domain-target-keys`, squash-merged).** Started from a fresh compiler-profile
+JFR (the flat post-482 profile). Three byte-identical changes, compiler self-compile still 46
+diagnostics, full corpus suite green 10,160 / 0.
+- **Change 1 — LinkedHashMap → HashMap on order-independent hot maps.** Kotlin's
+  `mutableMapOf()`/`mutableSetOf()` return LinkedHashMap/LinkedHashSet, which pay
+  `afterNodeInsertion` on every put and an ordered copy on construction. The per-function-body
+  scope structures `currentLocalTypes` / `currentLocalDeclTypeNodes` / `currentShadowedNames` /
+  `currentParamBindingNames` are copied on every scope entry and their iteration order is never
+  consumed (verified: zero `.keys/.values/.entries/.forEach/iterator` usages across all
+  references), and `getUnionType`'s dedup set is membership-only with the result sorted before
+  use — convert all to plain HashMap/HashSet. Profile: `LinkedHashMap.afterNodeInsertion`
+  **5.0% → 0.6% self**, `LinkedHashIterator.nextNode` 1.5% → 0.7%.
+- **Change 2 — `flowCallMightNarrow` gate order.** It tested the O(arg-tree)
+  `argMentionsReferencePath` scan FIRST on every flow call, then the callee-effects predicate.
+  Swap the `&&`: `flowCalleeMayHaveAssertEffects` is per-walk memoized (`narrowWalkDeclCache`)
+  and returns false for the vast majority of flow calls (non-assert callees), short-circuiting
+  before the scan; `&&` is commutative for the result and both operands only fill idempotent
+  memos. Profile: `argMentionsReferencePath` **1.9% self → out of top-90**;
+  `flowCallMightNarrow` inclusive 2.5% → 1.0%.
+- **Change 3 — single-lookup `resolveModuleSpecifier` memo.** It did `containsKey` + `get`
+  (two map lookups) per hit and null is the hot result; encode null with a sentinel so the
+  memo is one `get`. Profile: getNode-from-`resolveModuleSpecifier` 26 → 7 samples.
+- **Merge note:** this session's fourth planned item — hoisting the target `.kind`-domain out
+  of the negative type-guard filter — was landed INDEPENDENTLY by round 482 (`b72ebcf2`, which
+  also added the `kindDomainKeysOfType` memo). On merging main into the branch, that hunk
+  conflicted and was resolved to main's version (strictly better), so the squash contributes
+  only changes 1–3.
+- **Verification:** every change confirmed byte-identical by the full corpus suite (10,160/0)
+  and the unchanged 46-diagnostic compiler self-compile, then measured against a re-recorded
+  JFR (the profile shifts after each fix, so each was re-profiled). Wall-clock on the dev box
+  was too noise-dominated (±4 s on a 78-file `noEmit`) to read a single-file delta — the
+  sample-fraction reductions are the signal; the savings compound on the larger services/server
+  profiles (more/larger discriminated unions and scope entries).
+- **NEXT M5 leads (unchanged from 482):** the node-keyed AST scans need file+node-identity
+  keying (round-481 (e) hazard); `checkMemberAccessMissing` (~4.7% self); the residual
+  scope-map COPY cost (`HashMap.putMapEntries` — a copy-on-write / layered-scope redesign,
+  higher risk).
+
+**Round 482 (2026-07-12) — M5.1 performance, first post-v1 perf items after the mandatory
+fresh JFR pass.** Two commits (b72ebcf2, 5b5d4f75), both byte-identical. The fresh round-482
+harness JFR (45.8 s / 3,620 samples) confirmed the round-481 flat profile with the
+discriminant `.kind` key-domain family as the top set-churn source: `--callers-of
+AbstractCollection.addAll` and `HashSet.add` both put `kindDomainKeysOfType` at the top
+(~29 `addAll` + ~24 `HashSet.add` samples), because a union like `Node` is guard-narrowed
+at many read sites and each call re-scanned every member's `.kind` annotation and built
+fresh mutable sets.
+- **Fix 1 (byte-identical, two behavior-preserving moves):**
+  - Memoize `kindDomainKeysOfType` by Type.id (new `kindDomainKeysOfTypeCache`, mirroring
+    `discriminantKindKeysCache` exactly — empty-set encodes "unreadable", and the same
+    `canonicalEnumSymbol` cross-path determinism guarantee its `.kind`-annotation readers
+    already carry makes a global Type.id memo safe, per the round-425 canonical-key gotcha).
+  - Hoist the target's `.kind` key domain out of the negative type-guard filter loop:
+    `kindDomainProvesNotSubtype(member, targetNode)` was re-scanning `targetTypeNode` once
+    per union member; new `kindDomainKeysExceed(t, targetKeys)` takes the pre-computed
+    domain so the filter computes it once per narrowing call.
+- **Verification (fix 1):** harness diagnostics byte-identical (95, per-position `--listAll`
+  diff empty vs HEAD); full corpus suite green 10,155 → 10,157 (+2 local
+  KindDomainMemoConsistencyTest — repeated negative guards on the same union with different
+  targets narrow independently, no stale cross-site memo contamination; + the negative
+  control that a genuine subtype still collapses); clean same-machine A/B (3 runs each,
+  daemon up) harness self **44.35 → 41.5 s (−6.4%)**; bench TSV row 41.1 s, 95 errors.
+- **Fix 2 (`emitTs18048ForClosureCapturedUndefinedReceiver`, 1.6% self):** this emitter runs
+  for EVERY property-access with an Identifier receiver and built a throwaway filtered list
+  per call (`.filter{}.maxByOrNull{}`) to find the innermost lexically-containing closure.
+  Replaced with an allocation-free single-pass max-`container.pos` scan + an empty-
+  closureStarts early bail. Byte-identical (harness 95, listAll diff empty); suite
+  10,157 → 10,160 (+3 local ClosureCapturedInnermostSelectionTest — the innermost-closure
+  selection the single pass must preserve: fires for a captured maybe-undefined receiver in
+  the inner of two nested closures, suppresses with an inner-closure guard, bails for the
+  inner closure's own local); bench row 41.1 → 40.8 s (−0.6%, allocation reduction near the
+  noise band but consistently in the right direction).
+- **NEXT M5 leads (from this JFR):** the node-keyed AST scans `kindDomainKeysFromTypeNode`
+  / `enumSwitchKeysFromTypeNode` / `enumMemberKeysOfTypeNode` (3.7% / 3.1% / 2.3% inclusive)
+  are the deeper cost but need file + node-identity keying — the round-481 (e) hazard (pos
+  collides across files; result depends on `currentFileLocals`), so a pure memo is unsafe;
+  `checkMemberAccessMissing` (9.2% inclusive / 4.3% self — the biggest walker);
+  `emitTs18048ForClosureCapturedUndefinedReceiver` 1.6% self (audit its per-node work); and
+  the broad flow-walk HashMap/HashSet churn (M5.2 allocation discipline).
+
 **Round 481 (2026-07-12) — HARNESS REACHES ZERO REAL FPs: ALL EIGHT PROFILES AT ZERO REAL
 FALSE POSITIVES — the v1 FP exit criterion is met.** FIVE fixes in 1 commit (b77b1afc),
 harness 100 → 95 (the remaining 95 = TS2591×66 process/require + TS2304×10
