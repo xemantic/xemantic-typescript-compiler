@@ -59,6 +59,52 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 510 (2026-07-13) — INV.3(d) merge retire: BUILT AND PROFILE-VERIFIED on
+branch `wip/inv3d-merge-retire` (033598b6); main untouched pending the
+enumerated 36-failure worklist.** The retire (skip a MODULE file's module-only
+top-level locals in the step-1 merge) landed with every consult flip the
+empirical loop demanded, and reached **compiler AND services `--listAll`
+BYTE-IDENTICAL vs pre-retire HEAD**. Method (the session's real product): (1)
+naive full retire → 861 compiler FPs, dominated by SHARED names — module
+interfaces riding same-named LIB globals (`Symbol`/`Node`/`Performance`),
+whose importers free-ride on the merge because the general resolver can't
+follow `.js` barrels → **the retire must stage by NAME CLASS: module-only
+first, SHARED later** (predicate: lib-keys ∪ script-locals computed pre-merge,
+kept as `mergeSharedKeepNames`); (2) module-only cut → 34 FPs; a
+classifier-MISS stack-sampling probe (a miss on a retired name was a hit
+pre-retire = exactly the at-risk traffic) + the Diagnostic-init emitter probe
+traced every family to its consult: the shadow-ecology collision questions
+(gain a `currentFileLocals` disjunct — imports no longer sit in globals),
+checkMemberAccessMissing's bare-Identifier receiver, checkTypeArgCount's
+enum-member gate, aliasUnionContainsNullishKeyword,
+calleeDeclaredCtxParams/resolveClassCtorParamsForCtx,
+computeImportedCalleeFunctionType's collision gate (globalsForFile),
+getTypeFromTypeQuery, resolveTypeOfValueEntityName, resolveQualifiedName +
+resolveQualifiedValueSymbol (the QualifiedName-root convention is untenable
+post-retire), findVariadicTupleInTarget/arrayElementTypeNode; (3) services
+flood (TS2339×5355!) rooted in ONE line: `mergeModuleAugmentations`' else-add
+put an AUGMENTATION-ONLY stub into globals when the retired base missed, and
+the 1b visibility delta then marked `SourceFile`/`Node` non-module-only so
+every fast-path consult returned the stub — fixed by resolving `.js`
+augmentation targets (`resolveModuleSpecifierRelativeJsAware`; the
+locals-merge now fires, so augmentation members reach the target file's own
+symbol) and gating the globals-add to FILELESS ambient targets; (4) the
+remaining services families forced real per-file machinery:
+`typeSideImportFallback` (import-TYPE shadowed by a same-named local VALUE —
+utilities.ts's `SourceMapSource`; recovered via the ImportSpecifier's
+nodeToSymbol-recorded alias), `namespaceAliasMemberSymbol` (dotted
+`ts.server.X` chains + the round-479 `import * as NS; export { NS }` barrel
+re-publication), and `ternaryBranchType` (a ternary condition narrows a
+`??`/`||` branch's LEFT reference — deprecatedCompat's Version idiom). The
+full suite then enumerated 36 failures (~11 from the foreign-TP
+ambiguous-constrained leg — revert it, re-solve checker.ts:7358 on the
+inference side; ~13 corpus multi-file; ~10 of the (c)-era local tests pinning
+pre-retire semantics) + harness +5 / server +2 residuals — more than the
+session budget, so per protocol the working state is preserved on the branch
+with the worklist decomposed into queue sub-items (d)(i)–(v). Suite on main
+UNCHANGED (10,316 / 0 / 3). NEXT: (d)(i)–(iv) on the branch, then merge, then
+the (v) deletions.
+
 **Round 509 (2026-07-13, same session as 508) — INV.3(c)(iv) leg 2 LANDED +
 re-measure: the (c) migration is COMPLETE, INV.3(d) unlocked.** The four
 remaining sites node-keyed: `getTypeFromBaseTypeExpression`'s Identifier
@@ -398,55 +444,6 @@ current-file-keyed value/callee sites (suppression-only), (iv) the
 type-position tail + re-measure to unlock (d). No code change landed (probe
 fully reverted, tree byte-equal to the round-502 commits; suite state
 carries over: 10,273 / 0 / 3). NEXT: INV.3(c)(i).
-
-**Round 502 (2026-07-13, same session as 500/501) — INV.3(b)(ii) LANDED: the
-pilot consumer — INV.3(b) is COMPLETE.** The TS2315/TS2346 heritage-base
-"not generic" gate — the `checkTypeArgumentConstraints` pass, the SMALLEST
-nonzero pass in the (a) conflated-by-pass table that has DIRECT pass-local
-consults (`checkImplicitThis`/`checkEvolvingEmptyArrayImplicitAny` have none;
-`checkInterfaceMultiBaseConflicts`' mergedDecls consult is flow-changing, not
-suppression-only) — now consults `globals` through the NEW
-`globalsForFile(fileName, name)`, THE flip shape for the (c) migration:
-return the merged-globals symbol INSTANCE (what keeps a flip byte-identical
-for every legitimately visible name — substituting `lookupPerFile`'s return
-directly would change symbol identity for lib/script names, since
-`perFileScope` holds the first-occurrence script symbol while `globals`
-holds the first-declarer merged instance) whenever the name has a per-file
-meaning — a name outside `moduleOnlyGlobalNames` (lib / script-file /
-augmentation-added global), or a module-only name the file declares or
-imports, probed through `lookupPerFile` (an import alias probes non-null
-whether or not its target resolves) — and null exactly where the legacy
-consult LEAKED a foreign module file's local. Suppression-only at this site
-by construction: a conflated hit could only ever EMIT a bogus TS2315/TS2346
-(real tsc: an unresolvable heritage base is TS2304 territory, never TS2315).
-Supporting infra now always-on: init 1b2 became `computePerFileVisibility`
-(the INV.3(a) classifier's set construction hoisted out of the passTiming
-gate; publishes `moduleOnlyGlobalNames` = module-file local names MINUS
-lib/script/augmentation-visible; the classifier installs on top only when
-instrumented; the pre-augmentation key-set snapshot is now unconditional —
-one HashSet copy per program). Both mirrored consult sites flipped together
-per their kept-in-sync contract (`checkConstraintsInExprWithTypeArgs`'s
-TS2315 + `extendsClauseIsNonGeneric`'s TS2346 gate, `fileName` threaded).
-**MEASUREMENT LESSON for (c): per-PASS attribution ≠ per-SITE.** The
-post-flip instrumented run shows the pass STILL at 11 conflated with the
-total lookup count EXACTLY unchanged (2,711,601) — the pass's conflated
-traffic comes from DEEPER shared machinery (`checkConstraintsForTypeArgs` →
-`getTypeFromTypeNode`), not the direct pass-local consults, which measured
-ZERO conflated hits on the compiler profile (also why byte-identity holds
-by measurement, with the leak-kill pinned by the local tests instead). A
-hot-pass (c) flip must reason per-SITE about which consults inside the pass
-carry the conflated traffic. Verified: suite green 10,266 → 10,273 (+7
-Inv3GlobalsForFileTest — the two leak-kill tests FAIL on the pre-flip
-checker, measured via stash: bogus TS2315/TS2346 from a foreign unimported
-non-generic base; the five preservation controls pass on BOTH sides —
-own-file / imported / script-file-global bases keep firing, imported-generic
-+ same-file TS2346 controls); `--listAll` byte-identical on compiler AND
-services (46/46 diagnostics each); bench row in band (26,265 ms self /
-1,062 MB, +0.2% vs previous, same 46 env-legit diagnostics). CLAUDE.md
-gotcha added (the globalsForFile-not-lookupPerFile flip rule +
-mirrored-sites-flip-together); `lookupPerFile`'s KDoc re-pointed at
-`globalsForFile` as the consumer-facing wrapper. NEXT: INV.3(c) — flip
-resolution families onto the primitive in the (a) tables' order, per-site.
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
@@ -862,6 +859,53 @@ interrupt the arc).
     `conflatedEnumFileSubsets`, the per-file interface views, and the chimera
     bails — walker-by-walker, each deletion suite- and listAll-gated (each
     removes hot-path work from `checkMemberAccessMissing`).
+    **IN PROGRESS round 510 — the retire itself lives on branch
+    `wip/inv3d-merge-retire` (033598b6), compiler + services listAll
+    BYTE-IDENTICAL, with an enumerated 36-failure/2-profile-residual worklist;
+    main untouched.** What the branch proves (measured round 510): the retire
+    must be STAGED BY NAME CLASS — retire only MODULE-ONLY names; SHARED names
+    (module local colliding with a lib/script global: `Symbol`/`Node`/
+    `Performance` riding the lib names) must KEEP merging until every lib-name
+    consumer resolves per-file (the naive full retire measured 861 compiler
+    FPs, the module-only cut 34, each traced to an unflipped consult by the
+    classifier-MISS stack-probe technique). Sub-items to finish it, in order:
+    - (i) On the branch: revert `typeContainsForeignTypeParam`'s
+      ambiguous-constrained→foreign leg (kills ~11 corpus TP-pin failures:
+      typeParametersShouldNotBeEqual2/3, genericTypeAssertions4/5, …); keep
+      the declaration-IDENTITY leg. Re-solve checker.ts:7358 (the
+      `setTextRangeWorker(factory.createNodeArray(…))` NAME-COLLIDING-T
+      unmasking) via an inference-side fix instead: an arg whose type contains
+      an un-inferred TypeParam soft-skips in `tryInferSingleTypeParamFromArgs`
+      at forReturnType sites (pre-retire the pure-alias merged callee degraded
+      to any — the FP is an unmasking, not new).
+    - (ii) Triage the ~13 corpus multi-file failures (augmentExportEquals1/2,
+      exportStarFromEmptyModule, noCrashOnImportShadowing,
+      allowImportClausesToMergeWithTypes, interfaceDeclaration3,
+      interfaceImplementation6, divergentAccessorsTypes6,
+      indirectDiscriminantAndExcessProperty, decoratorMetadataWithImport…7,
+      checkJsdocTypeTagOnExportAssignment2, declarationEmitPrivateSymbol…2,
+      allowJscheckJsTypeParameterNoCrash) — likely 3-5 roots; the
+      augmentExportEquals pair is probably the mergeModuleAugmentations
+      globals-add gate (now fileless-ambient-only) or the .js-aware
+      locals-merge newly firing.
+    - (iii) Review the ~10 prior INV.3 local tests that pin PRE-retire
+      semantics the retire deliberately changes (Inv3NodeKeyedLookupTest's
+      "unindexed copy degrades to the legacy merged consult",
+      Inv3GlobalsLookupTest's instrumentation invariant, the
+      structurally*Imports* pair, …) — update each to the post-retire
+      contract or fix the code where the pin is genuinely load-bearing.
+    - (iv) Close the remaining profile residuals: harness +5 / server +2
+      (deprecate.ts `compareTo` — the applyBodyLocalShadowing importCollision
+      branch is on the branch UNTESTED; session.ts protocol.Diagnostic objlit
+      member — suspect the conflated per-file-view QualifiedName machinery
+      post-retire; fourslashImpl `'array'` — the STRING-relation
+      `isAssignableTo` path resolving `ArrayOrSingle` through retired
+      globals). Then full 8-profile listAll A/B + suite green → merge the
+      branch to main as one reviewed commit stack.
+    - (v) THEN the deletions: `moduleFileLocalVarNames`,
+      `conflatedTypeAliasFiles`, `conflatedInterfaceFiles`,
+      `conflatedEnumFileSubsets`, `conflatedPerFileInterfaceType` + chimera
+      bails, walker-by-walker, each suite- and listAll-gated.
 - [ ] **INV.4 Single-pass check spine.** `checkSourceFileOnce` per-node dispatch;
   migrate walker families in INV.0's cost order — every migration deletes a full-tree
   pass and its private scope machinery. Once ONE authoritative walk state exists, land

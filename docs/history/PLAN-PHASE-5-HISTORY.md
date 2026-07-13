@@ -1,3 +1,54 @@
+
+**Round 502 (2026-07-13, same session as 500/501) — INV.3(b)(ii) LANDED: the
+pilot consumer — INV.3(b) is COMPLETE.** The TS2315/TS2346 heritage-base
+"not generic" gate — the `checkTypeArgumentConstraints` pass, the SMALLEST
+nonzero pass in the (a) conflated-by-pass table that has DIRECT pass-local
+consults (`checkImplicitThis`/`checkEvolvingEmptyArrayImplicitAny` have none;
+`checkInterfaceMultiBaseConflicts`' mergedDecls consult is flow-changing, not
+suppression-only) — now consults `globals` through the NEW
+`globalsForFile(fileName, name)`, THE flip shape for the (c) migration:
+return the merged-globals symbol INSTANCE (what keeps a flip byte-identical
+for every legitimately visible name — substituting `lookupPerFile`'s return
+directly would change symbol identity for lib/script names, since
+`perFileScope` holds the first-occurrence script symbol while `globals`
+holds the first-declarer merged instance) whenever the name has a per-file
+meaning — a name outside `moduleOnlyGlobalNames` (lib / script-file /
+augmentation-added global), or a module-only name the file declares or
+imports, probed through `lookupPerFile` (an import alias probes non-null
+whether or not its target resolves) — and null exactly where the legacy
+consult LEAKED a foreign module file's local. Suppression-only at this site
+by construction: a conflated hit could only ever EMIT a bogus TS2315/TS2346
+(real tsc: an unresolvable heritage base is TS2304 territory, never TS2315).
+Supporting infra now always-on: init 1b2 became `computePerFileVisibility`
+(the INV.3(a) classifier's set construction hoisted out of the passTiming
+gate; publishes `moduleOnlyGlobalNames` = module-file local names MINUS
+lib/script/augmentation-visible; the classifier installs on top only when
+instrumented; the pre-augmentation key-set snapshot is now unconditional —
+one HashSet copy per program). Both mirrored consult sites flipped together
+per their kept-in-sync contract (`checkConstraintsInExprWithTypeArgs`'s
+TS2315 + `extendsClauseIsNonGeneric`'s TS2346 gate, `fileName` threaded).
+**MEASUREMENT LESSON for (c): per-PASS attribution ≠ per-SITE.** The
+post-flip instrumented run shows the pass STILL at 11 conflated with the
+total lookup count EXACTLY unchanged (2,711,601) — the pass's conflated
+traffic comes from DEEPER shared machinery (`checkConstraintsForTypeArgs` →
+`getTypeFromTypeNode`), not the direct pass-local consults, which measured
+ZERO conflated hits on the compiler profile (also why byte-identity holds
+by measurement, with the leak-kill pinned by the local tests instead). A
+hot-pass (c) flip must reason per-SITE about which consults inside the pass
+carry the conflated traffic. Verified: suite green 10,266 → 10,273 (+7
+Inv3GlobalsForFileTest — the two leak-kill tests FAIL on the pre-flip
+checker, measured via stash: bogus TS2315/TS2346 from a foreign unimported
+non-generic base; the five preservation controls pass on BOTH sides —
+own-file / imported / script-file-global bases keep firing, imported-generic
++ same-file TS2346 controls); `--listAll` byte-identical on compiler AND
+services (46/46 diagnostics each); bench row in band (26,265 ms self /
+1,062 MB, +0.2% vs previous, same 46 env-legit diagnostics). CLAUDE.md
+gotcha added (the globalsForFile-not-lookupPerFile flip rule +
+mirrored-sites-flip-together); `lookupPerFile`'s KDoc re-pointed at
+`globalsForFile` as the consumer-facing wrapper. NEXT: INV.3(c) — flip
+resolution families onto the primitive in the (a) tables' order, per-site.
+
+
 **Round 501 (2026-07-13, same session as 500) — INV.3(b) phase (i) LANDED:
 the per-file resolution primitive, additive and unconsumed.**
 `lookupPerFile(fileName, name)` (internal) — the lookup the (c) family flips
