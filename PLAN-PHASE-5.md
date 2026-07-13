@@ -89,7 +89,10 @@ later). An INTERLEAVED A/B (B/A pairs ×3, daemons stopped) gives the valid
 read: **BEFORE median 26,804 ms vs AFTER 25,976 ms (−0.8 s, ~3%), every A run
 beating its adjacent B runs** — consistent with parallelizing the ~1–1.5 s
 extraction-parse leg on 4 cores; the front-end win grows with profile size and
-on the 500k-LOC horizon. Bench TSV row appended (d). **NEXT (queued as
+on the 500k-LOC horizon. Bench TSV row appended (d): 24,846 ms self / 934 MB /
+46 errors / 78 emitted — an EMIT run (the `+1.3%` vs-previous line compares
+against a `--noEmit` row, so it understates; the interleaved A/B above is the
+valid perf read). **NEXT (queued as
 INV.1(e)):** reuse the crawl's parses in `compileParsed` to kill the double
 parse — NOT a drop-in: the core's three parse sites pass option-derived parser
 flags (`forceJsx` / `topLevelAwait` / `needsJsxFlag` / `noImplicitAny`) that
@@ -587,12 +590,21 @@ interrupt the arc).
 - [ ] **INV.1(e) Kill the double parse — reuse the crawl's parses in the core.**
   The crawl full-parses every file (`extractSpecifiers`) and `compileParsed` then
   parses everything AGAIN. NOT a drop-in reuse (scoped separately per the round-492
-  note): the core's three `Parser(...)` sites pass option-derived parser flags
-  (`forceJsx`, `topLevelAwait`, `needsJsxFlag`, `noImplicitAny`) that change the
-  tree, so the crawl must parse with the RESOLVED options (available — the tsconfig
-  loads before the crawl) and `ParsedSource` must grow a pre-parsed-files channel
-  consumed by the multi-file path. Gate: `--listAll` byte-diff on compiler +
-  services + the full suite.
+  note; refined round 493): (1) the core's multi-file parse site
+  (TypeScriptCompiler.kt ~1338) passes option-derived parser flags — `forceJsx`,
+  `topLevelAwait` (which also consults `fileLooksLikeModuleForAwait(content)`),
+  `needsJsxFlag`, `noImplicitAny` — ALL per-file computable (no whole-program
+  dependency), but from the core's POST-PROCESSED options (implied-option rules,
+  e.g. checkJs⇒allowJs), which can differ from the crawl-time `config.options`;
+  (2) the core also consumes `parser.getDiagnostics()` (parse-diagnostic
+  suppression sets), so the reuse channel must carry (SourceFile, parse
+  diagnostics, the flags used) — not just the tree. Safe design: the crawl parses
+  with flags computed from the resolved tsconfig options via the SAME (shared)
+  helpers, `ParsedSource` grows a pre-parsed channel, and the core reuses a file's
+  parse ONLY when its own computed flags MATCH the recorded ones (else re-parse) —
+  behavior-identical by construction, reuse as pure optimization; verify the
+  match actually fires on the bench profiles. Gate: `--listAll` byte-diff on
+  compiler + services + the full suite.
 - [ ] **INV.2 Bind the world.** Full lexical binding — function bodies + block scopes
   (dissolves B83.5), container/parent chain, per-file `nodeId` for array-indexed side
   tables (attacks the `HashMap.getNode` top JFR entry; unlocks the file+node-identity
