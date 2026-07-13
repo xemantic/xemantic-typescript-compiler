@@ -59,6 +59,39 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 492 (2026-07-13, same session as 491) — INV.1(a): the sequential-Flow
+beachhead landed.** kotlinx-coroutines-core was ALREADY a commonMain dependency
+(only the unused CheckerPool consumed it), so (a) reduced to the seam: new
+`runCompilerPipeline` expect/actual (JVM = `runBlocking`; common code cannot call
+runBlocking — a future JS target needs an async driver, pipeline sequential there
+anyway) + ProjectCompiler's import-graph crawl rewritten as a cold
+`Flow<Pair<path, content>>` (`crawlImportGraph`) collected through the seam —
+sequential and behavior-identical (seeds in seed order, read unconditionally;
+BFS discovery order; duplicate-seed re-reads preserved; unreadable discovered
+files skipped). The EMISSION-order contract is documented at the flow: emission
+order becomes the binder's file order → global symbol-id allocation (the
+documented ~350-test reshuffle hazard) — INV.1(b)'s concurrency must keep
+emission DETERMINISTIC (e.g. frontier-level barriers), never completion-ordered.
+**Verification:** suite green 10,203 → 10,206 (+3 local
+`Inv1SequentialCrawlOrderTest`: diamond-graph seed-then-BFS order with
+first-discovery dedup, unresolved `(importer, specifier)` attribution,
+run-to-run determinism — the INV.1(b) invariant); compiler-profile `--listAll`
+A/B vs the INV.0-only binary byte-identical at wall parity; the round-491
+"clean re-run" bench row (24,525 ms self, `+dirty`) was in fact built WITH this
+refactor — an accidental whole-profile smoke A/B at diagnostic (46) and wall
+parity. **Bench-row hygiene:** the FIRST round-491 TSV row (80,122 ms) is
+swap-polluted — the bench script's own gradle build leaves BOTH daemons resident
+on the 7.7 GB box and the -Xmx4g run swaps (the documented memory trap; the
+historical ~28–29.5 s TSV band carries mild daemon overhead, this session's
+full-suite daemon made it catastrophic); always `./gradlew --stop && pkill -9 -f
+'KotlinCompile[D]aemon'` before bench runs whose numbers will be read — the
+corrective row's label documents the pollution. **NEXT — INV.1(b):** IO decode /
+Default parse via bounded `flatMapMerge`; note for its design: the crawl's
+`extractSpecifiers` already FULL-PARSES every file and `compileParsed` parses
+everything a second time — the parallel-parse step should also evaluate reusing
+the crawl's parses (kills the double parse; changes `ParsedSource`'s input
+shape, scope it separately).
+
 **Round 491 (2026-07-13) — INV.0 LANDED: the pass multiplier is instrumented and
 measured (opt-in, byte-identical off).** First item of the inversion arc. Landed:
 `PassTiming.kt` (off-by-default singleton + a top-level NON-inline `pass(name) {}`
@@ -580,8 +613,11 @@ interrupt the arc).
   checkPropertyAccess); 474 sub-100 ms passes sum 36.5% = the multiplication tail.
   That note's cost-ordered worklist IS the INV.4 migration order.
 - [ ] **INV.1 Concurrent front-end — the owner's Flow beachhead (owner-approved
-  kotlinx-coroutines-core dependency, 2026-07-13).** Sub-steps: (a) add the dep + a
-  behavior-identical sequential `Flow` refactor of project file loading; (b) read +
+  kotlinx-coroutines-core dependency, 2026-07-13).** Sub-steps: (a) DONE round 492 —
+  the dep was already in commonMain; landed the `runCompilerPipeline` expect/actual
+  seam (JVM `runBlocking`) + the import-graph crawl as a cold sequential Flow
+  (`crawlImportGraph`, ProjectCompiler) with the load-bearing emission-order
+  contract documented at the seam (suite +3, listAll A/B byte-identical); (b) read +
   UTF-8→UTF-16 decode on `Dispatchers.IO`, scan+parse on `Dispatchers.Default`,
   bounded `flatMapMerge` (backpressure = bounded in-flight files); the BINDER STAYS
   SEQUENTIAL in file order — global `nextSymbolId` allocation order is load-bearing

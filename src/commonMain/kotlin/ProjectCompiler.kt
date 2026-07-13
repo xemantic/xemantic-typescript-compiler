@@ -25,6 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.flow
+
 /**
  * Drives a real on-disk whole-project build: loads `tsconfig.json`, expands
  * `include`/`exclude` globs to root files, walks the import graph (via
@@ -98,25 +101,18 @@ class ProjectCompiler(private val vfs: Vfs) {
         val typeEntries = collectTypeRootEntries(config, resolver, typeDiagnostics)
 
         // Walk the import graph from the roots, reading and resolving as we go.
+        // INV.1(a): the crawl is a cold Flow collected through the coroutine
+        // pipeline seam ([runCompilerPipeline]) — sequential and behavior-identical
+        // to the pre-Flow loop. The collected insertion order is load-bearing: it
+        // becomes the binder's file order, which fixes symbol-id allocation
+        // (docs/ARCHITECTURE-RETHINK.md § 4 determinism hazards). INV.1(b) slots
+        // concurrent read+decode / parse into this seam.
         val program = LinkedHashMap<String, String>() // path -> content
         val unresolved = mutableListOf<Pair<String, String>>()
         val seeds = rootFiles + typeEntries.filter { it !in rootFiles }
-        val queue = ArrayDeque(seeds)
-        for (f in seeds) program[f] = vfs.readText(f) ?: ""
-        while (queue.isNotEmpty()) {
-            val file = queue.removeFirst()
-            val content = program[file] ?: continue
-            for (spec in extractSpecifiers(file, content)) {
-                val resolved = resolver.resolve(spec, file)
-                if (resolved == null) {
-                    if (PathUtil.isBare(spec) || PathUtil.isRelative(spec)) unresolved.add(file to spec)
-                    continue
-                }
-                if (resolved !in program) {
-                    val rc = vfs.readText(resolved) ?: continue
-                    program[resolved] = rc
-                    queue.addLast(resolved)
-                }
+        runCompilerPipeline {
+            crawlImportGraph(seeds, resolver, unresolved).collect { (path, content) ->
+                program[path] = content
             }
         }
 
@@ -152,6 +148,52 @@ class ProjectCompiler(private val vfs: Vfs) {
             unresolved = unresolved.distinct(),
             written = written,
         )
+    }
+
+    /**
+     * INV.1(a): the import-graph crawl as a cold [Flow] of `(path, content)` in
+     * BFS discovery order — seeds first (in seed order, read unconditionally:
+     * an unreadable seed becomes ""), then each file's resolved imports
+     * breadth-first (an unreadable discovered file is skipped). Behavior-identical
+     * to the pre-Flow imperative loop, including duplicate-seed re-reads.
+     *
+     * The EMISSION order is the program file order the binder will see, and
+     * binder file order fixes global symbol-id allocation (the documented
+     * ~350-test reshuffle on drift) — a future concurrent version (INV.1(b))
+     * may parallelize the per-file read/decode/parse work but MUST keep the
+     * emission order deterministic (e.g. frontier-level barriers), never
+     * completion-ordered. Unresolvable bare/relative specifiers accumulate
+     * into [unresolved] as (importer, specifier).
+     */
+    private fun crawlImportGraph(
+        seeds: List<String>,
+        resolver: ModuleResolver,
+        unresolved: MutableList<Pair<String, String>>,
+    ): Flow<Pair<String, String>> = flow {
+        val loaded = LinkedHashMap<String, String>() // path -> content (the dedup set)
+        val queue = ArrayDeque(seeds)
+        for (f in seeds) {
+            val content = vfs.readText(f) ?: ""
+            loaded[f] = content
+            emit(f to content)
+        }
+        while (queue.isNotEmpty()) {
+            val file = queue.removeFirst()
+            val content = loaded[file] ?: continue
+            for (spec in extractSpecifiers(file, content)) {
+                val resolved = resolver.resolve(spec, file)
+                if (resolved == null) {
+                    if (PathUtil.isBare(spec) || PathUtil.isRelative(spec)) unresolved.add(file to spec)
+                    continue
+                }
+                if (resolved !in loaded) {
+                    val rc = vfs.readText(resolved) ?: continue
+                    loaded[resolved] = rc
+                    queue.addLast(resolved)
+                    emit(resolved to rc)
+                }
+            }
+        }
     }
 
     private fun resolveConfigPath(projectPath: String): String {
