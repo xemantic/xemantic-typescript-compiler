@@ -59,6 +59,45 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 503 (2026-07-13, same session as 500–502) — INV.3(c) DECOMPOSED from a
+measured per-site attribution (probe-and-revert; no code landed).** The
+round-502 lesson (per-PASS ≠ per-SITE) applied: tagging the GUESSED hot sites
+(`getTypeFromTypeReference` fallback / `getTypeOfIdentifier` fallback /
+`getCalleeType` ×3) left 148k of 157k conflated lookups untagged — the guess
+list in the old (c) item was wrong (typeRef.fallback measured literally ZERO).
+A second probe — 1:200 stack-sampling in the classifier's CONFLATED branch
+(`Throwable.stackTraceToString()` is common-stdlib; ~790 samples), TEMP code
+reverted after the run — settled it: **~82% of conflated traffic is ONE
+family, the enum-discriminant/kind-domain narrowing machinery**
+(`kindDomainKeysFromTypeNode` → `enumSwitchKeysFromTypeNode` /
+`enumMemberKeysOfTypeNode` / `kindDomainTypeDeclSymbol` /
+`resolveEnumSymbolForDiscriminant`, from `narrowByCallPredicate` via
+`applyConditionNarrowing` + smaller `filterUnionByEnumDiscriminant` /
+`resolveCallOverload` entries) — resolving type names read from FOREIGN AST
+nodes (types.ts's union-member `.kind` annotations) while `currentFileLocals`
+points at the CHECKING file, which is exactly why the top conflated names are
+all types.ts node-interface names (JSDocFunctionType 21.5k / FunctionTypeNode
+17.9k / ConstructorTypeNode 17.8k / MappedTypeNode / ConditionalTypeNode).
+KEY DESIGN CONSEQUENCE: the per-file-correct key for that family is the
+NODE'S OWNING FILE (tsc semantics — a types.ts annotation resolves in
+types.ts's scope), now derivable from the INV.2(a) parent chains; a naive
+`globalsForFile(currentCheckFileName, …)` flip would silently KILL the
+narrowing wherever the checking file doesn't import the name (an FP
+regression, not a cleanup). Remainder of the distribution: tagged counts
+`identifier.fallback` 3,829 + `propAccess.objExpr` 3,005 +
+`typeRef.resolve.ident` 1,942 + `mam.*` 63+63 + `propAccess.base` 13;
+sampled small families `checkPrivateMemberAccess`, `getTypeOfIdentifier ←
+isCalleeResolvable`, `resolveFlowCalleeDecl ← flowCalleeMayHaveAssertEffects`,
+`computeRawTypeOfPropertyAccess ← getCalleeType`,
+`typeNodeDefinitelyNonNullish`, `pmrCheckAccess`. The (c) item is rewritten
+as four sub-items in dependency order: (i) the node-keyed primitive
+(`owningSourceFile(node)` + `lookupPerFileForNode`), (ii) the kind-domain
+family flip (~82%, resolution-PRESERVING, node-keyed), (iii) the
+current-file-keyed value/callee sites (suppression-only), (iv) the
+type-position tail + re-measure to unlock (d). No code change landed (probe
+fully reverted, tree byte-equal to the round-502 commits; suite state
+carries over: 10,273 / 0 / 3). NEXT: INV.3(c)(i).
+
 **Round 502 (2026-07-13, same session as 500/501) — INV.3(b)(ii) LANDED: the
 pilot consumer — INV.3(b) is COMPLETE.** The TS2315/TS2346 heritage-base
 "not generic" gate — the `checkTypeArgumentConstraints` pass, the SMALLEST
@@ -416,47 +455,6 @@ were the truth; parse XMLs before reacting to a "failed" suite notification.
 NEXT: INV.2 bind-the-world (full lexical binding, nodeIds, array-indexed side
 tables — dissolves B83.5).
 
-**Round 493 (2026-07-13, same session as 492) — INV.1(b)+(c)+(d): the concurrent
-front-end landed.** The crawl's per-file work now runs CONCURRENTLY per frontier:
-read + UTF-8→UTF-16 decode on `Dispatchers.IO` (new `pipelineIoDispatcher`
-expect/actual in PipelineRunner — `Dispatchers.IO` does not exist in common
-code), the specifier-extraction parse on `Dispatchers.Default`, under a bounded
-`flatMapMerge(16)` (`readAndScanBatch`, results re-ordered to INPUT order, one
-entry per occurrence; note `flatMapMerge` is `@ExperimentalCoroutinesApi` in
-coroutines 1.11.0, not `@FlowPreview` as older docs suggest). Specifier
-RESOLUTION + emission stay sequential per frontier (a frontier-level barrier),
-so emission order remains first-discovery order — the binder/symbol-id contract
-from (a) holds by construction. Parser concurrency audit (the
-ARCHITECTURE-RETHINK § 4 precondition): no top-level/companion mutable state in
-Parser/Scanner/Ast — only immutable keyword sets; `internSalt` is per-file pure.
-Observable parity with the sequential crawl for a static-during-crawl Vfs; only
-read COUNTS differ (a multiply-discovered UNREADABLE path probes once per
-frontier, not once per discovery). **Verification:** suite green 10,206 → 10,212
-(+6 local `Inv1ConcurrentCrawlTest`: wider-than-the-bound frontier order (30
-imports vs concurrency 16), cross-frontier first-discovery positions, deep-chain
-BFS, resolvable-but-unreadable discovered file skipped (NOT unresolved) with
-siblings intact, unreadable SEED enters as "", 3× build determinism); (c) 3×
-`--listAll` runs byte-identical to each other AND to the round-492 BEFORE binary
-(46 diagnostics incl. chains). **Measurement — the false-regression trap:** the
-initial batch-then-batch wall-clock read showed AFTER ~0.7 s SLOWER (+4–6 s
-user), and a `-Dkotlinx.coroutines.default.parallelism=1` probe ruled out
-concurrent-parse GC pressure — the BOX had drifted ~2 s slower across the
-session (the same BEFORE binary: 24.6 s at session start, 26.1–27.1 s two hours
-later). An INTERLEAVED A/B (B/A pairs ×3, daemons stopped) gives the valid
-read: **BEFORE median 26,804 ms vs AFTER 25,976 ms (−0.8 s, ~3%), every A run
-beating its adjacent B runs** — consistent with parallelizing the ~1–1.5 s
-extraction-parse leg on 4 cores; the front-end win grows with profile size and
-on the 500k-LOC horizon. Bench TSV row appended (d): 24,846 ms self / 934 MB /
-46 errors / 78 emitted — an EMIT run (the `+1.3%` vs-previous line compares
-against a `--noEmit` row, so it understates; the interleaved A/B above is the
-valid perf read). **NEXT (queued as
-INV.1(e)):** reuse the crawl's parses in `compileParsed` to kill the double
-parse — NOT a drop-in: the core's three parse sites pass option-derived parser
-flags (`forceJsx` / `topLevelAwait` / `needsJsxFlag` / `noImplicitAny`) that
-change the tree, so the crawl must parse with the RESOLVED options (available —
-the tsconfig loads before the crawl) and `ParsedSource` must grow a
-pre-parsed-files channel.
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 (Restored 2026-07-12, round 481 — the queue/backlog/inventory sections had been
@@ -714,13 +712,55 @@ interrupt the arc).
       (Inv3GlobalsForFileTest — both leak-kill tests FAIL on the pre-flip
       checker, verified via stash; five preservation controls pass on
       both); `--listAll` byte-identical on compiler AND services.
-  - [ ] **INV.3(c) Flip resolution families onto the primitive** in (a)'s
-    cost/dependency order (identifier-type globals fallback, type-reference
-    globals fallback, callee resolution, heritage bases, …), each
-    suite+listAll-gated; expect several rounds — the (a) per-pass tables order
-    the work, and a flip is safe exactly when its site's lookups classify
-    clean (TRUE_GLOBAL/SHARED/OWN_LOCAL) or its conflated names resolve
-    through the (b) primitive.
+  - [ ] **INV.3(c) Flip resolution families onto the primitive** — decomposed
+    round 503 from a MEASURED per-site attribution (a temporary 1:200
+    stack-sampling probe on the classifier's CONFLATED branch, ~790 samples,
+    probe reverted — evidence in the round-503 session note). The guessed
+    site list above was WRONG: `getTypeFromTypeReference`'s globals fallback
+    measured ZERO conflated hits and `resolveTypeNameToSymbol`'s Identifier
+    entry only ~1.2% — the actual distribution:
+    **~82% is ONE family, the enum-discriminant/kind-domain narrowing
+    machinery** (`kindDomainKeysFromTypeNode` → `enumSwitchKeysFromTypeNode` /
+    `enumMemberKeysOfTypeNode` / `kindDomainTypeDeclSymbol` /
+    `resolveEnumSymbolForDiscriminant`, reached from `narrowByCallPredicate`
+    via `applyConditionNarrowing`, plus smaller entries from
+    `filterUnionByEnumDiscriminant`/`resolveCallOverload`), which resolves
+    type names read from FOREIGN AST nodes — types.ts's union-member `.kind`
+    annotations — while `currentFileLocals` points at the CHECKING file
+    (exactly the top conflated names: JSDocFunctionType / FunctionTypeNode /
+    ConstructorTypeNode / MappedTypeNode / ConditionalTypeNode). The
+    per-file-correct key there is the NODE'S OWNING FILE (tsc semantics: a
+    types.ts annotation resolves in types.ts's scope), NOT
+    `currentCheckFileName` — a naive `globalsForFile(currentCheckFileName,…)`
+    flip would silently kill narrowing in files that don't import the name.
+    The rest: `identifier.fallback` ~3.8k + `propAccess.objExpr` ~3k (tagged
+    counts), `checkPrivateMemberAccess`, `getTypeOfIdentifier ←
+    isCalleeResolvable`, `resolveFlowCalleeDecl ←
+    flowCalleeMayHaveAssertEffects`, `computeRawTypeOfPropertyAccess ←
+    getCalleeType`, `typeNodeDefinitelyNonNullish`, `pmrCheckAccess`,
+    `mam.objectExpr`/`mam.recvSym` (~63 each). Sub-items, one commit each,
+    every flip suite+listAll-gated on compiler AND services:
+    - (i) **The node-keyed resolution primitive**: `owningSourceFile(node)`
+      via the INV.2(a) parent chains (indexed trees only; unindexed →
+      null → legacy) + `lookupPerFileForNode(node, name)` =
+      `globalsForFile(owningFile, name)` — the resolution INV.3(d) needs
+      for every foreign-node annotation read. Pin with a direct-construction
+      test (Inv3PerFileLookupTest pattern).
+    - (ii) **Flip the kind-domain/enum-discriminant family** (~82% of
+      conflated traffic) onto the node-keyed primitive — the annotation
+      node is in hand at every one of those sites; preserving resolution
+      (not nulling) is the acceptance bar, listAll byte-identity the gate.
+    - (iii) **Flip the current-file-keyed value/callee sites**
+      (identifier.fallback, propAccess.objExpr/base/root, callee.ident,
+      mam.*, pmrCheckAccess, resolveFlowCalleeDecl, isCalleeResolvable) —
+      these read names from the CURRENT file's own AST, so
+      `globalsForFile(currentCheckFileName/fileName, name)` is the right
+      key; suppression-only where the name classifies conflated.
+    - (iv) **Flip the type-position tail** (typeRef.resolve.ident ~1.9k,
+      typeNodeDefinitelyNonNullish's globals fallback — the round-424
+      barrel-alias fallback already restricted to interface/class/enum) and
+      re-run the instrumented measurement; conflated-by-pass should
+      approach zero, unlocking INV.3(d).
   - [ ] **INV.3(d) Retire the merge + delete the ecology.** Stop merging
     module-file locals into `globals`; delete `moduleFileLocalVarNames`,
     `conflatedTypeAliasFiles`, `conflatedInterfaceFiles`,

@@ -1,3 +1,45 @@
+**Round 493 (2026-07-13, same session as 492) — INV.1(b)+(c)+(d): the concurrent
+front-end landed.** The crawl's per-file work now runs CONCURRENTLY per frontier:
+read + UTF-8→UTF-16 decode on `Dispatchers.IO` (new `pipelineIoDispatcher`
+expect/actual in PipelineRunner — `Dispatchers.IO` does not exist in common
+code), the specifier-extraction parse on `Dispatchers.Default`, under a bounded
+`flatMapMerge(16)` (`readAndScanBatch`, results re-ordered to INPUT order, one
+entry per occurrence; note `flatMapMerge` is `@ExperimentalCoroutinesApi` in
+coroutines 1.11.0, not `@FlowPreview` as older docs suggest). Specifier
+RESOLUTION + emission stay sequential per frontier (a frontier-level barrier),
+so emission order remains first-discovery order — the binder/symbol-id contract
+from (a) holds by construction. Parser concurrency audit (the
+ARCHITECTURE-RETHINK § 4 precondition): no top-level/companion mutable state in
+Parser/Scanner/Ast — only immutable keyword sets; `internSalt` is per-file pure.
+Observable parity with the sequential crawl for a static-during-crawl Vfs; only
+read COUNTS differ (a multiply-discovered UNREADABLE path probes once per
+frontier, not once per discovery). **Verification:** suite green 10,206 → 10,212
+(+6 local `Inv1ConcurrentCrawlTest`: wider-than-the-bound frontier order (30
+imports vs concurrency 16), cross-frontier first-discovery positions, deep-chain
+BFS, resolvable-but-unreadable discovered file skipped (NOT unresolved) with
+siblings intact, unreadable SEED enters as "", 3× build determinism); (c) 3×
+`--listAll` runs byte-identical to each other AND to the round-492 BEFORE binary
+(46 diagnostics incl. chains). **Measurement — the false-regression trap:** the
+initial batch-then-batch wall-clock read showed AFTER ~0.7 s SLOWER (+4–6 s
+user), and a `-Dkotlinx.coroutines.default.parallelism=1` probe ruled out
+concurrent-parse GC pressure — the BOX had drifted ~2 s slower across the
+session (the same BEFORE binary: 24.6 s at session start, 26.1–27.1 s two hours
+later). An INTERLEAVED A/B (B/A pairs ×3, daemons stopped) gives the valid
+read: **BEFORE median 26,804 ms vs AFTER 25,976 ms (−0.8 s, ~3%), every A run
+beating its adjacent B runs** — consistent with parallelizing the ~1–1.5 s
+extraction-parse leg on 4 cores; the front-end win grows with profile size and
+on the 500k-LOC horizon. Bench TSV row appended (d): 24,846 ms self / 934 MB /
+46 errors / 78 emitted — an EMIT run (the `+1.3%` vs-previous line compares
+against a `--noEmit` row, so it understates; the interleaved A/B above is the
+valid perf read). **NEXT (queued as
+INV.1(e)):** reuse the crawl's parses in `compileParsed` to kill the double
+parse — NOT a drop-in: the core's three parse sites pass option-derived parser
+flags (`forceJsx` / `topLevelAwait` / `needsJsxFlag` / `noImplicitAny`) that
+change the tree, so the crawl must parse with the RESOLVED options (available —
+the tsconfig loads before the crawl) and `ParsedSource` must grow a
+pre-parsed-files channel.
+
+
 **Round 492 (2026-07-13, same session as 491) — INV.1(a): the sequential-Flow
 beachhead landed.** kotlinx-coroutines-core was ALREADY a commonMain dependency
 (only the unused CheckerPool consumed it), so (a) reduced to the seam: new
