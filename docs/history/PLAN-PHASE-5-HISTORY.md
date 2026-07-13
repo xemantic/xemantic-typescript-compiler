@@ -1,3 +1,58 @@
+**Round 489 (2026-07-12) — M5.1: two byte-identical per-property-access hot-path
+reductions from a fresh JFR (~2.9% wall-clock).** Mandatory fresh compiler-profile JFR
+(25.5 s / 1,961 samples, post-488): `checkMemberAccessMissing` at the clear top (5.7%
+self / 6.8% incl, under `checkPropertyAccessInExpr` 8.8% → `checkSinglePropertyAccess`
+8.1%), with `emitTs18048ForClosureCapturedUndefinedReceiver` (1.4% self) and
+`narrowTypeFromFlow` (1.3% self) both running per-access. Two commits, each byte-identical
+(compiler / services / harness `--listAll` diffs empty vs a stash-built BEFORE binary —
+46 / 46 / 95; the compiler profile exercises the round-418 `isTupleType` narrow-DOWN path
+via checker.ts, and the full corpus suite pins the narrowing corner cases):
+- **Fix 1 — closure-scan skip for concrete receivers** (`34d9798c`):
+  `emitTs18048ForClosureCapturedUndefinedReceiver` runs for EVERY property-access with an
+  Identifier receiver and scanned ALL of the flow graph's `closureStarts` (hundreds on a
+  big source like checker.ts) to find the innermost lexically-containing closure BEFORE
+  resolving the receiver type. The emitter only ever fires when the (narrowed) receiver
+  type is a union containing `undefined`, and `getNarrowedTypeForReferenceFollowLoopEntry`
+  only ever SUBSETS the raw type, so resolve the type first and bail before the
+  O(closureStarts) scan whenever `raw` is concrete (not a `T | undefined` union). The
+  captured-`var` case resolves to `anyType` (B467, recovered below via the closure's
+  `enclosingVarDecls`), so `anyType` must NOT bail — it needs the closure.
+- **Fix 2 — narrow-DOWN walks skipped when the property is present** (`3d9aee21`): the
+  round-418 single-type narrow-DOWN suppression (`checkMemberAccessMissing`) ran TWO
+  flow-narrowing walks (`getNarrowedTypeForReference` +
+  `getNarrowedTypeForReferenceFollowLoopEntry`) for every concrete non-union receiver. Its
+  ONLY purpose is to suppress a would-be TS2339 when `raw` LACKS the property but a
+  narrowed strict subtype HAS it — so if `raw` already resolves the property (on itself or
+  its apparent type, exactly what the tail-of-function main check consults for a concrete
+  non-union receiver, where `objectType == raw`), no TS2339 can fire and both walks are
+  pure waste. Gate them on `getPropertyOfType(raw / apparent, propName) == null`.
+- **Verification:** both byte-identical on compiler / services / harness (`--listAll`
+  diffs empty). AFTER JFR: the closure emitter drops out of the top-16 self-time,
+  `narrowTypeFromFlow` 26 → 18 samples, `checkMemberAccessMissing` self 111 → 97. Full
+  corpus suite green 10,190 → 10,196 (+6 local across 2 files:
+  `Round489ClosureConcreteReceiverFastBailTest` — concrete bails, undefined-union still
+  fires, inner guard still suppresses; `Round489MemberPresentNarrowGateTest` —
+  present-on-declared no error under active narrowing, subtype-only still suppressed,
+  genuinely-missing still fires; 0 regressions). Clean same-machine wall-clock A/B (daemon
+  stopped, `pkill KotlinCompile[D]aemon`, ≥4.9 GB free, 4 runs each, self `time:`): BEFORE
+  (round 488) median 25.5 s (band 24.8–26.2) → AFTER 24.76 s (band 24.5–25.1) ≈ **2.9%**,
+  with the AFTER runs also visibly tighter. Recordings `$SCRATCH/r489-compiler.jfr`
+  (before) + `$SCRATCH/r489-after.jfr` (after), session-local.
+- **INVARIANT:** the fix-2 gate is sound ONLY because the round-418 block handles the
+  concrete non-union receiver, where the main check's `objectType == raw` and every
+  downstream emitter gates on `getPropertyOfType(objectType, …) == null`. Do NOT extend the
+  gate to union / `this` receivers — they have their own separate narrowing paths and
+  emission logic.
+- **NEXT M5 lead (unchanged):** `checkMemberAccessMissing` remains the top single WALKER.
+  This round shaved its per-access work at the entry (skipping the two narrow-DOWN walks
+  for the property-present case); the bigger remaining lever is a broader member-present
+  common-case early-out at the very top of the function (before the conflation / leak /
+  shadow suppression pre-checks), but it is a 1,965-line correctness-critical fn and the
+  suppression pre-checks are gated so they are cheap when their program-wide conditions are
+  empty (the compiler profile has ZERO conflated aliases, so that block is already skipped
+  there — the lever is bigger on services / harness). Attempt with the `--listAll` byte gate
+  on all three profiles + the full suite, and decompose carefully.
+
 **Round 488 (2026-07-12) — M5.1/M5.2: three byte-identical hot-path allocation /
 map-lookup reductions from a fresh JFR (~2.1% wall-clock).** Mandatory fresh
 compiler-profile JFR (26.4 s / 2,014 samples, post-487): with the scope-name-set

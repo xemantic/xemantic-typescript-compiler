@@ -59,6 +59,34 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 499 (2026-07-13, same session as 497/498) — INV.2(d) LANDED: the first
+lexical-table CONSUMER — INV.2 "bind the world" is COMPLETE.** The canonical
+B83.5 transient-symbol site (`checkPropertyAccessInStatement`'s
+ClassDeclaration branch: a block-scoped class is invisible to the conventional
+binder, so the `this.X` member check synthesized a fresh
+`Symbol(SymbolFlags.Class, …)` per visit) now resolves the class through the
+INV.2(c) tables: `currentLexicalScopes` (a per-file checker field set in
+`checkPropertyAccess`, declared BEFORE `init` per the init-order gotcha) +
+`lexicalScopeSymbol(node, name)` — a parent-chain walk to the nearest scope
+binding the name, gated `flags.hasAny(Class)`, with the legacy synthesis kept
+as the unindexed-tree fallback. This is the resolution primitive INV.4 will
+generalize. **Fidelity + a real fix:** diagnostics are byte-identical on the
+compiler AND services listAll A/Bs (46/46 each), the corpus suite is green,
+AND a block-level `interface B { extra } class B { m() { this.extra } }`
+merge no longer FPs TS2339 — the lexical symbol carries BOTH declarations
+(canMerge Class+Interface), which the class-only transient never saw
+(measured: the pre-pilot checker emitted the false TS2339; the new
+Inv2LexicalConsumerTest pins both directions plus the TS2551
+spelling-suggestion variant, proving the lexically-resolved type feeds the
+full member machinery). Investigation notes: the OTHER two
+`Symbol(SymbolFlags.Class, …)` syntheses are NOT convertible — the B511
+clodule recovery's class is main-bound then OVERWRITTEN by last-wins (in
+neither table), and the classExpressionAssignment display synthesis names an
+anonymous ClassExpression (never a scope binding); a probe also recorded that
+this pass's traversal does not descend `while` bodies (pre-existing, both
+code paths — the tests use `if`/`for` shapes). Suite 10,251 → 10,255 (+4).
+NEXT: INV.3 per-file scoping.
+
 **Round 498 (2026-07-13, same session as 497) — INV.2(c) phase (ii) LANDED:
 block-scope containers + class/interface/alias/enum scopes — INV.2(c) is
 COMPLETE.** The lexical binder now covers tsc's `IsBlockScopedContainer` set
@@ -399,61 +427,6 @@ the walker architecture, not micro-inefficiency, is the bottleneck (rounds 432�
 the response curve). Deliverables: `docs/ARCHITECTURE-RETHINK.md` + this queue
 restructure + CLAUDE.md mission pointer.
 
-**Round 489 (2026-07-12) — M5.1: two byte-identical per-property-access hot-path
-reductions from a fresh JFR (~2.9% wall-clock).** Mandatory fresh compiler-profile JFR
-(25.5 s / 1,961 samples, post-488): `checkMemberAccessMissing` at the clear top (5.7%
-self / 6.8% incl, under `checkPropertyAccessInExpr` 8.8% → `checkSinglePropertyAccess`
-8.1%), with `emitTs18048ForClosureCapturedUndefinedReceiver` (1.4% self) and
-`narrowTypeFromFlow` (1.3% self) both running per-access. Two commits, each byte-identical
-(compiler / services / harness `--listAll` diffs empty vs a stash-built BEFORE binary —
-46 / 46 / 95; the compiler profile exercises the round-418 `isTupleType` narrow-DOWN path
-via checker.ts, and the full corpus suite pins the narrowing corner cases):
-- **Fix 1 — closure-scan skip for concrete receivers** (`34d9798c`):
-  `emitTs18048ForClosureCapturedUndefinedReceiver` runs for EVERY property-access with an
-  Identifier receiver and scanned ALL of the flow graph's `closureStarts` (hundreds on a
-  big source like checker.ts) to find the innermost lexically-containing closure BEFORE
-  resolving the receiver type. The emitter only ever fires when the (narrowed) receiver
-  type is a union containing `undefined`, and `getNarrowedTypeForReferenceFollowLoopEntry`
-  only ever SUBSETS the raw type, so resolve the type first and bail before the
-  O(closureStarts) scan whenever `raw` is concrete (not a `T | undefined` union). The
-  captured-`var` case resolves to `anyType` (B467, recovered below via the closure's
-  `enclosingVarDecls`), so `anyType` must NOT bail — it needs the closure.
-- **Fix 2 — narrow-DOWN walks skipped when the property is present** (`3d9aee21`): the
-  round-418 single-type narrow-DOWN suppression (`checkMemberAccessMissing`) ran TWO
-  flow-narrowing walks (`getNarrowedTypeForReference` +
-  `getNarrowedTypeForReferenceFollowLoopEntry`) for every concrete non-union receiver. Its
-  ONLY purpose is to suppress a would-be TS2339 when `raw` LACKS the property but a
-  narrowed strict subtype HAS it — so if `raw` already resolves the property (on itself or
-  its apparent type, exactly what the tail-of-function main check consults for a concrete
-  non-union receiver, where `objectType == raw`), no TS2339 can fire and both walks are
-  pure waste. Gate them on `getPropertyOfType(raw / apparent, propName) == null`.
-- **Verification:** both byte-identical on compiler / services / harness (`--listAll`
-  diffs empty). AFTER JFR: the closure emitter drops out of the top-16 self-time,
-  `narrowTypeFromFlow` 26 → 18 samples, `checkMemberAccessMissing` self 111 → 97. Full
-  corpus suite green 10,190 → 10,196 (+6 local across 2 files:
-  `Round489ClosureConcreteReceiverFastBailTest` — concrete bails, undefined-union still
-  fires, inner guard still suppresses; `Round489MemberPresentNarrowGateTest` —
-  present-on-declared no error under active narrowing, subtype-only still suppressed,
-  genuinely-missing still fires; 0 regressions). Clean same-machine wall-clock A/B (daemon
-  stopped, `pkill KotlinCompile[D]aemon`, ≥4.9 GB free, 4 runs each, self `time:`): BEFORE
-  (round 488) median 25.5 s (band 24.8–26.2) → AFTER 24.76 s (band 24.5–25.1) ≈ **2.9%**,
-  with the AFTER runs also visibly tighter. Recordings `$SCRATCH/r489-compiler.jfr`
-  (before) + `$SCRATCH/r489-after.jfr` (after), session-local.
-- **INVARIANT:** the fix-2 gate is sound ONLY because the round-418 block handles the
-  concrete non-union receiver, where the main check's `objectType == raw` and every
-  downstream emitter gates on `getPropertyOfType(objectType, …) == null`. Do NOT extend the
-  gate to union / `this` receivers — they have their own separate narrowing paths and
-  emission logic.
-- **NEXT M5 lead (unchanged):** `checkMemberAccessMissing` remains the top single WALKER.
-  This round shaved its per-access work at the entry (skipping the two narrow-DOWN walks
-  for the property-present case); the bigger remaining lever is a broader member-present
-  common-case early-out at the very top of the function (before the conflation / leak /
-  shadow suppression pre-checks), but it is a 1,965-line correctness-critical fn and the
-  suppression pre-checks are gated so they are cheap when their program-wide conditions are
-  empty (the compiler profile has ZERO conflated aliases, so that block is already skipped
-  there — the lever is bigger on services / harness). Attempt with the `--listAll` byte gate
-  on all three profiles + the full suite, and decompose carefully.
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 (Restored 2026-07-12, round 481 — the queue/backlog/inventory sections had been
@@ -549,7 +522,9 @@ interrupt the arc).
   checker; the point is one canonical tree per file — the INV.2 enabler).
   CLAUDE.md gotcha: a new option-derived Parser argument must extend
   `ParserFlags`, never a parse site inline, or the match reuses a wrong tree.
-- [ ] **INV.2 Bind the world** — decomposed round 494 (facts verified in-code:
+- [x] **INV.2 Bind the world** — COMPLETE round 499 (all four sub-items landed;
+  the tables' mass consumption is INV.4's migration). Decomposed round 494
+  (facts verified in-code:
   `Node` is a sealed interface + ~138 data classes with single-interface supertypes
   `) : Expression/Node/TypeNode/Statement/Declaration/ClassElement`; there is NO
   generic child-walk anywhere; nodes have no parent/id fields; `Symbol.id` is a
@@ -606,10 +581,22 @@ interrupt the arc).
       Inv2LexicalScopeTest — the phase-(i) negative controls flipped to
       positive location asserts), listAll byte-identical, interleaved wall ×6
       both orders neutral.
-  - [ ] **INV.2(d) B83.5 dissolution pilots.** Convert 1–2 checker sites that
-    synthesize transient symbols for unbound block-scoped decls (e.g.
-    `checkPropertyAccessInStatement`'s ClassDeclaration branch) to consume the
-    new tables — proving fidelity walker-by-walker; suite-gated.
+  - [x] **INV.2(d) B83.5 dissolution pilots.** DONE round 499 (2026-07-13): the
+    canonical site — `checkPropertyAccessInStatement`'s ClassDeclaration branch —
+    now resolves a block-scoped class via `lexicalScopeSymbol` (parent-chain walk
+    over `currentLexicalScopes`, set per file in `checkPropertyAccess`; legacy
+    transient synthesis kept as the unindexed-tree fallback). Fidelity proven:
+    suite green, listAll byte-identical on compiler AND services; and the pilot
+    FIXES a real FP — a block-level `interface B` + `class B` merge now
+    contributes interface members to `this` (the transient class-only symbol
+    could not see them; measured: the pre-pilot checker emitted a false TS2339).
+    Candidate analysis: the other two `Symbol(SymbolFlags.Class, …)` syntheses
+    are NOT B83.5 scope-binding shapes and stay — the B511 clodule recovery
+    (the class symbol is main-bound then OVERWRITTEN by last-wins, so it is in
+    neither table) and the classExpressionAssignment display synthesis (a
+    ClassExpression is never a scope binding). Mass consumption of the tables
+    (the ~59 synthesis sites, `buildNestedFunctionMap`, the per-pass scope
+    machinery) is INV.4's migration proper.
 - [ ] **INV.3 Per-file scoping.** Consume `buildPerFileScopes` (built round 17.32a,
   never consumed); module files resolve own-locals + imports + true globals; retire the
   `mergeSymbolTable` globals conflation for module files; delete the conflation
