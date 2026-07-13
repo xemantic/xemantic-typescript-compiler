@@ -1242,6 +1242,22 @@ class Checker(
     private val libGlobals: SymbolTable = parseBuiltinLib()
 
     /**
+     * INV.3(b)(ii): names whose ONLY declarations are module-file top-level
+     * locals — the conflation candidates. A `globals` hit on such a name is a
+     * legitimate resolution ONLY when the consulting file itself declares or
+     * imports it; anywhere else it is a foreign module file's local leaking
+     * through the init-block `mergeSymbolTable` conflation (the CONFLATED
+     * class of the INV.3(a) instrumentation). Computed once per program in
+     * [computePerFileVisibility] (init step 1b2): module-file local names
+     * MINUS every name with a module-independent global meaning (lib globals,
+     * script-file locals, names ADDED to [globals] by module augmentations).
+     * Consulted by [globalsForFile]. Declared before `init` (the Kotlin
+     * init-order gotcha) and empty until 1b2 runs, so earlier consults — and
+     * programs where the set is never computed — degrade to legacy behavior.
+     */
+    private var moduleOnlyGlobalNames: Set<String> = emptySet()
+
+    /**
      * 17.33: UMD global names registered via `export as namespace X;` in
      * .d.ts files. Used to upgrade TS2304 → TS2686 when an identifier
      * resolution fails AND the name is a UMD global AND the current file
@@ -1856,18 +1872,16 @@ class Checker(
             conflatedEnumFileSubsets = subsets
         }
         // 1b. Merge module augmentation exports into target module symbols
-        // (INV.3(a): snapshot the pre-augmentation key set so the lookup
-        // classifier can tell augmentation-ADDED names — legitimately global —
-        // from module-file leaks; null and dead when instrumentation is off.)
-        val preAugmentationGlobalsKeys: Set<String>? =
-            if (PassTiming.enabled) HashSet(globals.keys) else null
+        // (snapshot the pre-augmentation key set so the per-file visibility
+        // model can tell augmentation-ADDED names — legitimately global —
+        // from module-file leaks).
+        val preAugmentationGlobalsKeys: Set<String> = HashSet(globals.keys)
         mergeModuleAugmentations()
-        // 1b2. INV.3(a): install the globals-lookup classifier now that the
-        // membership of [globals] has settled (steps 0/1/1b) — earlier lookups
-        // are the merge's own bookkeeping, not consultation.
-        if (preAugmentationGlobalsKeys != null) {
-            installGlobalsLookupClassifier(preAugmentationGlobalsKeys)
-        }
+        // 1b2. INV.3(b)(ii): compute the per-file visibility sets now that the
+        // membership of [globals] has settled (steps 0/1/1b) — feeds the
+        // [globalsForFile] conflation gate always, and installs the INV.3(a)
+        // lookup classifier on top when instrumentation is on.
+        computePerFileVisibility(preAugmentationGlobalsKeys)
         // 1c. 17.32a: build per-file scope tables (NOT YET CONSUMED — pure infra
         // foundation for future Blocker #3 substeps).
         buildPerFileScopes()
@@ -5927,15 +5941,8 @@ class Checker(
     }
 
     /**
-     * INV.3(a): install the `globals`-lookup classifier onto the
-     * [InstrumentedSymbolTable] the field was constructed as under
-     * `--passTiming` (no-op otherwise). Each keyed lookup from here on is
-     * classified against the per-file visibility model INV.3 migrates to —
-     * see [GlobalsLookupClass] for the classes — and recorded via
-     * [PassTiming.noteGlobalsLookup] with per-pass attribution. The dump's
-     * conflated/unscoped name and pass tables ARE the migration worklist.
-     *
-     * Classification sets (computed once, at install):
+     * INV.3(b)(ii): compute the per-file visibility model's sets once per
+     * program (init step 1b2, after the [globals] membership settles):
      *  - `moduleLocalNames` — every top-level local of every MODULE file: the
      *    conflation candidates (only these names can be module-file leaks);
      *  - `nonModuleVisible` — names with a legitimate global meaning without
@@ -5943,14 +5950,12 @@ class Checker(
      *    locals, and names ADDED to [globals] by [mergeModuleAugmentations]
      *    (captured as the key-set delta around step 1b).
      *
-     * A hit on a name in `moduleLocalNames` but not `nonModuleVisible` is a
-     * pure module-file leak; whether the SITE is fine per-file depends on
-     * [currentFileLocals] at lookup time (own local vs conflated vs no file
-     * context). The classifier must never consult [globals] itself — that
-     * would recurse the hook.
+     * Publishes their difference as [moduleOnlyGlobalNames] (the
+     * [globalsForFile] gate) and hands both sets to the INV.3(a) classifier
+     * install (a no-op unless `--passTiming` constructed [globals]
+     * instrumented).
      */
-    private fun installGlobalsLookupClassifier(preAugmentationGlobalsKeys: Set<String>) {
-        val instrumented = globals as? InstrumentedSymbolTable ?: return
+    private fun computePerFileVisibility(preAugmentationGlobalsKeys: Set<String>) {
         val moduleLocalNames = HashSet<String>()
         val nonModuleVisible = HashSet<String>(libGlobals.keys)
         for (result in binderResults) {
@@ -5962,6 +5967,31 @@ class Checker(
         for (key in globals.keys) {
             if (key !in preAugmentationGlobalsKeys) nonModuleVisible.add(key)
         }
+        moduleOnlyGlobalNames = HashSet(moduleLocalNames).apply { removeAll(nonModuleVisible) }
+        installGlobalsLookupClassifier(moduleLocalNames, nonModuleVisible)
+    }
+
+    /**
+     * INV.3(a): install the `globals`-lookup classifier onto the
+     * [InstrumentedSymbolTable] the field was constructed as under
+     * `--passTiming` (no-op otherwise). Each keyed lookup from here on is
+     * classified against the per-file visibility model INV.3 migrates to —
+     * see [GlobalsLookupClass] for the classes — and recorded via
+     * [PassTiming.noteGlobalsLookup] with per-pass attribution. The dump's
+     * conflated/unscoped name and pass tables ARE the migration worklist.
+     *
+     * Classification sets come from [computePerFileVisibility]. A hit on a
+     * name in `moduleLocalNames` but not `nonModuleVisible` is a pure
+     * module-file leak; whether the SITE is fine per-file depends on
+     * [currentFileLocals] at lookup time (own local vs conflated vs no file
+     * context). The classifier must never consult [globals] itself — that
+     * would recurse the hook.
+     */
+    private fun installGlobalsLookupClassifier(
+        moduleLocalNames: Set<String>,
+        nonModuleVisible: Set<String>,
+    ) {
+        val instrumented = globals as? InstrumentedSymbolTable ?: return
         instrumented.onLookup = { name, sym ->
             val cls = when {
                 sym == null -> GlobalsLookupClass.MISS
@@ -5981,8 +6011,12 @@ class Checker(
     }
 
     /**
-     * INV.3(b): THE per-file resolution primitive — the lookup an INV.3(c) family
-     * flip substitutes for a conflated `globals[name]` consult. Resolution:
+     * INV.3(b): THE per-file resolution primitive. An INV.3(c) family flip
+     * consumes it through [globalsForFile] (which preserves the legacy merged
+     * symbol INSTANCE for legitimately visible names — substituting THIS
+     * function's return directly changes symbol identity for lib/script names,
+     * because [perFileScope] holds the first-occurrence script symbol while
+     * [globals] holds the first-declarer merged instance). Resolution:
      * [perFileScope]'s table for [fileName] (own top-level locals shadowing
      * script-file globals shadowing lib — built by [buildPerFileScopes]), with an
      * own-local IMPORT alias resolved onward through [resolveImportedSymbolGeneral]
@@ -6014,6 +6048,35 @@ class Checker(
             resolveImportedSymbolGeneral(sym)?.let { return it }
         }
         return sym
+    }
+
+    /**
+     * INV.3(b)(ii): a `globals[name]` consult made per-file-correct — the flip
+     * shape for the INV.3(c) migration. Returns the merged-globals symbol
+     * (INSTANCE-identical to the legacy consult, which is what keeps a flip
+     * byte-identical for every legitimately visible name) whenever [name] has a
+     * per-file meaning in [fileName]:
+     *  - a name outside [moduleOnlyGlobalNames] (lib / script-file /
+     *    augmentation-added global — no conflation possible), or
+     *  - a module-only name the file itself declares or imports, probed through
+     *    [lookupPerFile] (the INV.3(b) primitive; an import alias resolves
+     *    non-null there whether or not its target module resolves).
+     *
+     * Returns null exactly when the legacy consult would have LEAKED a foreign
+     * module file's local (the CONFLATED class of the INV.3(a)
+     * instrumentation): the caller behaves as if the name did not resolve,
+     * which is what real tsc sees in that file. A [fileName] without a
+     * [perFileScope] entry (scopes unbuilt, or a file outside the program)
+     * degrades to the legacy consult.
+     *
+     * The conflated branch never touches [globals], so under `--passTiming`
+     * the per-pass conflated tables keep measuring only UN-migrated traffic.
+     */
+    internal fun globalsForFile(fileName: String, name: String): Symbol? {
+        if (name in moduleOnlyGlobalNames && perFileScope.containsKey(fileName) &&
+            lookupPerFile(fileName, name) == null
+        ) return null
+        return globals[name]
     }
 
     /**
@@ -118831,7 +118894,7 @@ interface DataView {
                     stmt.heritageClauses?.forEach { clause ->
                         clause.types.forEach { checkConstraintsInExprWithTypeArgs(it, source, fileName, stmts) }
                     }
-                    if (extendsClauseIsNonGeneric(stmt) && classMergedWithInterface(stmt, stmts)) {
+                    if (extendsClauseIsNonGeneric(stmt, fileName) && classMergedWithInterface(stmt, stmts)) {
                         for (member in stmt.members) {
                             if (member is Constructor) {
                                 member.body?.let { body ->
@@ -118967,7 +119030,12 @@ interface DataView {
                 val name = expr.text
                 // TS2315: check if type is not generic (only for class/interface/type alias/module, not variables)
                 if (name !in BUILTIN_GENERICS) {
-                    val symbol = globals[name]
+                    // INV.3(b)(ii) pilot: per-file-gated consult — a foreign module
+                    // file's same-named local must not decide "not generic" about a
+                    // name this file cannot see (real tsc: unresolvable base → TS2304
+                    // elsewhere, never TS2315). Kept in sync with the mirrored gate
+                    // in [extendsClauseIsNonGeneric].
+                    val symbol = globalsForFile(fileName, name)
                     if (symbol != null && symbol.flags.hasAny(SymbolFlags.Class or SymbolFlags.Interface or SymbolFlags.TypeAlias or SymbolFlags.Module)) {
                         val typeParams = getTypeParametersOfSymbol(symbol)
                         if (typeParams == null || typeParams.isEmpty()) {
@@ -119046,14 +119114,16 @@ interface DataView {
      * `extends` clause of a class. Used to gate TS2346 emission on `super()` calls when the
      * declared base type is non-generic but type arguments were provided.
      */
-    private fun extendsClauseIsNonGeneric(cls: ClassDeclaration): Boolean {
+    private fun extendsClauseIsNonGeneric(cls: ClassDeclaration, fileName: String): Boolean {
         val extendsClause = cls.heritageClauses?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword } ?: return false
         val baseExpr = extendsClause.types.firstOrNull() ?: return false
         val typeArgs = baseExpr.typeArguments ?: return false
         if (typeArgs.isEmpty()) return false
         val name = (baseExpr.expression as? Identifier)?.text ?: return false
         if (name in BUILTIN_GENERICS) return false
-        val symbol = globals[name] ?: return false
+        // INV.3(b)(ii) pilot: per-file-gated consult, mirroring the TS2315
+        // condition in [checkConstraintsInExprWithTypeArgs] — keep in sync.
+        val symbol = globalsForFile(fileName, name) ?: return false
         if (!symbol.flags.hasAny(SymbolFlags.Class or SymbolFlags.Interface or SymbolFlags.TypeAlias or SymbolFlags.Module)) return false
         val typeParams = getTypeParametersOfSymbol(symbol)
         return typeParams == null || typeParams.isEmpty()
