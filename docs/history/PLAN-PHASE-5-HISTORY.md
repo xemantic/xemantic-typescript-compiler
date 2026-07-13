@@ -1,3 +1,65 @@
+**Round 491 (2026-07-13) — INV.0 LANDED: the pass multiplier is instrumented and
+measured (opt-in, byte-identical off).** First item of the inversion arc. Landed:
+`PassTiming.kt` (off-by-default singleton + a top-level NON-inline `pass(name) {}`
+wrapper — non-inline deliberately: ~514 inline expansions of the try/finally +
+time-mark body would push the constructor toward the JVM 64 KB method limit), a
+mechanical bytes-mode rewrite of the init dispatch (all 513 whole-line zero-arg
+dispatch calls + 1 single-line if-call → `pass("checkFoo") { checkFoo() }`; all
+names unique so accumulation is 1:1), counter hooks (each additive-only behind
+`if (PassTiming.enabled)`): `getTypeOfExpression` invocations + approx-distinct
+nodes (pos<<32|end keys — cross-file collisions UNDERcount distinct, so the
+recompute factor is slightly OVERstated; labeled `~` in the dump) with per-pass
+attribution via `PassTiming.currentPass`, `getTypeFromTypeNode` cacheable vs
+bypassed vs hit, and depth-0 flow walks at the `flowWalkWithTripCheck` choke
+point; `--passTiming` CLI flag (reset + enable before build, sorted table after).
+**Verification:** suite green 10,196 → 10,203 (+7 local `Inv0PassTimingTest`:
+on/off diagnostic parity on a TS2322-emitting probe, disabled-run-records-nothing
+negative control — which caught noteInitStart/End recording unconditionally
+pre-commit — accumulation, per-pass attribution incl. nested + throwing bodies,
+dump format); `--listAll` A/B compiler profile vs a stash-built BEFORE binary:
+byte-identical (46 lines incl. chains) at wall parity (24.51 vs 24.53 s);
+instrumented run +~2% (25.07 s).
+**THE TABLE (compiler profile, --noEmit --passTiming, daemons stopped):**
+checker-init 20,846.7 ms of 25,071 ms wall (83%); 496 passes ran, sum 20,009 ms,
+outside-pass (setup/merges/eager indexes) only 837.5 ms. Concentration: top-1 =
+19.0%, top-3 = 38.6%, top-10 = 54.2%, top-25 = 64.9%, top-50 = 75.3%; median pass
+1.6 ms; **474 passes under 100 ms sum to 7,297 ms (36.5%)** — the pure
+pass-multiplication tail (each is a full-program walk for a small check). Top 15:
+```
+      ms   typeOfExpr  narrowWalks  pass
+  3788.9       255192        57282  checkPropertyAccess
+  2195.4        87225        10508  checkTypeAssignability
+  1727.5       115956        16211  checkCallExpressionTypes
+   845.6            0            0  checkUnresolvedNames
+   733.7            0            0  checkTypeUsedAsValue
+   506.1        37188           90  checkUncalledFunctionsInConditions
+   289.6            0            0  checkAbstractClassInstantiation
+   271.2        69024           61  checkArithmeticOperandTypes
+   242.5            0            0  checkDuplicateIdentifiers
+   228.0            0            0  checkDefiniteAssignment
+   218.0         2756          124  checkImplicitReturns
+   204.7         9948            0  checkImplicitAnyParameters
+   196.9            0            0  checkArgumentCounts
+   191.3          103            0  checkFnTypedParamCalls
+   169.9           66            0  checkObjectSpreadInvalidTypes
+```
+**Counters:** `getTypeOfExpression` 594,779 calls over ~221,844 distinct nodes —
+×2.6 program-wide recompute, and the top-3 passes ALONE make 458k calls (each
+independently re-types overlapping expression sets with its own scope machinery);
+`getTypeFromTypeNode` 255,019 cacheable (77% hit) vs 47,946 bypassed (15.8% — the
+compiler profile; expect higher inside generic-heavy services) = ~107k full
+annotation re-resolutions; flow-narrowing walks 84,469 — checkPropertyAccess
+launches 57,282 of them (68%), each a fresh CFG traversal with per-walk memos.
+**INV.4 migration worklist (this table, cost order):** (1) the property-access
+family (3.8 s, the top walker + top narrower), (2) assignability (2.2 s), (3)
+call-types (1.7 s) — these three are the spine candidates where one shared walk +
+one narrowing consult per reference collapses 7.7 s (38.6%); (4) the
+name-resolution pair checkUnresolvedNames + checkTypeUsedAsValue (1.6 s combined,
+zero expression typing — pure walk cost); then the sub-100 ms tail wholesale
+(7.3 s of walk overhead that becomes per-node cases in a single dispatch).
+Instrumentation invariants recorded as a CLAUDE.md gotcha (wrap new init passes;
+hooks stay additive-only; `pass` stays non-inline).
+
 **Round 490 (2026-07-13) — the architecture analysis behind the rescope (no code
 change).** Verified in-code: Checker.init dispatches ~512 passes (523 call sites,
 1,700 lines); 575 `for (result in binderResults)` loops; 1,005 `check*` functions;
