@@ -115,6 +115,7 @@ private fun printUsage() {
           --noEmit           type-check only; do not write outputs
           --listAll          print every error (default: first 30) — for run-to-run FP diffing
           --passTiming       print the INV.0 per-pass wall-time table + recompute counters
+                             + the INV.3(a) globals-lookup conflation classification
           --help, -h         show this help
         """.trimIndent()
     )

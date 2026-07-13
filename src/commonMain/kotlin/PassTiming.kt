@@ -107,6 +107,29 @@ object PassTiming {
     var preParseReused: Long = 0
     var preParseFresh: Long = 0
 
+    /** INV.3(a): keyed `globals` lookups (get/containsKey), classified by the
+     *  checker-installed classifier (see `Checker.installGlobalsLookupClassifier`)
+     *  against the per-file visibility model INV.3 migrates to. One counter per
+     *  [GlobalsLookupClass]; the invariant `globalsLookups == sum(classes)` is
+     *  pinned by Inv3GlobalsLookupTest. */
+    var globalsLookups: Long = 0
+    var globalsMisses: Long = 0
+    var globalsTrueGlobalHits: Long = 0
+    var globalsSharedHits: Long = 0
+    var globalsOwnLocalHits: Long = 0
+    var globalsConflatedHits: Long = 0
+    var globalsUnscopedHits: Long = 0
+
+    /** Names / passes behind [globalsConflatedHits] — the INV.3 migration worklist. */
+    val globalsConflatedByName = HashMap<String, Long>()
+    val globalsConflatedByPass = HashMap<String, Long>()
+
+    /** Names / passes behind [globalsUnscopedHits] (no file context at the site —
+     *  the lookup MAY be the current file's own local; also an INV.4 datum: how
+     *  much checking runs without file attribution). */
+    val globalsUnscopedByName = HashMap<String, Long>()
+    val globalsUnscopedByPass = HashMap<String, Long>()
+
     /** Total wall time between checker-init entry and dispatch end, summed over
      *  every checker constructed in the run (a compile may build more than one). */
     var checkerInitNanos: Long = 0
@@ -129,6 +152,17 @@ object PassTiming {
         narrowWalksByPass.clear()
         preParseReused = 0
         preParseFresh = 0
+        globalsLookups = 0
+        globalsMisses = 0
+        globalsTrueGlobalHits = 0
+        globalsSharedHits = 0
+        globalsOwnLocalHits = 0
+        globalsConflatedHits = 0
+        globalsUnscopedHits = 0
+        globalsConflatedByName.clear()
+        globalsConflatedByPass.clear()
+        globalsUnscopedByName.clear()
+        globalsUnscopedByPass.clear()
         checkerInitNanos = 0
         initMark = null
     }
@@ -149,6 +183,28 @@ object PassTiming {
         narrowWalks++
         val p = currentPass ?: OUTSIDE_PASS
         narrowWalksByPass[p] = (narrowWalksByPass[p] ?: 0L) + 1
+    }
+
+    internal fun noteGlobalsLookup(cls: GlobalsLookupClass, name: String) {
+        globalsLookups++
+        when (cls) {
+            GlobalsLookupClass.MISS -> globalsMisses++
+            GlobalsLookupClass.TRUE_GLOBAL -> globalsTrueGlobalHits++
+            GlobalsLookupClass.SHARED -> globalsSharedHits++
+            GlobalsLookupClass.OWN_LOCAL -> globalsOwnLocalHits++
+            GlobalsLookupClass.CONFLATED -> {
+                globalsConflatedHits++
+                globalsConflatedByName[name] = (globalsConflatedByName[name] ?: 0L) + 1
+                val p = currentPass ?: OUTSIDE_PASS
+                globalsConflatedByPass[p] = (globalsConflatedByPass[p] ?: 0L) + 1
+            }
+            GlobalsLookupClass.UNSCOPED -> {
+                globalsUnscopedHits++
+                globalsUnscopedByName[name] = (globalsUnscopedByName[name] ?: 0L) + 1
+                val p = currentPass ?: OUTSIDE_PASS
+                globalsUnscopedByPass[p] = (globalsUnscopedByPass[p] ?: 0L) + 1
+            }
+        }
     }
 
     fun noteInitStart() {
@@ -207,6 +263,26 @@ object PassTiming {
             "pre-parse reuse (INV.1(e), multi-file core): reused $preParseReused, " +
                 "parsed fresh $preParseFresh"
         )
+        if (globalsLookups > 0) {
+            appendLine("== globals lookups (INV.3(a)) ==")
+            appendLine(
+                "total $globalsLookups: trueGlobal $globalsTrueGlobalHits, " +
+                    "shared $globalsSharedHits, ownLocal $globalsOwnLocalHits, " +
+                    "CONFLATED $globalsConflatedHits, unscoped $globalsUnscopedHits, " +
+                    "miss $globalsMisses"
+            )
+            fun top(map: Map<String, Long>, n: Int, label: String) {
+                if (map.isEmpty()) return
+                appendLine("$label (top ${minOf(n, map.size)} of ${map.size}):")
+                for ((k, v) in map.entries.sortedByDescending { it.value }.take(n)) {
+                    appendLine("  ${v.toString().padStart(9)}  $k")
+                }
+            }
+            top(globalsConflatedByName, 30, "conflated by name")
+            top(globalsConflatedByPass, 20, "conflated by pass")
+            top(globalsUnscopedByName, 30, "unscoped by name")
+            top(globalsUnscopedByPass, 20, "unscoped by pass")
+        }
     }
 
     private fun ms(nanos: Long): String {
@@ -238,5 +314,64 @@ internal fun pass(name: String, body: () -> Unit) {
     } finally {
         PassTiming.notePass(name, mark.elapsedNow().inWholeNanoseconds)
         PassTiming.currentPass = saved
+    }
+}
+
+/**
+ * INV.3(a): how a keyed `globals` lookup relates to the per-file visibility
+ * model INV.3 migrates to (own locals + true globals = lib + script-file
+ * locals + augmentation-added names).
+ *
+ *  - [MISS] — the name is not in `globals` at all.
+ *  - [TRUE_GLOBAL] — no module file declares the name: presence is legitimate
+ *    (lib / script-file / augmentation) and survives the conflation retirement.
+ *  - [SHARED] — a module file declares the name AND it has a legitimate
+ *    non-module meaning: presence survives, but the merged symbol is polluted
+ *    by the module declarations (the chimera/per-file-view dimension).
+ *  - [OWN_LOCAL] — only module files declare it, and it is the CURRENT check
+ *    file's own top-level local: a per-file scope serves this site unchanged.
+ *  - [CONFLATED] — only module files declare it and it is NOT the current
+ *    file's local: the site depends on the cross-file leak (the migration
+ *    worklist proper).
+ *  - [UNSCOPED] — only module files declare it, but the site has no file
+ *    context (`currentFileLocals == null`), so own-vs-foreign is undecidable —
+ *    also a datum for INV.4 (how much checking runs without file attribution).
+ */
+internal enum class GlobalsLookupClass { MISS, TRUE_GLOBAL, SHARED, OWN_LOCAL, CONFLATED, UNSCOPED }
+
+/**
+ * INV.3(a): a [SymbolTable] that reports keyed lookups (`get`/`containsKey`)
+ * to [onLookup] while delegating everything else to [backing] — which stays
+ * the exact `symbolTable()` LinkedHashMap, so iteration order (and therefore
+ * every order-sensitive consumer) is byte-identical to the uninstrumented map.
+ *
+ * The checker constructs its `globals` as this class ONLY when
+ * [PassTiming.enabled] is on at construction time; the default path keeps the
+ * plain map, so a disabled run has zero added code on the hottest map in the
+ * program. [onLookup] stays null until the checker's init has finished the
+ * globals merge and installed the classifier (pre-install lookups are the
+ * merge's own bookkeeping, not consultation).
+ *
+ * NOTE: interface delegation does not forward `equals`/`hashCode`/`toString`
+ * — this table has identity semantics. `globals` is never compared or
+ * rendered, only consulted; do not reuse this wrapper for a map that is.
+ */
+internal class InstrumentedSymbolTable(
+    private val backing: SymbolTable = symbolTable(),
+) : SymbolTable by backing {
+
+    /** Classifier installed by the checker; null = inert. */
+    var onLookup: ((name: String, result: Symbol?) -> Unit)? = null
+
+    override fun get(key: String): Symbol? {
+        val result = backing[key]
+        onLookup?.invoke(key, result)
+        return result
+    }
+
+    override fun containsKey(key: String): Boolean {
+        val result = backing[key]
+        onLookup?.invoke(key, result)
+        return result != null
     }
 }

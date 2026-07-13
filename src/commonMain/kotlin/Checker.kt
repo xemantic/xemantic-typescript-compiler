@@ -68,8 +68,15 @@ class Checker(
      */
     private val jsonModuleContents: Map<String, String> = emptyMap(),
 ) {
-    /** Merged symbol tables from all files (global scope). */
-    private val globals: SymbolTable = symbolTable()
+    /** Merged symbol tables from all files (global scope).
+     *
+     * INV.3(a): under `--passTiming` the table is wrapped in
+     * [InstrumentedSymbolTable] so every keyed lookup can be classified
+     * against the per-file visibility model (see
+     * [installGlobalsLookupClassifier]); the default path keeps the plain
+     * map — zero added code on the hottest map in the program. */
+    private val globals: SymbolTable =
+        if (PassTiming.enabled) InstrumentedSymbolTable() else symbolTable()
 
     /** Per-file binder results for lookup. */
     private val fileResults: Map<String, BinderResult> =
@@ -1843,7 +1850,18 @@ class Checker(
             conflatedEnumFileSubsets = subsets
         }
         // 1b. Merge module augmentation exports into target module symbols
+        // (INV.3(a): snapshot the pre-augmentation key set so the lookup
+        // classifier can tell augmentation-ADDED names — legitimately global —
+        // from module-file leaks; null and dead when instrumentation is off.)
+        val preAugmentationGlobalsKeys: Set<String>? =
+            if (PassTiming.enabled) HashSet(globals.keys) else null
         mergeModuleAugmentations()
+        // 1b2. INV.3(a): install the globals-lookup classifier now that the
+        // membership of [globals] has settled (steps 0/1/1b) — earlier lookups
+        // are the merge's own bookkeeping, not consultation.
+        if (preAugmentationGlobalsKeys != null) {
+            installGlobalsLookupClassifier(preAugmentationGlobalsKeys)
+        }
         // 1c. 17.32a: build per-file scope tables (NOT YET CONSUMED — pure infra
         // foundation for future Blocker #3 substeps).
         buildPerFileScopes()
@@ -5899,6 +5917,60 @@ class Checker(
             // shadows-global semantics for the file's own declarations).
             for ((name, sym) in result.locals) fileScope[name] = sym
             perFileScope[result.sourceFile.fileName] = fileScope
+        }
+    }
+
+    /**
+     * INV.3(a): install the `globals`-lookup classifier onto the
+     * [InstrumentedSymbolTable] the field was constructed as under
+     * `--passTiming` (no-op otherwise). Each keyed lookup from here on is
+     * classified against the per-file visibility model INV.3 migrates to —
+     * see [GlobalsLookupClass] for the classes — and recorded via
+     * [PassTiming.noteGlobalsLookup] with per-pass attribution. The dump's
+     * conflated/unscoped name and pass tables ARE the migration worklist.
+     *
+     * Classification sets (computed once, at install):
+     *  - `moduleLocalNames` — every top-level local of every MODULE file: the
+     *    conflation candidates (only these names can be module-file leaks);
+     *  - `nonModuleVisible` — names with a legitimate global meaning without
+     *    the conflation: [libGlobals] keys (embedded or real libs), script-file
+     *    locals, and names ADDED to [globals] by [mergeModuleAugmentations]
+     *    (captured as the key-set delta around step 1b).
+     *
+     * A hit on a name in `moduleLocalNames` but not `nonModuleVisible` is a
+     * pure module-file leak; whether the SITE is fine per-file depends on
+     * [currentFileLocals] at lookup time (own local vs conflated vs no file
+     * context). The classifier must never consult [globals] itself — that
+     * would recurse the hook.
+     */
+    private fun installGlobalsLookupClassifier(preAugmentationGlobalsKeys: Set<String>) {
+        val instrumented = globals as? InstrumentedSymbolTable ?: return
+        val moduleLocalNames = HashSet<String>()
+        val nonModuleVisible = HashSet<String>(libGlobals.keys)
+        for (result in binderResults) {
+            val into =
+                if (isModuleFile(result.sourceFile.statements)) moduleLocalNames
+                else nonModuleVisible
+            into.addAll(result.locals.keys)
+        }
+        for (key in globals.keys) {
+            if (key !in preAugmentationGlobalsKeys) nonModuleVisible.add(key)
+        }
+        instrumented.onLookup = { name, sym ->
+            val cls = when {
+                sym == null -> GlobalsLookupClass.MISS
+                name !in moduleLocalNames -> GlobalsLookupClass.TRUE_GLOBAL
+                name in nonModuleVisible -> GlobalsLookupClass.SHARED
+                else -> {
+                    val locals = currentFileLocals
+                    when {
+                        locals == null -> GlobalsLookupClass.UNSCOPED
+                        locals.containsKey(name) -> GlobalsLookupClass.OWN_LOCAL
+                        else -> GlobalsLookupClass.CONFLATED
+                    }
+                }
+            }
+            PassTiming.noteGlobalsLookup(cls, name)
         }
     }
 
