@@ -1,0 +1,394 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Kazimierz Pogoda / Xemantic
+ * SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-xtsc-output-exception
+ *
+ * xemantic-typescript-compiler - a conformant TypeScript compiler and type
+ * checker that runs on JVM, native, and WebAssembly
+ * Copyright (C) 2026 Kazimierz Pogoda / Xemantic
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, version 3 of the License.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public
+ * License along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ *
+ * As a special exception, this file contains Helper Code covered by the
+ * xemantic-typescript-compiler Output Exception; additional permissions
+ * are granted as described in the file LICENSE-EXCEPTION.
+ */
+
+package com.xemantic.typescript.compiler
+
+import com.xemantic.kotlin.test.have
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
+import kotlin.test.assertNull
+
+/**
+ * INV.2(c) phase (i) invariants for the Binder's ADDITIVE lexical-binding pass:
+ * function-like containers get per-nodeId [LexicalScope]s holding type params,
+ * params, body-top-level declarations, and block-hoisted `var`s; scope symbols
+ * come from the SEPARATE negative id space (never the global sequence — the
+ * ~350-test reshuffle guard); the main binder's `locals`/`nodeToSymbol` stay
+ * untouched; container scopes ALIAS (never copy, never mutate) the existing
+ * tables. Phase (ii) — nested block/for/catch/case scopes and class scopes —
+ * is deliberately NOT yet bound; the negative controls here pin that boundary
+ * so phase (ii) flips them consciously.
+ */
+class Inv2LexicalScopeTest {
+
+    private fun bind(source: String, fileName: String = "t.ts"): BinderResult {
+        val sourceFile = Parser(source.trimIndent(), fileName).parse()
+        return Binder(CompilerOptions()).bind(sourceFile)
+    }
+
+    /** Preorder node list (mirrors indexSourceFile's iterative walk). */
+    private fun descendants(root: Node): List<Node> {
+        val out = ArrayList<Node>()
+        val stack = ArrayList<Node>()
+        stack.add(root)
+        val buf = ArrayList<Node>()
+        val collect: (Node) -> Unit = { buf.add(it) }
+        while (stack.isNotEmpty()) {
+            val node = stack.removeAt(stack.size - 1)
+            out.add(node)
+            buf.clear()
+            forEachChild(node, collect)
+            for (i in buf.indices.reversed()) stack.add(buf[i])
+        }
+        return out
+    }
+
+    private fun BinderResult.scopeOf(node: Node): LexicalScope? =
+        lexicalScopes[(node as NodeBase).nodeId]
+
+    private fun BinderResult.functionScope(name: String): LexicalScope {
+        val fn = descendants(sourceFile).filterIsInstance<FunctionDeclaration>()
+            .first { it.name?.text == name }
+        return assertNotNull(scopeOf(fn), "no lexical scope for function $name")
+    }
+
+    @Test
+    fun `function body top-level declarations bind with the right flags`() {
+        val result = bind(
+            """
+            function f(a: number) {
+              var v = 1;
+              let l = 2;
+              const c = 3;
+              function g() {}
+              class K {}
+              interface I { p: string }
+              type T = number;
+              enum E { A }
+              const enum CE { B }
+            }
+            """
+        )
+        val scope = result.functionScope("f")
+        val flagsByName = scope.symbols.mapValues { it.value.flags }
+        val paramOk = flagsByName["a"]?.hasAny(SymbolFlags.FunctionScopedVariable) == true
+        val varOk = flagsByName["v"]?.hasAny(SymbolFlags.FunctionScopedVariable) == true
+        val letOk = flagsByName["l"]?.hasAny(SymbolFlags.BlockScopedVariable) == true
+        val constOk = flagsByName["c"]?.hasAny(SymbolFlags.BlockScopedVariable) == true
+        val fnOk = flagsByName["g"]?.hasAny(SymbolFlags.Function) == true
+        val classOk = flagsByName["K"]?.hasAny(SymbolFlags.Class) == true
+        val ifaceOk = flagsByName["I"]?.hasAny(SymbolFlags.Interface) == true
+        val aliasOk = flagsByName["T"]?.hasAny(SymbolFlags.TypeAlias) == true
+        val enumOk = flagsByName["E"]?.hasAny(SymbolFlags.RegularEnum) == true
+        val constEnumOk = flagsByName["CE"]?.hasAny(SymbolFlags.ConstEnum) == true
+        have(paramOk && varOk && letOk && constOk && fnOk && classOk && ifaceOk && aliasOk && enumOk && constEnumOk)
+        // Sharp B83.5 signal: none of these leak into the main binder's tables.
+        val localsHasBodyDecl = listOf("a", "v", "l", "g", "K", "I", "T", "E", "CE").any { it in result.locals }
+        have(!localsHasBodyDecl)
+        // Declarations point at the AST decl nodes (consumable by INV.2(d) pilots).
+        val classDeclIsAst = scope.symbols["K"]?.declarations?.singleOrNull() is ClassDeclaration
+        have(classDeclIsAst)
+    }
+
+    @Test
+    fun `nested-block var hoists into the function scope while block-scoped declarations wait for phase ii`() {
+        val result = bind(
+            """
+            function f(cond: boolean) {
+              if (cond) {
+                var hoisted = 1;
+                let blockLet = 2;
+                class BlockClass {}
+                function blockFn() {}
+              }
+              for (var i = 0; i < 1; i++) {}
+              for (let j = 0; j < 1; j++) {}
+              try {} catch (err) { var inCatch = 1; }
+            }
+            """
+        )
+        val scope = result.functionScope("f")
+        val hoistedOk = scope.symbols["hoisted"]?.flags?.hasAny(SymbolFlags.FunctionScopedVariable) == true
+        val forVarOk = scope.symbols["i"]?.flags?.hasAny(SymbolFlags.FunctionScopedVariable) == true
+        val catchVarOk = scope.symbols["inCatch"]?.flags?.hasAny(SymbolFlags.FunctionScopedVariable) == true
+        have(hoistedOk && forVarOk && catchVarOk)
+        // Phase (ii) territory — pinned unbound so the boundary is flipped consciously:
+        // nested-block let/class/function, for-header let, the catch variable itself.
+        val phaseTwoNames = listOf("blockLet", "BlockClass", "blockFn", "j", "err")
+        val phaseTwoBound = phaseTwoNames.filter { it in scope.symbols }
+        assertEquals(emptyList(), phaseTwoBound, "phase (ii) declarations must not be bound by phase (i)")
+    }
+
+    @Test
+    fun `file-level block-nested var binds into the root scope without touching the main binder locals`() {
+        val result = bind(
+            """
+            var top = 1;
+            if (top) {
+              var nested = 2;
+              var top = 3;
+            }
+            """
+        )
+        val root = assertNotNull(result.scopeOf(result.sourceFile), "missing root scope")
+        val aliasesLocals = root.existing === result.locals
+        have(aliasesLocals)
+        val nestedBound = root.symbols["nested"]?.flags?.hasAny(SymbolFlags.FunctionScopedVariable) == true
+        have(nestedBound)
+        // `top` already has a file-level binding — the existing symbol stands untouched:
+        // no scope-space duplicate, no declaration appended to the main binder's symbol.
+        assertNull(root.symbols["top"])
+        val topDeclCount = result.locals["top"]?.declarations?.size
+        assertEquals(1, topDeclCount, "main binder symbol must stay byte-unchanged")
+        val localsHasNested = "nested" in result.locals
+        have(!localsHasNested)
+    }
+
+    @Test
+    fun `parameters bind including binding patterns and rest while the this parameter stays out`() {
+        val result = bind(
+            """
+            function f(this: Window, a: number, { b, c: [d] = [1] }: any, ...rest: string[]) {}
+            """
+        )
+        val scope = result.functionScope("f")
+        val names = scope.symbols.keys
+        assertEquals(setOf("a", "b", "d", "rest"), names)
+        val allParamsFunctionScoped = scope.symbols.values.all { it.flags.hasAny(SymbolFlags.FunctionScopedVariable) }
+        have(allParamsFunctionScoped)
+    }
+
+    @Test
+    fun `type parameters bind with the TypeParameter flag`() {
+        val result = bind(
+            """
+            function f<T extends object, U = T>(x: T): U { return x as any; }
+            """
+        )
+        val scope = result.functionScope("f")
+        val tOk = scope.symbols["T"]?.flags?.hasAny(SymbolFlags.TypeParameter) == true
+        val uOk = scope.symbols["U"]?.flags?.hasAny(SymbolFlags.TypeParameter) == true
+        have(tOk && uOk)
+        val tHasNoValueDecl = scope.symbols["T"]?.valueDeclaration == null
+        have(tHasNoValueDecl)
+    }
+
+    @Test
+    fun `scope symbols use the negative id space and binding consumes zero global symbol ids`() {
+        // Identical top-level shape; only one variant has function-body declarations.
+        // If lexical binding minted global-sequence symbols, the deltas would differ
+        // — the sharp signal for the ~350-test id-reshuffle hazard.
+        val withBodies = """
+            function f(a: number) { var v = 1; let l = 2; function g() {} class K {} }
+            var top = 1;
+        """
+        val withoutBodies = """
+            function f(a: number) { }
+            var top = 1;
+        """
+        val probeBefore = Symbol(SymbolFlags.None, "probe").id
+        val rich = bind(withBodies)
+        val probeMid = Symbol(SymbolFlags.None, "probe").id
+        bind(withoutBodies)
+        val probeAfter = Symbol(SymbolFlags.None, "probe").id
+        assertEquals(
+            probeAfter - probeMid, probeMid - probeBefore,
+            "lexical binding must not consume global symbol ids"
+        )
+        val scope = rich.functionScope("f")
+        val allScopeIdsNegative = scope.symbols.values.all { it.id <= -2 }
+        have(allScopeIdsNegative)
+        val allLocalIdsPositive = rich.locals.values.all { it.id >= 1 }
+        have(allLocalIdsPositive)
+    }
+
+    @Test
+    fun `namespace scopes chain per dotted segment and alias the merged exports`() {
+        val result = bind(
+            """
+            namespace A.B {
+              export function f() { var v = 1; }
+              if (true) { var hoistedInNs = 2; }
+            }
+            """
+        )
+        val moduleDecl = result.sourceFile.statements.filterIsInstance<ModuleDeclaration>().single()
+        val inner = assertNotNull(result.scopeOf(moduleDecl), "missing namespace scope")
+        val symbolA = assertNotNull(result.locals["A"])
+        val symbolB = assertNotNull(symbolA.exports?.get("B"))
+        val innerAliasesB = inner.existing === symbolB.exports
+        have(innerAliasesB)
+        val outer = assertNotNull(inner.parent, "dotted namespace must chain a scope per segment")
+        val outerAliasesA = outer.existing === symbolA.exports
+        have(outerAliasesA)
+        val outerParentIsRoot = outer.parent === result.scopeOf(result.sourceFile)
+        have(outerParentIsRoot)
+        // f is the main binder's (in B.exports) — not re-bound; the block-hoisted var is ours.
+        assertNull(inner.symbols["f"])
+        val hoistedOk = inner.symbols["hoistedInNs"]?.flags?.hasAny(SymbolFlags.FunctionScopedVariable) == true
+        have(hoistedOk)
+        // The function scope chains to the innermost namespace level.
+        val fnScope = result.functionScope("f")
+        val fnParentIsInner = fnScope.parent === inner
+        have(fnParentIsInner)
+        val vOk = fnScope.symbols["v"]?.flags?.hasAny(SymbolFlags.FunctionScopedVariable) == true
+        have(vOk)
+    }
+
+    @Test
+    fun `function expressions arrows and object-literal methods get their own scopes`() {
+        val result = bind(
+            """
+            const g = function named(x: number) { return named; };
+            const h = (y: number) => { let w = y; };
+            const o = { m(z: number) { var mv = z; } };
+            """
+        )
+        val nodes = descendants(result.sourceFile)
+        val fnExpr = nodes.filterIsInstance<FunctionExpression>().single()
+        val fnScope = assertNotNull(result.scopeOf(fnExpr))
+        // The self-name is visible only inside the expression's own body.
+        val selfNameOk = fnScope.symbols["named"]?.flags?.hasAny(SymbolFlags.Function) == true
+        val xOk = fnScope.symbols["x"]?.flags?.hasAny(SymbolFlags.FunctionScopedVariable) == true
+        have(selfNameOk && xOk)
+        val namedLeaks = "named" in result.locals
+        have(!namedLeaks)
+        val arrow = nodes.filterIsInstance<ArrowFunction>().single()
+        val arrowScope = assertNotNull(result.scopeOf(arrow))
+        assertEquals(setOf("y", "w"), arrowScope.symbols.keys)
+        val method = nodes.filterIsInstance<MethodDeclaration>().single()
+        val methodScope = assertNotNull(result.scopeOf(method))
+        assertEquals(setOf("z", "mv"), methodScope.symbols.keys)
+        // All three chain to the file root.
+        val root = result.scopeOf(result.sourceFile)
+        val allChainToRoot = fnScope.parent === root && arrowScope.parent === root && methodScope.parent === root
+        have(allChainToRoot)
+    }
+
+    @Test
+    fun `class member bodies get scopes constructor accessors static block and generic method`() {
+        val result = bind(
+            """
+            class C {
+              constructor(pub: number) { var cv = 1; }
+              get g() { var gv = 1; return gv; }
+              set g(v: number) {}
+              static { var sv = 1; }
+              m<T>(x: T) { let mv = x; }
+            }
+            """
+        )
+        val nodes = descendants(result.sourceFile)
+        val ctorScope = assertNotNull(result.scopeOf(nodes.filterIsInstance<Constructor>().single()))
+        assertEquals(setOf("pub", "cv"), ctorScope.symbols.keys)
+        val getScope = assertNotNull(result.scopeOf(nodes.filterIsInstance<GetAccessor>().single()))
+        assertEquals(setOf("gv"), getScope.symbols.keys)
+        val setScope = assertNotNull(result.scopeOf(nodes.filterIsInstance<SetAccessor>().single()))
+        assertEquals(setOf("v"), setScope.symbols.keys)
+        val staticScope = assertNotNull(result.scopeOf(nodes.filterIsInstance<ClassStaticBlockDeclaration>().single()))
+        assertEquals(setOf("sv"), staticScope.symbols.keys)
+        val methodScope = assertNotNull(result.scopeOf(nodes.filterIsInstance<MethodDeclaration>().single()))
+        assertEquals(setOf("T", "x", "mv"), methodScope.symbols.keys)
+    }
+
+    @Test
+    fun `a parameter and a same-named body var merge into one symbol with both declarations`() {
+        val result = bind(
+            """
+            function f(x: number) { var x = 1; }
+            """
+        )
+        val scope = result.functionScope("f")
+        val sym = assertNotNull(scope.symbols["x"])
+        assertEquals(2, sym.declarations.size, "param + var redeclaration must merge (param first)")
+        val firstIsParam = sym.declarations.first() is Parameter
+        have(firstIsParam)
+        val valueDeclIsParam = sym.valueDeclaration is Parameter
+        have(valueDeclIsParam)
+    }
+
+    @Test
+    fun `nested function overloads merge into one symbol`() {
+        val result = bind(
+            """
+            function outer() {
+              function g(a: number): void;
+              function g(a: any) {}
+            }
+            """
+        )
+        val scope = result.functionScope("outer")
+        val sym = assertNotNull(scope.symbols["g"])
+        assertEquals(2, sym.declarations.size)
+    }
+
+    @Test
+    fun `a 30k-term binary chain binds on a plain thread without overflow`() {
+        // No runWithDeepStack wrapper here — pins the ITERATIVE lexical walk
+        // (a recursive one would overflow exactly where the INV.1 crawl runs).
+        val terms = 30_000
+        val source = "function f() { var r = " + "1 + ".repeat(terms - 1) + "1; }\n"
+        val result = bind(source)
+        val scope = result.functionScope("f")
+        val rBound = "r" in scope.symbols
+        have(rBound)
+    }
+
+    @Test
+    fun `negative control - an unindexed hand-built tree yields no lexical scopes but binds locals normally`() {
+        val statement = VariableStatement(
+            declarationList = VariableDeclarationList(
+                declarations = listOf(VariableDeclaration(name = Identifier(text = "x"))),
+                flags = SyntaxKind.VarKeyword,
+            ),
+        )
+        val sourceFile = SourceFile(fileName = "hand.ts", statements = listOf(statement), text = "")
+        assertEquals(0, sourceFile.nodeCount, "hand-built tree must be unindexed")
+        val result = Binder(CompilerOptions()).bind(sourceFile)
+        assertEquals(emptyMap(), result.lexicalScopes)
+        val xBound = "x" in result.locals
+        have(xBound)
+    }
+
+    @Test
+    fun `the rich fixture binds without crashing and spot-checks hold`() {
+        val result = bind(INV2_RICH_FIXTURE, "rich.ts")
+        val root = assertNotNull(result.scopeOf(result.sourceFile))
+        val rootAliasesLocals = root.existing === result.locals
+        have(rootAliasesLocals)
+        val gen = descendants(result.sourceFile).filterIsInstance<MethodDeclaration>()
+            .first { (it.name as? Identifier)?.text == "gen" }
+        val genScope = assertNotNull(result.scopeOf(gen))
+        val genParamNames = listOf("a", "d1", "d2", "e1", "e2")
+        val genParamsBound = genParamNames.all { it in genScope.symbols }
+        have(genParamsBound)
+        val fnScope = result.functionScope("fn")
+        // fn<T>(a, b, ...rest) with body locals o/arr/t/... and nested fn `inner`.
+        val fnNames = listOf("T", "a", "b", "rest", "o", "arr", "inner")
+        val fnNamesBound = fnNames.all { it in fnScope.symbols }
+        have(fnNamesBound)
+    }
+}

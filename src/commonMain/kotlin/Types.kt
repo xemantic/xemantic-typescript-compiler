@@ -96,6 +96,14 @@ value class SymbolFlags(val value: Int) {
 class Symbol(
     var flags: SymbolFlags,
     val name: String,
+    /**
+     * Unique identifier for use as map keys. Defaults to the global sequence;
+     * INV.2(c) lexical-scope symbols pass an id from the SEPARATE negative
+     * space via [scopeSymbol] so their creation never shifts the global
+     * sequence (symbol-id allocation order is load-bearing — the documented
+     * ~350-test boundary reshuffle on id drift).
+     */
+    val id: Int = nextId++,
 ) {
     /** All declaration AST nodes that contribute to this symbol. */
     val declarations: MutableList<Node> = mutableListOf()
@@ -112,9 +120,6 @@ class Symbol(
     /** Parent symbol (container scope). */
     var parent: Symbol? = null
 
-    /** Unique identifier for use as map keys. */
-    val id: Int = nextId++
-
     /** For import aliases: the resolved target symbol. Set by the checker. */
     var target: Symbol? = null
 
@@ -123,8 +128,20 @@ class Symbol(
     companion object {
         private var nextId = 1
 
-        /** Reset the ID counter (for testing). */
-        fun resetIdCounter() { nextId = 1 }
+        /** INV.2(c): ids for lexical-scope symbols — negative, descending from −2 (−1 stays a sentinel). */
+        private var nextScopeSymbolId = -2
+
+        /**
+         * Create a symbol in the lexical-scope id space (INV.2(c)). These ids are
+         * always ≤ −2, disjoint from the global positive sequence, so id-keyed
+         * checker maps can hold both without collision and creating scope symbols
+         * never perturbs the ids of conventionally-bound symbols.
+         */
+        fun scopeSymbol(flags: SymbolFlags, name: String): Symbol =
+            Symbol(flags, name, nextScopeSymbolId--)
+
+        /** Reset the ID counters (for testing). */
+        fun resetIdCounter() { nextId = 1; nextScopeSymbolId = -2 }
     }
 }
 
@@ -133,6 +150,33 @@ typealias SymbolTable = MutableMap<String, Symbol>
 
 /** Create a new empty symbol table. */
 fun symbolTable(): SymbolTable = mutableMapOf()
+
+/**
+ * INV.2(c): one lexical scope, produced by the [Binder]'s additive
+ * lexical-binding pass and keyed in [BinderResult.lexicalScopes] by the owner
+ * node's `nodeId`. UNCONSUMED until INV.4 — nothing in the checker reads these
+ * tables yet; they exist so the single-pass spine can resolve names through a
+ * real scope chain instead of the per-pass scope re-derivation.
+ *
+ * Two-table design: [symbols] holds ONLY the bindings the lexical pass itself
+ * made (from the separate negative id space, [Symbol.scopeSymbol]); [existing]
+ * ALIASES the main binder's pre-existing table for container scopes (file
+ * locals for the [SourceFile] root, the merged `exports` for a namespace) and
+ * is never mutated. Resolution order for a future consumer: `symbols` →
+ * `existing` → [parent]. This keeps the main binder's output byte-unchanged —
+ * the queue item's load-bearing constraint.
+ */
+class LexicalScope(
+    /** The scope-owning node: SourceFile, ModuleDeclaration, or a function-like. */
+    val owner: Node,
+    /** The enclosing scope; null only for the SourceFile root. */
+    val parent: LexicalScope?,
+    /** Read-only alias of the main binder's table for this container, when one exists. */
+    val existing: SymbolTable? = null,
+) {
+    /** Bindings made by the lexical pass (scope-id space). Never shared with [existing]. */
+    val symbols: SymbolTable = symbolTable()
+}
 
 // ---------------------------------------------------------------------------
 // Constant values — computed enum member values
