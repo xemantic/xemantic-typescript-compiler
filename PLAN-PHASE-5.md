@@ -59,6 +59,68 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 491 (2026-07-13) — INV.0 LANDED: the pass multiplier is instrumented and
+measured (opt-in, byte-identical off).** First item of the inversion arc. Landed:
+`PassTiming.kt` (off-by-default singleton + a top-level NON-inline `pass(name) {}`
+wrapper — non-inline deliberately: ~514 inline expansions of the try/finally +
+time-mark body would push the constructor toward the JVM 64 KB method limit), a
+mechanical bytes-mode rewrite of the init dispatch (all 513 whole-line zero-arg
+dispatch calls + 1 single-line if-call → `pass("checkFoo") { checkFoo() }`; all
+names unique so accumulation is 1:1), counter hooks (each additive-only behind
+`if (PassTiming.enabled)`): `getTypeOfExpression` invocations + approx-distinct
+nodes (pos<<32|end keys — cross-file collisions UNDERcount distinct, so the
+recompute factor is slightly OVERstated; labeled `~` in the dump) with per-pass
+attribution via `PassTiming.currentPass`, `getTypeFromTypeNode` cacheable vs
+bypassed vs hit, and depth-0 flow walks at the `flowWalkWithTripCheck` choke
+point; `--passTiming` CLI flag (reset + enable before build, sorted table after).
+**Verification:** suite green 10,196 → 10,203 (+7 local `Inv0PassTimingTest`:
+on/off diagnostic parity on a TS2322-emitting probe, disabled-run-records-nothing
+negative control — which caught noteInitStart/End recording unconditionally
+pre-commit — accumulation, per-pass attribution incl. nested + throwing bodies,
+dump format); `--listAll` A/B compiler profile vs a stash-built BEFORE binary:
+byte-identical (46 lines incl. chains) at wall parity (24.51 vs 24.53 s);
+instrumented run +~2% (25.07 s).
+**THE TABLE (compiler profile, --noEmit --passTiming, daemons stopped):**
+checker-init 20,846.7 ms of 25,071 ms wall (83%); 496 passes ran, sum 20,009 ms,
+outside-pass (setup/merges/eager indexes) only 837.5 ms. Concentration: top-1 =
+19.0%, top-3 = 38.6%, top-10 = 54.2%, top-25 = 64.9%, top-50 = 75.3%; median pass
+1.6 ms; **474 passes under 100 ms sum to 7,297 ms (36.5%)** — the pure
+pass-multiplication tail (each is a full-program walk for a small check). Top 15:
+```
+      ms   typeOfExpr  narrowWalks  pass
+  3788.9       255192        57282  checkPropertyAccess
+  2195.4        87225        10508  checkTypeAssignability
+  1727.5       115956        16211  checkCallExpressionTypes
+   845.6            0            0  checkUnresolvedNames
+   733.7            0            0  checkTypeUsedAsValue
+   506.1        37188           90  checkUncalledFunctionsInConditions
+   289.6            0            0  checkAbstractClassInstantiation
+   271.2        69024           61  checkArithmeticOperandTypes
+   242.5            0            0  checkDuplicateIdentifiers
+   228.0            0            0  checkDefiniteAssignment
+   218.0         2756          124  checkImplicitReturns
+   204.7         9948            0  checkImplicitAnyParameters
+   196.9            0            0  checkArgumentCounts
+   191.3          103            0  checkFnTypedParamCalls
+   169.9           66            0  checkObjectSpreadInvalidTypes
+```
+**Counters:** `getTypeOfExpression` 594,779 calls over ~221,844 distinct nodes —
+×2.6 program-wide recompute, and the top-3 passes ALONE make 458k calls (each
+independently re-types overlapping expression sets with its own scope machinery);
+`getTypeFromTypeNode` 255,019 cacheable (77% hit) vs 47,946 bypassed (15.8% — the
+compiler profile; expect higher inside generic-heavy services) = ~107k full
+annotation re-resolutions; flow-narrowing walks 84,469 — checkPropertyAccess
+launches 57,282 of them (68%), each a fresh CFG traversal with per-walk memos.
+**INV.4 migration worklist (this table, cost order):** (1) the property-access
+family (3.8 s, the top walker + top narrower), (2) assignability (2.2 s), (3)
+call-types (1.7 s) — these three are the spine candidates where one shared walk +
+one narrowing consult per reference collapses 7.7 s (38.6%); (4) the
+name-resolution pair checkUnresolvedNames + checkTypeUsedAsValue (1.6 s combined,
+zero expression typing — pure walk cost); then the sub-100 ms tail wholesale
+(7.3 s of walk overhead that becomes per-node cases in a single dispatch).
+Instrumentation invariants recorded as a CLAUDE.md gotcha (wrap new init passes;
+hooks stay additive-only; `pass` stays non-inline).
+
 **Round 490 (2026-07-13) — the architecture analysis behind the rescope (no code
 change).** Verified in-code: Checker.init dispatches ~512 passes (523 call sites,
 1,700 lines); 575 `for (result in binderResults)` loops; 1,005 `check*` functions;
@@ -449,127 +511,6 @@ fresh mutable sets.
   `emitTs18048ForClosureCapturedUndefinedReceiver` 1.6% self (audit its per-node work); and
   the broad flow-walk HashMap/HashSet churn (M5.2 allocation discipline).
 
-**Round 481 (2026-07-12) — HARNESS REACHES ZERO REAL FPs: ALL EIGHT PROFILES AT ZERO REAL
-FALSE POSITIVES — the v1 FP exit criterion is met.** FIVE fixes in 1 commit (b77b1afc),
-harness 100 → 95 (the remaining 95 = TS2591×66 process/require + TS2304×10
-BufferEncoding/global + TS2584×6 console + TS2503×6 + TS2593 `it` + harnessGlobals
-TS7006×3 chai + `Error.captureStackTrace` TS2339×2 + a BufferEncoding-consequence
-TS2322 — ALL env-legit offline artifacts). Zero additions by per-position diff; all
-seven other profiles re-verified at their 46 floors. Suite 10,142 → 10,155 (+11 local
-tests across 5 new files, 0 regressions).
-- **Spread-of-any poisons at the TYPE level:** getTypeOfObjectLiteral returns `anyType`
-  when a spread's type is any/error (tsc semantics) — harnessLanguageService:758's
-  `typingsInstaller: { ...nullTypingsInstaller, globalTypingsCacheLocation }` FP'd the
-  per-property leaf, and suppressing only the leaf UNMASKED the coarse whole-object
-  relation at the var decl (same-position masking); the type-level rule makes every
-  consumer agree. The round-445/472 per-site bails stay as guards.
-- **Chimera structural sibling:** `sourceSatisfiesConflatedTargetPerFileView` (relation
-  entry + missing-props arg emitter) — a source with NO heritage link relates to a
-  chimera target when it satisfies SOME declaring file's per-file view
-  (editorServices:3212 CachedDirectoryStructureHost vs ParseConfigHost, whose fakesHosts
-  class merge demanded a required getCurrentDirectory; optional on the interface tsc sees).
-- **String-layer union members are display strings (no `@`):** a named member falls to
-  the bottom `return false` — `namedUnionMemberCouldAcceptArray` resolves a TYPE-ALIAS
-  member's body for array-ish forms (`ArrayOrSingle<T> = T | readonly T[]`) so
-  fourslashImpl:1214's `expected = [expected]` relates; Array-EXTENDING interfaces
-  deliberately keep firing (their extra members make a bare literal a genuine error —
-  the first cut's heritage arm failed its own negative control).
-- **Overload contextual selection:** resolveCallOverload treats an un-inferred bare
-  TypeParam param as matching (tsc infers it), and the property-access pass's
-  multi-overload contextual branch adopts the overload arg-matching SELECTS
-  (strictSelect — definitive winners only, and only when ≠ sigs[0], keeping the legacy
-  heuristic byte-identical otherwise) — documentsUtil:30's `.reduce((meta, key) =>
-  meta.set(…), new Map())` typed `meta` as string via the first overload's callback.
-- **As-cast member context:** `castTypeDeclaresFnMember` + `uniqueTypeAliasInclNamespaces`
-  — an as-cast receiver whose TYPE declares the assigned member as a method AST-side
-  signals ctx-unknowable (round-474 mechanism) when the resolved receiver poisons to any
-  (harnessIO:379's `(result as CompileFilesResult).repeat = newOptions => …`; the
-  namespace-nested alias intersects a barrel-unresolvable `compiler.CompilationResult`).
-- **Emit/crash legs verified same session — the OFFLINE-VERIFIABLE v1 DEFINITION OF DONE
-  IS FULLY MET:** all eight profiles emit every program file with exit 0, no
-  crashes/hangs/OOMs (compiler 78/78, tsc-cli 80/80, jsTyping 84/84, deprecatedCompat
-  81/81, typingsInstallerCore 88/88, services 252/252, server 274/274, harness 312/312
-  via the bench row — self 50.5 s, +0.9% noise band, RSS 1.89 GB).
-- **M5.1 fresh JFR pass (same session, harness profile, 50.5 s / 4,070 samples) — the
-  round-434 "flat profile" verdict still holds (top self = HashMap.getNode 6.4%), with
-  these ranked leads:** (a) **HashMap/HashSet churn ~20%+ inclusive aggregate**
-  (getNode 9.2%, put 7.8%, HashSet.add 6.9%, putVal 5.4% — the flow-walk memos and
-  per-walk set copies; M5.2 territory); (b) **checkMemberAccessMissing 8.6% inclusive
-  / 4.1% self** — the single biggest walker; (c) **the barrel-star resolution chain
-  resolveBarrelStarTarget → resolveModuleSpecifierRelative → normalizePath ~5%**
-  (every star-chain walk re-resolved every hop) — **FIXED same session:
-  `barrelStarTargetCache` (Tier-2 pure memo over frozen fileResults), byte-identical
-  diagnostics, harness self 50.5 → 46.2 s (−8.5%, bench row)**; (d) **the symbol-lookup
-  family `findSymbolInAllNamespaceScopes` → `findSymbolInExports` ~7% inclusive** — the
-  Transformer probes `resolveConstEnumMemberAccess` for EVERY dotted expression chain,
-  and any head resolving nowhere (a B83.5-unbound function-body local) fell through
-  `resolveNamePath` to a full-program recursive namespace scan — **FIXED same session:
-  `namespaceScopeSymbolCache` (Tier-2 memo keyed by name; stored null = not found),
-  byte-identical diagnostics, harness self 46.2 → 45.0 s (a further −2.6%)**; (e) the
-  discriminant key-domain AST scans `kindDomainKeysFromTypeNode` +
-  `enumSwitchKeysFromTypeNode` ~6% combined (per-node memo candidates); (f)
-  display-string building (typeToString 3.4% + joinTo/split ~3.5%); (g)
-  `emitTs18048ForClosureCapturedUndefinedReceiver` 1.3% self (a niche emitter — audit
-  its per-node work). `getTypeParamInfo` 1.7% self is a smaller flat-profile entry.
-  Caller attribution: normalizePath ← resolveModuleSpecifierRelative (137/188);
-  resolveModuleSpecifierRelative ← resolveBarrelStarTarget (82 direct + 117
-  deep-recursion truncated); checkMemberAccessMissing ← checkSinglePropertyAccess
-  (254/351); findSymbolInExports ← findSymbolInAllNamespaceScopes (143/143);
-  resolveConstEnumMemberAccess ← Transformer.transformExpression (118/131). Recording:
-  `$SCRATCH/r481-harness.jfr` (session-local; rerun per the docs/parallel-caching.md
-  how-to — the profile shifts after every fix). **FOUR Tier-2 memos landed same session
-  (all byte-identical diagnostics, full suite green): `barrelStarTargetCache`,
-  `namespaceScopeSymbolCache`, `typeParamInfoCache` (getTypeParamInfo — full-program
-  binder-table double scan per generic ref), `starExportVarDeclCache`
-  (resolveExportedVarDeclThroughStars — the emptyArray conflation path). Net harness
-  self 50.5 → 44.8 s (−11.3%). LESSON re-confirmed: a Tier-2 memo field consulted
-  during init (getTypeParamInfo runs via collectUninitializedVars) MUST be declared
-  BEFORE `init` — the first getTypeParamInfo cut NPE'd on a null cache field; the
-  crash surfaced as `COUNT=0` on the whole profile (a run-wide crash, not a diff).**
-- **NEXT (post-v1):** M5 continues — the remaining flat-profile leads are HashMap/HashSet
-  churn in the flow-walk memos (M5.2 allocation discipline) and the discriminant
-  key-domain per-node AST scans (context-sensitive on `currentFileLocals`, so a
-  file-keyed memo, not a pure one). byte-correct emit diffing vs real tsc stays
-  network-gated (needs node + typescript). Candidate follow-ups: delete superseded pin
-  walkers; re-audit the env-legit floors once a node-types story exists.**
-
-**Round 480 (2026-07-12, same session as 479) — SIX fixes in 1 commit (629561bb). Dashboard:
-harness 109 → 100 with the 480b heritage batch (ddad6077): an imported conflated heritage base resolves per-file (conflatedPerFileViewForContext) + the derived-vs-chimera bails (conflatedChimeraTargetSourceHasPerFileBase, relation entry + arg emitter — the first cut manufactured 2 ParseConfigFileHost FPs, caught by per-position diff). ~5 real left; every step zero-additions by per-position diff; all seven
-other profiles hold their 46 floors. Suite 10,132 → 10,142 (+10 local across 5 new test
-files, 0 regressions); bench row +2.1% self (noise band).**
-- **Never-inference:** a no-return block body whose every path THROWS infers `never`
-  (tsc fall-off-never; gated on blockHasAnyReturn so a bare `return;` keeps void) —
-  evaluatorImpl's `import: _id => { throw … }` vs `import(id): Promise<…>`.
-- **Contextual literal returns:** allArgumentsMatch accepts an inline arrow arg whose every
-  RETURN is a string literal ∈ the param's literal-union return
-  (argFnLiteralReturnsSatisfyParam; block bodies must always-return) — vfsUtil `_walk`
-  callbacks widened `"retry"`/`"throw"` to string and FP-rejected BOTH overloads (TS2769 ×2).
-- **Fresh literals at the per-prop ARG leaf:** the B326 keep-the-literal rule applied where
-  an objlit arg's member is drilled per-property (`type: "file"` vs `type: "file"` displayed
-  as 'string' ⊄ 'string', fourslash organizeImports/getCombinedCodeFix).
-- **tsc's SUBTYPE rule in negative narrowing (the vfsUtil symlink-never family):**
-  `missingVsOptionalProvesNotSubtype` — a union member LACKING a property the guard target
-  declares OPTIONAL is not a subtype (tsc assumeFalse uses the subtype relation, where
-  missing-vs-optional FAILS; assignability passes) → `!isDirectory(node)` keeps
-  FileInode/SymlinkInode, whose only differences from DirectoryInode are optional props.
-  Wired into BOTH the union filter and the single-type negative return; the
-  structurally-identical corpus pin (instanceofWithStructurallyIdenticalTypes — no optional
-  distinguishers) is unaffected.
-- **Any-element source REST params accept-all:** signatureRelatedTo's B196 expansion
-  rejected `(...args: any[]) => void` → `(project: Project) => void` by comparing the ARRAY
-  type contravariantly when the element gate returned null (incrementalUtils:656).
-- **NEXT (harness @100, 5 real + harnessGlobals×3 likely-env-legit):** documentsUtil:30
-  (reduce<U> accumulator contextual typing — both overloads arity-applicable so B476
-  bails, yet `meta` typed as T; probe); harnessIO:379 (as-cast member assignment ctx —
-  minimal repro passes, whole-program only; probe); harnessLanguageService:758 (spread of
-  barrel-unresolvable `nullTypingsInstaller` in a var-decl objlit MEMBER value — the
-  emission is emitPerPropertyMismatchesForObjectLiteral per the probe; needs the
-  round-445 unresolved-spread bail there); fourslash:1214 ('array' vs ArrayOrSingle<…>
-  union — the "array" display suggests an un-typed array literal vs an alias union);
-  editorServices:3212 (CachedDirectoryStructureHost vs chimera ParseConfigHost param —
-  no heritage link, tsc satisfies STRUCTURALLY; the arg emitter would need to compare
-  against the per-file view when the param is a chimera).**
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 (Restored 2026-07-12, round 481 — the queue/backlog/inventory sections had been
@@ -628,14 +569,16 @@ item; decompose into the smallest standalone suite-gated commits; micro-opt roun
 against the flat profile are CLOSED (only an INV.0-evidenced ≥5% single lever may
 interrupt the arc).
 
-- [ ] **INV.0 Instrument the multiplier.** Per-pass wall-time table behind an opt-in
-  flag: a `pass("name") { … }` wrapper around Checker.init's ~512 dispatch calls
-  (accumulator fields declared BEFORE `init` — the documented Kotlin init-order trap;
-  wrap the plain `checkFoo()` lines mechanically, conditionals by hand), plus counters:
-  `getTypeOfExpression` invocations vs distinct expression nodes, `nodeTypes`
-  cacheable-vs-bypassed ratio, narrowing walks launched per consumer family. Publish
-  the sorted pass-time table in a session note — it is the INV.4 migration worklist
-  and the honest baseline. Gate: instrumentation off by default, byte-identical.
+- [x] **INV.0 Instrument the multiplier.** DONE round 491 (2026-07-13):
+  `PassTiming.kt` + non-inline `pass(name) {}` around all 514 init dispatch calls +
+  the three counters (`getTypeOfExpression` calls/distinct with per-pass attribution,
+  `nodeTypes` cacheable/bypassed/hit, depth-0 flow walks at `flowWalkWithTripCheck`),
+  behind the `--passTiming` CLI flag; off-mode byte-identical (listAll A/B + wall
+  parity) + suite green (+7 local). The table (round-491 session note): checker-init
+  = 83% of wall; top-3 passes 38.6% (property-access / assignability / call-types,
+  458k of 595k getTypeOfExpression calls, 84k flow walks — 68% from
+  checkPropertyAccess); 474 sub-100 ms passes sum 36.5% = the multiplication tail.
+  That note's cost-ordered worklist IS the INV.4 migration order.
 - [ ] **INV.1 Concurrent front-end — the owner's Flow beachhead (owner-approved
   kotlinx-coroutines-core dependency, 2026-07-13).** Sub-steps: (a) add the dep + a
   behavior-identical sequential `Flow` refactor of project file loading; (b) read +
