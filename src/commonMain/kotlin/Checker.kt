@@ -6114,8 +6114,41 @@ class Checker(
         // Before init step 1b2 the set is empty → everything degrades to the
         // legacy merged consult (same as the ownerless degradation below).
         if (name !in moduleOnlyGlobalNames) return globals[name]
-        val owner = owningSourceFile(node) ?: return globals[name]
-        return globalsForFile(owner.fileName, name)
+        // Walk to the owning SourceFile, capturing the INNERMOST enclosing
+        // `declare module "<spec>"` block on the way (the INV.3(c)(iv)
+        // augmentation-visibility rule below needs it). Mirrors
+        // [owningSourceFile]'s hop-bounded chain walk.
+        var cur: Node? = node
+        var hops = 0
+        var ambientSpec: String? = null
+        var owner: SourceFile? = null
+        while (cur != null && hops++ < 4096) {
+            if (cur is SourceFile) { owner = cur; break }
+            if (ambientSpec == null && cur is ModuleDeclaration) {
+                (cur.name as? StringLiteralNode)?.let { ambientSpec = it.text }
+            }
+            cur = (cur as NodeBase).parent
+        }
+        if (owner == null) return globals[name]
+        globalsForFile(owner.fileName, name)?.let { return it }
+        // INV.3(c)(iv): a node inside a `declare module "<relative-spec>"`
+        // AUGMENTATION block additionally sees the AUGMENTED module's exports
+        // by bare name — tsc checks the body in that module's context (the
+        // round-443 rule; mirrors buildNamespaceScope's StringLiteralNode
+        // branch, which grants the same visibility to the TS2304 scope). A
+        // services/types.ts augmentation of "../compiler/types.js" references
+        // Node/SymbolFlags/UnionType without importing them; the per-file
+        // consult alone would null those and silently kill e.g. this-predicate
+        // narrowing whose target type lives in the augmented module.
+        val spec = ambientSpec ?: return null
+        val target = resolveModuleSpecifierRelativeJsAware(spec, owner.fileName) ?: return null
+        val targetFile = fileResults[target]?.sourceFile ?: return null
+        if (name !in moduleNamedExportsOf(targetFile)) return null
+        // Proven visible via the augmentation context: return the merged
+        // instance, unclassified under --passTiming (the (c)(ii) discipline —
+        // a legitimate hit must not pollute the conflated migration tables).
+        (globals as? InstrumentedSymbolTable)?.let { return it.getUnclassified(name) }
+        return globals[name]
     }
 
     /**
@@ -93899,7 +93932,13 @@ interface DataView {
         // annotation references a namespace-local interface.
         val symbol = resolveTypeNameToSymbol(node.typeName)
             ?: (node.typeName as? Identifier)?.let { lookupTypeSymbolInInferenceNamespace(it.text) }
-            ?: globals[name]
+            // Round 444 last-segment fallback for a QUALIFIED name whose
+            // resolution failed (`NS.Base` through an unresolvable namespace
+            // alias). QualifiedName-ONLY since INV.3(c)(iv): for an Identifier
+            // this consult was byte-redundant (same key as
+            // resolveTypeNameToSymbol's own lookup) and would re-leak the
+            // node-keyed null.
+            ?: (node.typeName as? QualifiedName)?.let { globals[name] }
         if (symbol != null) {
             // Round 473 (Blocker #3): a CONFLATED top-level interface (declared in ≥2
             // module files — the merged symbol is a chimera of both member tables)
@@ -98362,7 +98401,14 @@ interface DataView {
             is TypeReference -> {
                 val name = (t.typeName as? Identifier)?.text ?: return false
                 if (name in tpNames) return false
-                val sym = currentFileLocals?.get(name) ?: globals[name] ?: return false
+                // INV.3(c)(iv): the merged-globals fallback keys by the
+                // annotation node's owning file (the annotation usually lives
+                // in the resolved CALLEE's file, not the checking file) — a
+                // name with no per-file meaning there must not prove
+                // non-nullishness. currentFileLocals stays the first consult
+                // (the (c)(ii) convention).
+                val sym = currentFileLocals?.get(name)
+                    ?: lookupPerFileForNode(t.typeName, name) ?: return false
                 when (val d = sym.declarations.firstOrNull() ?: return false) {
                     is InterfaceDeclaration, is ClassDeclaration, is EnumDeclaration -> true
                     is TypeAliasDeclaration -> typeNodeDefinitelyNonNullish(d.type, tpNames, depth + 1)
@@ -98376,7 +98422,11 @@ interface DataView {
                         // same-named declaration the name-keyed lookup hits); a
                         // conflatable TypeAliasDeclaration through this fallback would
                         // re-open the round-443 cross-file alias-conflation trap.
-                        val gdecls = globals[name]?.declarations ?: return false
+                        // INV.3(c)(iv): node-keyed like the first consult — the real
+                        // declarations are consulted only when the name is visible in
+                        // the annotation's own file.
+                        val gdecls = lookupPerFileForNode(t.typeName, name)?.declarations
+                            ?: return false
                         if (gdecls.any {
                             it is InterfaceDeclaration || it is ClassDeclaration || it is EnumDeclaration
                         }) return true
@@ -119328,7 +119378,13 @@ interface DataView {
                     if (name != null) {
                         // TS2315: check if type is not generic (only for type declarations, not variables)
                         if (name !in BUILTIN_GENERICS) {
-                            val symbol = resolveTypeNameToSymbol(node.typeName) ?: globals[name]
+                            // INV.3(c)(iv): the trailing fallback is QualifiedName-only —
+                            // an Identifier resolves node-keyed inside
+                            // resolveTypeNameToSymbol, and a name with no per-file
+                            // meaning must not manufacture TS2315 (real tsc: TS2304
+                            // territory, same rationale as the INV.3(b)(ii) pilot).
+                            val symbol = resolveTypeNameToSymbol(node.typeName)
+                                ?: (node.typeName as? QualifiedName)?.let { globals[name] }
                             if (symbol != null && symbol.flags.hasAny(SymbolFlags.Class or SymbolFlags.Interface or SymbolFlags.TypeAlias or SymbolFlags.Module)) {
                                 val typeParams = getTypeParametersOfSymbol(symbol)
                                 if (typeParams == null || typeParams.isEmpty()) {
@@ -141680,10 +141736,27 @@ interface DataView {
         }
     }
 
-    /** Resolve a TypeReference typeName (Identifier or QualifiedName) to a Symbol. */
+    /**
+     * Resolve a TypeReference typeName (Identifier or QualifiedName) to a Symbol.
+     *
+     * INV.3(c)(iv) (round 508): the Identifier branch keys the merged-globals
+     * consult by the NAME NODE'S owning file — a type name resolves under the
+     * visibility of the file its annotation lives in (tsc semantics; a
+     * types.ts annotation resolves in types.ts's scope whatever file is being
+     * checked). A module-only name with no meaning in the owning file returns
+     * null (the conflation leak, killed — real tsc sees TS2304 there); every
+     * visible name keeps resolving to the SAME merged instance, and node-keyed
+     * resolution is a fixed property of the node, so the `nodeTypes` cache
+     * stays valid. Synthesized/unindexed Identifiers degrade to the legacy
+     * merged consult inside [lookupPerFileForNode]. NOTE the two call sites
+     * with their own trailing `?: globals[name]` fallback gate it to
+     * QualifiedName ([getTypeFromTypeReference], [checkConstraintsInTypeNode])
+     * — for an Identifier that fallback was byte-redundant pre-flip and would
+     * silently re-leak post-flip.
+     */
     private fun resolveTypeNameToSymbol(node: Node): Symbol? {
         return when (node) {
-            is Identifier -> globals[node.text]
+            is Identifier -> lookupPerFileForNode(node, node.text)
             is QualifiedName -> resolveQualifiedName(node)
             else -> null
         }
