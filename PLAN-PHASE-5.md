@@ -59,6 +59,58 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 507 (2026-07-13) — INV.3(c)(iii) phase 2 LANDED: the bare-Identifier
+VALUE/receiver/callee cluster node-keyed (11 consults, one commit).** The
+round opened by re-running the round-503 stack-sampling probe on HEAD (1:20,
+937 samples over the remaining ~18.7k conflated lookups — probe reverted):
+the measured per-site distribution was checkPrivateMemberAccess ~2.7k /
+computeRawTypeOfPropertyAccess's direct ns-fallback ~2.9k / getTypeOfIdentifier
+via isCalleeResolvable+receiver typing ~3.2k / typeNodeDefinitelyNonNullish
+~2.7k + resolveTypeNameToSymbol ~1.9k (the (iv) type tail) /
+resolveFlowCalleeDecl ~1.6k / resolveNamespaceMemberFnDecl ~1.1k, dominant
+name `factory` (~38% — a function PARAM in non-importing files like
+emitter.ts, resolving through nodeFactory.ts's leaked export). Flipped onto
+`lookupPerFileForNode` (keyed by the name's own Identifier node — uniform
+with (c)(ii), equals current-file keying for own nodes): the TS2341 receiver
+consult (`checkPrivateMemberAccess` — a private-access verdict about an
+invisible class is always bogus), `getCalleeType`'s Identifier branch (args
+must not check against a foreign leaked signature), `resolveFlowCalleeDecl`
++ `resolveNamespaceMemberFnDecl` (guards/asserts with no per-file meaning
+must not narrow — tsc sees TS2304 there; the round-471 per-file predicate
+selection is preserved via the extracted `currentFileNestedPredicateDecl`,
+now also reachable from the direct==null fallback so an own-file nested
+guard keeps narrowing when several files nest same-named guards), the three
+ns-fallback receiver resolvers (`computeRawTypeOfPropertyAccess` /
+`resolvePropertyAccessToSymbol` / `propertyAccessChainIsNamespaceQualified`
+— a leaked root now bails exactly like an unleaked one),
+`isCalleeResolvable` (an unresolvable callee provides no contextual
+signature → TS7006 legitimately fires; lexical/nested checks below the
+consult keep param callees resolvable), `checkPropertyAccessAssignment`'s
+ns base, the two mam receiver consults (B589's gate is unreachable for
+conflated names by construction — lib-visible ⇒ SHARED; B586's foreign
+`{}`-annotation emission), and the two protected-CONSTRUCTOR heritage walks
+(`findEffectiveConstructorVisibility`/`classExtendsOrIs` — the round-506
+cluster's missed siblings). MEASURED: conflated 20,941 → 10,034 (−52%);
+by-pass checkPropertyAccess 7,038 → 3,136, checkCallExpressionTypes 5,743 →
+1,430, checkProtectedMemberReadAccess 2,198 → 0; remaining top names are
+`factory` 3.3k + the types.ts type-name tail (the (iv) sites) + clone/diag/
+toPath (getTypeOfIdentifier fallback + shadow ecology). Verified: suite
+green 10,289 → 10,298 (+9 Inv3ValueCalleeNodeKeyTest — 4 leak-kill tests
+FAIL on the pre-flip checker via stash: bogus TS2341 from a leaked
+private-membered var vs a same-named param, bogus TS2345 from an unimported
+foreign callee, and two narrowing-leak kills where killing the foreign
+guard/namespace-guard resolution makes the genuine union TS2339/TS2345
+fire; 5 preservation controls pass both sides: same-file private, imported
+callee, cross-file script callee, imported guard, same-file namespace
+guard); `--listAll` byte-identical on compiler AND services; bench row in
+band (26,902 ms self, −1.8%, same 46 env-legit diagnostics). Test-design
+note: `v.length` on a `string | number` param draws NO union TS2339 from
+our checker (pre-existing FN — the leak-kill observables use an
+interface-member union TS2339 and a union-arg TS2345 instead). NEXT:
+(c)(iii) phase 3 = `getTypeOfIdentifier`'s fallback node-keyed (the ~3.2k
+receiver-typing tail — needs its own battery per the round-442 caution),
+then (c)(iv) the type-position tail.
+
 **Round 506 (2026-07-13, same session as 500–505) — INV.3(c)(iii) phase 1
 LANDED: the protected-member cluster node-keyed.** The pw/pmr/pm walkers
 (TS2445/TS2446 protected-access + the assignment-mismatch companion —
@@ -415,44 +467,6 @@ faster on medians, slower on means via one outlier; noise). Tables remain
 UNCONSUMED until INV.4/INV.2(d). NEXT: INV.2(d) — B83.5 dissolution pilots
 (convert 1–2 checker transient-symbol sites to consume the new tables).
 
-**Round 497 (2026-07-13) — INV.2(c) phase (i) LANDED: additive lexical binding
-for function-like containers.** The Binder gained a second pass
-(`bindLexicalScopes`, run after conventional binding) that walks the whole
-tree ITERATIVELY (parallel explicit node/scope stacks — a 30k-term binary
-chain binds on a plain thread) and builds `BinderResult.lexicalScopes`:
-per-nodeId `LexicalScope` tables. Container design: the SourceFile root
-ALIASES file locals and a ModuleDeclaration aliases its merged namespace
-`exports` — one chained scope level per dotted segment, mirroring the
-checker's B512 rule, with outer segments recovered via `symbol.parent` —
-while the seven function-like kinds plus `ClassStaticBlockDeclaration` get
-FRESH tables holding type params, params (binding patterns recursed; `this`
-params excluded — tsc never binds them into locals), a named function
-expression's self-name, body-top-level declarations (the function body block
-is NOT a block-scope container, tsc `getContainerFlags`), and `var`s hoisted
-from ANY block depth (also into file/module scopes for block-nested vars the
-main binder's statement-only walk never saw). The function-like's own
-decorators walk under the OUTER scope. **The reshuffle firewall: scope
-symbols come from `Symbol.scopeSymbol` — a SEPARATE negative id space
-(≤ −2, own counter) — so the global `nextId` sequence is untouched;
-`declareLexical` mirrors `declareSymbol`'s merge semantics (canMerge reuse,
-B505 Class+Class first-wins, param+var redeclaration merge) but never writes
-`nodeToSymbol` or the aliased existing tables (a name the main binder
-already bound is SKIPPED — attaching the extra declaration would mutate the
-shared symbol).** Phase (ii) is deliberately unbound and PINNED by negative
-controls: nested-block let/const/class/function, for-header let, catch
-variables, case blocks, class scopes. Verification: suite green
-10,231 → 10,245 (+14 `Inv2LexicalScopeTest` — flags per decl kind, hoisting,
-root-aliasing identity, binding patterns, the zero-global-id-consumption
-DELTA PROBE (two binds of identical top-level shape, one with rich bodies,
-must consume equal global-id counts), namespace chain identity, plain-thread
-deep chain, unindexed-tree guard, rich-fixture smoke); `--listAll`
-byte-identical vs the stash-built BEFORE binary (46 diagnostics, compiler
-profile); interleaved wall B/A ×6 with BOTH orders: a consistent
-second-position-slower artifact appears in each order — position-balanced
-means 26,328 vs 26,550 ms (+0.8%), inside the documented drift band. Tables
-UNCONSUMED until INV.4/INV.2(d). NEXT: INV.2(c)(ii) block-scope containers +
-class scopes, then INV.2(d) B83.5 dissolution pilots.
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 (Restored 2026-07-12, round 481 — the queue/backlog/inventory sections had been
@@ -778,16 +792,28 @@ interrupt the arc).
       consult inside the primitive. Suite +5 (Inv3ProtectedNodeKeyTest —
       both leak-kill tests FAIL pre-flip via stash: the leaked resolution
       manufactured bogus TS2445 about a class the file never imports);
-      listAll byte-identical on compiler AND services. REMAINING phases:
-      the typing-path sites (identifier.fallback ~3.8k, propAccess.objExpr
-      ~3k / base / root, callee.ident/getCalleeType, mam.*,
-      resolveFlowCalleeDecl, isCalleeResolvable, checkPrivateMemberAccess,
-      checkImplicitAnyParameters 2,744 / checkUncalledFunctionsInConditions
-      987 / checkConstAssignment 212 per the post-505 by-pass table) —
-      CAUTION: `getTypeOfIdentifier`'s fallback is the round-442 measured
-      dead-end territory (typing feeds emit/redeclare, not just
-      diagnostics); the visibility gate protects imports, but each flip
-      needs the per-site consumer classification + the full battery.
+      listAll byte-identical on compiler AND services. Phase 2 DONE round
+      507 (2026-07-13): the bare-Identifier VALUE/receiver/callee cluster —
+      checkPrivateMemberAccess, getCalleeType's Identifier branch,
+      resolveFlowCalleeDecl (+ the extracted currentFileNestedPredicateDecl
+      preserving round-471 narrowing from the direct==null fallback too),
+      resolveNamespaceMemberFnDecl, the three ns-fallback receiver
+      resolvers (computeRawTypeOfPropertyAccess /
+      resolvePropertyAccessToSymbol / propertyAccessChainIsNamespaceQualified),
+      isCalleeResolvable, checkPropertyAccessAssignment's ns base, the two
+      mam receiver consults, and the protected-ctor heritage walks
+      (findEffectiveConstructorVisibility/classExtendsOrIs) — all keyed by
+      the name's own Identifier node. Conflated 20,941 → 10,034 (−52%);
+      suite +9 (Inv3ValueCalleeNodeKeyTest — 4 leak-kills FAIL pre-flip via
+      stash); listAll byte-identical on compiler AND services; bench in
+      band. REMAINING phase 3: `getTypeOfIdentifier`'s globals fallback
+      (~3.2k, the receiver-typing tail — round-442 measured dead-end
+      territory: typing feeds emit/redeclare, so it needs its own battery +
+      per-consumer classification even though the visibility gate now
+      protects imports). NOT to flip: the shadow-detection ecology's
+      consults (registerNestedGlobalShadow*/applyBodyLocalShadowing/
+      shadowNestedFunctionNames ask "does a merged global collide" — they
+      die with INV.3(d)).
     - (iv) **Flip the type-position tail** (typeRef.resolve.ident ~1.9k,
       typeNodeDefinitelyNonNullish's globals fallback — the round-424
       barrel-alias fallback already restricted to interface/class/enum) and

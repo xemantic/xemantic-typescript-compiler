@@ -1,3 +1,41 @@
+**Round 497 (2026-07-13) — INV.2(c) phase (i) LANDED: additive lexical binding
+for function-like containers.** The Binder gained a second pass
+(`bindLexicalScopes`, run after conventional binding) that walks the whole
+tree ITERATIVELY (parallel explicit node/scope stacks — a 30k-term binary
+chain binds on a plain thread) and builds `BinderResult.lexicalScopes`:
+per-nodeId `LexicalScope` tables. Container design: the SourceFile root
+ALIASES file locals and a ModuleDeclaration aliases its merged namespace
+`exports` — one chained scope level per dotted segment, mirroring the
+checker's B512 rule, with outer segments recovered via `symbol.parent` —
+while the seven function-like kinds plus `ClassStaticBlockDeclaration` get
+FRESH tables holding type params, params (binding patterns recursed; `this`
+params excluded — tsc never binds them into locals), a named function
+expression's self-name, body-top-level declarations (the function body block
+is NOT a block-scope container, tsc `getContainerFlags`), and `var`s hoisted
+from ANY block depth (also into file/module scopes for block-nested vars the
+main binder's statement-only walk never saw). The function-like's own
+decorators walk under the OUTER scope. **The reshuffle firewall: scope
+symbols come from `Symbol.scopeSymbol` — a SEPARATE negative id space
+(≤ −2, own counter) — so the global `nextId` sequence is untouched;
+`declareLexical` mirrors `declareSymbol`'s merge semantics (canMerge reuse,
+B505 Class+Class first-wins, param+var redeclaration merge) but never writes
+`nodeToSymbol` or the aliased existing tables (a name the main binder
+already bound is SKIPPED — attaching the extra declaration would mutate the
+shared symbol).** Phase (ii) is deliberately unbound and PINNED by negative
+controls: nested-block let/const/class/function, for-header let, catch
+variables, case blocks, class scopes. Verification: suite green
+10,231 → 10,245 (+14 `Inv2LexicalScopeTest` — flags per decl kind, hoisting,
+root-aliasing identity, binding patterns, the zero-global-id-consumption
+DELTA PROBE (two binds of identical top-level shape, one with rich bodies,
+must consume equal global-id counts), namespace chain identity, plain-thread
+deep chain, unindexed-tree guard, rich-fixture smoke); `--listAll`
+byte-identical vs the stash-built BEFORE binary (46 diagnostics, compiler
+profile); interleaved wall B/A ×6 with BOTH orders: a consistent
+second-position-slower artifact appears in each order — position-balanced
+means 26,328 vs 26,550 ms (+0.8%), inside the documented drift band. Tables
+UNCONSUMED until INV.4/INV.2(d). NEXT: INV.2(c)(ii) block-scope containers +
+class scopes, then INV.2(d) B83.5 dissolution pilots.
+
 **Round 496 (2026-07-13, same session as 495) — INV.2(b) LANDED: the pilot
 nodeId-array side table — `FlowGraph.flowAt`.** The first consumer of INV.2(a)'s
 identity fields: `FlowGraph` carries `flowById`/`nodeById` arrays sized
