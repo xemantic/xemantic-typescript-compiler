@@ -102,6 +102,11 @@ object PassTiming {
     /** Narrowing walks attributed to the launching pass. */
     val narrowWalksByPass = HashMap<String, Long>()
 
+    /** INV.1(e): files whose crawl-time pre-parse the multi-file core REUSED
+     *  (content + flags matched) vs parsed FRESH (no pre-parse, or mismatch). */
+    var preParseReused: Long = 0
+    var preParseFresh: Long = 0
+
     /** Total wall time between checker-init entry and dispatch end, summed over
      *  every checker constructed in the run (a compile may build more than one). */
     var checkerInitNanos: Long = 0
@@ -122,6 +127,8 @@ object PassTiming {
         typeNodeBypassed = 0
         narrowWalks = 0
         narrowWalksByPass.clear()
+        preParseReused = 0
+        preParseFresh = 0
         checkerInitNanos = 0
         initMark = null
     }
@@ -195,6 +202,10 @@ object PassTiming {
         appendLine(
             "flow-narrowing walks: $narrowWalks " +
                 "(outside init dispatch: ${narrowWalksByPass[OUTSIDE_PASS] ?: 0L})"
+        )
+        appendLine(
+            "pre-parse reuse (INV.1(e), multi-file core): reused $preParseReused, " +
+                "parsed fresh $preParseFresh"
         )
     }
 

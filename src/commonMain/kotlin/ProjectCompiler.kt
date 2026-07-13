@@ -115,6 +115,17 @@ class ProjectCompiler(private val vfs: Vfs) {
         val typeDiagnostics = mutableListOf<Diagnostic>()
         val typeEntries = collectTypeRootEntries(config, resolver, typeDiagnostics)
 
+        // The options the compilation core receives. The core's output naming serves
+        // baseline comparison: by default it strips names to basenames (which collide
+        // across subdirectories), and its own outDir remap is keyed on the inputs'
+        // common ancestor rather than rootDir. Withhold outDir and request full
+        // input-derived paths instead (`fullEmitPaths` affects naming only); all
+        // outDir/rootDir mapping happens in [writeOutputs] from the input paths.
+        // Hoisted above the crawl (INV.1(e)): the crawl parses each file with the
+        // parser flags computed from THESE options, so the core's pre-parse reuse
+        // gate (content + flags equality) matches.
+        val emitOptions = config.options.copy(outDir = null, fullEmitPaths = true)
+
         // Walk the import graph from the roots, reading and resolving as we go.
         // INV.1: the crawl is a cold Flow collected through the coroutine pipeline
         // seam ([runCompilerPipeline]); since (b) its per-file read+decode/parse
@@ -123,23 +134,20 @@ class ProjectCompiler(private val vfs: Vfs) {
         // order, which fixes symbol-id allocation (docs/ARCHITECTURE-RETHINK.md
         // § 4 determinism hazards).
         val program = LinkedHashMap<String, String>() // path -> content
+        val preParsed = HashMap<String, PreParsedFile>() // path -> crawl-time parse (INV.1(e))
         val unresolved = mutableListOf<Pair<String, String>>()
         val seeds = rootFiles + typeEntries.filter { it !in rootFiles }
         runCompilerPipeline {
-            crawlImportGraph(seeds, resolver, unresolved).collect { (path, content) ->
-                program[path] = content
+            crawlImportGraph(seeds, resolver, emitOptions, unresolved).collect { f ->
+                program[f.path] = f.content ?: ""
+                f.preParsed?.let { preParsed[f.path] = it }
             }
         }
 
-        // Feed the gathered file set through the shared compilation core. The core's
-        // output naming serves baseline comparison: by default it strips names to
-        // basenames (which collide across subdirectories), and its own outDir remap is
-        // keyed on the inputs' common ancestor rather than rootDir. Withhold outDir and
-        // request full input-derived paths instead (`fullEmitPaths` affects naming only);
-        // all outDir/rootDir mapping happens in [writeOutputs] from the input paths.
-        val emitOptions = config.options.copy(outDir = null, fullEmitPaths = true)
+        // Feed the gathered file set through the shared compilation core, handing it
+        // the crawl's parses so program files are not parsed a second time.
         val files = program.map { (name, content) -> SourceFileEntry(name, content) }
-        val parsed = ParsedSource(emitOptions, files, hasExplicitFilenames = true)
+        val parsed = ParsedSource(emitOptions, files, hasExplicitFilenames = true, preParsed = preParsed)
         val result = TypeScriptCompiler().compileParsed(
             parsed, emitOptions, rootFiles.firstOrNull() ?: "input.ts",
         )
@@ -165,11 +173,18 @@ class ProjectCompiler(private val vfs: Vfs) {
         )
     }
 
-    /** A crawled file: [content] null when unreadable; [specifiers] from the extraction parse. */
-    private class CrawledFile(val path: String, val content: String?, val specifiers: Set<String>)
+    /**
+     * A crawled file: [content] null when unreadable; [preParsed] the crawl-time
+     * parse (null for unreadable and `.json` files), whose tree supplies the
+     * [specifiers] the graph walk follows and rides into the compilation core
+     * via [ParsedSource.preParsed] (INV.1(e)).
+     */
+    private class CrawledFile(val path: String, val content: String?, val preParsed: PreParsedFile?) {
+        val specifiers: Set<String> = preParsed?.sourceFile?.moduleSpecifiers?.toSet() ?: emptySet()
+    }
 
     /**
-     * The import-graph crawl as a cold [Flow] of `(path, content)` in BFS
+     * The import-graph crawl as a cold [Flow] of [CrawledFile] in BFS
      * discovery order — seeds first (in seed order, read unconditionally: an
      * unreadable seed becomes ""), then each file's resolved imports
      * breadth-first (an unreadable discovered file is skipped, and stays
@@ -190,15 +205,16 @@ class ProjectCompiler(private val vfs: Vfs) {
     private fun crawlImportGraph(
         seeds: List<String>,
         resolver: ModuleResolver,
+        options: CompilerOptions,
         unresolved: MutableList<Pair<String, String>>,
-    ): Flow<Pair<String, String>> = flow {
+    ): Flow<CrawledFile> = flow {
         val loaded = HashSet<String>() // paths already emitted (the dedup set)
         // Frontier 0: the seeds — read per occurrence (duplicate-seed re-reads
         // preserved); an unreadable seed still enters the program as "".
-        var frontier = readAndScanBatch(seeds)
+        var frontier = readAndScanBatch(seeds, options)
         for (f in frontier) {
             loaded.add(f.path)
-            emit(f.path to (f.content ?: ""))
+            emit(f)
         }
         while (frontier.isNotEmpty()) {
             // Resolve specifiers SEQUENTIALLY in frontier order: the resolver is
@@ -221,17 +237,17 @@ class ProjectCompiler(private val vfs: Vfs) {
             // order (the emission-order contract above). An unreadable discovered
             // file is dropped here and stays out of `loaded`, so a later frontier
             // may re-probe it — matching the sequential crawl.
-            frontier = readAndScanBatch(discovered).filter { it.content != null }
+            frontier = readAndScanBatch(discovered, options).filter { it.content != null }
             for (f in frontier) {
                 loaded.add(f.path)
-                emit(f.path to f.content!!)
+                emit(f)
             }
         }
     }
 
     /**
-     * INV.1(b): reads and specifier-scans [paths] concurrently — read +
-     * UTF-8→UTF-16 decode on [pipelineIoDispatcher], the extraction parse on
+     * INV.1(b): reads and parses [paths] concurrently — read +
+     * UTF-8→UTF-16 decode on [pipelineIoDispatcher], the parse on
      * [Dispatchers.Default], at most [FRONTEND_CONCURRENCY] files in flight
      * (bounded [flatMapMerge] = the owner's measured pipeline shape,
      * docs/ARCHITECTURE-RETHINK.md § 4) — and returns results in INPUT order,
@@ -240,16 +256,16 @@ class ProjectCompiler(private val vfs: Vfs) {
      * TypeParameter `internSalt` stamp is per-file pure — audited for this step).
      */
     @OptIn(ExperimentalCoroutinesApi::class)
-    private suspend fun readAndScanBatch(paths: List<String>): List<CrawledFile> {
+    private suspend fun readAndScanBatch(paths: List<String>, options: CompilerOptions): List<CrawledFile> {
         if (paths.isEmpty()) return emptyList()
         val byPath = paths.asFlow()
             .flatMapMerge(concurrency = FRONTEND_CONCURRENCY) { path ->
                 flow {
                     val content = withContext(pipelineIoDispatcher) { vfs.readText(path) }
-                    val specifiers =
-                        if (content == null) emptySet()
-                        else withContext(Dispatchers.Default) { extractSpecifiers(path, content) }
-                    emit(CrawledFile(path, content, specifiers))
+                    val preParsed =
+                        if (content == null) null
+                        else withContext(Dispatchers.Default) { parseForCrawl(path, content, options) }
+                    emit(CrawledFile(path, content, preParsed))
                 }
             }
             .toList()
@@ -419,21 +435,34 @@ class ProjectCompiler(private val vfs: Vfs) {
         return Regex("^$sb$")
     }
 
-    // --- import-specifier extraction --------------------------------------------
+    // --- crawl parse (specifier extraction + INV.1(e) pre-parse) -----------------
 
     /**
-     * Extracts every module specifier referenced by [source] by PARSING it (the parser
-     * records specifiers as it parses — [SourceFile.moduleSpecifiers], tsc's
-     * `SourceFile.imports`). A text scan is not usable here: real-world sources (e.g.
-     * tsc's own) contain `import ... from "..."` shapes inside string literals,
-     * comments, and regex literals, which a regex extraction reports as garbage
-     * unresolved imports and can even pull junk files into the program.
-     * The extraction parse's diagnostics are discarded — the compilation core
-     * re-parses program files and owns diagnostics.
+     * Parses [source] for the crawl. The parse serves two purposes: the tree
+     * records every module specifier the graph walk follows
+     * ([SourceFile.moduleSpecifiers], tsc's `SourceFile.imports`), and the whole
+     * parse rides into the compilation core as a [PreParsedFile] so program files
+     * are not parsed a second time (INV.1(e)). A text scan is not usable for
+     * specifier extraction: real-world sources (e.g. tsc's own) contain
+     * `import ... from "..."` shapes inside string literals, comments, and regex
+     * literals, which a regex extraction reports as garbage unresolved imports
+     * and can even pull junk files into the program.
+     *
+     * The parse uses the option-derived flags from the SAME shared helper the
+     * core's parse sites use ([computeParserFlags] over the resolved tsconfig
+     * options), so the core's content+flags reuse gate provably matches — and the
+     * graph walk itself sees the option-faithful tree. `.json` files are not
+     * parsed (the core never parses them either — JSON is re-emitted verbatim).
      */
-    private fun extractSpecifiers(fileName: String, source: String): Set<String> {
-        if (fileName.endsWith(".json")) return emptySet()
-        return Parser(source, fileName).parse().moduleSpecifiers.toSet()
+    private fun parseForCrawl(fileName: String, source: String, options: CompilerOptions): PreParsedFile? {
+        if (fileName.endsWith(".json")) return null
+        val flags = computeParserFlags(fileName, source, options)
+        val parser = Parser(
+            source, fileName, forceJsx = flags.forceJsx, topLevelAwait = flags.topLevelAwait,
+            needsJsxFlag = flags.needsJsxFlag, noImplicitAny = flags.noImplicitAny,
+        )
+        val sourceFile = parser.parse()
+        return PreParsedFile(source, flags, sourceFile, parser.getDiagnostics())
     }
 
     // --- output emission --------------------------------------------------------

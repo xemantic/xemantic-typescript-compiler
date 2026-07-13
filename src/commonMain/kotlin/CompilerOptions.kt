@@ -342,6 +342,41 @@ data class ParsedSource(
     // symlink group). These are COMPILED/emitted as distinct files but skipped in the source
     // echo (tsc dedupes the echo by realpath — moduleResolutionWithSymlinks_notInNodeModules).
     val symlinkSkipEcho: Set<String> = emptySet(),
+    // INV.1(e): parses carried over from the project crawl (fileName -> pre-parse).
+    // The core's multi-file parse site reuses an entry ONLY when its own computed
+    // [ParserFlags] and the entry content match the recorded ones — reuse is a pure
+    // optimization; any mismatch re-parses. Empty for the string-based [compile] path.
+    val preParsed: Map<String, PreParsedFile> = emptyMap(),
+)
+
+/**
+ * The option-derived per-file parser configuration (the [Parser] constructor
+ * flags that change the produced tree). Computed by `computeParserFlags` from a
+ * file's name/content and the resolved [CompilerOptions]; recorded alongside a
+ * crawl-time parse so the compilation core can prove the parse matches the one
+ * it would produce itself (INV.1(e)).
+ */
+data class ParserFlags(
+    val forceJsx: Boolean,
+    val topLevelAwait: Boolean,
+    val needsJsxFlag: Boolean,
+    val noImplicitAny: Boolean,
+)
+
+/**
+ * A file's parse carried from the project crawl into the compilation core
+ * (INV.1(e) — the crawl full-parses every file for import specifiers; without
+ * this channel the core parses everything a second time).
+ *
+ * CONTRACT: [sourceFile]/[diagnostics] MUST be the result of parsing [content]
+ * with exactly [flags] — the core verifies content and flags equality before
+ * reusing, but cannot verify tree fidelity.
+ */
+class PreParsedFile(
+    val content: String,
+    val flags: ParserFlags,
+    val sourceFile: SourceFile,
+    val diagnostics: List<Diagnostic>,
 )
 
 /**

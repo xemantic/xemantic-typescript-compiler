@@ -941,16 +941,11 @@ class TypeScriptCompiler {
                 )
             }
 
-            // Force JSX mode for .js files when jsx option is set (allowJs + jsx),
-            // OR when allowJs is true (TypeScript enables JSX for .js files with allowJs)
+            // The option-derived parser flags (JSX forcing for .js, top-level await,
+            // TS17004 gating, noImplicitAny) — via the shared INV.1(e) helper.
+            val singleFileFlags = computeParserFlags(file.fileName, file.content, options)
             val isPlainJsFile = file.fileName.endsWith(".js") || file.fileName.endsWith(".cjs") || file.fileName.endsWith(".mjs")
-            val forceJsxForJs = isPlainJsFile && (options.jsx != null || options.allowJs)
-            val topLevelAwait = options.effectiveModule.let { m ->
-                m == ModuleKind.ES2022 || m == ModuleKind.ESNext || m.isNodeNext ||
-                    m == ModuleKind.Preserve || m == ModuleKind.System
-            } || fileLooksLikeModuleForAwait(file.content)
-            val needsJsxFlag = computeNeedsJsxFlag(file.fileName, options, forceJsxForJs)
-            val parser = Parser(file.content, file.fileName, forceJsx = forceJsxForJs, topLevelAwait = topLevelAwait, needsJsxFlag = needsJsxFlag, noImplicitAny = options.noImplicitAny || options.strict)
+            val parser = Parser(file.content, file.fileName, forceJsx = singleFileFlags.forceJsx, topLevelAwait = singleFileFlags.topLevelAwait, needsJsxFlag = singleFileFlags.needsJsxFlag, noImplicitAny = singleFileFlags.noImplicitAny)
             val sourceFile = parser.parse()
             diagnostics.addAll(parser.getDiagnostics())
 
@@ -1063,14 +1058,8 @@ class TypeScriptCompiler {
                     }
                     val isDtsFile = file.fileName.endsWith(".d.ts") || file.fileName.endsWith(".d.mts") || file.fileName.endsWith(".d.cts")
                     if (!isDtsFile && file.content.isNotBlank()) {
-                        val isPlainJsFile = file.fileName.endsWith(".js") || file.fileName.endsWith(".cjs") || file.fileName.endsWith(".mjs")
-                        val forceJsxForJs = isPlainJsFile && (options.jsx != null || options.allowJs)
-                        val topLevelAwait = options.effectiveModule.let { m ->
-                            m == ModuleKind.ES2022 || m == ModuleKind.ESNext || m.isNodeNext ||
-                                m == ModuleKind.Preserve || m == ModuleKind.System
-                        } || fileLooksLikeModuleForAwait(file.content)
-                        val needsJsxFlag = computeNeedsJsxFlag(file.fileName, options, forceJsxForJs)
-                        val parser = Parser(file.content, file.fileName, forceJsx = forceJsxForJs, topLevelAwait = topLevelAwait, needsJsxFlag = needsJsxFlag, noImplicitAny = options.noImplicitAny || options.strict)
+                        val flags = computeParserFlags(file.fileName, file.content, options)
+                        val parser = Parser(file.content, file.fileName, forceJsx = flags.forceJsx, topLevelAwait = flags.topLevelAwait, needsJsxFlag = flags.needsJsxFlag, noImplicitAny = flags.noImplicitAny)
                         val sourceFile = parser.parse()
                         diagnostics.addAll(parser.getDiagnostics())
                         parsedFiles[file.fileName] = sourceFile
@@ -1326,20 +1315,31 @@ class TypeScriptCompiler {
                     if (hasConflictingJs) continue
                 }
 
-                // Force JSX mode for .js files when jsx option is set (allowJs + jsx),
-                // OR when allowJs is true (TypeScript enables JSX for .js files with allowJs)
-                val isPlainJsFileMulti = file.fileName.endsWith(".js") || file.fileName.endsWith(".cjs") || file.fileName.endsWith(".mjs")
-                val forceJsxForJsMulti = isPlainJsFileMulti && (options.jsx != null || options.allowJs)
-                val topLevelAwaitMulti = options.effectiveModule.let { m ->
-                    m == ModuleKind.ES2022 || m == ModuleKind.ESNext || m.isNodeNext ||
-                        m == ModuleKind.Preserve || m == ModuleKind.System
-                } || fileLooksLikeModuleForAwait(file.content)
-                val needsJsxFlagMulti = computeNeedsJsxFlag(file.fileName, options, forceJsxForJsMulti)
-                val parser = Parser(file.content, file.fileName, forceJsx = forceJsxForJsMulti, topLevelAwait = topLevelAwaitMulti, needsJsxFlag = needsJsxFlagMulti, noImplicitAny = options.noImplicitAny || options.strict)
-                val sourceFile = parser.parse()
+                // INV.1(e): the option-derived parser flags via the shared helper. A
+                // crawl-supplied pre-parse ([ParsedSource.preParsed]) is reused ONLY on
+                // an exact content + flags match — any mismatch (e.g. a future flag
+                // reading an option the core post-processes, like packageJsonTypes)
+                // falls through to a fresh parse, so reuse is a pure optimization.
+                val parserFlagsMulti = computeParserFlags(file.fileName, file.content, options)
+                val preParsed = parsed.preParsed[file.fileName]?.takeIf {
+                    it.flags == parserFlagsMulti && it.content == file.content
+                }
+                if (PassTiming.enabled) {
+                    if (preParsed != null) PassTiming.preParseReused++ else PassTiming.preParseFresh++
+                }
+                val sourceFile: SourceFile
+                val parserDiagnostics: List<Diagnostic>
+                if (preParsed != null) {
+                    sourceFile = preParsed.sourceFile
+                    parserDiagnostics = preParsed.diagnostics
+                } else {
+                    val parser = Parser(file.content, file.fileName, forceJsx = parserFlagsMulti.forceJsx, topLevelAwait = parserFlagsMulti.topLevelAwait, needsJsxFlag = parserFlagsMulti.needsJsxFlag, noImplicitAny = parserFlagsMulti.noImplicitAny)
+                    sourceFile = parser.parse()
+                    parserDiagnostics = parser.getDiagnostics()
+                }
                 parsedSourceFiles[file.fileName] = sourceFile
-                if (parser.getDiagnostics().isNotEmpty()) filesWithParseDiagnostics.add(file.fileName)
-                if (parser.getDiagnostics().any { it.code !in GRAMMAR_CLASS_CODES }) {
+                if (parserDiagnostics.isNotEmpty()) filesWithParseDiagnostics.add(file.fileName)
+                if (parserDiagnostics.any { it.code !in GRAMMAR_CLASS_CODES }) {
                     filesWithRealParseDiagnostics.add(file.fileName)
                 }
 
@@ -1353,7 +1353,7 @@ class TypeScriptCompiler {
                 // `/app/src/index.ts` should make commonSourceDir `/app`, not `/app/src`).
                 if (isDtsFile) {
                     if (!isNodeModulesFile) {
-                        diagnostics.addAll(parser.getDiagnostics())
+                        diagnostics.addAll(parserDiagnostics)
                         if (computedTsconfigDir != null && computedTsconfigDir.isNotEmpty()
                             && file.fileName.startsWith("$computedTsconfigDir/")) {
                             dtsFileNamesInProjectDir.add(file.fileName)
@@ -1374,8 +1374,8 @@ class TypeScriptCompiler {
                     options.noImplicitReferences
                 if (isNodeModulesFile && (computedTsconfigDir != null || isBundlerOrNoImplicit)) continue
 
-                diagnostics.addAll(parser.getDiagnostics())
-                allParserDiagsForPins.addAll(parser.getDiagnostics())
+                diagnostics.addAll(parserDiagnostics)
+                allParserDiagsForPins.addAll(parserDiagnostics)
 
                 // .js/.cjs/.mjs files OUTSIDE the tsconfig project directory must still be
                 // parsed/bound (for type-only use under `allowJs`) but never emitted as JS.
@@ -2075,6 +2075,30 @@ private fun computeNeedsJsxFlag(fileName: String, options: CompilerOptions, forc
     val isJsxJs = fileName.endsWith(".jsx")
     val isPlainJsFile = fileName.endsWith(".js") || fileName.endsWith(".cjs") || fileName.endsWith(".mjs")
     return isTsx || (isJsxJs && options.checkJs) || (isPlainJsFile && forceJsxForJs && options.checkJs)
+}
+
+/**
+ * INV.1(e): the single source of truth for the option-derived [Parser] flags —
+ * used by the compilation core's parse sites AND by [ProjectCompiler]'s crawl
+ * parse, so a crawl-time parse is provably the parse the core would produce
+ * (the reuse gate compares these flags for equality). All inputs are per-file
+ * (fileName/content) or plain option fields — no whole-program dependency.
+ */
+internal fun computeParserFlags(fileName: String, content: String, options: CompilerOptions): ParserFlags {
+    // Force JSX mode for .js files when jsx option is set (allowJs + jsx),
+    // OR when allowJs is true (TypeScript enables JSX for .js files with allowJs)
+    val isPlainJsFile = fileName.endsWith(".js") || fileName.endsWith(".cjs") || fileName.endsWith(".mjs")
+    val forceJsx = isPlainJsFile && (options.jsx != null || options.allowJs)
+    val topLevelAwait = options.effectiveModule.let { m ->
+        m == ModuleKind.ES2022 || m == ModuleKind.ESNext || m.isNodeNext ||
+            m == ModuleKind.Preserve || m == ModuleKind.System
+    } || fileLooksLikeModuleForAwait(content)
+    return ParserFlags(
+        forceJsx = forceJsx,
+        topLevelAwait = topLevelAwait,
+        needsJsxFlag = computeNeedsJsxFlag(fileName, options, forceJsx),
+        noImplicitAny = options.noImplicitAny || options.strict,
+    )
 }
 
 private fun extractRelativeImports(
