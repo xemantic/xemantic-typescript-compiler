@@ -59,6 +59,35 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 504 (2026-07-13, same session as 500–503) — INV.3(c)(i) LANDED: the
+node-keyed resolution primitive, additive and unconsumed.** The round-503
+measurement's design consequence made concrete: `owningSourceFile(node)`
+(NodeWalk.kt — the first general consumer of the INV.2(a) parent chains
+outside the lexical binder: walk `parent` to the SourceFile; null for an
+unindexed node — data-class `copy()` / Transformer-synthesized / detached —
+whose links were never stamped; defensive 4096-hop bound so a corrupted link
+cannot hang a lookup) + `lookupPerFileForNode(node, name)` =
+`globalsForFile(owner.fileName, name)`, degrading to the legacy merged
+consult when no owner exists (mirrors `globalsForFile`'s unknown-file
+degradation). This is the key the (c)(ii) kind-domain flip needs: a types.ts
+`.kind` annotation read while checking parser.ts resolves under TYPES.TS's
+visibility (where the name is an own local → the merged instance, i.e.
+resolution PRESERVED), while the same name asked of a node owned by a file
+with no meaning for it returns null (the leak, killed). Pinned by
+Inv3NodeKeyedLookupTest (direct `Checker(options, binderResults)`
+construction, path-shaped fixtures): foreign-node annotation → the declaring
+file's own symbol instance (assertSame vs binder locals); node owned by a
+non-importing module file → null; importing owner → still the merged
+instance; `copy()` → `owningSourceFile` null + legacy consult still answers;
+lib names never nulled regardless of owner. Suite green 10,273 → 10,279
+(+6); primitive unconsumed by checker paths (behavior provably unchanged —
+compiler-profile `--listAll` spot-check byte-identical); bench row 27,302 ms
+self / 887 MB (+3.9% single-run vs previous = the documented box-drift band;
+the primitive is dead code until (c)(ii) consumes it; same 46 env-legit
+diagnostics). NEXT: INV.3(c)(ii) — flip the kind-domain/enum-discriminant
+family (~82% of conflated traffic) onto `lookupPerFileForNode`,
+listAll-gated.
+
 **Round 503 (2026-07-13, same session as 500–502) — INV.3(c) DECOMPOSED from a
 measured per-site attribution (probe-and-revert; no code landed).** The
 round-502 lesson (per-PASS ≠ per-SITE) applied: tagging the GUESSED hot sites
@@ -416,45 +445,6 @@ a forEachChild gap). NEXT: INV.2(b) — migrate ONE hot pos-keyed side table
 nodeId-indexed array; measure the `HashMap.getNode` JFR delta before mass
 migration.
 
-**Round 494 (2026-07-13) — INV.1(e) LANDED: the double parse is dead — the core
-reuses the crawl's parses.** The crawl full-parsed every file for specifiers and
-`compileParsed` parsed everything again; now ONE parse per file serves both.
-Design (as scoped rounds 492/493): (1) `computeParserFlags(fileName, content,
-options)` in TypeScriptCompiler.kt is the single source of truth for the
-option-derived `Parser` flags (`forceJsx` / `topLevelAwait` incl. the
-`fileLooksLikeModuleForAwait` content scan / `needsJsxFlag` / `noImplicitAny`) —
-the core's single-file, emitDeclarationOnly-multi, and main multi-file sites all
-route through it, and so does the crawl (`parseForCrawl`, which replaced
-`extractSpecifiers`; specifiers now read off `preParsed.sourceFile.
-moduleSpecifiers`). (2) `ParsedSource.preParsed: Map<String, PreParsedFile>`
-carries `(content, flags, sourceFile, parser diagnostics)` from
-`ProjectCompiler.build` (which hoists `emitOptions` above the crawl so crawl
-flags are computed from the SAME options the core receives — verified
-`effectiveModule` and every flag input is independent of the core's later
-`packageJsonTypes` copy). (3) The core's multi-file parse site reuses an entry
-ONLY on an exact content + flags match (`takeIf`), else parses fresh — reuse is
-a pure optimization by construction; opt-in PassTiming counters
-(`preParseReused`/`preParseFresh`, `--passTiming` dump line) make the match
-observable. **Verification:** suite green 10,212 → 10,218 (+6 local
-`Inv1PreParseReuseTest`: a deliberately-lying sentinel tree proves reuse FIRES
-(the only externally visible identity signal), flags-mismatch and
-content-mismatch negative controls re-parse, the real driver path reuses 2/2
-under an option-driven flag (module es2022 makes `topLevelAwait` option-only —
-a default-flag crawl would read 0), native top-level `await` flows through
-check+emit off the reused tree, and the string/corpus path parses fresh);
-`--listAll` byte-identical vs the stash-built BEFORE on compiler (46) AND
-services (46, 252 files); reuse fires 78/78 on the bench compiler profile.
-**Wall-clock: neutral within noise** on interleaved A/B (compiler BEFORE median
-25,455 ms vs AFTER 25,364 ms; services 36,605 vs 36,466 with one adverse pair) —
-the removed core-parse leg is small (~0.2–0.5 s hot) next to the 21 s checker,
-and the win is architectural: ONE canonical tree per file is what INV.2 hangs
-per-file `nodeId` side tables off. SESSION TRAP (memory updated): a fully GREEN
-`./gradlew jvmTest` printed NO "tests completed" line, so the protocol's grep
-pipeline exit-1'd and the task notification claimed failure — the XMLs (10,218/0)
-were the truth; parse XMLs before reacting to a "failed" suite notification.
-NEXT: INV.2 bind-the-world (full lexical binding, nodeIds, array-indexed side
-tables — dissolves B83.5).
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 (Restored 2026-07-12, round 481 — the queue/backlog/inventory sections had been
@@ -740,12 +730,17 @@ interrupt the arc).
     getCalleeType`, `typeNodeDefinitelyNonNullish`, `pmrCheckAccess`,
     `mam.objectExpr`/`mam.recvSym` (~63 each). Sub-items, one commit each,
     every flip suite+listAll-gated on compiler AND services:
-    - (i) **The node-keyed resolution primitive**: `owningSourceFile(node)`
-      via the INV.2(a) parent chains (indexed trees only; unindexed →
-      null → legacy) + `lookupPerFileForNode(node, name)` =
-      `globalsForFile(owningFile, name)` — the resolution INV.3(d) needs
-      for every foreign-node annotation read. Pin with a direct-construction
-      test (Inv3PerFileLookupTest pattern).
+    - (i) DONE round 504 (2026-07-13): the node-keyed resolution primitive —
+      `owningSourceFile(node)` (NodeWalk.kt: parent-chain walk to the
+      SourceFile, null for unindexed `copy()`/synthesized/detached nodes,
+      defensive hop bound) + `lookupPerFileForNode(node, name)` =
+      `globalsForFile(owner.fileName, name)` with legacy-merged-consult
+      degradation for ownerless nodes. Additive/unconsumed; pinned by
+      Inv3NodeKeyedLookupTest (direct construction — a foreign-node
+      annotation resolves under its OWNING file's visibility to the same
+      merged instance; an owner without the name yields null (the leak);
+      an importing owner keeps resolving; an unindexed copy degrades to
+      legacy; lib names never nulled).
     - (ii) **Flip the kind-domain/enum-discriminant family** (~82% of
       conflated traffic) onto the node-keyed primitive — the annotation
       node is in hand at every one of those sites; preserving resolution

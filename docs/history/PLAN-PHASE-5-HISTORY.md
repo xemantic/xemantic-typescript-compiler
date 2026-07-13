@@ -1,3 +1,43 @@
+**Round 494 (2026-07-13) — INV.1(e) LANDED: the double parse is dead — the core
+reuses the crawl's parses.** The crawl full-parsed every file for specifiers and
+`compileParsed` parsed everything again; now ONE parse per file serves both.
+Design (as scoped rounds 492/493): (1) `computeParserFlags(fileName, content,
+options)` in TypeScriptCompiler.kt is the single source of truth for the
+option-derived `Parser` flags (`forceJsx` / `topLevelAwait` incl. the
+`fileLooksLikeModuleForAwait` content scan / `needsJsxFlag` / `noImplicitAny`) —
+the core's single-file, emitDeclarationOnly-multi, and main multi-file sites all
+route through it, and so does the crawl (`parseForCrawl`, which replaced
+`extractSpecifiers`; specifiers now read off `preParsed.sourceFile.
+moduleSpecifiers`). (2) `ParsedSource.preParsed: Map<String, PreParsedFile>`
+carries `(content, flags, sourceFile, parser diagnostics)` from
+`ProjectCompiler.build` (which hoists `emitOptions` above the crawl so crawl
+flags are computed from the SAME options the core receives — verified
+`effectiveModule` and every flag input is independent of the core's later
+`packageJsonTypes` copy). (3) The core's multi-file parse site reuses an entry
+ONLY on an exact content + flags match (`takeIf`), else parses fresh — reuse is
+a pure optimization by construction; opt-in PassTiming counters
+(`preParseReused`/`preParseFresh`, `--passTiming` dump line) make the match
+observable. **Verification:** suite green 10,212 → 10,218 (+6 local
+`Inv1PreParseReuseTest`: a deliberately-lying sentinel tree proves reuse FIRES
+(the only externally visible identity signal), flags-mismatch and
+content-mismatch negative controls re-parse, the real driver path reuses 2/2
+under an option-driven flag (module es2022 makes `topLevelAwait` option-only —
+a default-flag crawl would read 0), native top-level `await` flows through
+check+emit off the reused tree, and the string/corpus path parses fresh);
+`--listAll` byte-identical vs the stash-built BEFORE on compiler (46) AND
+services (46, 252 files); reuse fires 78/78 on the bench compiler profile.
+**Wall-clock: neutral within noise** on interleaved A/B (compiler BEFORE median
+25,455 ms vs AFTER 25,364 ms; services 36,605 vs 36,466 with one adverse pair) —
+the removed core-parse leg is small (~0.2–0.5 s hot) next to the 21 s checker,
+and the win is architectural: ONE canonical tree per file is what INV.2 hangs
+per-file `nodeId` side tables off. SESSION TRAP (memory updated): a fully GREEN
+`./gradlew jvmTest` printed NO "tests completed" line, so the protocol's grep
+pipeline exit-1'd and the task notification claimed failure — the XMLs (10,218/0)
+were the truth; parse XMLs before reacting to a "failed" suite notification.
+NEXT: INV.2 bind-the-world (full lexical binding, nodeIds, array-indexed side
+tables — dissolves B83.5).
+
+
 **Round 493 (2026-07-13, same session as 492) — INV.1(b)+(c)+(d): the concurrent
 front-end landed.** The crawl's per-file work now runs CONCURRENTLY per frontier:
 read + UTF-8→UTF-16 decode on `Dispatchers.IO` (new `pipelineIoDispatcher`
