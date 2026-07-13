@@ -51430,8 +51430,13 @@ interface DataView {
     private fun pwResolveClass(typeNode: TypeNode?, locals: SymbolTable?): ClassDeclaration? {
         val tr = typeNode as? TypeReference ?: return null
         if (tr.typeArguments != null) return null
-        val name = (tr.typeName as? Identifier)?.text ?: return null
-        val sym = locals?.get(name) ?: globals[name] ?: return null
+        val tn = tr.typeName as? Identifier ?: return null
+        // INV.3(c)(iii): the merged-globals fallback is keyed by the NAME
+        // IDENTIFIER node's owning file — the heritage walkers wrap a REAL
+        // indexed Identifier in a synthesized TypeReference, so the identifier
+        // (never the wrapper) carries the owner; a fully-synthesized identifier
+        // degrades to the legacy merged consult inside the primitive.
+        val sym = locals?.get(tn.text) ?: lookupPerFileForNode(tn, tn.text) ?: return null
         return sym.declarations.firstOrNull { it is ClassDeclaration } as? ClassDeclaration
     }
 
@@ -51601,9 +51606,10 @@ interface DataView {
                 // whose callee is a const, not a class, resolves to null → left to its own walker).
                 if (d.type == null) {
                     val ne = d.initializer as? NewExpression
-                    val ctorName = (ne?.expression as? Identifier)?.text
-                    if (ctorName != null) {
-                        ((result.locals.get(ctorName) ?: globals[ctorName])
+                    val ctorIdent = ne?.expression as? Identifier
+                    if (ctorIdent != null) {
+                        // INV.3(c)(iii): node-keyed merged fallback (see pwResolveClass).
+                        ((result.locals.get(ctorIdent.text) ?: lookupPerFileForNode(ctorIdent, ctorIdent.text))
                             ?.declarations?.firstOrNull { it is ClassDeclaration } as? ClassDeclaration)
                             ?.let { topVars[nm] = it }
                     }
@@ -51647,10 +51653,13 @@ interface DataView {
         if (t == null || depth > 8) return null
         val tr = t as? TypeReference ?: return null
         if (tr.typeArguments != null) return null
-        val name = (tr.typeName as? Identifier)?.text ?: return null
+        val tn = tr.typeName as? Identifier ?: return null
+        val name = tn.text
         val tp = tps?.firstOrNull { it.name.text == name }
         if (tp != null) return pmrResolveClass(tp.constraint, tps, locals, depth + 1)
-        val sym = locals?.get(name) ?: globals[name] ?: return null
+        // INV.3(c)(iii): node-keyed fallback — see pwResolveClass (the heritage
+        // walkers' synthesized wrappers carry a real indexed Identifier).
+        val sym = locals?.get(name) ?: lookupPerFileForNode(tn, name) ?: return null
         return sym.declarations.firstOrNull { it is ClassDeclaration } as? ClassDeclaration
     }
 
@@ -51857,7 +51866,8 @@ interface DataView {
         // protected static (tsc disallows the `this:`-param fallback for statics); the
         // instance-receiver rule (TS2446) does not apply to statics.
         if (obj is Identifier && obj.text != "this" && obj.text != "super" && vars[obj.text] == null) {
-            val cls = (locals?.get(obj.text) ?: globals[obj.text])
+            // INV.3(c)(iii): node-keyed merged fallback (see pwResolveClass).
+            val cls = (locals?.get(obj.text) ?: lookupPerFileForNode(obj, obj.text))
                 ?.declarations?.firstOrNull { it is ClassDeclaration } as? ClassDeclaration
             if (cls != null) {
                 val declaring = pmrFindProtectedStaticDeclaringClass(cls, member, locals) ?: return
