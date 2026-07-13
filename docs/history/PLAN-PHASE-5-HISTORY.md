@@ -1,3 +1,32 @@
+**Round 484 (2026-07-12) — EP emit parity: three-way bench + emit diff + EP.3 landed
+(owner-authorized "output parity, including reported errors").**
+- **Three-way bench** (`compiler` profile, 78 files / 194,702 LOC, cold wall, emit): xtsc
+  26,893 ms (self 26,769) vs JS `tsc@6.0.3` 10,161 ms (median of 3) vs `tsgo@7.0-dev`
+  2,124 ms. xtsc ≈2.6× behind JS tsc, ≈12.7× behind tsgo — the M5 frontier. All three
+  agree diagnostically: only env-legit offline `@types/node` errors (tsc/tsgo 65, xtsc
+  46 — xtsc suppresses more of the same family), zero real FPs, 78/78 emitted.
+- **Emit-byte diff** (new `scripts/emit-diff-tsc.sh`, xtsc vs `tsc@6.0.3`, SEPARATE
+  outDirs): 8/78 byte-identical, 70/78 differ — but NONE are miscompiles (xtsc output is
+  runnable). Three systematic families explain nearly all changed lines: (1) cross-module
+  const-enum inlining — xtsc keeps `mod.Enum.Member`, tsc inlines `VALUE /* Enum.Member */`
+  (xtsc inlines 8,695 reads, tsc 18,118 — the ~9,400 gap is cross-module; utilities.js
+  3,091→225 residual once normalized); (2) multi-line expression printer formatting
+  (operator/`:` line-end vs line-start); (3) `||=`/`&&=`/`??=` not downleveled at es2020
+  (xtsc 299 vs tsc 15). Version confound noted (npm tsc ≠ pinned commit; the 3 families
+  are version-stable, the small emitHelpers.js residual is version noise).
+- **EP.3 landed** — `Transformer.downlevelLogicalAssignment` (gate `effectiveTarget <
+  ES2021` in the binary-spine collector + `transformBinaryExpressionSpecial` dispatch):
+  `a ||= b` → `a || (a = b)`, `&&=`/`??=` likewise; side-effecting property/element
+  receivers captured into temps with tsc-faithful naming (`(_a = obj())[_b = key()] ||
+  (_a[_b] = 6)` — the element KEY capture is bare inside `[]`, only the receiver is
+  parenthesized). Corpus has ZERO logical-assign files → pinned by the new
+  `LogicalAssignmentDownlevelTest` (7 cases). Known residual: sub-ES2020 `??=` keeps a
+  native `??`. Full suite green 10,167 / 0 (was 10,160 + 7 local).
+- Queue: added the **EP milestone** (EP.3 done; EP.2 printer formatting, EP.1
+  cross-module const-enum, EP.0 dashboard-wire the gate — sequenced cheap-first). Pre-
+  existing (not this change): 5 `Checker.kt` compiler warnings on HEAD — the
+  "warning-clean" invariant has drifted; flagged for a separate cleanup.
+
 **Round 483 (2026-07-12) — M5.1 performance, checker hot-path micro-opts (branch
 `perf/hoist-kind-domain-target-keys`, squash-merged).** Started from a fresh compiler-profile
 JFR (the flat post-482 profile). Three byte-identical changes, compiler self-compile still 46

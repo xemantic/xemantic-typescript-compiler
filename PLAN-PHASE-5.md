@@ -59,6 +59,45 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 494 (2026-07-13) — INV.1(e) LANDED: the double parse is dead — the core
+reuses the crawl's parses.** The crawl full-parsed every file for specifiers and
+`compileParsed` parsed everything again; now ONE parse per file serves both.
+Design (as scoped rounds 492/493): (1) `computeParserFlags(fileName, content,
+options)` in TypeScriptCompiler.kt is the single source of truth for the
+option-derived `Parser` flags (`forceJsx` / `topLevelAwait` incl. the
+`fileLooksLikeModuleForAwait` content scan / `needsJsxFlag` / `noImplicitAny`) —
+the core's single-file, emitDeclarationOnly-multi, and main multi-file sites all
+route through it, and so does the crawl (`parseForCrawl`, which replaced
+`extractSpecifiers`; specifiers now read off `preParsed.sourceFile.
+moduleSpecifiers`). (2) `ParsedSource.preParsed: Map<String, PreParsedFile>`
+carries `(content, flags, sourceFile, parser diagnostics)` from
+`ProjectCompiler.build` (which hoists `emitOptions` above the crawl so crawl
+flags are computed from the SAME options the core receives — verified
+`effectiveModule` and every flag input is independent of the core's later
+`packageJsonTypes` copy). (3) The core's multi-file parse site reuses an entry
+ONLY on an exact content + flags match (`takeIf`), else parses fresh — reuse is
+a pure optimization by construction; opt-in PassTiming counters
+(`preParseReused`/`preParseFresh`, `--passTiming` dump line) make the match
+observable. **Verification:** suite green 10,212 → 10,218 (+6 local
+`Inv1PreParseReuseTest`: a deliberately-lying sentinel tree proves reuse FIRES
+(the only externally visible identity signal), flags-mismatch and
+content-mismatch negative controls re-parse, the real driver path reuses 2/2
+under an option-driven flag (module es2022 makes `topLevelAwait` option-only —
+a default-flag crawl would read 0), native top-level `await` flows through
+check+emit off the reused tree, and the string/corpus path parses fresh);
+`--listAll` byte-identical vs the stash-built BEFORE on compiler (46) AND
+services (46, 252 files); reuse fires 78/78 on the bench compiler profile.
+**Wall-clock: neutral within noise** on interleaved A/B (compiler BEFORE median
+25,455 ms vs AFTER 25,364 ms; services 36,605 vs 36,466 with one adverse pair) —
+the removed core-parse leg is small (~0.2–0.5 s hot) next to the 21 s checker,
+and the win is architectural: ONE canonical tree per file is what INV.2 hangs
+per-file `nodeId` side tables off. SESSION TRAP (memory updated): a fully GREEN
+`./gradlew jvmTest` printed NO "tests completed" line, so the protocol's grep
+pipeline exit-1'd and the task notification claimed failure — the XMLs (10,218/0)
+were the truth; parse XMLs before reacting to a "failed" suite notification.
+NEXT: INV.2 bind-the-world (full lexical binding, nodeIds, array-indexed side
+tables — dissolves B83.5).
+
 **Round 493 (2026-07-13, same session as 492) — INV.1(b)+(c)+(d): the concurrent
 front-end landed.** The crawl's per-file work now runs CONCURRENTLY per frontier:
 read + UTF-8→UTF-16 decode on `Dispatchers.IO` (new `pipelineIoDispatcher`
@@ -476,35 +515,6 @@ LTS) + break the reusable CI workflow + bench.yml's JDK 21. Revisit only if xtsc
 as a standalone bundled-JRE binary (min-JDK moot) AND the gain is confirmed on a quiet
 box / warm BenchMain.
 
-**Round 484 (2026-07-12) — EP emit parity: three-way bench + emit diff + EP.3 landed
-(owner-authorized "output parity, including reported errors").**
-- **Three-way bench** (`compiler` profile, 78 files / 194,702 LOC, cold wall, emit): xtsc
-  26,893 ms (self 26,769) vs JS `tsc@6.0.3` 10,161 ms (median of 3) vs `tsgo@7.0-dev`
-  2,124 ms. xtsc ≈2.6× behind JS tsc, ≈12.7× behind tsgo — the M5 frontier. All three
-  agree diagnostically: only env-legit offline `@types/node` errors (tsc/tsgo 65, xtsc
-  46 — xtsc suppresses more of the same family), zero real FPs, 78/78 emitted.
-- **Emit-byte diff** (new `scripts/emit-diff-tsc.sh`, xtsc vs `tsc@6.0.3`, SEPARATE
-  outDirs): 8/78 byte-identical, 70/78 differ — but NONE are miscompiles (xtsc output is
-  runnable). Three systematic families explain nearly all changed lines: (1) cross-module
-  const-enum inlining — xtsc keeps `mod.Enum.Member`, tsc inlines `VALUE /* Enum.Member */`
-  (xtsc inlines 8,695 reads, tsc 18,118 — the ~9,400 gap is cross-module; utilities.js
-  3,091→225 residual once normalized); (2) multi-line expression printer formatting
-  (operator/`:` line-end vs line-start); (3) `||=`/`&&=`/`??=` not downleveled at es2020
-  (xtsc 299 vs tsc 15). Version confound noted (npm tsc ≠ pinned commit; the 3 families
-  are version-stable, the small emitHelpers.js residual is version noise).
-- **EP.3 landed** — `Transformer.downlevelLogicalAssignment` (gate `effectiveTarget <
-  ES2021` in the binary-spine collector + `transformBinaryExpressionSpecial` dispatch):
-  `a ||= b` → `a || (a = b)`, `&&=`/`??=` likewise; side-effecting property/element
-  receivers captured into temps with tsc-faithful naming (`(_a = obj())[_b = key()] ||
-  (_a[_b] = 6)` — the element KEY capture is bare inside `[]`, only the receiver is
-  parenthesized). Corpus has ZERO logical-assign files → pinned by the new
-  `LogicalAssignmentDownlevelTest` (7 cases). Known residual: sub-ES2020 `??=` keeps a
-  native `??`. Full suite green 10,167 / 0 (was 10,160 + 7 local).
-- Queue: added the **EP milestone** (EP.3 done; EP.2 printer formatting, EP.1
-  cross-module const-enum, EP.0 dashboard-wire the gate — sequenced cheap-first). Pre-
-  existing (not this change): 5 `Checker.kt` compiler warnings on HEAD — the
-  "warning-clean" invariant has drifted; flagged for a separate cleanup.
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 (Restored 2026-07-12, round 481 — the queue/backlog/inventory sections had been
@@ -587,24 +597,19 @@ interrupt the arc).
   corpus green (+6 local) + 3× `--listAll` byte-identical vs the (a) binary; (d)
   DONE round 493 — interleaved A/B −0.8 s (~3%) on the compiler profile + bench
   TSV row.
-- [ ] **INV.1(e) Kill the double parse — reuse the crawl's parses in the core.**
-  The crawl full-parses every file (`extractSpecifiers`) and `compileParsed` then
-  parses everything AGAIN. NOT a drop-in reuse (scoped separately per the round-492
-  note; refined round 493): (1) the core's multi-file parse site
-  (TypeScriptCompiler.kt ~1338) passes option-derived parser flags — `forceJsx`,
-  `topLevelAwait` (which also consults `fileLooksLikeModuleForAwait(content)`),
-  `needsJsxFlag`, `noImplicitAny` — ALL per-file computable (no whole-program
-  dependency), but from the core's POST-PROCESSED options (implied-option rules,
-  e.g. checkJs⇒allowJs), which can differ from the crawl-time `config.options`;
-  (2) the core also consumes `parser.getDiagnostics()` (parse-diagnostic
-  suppression sets), so the reuse channel must carry (SourceFile, parse
-  diagnostics, the flags used) — not just the tree. Safe design: the crawl parses
-  with flags computed from the resolved tsconfig options via the SAME (shared)
-  helpers, `ParsedSource` grows a pre-parsed channel, and the core reuses a file's
-  parse ONLY when its own computed flags MATCH the recorded ones (else re-parse) —
-  behavior-identical by construction, reuse as pure optimization; verify the
-  match actually fires on the bench profiles. Gate: `--listAll` byte-diff on
-  compiler + services + the full suite.
+- [x] **INV.1(e) Kill the double parse — reuse the crawl's parses in the core.**
+  DONE round 494 (2026-07-13): `computeParserFlags` (the shared single source of
+  truth for the option-derived `Parser` flags, used by the core's parse sites AND
+  the crawl), `ParsedSource.preParsed` carrying `PreParsedFile(content, flags,
+  sourceFile, diagnostics)`, and the core's multi-file site reusing an entry ONLY
+  on an exact content+flags match (else re-parse — reuse is a pure optimization).
+  Verified: suite +6 (Inv1PreParseReuseTest — sentinel-tree reuse proof + both
+  mismatch gates + driver-path counters), `--listAll` byte-identical on compiler
+  AND services, reuse fires 78/78 (`--passTiming` counters), interleaved wall A/B
+  neutral within noise on both profiles (the parse leg is small next to the
+  checker; the point is one canonical tree per file — the INV.2 enabler).
+  CLAUDE.md gotcha: a new option-derived Parser argument must extend
+  `ParserFlags`, never a parse site inline, or the match reuses a wrong tree.
 - [ ] **INV.2 Bind the world.** Full lexical binding — function bodies + block scopes
   (dissolves B83.5), container/parent chain, per-file `nodeId` for array-indexed side
   tables (attacks the `HashMap.getNode` top JFR entry; unlocks the file+node-identity
