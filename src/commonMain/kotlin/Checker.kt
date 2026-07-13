@@ -56286,7 +56286,7 @@ interface DataView {
         if (refs.isEmpty()) return
         val cache = HashMap<Int, Boolean>()
         for ((node, isSuper) in refs) {
-            val flow = flowGraph.nodeToFlow[nodeKey(node)] ?: continue
+            val flow = flowGraph.flowAt(node) ?: continue
             if (isPostSuperFlowNode(flow, cache)) continue
             if (isSuper) {
                 val start = node.pos
@@ -96578,7 +96578,7 @@ interface DataView {
     /** Look up the [FlowNode] recorded for a node's reference position. */
     private fun getFlowAt(node: Node): FlowNode? {
         val graph = currentFlowGraph ?: return null
-        return graph.nodeToFlow[nodeKey(node)]
+        return graph.flowAt(node)
     }
 
     /**
@@ -98369,7 +98369,7 @@ interface DataView {
      * this path-local scan is the flow-graph equivalent), or past 200 steps.
      */
     private fun aliasedConditionInitializer(expr: Identifier, name: String): Expression? {
-        val start = currentFlowGraph?.nodeToFlow?.get(nodeKey(expr)) ?: return null
+        val start = currentFlowGraph?.flowAt(expr) ?: return null
         val aliasName = expr.text
         val rootOfName = flowPathRoot(name)
         val key = AliasedCondKey(start, aliasName, rootOfName)
@@ -121631,7 +121631,7 @@ interface DataView {
         if (segments.size < 2) return
 
         // Flow node at the enclosing statement (TypeAlias).
-        val flow = currentFlowGraph?.nodeToFlow?.get(nodeKey(atNode)) ?: return
+        val flow = currentFlowGraph?.flowAt(atNode) ?: return
 
         // Resolve the leftmost identifier's type.
         var receiverType: Type = getTypeOfIdentifier(leftmost)
@@ -154996,7 +154996,7 @@ interface DataView {
     private fun arithFlowNarrowedNonNullish(ref: Expression, t: Type.Union): Type? {
         val graph = currentArithmeticFlowGraph ?: return null
         if (getReferencePath(ref) == null) return null
-        if (graph.nodeToFlow[nodeKey(ref)] == null) return null
+        if (graph.flowAt(ref) == null) return null
         val saved = currentFlowGraph
         currentFlowGraph = graph
         val narrowed = try {

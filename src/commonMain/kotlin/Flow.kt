@@ -169,7 +169,46 @@ class FlowGraph(
      *  reference position is tsc's `findAncestor(reference, isFunctionOrModuleBlock)`
      *  answer (the SourceFile when none contains it). */
     val containerStarts: List<FlowStart> = emptyList(),
-)
+) {
+    // INV.2(b): nodeId-indexed fast path for [flowAt] — the pilot array-indexed side
+    // table. Pre-computed here from the FINISHED map by walking the tree, so an
+    // in-tree node's array answer is BY CONSTRUCTION exactly what the map returns
+    // for its (pos,end) key — including the extent-ALIASING the Long key produces
+    // (a wrapper and a same-extent child share one map entry; both their slots get
+    // that shared answer). [nodeById] verifies ownership by IDENTITY: any node NOT
+    // in this graph's tree (a synthesized copy, a foreign file's node) takes the
+    // exact legacy map path, so the fast path is behavior-preserving by construction.
+    private val flowById: Array<FlowNode?>
+    private val nodeById: Array<Node?>
+
+    init {
+        val count = sourceFile?.nodeCount ?: 0
+        flowById = arrayOfNulls(count)
+        nodeById = arrayOfNulls(count)
+        if (sourceFile != null && count > 0) {
+            val stack = ArrayList<Node>(64)
+            val push: (Node) -> Unit = { stack.add(it) }
+            stack.add(sourceFile)
+            while (stack.isNotEmpty()) {
+                val node = stack.removeAt(stack.size - 1)
+                val id = (node as NodeBase).nodeId
+                if (id in 0 until count) {
+                    nodeById[id] = node
+                    flowById[id] = nodeToFlow[nodeKey(node)]
+                }
+                forEachChild(node, push)
+            }
+        }
+    }
+
+    /** The flow just before [node] is evaluated — array-indexed for in-tree nodes,
+     *  the legacy [nodeToFlow] lookup for everything else. */
+    fun flowAt(node: Node): FlowNode? {
+        val id = (node as NodeBase).nodeId
+        if (id >= 0 && id < nodeById.size && nodeById[id] === node) return flowById[id]
+        return nodeToFlow[nodeKey(node)]
+    }
+}
 
 // ---------------------------------------------------------------------------
 // FlowGraphBuilder — walks the AST and builds the flow graph
