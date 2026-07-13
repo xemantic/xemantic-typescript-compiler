@@ -59,6 +59,36 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 496 (2026-07-13, same session as 495) — INV.2(b) LANDED: the pilot
+nodeId-array side table — `FlowGraph.flowAt`.** The first consumer of INV.2(a)'s
+identity fields: `FlowGraph` carries `flowById`/`nodeById` arrays sized
+`sourceFile.nodeCount`, PRE-COMPUTED at construction from the FINISHED
+`nodeToFlow` map by a `forEachChild` walk (`array[nodeId] = map[nodeKey(node)]`),
+and `flowAt(node)` serves in-tree lookups from the array behind an IDENTITY
+ownership check (`nodeById[id] === node`), legacy-map fallback otherwise; all 5
+checker read sites migrated. **The design discovery: a naive record-into-
+array[nodeId] migration is NOT faithful** — the Long `nodeKey(pos,end)` ALIASES a
+wrapper and a same-extent child onto one map entry (last-write-wins) and lookups
+for EITHER hit it; pre-computing from the map reproduces the aliasing exactly,
+and the identity check routes synthesized copies (nodeId −1 with real extents)
+and foreign-file nodes (valid-looking ids) to the exact old path — behavior-
+preserving BY CONSTRUCTION. (`nodeTypes` was REJECTED as the pilot: program-wide
+`HashMap<TypeNode, Type>` STRUCTURAL keying with no file context at the lookup
+sites, and the round-473 cross-file structural-collision ecology sits on top of
+it — migrating it is INV.5's (node, mapper) keying, not a drop-in array.)
+**Verification:** suite green 10,228 → 10,231 (+3 `Inv2FlowLookupTest`:
+per-node fast≡legacy equivalence over the rich fixture incl. aliasing;
+ghost-node fallback KEEPS the legacy map hit; foreign-file nodes take the map
+path); `--listAll` byte-identical (interleaved). **Measurement (the (b)
+deliverable):** interleaved wall B/A ×3 NEUTRAL (medians 25,999 vs 26,177 ms —
+inside the noise band); bench row 25,800 ms self / 997 MB (RSS single-run band
+840–997 across recent rows; the arrays' true cost ≈ +16 MB on ~1M nodes); JFR: `HashMap.getNode` = ~6.7% of ALL execution samples
+but the nodeToFlow slice only ~6/139 of those (~0.3% of wall) — the ARRAY
+MECHANISM is validated, and the mass-migration payoff is NOT in more cold
+tables: it is in the hot maps the getNode samples actually sit in (walk-internal
+memos, checker caches) and ultimately INV.4's per-node expression-type cache.
+NEXT: INV.2(c) — full lexical binding, additive (function bodies first).
+
 **Round 495 (2026-07-13) — INV.2(a) LANDED: AST identity foundations.** All 138
 node data classes now extend `NodeBase` (`var nodeId = -1`, `var parent: Node? =
 null`; deliberately NOT implementing `Node` — a non-sealed direct subtype would
@@ -457,69 +487,6 @@ nested functions, a ~1000-name file-level `typeOnlyNames`) that is quadratic cop
   `checkPropertyAccessInExpr` 8.4% incl). Audit `checkMemberAccessMissing`'s per-access
   work for a real wall-clock lever (the round-486 NEXT, still standing).
 
-**Round 486 (2026-07-12) — M5.1/M5.2 allocation discipline: HashSet for per-scope
-name-set copies in the type-as-value + expando walkers (byte-identical).** Commit
-`9ec344e6`. A fresh compiler-profile JFR (28 s / 2,097 samples, post-483 flat profile)
-put the `checkTypeAsValue*`/`visitExpando*` walker family at the top of the
-set-allocation churn: `--callers-of SetsKt___SetsKt.plus` → `checkTypeAsValueInStatements`
-(20) / `visitExpandoStmt` (13) / `visitExpandoExpr` (6); `--callers-of
-AbstractCollection.addAll` the same three. Root cause: those walkers copy the enclosing
-scope's name sets (`typeOnlyNames`/`valueNames`/`namespaceOnlyNames`/expando `shadowed`)
-at EVERY nested function/arrow/class so a child scope can add its own names without
-mutating the parent, and the copies were `.toMutableSet()` / `Set.plus` — both return a
-`LinkedHashSet` (per-element `afterNodeInsertion` + an insertion-ordered linked list),
-pure overhead because these sets are membership-only (verified: zero
-`.joinToString/.sorted/.first/.forEach/.map/.iterator/…` on them file-wide). On tsc's
-own checker.ts (one `createTypeChecker`, hundreds of nested functions, a large
-accumulated name set) that is quadratic LinkedHashSet churn.
-- **Fix:** convert all 15 `.toMutableSet()` + the 4 `Set.plus` copies in the family to
-  plain `HashSet(...)` / `HashSet(a).also { it.addAll(b) }` (the three `typeOnlyNames`/
-  `valueNames`/`namespaceOnlyNames.toMutableSet()` strings are UNIQUE to this walker
-  family per a whole-file grep, so `replace_all` was confined; mirrors round 483 change
-  1's rationale for the per-function-body scope maps).
-- **Verification:** compiler-profile diagnostics byte-identical (46, per-position diff
-  of sorted `error TS` lines empty vs pre-change); full corpus suite green 10,167 →
-  10,171 (+4 local `NestedScopeNameSetPropagationTest` — TS2693 fires three functions
-  deep (typeOnlyNames propagated), a param that shadows a type name as a value
-  propagates into a nested fn (no TS2693), a nested-fn read of an undeclared expando
-  prop fires TS2339 while a declared one does not, and a nested-fn param shadowing the
-  expando base suppresses TS2339). Fresh AFTER JFR: `SetsKt.plus` (3.2%) and
-  `LinkedHashSet.<init>` (2.4%) GONE from the top-90 (~5.6% of samples redistributed to
-  cheaper HashSet ops). **Clean A/B (daemon stopped, 3 runs each, self-reported `time:`):
-  BEFORE (LinkedHashSet) 25.35/25.77/25.43 s vs AFTER (HashSet) 25.35/25.81/25.97 s —
-  WALL-CLOCK-NEUTRAL, within the ~2% box-noise band.** Honest read: this is
-  allocation-discipline hygiene (GC pressure + correct data structure), NOT a wall-clock
-  win — the compiler profile's remaining wall-clock cost is elsewhere
-  (`checkMemberAccessMissing` 5.1% self / 6.5% inclusive, the biggest walker;
-  `narrowTypeFromFlow` + `applyConditionNarrowing` flow narrowing; `getTypeOfExpression`).
-  Recording: `$SCRATCH/r486-compiler.jfr` (before) + `$SCRATCH/r486-after.jfr` (after),
-  session-local. **NEXT M5 lead (fresh JFR):** `checkMemberAccessMissing` is now the
-  clear top walker (5.1% self, 6.5% inclusive; `checkPropertyAccessInExpr` 8.8% inclusive
-  → `checkSinglePropertyAccess` 7.5% → `checkMemberAccessMissing`) — audit its per-access
-  work for a real wall-clock lever, not just allocation churn.
-- **Fix 2 (commit `fe01237d`) — memoize `getLineAndCharacterOfPosition` (a
-  reduce-redundant-WORK lever, not allocation):** it was an O(position) linear newline
-  scan from index 0 on EVERY call — on tsc's ~1.5 MB checker.ts a position near the end
-  is ~1.5 M char comparisons per call, run per-diagnostic + in several walker position
-  computations (0.9% self / 1.9% inclusive). Build a per-source line-start offset table
-  once (memoized by the stable `sourceFile.text` String — JVM String.hashCode cached +
-  equals short-circuits on identity → O(1) lookups after the first per file) and
-  binary-search the greatest offset ≤ min(position, len). Byte-for-byte equivalent
-  result (line/col unchanged for all 46 diagnostics — the sorted diff is empty).
-  `lineStartsCache` declared before `init` (the function runs during init via diagnostic
-  emission). **Same-session A/B (daemon stopped, 4 runs, self `time:`): BEFORE (linear)
-  median 26.75 s vs AFTER (memo) median 26.41 s — ~1.3% faster, matching the ~0.9% self
-  this held.** +2 local `LineAndCharacterMemoTest` (offset-independent: two identical
-  errors N lines apart → exactly an N-line gap + identical column, deep into a large
-  source). Suite 10,171 → 10,173.
-- **Also this session (commit `724fa2bb`) — restored the warning-clean invariant:**
-  round 484 flagged 5 drifted `Checker.kt` compiler warnings; all fixed (redundant
-  `?.`/cast/`else`, each verified to drop no load-bearing smart-cast or side effect —
-  e.g. 129367/129374's `when (arg)` blocks are exhaustive because the function opens
-  with `if (arg !is ArrowFunction && arg !is FunctionExpression) return false`).
-  `compileKotlinJvm compileTestKotlinJvm --rerun-tasks` is 0-`w:` again; diagnostics
-  byte-identical; suite green.
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 (Restored 2026-07-12, round 481 — the queue/backlog/inventory sections had been
@@ -632,10 +599,15 @@ interrupt the arc).
     chains / copy-unindexed / 30k-chain-on-plain-thread). Suite +10 (10,228),
     `--listAll` byte-identical, wall neutral. Gotchas: NodeBase LUB trap +
     power-assert node-toString trap.
-  - [ ] **INV.2(b) Pilot consumer.** Migrate ONE hot pos-keyed side table (pick by
-    INV.0 evidence — Flow's `nodeToFlow` or the checker's `nodeTypes`) to a
-    nodeId-indexed array; byte-diff + suite gate; measure the `HashMap.getNode`
-    JFR delta to validate the array-indexing thesis before mass migration.
+  - [x] **INV.2(b) Pilot consumer.** DONE round 496 (2026-07-13):
+    `FlowGraph.flowAt` — nodeId arrays pre-computed from the finished map
+    (preserves the nodeKey extent-ALIASING) + identity ownership check
+    (synthesized/foreign nodes take the legacy path); 5 checker sites migrated;
+    suite +3, listAll byte-identical, wall neutral. JFR verdict: getNode ≈6.7%
+    of samples but nodeToFlow only ~4% of that slice (~0.3% wall) — mechanism
+    validated; the mass-migration targets are the HOT maps (walk memos, INV.4
+    per-node type cache), not more cold tables. `nodeTypes` rejected as pilot
+    (structural cross-file keying — INV.5 territory).
   - [ ] **INV.2(c) Full lexical binding, additive.** Binder descends into function
     bodies/blocks binding block-scoped decls into NEW per-node scope tables;
     scope symbols from a SEPARATE id space (do NOT touch the global `nextId`

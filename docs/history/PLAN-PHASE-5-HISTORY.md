@@ -1,3 +1,66 @@
+**Round 486 (2026-07-12) — M5.1/M5.2 allocation discipline: HashSet for per-scope
+name-set copies in the type-as-value + expando walkers (byte-identical).** Commit
+`9ec344e6`. A fresh compiler-profile JFR (28 s / 2,097 samples, post-483 flat profile)
+put the `checkTypeAsValue*`/`visitExpando*` walker family at the top of the
+set-allocation churn: `--callers-of SetsKt___SetsKt.plus` → `checkTypeAsValueInStatements`
+(20) / `visitExpandoStmt` (13) / `visitExpandoExpr` (6); `--callers-of
+AbstractCollection.addAll` the same three. Root cause: those walkers copy the enclosing
+scope's name sets (`typeOnlyNames`/`valueNames`/`namespaceOnlyNames`/expando `shadowed`)
+at EVERY nested function/arrow/class so a child scope can add its own names without
+mutating the parent, and the copies were `.toMutableSet()` / `Set.plus` — both return a
+`LinkedHashSet` (per-element `afterNodeInsertion` + an insertion-ordered linked list),
+pure overhead because these sets are membership-only (verified: zero
+`.joinToString/.sorted/.first/.forEach/.map/.iterator/…` on them file-wide). On tsc's
+own checker.ts (one `createTypeChecker`, hundreds of nested functions, a large
+accumulated name set) that is quadratic LinkedHashSet churn.
+- **Fix:** convert all 15 `.toMutableSet()` + the 4 `Set.plus` copies in the family to
+  plain `HashSet(...)` / `HashSet(a).also { it.addAll(b) }` (the three `typeOnlyNames`/
+  `valueNames`/`namespaceOnlyNames.toMutableSet()` strings are UNIQUE to this walker
+  family per a whole-file grep, so `replace_all` was confined; mirrors round 483 change
+  1's rationale for the per-function-body scope maps).
+- **Verification:** compiler-profile diagnostics byte-identical (46, per-position diff
+  of sorted `error TS` lines empty vs pre-change); full corpus suite green 10,167 →
+  10,171 (+4 local `NestedScopeNameSetPropagationTest` — TS2693 fires three functions
+  deep (typeOnlyNames propagated), a param that shadows a type name as a value
+  propagates into a nested fn (no TS2693), a nested-fn read of an undeclared expando
+  prop fires TS2339 while a declared one does not, and a nested-fn param shadowing the
+  expando base suppresses TS2339). Fresh AFTER JFR: `SetsKt.plus` (3.2%) and
+  `LinkedHashSet.<init>` (2.4%) GONE from the top-90 (~5.6% of samples redistributed to
+  cheaper HashSet ops). **Clean A/B (daemon stopped, 3 runs each, self-reported `time:`):
+  BEFORE (LinkedHashSet) 25.35/25.77/25.43 s vs AFTER (HashSet) 25.35/25.81/25.97 s —
+  WALL-CLOCK-NEUTRAL, within the ~2% box-noise band.** Honest read: this is
+  allocation-discipline hygiene (GC pressure + correct data structure), NOT a wall-clock
+  win — the compiler profile's remaining wall-clock cost is elsewhere
+  (`checkMemberAccessMissing` 5.1% self / 6.5% inclusive, the biggest walker;
+  `narrowTypeFromFlow` + `applyConditionNarrowing` flow narrowing; `getTypeOfExpression`).
+  Recording: `$SCRATCH/r486-compiler.jfr` (before) + `$SCRATCH/r486-after.jfr` (after),
+  session-local. **NEXT M5 lead (fresh JFR):** `checkMemberAccessMissing` is now the
+  clear top walker (5.1% self, 6.5% inclusive; `checkPropertyAccessInExpr` 8.8% inclusive
+  → `checkSinglePropertyAccess` 7.5% → `checkMemberAccessMissing`) — audit its per-access
+  work for a real wall-clock lever, not just allocation churn.
+- **Fix 2 (commit `fe01237d`) — memoize `getLineAndCharacterOfPosition` (a
+  reduce-redundant-WORK lever, not allocation):** it was an O(position) linear newline
+  scan from index 0 on EVERY call — on tsc's ~1.5 MB checker.ts a position near the end
+  is ~1.5 M char comparisons per call, run per-diagnostic + in several walker position
+  computations (0.9% self / 1.9% inclusive). Build a per-source line-start offset table
+  once (memoized by the stable `sourceFile.text` String — JVM String.hashCode cached +
+  equals short-circuits on identity → O(1) lookups after the first per file) and
+  binary-search the greatest offset ≤ min(position, len). Byte-for-byte equivalent
+  result (line/col unchanged for all 46 diagnostics — the sorted diff is empty).
+  `lineStartsCache` declared before `init` (the function runs during init via diagnostic
+  emission). **Same-session A/B (daemon stopped, 4 runs, self `time:`): BEFORE (linear)
+  median 26.75 s vs AFTER (memo) median 26.41 s — ~1.3% faster, matching the ~0.9% self
+  this held.** +2 local `LineAndCharacterMemoTest` (offset-independent: two identical
+  errors N lines apart → exactly an N-line gap + identical column, deep into a large
+  source). Suite 10,171 → 10,173.
+- **Also this session (commit `724fa2bb`) — restored the warning-clean invariant:**
+  round 484 flagged 5 drifted `Checker.kt` compiler warnings; all fixed (redundant
+  `?.`/cast/`else`, each verified to drop no load-bearing smart-cast or side effect —
+  e.g. 129367/129374's `when (arg)` blocks are exhaustive because the function opens
+  with `if (arg !is ArrowFunction && arg !is FunctionExpression) return false`).
+  `compileKotlinJvm compileTestKotlinJvm --rerun-tasks` is 0-`w:` again; diagnostics
+  byte-identical; suite green.
+
 **Round 485 (2026-07-12) — CI perf/compliance dashboard: `Bench` GitHub Action
 (owner-requested).** New `.github/workflows/bench.yml` + `scripts/bench-3way.sh`
 compile the pinned TypeScript `compiler` profile with xtsc, reference JS tsc, and
