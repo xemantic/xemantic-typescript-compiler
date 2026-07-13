@@ -49,7 +49,7 @@ class MultiBaseTs2320OccOfTest {
         assertTrue(d != null, "expected TS2320")
         assertTrue(
             d.message.contains("A<string>") && d.message.contains("A<number>"),
-            "${d.message}",
+            d.message,
         )
     }
 

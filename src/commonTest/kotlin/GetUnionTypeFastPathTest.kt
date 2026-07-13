@@ -88,7 +88,7 @@ class GetUnionTypeFastPathTest {
         ).firstOrNull { it.code == 2322 }?.message
         assertTrue(
             msg != null && msg.contains("Type 'string | number'"),
-            "$msg",
+            msg ?: "no TS2322 emitted",
         )
     }
 }
