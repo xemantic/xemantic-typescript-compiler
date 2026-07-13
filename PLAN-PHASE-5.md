@@ -610,12 +610,41 @@ interrupt the arc).
   checker; the point is one canonical tree per file — the INV.2 enabler).
   CLAUDE.md gotcha: a new option-derived Parser argument must extend
   `ParserFlags`, never a parse site inline, or the match reuses a wrong tree.
-- [ ] **INV.2 Bind the world.** Full lexical binding — function bodies + block scopes
-  (dissolves B83.5), container/parent chain, per-file `nodeId` for array-indexed side
-  tables (attacks the `HashMap.getNode` top JFR entry; unlocks the file+node-identity
-  memo keying rounds 481–482 were blocked on). Scope symbols allocate from a SEPARATE
-  id space (no boundary-test reshuffle). Additive: existing walkers keep working; their
-  scope hacks become deletable in INV.4.
+- [ ] **INV.2 Bind the world** — decomposed round 494 (facts verified in-code:
+  `Node` is a sealed interface + ~138 data classes with single-interface supertypes
+  `) : Expression/Node/TypeNode/Statement/Declaration/ClassElement`; there is NO
+  generic child-walk anywhere; nodes have no parent/id fields; `Symbol.id` is a
+  GLOBAL companion `nextId++` (Types.kt:116–127, the ~350-test reshuffle anchor);
+  `nodeKey` is the cross-file-colliding `(pos<<32)|end`). Work the sub-items in
+  order, one commit each:
+  - [ ] **INV.2(a) AST identity foundations.** `abstract class NodeBase`
+    (`var nodeId = -1`, `var parent: Node? = null` — base-class vars are IGNORED
+    by data-class `copy()`/`equals()`, so structural node keys stay byte-identical
+    and a Transformer `copy()` correctly yields an unindexed node) + the ~138
+    mechanical `NodeBase(), ` supertype edits; generic `forEachChild(node) {}`
+    (the 139-kind child enumeration — the one hard deliverable: a missed child
+    position silently exempts a subtree, cf. the MappedType-constraint gotcha);
+    post-parse `indexSourceFile` stamping dense per-file nodeIds + parents +
+    `nodeCount`, invoked from `Parser.parse()` (linear, behavior-free — fields
+    inert until consumed). PIN: a jvmTest REFLECTION oracle (data-class property
+    scan is JVM-only but tests run on JVM) walking every `Node`/`List<Node>`
+    property and asserting forEachChild reaches the identical node set on a rich
+    fixture + real tsc sources; parent-chain-reaches-SourceFile invariant; suite +
+    `--listAll` byte-diff.
+  - [ ] **INV.2(b) Pilot consumer.** Migrate ONE hot pos-keyed side table (pick by
+    INV.0 evidence — Flow's `nodeToFlow` or the checker's `nodeTypes`) to a
+    nodeId-indexed array; byte-diff + suite gate; measure the `HashMap.getNode`
+    JFR delta to validate the array-indexing thesis before mass migration.
+  - [ ] **INV.2(c) Full lexical binding, additive.** Binder descends into function
+    bodies/blocks binding block-scoped decls into NEW per-node scope tables;
+    scope symbols from a SEPARATE id space (do NOT touch the global `nextId`
+    sequence for existing symbols — the reshuffle hazard); existing
+    `locals`/`globals` byte-unchanged; new tables unconsumed until INV.4.
+    Sub-decompose on entry (function bodies first, then blocks).
+  - [ ] **INV.2(d) B83.5 dissolution pilots.** Convert 1–2 checker sites that
+    synthesize transient symbols for unbound block-scoped decls (e.g.
+    `checkPropertyAccessInStatement`'s ClassDeclaration branch) to consume the
+    new tables — proving fidelity walker-by-walker; suite-gated.
 - [ ] **INV.3 Per-file scoping.** Consume `buildPerFileScopes` (built round 17.32a,
   never consumed); module files resolve own-locals + imports + true globals; retire the
   `mergeSymbolTable` globals conflation for module files; delete the conflation
