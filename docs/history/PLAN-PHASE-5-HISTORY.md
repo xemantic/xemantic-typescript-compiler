@@ -1,3 +1,33 @@
+**Round 496 (2026-07-13, same session as 495) — INV.2(b) LANDED: the pilot
+nodeId-array side table — `FlowGraph.flowAt`.** The first consumer of INV.2(a)'s
+identity fields: `FlowGraph` carries `flowById`/`nodeById` arrays sized
+`sourceFile.nodeCount`, PRE-COMPUTED at construction from the FINISHED
+`nodeToFlow` map by a `forEachChild` walk (`array[nodeId] = map[nodeKey(node)]`),
+and `flowAt(node)` serves in-tree lookups from the array behind an IDENTITY
+ownership check (`nodeById[id] === node`), legacy-map fallback otherwise; all 5
+checker read sites migrated. **The design discovery: a naive record-into-
+array[nodeId] migration is NOT faithful** — the Long `nodeKey(pos,end)` ALIASES a
+wrapper and a same-extent child onto one map entry (last-write-wins) and lookups
+for EITHER hit it; pre-computing from the map reproduces the aliasing exactly,
+and the identity check routes synthesized copies (nodeId −1 with real extents)
+and foreign-file nodes (valid-looking ids) to the exact old path — behavior-
+preserving BY CONSTRUCTION. (`nodeTypes` was REJECTED as the pilot: program-wide
+`HashMap<TypeNode, Type>` STRUCTURAL keying with no file context at the lookup
+sites, and the round-473 cross-file structural-collision ecology sits on top of
+it — migrating it is INV.5's (node, mapper) keying, not a drop-in array.)
+**Verification:** suite green 10,228 → 10,231 (+3 `Inv2FlowLookupTest`:
+per-node fast≡legacy equivalence over the rich fixture incl. aliasing;
+ghost-node fallback KEEPS the legacy map hit; foreign-file nodes take the map
+path); `--listAll` byte-identical (interleaved). **Measurement (the (b)
+deliverable):** interleaved wall B/A ×3 NEUTRAL (medians 25,999 vs 26,177 ms —
+inside the noise band); bench row 25,800 ms self / 997 MB (RSS single-run band
+840–997 across recent rows; the arrays' true cost ≈ +16 MB on ~1M nodes); JFR: `HashMap.getNode` = ~6.7% of ALL execution samples
+but the nodeToFlow slice only ~6/139 of those (~0.3% of wall) — the ARRAY
+MECHANISM is validated, and the mass-migration payoff is NOT in more cold
+tables: it is in the hot maps the getNode samples actually sit in (walk-internal
+memos, checker caches) and ultimately INV.4's per-node expression-type cache.
+NEXT: INV.2(c) — full lexical binding, additive (function bodies first).
+
 **Round 495 (2026-07-13) — INV.2(a) LANDED: AST identity foundations.** All 138
 node data classes now extend `NodeBase` (`var nodeId = -1`, `var parent: Node? =
 null`; deliberately NOT implementing `Node` — a non-sealed direct subtype would

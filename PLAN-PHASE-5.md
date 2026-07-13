@@ -59,6 +59,37 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 506 (2026-07-13, same session as 500–505) — INV.3(c)(iii) phase 1
+LANDED: the protected-member cluster node-keyed.** The pw/pmr/pm walkers
+(TS2445/TS2446 protected-access + the assignment-mismatch companion —
+`checkProtectedMemberReadAccess` was #4 in the post-505 conflated-by-pass
+table at 2,198) key their merged-globals fallbacks by the name IDENTIFIER
+node via `lookupPerFileForNode`: the `pwResolveClass`/`pmrResolveClass`
+funnels (which every heritage walker, param-annotation resolution, and
+derives-from chain feeds) plus the two direct consults (`pmrCheckAccess`'s
+static-class receiver, the top-var ctor-init resolution). KEY TECHNIQUE
+(the template for the remaining (iii) sites): the heritage walkers all wrap
+a REAL indexed Identifier in a synthesized `TypeReference(typeName =
+baseName)` — keying by `typeName` (never the wrapper, whose parent is null)
+attributes correctly with ZERO signature changes; a fully-synthesized
+identifier (pmrLocalClass's from-text `Identifier(it)`) has no owner and
+degrades to the legacy merged consult inside the primitive. Suppression-only
+by construction: every consumer resolves a CLASS for a protected-visibility
+verdict, and a conflated resolution could only manufacture a bogus TS2445
+about a class the file never imports (real tsc: TS2304 territory; note the
+imported-class case was ALREADY a silent FN here — the locals hit returns
+the alias with no ClassDeclaration and the walker bails — so the flip
+cannot lose real diagnostics). Verified: suite green 10,284 → 10,289 (+5
+Inv3ProtectedNodeKeyTest — BOTH leak-kill tests FAIL on the pre-flip
+checker via stash: the leaked resolution manufactured TS2445 for an
+unimported foreign class's protected static and for a param annotated with
+an unimported foreign class; 3 preservation controls — same-file instance,
+same-file static, cross-file script — pass both sides); `--listAll`
+byte-identical on compiler AND services vs the pre-505 baseline (46/46);
+bench row in band. NEXT: (iii) phase 2 — the typing-path sites, starting
+with the per-site consumer classification (identifier.fallback is
+round-442 dead-end territory).
+
 **Round 505 (2026-07-13, same session as 500–504) — INV.3(c)(ii) LANDED: the
 kind-domain/enum-discriminant family flipped onto the node-keyed primitive.**
 The ~82% conflated family (round-503 measurement) now keys its merged-globals
@@ -422,36 +453,6 @@ means 26,328 vs 26,550 ms (+0.8%), inside the documented drift band. Tables
 UNCONSUMED until INV.4/INV.2(d). NEXT: INV.2(c)(ii) block-scope containers +
 class scopes, then INV.2(d) B83.5 dissolution pilots.
 
-**Round 496 (2026-07-13, same session as 495) — INV.2(b) LANDED: the pilot
-nodeId-array side table — `FlowGraph.flowAt`.** The first consumer of INV.2(a)'s
-identity fields: `FlowGraph` carries `flowById`/`nodeById` arrays sized
-`sourceFile.nodeCount`, PRE-COMPUTED at construction from the FINISHED
-`nodeToFlow` map by a `forEachChild` walk (`array[nodeId] = map[nodeKey(node)]`),
-and `flowAt(node)` serves in-tree lookups from the array behind an IDENTITY
-ownership check (`nodeById[id] === node`), legacy-map fallback otherwise; all 5
-checker read sites migrated. **The design discovery: a naive record-into-
-array[nodeId] migration is NOT faithful** — the Long `nodeKey(pos,end)` ALIASES a
-wrapper and a same-extent child onto one map entry (last-write-wins) and lookups
-for EITHER hit it; pre-computing from the map reproduces the aliasing exactly,
-and the identity check routes synthesized copies (nodeId −1 with real extents)
-and foreign-file nodes (valid-looking ids) to the exact old path — behavior-
-preserving BY CONSTRUCTION. (`nodeTypes` was REJECTED as the pilot: program-wide
-`HashMap<TypeNode, Type>` STRUCTURAL keying with no file context at the lookup
-sites, and the round-473 cross-file structural-collision ecology sits on top of
-it — migrating it is INV.5's (node, mapper) keying, not a drop-in array.)
-**Verification:** suite green 10,228 → 10,231 (+3 `Inv2FlowLookupTest`:
-per-node fast≡legacy equivalence over the rich fixture incl. aliasing;
-ghost-node fallback KEEPS the legacy map hit; foreign-file nodes take the map
-path); `--listAll` byte-identical (interleaved). **Measurement (the (b)
-deliverable):** interleaved wall B/A ×3 NEUTRAL (medians 25,999 vs 26,177 ms —
-inside the noise band); bench row 25,800 ms self / 997 MB (RSS single-run band
-840–997 across recent rows; the arrays' true cost ≈ +16 MB on ~1M nodes); JFR: `HashMap.getNode` = ~6.7% of ALL execution samples
-but the nodeToFlow slice only ~6/139 of those (~0.3% of wall) — the ARRAY
-MECHANISM is validated, and the mass-migration payoff is NOT in more cold
-tables: it is in the hot maps the getNode samples actually sit in (walk-internal
-memos, checker caches) and ultimately INV.4's per-node expression-type cache.
-NEXT: INV.2(c) — full lexical binding, additive (function bodies first).
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 (Restored 2026-07-12, round 481 — the queue/backlog/inventory sections had been
@@ -762,12 +763,31 @@ interrupt the arc).
       (Inv3KindDomainNodeKeyTest — leak-kill FAILS pre-flip via stash;
       4 preservation controls pass both sides); listAll byte-identical on
       compiler AND services.
-    - (iii) **Flip the current-file-keyed value/callee sites**
-      (identifier.fallback, propAccess.objExpr/base/root, callee.ident,
-      mam.*, pmrCheckAccess, resolveFlowCalleeDecl, isCalleeResolvable) —
-      these read names from the CURRENT file's own AST, so
-      `globalsForFile(currentCheckFileName/fileName, name)` is the right
-      key; suppression-only where the name classifies conflated.
+    - (iii) **Flip the current-file-keyed value/callee sites** — these read
+      names from the CURRENT file's own AST; node-keying by the name's
+      IDENTIFIER node is the uniform shape (equals current-file keying for
+      own nodes); suppression-only where the name classifies conflated.
+      Phase 1 DONE round 506 (2026-07-13): the protected-member cluster
+      (pw/pmr/pm, TS2445/TS2446 — `pmrCheckAccess`'s static consult, the
+      ctor-init consult, and the `pwResolveClass`/`pmrResolveClass` funnels
+      every heritage walker feeds) keys by the name Identifier via
+      `lookupPerFileForNode` — the heritage walkers wrap a REAL indexed
+      Identifier in a synthesized TypeReference, so keying by `typeName`
+      (never the wrapper) needs zero signature changes; a fully-synthesized
+      identifier (pmrLocalClass's from-text one) degrades to the legacy
+      consult inside the primitive. Suite +5 (Inv3ProtectedNodeKeyTest —
+      both leak-kill tests FAIL pre-flip via stash: the leaked resolution
+      manufactured bogus TS2445 about a class the file never imports);
+      listAll byte-identical on compiler AND services. REMAINING phases:
+      the typing-path sites (identifier.fallback ~3.8k, propAccess.objExpr
+      ~3k / base / root, callee.ident/getCalleeType, mam.*,
+      resolveFlowCalleeDecl, isCalleeResolvable, checkPrivateMemberAccess,
+      checkImplicitAnyParameters 2,744 / checkUncalledFunctionsInConditions
+      987 / checkConstAssignment 212 per the post-505 by-pass table) —
+      CAUTION: `getTypeOfIdentifier`'s fallback is the round-442 measured
+      dead-end territory (typing feeds emit/redeclare, not just
+      diagnostics); the visibility gate protects imports, but each flip
+      needs the per-site consumer classification + the full battery.
     - (iv) **Flip the type-position tail** (typeRef.resolve.ident ~1.9k,
       typeNodeDefinitelyNonNullish's globals fallback — the round-424
       barrel-alias fallback already restricted to interface/class/enum) and
