@@ -107,10 +107,39 @@ VERIFIED: 29 pins written FIRST and run against the OLD walkers (23 green,
 the 6 widening pins fail pre-migration as expected — exactly the widened
 positions); suite 10,491 → 10,520 (+29 Inv4SpineBatch8Test, 0 regressions);
 listAll error lines IDENTICAL on ALL 8 profiles (518a vs 517b); warning-clean
-(--rerun-tasks). Ops note: a `pkill -f "MainK[t]"` bracket pattern still
-matched ITSELF because a `pgrep -af "MainKt"` LITERAL sat earlier in the same
-compound command — the bracket trick must cover every occurrence of the
-pattern in the command line, not just the pkill's own argument.
+(--rerun-tasks). Bench row: 26,357 ms self, 46 errors unchanged (the TSV's
+−25% vs-previous compares against round 517's documented drift-artifact row —
+vs the clean 517 band ~26–27 s this is neutral). BATCH 9 same session: FOUR
+more passes (16 walker funs, ~606 lines deleted, 4 init slots removed):
+(1) `checkForInLhsTypeAnnotation` (TS2404) — ForInStatement-enter handler;
+widened faithfully to arrow/fn-expr bodies (the old statement walk had no
+expression descent at all). (2) `checkEmptyTypeArguments` (TS1099 on
+calls/new) — CallExpression/NewExpression-enter; the `<>` source scan from
+the callee start preserved; the type-POSITION TS1099 emitter (emitTS1099's
+other caller at ~27072) untouched; `reportEmptyTypeArgs` deleted as orphaned.
+(3) `checkSetterReturns` (TS2408) — SetAccessor-enter with body;
+`checkSetterBodyReturns` retained (does not cross fn/class boundaries);
+interface/type-literal setters have no body so no parent gate is needed;
+widened to expression positions the finder walk missed (await operands —
+pinned). (4) `checkWithStatements` (TS1101/TS1300/TS2410) — the threaded
+isInWith/isInAsync pair became ONE parent-chain walk from the WithStatement:
+a WithStatement ancestor hit BEFORE any function-like boundary suppresses
+TS1300/TS2410 (inner with of a chain); the nearest function-like boundary
+decides isInAsync (Async modifier on fn-decl/fn-expr/method; ARROWS reset to
+false — the old walker's rule, tsc's AwaitContext would fire for async
+arrows, a signal-driven widening candidate pinned negative; ctors/accessors/
+static blocks/namespaces reset too); TS1101 gated on `spineWithStrictActive`
+(alwaysStrict != false); TS2410's balanced-paren span scan preserved
+verbatim; widened to class property initializers (pinned). VERIFIED: 18 pins
+pre-run against the OLD walkers (14 green, 4 widening pins fail
+pre-migration as expected); suite 10,520 → 10,538 (+18 Inv4SpineBatch9Test,
+0 regressions); listAll error lines IDENTICAL on ALL 8 profiles (518b vs
+518a); warning-clean. Session total: TEN passes, 40 walker funs (~1,508
+lines) deleted, 10 init dispatches removed, suite +47. Ops note: a
+`pkill -f "MainK[t]"` bracket pattern still matched ITSELF because a
+`pgrep -af "MainKt"` LITERAL sat earlier in the same compound command — the
+bracket trick must cover every occurrence of the pattern in the command
+line, not just the pkill's own argument.
 
 **Round 517 (2026-07-14) — INV.4(b) batch 6: duplicate-modifier grammar +
 ambient initializers + switch/case comparability migrated onto the spine;
@@ -1306,10 +1335,31 @@ interrupt the arc).
     listAll error lines IDENTICAL on ALL 8 profiles (518a vs 517b).
     Re-measured --passTiming (pre-batch): checker-init 21.6 s, spine 529 ms
     carrying 24 passes; this batch's six summed ~292 ms of old pass time.
-    NEXT batches: remaining zero-typing tail candidates by the 518 table —
-    checkParamInitForwardRef (TS2373, function-level), checkForInLhsTypeAnnotation
-    (TS2404), checkEmptyTypeArguments (TS1099), checkSetterReturns (TS2408),
-    checkWithStatements (TS1101/TS1300/TS2410, parent-chain isInWith/isInAsync);
+    Batch 9 DONE same round: checkForInLhsTypeAnnotation (TS2404 —
+    ForInStatement-enter; widened faithfully to arrow/fn-expr bodies the old
+    statement walk never descended) + checkEmptyTypeArguments (TS1099 on
+    calls/new — CallExpression/NewExpression-enter; the type-POSITION TS1099
+    emitter sharing emitTS1099 is untouched; reportEmptyTypeArgs deleted as
+    orphaned) + checkSetterReturns (TS2408 — SetAccessor-enter;
+    checkSetterBodyReturns retained as the per-setter body scan, fn-boundary
+    semantics unchanged; widened to await operands etc.) + checkWithStatements
+    (TS1101/TS1300/TS2410 — WithStatement-enter; the threaded isInWith/isInAsync
+    pair became ONE parent-chain walk: first WithStatement ancestor before any
+    function-like boundary → inner-with suppression of TS1300/TS2410; nearest
+    fn boundary's Async modifier decides TS1300, ARROWS still reset async to
+    false (old behavior, tsc's AwaitContext would fire — signal-driven
+    candidate, pinned negative); TS2410's balanced-paren span scan preserved;
+    TS1101 gated on alwaysStrict != false via spineWithStrictActive). 16
+    walker funs (~606 lines) deleted, 4 init slots removed. Suite +18
+    (Inv4SpineBatch9Test — 14 pre-verified against the OLD walkers, 4 widening
+    pins fail pre-migration as expected); listAll error lines IDENTICAL on ALL
+    8 profiles (518b vs 518a). NEXT batches: checkParamInitForwardRef (TS2373,
+    function-level with the ES5 hoisted-body-var TS2454 companion — gate to
+    the old class-decl/fn-decl reach); remaining zero-typing tail by the 518
+    table (checkJumpTargets, checkReservedWordIdentifiers,
+    checkStrictModeReservedWords, checkConflictMarkers (a text scan — may not
+    need the spine), checkDuplicateObjectLiteralProperties,
+    checkObjectLiteralModifiers, checkAwaitContext);
     checkMixinClassConstructor is TP-scope-stateful — (d) territory.
   - [ ] **INV.4(c) The name-resolution pair.** checkUnresolvedNames (846 ms) +
     checkTypeUsedAsValue (734 ms): fold their private NameScope chains into

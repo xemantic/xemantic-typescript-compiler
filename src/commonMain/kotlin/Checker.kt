@@ -949,6 +949,7 @@ class Checker(
     private var spineReservedIfaceParamsActive: Boolean = false
     private var spineForOfNonIterableActive: Boolean = false
     private var spineAbstractAccessorActive: Boolean = false
+    private var spineWithStrictActive: Boolean = false
     // INV.4(b) batch 2 per-file spine state (cleared per file in checkSpine):
     // statement-level object-literal locals (first-wins — TS1320 operand
     // resolution) and their bad-iterator subset (last-BAD-wins — TS2488/TS2504),
@@ -2566,8 +2567,8 @@ class Checker(
         // check spine (INV.4(b) batch 8) — see spineCheckOptionalParamInit.
         // 49/49b. TS1052/TS1053 (set-accessor parameter grammar) migrated to the
         // check spine (INV.4(b) batch 8) — see spineCheckSetAccessorParamGrammar.
-        // 49c. Check for-in left-hand side type annotation (TS2404)
-        pass("checkForInLhsTypeAnnotation") { checkForInLhsTypeAnnotation() }
+        // 49c. TS2404 (for-in LHS type annotation) migrated to the check spine
+        // (INV.4(b) batch 9) — see spineCheckForInLhsType.
         // 50. Check statements in ambient contexts (TS1036)
         pass("checkAmbientStatements") { checkAmbientStatements() }
         // 50b. Check redundant `declare` modifier inside ambient namespaces (TS1038)
@@ -2602,12 +2603,12 @@ class Checker(
         pass("checkExportAsNamespaceSelfCycle") { checkExportAsNamespaceSelfCycle() }
         // 57. Check return statement outside function body (TS1108)
         pass("checkReturnOutsideFunction") { checkReturnOutsideFunction() }
-        // 57b. Check with statements (TS1101 in strict mode, TS2410 always)
-        pass("checkWithStatements") { checkWithStatements() }
+        // 57b. TS1101/TS1300/TS2410 (with statements) migrated to the check
+        // spine (INV.4(b) batch 9) — see spineCheckWithStatement.
         // 58. Check duplicate labels (TS1114)
         pass("checkDuplicateLabels") { checkDuplicateLabels() }
-        // 59. Check empty type argument list (TS1099)
-        pass("checkEmptyTypeArguments") { checkEmptyTypeArguments() }
+        // 59. TS1099 (empty type-argument list on calls/new) migrated to the
+        // check spine (INV.4(b) batch 9) — see spineCheckEmptyTypeArgs.
         // 59b. Check type parameter defaults for self/forward references (TS2744)
         pass("checkTypeParameterDefaults") { checkTypeParameterDefaults() }
         // 60. Check TS2354: importHelpers without tslib
@@ -3122,8 +3123,8 @@ class Checker(
         pass("checkEnumForwardReferences") { checkEnumForwardReferences() }
         // 72b2. Const-enum cluster: TS2474/2475/2476/2477/2478/2567 (AST + const-eval).
         pass("checkConstEnumDiagnostics") { checkConstEnumDiagnostics() }
-        // 72c. Setter bodies may not return a value (TS2408)
-        pass("checkSetterReturns") { checkSetterReturns() }
+        // 72c. TS2408 (setter value-returns) migrated to the check spine
+        // (INV.4(b) batch 9) — see spineCheckSetterReturns.
         // 72d. A class's own name used in a direct member's computed property name is a
         //      TDZ use-before-declaration (TS2449)
         pass("checkClassNameInOwnComputedMemberNames") { checkClassNameInOwnComputedMemberNames() }
@@ -5207,19 +5208,6 @@ class Checker(
         }
     }
 
-    /**
-     * TS2408: a setter (SetAccessor) body may not `return` a value. Each
-     * `return <expr>;` directly within a setter body (not crossing into a nested
-     * function or class) is flagged at the `return` keyword (length 6). A bare
-     * `return;` is allowed. Finds setters anywhere — class declarations/expressions
-     * and object literals, including nested ones.
-     */
-    private fun checkSetterReturns() {
-        for (result in binderResults) {
-            findSettersInStatements(result.sourceFile.statements, result.sourceFile.text, result.sourceFile.fileName)
-        }
-    }
-
     /** Walk a setter body for value-`return` statements, NOT crossing function/class
      *  boundaries (returns inside nested functions belong to those functions). */
     private fun checkSetterBodyReturns(s: Statement, source: String, fileName: String) {
@@ -5256,102 +5244,6 @@ class Checker(
             is LabeledStatement -> checkSetterBodyReturns(s.statement, source, fileName)
             is WithStatement -> checkSetterBodyReturns(s.statement, source, fileName)
             else -> {}   // FunctionDeclaration / ClassDeclaration / etc. — own scope
-        }
-    }
-
-    private fun findSettersInStatements(stmts: List<Statement>, source: String, fileName: String) {
-        for (s in stmts) findSettersInStatement(s, source, fileName)
-    }
-
-    private fun findSettersInStatement(s: Statement, source: String, fileName: String) {
-        when (s) {
-            is ClassDeclaration -> findSettersInMembers(s.members, source, fileName)
-            is FunctionDeclaration -> s.body?.let { findSettersInStatements(it.statements, source, fileName) }
-            is ModuleDeclaration -> when (val b = s.body) {
-                is ModuleBlock -> findSettersInStatements(b.statements, source, fileName)
-                is ModuleDeclaration -> findSettersInStatement(b, source, fileName)
-                else -> {}
-            }
-            is VariableStatement -> for (d in s.declarationList.declarations)
-                d.initializer?.let { findSettersInExpr(it, source, fileName) }
-            is ExpressionStatement -> findSettersInExpr(s.expression, source, fileName)
-            is ReturnStatement -> s.expression?.let { findSettersInExpr(it, source, fileName) }
-            is ThrowStatement -> s.expression?.let { findSettersInExpr(it, source, fileName) }
-            is Block -> findSettersInStatements(s.statements, source, fileName)
-            is IfStatement -> {
-                findSettersInExpr(s.expression, source, fileName)
-                findSettersInStatement(s.thenStatement, source, fileName)
-                s.elseStatement?.let { findSettersInStatement(it, source, fileName) }
-            }
-            is ForStatement -> { (s.initializer as? Statement)?.let { findSettersInStatement(it, source, fileName) }; findSettersInStatement(s.statement, source, fileName) }
-            is ForInStatement -> findSettersInStatement(s.statement, source, fileName)
-            is ForOfStatement -> { findSettersInExpr(s.expression, source, fileName); findSettersInStatement(s.statement, source, fileName) }
-            is WhileStatement -> findSettersInStatement(s.statement, source, fileName)
-            is DoStatement -> findSettersInStatement(s.statement, source, fileName)
-            is SwitchStatement -> for (c in s.caseBlock) when (c) {
-                is CaseClause -> findSettersInStatements(c.statements, source, fileName)
-                is DefaultClause -> findSettersInStatements(c.statements, source, fileName)
-                else -> {}
-            }
-            is TryStatement -> {
-                findSettersInStatement(s.tryBlock, source, fileName)
-                s.catchClause?.block?.let { findSettersInStatement(it, source, fileName) }
-                s.finallyBlock?.let { findSettersInStatement(it, source, fileName) }
-            }
-            is LabeledStatement -> findSettersInStatement(s.statement, source, fileName)
-            is WithStatement -> findSettersInStatement(s.statement, source, fileName)
-            else -> {}
-        }
-    }
-
-    private fun findSettersInMembers(members: List<ClassElement>, source: String, fileName: String) {
-        for (m in members) when (m) {
-            is SetAccessor -> m.body?.let {
-                checkSetterBodyReturns(it, source, fileName)
-                findSettersInStatements(it.statements, source, fileName)
-            }
-            is GetAccessor -> m.body?.let { findSettersInStatements(it.statements, source, fileName) }
-            is MethodDeclaration -> m.body?.let { findSettersInStatements(it.statements, source, fileName) }
-            is Constructor -> m.body?.let { findSettersInStatements(it.statements, source, fileName) }
-            is PropertyDeclaration -> m.initializer?.let { findSettersInExpr(it, source, fileName) }
-            is ClassStaticBlockDeclaration -> findSettersInStatements(m.body.statements, source, fileName)
-            else -> {}
-        }
-    }
-
-    private fun findSettersInExpr(e: Expression, source: String, fileName: String) {
-        when (e) {
-            is ClassExpression -> findSettersInMembers(e.members, source, fileName)
-            is ObjectLiteralExpression -> for (p in e.properties) when (p) {
-                is PropertyAssignment -> findSettersInExpr(p.initializer, source, fileName)
-                is SetAccessor -> p.body?.let {
-                    checkSetterBodyReturns(it, source, fileName)
-                    findSettersInStatements(it.statements, source, fileName)
-                }
-                is GetAccessor -> p.body?.let { findSettersInStatements(it.statements, source, fileName) }
-                is MethodDeclaration -> p.body?.let { findSettersInStatements(it.statements, source, fileName) }
-                is SpreadElement -> findSettersInExpr(p.expression, source, fileName)
-                else -> {}
-            }
-            is ParenthesizedExpression -> findSettersInExpr(e.expression, source, fileName)
-            is BinaryExpression -> { findSettersInExpr(e.left, source, fileName); findSettersInExpr(e.right, source, fileName) }
-            is CallExpression -> { findSettersInExpr(e.expression, source, fileName); e.arguments.forEach { findSettersInExpr(it, source, fileName) } }
-            is NewExpression -> { findSettersInExpr(e.expression, source, fileName); e.arguments?.forEach { findSettersInExpr(it, source, fileName) } }
-            is ArrayLiteralExpression -> e.elements.forEach { findSettersInExpr(it, source, fileName) }
-            is ConditionalExpression -> { findSettersInExpr(e.condition, source, fileName); findSettersInExpr(e.whenTrue, source, fileName); findSettersInExpr(e.whenFalse, source, fileName) }
-            is PropertyAccessExpression -> findSettersInExpr(e.expression, source, fileName)
-            is ElementAccessExpression -> { findSettersInExpr(e.expression, source, fileName); findSettersInExpr(e.argumentExpression, source, fileName) }
-            is SpreadElement -> findSettersInExpr(e.expression, source, fileName)
-            is AsExpression -> findSettersInExpr(e.expression, source, fileName)
-            is NonNullExpression -> findSettersInExpr(e.expression, source, fileName)
-            is ArrowFunction -> when (val b = e.body) {
-                is Block -> findSettersInStatements(b.statements, source, fileName)
-                is Expression -> findSettersInExpr(b, source, fileName)
-                else -> {}
-            }
-            is FunctionExpression -> findSettersInStatements(e.body.statements, source, fileName)
-            is TemplateExpression -> e.templateSpans.forEach { findSettersInExpr(it.expression, source, fileName) }
-            else -> {}
         }
     }
 
@@ -17554,6 +17446,9 @@ class Checker(
                     lname.equals("esnext", ignoreCase = true)
             }
         spineAbstractAccessorActive = options.noImplicitAny || options.strict
+        // TS1101 fires unless alwaysStrict is EXPLICITLY false (the old
+        // checkWithStatements gate).
+        spineWithStrictActive = options.alwaysStrict != false
         val savedLocals = currentFileLocals
         try {
             for (result in binderResults) {
@@ -17656,8 +17551,12 @@ class Checker(
                 spineNoteIterationPosition(node.expression)
                 spineCheckForOfNonIterable(node)
             }
+            is ForInStatement -> spineCheckForInLhsType(node)
             is SpreadElement -> spineNoteIterationPosition(node.expression)
             is YieldExpression -> spineNoteYieldStar(node)
+            is CallExpression -> spineCheckEmptyTypeArgs(node.typeArguments, node.expression)
+            is NewExpression -> spineCheckEmptyTypeArgs(node.typeArguments, node.expression)
+            is WithStatement -> spineCheckWithStatement(node)
             is GetAccessor -> {
                 spineCheckAbstractAccessorReturnType(node)
                 spineCheckGetAccessorGrammar(node)
@@ -17665,6 +17564,7 @@ class Checker(
             is SetAccessor -> {
                 spineCheckSetAccessorGrammar(node)
                 spineCheckSetAccessorParamGrammar(node)
+                spineCheckSetterReturns(node)
             }
             is ClassDeclaration -> {
                 spineCheckAccessorPairVisibility(node)
@@ -18556,6 +18456,175 @@ class Checker(
                 character = character,
                 start = start,
                 length = 3,
+            ))
+        }
+    }
+
+    /**
+     * TS2404 "The left-hand side of a 'for...in' statement cannot use a type
+     * annotation." — migrated from the deleted `checkForInLhsTypeAnnotation`
+     * walk family (INV.4(b) batch 9). Fires per annotated declaration in the
+     * for-in head; squiggle on the variable name. Position-independent tsc
+     * grammar (checkGrammarForInOrForOfStatement), so the spine widens
+     * faithfully to arrow/function-expression bodies the old statement walk
+     * never descended.
+     */
+    private fun spineCheckForInLhsType(node: ForInStatement) {
+        if (spineIsDts) return
+        val init = node.initializer as? VariableDeclarationList ?: return
+        for (decl in init.declarations) {
+            if (decl.type == null) continue
+            val namePos = decl.name.pos
+            val nameLen = when (val n = decl.name) {
+                is Identifier -> n.text.length.coerceAtLeast(1)
+                else -> 1
+            }
+            val (line, character) = getLineAndCharacterOfPosition(spineSource, namePos)
+            diagnostics.add(Diagnostic(
+                message = "The left-hand side of a 'for...in' statement cannot use a type annotation.",
+                category = DiagnosticCategory.Error,
+                code = 2404,
+                fileName = spineFileName,
+                line = line,
+                character = character,
+                start = namePos,
+                length = nameLen,
+            ))
+        }
+    }
+
+    /**
+     * TS1099 "Type argument list cannot be empty." for CALL and NEW
+     * expressions — migrated from the deleted `checkEmptyTypeArguments` walk
+     * family (INV.4(b) batch 9). The `<>` is located by source scan from the
+     * callee start (parser position semantics overshoot past `<`). The
+     * type-POSITION TS1099 emitter (via [emitTS1099]'s other caller) is a
+     * separate, untouched path. Old behavior preserved: type references with
+     * empty args are not this handler's concern.
+     */
+    private fun spineCheckEmptyTypeArgs(typeArguments: List<TypeNode>?, callee: Expression) {
+        if (spineIsDts) return
+        if (typeArguments == null || typeArguments.isNotEmpty()) return
+        val ltIdx = spineSource.indexOf("<>", callee.pos)
+        if (ltIdx < 0) return
+        emitTS1099(ltIdx, spineSource, spineFileName)
+    }
+
+    /**
+     * TS2408 "Setters cannot return a value." — migrated from the deleted
+     * `checkSetterReturns` walk family (INV.4(b) batch 9).
+     * [checkSetterBodyReturns] is retained as the per-setter body scan (it
+     * does not cross nested function/class boundaries — a nested setter gets
+     * its own enter). Interface/type-literal setters have no body, so no
+     * parent gate is needed; the spine widens faithfully to expression
+     * positions the old walk missed (await operands, decorators).
+     */
+    private fun spineCheckSetterReturns(node: SetAccessor) {
+        val body = node.body ?: return
+        checkSetterBodyReturns(body, spineSource, spineFileName)
+    }
+
+    /**
+     * TS1101 ("'with' statements are not allowed in strict mode.") + TS1300
+     * (async function block) + TS2410 (the with-not-supported warning-shaped
+     * error) — migrated from the deleted `checkWithStatements` walk family
+     * (INV.4(b) batch 9). The two threaded flags became one parent-chain
+     * walk: isInWith = a WithStatement ancestor BEFORE any function-like
+     * boundary (TS1300/TS2410 fire only for the outermost with of a chain);
+     * isInAsync = the nearest function-like boundary is an Async-modified
+     * function declaration / function expression / method — ARROWS reset to
+     * false (the old walker's rule; tsc's AwaitContext would fire for async
+     * arrows — a signal-driven widening candidate), as do constructors,
+     * accessors, static blocks, and namespace bodies. TS1101 is gated on
+     * [spineWithStrictActive] (alwaysStrict not explicitly false); TS2410's
+     * balanced-paren span scan is preserved exactly.
+     */
+    private fun spineCheckWithStatement(node: WithStatement) {
+        if (spineIsDts) return
+        var isInWith = false
+        var isInAsync = false
+        var cur = (node as NodeBase).parent
+        loop@ while (cur != null) {
+            when (cur) {
+                is WithStatement -> {
+                    isInWith = true
+                    break@loop
+                }
+                is FunctionDeclaration -> {
+                    isInAsync = ModifierFlag.Async in cur.modifiers
+                    break@loop
+                }
+                is FunctionExpression -> {
+                    isInAsync = ModifierFlag.Async in cur.modifiers
+                    break@loop
+                }
+                is MethodDeclaration -> {
+                    isInAsync = ModifierFlag.Async in cur.modifiers
+                    break@loop
+                }
+                is ArrowFunction, is Constructor, is GetAccessor, is SetAccessor,
+                is ClassStaticBlockDeclaration, is ModuleDeclaration -> break@loop
+                else -> {}
+            }
+            cur = (cur as NodeBase).parent
+        }
+        val source = spineSource
+        var spanStart = node.pos
+        while (spanStart < source.length && source[spanStart].isWhitespace()) spanStart++
+        val (line, character) = getLineAndCharacterOfPosition(source, spanStart)
+        if (spineWithStrictActive) {
+            // TS1101: span = just the 'with' keyword (4 chars)
+            diagnostics.add(Diagnostic(
+                message = "'with' statements are not allowed in strict mode.",
+                category = DiagnosticCategory.Error,
+                code = 1101,
+                fileName = spineFileName,
+                line = line,
+                character = character,
+                start = spanStart,
+                length = 4,
+            ))
+        }
+        // Only the outermost 'with' in a chain draws TS1300 and TS2410.
+        if (isInWith) return
+        if (isInAsync) {
+            diagnostics.add(Diagnostic(
+                message = "'with' statements are not allowed in an async function block.",
+                category = DiagnosticCategory.Error,
+                code = 1300,
+                fileName = spineFileName,
+                line = line,
+                character = character,
+                start = spanStart,
+                length = 4,
+            ))
+        }
+        // TS2410: span = from 'with' to the closing ')' of the condition —
+        // scan forward tracking paren depth; emit only when balanced.
+        var spanEnd2 = spanStart + 4
+        while (spanEnd2 < source.length && source[spanEnd2] != '(') spanEnd2++
+        var depth = 0
+        var balanced = false
+        while (spanEnd2 < source.length) {
+            when (source[spanEnd2]) {
+                '(' -> { depth++; spanEnd2++ }
+                ')' -> {
+                    spanEnd2++
+                    if (--depth == 0) { balanced = true; break }
+                }
+                else -> spanEnd2++
+            }
+        }
+        if (balanced) {
+            diagnostics.add(Diagnostic(
+                message = "The 'with' statement is not supported. All symbols in a 'with' block will have type 'any'.",
+                category = DiagnosticCategory.Error,
+                code = 2410,
+                fileName = spineFileName,
+                line = line,
+                character = character,
+                start = spanStart,
+                length = spanEnd2 - spanStart,
             ))
         }
     }
@@ -71310,87 +71379,6 @@ interface DataView {
     }
 
     // -----------------------------------------------------------------------
-    // TS2404: The left-hand side of a 'for...in' statement cannot use a type annotation
-    // -----------------------------------------------------------------------
-
-    private fun checkForInLhsTypeAnnotation() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            walkForInLhsType(result.sourceFile.statements, source, fileName)
-        }
-    }
-
-    private fun walkForInLhsType(stmts: List<Statement>, source: String, fileName: String) {
-        for (stmt in stmts) {
-            when (stmt) {
-                is ForInStatement -> {
-                    val init = stmt.initializer
-                    if (init is VariableDeclarationList) {
-                        for (decl in init.declarations) {
-                            if (decl.type == null) continue
-                            // TypeScript squiggles the variable name, not the `:`.
-                            val namePos = decl.name.pos
-                            val nameLen = when (val n = decl.name) {
-                                is Identifier -> n.text.length.coerceAtLeast(1)
-                                else -> 1
-                            }
-                            val (line, character) = getLineAndCharacterOfPosition(source, namePos)
-                            diagnostics.add(Diagnostic(
-                                message = "The left-hand side of a 'for...in' statement cannot use a type annotation.",
-                                category = DiagnosticCategory.Error,
-                                code = 2404,
-                                fileName = fileName,
-                                line = line,
-                                character = character,
-                                start = namePos,
-                                length = nameLen,
-                            ))
-                        }
-                    }
-                }
-                is Block -> walkForInLhsType(stmt.statements, source, fileName)
-                is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkForInLhsType(it.statements, source, fileName) }
-                is FunctionDeclaration -> stmt.body?.let { walkForInLhsType(it.statements, source, fileName) }
-                is IfStatement -> {
-                    walkForInLhsType(listOf(stmt.thenStatement), source, fileName)
-                    stmt.elseStatement?.let { walkForInLhsType(listOf(it), source, fileName) }
-                }
-                is WhileStatement -> walkForInLhsType(listOf(stmt.statement), source, fileName)
-                is DoStatement -> walkForInLhsType(listOf(stmt.statement), source, fileName)
-                is ForStatement -> walkForInLhsType(listOf(stmt.statement), source, fileName)
-                is ForOfStatement -> walkForInLhsType(listOf(stmt.statement), source, fileName)
-                is SwitchStatement -> for (clause in stmt.caseBlock) {
-                    when (clause) {
-                        is CaseClause -> walkForInLhsType(clause.statements, source, fileName)
-                        is DefaultClause -> walkForInLhsType(clause.statements, source, fileName)
-                        else -> {}
-                    }
-                }
-                is TryStatement -> {
-                    walkForInLhsType(stmt.tryBlock.statements, source, fileName)
-                    stmt.catchClause?.let { walkForInLhsType(it.block.statements, source, fileName) }
-                    stmt.finallyBlock?.let { walkForInLhsType(it.statements, source, fileName) }
-                }
-                is LabeledStatement -> walkForInLhsType(listOf(stmt.statement), source, fileName)
-                is ClassDeclaration -> {
-                    for (member in stmt.members) {
-                        when (member) {
-                            is MethodDeclaration -> member.body?.let { walkForInLhsType(it.statements, source, fileName) }
-                            is Constructor -> member.body?.let { walkForInLhsType(it.statements, source, fileName) }
-                            is GetAccessor -> member.body?.let { walkForInLhsType(it.statements, source, fileName) }
-                            is SetAccessor -> member.body?.let { walkForInLhsType(it.statements, source, fileName) }
-                            else -> {}
-                        }
-                    }
-                }
-                else -> {}
-            }
-        }
-    }
-
-    // -----------------------------------------------------------------------
     // TS1036: Statements are not allowed in ambient contexts
     // -----------------------------------------------------------------------
 
@@ -74974,245 +74962,6 @@ interface DataView {
     }
 
     // -----------------------------------------------------------------------
-    // TS1101: 'with' statements are not allowed in strict mode
-    // TS2410: The 'with' statement is not supported
-    // -----------------------------------------------------------------------
-
-    private fun checkWithStatements() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            // Strict mode: fires when alwaysStrict is not explicitly false
-            val isStrict = options.alwaysStrict != false
-            walkForWithStatements(result.sourceFile.statements, source, fileName, isStrict, isInAsync = false, isInWith = false)
-        }
-    }
-
-    private fun walkForWithStatements(stmts: List<Statement>, source: String, fileName: String, isStrict: Boolean, isInAsync: Boolean, isInWith: Boolean) {
-        for (stmt in stmts) {
-            walkStmtForWithStatements(stmt, source, fileName, isStrict, isInAsync, isInWith)
-        }
-    }
-
-    private fun walkStmtForWithStatements(stmt: Statement, source: String, fileName: String, isStrict: Boolean, isInAsync: Boolean, isInWith: Boolean) {
-        when (stmt) {
-            is WithStatement -> {
-                var spanStart = stmt.pos
-                while (spanStart < source.length && source[spanStart].isWhitespace()) spanStart++
-                val (line, character) = getLineAndCharacterOfPosition(source, spanStart)
-                if (isStrict) {
-                    // TS1101: span = just the 'with' keyword (4 chars)
-                    diagnostics.add(Diagnostic(
-                        message = "'with' statements are not allowed in strict mode.",
-                        category = DiagnosticCategory.Error,
-                        code = 1101,
-                        fileName = fileName,
-                        line = line,
-                        character = character,
-                        start = spanStart,
-                        length = 4, // "with".length
-                    ))
-                }
-                // Only emit TS1300 and TS2410 for the outermost 'with' in a chain (not nested withs).
-                if (!isInWith) {
-                    if (isInAsync) {
-                        // TS1300: 'with' not allowed in async function block
-                        diagnostics.add(Diagnostic(
-                            message = "'with' statements are not allowed in an async function block.",
-                            category = DiagnosticCategory.Error,
-                            code = 1300,
-                            fileName = fileName,
-                            line = line,
-                            character = character,
-                            start = spanStart,
-                            length = 4,
-                        ))
-                    }
-                    // TS2410: span = from 'with' to closing ')' of the condition.
-                    // Find the matching ')' by scanning forward from 'with ' and tracking depth.
-                    // Only emit TS2410 if the with statement is well-formed (balanced parens).
-                    var spanEnd2 = spanStart + 4 // skip 'with'
-                    while (spanEnd2 < source.length && source[spanEnd2] != '(') spanEnd2++
-                    var depth = 0
-                    var balanced = false
-                    while (spanEnd2 < source.length) {
-                        when (source[spanEnd2]) {
-                            '(' -> { depth++; spanEnd2++ }
-                            ')' -> {
-                                spanEnd2++ // include the ')'
-                                if (--depth == 0) { balanced = true; break }
-                            }
-                            else -> spanEnd2++
-                        }
-                    }
-                    if (balanced) {
-                        val ts2410Length = spanEnd2 - spanStart
-                        diagnostics.add(Diagnostic(
-                            message = "The 'with' statement is not supported. All symbols in a 'with' block will have type 'any'.",
-                            category = DiagnosticCategory.Error,
-                            code = 2410,
-                            fileName = fileName,
-                            line = line,
-                            character = character,
-                            start = spanStart,
-                            length = ts2410Length,
-                        ))
-                    }
-                }
-                // Recurse into the body statement — now inside a with, TS2410 and TS1300 suppressed
-                walkStmtForWithStatements(stmt.statement, source, fileName, isStrict, isInAsync, isInWith = true)
-            }
-            is Block -> walkForWithStatements(stmt.statements, source, fileName, isStrict, isInAsync, isInWith)
-            is IfStatement -> {
-                walkStmtForWithStatements(stmt.thenStatement, source, fileName, isStrict, isInAsync, isInWith)
-                stmt.elseStatement?.let { walkStmtForWithStatements(it, source, fileName, isStrict, isInAsync, isInWith) }
-            }
-            is ForStatement -> walkStmtForWithStatements(stmt.statement, source, fileName, isStrict, isInAsync, isInWith)
-            is ForInStatement -> walkStmtForWithStatements(stmt.statement, source, fileName, isStrict, isInAsync, isInWith)
-            is ForOfStatement -> walkStmtForWithStatements(stmt.statement, source, fileName, isStrict, isInAsync, isInWith)
-            is WhileStatement -> walkStmtForWithStatements(stmt.statement, source, fileName, isStrict, isInAsync, isInWith)
-            is DoStatement -> walkStmtForWithStatements(stmt.statement, source, fileName, isStrict, isInAsync, isInWith)
-            is SwitchStatement -> {
-                for (clause in stmt.caseBlock) {
-                    val stmts2 = when (clause) {
-                        is CaseClause -> clause.statements
-                        is DefaultClause -> clause.statements
-                        else -> emptyList()
-                    }
-                    walkForWithStatements(stmts2, source, fileName, isStrict, isInAsync, isInWith)
-                }
-            }
-            is TryStatement -> {
-                walkForWithStatements(stmt.tryBlock.statements, source, fileName, isStrict, isInAsync, isInWith)
-                stmt.catchClause?.block?.let { walkForWithStatements(it.statements, source, fileName, isStrict, isInAsync, isInWith) }
-                stmt.finallyBlock?.let { walkForWithStatements(it.statements, source, fileName, isStrict, isInAsync, isInWith) }
-            }
-            is LabeledStatement -> walkStmtForWithStatements(stmt.statement, source, fileName, isStrict, isInAsync, isInWith)
-            // Function bodies: recurse, tracking async context, resetting isInWith
-            is FunctionDeclaration -> {
-                val fnIsAsync = ModifierFlag.Async in stmt.modifiers
-                stmt.body?.let { walkForWithStatements(it.statements, source, fileName, isStrict, isInAsync = fnIsAsync, isInWith = false) }
-            }
-            is ClassDeclaration -> {
-                for (member in stmt.members) {
-                    val memberIsAsync = member is MethodDeclaration && ModifierFlag.Async in member.modifiers
-                    val body = when (member) {
-                        is MethodDeclaration -> member.body
-                        is Constructor -> member.body
-                        is GetAccessor -> member.body
-                        is SetAccessor -> member.body
-                        else -> null
-                    }
-                    body?.let { walkForWithStatements(it.statements, source, fileName, isStrict, isInAsync = memberIsAsync, isInWith = false) }
-                }
-            }
-            is ModuleDeclaration -> {
-                val body = stmt.body
-                if (body is ModuleBlock) walkForWithStatements(body.statements, source, fileName, isStrict, isInAsync = false, isInWith = false)
-            }
-            is ExpressionStatement -> walkExprForWithStatements(stmt.expression, source, fileName, isStrict, isInWith)
-            is VariableStatement -> {
-                for (decl in stmt.declarationList.declarations) {
-                    decl.initializer?.let { walkExprForWithStatements(it, source, fileName, isStrict, isInWith) }
-                }
-            }
-            is ReturnStatement -> stmt.expression?.let { walkExprForWithStatements(it, source, fileName, isStrict, isInWith) }
-            is ThrowStatement -> stmt.expression?.let { walkExprForWithStatements(it, source, fileName, isStrict, isInWith) }
-            is ExportAssignment -> walkExprForWithStatements(stmt.expression, source, fileName, isStrict, isInWith)
-            else -> {}
-        }
-    }
-
-    private fun walkExprForWithStatements(expr: Expression, source: String, fileName: String, isStrict: Boolean, isInWith: Boolean) {
-        when (expr) {
-            is FunctionExpression -> {
-                val fnIsAsync = ModifierFlag.Async in expr.modifiers
-                walkForWithStatements(expr.body.statements, source, fileName, isStrict, isInAsync = fnIsAsync, isInWith = false)
-            }
-            is ArrowFunction -> {
-                val body = expr.body
-                if (body is Block) walkForWithStatements(body.statements, source, fileName, isStrict, isInAsync = false, isInWith = false)
-                else if (body is Expression) walkExprForWithStatements(body, source, fileName, isStrict, isInWith)
-            }
-            is ClassExpression -> {
-                for (member in expr.members) {
-                    val memberIsAsync = member is MethodDeclaration && ModifierFlag.Async in member.modifiers
-                    val body = when (member) {
-                        is MethodDeclaration -> member.body
-                        is Constructor -> member.body
-                        is GetAccessor -> member.body
-                        is SetAccessor -> member.body
-                        else -> null
-                    }
-                    body?.let { walkForWithStatements(it.statements, source, fileName, isStrict, isInAsync = memberIsAsync, isInWith = false) }
-                }
-            }
-            is ParenthesizedExpression -> walkExprForWithStatements(expr.expression, source, fileName, isStrict, isInWith)
-            is AsExpression -> walkExprForWithStatements(expr.expression, source, fileName, isStrict, isInWith)
-            is TypeAssertionExpression -> walkExprForWithStatements(expr.expression, source, fileName, isStrict, isInWith)
-            is SatisfiesExpression -> walkExprForWithStatements(expr.expression, source, fileName, isStrict, isInWith)
-            is NonNullExpression -> walkExprForWithStatements(expr.expression, source, fileName, isStrict, isInWith)
-            is BinaryExpression -> {
-                var cur: Expression = expr
-                val rightStack = ArrayDeque<Expression>()
-                while (cur is BinaryExpression) { rightStack.addLast(cur.right); cur = cur.left }
-                walkExprForWithStatements(cur, source, fileName, isStrict, isInWith)
-                while (rightStack.isNotEmpty()) walkExprForWithStatements(rightStack.removeLast(), source, fileName, isStrict, isInWith)
-            }
-            is ConditionalExpression -> {
-                walkExprForWithStatements(expr.condition, source, fileName, isStrict, isInWith)
-                walkExprForWithStatements(expr.whenTrue, source, fileName, isStrict, isInWith)
-                walkExprForWithStatements(expr.whenFalse, source, fileName, isStrict, isInWith)
-            }
-            is CallExpression -> {
-                walkExprForWithStatements(expr.expression, source, fileName, isStrict, isInWith)
-                for (arg in expr.arguments) walkExprForWithStatements(arg, source, fileName, isStrict, isInWith)
-            }
-            is NewExpression -> {
-                walkExprForWithStatements(expr.expression, source, fileName, isStrict, isInWith)
-                expr.arguments?.forEach { walkExprForWithStatements(it, source, fileName, isStrict, isInWith) }
-            }
-            is PropertyAccessExpression -> walkExprForWithStatements(expr.expression, source, fileName, isStrict, isInWith)
-            is ElementAccessExpression -> {
-                walkExprForWithStatements(expr.expression, source, fileName, isStrict, isInWith)
-                walkExprForWithStatements(expr.argumentExpression, source, fileName, isStrict, isInWith)
-            }
-            is ArrayLiteralExpression -> for (e in expr.elements) walkExprForWithStatements(e, source, fileName, isStrict, isInWith)
-            is ObjectLiteralExpression -> for (p in expr.properties) {
-                when (p) {
-                    is PropertyAssignment -> walkExprForWithStatements(p.initializer, source, fileName, isStrict, isInWith)
-                    is SpreadAssignment -> walkExprForWithStatements(p.expression, source, fileName, isStrict, isInWith)
-                    is MethodDeclaration -> {
-                        val mAsync = ModifierFlag.Async in p.modifiers
-                        p.body?.let { walkForWithStatements(it.statements, source, fileName, isStrict, isInAsync = mAsync, isInWith = false) }
-                    }
-                    is GetAccessor -> p.body?.let { walkForWithStatements(it.statements, source, fileName, isStrict, isInAsync = false, isInWith = false) }
-                    is SetAccessor -> p.body?.let { walkForWithStatements(it.statements, source, fileName, isStrict, isInAsync = false, isInWith = false) }
-                    else -> {}
-                }
-            }
-            is SpreadElement -> walkExprForWithStatements(expr.expression, source, fileName, isStrict, isInWith)
-            is PrefixUnaryExpression -> walkExprForWithStatements(expr.operand, source, fileName, isStrict, isInWith)
-            is PostfixUnaryExpression -> walkExprForWithStatements(expr.operand, source, fileName, isStrict, isInWith)
-            is AwaitExpression -> walkExprForWithStatements(expr.expression, source, fileName, isStrict, isInWith)
-            is YieldExpression -> expr.expression?.let { walkExprForWithStatements(it, source, fileName, isStrict, isInWith) }
-            is VoidExpression -> walkExprForWithStatements(expr.expression, source, fileName, isStrict, isInWith)
-            is DeleteExpression -> walkExprForWithStatements(expr.expression, source, fileName, isStrict, isInWith)
-            is TypeOfExpression -> walkExprForWithStatements(expr.expression, source, fileName, isStrict, isInWith)
-            is TemplateExpression -> for (span in expr.templateSpans) walkExprForWithStatements(span.expression, source, fileName, isStrict, isInWith)
-            is TaggedTemplateExpression -> {
-                walkExprForWithStatements(expr.tag, source, fileName, isStrict, isInWith)
-                if (expr.template is TemplateExpression) {
-                    for (span in (expr.template).templateSpans) walkExprForWithStatements(span.expression, source, fileName, isStrict, isInWith)
-                }
-            }
-            is CommaListExpression -> for (e in expr.elements) walkExprForWithStatements(e, source, fileName, isStrict, isInWith)
-            else -> {}
-        }
-    }
-
-    // -----------------------------------------------------------------------
     // TS2815: 'arguments' in class field initializers / static blocks
     // -----------------------------------------------------------------------
 
@@ -75669,183 +75418,6 @@ interface DataView {
             is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkForDuplicateLabels(it.statements, source, fileName, activeLabels) }
             else -> {}
         }
-    }
-
-    // -----------------------------------------------------------------------
-    // TS1099: Type argument list cannot be empty
-    // -----------------------------------------------------------------------
-
-    private fun checkEmptyTypeArguments() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            walkForEmptyTypeArgs(result.sourceFile.statements, source, fileName)
-        }
-    }
-
-    private fun walkForEmptyTypeArgs(stmts: List<Statement>, source: String, fileName: String) {
-        for (stmt in stmts) walkStmtForEmptyTypeArgs(stmt, source, fileName)
-    }
-
-    private fun walkStmtForEmptyTypeArgs(stmt: Statement, source: String, fileName: String) {
-        when (stmt) {
-            is ExpressionStatement -> walkExprForEmptyTypeArgs(stmt.expression, source, fileName)
-            is VariableStatement -> for (d in stmt.declarationList.declarations) {
-                d.initializer?.let { walkExprForEmptyTypeArgs(it, source, fileName) }
-            }
-            is ReturnStatement -> stmt.expression?.let { walkExprForEmptyTypeArgs(it, source, fileName) }
-            is FunctionDeclaration -> stmt.body?.let { walkForEmptyTypeArgs(it.statements, source, fileName) }
-            is ClassDeclaration -> for (m in stmt.members) {
-                when (m) {
-                    is MethodDeclaration -> m.body?.let { walkForEmptyTypeArgs(it.statements, source, fileName) }
-                    is Constructor -> m.body?.let { walkForEmptyTypeArgs(it.statements, source, fileName) }
-                    is GetAccessor -> m.body?.let { walkForEmptyTypeArgs(it.statements, source, fileName) }
-                    is SetAccessor -> m.body?.let { walkForEmptyTypeArgs(it.statements, source, fileName) }
-                    is PropertyDeclaration -> m.initializer?.let { walkExprForEmptyTypeArgs(it, source, fileName) }
-                    else -> {}
-                }
-            }
-            is Block -> walkForEmptyTypeArgs(stmt.statements, source, fileName)
-            is IfStatement -> {
-                walkExprForEmptyTypeArgs(stmt.expression, source, fileName)
-                walkStmtForEmptyTypeArgs(stmt.thenStatement, source, fileName)
-                stmt.elseStatement?.let { walkStmtForEmptyTypeArgs(it, source, fileName) }
-            }
-            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkForEmptyTypeArgs(it.statements, source, fileName) }
-            is ForStatement -> {
-                when (val init = stmt.initializer) {
-                    is VariableDeclarationList -> for (d in init.declarations) d.initializer?.let { walkExprForEmptyTypeArgs(it, source, fileName) }
-                    is Expression -> walkExprForEmptyTypeArgs(init, source, fileName)
-                    else -> {}
-                }
-                stmt.condition?.let { walkExprForEmptyTypeArgs(it, source, fileName) }
-                stmt.incrementor?.let { walkExprForEmptyTypeArgs(it, source, fileName) }
-                walkStmtForEmptyTypeArgs(stmt.statement, source, fileName)
-            }
-            is ForInStatement -> {
-                walkExprForEmptyTypeArgs(stmt.expression, source, fileName)
-                walkStmtForEmptyTypeArgs(stmt.statement, source, fileName)
-            }
-            is ForOfStatement -> {
-                walkExprForEmptyTypeArgs(stmt.expression, source, fileName)
-                walkStmtForEmptyTypeArgs(stmt.statement, source, fileName)
-            }
-            is WhileStatement -> {
-                walkExprForEmptyTypeArgs(stmt.expression, source, fileName)
-                walkStmtForEmptyTypeArgs(stmt.statement, source, fileName)
-            }
-            is DoStatement -> {
-                walkStmtForEmptyTypeArgs(stmt.statement, source, fileName)
-                walkExprForEmptyTypeArgs(stmt.expression, source, fileName)
-            }
-            is SwitchStatement -> {
-                walkExprForEmptyTypeArgs(stmt.expression, source, fileName)
-                for (clause in stmt.caseBlock) {
-                    when (clause) {
-                        is CaseClause -> {
-                            walkExprForEmptyTypeArgs(clause.expression, source, fileName)
-                            walkForEmptyTypeArgs(clause.statements, source, fileName)
-                        }
-                        is DefaultClause -> walkForEmptyTypeArgs(clause.statements, source, fileName)
-                        else -> {}
-                    }
-                }
-            }
-            is TryStatement -> {
-                walkForEmptyTypeArgs(stmt.tryBlock.statements, source, fileName)
-                stmt.catchClause?.block?.let { walkForEmptyTypeArgs(it.statements, source, fileName) }
-                stmt.finallyBlock?.let { walkForEmptyTypeArgs(it.statements, source, fileName) }
-            }
-            is LabeledStatement -> walkStmtForEmptyTypeArgs(stmt.statement, source, fileName)
-            is ThrowStatement -> stmt.expression?.let { walkExprForEmptyTypeArgs(it, source, fileName) }
-            is ExportAssignment -> walkExprForEmptyTypeArgs(stmt.expression, source, fileName)
-            else -> {}
-        }
-    }
-
-    private fun walkExprForEmptyTypeArgs(expr: Expression, source: String, fileName: String) {
-        when (expr) {
-            is CallExpression -> {
-                if (expr.typeArguments != null && expr.typeArguments.isEmpty()) {
-                    reportEmptyTypeArgs(expr, source, fileName)
-                }
-                walkExprForEmptyTypeArgs(expr.expression, source, fileName)
-                for (arg in expr.arguments) walkExprForEmptyTypeArgs(arg, source, fileName)
-            }
-            is NewExpression -> {
-                if (expr.typeArguments != null && expr.typeArguments.isEmpty()) {
-                    reportEmptyTypeArgs(expr, source, fileName)
-                }
-                walkExprForEmptyTypeArgs(expr.expression, source, fileName)
-                expr.arguments?.forEach { walkExprForEmptyTypeArgs(it, source, fileName) }
-            }
-            is BinaryExpression -> {
-                var current: Expression = expr
-                while (current is BinaryExpression) {
-                    walkExprForEmptyTypeArgs(current.right, source, fileName)
-                    current = current.left
-                }
-                walkExprForEmptyTypeArgs(current, source, fileName)
-            }
-            is ParenthesizedExpression -> walkExprForEmptyTypeArgs(expr.expression, source, fileName)
-            is ConditionalExpression -> {
-                walkExprForEmptyTypeArgs(expr.condition, source, fileName)
-                walkExprForEmptyTypeArgs(expr.whenTrue, source, fileName)
-                walkExprForEmptyTypeArgs(expr.whenFalse, source, fileName)
-            }
-            is PropertyAccessExpression -> walkExprForEmptyTypeArgs(expr.expression, source, fileName)
-            is ElementAccessExpression -> {
-                walkExprForEmptyTypeArgs(expr.expression, source, fileName)
-                walkExprForEmptyTypeArgs(expr.argumentExpression, source, fileName)
-            }
-            is ArrowFunction -> {
-                when (val body = expr.body) {
-                    is Block -> walkForEmptyTypeArgs(body.statements, source, fileName)
-                    is Expression -> walkExprForEmptyTypeArgs(body, source, fileName)
-                    else -> {}
-                }
-            }
-            is FunctionExpression -> walkForEmptyTypeArgs(expr.body.statements, source, fileName)
-            is AsExpression -> walkExprForEmptyTypeArgs(expr.expression, source, fileName)
-            is TypeAssertionExpression -> walkExprForEmptyTypeArgs(expr.expression, source, fileName)
-            is SatisfiesExpression -> walkExprForEmptyTypeArgs(expr.expression, source, fileName)
-            is NonNullExpression -> walkExprForEmptyTypeArgs(expr.expression, source, fileName)
-            is PrefixUnaryExpression -> walkExprForEmptyTypeArgs(expr.operand, source, fileName)
-            is PostfixUnaryExpression -> walkExprForEmptyTypeArgs(expr.operand, source, fileName)
-            is SpreadElement -> walkExprForEmptyTypeArgs(expr.expression, source, fileName)
-            is AwaitExpression -> walkExprForEmptyTypeArgs(expr.expression, source, fileName)
-            is YieldExpression -> expr.expression?.let { walkExprForEmptyTypeArgs(it, source, fileName) }
-            is ArrayLiteralExpression -> expr.elements.forEach { walkExprForEmptyTypeArgs(it, source, fileName) }
-            is ObjectLiteralExpression -> for (prop in expr.properties) when (prop) {
-                is PropertyAssignment -> walkExprForEmptyTypeArgs(prop.initializer, source, fileName)
-                is SpreadAssignment -> walkExprForEmptyTypeArgs(prop.expression, source, fileName)
-                else -> {}
-            }
-            is TemplateExpression -> expr.templateSpans.forEach { walkExprForEmptyTypeArgs(it.expression, source, fileName) }
-            is TaggedTemplateExpression -> {
-                walkExprForEmptyTypeArgs(expr.tag, source, fileName)
-                when (val templ = expr.template) {
-                    is TemplateExpression -> templ.templateSpans.forEach { walkExprForEmptyTypeArgs(it.expression, source, fileName) }
-                    else -> {}
-                }
-            }
-            is CommaListExpression -> expr.elements.forEach { walkExprForEmptyTypeArgs(it, source, fileName) }
-            else -> {}
-        }
-    }
-
-    private fun reportEmptyTypeArgs(expr: Node, source: String, fileName: String) {
-        // Find the `<>` in source — search from the expression start (not end, which may
-        // overshoot past `<` due to parser position semantics after nextToken())
-        val searchStart = when (expr) {
-            is CallExpression -> expr.expression.pos
-            is NewExpression -> expr.expression.pos
-            else -> expr.pos
-        }
-        val ltIdx = source.indexOf("<>", searchStart)
-        if (ltIdx < 0) return
-        emitTS1099(ltIdx, source, fileName)
     }
 
     private fun emitTS1099(start: Int, source: String, fileName: String) {
