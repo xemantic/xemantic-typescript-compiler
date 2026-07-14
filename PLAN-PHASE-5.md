@@ -80,11 +80,35 @@ assignment-reduction arm (tsc getAssignmentReducedType — the 4th round-477
 sibling); plus the DIR-RELATIVE resolver leg in `namespaceAliasMemberSymbol`'s
 three arms (the THIRD instance of the round-511 lesson class, purely additive).
 Pins: InstanceofNsQualifiedNarrowingTest (5). VERIFIED: suite 10,346 → 10,351
-(0/3); ALL 8 profiles listAll byte-identical vs pre-deletion. NEXT: deletion #2
-— the `conflatedTypeAliasFiles` ecology (re-key the round-468b
-augmentation-merge compensation onto its OWN gate first — it compensates for
-the still-unmodeled cross-file augmentation MEMBER merge, not the retired
-conflation).
+(0/3); ALL 8 profiles listAll byte-identical vs pre-deletion.
+**Deletion #2 (same session, resumed after an OOM kill): the
+`conflatedTypeAliasFiles` alias-shadow ecology DELETED** (rounds
+443/444/447/464/468b/474/475/476/477): the field, the 1a3 builder, the mam
+receiver bail (+ aliasOwnFileHasProp), `paramTypeIsLeakedConflatedAlias`,
+`returnSourceSatisfiesFileLocalAliasBody`,
+`objectLiteralMatchesConflatedFileLocalTypeAlias`,
+`implicitAnyMemberAnnotationConflated`, the round-477 QualifiedName
+per-file-view dispatch, `qualifiedAliasShadowedTarget` + its return-path
+early-return, the round-474 keyof recovery (2 helpers), the round-464 negative
+gate in typeNodeDefinitelyNonNullish, and isConflatedInterfaceRefNode's alias
+arms. TWO pieces RE-KEYED onto their true conditions (both are NON-conflation
+gaps the alias table happened to gate): (1)
+`objectLiteralSatisfiesAugmentationMergedInterface` — fires on
+augmentation-block `interface X` presence (the un-modeled cross-file
+augmentation MEMBER merge); the gates caught a same-named-CLASS hole
+(jsExportMemberMergedWithModuleAugmentation: `class Abcde { x }` merges
+invisible-to-the-scan members → bail). (2)
+`objectLiteralMatchesFileLocalAliasUnion` — a returned objlit vs a FILE-LOCAL
+alias union name-covering some constituent (the round-438 nullish-strip-only
+objlit gate makes REFERENCE-valued members' guard narrow-DOWNs invisible —
+fixAddMissingMember.ts:410 `{ kind: InfoKind.Enum, token, parentDeclaration }`
+vs `Info | undefined` was the sole 3-profile diff), WITH an explicit-value type
+firewall (ConflatedAliasBodyOwnerContextTest's negative control caught the
+name-only version over-suppressing `{ errors: "not an array" }`). Pins:
+FileLocalAliasUnionReturnTest (3). VERIFIED: suite green (10,351/0/3 + the new
+pins targeted; 10,354 next full run); ALL 8 profiles listAll byte-identical.
+NEXT: deletion #3 — the `conflatedInterfaceFiles` objlit/relation chimera
+bails, then #4 (enum subsets + the per-file-view core + heritage threading).
 
 **Round 512 (2026-07-14) — INV.3(d)(ii)+(iii)+(iv) ALL DONE; the retire branch is
 MERGED TO MAIN: suite fully green, ALL 8 profiles byte-identical to pre-retire.**
