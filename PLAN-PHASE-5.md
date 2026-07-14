@@ -1041,8 +1041,60 @@ interrupt the arc).
   pass and its private scope machinery. Once ONE authoritative walk state exists, land
   the two things that are unsound today: a per-node expression-type cache, and flow
   narrowing folded into reference typing once (collapsing the rounds-408–479
-  per-consumer wiring). The long middle — plan as many small items; corpus + listAll
-  gate every family move.
+  per-consumer wiring). Decomposed round 514. Cross-cutting rules for every
+  sub-item: (1) the spine is dispatched as ONE `pass("checkSpine")` at a FIXED
+  init position (the earliest migrated pass's slot); passes migrating in from
+  LATER positions move their emissions earlier in insertion order — the stable
+  diagnostic sort (start→length→code→message) hides all but exact 4-tuple ties,
+  and the per-migration corpus + listAll gates decide each case. (2) A spine
+  handler sees ALL nodes: a hand-walk's accidental under-visits (arrow bodies,
+  class/function expressions, initializers) become visits — per migrated pass,
+  decide widen-vs-gate by the CLAUDE.md emission-direction rule (a
+  position-independent tsc grammar rule widens faithfully; an FP-firewalled
+  heuristic walker must reproduce its descent gates via parent-chain checks).
+  (3) Every migrated pass with no local pins gets them BEFORE migration (the
+  corpus pins emit bytes, not checker diagnostics — `.errors.txt` is disabled,
+  so local tests are the primary under-emission gate). (4) Suite green +
+  8-profile listAll + bench row per landed commit.
+  - [ ] **INV.4(a) Spine skeleton + pilot migration.** The iterative
+    enter/leave preorder walk per file (explicit stack — parses/checks can run
+    off the deep-stack thread; 10k-chain pinned), per-file spine context
+    FIELDS DECLARED BEFORE `init` (the Kotlin init-order gotcha), per-node
+    `when` dispatch in `spineEnterNode`/`spineLeaveNode` (tsc
+    checkSourceElement-style; handlers = plain private funs, no registry
+    indirection), and an active-handler gate so a run with all migrated
+    handlers gated off SKIPS the walk (bench-neutral while the spine is
+    small). Pilot: `checkAccessorModifierTarget` (TS18045 — zero typing; the
+    threaded `inAmbient` becomes an INV.2 parent-chain ancestry check; its
+    private 78-line walk deleted). Coverage NOTE: the pilot's old walk missed
+    class expressions / arrow bodies — TS18045 is a position-independent
+    grammar rule, so the spine widens faithfully (local pins assert both
+    directions). listAll is VACUOUS for the pilot (profiles target ES2020 →
+    handler off → walk skipped) — the skeleton commit's value is the proven
+    machinery, not the pilot's dashboard delta.
+  - [ ] **INV.4(b) Tail-pass batches.** Migrate the 474-pass sub-100 ms tail
+    (7.3 s = 36.5% of checker-init, round-491 table) in batches of ~5–15 per
+    commit, most-mechanical first (zero-typing grammar/AST-shape walkers with
+    per-file prepasses moving to a file-enter hook); each batch deletes its
+    walks. Re-measure `--passTiming` every few batches; stop batching a shape
+    that resists (stateful scope machinery) and queue it for (c)/(d) instead.
+  - [ ] **INV.4(c) The name-resolution pair.** checkUnresolvedNames (846 ms) +
+    checkTypeUsedAsValue (734 ms): fold their private NameScope chains into
+    spine-maintained authoritative lexical state backed by the INV.2(c)
+    `lexicalScopes` tables (their planned mass consumption).
+  - [ ] **INV.4(d) Mid-weight stateful walkers.** checkUncalledFunctionsInConditions
+    (506 ms), checkArithmeticOperandTypes (271 ms), checkImplicitReturns,
+    checkArgumentCounts, checkDefiniteAssignment, … — each moves its scope
+    machinery onto the shared spine state; decompose per walker when reached.
+  - [ ] **INV.4(e) The top-3 giants.** checkPropertyAccess (3.8 s) →
+    checkTypeAssignability (2.2 s) → checkCallExpressionTypes (1.7 s) — one at
+    a time, each with its own sub-plan when reached (together 38.6% of
+    checker-init; 458k of 595k getTypeOfExpression calls).
+  - [ ] **INV.4(f) The two unlocked soundness wins.** Once one authoritative
+    walk state exists: the per-node expression-type cache (594,779 calls over
+    ~221,844 distinct nodes = ×2.6 recompute), and flow narrowing folded into
+    reference typing once (84,469 depth-0 walks, 68% from property access).
+    Re-measure against the ≤10 s single-threaded compiler-profile target.
 - [ ] **INV.5 Canonical types + explicit instantiation** (absorbs M5.2/M5.3). Intern
   unions/intersections by sorted member-id key; literal interning; explicit mapper
   objects replace the ambient `currentTypeAliasArgs`/TP-scope contexts; instantiated
