@@ -1211,7 +1211,7 @@ interrupt the arc).
     compiler AND services (46/46; header-only argv difference), bench row in
     band. The leave hook is the scope-pop extension point — its pairing gets
     its first real pin when the first stateful migration lands.
-  - [ ] **INV.4(b) Tail-pass batches.** Migrate the 474-pass sub-100 ms tail
+  - [x] **INV.4(b) Tail-pass batches.** Migrate the 474-pass sub-100 ms tail
     (7.3 s = 36.5% of checker-init, round-491 table) in batches of ~5–15 per
     commit, most-mechanical first (zero-typing grammar/AST-shape walkers with
     per-file prepasses moving to a file-enter hook); each batch deletes its
@@ -1474,9 +1474,27 @@ interrupt the arc).
     tail is mostly sub-100 ms each (checkAwaitContext 93 ms — stateful
     isAsync threading + the TS1262 top-level prepass + the batch-8 TS2524
     param-default ownership boundary; decompose when reached, low yield).
-    NEXT: INV.4(c) is the natural next arc; residual (b) candidates:
-    checkAwaitContext, checkConflictMarkers (a text scan — may not need
-    the spine); checkMixinClassConstructor is TP-scope-stateful — (d).
+    Batch 15 DONE round 521 (2026-07-14) — **(b) COMPLETE**: checkAwaitContext
+    (TS1308/TS1103/TS2311/TS1262 — the threaded isAsync/enclosingFunc pair)
+    became THREE rare-node enter handlers (spineCheckAwaitExpr /
+    spineCheckForAwait / spineCheckAwaitCall) driven by ONE full parent-chain
+    walk (`spineAwaitCtx`): the FIRST function-like boundary decides the flags
+    (async modifier; the TS1356 related-info FuncRef — ctor/accessor/prop-init
+    boundaries force sync), and EVERY chain step up to the SourceFile must be
+    an old-walked position (parameter defaults are TS2524's, enum member
+    initializers / computed names / static blocks / heritage / shorthand
+    destructuring defaults / objlit ACCESSOR bodies stay unreached — pinned
+    negative); ModuleDeclaration bodies are TRANSPARENT, preserving the
+    namespace-inherits-module-asyncness quirk (pinned); the TS1262 top-level
+    `await`-binding scan (checkTopLevelAwaitNames, retained) runs per module
+    file from checkSpine's loop and sets the TS2311 suppression flag. 4 walker
+    funs (~310 lines) deleted, 1 init dispatch removed. Suite +27
+    (Inv4SpineBatch15Test — ALL pre-verified against the OLD walker; a pure
+    reach-preserving migration); listAll error lines IDENTICAL on ALL 8
+    profiles (521a vs 520b). Closure decisions: checkConflictMarkers STAYS an
+    init pass (a per-file TEXT scan — the spine walks nodes; there is no walk
+    to delete); checkMixinClassConstructor is TP-scope-stateful → (d). The
+    remaining stateful walkers are (c)/(d) territory.
   - [ ] **INV.4(c) The name-resolution pair.** checkUnresolvedNames (846 ms) +
     checkTypeUsedAsValue (734 ms): fold their private NameScope chains into
     spine-maintained authoritative lexical state backed by the INV.2(c)

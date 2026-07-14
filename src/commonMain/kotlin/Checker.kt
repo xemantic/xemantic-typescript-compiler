@@ -975,6 +975,15 @@ class Checker(
     private var spineStrictFileIsStrict: Boolean = false
     private var spineStrictFileIsExprStrict: Boolean = false
     private var spineStrictFileRealStrict: Boolean = false
+    // INV.4(b) batch 15 per-file await-context flags (computed per file in
+    // checkSpine, from the deleted checkAwaitContext preamble): the INLINE
+    // module detection (narrower than isModuleFile — top-level import/export
+    // statement shapes only) that drives top-level asyncness, and the TS2311
+    // suppression flag set by the TS1262 top-level `await`-binding scan
+    // (tsc only emits TS2311 on resolution FAILURE — a file that genuinely
+    // binds `await` at module top level resolves the call).
+    private var spineAwaitFileIsModule: Boolean = false
+    private var currentFileBindsAwaitTopLevel: Boolean = false
 
     /** True for a file that is EXPLICITLY non-strict (strict/alwaysStrict false,
      *  no module/"use strict") — the let/const-implies-strict TS1212 shortcut must
@@ -2586,8 +2595,10 @@ class Checker(
         if (options.erasableSyntaxOnly) {
             pass("checkErasableSyntaxOnly") { checkErasableSyntaxOnly() }
         }
-        // 46. Check await in non-async context (TS1308)
-        pass("checkAwaitContext") { checkAwaitContext() }
+        // 46. Await in non-async context (TS1308/TS1103/TS2311/TS1262) migrated
+        // to the check spine (INV.4(b) batch 15) — see spineCheckAwaitExpr /
+        // spineCheckForAwait / spineCheckAwaitCall + checkSpine's per-file
+        // TS1262 scan (checkTopLevelAwaitNames).
         // 47. Check declaration name conflicts with built-in global (TS2397)
         pass("checkBuiltinGlobalConflict") { checkBuiltinGlobalConflict() }
         // 48. TS1015 (parameter question mark with initializer) migrated to the
@@ -17516,6 +17527,21 @@ class Checker(
                 }
                 spineStrictFileRealStrict = spineFileIsModule || hasUseStrict ||
                     options.strict == true || options.alwaysStrict == true
+                // Batch 15 per-file await-context state (the deleted
+                // checkAwaitContext preamble, verbatim): inline module
+                // detection + the TS1262 top-level `await`-binding scan
+                // (module files only; sets currentFileBindsAwaitTopLevel).
+                spineAwaitFileIsModule = sf.statements.any { stmt ->
+                    stmt is ImportDeclaration || stmt is ExportDeclaration ||
+                        (stmt is ExportAssignment) ||
+                        (stmt is VariableStatement && ModifierFlag.Export in stmt.modifiers) ||
+                        (stmt is FunctionDeclaration && ModifierFlag.Export in stmt.modifiers) ||
+                        (stmt is ClassDeclaration && ModifierFlag.Export in stmt.modifiers)
+                }
+                currentFileBindsAwaitTopLevel = false
+                if (!spineIsDts && spineAwaitFileIsModule) {
+                    checkTopLevelAwaitNames(sf.statements, spineSource, spineFileName)
+                }
                 currentFileLocals = result.locals
                 spineObjLitVars.clear()
                 spineBadIterVars.clear()
@@ -17626,6 +17652,7 @@ class Checker(
                 spineNoteIterationPosition(node.expression)
                 spineCheckForOfNonIterable(node)
                 spineCheckStrictForInOfDecls(node.initializer)
+                spineCheckForAwait(node)
             }
             is ForInStatement -> {
                 spineCheckForInLhsType(node)
@@ -17633,8 +17660,12 @@ class Checker(
             }
             is SpreadElement -> spineNoteIterationPosition(node.expression)
             is YieldExpression -> spineNoteYieldStar(node)
-            is CallExpression -> spineCheckEmptyTypeArgs(node.typeArguments, node.expression)
+            is CallExpression -> {
+                spineCheckEmptyTypeArgs(node.typeArguments, node.expression)
+                spineCheckAwaitCall(node)
+            }
             is NewExpression -> spineCheckEmptyTypeArgs(node.typeArguments, node.expression)
+            is AwaitExpression -> spineCheckAwaitExpr(node)
             is WithStatement -> spineCheckWithStatement(node)
             is BreakStatement -> spineCheckJumpTarget(node, node.label?.text, isBreak = true)
             is ContinueStatement -> spineCheckJumpTarget(node, node.label?.text, isBreak = false)
@@ -66888,35 +66919,17 @@ interface DataView {
         ))
     }
 
-    private fun checkAwaitContext() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            // Top level of modules is OK for await
-            val isModule = result.sourceFile.statements.any { stmt ->
-                stmt is ImportDeclaration || stmt is ExportDeclaration ||
-                (stmt is ExportAssignment) ||
-                (stmt is VariableStatement && ModifierFlag.Export in stmt.modifiers) ||
-                (stmt is FunctionDeclaration && ModifierFlag.Export in stmt.modifiers) ||
-                (stmt is ClassDeclaration && ModifierFlag.Export in stmt.modifiers)
-            }
-            // TS1262: `await` used as a declared name at the top level of an external
-            // module (tsc binder.ts checkContextualIdentifier — AwaitKeyword +
-            // isExternalModule + isInTopLevelContext). Fn/class declaration NAMES bind
-            // in the surrounding (top-level) scope; import-specifier propertyName is
-            // an identifier-name position (exempt), the binding name is not.
-            currentFileBindsAwaitTopLevel = false
-            if (isModule) checkTopLevelAwaitNames(result.sourceFile.statements, source, fileName)
-            checkAwaitInStatements(result.sourceFile.statements, source, fileName, isAsync = isModule)
-        }
-    }
-
-    /** True while checking a file whose top level binds the name `await` (import/fn/var/class) —
-     * suppresses the TS2311 "Did you mean to write this in an async function?" heuristic, since
-     * `await(...)` then resolves to the real binding (tsc only emits TS2311 on resolution FAILURE). */
-    private var currentFileBindsAwaitTopLevel = false
-
+    /**
+     * TS1262: `await` used as a declared name at the top level of an external
+     * module (tsc binder.ts checkContextualIdentifier — AwaitKeyword +
+     * isExternalModule + isInTopLevelContext). Fn/class declaration NAMES bind
+     * in the surrounding (top-level) scope; import-specifier propertyName is
+     * an identifier-name position (exempt), the binding name is not.
+     * Called per module file from [checkSpine]'s file loop (INV.4(b) batch 15);
+     * also sets [currentFileBindsAwaitTopLevel] (the TS2311 suppression —
+     * `await(...)` then resolves to the real binding; tsc only emits TS2311 on
+     * resolution FAILURE).
+     */
     private fun checkTopLevelAwaitNames(stmts: List<Statement>, source: String, fileName: String) {
         fun emit(name: Identifier?) {
             if (name == null || name.text != "await" || name.pos < 0) return
@@ -66964,269 +66977,246 @@ interface DataView {
         }
     }
 
-    private fun checkAwaitInStatements(stmts: List<Statement>, source: String, fileName: String, isAsync: Boolean, enclosingFunc: FuncRef? = null) {
-        for (stmt in stmts) checkAwaitInStatement(stmt, source, fileName, isAsync, enclosingFunc)
+    // ── INV.4(b) batch 15: await-context handlers on the check spine ───────
+    // (migrated from the deleted checkAwaitContext / checkAwaitInStatements /
+    // checkAwaitInStatement / checkAwaitInExpr walk family)
+
+    /** The (isAsync, enclosingFunc) pair the deleted await walk threaded to a
+     * node's position — see [spineAwaitCtx]. */
+    private class SpineAwaitCtx(val isAsync: Boolean, val funcRef: FuncRef?)
+
+    /**
+     * Reproduces the deleted await-walk's threaded (isAsync, enclosingFunc)
+     * state as a full parent-chain walk: the FIRST function-like boundary on
+     * the way up decides the flags (its `async` modifier; the TS1356
+     * related-info [FuncRef] — null when async), and EVERY step of the chain
+     * up to the SourceFile must be a position the old walk descended (a
+     * boundary's body / initializer, or a walked expression/statement child)
+     * — any other position returns null = unreached, exactly the old walker's
+     * silence. Deliberately unreached (signal-driven widening candidates,
+     * pinned in Inv4SpineBatch15Test): parameter defaults (TS2524 owns them),
+     * enum member initializers, computed member names, class static blocks,
+     * class heritage, shorthand destructuring defaults, and object-literal
+     * ACCESSOR bodies. ModuleDeclaration bodies are TRANSPARENT — a namespace
+     * inherits the file's top-level asyncness ([spineAwaitFileIsModule]), the
+     * old quirk (tsc would fire inside a module file's namespace; we don't).
+     */
+    private fun spineAwaitCtx(start: Node): SpineAwaitCtx? {
+        var decided = false
+        var decidedAsync = false
+        var decidedRef: FuncRef? = null
+        var child: Node = start
+        var cur = (start as NodeBase).parent
+        while (cur != null) {
+            when (cur) {
+                is SourceFile -> return if (decided) SpineAwaitCtx(decidedAsync, decidedRef)
+                    else SpineAwaitCtx(spineAwaitFileIsModule, null)
+                is ArrowFunction -> {
+                    if (child !== cur.body) return null
+                    if (!decided) {
+                        decided = true
+                        decidedAsync = ModifierFlag.Async in cur.modifiers
+                        decidedRef = if (!decidedAsync) spineArrowAwaitRef(cur) else null
+                    }
+                }
+                is FunctionExpression -> {
+                    if (child !== cur.body) return null
+                    if (!decided) {
+                        decided = true
+                        decidedAsync = ModifierFlag.Async in cur.modifiers
+                        decidedRef = if (!decidedAsync) {
+                            val nm = cur.name
+                            if (nm != null) FuncRef(nm.pos, nm.text.length)
+                            else FuncRef(cur.pos, 8) // "function" keyword length
+                        } else null
+                    }
+                }
+                is FunctionDeclaration -> {
+                    if (child !== cur.body) return null
+                    if (!decided) {
+                        decided = true
+                        decidedAsync = ModifierFlag.Async in cur.modifiers
+                        val nm = cur.name
+                        decidedRef = if (!decidedAsync && nm != null) {
+                            FuncRef(nm.pos, nm.text.length)
+                        } else null
+                    }
+                }
+                is MethodDeclaration -> {
+                    if (child !== cur.body) return null
+                    // Reached only for class-decl/class-expr/objlit methods
+                    // (interface methods are bodyless in the parse anyway).
+                    when ((cur as NodeBase).parent) {
+                        is ClassDeclaration, is ClassExpression, is ObjectLiteralExpression -> {}
+                        else -> return null
+                    }
+                    if (!decided) {
+                        decided = true
+                        decidedAsync = ModifierFlag.Async in cur.modifiers
+                        val mid = cur.name as? Identifier
+                        decidedRef = if (!decidedAsync && mid != null) {
+                            FuncRef(mid.pos, mid.text.length)
+                        } else null
+                    }
+                }
+                is Constructor -> {
+                    if (child !== cur.body) return null
+                    if (!decided) {
+                        decided = true
+                        decidedAsync = false
+                        decidedRef = null
+                    }
+                }
+                is GetAccessor -> {
+                    if (child !== cur.body) return null
+                    // Object-literal accessor bodies were never walked.
+                    when ((cur as NodeBase).parent) {
+                        is ClassDeclaration, is ClassExpression -> {}
+                        else -> return null
+                    }
+                    if (!decided) {
+                        decided = true
+                        decidedAsync = false
+                        decidedRef = null
+                    }
+                }
+                is SetAccessor -> {
+                    if (child !== cur.body) return null
+                    when ((cur as NodeBase).parent) {
+                        is ClassDeclaration, is ClassExpression -> {}
+                        else -> return null
+                    }
+                    if (!decided) {
+                        decided = true
+                        decidedAsync = false
+                        decidedRef = null
+                    }
+                }
+                is PropertyDeclaration -> {
+                    if (child !== cur.initializer) return null
+                    if (!decided) {
+                        decided = true
+                        decidedAsync = false
+                        decidedRef = null
+                    }
+                }
+                is ClassDeclaration, is ClassExpression -> when (child) {
+                    // Members were walked; heritage / name / type params were not.
+                    is MethodDeclaration, is Constructor, is PropertyDeclaration,
+                    is GetAccessor, is SetAccessor -> {}
+                    else -> return null
+                }
+                is ModuleDeclaration -> if (child !== cur.body) return null
+                is VariableDeclaration -> if (child !== cur.initializer) return null
+                is PropertyAssignment -> if (child !== cur.initializer) return null
+                is ForOfStatement -> if (child !== cur.expression && child !== cur.statement) return null
+                is ForInStatement -> if (child !== cur.expression && child !== cur.statement) return null
+                is CatchClause -> if (child !== cur.block) return null
+                is TaggedTemplateExpression -> if (child !== cur.tag && child !== cur.template) return null
+                is PropertyAccessExpression -> if (child !== cur.expression) return null
+                // Fully transparent containers — every expression-position
+                // child was walked by the old family.
+                is ModuleBlock, is Block, is IfStatement, is ForStatement,
+                is VariableDeclarationList, is VariableStatement, is WhileStatement,
+                is DoStatement, is TryStatement, is SwitchStatement, is CaseClause,
+                is DefaultClause, is ThrowStatement, is ReturnStatement,
+                is ExpressionStatement, is LabeledStatement, is ExportAssignment,
+                is BinaryExpression, is CallExpression, is NewExpression,
+                is ParenthesizedExpression, is ConditionalExpression,
+                is ElementAccessExpression, is ArrayLiteralExpression,
+                is ObjectLiteralExpression, is SpreadAssignment, is TemplateExpression,
+                is TemplateSpan, is PrefixUnaryExpression, is PostfixUnaryExpression,
+                is SpreadElement, is NonNullExpression, is AsExpression,
+                is TypeAssertionExpression, is SatisfiesExpression, is YieldExpression,
+                is VoidExpression, is DeleteExpression, is TypeOfExpression,
+                is CommaListExpression, is AwaitExpression -> {}
+                else -> return null
+            }
+            child = cur
+            cur = (cur as NodeBase).parent
+        }
+        return null // unindexed / detached tree — no old-walk equivalent
     }
 
-    private fun checkAwaitInStatement(stmt: Statement, source: String, fileName: String, isAsync: Boolean, enclosingFunc: FuncRef? = null) {
-        when (stmt) {
-            is ExpressionStatement -> checkAwaitInExpr(stmt.expression, source, fileName, isAsync, enclosingFunc)
-            is VariableStatement -> for (d in stmt.declarationList.declarations) {
-                d.initializer?.let { checkAwaitInExpr(it, source, fileName, isAsync, enclosingFunc) }
-            }
-            is ReturnStatement -> stmt.expression?.let { checkAwaitInExpr(it, source, fileName, isAsync, enclosingFunc) }
-            is FunctionDeclaration -> {
-                val async = ModifierFlag.Async in stmt.modifiers
-                val funcRef = if (!async && stmt.name != null) FuncRef(stmt.name.pos, stmt.name.text.length) else null
-                stmt.body?.let { checkAwaitInStatements(it.statements, source, fileName, async, funcRef) }
-            }
-            is ClassDeclaration -> {
-                for (m in stmt.members) {
-                    when (m) {
-                        is MethodDeclaration -> {
-                            val async = ModifierFlag.Async in m.modifiers
-                            val mRef = if (!async) { val mid = m.name as? Identifier; if (mid != null) FuncRef(mid.pos, mid.text.length) else null } else null
-                            m.body?.let { checkAwaitInStatements(it.statements, source, fileName, async, mRef) }
-                        }
-                        is Constructor -> m.body?.let { checkAwaitInStatements(it.statements, source, fileName, false, null) }
-                        is PropertyDeclaration -> m.initializer?.let { checkAwaitInExpr(it, source, fileName, false, null) }
-                        is GetAccessor -> m.body?.let { checkAwaitInStatements(it.statements, source, fileName, false, null) }
-                        is SetAccessor -> m.body?.let { checkAwaitInStatements(it.statements, source, fileName, false, null) }
-                        else -> {}
-                    }
-                }
-            }
-            is Block -> checkAwaitInStatements(stmt.statements, source, fileName, isAsync, enclosingFunc)
-            is IfStatement -> {
-                checkAwaitInExpr(stmt.expression, source, fileName, isAsync, enclosingFunc)
-                checkAwaitInStatement(stmt.thenStatement, source, fileName, isAsync, enclosingFunc)
-                stmt.elseStatement?.let { checkAwaitInStatement(it, source, fileName, isAsync, enclosingFunc) }
-            }
-            is ForStatement -> {
-                stmt.initializer?.let { init ->
-                    when (init) {
-                        is VariableDeclarationList -> for (d in init.declarations) {
-                            d.initializer?.let { checkAwaitInExpr(it, source, fileName, isAsync, enclosingFunc) }
-                        }
-                        is Expression -> checkAwaitInExpr(init, source, fileName, isAsync, enclosingFunc)
-                        else -> {}
-                    }
-                }
-                stmt.condition?.let { checkAwaitInExpr(it, source, fileName, isAsync, enclosingFunc) }
-                stmt.incrementor?.let { checkAwaitInExpr(it, source, fileName, isAsync, enclosingFunc) }
-                checkAwaitInStatement(stmt.statement, source, fileName, isAsync, enclosingFunc)
-            }
-            is ForOfStatement -> {
-                if (stmt.awaitModifier && !isAsync) {
-                    // TS1103: 'for await' loops are only allowed within async functions and at the top levels of modules.
-                    val forStart = stmt.pos
-                    val awaitIdx = source.indexOf("await", forStart)
-                    if (awaitIdx >= 0 && awaitIdx < forStart + 20) {
-                        val (line, character) = getLineAndCharacterOfPosition(source, awaitIdx)
-                        diagnostics.add(Diagnostic(
-                            message = "'for await' loops are only allowed within async functions and at the top levels of modules.",
-                            category = DiagnosticCategory.Error,
-                            code = 1103,
-                            fileName = fileName,
-                            line = line,
-                            character = character,
-                            start = awaitIdx,
-                            length = 5, // "await"
-                            relatedInformation = makeAsyncRelated(enclosingFunc, source, fileName),
-                        ))
-                    }
-                }
-                checkAwaitInExpr(stmt.expression, source, fileName, isAsync, enclosingFunc)
-                checkAwaitInStatement(stmt.statement, source, fileName, isAsync, enclosingFunc)
-            }
-            is ForInStatement -> {
-                checkAwaitInExpr(stmt.expression, source, fileName, isAsync, enclosingFunc)
-                checkAwaitInStatement(stmt.statement, source, fileName, isAsync, enclosingFunc)
-            }
-            is WhileStatement -> {
-                checkAwaitInExpr(stmt.expression, source, fileName, isAsync, enclosingFunc)
-                checkAwaitInStatement(stmt.statement, source, fileName, isAsync, enclosingFunc)
-            }
-            is DoStatement -> {
-                checkAwaitInStatement(stmt.statement, source, fileName, isAsync, enclosingFunc)
-                checkAwaitInExpr(stmt.expression, source, fileName, isAsync, enclosingFunc)
-            }
-            is TryStatement -> {
-                checkAwaitInStatements(stmt.tryBlock.statements, source, fileName, isAsync, enclosingFunc)
-                stmt.catchClause?.let { checkAwaitInStatements(it.block.statements, source, fileName, isAsync, enclosingFunc) }
-                stmt.finallyBlock?.let { checkAwaitInStatements(it.statements, source, fileName, isAsync, enclosingFunc) }
-            }
-            is SwitchStatement -> {
-                checkAwaitInExpr(stmt.expression, source, fileName, isAsync, enclosingFunc)
-                for (c in stmt.caseBlock) {
-                    when (c) {
-                        is CaseClause -> {
-                            checkAwaitInExpr(c.expression, source, fileName, isAsync, enclosingFunc)
-                            checkAwaitInStatements(c.statements, source, fileName, isAsync, enclosingFunc)
-                        }
-                        is DefaultClause -> checkAwaitInStatements(c.statements, source, fileName, isAsync, enclosingFunc)
-                        else -> {}
-                    }
-                }
-            }
-            is ThrowStatement -> stmt.expression?.let { checkAwaitInExpr(it, source, fileName, isAsync, enclosingFunc) }
-            is LabeledStatement -> checkAwaitInStatement(stmt.statement, source, fileName, isAsync, enclosingFunc)
-            is ExportAssignment -> checkAwaitInExpr(stmt.expression, source, fileName, isAsync, enclosingFunc)
-            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { checkAwaitInStatements(it.statements, source, fileName, isAsync, enclosingFunc) }
-            else -> {}
+    /** TS1356 related-info anchor for a non-async arrow — points at the `(`
+     * of the parameter list (or the arrow's start), verbatim from the deleted
+     * checkAwaitInExpr ArrowFunction branch. */
+    private fun spineArrowAwaitRef(expr: ArrowFunction): FuncRef {
+        val paramStart = if (expr.hasParenthesizedParameters) {
+            val firstParam = expr.parameters.firstOrNull()
+            if (firstParam != null) {
+                // The '(' is right before the first parameter
+                val parenIdx = spineSource.indexOf('(', expr.pos)
+                if (parenIdx >= 0 && parenIdx < firstParam.pos) parenIdx else expr.pos
+            } else expr.pos
+        } else expr.pos
+        return FuncRef(paramStart, 1) // just the '(' character
+    }
+
+    /** TS1308 — `await` outside an async context (INV.4(b) batch 15). */
+    private fun spineCheckAwaitExpr(expr: AwaitExpression) {
+        if (spineIsDts) return
+        val ctx = spineAwaitCtx(expr) ?: return
+        if (ctx.isAsync) return
+        val (line, character) = getLineAndCharacterOfPosition(spineSource, expr.pos)
+        diagnostics.add(Diagnostic(
+            message = "'await' expressions are only allowed within async functions and at the top levels of modules.",
+            category = DiagnosticCategory.Error,
+            code = 1308,
+            fileName = spineFileName,
+            line = line,
+            character = character,
+            start = expr.pos,
+            length = 5, // "await"
+            relatedInformation = makeAsyncRelated(ctx.funcRef, spineSource, spineFileName),
+        ))
+    }
+
+    /** TS1103 — `for await` outside an async context (INV.4(b) batch 15). */
+    private fun spineCheckForAwait(stmt: ForOfStatement) {
+        if (spineIsDts || !stmt.awaitModifier) return
+        val ctx = spineAwaitCtx(stmt) ?: return
+        if (ctx.isAsync) return
+        val forStart = stmt.pos
+        val awaitIdx = spineSource.indexOf("await", forStart)
+        if (awaitIdx >= 0 && awaitIdx < forStart + 20) {
+            val (line, character) = getLineAndCharacterOfPosition(spineSource, awaitIdx)
+            diagnostics.add(Diagnostic(
+                message = "'for await' loops are only allowed within async functions and at the top levels of modules.",
+                category = DiagnosticCategory.Error,
+                code = 1103,
+                fileName = spineFileName,
+                line = line,
+                character = character,
+                start = awaitIdx,
+                length = 5, // "await"
+                relatedInformation = makeAsyncRelated(ctx.funcRef, spineSource, spineFileName),
+            ))
         }
     }
 
-    private fun checkAwaitInExpr(expr: Expression, source: String, fileName: String, isAsync: Boolean, enclosingFunc: FuncRef? = null) {
-        when (expr) {
-            is AwaitExpression -> {
-                if (!isAsync) {
-                    val start = expr.pos
-                    val (line, character) = getLineAndCharacterOfPosition(source, start)
-                    val relatedInfo = makeAsyncRelated(enclosingFunc, source, fileName)
-                    diagnostics.add(Diagnostic(
-                        message = "'await' expressions are only allowed within async functions and at the top levels of modules.",
-                        category = DiagnosticCategory.Error,
-                        code = 1308,
-                        fileName = fileName,
-                        line = line,
-                        character = character,
-                        start = start,
-                        length = 5, // "await"
-                        relatedInformation = relatedInfo,
-                    ))
-                }
-                expr.expression.let { checkAwaitInExpr(it, source, fileName, isAsync, enclosingFunc) }
-            }
-            is ArrowFunction -> {
-                val async = ModifierFlag.Async in expr.modifiers
-                // For the related info, point to the opening paren of the params
-                val arrowRef = if (!async) {
-                    val paramStart = if (expr.hasParenthesizedParameters) {
-                        // Find the '(' — typically at expr.pos or just before parameters
-                        val firstParam = expr.parameters.firstOrNull()
-                        if (firstParam != null) {
-                            // The '(' is right before the first parameter
-                            val searchStart = expr.pos
-                            val parenIdx = source.indexOf('(', searchStart)
-                            if (parenIdx >= 0 && parenIdx < firstParam.pos) parenIdx else expr.pos
-                        } else expr.pos
-                    } else expr.pos
-                    FuncRef(paramStart, 1) // just the '(' character
-                } else null
-                when (val body = expr.body) {
-                    is Block -> checkAwaitInStatements(body.statements, source, fileName, async, arrowRef)
-                    is Expression -> checkAwaitInExpr(body, source, fileName, async, arrowRef)
-                    else -> {}
-                }
-            }
-            is FunctionExpression -> {
-                val async = ModifierFlag.Async in expr.modifiers
-                val fRef = if (!async) {
-                    if (expr.name != null) FuncRef(expr.name.pos, expr.name.text.length)
-                    else FuncRef(expr.pos, 8) // "function" keyword length
-                } else null
-                expr.body.let { checkAwaitInStatements(it.statements, source, fileName, async, fRef) }
-            }
-            is ClassExpression -> {
-                for (m in expr.members) {
-                    when (m) {
-                        is MethodDeclaration -> {
-                            val async = ModifierFlag.Async in m.modifiers
-                            val mRef = if (!async) { val mid = m.name as? Identifier; if (mid != null) FuncRef(mid.pos, mid.text.length) else null } else null
-                            m.body?.let { checkAwaitInStatements(it.statements, source, fileName, async, mRef) }
-                        }
-                        is Constructor -> m.body?.let { checkAwaitInStatements(it.statements, source, fileName, false, null) }
-                        is PropertyDeclaration -> m.initializer?.let { checkAwaitInExpr(it, source, fileName, false, null) }
-                        is GetAccessor -> m.body?.let { checkAwaitInStatements(it.statements, source, fileName, false, null) }
-                        is SetAccessor -> m.body?.let { checkAwaitInStatements(it.statements, source, fileName, false, null) }
-                        else -> {}
-                    }
-                }
-            }
-            is BinaryExpression -> {
-                var current: Expression = expr
-                while (current is BinaryExpression) {
-                    checkAwaitInExpr(current.right, source, fileName, isAsync, enclosingFunc)
-                    current = current.left
-                }
-                checkAwaitInExpr(current, source, fileName, isAsync, enclosingFunc)
-            }
-            is CallExpression -> {
-                // 17.175: TS2311 — `await(...)` in a sync function parses as
-                // CallExpression with Identifier "await" as callee. The `await`
-                // keyword is reserved only in async/module contexts; outside,
-                // it's a regular identifier — but referencing it here is almost
-                // certainly a missing-async mistake.
-                val callee = expr.expression
-                if (!isAsync && callee is Identifier && callee.text == "await" &&
-                    !currentFileBindsAwaitTopLevel) {
-                    val (line, character) = getLineAndCharacterOfPosition(source, callee.pos)
-                    diagnostics.add(Diagnostic(
-                        message = "Cannot find name 'await'. Did you mean to write this in an async function?",
-                        category = DiagnosticCategory.Error,
-                        code = 2311,
-                        fileName = fileName,
-                        line = line,
-                        character = character,
-                        start = callee.pos,
-                        length = 5,
-                    ))
-                }
-                checkAwaitInExpr(expr.expression, source, fileName, isAsync, enclosingFunc)
-                for (arg in expr.arguments) checkAwaitInExpr(arg, source, fileName, isAsync, enclosingFunc)
-            }
-            is NewExpression -> {
-                checkAwaitInExpr(expr.expression, source, fileName, isAsync, enclosingFunc)
-                expr.arguments?.forEach { checkAwaitInExpr(it, source, fileName, isAsync, enclosingFunc) }
-            }
-            is ParenthesizedExpression -> checkAwaitInExpr(expr.expression, source, fileName, isAsync, enclosingFunc)
-            is ConditionalExpression -> {
-                checkAwaitInExpr(expr.condition, source, fileName, isAsync, enclosingFunc)
-                checkAwaitInExpr(expr.whenTrue, source, fileName, isAsync, enclosingFunc)
-                checkAwaitInExpr(expr.whenFalse, source, fileName, isAsync, enclosingFunc)
-            }
-            is PropertyAccessExpression -> checkAwaitInExpr(expr.expression, source, fileName, isAsync, enclosingFunc)
-            is ElementAccessExpression -> {
-                checkAwaitInExpr(expr.expression, source, fileName, isAsync, enclosingFunc)
-                checkAwaitInExpr(expr.argumentExpression, source, fileName, isAsync, enclosingFunc)
-            }
-            is ArrayLiteralExpression -> for (el in expr.elements) checkAwaitInExpr(el, source, fileName, isAsync, enclosingFunc)
-            is ObjectLiteralExpression -> for (prop in expr.properties) {
-                when (prop) {
-                    is PropertyAssignment -> checkAwaitInExpr(prop.initializer, source, fileName, isAsync, enclosingFunc)
-                    is SpreadAssignment -> checkAwaitInExpr(prop.expression, source, fileName, isAsync, enclosingFunc)
-                    is MethodDeclaration -> {
-                        val async = ModifierFlag.Async in prop.modifiers
-                        val pRef = if (!async) { val pid = prop.name as? Identifier; if (pid != null) FuncRef(pid.pos, pid.text.length) else null } else null
-                        prop.body?.let { checkAwaitInStatements(it.statements, source, fileName, async, pRef) }
-                    }
-                    else -> {}
-                }
-            }
-            is TemplateExpression -> for (span in expr.templateSpans) {
-                checkAwaitInExpr(span.expression, source, fileName, isAsync, enclosingFunc)
-            }
-            is PrefixUnaryExpression -> checkAwaitInExpr(expr.operand, source, fileName, isAsync, enclosingFunc)
-            is PostfixUnaryExpression -> checkAwaitInExpr(expr.operand, source, fileName, isAsync, enclosingFunc)
-            is SpreadElement -> checkAwaitInExpr(expr.expression, source, fileName, isAsync, enclosingFunc)
-            is NonNullExpression -> checkAwaitInExpr(expr.expression, source, fileName, isAsync, enclosingFunc)
-            is AsExpression -> checkAwaitInExpr(expr.expression, source, fileName, isAsync, enclosingFunc)
-            is TypeAssertionExpression -> checkAwaitInExpr(expr.expression, source, fileName, isAsync, enclosingFunc)
-            is SatisfiesExpression -> checkAwaitInExpr(expr.expression, source, fileName, isAsync, enclosingFunc)
-            is YieldExpression -> expr.expression?.let { checkAwaitInExpr(it, source, fileName, isAsync, enclosingFunc) }
-            is TaggedTemplateExpression -> {
-                checkAwaitInExpr(expr.tag, source, fileName, isAsync, enclosingFunc)
-                (expr.template as? TemplateExpression)?.templateSpans?.forEach {
-                    checkAwaitInExpr(it.expression, source, fileName, isAsync, enclosingFunc)
-                }
-            }
-            is VoidExpression -> checkAwaitInExpr(expr.expression, source, fileName, isAsync, enclosingFunc)
-            is DeleteExpression -> checkAwaitInExpr(expr.expression, source, fileName, isAsync, enclosingFunc)
-            is TypeOfExpression -> checkAwaitInExpr(expr.expression, source, fileName, isAsync, enclosingFunc)
-            is CommaListExpression -> for (el in expr.elements) checkAwaitInExpr(el, source, fileName, isAsync, enclosingFunc)
-            else -> {}
-        }
+    /** TS2311 (17.175) — `await(...)` in a sync context parses as a
+     * CallExpression with Identifier "await" as callee; referencing it is
+     * almost certainly a missing-async mistake. Suppressed when the file
+     * genuinely binds `await` at module top level (TS1262 owns those —
+     * [currentFileBindsAwaitTopLevel]). */
+    private fun spineCheckAwaitCall(expr: CallExpression) {
+        if (spineIsDts) return
+        val callee = expr.expression
+        if (callee !is Identifier || callee.text != "await" || currentFileBindsAwaitTopLevel) return
+        val ctx = spineAwaitCtx(expr) ?: return
+        if (ctx.isAsync) return
+        val (line, character) = getLineAndCharacterOfPosition(spineSource, callee.pos)
+        diagnostics.add(Diagnostic(
+            message = "Cannot find name 'await'. Did you mean to write this in an async function?",
+            category = DiagnosticCategory.Error,
+            code = 2311,
+            fileName = spineFileName,
+            line = line,
+            character = character,
+            start = callee.pos,
+            length = 5,
+        ))
     }
 
     // -----------------------------------------------------------------------
