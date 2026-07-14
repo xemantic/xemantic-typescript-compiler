@@ -1,3 +1,38 @@
+**Round 509 (2026-07-13, same session as 508) — INV.3(c)(iv) leg 2 LANDED +
+re-measure: the (c) migration is COMPLETE, INV.3(d) unlocked.** The four
+remaining sites node-keyed: `getTypeFromBaseTypeExpression`'s Identifier
+fallback (the PropertyAccess last-segment fallback stays legacy, mirroring
+getTypeFromTypeReference's QualifiedName convention),
+`emitTs2345ForBareTpArgToConstrainedTpParam`,
+`getOverloadImplementationRelated` (keyed by the overload DECL's own name
+node — a top-level decl's file always declares the name so the merged
+instance is byte-identical; a nested/B83.5-unbound or foreign-collision name
+no longer hands TS2793 a wrong-file impl pointer from the polluted merged
+declarations list), and `calleeReturnAnnotationForImplicitAny` (the
+`uniqueFunctionDeclByName` fallback still covers program-wide-UNIQUE names —
+only ambiguous foreign names change, yielding no annotation instead of the
+merged list's first pick). Verified: suite green 10,311 → 10,316 (+5
+Inv3TypePositionLeg2NodeKeyTest — 2 leak-kills FAIL on the post-leg-1
+checker via stash: an UNIMPORTED foreign heritage base grafting members
+manufactured TS2741 on `const d: D = {}` (post-flip only the correct TS2304
+on the base name remains), and an unimported foreign `take<T extends
+string>` callee manufactured TS2345+TS2208 about an invisible constraint;
+3 preservation controls: imported base + cross-file SCRIPT base keep the
+real TS2741, own-file constrained callee keeps TS2345); `--listAll`
+byte-identical on compiler AND services (46/46 — diffed against the leg-1
+captures, which are HEAD's own outputs). RE-MEASURE (`--passTiming`,
+compiler profile): **CONFLATED 6,165 → 917** (−85%; cumulative from the
+pre-migration 157k → −99.4%), total keyed lookups 2.36M → 2.06M, 97 names
+across 9 passes (top: checkCallExpressionTypes 318 /
+checkTypeAssignability 284 / checkPropertyAccess 273), and the by-NAME table
+(`diag` 140, `clone` 135, `map` 73, `length` 45, `factory` 38, `min`,
+`isIdentifier`, …) is exactly the shadow-detection ecology's
+"does a merged global collide" consults (`registerNestedGlobalShadow*`/
+`applyBodyLocalShadowing`/`shadowNestedFunctionNames`) + tiny tails — the
+deliberately-legacy INV.3(d) scope, per the round-507b prediction. Bench row
+appended. NEXT: INV.3(d) — retire the merge + delete the conflation ecology,
+walker-by-walker, each deletion suite- and listAll-gated.
+
 **Round 508 (2026-07-13) — INV.3(c)(iv) leg 1 LANDED: `resolveTypeNameToSymbol`'s
 Identifier branch + `typeNodeDefinitelyNonNullish`'s two fallbacks node-keyed
 JOINTLY (the round-507c order constraint).** The general type-resolution flip:

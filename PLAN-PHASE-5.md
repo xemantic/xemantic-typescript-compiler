@@ -59,6 +59,47 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 519 (2026-07-14) — INV.4(b) batches 10+11: TS2373 param-init forward
+refs + the break/continue jump-target family migrated onto the check spine;
+6 walker functions (~376 lines) deleted, 2 init dispatches removed.**
+Batch 10: `checkParamInitForwardRef`/`walkForParamInitForwardRef` deleted;
+`checkForwardRefsInParams` (+ `findForwardParamRefs`/`findForwardParamRefsInBlock`/
+`collectHoistedVarNamesFromStmts`) retained as the per-function core,
+dispatched from `spineCheckParamForwardRefs` at every BODIED function-like's
+enter — the old statement walk reached function/class DECLARATIONS only, so
+arrows / function expressions / object-literal methods / class-EXPRESSION
+members are faithful widenings (TS2373 is per-signature tsc grammar,
+position-independent); bodyless signatures keep the old no-check (TS2371
+territory), GetAccessor params stay unchecked (TS1054 territory); the ES5
+hoisted-body-var TS2454 companion rides along unchanged (raw
+`options.target < ES2015` gate). Batch 11: the `checkJumpTargets` family
+(TS1104/TS1105/TS1107/TS1115/TS1116 + TS1344) — the threaded
+inIteration/inSwitch/labelNames/crossedFunctionBoundary flags became ONE
+parent-chain walk (`spineCheckJumpTarget`) that is a direct mirror of tsc
+checkGrammarBreakOrContinueStatement's `while (current)` loop: the first
+function-like ancestor → TS1107 (class static blocks now count — the old
+walk never descended them); a matching LabeledStatement resolves the jump,
+with tsc's isIterationStatement(lookInLabeledStatements=true) nested-label
+unwrap for labeled `continue` — a faithfulness FIX over the old
+immediate-child test (`L1: L2: for(;;){continue L1}` no longer false-fires
+TS1115); an iteration ancestor legalizes unlabeled jumps, a SwitchStatement
+legalizes unlabeled `break`, and a ModuleBlock ancestor suppresses unlabeled
+`break` (the old inSwitch=true namespace rule — TS1036 owns ambient-context
+statements); TS1344 label-on-declaration became a LabeledStatement-enter
+handler (widened to arrow-in-condition positions the old expression walk
+missed); `emitJumpDiagnostic`/`isDeclarationStatement` retained as the
+per-jump core. VERIFIED: 32 pins written FIRST and pre-run against the OLD
+walkers (batch 10: 10 green + 4 widening pins fail pre-migration; batch 11:
+14 green + 3 widening + 1 faithfulness-fix pins fail pre-migration); suite
+10,538 → 10,552 → 10,570 (+14 Inv4SpineBatch10Test, +18
+Inv4SpineBatch11Test, 0 regressions); `--listAll` error lines IDENTICAL on
+ALL 8 profiles after EACH batch (519a vs 518b, 519b vs 519a); warning-clean; bench 25,491 ms self, 46 errors unchanged (single-run −7.9% = the box-drift band). NEXT:
+INV.4(b) batch 12 — the remaining zero-typing tail
+(checkObjectLiteralModifiers as a trivial ObjectLiteralExpression-enter,
+checkDuplicateObjectLiteralProperties, checkReservedWordIdentifiers,
+checkStrictModeReservedWords, checkAwaitContext — the last is stateful
+isAsync threading, decompose when reached).
+
 **Round 518 (2026-07-14) — INV.4(b) batch 8: the parameter-initializer family
 migrated onto the spine; 24 walker functions (~902 lines) deleted, 6 init
 dispatches removed.** Session opened with the queued `--passTiming` re-measure
@@ -609,41 +650,6 @@ session budget, so per protocol the working state is preserved on the branch
 with the worklist decomposed into queue sub-items (d)(i)–(v). Suite on main
 UNCHANGED (10,316 / 0 / 3). NEXT: (d)(i)–(iv) on the branch, then merge, then
 the (v) deletions.
-
-**Round 509 (2026-07-13, same session as 508) — INV.3(c)(iv) leg 2 LANDED +
-re-measure: the (c) migration is COMPLETE, INV.3(d) unlocked.** The four
-remaining sites node-keyed: `getTypeFromBaseTypeExpression`'s Identifier
-fallback (the PropertyAccess last-segment fallback stays legacy, mirroring
-getTypeFromTypeReference's QualifiedName convention),
-`emitTs2345ForBareTpArgToConstrainedTpParam`,
-`getOverloadImplementationRelated` (keyed by the overload DECL's own name
-node — a top-level decl's file always declares the name so the merged
-instance is byte-identical; a nested/B83.5-unbound or foreign-collision name
-no longer hands TS2793 a wrong-file impl pointer from the polluted merged
-declarations list), and `calleeReturnAnnotationForImplicitAny` (the
-`uniqueFunctionDeclByName` fallback still covers program-wide-UNIQUE names —
-only ambiguous foreign names change, yielding no annotation instead of the
-merged list's first pick). Verified: suite green 10,311 → 10,316 (+5
-Inv3TypePositionLeg2NodeKeyTest — 2 leak-kills FAIL on the post-leg-1
-checker via stash: an UNIMPORTED foreign heritage base grafting members
-manufactured TS2741 on `const d: D = {}` (post-flip only the correct TS2304
-on the base name remains), and an unimported foreign `take<T extends
-string>` callee manufactured TS2345+TS2208 about an invisible constraint;
-3 preservation controls: imported base + cross-file SCRIPT base keep the
-real TS2741, own-file constrained callee keeps TS2345); `--listAll`
-byte-identical on compiler AND services (46/46 — diffed against the leg-1
-captures, which are HEAD's own outputs). RE-MEASURE (`--passTiming`,
-compiler profile): **CONFLATED 6,165 → 917** (−85%; cumulative from the
-pre-migration 157k → −99.4%), total keyed lookups 2.36M → 2.06M, 97 names
-across 9 passes (top: checkCallExpressionTypes 318 /
-checkTypeAssignability 284 / checkPropertyAccess 273), and the by-NAME table
-(`diag` 140, `clone` 135, `map` 73, `length` 45, `factory` 38, `min`,
-`isIdentifier`, …) is exactly the shadow-detection ecology's
-"does a merged global collide" consults (`registerNestedGlobalShadow*`/
-`applyBodyLocalShadowing`/`shadowNestedFunctionNames`) + tiny tails — the
-deliberately-legacy INV.3(d) scope, per the round-507b prediction. Bench row
-appended. NEXT: INV.3(d) — retire the merge + delete the conflation ecology,
-walker-by-walker, each deletion suite- and listAll-gated.
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
@@ -1353,13 +1359,45 @@ interrupt the arc).
     walker funs (~606 lines) deleted, 4 init slots removed. Suite +18
     (Inv4SpineBatch9Test — 14 pre-verified against the OLD walkers, 4 widening
     pins fail pre-migration as expected); listAll error lines IDENTICAL on ALL
-    8 profiles (518b vs 518a). NEXT batches: checkParamInitForwardRef (TS2373,
-    function-level with the ES5 hoisted-body-var TS2454 companion — gate to
-    the old class-decl/fn-decl reach); remaining zero-typing tail by the 518
-    table (checkJumpTargets, checkReservedWordIdentifiers,
+    8 profiles (518b vs 518a). Batch 10 DONE round 519 (2026-07-14):
+    checkParamInitForwardRef (TS2373 + the ES5 hoisted-body-var TS2454
+    companion) — checkForwardRefsInParams (+ findForwardParamRefs /
+    findForwardParamRefsInBlock / collectHoistedVarNamesFromStmts) retained
+    as the per-function core, dispatched from spineCheckParamForwardRefs at
+    every BODIED function-like's enter; widened faithfully to arrows /
+    fn-exprs / objlit methods / class-EXPRESSION members
+    (position-independent per-signature tsc grammar); bodyless signatures
+    keep the old no-check (TS2371 territory), GetAccessor params stay
+    unchecked (TS1054 territory). 2 walker funs (~70 lines) deleted, 1 init
+    dispatch removed. Suite +14 (Inv4SpineBatch10Test — 10 pre-verified
+    against the OLD walker, 4 widening pins fail pre-migration as expected);
+    listAll error lines IDENTICAL on ALL 8 profiles (519a vs 518b). Batch 11
+    DONE same round: the checkJumpTargets family (TS1104/TS1105/TS1107/
+    TS1115/TS1116 + TS1344) — the threaded inIteration/inSwitch/labelNames/
+    crossedFunctionBoundary flags became ONE parent-chain walk
+    (spineCheckJumpTarget) mirroring tsc
+    checkGrammarBreakOrContinueStatement's `while (current)` loop: first
+    function-like ancestor → TS1107 (class static blocks now count — a
+    faithful widening); a matching LabeledStatement resolves the jump, with
+    tsc's isIterationStatement(lookInLabeledStatements=true) nested-label
+    unwrap for labeled `continue` — a faithfulness FIX over the old
+    immediate-child test (`L1: L2: for(;;){continue L1}` no longer
+    false-fires TS1115); an iteration ancestor legalizes unlabeled jumps, a
+    SwitchStatement legalizes unlabeled `break`, a ModuleBlock ancestor
+    suppresses unlabeled `break` (the old inSwitch=true namespace rule);
+    TS1344 label-on-declaration became a LabeledStatement-enter handler
+    (widened to arrow-in-condition positions). 4 walker funs (~306 lines)
+    deleted, 1 init dispatch removed; emitJumpDiagnostic /
+    isDeclarationStatement retained as the per-jump core. Suite +18
+    (Inv4SpineBatch11Test — 14 pre-verified against the OLD walker, 3
+    widening + 1 faithfulness-fix pins fail pre-migration as expected);
+    listAll error lines IDENTICAL on ALL 8 profiles (519b vs 519a). NEXT
+    batches: remaining zero-typing tail by the 518 table
+    (checkObjectLiteralModifiers — a trivial ObjectLiteralExpression-enter,
+    checkDuplicateObjectLiteralProperties, checkReservedWordIdentifiers,
     checkStrictModeReservedWords, checkConflictMarkers (a text scan — may not
-    need the spine), checkDuplicateObjectLiteralProperties,
-    checkObjectLiteralModifiers, checkAwaitContext);
+    need the spine), checkAwaitContext (stateful isAsync threading +
+    module-top-level rules — decompose when reached));
     checkMixinClassConstructor is TP-scope-stateful — (d) territory.
   - [ ] **INV.4(c) The name-resolution pair.** checkUnresolvedNames (846 ms) +
     checkTypeUsedAsValue (734 ms): fold their private NameScope chains into
