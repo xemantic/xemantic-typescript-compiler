@@ -99,10 +99,27 @@ arrows + class-property-initializer for-of + nested-if yield*, negative
 controls for sync generators / data-property `then` / match-all fn-type
 keyword rest); listAll error lines IDENTICAL on ALL 8 profiles (compiler +
 services vs the round-514c baselines, the other six vs 513d3e); wall in band
-(compiler 26.8 s vs 27.2 s baseline single-run). NEXT: INV.4(b) batch 3 —
-checkMixinClassConstructor is TP-scope-stateful (likely (d) territory);
-re-consult the round-491 `--passTiming` table for the next most-mechanical
-tail passes.**
+(compiler 26.8 s vs 27.2 s baseline single-run). BATCH 3 same session:
+checkForOfNonIterable (TS2495) + checkAbstractAccessorReturnTypes (TS7033)
+migrated — TS2495's option gate (lib explicitly excludes es2015+/esnext, never
+under noLib) computed once per run (`spineForOfNonIterableActive`), the
+conservative verdict helper `checkForOfExprNonIterable` retained unchanged, the
+handler on ForOfStatement enter (the old walk already descended statements AND
+expressions, so widening is negligible — param defaults pinned); TS7033 as a
+GetAccessor-enter handler with THREE preserved gates: noImplicitAny/strict
+(`spineAbstractAccessorActive`), the `.js`/`.jsx` skip (deliberately NOT
+`spineIsJsLike` — the old pass ran on .mjs/.cjs), and the
+ClassDeclaration-PARENT gate (class-EXPRESSION members stay unchecked — a
+bodyless accessor there is a parse-recovery shape; pinned negative). Faithful
+widening pinned: a class DECLARATION nested in an arrow body (the old
+statement walk had no expression descent). 6 more walker funs deleted + the
+round-514 orphaned TS18045 KDoc swept. VERIFIED: suite 10,396 → 10,405 (+9
+Inv4SpineBatch3Test, 0 regressions); listAll error lines IDENTICAL on ALL 8
+profiles (vs the same-session 515a set); wall in band (compiler 26.5 s).
+Session total: FIVE passes migrated, 22 walker functions (~600 lines)
+deleted, suite +30. NEXT: INV.4(b) batch 4 — checkMixinClassConstructor is
+TP-scope-stateful (likely (d) territory); re-consult the round-491
+`--passTiming` table for the next most-mechanical tail passes.**
 
 **Round 514 (2026-07-14) — INV.4 DECOMPOSED into (a)–(f) + INV.4(a) LANDED: the
 single-pass check spine exists with its first migrated pass.** (Session start:
@@ -1030,9 +1047,17 @@ interrupt the arc).
     widened to a nearest-function-ancestor async-generator gate. 16 walker
     funs deleted (~460 lines), 3 init slots removed. Suite +21
     (Inv4SpineBatch2Test), listAll error lines identical on ALL 8 profiles,
-    wall in band. NEXT batches: checkMixinClassConstructor (TP-scope
-    machinery — maybe (d)); pick the next most-mechanical tail passes from
-    the round-491 table.
+    wall in band. Batch 3 DONE same round: checkForOfNonIterable (TS2495 —
+    the per-run lib-exclusion gate became spineForOfNonIterableActive; the
+    verdict helper checkForOfExprNonIterable retained unchanged) +
+    checkAbstractAccessorReturnTypes (TS7033 — GetAccessor-enter handler;
+    the ClassDeclaration-parent gate keeps class-EXPRESSION members
+    unchecked; the `.js`/`.jsx` skip is deliberately NOT spineIsJsLike —
+    the old pass ran on .mjs/.cjs); 6 more walker funs + the round-514
+    orphaned TS18045 KDoc deleted. Suite +9 (Inv4SpineBatch3Test), listAll
+    identical on ALL 8 profiles. NEXT batches: checkMixinClassConstructor
+    (TP-scope machinery — maybe (d)); pick the next most-mechanical tail
+    passes from the round-491 table.
   - [ ] **INV.4(c) The name-resolution pair.** checkUnresolvedNames (846 ms) +
     checkTypeUsedAsValue (734 ms): fold their private NameScope chains into
     spine-maintained authoritative lexical state backed by the INV.2(c)

@@ -947,6 +947,8 @@ class Checker(
     // Per-handler activation gates, computed once per run in checkSpine.
     private var spineAccessorModifierActive: Boolean = false
     private var spineReservedIfaceParamsActive: Boolean = false
+    private var spineForOfNonIterableActive: Boolean = false
+    private var spineAbstractAccessorActive: Boolean = false
     // INV.4(b) batch 2 per-file spine state (cleared per file in checkSpine):
     // statement-level object-literal locals (first-wins — TS1320 operand
     // resolution) and their bad-iterator subset (last-BAD-wins — TS2488/TS2504),
@@ -1977,18 +1979,13 @@ class Checker(
         // check spine (INV.4(b) batch 2) — see spineCheckRestParam.
         // 7b''. B74.4 TS7051/TS7006 (reserved-word interface params) migrated to
         // the check spine (INV.4(b) batch 1) — see spineCheckReservedWordInterfaceParams.
-        // 17.218: TS2495 — `for-of <expr>` where expr is non-iterable. Only fires
-        // when the user's `@lib` excludes es2015+ (es2015.iterable provides
-        // Symbol.iterator); without it, only Array and string are iterable.
-        pass("checkForOfNonIterable") { checkForOfNonIterable() }
+        // 17.218: TS2495 (for-of over a non-iterable under es5-only @lib) migrated
+        // to the check spine (INV.4(b) batch 3) — see spineCheckForOfNonIterable.
         // B438e: TS2488/TS2504 (iterator method REQUIRING a parameter) migrated to
         // the check spine (INV.4(b) batch 2) — see spineCollectObjLitVar /
         // spineResolveDeferredIterationChecks.
-        // 7b''. TS7033: Abstract get accessor with no return type annotation → implicit any.
-        // Gated on noImplicitAny/strict.
-        if (options.noImplicitAny || options.strict) {
-            pass("checkAbstractAccessorReturnTypes") { checkAbstractAccessorReturnTypes() }
-        }
+        // 7b''. TS7033 (bodyless get accessor without return annotation) migrated to
+        // the check spine (INV.4(b) batch 3) — see spineCheckAbstractAccessorReturnType.
         // 7b'''. INV.4 single-pass check spine (round 514): ONE preorder walk
         // per file dispatching all MIGRATED per-node checks (TS18045
         // accessor-modifier-vs-target; TS2669/TS2670 global-augmentation
@@ -17480,173 +17477,6 @@ class Checker(
         return if (types.isEmpty()) "never" else types.joinToString(" | ")
     }
 
-    /**
-     * 17.218: TS2495 "Type 'X' is not an array type or a string type."
-     *
-     * Fires for `for (... of <expr>)` when the iterable expression's type
-     * isn't a known iterable (Array, string, any) AND the user's `@lib`
-     * configuration excludes es2015.iterable. Under es5-only lib, only
-     * Array and string are iterable; bare object types and primitive
-     * non-string types fail with TS2495.
-     *
-     * Conservative gate: only fire for clearly non-iterable types
-     * (Type.Intrinsic non-string/any, anonymous Type.Object without a
-     * symbol). Skip everything else to avoid FP regressions.
-     */
-    private fun checkForOfNonIterable() {
-        // Skip entirely when @noLib — no types are loaded, so iterability
-        // checks make no sense (TS2318 fires for missing globals instead).
-        if (options.noLib) return
-        // Only fires when @lib explicitly excludes ES2015+ iterables.
-        val libExcludesIterable = options.lib.isNotEmpty() &&
-            options.lib.none { lname ->
-                lname.startsWith("es2", ignoreCase = true) ||
-                    lname.equals("esnext", ignoreCase = true)
-            }
-        if (!libExcludesIterable) return
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            walkForOfNonIterable(result.sourceFile.statements, source, fileName)
-        }
-    }
-
-    private fun walkForOfNonIterable(stmts: List<Statement>, source: String, fileName: String) {
-        for (stmt in stmts) {
-            walkForOfNonIterableStmt(stmt, source, fileName)
-        }
-    }
-
-    private fun walkForOfNonIterableStmt(stmt: Statement, source: String, fileName: String) {
-        when (stmt) {
-            is ForOfStatement -> {
-                checkForOfExprNonIterable(stmt.expression, source, fileName)
-                walkForOfNonIterableStmt(stmt.statement, source, fileName)
-            }
-            is Block -> walkForOfNonIterable(stmt.statements, source, fileName)
-            is IfStatement -> {
-                walkForOfNonIterableStmt(stmt.thenStatement, source, fileName)
-                stmt.elseStatement?.let { walkForOfNonIterableStmt(it, source, fileName) }
-            }
-            is ForStatement -> walkForOfNonIterableStmt(stmt.statement, source, fileName)
-            is ForInStatement -> walkForOfNonIterableStmt(stmt.statement, source, fileName)
-            is WhileStatement -> walkForOfNonIterableStmt(stmt.statement, source, fileName)
-            is DoStatement -> walkForOfNonIterableStmt(stmt.statement, source, fileName)
-            is FunctionDeclaration -> stmt.body?.let { walkForOfNonIterable(it.statements, source, fileName) }
-            is ClassDeclaration -> {
-                for (member in stmt.members) when (member) {
-                    is MethodDeclaration -> member.body?.let { walkForOfNonIterable(it.statements, source, fileName) }
-                    is Constructor -> member.body?.let { walkForOfNonIterable(it.statements, source, fileName) }
-                    is GetAccessor -> member.body?.let { walkForOfNonIterable(it.statements, source, fileName) }
-                    is SetAccessor -> member.body?.let { walkForOfNonIterable(it.statements, source, fileName) }
-                    else -> {}
-                }
-            }
-            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkForOfNonIterable(it.statements, source, fileName) }
-            is TryStatement -> {
-                walkForOfNonIterable(stmt.tryBlock.statements, source, fileName)
-                stmt.catchClause?.block?.statements?.let { walkForOfNonIterable(it, source, fileName) }
-                stmt.finallyBlock?.statements?.let { walkForOfNonIterable(it, source, fileName) }
-            }
-            is SwitchStatement -> {
-                for (c in stmt.caseBlock) when (c) {
-                    is CaseClause -> walkForOfNonIterable(c.statements, source, fileName)
-                    is DefaultClause -> walkForOfNonIterable(c.statements, source, fileName)
-                    else -> {}
-                }
-            }
-            is LabeledStatement -> walkForOfNonIterableStmt(stmt.statement, source, fileName)
-            is ExpressionStatement -> walkForOfNonIterableInExpr(stmt.expression, source, fileName)
-            is ReturnStatement -> stmt.expression?.let { walkForOfNonIterableInExpr(it, source, fileName) }
-            is ThrowStatement -> stmt.expression?.let { walkForOfNonIterableInExpr(it, source, fileName) }
-            is ExportAssignment -> stmt.expression.let { walkForOfNonIterableInExpr(it, source, fileName) }
-            is VariableStatement -> for (d in stmt.declarationList.declarations) {
-                d.initializer?.let { walkForOfNonIterableInExpr(it, source, fileName) }
-            }
-            else -> {}
-        }
-    }
-
-    private fun walkForOfNonIterableInExpr(expr: Expression, source: String, fileName: String) {
-        when (expr) {
-            is ArrowFunction -> when (val body = expr.body) {
-                is Block -> walkForOfNonIterable(body.statements, source, fileName)
-                is Expression -> walkForOfNonIterableInExpr(body, source, fileName)
-                else -> {}
-            }
-            is FunctionExpression -> walkForOfNonIterable(expr.body.statements, source, fileName)
-            is ClassExpression -> {
-                for (m in expr.members) when (m) {
-                    is MethodDeclaration -> m.body?.let { walkForOfNonIterable(it.statements, source, fileName) }
-                    is Constructor -> m.body?.let { walkForOfNonIterable(it.statements, source, fileName) }
-                    is GetAccessor -> m.body?.let { walkForOfNonIterable(it.statements, source, fileName) }
-                    is SetAccessor -> m.body?.let { walkForOfNonIterable(it.statements, source, fileName) }
-                    is PropertyDeclaration -> m.initializer?.let { walkForOfNonIterableInExpr(it, source, fileName) }
-                    else -> {}
-                }
-            }
-            is ParenthesizedExpression -> walkForOfNonIterableInExpr(expr.expression, source, fileName)
-            is AsExpression -> walkForOfNonIterableInExpr(expr.expression, source, fileName)
-            is TypeAssertionExpression -> walkForOfNonIterableInExpr(expr.expression, source, fileName)
-            is SatisfiesExpression -> walkForOfNonIterableInExpr(expr.expression, source, fileName)
-            is NonNullExpression -> walkForOfNonIterableInExpr(expr.expression, source, fileName)
-            // round 42 iter9: broaden to recurse through expressions that may contain
-            // ArrowFunction / FunctionExpression / ClassExpression in their substructure.
-            is BinaryExpression -> {
-                var cur: Expression = expr
-                val rightStack = ArrayDeque<Expression>()
-                while (cur is BinaryExpression) { rightStack.addLast(cur.right); cur = cur.left }
-                walkForOfNonIterableInExpr(cur, source, fileName)
-                while (rightStack.isNotEmpty()) walkForOfNonIterableInExpr(rightStack.removeLast(), source, fileName)
-            }
-            is ConditionalExpression -> {
-                walkForOfNonIterableInExpr(expr.condition, source, fileName)
-                walkForOfNonIterableInExpr(expr.whenTrue, source, fileName)
-                walkForOfNonIterableInExpr(expr.whenFalse, source, fileName)
-            }
-            is CallExpression -> {
-                walkForOfNonIterableInExpr(expr.expression, source, fileName)
-                for (a in expr.arguments) walkForOfNonIterableInExpr(a, source, fileName)
-            }
-            is NewExpression -> {
-                walkForOfNonIterableInExpr(expr.expression, source, fileName)
-                expr.arguments?.forEach { walkForOfNonIterableInExpr(it, source, fileName) }
-            }
-            is ArrayLiteralExpression -> for (e in expr.elements) walkForOfNonIterableInExpr(e, source, fileName)
-            is ObjectLiteralExpression -> for (p in expr.properties) when (p) {
-                is PropertyAssignment -> walkForOfNonIterableInExpr(p.initializer, source, fileName)
-                is SpreadAssignment -> walkForOfNonIterableInExpr(p.expression, source, fileName)
-                is MethodDeclaration -> p.body?.let { walkForOfNonIterable(it.statements, source, fileName) }
-                is GetAccessor -> p.body?.let { walkForOfNonIterable(it.statements, source, fileName) }
-                is SetAccessor -> p.body?.let { walkForOfNonIterable(it.statements, source, fileName) }
-                else -> {}
-            }
-            is SpreadElement -> walkForOfNonIterableInExpr(expr.expression, source, fileName)
-            is AwaitExpression -> walkForOfNonIterableInExpr(expr.expression, source, fileName)
-            is YieldExpression -> expr.expression?.let { walkForOfNonIterableInExpr(it, source, fileName) }
-            is VoidExpression -> walkForOfNonIterableInExpr(expr.expression, source, fileName)
-            is DeleteExpression -> walkForOfNonIterableInExpr(expr.expression, source, fileName)
-            is TypeOfExpression -> walkForOfNonIterableInExpr(expr.expression, source, fileName)
-            is TemplateExpression -> for (span in expr.templateSpans) walkForOfNonIterableInExpr(span.expression, source, fileName)
-            is TaggedTemplateExpression -> {
-                walkForOfNonIterableInExpr(expr.tag, source, fileName)
-                if (expr.template is TemplateExpression) {
-                    for (span in (expr.template).templateSpans) walkForOfNonIterableInExpr(span.expression, source, fileName)
-                }
-            }
-            is CommaListExpression -> for (e in expr.elements) walkForOfNonIterableInExpr(e, source, fileName)
-            is PropertyAccessExpression -> walkForOfNonIterableInExpr(expr.expression, source, fileName)
-            is ElementAccessExpression -> {
-                walkForOfNonIterableInExpr(expr.expression, source, fileName)
-                walkForOfNonIterableInExpr(expr.argumentExpression, source, fileName)
-            }
-            is PrefixUnaryExpression -> walkForOfNonIterableInExpr(expr.operand, source, fileName)
-            is PostfixUnaryExpression -> walkForOfNonIterableInExpr(expr.operand, source, fileName)
-            else -> {}
-        }
-    }
-
     private fun checkForOfExprNonIterable(expr: Expression, source: String, fileName: String) {
         val exprType = getTypeOfExpression(expr)
         // Determine "definitely non-iterable":
@@ -17682,90 +17512,6 @@ class Checker(
         ))
     }
 
-    /**
-     * TS7033: Property 'X' implicitly has type 'any', because its get accessor lacks
-     * a return type annotation.
-     *
-     * Conservative: only fires for bodyless get accessors (abstract/interface form)
-     * with no return type annotation. Full TS7033 coverage for getters with bodies
-     * requires body return-type inference (not yet implemented).
-     */
-    private fun checkAbstractAccessorReturnTypes() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
-            val source = result.sourceFile.text
-            checkAbstractAccessorInStatements(result.sourceFile.statements, source, fileName)
-        }
-    }
-
-    private fun checkAbstractAccessorInStatements(stmts: List<Statement>, source: String, fileName: String) {
-        for (stmt in stmts) {
-            when (stmt) {
-                is ClassDeclaration -> {
-                    for (m in stmt.members) {
-                        if (m is GetAccessor && m.body == null && m.type == null) {
-                            val nameNode = m.name as? Identifier ?: continue
-                            val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
-                            diagnostics.add(Diagnostic(
-                                message = "Property '${nameNode.text}' implicitly has type 'any', because its get accessor lacks a return type annotation.",
-                                category = DiagnosticCategory.Error,
-                                code = 7033,
-                                fileName = fileName,
-                                line = line,
-                                character = character,
-                                start = nameNode.pos,
-                                length = nameNode.text.length,
-                            ))
-                        }
-                    }
-                    // Recurse into member bodies for nested classes
-                    for (m in stmt.members) {
-                        when (m) {
-                            is MethodDeclaration -> m.body?.let { checkAbstractAccessorInStatements(it.statements, source, fileName) }
-                            is Constructor -> m.body?.let { checkAbstractAccessorInStatements(it.statements, source, fileName) }
-                            is GetAccessor -> m.body?.let { checkAbstractAccessorInStatements(it.statements, source, fileName) }
-                            is SetAccessor -> m.body?.let { checkAbstractAccessorInStatements(it.statements, source, fileName) }
-                            else -> {}
-                        }
-                    }
-                }
-                is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { checkAbstractAccessorInStatements(it.statements, source, fileName) }
-                is Block -> checkAbstractAccessorInStatements(stmt.statements, source, fileName)
-                is FunctionDeclaration -> stmt.body?.let { checkAbstractAccessorInStatements(it.statements, source, fileName) }
-                is IfStatement -> {
-                    checkAbstractAccessorInStatements(listOf(stmt.thenStatement), source, fileName)
-                    stmt.elseStatement?.let { checkAbstractAccessorInStatements(listOf(it), source, fileName) }
-                }
-                is ForStatement -> checkAbstractAccessorInStatements(listOf(stmt.statement), source, fileName)
-                is ForInStatement -> checkAbstractAccessorInStatements(listOf(stmt.statement), source, fileName)
-                is ForOfStatement -> checkAbstractAccessorInStatements(listOf(stmt.statement), source, fileName)
-                is WhileStatement -> checkAbstractAccessorInStatements(listOf(stmt.statement), source, fileName)
-                is DoStatement -> checkAbstractAccessorInStatements(listOf(stmt.statement), source, fileName)
-                is SwitchStatement -> {
-                    for (clause in stmt.caseBlock) {
-                        when (clause) {
-                            is CaseClause -> checkAbstractAccessorInStatements(clause.statements, source, fileName)
-                            is DefaultClause -> checkAbstractAccessorInStatements(clause.statements, source, fileName)
-                            else -> {}
-                        }
-                    }
-                }
-                is TryStatement -> {
-                    checkAbstractAccessorInStatements(stmt.tryBlock.statements, source, fileName)
-                    stmt.catchClause?.block?.let { checkAbstractAccessorInStatements(it.statements, source, fileName) }
-                    stmt.finallyBlock?.let { checkAbstractAccessorInStatements(it.statements, source, fileName) }
-                }
-                is LabeledStatement -> checkAbstractAccessorInStatements(listOf(stmt.statement), source, fileName)
-                else -> {}
-            }
-        }
-    }
-
-    /**
-     * TS18045: Properties with the 'accessor' modifier require target ES2015+.
-     * Only fires in non-ambient contexts (ambient classes / declare namespaces suppress it).
-     */
     // ─────────────────────────────────────────────────────────────────────────
     // INV.4 — the single-pass check spine (round 514).
     //
@@ -17793,6 +17539,14 @@ class Checker(
         spineAccessorModifierActive = options.target < ScriptTarget.ES2015
         spineReservedIfaceParamsActive =
             !options.strictExplicitlyFalse && !(options.noImplicitAny || options.strict)
+        // TS2495 fires only when @lib EXPLICITLY excludes ES2015+ iterables
+        // (and never under @noLib — TS2318 owns missing globals there).
+        spineForOfNonIterableActive = !options.noLib && options.lib.isNotEmpty() &&
+            options.lib.none { lname ->
+                lname.startsWith("es2", ignoreCase = true) ||
+                    lname.equals("esnext", ignoreCase = true)
+            }
+        spineAbstractAccessorActive = options.noImplicitAny || options.strict
         val savedLocals = currentFileLocals
         try {
             for (result in binderResults) {
@@ -17869,9 +17623,13 @@ class Checker(
             is MethodDeclaration -> spineCheckReservedWordInterfaceParams(node)
             is Parameter -> spineCheckRestParam(node)
             is VariableDeclaration -> spineCollectObjLitVar(node)
-            is ForOfStatement -> spineNoteIterationPosition(node.expression)
+            is ForOfStatement -> {
+                spineNoteIterationPosition(node.expression)
+                spineCheckForOfNonIterable(node)
+            }
             is SpreadElement -> spineNoteIterationPosition(node.expression)
             is YieldExpression -> spineNoteYieldStar(node)
+            is GetAccessor -> spineCheckAbstractAccessorReturnType(node)
             else -> {}
         }
     }
@@ -18235,6 +17993,56 @@ class Checker(
             cur = (cur as NodeBase).parent
         }
         return false
+    }
+
+    /**
+     * TS2495 "Type 'X' is not an array type or a string type." — migrated from
+     * the deleted `checkForOfNonIterable` walk family (INV.4(b) batch 3;
+     * 17.218). Per-run gate [spineForOfNonIterableActive]: fires only when
+     * `@lib` explicitly excludes ES2015+ iterables (under es5-only lib, only
+     * Array and string are iterable); never under `@noLib`. The verdict logic
+     * lives unchanged in [checkForOfExprNonIterable] (conservative: only
+     * clearly non-iterable intrinsics and bare anonymous object types fire).
+     * The old walk already descended statements AND expressions, so the
+     * spine's coverage is a negligible faithful widening (param defaults,
+     * decorators).
+     */
+    private fun spineCheckForOfNonIterable(node: ForOfStatement) {
+        if (!spineForOfNonIterableActive || spineIsDts) return
+        checkForOfExprNonIterable(node.expression, spineSource, spineFileName)
+    }
+
+    /**
+     * TS7033 "Property 'X' implicitly has type 'any', because its get accessor
+     * lacks a return type annotation." — migrated from the deleted
+     * `checkAbstractAccessorReturnTypes` (INV.4(b) batch 3). Conservative:
+     * only BODYLESS get accessors (abstract/ambient form) with no return
+     * annotation — full TS7033 needs body return-type inference. Gates
+     * preserved: noImplicitAny/strict ([spineAbstractAccessorActive]), the
+     * `.js`/`.jsx` skip (deliberately NOT [spineIsJsLike] — the old pass ran
+     * on `.mjs`/`.cjs`), and the ClassDeclaration-parent gate (class
+     * EXPRESSION members stay unchecked — a bodyless accessor there is a
+     * parse-recovery shape). The spine reaches class declarations nested in
+     * arrow/function-expression bodies the old statement walk missed — a
+     * faithful widening.
+     */
+    private fun spineCheckAbstractAccessorReturnType(node: GetAccessor) {
+        if (!spineAbstractAccessorActive) return
+        if (spineFileName.endsWith(".js") || spineFileName.endsWith(".jsx")) return
+        if (node.body != null || node.type != null) return
+        if (node.parent !is ClassDeclaration) return
+        val nameNode = node.name as? Identifier ?: return
+        val (line, character) = getLineAndCharacterOfPosition(spineSource, nameNode.pos)
+        diagnostics.add(Diagnostic(
+            message = "Property '${nameNode.text}' implicitly has type 'any', because its get accessor lacks a return type annotation.",
+            category = DiagnosticCategory.Error,
+            code = 7033,
+            fileName = spineFileName,
+            line = line,
+            character = character,
+            start = nameNode.pos,
+            length = nameNode.text.length,
+        ))
     }
 
     /**
