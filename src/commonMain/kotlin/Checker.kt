@@ -2488,12 +2488,14 @@ class Checker(
         pass("checkForIncrementorReachingAssignments") { checkForIncrementorReachingAssignments() }
         // 37b. Check switch/case literal-type comparability for const-narrowed switch exprs (TS2678)
         pass("checkSwitchCaseComparable") { checkSwitchCaseComparable() }
-        // 38. Check setter parameter count (TS1049)
-        pass("checkSetterParameterCount") { checkSetterParameterCount() }
+        // 38. TS1049/TS1095/TS1054 (setter/getter grammar) + TS2808 (accessor-pair
+        // visibility) migrated to the check spine (INV.4(b) batch 4) — see
+        // spineCheckSetAccessorGrammar / spineCheckGetAccessorGrammar /
+        // spineCheckAccessorPairVisibility.
         // 39. Check duplicate modifiers (TS1030)
         pass("checkDuplicateModifiers") { checkDuplicateModifiers() }
-        // 40. Check rest parameter is last (TS1014)
-        pass("checkRestParameterLast") { checkRestParameterLast() }
+        // 40. TS1014 (rest parameter must be last) migrated to the check spine
+        // (INV.4(b) batch 4) — see spineCheckRestParamLast.
         // 40b. Check rest element with property name in binding patterns (TS2566)
         pass("checkRestElementPropertyNames") { checkRestElementPropertyNames() }
         // 40b'. restParameterWithBindingPattern3 — a REST parameter whose binding pattern is
@@ -2515,10 +2517,10 @@ class Checker(
         }
         // 43. Check initializers in ambient contexts (TS1039)
         pass("checkAmbientInitializers") { checkAmbientInitializers() }
-        // 44. Check multiple defaults in switch (TS1113)
-        pass("checkMultipleDefaults") { checkMultipleDefaults() }
-        // 45. Check interface property initializers (TS1246)
-        pass("checkInterfacePropertyInitializers") { checkInterfacePropertyInitializers() }
+        // 44. TS1113 (multiple switch defaults) migrated to the check spine
+        // (INV.4(b) batch 4) — see spineCheckMultipleDefaults.
+        // 45. TS1246 (interface property initializers) migrated to the check
+        // spine (INV.4(b) batch 4) — see spineCheckInterfacePropertyInitializers.
         // 45b. Check computed property name expressions in classes/interfaces (TS1166/TS1169)
         pass("checkComputedPropertyNameLiteral") { checkComputedPropertyNameLiteral() }
         // 45b''. B364: function-local call-arg discriminated-union element mismatch (TS2820/2322)
@@ -17621,7 +17623,10 @@ class Checker(
             is PropertyDeclaration -> spineCheckAccessorModifier(node)
             is ModuleDeclaration -> spineCheckGlobalAugmentation(node)
             is MethodDeclaration -> spineCheckReservedWordInterfaceParams(node)
-            is Parameter -> spineCheckRestParam(node)
+            is Parameter -> {
+                spineCheckRestParam(node)
+                spineCheckRestParamLast(node)
+            }
             is VariableDeclaration -> spineCollectObjLitVar(node)
             is ForOfStatement -> {
                 spineNoteIterationPosition(node.expression)
@@ -17629,7 +17634,14 @@ class Checker(
             }
             is SpreadElement -> spineNoteIterationPosition(node.expression)
             is YieldExpression -> spineNoteYieldStar(node)
-            is GetAccessor -> spineCheckAbstractAccessorReturnType(node)
+            is GetAccessor -> {
+                spineCheckAbstractAccessorReturnType(node)
+                spineCheckGetAccessorGrammar(node)
+            }
+            is SetAccessor -> spineCheckSetAccessorGrammar(node)
+            is ClassDeclaration -> spineCheckAccessorPairVisibility(node)
+            is SwitchStatement -> spineCheckMultipleDefaults(node)
+            is InterfaceDeclaration -> spineCheckInterfacePropertyInitializers(node)
             else -> {}
         }
     }
@@ -18043,6 +18055,264 @@ class Checker(
             start = nameNode.pos,
             length = nameNode.text.length,
         ))
+    }
+
+    /**
+     * TS1054 "A 'get' accessor cannot have parameters." — migrated from the
+     * deleted `checkSetterParameterCount` walk family (INV.4(b) batch 4). The
+     * old walk checked class-declaration members and object-literal properties
+     * only; TS1054 is a position-independent tsc grammar rule
+     * (checkGrammarAccessor via checkGrammarFunctionLikeDeclaration), so the
+     * spine widens faithfully to class-EXPRESSION members and interface /
+     * type-literal accessors. The raw `parameters.isNotEmpty()` gate (no
+     * comment-placeholder filter) is the old walker's, preserved exactly.
+     * The `.d.ts` skip is the old driver gate.
+     */
+    private fun spineCheckGetAccessorGrammar(node: GetAccessor) {
+        if (spineIsDts) return
+        if (node.parameters.isEmpty()) return
+        val nameNode = node.name
+        val start = if (nameNode is Identifier) nameNode.pos else node.pos
+        val length = if (nameNode is Identifier) nameNode.text.length else 3
+        val (line, character) = getLineAndCharacterOfPosition(spineSource, start)
+        diagnostics.add(Diagnostic(
+            message = "A 'get' accessor cannot have parameters.",
+            category = DiagnosticCategory.Error,
+            code = 1054,
+            fileName = spineFileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+
+    /**
+     * TS1049 "A 'set' accessor must have exactly one parameter." + TS1095
+     * "A 'set' accessor cannot have a return type annotation." — migrated from
+     * the deleted `checkSetterParameterCount` walk family (INV.4(b) batch 4).
+     * TS1049's old reach was class declarations, class expressions, and object
+     * literals; TS1095's was class declarations ONLY — both widen faithfully
+     * (position-independent tsc grammar). Interface / type-literal setters
+     * never carry a `type` (the parser parses but drops the annotation there)
+     * and the object-literal parse path never parses one at all, so the TS1095
+     * widening reaches exactly class EXPRESSIONS; the TS1049 widening covers
+     * interface / type-literal setters (tsc fires there too). Spans preserved
+     * exactly: TS1049 falls back to the whole name node for a computed name;
+     * TS1095 to `node.pos`/3.
+     */
+    private fun spineCheckSetAccessorGrammar(node: SetAccessor) {
+        if (spineIsDts) return
+        val realParams = node.parameters.count { !it.isCommentPlaceholder }
+        if (realParams != 1) {
+            val nameId = node.name as? Identifier
+            val start = nameId?.pos ?: node.name.pos
+            val length = nameId?.text?.length ?: (node.name.end - 1 - start).coerceAtLeast(1)
+            val (line, character) = getLineAndCharacterOfPosition(spineSource, start)
+            diagnostics.add(Diagnostic(
+                message = "A 'set' accessor must have exactly one parameter.",
+                category = DiagnosticCategory.Error,
+                code = 1049,
+                fileName = spineFileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
+        }
+        if (node.type != null) {
+            val nameNode = node.name
+            val start = if (nameNode is Identifier) nameNode.pos else node.pos
+            val length = if (nameNode is Identifier) nameNode.text.length else 3
+            val (line, character) = getLineAndCharacterOfPosition(spineSource, start)
+            diagnostics.add(Diagnostic(
+                message = "A 'set' accessor cannot have a return type annotation.",
+                category = DiagnosticCategory.Error,
+                code = 1095,
+                fileName = spineFileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
+        }
+    }
+
+    /**
+     * TS2808 "A get accessor must be at least as accessible as the setter" —
+     * migrated from the deleted `checkAccessorVisibilityMismatch` (INV.4(b)
+     * batch 4). Fires on BOTH the getter and setter names when the getter's
+     * visibility is more restrictive than the setter's (private=1 <
+     * protected=2 < public=3). Deliberately GATED to ClassDeclaration (the old
+     * walker never checked class expressions — a behavior change to make on a
+     * signal, not as a migration side effect). Pair matching keys on
+     * (name, static-ness); ordered maps preserve member-order emission.
+     */
+    private fun spineCheckAccessorPairVisibility(node: ClassDeclaration) {
+        if (spineIsDts) return
+        fun accessorName(n: NameNode): String? = when (n) {
+            is Identifier -> n.text
+            is StringLiteralNode -> n.text
+            is NumericLiteralNode -> n.text
+            else -> null
+        }
+        fun accessLevel(mods: Set<ModifierFlag>): Int = when {
+            ModifierFlag.Private in mods -> 1
+            ModifierFlag.Protected in mods -> 2
+            else -> 3
+        }
+        var getters: MutableMap<Pair<String, Boolean>, GetAccessor>? = null
+        var setters: MutableMap<Pair<String, Boolean>, SetAccessor>? = null
+        for (m in node.members) {
+            when (m) {
+                is GetAccessor -> accessorName(m.name)?.let {
+                    (getters ?: mutableMapOf<Pair<String, Boolean>, GetAccessor>().also { g -> getters = g })[
+                        it to (ModifierFlag.Static in m.modifiers)] = m
+                }
+                is SetAccessor -> accessorName(m.name)?.let {
+                    (setters ?: mutableMapOf<Pair<String, Boolean>, SetAccessor>().also { s -> setters = s })[
+                        it to (ModifierFlag.Static in m.modifiers)] = m
+                }
+                else -> {}
+            }
+        }
+        val g = getters ?: return
+        val s = setters ?: return
+        for ((key, getter) in g) {
+            val setter = s[key] ?: continue
+            if (accessLevel(getter.modifiers) < accessLevel(setter.modifiers)) {
+                for (nameNode in listOf(getter.name, setter.name)) {
+                    val start = if (nameNode is Identifier) nameNode.pos else 0
+                    val length = if (nameNode is Identifier) nameNode.text.length else 3
+                    val (line, character) = getLineAndCharacterOfPosition(spineSource, start)
+                    diagnostics.add(Diagnostic(
+                        message = "A get accessor must be at least as accessible as the setter",
+                        category = DiagnosticCategory.Error,
+                        code = 2808,
+                        fileName = spineFileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = length,
+                    ))
+                }
+            }
+        }
+    }
+
+    /**
+     * TS1014 "A rest parameter must be last in a parameter list." — migrated
+     * from the deleted `checkRestParameterLast` walk family (INV.4(b) batch 4).
+     * A Parameter-enter handler (like [spineCheckRestParam]): a `...` param
+     * that is not the LAST real (non-placeholder) parameter of its parent's
+     * list fires at the `...` token (length 3). Parent kinds: the old walk's
+     * value positions (function/ctor/arrow/fn-expr declarations, methods of
+     * class / class-expr / interface / objlit, set accessors) WIDENED
+     * faithfully to FunctionType / ConstructorType / type-literal methods
+     * (tsc checkGrammarParameterList runs for every signature declaration).
+     * GetAccessor parents stay excluded (the old walker never visited getter
+     * params — TS1054 owns that shape). B18.2 preserved: a comma-recovered
+     * FOLLOWING parameter suppresses (the parser's TS1005 owns the malformed
+     * `...x y`).
+     */
+    private fun spineCheckRestParamLast(param: Parameter) {
+        if (spineIsDts) return
+        if (!param.dotDotDotToken || param.isCommentPlaceholder) return
+        val params = when (val parent = param.parent) {
+            is FunctionDeclaration -> parent.parameters
+            is MethodDeclaration -> parent.parameters
+            is Constructor -> parent.parameters
+            is SetAccessor -> parent.parameters
+            is ArrowFunction -> parent.parameters
+            is FunctionExpression -> parent.parameters
+            is FunctionType -> parent.parameters
+            is ConstructorType -> parent.parameters
+            else -> return
+        }
+        var seenSelf = false
+        var next: Parameter? = null
+        for (p in params) {
+            if (p.isCommentPlaceholder) continue
+            if (seenSelf) { next = p; break }
+            if (p === param) seenSelf = true
+        }
+        if (next == null) return
+        if (next.commaRecovered) return
+        val name = param.name
+        val start = if (name is Identifier) name.pos - 3 else param.pos
+        val (line, character) = getLineAndCharacterOfPosition(spineSource, start)
+        diagnostics.add(Diagnostic(
+            message = "A rest parameter must be last in a parameter list.",
+            category = DiagnosticCategory.Error,
+            code = 1014,
+            fileName = spineFileName,
+            line = line,
+            character = character,
+            start = start,
+            length = 3,
+        ))
+    }
+
+    /**
+     * TS1113 "A 'default' clause cannot appear more than once in a 'switch'
+     * statement." — migrated from the deleted `checkMultipleDefaults` walk
+     * family (INV.4(b) batch 4). ONE diagnostic per switch at the SECOND
+     * default clause (the old walker's errorEmitted latch), span "default:"
+     * (length 8). Position-independent grammar — the spine widens faithfully
+     * to the statement/expression positions the old hand-walk missed.
+     */
+    private fun spineCheckMultipleDefaults(node: SwitchStatement) {
+        if (spineIsDts) return
+        var defaultSeen = false
+        for (c in node.caseBlock) {
+            if (c !is DefaultClause) continue
+            if (defaultSeen) {
+                val (line, character) = getLineAndCharacterOfPosition(spineSource, c.pos)
+                diagnostics.add(Diagnostic(
+                    message = "A 'default' clause cannot appear more than once in a 'switch' statement.",
+                    category = DiagnosticCategory.Error,
+                    code = 1113,
+                    fileName = spineFileName,
+                    line = line,
+                    character = character,
+                    start = c.pos,
+                    length = 8,
+                ))
+                return
+            }
+            defaultSeen = true
+        }
+    }
+
+    /**
+     * TS1246 "An interface property cannot have an initializer." — migrated
+     * from the deleted `checkInterfacePropertyInitializers` walk (INV.4(b)
+     * batch 4). NOTE the parser owns the common shape (it consumes an
+     * interface member's `= init` WITHOUT storing it and reports TS1246 at the
+     * initializer's first char) — this handler covers only members whose
+     * PropertyDeclaration actually CARRIES an initializer (none of the current
+     * type-member parse paths store one; kept as the faithful migration of the
+     * old walker's semantics). Span: the whole initializer minus the trailing
+     * token overshoot.
+     */
+    private fun spineCheckInterfacePropertyInitializers(node: InterfaceDeclaration) {
+        if (spineIsDts) return
+        for (m in node.members) {
+            val init = (m as? PropertyDeclaration)?.initializer ?: continue
+            val start = init.pos
+            val length = (init.end - 1 - start).coerceAtLeast(1)
+            val (line, character) = getLineAndCharacterOfPosition(spineSource, start)
+            diagnostics.add(Diagnostic(
+                message = "An interface property cannot have an initializer.",
+                category = DiagnosticCategory.Error,
+                code = 1246,
+                fileName = spineFileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
+        }
     }
 
     /**
@@ -65381,298 +65651,6 @@ interface DataView {
     }
 
     // -----------------------------------------------------------------------
-    // Setter parameter count (TS1049)
-    // -----------------------------------------------------------------------
-
-    private fun checkSetterParameterCount() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            checkSetterInStatements(result.sourceFile.statements, source, fileName)
-        }
-    }
-
-    private fun checkSetterInStatements(stmts: List<Statement>, source: String, fileName: String) {
-        for (stmt in stmts) checkSetterInStatement(stmt, source, fileName)
-    }
-
-    /**
-     * TS2808: "A get accessor must be at least as accessible as the setter".
-     * Fires on BOTH getter and setter when the getter's visibility is more restrictive
-     * than the setter's (e.g. `private get X` + `public set X`). Ignores cases without
-     * a matching pair.
-     *
-     * Accessibility level: private=1, protected=2, public=3 (default).
-     */
-    private fun checkAccessorVisibilityMismatch(members: List<ClassElement>, source: String, fileName: String) {
-        fun accessorName(node: NameNode): String? = when (node) {
-            is Identifier -> node.text
-            is StringLiteralNode -> node.text
-            is NumericLiteralNode -> node.text
-            else -> null
-        }
-        fun accessLevel(mods: Set<ModifierFlag>): Int = when {
-            ModifierFlag.Private in mods -> 1
-            ModifierFlag.Protected in mods -> 2
-            else -> 3
-        }
-        val getters = mutableMapOf<Pair<String, Boolean>, GetAccessor>()
-        val setters = mutableMapOf<Pair<String, Boolean>, SetAccessor>()
-        for (m in members) {
-            when (m) {
-                is GetAccessor -> accessorName(m.name)?.let {
-                    getters[it to (ModifierFlag.Static in m.modifiers)] = m
-                }
-                is SetAccessor -> accessorName(m.name)?.let {
-                    setters[it to (ModifierFlag.Static in m.modifiers)] = m
-                }
-                else -> {}
-            }
-        }
-        for ((key, g) in getters) {
-            val s = setters[key] ?: continue
-            if (accessLevel(g.modifiers) < accessLevel(s.modifiers)) {
-                for ((nameNode, _) in listOf(g.name to true, s.name to false)) {
-                    val start = if (nameNode is Identifier) nameNode.pos else 0
-                    val length = if (nameNode is Identifier) nameNode.text.length else 3
-                    val (line, character) = getLineAndCharacterOfPosition(source, start)
-                    diagnostics.add(Diagnostic(
-                        message = "A get accessor must be at least as accessible as the setter",
-                        category = DiagnosticCategory.Error,
-                        code = 2808,
-                        fileName = fileName,
-                        line = line,
-                        character = character,
-                        start = start,
-                        length = length,
-                    ))
-                }
-            }
-        }
-    }
-
-    private fun checkSetterInStatement(stmt: Statement, source: String, fileName: String) {
-        when (stmt) {
-            is ClassDeclaration -> {
-                checkAccessorVisibilityMismatch(stmt.members, source, fileName)
-                for (m in stmt.members) {
-                    if (m is SetAccessor) {
-                        checkSetterParams(m.name, m.parameters, source, fileName)
-                        // TS1095: set accessor cannot have a return type annotation
-                        if (m.type != null) {
-                            val nameNode = m.name
-                            val start = if (nameNode is Identifier) nameNode.pos else m.pos
-                            val length = if (nameNode is Identifier) nameNode.text.length else 3
-                            val (line, character) = getLineAndCharacterOfPosition(source, start)
-                            diagnostics.add(Diagnostic(
-                                message = "A 'set' accessor cannot have a return type annotation.",
-                                category = DiagnosticCategory.Error,
-                                code = 1095,
-                                fileName = fileName,
-                                line = line,
-                                character = character,
-                                start = start,
-                                length = length,
-                            ))
-                        }
-                    }
-                    if (m is GetAccessor && m.parameters.isNotEmpty()) {
-                        // TS1054: get accessor cannot have parameters
-                        val nameNode = m.name
-                        val start = if (nameNode is Identifier) nameNode.pos else m.pos
-                        val length = if (nameNode is Identifier) nameNode.text.length else 3
-                        val (line, character) = getLineAndCharacterOfPosition(source, start)
-                        diagnostics.add(Diagnostic(
-                            message = "A 'get' accessor cannot have parameters.",
-                            category = DiagnosticCategory.Error,
-                            code = 1054,
-                            fileName = fileName,
-                            line = line,
-                            character = character,
-                            start = start,
-                            length = length,
-                        ))
-                    }
-                    // Recurse into methods/constructors
-                    when (m) {
-                        is MethodDeclaration -> m.body?.let { checkSetterInStatements(it.statements, source, fileName) }
-                        is Constructor -> m.body?.let { checkSetterInStatements(it.statements, source, fileName) }
-                        is GetAccessor -> m.body?.let { checkSetterInStatements(it.statements, source, fileName) }
-                        is SetAccessor -> m.body?.let { checkSetterInStatements(it.statements, source, fileName) }
-                        else -> {}
-                    }
-                }
-            }
-            is ExpressionStatement -> checkSetterInExpr(stmt.expression, source, fileName)
-            is VariableStatement -> for (d in stmt.declarationList.declarations) {
-                d.initializer?.let { checkSetterInExpr(it, source, fileName) }
-            }
-            is ReturnStatement -> stmt.expression?.let { checkSetterInExpr(it, source, fileName) }
-            is FunctionDeclaration -> stmt.body?.let { checkSetterInStatements(it.statements, source, fileName) }
-            is Block -> checkSetterInStatements(stmt.statements, source, fileName)
-            is IfStatement -> {
-                checkSetterInStatement(stmt.thenStatement, source, fileName)
-                stmt.elseStatement?.let { checkSetterInStatement(it, source, fileName) }
-            }
-            is ForStatement -> checkSetterInStatement(stmt.statement, source, fileName)
-            is ForInStatement -> checkSetterInStatement(stmt.statement, source, fileName)
-            is ForOfStatement -> checkSetterInStatement(stmt.statement, source, fileName)
-            is WhileStatement -> checkSetterInStatement(stmt.statement, source, fileName)
-            is DoStatement -> checkSetterInStatement(stmt.statement, source, fileName)
-            is TryStatement -> {
-                checkSetterInStatements(stmt.tryBlock.statements, source, fileName)
-                stmt.catchClause?.let { checkSetterInStatements(it.block.statements, source, fileName) }
-                stmt.finallyBlock?.let { checkSetterInStatements(it.statements, source, fileName) }
-            }
-            is SwitchStatement -> for (c in stmt.caseBlock) {
-                when (c) {
-                    is CaseClause -> checkSetterInStatements(c.statements, source, fileName)
-                    is DefaultClause -> checkSetterInStatements(c.statements, source, fileName)
-                    else -> {}
-                }
-            }
-            is LabeledStatement -> checkSetterInStatement(stmt.statement, source, fileName)
-            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { checkSetterInStatements(it.statements, source, fileName) }
-            is ThrowStatement -> stmt.expression?.let { checkSetterInExpr(it, source, fileName) }
-            is ExportAssignment -> checkSetterInExpr(stmt.expression, source, fileName)
-            else -> {}
-        }
-    }
-
-    private fun checkSetterInExpr(expr: Expression, source: String, fileName: String) {
-        when (expr) {
-            is ObjectLiteralExpression -> {
-                for (prop in expr.properties) {
-                    if (prop is SetAccessor) {
-                        checkSetterParams(prop.name, prop.parameters, source, fileName)
-                    }
-                    if (prop is GetAccessor && prop.parameters.isNotEmpty()) {
-                        val nameNode = prop.name
-                        val start = if (nameNode is Identifier) nameNode.pos else prop.pos
-                        val length = if (nameNode is Identifier) nameNode.text.length else 3
-                        val (line, character) = getLineAndCharacterOfPosition(source, start)
-                        diagnostics.add(Diagnostic(
-                            message = "A 'get' accessor cannot have parameters.",
-                            category = DiagnosticCategory.Error,
-                            code = 1054,
-                            fileName = fileName,
-                            line = line,
-                            character = character,
-                            start = start,
-                            length = length,
-                        ))
-                    }
-                    // Recurse into property initializers / method bodies so nested object
-                    // literals with setters are checked.
-                    when (prop) {
-                        is PropertyAssignment -> checkSetterInExpr(prop.initializer, source, fileName)
-                        is SpreadAssignment -> checkSetterInExpr(prop.expression, source, fileName)
-                        is MethodDeclaration -> prop.body?.let { checkSetterInStatements(it.statements, source, fileName) }
-                        is GetAccessor -> prop.body?.let { checkSetterInStatements(it.statements, source, fileName) }
-                        is SetAccessor -> prop.body?.let { checkSetterInStatements(it.statements, source, fileName) }
-                        else -> {}
-                    }
-                }
-            }
-            is ArrowFunction -> when (val body = expr.body) {
-                is Block -> checkSetterInStatements(body.statements, source, fileName)
-                is Expression -> checkSetterInExpr(body, source, fileName)
-                else -> {}
-            }
-            is FunctionExpression -> expr.body.let { checkSetterInStatements(it.statements, source, fileName) }
-            is ClassExpression -> {
-                for (m in expr.members) {
-                    if (m is SetAccessor) {
-                        checkSetterParams(m.name, m.parameters, source, fileName)
-                    }
-                    when (m) {
-                        is MethodDeclaration -> m.body?.let { checkSetterInStatements(it.statements, source, fileName) }
-                        is Constructor -> m.body?.let { checkSetterInStatements(it.statements, source, fileName) }
-                        is GetAccessor -> m.body?.let { checkSetterInStatements(it.statements, source, fileName) }
-                        is SetAccessor -> m.body?.let { checkSetterInStatements(it.statements, source, fileName) }
-                        is PropertyDeclaration -> m.initializer?.let { checkSetterInExpr(it, source, fileName) }
-                        else -> {}
-                    }
-                }
-            }
-            is ParenthesizedExpression -> checkSetterInExpr(expr.expression, source, fileName)
-            is AsExpression -> checkSetterInExpr(expr.expression, source, fileName)
-            is TypeAssertionExpression -> checkSetterInExpr(expr.expression, source, fileName)
-            is SatisfiesExpression -> checkSetterInExpr(expr.expression, source, fileName)
-            is NonNullExpression -> checkSetterInExpr(expr.expression, source, fileName)
-            is BinaryExpression -> {
-                var current: Expression = expr
-                val rightStack = ArrayDeque<Expression>()
-                while (current is BinaryExpression) { rightStack.addLast(current.right); current = current.left }
-                checkSetterInExpr(current, source, fileName)
-                while (rightStack.isNotEmpty()) checkSetterInExpr(rightStack.removeLast(), source, fileName)
-            }
-            is ConditionalExpression -> {
-                checkSetterInExpr(expr.condition, source, fileName)
-                checkSetterInExpr(expr.whenTrue, source, fileName)
-                checkSetterInExpr(expr.whenFalse, source, fileName)
-            }
-            is CallExpression -> {
-                checkSetterInExpr(expr.expression, source, fileName)
-                for (arg in expr.arguments) checkSetterInExpr(arg, source, fileName)
-            }
-            is NewExpression -> {
-                checkSetterInExpr(expr.expression, source, fileName)
-                expr.arguments?.forEach { checkSetterInExpr(it, source, fileName) }
-            }
-            is PropertyAccessExpression -> checkSetterInExpr(expr.expression, source, fileName)
-            is ElementAccessExpression -> {
-                checkSetterInExpr(expr.expression, source, fileName)
-                checkSetterInExpr(expr.argumentExpression, source, fileName)
-            }
-            is ArrayLiteralExpression -> for (e in expr.elements) checkSetterInExpr(e, source, fileName)
-            is SpreadElement -> checkSetterInExpr(expr.expression, source, fileName)
-            is PrefixUnaryExpression -> checkSetterInExpr(expr.operand, source, fileName)
-            is PostfixUnaryExpression -> checkSetterInExpr(expr.operand, source, fileName)
-            is AwaitExpression -> checkSetterInExpr(expr.expression, source, fileName)
-            is YieldExpression -> expr.expression?.let { checkSetterInExpr(it, source, fileName) }
-            is VoidExpression -> checkSetterInExpr(expr.expression, source, fileName)
-            is DeleteExpression -> checkSetterInExpr(expr.expression, source, fileName)
-            is TypeOfExpression -> checkSetterInExpr(expr.expression, source, fileName)
-            is TemplateExpression -> for (span in expr.templateSpans) checkSetterInExpr(span.expression, source, fileName)
-            is TaggedTemplateExpression -> {
-                checkSetterInExpr(expr.tag, source, fileName)
-                if (expr.template is TemplateExpression) {
-                    for (span in (expr.template).templateSpans) checkSetterInExpr(span.expression, source, fileName)
-                }
-            }
-            is CommaListExpression -> for (e in expr.elements) checkSetterInExpr(e, source, fileName)
-            else -> {}
-        }
-    }
-
-    private fun checkSetterParams(name: Node, params: List<Parameter>, source: String, fileName: String) {
-        // Count non-comment-placeholder params
-        val realParams = params.count { !it.isCommentPlaceholder }
-        if (realParams != 1) {
-            val nameId = when (name) {
-                is Identifier -> name
-                is ComputedPropertyName -> null // skip computed names
-                else -> null
-            }
-            val start = nameId?.pos ?: name.pos
-            val length = if (nameId != null) nameId.text.length else (name.end - 1 - start).coerceAtLeast(1)
-            val (line, character) = getLineAndCharacterOfPosition(source, start)
-            diagnostics.add(Diagnostic(
-                message = "A 'set' accessor must have exactly one parameter.",
-                category = DiagnosticCategory.Error,
-                code = 1049,
-                fileName = fileName,
-                line = line,
-                character = character,
-                start = start,
-                length = length,
-            ))
-        }
-    }
-
-    // -----------------------------------------------------------------------
     // Duplicate modifiers (TS1030)
     // -----------------------------------------------------------------------
 
@@ -65958,216 +65936,6 @@ interface DataView {
                 }
             }
             if (!matched) break // Hit a non-modifier token → done
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // Rest parameter must be last (TS1014)
-    // -----------------------------------------------------------------------
-
-    private fun checkRestParameterLast() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            checkRestLastInStatements(result.sourceFile.statements, source, fileName)
-        }
-    }
-
-    private fun checkRestLastInStatements(stmts: List<Statement>, source: String, fileName: String) {
-        for (stmt in stmts) checkRestLastInStatement(stmt, source, fileName)
-    }
-
-    private fun checkRestLastInStatement(stmt: Statement, source: String, fileName: String) {
-        when (stmt) {
-            is FunctionDeclaration -> {
-                checkRestLastInParams(stmt.parameters, source, fileName)
-                stmt.body?.let { checkRestLastInStatements(it.statements, source, fileName) }
-            }
-            is ClassDeclaration -> for (m in stmt.members) {
-                when (m) {
-                    is MethodDeclaration -> {
-                        checkRestLastInParams(m.parameters, source, fileName)
-                        m.body?.let { checkRestLastInStatements(it.statements, source, fileName) }
-                    }
-                    is Constructor -> {
-                        checkRestLastInParams(m.parameters, source, fileName)
-                        m.body?.let { checkRestLastInStatements(it.statements, source, fileName) }
-                    }
-                    is GetAccessor -> m.body?.let { checkRestLastInStatements(it.statements, source, fileName) }
-                    is SetAccessor -> {
-                        checkRestLastInParams(m.parameters, source, fileName)
-                        m.body?.let { checkRestLastInStatements(it.statements, source, fileName) }
-                    }
-                    else -> {}
-                }
-            }
-            is ExpressionStatement -> checkRestLastInExpr(stmt.expression, source, fileName)
-            is VariableStatement -> for (d in stmt.declarationList.declarations) {
-                d.initializer?.let { checkRestLastInExpr(it, source, fileName) }
-            }
-            is ReturnStatement -> stmt.expression?.let { checkRestLastInExpr(it, source, fileName) }
-            is Block -> checkRestLastInStatements(stmt.statements, source, fileName)
-            is IfStatement -> {
-                checkRestLastInStatement(stmt.thenStatement, source, fileName)
-                stmt.elseStatement?.let { checkRestLastInStatement(it, source, fileName) }
-            }
-            is ForStatement -> checkRestLastInStatement(stmt.statement, source, fileName)
-            is ForInStatement -> checkRestLastInStatement(stmt.statement, source, fileName)
-            is ForOfStatement -> checkRestLastInStatement(stmt.statement, source, fileName)
-            is WhileStatement -> checkRestLastInStatement(stmt.statement, source, fileName)
-            is DoStatement -> checkRestLastInStatement(stmt.statement, source, fileName)
-            is SwitchStatement -> {
-                for (c in stmt.caseBlock) when (c) {
-                    is CaseClause -> checkRestLastInStatements(c.statements, source, fileName)
-                    is DefaultClause -> checkRestLastInStatements(c.statements, source, fileName)
-                    else -> {}
-                }
-            }
-            is TryStatement -> {
-                checkRestLastInStatements(stmt.tryBlock.statements, source, fileName)
-                stmt.catchClause?.let { checkRestLastInStatements(it.block.statements, source, fileName) }
-                stmt.finallyBlock?.let { checkRestLastInStatements(it.statements, source, fileName) }
-            }
-            is LabeledStatement -> checkRestLastInStatement(stmt.statement, source, fileName)
-            is ThrowStatement -> stmt.expression?.let { checkRestLastInExpr(it, source, fileName) }
-            is ExportAssignment -> checkRestLastInExpr(stmt.expression, source, fileName)
-            is InterfaceDeclaration -> for (m in stmt.members) {
-                when (m) {
-                    is MethodDeclaration -> checkRestLastInParams(m.parameters, source, fileName)
-                    else -> {}
-                }
-            }
-            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { checkRestLastInStatements(it.statements, source, fileName) }
-            else -> {}
-        }
-    }
-
-    private fun checkRestLastInExpr(expr: Expression, source: String, fileName: String) {
-        when (expr) {
-            is ArrowFunction -> {
-                checkRestLastInParams(expr.parameters, source, fileName)
-                when (val body = expr.body) {
-                    is Block -> checkRestLastInStatements(body.statements, source, fileName)
-                    is Expression -> checkRestLastInExpr(body, source, fileName)
-                    else -> {}
-                }
-            }
-            is FunctionExpression -> {
-                checkRestLastInParams(expr.parameters, source, fileName)
-                expr.body.let { checkRestLastInStatements(it.statements, source, fileName) }
-            }
-            is ClassExpression -> for (m in expr.members) {
-                when (m) {
-                    is MethodDeclaration -> {
-                        checkRestLastInParams(m.parameters, source, fileName)
-                        m.body?.let { checkRestLastInStatements(it.statements, source, fileName) }
-                    }
-                    is Constructor -> {
-                        checkRestLastInParams(m.parameters, source, fileName)
-                        m.body?.let { checkRestLastInStatements(it.statements, source, fileName) }
-                    }
-                    is GetAccessor -> m.body?.let { checkRestLastInStatements(it.statements, source, fileName) }
-                    is SetAccessor -> {
-                        checkRestLastInParams(m.parameters, source, fileName)
-                        m.body?.let { checkRestLastInStatements(it.statements, source, fileName) }
-                    }
-                    is PropertyDeclaration -> m.initializer?.let { checkRestLastInExpr(it, source, fileName) }
-                    else -> {}
-                }
-            }
-            is ParenthesizedExpression -> checkRestLastInExpr(expr.expression, source, fileName)
-            is AsExpression -> checkRestLastInExpr(expr.expression, source, fileName)
-            is TypeAssertionExpression -> checkRestLastInExpr(expr.expression, source, fileName)
-            is SatisfiesExpression -> checkRestLastInExpr(expr.expression, source, fileName)
-            is NonNullExpression -> checkRestLastInExpr(expr.expression, source, fileName)
-            is BinaryExpression -> {
-                var cur: Expression = expr
-                val rightStack = ArrayDeque<Expression>()
-                while (cur is BinaryExpression) { rightStack.addLast(cur.right); cur = cur.left }
-                checkRestLastInExpr(cur, source, fileName)
-                while (rightStack.isNotEmpty()) checkRestLastInExpr(rightStack.removeLast(), source, fileName)
-            }
-            is ConditionalExpression -> {
-                checkRestLastInExpr(expr.condition, source, fileName)
-                checkRestLastInExpr(expr.whenTrue, source, fileName)
-                checkRestLastInExpr(expr.whenFalse, source, fileName)
-            }
-            is CallExpression -> {
-                checkRestLastInExpr(expr.expression, source, fileName)
-                for (a in expr.arguments) checkRestLastInExpr(a, source, fileName)
-            }
-            is NewExpression -> {
-                checkRestLastInExpr(expr.expression, source, fileName)
-                expr.arguments?.forEach { checkRestLastInExpr(it, source, fileName) }
-            }
-            is PropertyAccessExpression -> checkRestLastInExpr(expr.expression, source, fileName)
-            is ElementAccessExpression -> {
-                checkRestLastInExpr(expr.expression, source, fileName)
-                checkRestLastInExpr(expr.argumentExpression, source, fileName)
-            }
-            is ArrayLiteralExpression -> for (e in expr.elements) checkRestLastInExpr(e, source, fileName)
-            is ObjectLiteralExpression -> for (prop in expr.properties) {
-                when (prop) {
-                    is PropertyAssignment -> checkRestLastInExpr(prop.initializer, source, fileName)
-                    is SpreadAssignment -> checkRestLastInExpr(prop.expression, source, fileName)
-                    is MethodDeclaration -> {
-                        checkRestLastInParams(prop.parameters, source, fileName)
-                        prop.body?.let { checkRestLastInStatements(it.statements, source, fileName) }
-                    }
-                    is GetAccessor -> prop.body?.let { checkRestLastInStatements(it.statements, source, fileName) }
-                    is SetAccessor -> {
-                        checkRestLastInParams(prop.parameters, source, fileName)
-                        prop.body?.let { checkRestLastInStatements(it.statements, source, fileName) }
-                    }
-                    else -> {}
-                }
-            }
-            is SpreadElement -> checkRestLastInExpr(expr.expression, source, fileName)
-            is AwaitExpression -> checkRestLastInExpr(expr.expression, source, fileName)
-            is YieldExpression -> expr.expression?.let { checkRestLastInExpr(it, source, fileName) }
-            is VoidExpression -> checkRestLastInExpr(expr.expression, source, fileName)
-            is DeleteExpression -> checkRestLastInExpr(expr.expression, source, fileName)
-            is TypeOfExpression -> checkRestLastInExpr(expr.expression, source, fileName)
-            is PrefixUnaryExpression -> checkRestLastInExpr(expr.operand, source, fileName)
-            is PostfixUnaryExpression -> checkRestLastInExpr(expr.operand, source, fileName)
-            is TemplateExpression -> for (span in expr.templateSpans) checkRestLastInExpr(span.expression, source, fileName)
-            is TaggedTemplateExpression -> {
-                checkRestLastInExpr(expr.tag, source, fileName)
-                if (expr.template is TemplateExpression) {
-                    for (span in (expr.template).templateSpans) checkRestLastInExpr(span.expression, source, fileName)
-                }
-            }
-            is CommaListExpression -> for (e in expr.elements) checkRestLastInExpr(e, source, fileName)
-            else -> {}
-        }
-    }
-
-    private fun checkRestLastInParams(params: List<Parameter>, source: String, fileName: String) {
-        val realParams = params.filter { !it.isCommentPlaceholder }
-        for (i in 0 until realParams.size - 1) {
-            val param = realParams[i]
-            if (param.dotDotDotToken) {
-                // B18.2: suppress TS1014 when the FOLLOWING parameter was created via
-                // B17.7's comma-recovery — the parser already emitted TS1005 for the
-                // malformed `...x y` shape, and TypeScript treats it as the sole diagnostic.
-                if (realParams[i + 1].commaRecovered) continue
-                val name = param.name
-                // TS1014 span covers only `...` (3 chars), not the param name
-                val start = if (name is Identifier) name.pos - 3 else param.pos
-                val length = 3  // just the `...` token
-                val (line, character) = getLineAndCharacterOfPosition(source, start)
-                diagnostics.add(Diagnostic(
-                    message = "A rest parameter must be last in a parameter list.",
-                    category = DiagnosticCategory.Error,
-                    code = 1014,
-                    fileName = fileName,
-                    line = line,
-                    character = character,
-                    start = start,
-                    length = length,
-                ))
-            }
         }
     }
 
@@ -67427,166 +67195,6 @@ interface DataView {
     }
 
     // -----------------------------------------------------------------------
-    // Multiple defaults in switch (TS1113)
-    // -----------------------------------------------------------------------
-
-    private fun checkMultipleDefaults() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            checkMultiDefaultsInStatements(result.sourceFile.statements, source, fileName)
-        }
-    }
-
-    private fun checkMultiDefaultsInStatements(stmts: List<Statement>, source: String, fileName: String) {
-        for (stmt in stmts) checkMultiDefaultsInStatement(stmt, source, fileName)
-    }
-
-    private fun checkMultiDefaultsInStatement(stmt: Statement, source: String, fileName: String) {
-        when (stmt) {
-            is SwitchStatement -> {
-                var defaultSeen = false
-                var errorEmitted = false
-                for (c in stmt.caseBlock) {
-                    if (c is DefaultClause) {
-                        if (defaultSeen && !errorEmitted) {
-                            val start = c.pos
-                            val (line, character) = getLineAndCharacterOfPosition(source, start)
-                            diagnostics.add(Diagnostic(
-                                message = "A 'default' clause cannot appear more than once in a 'switch' statement.",
-                                category = DiagnosticCategory.Error,
-                                code = 1113,
-                                fileName = fileName,
-                                line = line,
-                                character = character,
-                                start = start,
-                                length = 8, // "default:"
-                            ))
-                            errorEmitted = true
-                        }
-                        defaultSeen = true
-                        checkMultiDefaultsInStatements(c.statements, source, fileName)
-                    } else if (c is CaseClause) {
-                        checkMultiDefaultsInStatements(c.statements, source, fileName)
-                    }
-                }
-            }
-            is Block -> checkMultiDefaultsInStatements(stmt.statements, source, fileName)
-            is FunctionDeclaration -> stmt.body?.let { checkMultiDefaultsInStatements(it.statements, source, fileName) }
-            is ClassDeclaration -> for (m in stmt.members) {
-                when (m) {
-                    is MethodDeclaration -> m.body?.let { checkMultiDefaultsInStatements(it.statements, source, fileName) }
-                    is Constructor -> m.body?.let { checkMultiDefaultsInStatements(it.statements, source, fileName) }
-                    is GetAccessor -> m.body?.let { checkMultiDefaultsInStatements(it.statements, source, fileName) }
-                    is SetAccessor -> m.body?.let { checkMultiDefaultsInStatements(it.statements, source, fileName) }
-                    is PropertyDeclaration -> m.initializer?.let { checkMultiDefaultsInExpr(it, source, fileName) }
-                    else -> {}
-                }
-            }
-            is IfStatement -> {
-                checkMultiDefaultsInStatement(stmt.thenStatement, source, fileName)
-                stmt.elseStatement?.let { checkMultiDefaultsInStatement(it, source, fileName) }
-            }
-            is ForStatement -> checkMultiDefaultsInStatement(stmt.statement, source, fileName)
-            is ForInStatement -> checkMultiDefaultsInStatement(stmt.statement, source, fileName)
-            is ForOfStatement -> checkMultiDefaultsInStatement(stmt.statement, source, fileName)
-            is WhileStatement -> checkMultiDefaultsInStatement(stmt.statement, source, fileName)
-            is DoStatement -> checkMultiDefaultsInStatement(stmt.statement, source, fileName)
-            is TryStatement -> {
-                checkMultiDefaultsInStatements(stmt.tryBlock.statements, source, fileName)
-                stmt.catchClause?.let { checkMultiDefaultsInStatements(it.block.statements, source, fileName) }
-                stmt.finallyBlock?.let { checkMultiDefaultsInStatements(it.statements, source, fileName) }
-            }
-            is LabeledStatement -> checkMultiDefaultsInStatement(stmt.statement, source, fileName)
-            is ThrowStatement -> stmt.expression?.let { checkMultiDefaultsInExpr(it, source, fileName) }
-            is ExportAssignment -> checkMultiDefaultsInExpr(stmt.expression, source, fileName)
-            is ReturnStatement -> stmt.expression?.let { checkMultiDefaultsInExpr(it, source, fileName) }
-            is ExpressionStatement -> checkMultiDefaultsInExpr(stmt.expression, source, fileName)
-            is VariableStatement -> for (d in stmt.declarationList.declarations) {
-                d.initializer?.let { checkMultiDefaultsInExpr(it, source, fileName) }
-            }
-            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { checkMultiDefaultsInStatements(it.statements, source, fileName) }
-            else -> {}
-        }
-    }
-
-    private fun checkMultiDefaultsInExpr(expr: Expression, source: String, fileName: String) {
-        when (expr) {
-            is ArrowFunction -> when (val body = expr.body) {
-                is Block -> checkMultiDefaultsInStatements(body.statements, source, fileName)
-                is Expression -> checkMultiDefaultsInExpr(body, source, fileName)
-                else -> {}
-            }
-            is FunctionExpression -> expr.body.let { checkMultiDefaultsInStatements(it.statements, source, fileName) }
-            is ClassExpression -> for (member in expr.members) when (member) {
-                is MethodDeclaration -> member.body?.let { checkMultiDefaultsInStatements(it.statements, source, fileName) }
-                is Constructor -> member.body?.let { checkMultiDefaultsInStatements(it.statements, source, fileName) }
-                is GetAccessor -> member.body?.let { checkMultiDefaultsInStatements(it.statements, source, fileName) }
-                is SetAccessor -> member.body?.let { checkMultiDefaultsInStatements(it.statements, source, fileName) }
-                is PropertyDeclaration -> member.initializer?.let { checkMultiDefaultsInExpr(it, source, fileName) }
-                else -> {}
-            }
-            is ParenthesizedExpression -> checkMultiDefaultsInExpr(expr.expression, source, fileName)
-            is AsExpression -> checkMultiDefaultsInExpr(expr.expression, source, fileName)
-            is TypeAssertionExpression -> checkMultiDefaultsInExpr(expr.expression, source, fileName)
-            is SatisfiesExpression -> checkMultiDefaultsInExpr(expr.expression, source, fileName)
-            is NonNullExpression -> checkMultiDefaultsInExpr(expr.expression, source, fileName)
-            is BinaryExpression -> {
-                var cur: Expression = expr
-                val rightStack = ArrayDeque<Expression>()
-                while (cur is BinaryExpression) { rightStack.addLast(cur.right); cur = cur.left }
-                checkMultiDefaultsInExpr(cur, source, fileName)
-                while (rightStack.isNotEmpty()) checkMultiDefaultsInExpr(rightStack.removeLast(), source, fileName)
-            }
-            is ConditionalExpression -> {
-                checkMultiDefaultsInExpr(expr.condition, source, fileName)
-                checkMultiDefaultsInExpr(expr.whenTrue, source, fileName)
-                checkMultiDefaultsInExpr(expr.whenFalse, source, fileName)
-            }
-            is CallExpression -> {
-                checkMultiDefaultsInExpr(expr.expression, source, fileName)
-                for (arg in expr.arguments) checkMultiDefaultsInExpr(arg, source, fileName)
-            }
-            is NewExpression -> {
-                checkMultiDefaultsInExpr(expr.expression, source, fileName)
-                expr.arguments?.forEach { checkMultiDefaultsInExpr(it, source, fileName) }
-            }
-            is PropertyAccessExpression -> checkMultiDefaultsInExpr(expr.expression, source, fileName)
-            is ElementAccessExpression -> {
-                checkMultiDefaultsInExpr(expr.expression, source, fileName)
-                checkMultiDefaultsInExpr(expr.argumentExpression, source, fileName)
-            }
-            is ArrayLiteralExpression -> for (e in expr.elements) checkMultiDefaultsInExpr(e, source, fileName)
-            is ObjectLiteralExpression -> for (p in expr.properties) when (p) {
-                is PropertyAssignment -> checkMultiDefaultsInExpr(p.initializer, source, fileName)
-                is SpreadAssignment -> checkMultiDefaultsInExpr(p.expression, source, fileName)
-                is MethodDeclaration -> p.body?.let { checkMultiDefaultsInStatements(it.statements, source, fileName) }
-                is GetAccessor -> p.body?.let { checkMultiDefaultsInStatements(it.statements, source, fileName) }
-                is SetAccessor -> p.body?.let { checkMultiDefaultsInStatements(it.statements, source, fileName) }
-                else -> {}
-            }
-            is SpreadElement -> checkMultiDefaultsInExpr(expr.expression, source, fileName)
-            is AwaitExpression -> checkMultiDefaultsInExpr(expr.expression, source, fileName)
-            is YieldExpression -> expr.expression?.let { checkMultiDefaultsInExpr(it, source, fileName) }
-            is VoidExpression -> checkMultiDefaultsInExpr(expr.expression, source, fileName)
-            is DeleteExpression -> checkMultiDefaultsInExpr(expr.expression, source, fileName)
-            is TypeOfExpression -> checkMultiDefaultsInExpr(expr.expression, source, fileName)
-            is PrefixUnaryExpression -> checkMultiDefaultsInExpr(expr.operand, source, fileName)
-            is PostfixUnaryExpression -> checkMultiDefaultsInExpr(expr.operand, source, fileName)
-            is TemplateExpression -> for (span in expr.templateSpans) checkMultiDefaultsInExpr(span.expression, source, fileName)
-            is TaggedTemplateExpression -> {
-                checkMultiDefaultsInExpr(expr.tag, source, fileName)
-                if (expr.template is TemplateExpression) {
-                    for (span in (expr.template).templateSpans) checkMultiDefaultsInExpr(span.expression, source, fileName)
-                }
-            }
-            is CommaListExpression -> for (e in expr.elements) checkMultiDefaultsInExpr(e, source, fileName)
-            else -> {}
-        }
-    }
-
-    // -----------------------------------------------------------------------
     // Switch/case literal-type comparability (TS2678)
     // -----------------------------------------------------------------------
 
@@ -67884,21 +67492,6 @@ interface DataView {
             }
             is CommaListExpression -> for (e in expr.elements) walkSwitchCaseComparableInExpr(e, source, fileName)
             else -> {}
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // Interface property initializers (TS1246)
-    // -----------------------------------------------------------------------
-
-    private fun checkInterfacePropertyInitializers() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            for (stmt in result.sourceFile.statements) {
-                checkInterfacePropInit(stmt, source, fileName)
-            }
         }
     }
 
@@ -68320,62 +67913,6 @@ interface DataView {
             start = start,
             length = length,
         ))
-    }
-
-    // -----------------------------------------------------------------------
-    // Interface property initializer checking (TS1246)
-    // -----------------------------------------------------------------------
-
-    private fun checkInterfacePropInit(stmt: Statement, source: String, fileName: String) {
-        when (stmt) {
-            is InterfaceDeclaration -> {
-                for (m in stmt.members) {
-                    if (m is PropertyDeclaration && m.initializer != null) {
-                        val init = m.initializer
-                        val start = init.pos
-                        val length = (init.end - 1 - start).coerceAtLeast(1)
-                        val (line, character) = getLineAndCharacterOfPosition(source, start)
-                        diagnostics.add(Diagnostic(
-                            message = "An interface property cannot have an initializer.",
-                            category = DiagnosticCategory.Error,
-                            code = 1246,
-                            fileName = fileName,
-                            line = line,
-                            character = character,
-                            start = start,
-                            length = length,
-                        ))
-                    }
-                }
-            }
-            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let {
-                for (s in it.statements) checkInterfacePropInit(s, source, fileName)
-            }
-            is Block -> for (s in stmt.statements) checkInterfacePropInit(s, source, fileName)
-            is IfStatement -> {
-                checkInterfacePropInit(stmt.thenStatement, source, fileName)
-                stmt.elseStatement?.let { checkInterfacePropInit(it, source, fileName) }
-            }
-            is ForStatement -> checkInterfacePropInit(stmt.statement, source, fileName)
-            is ForInStatement -> checkInterfacePropInit(stmt.statement, source, fileName)
-            is ForOfStatement -> checkInterfacePropInit(stmt.statement, source, fileName)
-            is WhileStatement -> checkInterfacePropInit(stmt.statement, source, fileName)
-            is DoStatement -> checkInterfacePropInit(stmt.statement, source, fileName)
-            is SwitchStatement -> for (clause in stmt.caseBlock) {
-                when (clause) {
-                    is CaseClause -> for (s in clause.statements) checkInterfacePropInit(s, source, fileName)
-                    is DefaultClause -> for (s in clause.statements) checkInterfacePropInit(s, source, fileName)
-                    else -> {}
-                }
-            }
-            is TryStatement -> {
-                for (s in stmt.tryBlock.statements) checkInterfacePropInit(s, source, fileName)
-                stmt.catchClause?.let { for (s in it.block.statements) checkInterfacePropInit(s, source, fileName) }
-                stmt.finallyBlock?.let { for (s in it.statements) checkInterfacePropInit(s, source, fileName) }
-            }
-            is LabeledStatement -> checkInterfacePropInit(stmt.statement, source, fileName)
-            else -> {}
-        }
     }
 
     // -----------------------------------------------------------------------

@@ -59,6 +59,48 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 516 (2026-07-14) — INV.4(b) batch 4: the accessor-grammar family +
+TS1014/TS1113/TS1246 migrated onto the spine; 17 walker functions (~733 lines)
+deleted, 4 init slots removed.** (Session start: recovered from an OOM-killed
+predecessor — round-515 work was all committed; nothing lost.) Four passes
+migrated: (1) `checkSetterParameterCount` (the largest hand-walk family so far,
+~290 lines / 6 functions carrying FOUR codes) split into three handlers —
+`spineCheckGetAccessorGrammar` (TS1054, widened faithfully from
+class-decl+objlit to class-EXPRESSION and interface/type-literal getters — the
+old walk never checked class-expr getters at all), `spineCheckSetAccessorGrammar`
+(TS1049 preserved across all old contexts + widened to interface/type-literal
+setters; TS1095 widened from class declarations to class EXPRESSIONS — and
+PROVABLY no further: the objlit accessor parse never PARSES a setter return
+annotation and the interface parse drops it, a first-cut objlit pin caught
+this), and `spineCheckAccessorPairVisibility` (TS2808, deliberately KEPT at the
+ClassDeclaration gate — the old walker never checked class expressions; pinned
+negative). (2) `checkRestParameterLast` (TS1014) — a second Parameter-enter
+handler beside batch 2's `spineCheckRestParamLast` sibling: rest param not last
+among the parent's real params fires at the `...` (B18.2 comma-recovery
+suppression preserved); parent set = the old value positions + a faithful
+widening to FunctionType/ConstructorType/type-literal methods (tsc
+checkGrammarParameterList runs for every signature declaration — pinned);
+GetAccessor parents stay excluded (old behavior, TS1054 owns that shape).
+(3) `checkMultipleDefaults` (TS1113) — a trivial SwitchStatement-enter handler
+with the old one-per-switch errorEmitted latch preserved (three-defaults pin);
+widened to parameter-default initializers (pinned). (4)
+`checkInterfacePropertyInitializers` (TS1246) — an InterfaceDeclaration-enter
+handler; NOTE the parser owns the common `= init` shape (consumes without
+storing + reports at the initializer's first char), so the checker handler
+covers only initializer-CARRYING PropertyDeclarations (none of the current
+type-member parse paths store one — the handler is the faithful migration of
+the old walker's semantics, kept cheap). All handlers carry the old driver's
+`!spineIsDts` gate. VERIFIED: suite 10,405 → 10,427 (+22 Inv4SpineBatch4Test,
+0 regressions); listAll error lines IDENTICAL on ALL 8 profiles (vs the 515b
+baselines; header path-form + timing lines only); bench row in band (compiler
+26,738 ms self, +1.1% vs previous = noise). NEXT: INV.4(b) batch 5 — candidates
+from the same init region: checkComputedPropertyNameLiteral (TS1166/TS1169,
+mind the round-42 isLiteralLikeExpr direction-of-emission gotcha),
+checkDuplicateModifiers (TS1030, threads inAmbientContext), checkAmbientInitializers
+(TS1039), checkConstWithoutInitializer/checkDestructuringWithoutInitializer
+(TS1155/TS1182); checkMixinClassConstructor stays (d) territory (TP-scope
+machinery).**
+
 **Round 515 (2026-07-14) — INV.4(b) batch 2: TS2370 + the iterator/yield-star
 prepass pair migrated onto the spine; 16 walker functions (~460 lines) deleted.**
 (Session start: recovered from an OOM-killed predecessor — round-514 work was
@@ -1055,9 +1097,26 @@ interrupt the arc).
     unchecked; the `.js`/`.jsx` skip is deliberately NOT spineIsJsLike —
     the old pass ran on .mjs/.cjs); 6 more walker funs + the round-514
     orphaned TS18045 KDoc deleted. Suite +9 (Inv4SpineBatch3Test), listAll
-    identical on ALL 8 profiles. NEXT batches: checkMixinClassConstructor
-    (TP-scope machinery — maybe (d)); pick the next most-mechanical tail
-    passes from the round-491 table.
+    identical on ALL 8 profiles. Batch 4 DONE round 516 (2026-07-14):
+    checkSetterParameterCount (TS1054/TS1049/TS1095 as Get/SetAccessor-enter
+    handlers — TS1054/TS1049 widened faithfully to class expressions +
+    interface/type-literal accessors, TS1095 widened exactly to class
+    expressions (the objlit/interface parses never store a setter return
+    annotation); TS2808 as a ClassDeclaration-enter pair check KEPT at the
+    old ClassDeclaration-only gate) + checkRestParameterLast (TS1014 — a
+    second Parameter-enter handler; widened to FunctionType/ConstructorType/
+    type-literal methods per tsc checkGrammarParameterList; GetAccessor
+    parents stay excluded) + checkMultipleDefaults (TS1113 —
+    SwitchStatement-enter, one-per-switch latch preserved) +
+    checkInterfacePropertyInitializers (TS1246 — InterfaceDeclaration-enter;
+    the parser owns the common shape). 17 walker funs (~733 lines) deleted,
+    4 init slots removed. Suite +22 (Inv4SpineBatch4Test), listAll identical
+    on ALL 8 profiles, bench in band. NEXT batches: batch-5 candidates —
+    checkComputedPropertyNameLiteral (TS1166/TS1169),
+    checkDuplicateModifiers (TS1030), checkAmbientInitializers (TS1039),
+    checkConstWithoutInitializer / checkDestructuringWithoutInitializer
+    (TS1155/TS1182); checkMixinClassConstructor is TP-scope-stateful —
+    (d) territory.
   - [ ] **INV.4(c) The name-resolution pair.** checkUnresolvedNames (846 ms) +
     checkTypeUsedAsValue (734 ms): fold their private NameScope chains into
     spine-maintained authoritative lexical state backed by the INV.2(c)
