@@ -93,12 +93,23 @@ walkers (batch 10: 10 green + 4 widening pins fail pre-migration; batch 11:
 14 green + 3 widening + 1 faithfulness-fix pins fail pre-migration); suite
 10,538 → 10,552 → 10,570 (+14 Inv4SpineBatch10Test, +18
 Inv4SpineBatch11Test, 0 regressions); `--listAll` error lines IDENTICAL on
-ALL 8 profiles after EACH batch (519a vs 518b, 519b vs 519a); warning-clean; bench 25,491 ms self, 46 errors unchanged (single-run −7.9% = the box-drift band). NEXT:
-INV.4(b) batch 12 — the remaining zero-typing tail
-(checkObjectLiteralModifiers as a trivial ObjectLiteralExpression-enter,
-checkDuplicateObjectLiteralProperties, checkReservedWordIdentifiers,
-checkStrictModeReservedWords, checkAwaitContext — the last is stateful
-isAsync threading, decompose when reached).
+ALL 8 profiles after EACH batch (519a vs 518b, 519b vs 519a); warning-clean; bench 25,491 ms self, 46 errors unchanged (single-run −7.9% = the box-drift band). Batch 12 same session:
+checkObjectLiteralModifiers (TS1042/TS1184) — the near-full-tree
+explicit-stack expression walk became a pure ObjectLiteralExpression-enter
+handler (spineCheckObjLitModifiers; OBJLIT_ACCESS_MODIFIERS
+companion-hosted per the init-order gotcha — the spine runs during init, an
+instance field declared after init would read null); nested literals get
+their own enters; parameter-default + spread-operand positions are faithful
+widenings. 3 walker funs (~206 lines) deleted, 1 init dispatch removed.
+Suite 10,570 → 10,580 (+10 Inv4SpineBatch12Test — 8 pre-verified against
+the OLD walker, 2 widening pins fail pre-migration as expected); listAll
+error lines IDENTICAL on ALL 8 profiles (519c vs 519b). NEXT: INV.4(b)
+batch 13 — the remaining zero-typing tail
+(checkDuplicateObjectLiteralProperties — NOTE its
+destructuring-assignment-LHS skip needs a came-from-child parent walk,
+checkReservedWordIdentifiers, checkStrictModeReservedWords,
+checkAwaitContext — the last is stateful isAsync threading, decompose when
+reached).
 
 **Round 518 (2026-07-14) — INV.4(b) batch 8: the parameter-initializer family
 migrated onto the spine; 24 walker functions (~902 lines) deleted, 6 init
@@ -1391,13 +1402,25 @@ interrupt the arc).
     isDeclarationStatement retained as the per-jump core. Suite +18
     (Inv4SpineBatch11Test — 14 pre-verified against the OLD walker, 3
     widening + 1 faithfulness-fix pins fail pre-migration as expected);
-    listAll error lines IDENTICAL on ALL 8 profiles (519b vs 519a). NEXT
+    listAll error lines IDENTICAL on ALL 8 profiles (519b vs 519a). Batch 12
+    DONE same round: checkObjectLiteralModifiers (TS1042/TS1184) — the
+    near-full-tree explicit-stack expression walk became a pure
+    ObjectLiteralExpression-enter handler (spineCheckObjLitModifiers;
+    OBJLIT_ACCESS_MODIFIERS companion-hosted per the init-order gotcha);
+    nested literals get their own enters; parameter-default and
+    spread-operand positions are faithful widenings. 3 walker funs
+    (~206 lines) deleted, 1 init dispatch removed. Suite +10
+    (Inv4SpineBatch12Test — 2 widening pins fail pre-migration as expected);
+    listAll error lines IDENTICAL on ALL 8 profiles (519c vs 519b). NEXT
     batches: remaining zero-typing tail by the 518 table
-    (checkObjectLiteralModifiers — a trivial ObjectLiteralExpression-enter,
-    checkDuplicateObjectLiteralProperties, checkReservedWordIdentifiers,
-    checkStrictModeReservedWords, checkConflictMarkers (a text scan — may not
-    need the spine), checkAwaitContext (stateful isAsync threading +
-    module-top-level rules — decompose when reached));
+    (checkDuplicateObjectLiteralProperties — NOTE its
+    destructuring-assignment-LHS skip must become a came-from-child parent
+    walk: from the objlit walk up through literal/property nodes and skip
+    when a BinaryExpression(=) is reached with the walked child as its LEFT,
+    checkReservedWordIdentifiers, checkStrictModeReservedWords,
+    checkConflictMarkers (a text scan — may not need the spine),
+    checkAwaitContext (stateful isAsync threading + module-top-level rules —
+    decompose when reached));
     checkMixinClassConstructor is TP-scope-stateful — (d) territory.
   - [ ] **INV.4(c) The name-resolution pair.** checkUnresolvedNames (846 ms) +
     checkTypeUsedAsValue (734 ms): fold their private NameScope chains into
