@@ -59,6 +59,51 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 515 (2026-07-14) — INV.4(b) batch 2: TS2370 + the iterator/yield-star
+prepass pair migrated onto the spine; 16 walker functions (~460 lines) deleted.**
+(Session start: recovered from an OOM-killed predecessor — round-514 work was
+all committed; lesson re-confirmed: never start a listAll JVM while the suite
+runs.) Three passes migrated: (1) `checkNonArrayRestParameters` — the old
+VALUE-position statement/expression walk pair and the TYPE-context annotation
+walk collapsed into ONE `Parameter`-enter handler (`spineCheckRestParam`)
+dispatching on the parameter's PARENT kind: FunctionDeclaration / Constructor /
+ArrowFunction / FunctionExpression / method-of-{class, class-expr, interface,
+objlit} → the keyword rule; FunctionType / ConstructorType /
+method-of-TypeLiteral → the B71.2 optional-rest rule; anything else (accessors,
+index sigs) → skip. Both rules widened faithfully (position-independent
+per-signature tsc grammar — new visits: param default values, casts,
+decorators; pinned both directions). (2)+(3) `checkIteratorMethodExtraParameters`
+(TS2488/TS2504) + `checkAsyncYieldStarThenable` (TS1320) — the fused prepass
+pattern: collection happens ON the spine (`spineCollectObjLitVar`,
+VariableDeclaration enter gated to a VariableStatement parent; first-wins objlit
+map + last-bad-wins BadIterInfo map, exactly the old maps' write semantics) and
+iteration positions (for-of / spread / `yield*` operands) plus `yield*` thenable
+candidates are BUFFERED and resolved at file END
+(`spineResolveDeferredIterationChecks`) — use-before-declaration still matches
+(the old passes collected in a full prepass first) with NO second walk. This is
+the template for collect-then-scan walkers. TS1320's old statement-level-only
+reachability widened to a nearest-function-like-ancestor async-generator gate
+(`spineInAsyncGeneratorBody`; arrow/ctor/accessor boundaries return false —
+none can be a generator). All three old passes had NO option gates; the
+iterator/yield handlers keep the per-check `!spineIsDts` gates, TS2370 stays
+ungated (covers .d.ts as before). Deleted: 16 functions (~460 lines — the two
+TS2370 walk families, walkIterationPositions/walkIterPosStmt/walkIterPosExpr,
+both collect prepasses, both scan walks); retained shared helpers:
+nonArrayKeywordText (2 other consumers), BadIterInfo + badIteratorDisplay +
+inferGeneratorYieldDisplay, objLiteralYieldsNonPromiseThenable +
+isComputedSymbolMethod + singleReturnObjLiteral. VERIFIED: suite 10,375 →
+10,396 (+21 Inv4SpineBatch2Test: keyword-rest across all five value-position
+parent kinds, optional-rest in fn-type/type-literal/cast, use-before-decl
+deferred resolution, async TS2504 via yield*, widening pins for param-default
+arrows + class-property-initializer for-of + nested-if yield*, negative
+controls for sync generators / data-property `then` / match-all fn-type
+keyword rest); listAll error lines IDENTICAL on ALL 8 profiles (compiler +
+services vs the round-514c baselines, the other six vs 513d3e); wall in band
+(compiler 26.8 s vs 27.2 s baseline single-run). NEXT: INV.4(b) batch 3 —
+checkMixinClassConstructor is TP-scope-stateful (likely (d) territory);
+re-consult the round-491 `--passTiming` table for the next most-mechanical
+tail passes.**
+
 **Round 514 (2026-07-14) — INV.4 DECOMPOSED into (a)–(f) + INV.4(a) LANDED: the
 single-pass check spine exists with its first migrated pass.** (Session start:
 recovered from an OOM-killed predecessor — all round-513 work was verified
@@ -970,11 +1015,24 @@ interrupt the arc).
     (leave fires inline for childless nodes, no re-push) → re-interleaved
     NEUTRAL within noise (pair deltas +861/−1063/+574 ms, mean +124 ms).
     Per-frame costs are the whole game in a walk that visits every node —
-    the walk KDoc carries the warning. NEXT batches:
-    checkNonArrayRestParameters (needs the value-position walk read — two
-    differently-shaped walks), checkMixinClassConstructor (TP-scope
-    machinery — maybe (d)), checkIteratorMethodExtraParameters +
-    checkAsyncYieldStarThenable (per-file prepass → file-enter hook pattern).
+    the walk KDoc carries the warning. Batch 2 DONE round 515 (2026-07-14):
+    checkNonArrayRestParameters (TS2370 — the two differently-shaped walks
+    became ONE Parameter-enter handler dispatching on the parameter's PARENT
+    kind: value-position parents get the keyword rule, type-position parents
+    the optional-rest rule; both widened faithfully — position-independent
+    per-signature grammar) + checkIteratorMethodExtraParameters
+    (TS2488/TS2504) + checkAsyncYieldStarThenable (TS1320) — the prepass
+    pair became spine COLLECTION (VariableDeclaration enter, VariableStatement
+    parent gate) plus BUFFERED iteration positions/yield* candidates resolved
+    at file END (spineResolveDeferredIterationChecks — preserves the old
+    prepasses' use-before-decl semantics with NO extra walk; the template for
+    collect-then-scan walkers). TS1320's statement-level-only reachability
+    widened to a nearest-function-ancestor async-generator gate. 16 walker
+    funs deleted (~460 lines), 3 init slots removed. Suite +21
+    (Inv4SpineBatch2Test), listAll error lines identical on ALL 8 profiles,
+    wall in band. NEXT batches: checkMixinClassConstructor (TP-scope
+    machinery — maybe (d)); pick the next most-mechanical tail passes from
+    the round-491 table.
   - [ ] **INV.4(c) The name-resolution pair.** checkUnresolvedNames (846 ms) +
     checkTypeUsedAsValue (734 ms): fold their private NameScope chains into
     spine-maintained authoritative lexical state backed by the INV.2(c)

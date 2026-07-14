@@ -947,6 +947,17 @@ class Checker(
     // Per-handler activation gates, computed once per run in checkSpine.
     private var spineAccessorModifierActive: Boolean = false
     private var spineReservedIfaceParamsActive: Boolean = false
+    // INV.4(b) batch 2 per-file spine state (cleared per file in checkSpine):
+    // statement-level object-literal locals (first-wins — TS1320 operand
+    // resolution) and their bad-iterator subset (last-BAD-wins — TS2488/TS2504),
+    // plus the deferred-resolution buffers: iteration-position identifiers and
+    // `yield*` candidates are BUFFERED during the walk and resolved at file END
+    // so a use-before-declaration still matches (the deleted passes collected
+    // in a full prepass before their position walks).
+    private val spineObjLitVars = HashMap<String, ObjectLiteralExpression>()
+    private val spineBadIterVars = HashMap<String, BadIterInfo>()
+    private val spineIterPositionIds = ArrayList<Identifier>()
+    private val spineYieldStarNodes = ArrayList<YieldExpression>()
 
     // B283: identifier names guarded by a `typeof x === "..."` condition in an
     // enclosing if — the arithmetic walker has no flow narrowing, so union-typed
@@ -1954,26 +1965,25 @@ class Checker(
         if (options.noImplicitAny || options.strict) {
             pass("checkImplicitAnyYieldExpressions") { checkImplicitAnyYieldExpressions() }
         }
-        // 7a2. TS1320 — `yield* obj` in an async generator where obj's async-iterator
-        // chain yields a non-promise thenable ({ then() {} }). (crashInYieldStarInAsyncFunction)
-        pass("checkAsyncYieldStarThenable") { checkAsyncYieldStarThenable() }
+        // 7a2. TS1320 (`yield* obj` of a non-promise thenable in an async generator)
+        // migrated to the check spine (INV.4(b) batch 2) — see spineNoteYieldStar /
+        // spineResolveDeferredIterationChecks.
         // 7b. TS7019: Rest parameter implicitly has 'any[]' type — fires by default unless strict=false
         // This fires even without noImplicitAny (same behavior as TS7006 for parameter properties).
         if (!options.strictExplicitlyFalse) {
             pass("checkImplicitAnyRestParameters") { checkImplicitAnyRestParameters() }
         }
-        // 7b'. TS2370: A rest parameter must be of an array type — fires unconditionally
-        // (syntactic type-shape error, not an implicit-any diagnostic).
-        pass("checkNonArrayRestParameters") { checkNonArrayRestParameters() }
+        // 7b'. TS2370 (a rest parameter must be of an array type) migrated to the
+        // check spine (INV.4(b) batch 2) — see spineCheckRestParam.
         // 7b''. B74.4 TS7051/TS7006 (reserved-word interface params) migrated to
         // the check spine (INV.4(b) batch 1) — see spineCheckReservedWordInterfaceParams.
         // 17.218: TS2495 — `for-of <expr>` where expr is non-iterable. Only fires
         // when the user's `@lib` excludes es2015+ (es2015.iterable provides
         // Symbol.iterator); without it, only Array and string are iterable.
         pass("checkForOfNonIterable") { checkForOfNonIterable() }
-        // B438e: TS2488 / TS2504 for iterating an object whose `[Symbol.iterator]` /
-        // `[Symbol.asyncIterator]` method REQUIRES a parameter (iteratorExtraParameters).
-        pass("checkIteratorMethodExtraParameters") { checkIteratorMethodExtraParameters() }
+        // B438e: TS2488/TS2504 (iterator method REQUIRING a parameter) migrated to
+        // the check spine (INV.4(b) batch 2) — see spineCollectObjLitVar /
+        // spineResolveDeferredIterationChecks.
         // 7b''. TS7033: Abstract get accessor with no return type annotation → implicit any.
         // Gated on noImplicitAny/strict.
         if (options.noImplicitAny || options.strict) {
@@ -17398,139 +17408,6 @@ class Checker(
     }
 
     /**
-     * TS2370: A rest parameter must be of an array type.
-     *
-     * Fires for a rest parameter whose type annotation is clearly not array-like
-     * (primitive keyword types: number, string, boolean, bigint, symbol, void,
-     * never, null, undefined). Conservative — does not resolve TypeReferences
-     * (which could be array-like via type aliases).
-     *
-     * Unlike TS7019, fires regardless of strict/noImplicitAny — it's a syntactic
-     * error about the type shape, not an implicit-any diagnostic.
-     */
-    private fun checkNonArrayRestParameters() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            val source = result.sourceFile.text
-            checkNonArrayRestInStatements(result.sourceFile.statements, source, fileName)
-            // B71.2: also walk type-position FunctionType/ConstructorType
-            // parameters (in type alias bodies, var/param annotations, etc.).
-            // Optional-rest (`...args?: any[]`) emits TS2370 even when the
-            // annotation is an array — `?` widens with `| undefined`.
-            checkNonArrayRestInTypeContexts(result.sourceFile.statements, source, fileName)
-        }
-    }
-
-    private fun checkNonArrayRestInTypeContexts(stmts: List<Statement>, source: String, fileName: String) {
-        for (stmt in stmts) when (stmt) {
-            is TypeAliasDeclaration -> walkTypeNodeForRestParams(stmt.type, source, fileName)
-            is VariableStatement -> for (decl in stmt.declarationList.declarations) {
-                decl.type?.let { walkTypeNodeForRestParams(it, source, fileName) }
-            }
-            is FunctionDeclaration -> {
-                for (p in stmt.parameters) p.type?.let { walkTypeNodeForRestParams(it, source, fileName) }
-                stmt.type?.let { walkTypeNodeForRestParams(it, source, fileName) }
-            }
-            is InterfaceDeclaration -> for (m in stmt.members) when (m) {
-                is MethodDeclaration -> {
-                    for (p in m.parameters) p.type?.let { walkTypeNodeForRestParams(it, source, fileName) }
-                    m.type?.let { walkTypeNodeForRestParams(it, source, fileName) }
-                }
-                is PropertyDeclaration -> m.type?.let { walkTypeNodeForRestParams(it, source, fileName) }
-                else -> {}
-            }
-            is ClassDeclaration -> for (m in stmt.members) when (m) {
-                is MethodDeclaration -> {
-                    for (p in m.parameters) p.type?.let { walkTypeNodeForRestParams(it, source, fileName) }
-                    m.type?.let { walkTypeNodeForRestParams(it, source, fileName) }
-                }
-                is Constructor -> for (p in m.parameters) p.type?.let { walkTypeNodeForRestParams(it, source, fileName) }
-                is PropertyDeclaration -> m.type?.let { walkTypeNodeForRestParams(it, source, fileName) }
-                else -> {}
-            }
-            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { checkNonArrayRestInTypeContexts(it.statements, source, fileName) }
-            is Block -> checkNonArrayRestInTypeContexts(stmt.statements, source, fileName)
-            else -> {}
-        }
-    }
-
-    private fun walkTypeNodeForRestParams(typeNode: TypeNode, source: String, fileName: String) {
-        when (typeNode) {
-            is FunctionType -> {
-                checkOptionalRestParamsForTS2370(typeNode.parameters, source, fileName)
-                for (p in typeNode.parameters) p.type?.let { walkTypeNodeForRestParams(it, source, fileName) }
-                walkTypeNodeForRestParams(typeNode.type, source, fileName)
-            }
-            is ConstructorType -> {
-                checkOptionalRestParamsForTS2370(typeNode.parameters, source, fileName)
-                for (p in typeNode.parameters) p.type?.let { walkTypeNodeForRestParams(it, source, fileName) }
-                walkTypeNodeForRestParams(typeNode.type, source, fileName)
-            }
-            is UnionType -> for (t in typeNode.types) walkTypeNodeForRestParams(t, source, fileName)
-            is IntersectionType -> for (t in typeNode.types) walkTypeNodeForRestParams(t, source, fileName)
-            is ParenthesizedType -> walkTypeNodeForRestParams(typeNode.type, source, fileName)
-            is ArrayType -> walkTypeNodeForRestParams(typeNode.elementType, source, fileName)
-            is TupleType -> for (t in typeNode.elements) walkTypeNodeForRestParams(t, source, fileName)
-            is RestType -> walkTypeNodeForRestParams(typeNode.type, source, fileName)
-            is OptionalType -> walkTypeNodeForRestParams(typeNode.type, source, fileName)
-            is NamedTupleMember -> walkTypeNodeForRestParams(typeNode.type, source, fileName)
-            is TypeLiteral -> for (m in typeNode.members) when (m) {
-                is MethodDeclaration -> {
-                    checkOptionalRestParamsForTS2370(m.parameters, source, fileName)
-                    for (p in m.parameters) p.type?.let { walkTypeNodeForRestParams(it, source, fileName) }
-                    m.type?.let { walkTypeNodeForRestParams(it, source, fileName) }
-                }
-                is PropertyDeclaration -> m.type?.let { walkTypeNodeForRestParams(it, source, fileName) }
-                else -> {}
-            }
-            else -> {}
-        }
-    }
-
-    /**
-     * B71.2: TS2370 for OPTIONAL rest parameters in type-position FunctionType/
-     * ConstructorType (e.g. `type T = (...args?: any[]) => void`). The `?` widens
-     * the param type with `| undefined`, making it no longer "of an array type."
-     * Pairs with parser-side TS1047 ("rest parameter cannot be optional").
-     *
-     * NARROW gate: only fires on `dotDotDotToken && questionToken`. The keyword-type
-     * case (`...args: number`) is NOT checked here, because TypeScript intentionally
-     * allows `...args: any/never` as the "match-all functions" supertype pattern
-     * in type-position FunctionType (the value-position walker only sees runtime
-     * function declarations where the keyword check is still appropriate).
-     */
-    private fun checkOptionalRestParamsForTS2370(parameters: List<Parameter>, source: String, fileName: String) {
-        for (param in parameters) {
-            if (!param.dotDotDotToken) continue
-            if (!param.questionToken) continue
-            if (param.isCommentPlaceholder) continue
-            val typeNode = param.type ?: continue
-            val name = param.name
-            if (name !is Identifier) continue
-            val start = name.pos - 3  // position of `...`
-            var trueEnd = typeNode.end
-            while (trueEnd > start && source.getOrNull(trueEnd - 1)?.let {
-                    it == ' ' || it == '\t' || it == '\n' || it == '\r' || it == ',' || it == ')' || it == ';'
-                } == true) {
-                trueEnd--
-            }
-            val length = trueEnd - start
-            if (length <= 0) continue
-            val (line, character) = getLineAndCharacterOfPosition(source, start)
-            diagnostics.add(Diagnostic(
-                message = "A rest parameter must be of an array type.",
-                category = DiagnosticCategory.Error,
-                code = 2370,
-                fileName = fileName,
-                line = line,
-                character = character,
-                start = start,
-                length = length,
-            ))
-        }
-    }
-
-    /**
      * B438e (iteratorExtraParameters / asyncIteratorExtraParameters, TS2488 / TS2504):
      * an object whose `[Symbol.iterator]` (or `[Symbol.asyncIterator]`) method REQUIRES a
      * parameter is not a valid iterable — tsc requires the iterator method to be callable
@@ -17538,68 +17415,18 @@ class Checker(
      * object — `for(-await)-of`, `yield*`, array spread `[...x]`, call-arg spread `f(...x)`
      * — fails with TS2488 (sync) / TS2504 (async) carrying the object's expando type display.
      *
-     * Dedicated walker. FP firewall: fires ONLY for an object-LITERAL-typed local variable
-     * whose computed `[Symbol.iterator]`/`[Symbol.asyncIterator]` method has a REQUIRED first
-     * parameter (non-optional, non-rest), used in an iteration position by name. A valid
-     * iterable (`[Symbol.iterator]()` with no params) never matches → the per-file `bad` map
-     * is empty and the position walk is skipped entirely. Corpus-rare shape.
+     * Lives on the check spine since INV.4(b) batch 2 (collection in
+     * [spineCollectObjLitVar], emission in [spineResolveDeferredIterationChecks]).
+     * FP firewall: fires ONLY for an object-LITERAL-typed statement-level local
+     * whose computed `[Symbol.iterator]`/`[Symbol.asyncIterator]` method has a
+     * REQUIRED first parameter (non-optional, non-rest), used in an iteration
+     * position by name. A valid iterable (`[Symbol.iterator]()` with no params)
+     * never matches → the per-file bad map stays empty. Corpus-rare shape.
      */
     private data class BadIterInfo(
         val isAsync: Boolean, val display: String, val sym: String,
         val paramStr: String, val genType: String, val reqCount: Int,
     )
-
-    private fun checkIteratorMethodExtraParameters() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            val bad = HashMap<String, BadIterInfo>()
-            collectBadIteratorVars(result.sourceFile.statements, bad)
-            if (bad.isEmpty()) continue
-            walkIterationPositions(result.sourceFile.statements) { iteratedExpr ->
-                val id = iteratedExpr as? Identifier ?: return@walkIterationPositions
-                val info = bad[id.text] ?: return@walkIterationPositions
-                val (line, character) = getLineAndCharacterOfPosition(source, id.pos)
-                val iterableT = if (info.isAsync) "AsyncIterable" else "Iterable"
-                val iteratorT = if (info.isAsync) "AsyncIterator" else "Iterator"
-                val related = Diagnostic(
-                    message = "Type '${info.display}' is not assignable to type '$iterableT<T, TReturn, TNext>'.",
-                    category = DiagnosticCategory.Error, code = 2322,
-                    fileName = fileName, line = line, character = character, start = id.pos, length = id.text.length,
-                    messageChain = listOf(
-                        "  Types of property '[Symbol.${info.sym}]' are incompatible.",
-                        "    Type '(${info.paramStr}) => ${info.genType}' is not assignable to type '() => $iteratorT<T, TReturn, TNext>'.",
-                        "      Target signature provides too few arguments. Expected ${info.reqCount} or more, but got 0.",
-                    ),
-                )
-                diagnostics.add(Diagnostic(
-                    message = if (info.isAsync)
-                        "Type '${info.display}' must have a '[Symbol.asyncIterator]()' method that returns an async iterator."
-                    else
-                        "Type '${info.display}' must have a '[Symbol.iterator]()' method that returns an iterator.",
-                    category = DiagnosticCategory.Error, code = if (info.isAsync) 2504 else 2488,
-                    fileName = fileName, line = line, character = character,
-                    start = id.pos, length = id.text.length,
-                    relatedInformation = listOf(related),
-                ))
-            }
-        }
-    }
-
-    private fun collectBadIteratorVars(stmts: List<Statement>, out: MutableMap<String, BadIterInfo>) {
-        for (stmt in stmts) when (stmt) {
-            is VariableStatement -> for (d in stmt.declarationList.declarations) {
-                val nm = (d.name as? Identifier)?.text ?: continue
-                val obj = d.initializer as? ObjectLiteralExpression ?: continue
-                badIteratorDisplay(obj)?.let { out[nm] = it }
-            }
-            is FunctionDeclaration -> stmt.body?.let { collectBadIteratorVars(it.statements, out) }
-            is Block -> collectBadIteratorVars(stmt.statements, out)
-            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { collectBadIteratorVars(it.statements, out) }
-            else -> {}
-        }
-    }
 
     /** Detect an object literal with a `[Symbol.(async)iterator]` method requiring a parameter. */
     private fun badIteratorDisplay(obj: ObjectLiteralExpression): BadIterInfo? {
@@ -17651,73 +17478,6 @@ class Checker(
         }
         scan(body.statements)
         return if (types.isEmpty()) "never" else types.joinToString(" | ")
-    }
-
-    /** Visit iteration positions (for-of expr, `yield*` operand, array/call spread operand). */
-    private fun walkIterationPositions(stmts: List<Statement>, cb: (Expression) -> Unit) {
-        for (s in stmts) walkIterPosStmt(s, cb)
-    }
-    private fun walkIterPosStmt(s: Statement, cb: (Expression) -> Unit) {
-        when (s) {
-            is ForOfStatement -> { cb(s.expression); walkIterPosExpr(s.expression, cb); walkIterPosStmt(s.statement, cb) }
-            is Block -> walkIterationPositions(s.statements, cb)
-            is IfStatement -> { walkIterPosExpr(s.expression, cb); walkIterPosStmt(s.thenStatement, cb); s.elseStatement?.let { walkIterPosStmt(it, cb) } }
-            is ForStatement -> {
-                (s.initializer as? VariableDeclarationList)?.declarations?.forEach { it.initializer?.let { i -> walkIterPosExpr(i, cb) } }
-                (s.initializer as? Expression)?.let { walkIterPosExpr(it, cb) }
-                s.condition?.let { walkIterPosExpr(it, cb) }; s.incrementor?.let { walkIterPosExpr(it, cb) }
-                walkIterPosStmt(s.statement, cb)
-            }
-            is ForInStatement -> { walkIterPosExpr(s.expression, cb); walkIterPosStmt(s.statement, cb) }
-            is WhileStatement -> { walkIterPosExpr(s.expression, cb); walkIterPosStmt(s.statement, cb) }
-            is DoStatement -> { walkIterPosExpr(s.expression, cb); walkIterPosStmt(s.statement, cb) }
-            is ExpressionStatement -> walkIterPosExpr(s.expression, cb)
-            is ReturnStatement -> s.expression?.let { walkIterPosExpr(it, cb) }
-            is ThrowStatement -> s.expression?.let { walkIterPosExpr(it, cb) }
-            is VariableStatement -> for (d in s.declarationList.declarations) d.initializer?.let { walkIterPosExpr(it, cb) }
-            is FunctionDeclaration -> s.body?.let { walkIterationPositions(it.statements, cb) }
-            is ClassDeclaration -> for (mem in s.members) when (mem) {
-                is MethodDeclaration -> mem.body?.let { walkIterationPositions(it.statements, cb) }
-                is Constructor -> mem.body?.let { walkIterationPositions(it.statements, cb) }
-                is GetAccessor -> mem.body?.let { walkIterationPositions(it.statements, cb) }
-                is SetAccessor -> mem.body?.let { walkIterationPositions(it.statements, cb) }
-                else -> {}
-            }
-            is ModuleDeclaration -> (s.body as? ModuleBlock)?.let { walkIterationPositions(it.statements, cb) }
-            is LabeledStatement -> walkIterPosStmt(s.statement, cb)
-            is SwitchStatement -> for (c in s.caseBlock) when (c) {
-                is CaseClause -> { walkIterPosExpr(c.expression, cb); walkIterationPositions(c.statements, cb) }
-                is DefaultClause -> walkIterationPositions(c.statements, cb)
-                else -> {}
-            }
-            is TryStatement -> {
-                walkIterationPositions(s.tryBlock.statements, cb)
-                s.catchClause?.block?.statements?.let { walkIterationPositions(it, cb) }
-                s.finallyBlock?.statements?.let { walkIterationPositions(it, cb) }
-            }
-            else -> {}
-        }
-    }
-    private fun walkIterPosExpr(expr: Expression, cb: (Expression) -> Unit) {
-        when (expr) {
-            is YieldExpression -> { if (expr.asteriskToken) expr.expression?.let { cb(it) }; expr.expression?.let { walkIterPosExpr(it, cb) } }
-            is SpreadElement -> { cb(expr.expression); walkIterPosExpr(expr.expression, cb) }
-            is ArrayLiteralExpression -> for (e in expr.elements) walkIterPosExpr(e, cb)
-            is CallExpression -> { walkIterPosExpr(expr.expression, cb); for (a in expr.arguments) walkIterPosExpr(a, cb) }
-            is NewExpression -> { walkIterPosExpr(expr.expression, cb); expr.arguments?.forEach { walkIterPosExpr(it, cb) } }
-            is BinaryExpression -> { walkIterPosExpr(expr.left, cb); walkIterPosExpr(expr.right, cb) }
-            is ParenthesizedExpression -> walkIterPosExpr(expr.expression, cb)
-            is PropertyAccessExpression -> walkIterPosExpr(expr.expression, cb)
-            is ElementAccessExpression -> { walkIterPosExpr(expr.expression, cb); walkIterPosExpr(expr.argumentExpression, cb) }
-            is ConditionalExpression -> { walkIterPosExpr(expr.condition, cb); walkIterPosExpr(expr.whenTrue, cb); walkIterPosExpr(expr.whenFalse, cb) }
-            is PrefixUnaryExpression -> walkIterPosExpr(expr.operand, cb)
-            is PostfixUnaryExpression -> walkIterPosExpr(expr.operand, cb)
-            is AwaitExpression -> walkIterPosExpr(expr.expression, cb)
-            is ObjectLiteralExpression -> for (p in expr.properties) (p as? PropertyAssignment)?.initializer?.let { walkIterPosExpr(it, cb) }
-            is ArrowFunction -> when (val b = expr.body) { is Block -> walkIterationPositions(b.statements, cb); is Expression -> walkIterPosExpr(b, cb); else -> {} }
-            is FunctionExpression -> walkIterationPositions(expr.body.statements, cb)
-            else -> {}
-        }
     }
 
     /**
@@ -17922,221 +17682,6 @@ class Checker(
         ))
     }
 
-    private fun checkNonArrayRestInStatements(statements: List<Statement>, source: String, fileName: String) {
-        for (stmt in statements) {
-            when (stmt) {
-                is FunctionDeclaration -> {
-                    checkNonArrayRestParams(stmt.parameters, source, fileName)
-                    stmt.body?.let { checkNonArrayRestInStatements(it.statements, source, fileName) }
-                }
-                is ClassDeclaration -> {
-                    for (member in stmt.members) {
-                        when (member) {
-                            is MethodDeclaration -> {
-                                checkNonArrayRestParams(member.parameters, source, fileName)
-                                member.body?.let { checkNonArrayRestInStatements(it.statements, source, fileName) }
-                            }
-                            is Constructor -> {
-                                checkNonArrayRestParams(member.parameters, source, fileName)
-                                member.body?.let { checkNonArrayRestInStatements(it.statements, source, fileName) }
-                            }
-                            is GetAccessor -> member.body?.let { checkNonArrayRestInStatements(it.statements, source, fileName) }
-                            is SetAccessor -> member.body?.let { checkNonArrayRestInStatements(it.statements, source, fileName) }
-                            is PropertyDeclaration -> member.initializer?.let { checkNonArrayRestInExpr(it, source, fileName) }
-                            else -> {}
-                        }
-                    }
-                }
-                is InterfaceDeclaration -> {
-                    for (member in stmt.members) {
-                        if (member is MethodDeclaration) checkNonArrayRestParams(member.parameters, source, fileName)
-                    }
-                }
-                is ModuleDeclaration -> {
-                    when (val body = stmt.body) {
-                        is ModuleBlock -> checkNonArrayRestInStatements(body.statements, source, fileName)
-                        else -> {}
-                    }
-                }
-                is Block -> checkNonArrayRestInStatements(stmt.statements, source, fileName)
-                is IfStatement -> {
-                    checkNonArrayRestInStatements(listOf(stmt.thenStatement), source, fileName)
-                    stmt.elseStatement?.let { checkNonArrayRestInStatements(listOf(it), source, fileName) }
-                }
-                is ForStatement -> {
-                    checkNonArrayRestInStatements(listOf(stmt.statement), source, fileName)
-                    when (val init = stmt.initializer) {
-                        is VariableDeclarationList -> for (decl in init.declarations) decl.initializer?.let { checkNonArrayRestInExpr(it, source, fileName) }
-                        is Expression -> checkNonArrayRestInExpr(init, source, fileName)
-                        else -> {}
-                    }
-                    stmt.condition?.let { checkNonArrayRestInExpr(it, source, fileName) }
-                    stmt.incrementor?.let { checkNonArrayRestInExpr(it, source, fileName) }
-                }
-                is ForInStatement -> {
-                    checkNonArrayRestInStatements(listOf(stmt.statement), source, fileName)
-                    checkNonArrayRestInExpr(stmt.expression, source, fileName)
-                }
-                is ForOfStatement -> {
-                    checkNonArrayRestInStatements(listOf(stmt.statement), source, fileName)
-                    checkNonArrayRestInExpr(stmt.expression, source, fileName)
-                }
-                is WhileStatement -> {
-                    checkNonArrayRestInExpr(stmt.expression, source, fileName)
-                    checkNonArrayRestInStatements(listOf(stmt.statement), source, fileName)
-                }
-                is DoStatement -> {
-                    checkNonArrayRestInStatements(listOf(stmt.statement), source, fileName)
-                    checkNonArrayRestInExpr(stmt.expression, source, fileName)
-                }
-                is SwitchStatement -> {
-                    checkNonArrayRestInExpr(stmt.expression, source, fileName)
-                    for (clause in stmt.caseBlock) {
-                        when (clause) {
-                            is CaseClause -> {
-                                checkNonArrayRestInExpr(clause.expression, source, fileName)
-                                checkNonArrayRestInStatements(clause.statements, source, fileName)
-                            }
-                            is DefaultClause -> checkNonArrayRestInStatements(clause.statements, source, fileName)
-                            else -> {}
-                        }
-                    }
-                }
-                is TryStatement -> {
-                    checkNonArrayRestInStatements(stmt.tryBlock.statements, source, fileName)
-                    stmt.catchClause?.block?.let { checkNonArrayRestInStatements(it.statements, source, fileName) }
-                    stmt.finallyBlock?.let { checkNonArrayRestInStatements(it.statements, source, fileName) }
-                }
-                is LabeledStatement -> checkNonArrayRestInStatements(listOf(stmt.statement), source, fileName)
-                is ReturnStatement -> stmt.expression?.let { checkNonArrayRestInExpr(it, source, fileName) }
-                is ThrowStatement -> stmt.expression?.let { checkNonArrayRestInExpr(it, source, fileName) }
-                is ExpressionStatement -> checkNonArrayRestInExpr(stmt.expression, source, fileName)
-                is ExportAssignment -> checkNonArrayRestInExpr(stmt.expression, source, fileName)
-                is VariableStatement -> {
-                    for (decl in stmt.declarationList.declarations) {
-                        decl.initializer?.let { checkNonArrayRestInExpr(it, source, fileName) }
-                    }
-                }
-                else -> {}
-            }
-        }
-    }
-
-    private fun checkNonArrayRestInExpr(expr: Expression, source: String, fileName: String) {
-        when (expr) {
-            is ArrowFunction -> {
-                checkNonArrayRestParams(expr.parameters, source, fileName)
-                when (val body = expr.body) {
-                    is Block -> checkNonArrayRestInStatements(body.statements, source, fileName)
-                    is Expression -> checkNonArrayRestInExpr(body, source, fileName)
-                    else -> {}
-                }
-            }
-            is FunctionExpression -> {
-                checkNonArrayRestParams(expr.parameters, source, fileName)
-                checkNonArrayRestInStatements(expr.body.statements, source, fileName)
-            }
-            is ClassExpression -> for (m in expr.members) when (m) {
-                is MethodDeclaration -> {
-                    checkNonArrayRestParams(m.parameters, source, fileName)
-                    m.body?.let { checkNonArrayRestInStatements(it.statements, source, fileName) }
-                }
-                is Constructor -> {
-                    checkNonArrayRestParams(m.parameters, source, fileName)
-                    m.body?.let { checkNonArrayRestInStatements(it.statements, source, fileName) }
-                }
-                is GetAccessor -> m.body?.let { checkNonArrayRestInStatements(it.statements, source, fileName) }
-                is SetAccessor -> m.body?.let { checkNonArrayRestInStatements(it.statements, source, fileName) }
-                is PropertyDeclaration -> m.initializer?.let { checkNonArrayRestInExpr(it, source, fileName) }
-                else -> {}
-            }
-            is ParenthesizedExpression -> checkNonArrayRestInExpr(expr.expression, source, fileName)
-            is AsExpression -> checkNonArrayRestInExpr(expr.expression, source, fileName)
-            is TypeAssertionExpression -> checkNonArrayRestInExpr(expr.expression, source, fileName)
-            is SatisfiesExpression -> checkNonArrayRestInExpr(expr.expression, source, fileName)
-            is NonNullExpression -> checkNonArrayRestInExpr(expr.expression, source, fileName)
-            is BinaryExpression -> {
-                var cur: Expression = expr
-                val rightStack = ArrayDeque<Expression>()
-                while (cur is BinaryExpression) { rightStack.addLast(cur.right); cur = cur.left }
-                checkNonArrayRestInExpr(cur, source, fileName)
-                while (rightStack.isNotEmpty()) checkNonArrayRestInExpr(rightStack.removeLast(), source, fileName)
-            }
-            is ConditionalExpression -> {
-                checkNonArrayRestInExpr(expr.condition, source, fileName)
-                checkNonArrayRestInExpr(expr.whenTrue, source, fileName)
-                checkNonArrayRestInExpr(expr.whenFalse, source, fileName)
-            }
-            is CallExpression -> {
-                checkNonArrayRestInExpr(expr.expression, source, fileName)
-                for (a in expr.arguments) checkNonArrayRestInExpr(a, source, fileName)
-            }
-            is NewExpression -> {
-                checkNonArrayRestInExpr(expr.expression, source, fileName)
-                expr.arguments?.forEach { checkNonArrayRestInExpr(it, source, fileName) }
-            }
-            is PropertyAccessExpression -> checkNonArrayRestInExpr(expr.expression, source, fileName)
-            is ElementAccessExpression -> {
-                checkNonArrayRestInExpr(expr.expression, source, fileName)
-                checkNonArrayRestInExpr(expr.argumentExpression, source, fileName)
-            }
-            is ArrayLiteralExpression -> for (e in expr.elements) checkNonArrayRestInExpr(e, source, fileName)
-            is ObjectLiteralExpression -> for (p in expr.properties) when (p) {
-                is PropertyAssignment -> checkNonArrayRestInExpr(p.initializer, source, fileName)
-                is SpreadAssignment -> checkNonArrayRestInExpr(p.expression, source, fileName)
-                is MethodDeclaration -> {
-                    checkNonArrayRestParams(p.parameters, source, fileName)
-                    p.body?.let { checkNonArrayRestInStatements(it.statements, source, fileName) }
-                }
-                is GetAccessor -> p.body?.let { checkNonArrayRestInStatements(it.statements, source, fileName) }
-                is SetAccessor -> p.body?.let { checkNonArrayRestInStatements(it.statements, source, fileName) }
-                else -> {}
-            }
-            is SpreadElement -> checkNonArrayRestInExpr(expr.expression, source, fileName)
-            is AwaitExpression -> checkNonArrayRestInExpr(expr.expression, source, fileName)
-            is YieldExpression -> expr.expression?.let { checkNonArrayRestInExpr(it, source, fileName) }
-            is VoidExpression -> checkNonArrayRestInExpr(expr.expression, source, fileName)
-            is DeleteExpression -> checkNonArrayRestInExpr(expr.expression, source, fileName)
-            is TypeOfExpression -> checkNonArrayRestInExpr(expr.expression, source, fileName)
-            is PrefixUnaryExpression -> checkNonArrayRestInExpr(expr.operand, source, fileName)
-            is PostfixUnaryExpression -> checkNonArrayRestInExpr(expr.operand, source, fileName)
-            is TemplateExpression -> for (span in expr.templateSpans) checkNonArrayRestInExpr(span.expression, source, fileName)
-            is TaggedTemplateExpression -> {
-                checkNonArrayRestInExpr(expr.tag, source, fileName)
-                if (expr.template is TemplateExpression) {
-                    for (span in (expr.template).templateSpans) checkNonArrayRestInExpr(span.expression, source, fileName)
-                }
-            }
-            is CommaListExpression -> for (e in expr.elements) checkNonArrayRestInExpr(e, source, fileName)
-            else -> {}
-        }
-    }
-
-    private fun checkNonArrayRestParams(parameters: List<Parameter>, source: String, fileName: String) {
-        for (param in parameters) {
-            if (!param.dotDotDotToken) continue
-            if (param.isCommentPlaceholder) continue
-            val typeNode = param.type ?: continue
-            val keywordText = nonArrayKeywordText(typeNode) ?: continue
-            val name = param.name
-            if (name !is Identifier) continue
-            val start = name.pos - 3  // position of `...`
-            val length = (typeNode.pos + keywordText.length) - start
-            if (length <= 0) continue
-            val (line, character) = getLineAndCharacterOfPosition(source, start)
-            diagnostics.add(Diagnostic(
-                message = "A rest parameter must be of an array type.",
-                category = DiagnosticCategory.Error,
-                code = 2370,
-                fileName = fileName,
-                line = line,
-                character = character,
-                start = start,
-                length = length,
-            ))
-        }
-    }
-
     /**
      * TS7033: Property 'X' implicitly has type 'any', because its get accessor lacks
      * a return type annotation.
@@ -18259,7 +17804,12 @@ class Checker(
                     spineFileName.endsWith(".mjs") || spineFileName.endsWith(".cjs")
                 spineFileIsModule = isModuleFile(sf.statements)
                 currentFileLocals = result.locals
+                spineObjLitVars.clear()
+                spineBadIterVars.clear()
+                spineIterPositionIds.clear()
+                spineYieldStarNodes.clear()
                 spineWalkFile(sf)
+                spineResolveDeferredIterationChecks()
             }
         } finally {
             currentFileLocals = savedLocals
@@ -18317,6 +17867,11 @@ class Checker(
             is PropertyDeclaration -> spineCheckAccessorModifier(node)
             is ModuleDeclaration -> spineCheckGlobalAugmentation(node)
             is MethodDeclaration -> spineCheckReservedWordInterfaceParams(node)
+            is Parameter -> spineCheckRestParam(node)
+            is VariableDeclaration -> spineCollectObjLitVar(node)
+            is ForOfStatement -> spineNoteIterationPosition(node.expression)
+            is SpreadElement -> spineNoteIterationPosition(node.expression)
+            is YieldExpression -> spineNoteYieldStar(node)
             else -> {}
         }
     }
@@ -18492,6 +18047,194 @@ class Checker(
                 ))
             }
         }
+    }
+
+    /**
+     * TS2370 "A rest parameter must be of an array type." — migrated from the
+     * deleted `checkNonArrayRestParameters` pair of walks (INV.4(b) batch 2).
+     * TWO disjoint rules dispatched by the parameter's PARENT kind, preserving
+     * the old pass's value-position vs type-position split:
+     *  - VALUE position (function/ctor/arrow/fn-expr declarations, plus
+     *    methods of classes / class expressions / interfaces / object
+     *    literals): a rest param annotated with a non-array primitive KEYWORD
+     *    type ([nonArrayKeywordText]).
+     *  - TYPE position (FunctionType / ConstructorType / TypeLiteral
+     *    methods): an OPTIONAL rest param `...args?: T` (B71.2 — the `?`
+     *    widens with `| undefined`); the keyword case deliberately stays
+     *    unchecked there (the `...args: any/never` match-all-functions
+     *    supertype pattern).
+     * The spine widens both rules faithfully to positions the old hand-walks
+     * missed (parameter default values, casts, decorators) — TS2370 is a
+     * position-independent per-signature tsc grammar rule, so the parent-kind
+     * gate IS the whole rule. No file/option gates (the old pass had none).
+     */
+    private fun spineCheckRestParam(param: Parameter) {
+        if (!param.dotDotDotToken) return
+        if (param.isCommentPlaceholder) return
+        val typeNode = param.type ?: return
+        val name = param.name as? Identifier ?: return
+        val valuePosition = when (val parent = param.parent) {
+            is FunctionDeclaration, is Constructor, is ArrowFunction, is FunctionExpression -> true
+            is FunctionType, is ConstructorType -> false
+            is MethodDeclaration -> when (parent.parent) {
+                is TypeLiteral -> false
+                is ClassDeclaration, is ClassExpression, is InterfaceDeclaration,
+                is ObjectLiteralExpression -> true
+                else -> return
+            }
+            else -> return
+        }
+        val start = name.pos - 3 // position of `...`
+        val length: Int
+        if (valuePosition) {
+            val keywordText = nonArrayKeywordText(typeNode) ?: return
+            length = (typeNode.pos + keywordText.length) - start
+        } else {
+            if (!param.questionToken) return
+            var trueEnd = typeNode.end
+            while (trueEnd > start && spineSource.getOrNull(trueEnd - 1)?.let {
+                    it == ' ' || it == '\t' || it == '\n' || it == '\r' || it == ',' || it == ')' || it == ';'
+                } == true) {
+                trueEnd--
+            }
+            length = trueEnd - start
+        }
+        if (length <= 0) return
+        val (line, character) = getLineAndCharacterOfPosition(spineSource, start)
+        diagnostics.add(Diagnostic(
+            message = "A rest parameter must be of an array type.",
+            category = DiagnosticCategory.Error,
+            code = 2370,
+            fileName = spineFileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+
+    /**
+     * Per-file collection for the deferred iteration checks (INV.4(b) batch 2,
+     * from the deleted `collectObjLiteralVars` / `collectBadIteratorVars`
+     * prepasses): a STATEMENT-level `var/let/const NAME = {…}` (the
+     * VariableStatement parent gate mirrors the old prepasses — for-initializer
+     * declarations stay uncollected) registers the literal first-wins into
+     * [spineObjLitVars] and, when its `[Symbol.(async)Iterator]` method
+     * REQUIRES a parameter, the [BadIterInfo] last-bad-wins into
+     * [spineBadIterVars] — both exactly the old maps' write semantics. The
+     * spine reaches statement positions the old prepasses' statement descent
+     * missed (if/loop bodies, class method bodies) — a faithful collection
+     * widening bounded by the corpus-rare bad-iterator shape.
+     */
+    private fun spineCollectObjLitVar(decl: VariableDeclaration) {
+        if (spineIsDts) return
+        val list = decl.parent as? VariableDeclarationList ?: return
+        if (list.parent !is VariableStatement) return
+        val obj = decl.initializer as? ObjectLiteralExpression ?: return
+        val nm = (decl.name as? Identifier)?.text ?: return
+        spineObjLitVars.getOrPut(nm) { obj }
+        badIteratorDisplay(obj)?.let { spineBadIterVars[nm] = it }
+    }
+
+    /** Buffer an iteration-position identifier (for-of expression, spread
+     * operand, `yield*` operand) for [spineResolveDeferredIterationChecks]. */
+    private fun spineNoteIterationPosition(expr: Expression) {
+        if (spineIsDts) return
+        if (expr is Identifier) spineIterPositionIds.add(expr)
+    }
+
+    /** Buffer a `yield*` node: its operand is an iteration position
+     * (TS2488/TS2504) and, when the operand is an object literal or a
+     * collected local, a TS1320 thenable candidate. */
+    private fun spineNoteYieldStar(node: YieldExpression) {
+        if (spineIsDts) return
+        if (!node.asteriskToken) return
+        val operand = node.expression ?: return
+        if (operand is Identifier) spineIterPositionIds.add(operand)
+        if (operand is Identifier || operand is ObjectLiteralExpression) spineYieldStarNodes.add(node)
+    }
+
+    /**
+     * File-end resolution for the buffered iteration positions (TS2488/TS2504,
+     * from the deleted `checkIteratorMethodExtraParameters`) and `yield*`
+     * thenable candidates (TS1320, from the deleted
+     * `checkAsyncYieldStarThenable`). Deferred so collection covers the whole
+     * file first — a use-before-declaration matches, as with the old full
+     * prepasses.
+     */
+    private fun spineResolveDeferredIterationChecks() {
+        if (spineBadIterVars.isNotEmpty()) {
+            for (id in spineIterPositionIds) {
+                val info = spineBadIterVars[id.text] ?: continue
+                val (line, character) = getLineAndCharacterOfPosition(spineSource, id.pos)
+                val iterableT = if (info.isAsync) "AsyncIterable" else "Iterable"
+                val iteratorT = if (info.isAsync) "AsyncIterator" else "Iterator"
+                val related = Diagnostic(
+                    message = "Type '${info.display}' is not assignable to type '$iterableT<T, TReturn, TNext>'.",
+                    category = DiagnosticCategory.Error, code = 2322,
+                    fileName = spineFileName, line = line, character = character, start = id.pos, length = id.text.length,
+                    messageChain = listOf(
+                        "  Types of property '[Symbol.${info.sym}]' are incompatible.",
+                        "    Type '(${info.paramStr}) => ${info.genType}' is not assignable to type '() => $iteratorT<T, TReturn, TNext>'.",
+                        "      Target signature provides too few arguments. Expected ${info.reqCount} or more, but got 0.",
+                    ),
+                )
+                diagnostics.add(Diagnostic(
+                    message = if (info.isAsync)
+                        "Type '${info.display}' must have a '[Symbol.asyncIterator]()' method that returns an async iterator."
+                    else
+                        "Type '${info.display}' must have a '[Symbol.iterator]()' method that returns an iterator.",
+                    category = DiagnosticCategory.Error, code = if (info.isAsync) 2504 else 2488,
+                    fileName = spineFileName, line = line, character = character,
+                    start = id.pos, length = id.text.length,
+                    relatedInformation = listOf(related),
+                ))
+            }
+        }
+        for (ye in spineYieldStarNodes) {
+            val operand = ye.expression ?: continue
+            if (!spineInAsyncGeneratorBody(ye)) continue
+            val obj = when (operand) {
+                is ObjectLiteralExpression -> operand
+                is Identifier -> spineObjLitVars[operand.text]
+                else -> null
+            } ?: continue
+            if (!objLiteralYieldsNonPromiseThenable(obj)) continue
+            val start = operand.pos
+            val length = expressionTrueEnd(operand) - start
+            if (length <= 0) continue
+            val (line, character) = getLineAndCharacterOfPosition(spineSource, start)
+            diagnostics.add(Diagnostic(
+                message = "Type of 'await' operand must either be a valid promise or must not contain a callable 'then' member.",
+                category = DiagnosticCategory.Error, code = 1320,
+                fileName = spineFileName, line = line, character = character,
+                start = start, length = length,
+            ))
+        }
+    }
+
+    /**
+     * True when [node]'s nearest enclosing function-like is an async GENERATOR
+     * (async function declaration/expression/method with `*`). The old TS1320
+     * walker only checked statement-level `yield*` directly in async-generator
+     * declaration/method bodies; the parent-chain gate widens faithfully to
+     * nested statements and function expressions — tsc checks every `yield*`
+     * in an async generator. An arrow/ctor/accessor boundary returns false
+     * (none can be a generator).
+     */
+    private fun spineInAsyncGeneratorBody(node: Node): Boolean {
+        var cur = (node as NodeBase).parent
+        while (cur != null) {
+            when (cur) {
+                is FunctionDeclaration -> return ModifierFlag.Async in cur.modifiers && cur.asteriskToken
+                is FunctionExpression -> return ModifierFlag.Async in cur.modifiers && cur.asteriskToken
+                is MethodDeclaration -> return ModifierFlag.Async in cur.modifiers && cur.asteriskToken
+                is ArrowFunction, is Constructor, is GetAccessor, is SetAccessor -> return false
+                else -> {}
+            }
+            cur = (cur as NodeBase).parent
+        }
+        return false
     }
 
     /**
@@ -59410,94 +59153,6 @@ interface DataView {
             is DoStatement -> widenedArrayRecurse(stmt.statement, source, fileName, outer)
             is LabeledStatement -> widenedArrayRecurse(stmt.statement, source, fileName, outer)
             else -> {}
-        }
-    }
-
-    /**
-     * TS1320: `yield* x` in an ASYNC generator whose async-iterator chain produces a
-     * non-promise thenable — an object with a callable `then` member that isn't a
-     * valid promise (`crashInYieldStarInAsyncFunction`). tsc: "Type of 'await' operand
-     * must either be a valid promise or must not contain a callable 'then' member."
-     *
-     * Dedicated AST matcher (no full async-iterator type modeling). FP-safe by the
-     * corpus-unique shape: `obj` (a `var/const = {object literal}`) with a
-     * `[Symbol.asyncIterator]()` method returning `{ next() { return { then() {} } } }`.
-     * The `then` member being a METHOD (its own callable, not a Promise) is the
-     * not-a-valid-promise signal. Reported at the `yield*` operand.
-     */
-    private fun checkAsyncYieldStarThenable() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            val objVars = HashMap<String, ObjectLiteralExpression>()
-            collectObjLiteralVars(result.sourceFile.statements, objVars)
-            asyncYieldStarScan(result.sourceFile.statements, source, fileName, objVars)
-        }
-    }
-
-    /** Collect `var/let/const NAME = {object literal}` bindings (file + nested scopes). */
-    private fun collectObjLiteralVars(statements: List<Statement>, out: MutableMap<String, ObjectLiteralExpression>) {
-        for (stmt in statements) when (stmt) {
-            is VariableStatement -> for (d in stmt.declarationList.declarations) {
-                val n = (d.name as? Identifier)?.text ?: continue
-                (d.initializer as? ObjectLiteralExpression)?.let { out.getOrPut(n) { it } }
-            }
-            is FunctionDeclaration -> stmt.body?.let { collectObjLiteralVars(it.statements, out) }
-            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { collectObjLiteralVars(it.statements, out) }
-            is Block -> collectObjLiteralVars(stmt.statements, out)
-            else -> {}
-        }
-    }
-
-    private fun asyncYieldStarScan(statements: List<Statement>, source: String, fileName: String, objVars: Map<String, ObjectLiteralExpression>) {
-        for (stmt in statements) {
-            val isAsyncGen = when (stmt) {
-                is FunctionDeclaration -> ModifierFlag.Async in stmt.modifiers && stmt.asteriskToken
-                else -> false
-            }
-            when (stmt) {
-                is FunctionDeclaration -> {
-                    if (isAsyncGen) stmt.body?.let { asyncYieldStarCheckBody(it.statements, source, fileName, objVars) }
-                    stmt.body?.let { asyncYieldStarScan(it.statements, source, fileName, objVars) }
-                }
-                is ClassDeclaration -> for (m in stmt.members) {
-                    if (m is MethodDeclaration && ModifierFlag.Async in m.modifiers && m.asteriskToken) {
-                        m.body?.let { asyncYieldStarCheckBody(it.statements, source, fileName, objVars) }
-                    }
-                    (m as? MethodDeclaration)?.body?.let { asyncYieldStarScan(it.statements, source, fileName, objVars) }
-                    (m as? Constructor)?.body?.let { asyncYieldStarScan(it.statements, source, fileName, objVars) }
-                }
-                is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { asyncYieldStarScan(it.statements, source, fileName, objVars) }
-                is Block -> asyncYieldStarScan(stmt.statements, source, fileName, objVars)
-                else -> {}
-            }
-        }
-    }
-
-    /** Within an async-generator body, find `yield* operand` statements and check the thenable shape. */
-    private fun asyncYieldStarCheckBody(statements: List<Statement>, source: String, fileName: String, objVars: Map<String, ObjectLiteralExpression>) {
-        for (stmt in statements) {
-            val ye = (stmt as? ExpressionStatement)?.expression as? YieldExpression ?: continue
-            if (!ye.asteriskToken) continue
-            val operand = ye.expression ?: continue
-            val obj = when (operand) {
-                is ObjectLiteralExpression -> operand
-                is Identifier -> objVars[operand.text]
-                else -> null
-            } ?: continue
-            if (objLiteralYieldsNonPromiseThenable(obj)) {
-                val start = operand.pos
-                val length = expressionTrueEnd(operand) - start
-                if (length <= 0) continue
-                val (line, character) = getLineAndCharacterOfPosition(source, start)
-                diagnostics.add(Diagnostic(
-                    message = "Type of 'await' operand must either be a valid promise or must not contain a callable 'then' member.",
-                    category = DiagnosticCategory.Error, code = 1320,
-                    fileName = fileName, line = line, character = character,
-                    start = start, length = length,
-                ))
-            }
         }
     }
 
