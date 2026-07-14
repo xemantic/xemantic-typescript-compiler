@@ -44,7 +44,10 @@ import kotlin.test.assertSame
  *    (the conflation leak, killed);
  *  - keep resolving for a node owned by a file that IMPORTS the name;
  *  - degrade to the LEGACY merged consult for an unindexed node (data-class
- *    `copy()` — parent chain never stamped).
+ *    `copy()` — parent chain never stamped). INV.3(d): post-retire the merged
+ *    consult no longer holds MODULE-ONLY names at all, so the degradation
+ *    yields null for them — an ownerless node has no visibility carrier and
+ *    conservative invisibility is the contract (lib/script names still answer).
  *
  * Built by direct `Checker(options, binderResults)` construction (the
  * Inv3PerFileLookupTest pattern) so symbol IDENTITY is assertable; fixture
@@ -116,15 +119,17 @@ class Inv3NodeKeyedLookupTest {
     @Test
     fun `an unindexed copy degrades to the legacy merged consult`() {
         val (checker, results) = buildChecker(declaringFile, foreignFile)
-        val declared = results.getValue("/proj/a.ts").locals["KindEnum"]
-        assertNotNull(declared)
         // A data-class copy has nodeId -1 / parent null — no owner.
         val iface = results.getValue("/proj/a.ts").sourceFile.statements
             .filterIsInstance<InterfaceDeclaration>().single()
         val detached = iface.copy()
         assertNull(owningSourceFile(detached))
-        // Legacy degradation: the merged-globals consult still answers.
-        assertSame(declared, checker.lookupPerFileForNode(detached, "KindEnum"))
+        // INV.3(d) contract: the legacy merged consult no longer holds
+        // MODULE-ONLY names — an ownerless node has no visibility carrier, so
+        // a module-only name is conservatively invisible (null)…
+        assertNull(checker.lookupPerFileForNode(detached, "KindEnum"))
+        // …while a lib name still answers through the same degradation.
+        assertNotNull(checker.lookupPerFileForNode(detached, "Array"))
     }
 
     @Test
