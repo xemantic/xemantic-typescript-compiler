@@ -1,3 +1,43 @@
+**Round 503 (2026-07-13, same session as 500–502) — INV.3(c) DECOMPOSED from a
+measured per-site attribution (probe-and-revert; no code landed).** The
+round-502 lesson (per-PASS ≠ per-SITE) applied: tagging the GUESSED hot sites
+(`getTypeFromTypeReference` fallback / `getTypeOfIdentifier` fallback /
+`getCalleeType` ×3) left 148k of 157k conflated lookups untagged — the guess
+list in the old (c) item was wrong (typeRef.fallback measured literally ZERO).
+A second probe — 1:200 stack-sampling in the classifier's CONFLATED branch
+(`Throwable.stackTraceToString()` is common-stdlib; ~790 samples), TEMP code
+reverted after the run — settled it: **~82% of conflated traffic is ONE
+family, the enum-discriminant/kind-domain narrowing machinery**
+(`kindDomainKeysFromTypeNode` → `enumSwitchKeysFromTypeNode` /
+`enumMemberKeysOfTypeNode` / `kindDomainTypeDeclSymbol` /
+`resolveEnumSymbolForDiscriminant`, from `narrowByCallPredicate` via
+`applyConditionNarrowing` + smaller `filterUnionByEnumDiscriminant` /
+`resolveCallOverload` entries) — resolving type names read from FOREIGN AST
+nodes (types.ts's union-member `.kind` annotations) while `currentFileLocals`
+points at the CHECKING file, which is exactly why the top conflated names are
+all types.ts node-interface names (JSDocFunctionType 21.5k / FunctionTypeNode
+17.9k / ConstructorTypeNode 17.8k / MappedTypeNode / ConditionalTypeNode).
+KEY DESIGN CONSEQUENCE: the per-file-correct key for that family is the
+NODE'S OWNING FILE (tsc semantics — a types.ts annotation resolves in
+types.ts's scope), now derivable from the INV.2(a) parent chains; a naive
+`globalsForFile(currentCheckFileName, …)` flip would silently KILL the
+narrowing wherever the checking file doesn't import the name (an FP
+regression, not a cleanup). Remainder of the distribution: tagged counts
+`identifier.fallback` 3,829 + `propAccess.objExpr` 3,005 +
+`typeRef.resolve.ident` 1,942 + `mam.*` 63+63 + `propAccess.base` 13;
+sampled small families `checkPrivateMemberAccess`, `getTypeOfIdentifier ←
+isCalleeResolvable`, `resolveFlowCalleeDecl ← flowCalleeMayHaveAssertEffects`,
+`computeRawTypeOfPropertyAccess ← getCalleeType`,
+`typeNodeDefinitelyNonNullish`, `pmrCheckAccess`. The (c) item is rewritten
+as four sub-items in dependency order: (i) the node-keyed primitive
+(`owningSourceFile(node)` + `lookupPerFileForNode`), (ii) the kind-domain
+family flip (~82%, resolution-PRESERVING, node-keyed), (iii) the
+current-file-keyed value/callee sites (suppression-only), (iv) the
+type-position tail + re-measure to unlock (d). No code change landed (probe
+fully reverted, tree byte-equal to the round-502 commits; suite state
+carries over: 10,273 / 0 / 3). NEXT: INV.3(c)(i).
+
+
 
 **Round 502 (2026-07-13, same session as 500/501) — INV.3(b)(ii) LANDED: the
 pilot consumer — INV.3(b) is COMPLETE.** The TS2315/TS2346 heritage-base
