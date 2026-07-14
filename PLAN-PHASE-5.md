@@ -59,6 +59,35 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 511 (2026-07-14) — INV.3(d)(i) DONE + (ii) 8/14 + (iii) 4 flips & 2 pin-updates
+(all on branch `wip/inv3d-merge-retire`, rebased onto main; 4 commits): branch
+failures 42 → 10.** (i) The ambiguous-constrained→foreign TP leg reverted
+(declaration-identity kept) — 17 tests flipped incl. the WhileTrue/tsx collateral;
+checker.ts:7358 re-solved inference-side (CallExpression args carrying a TypeParam
+soft-skip at forReturnType sites, pinned by ForeignTpInferenceSoftSkipTest ×6).
+(ii) Per-consult flips per the round-510 method: heritage/implements walkers
+node-keyed + the B563 ownership-gate mirror (the double-TS2420 lesson: when a
+walker's ownership gate is "the OTHER walker resolves it", both must consult the
+SAME primitive), checkConstraintsForTypeArgs keyNode/presetSymbol (ImportType
+resolves through its OWN specifier), checkTypeNameResolved's leftSym →
+globalsForFile (the pass runs unscoped — currentFileLocals is null there), the mam
+type-only-winner + ns-import value-side bail. **Critical find: the import hop
+lacked a DIR-RELATIVE resolver leg — path-shaped extensionless imports never
+hopped, so post-retire EVERY import-mediated type died on real on-disk projects
+(repro: `const x: number = importedString` drew NOTHING); pre-retire the merge
+masked it, and the tsc profiles' `.js` specifiers take the separate stripping leg,
+so listAll byte-identity NEVER covered this class — the local direct-construction
+pins (EnclosingImportIndexTest) were the only net that caught it. Lesson recorded
+as a CLAUDE.md gotcha: profile byte-identity is NOT sufficient verification for
+resolution changes; scratch-project MainKt repros are cheap and decisive.**
+(iii) Two pin-updates to the post-retire contract (unindexed-copy degradation
+nulls module-only names; the leak worklist assertion inverted — an emptied
+worklist is the victory condition). Every commit gated on compiler AND services
+`--listAll` byte-identical vs the round-510 captures. Remaining on the branch:
+6 corpus (roots noted per-test in the (ii) item) + 4 local (all suspected REAL
+suppressions — r7/r8 scratch repros exist for the ConflatedTypeAliasLeak pair) +
+the (iv) profile residuals. Main untouched.
+
 **Round 510 (2026-07-13) — INV.3(d) merge retire: BUILT AND PROFILE-VERIFIED on
 branch `wip/inv3d-merge-retire` (033598b6); main untouched pending the
 enumerated 36-failure worklist.** The retire (skip a MODULE file's module-only
@@ -405,45 +434,6 @@ the primitive is dead code until (c)(ii) consumes it; same 46 env-legit
 diagnostics). NEXT: INV.3(c)(ii) — flip the kind-domain/enum-discriminant
 family (~82% of conflated traffic) onto `lookupPerFileForNode`,
 listAll-gated.
-
-**Round 503 (2026-07-13, same session as 500–502) — INV.3(c) DECOMPOSED from a
-measured per-site attribution (probe-and-revert; no code landed).** The
-round-502 lesson (per-PASS ≠ per-SITE) applied: tagging the GUESSED hot sites
-(`getTypeFromTypeReference` fallback / `getTypeOfIdentifier` fallback /
-`getCalleeType` ×3) left 148k of 157k conflated lookups untagged — the guess
-list in the old (c) item was wrong (typeRef.fallback measured literally ZERO).
-A second probe — 1:200 stack-sampling in the classifier's CONFLATED branch
-(`Throwable.stackTraceToString()` is common-stdlib; ~790 samples), TEMP code
-reverted after the run — settled it: **~82% of conflated traffic is ONE
-family, the enum-discriminant/kind-domain narrowing machinery**
-(`kindDomainKeysFromTypeNode` → `enumSwitchKeysFromTypeNode` /
-`enumMemberKeysOfTypeNode` / `kindDomainTypeDeclSymbol` /
-`resolveEnumSymbolForDiscriminant`, from `narrowByCallPredicate` via
-`applyConditionNarrowing` + smaller `filterUnionByEnumDiscriminant` /
-`resolveCallOverload` entries) — resolving type names read from FOREIGN AST
-nodes (types.ts's union-member `.kind` annotations) while `currentFileLocals`
-points at the CHECKING file, which is exactly why the top conflated names are
-all types.ts node-interface names (JSDocFunctionType 21.5k / FunctionTypeNode
-17.9k / ConstructorTypeNode 17.8k / MappedTypeNode / ConditionalTypeNode).
-KEY DESIGN CONSEQUENCE: the per-file-correct key for that family is the
-NODE'S OWNING FILE (tsc semantics — a types.ts annotation resolves in
-types.ts's scope), now derivable from the INV.2(a) parent chains; a naive
-`globalsForFile(currentCheckFileName, …)` flip would silently KILL the
-narrowing wherever the checking file doesn't import the name (an FP
-regression, not a cleanup). Remainder of the distribution: tagged counts
-`identifier.fallback` 3,829 + `propAccess.objExpr` 3,005 +
-`typeRef.resolve.ident` 1,942 + `mam.*` 63+63 + `propAccess.base` 13;
-sampled small families `checkPrivateMemberAccess`, `getTypeOfIdentifier ←
-isCalleeResolvable`, `resolveFlowCalleeDecl ← flowCalleeMayHaveAssertEffects`,
-`computeRawTypeOfPropertyAccess ← getCalleeType`,
-`typeNodeDefinitelyNonNullish`, `pmrCheckAccess`. The (c) item is rewritten
-as four sub-items in dependency order: (i) the node-keyed primitive
-(`owningSourceFile(node)` + `lookupPerFileForNode`), (ii) the kind-domain
-family flip (~82%, resolution-PRESERVING, node-keyed), (iii) the
-current-file-keyed value/callee sites (suppression-only), (iv) the
-type-position tail + re-measure to unlock (d). No code change landed (probe
-fully reverted, tree byte-equal to the round-502 commits; suite state
-carries over: 10,273 / 0 / 3). NEXT: INV.3(c)(i).
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
@@ -869,31 +859,61 @@ interrupt the arc).
     consumer resolves per-file (the naive full retire measured 861 compiler
     FPs, the module-only cut 34, each traced to an unflipped consult by the
     classifier-MISS stack-probe technique). Sub-items to finish it, in order:
-    - (i) On the branch: revert `typeContainsForeignTypeParam`'s
-      ambiguous-constrained→foreign leg (kills ~11 corpus TP-pin failures:
-      typeParametersShouldNotBeEqual2/3, genericTypeAssertions4/5, …); keep
-      the declaration-IDENTITY leg. Re-solve checker.ts:7358 (the
-      `setTextRangeWorker(factory.createNodeArray(…))` NAME-COLLIDING-T
-      unmasking) via an inference-side fix instead: an arg whose type contains
-      an un-inferred TypeParam soft-skips in `tryInferSingleTypeParamFromArgs`
-      at forReturnType sites (pre-retire the pure-alias merged callee degraded
-      to any — the FP is an unmasking, not new).
-    - (ii) Triage the ~13 corpus multi-file failures (augmentExportEquals1/2,
-      exportStarFromEmptyModule, noCrashOnImportShadowing,
-      allowImportClausesToMergeWithTypes, interfaceDeclaration3,
-      interfaceImplementation6, divergentAccessorsTypes6,
-      indirectDiscriminantAndExcessProperty, decoratorMetadataWithImport…7,
-      checkJsdocTypeTagOnExportAssignment2, declarationEmitPrivateSymbol…2,
-      allowJscheckJsTypeParameterNoCrash) — likely 3-5 roots; the
-      augmentExportEquals pair is probably the mergeModuleAugmentations
-      globals-add gate (now fileless-ambient-only) or the .js-aware
-      locals-merge newly firing.
-    - (iii) Review the ~10 prior INV.3 local tests that pin PRE-retire
-      semantics the retire deliberately changes (Inv3NodeKeyedLookupTest's
-      "unindexed copy degrades to the legacy merged consult",
-      Inv3GlobalsLookupTest's instrumentation invariant, the
-      structurally*Imports* pair, …) — update each to the post-retire
-      contract or fix the code where the pin is genuinely load-bearing.
+    - (i) DONE round 511 (2026-07-14): the ambiguous-constrained→foreign leg
+      REVERTED (declaration-IDENTITY leg kept) — flipped the whole TP family
+      (17 tests: the 8 corpus TP pins + 3 local negative controls +
+      tsxTypeArgumentPartialDefinitionStillErrors ×2 + WhileTrueDefiniteAssignTest
+      ×4, the last two collateral of the over-aggressive classification);
+      checker.ts:7358 re-solved at the INFERENCE side —
+      `tryInferSingleTypeParamFromArgs` soft-skips a CallExpression arg whose
+      type still carries a TypeParam at forReturnType sites (tpSawAnyArg →
+      anyType, the pre-retire any-degradation behavior; round-468
+      CallExpression gate keeps own-TP identifier args anchoring). Pinned by
+      ForeignTpInferenceSoftSkipTest (6); compiler+services listAll
+      byte-identical.
+    - (ii) IN PROGRESS round 511 — 8 of 14 fixed, one commit each family:
+      heritage/implements walkers node-keyed (interfaceDeclaration3,
+      interfaceImplementation6 — incl. the B563 ownership-gate mirror that
+      killed the double TS2420), checkConstraintsForTypeArgs keyNode +
+      ImportType presetSymbol (divergentAccessorsTypes6,
+      unmetTypeConstraintInImportCall), checkTypeNameResolved's leftSym →
+      globalsForFile (augmentExportEquals1/2 + decoratorMetadataWithImport…7),
+      the mam type-only-winner + namespace-import value-side bail
+      (noCrashOnImportShadowing), **and the session's critical find: the
+      import hop (`resolveImportedSymbolGeneral`) lacked the DIR-RELATIVE
+      resolver leg, so path-shaped extensionless imports (`/proj/src/f1.ts` →
+      `./lib`) never hopped and EVERY import-mediated type died on real
+      on-disk projects — masked pre-retire by the merge, invisible to the
+      `.js`-specifier tsc profiles; found via the EnclosingImportIndexTest
+      pins + a MainKt scratch-repro matrix.** REMAINING 6 (per-test roots,
+      each needs a probe dig): exportStarFromEmptyModule (X.A.r static
+      TS2339 through a local-shadowed star chain),
+      allowImportClausesToMergeWithTypes (TS2749 default-import-of-value used
+      as type), allowJscheckJsTypeParameterNoCrash (display regression:
+      `WatchHandler<any>` unfolds to the fn-type — alias display lost),
+      checkJsdocTypeTagOnExportAssignment2 (JS `@type import("./a").Foo`
+      excess-prop TS2353 — the JSDoc path's cross-file resolution),
+      declarationEmitPrivateSymbolCausesVarDeclarationEmit2 (TS2415 with
+      cross-file computed `[x]` private members),
+      indirectDiscriminantAndExcessProperty (single-file module: TS2322
+      member-vs-discriminant `"foo" | "bar"` — the objlit-member drill's
+      resolution; NOT tryEmitObjectVsNamedUnionArg, whose anonymous
+      constituents defer to the discriminant walker).
+    - (iii) IN PROGRESS round 511 — 2 pin-updates landed
+      (Inv3NodeKeyedLookupTest's unindexed-copy degradation → null for
+      module-only names; Inv3GlobalsLookupTest's leak assertions inverted to
+      the emptied-worklist victory condition); 3 more of the original 9
+      flipped as REAL code fixes (EnclosingImportIndexTest ×2 +
+      Inv3NodeKeyedLookupTest imports-keep-resolving via the dir-relative hop
+      leg; ExtendsImplementsSameClassTest + NamespaceImportQualifiedTypeTest
+      via the (ii) walker flips). REMAINING 4, all look like REAL
+      suppressions to dig (scratch repros r7/r8 reproduce two):
+      ConflatedTypeAliasLeakTest ×2 (own-file `type X` union TS2339 /
+      own-file TS2345 both silent — receiver/param resolution in the alias's
+      own file returns something unexpected post-retire),
+      NamespaceQualifiedBaseInheritanceTest (export-star-as barrel base →
+      TS2339 FP returned), BuilderChainAndNsMemberCtxTest (ns-member objlit
+      contextual params → TS7006 FP returned).
     - (iv) Close the remaining profile residuals: harness +5 / server +2
       (deprecate.ts `compareTo` — the applyBodyLocalShadowing importCollision
       branch is on the branch UNTESTED; session.ts protocol.Diagnostic objlit
