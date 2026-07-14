@@ -2262,8 +2262,9 @@ class Checker(
         // conflictingDeclarationsImportFromNamespace1/2 — `import * as N from '<pkg>'` +
         // self-calling `export const N = () => N()` → TS2497 + TS7023.
         pass("checkConflictingNamespaceImportSelfConst") { checkConflictingNamespaceImportSelfConst() }
-        // 15. Check break/continue crossing function boundaries (TS1107)
-        pass("checkJumpTargets") { checkJumpTargets() }
+        // 15. Break/continue jump targets (TS1104/TS1105/TS1107/TS1115/TS1116
+        // + TS1344) migrated to the check spine (INV.4(b) batch 11) — see
+        // spineCheckJumpTarget / spineCheckLabelOnDeclaration.
         // 15c. noImplicitAnyLoopCrash — a spread `f(...x)` of a NON-ITERABLE operand into a
         // fixed-arity (no-rest) function → TS2556 (+ TS2488/TS2461). Runs BEFORE the arg-count
         // pass so it can register the call to suppress the spurious TS2554.
@@ -17564,6 +17565,9 @@ class Checker(
             is CallExpression -> spineCheckEmptyTypeArgs(node.typeArguments, node.expression)
             is NewExpression -> spineCheckEmptyTypeArgs(node.typeArguments, node.expression)
             is WithStatement -> spineCheckWithStatement(node)
+            is BreakStatement -> spineCheckJumpTarget(node, node.label?.text, isBreak = true)
+            is ContinueStatement -> spineCheckJumpTarget(node, node.label?.text, isBreak = false)
+            is LabeledStatement -> spineCheckLabelOnDeclaration(node)
             is GetAccessor -> {
                 spineCheckAbstractAccessorReturnType(node)
                 spineCheckGetAccessorGrammar(node)
@@ -17688,6 +17692,109 @@ class Checker(
     private fun spineCheckParamForwardRefs(params: List<Parameter>, body: Node?) {
         if (spineIsDts || body == null || params.isEmpty()) return
         checkForwardRefsInParams(params, spineSource, spineFileName, body as? Block)
+    }
+
+    /**
+     * TS1104/TS1105/TS1107/TS1115/TS1116: break/continue target resolution —
+     * migrated from the deleted `checkJumpTargets` / `checkJumpInStatements` /
+     * `checkJumpInStatement` / `checkJumpInExpr` walk family (INV.4(b)
+     * batch 11). The threaded inIteration/inSwitch/labelNames/
+     * crossedFunctionBoundary flags became ONE parent-chain walk from the
+     * jump statement — a direct mirror of tsc
+     * checkGrammarBreakOrContinueStatement's `while (current)` loop: the
+     * first function-like ancestor → TS1107 (class static blocks count, a
+     * faithful widening — the old walk never descended them); a matching
+     * LabeledStatement below it resolves the jump (a labeled `continue` on a
+     * non-iteration statement → TS1115, with tsc's
+     * isIterationStatement(lookInLabeledStatements=true) nested-label unwrap
+     * — a faithfulness FIX over the old walk's immediate-child test); an
+     * iteration-statement ancestor legalizes unlabeled jumps; a
+     * SwitchStatement legalizes unlabeled `break`; a ModuleBlock ancestor
+     * suppresses unlabeled `break` (the old inSwitch=true namespace rule —
+     * TS1036 owns ambient-context statements); no target by the SourceFile →
+     * the per-shape 110x/111x code. Object-literal method / class-expression
+     * member bodies are faithful reach widenings (the old expression walk
+     * missed them).
+     */
+    private fun spineCheckJumpTarget(node: Statement, label: String?, isBreak: Boolean) {
+        if (spineIsDts) return
+        var cur: Node? = (node as NodeBase).parent
+        while (cur != null && cur !is SourceFile) {
+            when (cur) {
+                is FunctionDeclaration, is FunctionExpression, is ArrowFunction,
+                is MethodDeclaration, is Constructor, is GetAccessor, is SetAccessor,
+                is ClassStaticBlockDeclaration -> {
+                    emitJumpDiagnostic(node, spineSource, spineFileName, 1107,
+                        "Jump target cannot cross function boundary.")
+                    return
+                }
+                is LabeledStatement -> if (label != null && cur.label.text == label) {
+                    if (!isBreak && !jumpLabelTargetsIteration(cur.statement)) {
+                        emitJumpDiagnostic(node, spineSource, spineFileName, 1115,
+                            "A 'continue' statement can only jump to a label of an enclosing iteration statement.")
+                    }
+                    return
+                }
+                is ForStatement, is ForInStatement, is ForOfStatement,
+                is WhileStatement, is DoStatement -> if (label == null) return
+                is SwitchStatement -> if (label == null && isBreak) return
+                is ModuleBlock -> if (label == null && isBreak) return
+                else -> {}
+            }
+            cur = (cur as NodeBase).parent
+        }
+        if (cur == null) return // detached/unindexed tree — no old-walk equivalent
+        if (label != null) {
+            if (isBreak) {
+                emitJumpDiagnostic(node, spineSource, spineFileName, 1116,
+                    "A 'break' statement can only jump to a label of an enclosing statement.")
+            } else {
+                emitJumpDiagnostic(node, spineSource, spineFileName, 1115,
+                    "A 'continue' statement can only jump to a label of an enclosing iteration statement.")
+            }
+        } else {
+            if (isBreak) {
+                emitJumpDiagnostic(node, spineSource, spineFileName, 1105,
+                    "A 'break' statement can only be used within an enclosing iteration or switch statement.")
+            } else {
+                emitJumpDiagnostic(node, spineSource, spineFileName, 1104,
+                    "A 'continue' statement can only be used within an enclosing iteration statement.")
+            }
+        }
+    }
+
+    /** tsc isIterationStatement(node, lookInLabeledStatements = true): a label
+     * chain `L1: L2: for(...)` makes `continue L1` legal — unwrap nested
+     * LabeledStatements before the iteration-kind test. */
+    private fun jumpLabelTargetsIteration(stmt: Statement): Boolean {
+        var s = stmt
+        while (s is LabeledStatement) s = s.statement
+        return s is ForStatement || s is ForInStatement || s is ForOfStatement ||
+            s is WhileStatement || s is DoStatement
+    }
+
+    /**
+     * TS1344: a label on a declaration statement (strict mode only) — the
+     * LabeledStatement leg of the deleted `checkJumpTargets` family. Position
+     * independent in tsc, so the spine's full coverage (arrow bodies in
+     * conditions, class-expression members, …) is a faithful widening.
+     */
+    private fun spineCheckLabelOnDeclaration(node: LabeledStatement) {
+        if (spineIsDts) return
+        if (options.alwaysStrict == false) return
+        if (!isDeclarationStatement(node.statement)) return
+        val labelStart = node.label.pos
+        val (line, character) = getLineAndCharacterOfPosition(spineSource, labelStart)
+        diagnostics.add(Diagnostic(
+            message = "A label is not allowed here.",
+            category = DiagnosticCategory.Error,
+            code = 1344,
+            fileName = spineFileName,
+            line = line,
+            character = character,
+            start = labelStart,
+            length = node.label.text.length,
+        ))
     }
 
     /**
@@ -40989,314 +41096,11 @@ class Checker(
     }
 
     // -----------------------------------------------------------------------
-    // Jump target checking (TS1107)
+    // Jump target checking (TS1104/TS1105/TS1107/TS1115/TS1116 + TS1344) —
+    // dispatched from the check spine (INV.4(b) batch 11): see
+    // spineCheckJumpTarget / spineCheckLabelOnDeclaration. The two helpers
+    // below are the retained per-jump core.
     // -----------------------------------------------------------------------
-
-    /**
-     * Check for TS1107: "Jump target cannot cross function boundary."
-     * break/continue inside a nested function/arrow that targets an outer loop/label.
-     */
-    private fun checkJumpTargets() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            checkJumpInStatements(result.sourceFile.statements, source, fileName,
-                inIteration = false, inSwitch = false, labelNames = emptyMap(),
-                crossedFunctionBoundary = false)
-        }
-    }
-
-    private fun checkJumpInStatements(
-        statements: List<Statement>,
-        source: String,
-        fileName: String,
-        inIteration: Boolean,
-        inSwitch: Boolean,
-        labelNames: Map<String, Boolean>,
-        crossedFunctionBoundary: Boolean,
-    ) {
-        for (stmt in statements) {
-            checkJumpInStatement(stmt, source, fileName, inIteration, inSwitch, labelNames, crossedFunctionBoundary)
-        }
-    }
-
-    private fun checkJumpInStatement(
-        stmt: Statement,
-        source: String,
-        fileName: String,
-        inIteration: Boolean,
-        inSwitch: Boolean,
-        labelNames: Map<String, Boolean>,
-        crossedFunctionBoundary: Boolean,
-    ) {
-        when (stmt) {
-            is BreakStatement -> {
-                val label = stmt.label?.text
-                if (label != null) {
-                    // Labeled break — check if label is in scope
-                    if (label !in labelNames) {
-                        if (crossedFunctionBoundary) {
-                            emitJumpDiagnostic(stmt, source, fileName, 1107,
-                                "Jump target cannot cross function boundary.")
-                        } else {
-                            emitJumpDiagnostic(stmt, source, fileName, 1116,
-                                "A 'break' statement can only jump to a label of an enclosing statement.")
-                        }
-                    }
-                } else {
-                    // Unlabeled break — needs to be in a loop or switch
-                    if (!inIteration && !inSwitch) {
-                        if (crossedFunctionBoundary) {
-                            emitJumpDiagnostic(stmt, source, fileName, 1107,
-                                "Jump target cannot cross function boundary.")
-                        } else {
-                            emitJumpDiagnostic(stmt, source, fileName, 1105,
-                                "A 'break' statement can only be used within an enclosing iteration or switch statement.")
-                        }
-                    }
-                }
-            }
-            is ContinueStatement -> {
-                val label = stmt.label?.text
-                if (label != null) {
-                    // continue can only jump to labels of iteration statements
-                    if (label !in labelNames || labelNames[label] != true) {
-                        if (crossedFunctionBoundary) {
-                            emitJumpDiagnostic(stmt, source, fileName, 1107,
-                                "Jump target cannot cross function boundary.")
-                        } else {
-                            emitJumpDiagnostic(stmt, source, fileName, 1115,
-                                "A 'continue' statement can only jump to a label of an enclosing iteration statement.")
-                        }
-                    }
-                } else {
-                    if (!inIteration) {
-                        if (crossedFunctionBoundary) {
-                            emitJumpDiagnostic(stmt, source, fileName, 1107,
-                                "Jump target cannot cross function boundary.")
-                        } else {
-                            emitJumpDiagnostic(stmt, source, fileName, 1104,
-                                "A 'continue' statement can only be used within an enclosing iteration statement.")
-                        }
-                    }
-                }
-            }
-            // Loop statements: set inIteration = true
-            is ForStatement -> {
-                checkJumpInStatement(stmt.statement, source, fileName,
-                    inIteration = true, inSwitch, labelNames, crossedFunctionBoundary)
-            }
-            is ForInStatement -> {
-                checkJumpInStatement(stmt.statement, source, fileName,
-                    inIteration = true, inSwitch, labelNames, crossedFunctionBoundary)
-            }
-            is ForOfStatement -> {
-                checkJumpInStatement(stmt.statement, source, fileName,
-                    inIteration = true, inSwitch, labelNames, crossedFunctionBoundary)
-            }
-            is WhileStatement -> {
-                checkJumpInStatement(stmt.statement, source, fileName,
-                    inIteration = true, inSwitch, labelNames, crossedFunctionBoundary)
-            }
-            is DoStatement -> {
-                checkJumpInStatement(stmt.statement, source, fileName,
-                    inIteration = true, inSwitch, labelNames, crossedFunctionBoundary)
-            }
-            is SwitchStatement -> {
-                for (clause in stmt.caseBlock) {
-                    val stmts = when (clause) {
-                        is CaseClause -> clause.statements
-                        is DefaultClause -> clause.statements
-                        else -> emptyList()
-                    }
-                    checkJumpInStatements(stmts, source, fileName,
-                        inIteration, inSwitch = true, labelNames, crossedFunctionBoundary)
-                }
-            }
-            is LabeledStatement -> {
-                // TS1344: A label is not allowed on declaration statements (strict mode only)
-                val isStrict = options.alwaysStrict != false
-                if (isStrict && isDeclarationStatement(stmt.statement)) {
-                    val labelStart = stmt.label.pos
-                    val (line, character) = getLineAndCharacterOfPosition(source, labelStart)
-                    diagnostics.add(Diagnostic(
-                        message = "A label is not allowed here.",
-                        category = DiagnosticCategory.Error,
-                        code = 1344,
-                        fileName = fileName,
-                        line = line,
-                        character = character,
-                        start = labelStart,
-                        length = stmt.label.text.length,
-                    ))
-                }
-                val isIterationLabel = stmt.statement is ForStatement || stmt.statement is ForInStatement ||
-                    stmt.statement is ForOfStatement || stmt.statement is WhileStatement ||
-                    stmt.statement is DoStatement
-                val newLabels = labelNames + (stmt.label.text to isIterationLabel)
-                checkJumpInStatement(stmt.statement, source, fileName,
-                    inIteration, inSwitch, newLabels, crossedFunctionBoundary)
-            }
-            is Block -> {
-                checkJumpInStatements(stmt.statements, source, fileName,
-                    inIteration, inSwitch, labelNames, crossedFunctionBoundary)
-            }
-            is IfStatement -> {
-                checkJumpInStatement(stmt.thenStatement, source, fileName,
-                    inIteration, inSwitch, labelNames, crossedFunctionBoundary)
-                stmt.elseStatement?.let {
-                    checkJumpInStatement(it, source, fileName, inIteration, inSwitch, labelNames, crossedFunctionBoundary)
-                }
-            }
-            is TryStatement -> {
-                checkJumpInStatements(stmt.tryBlock.statements, source, fileName,
-                    inIteration, inSwitch, labelNames, crossedFunctionBoundary)
-                stmt.catchClause?.block?.let {
-                    checkJumpInStatements(it.statements, source, fileName,
-                        inIteration, inSwitch, labelNames, crossedFunctionBoundary)
-                }
-                stmt.finallyBlock?.let {
-                    checkJumpInStatements(it.statements, source, fileName,
-                        inIteration, inSwitch, labelNames, crossedFunctionBoundary)
-                }
-            }
-            // Function boundaries: reset iteration/switch/label state, mark boundary crossed
-            is FunctionDeclaration -> {
-                stmt.body?.let {
-                    checkJumpInStatements(it.statements, source, fileName,
-                        inIteration = false, inSwitch = false, labelNames = emptyMap(),
-                        crossedFunctionBoundary = true)
-                }
-            }
-            is ClassDeclaration -> {
-                for (member in stmt.members) {
-                    val body = when (member) {
-                        is MethodDeclaration -> member.body
-                        is Constructor -> member.body
-                        is GetAccessor -> member.body
-                        is SetAccessor -> member.body
-                        else -> null
-                    }
-                    body?.let {
-                        checkJumpInStatements(it.statements, source, fileName,
-                            inIteration = false, inSwitch = false, labelNames = emptyMap(),
-                            crossedFunctionBoundary = true)
-                    }
-                }
-            }
-            is ModuleDeclaration -> {
-                // Recurse into namespace bodies with same iteration/switch context.
-                // Note: TypeScript fires TS1104 (continue not in iteration) and TS1108 (return
-                // outside function) inside namespaces, but does NOT fire TS1105 (break not in
-                // iteration/switch) because TS1036 (ambient statement) covers break statements.
-                // We suppress TS1105 for break inside namespace by noting the namespace context.
-                val body = stmt.body
-                if (body is ModuleBlock) {
-                    checkJumpInStatements(body.statements, source, fileName,
-                        inIteration, inSwitch = true /* suppress TS1105 for break */,
-                        labelNames, crossedFunctionBoundary)
-                }
-            }
-            is VariableStatement -> {
-                for (decl in stmt.declarationList.declarations) {
-                    decl.initializer?.let { checkJumpInExpr(it, source, fileName) }
-                }
-            }
-            is ExpressionStatement -> checkJumpInExpr(stmt.expression, source, fileName)
-            is ReturnStatement -> stmt.expression?.let { checkJumpInExpr(it, source, fileName) }
-            else -> {}
-        }
-    }
-
-    private fun checkJumpInExpr(expr: Expression, source: String, fileName: String) {
-        when (expr) {
-            is ArrowFunction -> {
-                when (val body = expr.body) {
-                    is Block -> checkJumpInStatements(body.statements, source, fileName,
-                        inIteration = false, inSwitch = false, labelNames = emptyMap(),
-                        crossedFunctionBoundary = true)
-                    else -> {}
-                }
-            }
-            is FunctionExpression -> {
-                checkJumpInStatements(expr.body.statements, source, fileName,
-                    inIteration = false, inSwitch = false, labelNames = emptyMap(),
-                    crossedFunctionBoundary = true)
-            }
-            is ClassExpression -> {
-                for (member in expr.members) {
-                    val body = when (member) {
-                        is MethodDeclaration -> member.body
-                        is Constructor -> member.body
-                        is GetAccessor -> member.body
-                        is SetAccessor -> member.body
-                        else -> null
-                    }
-                    body?.let {
-                        checkJumpInStatements(it.statements, source, fileName,
-                            inIteration = false, inSwitch = false, labelNames = emptyMap(),
-                            crossedFunctionBoundary = true)
-                    }
-                }
-            }
-            is CallExpression -> {
-                checkJumpInExpr(expr.expression, source, fileName)
-                expr.arguments.forEach { checkJumpInExpr(it, source, fileName) }
-            }
-            is NewExpression -> {
-                checkJumpInExpr(expr.expression, source, fileName)
-                expr.arguments?.forEach { checkJumpInExpr(it, source, fileName) }
-            }
-            is ParenthesizedExpression -> checkJumpInExpr(expr.expression, source, fileName)
-            is AsExpression -> checkJumpInExpr(expr.expression, source, fileName)
-            is TypeAssertionExpression -> checkJumpInExpr(expr.expression, source, fileName)
-            is SatisfiesExpression -> checkJumpInExpr(expr.expression, source, fileName)
-            is NonNullExpression -> checkJumpInExpr(expr.expression, source, fileName)
-            is PropertyAccessExpression -> checkJumpInExpr(expr.expression, source, fileName)
-            is ElementAccessExpression -> {
-                checkJumpInExpr(expr.expression, source, fileName)
-                checkJumpInExpr(expr.argumentExpression, source, fileName)
-            }
-            is ConditionalExpression -> {
-                checkJumpInExpr(expr.condition, source, fileName)
-                checkJumpInExpr(expr.whenTrue, source, fileName)
-                checkJumpInExpr(expr.whenFalse, source, fileName)
-            }
-            is PrefixUnaryExpression -> checkJumpInExpr(expr.operand, source, fileName)
-            is PostfixUnaryExpression -> checkJumpInExpr(expr.operand, source, fileName)
-            is BinaryExpression -> {
-                var current: Expression = expr
-                while (current is BinaryExpression) {
-                    checkJumpInExpr(current.right, source, fileName)
-                    current = current.left
-                }
-                checkJumpInExpr(current, source, fileName)
-            }
-            is ArrayLiteralExpression -> expr.elements.forEach { checkJumpInExpr(it, source, fileName) }
-            is ObjectLiteralExpression -> for (prop in expr.properties) when (prop) {
-                is PropertyAssignment -> checkJumpInExpr(prop.initializer, source, fileName)
-                is SpreadAssignment -> checkJumpInExpr(prop.expression, source, fileName)
-                else -> {}
-            }
-            is SpreadElement -> checkJumpInExpr(expr.expression, source, fileName)
-            is AwaitExpression -> checkJumpInExpr(expr.expression, source, fileName)
-            is YieldExpression -> expr.expression?.let { checkJumpInExpr(it, source, fileName) }
-            is DeleteExpression -> checkJumpInExpr(expr.expression, source, fileName)
-            is VoidExpression -> checkJumpInExpr(expr.expression, source, fileName)
-            is TypeOfExpression -> checkJumpInExpr(expr.expression, source, fileName)
-            is TemplateExpression -> expr.templateSpans.forEach { checkJumpInExpr(it.expression, source, fileName) }
-            is TaggedTemplateExpression -> {
-                checkJumpInExpr(expr.tag, source, fileName)
-                when (val templ = expr.template) {
-                    is TemplateExpression -> templ.templateSpans.forEach { checkJumpInExpr(it.expression, source, fileName) }
-                    else -> {}
-                }
-            }
-            is CommaListExpression -> expr.elements.forEach { checkJumpInExpr(it, source, fileName) }
-            else -> {}
-        }
-    }
 
     /**
      * Returns true if this statement is a "declaration statement" that cannot be the body
