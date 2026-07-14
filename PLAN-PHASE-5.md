@@ -59,6 +59,52 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 517 (2026-07-14) — INV.4(b) batch 6: duplicate-modifier grammar +
+ambient initializers + switch/case comparability migrated onto the spine;
+9 walker functions (~453 lines) deleted, 3 init slots removed.** Three passes:
+(1) `checkDuplicateModifiers` (TS1030/TS1029 + TS1044 via
+`checkInvalidImportEqualsModifiers`) — dispatched for the exact 10 statement
+kinds the old walk checked (class/interface members handled inside the
+class/interface handler, preserving member-kind coverage); the TWO threaded
+flags with DIFFERENT reset rules (inAmbientContext: reset by fn/member
+bodies, set by declare-module descent; atTopLevel: false in Blocks, reset
+TRUE in ModuleBlocks, preserved through if/else) became one parent-chain walk
+(`spineDupModContext`) where the innermost flag-deciding ancestor wins per
+flag and any ancestor kind the old walk never descended (loops, switch, try,
+labeled, arrow/fn-expr bodies, class expressions) returns null = no-visit.
+Reach deliberately NOT widened: `checkModifiers` is an FP-firewalled TEXT
+heuristic (B69.6 `as const` firewall, B459b TS1184-ownership suppression for
+non-top-level functions, B61.5g ambient import-equals TS1029 skip) — the
+negative pins (for-loop body, nested fn) hold the line. (2)
+`checkAmbientInitializers` (TS1039/TS1254/TS1066/TS1031) — EnumDeclaration /
+VariableStatement / ClassDeclaration enter handlers over
+`spineAmbientInitContext` (pass-through for the old walk's full statement-
+container set incl. loops/switch/try/labeled; declare-module sets ambient,
+fn bodies reset it, SourceFile terminal returns `spineIsDts` = the
+.d.ts-top-level-ambient rule — this pass has NO dts skip). Class-member and
+arrow/fn-expr bodies stay unreached (pinned negative — tsc WOULD emit TS1039
+for `declare var x = 1` in a method body; widening is a signal-driven change,
+noted in the KDoc). The B162 same-enum member-reference exception's sibling
+scan reproduced via `spineSiblingStatements` (parent statement list;
+single-statement positions degrade to `listOf(stmt)`). The class-EXPRESSION
+member path (TS1031 fires regardless of ambient) retained via the unchanged
+`visitExprForClassExpression` Paren/Binary-only descent from VariableStatement
+initializers. (3) `checkSwitchCaseComparable` (TS2678) — the old walker's
+per-statement-LIST const/annotated binding maps (FRESH per nested block,
+accumulated in statement order, annotated-wins-over-const, non-classifiable
+writes preserve earlier entries) reproduced as a preceding-sibling scan AT
+the SwitchStatement node (`spineSwitchSubjectBinding` breaks at the switch,
+so declared-after bindings stay invisible — pinned); the old broad expression
+descent (arrow/fn-expr/class-expr bodies) is subsumed by the spine, widening
+faithfully to the few positions it missed (parameter defaults). VERIFIED:
+27 pins written FIRST and run against the OLD walkers (all green), then the
+migration — suite 10,443 → 10,470 (+27 Inv4SpineBatch6Test, 0 regressions);
+listAll error lines IDENTICAL on ALL 8 profiles (517a vs 516b); bench in
+band (27,212 ms self, +1.3% = noise; 46 errors unchanged). Session total: 3 passes, 9 walker funs (~453 lines) deleted, 3 init
+slots removed, suite +27. NEXT: INV.4(b) batch 7 —
+checkRestElementPropertyNames + checkRestBindingPatternElements +
+checkAmbientImplementation + checkAmbientRelativeModuleNames.**
+
 **Round 516 (2026-07-14) — INV.4(b) batch 4: the accessor-grammar family +
 TS1014/TS1113/TS1246 migrated onto the spine; 17 walker functions (~733 lines)
 deleted, 4 init slots removed.** (Session start: recovered from an OOM-killed
@@ -1149,12 +1195,31 @@ interrupt the arc).
     expression-statement-only reach — pinned negative). 7 walker funs
     (~318 lines) deleted, 3 init slots removed. Suite +16
     (Inv4SpineBatch5Test), listAll identical on ALL 8 profiles, bench in
-    band. NEXT batches: batch-6 candidates — checkDuplicateModifiers
-    (TS1030/TS1029: inAmbientContext + atTopLevel threading needs parent-walk
-    equivalents), checkAmbientInitializers (TS1039/TS1254/TS1066/TS1031:
-    .d.ts-topLevelAmbient + class-expression descent),
-    checkSwitchCaseComparable (TS2678); checkMixinClassConstructor is
-    TP-scope-stateful — (d) territory.
+    band. Batch 6 DONE round 517 (2026-07-14): checkDuplicateModifiers
+    (TS1030/TS1029/TS1044 — statement-kind handlers over 10 node kinds; the
+    threaded inAmbientContext + atTopLevel pair became ONE parent-chain walk,
+    `spineDupModContext`, where the INNERMOST flag-deciding ancestor wins per
+    flag — fn/member bodies reset ambient, Block decides atTopLevel=false,
+    ModuleBlock resets it true — and any non-descended ancestor kind returns
+    null = the old no-visit; checkModifiers/checkInvalidImportEqualsModifiers
+    retained as FP-firewalled text heuristics, reach NOT widened per B69.6) +
+    checkAmbientInitializers (TS1039/TS1254/TS1066/TS1031 — Enum/
+    VariableStatement/ClassDeclaration enter handlers over
+    `spineAmbientInitContext`; .d.ts top-level-ambient preserved at the
+    SourceFile terminal; class-member/arrow bodies stay unreached — pinned
+    negative, a signal-driven widening candidate; the B162 same-enum sibling
+    scan reproduced via `spineSiblingStatements`) + checkSwitchCaseComparable
+    (TS2678 — the per-statement-LIST const/annotated binding maps reproduced
+    as a preceding-sibling scan at the SWITCH node,
+    `spineSwitchSubjectBinding`; single-statement positions degrade to
+    `listOf(stmt)` = the old fresh-map wraps). 9 walker funs (~453 lines)
+    deleted, 3 init slots removed. Suite +27 (Inv4SpineBatch6Test, pins run
+    against the OLD walkers first), listAll error lines identical on ALL 8
+    profiles, bench in band. NEXT batches: batch-7 candidates —
+    checkRestElementPropertyNames + checkRestBindingPatternElements (TS2566/
+    TS1186/TS2493 statement+expr walk pairs), checkAmbientImplementation
+    (TS1183), checkAmbientRelativeModuleNames (TS2436);
+    checkMixinClassConstructor is TP-scope-stateful — (d) territory.
   - [ ] **INV.4(c) The name-resolution pair.** checkUnresolvedNames (846 ms) +
     checkTypeUsedAsValue (734 ms): fold their private NameScope chains into
     spine-maintained authoritative lexical state backed by the INV.2(c)

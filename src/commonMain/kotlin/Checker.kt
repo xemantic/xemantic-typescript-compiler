@@ -2486,14 +2486,14 @@ class Checker(
         // 37a4. B211: TS2322 for `i = v` for-incrementors where v's reaching
         // assignments (continue back-edges + fall-through) include a failing type.
         pass("checkForIncrementorReachingAssignments") { checkForIncrementorReachingAssignments() }
-        // 37b. Check switch/case literal-type comparability for const-narrowed switch exprs (TS2678)
-        pass("checkSwitchCaseComparable") { checkSwitchCaseComparable() }
+        // 37b. TS2678 (switch/case literal-type comparability) migrated to the
+        // check spine (INV.4(b) batch 6) — see spineCheckSwitchCaseComparable.
         // 38. TS1049/TS1095/TS1054 (setter/getter grammar) + TS2808 (accessor-pair
         // visibility) migrated to the check spine (INV.4(b) batch 4) — see
         // spineCheckSetAccessorGrammar / spineCheckGetAccessorGrammar /
         // spineCheckAccessorPairVisibility.
-        // 39. Check duplicate modifiers (TS1030)
-        pass("checkDuplicateModifiers") { checkDuplicateModifiers() }
+        // 39. TS1030/TS1029/TS1044 (duplicate / mis-ordered modifiers) migrated
+        // to the check spine (INV.4(b) batch 6) — see spineCheckDupModifiers.
         // 40. TS1014 (rest parameter must be last) migrated to the check spine
         // (INV.4(b) batch 4) — see spineCheckRestParamLast.
         // 40b. Check rest element with property name in binding patterns (TS2566)
@@ -2515,8 +2515,9 @@ class Checker(
         if (options.target < ScriptTarget.ES2015 || hasModuleFiles) {
             pass("checkArgumentsCollision") { checkArgumentsCollision() }
         }
-        // 43. Check initializers in ambient contexts (TS1039)
-        pass("checkAmbientInitializers") { checkAmbientInitializers() }
+        // 43. TS1039/TS1254/TS1066/TS1031 (ambient initializers) migrated to
+        // the check spine (INV.4(b) batch 6) — see spineCheckAmbientVarInitializers /
+        // spineCheckAmbientEnumInitializers / spineCheckAmbientClassMembers.
         // 44. TS1113 (multiple switch defaults) migrated to the check spine
         // (INV.4(b) batch 4) — see spineCheckMultipleDefaults.
         // 45. TS1246 (interface property initializers) migrated to the check
@@ -17626,7 +17627,10 @@ class Checker(
                 spineCheckAccessorModifier(node)
                 spineCheckComputedPropName(node)
             }
-            is ModuleDeclaration -> spineCheckGlobalAugmentation(node)
+            is ModuleDeclaration -> {
+                spineCheckGlobalAugmentation(node)
+                spineCheckDupModifiers(node)
+            }
             is MethodDeclaration -> spineCheckReservedWordInterfaceParams(node)
             is Parameter -> {
                 spineCheckRestParam(node)
@@ -17649,9 +17653,32 @@ class Checker(
                 spineCheckGetAccessorGrammar(node)
             }
             is SetAccessor -> spineCheckSetAccessorGrammar(node)
-            is ClassDeclaration -> spineCheckAccessorPairVisibility(node)
-            is SwitchStatement -> spineCheckMultipleDefaults(node)
-            is InterfaceDeclaration -> spineCheckInterfacePropertyInitializers(node)
+            is ClassDeclaration -> {
+                spineCheckAccessorPairVisibility(node)
+                spineCheckDupModifiers(node)
+                spineCheckAmbientClassMembers(node)
+            }
+            is SwitchStatement -> {
+                spineCheckMultipleDefaults(node)
+                spineCheckSwitchCaseComparable(node)
+            }
+            is InterfaceDeclaration -> {
+                spineCheckInterfacePropertyInitializers(node)
+                spineCheckDupModifiers(node)
+            }
+            is FunctionDeclaration -> spineCheckDupModifiers(node)
+            is VariableStatement -> {
+                spineCheckDupModifiers(node)
+                spineCheckAmbientVarInitializers(node)
+            }
+            is EnumDeclaration -> {
+                spineCheckDupModifiers(node)
+                spineCheckAmbientEnumInitializers(node)
+            }
+            is TypeAliasDeclaration -> spineCheckDupModifiers(node)
+            is ExportDeclaration -> spineCheckDupModifiers(node)
+            is ImportDeclaration -> spineCheckDupModifiers(node)
+            is ImportEqualsDeclaration -> spineCheckDupModifiers(node)
             else -> {}
         }
     }
@@ -18480,6 +18507,395 @@ class Checker(
                 }
             }
         }
+    }
+
+    /**
+     * Reach + context reconstruction for the migrated `checkDuplicateModifiers`
+     * walk (INV.4(b) batch 6): returns null when the old statement walk never
+     * visited [stmt], else the (inAmbientContext, atTopLevel) pair it threaded.
+     * The old walk descended: file statements, Block statements (atTopLevel →
+     * false, ambient preserved), if/else branches (both flags preserved),
+     * ModuleBlock bodies (atTopLevel reset to TRUE; ambient |= the module's
+     * `declare`), FunctionDeclaration bodies and class-member
+     * (method/ctor/accessor) bodies of CLASS DECLARATIONS (both reset ambient
+     * to false). Any other ancestor kind (loops, switch, try, labeled
+     * statements, arrow/function-expression bodies, class expressions, object
+     * literals) was never descended — the walk terminates null there,
+     * preserving the old no-emit (checkModifiers is an FP-firewalled text
+     * heuristic per B69.6, so the reach is reproduced, not widened).
+     */
+    private fun spineDupModContext(stmt: Node): Pair<Boolean, Boolean>? {
+        var ambientDecided = false
+        var ambient = false
+        var topDecided = false
+        var atTopLevel = true
+        var child: Node = stmt
+        var cur = (stmt as NodeBase).parent
+        while (cur != null) {
+            when (cur) {
+                is SourceFile -> return Pair(ambient, atTopLevel)
+                is IfStatement -> {
+                    if (child !== cur.thenStatement && child !== cur.elseStatement) return null
+                }
+                is Block -> if (!topDecided) { atTopLevel = false; topDecided = true }
+                is ModuleBlock -> if (!topDecided) { atTopLevel = true; topDecided = true }
+                is ModuleDeclaration -> {
+                    // Old walk descended only ModuleBlock bodies (a nested
+                    // ModuleDeclaration body was never visited).
+                    if (child !== cur.body || child !is ModuleBlock) return null
+                    if (!ambientDecided && ModifierFlag.Declare in cur.modifiers) {
+                        ambient = true; ambientDecided = true
+                    }
+                }
+                is FunctionDeclaration -> {
+                    if (child !== cur.body) return null
+                    ambientDecided = true // fn bodies reset ambient to false
+                }
+                is MethodDeclaration -> {
+                    if (child !== cur.body) return null
+                    ambientDecided = true
+                }
+                is Constructor -> {
+                    if (child !== cur.body) return null
+                    ambientDecided = true
+                }
+                is GetAccessor -> {
+                    if (child !== cur.body) return null
+                    ambientDecided = true
+                }
+                is SetAccessor -> {
+                    if (child !== cur.body) return null
+                    ambientDecided = true
+                }
+                is ClassDeclaration -> {
+                    // Reached from a member-body walk; the class continues the
+                    // chain. (Class-EXPRESSION member bodies fall to else-null.)
+                    if (child !is ClassElement) return null
+                }
+                else -> return null
+            }
+            child = cur
+            cur = (cur as NodeBase).parent
+        }
+        return null
+    }
+
+    /**
+     * TS1030/TS1029 duplicate / mis-ordered modifiers (+ TS1044 class-only
+     * modifiers on import-equals) — migrated from the deleted
+     * `checkDuplicateModifiers` walk family (INV.4(b) batch 6). Dispatched for
+     * the exact statement kinds the old walk checked; [spineDupModContext]
+     * reproduces its reach and threaded flags. The text-scanning emission
+     * helpers ([checkModifiers], [checkInvalidImportEqualsModifiers]) are
+     * retained unchanged.
+     */
+    private fun spineCheckDupModifiers(stmt: Statement) {
+        if (spineIsDts) return
+        val (ambient, atTopLevel) = spineDupModContext(stmt) ?: return
+        when (stmt) {
+            is ClassDeclaration -> {
+                checkModifiers(stmt.modifiers, spineSource, spineFileName, stmt.pos)
+                for (m in stmt.members) when (m) {
+                    is PropertyDeclaration -> checkModifiers(m.modifiers, spineSource, spineFileName, m.pos)
+                    is MethodDeclaration -> checkModifiers(m.modifiers, spineSource, spineFileName, m.pos)
+                    is GetAccessor -> checkModifiers(m.modifiers, spineSource, spineFileName, m.pos)
+                    is SetAccessor -> checkModifiers(m.modifiers, spineSource, spineFileName, m.pos)
+                    else -> {}
+                }
+            }
+            // B459b: a non-top-level (plain-block / function-body) function with
+            // position-illegal modifiers gets TS1184 (walkSiblingsForTopLevel)
+            // which owns the modifier error — tsc skips the ordering/dup grammar
+            // check (TS1029/TS1030) there.
+            is FunctionDeclaration ->
+                if (atTopLevel) checkModifiers(stmt.modifiers, spineSource, spineFileName, stmt.pos)
+            is VariableStatement -> checkModifiers(stmt.modifiers, spineSource, spineFileName, stmt.pos)
+            is InterfaceDeclaration -> {
+                checkModifiers(stmt.modifiers, spineSource, spineFileName, stmt.pos)
+                for (m in stmt.members) when (m) {
+                    is PropertyDeclaration -> checkModifiers(m.modifiers, spineSource, spineFileName, m.pos)
+                    is MethodDeclaration -> checkModifiers(m.modifiers, spineSource, spineFileName, m.pos)
+                    else -> {}
+                }
+            }
+            is EnumDeclaration -> checkModifiers(stmt.modifiers, spineSource, spineFileName, stmt.pos)
+            is TypeAliasDeclaration -> checkModifiers(stmt.modifiers, spineSource, spineFileName, stmt.pos)
+            is ModuleDeclaration -> checkModifiers(stmt.modifiers, spineSource, spineFileName, stmt.pos)
+            is ExportDeclaration -> checkModifiers(stmt.modifiers, spineSource, spineFileName, stmt.pos)
+            is ImportDeclaration -> checkModifiers(stmt.modifiers, spineSource, spineFileName, stmt.pos)
+            is ImportEqualsDeclaration -> {
+                // B61.5g: skip TS1029 (modifier ordering) for declare+export
+                // import-equals inside ambient context — TS1038 fires instead.
+                if (!ambient) checkModifiers(stmt.modifiers, spineSource, spineFileName, stmt.pos)
+                // B61.5e: TS1044 for class-only modifiers on module elements.
+                checkInvalidImportEqualsModifiers(stmt, spineSource, spineFileName)
+            }
+            else -> {}
+        }
+    }
+
+    /**
+     * Reach + ambient reconstruction for the migrated `checkAmbientInitializers`
+     * walk (INV.4(b) batch 6): returns null when the old statement walk never
+     * visited [stmt], else the threaded chain-ambient flag (NOT including the
+     * statement's own `declare` — callers OR that in). The old walk descended
+     * blocks, if/loop/switch/try/labeled statements (ambient preserved),
+     * ModuleBlock bodies (ambient |= the module's `declare`), and
+     * FunctionDeclaration bodies (ambient RESET to false); a `.d.ts` file's
+     * top level is implicitly ambient. Class member bodies and
+     * arrow/function-expression bodies were never descended — preserved
+     * as-is (a signal-driven widening candidate, pinned negative).
+     */
+    private fun spineAmbientInitContext(stmt: Node): Boolean? {
+        var ambientDecided = false
+        var ambient = false
+        var child: Node = stmt
+        var cur = (stmt as NodeBase).parent
+        while (cur != null) {
+            when (cur) {
+                is SourceFile -> return if (ambientDecided) ambient else spineIsDts
+                is ModuleBlock, is Block, is IfStatement, is ForStatement,
+                is ForInStatement, is ForOfStatement, is WhileStatement,
+                is DoStatement, is SwitchStatement, is CaseClause,
+                is DefaultClause, is TryStatement, is CatchClause,
+                is LabeledStatement -> {}
+                is ModuleDeclaration -> {
+                    if (child !== cur.body || child !is ModuleBlock) return null
+                    if (!ambientDecided && ModifierFlag.Declare in cur.modifiers) {
+                        ambient = true; ambientDecided = true
+                    }
+                }
+                is FunctionDeclaration -> {
+                    if (child !== cur.body) return null
+                    ambientDecided = true // fn bodies reset ambient to false
+                }
+                else -> return null
+            }
+            child = cur
+            cur = (cur as NodeBase).parent
+        }
+        return null
+    }
+
+    /** The enclosing statement LIST of a statement node (the old walkers'
+     *  `stmts` parameter); single-statement positions (if branches, loop
+     *  bodies) degrade to just the node itself, matching the old
+     *  `listOf(stmt)` wraps. */
+    private fun spineSiblingStatements(stmt: Statement): List<Statement> =
+        when (val p = (stmt as NodeBase).parent) {
+            is SourceFile -> p.statements
+            is ModuleBlock -> p.statements
+            is Block -> p.statements
+            is CaseClause -> p.statements
+            is DefaultClause -> p.statements
+            else -> listOf(stmt)
+        }
+
+    /**
+     * TS1066 ambient-enum member initializers must be constant — migrated from
+     * the deleted `checkAmbientInitializers` walk (INV.4(b) batch 6).
+     * [isConstantEnumMemberExpr] and the B162 same-enum member-reference
+     * exception (script-file merge via [scriptEnumMembersByName] + same-LIST
+     * sibling enums via [spineSiblingStatements]) are unchanged.
+     */
+    private fun spineCheckAmbientEnumInitializers(node: EnumDeclaration) {
+        val chainAmbient = spineAmbientInitContext(node) ?: return
+        if (!(chainAmbient || ModifierFlag.Declare in node.modifiers)) return
+        for (member in node.members) {
+            val init = member.initializer ?: continue
+            // B162: a bare identifier naming a member of the SAME (merged) enum
+            // is a constant enum-member reference — a constant expression per
+            // TS, so TS1066 must not fire.
+            if (init is Identifier && (
+                    scriptEnumMembersByName()[node.name.text]?.containsKey(init.text) == true ||
+                    spineSiblingStatements(node).any { s ->
+                        s is EnumDeclaration && s.name.text == node.name.text &&
+                            s.members.any { m -> (m.name as? Identifier)?.text == init.text }
+                    }
+                )
+            ) continue
+            if (!isConstantEnumMemberExpr(init)) {
+                val start = init.pos
+                val length = (expressionTrueEnd(init) - start).coerceAtLeast(1)
+                val (line, character) = getLineAndCharacterOfPosition(spineSource, start)
+                diagnostics.add(Diagnostic(
+                    message = "In ambient enum declarations member initializer must be constant expression.",
+                    category = DiagnosticCategory.Error,
+                    code = 1066,
+                    fileName = spineFileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
+            }
+        }
+    }
+
+    /**
+     * TS1039/TS1254 ambient variable initializers + the class-EXPRESSION
+     * member walk (TS1039/TS1031 through Paren/Binary initializers only —
+     * [visitExprForClassExpression] retained) — migrated from the deleted
+     * `checkAmbientInitializers` walk (INV.4(b) batch 6).
+     */
+    private fun spineCheckAmbientVarInitializers(node: VariableStatement) {
+        val chainAmbient = spineAmbientInitContext(node) ?: return
+        val ambient = chainAmbient || ModifierFlag.Declare in node.modifiers
+        if (ambient) {
+            // TypeScript allows `declare const x = 123` (without type
+            // annotation) — the literal initializer serves as the type
+            // annotation. With explicit type annotation, TS1039 still fires.
+            val isConst = node.declarationList.flags == SyntaxKind.ConstKeyword
+            for (d in node.declarationList.declarations) {
+                val init = d.initializer ?: continue
+                if (isConst && d.type == null && isLiteralExpression(init)) continue
+                val start = init.pos
+                val length = (init.end - 1 - start).coerceAtLeast(1)
+                val (line, character) = getLineAndCharacterOfPosition(spineSource, start)
+                // TS1254 for `declare const x = <non-literal>` without type annotation
+                val useTs1254 = isConst && d.type == null && !isLiteralExpression(init)
+                diagnostics.add(Diagnostic(
+                    message = if (useTs1254) "A 'const' initializer in an ambient context must be a string or numeric literal or literal enum reference."
+                        else "Initializers are not allowed in ambient contexts.",
+                    category = DiagnosticCategory.Error,
+                    code = if (useTs1254) 1254 else 1039,
+                    fileName = spineFileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
+            }
+        }
+        // Also walk initializers for ClassExpressions (fires TS1031 regardless
+        // of ambient; member-initializer TS1039 only under ambient).
+        for (d in node.declarationList.declarations) {
+            d.initializer?.let { visitExprForClassExpression(it, ambient, spineSource, spineFileName) }
+        }
+    }
+
+    /**
+     * TS1039 (ambient class-member property initializers) + TS1031 (`export`
+     * on class members, ambient or not) — migrated from the deleted
+     * `checkAmbientInitializers` walk (INV.4(b) batch 6);
+     * [checkClassMemberModifiersForAmbient] retained unchanged.
+     */
+    private fun spineCheckAmbientClassMembers(node: ClassDeclaration) {
+        val chainAmbient = spineAmbientInitContext(node) ?: return
+        val ambient = chainAmbient || ModifierFlag.Declare in node.modifiers
+        checkClassMemberModifiersForAmbient(node.members, ambient, spineSource, spineFileName)
+    }
+
+    /**
+     * TS2678 switch/case literal comparability — migrated from the deleted
+     * `checkSwitchCaseComparable` walk family (INV.4(b) batch 6). The old
+     * walker's per-statement-LIST const/annotated binding maps (fresh per
+     * nested block, accumulated in statement order) are reproduced by
+     * scanning the switch's PRECEDING SIBLINGS in its parent statement list
+     * ([spineSwitchSubjectBinding]); single-statement positions (if branches,
+     * loop bodies) see no bindings, exactly like the old `listOf(stmt)`
+     * wraps. The spine widens reach faithfully to the few expression
+     * positions the old descent missed (parameter defaults, decorators) —
+     * the binding scan is parent-list-based, so position independence holds.
+     */
+    private fun spineCheckSwitchCaseComparable(stmt: SwitchStatement) {
+        if (spineIsDts) return
+        val expr = stmt.expression
+        val allowed: SwitchAllowedSet = when (expr) {
+            is Identifier -> spineSwitchSubjectBinding(stmt, expr.text)
+            // B98.r60: `switch (/** @type {"foo"|"bar"} */ (value))` — a
+            // parenthesized JSDoc `@type` cast supplies the switch subject's
+            // allowed literal set (the parser attaches it as jsdocCastType).
+            is ParenthesizedExpression -> expr.jsdocCastType?.let { allowedSetFromTypeAnnotation(it, spineSource) }
+                ?: literalKindDisplay(expr)?.let { allowedSetFromBinding(it) }
+            else -> literalKindDisplay(expr)?.let { allowedSetFromBinding(it) }
+        } ?: return
+        for (c in stmt.caseBlock) {
+            if (c !is CaseClause) continue
+            // 17.198: TS2678 for `case <ClassIdent>` — class identifier
+            // resolves to `typeof Class`, never comparable to a literal
+            // type. Display: `typeof <ClassName>`.
+            val caseExpr = c.expression
+            if (caseExpr is Identifier) {
+                val sym = globals[caseExpr.text]
+                val isPureClass = sym != null && sym.flags.hasAny(SymbolFlags.Class) &&
+                    !sym.flags.hasAny(SymbolFlags.Module or SymbolFlags.Alias or SymbolFlags.Variable or SymbolFlags.Function) &&
+                    sym.declarations.size == 1 &&
+                    sym.valueDeclaration is ClassDeclaration
+                if (isPureClass) {
+                    val (line, character) = getLineAndCharacterOfPosition(spineSource, caseExpr.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Type 'typeof ${caseExpr.text}' is not comparable to type '${allowed.display}'.",
+                        category = DiagnosticCategory.Error,
+                        code = 2678,
+                        fileName = spineFileName,
+                        line = line,
+                        character = character,
+                        start = caseExpr.pos,
+                        length = caseExpr.text.length,
+                    ))
+                    continue
+                }
+            }
+            val caseBinding = literalKindDisplay(c.expression) ?: continue
+            // Emit TS2678 when the case literal is NOT in the allowed set.
+            if (!allowed.allows(caseBinding)) {
+                val (line, character) = getLineAndCharacterOfPosition(spineSource, c.expression.pos)
+                val length = when (val ce = c.expression) {
+                    is NumericLiteralNode -> ce.text.length
+                    is StringLiteralNode -> ce.text.length + 2
+                    is BigIntLiteralNode -> ce.text.length
+                    is Identifier -> ce.text.length
+                    is PrefixUnaryExpression -> if (ce.operand is NumericLiteralNode) 1 + (ce.operand).text.length else 1
+                    else -> 1
+                }
+                diagnostics.add(Diagnostic(
+                    message = "Type '${caseBinding.display}' is not comparable to type '${allowed.display}'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2678,
+                    fileName = spineFileName,
+                    line = line,
+                    character = character,
+                    start = c.expression.pos,
+                    length = length,
+                ))
+            }
+        }
+    }
+
+    /**
+     * The old `checkSwitchCaseComparable` walker's constBindings /
+     * annotatedBindings lookup for a bare-Identifier switch subject,
+     * reproduced as a preceding-sibling scan (annotated wins over const;
+     * last matching write wins per map; an unclassifiable annotation or
+     * non-literal const initializer writes NOTHING, preserving an earlier
+     * entry — the old maps' exact semantics).
+     */
+    private fun spineSwitchSubjectBinding(switchStmt: SwitchStatement, name: String): SwitchAllowedSet? {
+        var constBinding: ConstLiteralBinding? = null
+        var annotated: SwitchAllowedSet? = null
+        for (s in spineSiblingStatements(switchStmt)) {
+            if (s === switchStmt) break
+            if (s !is VariableStatement) continue
+            if (s.declarationList.flags == SyntaxKind.ConstKeyword) {
+                for (d in s.declarationList.declarations) {
+                    val n = d.name as? Identifier ?: continue
+                    if (n.text != name) continue
+                    // Skip when there's a type annotation that would widen the literal
+                    if (d.type != null) continue
+                    val init = d.initializer ?: continue
+                    literalKindDisplay(init)?.let { constBinding = it }
+                }
+            }
+            // Pick up type-annotated declarations regardless of `var`/`let`/`const`.
+            for (d in s.declarationList.declarations) {
+                val n = d.name as? Identifier ?: continue
+                if (n.text != name) continue
+                val ann = d.type ?: continue
+                allowedSetFromTypeAnnotation(ann, spineSource)?.let { annotated = it }
+            }
+        }
+        return annotated ?: constBinding?.let { allowedSetFromBinding(it) }
     }
 
     /**
@@ -65621,92 +66037,6 @@ interface DataView {
     // Duplicate modifiers (TS1030)
     // -----------------------------------------------------------------------
 
-    private fun checkDuplicateModifiers() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            checkDupModInStatements(result.sourceFile.statements, source, fileName, inAmbientContext = false)
-        }
-    }
-
-    private fun checkDupModInStatements(stmts: List<Statement>, source: String, fileName: String, inAmbientContext: Boolean = false, atTopLevel: Boolean = true) {
-        for (stmt in stmts) checkDupModInStatement(stmt, source, fileName, inAmbientContext, atTopLevel)
-    }
-
-    private fun checkDupModInStatement(stmt: Statement, source: String, fileName: String, inAmbientContext: Boolean = false, atTopLevel: Boolean = true) {
-        when (stmt) {
-            is ClassDeclaration -> {
-                checkModifiers(stmt.modifiers, source, fileName, stmt.pos)
-                for (m in stmt.members) {
-                    when (m) {
-                        is PropertyDeclaration -> checkModifiers(m.modifiers, source, fileName, m.pos)
-                        is MethodDeclaration -> {
-                            checkModifiers(m.modifiers, source, fileName, m.pos)
-                            m.body?.let { checkDupModInStatements(it.statements, source, fileName, atTopLevel = false) }
-                        }
-                        is Constructor -> m.body?.let { checkDupModInStatements(it.statements, source, fileName, atTopLevel = false) }
-                        is GetAccessor -> {
-                            checkModifiers(m.modifiers, source, fileName, m.pos)
-                            m.body?.let { checkDupModInStatements(it.statements, source, fileName, atTopLevel = false) }
-                        }
-                        is SetAccessor -> {
-                            checkModifiers(m.modifiers, source, fileName, m.pos)
-                            m.body?.let { checkDupModInStatements(it.statements, source, fileName, atTopLevel = false) }
-                        }
-                        else -> {}
-                    }
-                }
-            }
-            is FunctionDeclaration -> {
-                // B459b: a non-top-level (plain-block / function-body) function with
-                // position-illegal modifiers gets TS1184 (walkSiblingsForTopLevel) which
-                // owns the modifier error — tsc skips the modifier-ordering/dup grammar
-                // check (TS1029/TS1030) there, so suppress checkModifiers in that case.
-                if (atTopLevel) checkModifiers(stmt.modifiers, source, fileName, stmt.pos)
-                stmt.body?.let { checkDupModInStatements(it.statements, source, fileName, atTopLevel = false) }
-            }
-            is VariableStatement -> checkModifiers(stmt.modifiers, source, fileName, stmt.pos)
-            is InterfaceDeclaration -> {
-                checkModifiers(stmt.modifiers, source, fileName, stmt.pos)
-                for (m in stmt.members) {
-                    when (m) {
-                        is PropertyDeclaration -> checkModifiers(m.modifiers, source, fileName, m.pos)
-                        is MethodDeclaration -> checkModifiers(m.modifiers, source, fileName, m.pos)
-                        else -> {}
-                    }
-                }
-            }
-            is EnumDeclaration -> checkModifiers(stmt.modifiers, source, fileName, stmt.pos)
-            is TypeAliasDeclaration -> checkModifiers(stmt.modifiers, source, fileName, stmt.pos)
-            is ModuleDeclaration -> {
-                checkModifiers(stmt.modifiers, source, fileName, stmt.pos)
-                val nowAmbient = inAmbientContext || ModifierFlag.Declare in stmt.modifiers
-                (stmt.body as? ModuleBlock)?.let { checkDupModInStatements(it.statements, source, fileName, nowAmbient) }
-            }
-            is Block -> checkDupModInStatements(stmt.statements, source, fileName, inAmbientContext, atTopLevel = false)
-            is IfStatement -> {
-                checkDupModInStatement(stmt.thenStatement, source, fileName, inAmbientContext, atTopLevel)
-                stmt.elseStatement?.let { checkDupModInStatement(it, source, fileName, inAmbientContext, atTopLevel) }
-            }
-            is ExportDeclaration -> checkModifiers(stmt.modifiers, source, fileName, stmt.pos)
-            is ImportDeclaration -> checkModifiers(stmt.modifiers, source, fileName, stmt.pos)
-            // B61.4: also walk ImportEqualsDeclaration for modifier ordering checks
-            // (e.g. `declare export import a = x.c;` should emit TS1029).
-            is ImportEqualsDeclaration -> {
-                // B61.5g: Skip TS1029 (modifier ordering) for declare+export import-equals
-                // when inside ambient context — TS1038 fires instead.
-                if (!inAmbientContext) {
-                    checkModifiers(stmt.modifiers, source, fileName, stmt.pos)
-                }
-                // B61.5e: TS1044 for class-only modifiers (public/private/protected/static)
-                // on module/namespace elements like import-equals.
-                checkInvalidImportEqualsModifiers(stmt, source, fileName)
-            }
-            else -> {}
-        }
-    }
-
     /**
      * B61.5e: Emit TS1044 for class-only modifiers (public/private/protected/static) on
      * an ImportEqualsDeclaration. These modifiers are not allowed on module/namespace
@@ -66813,17 +67143,6 @@ interface DataView {
     // Initializers in ambient contexts (TS1039)
     // -----------------------------------------------------------------------
 
-    private fun checkAmbientInitializers() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            val source = result.sourceFile.text
-            // In .d.ts files every top-level declaration is implicitly ambient, so
-            // initializers anywhere must emit TS1039 even without an explicit `declare`.
-            val topLevelAmbient = isDtsFile(fileName)
-            checkAmbientInitInStatements(result.sourceFile.statements, source, fileName, isAmbient = topLevelAmbient)
-        }
-    }
-
     /**
      * Returns true if the expression qualifies as a constant for ambient enum member initializers.
      * TS1066 fires when this returns false inside a declare enum.
@@ -66959,124 +67278,6 @@ interface DataView {
         is BigIntLiteralNode -> true
         is PrefixUnaryExpression -> expr.operator == SyntaxKind.Minus && isLiteralExpression(expr.operand)
         else -> false
-    }
-
-    private fun checkAmbientInitInStatements(stmts: List<Statement>, source: String, fileName: String, isAmbient: Boolean) {
-        for (stmt in stmts) {
-            val isDeclare = when (stmt) {
-                is VariableStatement -> ModifierFlag.Declare in stmt.modifiers
-                is ClassDeclaration -> ModifierFlag.Declare in stmt.modifiers
-                is ModuleDeclaration -> ModifierFlag.Declare in stmt.modifiers
-                is EnumDeclaration -> ModifierFlag.Declare in stmt.modifiers
-                else -> false
-            }
-            val ambient = isAmbient || isDeclare
-            when (stmt) {
-                is EnumDeclaration -> {
-                    if (ambient) {
-                        for (member in stmt.members) {
-                            val init = member.initializer ?: continue
-                            // B162: a bare identifier naming a member of the SAME (merged) enum is
-                            // a constant enum-member reference — a constant expression per TS, so
-                            // TS1066 must not fire (`declare enum Enum { F = A }` where A is a
-                            // member of Enum in this or another script file).
-                            if (init is Identifier && (
-                                    scriptEnumMembersByName()[stmt.name.text]?.containsKey(init.text) == true ||
-                                    stmts.any { s ->
-                                        s is EnumDeclaration && s.name.text == stmt.name.text &&
-                                            s.members.any { m -> (m.name as? Identifier)?.text == init.text }
-                                    }
-                                )
-                            ) continue
-                            if (!isConstantEnumMemberExpr(init)) {
-                                val start = init.pos
-                                val length = (expressionTrueEnd(init) - start).coerceAtLeast(1)
-                                val (line, character) = getLineAndCharacterOfPosition(source, start)
-                                diagnostics.add(Diagnostic(
-                                    message = "In ambient enum declarations member initializer must be constant expression.",
-                                    category = DiagnosticCategory.Error,
-                                    code = 1066,
-                                    fileName = fileName,
-                                    line = line,
-                                    character = character,
-                                    start = start,
-                                    length = length,
-                                ))
-                            }
-                        }
-                    }
-                }
-                is VariableStatement -> {
-                    if (ambient) {
-                        // TypeScript allows `declare const x = 123` (without type annotation) —
-                        // the literal initializer serves as the type annotation.
-                        // With explicit type annotation, TS1039 still fires.
-                        val isConst = stmt.declarationList.flags == SyntaxKind.ConstKeyword
-                        for (d in stmt.declarationList.declarations) {
-                            val init = d.initializer ?: continue
-                            // Skip TS1039 for `declare const x = <literal>` without type annotation
-                            if (isConst && d.type == null && isLiteralExpression(init)) continue
-                            val start = init.pos
-                            val length = (init.end - 1 - start).coerceAtLeast(1)
-                            val (line, character) = getLineAndCharacterOfPosition(source, start)
-                            // TS1254 for `declare const x = <non-literal>` without type annotation
-                            val useTs1254 = isConst && d.type == null && !isLiteralExpression(init)
-                            diagnostics.add(Diagnostic(
-                                message = if (useTs1254) "A 'const' initializer in an ambient context must be a string or numeric literal or literal enum reference."
-                                    else "Initializers are not allowed in ambient contexts.",
-                                category = DiagnosticCategory.Error,
-                                code = if (useTs1254) 1254 else 1039,
-                                fileName = fileName,
-                                line = line,
-                                character = character,
-                                start = start,
-                                length = length,
-                            ))
-                        }
-                    }
-                }
-                is ClassDeclaration -> {
-                    checkClassMemberModifiersForAmbient(stmt.members, ambient, source, fileName)
-                }
-                is ModuleDeclaration -> {
-                    (stmt.body as? ModuleBlock)?.let {
-                        checkAmbientInitInStatements(it.statements, source, fileName, ambient)
-                    }
-                }
-                is Block -> checkAmbientInitInStatements(stmt.statements, source, fileName, isAmbient)
-                is FunctionDeclaration -> stmt.body?.let { checkAmbientInitInStatements(it.statements, source, fileName, false) }
-                is IfStatement -> {
-                    checkAmbientInitInStatements(listOf(stmt.thenStatement), source, fileName, isAmbient)
-                    stmt.elseStatement?.let { checkAmbientInitInStatements(listOf(it), source, fileName, isAmbient) }
-                }
-                is ForStatement -> checkAmbientInitInStatements(listOf(stmt.statement), source, fileName, isAmbient)
-                is ForInStatement -> checkAmbientInitInStatements(listOf(stmt.statement), source, fileName, isAmbient)
-                is ForOfStatement -> checkAmbientInitInStatements(listOf(stmt.statement), source, fileName, isAmbient)
-                is WhileStatement -> checkAmbientInitInStatements(listOf(stmt.statement), source, fileName, isAmbient)
-                is DoStatement -> checkAmbientInitInStatements(listOf(stmt.statement), source, fileName, isAmbient)
-                is SwitchStatement -> for (clause in stmt.caseBlock) {
-                    when (clause) {
-                        is CaseClause -> checkAmbientInitInStatements(clause.statements, source, fileName, isAmbient)
-                        is DefaultClause -> checkAmbientInitInStatements(clause.statements, source, fileName, isAmbient)
-                        else -> {}
-                    }
-                }
-                is TryStatement -> {
-                    checkAmbientInitInStatements(stmt.tryBlock.statements, source, fileName, isAmbient)
-                    stmt.catchClause?.let { checkAmbientInitInStatements(it.block.statements, source, fileName, isAmbient) }
-                    stmt.finallyBlock?.let { checkAmbientInitInStatements(it.statements, source, fileName, isAmbient) }
-                }
-                is LabeledStatement -> checkAmbientInitInStatements(listOf(stmt.statement), source, fileName, isAmbient)
-                else -> {}
-            }
-            // Also walk VariableStatement initializers for ClassExpressions (not ambient).
-            if (stmt is VariableStatement) {
-                for (d in stmt.declarationList.declarations) {
-                    val init = d.initializer ?: continue
-                    visitExprForClassExpression(init, ambient, source, fileName)
-                }
-            }
-        }
     }
 
     /**
@@ -67232,234 +67433,6 @@ interface DataView {
             }
         }
         return SwitchAllowedSet(entries, displayParts.joinToString(" | "))
-    }
-
-    private fun checkSwitchCaseComparable() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            walkSwitchCaseComparable(result.sourceFile.statements, source, fileName)
-        }
-    }
-
-    private fun walkSwitchCaseComparable(stmts: List<Statement>, source: String, fileName: String) {
-        val constBindings = mutableMapOf<String, ConstLiteralBinding>()
-        // Variables declared with explicit type annotation (e.g. `declare var r: number | "hello"`).
-        val annotatedBindings = mutableMapOf<String, SwitchAllowedSet>()
-        for (stmt in stmts) {
-            when (stmt) {
-                is VariableStatement -> {
-                    if (stmt.declarationList.flags == SyntaxKind.ConstKeyword) {
-                        for (d in stmt.declarationList.declarations) {
-                            val name = d.name as? Identifier ?: continue
-                            // Skip when there's a type annotation that would widen the literal
-                            if (d.type != null) continue
-                            val init = d.initializer ?: continue
-                            val binding = literalKindDisplay(init) ?: continue
-                            constBindings[name.text] = binding
-                        }
-                    }
-                    // Pick up type-annotated declarations regardless of `var`/`let`/`const`.
-                    for (d in stmt.declarationList.declarations) {
-                        val name = d.name as? Identifier ?: continue
-                        val ann = d.type ?: continue
-                        val allowed = allowedSetFromTypeAnnotation(ann, source) ?: continue
-                        annotatedBindings[name.text] = allowed
-                    }
-                    // Walk initializers for nested switch/blocks
-                    for (d in stmt.declarationList.declarations) {
-                        d.initializer?.let { walkSwitchCaseComparableInExpr(it, source, fileName) }
-                    }
-                }
-                is SwitchStatement -> {
-                    // Check case clauses if the switch expression resolves to a known set of types.
-                    val expr = stmt.expression
-                    val allowed: SwitchAllowedSet? = when (expr) {
-                        is Identifier -> annotatedBindings[expr.text]
-                            ?: constBindings[expr.text]?.let { allowedSetFromBinding(it) }
-                        // B98.r60: `switch (/** @type {"foo"|"bar"} */ (value))` — a
-                        // parenthesized JSDoc `@type` cast supplies the switch subject's
-                        // allowed literal set (the parser attaches it as jsdocCastType).
-                        is ParenthesizedExpression -> expr.jsdocCastType?.let { allowedSetFromTypeAnnotation(it, source) }
-                            ?: literalKindDisplay(expr)?.let { allowedSetFromBinding(it) }
-                        else -> literalKindDisplay(expr)?.let { allowedSetFromBinding(it) }
-                    }
-                    if (allowed != null) {
-                        for (c in stmt.caseBlock) {
-                            if (c !is CaseClause) continue
-                            // 17.198: TS2678 for `case <ClassIdent>` — class identifier
-                            // resolves to `typeof Class`, never comparable to a literal
-                            // type. Display: `typeof <ClassName>`.
-                            val caseExpr = c.expression
-                            if (caseExpr is Identifier) {
-                                val sym = globals[caseExpr.text]
-                                val isPureClass = sym != null && sym.flags.hasAny(SymbolFlags.Class) &&
-                                    !sym.flags.hasAny(SymbolFlags.Module or SymbolFlags.Alias or SymbolFlags.Variable or SymbolFlags.Function) &&
-                                    sym.declarations.size == 1 &&
-                                    sym.valueDeclaration is ClassDeclaration
-                                if (isPureClass) {
-                                    val (line, character) = getLineAndCharacterOfPosition(source, caseExpr.pos)
-                                    diagnostics.add(Diagnostic(
-                                        message = "Type 'typeof ${caseExpr.text}' is not comparable to type '${allowed.display}'.",
-                                        category = DiagnosticCategory.Error,
-                                        code = 2678,
-                                        fileName = fileName,
-                                        line = line,
-                                        character = character,
-                                        start = caseExpr.pos,
-                                        length = caseExpr.text.length,
-                                    ))
-                                    continue
-                                }
-                            }
-                            val caseBinding = literalKindDisplay(c.expression) ?: continue
-                            // Emit TS2678 when the case literal is NOT in the allowed set.
-                            if (!allowed.allows(caseBinding)) {
-                                val (line, character) = getLineAndCharacterOfPosition(source, c.expression.pos)
-                                val length = when (val ce = c.expression) {
-                                    is NumericLiteralNode -> ce.text.length
-                                    is StringLiteralNode -> ce.text.length + 2
-                                    is BigIntLiteralNode -> ce.text.length
-                                    is Identifier -> ce.text.length
-                                    is PrefixUnaryExpression -> if (ce.operand is NumericLiteralNode) 1 + (ce.operand).text.length else 1
-                                    else -> 1
-                                }
-                                diagnostics.add(Diagnostic(
-                                    message = "Type '${caseBinding.display}' is not comparable to type '${allowed.display}'.",
-                                    category = DiagnosticCategory.Error,
-                                    code = 2678,
-                                    fileName = fileName,
-                                    line = line,
-                                    character = character,
-                                    start = c.expression.pos,
-                                    length = length,
-                                ))
-                            }
-                        }
-                    }
-                    // Recurse into case statement bodies
-                    for (c in stmt.caseBlock) {
-                        when (c) {
-                            is CaseClause -> walkSwitchCaseComparable(c.statements, source, fileName)
-                            is DefaultClause -> walkSwitchCaseComparable(c.statements, source, fileName)
-                            else -> {}
-                        }
-                    }
-                }
-                is Block -> walkSwitchCaseComparable(stmt.statements, source, fileName)
-                is IfStatement -> {
-                    walkSwitchCaseComparableStmt(stmt.thenStatement, source, fileName)
-                    stmt.elseStatement?.let { walkSwitchCaseComparableStmt(it, source, fileName) }
-                }
-                is ForStatement -> walkSwitchCaseComparableStmt(stmt.statement, source, fileName)
-                is ForInStatement -> walkSwitchCaseComparableStmt(stmt.statement, source, fileName)
-                is ForOfStatement -> walkSwitchCaseComparableStmt(stmt.statement, source, fileName)
-                is WhileStatement -> walkSwitchCaseComparableStmt(stmt.statement, source, fileName)
-                is DoStatement -> walkSwitchCaseComparableStmt(stmt.statement, source, fileName)
-                is TryStatement -> {
-                    walkSwitchCaseComparable(stmt.tryBlock.statements, source, fileName)
-                    stmt.catchClause?.let { walkSwitchCaseComparable(it.block.statements, source, fileName) }
-                    stmt.finallyBlock?.let { walkSwitchCaseComparable(it.statements, source, fileName) }
-                }
-                is FunctionDeclaration -> stmt.body?.let { walkSwitchCaseComparable(it.statements, source, fileName) }
-                is ClassDeclaration -> for (m in stmt.members) {
-                    when (m) {
-                        is MethodDeclaration -> m.body?.let { walkSwitchCaseComparable(it.statements, source, fileName) }
-                        is Constructor -> m.body?.let { walkSwitchCaseComparable(it.statements, source, fileName) }
-                        is GetAccessor -> m.body?.let { walkSwitchCaseComparable(it.statements, source, fileName) }
-                        is SetAccessor -> m.body?.let { walkSwitchCaseComparable(it.statements, source, fileName) }
-                        else -> {}
-                    }
-                }
-                is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkSwitchCaseComparable(it.statements, source, fileName) }
-                is ExpressionStatement -> walkSwitchCaseComparableInExpr(stmt.expression, source, fileName)
-                is LabeledStatement -> walkSwitchCaseComparableStmt(stmt.statement, source, fileName)
-                is ReturnStatement -> stmt.expression?.let { walkSwitchCaseComparableInExpr(it, source, fileName) }
-                is ThrowStatement -> stmt.expression?.let { walkSwitchCaseComparableInExpr(it, source, fileName) }
-                is ExportAssignment -> walkSwitchCaseComparableInExpr(stmt.expression, source, fileName)
-                else -> {}
-            }
-        }
-    }
-
-    private fun walkSwitchCaseComparableStmt(stmt: Statement, source: String, fileName: String) {
-        walkSwitchCaseComparable(listOf(stmt), source, fileName)
-    }
-
-    private fun walkSwitchCaseComparableInExpr(expr: Expression, source: String, fileName: String) {
-        when (expr) {
-            is ArrowFunction -> when (val body = expr.body) {
-                is Block -> walkSwitchCaseComparable(body.statements, source, fileName)
-                is Expression -> walkSwitchCaseComparableInExpr(body, source, fileName)
-                else -> {}
-            }
-            is FunctionExpression -> expr.body.let { walkSwitchCaseComparable(it.statements, source, fileName) }
-            is ClassExpression -> for (member in expr.members) when (member) {
-                is MethodDeclaration -> member.body?.let { walkSwitchCaseComparable(it.statements, source, fileName) }
-                is Constructor -> member.body?.let { walkSwitchCaseComparable(it.statements, source, fileName) }
-                is GetAccessor -> member.body?.let { walkSwitchCaseComparable(it.statements, source, fileName) }
-                is SetAccessor -> member.body?.let { walkSwitchCaseComparable(it.statements, source, fileName) }
-                is PropertyDeclaration -> member.initializer?.let { walkSwitchCaseComparableInExpr(it, source, fileName) }
-                else -> {}
-            }
-            is ParenthesizedExpression -> walkSwitchCaseComparableInExpr(expr.expression, source, fileName)
-            is AsExpression -> walkSwitchCaseComparableInExpr(expr.expression, source, fileName)
-            is TypeAssertionExpression -> walkSwitchCaseComparableInExpr(expr.expression, source, fileName)
-            is SatisfiesExpression -> walkSwitchCaseComparableInExpr(expr.expression, source, fileName)
-            is NonNullExpression -> walkSwitchCaseComparableInExpr(expr.expression, source, fileName)
-            is BinaryExpression -> {
-                var cur: Expression = expr
-                val rightStack = ArrayDeque<Expression>()
-                while (cur is BinaryExpression) { rightStack.addLast(cur.right); cur = cur.left }
-                walkSwitchCaseComparableInExpr(cur, source, fileName)
-                while (rightStack.isNotEmpty()) walkSwitchCaseComparableInExpr(rightStack.removeLast(), source, fileName)
-            }
-            is ConditionalExpression -> {
-                walkSwitchCaseComparableInExpr(expr.condition, source, fileName)
-                walkSwitchCaseComparableInExpr(expr.whenTrue, source, fileName)
-                walkSwitchCaseComparableInExpr(expr.whenFalse, source, fileName)
-            }
-            is CallExpression -> {
-                walkSwitchCaseComparableInExpr(expr.expression, source, fileName)
-                for (arg in expr.arguments) walkSwitchCaseComparableInExpr(arg, source, fileName)
-            }
-            is NewExpression -> {
-                walkSwitchCaseComparableInExpr(expr.expression, source, fileName)
-                expr.arguments?.forEach { walkSwitchCaseComparableInExpr(it, source, fileName) }
-            }
-            is PropertyAccessExpression -> walkSwitchCaseComparableInExpr(expr.expression, source, fileName)
-            is ElementAccessExpression -> {
-                walkSwitchCaseComparableInExpr(expr.expression, source, fileName)
-                walkSwitchCaseComparableInExpr(expr.argumentExpression, source, fileName)
-            }
-            is ArrayLiteralExpression -> for (e in expr.elements) walkSwitchCaseComparableInExpr(e, source, fileName)
-            is ObjectLiteralExpression -> for (p in expr.properties) when (p) {
-                is PropertyAssignment -> walkSwitchCaseComparableInExpr(p.initializer, source, fileName)
-                is SpreadAssignment -> walkSwitchCaseComparableInExpr(p.expression, source, fileName)
-                is MethodDeclaration -> p.body?.let { walkSwitchCaseComparable(it.statements, source, fileName) }
-                is GetAccessor -> p.body?.let { walkSwitchCaseComparable(it.statements, source, fileName) }
-                is SetAccessor -> p.body?.let { walkSwitchCaseComparable(it.statements, source, fileName) }
-                else -> {}
-            }
-            is SpreadElement -> walkSwitchCaseComparableInExpr(expr.expression, source, fileName)
-            is AwaitExpression -> walkSwitchCaseComparableInExpr(expr.expression, source, fileName)
-            is YieldExpression -> expr.expression?.let { walkSwitchCaseComparableInExpr(it, source, fileName) }
-            is VoidExpression -> walkSwitchCaseComparableInExpr(expr.expression, source, fileName)
-            is DeleteExpression -> walkSwitchCaseComparableInExpr(expr.expression, source, fileName)
-            is TypeOfExpression -> walkSwitchCaseComparableInExpr(expr.expression, source, fileName)
-            is PrefixUnaryExpression -> walkSwitchCaseComparableInExpr(expr.operand, source, fileName)
-            is PostfixUnaryExpression -> walkSwitchCaseComparableInExpr(expr.operand, source, fileName)
-            is TemplateExpression -> for (span in expr.templateSpans) walkSwitchCaseComparableInExpr(span.expression, source, fileName)
-            is TaggedTemplateExpression -> {
-                walkSwitchCaseComparableInExpr(expr.tag, source, fileName)
-                if (expr.template is TemplateExpression) {
-                    for (span in (expr.template).templateSpans) walkSwitchCaseComparableInExpr(span.expression, source, fileName)
-                }
-            }
-            is CommaListExpression -> for (e in expr.elements) walkSwitchCaseComparableInExpr(e, source, fileName)
-            else -> {}
-        }
     }
 
     // -----------------------------------------------------------------------
