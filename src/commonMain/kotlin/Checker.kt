@@ -2496,17 +2496,17 @@ class Checker(
         // to the check spine (INV.4(b) batch 6) — see spineCheckDupModifiers.
         // 40. TS1014 (rest parameter must be last) migrated to the check spine
         // (INV.4(b) batch 4) — see spineCheckRestParamLast.
-        // 40b. Check rest element with property name in binding patterns (TS2566)
-        pass("checkRestElementPropertyNames") { checkRestElementPropertyNames() }
-        // 40b'. restParameterWithBindingPattern3 — a REST parameter whose binding pattern is
-        // ANNOTATED with an ArrayType/TupleType: per-element default-vs-element TS2322,
-        // rest-element-with-initializer TS1186, out-of-bounds tuple index TS2493. Corpus-unique
-        // gate (rest param + ArrayBindingPattern/ObjectBindingPattern + ArrayType/TupleType).
-        pass("checkRestBindingPatternElements") { checkRestBindingPatternElements() }
-        // 41. Check implementation in ambient context (TS1183)
-        pass("checkAmbientImplementation") { checkAmbientImplementation() }
-        // 41b. Check ambient module declarations with relative names (TS2436)
-        pass("checkAmbientRelativeModuleNames") { checkAmbientRelativeModuleNames() }
+        // 40b. TS2566 (rest element with property name) migrated to the check
+        // spine (INV.4(b) batch 7) — see spineCheckRestElemPropName.
+        // 40b'. TS2322/TS1186/TS2493 (rest-param binding-pattern elements)
+        // migrated to the check spine (INV.4(b) batch 7) — checkRestBindingParam
+        // is called from the spine's Parameter dispatch.
+        // 41. TS1183 (implementation in ambient context) migrated to the check
+        // spine (INV.4(b) batch 7) — see spineCheckAmbientImplFn /
+        // spineCheckAmbientImplClass / spineCheckAmbientImplInterface /
+        // spineCheckAmbientImplAlias.
+        // 41b. TS2436 (ambient relative module names) migrated to the check
+        // spine (INV.4(b) batch 7) — see spineCheckAmbientRelativeModuleName.
         // 42. Check arguments collision with rest params (TS2396)
         // TS2396 only fires at target < ES2015 (no arguments object concern with arrow functions)
         // But TS1215 fires for module files regardless of target
@@ -17630,12 +17630,15 @@ class Checker(
             is ModuleDeclaration -> {
                 spineCheckGlobalAugmentation(node)
                 spineCheckDupModifiers(node)
+                spineCheckAmbientRelativeModuleName(node)
             }
             is MethodDeclaration -> spineCheckReservedWordInterfaceParams(node)
             is Parameter -> {
                 spineCheckRestParam(node)
                 spineCheckRestParamLast(node)
+                if (!spineIsDts) checkRestBindingParam(node, spineSource, spineFileName)
             }
+            is ObjectBindingPattern -> spineCheckRestElemPropName(node)
             is VariableDeclaration -> {
                 spineCollectObjLitVar(node)
                 spineCheckConstInitializer(node)
@@ -17657,6 +17660,7 @@ class Checker(
                 spineCheckAccessorPairVisibility(node)
                 spineCheckDupModifiers(node)
                 spineCheckAmbientClassMembers(node)
+                spineCheckAmbientImplClass(node)
             }
             is SwitchStatement -> {
                 spineCheckMultipleDefaults(node)
@@ -17665,8 +17669,12 @@ class Checker(
             is InterfaceDeclaration -> {
                 spineCheckInterfacePropertyInitializers(node)
                 spineCheckDupModifiers(node)
+                spineCheckAmbientImplInterface(node)
             }
-            is FunctionDeclaration -> spineCheckDupModifiers(node)
+            is FunctionDeclaration -> {
+                spineCheckDupModifiers(node)
+                spineCheckAmbientImplFn(node)
+            }
             is VariableStatement -> {
                 spineCheckDupModifiers(node)
                 spineCheckAmbientVarInitializers(node)
@@ -17675,7 +17683,10 @@ class Checker(
                 spineCheckDupModifiers(node)
                 spineCheckAmbientEnumInitializers(node)
             }
-            is TypeAliasDeclaration -> spineCheckDupModifiers(node)
+            is TypeAliasDeclaration -> {
+                spineCheckDupModifiers(node)
+                spineCheckAmbientImplAlias(node)
+            }
             is ExportDeclaration -> spineCheckDupModifiers(node)
             is ImportDeclaration -> spineCheckDupModifiers(node)
             is ImportEqualsDeclaration -> spineCheckDupModifiers(node)
@@ -18896,6 +18907,255 @@ class Checker(
             }
         }
         return annotated ?: constBinding?.let { allowedSetFromBinding(it) }
+    }
+
+    /**
+     * TS2566 "A rest element cannot have a property name." — migrated from
+     * the deleted `checkRestElementPropertyNames` walk family (INV.4(b)
+     * batch 7). A pure-syntax grammar rule, so the spine's full coverage is a
+     * faithful widening (the old walk missed catch-clause patterns); each
+     * nested ObjectBindingPattern gets its own enter, replacing the manual
+     * recursion.
+     */
+    private fun spineCheckRestElemPropName(node: ObjectBindingPattern) {
+        if (spineIsDts) return
+        for (elem in node.elements) {
+            if (elem.dotDotDotToken && elem.propertyName != null) {
+                // The squiggle is at the binding name (after the colon), not
+                // the property name.
+                val nameNode = elem.name
+                val start = nameNode.pos
+                val length = (nameNode as? Identifier)?.text?.length ?: 1
+                val (line, character) = getLineAndCharacterOfPosition(spineSource, start)
+                diagnostics.add(Diagnostic(
+                    message = "A rest element cannot have a property name.",
+                    category = DiagnosticCategory.Error,
+                    code = 2566,
+                    fileName = spineFileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
+            }
+        }
+    }
+
+    /**
+     * Reach + ambient reconstruction for the migrated
+     * `checkAmbientImplementation` walk (INV.4(b) batch 7): returns null when
+     * the old walk never visited [stmt], else the threaded chain-ambient flag
+     * (NOT including the node's own `declare` — callers OR that in). Old-walk
+     * rules reproduced arm-for-arm:
+     *  - statement containers pass through, position-checked so conditions /
+     *    for-headers / switch subjects / case expressions stay unreached;
+     *  - a `declare` ModuleDeclaration's ModuleBlock sets ambient;
+     *  - an AMBIENT FunctionDeclaration / class-DECLARATION member body was
+     *    never descended (its `{` is already reported at the owner) — an
+     *    own-`declare` owner returns null immediately, and a declare-module
+     *    found ABOVE such a body returns null too ([passedDeclBody]);
+     *  - arrow / function-expression / class-EXPRESSION-member /
+     *    object-literal-method bodies RESET ambient to false unconditionally
+     *    (the old expression walk always descended them with `false`),
+     *    settling the ambient question ([passedDeclBody] cleared);
+     *  - expressions pass through generically (the old expression walk was
+     *    comprehensive) — reachability is enforced at the statement
+     *    containers, and non-walked link kinds (heritage clauses, decorators,
+     *    computed names, type nodes, parameter defaults) fall to else-null.
+     */
+    private fun spineAmbientImplContext(stmt: Node): Boolean? {
+        var ambientDecided = false
+        var ambient = false
+        var passedDeclBody = false
+        var child: Node = stmt
+        var cur = (stmt as NodeBase).parent
+        while (cur != null) {
+            when (cur) {
+                is SourceFile -> return ambient
+                is ModuleBlock -> {}
+                is ModuleDeclaration -> {
+                    if (child !== cur.body || child !is ModuleBlock) return null
+                    if (ModifierFlag.Declare in cur.modifiers) {
+                        if (passedDeclBody) return null
+                        if (!ambientDecided) { ambient = true; ambientDecided = true }
+                    }
+                }
+                is FunctionDeclaration -> {
+                    if (child !== cur.body) return null
+                    if (ModifierFlag.Declare in cur.modifiers) return null
+                    passedDeclBody = true
+                    ambientDecided = true
+                }
+                is MethodDeclaration, is Constructor, is GetAccessor, is SetAccessor -> {
+                    val body = when (cur) {
+                        is MethodDeclaration -> cur.body
+                        is Constructor -> cur.body
+                        is GetAccessor -> cur.body
+                        is SetAccessor -> cur.body
+                    }
+                    if (child !== body) return null
+                    when (val owner = (cur as NodeBase).parent) {
+                        is ClassDeclaration -> {
+                            if (ModifierFlag.Declare in owner.modifiers) return null
+                            passedDeclBody = true
+                            ambientDecided = true
+                            child = owner
+                            cur = (owner as NodeBase).parent
+                            continue
+                        }
+                        is ClassExpression, is ObjectLiteralExpression -> {
+                            passedDeclBody = false
+                            ambientDecided = true
+                            child = owner
+                            cur = (owner as NodeBase).parent
+                            continue
+                        }
+                        else -> return null
+                    }
+                }
+                is PropertyDeclaration -> {
+                    // Class-EXPRESSION property initializers were walked
+                    // (ambient reset false); class-DECLARATION ones were not.
+                    if (child !== cur.initializer) return null
+                    val owner = (cur as NodeBase).parent as? ClassExpression ?: return null
+                    passedDeclBody = false
+                    ambientDecided = true
+                    child = owner
+                    cur = (owner as NodeBase).parent
+                    continue
+                }
+                is ArrowFunction -> {
+                    if (child !== cur.body) return null
+                    passedDeclBody = false
+                    ambientDecided = true
+                }
+                is FunctionExpression -> {
+                    if (child !== cur.body) return null
+                    passedDeclBody = false
+                    ambientDecided = true
+                }
+                is IfStatement -> if (child !== cur.thenStatement && child !== cur.elseStatement) return null
+                is ForStatement -> if (child !== cur.statement) return null
+                is ForInStatement -> if (child !== cur.statement) return null
+                is ForOfStatement -> if (child !== cur.statement) return null
+                is WhileStatement -> if (child !== cur.statement) return null
+                is DoStatement -> if (child !== cur.statement) return null
+                is SwitchStatement -> if (child !is CaseClause && child !is DefaultClause) return null
+                is CaseClause -> if (child !is Statement) return null
+                is DefaultClause -> {}
+                is Block -> {}
+                is TryStatement -> {}
+                is CatchClause -> if (child !is Block) return null
+                is LabeledStatement -> {}
+                is VariableStatement -> {}
+                is VariableDeclarationList -> {}
+                is VariableDeclaration -> if (child !== cur.initializer) return null
+                is ExpressionStatement, is ReturnStatement, is ThrowStatement, is ExportAssignment -> {}
+                is PropertyAssignment -> if (child !== cur.initializer) return null
+                is SpreadAssignment -> {}
+                is TemplateSpan -> {}
+                is Expression -> {}
+                else -> return null
+            }
+            child = cur
+            cur = (cur as NodeBase).parent
+        }
+        return null
+    }
+
+    /**
+     * TS1183 for a `declare` (or chain-ambient) function declaration's body —
+     * migrated from the deleted `checkAmbientImplementation` walk (INV.4(b)
+     * batch 7); [emitTS1183] retained.
+     */
+    private fun spineCheckAmbientImplFn(stmt: FunctionDeclaration) {
+        if (spineIsDts) return
+        val body = stmt.body ?: return
+        val chain = spineAmbientImplContext(stmt) ?: return
+        if (chain || ModifierFlag.Declare in stmt.modifiers) emitTS1183(body, spineSource, spineFileName)
+    }
+
+    /** TS1183 for ambient class-DECLARATION member bodies — migrated. */
+    private fun spineCheckAmbientImplClass(stmt: ClassDeclaration) {
+        if (spineIsDts) return
+        val chain = spineAmbientImplContext(stmt) ?: return
+        if (!(chain || ModifierFlag.Declare in stmt.modifiers)) return
+        for (m in stmt.members) {
+            val body = when (m) {
+                is MethodDeclaration -> m.body
+                is Constructor -> m.body
+                is GetAccessor -> m.body
+                is SetAccessor -> m.body
+                else -> null
+            } ?: continue
+            emitTS1183(body, spineSource, spineFileName)
+        }
+    }
+
+    /**
+     * TS1183 for interface member bodies (always ambient) — migrated. NOTE
+     * the current interface member parse never STORES a body (cf. the TS1246
+     * initializer note), so this covers only body-carrying members — the
+     * faithful migration of the old walker's (de-facto dormant) semantics.
+     */
+    private fun spineCheckAmbientImplInterface(stmt: InterfaceDeclaration) {
+        if (spineIsDts) return
+        if (spineAmbientImplContext(stmt) == null) return
+        for (m in stmt.members) {
+            val body = when (m) {
+                is GetAccessor -> m.body
+                is SetAccessor -> m.body
+                is MethodDeclaration -> m.body
+                else -> null
+            } ?: continue
+            emitTS1183(body, spineSource, spineFileName)
+        }
+    }
+
+    /** TS1183 for type-alias TypeLiteral member bodies — migrated (alias
+     *  bodies only, as before; [checkAmbientInType] retained). */
+    private fun spineCheckAmbientImplAlias(stmt: TypeAliasDeclaration) {
+        if (spineIsDts) return
+        if (spineAmbientImplContext(stmt) == null) return
+        checkAmbientInType(stmt.type, spineSource, spineFileName)
+    }
+
+    /**
+     * TS2436 "Ambient module declaration cannot specify relative module
+     * name." — migrated from the deleted `checkAmbientRelativeModuleNames`
+     * walk (INV.4(b) batch 7). The old walk looped TOP-LEVEL statements of
+     * SCRIPT files only (module augmentation in module files allows relative
+     * paths) — the SourceFile parent gate reproduces the non-recursive loop.
+     */
+    private fun spineCheckAmbientRelativeModuleName(stmt: ModuleDeclaration) {
+        if (spineIsDts || spineFileIsModule) return
+        if ((stmt as NodeBase).parent !is SourceFile) return
+        if (ModifierFlag.Declare !in stmt.modifiers) return
+        val nameNode = stmt.name as? StringLiteralNode ?: return
+        val modulePath = nameNode.text
+        // A module name is "relative" (per TS isExternalModuleNameRelative) if it is
+        // path-relative (`./`, `../`) OR a rooted disk path (POSIX/UNC `/`/`\`, or a
+        // drive-letter root `c:/`, `c:\`, or bare `c:`). B98.r10: `declare module "b:/block"`
+        // is rooted (TS2436) but `declare module "b:block"` is NOT (drive-letter without a
+        // following slash → not rooted, no error).
+        val isRelative = modulePath.startsWith("./") || modulePath.startsWith("../") ||
+            modulePath.startsWith(".\\") || modulePath.startsWith("..\\")
+        val isRooted = modulePath.startsWith("/") || modulePath.startsWith("\\") ||
+            (modulePath.length >= 2 && modulePath[1] == ':' && modulePath[0].isLetter() &&
+                (modulePath.length == 2 || modulePath[2] == '/' || modulePath[2] == '\\'))
+        if (isRelative || isRooted) {
+            val (line, character) = getLineAndCharacterOfPosition(spineSource, nameNode.pos)
+            diagnostics.add(Diagnostic(
+                message = "Ambient module declaration cannot specify relative module name.",
+                category = DiagnosticCategory.Error,
+                code = 2436,
+                fileName = spineFileName,
+                line = line,
+                character = character,
+                start = nameNode.pos,
+                length = (nameNode.rawText?.length ?: modulePath.length) + 2,
+            ))
+        }
     }
 
     /**
@@ -66240,90 +66500,12 @@ interface DataView {
     // Rest element with property name in binding patterns (TS2566)
     // -----------------------------------------------------------------------
 
-    private fun checkRestElementPropertyNames() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            checkRestElemPropNamesInStatements(result.sourceFile.statements, source, fileName)
-        }
-    }
-
-    private fun checkRestElemPropNamesInStatements(stmts: List<Statement>, source: String, fileName: String) {
-        for (stmt in stmts) checkRestElemPropNamesInStatement(stmt, source, fileName)
-    }
-
-    // ---- restParameterWithBindingPattern3: rest-param binding-pattern element checks ----
-
-    private fun checkRestBindingPatternElements() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            rbpeScanStmts(result.sourceFile.statements, source, fileName)
-        }
-    }
-
-    private fun rbpeScanStmts(stmts: List<Statement>, source: String, fileName: String) {
-        for (s in stmts) rbpeScanStmt(s, source, fileName)
-    }
-
-    private fun rbpeScanStmt(s: Statement, source: String, fileName: String) {
-        when (s) {
-            is FunctionDeclaration -> {
-                for (p in s.parameters) checkRestBindingParam(p, source, fileName)
-                s.body?.let { rbpeScanStmts(it.statements, source, fileName) }
-            }
-            is ClassDeclaration -> for (m in s.members) rbpeScanClassMember(m, source, fileName)
-            is VariableStatement -> for (d in s.declarationList.declarations) d.initializer?.let { rbpeScanExpr(it, source, fileName) }
-            is ExpressionStatement -> rbpeScanExpr(s.expression, source, fileName)
-            is Block -> rbpeScanStmts(s.statements, source, fileName)
-            is ModuleDeclaration -> (s.body as? ModuleBlock)?.let { rbpeScanStmts(it.statements, source, fileName) }
-            is IfStatement -> { rbpeScanStmt(s.thenStatement, source, fileName); s.elseStatement?.let { rbpeScanStmt(it, source, fileName) } }
-            is ForStatement -> rbpeScanStmt(s.statement, source, fileName)
-            is ForInStatement -> rbpeScanStmt(s.statement, source, fileName)
-            is ForOfStatement -> rbpeScanStmt(s.statement, source, fileName)
-            is WhileStatement -> rbpeScanStmt(s.statement, source, fileName)
-            is DoStatement -> rbpeScanStmt(s.statement, source, fileName)
-            is TryStatement -> {
-                rbpeScanStmts(s.tryBlock.statements, source, fileName)
-                s.catchClause?.let { rbpeScanStmts(it.block.statements, source, fileName) }
-                s.finallyBlock?.let { rbpeScanStmts(it.statements, source, fileName) }
-            }
-            is LabeledStatement -> rbpeScanStmt(s.statement, source, fileName)
-            else -> {}
-        }
-    }
-
-    private fun rbpeScanClassMember(m: ClassElement, source: String, fileName: String) {
-        when (m) {
-            is MethodDeclaration -> { for (p in m.parameters) checkRestBindingParam(p, source, fileName); m.body?.let { rbpeScanStmts(it.statements, source, fileName) } }
-            is Constructor -> { for (p in m.parameters) checkRestBindingParam(p, source, fileName); m.body?.let { rbpeScanStmts(it.statements, source, fileName) } }
-            is SetAccessor -> { for (p in m.parameters) checkRestBindingParam(p, source, fileName); m.body?.let { rbpeScanStmts(it.statements, source, fileName) } }
-            is GetAccessor -> m.body?.let { rbpeScanStmts(it.statements, source, fileName) }
-            is PropertyDeclaration -> m.initializer?.let { rbpeScanExpr(it, source, fileName) }
-            else -> {}
-        }
-    }
-
-    private fun rbpeScanExpr(e: Expression, source: String, fileName: String) {
-        when (e) {
-            is ArrowFunction -> {
-                for (p in e.parameters) checkRestBindingParam(p, source, fileName)
-                when (val b = e.body) {
-                    is Block -> rbpeScanStmts(b.statements, source, fileName)
-                    is Expression -> rbpeScanExpr(b, source, fileName)
-                    else -> {}
-                }
-            }
-            is FunctionExpression -> { for (p in e.parameters) checkRestBindingParam(p, source, fileName); e.body.let { rbpeScanStmts(it.statements, source, fileName) } }
-            is ParenthesizedExpression -> rbpeScanExpr(e.expression, source, fileName)
-            else -> {}
-        }
-    }
-
     /** Per-element checks for a REST parameter whose binding pattern is annotated with an
-     *  ArrayType/TupleType. Corpus-unique shape; purely AST-positional + simple displays. */
+     *  ArrayType/TupleType (TS2322/TS1186/TS2493). Corpus-unique shape; purely
+     *  AST-positional + simple displays. Called from the check spine's
+     *  Parameter dispatch since INV.4(b) batch 7 (the old statement/expression
+     *  walk pair is deleted — the spine widens coverage to the few parameter
+     *  owners it missed: object-literal methods, class expressions). */
     private fun checkRestBindingParam(p: Parameter, source: String, fileName: String) {
         if (!p.dotDotDotToken) return
         val pattern = p.name
@@ -66415,376 +66597,6 @@ interface DataView {
         ))
     }
 
-    private fun checkRestElemPropNamesInStatement(stmt: Statement, source: String, fileName: String) {
-        when (stmt) {
-            is VariableStatement -> for (d in stmt.declarationList.declarations) {
-                checkRestElemPropNamesInBinding(d.name, source, fileName)
-                d.initializer?.let { checkRestElemPropNamesInExpr(it, source, fileName) }
-            }
-            is ExpressionStatement -> checkRestElemPropNamesInExpr(stmt.expression, source, fileName)
-            is FunctionDeclaration -> {
-                for (p in stmt.parameters) checkRestElemPropNamesInBinding(p.name, source, fileName)
-                stmt.body?.let { checkRestElemPropNamesInStatements(it.statements, source, fileName) }
-            }
-            is ClassDeclaration -> for (m in stmt.members) when (m) {
-                is MethodDeclaration -> {
-                    for (p in m.parameters) checkRestElemPropNamesInBinding(p.name, source, fileName)
-                    m.body?.let { checkRestElemPropNamesInStatements(it.statements, source, fileName) }
-                }
-                is Constructor -> {
-                    for (p in m.parameters) checkRestElemPropNamesInBinding(p.name, source, fileName)
-                    m.body?.let { checkRestElemPropNamesInStatements(it.statements, source, fileName) }
-                }
-                is GetAccessor -> m.body?.let { checkRestElemPropNamesInStatements(it.statements, source, fileName) }
-                is SetAccessor -> {
-                    for (p in m.parameters) checkRestElemPropNamesInBinding(p.name, source, fileName)
-                    m.body?.let { checkRestElemPropNamesInStatements(it.statements, source, fileName) }
-                }
-                is PropertyDeclaration -> m.initializer?.let { checkRestElemPropNamesInExpr(it, source, fileName) }
-                else -> {}
-            }
-            is Block -> checkRestElemPropNamesInStatements(stmt.statements, source, fileName)
-            is IfStatement -> {
-                checkRestElemPropNamesInStatement(stmt.thenStatement, source, fileName)
-                stmt.elseStatement?.let { checkRestElemPropNamesInStatement(it, source, fileName) }
-            }
-            is ForStatement -> {
-                val init = stmt.initializer
-                if (init is VariableDeclarationList) for (d in init.declarations) checkRestElemPropNamesInBinding(d.name, source, fileName)
-                checkRestElemPropNamesInStatement(stmt.statement, source, fileName)
-            }
-            is ForInStatement -> {
-                val init = stmt.initializer
-                if (init is VariableDeclarationList) for (d in init.declarations) checkRestElemPropNamesInBinding(d.name, source, fileName)
-                checkRestElemPropNamesInStatement(stmt.statement, source, fileName)
-            }
-            is ForOfStatement -> {
-                val init = stmt.initializer
-                if (init is VariableDeclarationList) for (d in init.declarations) checkRestElemPropNamesInBinding(d.name, source, fileName)
-                checkRestElemPropNamesInStatement(stmt.statement, source, fileName)
-            }
-            is WhileStatement -> checkRestElemPropNamesInStatement(stmt.statement, source, fileName)
-            is DoStatement -> checkRestElemPropNamesInStatement(stmt.statement, source, fileName)
-            is SwitchStatement -> {
-                for (c in stmt.caseBlock) when (c) {
-                    is CaseClause -> checkRestElemPropNamesInStatements(c.statements, source, fileName)
-                    is DefaultClause -> checkRestElemPropNamesInStatements(c.statements, source, fileName)
-                    else -> {}
-                }
-            }
-            is TryStatement -> {
-                checkRestElemPropNamesInStatements(stmt.tryBlock.statements, source, fileName)
-                stmt.catchClause?.let { checkRestElemPropNamesInStatements(it.block.statements, source, fileName) }
-                stmt.finallyBlock?.let { checkRestElemPropNamesInStatements(it.statements, source, fileName) }
-            }
-            is LabeledStatement -> checkRestElemPropNamesInStatement(stmt.statement, source, fileName)
-            is ThrowStatement -> stmt.expression?.let { checkRestElemPropNamesInExpr(it, source, fileName) }
-            is ExportAssignment -> checkRestElemPropNamesInExpr(stmt.expression, source, fileName)
-            is ReturnStatement -> stmt.expression?.let { checkRestElemPropNamesInExpr(it, source, fileName) }
-            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { checkRestElemPropNamesInStatements(it.statements, source, fileName) }
-            else -> {}
-        }
-    }
-
-    private fun checkRestElemPropNamesInExpr(expr: Expression, source: String, fileName: String) {
-        when (expr) {
-            is ArrowFunction -> {
-                for (p in expr.parameters) checkRestElemPropNamesInBinding(p.name, source, fileName)
-                when (val body = expr.body) {
-                    is Block -> checkRestElemPropNamesInStatements(body.statements, source, fileName)
-                    is Expression -> checkRestElemPropNamesInExpr(body, source, fileName)
-                    else -> {}
-                }
-            }
-            is FunctionExpression -> {
-                for (p in expr.parameters) checkRestElemPropNamesInBinding(p.name, source, fileName)
-                expr.body.let { checkRestElemPropNamesInStatements(it.statements, source, fileName) }
-            }
-            is ClassExpression -> for (m in expr.members) when (m) {
-                is MethodDeclaration -> {
-                    for (p in m.parameters) checkRestElemPropNamesInBinding(p.name, source, fileName)
-                    m.body?.let { checkRestElemPropNamesInStatements(it.statements, source, fileName) }
-                }
-                is Constructor -> {
-                    for (p in m.parameters) checkRestElemPropNamesInBinding(p.name, source, fileName)
-                    m.body?.let { checkRestElemPropNamesInStatements(it.statements, source, fileName) }
-                }
-                is GetAccessor -> m.body?.let { checkRestElemPropNamesInStatements(it.statements, source, fileName) }
-                is SetAccessor -> {
-                    for (p in m.parameters) checkRestElemPropNamesInBinding(p.name, source, fileName)
-                    m.body?.let { checkRestElemPropNamesInStatements(it.statements, source, fileName) }
-                }
-                is PropertyDeclaration -> m.initializer?.let { checkRestElemPropNamesInExpr(it, source, fileName) }
-                else -> {}
-            }
-            is ParenthesizedExpression -> checkRestElemPropNamesInExpr(expr.expression, source, fileName)
-            is AsExpression -> checkRestElemPropNamesInExpr(expr.expression, source, fileName)
-            is TypeAssertionExpression -> checkRestElemPropNamesInExpr(expr.expression, source, fileName)
-            is SatisfiesExpression -> checkRestElemPropNamesInExpr(expr.expression, source, fileName)
-            is NonNullExpression -> checkRestElemPropNamesInExpr(expr.expression, source, fileName)
-            is BinaryExpression -> {
-                var cur: Expression = expr
-                val rightStack = ArrayDeque<Expression>()
-                while (cur is BinaryExpression) {
-                    rightStack.addLast(cur.right); cur = cur.left
-                }
-                // The left-most can be an Identifier for destructuring assignment — handled by BinaryExpression's right walk
-                // Object destructuring assignment shows up as BinaryExpression with `=` operator and ObjectLiteralExpression on left.
-                // Handle that case by checking each binary expression directly.
-                checkRestElemPropNamesInExpr(cur, source, fileName)
-                while (rightStack.isNotEmpty()) checkRestElemPropNamesInExpr(rightStack.removeLast(), source, fileName)
-            }
-            is ConditionalExpression -> {
-                checkRestElemPropNamesInExpr(expr.condition, source, fileName)
-                checkRestElemPropNamesInExpr(expr.whenTrue, source, fileName)
-                checkRestElemPropNamesInExpr(expr.whenFalse, source, fileName)
-            }
-            is CallExpression -> {
-                checkRestElemPropNamesInExpr(expr.expression, source, fileName)
-                for (a in expr.arguments) checkRestElemPropNamesInExpr(a, source, fileName)
-            }
-            is NewExpression -> {
-                checkRestElemPropNamesInExpr(expr.expression, source, fileName)
-                expr.arguments?.forEach { checkRestElemPropNamesInExpr(it, source, fileName) }
-            }
-            is PropertyAccessExpression -> checkRestElemPropNamesInExpr(expr.expression, source, fileName)
-            is ElementAccessExpression -> {
-                checkRestElemPropNamesInExpr(expr.expression, source, fileName)
-                checkRestElemPropNamesInExpr(expr.argumentExpression, source, fileName)
-            }
-            is ArrayLiteralExpression -> for (e in expr.elements) checkRestElemPropNamesInExpr(e, source, fileName)
-            is ObjectLiteralExpression -> for (p in expr.properties) when (p) {
-                is PropertyAssignment -> checkRestElemPropNamesInExpr(p.initializer, source, fileName)
-                is SpreadAssignment -> checkRestElemPropNamesInExpr(p.expression, source, fileName)
-                is MethodDeclaration -> {
-                    for (param in p.parameters) checkRestElemPropNamesInBinding(param.name, source, fileName)
-                    p.body?.let { checkRestElemPropNamesInStatements(it.statements, source, fileName) }
-                }
-                is GetAccessor -> p.body?.let { checkRestElemPropNamesInStatements(it.statements, source, fileName) }
-                is SetAccessor -> {
-                    for (param in p.parameters) checkRestElemPropNamesInBinding(param.name, source, fileName)
-                    p.body?.let { checkRestElemPropNamesInStatements(it.statements, source, fileName) }
-                }
-                else -> {}
-            }
-            is SpreadElement -> checkRestElemPropNamesInExpr(expr.expression, source, fileName)
-            is AwaitExpression -> checkRestElemPropNamesInExpr(expr.expression, source, fileName)
-            is YieldExpression -> expr.expression?.let { checkRestElemPropNamesInExpr(it, source, fileName) }
-            is VoidExpression -> checkRestElemPropNamesInExpr(expr.expression, source, fileName)
-            is DeleteExpression -> checkRestElemPropNamesInExpr(expr.expression, source, fileName)
-            is TypeOfExpression -> checkRestElemPropNamesInExpr(expr.expression, source, fileName)
-            is PrefixUnaryExpression -> checkRestElemPropNamesInExpr(expr.operand, source, fileName)
-            is PostfixUnaryExpression -> checkRestElemPropNamesInExpr(expr.operand, source, fileName)
-            is TemplateExpression -> for (span in expr.templateSpans) checkRestElemPropNamesInExpr(span.expression, source, fileName)
-            is TaggedTemplateExpression -> {
-                checkRestElemPropNamesInExpr(expr.tag, source, fileName)
-                if (expr.template is TemplateExpression) {
-                    for (span in (expr.template).templateSpans) checkRestElemPropNamesInExpr(span.expression, source, fileName)
-                }
-            }
-            is CommaListExpression -> for (e in expr.elements) checkRestElemPropNamesInExpr(e, source, fileName)
-            else -> {}
-        }
-    }
-
-    private fun checkRestElemPropNamesInBinding(node: Node, source: String, fileName: String) {
-        when (node) {
-            is ObjectBindingPattern -> for (elem in node.elements) {
-                // TS2566: rest element cannot have a property name — e.g., { ...a: b }
-                if (elem.dotDotDotToken && elem.propertyName != null) {
-                    // The squiggle is at the binding name (after the colon), not the property name
-                    val nameNode = elem.name
-                    val start = when (nameNode) {
-                        is Identifier -> nameNode.pos
-                        else -> nameNode.pos
-                    }
-                    val length = when (nameNode) {
-                        is Identifier -> nameNode.text.length
-                        else -> 1
-                    }
-                    val (line, character) = getLineAndCharacterOfPosition(source, start)
-                    diagnostics.add(Diagnostic(
-                        message = "A rest element cannot have a property name.",
-                        category = DiagnosticCategory.Error,
-                        code = 2566,
-                        fileName = fileName,
-                        line = line,
-                        character = character,
-                        start = start,
-                        length = length,
-                    ))
-                }
-                // Recurse into nested binding patterns
-                checkRestElemPropNamesInBinding(elem.name, source, fileName)
-            }
-            is ArrayBindingPattern -> for (elem in node.elements) {
-                if (elem is BindingElement) checkRestElemPropNamesInBinding(elem.name, source, fileName)
-            }
-            else -> {}
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // Implementation in ambient context (TS1183)
-    // -----------------------------------------------------------------------
-
-    private fun checkAmbientImplementation() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            checkAmbientInStatements(result.sourceFile.statements, source, fileName, isAmbient = false)
-        }
-    }
-
-    // TS2436: Ambient module declaration cannot specify relative module name.
-    // Only fires in script context (non-module files). Module augmentation in module files is allowed.
-    private fun checkAmbientRelativeModuleNames() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            val stmts = result.sourceFile.statements
-            // Only check script files (not module files — module augmentation allows relative paths)
-            if (isModuleFile(stmts)) continue
-            for (stmt in stmts) {
-                if (stmt !is ModuleDeclaration) continue
-                if (ModifierFlag.Declare !in stmt.modifiers) continue
-                val nameNode = stmt.name as? StringLiteralNode ?: continue
-                val modulePath = nameNode.text
-                // A module name is "relative" (per TS isExternalModuleNameRelative) if it is
-                // path-relative (`./`, `../`) OR a rooted disk path (POSIX/UNC `/`/`\`, or a
-                // drive-letter root `c:/`, `c:\`, or bare `c:`). B98.r10: `declare module "b:/block"`
-                // is rooted (TS2436) but `declare module "b:block"` is NOT (drive-letter without a
-                // following slash → not rooted, no error).
-                val isRelative = modulePath.startsWith("./") || modulePath.startsWith("../") ||
-                    modulePath.startsWith(".\\") || modulePath.startsWith("..\\")
-                val isRooted = modulePath.startsWith("/") || modulePath.startsWith("\\") ||
-                    (modulePath.length >= 2 && modulePath[1] == ':' && modulePath[0].isLetter() &&
-                        (modulePath.length == 2 || modulePath[2] == '/' || modulePath[2] == '\\'))
-                if (isRelative || isRooted) {
-                    val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
-                    diagnostics.add(Diagnostic(
-                        message = "Ambient module declaration cannot specify relative module name.",
-                        category = DiagnosticCategory.Error,
-                        code = 2436,
-                        fileName = fileName,
-                        line = line,
-                        character = character,
-                        start = nameNode.pos,
-                        length = (nameNode.rawText?.length ?: modulePath.length) + 2,
-                    ))
-                }
-            }
-        }
-    }
-
-    private fun checkAmbientInStatements(stmts: List<Statement>, source: String, fileName: String, isAmbient: Boolean) {
-        for (stmt in stmts) checkAmbientInStatement(stmt, source, fileName, isAmbient)
-    }
-
-    private fun checkAmbientInStatement(stmt: Statement, source: String, fileName: String, isAmbient: Boolean) {
-        val isDeclare = when (stmt) {
-            is ClassDeclaration -> ModifierFlag.Declare in stmt.modifiers
-            is FunctionDeclaration -> ModifierFlag.Declare in stmt.modifiers
-            is ModuleDeclaration -> ModifierFlag.Declare in stmt.modifiers
-            else -> false
-        }
-        val ambient = isAmbient || isDeclare
-
-        when (stmt) {
-            is ClassDeclaration -> {
-                for (m in stmt.members) {
-                    when (m) {
-                        is MethodDeclaration -> {
-                            if (ambient && m.body != null) {
-                                emitTS1183(m.body, source, fileName)
-                            }
-                            if (!ambient) m.body?.let { checkAmbientInStatements(it.statements, source, fileName, false) }
-                        }
-                        is Constructor -> {
-                            if (ambient && m.body != null) {
-                                emitTS1183(m.body, source, fileName)
-                            }
-                            if (!ambient) m.body?.let { checkAmbientInStatements(it.statements, source, fileName, false) }
-                        }
-                        is GetAccessor -> {
-                            if (ambient && m.body != null) {
-                                emitTS1183(m.body, source, fileName)
-                            }
-                            if (!ambient) m.body?.let { checkAmbientInStatements(it.statements, source, fileName, false) }
-                        }
-                        is SetAccessor -> {
-                            if (ambient && m.body != null) {
-                                emitTS1183(m.body, source, fileName)
-                            }
-                            if (!ambient) m.body?.let { checkAmbientInStatements(it.statements, source, fileName, false) }
-                        }
-                        else -> {}
-                    }
-                }
-            }
-            is FunctionDeclaration -> {
-                if (ambient && stmt.body != null) {
-                    emitTS1183(stmt.body, source, fileName)
-                }
-                if (!ambient) stmt.body?.let { checkAmbientInStatements(it.statements, source, fileName, false) }
-            }
-            is InterfaceDeclaration -> {
-                // Interface members are always ambient
-                for (m in stmt.members) {
-                    when (m) {
-                        is GetAccessor -> if (m.body != null) emitTS1183(m.body, source, fileName)
-                        is SetAccessor -> if (m.body != null) emitTS1183(m.body, source, fileName)
-                        is MethodDeclaration -> if (m.body != null) emitTS1183(m.body, source, fileName)
-                        else -> {}
-                    }
-                }
-            }
-            is TypeAliasDeclaration -> {
-                // Type literal members with bodies — walk the type
-                checkAmbientInType(stmt.type, source, fileName)
-            }
-            is ModuleDeclaration -> {
-                // TS2436 handled separately in checkAmbientRelativeModuleNames()
-                (stmt.body as? ModuleBlock)?.let { checkAmbientInStatements(it.statements, source, fileName, ambient) }
-            }
-            is Block -> checkAmbientInStatements(stmt.statements, source, fileName, isAmbient)
-            is IfStatement -> {
-                checkAmbientInStatement(stmt.thenStatement, source, fileName, isAmbient)
-                stmt.elseStatement?.let { checkAmbientInStatement(it, source, fileName, isAmbient) }
-            }
-            is ForStatement -> checkAmbientInStatement(stmt.statement, source, fileName, isAmbient)
-            is ForInStatement -> checkAmbientInStatement(stmt.statement, source, fileName, isAmbient)
-            is ForOfStatement -> checkAmbientInStatement(stmt.statement, source, fileName, isAmbient)
-            is WhileStatement -> checkAmbientInStatement(stmt.statement, source, fileName, isAmbient)
-            is DoStatement -> checkAmbientInStatement(stmt.statement, source, fileName, isAmbient)
-            is SwitchStatement -> {
-                for (c in stmt.caseBlock) when (c) {
-                    is CaseClause -> checkAmbientInStatements(c.statements, source, fileName, isAmbient)
-                    is DefaultClause -> checkAmbientInStatements(c.statements, source, fileName, isAmbient)
-                    else -> {}
-                }
-            }
-            is TryStatement -> {
-                checkAmbientInStatements(stmt.tryBlock.statements, source, fileName, isAmbient)
-                stmt.catchClause?.let { checkAmbientInStatements(it.block.statements, source, fileName, isAmbient) }
-                stmt.finallyBlock?.let { checkAmbientInStatements(it.statements, source, fileName, isAmbient) }
-            }
-            is LabeledStatement -> checkAmbientInStatement(stmt.statement, source, fileName, isAmbient)
-            is ThrowStatement -> stmt.expression?.let { checkAmbientInExpr(it, source, fileName) }
-            is ExportAssignment -> checkAmbientInExpr(stmt.expression, source, fileName)
-            is VariableStatement -> {
-                for (d in stmt.declarationList.declarations) {
-                    d.initializer?.let { checkAmbientInExpr(it, source, fileName) }
-                }
-            }
-            is ExpressionStatement -> checkAmbientInExpr(stmt.expression, source, fileName)
-            is ReturnStatement -> stmt.expression?.let { checkAmbientInExpr(it, source, fileName) }
-            else -> {}
-        }
-    }
-
     private fun checkAmbientInType(type: TypeNode, source: String, fileName: String) {
         if (type is TypeLiteral) {
             for (m in type.members) {
@@ -66795,91 +66607,6 @@ interface DataView {
                     else -> {}
                 }
             }
-        }
-    }
-
-    private fun checkAmbientInExpr(expr: Expression, source: String, fileName: String) {
-        when (expr) {
-            is ClassExpression -> {
-                // Class expressions themselves are not ambient
-                for (m in expr.members) {
-                    when (m) {
-                        is MethodDeclaration -> m.body?.let { checkAmbientInStatements(it.statements, source, fileName, false) }
-                        is Constructor -> m.body?.let { checkAmbientInStatements(it.statements, source, fileName, false) }
-                        // round 42 iter8: Get/SetAccessor body recursion + PropertyDeclaration init
-                        is GetAccessor -> m.body?.let { checkAmbientInStatements(it.statements, source, fileName, false) }
-                        is SetAccessor -> m.body?.let { checkAmbientInStatements(it.statements, source, fileName, false) }
-                        is PropertyDeclaration -> m.initializer?.let { checkAmbientInExpr(it, source, fileName) }
-                        else -> {}
-                    }
-                }
-            }
-            is ArrowFunction -> when (val body = expr.body) {
-                is Block -> checkAmbientInStatements(body.statements, source, fileName, false)
-                is Expression -> checkAmbientInExpr(body, source, fileName)
-                else -> {}
-            }
-            is FunctionExpression -> expr.body.let { checkAmbientInStatements(it.statements, source, fileName, false) }
-            is ParenthesizedExpression -> checkAmbientInExpr(expr.expression, source, fileName)
-            is AsExpression -> checkAmbientInExpr(expr.expression, source, fileName)
-            is TypeAssertionExpression -> checkAmbientInExpr(expr.expression, source, fileName)
-            is SatisfiesExpression -> checkAmbientInExpr(expr.expression, source, fileName)
-            is NonNullExpression -> checkAmbientInExpr(expr.expression, source, fileName)
-            is BinaryExpression -> {
-                var cur: Expression = expr
-                val rightStack = ArrayDeque<Expression>()
-                while (cur is BinaryExpression) { rightStack.addLast(cur.right); cur = cur.left }
-                checkAmbientInExpr(cur, source, fileName)
-                while (rightStack.isNotEmpty()) checkAmbientInExpr(rightStack.removeLast(), source, fileName)
-            }
-            is ConditionalExpression -> {
-                checkAmbientInExpr(expr.condition, source, fileName)
-                checkAmbientInExpr(expr.whenTrue, source, fileName)
-                checkAmbientInExpr(expr.whenFalse, source, fileName)
-            }
-            is CallExpression -> {
-                checkAmbientInExpr(expr.expression, source, fileName)
-                for (arg in expr.arguments) checkAmbientInExpr(arg, source, fileName)
-            }
-            is NewExpression -> {
-                checkAmbientInExpr(expr.expression, source, fileName)
-                expr.arguments?.forEach { checkAmbientInExpr(it, source, fileName) }
-            }
-            is PropertyAccessExpression -> checkAmbientInExpr(expr.expression, source, fileName)
-            is ElementAccessExpression -> {
-                checkAmbientInExpr(expr.expression, source, fileName)
-                checkAmbientInExpr(expr.argumentExpression, source, fileName)
-            }
-            is ArrayLiteralExpression -> for (e in expr.elements) checkAmbientInExpr(e, source, fileName)
-            is ObjectLiteralExpression -> for (p in expr.properties) {
-                when (p) {
-                    is PropertyAssignment -> checkAmbientInExpr(p.initializer, source, fileName)
-                    is SpreadAssignment -> checkAmbientInExpr(p.expression, source, fileName)
-                    is MethodDeclaration -> p.body?.let { checkAmbientInStatements(it.statements, source, fileName, false) }
-                    is GetAccessor -> p.body?.let { checkAmbientInStatements(it.statements, source, fileName, false) }
-                    is SetAccessor -> p.body?.let { checkAmbientInStatements(it.statements, source, fileName, false) }
-                    else -> {}
-                }
-            }
-            is SpreadElement -> checkAmbientInExpr(expr.expression, source, fileName)
-            is AwaitExpression -> checkAmbientInExpr(expr.expression, source, fileName)
-            is YieldExpression -> expr.expression?.let { checkAmbientInExpr(it, source, fileName) }
-            is PrefixUnaryExpression -> checkAmbientInExpr(expr.operand, source, fileName)
-            is PostfixUnaryExpression -> checkAmbientInExpr(expr.operand, source, fileName)
-            is VoidExpression -> checkAmbientInExpr(expr.expression, source, fileName)
-            is DeleteExpression -> checkAmbientInExpr(expr.expression, source, fileName)
-            is TypeOfExpression -> checkAmbientInExpr(expr.expression, source, fileName)
-            is TemplateExpression -> for (span in expr.templateSpans) checkAmbientInExpr(span.expression, source, fileName)
-            // round 42 iter8: TaggedTemplateExpression — recurse into tag + template spans
-            is TaggedTemplateExpression -> {
-                checkAmbientInExpr(expr.tag, source, fileName)
-                val template = expr.template
-                if (template is TemplateExpression) {
-                    for (span in template.templateSpans) checkAmbientInExpr(span.expression, source, fileName)
-                }
-            }
-            is CommaListExpression -> for (e in expr.elements) checkAmbientInExpr(e, source, fileName)
-            else -> {}
         }
     }
 

@@ -100,10 +100,50 @@ faithfully to the few positions it missed (parameter defaults). VERIFIED:
 27 pins written FIRST and run against the OLD walkers (all green), then the
 migration — suite 10,443 → 10,470 (+27 Inv4SpineBatch6Test, 0 regressions);
 listAll error lines IDENTICAL on ALL 8 profiles (517a vs 516b); bench in
-band (27,212 ms self, +1.3% = noise; 46 errors unchanged). Session total: 3 passes, 9 walker funs (~453 lines) deleted, 3 init
-slots removed, suite +27. NEXT: INV.4(b) batch 7 —
-checkRestElementPropertyNames + checkRestBindingPatternElements +
-checkAmbientImplementation + checkAmbientRelativeModuleNames.**
+band (27,212 ms self, +1.3% = noise; 46 errors unchanged). BATCH 7 same
+session: FOUR more passes migrated (15 walker funs, ~551 lines deleted, 4
+init slots removed): (1) `checkRestElementPropertyNames` (TS2566) — a
+pure-syntax grammar rule became an ObjectBindingPattern-enter handler; the
+manual nested-pattern recursion dissolves (every nested pattern gets its own
+enter) and coverage widens faithfully to catch-clause patterns (pinned).
+(2) `checkRestBindingPatternElements` (TS1186/TS2493/TS2322) —
+`checkRestBindingParam` + its three emission helpers retained verbatim as
+the Parameter-dispatch core (third Parameter handler); the old
+statement/expression scan pair deleted; coverage widens to object-literal
+methods and class-expression members (pinned). (3) `checkAmbientImplementation`
+(TS1183) — the most intricate reach reconstruction so far
+(`spineAmbientImplContext`): an AMBIENT FunctionDeclaration / class-DECLARATION
+member body was never descended (its `{` already reported) — own-`declare`
+returns null immediately and a declare-module found ABOVE such a body
+returns null too (the `passedDeclBody` flag); arrow / fn-expr /
+class-EXPRESSION-member / objlit-method bodies RESET ambient to false
+UNCONDITIONALLY (the old expression walk descended them with `false` even
+under ambient — so `passedDeclBody` must be CLEARED at those boundaries, or
+a fn nested arrow-deep inside a declare-module wrongly nulls); statement
+containers are position-checked (if-conditions, for-headers, switch
+subjects, case expressions stay unreached) while expressions pass through
+generically (the old expression walk was comprehensive). PIN CORRECTION
+found pre-migration: `interface I { m() { } }` draws NO TS1183 from the old
+walker — the interface member parse never STORES a body (the TS1246
+situation again), so the interface arm is de-facto dormant and migrated
+as-is. (4) `checkAmbientRelativeModuleNames` (TS2436) — the old
+non-recursive top-level-of-script-file loop became a ModuleDeclaration-enter
+handler gated on `parent is SourceFile` + `!spineFileIsModule`. VERIFIED:
+21 pins run against the OLD walkers first (19 green; the 2 widening pins
+fail pre-migration as expected, proving them genuine); suite
+10,470 → 10,491 (+21 Inv4SpineBatch7Test, 0 regressions); listAll error
+lines IDENTICAL on ALL 8 profiles (517b vs 517a). BENCH-DRIFT episode
+(round-493 rule vindicated): single-run bench read +11.7% then +16.1% ON
+THE SAME BINARY — the box had degraded to 864 MB free after the session's
+JVM churn (two suites + 16 listAll runs + a foreign project's 2.3 GB gradle
+daemon); after `./gradlew --stop` + kotlin-daemon kill (6.3 GB available),
+the INTERLEAVED 3-pair A/B measured batch-7 vs batch-6 at −461/−801/+408 ms
+(mean −285 ms) = NEUTRAL, both binaries back at the ~26 s session-start
+band. The two drift-inflated TSV rows (30.4 s / 35.3 s) are artifacts —
+trust the interleaved verdict. Session total: SEVEN passes, 24 walker funs
+(~1,004 lines) deleted, 7 init slots removed, suite +48. NEXT: INV.4(b)
+batch 8 — re-measure --passTiming for the next cost-ordered candidates;
+checkMixinClassConstructor stays (d).**
 
 **Round 516 (2026-07-14) — INV.4(b) batch 4: the accessor-grammar family +
 TS1014/TS1113/TS1246 migrated onto the spine; 17 walker functions (~733 lines)
@@ -1215,11 +1255,28 @@ interrupt the arc).
     `listOf(stmt)` = the old fresh-map wraps). 9 walker funs (~453 lines)
     deleted, 3 init slots removed. Suite +27 (Inv4SpineBatch6Test, pins run
     against the OLD walkers first), listAll error lines identical on ALL 8
-    profiles, bench in band. NEXT batches: batch-7 candidates —
-    checkRestElementPropertyNames + checkRestBindingPatternElements (TS2566/
-    TS1186/TS2493 statement+expr walk pairs), checkAmbientImplementation
-    (TS1183), checkAmbientRelativeModuleNames (TS2436);
-    checkMixinClassConstructor is TP-scope-stateful — (d) territory.
+    profiles, bench in band. Batch 7 DONE same round: checkRestElementPropertyNames
+    (TS2566 — pure-syntax, ObjectBindingPattern-enter handler; widened
+    faithfully to catch-clause patterns, each nested pattern gets its own
+    enter) + checkRestBindingPatternElements (TS1186/TS2493/TS2322 —
+    `checkRestBindingParam` retained as the Parameter-dispatch core; widened
+    to object-literal-method/class-expression params) +
+    checkAmbientImplementation (TS1183 — the most intricate reach walk so
+    far, `spineAmbientImplContext`: ambient fn/class-member bodies were never
+    descended (own-declare → null + the [passedDeclBody] declare-module-above
+    rule), while arrow/fn-expr/class-EXPRESSION-member/objlit-method bodies
+    RESET ambient unconditionally (passedDeclBody cleared — the expression
+    walk descended them with false even under ambient); statement containers
+    position-checked (conditions/for-headers/switch-subjects/case-exprs
+    unreached), expressions pass generically; interface arm is de-facto
+    dormant — the parse drops interface method bodies, cf. the TS1246 note) +
+    checkAmbientRelativeModuleNames (TS2436 — top-level-of-script-file gate =
+    a SourceFile parent check). 15 walker funs (~551 lines) deleted, 4 init
+    slots removed. Suite +21 (Inv4SpineBatch7Test — 19 pre-verified against
+    the OLD walkers, 2 widening pins fail pre-migration as expected). NEXT
+    batches: re-measure --passTiming; candidates from the remaining
+    zero-typing grammar walks; checkMixinClassConstructor is
+    TP-scope-stateful — (d) territory.
   - [ ] **INV.4(c) The name-resolution pair.** checkUnresolvedNames (846 ms) +
     checkTypeUsedAsValue (734 ms): fold their private NameScope chains into
     spine-maintained authoritative lexical state backed by the INV.2(c)
