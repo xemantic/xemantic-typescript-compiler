@@ -2399,8 +2399,9 @@ class Checker(
         // B98.r83: TS2332 + TS2683 for `this` referenced in an enum-member initializer
         // (`enum E { A = this }`), top-level or nested inside a namespace.
         pass("checkThisInEnumMembers") { checkThisInEnumMembers() }
-        // 23. Check duplicate object literal properties (TS1117)
-        pass("checkDuplicateObjectLiteralProperties") { checkDuplicateObjectLiteralProperties() }
+        // 23. TS1117/TS1118/TS2300 (duplicate object literal properties)
+        // migrated to the check spine (INV.4(b) batch 13) — see
+        // spineCheckObjLitDuplicates.
         // 23b. Check tuple destructuring bounds (TS2493) for empty-literal sources
         pass("checkTupleDestructuringBounds") { checkTupleDestructuringBounds() }
         // 24. Check super called before this in derived constructors (TS17009)
@@ -2431,8 +2432,9 @@ class Checker(
         // (destructuring declaration without initializer) migrated to the check
         // spine (INV.4(b) batch 5) — see spineCheckConstInitializer /
         // spineCheckDestructuringInitializer.
-        // 29. Check reserved words in wrong context (TS1359)
-        pass("checkReservedWordIdentifiers") { checkReservedWordIdentifiers() }
+        // 29. TS1359 (reserved words in wrong context) migrated to the check
+        // spine (INV.4(b) batch 13) — see spineCheckAsyncAwaitParams /
+        // spineCheckReservedEnumName.
         // 31. Check for merge conflict markers (TS1185)
         pass("checkConflictMarkers") { checkConflictMarkers() }
         // 32. Check module=none with imports/exports (TS1148)
@@ -17535,10 +17537,17 @@ class Checker(
             is MethodDeclaration -> {
                 spineCheckReservedWordInterfaceParams(node)
                 spineCheckParamForwardRefs(node.parameters, node.body)
+                spineCheckAsyncAwaitParams(node.modifiers, node.parameters)
             }
             is Constructor -> spineCheckParamForwardRefs(node.parameters, node.body)
-            is ArrowFunction -> spineCheckParamForwardRefs(node.parameters, node.body)
-            is FunctionExpression -> spineCheckParamForwardRefs(node.parameters, node.body)
+            is ArrowFunction -> {
+                spineCheckParamForwardRefs(node.parameters, node.body)
+                spineCheckAsyncAwaitParams(node.modifiers, node.parameters)
+            }
+            is FunctionExpression -> {
+                spineCheckParamForwardRefs(node.parameters, node.body)
+                spineCheckAsyncAwaitParams(node.modifiers, node.parameters)
+            }
             is Parameter -> {
                 spineCheckRestParam(node)
                 spineCheckRestParamLast(node)
@@ -17549,7 +17558,10 @@ class Checker(
                 spineCheckParamInitNonImpl(node)
             }
             is ObjectBindingPattern -> spineCheckRestElemPropName(node)
-            is ObjectLiteralExpression -> spineCheckObjLitModifiers(node)
+            is ObjectLiteralExpression -> {
+                spineCheckObjLitModifiers(node)
+                spineCheckObjLitDuplicates(node)
+            }
             is VariableDeclaration -> {
                 spineCollectObjLitVar(node)
                 spineCheckConstInitializer(node)
@@ -17598,6 +17610,7 @@ class Checker(
                 spineCheckDupModifiers(node)
                 spineCheckAmbientImplFn(node)
                 spineCheckParamForwardRefs(node.parameters, node.body)
+                spineCheckAsyncAwaitParams(node.modifiers, node.parameters)
             }
             is VariableStatement -> {
                 spineCheckDupModifiers(node)
@@ -17606,6 +17619,7 @@ class Checker(
             is EnumDeclaration -> {
                 spineCheckDupModifiers(node)
                 spineCheckAmbientEnumInitializers(node)
+                spineCheckReservedEnumName(node)
             }
             is TypeAliasDeclaration -> {
                 spineCheckDupModifiers(node)
@@ -17878,6 +17892,86 @@ class Checker(
                     }
                 }
             }
+        }
+    }
+
+    /**
+     * TS1117/TS1118/TS2300: duplicate object-literal members — migrated from
+     * the deleted `checkDuplicateObjectLiteralProperties` /
+     * `walkForObjectLiterals` / `walkNodeForObjectLiterals` walk family
+     * (INV.4(b) batch 13). [checkObjectLiteralDuplicates] stays the
+     * per-literal core (tsc checkGrammarObjectLiteralExpression runs per
+     * literal, position independent). The old walk's
+     * destructuring-assignment-LHS skip is reproduced by
+     * [spineObjLitInDestructuringLhs]. Faithful reach widenings: ternary
+     * CONDITIONS, parameter defaults, for-header positions, object-literal
+     * METHOD bodies, and a default VALUE inside a destructuring pattern
+     * (`({q = {a,a}} = o)` — the old walk skipped the whole LHS subtree; tsc
+     * checks a default value as a plain literal).
+     */
+    private fun spineCheckObjLitDuplicates(node: ObjectLiteralExpression) {
+        if (spineIsDts) return
+        if (spineObjLitInDestructuringLhs(node)) return
+        checkObjectLiteralDuplicates(node, spineSource, spineFileName)
+    }
+
+    /**
+     * True when [node] is (part of) a destructuring-assignment PATTERN —
+     * duplicate target properties are legal JS there (`({a: x, a: y} = obj)`),
+     * mirroring tsc's inDestructuringPattern/isAssignmentTarget gate. A
+     * came-from-child parent walk: climb through pattern-position parents
+     * (object/array literals, a PropertyAssignment when the child is its
+     * INITIALIZER — `{a: <pattern>}`, spread positions) and answer true iff a
+     * `=` BinaryExpression is reached with the climbed child as its LEFT.
+     * A ShorthandPropertyAssignment's objectAssignmentInitializer (a default
+     * VALUE) and any other parent kind terminate the climb — those positions
+     * are plain expressions tsc checks normally.
+     */
+    private fun spineObjLitInDestructuringLhs(node: ObjectLiteralExpression): Boolean {
+        var child: Node = node
+        var cur = (node as NodeBase).parent
+        while (cur != null) {
+            when (cur) {
+                is BinaryExpression ->
+                    return cur.operator == SyntaxKind.Equals && cur.left === child
+                is ObjectLiteralExpression, is ArrayLiteralExpression,
+                is SpreadAssignment, is SpreadElement -> {}
+                is PropertyAssignment -> if (cur.initializer !== child) return false
+                else -> return false
+            }
+            child = cur
+            cur = (cur as NodeBase).parent
+        }
+        return false
+    }
+
+    /**
+     * TS1359 (`await` as an ASYNC function-like's parameter name) — migrated
+     * from the deleted `checkReservedWordIdentifiers` / `walkForReservedWords`
+     * / `walkForReservedWordsInExpr` walk family (INV.4(b) batch 13).
+     * [checkAwaitParams] stays the per-signature core; the spine dispatches
+     * it from every async function-like's enter (position-independent tsc
+     * grammar). Faithful widenings: class property-initializer arrows,
+     * new-expression var initializers, and arrows nested in a var-init
+     * arrow's expression body (the old statement walk checked a var-init
+     * arrow's params but never descended its body).
+     */
+    private fun spineCheckAsyncAwaitParams(modifiers: Set<ModifierFlag>, params: List<Parameter>) {
+        if (spineIsDts) return
+        if (ModifierFlag.Async !in modifiers) return
+        checkAwaitParams(params, spineSource, spineFileName)
+    }
+
+    /**
+     * TS1359: an enum whose NAME is a reserved word (`void`/`await`/`yield`)
+     * — the EnumDeclaration leg of the deleted `checkReservedWordIdentifiers`
+     * family (INV.4(b) batch 13). Position independent.
+     */
+    private fun spineCheckReservedEnumName(node: EnumDeclaration) {
+        if (spineIsDts) return
+        val name = node.name.text
+        if (name == "void" || name == "await" || name == "yield") {
+            emitTS1359(node.name, spineSource, spineFileName, name)
         }
     }
 
@@ -56213,161 +56307,6 @@ interface DataView {
     // Duplicate object literal property checking (TS1117)
     // -----------------------------------------------------------------------
 
-    private fun checkDuplicateObjectLiteralProperties() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            walkForObjectLiterals(result.sourceFile.statements, source, fileName)
-        }
-    }
-
-    private fun walkForObjectLiterals(statements: List<Statement>, source: String, fileName: String) {
-        for (stmt in statements) {
-            walkNodeForObjectLiterals(stmt, source, fileName)
-        }
-    }
-
-    private fun walkNodeForObjectLiterals(node: Node, source: String, fileName: String, depth: Int = 0) {
-        if (depth > 100) return
-        when (node) {
-            is ObjectLiteralExpression -> {
-                checkObjectLiteralDuplicates(node, source, fileName)
-                // Also recurse into property values
-                for (prop in node.properties) {
-                    when (prop) {
-                        is PropertyAssignment -> walkNodeForObjectLiterals(prop.initializer, source, fileName, depth + 1)
-                        is SpreadAssignment -> walkNodeForObjectLiterals(prop.expression, source, fileName, depth + 1)
-                        else -> {}
-                    }
-                }
-            }
-            // Skip the left side of assignment expressions (destructuring patterns)
-            // but do check the right side
-            is VariableStatement -> {
-                for (decl in node.declarationList.declarations) {
-                    decl.initializer?.let { walkNodeForObjectLiterals(it, source, fileName, depth + 1) }
-                }
-            }
-            is ExpressionStatement -> walkNodeForObjectLiterals(node.expression, source, fileName, depth + 1)
-            is ReturnStatement -> node.expression?.let { walkNodeForObjectLiterals(it, source, fileName, depth + 1) }
-            is FunctionDeclaration -> node.body?.let { walkForObjectLiterals(it.statements, source, fileName) }
-            is ClassDeclaration -> {
-                for (member in node.members) {
-                    when (member) {
-                        is MethodDeclaration -> member.body?.let { walkForObjectLiterals(it.statements, source, fileName) }
-                        is Constructor -> member.body?.let { walkForObjectLiterals(it.statements, source, fileName) }
-                        is GetAccessor -> member.body?.let { walkForObjectLiterals(it.statements, source, fileName) }
-                        is SetAccessor -> member.body?.let { walkForObjectLiterals(it.statements, source, fileName) }
-                        is PropertyDeclaration -> member.initializer?.let { walkNodeForObjectLiterals(it, source, fileName, depth + 1) }
-                        else -> {}
-                    }
-                }
-            }
-            is Block -> walkForObjectLiterals(node.statements, source, fileName)
-            is IfStatement -> {
-                walkNodeForObjectLiterals(node.thenStatement, source, fileName, depth + 1)
-                node.elseStatement?.let { walkNodeForObjectLiterals(it, source, fileName, depth + 1) }
-            }
-            is ForStatement -> walkNodeForObjectLiterals(node.statement, source, fileName, depth + 1)
-            is ForInStatement -> walkNodeForObjectLiterals(node.statement, source, fileName, depth + 1)
-            is ForOfStatement -> walkNodeForObjectLiterals(node.statement, source, fileName, depth + 1)
-            is WhileStatement -> walkNodeForObjectLiterals(node.statement, source, fileName, depth + 1)
-            is DoStatement -> walkNodeForObjectLiterals(node.statement, source, fileName, depth + 1)
-            is SwitchStatement -> {
-                for (clause in node.caseBlock) {
-                    when (clause) {
-                        is CaseClause -> walkForObjectLiterals(clause.statements, source, fileName)
-                        is DefaultClause -> walkForObjectLiterals(clause.statements, source, fileName)
-                        else -> {}
-                    }
-                }
-            }
-            is TryStatement -> {
-                walkForObjectLiterals(node.tryBlock.statements, source, fileName)
-                node.catchClause?.block?.let { walkForObjectLiterals(it.statements, source, fileName) }
-                node.finallyBlock?.let { walkForObjectLiterals(it.statements, source, fileName) }
-            }
-            is ArrowFunction -> {
-                when (val body = node.body) {
-                    is Block -> walkForObjectLiterals(body.statements, source, fileName)
-                    else -> walkNodeForObjectLiterals(body, source, fileName, depth + 1)
-                }
-            }
-            is FunctionExpression -> node.body.let { walkForObjectLiterals(it.statements, source, fileName) }
-            is ParenthesizedExpression -> walkNodeForObjectLiterals(node.expression, source, fileName, depth + 1)
-            is BinaryExpression -> {
-                // Skip left side of assignment if it's a destructuring pattern
-                if (node.operator == SyntaxKind.Equals && (node.left is ObjectLiteralExpression || node.left is ArrayLiteralExpression)) {
-                    // Only recurse into the right side
-                    walkNodeForObjectLiterals(node.right, source, fileName, depth + 1)
-                } else {
-                    walkNodeForObjectLiterals(node.left, source, fileName, depth + 1)
-                    walkNodeForObjectLiterals(node.right, source, fileName, depth + 1)
-                }
-            }
-            is ConditionalExpression -> {
-                walkNodeForObjectLiterals(node.whenTrue, source, fileName, depth + 1)
-                walkNodeForObjectLiterals(node.whenFalse, source, fileName, depth + 1)
-            }
-            is CallExpression -> {
-                walkNodeForObjectLiterals(node.expression, source, fileName, depth + 1)
-                node.arguments.forEach { walkNodeForObjectLiterals(it, source, fileName, depth + 1) }
-            }
-            is NewExpression -> {
-                node.arguments?.forEach { walkNodeForObjectLiterals(it, source, fileName, depth + 1) }
-            }
-            is ArrayLiteralExpression -> {
-                node.elements.forEach { walkNodeForObjectLiterals(it, source, fileName, depth + 1) }
-            }
-            is PropertyAccessExpression -> walkNodeForObjectLiterals(node.expression, source, fileName, depth + 1)
-            is ElementAccessExpression -> {
-                walkNodeForObjectLiterals(node.expression, source, fileName, depth + 1)
-                walkNodeForObjectLiterals(node.argumentExpression, source, fileName, depth + 1)
-            }
-            is TemplateExpression -> {
-                node.templateSpans.forEach { walkNodeForObjectLiterals(it.expression, source, fileName, depth + 1) }
-            }
-            is TaggedTemplateExpression -> {
-                walkNodeForObjectLiterals(node.tag, source, fileName, depth + 1)
-                (node.template as? TemplateExpression)?.templateSpans?.forEach {
-                    walkNodeForObjectLiterals(it.expression, source, fileName, depth + 1)
-                }
-            }
-            is LabeledStatement -> walkNodeForObjectLiterals(node.statement, source, fileName, depth + 1)
-            is ModuleDeclaration -> {
-                val body = node.body
-                if (body is ModuleBlock) walkForObjectLiterals(body.statements, source, fileName)
-            }
-            is ExportAssignment -> walkNodeForObjectLiterals(node.expression, source, fileName, depth + 1)
-            is SpreadElement -> walkNodeForObjectLiterals(node.expression, source, fileName, depth + 1)
-            is AsExpression -> walkNodeForObjectLiterals(node.expression, source, fileName, depth + 1)
-            is TypeAssertionExpression -> walkNodeForObjectLiterals(node.expression, source, fileName, depth + 1)
-            is SatisfiesExpression -> walkNodeForObjectLiterals(node.expression, source, fileName, depth + 1)
-            is NonNullExpression -> walkNodeForObjectLiterals(node.expression, source, fileName, depth + 1)
-            is PrefixUnaryExpression -> walkNodeForObjectLiterals(node.operand, source, fileName, depth + 1)
-            is PostfixUnaryExpression -> walkNodeForObjectLiterals(node.operand, source, fileName, depth + 1)
-            is AwaitExpression -> walkNodeForObjectLiterals(node.expression, source, fileName, depth + 1)
-            is YieldExpression -> node.expression?.let { walkNodeForObjectLiterals(it, source, fileName, depth + 1) }
-            is VoidExpression -> walkNodeForObjectLiterals(node.expression, source, fileName, depth + 1)
-            is DeleteExpression -> walkNodeForObjectLiterals(node.expression, source, fileName, depth + 1)
-            is TypeOfExpression -> walkNodeForObjectLiterals(node.expression, source, fileName, depth + 1)
-            is CommaListExpression -> node.elements.forEach { walkNodeForObjectLiterals(it, source, fileName, depth + 1) }
-            is ClassExpression -> for (m in node.members) {
-                when (m) {
-                    is MethodDeclaration -> m.body?.let { walkForObjectLiterals(it.statements, source, fileName) }
-                    is Constructor -> m.body?.let { walkForObjectLiterals(it.statements, source, fileName) }
-                    is GetAccessor -> m.body?.let { walkForObjectLiterals(it.statements, source, fileName) }
-                    is SetAccessor -> m.body?.let { walkForObjectLiterals(it.statements, source, fileName) }
-                    is PropertyDeclaration -> m.initializer?.let { walkNodeForObjectLiterals(it, source, fileName, depth + 1) }
-                    else -> {}
-                }
-            }
-            is ThrowStatement -> node.expression?.let { walkNodeForObjectLiterals(it, source, fileName, depth + 1) }
-            else -> {}
-        }
-    }
-
     private fun checkObjectLiteralDuplicates(obj: ObjectLiteralExpression, source: String, fileName: String) {
         // Track what kind of property has been seen: 'p' = property/method, 'g' = getter, 's' = setter
         val seen = mutableMapOf<String, Char>()
@@ -61948,223 +61887,6 @@ interface DataView {
     // -----------------------------------------------------------------------
     // Reserved word identifier checking (TS1359)
     // -----------------------------------------------------------------------
-
-    private val reservedWords = setOf("await", "yield", "void", "delete", "typeof",
-        "instanceof", "in", "of", "new", "return", "throw", "case", "switch",
-        "if", "else", "for", "while", "do", "try", "catch", "finally",
-        "with", "debugger", "var", "let", "const", "class", "function",
-        "import", "export", "default", "extends", "implements", "enum",
-        "interface", "package", "private", "protected", "public", "static")
-
-    private fun checkReservedWordIdentifiers() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            walkForReservedWords(result.sourceFile.statements, source, fileName)
-        }
-    }
-
-    private fun walkForReservedWords(statements: List<Statement>, source: String, fileName: String) {
-        for (stmt in statements) {
-            when (stmt) {
-                is FunctionDeclaration -> {
-                    if (ModifierFlag.Async in stmt.modifiers) {
-                        checkAwaitParams(stmt.parameters, source, fileName)
-                    }
-                    stmt.body?.let { walkForReservedWords(it.statements, source, fileName) }
-                }
-                is ClassDeclaration -> {
-                    for (member in stmt.members) {
-                        when (member) {
-                            is MethodDeclaration -> {
-                                if (ModifierFlag.Async in member.modifiers) {
-                                    checkAwaitParams(member.parameters, source, fileName)
-                                }
-                                member.body?.let { walkForReservedWords(it.statements, source, fileName) }
-                            }
-                            is Constructor -> member.body?.let { walkForReservedWords(it.statements, source, fileName) }
-                            is GetAccessor -> member.body?.let { walkForReservedWords(it.statements, source, fileName) }
-                            is SetAccessor -> member.body?.let { walkForReservedWords(it.statements, source, fileName) }
-                            else -> {}
-                        }
-                    }
-                }
-                is VariableStatement -> {
-                    for (decl in stmt.declarationList.declarations) {
-                        when (val init = decl.initializer) {
-                            is ArrowFunction -> {
-                                if (ModifierFlag.Async in init.modifiers) {
-                                    checkAwaitParams(init.parameters, source, fileName)
-                                }
-                            }
-                            is FunctionExpression -> {
-                                if (ModifierFlag.Async in init.modifiers) {
-                                    checkAwaitParams(init.parameters, source, fileName)
-                                }
-                                walkForReservedWords(init.body.statements, source, fileName)
-                            }
-                            else -> {}
-                        }
-                    }
-                }
-                is ExpressionStatement -> walkForReservedWordsInExpr(stmt.expression, source, fileName)
-                is Block -> walkForReservedWords(stmt.statements, source, fileName)
-                is ModuleDeclaration -> {
-                    val body = stmt.body
-                    if (body is ModuleBlock) walkForReservedWords(body.statements, source, fileName)
-                }
-                // Check enum names that are reserved words
-                is EnumDeclaration -> {
-                    val name = stmt.name.text
-                    if (name == "void" || name == "await" || name == "yield") {
-                        emitTS1359(stmt.name, source, fileName, name)
-                    }
-                }
-                is IfStatement -> {
-                    walkForReservedWordsInExpr(stmt.expression, source, fileName)
-                    walkForReservedWords(listOf(stmt.thenStatement), source, fileName)
-                    stmt.elseStatement?.let { walkForReservedWords(listOf(it), source, fileName) }
-                }
-                is ForStatement -> {
-                    stmt.condition?.let { walkForReservedWordsInExpr(it, source, fileName) }
-                    stmt.incrementor?.let { walkForReservedWordsInExpr(it, source, fileName) }
-                    walkForReservedWords(listOf(stmt.statement), source, fileName)
-                }
-                is ForInStatement -> {
-                    walkForReservedWordsInExpr(stmt.expression, source, fileName)
-                    walkForReservedWords(listOf(stmt.statement), source, fileName)
-                }
-                is ForOfStatement -> {
-                    walkForReservedWordsInExpr(stmt.expression, source, fileName)
-                    walkForReservedWords(listOf(stmt.statement), source, fileName)
-                }
-                is WhileStatement -> {
-                    walkForReservedWordsInExpr(stmt.expression, source, fileName)
-                    walkForReservedWords(listOf(stmt.statement), source, fileName)
-                }
-                is DoStatement -> {
-                    walkForReservedWords(listOf(stmt.statement), source, fileName)
-                    walkForReservedWordsInExpr(stmt.expression, source, fileName)
-                }
-                is SwitchStatement -> {
-                    walkForReservedWordsInExpr(stmt.expression, source, fileName)
-                    for (clause in stmt.caseBlock) {
-                        val clauseStmts = when (clause) {
-                            is CaseClause -> {
-                                walkForReservedWordsInExpr(clause.expression, source, fileName)
-                                clause.statements
-                            }
-                            is DefaultClause -> clause.statements
-                            else -> emptyList()
-                        }
-                        walkForReservedWords(clauseStmts, source, fileName)
-                    }
-                }
-                is TryStatement -> {
-                    walkForReservedWords(stmt.tryBlock.statements, source, fileName)
-                    stmt.catchClause?.let { walkForReservedWords(it.block.statements, source, fileName) }
-                    stmt.finallyBlock?.let { walkForReservedWords(it.statements, source, fileName) }
-                }
-                is LabeledStatement -> walkForReservedWords(listOf(stmt.statement), source, fileName)
-                is ThrowStatement -> stmt.expression?.let { walkForReservedWordsInExpr(it, source, fileName) }
-                is ReturnStatement -> stmt.expression?.let { walkForReservedWordsInExpr(it, source, fileName) }
-                is ExportAssignment -> walkForReservedWordsInExpr(stmt.expression, source, fileName)
-                else -> {}
-            }
-        }
-    }
-
-    private fun walkForReservedWordsInExpr(expr: Expression, source: String, fileName: String) {
-        when (expr) {
-            is ArrowFunction -> {
-                if (ModifierFlag.Async in expr.modifiers) {
-                    checkAwaitParams(expr.parameters, source, fileName)
-                }
-                when (val body = expr.body) {
-                    is Block -> walkForReservedWords(body.statements, source, fileName)
-                    is Expression -> walkForReservedWordsInExpr(body, source, fileName)
-                    else -> {}
-                }
-            }
-            is FunctionExpression -> {
-                if (ModifierFlag.Async in expr.modifiers) {
-                    checkAwaitParams(expr.parameters, source, fileName)
-                }
-                walkForReservedWords(expr.body.statements, source, fileName)
-            }
-            is ClassExpression -> for (member in expr.members) when (member) {
-                is MethodDeclaration -> {
-                    if (ModifierFlag.Async in member.modifiers) checkAwaitParams(member.parameters, source, fileName)
-                    member.body?.let { walkForReservedWords(it.statements, source, fileName) }
-                }
-                is Constructor -> member.body?.let { walkForReservedWords(it.statements, source, fileName) }
-                is GetAccessor -> member.body?.let { walkForReservedWords(it.statements, source, fileName) }
-                is SetAccessor -> member.body?.let { walkForReservedWords(it.statements, source, fileName) }
-                is PropertyDeclaration -> member.initializer?.let { walkForReservedWordsInExpr(it, source, fileName) }
-                else -> {}
-            }
-            is BinaryExpression -> {
-                var current: Expression = expr
-                val rightStack = ArrayDeque<Expression>()
-                while (current is BinaryExpression) { rightStack.addLast(current.right); current = current.left }
-                walkForReservedWordsInExpr(current, source, fileName)
-                while (rightStack.isNotEmpty()) walkForReservedWordsInExpr(rightStack.removeLast(), source, fileName)
-            }
-            is ParenthesizedExpression -> walkForReservedWordsInExpr(expr.expression, source, fileName)
-            is AsExpression -> walkForReservedWordsInExpr(expr.expression, source, fileName)
-            is TypeAssertionExpression -> walkForReservedWordsInExpr(expr.expression, source, fileName)
-            is SatisfiesExpression -> walkForReservedWordsInExpr(expr.expression, source, fileName)
-            is NonNullExpression -> walkForReservedWordsInExpr(expr.expression, source, fileName)
-            is ConditionalExpression -> {
-                walkForReservedWordsInExpr(expr.condition, source, fileName)
-                walkForReservedWordsInExpr(expr.whenTrue, source, fileName)
-                walkForReservedWordsInExpr(expr.whenFalse, source, fileName)
-            }
-            is CallExpression -> {
-                walkForReservedWordsInExpr(expr.expression, source, fileName)
-                expr.arguments.forEach { walkForReservedWordsInExpr(it, source, fileName) }
-            }
-            is NewExpression -> {
-                walkForReservedWordsInExpr(expr.expression, source, fileName)
-                expr.arguments?.forEach { walkForReservedWordsInExpr(it, source, fileName) }
-            }
-            is PropertyAccessExpression -> walkForReservedWordsInExpr(expr.expression, source, fileName)
-            is ElementAccessExpression -> {
-                walkForReservedWordsInExpr(expr.expression, source, fileName)
-                walkForReservedWordsInExpr(expr.argumentExpression, source, fileName)
-            }
-            is ArrayLiteralExpression -> for (e in expr.elements) walkForReservedWordsInExpr(e, source, fileName)
-            is ObjectLiteralExpression -> for (p in expr.properties) when (p) {
-                is PropertyAssignment -> walkForReservedWordsInExpr(p.initializer, source, fileName)
-                is SpreadAssignment -> walkForReservedWordsInExpr(p.expression, source, fileName)
-                is MethodDeclaration -> {
-                    if (ModifierFlag.Async in p.modifiers) checkAwaitParams(p.parameters, source, fileName)
-                    p.body?.let { walkForReservedWords(it.statements, source, fileName) }
-                }
-                is GetAccessor -> p.body?.let { walkForReservedWords(it.statements, source, fileName) }
-                is SetAccessor -> p.body?.let { walkForReservedWords(it.statements, source, fileName) }
-                else -> {}
-            }
-            is SpreadElement -> walkForReservedWordsInExpr(expr.expression, source, fileName)
-            is AwaitExpression -> walkForReservedWordsInExpr(expr.expression, source, fileName)
-            is YieldExpression -> expr.expression?.let { walkForReservedWordsInExpr(it, source, fileName) }
-            is VoidExpression -> walkForReservedWordsInExpr(expr.expression, source, fileName)
-            is DeleteExpression -> walkForReservedWordsInExpr(expr.expression, source, fileName)
-            is TypeOfExpression -> walkForReservedWordsInExpr(expr.expression, source, fileName)
-            is PrefixUnaryExpression -> walkForReservedWordsInExpr(expr.operand, source, fileName)
-            is PostfixUnaryExpression -> walkForReservedWordsInExpr(expr.operand, source, fileName)
-            is TemplateExpression -> for (span in expr.templateSpans) walkForReservedWordsInExpr(span.expression, source, fileName)
-            is TaggedTemplateExpression -> {
-                walkForReservedWordsInExpr(expr.tag, source, fileName)
-                if (expr.template is TemplateExpression) {
-                    for (span in (expr.template).templateSpans) walkForReservedWordsInExpr(span.expression, source, fileName)
-                }
-            }
-            is CommaListExpression -> for (e in expr.elements) walkForReservedWordsInExpr(e, source, fileName)
-            else -> {}
-        }
-    }
 
     private fun checkAwaitParams(params: List<Parameter>, source: String, fileName: String) {
         for (param in params) {

@@ -1411,16 +1411,37 @@ interrupt the arc).
     spread-operand positions are faithful widenings. 3 walker funs
     (~206 lines) deleted, 1 init dispatch removed. Suite +10
     (Inv4SpineBatch12Test — 2 widening pins fail pre-migration as expected);
-    listAll error lines IDENTICAL on ALL 8 profiles (519c vs 519b). NEXT
-    batches: remaining zero-typing tail by the 518 table
-    (checkDuplicateObjectLiteralProperties — NOTE its
-    destructuring-assignment-LHS skip must become a came-from-child parent
-    walk: from the objlit walk up through literal/property nodes and skip
-    when a BinaryExpression(=) is reached with the walked child as its LEFT,
-    checkReservedWordIdentifiers, checkStrictModeReservedWords,
-    checkConflictMarkers (a text scan — may not need the spine),
-    checkAwaitContext (stateful isAsync threading + module-top-level rules —
-    decompose when reached));
+    listAll error lines IDENTICAL on ALL 8 profiles (519c vs 519b). Batch 13
+    DONE round 520 (2026-07-14): checkDuplicateObjectLiteralProperties
+    (TS1117/TS1118/TS2300 — [checkObjectLiteralDuplicates] retained as the
+    per-literal core dispatched from the ObjectLiteralExpression enter; the
+    destructuring-assignment-LHS skip became the came-from-child parent walk
+    `spineObjLitInDestructuringLhs`: climb through pattern-position parents
+    — object/array literals, a PropertyAssignment when the child is its
+    INITIALIZER, spread positions — and skip iff a `=` BinaryExpression is
+    reached with the climbed child as its LEFT; a ShorthandPropertyAssignment
+    default VALUE terminates the climb, so `({q = {a,a}} = o)` is now checked
+    — a tsc-faithful widening alongside ternary conditions, parameter
+    defaults, and object-literal METHOD bodies) + checkReservedWordIdentifiers
+    (TS1359 — checkAwaitParams retained, dispatched from every async
+    function-like's enter; the enum void/await/yield name rule as an
+    EnumDeclaration-enter handler; widenings: class property-initializer
+    arrows, new-expression var initializers, var-init arrow expression
+    bodies) — 6 walker funs (~370 lines incl. the already-dead reservedWords
+    val) deleted, 2 init dispatches removed. Suite +23 (Inv4SpineBatch13Test
+    — 16 pre-verified against the OLD walkers, 7 widening pins fail
+    pre-migration as expected); listAll error lines IDENTICAL on ALL 8
+    profiles (520a vs 519c). NEXT batches: checkStrictModeReservedWords
+    (TS1212/TS1213/TS1214/TS2480/TS18006 — a BIG stateful one: per-file
+    strictness flags (isStrict/isExpressionStrict/explicitNonStrict/
+    realStrict incl. nested "use strict" prologue upgrades) + inClass/
+    isModule threading + a load-bearing reach QUIRK — the FunctionDeclaration
+    case is entirely `if (isStrict)`-gated, so statements inside fn bodies
+    are UNVISITED in non-strict files (no TS2480 for `let let` there);
+    reproduce as a parent-chain context computation, pin the quirk, one
+    dedicated sub-batch); checkConflictMarkers (a text scan — may not need
+    the spine); checkAwaitContext (stateful isAsync threading +
+    module-top-level rules — decompose when reached);
     checkMixinClassConstructor is TP-scope-stateful — (d) territory.
   - [ ] **INV.4(c) The name-resolution pair.** checkUnresolvedNames (846 ms) +
     checkTypeUsedAsValue (734 ms): fold their private NameScope chains into
