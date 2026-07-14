@@ -38,10 +38,10 @@ import kotlin.test.assertTrue
  * per-file visibility classes the INV.3 migration is planned from:
  *
  *  - a LIB or SCRIPT-FILE name → TRUE_GLOBAL (survives conflation retirement);
- *  - a name declared by BOTH a module file and a script file → SHARED
- *    (presence legit, merged symbol polluted);
- *  - a name declared ONLY by module files, looked up from a DIFFERENT file →
- *    CONFLATED or UNSCOPED (the migration worklist proper);
+ *  - a name declared ONLY by module files is RETIRED from the merge
+ *    (INV.3(d)) — it must NOT appear in the conflated/unscoped worklist
+ *    (pre-retire this file asserted the opposite; the emptied worklist is the
+ *    migration's victory condition);
  *  - the accounting invariant: total == sum of all classes.
  *
  * Also pins [InstrumentedSymbolTable]'s contract: get/containsKey report to
@@ -92,15 +92,13 @@ class Inv3GlobalsLookupTest {
 
         // Lib names (Array/…) and the script-file `scriptGlobal` classify TRUE_GLOBAL.
         assertTrue(PassTiming.globalsTrueGlobalHits > 0, "lib/script lookups must classify TRUE_GLOBAL")
-        // `Dual` is declared by BOTH the module file a.ts and the script file c.ts.
-        assertTrue(PassTiming.globalsSharedHits > 0, "a module+script name must classify SHARED")
-        // `leakedVar` is declared ONLY by the module file a.ts and consumed from
-        // b.ts — a pure module-file leak (conflated when the site carries file
-        // context, unscoped when it does not).
-        val leak = PassTiming.globalsConflatedHits + PassTiming.globalsUnscopedHits
-        assertTrue(leak > 0, "the cross-file bare use of leakedVar must classify as a leak")
+        // INV.3(d): `leakedVar` (declared ONLY by module file a.ts) is RETIRED from
+        // the merged globals — a residual lookup can only MISS, so the leak classes
+        // must no longer carry it. (Pre-retire this test asserted the OPPOSITE:
+        // conflated/unscoped > 0 with leakedVar in the worklist — the migration's
+        // victory condition is that worklist draining to empty for retired names.)
         val leakNames = PassTiming.globalsConflatedByName.keys + PassTiming.globalsUnscopedByName.keys
-        assertTrue("leakedVar" in leakNames, "leakedVar must appear in the leak worklist, got: $leakNames")
+        assertFalse("leakedVar" in leakNames, "a retired module-only name must not classify as a leak, got: $leakNames")
         PassTiming.reset()
     }
 
