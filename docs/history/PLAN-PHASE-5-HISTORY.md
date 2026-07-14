@@ -1,3 +1,50 @@
+**Round 508 (2026-07-13) — INV.3(c)(iv) leg 1 LANDED: `resolveTypeNameToSymbol`'s
+Identifier branch + `typeNodeDefinitelyNonNullish`'s two fallbacks node-keyed
+JOINTLY (the round-507c order constraint).** The general type-resolution flip:
+`resolveTypeNameToSymbol`'s Identifier branch consults
+`lookupPerFileForNode(node, node.text)` — node-keyed resolution is a fixed
+property of the node, so the `nodeTypes` cache stays valid by construction —
+and the TWO call sites carrying their own trailing `?: globals[name]`
+(`getTypeFromTypeReference`, whose inferenceNamespace middle consult is
+untouched, and `checkConstraintsInTypeNode`'s TS2315 emitter) gate that
+fallback to QualifiedName: for an Identifier it was byte-redundant pre-flip
+(same key as the resolver's own lookup) and would silently RE-LEAK the
+node-keyed null post-flip — the trap is now recorded in the CLAUDE.md
+INV.3(c) entry. `typeNodeDefinitelyNonNullish`'s two merged-globals fallbacks
+consult `lookupPerFileForNode(t.typeName, name)` (currentFileLocals stays the
+first consult, the (c)(ii) convention). TWO discoveries: (1) the first full
+suite failed exactly ONE test — ThisPredicateNarrowingTest's cross-file
+augmentation pin — exposing a REAL visibility-model gap: tsc scopes a
+`declare module "<relative-spec>"` AUGMENTATION body under the augmented
+module's exports (the round-443 buildNamespaceScope rule), so the naive flip
+nulled `UnionType` inside services-style `declare module "./types.js"` blocks
+and this-predicate narrowing died; `lookupPerFileForNode` now captures the
+innermost string-named ModuleDeclaration during its parent walk and grants
+the resolved target's direct named exports (unclassified under --passTiming,
+the (c)(ii) discipline). (2) Test-design: the ADDITIVE leak-kill direction is
+SHADOWED by any-degradation — an unresolvable callee annotation degrades the
+assigned reference itself to `any` (proven with a never-declared `Zorp`
+control; also why the basic `return x` on a `T | undefined` local draws no
+TS2322 — pre-existing FN), masking every downstream narrowing consumer — so
+the flow observable uses the SUPPRESSION direction: a foreign UNIMPORTED
+NULLABLE alias return-annotation pre-flip types the assigned reference as the
+leaked union and manufactures TS18048 on a closure-captured read; post-flip
+the reference degrades to `any` and the leaked TS18048 dies (tsc-faithful:
+TS2304 → any). Verified: suite green 10,302 → 10,311 (+9
+Inv3TypePositionNodeKeyTest — 3 leak-kills FAIL on the pre-flip checker via
+stash: the flow TS18048, an annotation-position TS2322 from a leaked foreign
+`type Shape2 = { v: string }`, and a TS2315 manufactured about an unimported
+non-generic alias; 6 preservation controls pass both sides: imported/own-file
+nullable alias keep the REAL TS18048, imported non-nullish alias + imported
+interface keep the nullish-strip, imported alias annotation keeps the real
+TS2322, own-file TS2315 keeps firing); `--listAll` byte-identical on compiler
+AND services (46/46 env-legit diagnostics); bench row 28,004 ms self, +0.1%
+(dead in band), same top codes. NEXT:
+(iv) leg 2 — `getTypeFromBaseTypeExpression`'s Identifier fallback + the tiny
+value tail (emitTs2345ForBareTpArgToConstrainedTpParam,
+getOverloadImplementationRelated, calleeReturnAnnotationForImplicitAny), then
+the instrumented re-measure that unlocks INV.3(d).
+
 **Round 507c (2026-07-13, same session as 507/507b) — INV.3(c)(iv) first cut
 ATTEMPTED and REVERTED (unpinnable, not regressing): the
 `typeNodeDefinitelyNonNullish` fallbacks alone have NO observable.** The flip

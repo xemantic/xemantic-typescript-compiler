@@ -960,6 +960,11 @@ class Checker(
     private val spineBadIterVars = HashMap<String, BadIterInfo>()
     private val spineIterPositionIds = ArrayList<Identifier>()
     private val spineYieldStarNodes = ArrayList<YieldExpression>()
+    // INV.4(b) batch 8 per-file spine state (cleared per file in checkSpine):
+    // the (code@position) dedup set of the TS2523/TS2524/TS2372/TS2502/TS18048
+    // parameter-initializer family — the deleted walk family carried one per
+    // file (emitDiagAtPos / emitParamInitForbidden consult it).
+    private val spineParamForbiddenEmitted = HashSet<String>()
 
     // B283: identifier names guarded by a `typeof x === "..."` condition in an
     // enclosing if — the arithmetic walker has no flow narrowing, so union-typed
@@ -2364,14 +2369,12 @@ class Checker(
         // only through this-transparent constructs / arrow bodies) accesses a property of
         // undefined. Always runs (module-`this`-undefined is not gated on strictNullChecks).
         pass("checkModuleTopLevelThis") { checkModuleTopLevelThis() }
-        // 21c''. TS2523 / TS2524: `yield` / `await` in a parameter initializer
-        // (incl. destructuring binding-pattern element defaults). Purely syntactic
-        // grammar check (zero-FP) -- never recurses into a nested fn/arrow/class boundary.
-        pass("checkParamInitializerForbidden") { checkParamInitializerForbidden() }
-        // B98.r86: TS2463 — a binding-pattern parameter cannot be optional in an
-        // IMPLEMENTATION signature (`function f([x]?: T) {}`). Purely syntactic
-        // (binding-pattern name + questionToken + has-body) -> zero-FP.
-        pass("checkOptionalBindingPatternParams") { checkOptionalBindingPatternParams() }
+        // 21c''. TS2523/TS2524/TS2372/TS2502/TS18048 (parameter-initializer
+        // content family) migrated to the check spine (INV.4(b) batch 8) — see
+        // spineCheckParamInitForbidden.
+        // 21c'''. TS2463 (optional binding-pattern parameter in an implementation)
+        // migrated to the check spine (INV.4(b) batch 8) — see
+        // spineCheckOptionalBindingPatternParam.
         // B98.r89: TS1432/TS1378 — top-level `for await` / `await` is only allowed
         // when the module supports TLA AND target >= ES2017. When the module is in the
         // TLA set (parser produced top-level await nodes) but target < ES2017, those
@@ -2559,20 +2562,19 @@ class Checker(
         pass("checkAwaitContext") { checkAwaitContext() }
         // 47. Check declaration name conflicts with built-in global (TS2397)
         pass("checkBuiltinGlobalConflict") { checkBuiltinGlobalConflict() }
-        // 48. Check parameter question mark with initializer (TS1015)
-        pass("checkOptionalParamWithInitializer") { checkOptionalParamWithInitializer() }
-        // 49. Check set accessor parameter initializer (TS1052)
-        pass("checkSetAccessorInitializer") { checkSetAccessorInitializer() }
-        // 49b. Check set accessor rest parameter (TS1053)
-        pass("checkSetAccessorRestParameter") { checkSetAccessorRestParameter() }
+        // 48. TS1015 (parameter question mark with initializer) migrated to the
+        // check spine (INV.4(b) batch 8) — see spineCheckOptionalParamInit.
+        // 49/49b. TS1052/TS1053 (set-accessor parameter grammar) migrated to the
+        // check spine (INV.4(b) batch 8) — see spineCheckSetAccessorParamGrammar.
         // 49c. Check for-in left-hand side type annotation (TS2404)
         pass("checkForInLhsTypeAnnotation") { checkForInLhsTypeAnnotation() }
         // 50. Check statements in ambient contexts (TS1036)
         pass("checkAmbientStatements") { checkAmbientStatements() }
         // 50b. Check redundant `declare` modifier inside ambient namespaces (TS1038)
         pass("checkRedundantDeclareModifier") { checkRedundantDeclareModifier() }
-        // 51. Check parameter initializer in non-implementation context (TS2371)
-        pass("checkParameterInitializerInNonImpl") { checkParameterInitializerInNonImpl() }
+        // 51. TS2371 (parameter initializer in non-implementation context)
+        // migrated to the check spine (INV.4(b) batch 8) — see
+        // spineCheckParamInitNonImpl.
         // 51b. Check parameter initializer references later parameter (TS2373)
         pass("checkParamInitForwardRef") { checkParamInitForwardRef() }
         // 52. Check strict mode reserved words as identifiers (TS1212)
@@ -17567,6 +17569,7 @@ class Checker(
                 spineBadIterVars.clear()
                 spineIterPositionIds.clear()
                 spineYieldStarNodes.clear()
+                spineParamForbiddenEmitted.clear()
                 spineWalkFile(sf)
                 spineResolveDeferredIterationChecks()
             }
@@ -17637,6 +17640,10 @@ class Checker(
                 spineCheckRestParam(node)
                 spineCheckRestParamLast(node)
                 if (!spineIsDts) checkRestBindingParam(node, spineSource, spineFileName)
+                spineCheckOptionalParamInit(node)
+                spineCheckOptionalBindingPatternParam(node)
+                spineCheckParamInitForbidden(node)
+                spineCheckParamInitNonImpl(node)
             }
             is ObjectBindingPattern -> spineCheckRestElemPropName(node)
             is VariableDeclaration -> {
@@ -17655,7 +17662,10 @@ class Checker(
                 spineCheckAbstractAccessorReturnType(node)
                 spineCheckGetAccessorGrammar(node)
             }
-            is SetAccessor -> spineCheckSetAccessorGrammar(node)
+            is SetAccessor -> {
+                spineCheckSetAccessorGrammar(node)
+                spineCheckSetAccessorParamGrammar(node)
+            }
             is ClassDeclaration -> {
                 spineCheckAccessorPairVisibility(node)
                 spineCheckDupModifiers(node)
@@ -18299,6 +18309,255 @@ class Checker(
             start = start,
             length = 3,
         ))
+    }
+
+    /**
+     * TS1015 "Parameter cannot have question mark and initializer." — migrated
+     * from the deleted `checkOptionalParamWithInitializer` walk family
+     * (INV.4(b) batch 8). The old walker's requireType gate is preserved: in
+     * function/method/constructor/accessor DECLARATIONS the error fires only
+     * when the parameter has a type annotation or a parameter-property
+     * modifier; in arrow/function EXPRESSIONS it fires regardless. (tsc's
+     * checkGrammarParameterList fires unconditionally — the gate is
+     * corpus-tuned; lifting it is a signal-driven change, not a migration side
+     * effect.) Old reach quirks preserved via parent-kind gates:
+     * interface/type-literal signatures, function TYPES, and object-literal /
+     * class-expression GET accessors stay unchecked. The spine widens
+     * faithfully to positions the hand-walk missed (class property
+     * initializers, parameter defaults, dotted-namespace bodies).
+     */
+    private fun spineCheckOptionalParamInit(param: Parameter) {
+        if (spineIsDts) return
+        if (!param.questionToken || param.initializer == null) return
+        val requireType = when (val parent = param.parent) {
+            is ArrowFunction, is FunctionExpression -> false
+            is FunctionDeclaration, is Constructor -> true
+            is MethodDeclaration -> when (parent.parent) {
+                is ClassDeclaration, is ClassExpression, is ObjectLiteralExpression -> true
+                else -> return
+            }
+            is GetAccessor -> if (parent.parent is ClassDeclaration) true else return
+            is SetAccessor -> when (parent.parent) {
+                is ClassDeclaration, is ClassExpression, is ObjectLiteralExpression -> true
+                else -> return
+            }
+            else -> return
+        }
+        if (requireType && param.type == null) {
+            val isParamProperty = param.modifiers.any {
+                it == ModifierFlag.Public || it == ModifierFlag.Private ||
+                    it == ModifierFlag.Protected || it == ModifierFlag.Readonly
+            }
+            if (!isParamProperty) return
+        }
+        val name = param.name
+        val start = name.pos
+        val length = when (name) {
+            is Identifier -> name.text.length
+            else -> (name.end - 1 - start).coerceAtLeast(1)
+        }
+        val (line, character) = getLineAndCharacterOfPosition(spineSource, start)
+        diagnostics.add(Diagnostic(
+            message = "Parameter cannot have question mark and initializer.",
+            category = DiagnosticCategory.Error,
+            code = 1015,
+            fileName = spineFileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+
+    /**
+     * TS2463 "A binding pattern parameter cannot be optional in an
+     * implementation signature." (B98.r86) — migrated from the deleted
+     * `checkOptionalBindingPatternParams` walk family (INV.4(b) batch 8).
+     * Fires for a `?`-marked binding-pattern parameter whose containing
+     * function-like HAS a body (overload/ambient signatures are exempt —
+     * interface/type-literal methods and function TYPES never have one).
+     * The spine widens faithfully to positions the hand-walk missed
+     * (parameter defaults, throw expressions, static blocks).
+     */
+    private fun spineCheckOptionalBindingPatternParam(param: Parameter) {
+        if (!param.questionToken || param.typeFromJSDoc) return
+        val n = param.name
+        if (n !is ObjectBindingPattern && n !is ArrayBindingPattern) return
+        val hasBody = when (val parent = param.parent) {
+            is FunctionDeclaration -> parent.body != null
+            is MethodDeclaration -> parent.body != null
+            is Constructor -> parent.body != null
+            is GetAccessor -> parent.body != null
+            is SetAccessor -> parent.body != null
+            is FunctionExpression, is ArrowFunction -> true
+            else -> return
+        }
+        if (!hasBody) return
+        val start = n.pos
+        val end = if (param.type != null) param.type.end - 1 else n.end
+        val length = (end - start).coerceAtLeast(1)
+        val (line, character) = getLineAndCharacterOfPosition(spineSource, start)
+        diagnostics.add(Diagnostic(
+            message = "A binding pattern parameter cannot be optional in an implementation signature.",
+            category = DiagnosticCategory.Error,
+            code = 2463,
+            fileName = spineFileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+
+    /**
+     * The parameter-initializer CONTENT family — TS2524/TS2523 (`await` /
+     * `yield` in a parameter initializer, incl. the bare-Identifier
+     * parser-recovery shape), TS2372 (parameter referencing itself, B519) with
+     * its TS2502/TS18048 companions, and binding-element defaults — migrated
+     * from the deleted `checkParamInitializerForbidden` walk family (INV.4(b)
+     * batch 8). [walkParamInitForbidden] and the binding-name walk are
+     * retained as the per-parameter core (both stop at nested fn/class
+     * boundaries — a nested function's parameters get their own spine enter,
+     * which replaces the old walk's `walkParamForbiddenExprForFns` descent).
+     * The per-file (code@position) dedup set is [spineParamForbiddenEmitted].
+     * Value-position parents only (interface/type-literal signatures and
+     * function TYPES are TS2371 territory); the spine widens faithfully to
+     * positions the hand-walk missed (class property initializers, static
+     * blocks).
+     */
+    private fun spineCheckParamInitForbidden(param: Parameter) {
+        val valuePosition = when (val parent = param.parent) {
+            is FunctionDeclaration, is Constructor, is ArrowFunction, is FunctionExpression,
+            is GetAccessor, is SetAccessor -> true
+            is MethodDeclaration -> when (parent.parent) {
+                is ClassDeclaration, is ClassExpression, is ObjectLiteralExpression -> true
+                else -> false
+            }
+            else -> false
+        }
+        if (!valuePosition) return
+        param.initializer?.let { init ->
+            walkParamInitForbidden(init, spineSource, spineFileName, spineParamForbiddenEmitted)
+            // TS2372: a simple-identifier parameter's default initializer must not
+            // reference the parameter itself (`function f(x = x)`). B519: emit at
+            // EVERY self-reference, PLUS the optionality-removal companions when
+            // the param TYPE includes `undefined` under strictNullChecks: TS2502
+            // at the param name and TS18048 for an arithmetic/relational operand.
+            (param.name as? Identifier)?.let { nameId ->
+                val pname = nameId.text
+                val refs = mutableListOf<Pair<Int, Boolean>>()
+                collectParamSelfRefs(init, pname, false, refs)
+                if (refs.isNotEmpty()) {
+                    val typeHasUndef = paramTypeIncludesUndefined(param)
+                    if (typeHasUndef && strictNullChecks) {
+                        val spanEnd = paramDefaultRightmostEnd(init)
+                        emitDiagAtPos(nameId.pos, (spanEnd - nameId.pos).coerceAtLeast(1), 2502,
+                            "'$pname' is referenced directly or indirectly in its own type annotation.",
+                            spineSource, spineFileName, spineParamForbiddenEmitted)
+                    }
+                    for ((refPos, isArithOperand) in refs) {
+                        emitDiagAtPos(refPos, pname.length, 2372,
+                            "Parameter '$pname' cannot reference itself.",
+                            spineSource, spineFileName, spineParamForbiddenEmitted)
+                        if (isArithOperand && typeHasUndef && strictNullChecks) {
+                            emitDiagAtPos(refPos, pname.length, 18048,
+                                "'$pname' is possibly 'undefined'.",
+                                spineSource, spineFileName, spineParamForbiddenEmitted)
+                        }
+                    }
+                }
+            }
+        }
+        walkParamForbiddenBindingName(param.name, spineSource, spineFileName, spineParamForbiddenEmitted)
+    }
+
+    /**
+     * TS2371 "A parameter initializer is only allowed in a function or
+     * constructor implementation." — migrated from the deleted
+     * `checkParameterInitializerInNonImpl` walk family (INV.4(b) batch 8).
+     * tsc's rule (checkParameter): an initializer whose containing signature
+     * has NO body. Parent-kind dispatch: bodyless function/method/constructor
+     * declarations, interface/type-literal methods (never have a body), and
+     * function/constructor TYPES — the old walk reached function types only
+     * under variable annotations / type aliases / casts, so the spine widens
+     * faithfully to every FunctionType position (parameter annotations,
+     * return types, property annotations). Accessors stay excluded (the old
+     * walker never checked them). [reportTS2371ForParam] (the retained
+     * per-parameter emitter) also covers binding-element defaults.
+     */
+    private fun spineCheckParamInitNonImpl(param: Parameter) {
+        if (spineIsDts) return
+        val nonImpl = when (val parent = param.parent) {
+            is FunctionDeclaration -> parent.body == null
+            is Constructor -> parent.body == null
+            is MethodDeclaration -> when (parent.parent) {
+                is InterfaceDeclaration, is TypeLiteral -> true
+                is ClassDeclaration, is ClassExpression, is ObjectLiteralExpression -> parent.body == null
+                else -> return
+            }
+            is FunctionType, is ConstructorType -> true
+            else -> return
+        }
+        if (!nonImpl) return
+        reportTS2371ForParam(param)
+    }
+
+    /**
+     * TS1052 "A 'set' accessor parameter cannot have an initializer." +
+     * TS1053 "A 'set' accessor cannot have rest parameter." — migrated from
+     * the deleted `checkSetAccessorInitializer` / `checkSetAccessorRestParameter`
+     * walks (INV.4(b) batch 8). The old walks reached class-DECLARATION
+     * members only; tsc's checkGrammarAccessor runs for object-literal and
+     * class-expression accessors too, so the parent gate widens to those.
+     * Interface/type-literal setters stay excluded (their parse may drop
+     * initializers — a signal-driven widening candidate, cf. the TS1095
+     * note). Emission shapes preserved exactly: ONE TS1052 per setter at the
+     * name; TS1053 per rest param at the `...` (length 3).
+     */
+    private fun spineCheckSetAccessorParamGrammar(node: SetAccessor) {
+        if (spineIsDts) return
+        when (node.parent) {
+            is ClassDeclaration, is ClassExpression, is ObjectLiteralExpression -> {}
+            else -> return
+        }
+        if (node.parameters.any { it.initializer != null }) {
+            val name = node.name
+            val start = name.pos
+            val length = when (name) {
+                is Identifier -> name.text.length
+                else -> (name.end - 1 - start).coerceAtLeast(1)
+            }
+            val (line, character) = getLineAndCharacterOfPosition(spineSource, start)
+            diagnostics.add(Diagnostic(
+                message = "A 'set' accessor parameter cannot have an initializer.",
+                category = DiagnosticCategory.Error,
+                code = 1052,
+                fileName = spineFileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
+        }
+        for (param in node.parameters) {
+            if (!param.dotDotDotToken) continue
+            val namePos = when (val n = param.name) {
+                is Identifier -> n.pos
+                else -> param.pos
+            }
+            val start = namePos - 3
+            val (line, character) = getLineAndCharacterOfPosition(spineSource, start)
+            diagnostics.add(Diagnostic(
+                message = "A 'set' accessor cannot have rest parameter.",
+                category = DiagnosticCategory.Error,
+                code = 1053,
+                fileName = spineFileName,
+                line = line,
+                character = character,
+                start = start,
+                length = 3,
+            ))
+        }
     }
 
     /**
@@ -51341,386 +51600,13 @@ interface DataView {
         ))
     }
 
-    // -----------------------------------------------------------------------
-    // TS2523 / TS2524: `yield` / `await` expressions cannot appear in a
-    // parameter initializer. Mirrors TypeScript's parameter-initializer grammar
-    // check. Purely syntactic -- a `yield`/`await` reachable in a parameter's
-    // initializer (or a binding-pattern element default) WITHOUT crossing a
-    // function/class boundary is always a grammar error -> zero-FP.
-    //
-    // Dedup is done with a LOCAL set threaded through the walk (NOT an instance
-    // field): the whole check pipeline runs in `init {}`, where a property declared
-    // after `init` is still null (the documented Kotlin init-order trap), so an
-    // instance MutableSet would NPE and abort every file's checking. The dedup key
-    // is (code | trimmed-source-line-text): a self-importing file's content can be
-    // duplicated into one SourceFile by the program builder, so the same grammar
-    // error would otherwise be reported at two offsets on identical lines; keying
-    // on the line text (not the offset) collapses the copies, matching TypeScript
-    // (one report per offending keyword occurrence).
-    // -----------------------------------------------------------------------
-    private fun checkParamInitializerForbidden() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            val source = result.sourceFile.text
-            val emitted = HashSet<String>()
-            for (stmt in result.sourceFile.statements) walkParamForbiddenStmt(stmt, source, fileName, emitted)
-        }
-    }
-
-    /**
-     * B98.r86: TS2463 — "A binding pattern parameter cannot be optional in an
-     * implementation signature." Fires for any function-like WITH A BODY (an
-     * implementation signature, not an overload signature) whose parameter has both
-     * a binding-pattern name (`{…}` / `[…]`) and a `?` token. Squiggle spans the
-     * binding pattern through its type annotation. Zero-FP: this exact shape is
-     * always illegal in TypeScript; overload signatures (no body) are exempt.
-     */
-    private fun checkOptionalBindingPatternParams() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            val source = result.sourceFile.text
-            for (stmt in result.sourceFile.statements) walkObpStmt(stmt, source, fileName)
-        }
-    }
-
-    private fun emitTs2463ForImplParams(parameters: List<Parameter>, hasBody: Boolean, source: String, fileName: String) {
-        if (!hasBody) return
-        for (param in parameters) {
-            if (!param.questionToken) continue
-            if (param.typeFromJSDoc) continue
-            val n = param.name
-            if (n !is ObjectBindingPattern && n !is ArrayBindingPattern) continue
-            val start = n.pos
-            val end = if (param.type != null) param.type.end - 1 else (n.end)
-            val length = (end - start).coerceAtLeast(1)
-            val (line, character) = getLineAndCharacterOfPosition(source, start)
-            diagnostics.add(Diagnostic(
-                message = "A binding pattern parameter cannot be optional in an implementation signature.",
-                category = DiagnosticCategory.Error,
-                code = 2463,
-                fileName = fileName,
-                line = line,
-                character = character,
-                start = start,
-                length = length,
-            ))
-        }
-    }
-
-    private fun walkObpStmt(stmt: Statement, source: String, fileName: String) {
-        when (stmt) {
-            is FunctionDeclaration -> {
-                emitTs2463ForImplParams(stmt.parameters, stmt.body != null, source, fileName)
-                stmt.body?.statements?.forEach { walkObpStmt(it, source, fileName) }
-            }
-            is ClassDeclaration -> for (m in stmt.members) walkObpClassMember(m, source, fileName)
-            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.statements?.forEach { walkObpStmt(it, source, fileName) }
-            is VariableStatement -> for (d in stmt.declarationList.declarations) d.initializer?.let { walkObpExpr(it, source, fileName) }
-            is ExpressionStatement -> walkObpExpr(stmt.expression, source, fileName)
-            is ReturnStatement -> stmt.expression?.let { walkObpExpr(it, source, fileName) }
-            is Block -> stmt.statements.forEach { walkObpStmt(it, source, fileName) }
-            is IfStatement -> {
-                walkObpStmt(stmt.thenStatement, source, fileName)
-                stmt.elseStatement?.let { walkObpStmt(it, source, fileName) }
-            }
-            is ForStatement -> walkObpStmt(stmt.statement, source, fileName)
-            is ForInStatement -> walkObpStmt(stmt.statement, source, fileName)
-            is ForOfStatement -> walkObpStmt(stmt.statement, source, fileName)
-            is WhileStatement -> walkObpStmt(stmt.statement, source, fileName)
-            is DoStatement -> walkObpStmt(stmt.statement, source, fileName)
-            is LabeledStatement -> walkObpStmt(stmt.statement, source, fileName)
-            is TryStatement -> {
-                stmt.tryBlock.statements.forEach { walkObpStmt(it, source, fileName) }
-                stmt.catchClause?.block?.statements?.forEach { walkObpStmt(it, source, fileName) }
-                stmt.finallyBlock?.statements?.forEach { walkObpStmt(it, source, fileName) }
-            }
-            is SwitchStatement -> for (c in stmt.caseBlock) when (c) {
-                is CaseClause -> c.statements.forEach { walkObpStmt(it, source, fileName) }
-                is DefaultClause -> c.statements.forEach { walkObpStmt(it, source, fileName) }
-                else -> {}
-            }
-            else -> {}
-        }
-    }
-
-    private fun walkObpClassMember(member: ClassElement, source: String, fileName: String) {
-        when (member) {
-            is MethodDeclaration -> { emitTs2463ForImplParams(member.parameters, member.body != null, source, fileName); member.body?.statements?.forEach { walkObpStmt(it, source, fileName) } }
-            is Constructor -> { emitTs2463ForImplParams(member.parameters, member.body != null, source, fileName); member.body?.statements?.forEach { walkObpStmt(it, source, fileName) } }
-            is GetAccessor -> { emitTs2463ForImplParams(member.parameters, member.body != null, source, fileName); member.body?.statements?.forEach { walkObpStmt(it, source, fileName) } }
-            is SetAccessor -> { emitTs2463ForImplParams(member.parameters, member.body != null, source, fileName); member.body?.statements?.forEach { walkObpStmt(it, source, fileName) } }
-            is PropertyDeclaration -> member.initializer?.let { walkObpExpr(it, source, fileName) }
-            else -> {}
-        }
-    }
-
-    private fun walkObpExpr(expr: Expression, source: String, fileName: String) {
-        when (expr) {
-            is FunctionExpression -> { emitTs2463ForImplParams(expr.parameters, true, source, fileName); expr.body.statements.forEach { walkObpStmt(it, source, fileName) } }
-            is ArrowFunction -> {
-                emitTs2463ForImplParams(expr.parameters, true, source, fileName)
-                when (val b = expr.body) {
-                    is Block -> b.statements.forEach { walkObpStmt(it, source, fileName) }
-                    is Expression -> walkObpExpr(b, source, fileName)
-                    else -> {}
-                }
-            }
-            is ClassExpression -> for (m in expr.members) walkObpClassMember(m, source, fileName)
-            is ParenthesizedExpression -> walkObpExpr(expr.expression, source, fileName)
-            is CallExpression -> { walkObpExpr(expr.expression, source, fileName); expr.arguments.forEach { walkObpExpr(it, source, fileName) } }
-            is NewExpression -> { walkObpExpr(expr.expression, source, fileName); expr.arguments?.forEach { walkObpExpr(it, source, fileName) } }
-            is BinaryExpression -> {
-                var node: Expression = expr
-                while (node is BinaryExpression) { walkObpExpr(node.right, source, fileName); node = node.left }
-                walkObpExpr(node, source, fileName)
-            }
-            is ConditionalExpression -> { walkObpExpr(expr.condition, source, fileName); walkObpExpr(expr.whenTrue, source, fileName); walkObpExpr(expr.whenFalse, source, fileName) }
-            is ArrayLiteralExpression -> expr.elements.forEach { walkObpExpr(it, source, fileName) }
-            is ObjectLiteralExpression -> for (p in expr.properties) when (p) {
-                is PropertyAssignment -> walkObpExpr(p.initializer, source, fileName)
-                is SpreadAssignment -> walkObpExpr(p.expression, source, fileName)
-                is MethodDeclaration -> { emitTs2463ForImplParams(p.parameters, p.body != null, source, fileName); p.body?.statements?.forEach { walkObpStmt(it, source, fileName) } }
-                is GetAccessor -> { emitTs2463ForImplParams(p.parameters, p.body != null, source, fileName); p.body?.statements?.forEach { walkObpStmt(it, source, fileName) } }
-                is SetAccessor -> { emitTs2463ForImplParams(p.parameters, p.body != null, source, fileName); p.body?.statements?.forEach { walkObpStmt(it, source, fileName) } }
-                else -> {}
-            }
-            is SpreadElement -> walkObpExpr(expr.expression, source, fileName)
-            is AsExpression -> walkObpExpr(expr.expression, source, fileName)
-            is NonNullExpression -> walkObpExpr(expr.expression, source, fileName)
-            is AwaitExpression -> walkObpExpr(expr.expression, source, fileName)
-            is PrefixUnaryExpression -> walkObpExpr(expr.operand, source, fileName)
-            else -> {}
-        }
-    }
-
-    private fun walkParamForbiddenStmt(stmt: Statement, source: String, fileName: String, emitted: MutableSet<String>) {
-        when (stmt) {
-            is FunctionDeclaration -> {
-                walkParamForbiddenParameters(stmt.parameters, source, fileName, emitted)
-                stmt.body?.statements?.forEach { walkParamForbiddenStmt(it, source, fileName, emitted) }
-            }
-            is ClassDeclaration -> for (m in stmt.members) walkParamForbiddenClassMember(m, source, fileName, emitted)
-            is ModuleDeclaration -> stmt.body?.let { body ->
-                if (body is ModuleBlock) body.statements.forEach { walkParamForbiddenStmt(it, source, fileName, emitted) }
-            }
-            is VariableStatement -> for (d in stmt.declarationList.declarations) d.initializer?.let { walkParamForbiddenExprForFns(it, source, fileName, emitted) }
-            is ExpressionStatement -> walkParamForbiddenExprForFns(stmt.expression, source, fileName, emitted)
-            is ReturnStatement -> stmt.expression?.let { walkParamForbiddenExprForFns(it, source, fileName, emitted) }
-            is Block -> stmt.statements.forEach { walkParamForbiddenStmt(it, source, fileName, emitted) }
-            is IfStatement -> {
-                walkParamForbiddenStmt(stmt.thenStatement, source, fileName, emitted)
-                stmt.elseStatement?.let { walkParamForbiddenStmt(it, source, fileName, emitted) }
-            }
-            is ForStatement -> walkParamForbiddenStmt(stmt.statement, source, fileName, emitted)
-            is ForInStatement -> walkParamForbiddenStmt(stmt.statement, source, fileName, emitted)
-            is ForOfStatement -> walkParamForbiddenStmt(stmt.statement, source, fileName, emitted)
-            is WhileStatement -> walkParamForbiddenStmt(stmt.statement, source, fileName, emitted)
-            is DoStatement -> walkParamForbiddenStmt(stmt.statement, source, fileName, emitted)
-            is TryStatement -> {
-                stmt.tryBlock.statements.forEach { walkParamForbiddenStmt(it, source, fileName, emitted) }
-                stmt.catchClause?.block?.statements?.forEach { walkParamForbiddenStmt(it, source, fileName, emitted) }
-                stmt.finallyBlock?.statements?.forEach { walkParamForbiddenStmt(it, source, fileName, emitted) }
-            }
-            is LabeledStatement -> walkParamForbiddenStmt(stmt.statement, source, fileName, emitted)
-            is SwitchStatement -> for (c in stmt.caseBlock) when (c) {
-                is CaseClause -> c.statements.forEach { walkParamForbiddenStmt(it, source, fileName, emitted) }
-                is DefaultClause -> c.statements.forEach { walkParamForbiddenStmt(it, source, fileName, emitted) }
-                else -> {}
-            }
-            else -> {}
-        }
-    }
-
-    private fun walkParamForbiddenClassMember(member: ClassElement, source: String, fileName: String, emitted: MutableSet<String>) {
-        when (member) {
-            is MethodDeclaration -> {
-                walkParamForbiddenParameters(member.parameters, source, fileName, emitted)
-                member.body?.statements?.forEach { walkParamForbiddenStmt(it, source, fileName, emitted) }
-            }
-            is Constructor -> {
-                walkParamForbiddenParameters(member.parameters, source, fileName, emitted)
-                member.body?.statements?.forEach { walkParamForbiddenStmt(it, source, fileName, emitted) }
-            }
-            is GetAccessor -> {
-                walkParamForbiddenParameters(member.parameters, source, fileName, emitted)
-                member.body?.statements?.forEach { walkParamForbiddenStmt(it, source, fileName, emitted) }
-            }
-            is SetAccessor -> {
-                walkParamForbiddenParameters(member.parameters, source, fileName, emitted)
-                member.body?.statements?.forEach { walkParamForbiddenStmt(it, source, fileName, emitted) }
-            }
-            else -> {}
-        }
-    }
-
-    private fun walkParamForbiddenExprForFns(expr: Expression, source: String, fileName: String, emitted: MutableSet<String>) {
-        when (expr) {
-            is FunctionExpression -> {
-                walkParamForbiddenParameters(expr.parameters, source, fileName, emitted)
-                expr.body.statements.forEach { walkParamForbiddenStmt(it, source, fileName, emitted) }
-            }
-            is ArrowFunction -> {
-                walkParamForbiddenParameters(expr.parameters, source, fileName, emitted)
-                when (val b = expr.body) {
-                    is Block -> b.statements.forEach { walkParamForbiddenStmt(it, source, fileName, emitted) }
-                    is Expression -> walkParamForbiddenExprForFns(b, source, fileName, emitted)
-                    else -> {}
-                }
-            }
-            is ClassExpression -> for (m in expr.members) walkParamForbiddenClassMember(m, source, fileName, emitted)
-            is ParenthesizedExpression -> walkParamForbiddenExprForFns(expr.expression, source, fileName, emitted)
-            is CallExpression -> { walkParamForbiddenExprForFns(expr.expression, source, fileName, emitted); expr.arguments.forEach { walkParamForbiddenExprForFns(it, source, fileName, emitted) } }
-            is NewExpression -> { walkParamForbiddenExprForFns(expr.expression, source, fileName, emitted); expr.arguments?.forEach { walkParamForbiddenExprForFns(it, source, fileName, emitted) } }
-            is BinaryExpression -> {
-                var node: Expression = expr
-                while (node is BinaryExpression) { walkParamForbiddenExprForFns(node.right, source, fileName, emitted); node = node.left }
-                walkParamForbiddenExprForFns(node, source, fileName, emitted)
-            }
-            is ConditionalExpression -> { walkParamForbiddenExprForFns(expr.condition, source, fileName, emitted); walkParamForbiddenExprForFns(expr.whenTrue, source, fileName, emitted); walkParamForbiddenExprForFns(expr.whenFalse, source, fileName, emitted) }
-            is ArrayLiteralExpression -> expr.elements.forEach { walkParamForbiddenExprForFns(it, source, fileName, emitted) }
-            is ObjectLiteralExpression -> for (p in expr.properties) when (p) {
-                is PropertyAssignment -> walkParamForbiddenExprForFns(p.initializer, source, fileName, emitted)
-                is SpreadAssignment -> walkParamForbiddenExprForFns(p.expression, source, fileName, emitted)
-                is MethodDeclaration -> { walkParamForbiddenParameters(p.parameters, source, fileName, emitted); p.body?.statements?.forEach { walkParamForbiddenStmt(it, source, fileName, emitted) } }
-                is GetAccessor -> { walkParamForbiddenParameters(p.parameters, source, fileName, emitted); p.body?.statements?.forEach { walkParamForbiddenStmt(it, source, fileName, emitted) } }
-                is SetAccessor -> { walkParamForbiddenParameters(p.parameters, source, fileName, emitted); p.body?.statements?.forEach { walkParamForbiddenStmt(it, source, fileName, emitted) } }
-                else -> {}
-            }
-            is PrefixUnaryExpression -> walkParamForbiddenExprForFns(expr.operand, source, fileName, emitted)
-            is PostfixUnaryExpression -> walkParamForbiddenExprForFns(expr.operand, source, fileName, emitted)
-            is SpreadElement -> walkParamForbiddenExprForFns(expr.expression, source, fileName, emitted)
-            is AsExpression -> walkParamForbiddenExprForFns(expr.expression, source, fileName, emitted)
-            is NonNullExpression -> walkParamForbiddenExprForFns(expr.expression, source, fileName, emitted)
-            is TypeAssertionExpression -> walkParamForbiddenExprForFns(expr.expression, source, fileName, emitted)
-            is SatisfiesExpression -> walkParamForbiddenExprForFns(expr.expression, source, fileName, emitted)
-            else -> {}
-        }
-    }
-
-    private fun walkParamForbiddenParameters(parameters: List<Parameter>, source: String, fileName: String, emitted: MutableSet<String>) {
-        for (param in parameters) {
-            // A binding-pattern parameter stores its default on the BindingElement,
-            // not on Parameter.initializer; walkParamForbiddenBindingName covers it.
-            param.initializer?.let { init ->
-                walkParamInitForbidden(init, source, fileName, emitted)
-                walkParamForbiddenExprForFns(init, source, fileName, emitted)
-                // TS2372: a simple-identifier parameter's default initializer must not
-                // reference the parameter itself (`function f(x = x)` / `(b = b.toString())`).
-                // FP-safe: a reference to the own name inside the own initializer (not crossing
-                // a nested function/class boundary) is always a self-reference grammar error.
-                // B519: emit TS2372 at EVERY self-reference (per-position, not per-line — tsc
-                // reports per identifier resolution), PLUS the optionality-removal companions
-                // when the param TYPE includes `undefined` under strictNullChecks: TS2502 at the
-                // param name (the param's type resolution is circular through the default) and
-                // TS18048 for a self-ref used as an arithmetic/relational operand (possibly
-                // undefined). Flips `circularOptionalityRemoval`.
-                (param.name as? Identifier)?.let { nameId ->
-                    val pname = nameId.text
-                    val refs = mutableListOf<Pair<Int, Boolean>>()
-                    collectParamSelfRefs(init, pname, false, refs)
-                    if (refs.isNotEmpty()) {
-                        val typeHasUndef = paramTypeIncludesUndefined(param)
-                        if (typeHasUndef && strictNullChecks) {
-                            // TS2502 squiggles the WHOLE parameter (name through default end).
-                            val spanEnd = paramDefaultRightmostEnd(init)
-                            emitDiagAtPos(nameId.pos, (spanEnd - nameId.pos).coerceAtLeast(1), 2502,
-                                "'$pname' is referenced directly or indirectly in its own type annotation.",
-                                source, fileName, emitted)
-                        }
-                        for ((refPos, isArithOperand) in refs) {
-                            emitDiagAtPos(refPos, pname.length, 2372,
-                                "Parameter '$pname' cannot reference itself.", source, fileName, emitted)
-                            if (isArithOperand && typeHasUndef && strictNullChecks) {
-                                emitDiagAtPos(refPos, pname.length, 18048,
-                                    "'$pname' is possibly 'undefined'.", source, fileName, emitted)
-                            }
-                        }
-                    }
-                }
-            }
-            walkParamForbiddenBindingName(param.name, source, fileName, emitted)
-        }
-    }
-
-    /**
-     * Returns the source position of the first reference to [name] inside a parameter's
-     * default initializer [expr], or null. Recurses through value-transparent wrappers but
-     * STOPS at nested function/arrow/class boundaries (a closure that reads the param is a
-     * deferred read, not an init-time self-reference) and only descends into the BASE of a
-     * property access (`obj.x`'s `.x` property name is not a reference). BinaryExpression is
-     * flattened iteratively (deep `a+b+…` chains) while preserving source order.
-     */
-    private fun findParamSelfRef(expr: Expression, name: String): Int? {
-        when (expr) {
-            is Identifier -> return if (expr.text == name) expr.pos else null
-            is ParenthesizedExpression -> return findParamSelfRef(expr.expression, name)
-            is PropertyAccessExpression -> return findParamSelfRef(expr.expression, name)
-            is ElementAccessExpression -> return findParamSelfRef(expr.expression, name) ?: findParamSelfRef(expr.argumentExpression, name)
-            is CallExpression -> {
-                findParamSelfRef(expr.expression, name)?.let { return it }
-                for (a in expr.arguments) findParamSelfRef(a, name)?.let { return it }
-                return null
-            }
-            is NewExpression -> {
-                findParamSelfRef(expr.expression, name)?.let { return it }
-                expr.arguments?.forEach { findParamSelfRef(it, name)?.let { return it } }
-                return null
-            }
-            is BinaryExpression -> {
-                val rights = ArrayDeque<Expression>()
-                var node: Expression = expr
-                while (node is BinaryExpression) { rights.addFirst(node.right); node = node.left }
-                findParamSelfRef(node, name)?.let { return it }
-                for (r in rights) findParamSelfRef(r, name)?.let { return it }
-                return null
-            }
-            is ConditionalExpression -> {
-                findParamSelfRef(expr.condition, name)?.let { return it }
-                findParamSelfRef(expr.whenTrue, name)?.let { return it }
-                return findParamSelfRef(expr.whenFalse, name)
-            }
-            is PrefixUnaryExpression -> return findParamSelfRef(expr.operand, name)
-            is PostfixUnaryExpression -> return findParamSelfRef(expr.operand, name)
-            is ArrayLiteralExpression -> { for (e in expr.elements) findParamSelfRef(e, name)?.let { return it }; return null }
-            is ObjectLiteralExpression -> {
-                for (p in expr.properties) {
-                    val hit = when (p) {
-                        is PropertyAssignment -> findParamSelfRef(p.initializer, name)
-                        is SpreadAssignment -> findParamSelfRef(p.expression, name)
-                        is ShorthandPropertyAssignment -> if (p.name.text == name) p.name.pos else p.objectAssignmentInitializer?.let { findParamSelfRef(it, name) }
-                        else -> null // method / accessor → boundary
-                    }
-                    if (hit != null) return hit
-                }
-                return null
-            }
-            is SpreadElement -> return findParamSelfRef(expr.expression, name)
-            is AsExpression -> return findParamSelfRef(expr.expression, name)
-            is NonNullExpression -> return findParamSelfRef(expr.expression, name)
-            is TypeAssertionExpression -> return findParamSelfRef(expr.expression, name)
-            is SatisfiesExpression -> return findParamSelfRef(expr.expression, name)
-            is AwaitExpression -> return findParamSelfRef(expr.expression, name)
-            is YieldExpression -> return expr.expression?.let { findParamSelfRef(it, name) }
-            is DeleteExpression -> return findParamSelfRef(expr.expression, name)
-            is VoidExpression -> return findParamSelfRef(expr.expression, name)
-            is TypeOfExpression -> return findParamSelfRef(expr.expression, name)
-            is TemplateExpression -> { for (s in expr.templateSpans) findParamSelfRef(s.expression, name)?.let { return it }; return null }
-            is CommaListExpression -> { for (e in expr.elements) findParamSelfRef(e, name)?.let { return it }; return null }
-            is TaggedTemplateExpression -> {
-                findParamSelfRef(expr.tag, name)?.let { return it }
-                (expr.template as? TemplateExpression)?.templateSpans?.forEach { findParamSelfRef(it.expression, name)?.let { return it } }
-                return null
-            }
-            // FunctionExpression / ArrowFunction / ClassExpression / literals → boundary; do not recurse.
-            else -> return null
-        }
-    }
-
     /**
      * B519: collect ALL references to [name] inside a parameter default initializer [expr], each
      * tagged with whether it is a direct operand of an arithmetic/relational/bitwise binary
-     * expression (→ possibly-undefined TS18048). Same scope rules as [findParamSelfRef] (does not
-     * cross nested function/arrow/class boundaries). [arithCtx] propagates through parens only.
+     * expression (→ possibly-undefined TS18048). Does not cross nested function/arrow/class
+     * boundaries and only descends the BASE of a property access (a closure that reads the
+     * param is a deferred read, not an init-time self-reference). [arithCtx] propagates
+     * through parens only.
      */
     private fun collectParamSelfRefs(expr: Expression, name: String, arithCtx: Boolean, out: MutableList<Pair<Int, Boolean>>) {
         when (expr) {
@@ -51811,10 +51697,9 @@ interface DataView {
     }
 
     private fun walkParamForbiddenBindingElement(el: BindingElement, source: String, fileName: String, emitted: MutableSet<String>) {
-        el.initializer?.let {
-            walkParamInitForbidden(it, source, fileName, emitted)
-            walkParamForbiddenExprForFns(it, source, fileName, emitted)
-        }
+        // Nested functions inside the element default get their own spine
+        // Parameter enter (the deleted walkParamForbiddenExprForFns descent).
+        el.initializer?.let { walkParamInitForbidden(it, source, fileName, emitted) }
         walkParamForbiddenBindingName(el.name, source, fileName, emitted)
     }
 
@@ -71425,390 +71310,6 @@ interface DataView {
     }
 
     // -----------------------------------------------------------------------
-    // TS1015: Parameter cannot have question mark and initializer
-    // -----------------------------------------------------------------------
-
-    private fun checkOptionalParamWithInitializer() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            walkForOptionalParams(result.sourceFile.statements, source, fileName)
-        }
-    }
-
-    private fun walkForOptionalParams(stmts: List<Statement>, source: String, fileName: String) {
-        for (stmt in stmts) walkForOptionalParamsInStmt(stmt, source, fileName)
-    }
-
-    private fun walkForOptionalParamsInStmt(stmt: Statement, source: String, fileName: String) {
-        when (stmt) {
-            is FunctionDeclaration -> {
-                checkParamsForTS1015(stmt.parameters, source, fileName)
-                stmt.body?.let { walkForOptionalParams(it.statements, source, fileName) }
-            }
-            is ClassDeclaration -> {
-                for (member in stmt.members) {
-                    when (member) {
-                        is MethodDeclaration -> {
-                            checkParamsForTS1015(member.parameters, source, fileName)
-                            member.body?.let { walkForOptionalParams(it.statements, source, fileName) }
-                        }
-                        is Constructor -> {
-                            checkParamsForTS1015(member.parameters, source, fileName)
-                            member.body?.let { walkForOptionalParams(it.statements, source, fileName) }
-                        }
-                        is GetAccessor -> {
-                            checkParamsForTS1015(member.parameters, source, fileName)
-                            member.body?.let { walkForOptionalParams(it.statements, source, fileName) }
-                        }
-                        is SetAccessor -> {
-                            checkParamsForTS1015(member.parameters, source, fileName)
-                            member.body?.let { walkForOptionalParams(it.statements, source, fileName) }
-                        }
-                        else -> {}
-                    }
-                }
-            }
-            is VariableStatement -> {
-                for (decl in stmt.declarationList.declarations) {
-                    walkForOptionalParamsInExpr(decl.initializer, source, fileName)
-                }
-            }
-            is ExpressionStatement -> walkForOptionalParamsInExpr(stmt.expression, source, fileName)
-            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkForOptionalParams(it.statements, source, fileName) }
-            is Block -> walkForOptionalParams(stmt.statements, source, fileName)
-            is ReturnStatement -> walkForOptionalParamsInExpr(stmt.expression, source, fileName)
-            is IfStatement -> {
-                walkForOptionalParamsInExpr(stmt.expression, source, fileName)
-                walkForOptionalParamsInStmt(stmt.thenStatement, source, fileName)
-                stmt.elseStatement?.let { walkForOptionalParamsInStmt(it, source, fileName) }
-            }
-            is ForStatement -> {
-                stmt.condition?.let { walkForOptionalParamsInExpr(it, source, fileName) }
-                stmt.incrementor?.let { walkForOptionalParamsInExpr(it, source, fileName) }
-                walkForOptionalParamsInStmt(stmt.statement, source, fileName)
-            }
-            is ForInStatement -> {
-                walkForOptionalParamsInExpr(stmt.expression, source, fileName)
-                walkForOptionalParamsInStmt(stmt.statement, source, fileName)
-            }
-            is ForOfStatement -> {
-                walkForOptionalParamsInExpr(stmt.expression, source, fileName)
-                walkForOptionalParamsInStmt(stmt.statement, source, fileName)
-            }
-            is WhileStatement -> {
-                walkForOptionalParamsInExpr(stmt.expression, source, fileName)
-                walkForOptionalParamsInStmt(stmt.statement, source, fileName)
-            }
-            is DoStatement -> {
-                walkForOptionalParamsInStmt(stmt.statement, source, fileName)
-                walkForOptionalParamsInExpr(stmt.expression, source, fileName)
-            }
-            is SwitchStatement -> {
-                walkForOptionalParamsInExpr(stmt.expression, source, fileName)
-                for (clause in stmt.caseBlock) {
-                    val clauseStmts = when (clause) {
-                        is CaseClause -> {
-                            walkForOptionalParamsInExpr(clause.expression, source, fileName)
-                            clause.statements
-                        }
-                        is DefaultClause -> clause.statements
-                        else -> emptyList()
-                    }
-                    walkForOptionalParams(clauseStmts, source, fileName)
-                }
-            }
-            is TryStatement -> {
-                walkForOptionalParams(stmt.tryBlock.statements, source, fileName)
-                stmt.catchClause?.let { walkForOptionalParams(it.block.statements, source, fileName) }
-                stmt.finallyBlock?.let { walkForOptionalParams(it.statements, source, fileName) }
-            }
-            is LabeledStatement -> walkForOptionalParamsInStmt(stmt.statement, source, fileName)
-            is ThrowStatement -> walkForOptionalParamsInExpr(stmt.expression, source, fileName)
-            is ExportAssignment -> walkForOptionalParamsInExpr(stmt.expression, source, fileName)
-            else -> {}
-        }
-    }
-
-    private fun walkForOptionalParamsInExpr(expr: Expression?, source: String, fileName: String) {
-        when (expr) {
-            is ArrowFunction -> {
-                checkParamsForTS1015(expr.parameters, source, fileName, requireType = false)
-                when (val body = expr.body) {
-                    is Block -> walkForOptionalParams(body.statements, source, fileName)
-                    is Expression -> walkForOptionalParamsInExpr(body, source, fileName)
-                    else -> {}
-                }
-            }
-            is FunctionExpression -> {
-                checkParamsForTS1015(expr.parameters, source, fileName, requireType = false)
-                walkForOptionalParams(expr.body.statements, source, fileName)
-            }
-            is ParenthesizedExpression -> walkForOptionalParamsInExpr(expr.expression, source, fileName)
-            is AsExpression -> walkForOptionalParamsInExpr(expr.expression, source, fileName)
-            is TypeAssertionExpression -> walkForOptionalParamsInExpr(expr.expression, source, fileName)
-            is SatisfiesExpression -> walkForOptionalParamsInExpr(expr.expression, source, fileName)
-            is NonNullExpression -> walkForOptionalParamsInExpr(expr.expression, source, fileName)
-            is NewExpression -> {
-                walkForOptionalParamsInExpr(expr.expression, source, fileName)
-                expr.arguments?.forEach { walkForOptionalParamsInExpr(it, source, fileName) }
-            }
-            is PropertyAccessExpression -> walkForOptionalParamsInExpr(expr.expression, source, fileName)
-            is ElementAccessExpression -> {
-                walkForOptionalParamsInExpr(expr.expression, source, fileName)
-                walkForOptionalParamsInExpr(expr.argumentExpression, source, fileName)
-            }
-            is ArrayLiteralExpression -> expr.elements.forEach { walkForOptionalParamsInExpr(it, source, fileName) }
-            is TemplateExpression -> expr.templateSpans.forEach { walkForOptionalParamsInExpr(it.expression, source, fileName) }
-            is TaggedTemplateExpression -> {
-                walkForOptionalParamsInExpr(expr.tag, source, fileName)
-                when (val templ = expr.template) {
-                    is TemplateExpression -> templ.templateSpans.forEach { walkForOptionalParamsInExpr(it.expression, source, fileName) }
-                    else -> {}
-                }
-            }
-            is SpreadElement -> walkForOptionalParamsInExpr(expr.expression, source, fileName)
-            is AwaitExpression -> walkForOptionalParamsInExpr(expr.expression, source, fileName)
-            is YieldExpression -> expr.expression?.let { walkForOptionalParamsInExpr(it, source, fileName) }
-            is PrefixUnaryExpression -> walkForOptionalParamsInExpr(expr.operand, source, fileName)
-            is PostfixUnaryExpression -> walkForOptionalParamsInExpr(expr.operand, source, fileName)
-            is CommaListExpression -> expr.elements.forEach { walkForOptionalParamsInExpr(it, source, fileName) }
-            is BinaryExpression -> {
-                var current: Expression = expr
-                while (current is BinaryExpression) {
-                    walkForOptionalParamsInExpr(current.right, source, fileName)
-                    current = current.left
-                }
-                walkForOptionalParamsInExpr(current, source, fileName)
-            }
-            is ConditionalExpression -> {
-                walkForOptionalParamsInExpr(expr.condition, source, fileName)
-                walkForOptionalParamsInExpr(expr.whenTrue, source, fileName)
-                walkForOptionalParamsInExpr(expr.whenFalse, source, fileName)
-            }
-            is CallExpression -> {
-                walkForOptionalParamsInExpr(expr.expression, source, fileName)
-                for (arg in expr.arguments) walkForOptionalParamsInExpr(arg, source, fileName)
-            }
-            is ObjectLiteralExpression -> {
-                for (prop in expr.properties) {
-                    when (prop) {
-                        is MethodDeclaration -> {
-                            checkParamsForTS1015(prop.parameters, source, fileName)
-                            prop.body?.let { walkForOptionalParams(it.statements, source, fileName) }
-                        }
-                        is PropertyAssignment -> walkForOptionalParamsInExpr(prop.initializer, source, fileName)
-                        is SpreadAssignment -> walkForOptionalParamsInExpr(prop.expression, source, fileName)
-                        is GetAccessor -> prop.body?.let { walkForOptionalParams(it.statements, source, fileName) }
-                        is SetAccessor -> {
-                            checkParamsForTS1015(prop.parameters, source, fileName)
-                            prop.body?.let { walkForOptionalParams(it.statements, source, fileName) }
-                        }
-                        else -> {}
-                    }
-                }
-            }
-            is ClassExpression -> {
-                for (member in expr.members) {
-                    when (member) {
-                        is MethodDeclaration -> {
-                            checkParamsForTS1015(member.parameters, source, fileName)
-                            member.body?.let { walkForOptionalParams(it.statements, source, fileName) }
-                        }
-                        is Constructor -> {
-                            checkParamsForTS1015(member.parameters, source, fileName)
-                            member.body?.let { walkForOptionalParams(it.statements, source, fileName) }
-                        }
-                        is GetAccessor -> member.body?.let { walkForOptionalParams(it.statements, source, fileName) }
-                        is SetAccessor -> {
-                            checkParamsForTS1015(member.parameters, source, fileName)
-                            member.body?.let { walkForOptionalParams(it.statements, source, fileName) }
-                        }
-                        is PropertyDeclaration -> member.initializer?.let { walkForOptionalParamsInExpr(it, source, fileName) }
-                        else -> {}
-                    }
-                }
-            }
-            is VoidExpression -> walkForOptionalParamsInExpr(expr.expression, source, fileName)
-            is DeleteExpression -> walkForOptionalParamsInExpr(expr.expression, source, fileName)
-            is TypeOfExpression -> walkForOptionalParamsInExpr(expr.expression, source, fileName)
-            else -> {}
-        }
-    }
-
-    private fun checkParamsForTS1015(params: List<Parameter>, source: String, fileName: String, requireType: Boolean = true) {
-        for (param in params) {
-            if (param.questionToken && param.initializer != null) {
-                // In function/method/constructor declarations, TS1015 only fires when type annotation is present
-                // or when the parameter has an access modifier (parameter property).
-                // In arrow/function expressions, it fires regardless.
-                val isParamProperty = param.modifiers.any { it == ModifierFlag.Public || it == ModifierFlag.Private || it == ModifierFlag.Protected || it == ModifierFlag.Readonly }
-                if (requireType && param.type == null && !isParamProperty) continue
-                val name = param.name
-                val start = name.pos
-                val length = when (name) {
-                    is Identifier -> name.text.length
-                    else -> (name.end - 1 - start).coerceAtLeast(1)
-                }
-                val (line, character) = getLineAndCharacterOfPosition(source, start)
-                diagnostics.add(Diagnostic(
-                    message = "Parameter cannot have question mark and initializer.",
-                    category = DiagnosticCategory.Error,
-                    code = 1015,
-                    fileName = fileName,
-                    line = line,
-                    character = character,
-                    start = start,
-                    length = length,
-                ))
-            }
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // TS1052: A 'set' accessor parameter cannot have an initializer
-    // -----------------------------------------------------------------------
-
-    private fun checkSetAccessorInitializer() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            walkForSetAccessorInit(result.sourceFile.statements, source, fileName)
-        }
-    }
-
-    private fun walkForSetAccessorInit(stmts: List<Statement>, source: String, fileName: String) {
-        for (stmt in stmts) {
-            when (stmt) {
-                is ClassDeclaration -> {
-                    for (member in stmt.members) {
-                        if (member is SetAccessor && member.parameters.any { it.initializer != null }) {
-                            val name = member.name
-                            val start = name.pos
-                            val length = when (name) {
-                                is Identifier -> name.text.length
-                                else -> (name.end - 1 - start).coerceAtLeast(1)
-                            }
-                            val (line, character) = getLineAndCharacterOfPosition(source, start)
-                            diagnostics.add(Diagnostic(
-                                message = "A 'set' accessor parameter cannot have an initializer.",
-                                category = DiagnosticCategory.Error,
-                                code = 1052,
-                                fileName = fileName,
-                                line = line,
-                                character = character,
-                                start = start,
-                                length = length,
-                            ))
-                        }
-                    }
-                }
-                is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkForSetAccessorInit(it.statements, source, fileName) }
-                is Block -> walkForSetAccessorInit(stmt.statements, source, fileName)
-                is IfStatement -> {
-                    walkForSetAccessorInit(listOf(stmt.thenStatement), source, fileName)
-                    stmt.elseStatement?.let { walkForSetAccessorInit(listOf(it), source, fileName) }
-                }
-                is ForStatement -> walkForSetAccessorInit(listOf(stmt.statement), source, fileName)
-                is ForInStatement -> walkForSetAccessorInit(listOf(stmt.statement), source, fileName)
-                is ForOfStatement -> walkForSetAccessorInit(listOf(stmt.statement), source, fileName)
-                is WhileStatement -> walkForSetAccessorInit(listOf(stmt.statement), source, fileName)
-                is DoStatement -> walkForSetAccessorInit(listOf(stmt.statement), source, fileName)
-                is SwitchStatement -> for (clause in stmt.caseBlock) {
-                    when (clause) {
-                        is CaseClause -> walkForSetAccessorInit(clause.statements, source, fileName)
-                        is DefaultClause -> walkForSetAccessorInit(clause.statements, source, fileName)
-                        else -> {}
-                    }
-                }
-                is TryStatement -> {
-                    walkForSetAccessorInit(stmt.tryBlock.statements, source, fileName)
-                    stmt.catchClause?.let { walkForSetAccessorInit(it.block.statements, source, fileName) }
-                    stmt.finallyBlock?.let { walkForSetAccessorInit(it.statements, source, fileName) }
-                }
-                is LabeledStatement -> walkForSetAccessorInit(listOf(stmt.statement), source, fileName)
-                is FunctionDeclaration -> stmt.body?.let { walkForSetAccessorInit(it.statements, source, fileName) }
-                else -> {}
-            }
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // TS1053: A 'set' accessor cannot have rest parameter
-    // -----------------------------------------------------------------------
-
-    private fun checkSetAccessorRestParameter() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            walkForSetAccessorRest(result.sourceFile.statements, source, fileName)
-        }
-    }
-
-    private fun walkForSetAccessorRest(stmts: List<Statement>, source: String, fileName: String) {
-        for (stmt in stmts) {
-            when (stmt) {
-                is ClassDeclaration -> {
-                    for (member in stmt.members) {
-                        if (member is SetAccessor) {
-                            for (param in member.parameters) {
-                                if (param.dotDotDotToken) {
-                                    // Squiggle on `...` (3 chars), at name.pos - 3
-                                    val namePos = when (val n = param.name) {
-                                        is Identifier -> n.pos
-                                        else -> param.pos
-                                    }
-                                    val start = namePos - 3
-                                    val (line, character) = getLineAndCharacterOfPosition(source, start)
-                                    diagnostics.add(Diagnostic(
-                                        message = "A 'set' accessor cannot have rest parameter.",
-                                        category = DiagnosticCategory.Error,
-                                        code = 1053,
-                                        fileName = fileName,
-                                        line = line,
-                                        character = character,
-                                        start = start,
-                                        length = 3,
-                                    ))
-                                }
-                            }
-                        }
-                    }
-                }
-                is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkForSetAccessorRest(it.statements, source, fileName) }
-                is Block -> walkForSetAccessorRest(stmt.statements, source, fileName)
-                is IfStatement -> {
-                    walkForSetAccessorRest(listOf(stmt.thenStatement), source, fileName)
-                    stmt.elseStatement?.let { walkForSetAccessorRest(listOf(it), source, fileName) }
-                }
-                is ForStatement -> walkForSetAccessorRest(listOf(stmt.statement), source, fileName)
-                is ForInStatement -> walkForSetAccessorRest(listOf(stmt.statement), source, fileName)
-                is ForOfStatement -> walkForSetAccessorRest(listOf(stmt.statement), source, fileName)
-                is WhileStatement -> walkForSetAccessorRest(listOf(stmt.statement), source, fileName)
-                is DoStatement -> walkForSetAccessorRest(listOf(stmt.statement), source, fileName)
-                is SwitchStatement -> for (clause in stmt.caseBlock) {
-                    when (clause) {
-                        is CaseClause -> walkForSetAccessorRest(clause.statements, source, fileName)
-                        is DefaultClause -> walkForSetAccessorRest(clause.statements, source, fileName)
-                        else -> {}
-                    }
-                }
-                is TryStatement -> {
-                    walkForSetAccessorRest(stmt.tryBlock.statements, source, fileName)
-                    stmt.catchClause?.let { walkForSetAccessorRest(it.block.statements, source, fileName) }
-                    stmt.finallyBlock?.let { walkForSetAccessorRest(it.statements, source, fileName) }
-                }
-                is LabeledStatement -> walkForSetAccessorRest(listOf(stmt.statement), source, fileName)
-                is FunctionDeclaration -> stmt.body?.let { walkForSetAccessorRest(it.statements, source, fileName) }
-                else -> {}
-            }
-        }
-    }
-
-    // -----------------------------------------------------------------------
     // TS2404: The left-hand side of a 'for...in' statement cannot use a type annotation
     // -----------------------------------------------------------------------
 
@@ -72056,182 +71557,39 @@ interface DataView {
         }
     }
 
-    // -----------------------------------------------------------------------
-    // TS2371: A parameter initializer is only allowed in a function or
-    //         constructor implementation
-    // -----------------------------------------------------------------------
-
-    private fun checkParameterInitializerInNonImpl() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            walkForParamInitNonImpl(result.sourceFile.statements, source, fileName)
+    private fun reportTS2371ForParam(param: Parameter) {
+        val source = spineSource
+        val fileName = spineFileName
+        val init = param.initializer
+        if (init != null) {
+            // Param-level default: `(a = 1)` / `(a: T = 1)`.
+            // Span starts at beginning of parameter (including access modifiers like 'public')
+            var spanStart = param.pos
+            while (spanStart < source.length && source[spanStart].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) spanStart++
+            // Span from spanStart to initializer end, trimming trailing trivia
+            var spanEnd = init.end
+            while (spanEnd > spanStart && spanEnd <= source.length &&
+                source[spanEnd - 1].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' || it == ')' || it == ',' || it == ';' }) {
+                spanEnd--
+            }
+            val length = (spanEnd - spanStart).coerceAtLeast(1)
+            val (line, character) = getLineAndCharacterOfPosition(source, spanStart)
+            diagnostics.add(Diagnostic(
+                message = "A parameter initializer is only allowed in a function or constructor implementation.",
+                category = DiagnosticCategory.Error,
+                code = 2371,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = spanStart,
+                length = length,
+            ))
         }
-    }
-
-    private fun walkForParamInitNonImpl(stmts: List<Statement>, source: String, fileName: String) {
-        for (stmt in stmts) {
-            when (stmt) {
-                is FunctionDeclaration -> {
-                    if (stmt.body == null) {
-                        reportTS2371ForParams(stmt.parameters, source, fileName)
-                    }
-                    stmt.body?.let { walkForParamInitNonImpl(it.statements, source, fileName) }
-                }
-                is ClassDeclaration -> {
-                    for (member in stmt.members) {
-                        when (member) {
-                            is MethodDeclaration -> {
-                                if (member.body == null) {
-                                    reportTS2371ForParams(member.parameters, source, fileName)
-                                }
-                                member.body?.let { walkForParamInitNonImpl(it.statements, source, fileName) }
-                            }
-                            is Constructor -> {
-                                if (member.body == null) {
-                                    reportTS2371ForParams(member.parameters, source, fileName)
-                                }
-                                member.body?.let { walkForParamInitNonImpl(it.statements, source, fileName) }
-                            }
-                            else -> {}
-                        }
-                    }
-                }
-                is InterfaceDeclaration -> {
-                    for (member in stmt.members) {
-                        if (member is MethodDeclaration) {
-                            reportTS2371ForParams(member.parameters, source, fileName)
-                        }
-                    }
-                }
-                is VariableStatement -> {
-                    // Check function type annotations in variable declarations
-                    // e.g., var f: (a = 3) => number
-                    for (decl in stmt.declarationList.declarations) {
-                        checkFunctionTypeParams(decl.type, source, fileName)
-                        // Also check initializers for type assertions with function types
-                        checkExprForFunctionTypeParams(decl.initializer, source, fileName)
-                    }
-                }
-                is TypeAliasDeclaration -> {
-                    checkFunctionTypeParams(stmt.type, source, fileName)
-                }
-                is ModuleDeclaration -> {
-                    (stmt.body as? ModuleBlock)?.let { walkForParamInitNonImpl(it.statements, source, fileName) }
-                }
-                is Block -> walkForParamInitNonImpl(stmt.statements, source, fileName)
-                is IfStatement -> {
-                    walkForParamInitNonImpl(listOf(stmt.thenStatement), source, fileName)
-                    stmt.elseStatement?.let { walkForParamInitNonImpl(listOf(it), source, fileName) }
-                }
-                is ForStatement -> walkForParamInitNonImpl(listOf(stmt.statement), source, fileName)
-                is ForInStatement -> walkForParamInitNonImpl(listOf(stmt.statement), source, fileName)
-                is ForOfStatement -> walkForParamInitNonImpl(listOf(stmt.statement), source, fileName)
-                is WhileStatement -> walkForParamInitNonImpl(listOf(stmt.statement), source, fileName)
-                is DoStatement -> walkForParamInitNonImpl(listOf(stmt.statement), source, fileName)
-                is SwitchStatement -> for (clause in stmt.caseBlock) {
-                    when (clause) {
-                        is CaseClause -> walkForParamInitNonImpl(clause.statements, source, fileName)
-                        is DefaultClause -> walkForParamInitNonImpl(clause.statements, source, fileName)
-                        else -> {}
-                    }
-                }
-                is TryStatement -> {
-                    walkForParamInitNonImpl(stmt.tryBlock.statements, source, fileName)
-                    stmt.catchClause?.let { walkForParamInitNonImpl(it.block.statements, source, fileName) }
-                    stmt.finallyBlock?.let { walkForParamInitNonImpl(it.statements, source, fileName) }
-                }
-                is LabeledStatement -> walkForParamInitNonImpl(listOf(stmt.statement), source, fileName)
-                else -> {}
-            }
-        }
-    }
-
-    private fun checkFunctionTypeParams(type: TypeNode?, source: String, fileName: String) {
-        when (type) {
-            is FunctionType -> reportTS2371ForParams(type.parameters, source, fileName)
-            is ConstructorType -> reportTS2371ForParams(type.parameters, source, fileName)
-            is ParenthesizedType -> checkFunctionTypeParams(type.type, source, fileName)
-            is UnionType -> for (t in type.types) checkFunctionTypeParams(t, source, fileName)
-            is IntersectionType -> for (t in type.types) checkFunctionTypeParams(t, source, fileName)
-            is ArrayType -> checkFunctionTypeParams(type.elementType, source, fileName)
-            is TupleType -> for (el in type.elements) checkFunctionTypeParams(el, source, fileName)
-            is TypeReference -> type.typeArguments?.forEach { checkFunctionTypeParams(it, source, fileName) }
-            is ConditionalType -> {
-                checkFunctionTypeParams(type.checkType, source, fileName)
-                checkFunctionTypeParams(type.extendsType, source, fileName)
-                checkFunctionTypeParams(type.trueType, source, fileName)
-                checkFunctionTypeParams(type.falseType, source, fileName)
-            }
-            is IndexedAccessType -> {
-                checkFunctionTypeParams(type.objectType, source, fileName)
-                checkFunctionTypeParams(type.indexType, source, fileName)
-            }
-            is TypeOperator -> checkFunctionTypeParams(type.type, source, fileName)
-            is RestType -> checkFunctionTypeParams(type.type, source, fileName)
-            is OptionalType -> checkFunctionTypeParams(type.type, source, fileName)
-            is NamedTupleMember -> checkFunctionTypeParams(type.type, source, fileName)
-            is TypeLiteral -> for (m in type.members) when (m) {
-                is PropertyDeclaration -> checkFunctionTypeParams(m.type, source, fileName)
-                is MethodDeclaration -> {
-                    for (p in m.parameters) checkFunctionTypeParams(p.type, source, fileName)
-                    checkFunctionTypeParams(m.type, source, fileName)
-                }
-                is IndexSignature -> checkFunctionTypeParams(m.type, source, fileName)
-                else -> {}
-            }
-            else -> {}
-        }
-    }
-
-    private fun checkExprForFunctionTypeParams(expr: Expression?, source: String, fileName: String) {
-        when (expr) {
-            is TypeAssertionExpression -> checkFunctionTypeParams(expr.type, source, fileName)
-            is AsExpression -> checkFunctionTypeParams(expr.type, source, fileName)
-            is SatisfiesExpression -> {
-                checkFunctionTypeParams(expr.type, source, fileName)
-                checkExprForFunctionTypeParams(expr.expression, source, fileName)
-            }
-            is ParenthesizedExpression -> checkExprForFunctionTypeParams(expr.expression, source, fileName)
-            is NonNullExpression -> checkExprForFunctionTypeParams(expr.expression, source, fileName)
-            else -> {}
-        }
-    }
-
-    private fun reportTS2371ForParams(params: List<Parameter>, source: String, fileName: String) {
-        for (param in params) {
-            val init = param.initializer
-            if (init != null) {
-                // Param-level default: `(a = 1)` / `(a: T = 1)`.
-                // Span starts at beginning of parameter (including access modifiers like 'public')
-                var spanStart = param.pos
-                while (spanStart < source.length && source[spanStart].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' }) spanStart++
-                // Span from spanStart to initializer end, trimming trailing trivia
-                var spanEnd = init.end
-                while (spanEnd > spanStart && spanEnd <= source.length &&
-                    source[spanEnd - 1].let { it == ' ' || it == '\t' || it == '\n' || it == '\r' || it == ')' || it == ',' || it == ';' }) {
-                    spanEnd--
-                }
-                val length = (spanEnd - spanStart).coerceAtLeast(1)
-                val (line, character) = getLineAndCharacterOfPosition(source, spanStart)
-                diagnostics.add(Diagnostic(
-                    message = "A parameter initializer is only allowed in a function or constructor implementation.",
-                    category = DiagnosticCategory.Error,
-                    code = 2371,
-                    fileName = fileName,
-                    line = line,
-                    character = character,
-                    start = spanStart,
-                    length = length,
-                ))
-            }
-            // B51.3: Binding-pattern defaults: `({first = 0}: T)` — TS2371 fires for
-            // each binding-element with a default initializer (recursive for nested
-            // patterns). Squiggle on the binding-element's name (not the whole
-            // param), matching TypeScript's baseline span.
-            reportTS2371ForBindingPattern(param.name, source, fileName)
-        }
+        // B51.3: Binding-pattern defaults: `({first = 0}: T)` — TS2371 fires for
+        // each binding-element with a default initializer (recursive for nested
+        // patterns). Squiggle on the binding-element's name (not the whole
+        // param), matching TypeScript's baseline span.
+        reportTS2371ForBindingPattern(param.name, source, fileName)
     }
 
     private fun reportTS2371ForBindingPattern(name: Expression, source: String, fileName: String) {

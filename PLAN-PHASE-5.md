@@ -59,6 +59,59 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 518 (2026-07-14) — INV.4(b) batch 8: the parameter-initializer family
+migrated onto the spine; 24 walker functions (~902 lines) deleted, 6 init
+dispatches removed.** Session opened with the queued `--passTiming` re-measure
+(compiler profile, daemons stopped): checker-init 21.6 s of 24.9 s wall; the
+spine pass now carries 24 migrated passes at 529 ms; top-3 unchanged
+(checkPropertyAccess 3.73 s / checkTypeAssignability 2.43 s /
+checkCallExpressionTypes 2.27 s); the name-resolution pair (INV.4(c)) at
+932.7 + 681.8 ms; the zero-typing tail remains the batch pool. Batch 8 took
+the six-pass parameter-initializer family as THREE Parameter-enter handlers +
+ONE SetAccessor-enter handler: (1) `checkOptionalParamWithInitializer`
+(TS1015) — parent-kind dispatch reproduces the old reach exactly: the
+corpus-tuned requireType gate (tsc's checkGrammarParameterList fires
+unconditionally; ours needs a type annotation or a param-property modifier in
+DECLARATIONS, fires bare in arrow/fn-expr params — lifting it is signal-driven,
+not a migration side effect), interface/type-literal signatures + function
+TYPES + objlit/class-expr GET accessors stay excluded; widened faithfully to
+class property initializers / parameter defaults / dotted-namespace bodies.
+(2) `checkOptionalBindingPatternParams` (TS2463) — the per-parent
+owner-has-body gate (overload/ambient signatures exempt); widened to
+parameter defaults. (3) `checkParamInitializerForbidden`
+(TS2523/TS2524/TS2372/TS2502/TS18048) — `walkParamInitForbidden`, the
+binding-name walk, and `collectParamSelfRefs` retained verbatim as the
+per-parameter core (all stop at nested fn/class boundaries); the per-FILE
+(code@pos) dedup set became `spineParamForbiddenEmitted` (cleared in
+checkSpine's file loop); the `walkParamForbiddenExprForFns` nested-fn descent
+DISSOLVES into per-Parameter enters (its whole purpose was reaching nested
+functions' params — the spine visits them directly); `findParamSelfRef`
+deleted as already-dead code (orphaned by B519's collectParamSelfRefs — only
+self-recursive references remained). (4) `checkParameterInitializerInNonImpl`
+(TS2371) — verified against tsc checker.ts:45130 (checkParameter: initializer
++ `nodeIsMissing(getContainingFunction(node).body)`) and WIDENED faithfully to
+every FunctionType/ConstructorType position (the old walk reached fn-types
+only under var annotations / type aliases / casts via a 35-branch manual
+type-node descent — a fn-type in a PARAMETER annotation was silently
+unchecked); bodyless fn/method/ctor declarations + interface/type-literal
+methods fire as before; accessors stay excluded (old behavior);
+`reportTS2371ForParam` retained as the per-param emitter (binding-element
+defaults included). (5) `checkSetAccessorInitializer` +
+`checkSetAccessorRestParameter` (TS1052/TS1053, one SetAccessor-enter
+handler) — parent gate widened from class DECLARATIONS to class expressions +
+object literals per tsc checkGrammarAccessor (verified at checker.ts:52894/52900);
+interface/type-literal setters stay excluded (their parse may drop
+initializers — signal-driven candidate); emission shapes preserved exactly
+(ONE TS1052 per setter at the name; TS1053 per rest param at the `...`).
+VERIFIED: 29 pins written FIRST and run against the OLD walkers (23 green,
+the 6 widening pins fail pre-migration as expected — exactly the widened
+positions); suite 10,491 → 10,520 (+29 Inv4SpineBatch8Test, 0 regressions);
+listAll error lines IDENTICAL on ALL 8 profiles (518a vs 517b); warning-clean
+(--rerun-tasks). Ops note: a `pkill -f "MainK[t]"` bracket pattern still
+matched ITSELF because a `pgrep -af "MainKt"` LITERAL sat earlier in the same
+compound command — the bracket trick must cover every occurrence of the
+pattern in the command line, not just the pkill's own argument.
+
 **Round 517 (2026-07-14) — INV.4(b) batch 6: duplicate-modifier grammar +
 ambient initializers + switch/case comparability migrated onto the spine;
 9 walker functions (~453 lines) deleted, 3 init slots removed.** Three passes:
@@ -562,53 +615,6 @@ checkTypeAssignability 284 / checkPropertyAccess 273), and the by-NAME table
 deliberately-legacy INV.3(d) scope, per the round-507b prediction. Bench row
 appended. NEXT: INV.3(d) — retire the merge + delete the conflation ecology,
 walker-by-walker, each deletion suite- and listAll-gated.
-
-**Round 508 (2026-07-13) — INV.3(c)(iv) leg 1 LANDED: `resolveTypeNameToSymbol`'s
-Identifier branch + `typeNodeDefinitelyNonNullish`'s two fallbacks node-keyed
-JOINTLY (the round-507c order constraint).** The general type-resolution flip:
-`resolveTypeNameToSymbol`'s Identifier branch consults
-`lookupPerFileForNode(node, node.text)` — node-keyed resolution is a fixed
-property of the node, so the `nodeTypes` cache stays valid by construction —
-and the TWO call sites carrying their own trailing `?: globals[name]`
-(`getTypeFromTypeReference`, whose inferenceNamespace middle consult is
-untouched, and `checkConstraintsInTypeNode`'s TS2315 emitter) gate that
-fallback to QualifiedName: for an Identifier it was byte-redundant pre-flip
-(same key as the resolver's own lookup) and would silently RE-LEAK the
-node-keyed null post-flip — the trap is now recorded in the CLAUDE.md
-INV.3(c) entry. `typeNodeDefinitelyNonNullish`'s two merged-globals fallbacks
-consult `lookupPerFileForNode(t.typeName, name)` (currentFileLocals stays the
-first consult, the (c)(ii) convention). TWO discoveries: (1) the first full
-suite failed exactly ONE test — ThisPredicateNarrowingTest's cross-file
-augmentation pin — exposing a REAL visibility-model gap: tsc scopes a
-`declare module "<relative-spec>"` AUGMENTATION body under the augmented
-module's exports (the round-443 buildNamespaceScope rule), so the naive flip
-nulled `UnionType` inside services-style `declare module "./types.js"` blocks
-and this-predicate narrowing died; `lookupPerFileForNode` now captures the
-innermost string-named ModuleDeclaration during its parent walk and grants
-the resolved target's direct named exports (unclassified under --passTiming,
-the (c)(ii) discipline). (2) Test-design: the ADDITIVE leak-kill direction is
-SHADOWED by any-degradation — an unresolvable callee annotation degrades the
-assigned reference itself to `any` (proven with a never-declared `Zorp`
-control; also why the basic `return x` on a `T | undefined` local draws no
-TS2322 — pre-existing FN), masking every downstream narrowing consumer — so
-the flow observable uses the SUPPRESSION direction: a foreign UNIMPORTED
-NULLABLE alias return-annotation pre-flip types the assigned reference as the
-leaked union and manufactures TS18048 on a closure-captured read; post-flip
-the reference degrades to `any` and the leaked TS18048 dies (tsc-faithful:
-TS2304 → any). Verified: suite green 10,302 → 10,311 (+9
-Inv3TypePositionNodeKeyTest — 3 leak-kills FAIL on the pre-flip checker via
-stash: the flow TS18048, an annotation-position TS2322 from a leaked foreign
-`type Shape2 = { v: string }`, and a TS2315 manufactured about an unimported
-non-generic alias; 6 preservation controls pass both sides: imported/own-file
-nullable alias keep the REAL TS18048, imported non-nullish alias + imported
-interface keep the nullish-strip, imported alias annotation keeps the real
-TS2322, own-file TS2315 keeps firing); `--listAll` byte-identical on compiler
-AND services (46/46 env-legit diagnostics); bench row 28,004 ms self, +0.1%
-(dead in band), same top codes. NEXT:
-(iv) leg 2 — `getTypeFromBaseTypeExpression`'s Identifier fallback + the tiny
-value tail (emitTs2345ForBareTpArgToConstrainedTpParam,
-getOverloadImplementationRelated, calleeReturnAnnotationForImplicitAny), then
-the instrumented re-measure that unlocks INV.3(d).
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
@@ -1273,10 +1279,38 @@ interrupt the arc).
     checkAmbientRelativeModuleNames (TS2436 — top-level-of-script-file gate =
     a SourceFile parent check). 15 walker funs (~551 lines) deleted, 4 init
     slots removed. Suite +21 (Inv4SpineBatch7Test — 19 pre-verified against
-    the OLD walkers, 2 widening pins fail pre-migration as expected). NEXT
-    batches: re-measure --passTiming; candidates from the remaining
-    zero-typing grammar walks; checkMixinClassConstructor is
-    TP-scope-stateful — (d) territory.
+    the OLD walkers, 2 widening pins fail pre-migration as expected). Batch 8
+    DONE round 518 (2026-07-14): the parameter-initializer family — SIX
+    passes as three Parameter-enter handlers + one SetAccessor-enter handler:
+    checkOptionalParamWithInitializer (TS1015 — the corpus-tuned requireType
+    gate preserved: declarations need a type annotation or param-property
+    modifier, arrow/fn-expr params fire regardless; interface/type-literal
+    signatures and objlit/class-expr GET accessors stay excluded per the old
+    reach) + checkOptionalBindingPatternParams (TS2463 — uniform
+    owner-has-body gate per parent kind) + checkParamInitializerForbidden
+    (TS2523/TS2524/TS2372/TS2502/TS18048 — walkParamInitForbidden + the
+    binding-name walk + collectParamSelfRefs retained as the per-parameter
+    core; the per-file code@pos dedup set became spineParamForbiddenEmitted;
+    the walkParamForbiddenExprForFns nested-fn descent dissolves into
+    per-Parameter enters; findParamSelfRef deleted as already-dead) +
+    checkParameterInitializerInNonImpl (TS2371 — widened faithfully to EVERY
+    FunctionType/ConstructorType position per tsc checkParameter (initializer
+    + missing containing body); old reach was var annotations/aliases/casts
+    only; accessors stay excluded) + checkSetAccessorInitializer/
+    checkSetAccessorRestParameter (TS1052/TS1053 — parent gate widened from
+    class declarations to class expressions + object literals per tsc
+    checkGrammarAccessor; interface/type-literal setters excluded, a
+    signal-driven candidate). 24 walker funs (~902 lines) deleted, 6 init
+    dispatches removed. Suite +29 (Inv4SpineBatch8Test — 23 pre-verified
+    against the OLD walkers, 6 widening pins fail pre-migration as expected);
+    listAll error lines IDENTICAL on ALL 8 profiles (518a vs 517b).
+    Re-measured --passTiming (pre-batch): checker-init 21.6 s, spine 529 ms
+    carrying 24 passes; this batch's six summed ~292 ms of old pass time.
+    NEXT batches: remaining zero-typing tail candidates by the 518 table —
+    checkParamInitForwardRef (TS2373, function-level), checkForInLhsTypeAnnotation
+    (TS2404), checkEmptyTypeArguments (TS1099), checkSetterReturns (TS2408),
+    checkWithStatements (TS1101/TS1300/TS2410, parent-chain isInWith/isInAsync);
+    checkMixinClassConstructor is TP-scope-stateful — (d) territory.
   - [ ] **INV.4(c) The name-resolution pair.** checkUnresolvedNames (846 ms) +
     checkTypeUsedAsValue (734 ms): fold their private NameScope chains into
     spine-maintained authoritative lexical state backed by the INV.2(c)
