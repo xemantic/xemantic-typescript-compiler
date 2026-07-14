@@ -100393,7 +100393,15 @@ interface DataView {
             val originalName = decl.propertyName?.text ?: decl.name.text
             val (contextFile, importDecl) = findEnclosingImport(decl) ?: continue
             val spec = (importDecl.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+            // INV.3(d)(ii): the DIR-RELATIVE resolver is load-bearing for path-shaped
+            // layouts (`/proj/src/f1.ts` importing `./lib`) — the plain resolver only
+            // knows flat corpus-style keys, and pre-retire the merged globals masked
+            // the miss (importers free-rode on the merge); a failed hop here returns
+            // the bare alias and every import-mediated type silently dies. The
+            // `.js`-aware leg is unaffected (a `.js` spec fails the relative
+            // candidates and still strips via resolveAliasJsModuleSpecifier).
             val targetFile = resolveModuleSpecifier(spec, importDecl)
+                ?: resolveModuleSpecifierRelative(spec, contextFile)
                 ?: resolveAliasJsModuleSpecifier(spec, contextFile)
                 ?: continue
             val tr = fileResults[targetFile] ?: continue
