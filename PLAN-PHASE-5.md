@@ -89,8 +89,38 @@ Inv4SpineAccessorModifierTest incl. the 10k-term iterative-walk sharp-signal
 pin: TS18045 present AND TS2589 absent); `--listAll` byte-identical on
 compiler AND services vs the round-513 baselines (46/46 diagnostics; only the
 header's argv form differs); wall in band (compiler 25.8 s vs 26.1 s
-baseline). NEXT: INV.4(b) — first tail batch; pick ~5–15 mechanical
-zero-typing walkers from the round-491 table, pin, migrate, delete.**
+baseline). INV.4(b) BATCH 1 landed same session: checkInvalidGlobalAugmentations
+(TS2669/TS2670) + checkReservedWordInterfaceParams (TS7051/TS7006) became
+spine handlers and their private walks were deleted. Both old walks descended
+ONLY through module bodies, so reachability is reproduced as a module-chain
+parent-walk gate — "every ancestor is ModuleBlock/ModuleDeclaration up to
+SourceFile" — computing the threaded flags (insideRegularNamespace /
+insideAmbientModule) in the SAME walk; this is the template for
+module-scope-only walkers. The reserved-params handler deliberately does NOT
+widen to function/class-nested interfaces (tsc does flag them, but that
+behavior change wants a signal, not a migration side effect — noted in the
+KDoc). Structural consequences: the spine walk is ALWAYS-ON from this batch
+(the TS2669 handler is unconditional and covers .d.ts — the file-level dts
+fast-skip lifted into per-handler gates), and checkSpine's file loop now
+sets currentFileLocals per file (isTypeLikeParamName consults it; saved and
+restored around the whole pass). Test-authoring note: TS7051 needs a
+STRICT_MODE_RESERVED_WORD that also names an in-scope type — `string` is a
+type keyword, NOT a reserved word, so the 7051 branch is near-unreachable
+and is pinned via its negative gate instead. VERIFIED: suite 10,365 →
+10,375 (+10 Inv4SpineBatch1Test); listAll byte-identical on compiler AND
+services. THE MEASUREMENT LESSON: the 3-iteration bench read +5.2% — the
+round-493 interleave rule applied (3 old/new pairs, same box, back-to-back)
+split that into ~+1.0 s REAL walk cost + drift; the first-cut walk paid a
+boxed ArrayList<Boolean> frame per node and a leave ROUND-TRIP per leaf.
+Fixed in-session (primitive BooleanArray phase stack; leaf shortcut — leave
+fires inline for childless nodes) → re-interleaved neutral within noise
+(mean +124 ms over 3 pairs). Enter/leave SEQUENCE is unchanged (a leaf's
+leave always fired before the next node), so handler semantics are
+byte-identical. NEXT: INV.4(b) batch 2 —
+checkNonArrayRestParameters (read its value-position walk first; two
+differently-shaped walks) + the per-file-prepass pair
+(checkIteratorMethodExtraParameters / checkAsyncYieldStarThenable, the
+file-enter hook pattern).**
 
 **Round 513 (2026-07-14) — INV.3(d)(v) deletion #1: the `moduleFileLocalVarNames`
 value-leak ecology DELETED (the round-442/445/447/448/450/453/460 family).**
@@ -921,6 +951,30 @@ interrupt the arc).
     per-file prepasses moving to a file-enter hook); each batch deletes its
     walks. Re-measure `--passTiming` every few batches; stop batching a shape
     that resists (stateful scope machinery) and queue it for (c)/(d) instead.
+    Batch 1 DONE round 514 (2026-07-14): checkInvalidGlobalAugmentations
+    (TS2669/TS2670) + checkReservedWordInterfaceParams (TS7051/TS7006) —
+    both old walks descended ONLY through module bodies, so reachability is
+    reproduced as a module-chain parent-walk gate (the template for
+    module-scope-only walkers); the reserved-params handler deliberately does
+    NOT widen to function/class-nested interfaces (a behavior change to make
+    on a signal, not as a migration side effect); currentFileLocals is now
+    set per file in checkSpine's loop (isTypeLikeParamName consults it); the
+    spine walk is ALWAYS-ON from this batch (the TS2669 handler is
+    unconditional and covers .d.ts — the .d.ts fast-skip lifted into
+    per-handler gates). Suite +10 (Inv4SpineBatch1Test), listAll
+    byte-identical on compiler AND services. WALK-COST measurement
+    (interleaved 3-pair A/B vs the pre-batch binary — the round-493 rule): the
+    first-cut enter/leave walk cost a REAL +1.0 s median on the compiler
+    profile (boxing ArrayList<Boolean> phase stack + a leave frame per LEAF);
+    fixed same commit — primitive BooleanArray phase stack + leaf shortcut
+    (leave fires inline for childless nodes, no re-push) → re-interleaved
+    NEUTRAL within noise (pair deltas +861/−1063/+574 ms, mean +124 ms).
+    Per-frame costs are the whole game in a walk that visits every node —
+    the walk KDoc carries the warning. NEXT batches:
+    checkNonArrayRestParameters (needs the value-position walk read — two
+    differently-shaped walks), checkMixinClassConstructor (TP-scope
+    machinery — maybe (d)), checkIteratorMethodExtraParameters +
+    checkAsyncYieldStarThenable (per-file prepass → file-enter hook pattern).
   - [ ] **INV.4(c) The name-resolution pair.** checkUnresolvedNames (846 ms) +
     checkTypeUsedAsValue (734 ms): fold their private NameScope chains into
     spine-maintained authoritative lexical state backed by the INV.2(c)

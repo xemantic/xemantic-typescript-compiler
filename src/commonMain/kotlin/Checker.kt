@@ -942,6 +942,11 @@ class Checker(
     private var spineFileName: String = ""
     private var spineSource: String = ""
     private var spineIsDts: Boolean = false
+    private var spineIsJsLike: Boolean = false
+    private var spineFileIsModule: Boolean = false
+    // Per-handler activation gates, computed once per run in checkSpine.
+    private var spineAccessorModifierActive: Boolean = false
+    private var spineReservedIfaceParamsActive: Boolean = false
 
     // B283: identifier names guarded by a `typeof x === "..."` condition in an
     // enclosing if — the arithmetic walker has no flow narrowing, so union-typed
@@ -1960,12 +1965,8 @@ class Checker(
         // 7b'. TS2370: A rest parameter must be of an array type — fires unconditionally
         // (syntactic type-shape error, not an implicit-any diagnostic).
         pass("checkNonArrayRestParameters") { checkNonArrayRestParameters() }
-        // 7b''. B74.4: TS7051/TS7006 for interface MethodDeclaration params whose name
-        // is a strict-mode reserved word — fires unconditionally (mirrors TypeScript's
-        // behavior in `strictModeReservedWord2.ts`-style sources).
-        if (!options.strictExplicitlyFalse) {
-            pass("checkReservedWordInterfaceParams") { checkReservedWordInterfaceParams() }
-        }
+        // 7b''. B74.4 TS7051/TS7006 (reserved-word interface params) migrated to
+        // the check spine (INV.4(b) batch 1) — see spineCheckReservedWordInterfaceParams.
         // 17.218: TS2495 — `for-of <expr>` where expr is non-iterable. Only fires
         // when the user's `@lib` excludes es2015+ (es2015.iterable provides
         // Symbol.iterator); without it, only Array and string are iterable.
@@ -1979,11 +1980,12 @@ class Checker(
             pass("checkAbstractAccessorReturnTypes") { checkAbstractAccessorReturnTypes() }
         }
         // 7b'''. INV.4 single-pass check spine (round 514): ONE preorder walk
-        // per file dispatching all MIGRATED per-node checks (currently: TS18045
-        // accessor-modifier-vs-target, the pilot). The spine stays at this FIXED
-        // init position as later passes migrate in — the stable diagnostic sort
-        // hides insertion-order deltas except exact 4-tuple ties (per-migration
-        // corpus + listAll gates decide those).
+        // per file dispatching all MIGRATED per-node checks (TS18045
+        // accessor-modifier-vs-target; TS2669/TS2670 global-augmentation
+        // misplacement; TS7051/TS7006 reserved-word interface params). The
+        // spine stays at this FIXED init position as later passes migrate in —
+        // the stable diagnostic sort hides insertion-order deltas except exact
+        // 4-tuple ties (per-migration corpus + listAll gates decide those).
         pass("checkSpine") { checkSpine() }
         // B72.1: TS2545 — A mixin class must have a constructor with a single rest
         // parameter of type 'any[]'. NARROW gate: fires only when the
@@ -1993,8 +1995,8 @@ class Checker(
         // NOT trigger TS2545 here (mixin without explicit constructor is OK
         // for the valid pattern).
         pass("checkMixinClassConstructor") { checkMixinClassConstructor() }
-        // 7b'''. TS2669: `declare global { ... }` nested inside a regular namespace.
-        pass("checkInvalidGlobalAugmentations") { checkInvalidGlobalAugmentations() }
+        // 7b'''. TS2669/TS2670 (`global {}` misplacement) migrated to the check
+        // spine (INV.4(b) batch 1) — see spineCheckGlobalAugmentation.
         // 7b''''. TS8024: JSDoc `@param` tag with name not matching any function parameter.
         // JS-like files only (`.js`/`.jsx`/`.cjs`/`.mjs`).
         pass("checkJSDocParamTags") { checkJSDocParamTags() }
@@ -17396,97 +17398,6 @@ class Checker(
     }
 
     /**
-     * B74.4: TS7051/TS7006 for interface method parameters whose name is a
-     * strict-mode reserved word (e.g. `package`, `protected`, `let`).
-     * Fires unconditionally — independent of `noImplicitAny`/`strict` — because
-     * a strict-mode reserved word as a param name is a syntactic error that
-     * TypeScript flags universally. This mirrors TypeScript's behavior in
-     * `strictModeReservedWord2.ts`-style sources (no `@strict`, no
-     * `@noImplicitAny`, but TS7006/TS7051 still emitted).
-     *
-     * Narrow gate: only inside `InterfaceDeclaration` `MethodDeclaration`
-     * params, and only when the param name is in `STRICT_MODE_RESERVED_WORDS`.
-     * Reuses `isTypeLikeParamName` to decide TS7051 vs TS7006.
-     */
-    private fun checkReservedWordInterfaceParams() {
-        // Skip when checkImplicitAnyParameters already handles all interface methods
-        // (avoids double-emission of TS7051/TS7006).
-        if (options.noImplicitAny || options.strict) return
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (fileName.endsWith(".js") || fileName.endsWith(".jsx") ||
-                fileName.endsWith(".mjs") || fileName.endsWith(".cjs")) continue
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            val savedLocals = currentFileLocals
-            currentFileLocals = result.locals
-            try {
-                walkReservedWordInterfaceParams(result.sourceFile.statements, source, fileName)
-            } finally {
-                currentFileLocals = savedLocals
-            }
-        }
-    }
-
-    private fun walkReservedWordInterfaceParams(
-        statements: List<Statement>,
-        source: String,
-        fileName: String,
-    ) {
-        for (stmt in statements) {
-            when (stmt) {
-                is InterfaceDeclaration -> {
-                    for (member in stmt.members) {
-                        if (member is MethodDeclaration) {
-                            for ((idx, param) in member.parameters.withIndex()) {
-                                val name = param.name as? Identifier ?: continue
-                                if (name.text !in STRICT_MODE_RESERVED_WORDS) continue
-                                if (param.type != null) continue
-                                if (param.initializer != null) continue
-                                if (param.dotDotDotToken) continue
-                                val start = name.pos
-                                val length = if (param.questionToken) name.text.length + 1 else name.text.length
-                                val (line, character) = getLineAndCharacterOfPosition(source, start)
-                                if (isTypeLikeParamName(name.text)) {
-                                    diagnostics.add(Diagnostic(
-                                        message = "Parameter has a name but no type. Did you mean 'arg$idx: ${name.text}'?",
-                                        category = DiagnosticCategory.Error,
-                                        code = 7051,
-                                        fileName = fileName,
-                                        line = line,
-                                        character = character,
-                                        start = start,
-                                        length = length,
-                                    ))
-                                } else {
-                                    diagnostics.add(Diagnostic(
-                                        message = "Parameter '${name.text}' implicitly has an 'any' type.",
-                                        category = DiagnosticCategory.Error,
-                                        code = 7006,
-                                        fileName = fileName,
-                                        line = line,
-                                        character = character,
-                                        start = start,
-                                        length = length,
-                                    ))
-                                }
-                            }
-                        }
-                    }
-                }
-                is ModuleDeclaration -> {
-                    when (val body = stmt.body) {
-                        is ModuleBlock -> walkReservedWordInterfaceParams(body.statements, source, fileName)
-                        is ModuleDeclaration -> walkReservedWordInterfaceParams(listOf(body), source, fileName)
-                        else -> {}
-                    }
-                }
-                else -> {}
-            }
-        }
-    }
-
-    /**
      * TS2370: A rest parameter must be of an array type.
      *
      * Fires for a rest parameter whose type annotation is clearly not array-like
@@ -18330,53 +18241,72 @@ class Checker(
     //  - the walk is EXPLICIT-STACK iterative (checks can run off the
     //    deep-stack thread; 10k-term binary chains exist).
     private fun checkSpine() {
-        // Per-handler activation gates, computed once per run. A run with every
-        // migrated handler off skips the walk entirely (bench-neutral while the
-        // spine is small).
-        val accessorModifier = options.target < ScriptTarget.ES2015
-        if (!accessorModifier) return
-        for (result in binderResults) {
-            val sf = result.sourceFile
-            spineFileName = sf.fileName
-            spineIsDts = isDtsFile(spineFileName)
-            // File-level fast-skip while EVERY migrated handler is .d.ts-exempt;
-            // lift into per-handler gates when a .d.ts-relevant pass migrates in.
-            if (spineIsDts) continue
-            spineSource = sf.text
-            spineWalkFile(sf)
+        // Per-handler activation gates, computed once per run. (The TS2669/TS2670
+        // global-augmentation handler is unconditional — it also covers .d.ts —
+        // so since batch 1 the walk always runs; per-handler gates carry the
+        // option/file-kind conditions.)
+        spineAccessorModifierActive = options.target < ScriptTarget.ES2015
+        spineReservedIfaceParamsActive =
+            !options.strictExplicitlyFalse && !(options.noImplicitAny || options.strict)
+        val savedLocals = currentFileLocals
+        try {
+            for (result in binderResults) {
+                val sf = result.sourceFile
+                spineFileName = sf.fileName
+                spineSource = sf.text
+                spineIsDts = isDtsFile(spineFileName)
+                spineIsJsLike = spineFileName.endsWith(".js") || spineFileName.endsWith(".jsx") ||
+                    spineFileName.endsWith(".mjs") || spineFileName.endsWith(".cjs")
+                spineFileIsModule = isModuleFile(sf.statements)
+                currentFileLocals = result.locals
+                spineWalkFile(sf)
+            }
+        } finally {
+            currentFileLocals = savedLocals
         }
     }
 
     /**
-     * The spine's iterative enter/leave preorder walk. Parallel stacks (node +
-     * phase) avoid per-frame allocations; children are pushed in reverse so pop
-     * order is exact document preorder (same convention as [indexSourceFile]).
-     * Enter fires before any child, leave after all children — the pairing is
-     * what future stateful migrations hang scope push/pop on.
+     * The spine's iterative enter/leave preorder walk. Parallel stacks — an
+     * `ArrayList<Node>` plus a manually-grown primitive [BooleanArray] phase
+     * stack (an `ArrayList<Boolean>` would BOX every frame; this walk visits
+     * every node of every file, so per-frame costs are the whole game) —
+     * children pushed in reverse so pop order is exact document preorder (same
+     * convention as [indexSourceFile]). Enter fires before any child, leave
+     * after all children — the pairing is what future stateful migrations hang
+     * scope push/pop on. LEAF nodes (the majority: identifiers, literals,
+     * keywords) take the shortcut: leave fires inline and no frame is
+     * re-pushed, halving stack traffic.
      */
     private fun spineWalkFile(sf: SourceFile) {
         val nodes = ArrayList<Node>(256)
-        val leaving = ArrayList<Boolean>(256)
+        var phases = BooleanArray(256)
         nodes.add(sf)
-        leaving.add(false)
+        phases[0] = false
         val buf = ArrayList<Node>(16)
         val collect: (Node) -> Unit = { buf.add(it) }
         while (nodes.isNotEmpty()) {
             val top = nodes.size - 1
             val node = nodes.removeAt(top)
-            val leave = leaving.removeAt(top)
-            if (leave) {
+            if (phases[top]) {
                 spineLeaveNode(node)
                 continue
             }
             spineEnterNode(node)
-            nodes.add(node)
-            leaving.add(true)
             buf.clear()
             forEachChild(node, collect)
+            if (buf.isEmpty()) {
+                spineLeaveNode(node)
+                continue
+            }
+            if (nodes.size + buf.size + 1 > phases.size) {
+                phases = phases.copyOf(maxOf(phases.size * 2, nodes.size + buf.size + 1))
+            }
+            phases[nodes.size] = true
+            nodes.add(node)
             for (j in buf.indices.reversed()) {
+                phases[nodes.size] = false
                 nodes.add(buf[j])
-                leaving.add(false)
             }
         }
     }
@@ -18385,6 +18315,8 @@ class Checker(
     private fun spineEnterNode(node: Node) {
         when (node) {
             is PropertyDeclaration -> spineCheckAccessorModifier(node)
+            is ModuleDeclaration -> spineCheckGlobalAugmentation(node)
+            is MethodDeclaration -> spineCheckReservedWordInterfaceParams(node)
             else -> {}
         }
     }
@@ -18410,6 +18342,7 @@ class Checker(
      * type-literal members (which share [ClassElement]) excluded, as before.
      */
     private fun spineCheckAccessorModifier(node: PropertyDeclaration) {
+        if (!spineAccessorModifierActive || spineIsDts) return
         if (ModifierFlag.Accessor !in node.modifiers) return
         val parent = node.parent
         if (parent !is ClassDeclaration && parent !is ClassExpression) return
@@ -18441,6 +18374,124 @@ class Checker(
             cur = (cur as NodeBase).parent
         }
         return false
+    }
+
+    /**
+     * TS2669/TS2670: a `global { }` augmentation block nested in a regular
+     * namespace, or at top level of a NON-module file (17.187/B287 — migrated
+     * from the deleted `checkInvalidGlobalAugmentations` walker, INV.4(b)
+     * batch 1). The old walk descended ONLY through module bodies, so its
+     * reachability is exactly "every ancestor is a ModuleBlock or
+     * ModuleDeclaration": the single parent walk below reproduces the
+     * reachability gate AND the two threaded flags (insideRegularNamespace /
+     * insideAmbientModule) at once — any other ancestor kind (a block- or
+     * function-nested recovery shape) bails, preserving the old no-emit there.
+     * A `global` block DIRECTLY inside a `declare module "X"` body is LEGAL
+     * ("…or ambient module declarations") — the insideAmbientModule flag.
+     */
+    private fun spineCheckGlobalAugmentation(node: ModuleDeclaration) {
+        val nameNode = node.name
+        if (nameNode !is Identifier || nameNode.text != "global") return
+        var insideRegularNamespace = false
+        var insideAmbientModule = false
+        var cur = (node as NodeBase).parent
+        while (cur != null && cur !is SourceFile) {
+            when (cur) {
+                is ModuleBlock -> {}
+                is ModuleDeclaration -> {
+                    val n = cur.name
+                    if (n is Identifier && n.text != "global") insideRegularNamespace = true
+                    if (n is StringLiteralNode) insideAmbientModule = true
+                }
+                else -> return
+            }
+            cur = (cur as NodeBase).parent
+        }
+        if (cur == null) return // detached/unindexed tree — no old-walk equivalent
+        if (!insideRegularNamespace && (spineFileIsModule || insideAmbientModule)) return
+        val start = nameNode.pos
+        val length = 6 // "global"
+        val (line, character) = getLineAndCharacterOfPosition(spineSource, start)
+        diagnostics.add(Diagnostic(
+            message = "Augmentations for the global scope can only be directly nested in external modules or ambient module declarations.",
+            category = DiagnosticCategory.Error,
+            code = 2669,
+            fileName = spineFileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+        // TS2670 also fires when the `global {}` block lacks a `declare` modifier.
+        if (ModifierFlag.Declare !in node.modifiers) {
+            diagnostics.add(Diagnostic(
+                message = "Augmentations for the global scope should have 'declare' modifier unless they appear in already ambient context.",
+                category = DiagnosticCategory.Error,
+                code = 2670,
+                fileName = spineFileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
+        }
+    }
+
+    /**
+     * TS7051/TS7006 for interface method params named with a strict-mode
+     * reserved word (B74.4 — migrated from the deleted
+     * `checkReservedWordInterfaceParams` walker, INV.4(b) batch 1). Fires only
+     * in default mode (`spineReservedIfaceParamsActive`: neither strict-family
+     * option set nor explicitly false — strict/noImplicitAny hand these params
+     * to checkImplicitAnyParameters, which would double-emit). Old-walk
+     * reachability preserved: the interface must sit at top level or under
+     * namespace bodies only (module-chain ancestry); function/class-nested
+     * interfaces stay unchecked — a deliberate non-widening (tsc does flag
+     * them, but flipping that is a behavior change to make with a dashboard
+     * or corpus signal, not as a migration side effect).
+     */
+    private fun spineCheckReservedWordInterfaceParams(node: MethodDeclaration) {
+        if (!spineReservedIfaceParamsActive || spineIsDts || spineIsJsLike) return
+        val iface = node.parent as? InterfaceDeclaration ?: return
+        var cur = (iface as NodeBase).parent
+        while (cur != null && cur !is SourceFile) {
+            if (cur !is ModuleBlock && cur !is ModuleDeclaration) return
+            cur = (cur as NodeBase).parent
+        }
+        if (cur == null) return // detached/unindexed tree
+        for ((idx, param) in node.parameters.withIndex()) {
+            val name = param.name as? Identifier ?: continue
+            if (name.text !in STRICT_MODE_RESERVED_WORDS) continue
+            if (param.type != null) continue
+            if (param.initializer != null) continue
+            if (param.dotDotDotToken) continue
+            val start = name.pos
+            val length = if (param.questionToken) name.text.length + 1 else name.text.length
+            val (line, character) = getLineAndCharacterOfPosition(spineSource, start)
+            if (isTypeLikeParamName(name.text)) {
+                diagnostics.add(Diagnostic(
+                    message = "Parameter has a name but no type. Did you mean 'arg$idx: ${name.text}'?",
+                    category = DiagnosticCategory.Error,
+                    code = 7051,
+                    fileName = spineFileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
+            } else {
+                diagnostics.add(Diagnostic(
+                    message = "Parameter '${name.text}' implicitly has an 'any' type.",
+                    category = DiagnosticCategory.Error,
+                    code = 7006,
+                    fileName = spineFileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
+            }
+        }
     }
 
     /**
@@ -18667,80 +18718,6 @@ class Checker(
      * regular namespace — i.e. a ModuleDeclaration with Identifier name, not
      * `declare module "X"` (StringLiteralNode name).
      */
-    private fun checkInvalidGlobalAugmentations() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            val source = result.sourceFile.text
-            // 17.187: TS2669 also fires when `declare global { ... }` appears at
-            // top level of a non-module file (no imports/exports). The original
-            // `insideRegularNamespace` gate handled the namespace-nested case;
-            // this propagates the file's module status down to top-level
-            // recursion so a non-module top-level `declare global` triggers the
-            // same diagnostic.
-            val isModule = isModuleFile(result.sourceFile.statements)
-            checkGlobalAugNested(result.sourceFile.statements, source, fileName,
-                insideRegularNamespace = false, fileIsModule = isModule)
-        }
-    }
-
-    private fun checkGlobalAugNested(
-        stmts: List<Statement>, source: String, fileName: String,
-        insideRegularNamespace: Boolean,
-        fileIsModule: Boolean = true,
-        insideAmbientModule: Boolean = false,
-    ) {
-        for (stmt in stmts) {
-            if (stmt is ModuleDeclaration) {
-                val nameNode = stmt.name
-                val isGlobalBlock = nameNode is Identifier && nameNode.text == "global"
-                // 17.187: also fires for top-level `declare global` in a
-                // non-module file (no imports/exports). B287: a `global { }` block
-                // DIRECTLY inside a `declare module "X"` body is LEGAL ("...or
-                // ambient module declarations") and already-ambient (no TS2670).
-                val nonModuleTopLevel = isGlobalBlock && !insideRegularNamespace && !fileIsModule &&
-                    !insideAmbientModule
-                if (isGlobalBlock && (insideRegularNamespace || nonModuleTopLevel)) {
-                    val start = nameNode.pos
-                    val length = 6  // "global"
-                    val (line, character) = getLineAndCharacterOfPosition(source, start)
-                    diagnostics.add(Diagnostic(
-                        message = "Augmentations for the global scope can only be directly nested in external modules or ambient module declarations.",
-                        category = DiagnosticCategory.Error,
-                        code = 2669,
-                        fileName = fileName,
-                        line = line,
-                        character = character,
-                        start = start,
-                        length = length,
-                    ))
-                    // TS2670 also fires when `global {}` lacks a `declare` modifier.
-                    if (ModifierFlag.Declare !in stmt.modifiers) {
-                        diagnostics.add(Diagnostic(
-                            message = "Augmentations for the global scope should have 'declare' modifier unless they appear in already ambient context.",
-                            category = DiagnosticCategory.Error,
-                            code = 2670,
-                            fileName = fileName,
-                            line = line,
-                            character = character,
-                            start = start,
-                            length = length,
-                        ))
-                    }
-                }
-                // Recurse into body; mark nested context.
-                // A ModuleDeclaration is a "regular namespace" if its name is an Identifier
-                // (not a StringLiteralNode for `declare module "X"`).
-                val nowInsideRegular = insideRegularNamespace || (nameNode is Identifier && !isGlobalBlock)
-                val nowInsideAmbient = insideAmbientModule || nameNode is StringLiteralNode
-                when (val body = stmt.body) {
-                    is ModuleBlock -> checkGlobalAugNested(body.statements, source, fileName, nowInsideRegular, fileIsModule, nowInsideAmbient)
-                    is ModuleDeclaration -> checkGlobalAugNested(listOf(body), source, fileName, nowInsideRegular, fileIsModule, nowInsideAmbient)
-                    else -> {}
-                }
-            }
-        }
-    }
-
     /** Returns the keyword text if the type node is clearly not array-like; null otherwise. */
     private fun nonArrayKeywordText(typeNode: TypeNode): String? {
         if (typeNode !is KeywordTypeNode) return null
