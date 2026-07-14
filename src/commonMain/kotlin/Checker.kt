@@ -2144,8 +2144,8 @@ class Checker(
         pass("checkStrictModeIdentifiers") { checkStrictModeIdentifiers() }
         // 12b. Check class body strict mode (TS1210) — class bodies are always strict
         pass("checkClassStrictModeIdentifiers") { checkClassStrictModeIdentifiers() }
-        // 12c. Check access modifiers on object literal members (TS1042)
-        pass("checkObjectLiteralModifiers") { checkObjectLiteralModifiers() }
+        // 12c. TS1042/TS1184 (modifiers on object-literal members) migrated to
+        // the check spine (INV.4(b) batch 12) — see spineCheckObjLitModifiers.
         // 12d. Check 'arguments' in class field initializers / static blocks (TS2815)
         pass("checkArgumentsInClassFieldInitializers") { checkArgumentsInClassFieldInitializers() }
         // 13. Check export= in ES module files (TS1203)
@@ -17549,6 +17549,7 @@ class Checker(
                 spineCheckParamInitNonImpl(node)
             }
             is ObjectBindingPattern -> spineCheckRestElemPropName(node)
+            is ObjectLiteralExpression -> spineCheckObjLitModifiers(node)
             is VariableDeclaration -> {
                 spineCollectObjLitVar(node)
                 spineCheckConstInitializer(node)
@@ -17795,6 +17796,89 @@ class Checker(
             start = labelStart,
             length = node.label.text.length,
         ))
+    }
+
+    /**
+     * TS1042/TS1184: modifiers on object-literal members — migrated from the
+     * deleted `checkObjectLiteralModifiers` / `walkForObjectLiteralModifiers`
+     * / `walkExprForObjectLiteralModifiers` walk family (INV.4(b) batch 12).
+     * Pure per-object-literal emission (tsc
+     * checkGrammarObjectLiteralExpression runs per literal, position
+     * independent): a PropertyAssignment carrying ANY parser-recovered
+     * modifier → one TS1042 per modifier keyword in source order; an access
+     * modifier (public/private/protected) on a method or accessor → TS1042,
+     * plus TS1184 for METHODS only (tsc emits both there, never for
+     * accessors). Nested literals get their own enters; parameter-default
+     * and spread-operand positions are faithful reach widenings.
+     */
+    private fun spineCheckObjLitModifiers(node: ObjectLiteralExpression) {
+        if (spineIsDts) return
+        for (prop in node.properties) {
+            if (prop is PropertyAssignment && prop.modifiers.isNotEmpty()) {
+                val found = prop.modifiers.mapNotNull { mod ->
+                    val nm = objLitModifierKeyword(mod) ?: return@mapNotNull null
+                    val idx = spineSource.indexOf(nm, prop.pos)
+                    if (idx in prop.pos until prop.end.coerceAtMost(spineSource.length)) idx to nm else null
+                }.sortedBy { it.first }
+                for ((idx, nm) in found) {
+                    val (line, character) = getLineAndCharacterOfPosition(spineSource, idx)
+                    diagnostics.add(Diagnostic(
+                        message = "'$nm' modifier cannot be used here.",
+                        category = DiagnosticCategory.Error,
+                        code = 1042,
+                        fileName = spineFileName,
+                        line = line,
+                        character = character,
+                        start = idx,
+                        length = nm.length,
+                    ))
+                }
+            }
+            val modifiers = when (prop) {
+                is MethodDeclaration -> prop.modifiers
+                is GetAccessor -> prop.modifiers
+                is SetAccessor -> prop.modifiers
+                else -> emptySet()
+            }
+            for (mod in OBJLIT_ACCESS_MODIFIERS) {
+                if (mod in modifiers) {
+                    val modName = when (mod) {
+                        ModifierFlag.Public -> "public"
+                        ModifierFlag.Private -> "private"
+                        ModifierFlag.Protected -> "protected"
+                        else -> continue
+                    }
+                    val modIdx = spineSource.indexOf(modName, prop.pos)
+                    if (modIdx >= 0 && modIdx < prop.end.coerceAtMost(spineSource.length)) {
+                        val (line, character) = getLineAndCharacterOfPosition(spineSource, modIdx)
+                        diagnostics.add(Diagnostic(
+                            message = "'$modName' modifier cannot be used here.",
+                            category = DiagnosticCategory.Error,
+                            code = 1042,
+                            fileName = spineFileName,
+                            line = line,
+                            character = character,
+                            start = modIdx,
+                            length = modName.length,
+                        ))
+                        // TS1184: Modifiers cannot appear here. (TypeScript emits both
+                        // for methods, but NOT for get/set accessors)
+                        if (prop is MethodDeclaration) {
+                            diagnostics.add(Diagnostic(
+                                message = "Modifiers cannot appear here.",
+                                category = DiagnosticCategory.Error,
+                                code = 1184,
+                                fileName = spineFileName,
+                                line = line,
+                                character = character,
+                                start = modIdx,
+                                length = modName.length,
+                            ))
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /**
@@ -41402,212 +41486,6 @@ class Checker(
         else -> null
     }
 
-    private fun checkObjectLiteralModifiers() {
-        val accessModifiers = setOf(ModifierFlag.Public, ModifierFlag.Private, ModifierFlag.Protected)
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            walkForObjectLiteralModifiers(result.sourceFile.statements, source, fileName, accessModifiers)
-        }
-    }
-
-    private fun walkForObjectLiteralModifiers(stmts: List<Statement>, source: String, fileName: String, accessModifiers: Set<ModifierFlag>) {
-        for (stmt in stmts) walkExprForObjectLiteralModifiers(stmt, source, fileName, accessModifiers)
-    }
-
-    private fun walkExprForObjectLiteralModifiers(startNode: Node, source: String, fileName: String, accessModifiers: Set<ModifierFlag>) {
-        // Iterative traversal using an explicit stack to avoid StackOverflow on deeply nested
-        // BinaryExpression trees (e.g. binderBinaryExpressionStress.ts with 4971-level nesting).
-        val stack = ArrayDeque<Node>()
-        stack.addLast(startNode)
-        while (stack.isNotEmpty()) {
-            val node = stack.removeLast()
-            when (node) {
-                is ObjectLiteralExpression -> {
-                    for (prop in node.properties) {
-                        // TS1042: a property assignment (`name: value`) cannot carry ANY
-                        // modifier — the parser recovers them into prop.modifiers. Emit
-                        // one TS1042 per modifier (no TS1184 — that's methods-only),
-                        // in source order.
-                        if (prop is PropertyAssignment && prop.modifiers.isNotEmpty()) {
-                            val found = prop.modifiers.mapNotNull { mod ->
-                                val nm = objLitModifierKeyword(mod) ?: return@mapNotNull null
-                                val idx = source.indexOf(nm, prop.pos)
-                                if (idx in prop.pos until prop.end.coerceAtMost(source.length)) idx to nm else null
-                            }.sortedBy { it.first }
-                            for ((idx, nm) in found) {
-                                val (line, character) = getLineAndCharacterOfPosition(source, idx)
-                                diagnostics.add(Diagnostic(
-                                    message = "'$nm' modifier cannot be used here.",
-                                    category = DiagnosticCategory.Error,
-                                    code = 1042,
-                                    fileName = fileName,
-                                    line = line,
-                                    character = character,
-                                    start = idx,
-                                    length = nm.length,
-                                ))
-                            }
-                        }
-                        val modifiers = when (prop) {
-                            is MethodDeclaration -> prop.modifiers
-                            is GetAccessor -> prop.modifiers
-                            is SetAccessor -> prop.modifiers
-                            is PropertyAssignment -> emptySet()
-                            else -> emptySet()
-                        }
-                        for (mod in accessModifiers) {
-                            if (mod in modifiers) {
-                                val modName = when (mod) {
-                                    ModifierFlag.Public -> "public"
-                                    ModifierFlag.Private -> "private"
-                                    ModifierFlag.Protected -> "protected"
-                                    else -> continue
-                                }
-                                // Find the modifier keyword position in source
-                                val memberPos = prop.pos
-                                val modIdx = source.indexOf(modName, memberPos)
-                                if (modIdx >= 0 && modIdx < (prop.end.coerceAtMost(source.length))) {
-                                    val (line, character) = getLineAndCharacterOfPosition(source, modIdx)
-                                    diagnostics.add(Diagnostic(
-                                        message = "'$modName' modifier cannot be used here.",
-                                        category = DiagnosticCategory.Error,
-                                        code = 1042,
-                                        fileName = fileName,
-                                        line = line,
-                                        character = character,
-                                        start = modIdx,
-                                        length = modName.length,
-                                    ))
-                                    // TS1184: Modifiers cannot appear here. (TypeScript emits both
-                                    // for methods, but NOT for get/set accessors)
-                                    if (prop is MethodDeclaration) {
-                                        diagnostics.add(Diagnostic(
-                                            message = "Modifiers cannot appear here.",
-                                            category = DiagnosticCategory.Error,
-                                            code = 1184,
-                                            fileName = fileName,
-                                            line = line,
-                                            character = character,
-                                            start = modIdx,
-                                            length = modName.length,
-                                        ))
-                                    }
-                                }
-                            }
-                        }
-                        // Push children for continued traversal
-                        when (prop) {
-                            is MethodDeclaration -> prop.body?.statements?.let { stmts -> stmts.forEach { stack.addLast(it) } }
-                            is GetAccessor -> prop.body?.statements?.let { stmts -> stmts.forEach { stack.addLast(it) } }
-                            is SetAccessor -> prop.body?.statements?.let { stmts -> stmts.forEach { stack.addLast(it) } }
-                            is PropertyAssignment -> stack.addLast(prop.initializer)
-                            else -> {}
-                        }
-                    }
-                }
-                // Push children onto stack instead of recursing
-                is VariableStatement -> for (decl in node.declarationList.declarations) {
-                    decl.initializer?.let { stack.addLast(it) }
-                }
-                is ExpressionStatement -> stack.addLast(node.expression)
-                is ReturnStatement -> node.expression?.let { stack.addLast(it) }
-                is Block -> node.statements.forEach { stack.addLast(it) }
-                is FunctionDeclaration -> node.body?.statements?.forEach { stack.addLast(it) }
-                is ClassDeclaration -> node.members.forEach { stack.addLast(it) }
-                is MethodDeclaration -> node.body?.statements?.forEach { stack.addLast(it) }
-                is GetAccessor -> node.body?.statements?.forEach { stack.addLast(it) }
-                is SetAccessor -> node.body?.statements?.forEach { stack.addLast(it) }
-                is Constructor -> node.body?.statements?.forEach { stack.addLast(it) }
-                is IfStatement -> {
-                    stack.addLast(node.thenStatement)
-                    node.elseStatement?.let { stack.addLast(it) }
-                }
-                is ForStatement -> stack.addLast(node.statement)
-                is WhileStatement -> stack.addLast(node.statement)
-                is ArrowFunction -> {
-                    val body = node.body
-                    if (body is Block) body.statements.forEach { stack.addLast(it) }
-                    else stack.addLast(body)
-                }
-                is FunctionExpression -> node.body.statements.forEach { stack.addLast(it) }
-                is ParenthesizedExpression -> stack.addLast(node.expression)
-                is AsExpression -> stack.addLast(node.expression)
-                is TypeAssertionExpression -> stack.addLast(node.expression)
-                is SatisfiesExpression -> stack.addLast(node.expression)
-                is NonNullExpression -> stack.addLast(node.expression)
-                is BinaryExpression -> {
-                    // Push both sides — iterative instead of recursive to handle deep nesting
-                    stack.addLast(node.left)
-                    stack.addLast(node.right)
-                }
-                is CallExpression -> {
-                    stack.addLast(node.expression)
-                    node.arguments.forEach { stack.addLast(it) }
-                }
-                is NewExpression -> {
-                    stack.addLast(node.expression)
-                    node.arguments?.forEach { stack.addLast(it) }
-                }
-                is ConditionalExpression -> {
-                    stack.addLast(node.condition)
-                    stack.addLast(node.whenTrue)
-                    stack.addLast(node.whenFalse)
-                }
-                is ArrayLiteralExpression -> node.elements.forEach { stack.addLast(it) }
-                is PropertyAccessExpression -> stack.addLast(node.expression)
-                is ElementAccessExpression -> {
-                    stack.addLast(node.expression)
-                    stack.addLast(node.argumentExpression)
-                }
-                is PrefixUnaryExpression -> stack.addLast(node.operand)
-                is PostfixUnaryExpression -> stack.addLast(node.operand)
-                is SpreadElement -> stack.addLast(node.expression)
-                is AwaitExpression -> stack.addLast(node.expression)
-                is YieldExpression -> node.expression?.let { stack.addLast(it) }
-                is TemplateExpression -> node.templateSpans.forEach { stack.addLast(it.expression) }
-                is TaggedTemplateExpression -> {
-                    stack.addLast(node.tag)
-                    when (val templ = node.template) {
-                        is TemplateExpression -> templ.templateSpans.forEach { stack.addLast(it.expression) }
-                        else -> {}
-                    }
-                }
-                is VoidExpression -> stack.addLast(node.expression)
-                is DeleteExpression -> stack.addLast(node.expression)
-                is TypeOfExpression -> stack.addLast(node.expression)
-                is CommaListExpression -> node.elements.forEach { stack.addLast(it) }
-                is ClassExpression -> node.members.forEach { stack.addLast(it) }
-                is PropertyDeclaration -> node.initializer?.let { stack.addLast(it) }
-                // Additional statement kinds for broader top-down coverage
-                is ForInStatement -> stack.addLast(node.statement)
-                is ForOfStatement -> stack.addLast(node.statement)
-                is DoStatement -> stack.addLast(node.statement)
-                is SwitchStatement -> for (clause in node.caseBlock) {
-                    when (clause) {
-                        is CaseClause -> {
-                            stack.addLast(clause.expression)
-                            clause.statements.forEach { stack.addLast(it) }
-                        }
-                        is DefaultClause -> clause.statements.forEach { stack.addLast(it) }
-                        else -> {}
-                    }
-                }
-                is TryStatement -> {
-                    node.tryBlock.statements.forEach { stack.addLast(it) }
-                    node.catchClause?.block?.statements?.forEach { stack.addLast(it) }
-                    node.finallyBlock?.statements?.forEach { stack.addLast(it) }
-                }
-                is LabeledStatement -> stack.addLast(node.statement)
-                is ThrowStatement -> node.expression?.let { stack.addLast(it) }
-                is ExportAssignment -> stack.addLast(node.expression)
-                is ModuleDeclaration -> (node.body as? ModuleBlock)?.statements?.forEach { stack.addLast(it) }
-                else -> {}
-            }
-        }
-    }
-
     // -----------------------------------------------------------------------
     // Class body strict mode checking (TS1210)
     // -----------------------------------------------------------------------
@@ -42292,6 +42170,12 @@ class Checker(
     }
 
     companion object {
+        /** Access modifiers rejected on object-literal members (TS1042/TS1184,
+         *  [spineCheckObjLitModifiers]). Companion-hosted: the spine runs during
+         *  `init`, so an instance field declared after `init` would read null. */
+        private val OBJLIT_ACCESS_MODIFIERS =
+            setOf(ModifierFlag.Public, ModifierFlag.Private, ModifierFlag.Protected)
+
         /** Maximum antecedent walk depth for control-flow narrowing, aligned with tsc's
          *  `flowDepth === 2000` stack guard (M1.2b, round 386 — was 50). Do NOT lower it
          *  back "to save time": truncated subtrees are never memo-stored (the clean-only
