@@ -26641,7 +26641,14 @@ class Checker(
                         }
                         // Leftmost IS in scope. If the resolved symbol is NOT a namespace/module,
                         // look for a similarly-named namespace and emit TS2833.
-                        val leftSym = globals[lname] ?: currentFileLocals?.get(lname)
+                        // INV.3(d)(ii): per-file — this pass runs without currentFileLocals
+                        // (the unscoped class), so a module file's own import-equals alias
+                        // no longer resolved through the retired merged globals and the
+                        // B90.1 TS2503 gate below silently died (augmentExportEquals1/2's
+                        // `let a: x.A`). lookupPerFile keeps an import-EQUALS alias itself
+                        // (the hop is ImportSpecifier-only), which is exactly what
+                        // getImportEqualsSpecifier needs.
+                        val leftSym = globalsForFile(fileName, lname) ?: currentFileLocals?.get(lname)
                         // B90.1: leftmost is an `import x = require("M")` alias where module M
                         // is defined with `export = <value-only entity>` — M has no namespace
                         // meaning, so `x.A` used as a namespace qualifier in a type position
@@ -115137,7 +115144,11 @@ interface DataView {
                     is PropertyAccessExpression -> (bn.name).text
                     else -> null
                 } ?: continue
-                val baseSym = globals[baseName] ?: continue
+                // INV.3(d)(ii): node-keyed — a module file's own extends-base left globals.
+                val baseSym = (when (val bn = baseExpr.expression) {
+                    is Identifier -> lookupPerFileForNode(bn, baseName)
+                    else -> globals[baseName]
+                }) ?: continue
                 val baseType = getDeclaredTypeOfSymbol(baseSym) as? Type.Object ?: continue
                 resolveStructuredTypeMembers(baseType)
                 baseType.properties?.forEach { classMemberNames.add(it.name) }
@@ -115197,6 +115208,10 @@ interface DataView {
                 }
                 val ifaceSymbol = when (val tn = typeExpr.expression) {
                     is PropertyAccessExpression -> resolveHeritageBaseSymbol(tn)
+                    // INV.3(d)(ii): node-keyed — a module file's own implements-target
+                    // left the retired merged globals (interfaceImplementation6's C2
+                    // private-mismatch TS2420 died).
+                    is Identifier -> lookupPerFileForNode(tn, baseIfaceName)
                     else -> globals[baseIfaceName]
                 } ?: continue
                 // 16.4l: Handle both interface (TS2420) and class (TS2720) targets.
@@ -115759,6 +115774,11 @@ interface DataView {
 
                 val baseSymbol = when (val tn = typeExpr.expression) {
                     is PropertyAccessExpression -> resolveHeritageBaseSymbol(tn)
+                    // INV.3(d)(ii): node-keyed — a module file's OWN base interface no
+                    // longer sits in the retired merged globals (interfaceDeclaration3's
+                    // top-level `interface I2 extends I1` died); the heritage Identifier
+                    // is a real indexed node, so its owning file's visibility applies.
+                    is Identifier -> lookupPerFileForNode(tn, baseName)
                     else -> globals[baseName]
                 } ?: continue
                 if (!baseSymbol.flags.hasAny(SymbolFlags.Interface)) continue
@@ -119639,7 +119659,10 @@ interface DataView {
                                 }
                             }
                         }
-                        checkConstraintsForTypeArgs(name, typeArgs, source, fileName)
+                        checkConstraintsForTypeArgs(
+                            name, typeArgs, source, fileName,
+                            keyNode = node.typeName as? Identifier,
+                        )
                     }
                     // Recurse into type arguments
                     typeArgs.forEach { checkConstraintsInTypeNode(it, source, fileName) }
@@ -119661,7 +119684,18 @@ interface DataView {
                 val qualName = (node.qualifier as? Identifier)?.text
                 val importArgs = node.typeArguments
                 if (qualName != null && !importArgs.isNullOrEmpty()) {
-                    checkConstraintsForTypeArgs(qualName, importArgs, source, fileName, emitTypeParamHint = true)
+                    // INV.3(d)(ii): resolve through the ImportType's OWN specifier —
+                    // the target module's local (the retired merge no longer leaks it
+                    // into globals; unmetTypeConstraintInImportCall's
+                    // `import('./file1').Foo<T>`). Unresolvable spec → the legacy
+                    // consult inside (globals still carries script/lib names).
+                    val spec = ((node.argument as? LiteralType)?.literal as? StringLiteralNode)?.text
+                    val target = spec?.let { resolveSpecifierAnywhere(it, fileName) }
+                    val preset = target?.let { fileResults[it]?.locals?.get(qualName) }
+                    checkConstraintsForTypeArgs(
+                        qualName, importArgs, source, fileName,
+                        emitTypeParamHint = true, presetSymbol = preset,
+                    )
                     importArgs.forEach { checkConstraintsInTypeNode(it, source, fileName) }
                 }
             }
@@ -119676,11 +119710,21 @@ interface DataView {
         // gets a TS2208 "might need an `extends X` constraint" hint at its declaration. Gated
         // off for the TypeReference path to avoid changing its existing TS2344 baselines.
         emitTypeParamHint: Boolean = false,
+        // INV.3(d)(ii): node-keyed resolution — a bare-Identifier reference resolves under
+        // its owning file's visibility (a module file's OWN generic alias left the retired
+        // merged globals: divergentAccessorsTypes6's `Fail<string>`); QualifiedName callers
+        // keep the legacy consult (keyNode = null).
+        keyNode: Node? = null,
+        // INV.3(d)(ii): the ImportType path pre-resolves through its own SPECIFIER
+        // (`import('./file1').Foo<T>` — the target module's local, not globals).
+        presetSymbol: Symbol? = null,
     ) {
         // Skip built-in generics (Array, Promise, etc.)
         if (typeName in BUILTIN_GENERICS) return
 
-        val symbol = globals[typeName] ?: return
+        val symbol = presetSymbol
+            ?: (if (keyNode != null) lookupPerFileForNode(keyNode, typeName) else globals[typeName])
+            ?: return
         // 16.4gc: Get type parameter DECLARATIONS and resolve constraints with the
         // fresh TypeParam objects pushed onto scope — this way TypeParam references
         // inside a constraint (e.g. `T` inside `{ a: T }` for `U extends { a: T }`)
@@ -124089,6 +124133,29 @@ interface DataView {
             val identSymbol = enclosingNsShadow ?: perFileIdentSymbol ?: nsEnumShadow
 
             if (identSymbol != null) {
+                // INV.3(d)(ii): a receiver whose resolution has ONLY type-side
+                // declarations while its DECLARING file also namespace-imports the
+                // same name (`import * as B from "./b"` + `interface B` — tsc's
+                // alias+interface merge, noCrashOnImportShadowing) reads its VALUE
+                // side from the namespace import: `B.zzz` resolves the target
+                // module's exports, so every interface-receiver TS2339 path below
+                // is the wrong space. Suppression-only bail (module-member absence
+                // stays owned by the module-receiver branches).
+                if (identSymbol.declarations.any { it is InterfaceDeclaration || it is TypeAliasDeclaration } &&
+                    identSymbol.declarations.none {
+                        it is ClassDeclaration || it is FunctionDeclaration || it is EnumDeclaration ||
+                            it is VariableDeclaration || it is ModuleDeclaration
+                    }) {
+                    val typeDecl = identSymbol.declarations.first {
+                        it is InterfaceDeclaration || it is TypeAliasDeclaration
+                    }
+                    val declFile = owningSourceFile(typeDecl)
+                    val hasNsImportOfName = declFile?.statements?.any { st ->
+                        st is ImportDeclaration &&
+                            (st.importClause?.namedBindings as? NamespaceImport)?.name?.text == identName
+                    } == true
+                    if (hasNsImportOfName) return
+                }
                 // B240: `fn.name` where fn is a plain no-param function declaration and
                 // the lib excludes es2015 — Function.name lives in lib.es2015.core, so
                 // the access is TS2339 with the function-type display ('() => void').
@@ -150522,7 +150589,13 @@ interface DataView {
             for (typeExpr in impl.types) {
                 val ifaceName = (typeExpr.expression as? Identifier)?.text ?: continue
                 if (!typeExpr.typeArguments.isNullOrEmpty()) continue
-                if (globals.containsKey(ifaceName)) continue  // shared walker owns top-level interfaces
+                // Shared walker owns top-level interfaces. INV.3(d)(ii): post-retire a
+                // module file's top-level interface left `globals`, and the shared
+                // walker resolves node-keyed — mirror ITS consult here so the two stay
+                // complementary by construction (a namespace-LOCAL interface is in
+                // neither globals nor file-level scope → stays owned here).
+                if (globals.containsKey(ifaceName) ||
+                    lookupPerFileForNode(typeExpr.expression, ifaceName) != null) continue
                 val iface = fnsIface(ifaceName, scopes) ?: continue
                 if (iface.heritageClauses?.any { it.token == SyntaxKind.ExtendsKeyword } == true) continue
                 val missing = fnsRequired(iface).filter { it.first !in classNames }
