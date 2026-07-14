@@ -2422,10 +2422,10 @@ class Checker(
         pass("checkAbstractMemberAccessInConstructor") { checkAbstractMemberAccessInConstructor() }
         // 27f. Check abstract members in non-abstract class (TS1253) + abstract property without annotation (TS7008)
         pass("checkAbstractMemberContext") { checkAbstractMemberContext() }
-        // 28. Check const without initializer (TS1155)
-        pass("checkConstWithoutInitializer") { checkConstWithoutInitializer() }
-        // 28b. Check destructuring declaration without initializer (TS1182)
-        pass("checkDestructuringWithoutInitializer") { checkDestructuringWithoutInitializer() }
+        // 28. TS1155 (const without initializer) + 28b. TS1182/TS7031
+        // (destructuring declaration without initializer) migrated to the check
+        // spine (INV.4(b) batch 5) — see spineCheckConstInitializer /
+        // spineCheckDestructuringInitializer.
         // 29. Check reserved words in wrong context (TS1359)
         pass("checkReservedWordIdentifiers") { checkReservedWordIdentifiers() }
         // 31. Check for merge conflict markers (TS1185)
@@ -2521,8 +2521,10 @@ class Checker(
         // (INV.4(b) batch 4) — see spineCheckMultipleDefaults.
         // 45. TS1246 (interface property initializers) migrated to the check
         // spine (INV.4(b) batch 4) — see spineCheckInterfacePropertyInitializers.
-        // 45b. Check computed property name expressions in classes/interfaces (TS1166/TS1169)
-        pass("checkComputedPropertyNameLiteral") { checkComputedPropertyNameLiteral() }
+        // 45b. TS1166/TS1169 (computed property names in classes/interfaces) +
+        // the class-expression TS1206 short-circuit migrated to the check spine
+        // (INV.4(b) batch 5) — see spineCheckComputedPropName /
+        // spineCheckClassExprComputedProps.
         // 45b''. B364: function-local call-arg discriminated-union element mismatch (TS2820/2322)
         pass("checkLocalCallDiscriminantArgs") { checkLocalCallDiscriminantArgs() }
         // 45b'''. B365: calling a construct-signature-only value (TS2348)
@@ -17620,14 +17622,22 @@ class Checker(
     /** Per-node dispatch, preorder position (before children). */
     private fun spineEnterNode(node: Node) {
         when (node) {
-            is PropertyDeclaration -> spineCheckAccessorModifier(node)
+            is PropertyDeclaration -> {
+                spineCheckAccessorModifier(node)
+                spineCheckComputedPropName(node)
+            }
             is ModuleDeclaration -> spineCheckGlobalAugmentation(node)
             is MethodDeclaration -> spineCheckReservedWordInterfaceParams(node)
             is Parameter -> {
                 spineCheckRestParam(node)
                 spineCheckRestParamLast(node)
             }
-            is VariableDeclaration -> spineCollectObjLitVar(node)
+            is VariableDeclaration -> {
+                spineCollectObjLitVar(node)
+                spineCheckConstInitializer(node)
+                spineCheckDestructuringInitializer(node)
+            }
+            is ClassExpression -> spineCheckClassExprComputedProps(node)
             is ForOfStatement -> {
                 spineNoteIterationPosition(node.expression)
                 spineCheckForOfNonIterable(node)
@@ -18312,6 +18322,163 @@ class Checker(
                 start = start,
                 length = length,
             ))
+        }
+    }
+
+    /**
+     * True when [node] sits under a `declare` namespace/module through a chain
+     * of ONLY ModuleBlock/ModuleDeclaration ancestors — the exact reach of the
+     * old TS1155/TS1182 walkers' `isAmbient` threading, which was set by the
+     * ModuleDeclaration descent and RESET by every other recursion (blocks,
+     * function bodies, if/loop/switch/try descents all passed the default
+     * false). Any non-module ancestor therefore terminates the walk non-ambient.
+     */
+    private fun spineInDeclareModuleChain(node: Node): Boolean {
+        var cur = (node as NodeBase).parent
+        while (cur != null) {
+            when (cur) {
+                is ModuleBlock -> {}
+                is ModuleDeclaration -> if (ModifierFlag.Declare in cur.modifiers) return true
+                else -> return false
+            }
+            cur = (cur as NodeBase).parent
+        }
+        return false
+    }
+
+    /**
+     * TS1155 "'const' declarations must be initialized." — migrated from the
+     * deleted `checkConstWithoutInitializer` walk (INV.4(b) batch 5). Fires for
+     * an initializer-less Identifier-named declarator of a `const` list whose
+     * owner is a VariableStatement (non-`declare`, non-ambient — the
+     * [spineInDeclareModuleChain] gate) or a plain `for(;;)` initializer (the
+     * old for-path had NO declare/ambient gate — none is expressible there).
+     * A `for-in`/`for-of` iteration variable is LEGAL without an initializer —
+     * the owner gate excludes them. Binding-pattern names are TS1182's
+     * territory. The spine widens faithfully to positions the old statement
+     * walk missed (for-in/for-of BODIES, arrow/function-expression bodies).
+     */
+    private fun spineCheckConstInitializer(decl: VariableDeclaration) {
+        if (spineIsDts) return
+        if (decl.initializer != null) return
+        val name = decl.name as? Identifier ?: return
+        val list = decl.parent as? VariableDeclarationList ?: return
+        if (list.flags != SyntaxKind.ConstKeyword) return
+        when (val owner = list.parent) {
+            is VariableStatement -> {
+                if (ModifierFlag.Declare in owner.modifiers) return
+                if (spineInDeclareModuleChain(owner)) return
+            }
+            is ForStatement -> {}
+            else -> return
+        }
+        val (line, character) = getLineAndCharacterOfPosition(spineSource, name.pos)
+        diagnostics.add(Diagnostic(
+            message = "'const' declarations must be initialized.",
+            category = DiagnosticCategory.Error,
+            code = 1155,
+            fileName = spineFileName,
+            line = line,
+            character = character,
+            start = name.pos,
+            length = name.text.length,
+        ))
+    }
+
+    /**
+     * TS1182 "A destructuring declaration must have an initializer." (+ the
+     * companion TS7031 binding-element implicit-any) — migrated from the
+     * deleted `checkDestructuringWithoutInitializer` walk (INV.4(b) batch 5).
+     * Same owner/ambient gates as [spineCheckConstInitializer] (the old
+     * for-path checked ALL declaration-list kinds, not just const); the
+     * emission logic lives unchanged in [emitTs1182IfMissingInit]. A
+     * `for-in`/`for-of` iteration variable is exempt (tsc: the iteration
+     * target initializes it).
+     */
+    private fun spineCheckDestructuringInitializer(decl: VariableDeclaration) {
+        if (spineIsDts) return
+        val list = decl.parent as? VariableDeclarationList ?: return
+        when (val owner = list.parent) {
+            is VariableStatement -> {
+                if (ModifierFlag.Declare in owner.modifiers) return
+                if (spineInDeclareModuleChain(owner)) return
+            }
+            is ForStatement -> {}
+            else -> return
+        }
+        emitTs1182IfMissingInit(decl, spineSource, spineFileName)
+    }
+
+    /**
+     * TS1166/TS1169: a computed property name in a class / interface property
+     * declaration must be literal-like — migrated from the deleted
+     * `checkComputedPropertyNameLiteral` walk (INV.4(b) batch 5). Dispatches on
+     * the member's PARENT: InterfaceDeclaration → TS1169, ClassDeclaration →
+     * TS1166; class-EXPRESSION members are owned by
+     * [spineCheckClassExprComputedProps] (position-gated); TypeLiteral members
+     * stay unchecked (old behavior). The conservative [isLiteralLikeExpr]
+     * gate and the [emitComputedPropNameNonLiteral] span logic are unchanged.
+     */
+    private fun spineCheckComputedPropName(node: PropertyDeclaration) {
+        if (spineIsDts) return
+        val name = node.name as? ComputedPropertyName ?: return
+        if (isLiteralLikeExpr(name.expression)) return
+        when (node.parent) {
+            is InterfaceDeclaration -> emitComputedPropNameNonLiteral(
+                name, spineSource, spineFileName, 1169,
+                "A computed property name in an interface must refer to an expression whose type is a literal type or a 'unique symbol' type.")
+            is ClassDeclaration -> emitComputedPropNameNonLiteral(
+                name, spineSource, spineFileName, 1166,
+                "A computed property name in a class property declaration must have a simple literal type or a 'unique symbol' type.")
+            else -> {}
+        }
+    }
+
+    /**
+     * decoratorsOnComputedProperties, CLASS EXPRESSIONS (migrated from the
+     * deleted `checkComputedPropNameInExpr`): under LEGACY decorators
+     * (experimentalDecorators) a class-expression member cannot be decorated
+     * (tsc nodeCanBeDecorated requires a ClassDeclaration parent) → TS1206 at
+     * the `@` (span 1), which SHORT-CIRCUITS the TS1166 computed-name check
+     * for that member (tsc checkGrammarModifiers runs before
+     * checkGrammarProperty). DELIBERATELY position-gated to the old walker's
+     * exact reach — an expression STATEMENT position, possibly wrapped in
+     * void/parens (`void class {…}`) — a behavior change beyond that is one
+     * to make on a signal, not as a migration side effect.
+     */
+    private fun spineCheckClassExprComputedProps(cls: ClassExpression) {
+        if (spineIsDts) return
+        var cur = (cls as NodeBase).parent
+        while (cur is ParenthesizedExpression || cur is VoidExpression) {
+            cur = (cur as NodeBase).parent
+        }
+        if (cur !is ExpressionStatement) return
+        for (m in cls.members) {
+            val decs = when (m) {
+                is PropertyDeclaration -> m.decorators
+                is MethodDeclaration -> m.decorators
+                is GetAccessor -> m.decorators
+                is SetAccessor -> m.decorators
+                else -> null
+            }
+            if (!decs.isNullOrEmpty() && options.experimentalDecorators == true) {
+                val d = decs.first()
+                val (line, character) = getLineAndCharacterOfPosition(spineSource, d.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Decorators are not valid here.",
+                    category = DiagnosticCategory.Error, code = 1206,
+                    fileName = spineFileName, line = line, character = character,
+                    start = d.pos, length = 1,
+                ))
+                continue
+            }
+            if (m is PropertyDeclaration) {
+                val name = m.name
+                if (name is ComputedPropertyName && !isLiteralLikeExpr(name.expression)) {
+                    emitComputedPropNameNonLiteral(name, spineSource, spineFileName, 1166,
+                        "A computed property name in a class property declaration must have a simple literal type or a 'unique symbol' type.")
+                }
+            }
         }
     }
 
@@ -61384,206 +61551,6 @@ interface DataView {
         ))
     }
 
-    // -----------------------------------------------------------------------
-    // Const without initializer checking (TS1155)
-    // -----------------------------------------------------------------------
-
-    private fun checkConstWithoutInitializer() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            walkForConstWithoutInit(result.sourceFile.statements, source, fileName)
-        }
-    }
-
-    private fun walkForConstWithoutInit(statements: List<Statement>, source: String, fileName: String, isAmbient: Boolean = false) {
-        for (stmt in statements) {
-            when (stmt) {
-                is VariableStatement -> {
-                    if (stmt.declarationList.flags == SyntaxKind.ConstKeyword
-                        && !isAmbient && ModifierFlag.Declare !in stmt.modifiers) {
-                        for (decl in stmt.declarationList.declarations) {
-                            if (decl.initializer == null) {
-                                // const without initializer
-                                val nameNode = decl.name
-                                if (nameNode is Identifier) {
-                                    val start = nameNode.pos
-                                    val length = nameNode.text.length
-                                    val (line, character) = getLineAndCharacterOfPosition(source, start)
-                                    diagnostics.add(Diagnostic(
-                                        message = "'const' declarations must be initialized.",
-                                        category = DiagnosticCategory.Error,
-                                        code = 1155,
-                                        fileName = fileName,
-                                        line = line,
-                                        character = character,
-                                        start = start,
-                                        length = length,
-                                    ))
-                                }
-                            }
-                        }
-                    }
-                }
-                is FunctionDeclaration -> stmt.body?.let { walkForConstWithoutInit(it.statements, source, fileName) }
-                is ClassDeclaration -> {
-                    for (member in stmt.members) {
-                        val body = when (member) {
-                            is MethodDeclaration -> member.body
-                            is Constructor -> member.body
-                            is GetAccessor -> member.body
-                            is SetAccessor -> member.body
-                            else -> null
-                        }
-                        body?.let { walkForConstWithoutInit(it.statements, source, fileName) }
-                    }
-                }
-                is Block -> walkForConstWithoutInit(stmt.statements, source, fileName)
-                is ModuleDeclaration -> {
-                    val body = stmt.body
-                    val childAmbient = isAmbient || ModifierFlag.Declare in stmt.modifiers
-                    if (body is ModuleBlock) walkForConstWithoutInit(body.statements, source, fileName, childAmbient)
-                }
-                is IfStatement -> {
-                    walkForConstWithoutInit(listOf(stmt.thenStatement), source, fileName)
-                    stmt.elseStatement?.let { walkForConstWithoutInit(listOf(it), source, fileName) }
-                }
-                is ForStatement -> {
-                    // Check initializer for const without init: for(const c9; ...)
-                    val init = stmt.initializer
-                    if (init is VariableDeclarationList && init.flags == SyntaxKind.ConstKeyword) {
-                        for (decl in init.declarations) {
-                            if (decl.initializer == null) {
-                                val nameNode = decl.name
-                                if (nameNode is Identifier) {
-                                    val start = nameNode.pos
-                                    val length = nameNode.text.length
-                                    val (line, character) = getLineAndCharacterOfPosition(source, start)
-                                    diagnostics.add(Diagnostic(
-                                        message = "'const' declarations must be initialized.",
-                                        category = DiagnosticCategory.Error,
-                                        code = 1155,
-                                        fileName = fileName,
-                                        line = line,
-                                        character = character,
-                                        start = start,
-                                        length = length,
-                                    ))
-                                }
-                            }
-                        }
-                    }
-                    walkForConstWithoutInit(listOf(stmt.statement), source, fileName)
-                }
-                is WhileStatement -> walkForConstWithoutInit(listOf(stmt.statement), source, fileName)
-                is DoStatement -> walkForConstWithoutInit(listOf(stmt.statement), source, fileName)
-                is SwitchStatement -> {
-                    for (clause in stmt.caseBlock) {
-                        val stmts = when (clause) {
-                            is CaseClause -> clause.statements
-                            is DefaultClause -> clause.statements
-                            else -> emptyList()
-                        }
-                        walkForConstWithoutInit(stmts, source, fileName)
-                    }
-                }
-                is TryStatement -> {
-                    walkForConstWithoutInit(stmt.tryBlock.statements, source, fileName)
-                    stmt.catchClause?.block?.let { walkForConstWithoutInit(it.statements, source, fileName) }
-                    stmt.finallyBlock?.let { walkForConstWithoutInit(it.statements, source, fileName) }
-                }
-                else -> {}
-            }
-        }
-    }
-
-    // -----------------------------------------------------------------------
-    // Destructuring declaration without initializer (TS1182)
-    // -----------------------------------------------------------------------
-
-    private fun checkDestructuringWithoutInitializer() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            walkForDestructuringWithoutInit(result.sourceFile.statements, source, fileName)
-        }
-    }
-
-    private fun walkForDestructuringWithoutInit(statements: List<Statement>, source: String, fileName: String, isAmbient: Boolean = false) {
-        for (stmt in statements) {
-            when (stmt) {
-                is VariableStatement -> {
-                    if (isAmbient || ModifierFlag.Declare in stmt.modifiers) continue
-                    for (decl in stmt.declarationList.declarations) {
-                        emitTs1182IfMissingInit(decl, source, fileName)
-                    }
-                }
-                is FunctionDeclaration -> stmt.body?.let { walkForDestructuringWithoutInit(it.statements, source, fileName) }
-                is ClassDeclaration -> {
-                    for (member in stmt.members) {
-                        val body = when (member) {
-                            is MethodDeclaration -> member.body
-                            is Constructor -> member.body
-                            is GetAccessor -> member.body
-                            is SetAccessor -> member.body
-                            else -> null
-                        }
-                        body?.let { walkForDestructuringWithoutInit(it.statements, source, fileName) }
-                    }
-                }
-                is Block -> walkForDestructuringWithoutInit(stmt.statements, source, fileName)
-                is ModuleDeclaration -> {
-                    val body = stmt.body
-                    val childAmbient = isAmbient || ModifierFlag.Declare in stmt.modifiers
-                    if (body is ModuleBlock) walkForDestructuringWithoutInit(body.statements, source, fileName, childAmbient)
-                }
-                is IfStatement -> {
-                    walkForDestructuringWithoutInit(listOf(stmt.thenStatement), source, fileName)
-                    stmt.elseStatement?.let { walkForDestructuringWithoutInit(listOf(it), source, fileName) }
-                }
-                is ForStatement -> {
-                    // for(var [a]=x;;) — check the variable declarations in init
-                    val init = stmt.initializer
-                    if (init is VariableDeclarationList) {
-                        for (decl in init.declarations) {
-                            emitTs1182IfMissingInit(decl, source, fileName)
-                        }
-                    }
-                    walkForDestructuringWithoutInit(listOf(stmt.statement), source, fileName)
-                }
-                is ForOfStatement -> {
-                    // for-of's initializer is the iteration variable — TS1182 does NOT apply.
-                    // Only descend into the body.
-                    walkForDestructuringWithoutInit(listOf(stmt.statement), source, fileName)
-                }
-                is ForInStatement -> {
-                    // for-in's initializer is the iteration variable — TS1182 does NOT apply.
-                    walkForDestructuringWithoutInit(listOf(stmt.statement), source, fileName)
-                }
-                is WhileStatement -> walkForDestructuringWithoutInit(listOf(stmt.statement), source, fileName)
-                is DoStatement -> walkForDestructuringWithoutInit(listOf(stmt.statement), source, fileName)
-                is SwitchStatement -> {
-                    for (clause in stmt.caseBlock) {
-                        val stmts = when (clause) {
-                            is CaseClause -> clause.statements
-                            is DefaultClause -> clause.statements
-                            else -> emptyList()
-                        }
-                        walkForDestructuringWithoutInit(stmts, source, fileName)
-                    }
-                }
-                is TryStatement -> {
-                    walkForDestructuringWithoutInit(stmt.tryBlock.statements, source, fileName)
-                    stmt.catchClause?.block?.let { walkForDestructuringWithoutInit(it.statements, source, fileName) }
-                    stmt.finallyBlock?.let { walkForDestructuringWithoutInit(it.statements, source, fileName) }
-                }
-                else -> {}
-            }
-        }
-    }
-
     private fun emitTs1182IfMissingInit(decl: VariableDeclaration, source: String, fileName: String) {
         if (decl.initializer != null) return
         val name = decl.name
@@ -67919,124 +67886,6 @@ interface DataView {
     // TS1166 / TS1169: Computed property names in classes / interfaces must
     // refer to literal or 'unique symbol' types.
     // -----------------------------------------------------------------------
-
-    private fun checkComputedPropertyNameLiteral() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            for (stmt in result.sourceFile.statements) {
-                checkComputedPropNameInStmt(stmt, source, fileName)
-            }
-        }
-    }
-
-    private fun checkComputedPropNameInStmt(stmt: Statement, source: String, fileName: String) {
-        when (stmt) {
-            is InterfaceDeclaration -> for (m in stmt.members) {
-                if (m is PropertyDeclaration) {
-                    val name = m.name
-                    if (name is ComputedPropertyName && !isLiteralLikeExpr(name.expression)) {
-                        emitComputedPropNameNonLiteral(name, source, fileName, 1169,
-                            "A computed property name in an interface must refer to an expression whose type is a literal type or a 'unique symbol' type.")
-                    }
-                }
-            }
-            is ClassDeclaration -> for (m in stmt.members) {
-                if (m is PropertyDeclaration) {
-                    val name = m.name
-                    if (name is ComputedPropertyName && !isLiteralLikeExpr(name.expression)) {
-                        emitComputedPropNameNonLiteral(name, source, fileName, 1166,
-                            "A computed property name in a class property declaration must have a simple literal type or a 'unique symbol' type.")
-                    }
-                }
-                // round 42 iter4: recurse into nested member bodies so nested
-                // Class/Interface declarations inside member bodies are also covered.
-                when (m) {
-                    is MethodDeclaration -> m.body?.let { for (s in it.statements) checkComputedPropNameInStmt(s, source, fileName) }
-                    is Constructor -> m.body?.let { for (s in it.statements) checkComputedPropNameInStmt(s, source, fileName) }
-                    is GetAccessor -> m.body?.let { for (s in it.statements) checkComputedPropNameInStmt(s, source, fileName) }
-                    is SetAccessor -> m.body?.let { for (s in it.statements) checkComputedPropNameInStmt(s, source, fileName) }
-                    else -> {}
-                }
-            }
-            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let {
-                for (s in it.statements) checkComputedPropNameInStmt(s, source, fileName)
-            }
-            is Block -> for (s in stmt.statements) checkComputedPropNameInStmt(s, source, fileName)
-            is IfStatement -> {
-                checkComputedPropNameInStmt(stmt.thenStatement, source, fileName)
-                stmt.elseStatement?.let { checkComputedPropNameInStmt(it, source, fileName) }
-            }
-            is ForStatement -> checkComputedPropNameInStmt(stmt.statement, source, fileName)
-            is ForInStatement -> checkComputedPropNameInStmt(stmt.statement, source, fileName)
-            is ForOfStatement -> checkComputedPropNameInStmt(stmt.statement, source, fileName)
-            is WhileStatement -> checkComputedPropNameInStmt(stmt.statement, source, fileName)
-            is DoStatement -> checkComputedPropNameInStmt(stmt.statement, source, fileName)
-            is SwitchStatement -> for (clause in stmt.caseBlock) {
-                when (clause) {
-                    is CaseClause -> for (s in clause.statements) checkComputedPropNameInStmt(s, source, fileName)
-                    is DefaultClause -> for (s in clause.statements) checkComputedPropNameInStmt(s, source, fileName)
-                    else -> {}
-                }
-            }
-            is TryStatement -> {
-                for (s in stmt.tryBlock.statements) checkComputedPropNameInStmt(s, source, fileName)
-                stmt.catchClause?.let { for (s in it.block.statements) checkComputedPropNameInStmt(s, source, fileName) }
-                stmt.finallyBlock?.let { for (s in it.statements) checkComputedPropNameInStmt(s, source, fileName) }
-            }
-            is LabeledStatement -> checkComputedPropNameInStmt(stmt.statement, source, fileName)
-            is FunctionDeclaration -> stmt.body?.let { for (s in it.statements) checkComputedPropNameInStmt(s, source, fileName) }
-            is ExpressionStatement -> checkComputedPropNameInExpr(stmt.expression, source, fileName)
-            else -> {}
-        }
-    }
-
-    /**
-     * decoratorsOnComputedProperties: CLASS EXPRESSIONS. Under LEGACY decorators
-     * (experimentalDecorators) a class-expression member cannot be decorated (tsc
-     * nodeCanBeDecorated requires a ClassDeclaration parent for PropertyDeclarations)
-     * → TS1206 "Decorators are not valid here." at the `@` (the declaration's first
-     * token, span 1), which SHORT-CIRCUITS the TS1166 computed-name check for that
-     * member (tsc checkGrammarModifiers runs before checkGrammarProperty). Undecorated
-     * members keep the TS1166 check, mirroring the ClassDeclaration branch.
-     */
-    private fun checkComputedPropNameInExpr(expr: Expression, source: String, fileName: String) {
-        when (expr) {
-            is VoidExpression -> checkComputedPropNameInExpr(expr.expression, source, fileName)
-            is ParenthesizedExpression -> checkComputedPropNameInExpr(expr.expression, source, fileName)
-            is ClassExpression -> {
-                for (m in expr.members) {
-                    val decs = when (m) {
-                        is PropertyDeclaration -> m.decorators
-                        is MethodDeclaration -> m.decorators
-                        is GetAccessor -> m.decorators
-                        is SetAccessor -> m.decorators
-                        else -> null
-                    }
-                    if (!decs.isNullOrEmpty() && options.experimentalDecorators == true) {
-                        val d = decs.first()
-                        val (line, character) = getLineAndCharacterOfPosition(source, d.pos)
-                        diagnostics.add(Diagnostic(
-                            message = "Decorators are not valid here.",
-                            category = DiagnosticCategory.Error, code = 1206,
-                            fileName = fileName, line = line, character = character,
-                            start = d.pos, length = 1,
-                        ))
-                        continue
-                    }
-                    if (m is PropertyDeclaration) {
-                        val name = m.name
-                        if (name is ComputedPropertyName && !isLiteralLikeExpr(name.expression)) {
-                            emitComputedPropNameNonLiteral(name, source, fileName, 1166,
-                                "A computed property name in a class property declaration must have a simple literal type or a 'unique symbol' type.")
-                        }
-                    }
-                }
-            }
-            else -> {}
-        }
-    }
 
     /** Conservative check: only obviously non-literal expressions return false.
      * Returns true for patterns TypeScript typically accepts (literals,

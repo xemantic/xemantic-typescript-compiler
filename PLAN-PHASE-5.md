@@ -93,13 +93,37 @@ the old walker's semantics, kept cheap). All handlers carry the old driver's
 `!spineIsDts` gate. VERIFIED: suite 10,405 → 10,427 (+22 Inv4SpineBatch4Test,
 0 regressions); listAll error lines IDENTICAL on ALL 8 profiles (vs the 515b
 baselines; header path-form + timing lines only); bench row in band (compiler
-26,738 ms self, +1.1% vs previous = noise). NEXT: INV.4(b) batch 5 — candidates
-from the same init region: checkComputedPropertyNameLiteral (TS1166/TS1169,
-mind the round-42 isLiteralLikeExpr direction-of-emission gotcha),
-checkDuplicateModifiers (TS1030, threads inAmbientContext), checkAmbientInitializers
-(TS1039), checkConstWithoutInitializer/checkDestructuringWithoutInitializer
-(TS1155/TS1182); checkMixinClassConstructor stays (d) territory (TP-scope
-machinery).**
+26,738 ms self, +1.1% vs previous = noise). BATCH 5 same session: THREE more
+passes migrated (~318 lines / 7 walker funs deleted, 3 init slots removed):
+(1)+(2) `checkConstWithoutInitializer` (TS1155) + `checkDestructuringWithoutInitializer`
+(TS1182/TS7031) as VariableDeclaration-enter handlers sharing the owner gate
+(VariableStatement non-`declare`/non-ambient, or a plain `for(;;)` initializer;
+for-in/for-of iteration vars excluded — legal without init) — the old walkers'
+`isAmbient` threading was set ONLY by ModuleDeclaration descent and RESET by
+every other recursion, so the parent-chain equivalent
+(`spineInDeclareModuleChain`) walks up through ModuleBlock/ModuleDeclaration
+ONLY and terminates non-ambient at any other ancestor kind; `emitTs1182IfMissingInit`
+(the TS1182+TS7031 emission) retained; faithful widening: for-of/for-in BODIES
+(the old walks had no ForOf/ForIn statement case at all — TS1155 pinned) +
+arrow bodies. (3) `checkComputedPropertyNameLiteral` (TS1166/TS1169 + the
+class-expression TS1206 decorator short-circuit) — PropertyDeclaration-enter
+dispatching on parent (InterfaceDeclaration → TS1169, ClassDeclaration →
+TS1166, TypeLiteral unchecked as before) + a ClassExpression-enter handler
+(`spineCheckClassExprComputedProps`) DELIBERATELY position-gated to the old
+reach (expression-statement position through void/paren wrappers — a var-init
+class expr stays unchecked, pinned negative; per the round-42 TS1166
+direction-of-emission history, widening THAT is a change to make on a signal);
+`isLiteralLikeExpr` + `emitComputedPropNameNonLiteral` retained; faithful
+widening: class declarations in arrow bodies (pinned). VERIFIED: suite
+10,427 → 10,443 (+16 Inv4SpineBatch5Test, 0 regressions); listAll error lines
+IDENTICAL on ALL 8 profiles (516b vs 516a); bench in band (26,871 ms self,
++0.5% = noise). Session total: SEVEN passes migrated, 24 walker functions
+(~1,050 lines) deleted, 7 init slots removed, suite +38. NEXT: INV.4(b)
+batch 6 — checkDuplicateModifiers (TS1030/TS1029, threads inAmbientContext +
+atTopLevel — needs parent-walk equivalents), checkAmbientInitializers
+(TS1039/TS1254/TS1066/TS1031, .d.ts-topLevelAmbient + class-expr descent),
+checkSwitchCaseComparable (TS2678, block-scoped const tracking);
+checkMixinClassConstructor stays (d) territory (TP-scope machinery).**
 
 **Round 515 (2026-07-14) — INV.4(b) batch 2: TS2370 + the iterator/yield-star
 prepass pair migrated onto the spine; 16 walker functions (~460 lines) deleted.**
@@ -1111,12 +1135,26 @@ interrupt the arc).
     checkInterfacePropertyInitializers (TS1246 — InterfaceDeclaration-enter;
     the parser owns the common shape). 17 walker funs (~733 lines) deleted,
     4 init slots removed. Suite +22 (Inv4SpineBatch4Test), listAll identical
-    on ALL 8 profiles, bench in band. NEXT batches: batch-5 candidates —
-    checkComputedPropertyNameLiteral (TS1166/TS1169),
-    checkDuplicateModifiers (TS1030), checkAmbientInitializers (TS1039),
-    checkConstWithoutInitializer / checkDestructuringWithoutInitializer
-    (TS1155/TS1182); checkMixinClassConstructor is TP-scope-stateful —
-    (d) territory.
+    on ALL 8 profiles, bench in band. Batch 5 DONE round 516 (same session):
+    checkConstWithoutInitializer (TS1155) + checkDestructuringWithoutInitializer
+    (TS1182/TS7031) as VariableDeclaration-enter handlers — shared owner gate
+    (VariableStatement non-declare/non-ambient via spineInDeclareModuleChain,
+    the parent-walk equivalent of the old isAmbient threading which reset at
+    every non-module descent; or a for(;;) initializer; for-in/for-of
+    excluded); emitTs1182IfMissingInit retained; for-of/for-in BODIES are a
+    faithful widening (the old walks had no ForOf/ForIn case). Plus
+    checkComputedPropertyNameLiteral (TS1166/TS1169 by PropertyDeclaration
+    parent kind; TypeLiteral stays unchecked) + spineCheckClassExprComputedProps
+    (the TS1206 legacy-decorator short-circuit, position-GATED to the old
+    expression-statement-only reach — pinned negative). 7 walker funs
+    (~318 lines) deleted, 3 init slots removed. Suite +16
+    (Inv4SpineBatch5Test), listAll identical on ALL 8 profiles, bench in
+    band. NEXT batches: batch-6 candidates — checkDuplicateModifiers
+    (TS1030/TS1029: inAmbientContext + atTopLevel threading needs parent-walk
+    equivalents), checkAmbientInitializers (TS1039/TS1254/TS1066/TS1031:
+    .d.ts-topLevelAmbient + class-expression descent),
+    checkSwitchCaseComparable (TS2678); checkMixinClassConstructor is
+    TP-scope-stateful — (d) territory.
   - [ ] **INV.4(c) The name-resolution pair.** checkUnresolvedNames (846 ms) +
     checkTypeUsedAsValue (734 ms): fold their private NameScope chains into
     spine-maintained authoritative lexical state backed by the INV.2(c)
