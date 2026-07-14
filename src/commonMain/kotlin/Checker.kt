@@ -935,6 +935,14 @@ class Checker(
     // string-named module anywhere). MUST be declared before init {} (init-order).
     private val fileAmbientModuleInfoCache = HashMap<String, Triple<Set<String>, Boolean, Set<String>>>()
 
+    // ── INV.4 check spine (round 514) ──────────────────────────────────────
+    // Per-file context for the single-pass check spine — the ONE preorder walk
+    // migrated per-node checks dispatch from (see checkSpine / spineEnterNode).
+    // MUST be declared before init {} (the spine runs from init).
+    private var spineFileName: String = ""
+    private var spineSource: String = ""
+    private var spineIsDts: Boolean = false
+
     // B283: identifier names guarded by a `typeof x === "..."` condition in an
     // enclosing if — the arithmetic walker has no flow narrowing, so union-typed
     // operands named here are exempt from the maybe-bigint TS2365 mixing rule
@@ -1970,8 +1978,13 @@ class Checker(
         if (options.noImplicitAny || options.strict) {
             pass("checkAbstractAccessorReturnTypes") { checkAbstractAccessorReturnTypes() }
         }
-        // 7b'''. TS18045: 'accessor' modifier requires target ES2015+.
-        pass("checkAccessorModifierTarget") { checkAccessorModifierTarget() }
+        // 7b'''. INV.4 single-pass check spine (round 514): ONE preorder walk
+        // per file dispatching all MIGRATED per-node checks (currently: TS18045
+        // accessor-modifier-vs-target, the pilot). The spine stays at this FIXED
+        // init position as later passes migrate in — the stable diagnostic sort
+        // hides insertion-order deltas except exact 4-tuple ties (per-migration
+        // corpus + listAll gates decide those).
+        pass("checkSpine") { checkSpine() }
         // B72.1: TS2545 — A mixin class must have a constructor with a single rest
         // parameter of type 'any[]'. NARROW gate: fires only when the
         // class-extends-TypeParam's constraint's construct signature has a
@@ -18297,83 +18310,137 @@ class Checker(
      * TS18045: Properties with the 'accessor' modifier require target ES2015+.
      * Only fires in non-ambient contexts (ambient classes / declare namespaces suppress it).
      */
-    private fun checkAccessorModifierTarget() {
-        if (options.target >= ScriptTarget.ES2015) return
+    // ─────────────────────────────────────────────────────────────────────────
+    // INV.4 — the single-pass check spine (round 514).
+    //
+    // ONE iterative enter/leave preorder walk per file; migrated passes become
+    // per-node cases in [spineEnterNode]/[spineLeaveNode] (tsc
+    // checkSourceElement-style `when` dispatch — plain private handler funs, no
+    // registry indirection). Contract:
+    //  - dispatched as `pass("checkSpine")` at a FIXED init position (the
+    //    earliest migrated pass's slot); passes migrating in from later slots
+    //    move their emissions earlier in insertion order — the stable
+    //    diagnostic sort hides all but exact (start,length,code,message) ties,
+    //    and each migration's corpus + listAll gates decide those;
+    //  - a handler sees ALL nodes: a hand-walk's accidental under-visits
+    //    (arrow bodies, class/function expressions, initializers) become
+    //    visits — per migrated pass, decide widen-vs-gate by the CLAUDE.md
+    //    emission-direction rule, reproducing descent gates via parent-chain
+    //    checks where the old walk's narrowness was an FP firewall;
+    //  - the walk is EXPLICIT-STACK iterative (checks can run off the
+    //    deep-stack thread; 10k-term binary chains exist).
+    private fun checkSpine() {
+        // Per-handler activation gates, computed once per run. A run with every
+        // migrated handler off skips the walk entirely (bench-neutral while the
+        // spine is small).
+        val accessorModifier = options.target < ScriptTarget.ES2015
+        if (!accessorModifier) return
         for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            checkAccessorModifierInStatements(result.sourceFile.statements, source, fileName, inAmbient = false)
+            val sf = result.sourceFile
+            spineFileName = sf.fileName
+            spineIsDts = isDtsFile(spineFileName)
+            // File-level fast-skip while EVERY migrated handler is .d.ts-exempt;
+            // lift into per-handler gates when a .d.ts-relevant pass migrates in.
+            if (spineIsDts) continue
+            spineSource = sf.text
+            spineWalkFile(sf)
         }
     }
 
-    private fun checkAccessorModifierInStatements(stmts: List<Statement>, source: String, fileName: String, inAmbient: Boolean) {
-        for (stmt in stmts) {
-            when (stmt) {
-                is ClassDeclaration -> {
-                    val classAmbient = inAmbient || ModifierFlag.Declare in stmt.modifiers
-                    if (!classAmbient) {
-                        for (m in stmt.members) {
-                            if (m is PropertyDeclaration && ModifierFlag.Accessor in m.modifiers) {
-                                val nameNode = m.name as? Identifier ?: continue
-                                val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
-                                diagnostics.add(Diagnostic(
-                                    message = "Properties with the 'accessor' modifier are only available when targeting ECMAScript 2015 and higher.",
-                                    category = DiagnosticCategory.Error,
-                                    code = 18045,
-                                    fileName = fileName,
-                                    line = line,
-                                    character = character,
-                                    start = nameNode.pos,
-                                    length = nameNode.text.length,
-                                ))
-                            }
-                        }
-                    }
-                    // Recurse into member bodies for nested classes regardless of ambient
-                    for (m in stmt.members) {
-                        when (m) {
-                            is MethodDeclaration -> m.body?.let { checkAccessorModifierInStatements(it.statements, source, fileName, classAmbient) }
-                            is Constructor -> m.body?.let { checkAccessorModifierInStatements(it.statements, source, fileName, classAmbient) }
-                            is GetAccessor -> m.body?.let { checkAccessorModifierInStatements(it.statements, source, fileName, classAmbient) }
-                            is SetAccessor -> m.body?.let { checkAccessorModifierInStatements(it.statements, source, fileName, classAmbient) }
-                            else -> {}
-                        }
-                    }
-                }
-                is ModuleDeclaration -> {
-                    val modAmbient = inAmbient || ModifierFlag.Declare in stmt.modifiers
-                    (stmt.body as? ModuleBlock)?.let { checkAccessorModifierInStatements(it.statements, source, fileName, modAmbient) }
-                }
-                is Block -> checkAccessorModifierInStatements(stmt.statements, source, fileName, inAmbient)
-                is FunctionDeclaration -> stmt.body?.let { checkAccessorModifierInStatements(it.statements, source, fileName, inAmbient) }
-                is IfStatement -> {
-                    checkAccessorModifierInStatements(listOf(stmt.thenStatement), source, fileName, inAmbient)
-                    stmt.elseStatement?.let { checkAccessorModifierInStatements(listOf(it), source, fileName, inAmbient) }
-                }
-                is ForStatement -> checkAccessorModifierInStatements(listOf(stmt.statement), source, fileName, inAmbient)
-                is ForInStatement -> checkAccessorModifierInStatements(listOf(stmt.statement), source, fileName, inAmbient)
-                is ForOfStatement -> checkAccessorModifierInStatements(listOf(stmt.statement), source, fileName, inAmbient)
-                is WhileStatement -> checkAccessorModifierInStatements(listOf(stmt.statement), source, fileName, inAmbient)
-                is DoStatement -> checkAccessorModifierInStatements(listOf(stmt.statement), source, fileName, inAmbient)
-                is SwitchStatement -> {
-                    for (clause in stmt.caseBlock) {
-                        when (clause) {
-                            is CaseClause -> checkAccessorModifierInStatements(clause.statements, source, fileName, inAmbient)
-                            is DefaultClause -> checkAccessorModifierInStatements(clause.statements, source, fileName, inAmbient)
-                            else -> {}
-                        }
-                    }
-                }
-                is TryStatement -> {
-                    checkAccessorModifierInStatements(stmt.tryBlock.statements, source, fileName, inAmbient)
-                    stmt.catchClause?.block?.let { checkAccessorModifierInStatements(it.statements, source, fileName, inAmbient) }
-                    stmt.finallyBlock?.let { checkAccessorModifierInStatements(it.statements, source, fileName, inAmbient) }
-                }
-                is LabeledStatement -> checkAccessorModifierInStatements(listOf(stmt.statement), source, fileName, inAmbient)
-                else -> {}
+    /**
+     * The spine's iterative enter/leave preorder walk. Parallel stacks (node +
+     * phase) avoid per-frame allocations; children are pushed in reverse so pop
+     * order is exact document preorder (same convention as [indexSourceFile]).
+     * Enter fires before any child, leave after all children — the pairing is
+     * what future stateful migrations hang scope push/pop on.
+     */
+    private fun spineWalkFile(sf: SourceFile) {
+        val nodes = ArrayList<Node>(256)
+        val leaving = ArrayList<Boolean>(256)
+        nodes.add(sf)
+        leaving.add(false)
+        val buf = ArrayList<Node>(16)
+        val collect: (Node) -> Unit = { buf.add(it) }
+        while (nodes.isNotEmpty()) {
+            val top = nodes.size - 1
+            val node = nodes.removeAt(top)
+            val leave = leaving.removeAt(top)
+            if (leave) {
+                spineLeaveNode(node)
+                continue
+            }
+            spineEnterNode(node)
+            nodes.add(node)
+            leaving.add(true)
+            buf.clear()
+            forEachChild(node, collect)
+            for (j in buf.indices.reversed()) {
+                nodes.add(buf[j])
+                leaving.add(false)
             }
         }
+    }
+
+    /** Per-node dispatch, preorder position (before children). */
+    private fun spineEnterNode(node: Node) {
+        when (node) {
+            is PropertyDeclaration -> spineCheckAccessorModifier(node)
+            else -> {}
+        }
+    }
+
+    /** Per-node dispatch, postorder position (after all children) — the scope-pop
+     * hook for stateful migrations; no current handler needs it. */
+    private fun spineLeaveNode(node: Node) {
+        when (node) {
+            else -> {}
+        }
+    }
+
+    /**
+     * TS18045: `accessor` properties require target ES2015+ (the INV.4 pilot,
+     * migrated from the deleted `checkAccessorModifierTarget` walker — round 514).
+     * Fires for a class-member PropertyDeclaration carrying the `accessor`
+     * modifier outside ambient contexts. The old hand-walk threaded `inAmbient`
+     * through class/namespace descent and missed class EXPRESSIONS and
+     * arrow/function-expression bodies; TS18045 is a position-independent tsc
+     * grammar rule, so the spine's full coverage is strictly MORE faithful. The
+     * ambient gate is reproduced via the INV.2 parent chain
+     * ([spineInAmbientContext]); the class-parent gate keeps interface /
+     * type-literal members (which share [ClassElement]) excluded, as before.
+     */
+    private fun spineCheckAccessorModifier(node: PropertyDeclaration) {
+        if (ModifierFlag.Accessor !in node.modifiers) return
+        val parent = node.parent
+        if (parent !is ClassDeclaration && parent !is ClassExpression) return
+        val nameNode = node.name as? Identifier ?: return
+        if (spineInAmbientContext(node)) return
+        val (line, character) = getLineAndCharacterOfPosition(spineSource, nameNode.pos)
+        diagnostics.add(Diagnostic(
+            message = "Properties with the 'accessor' modifier are only available when targeting ECMAScript 2015 and higher.",
+            category = DiagnosticCategory.Error,
+            code = 18045,
+            fileName = spineFileName,
+            line = line,
+            character = character,
+            start = nameNode.pos,
+            length = nameNode.text.length,
+        ))
+    }
+
+    /** True when [node] sits under a `declare` class or namespace (transitively) —
+     * the parent-chain equivalent of the old walkers' threaded `inAmbient`. */
+    private fun spineInAmbientContext(node: Node): Boolean {
+        var cur = (node as NodeBase).parent
+        while (cur != null) {
+            when (cur) {
+                is ClassDeclaration -> if (ModifierFlag.Declare in cur.modifiers) return true
+                is ModuleDeclaration -> if (ModifierFlag.Declare in cur.modifiers) return true
+                else -> {}
+            }
+            cur = (cur as NodeBase).parent
+        }
+        return false
     }
 
     /**
@@ -96969,10 +97036,10 @@ interface DataView {
             // overwrite below would reset to the FULL declared union instead. An
             // empty kept set (unrelated class) keeps the conservative fallthrough.
             if (rhs is NewExpression && declaredType is Type.Union) {
+                // (An Interface/Reference result can never be the any/error
+                // Intrinsic singletons, so the kind check alone gates this.)
                 val newT = getTypeOfExpression(rhs)
-                if ((newT is Type.Interface || newT is Type.Reference) &&
-                    newT !== anyType && newT !== errorType
-                ) {
+                if (newT is Type.Interface || newT is Type.Reference) {
                     val kept = declaredType.types.filter { m ->
                         checkTypeRelatedTo(newT, m, assignableRelation)
                     }

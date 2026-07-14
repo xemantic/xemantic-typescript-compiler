@@ -1,3 +1,193 @@
+**Round 507c (2026-07-13, same session as 507/507b) — INV.3(c)(iv) first cut
+ATTEMPTED and REVERTED (unpinnable, not regressing): the
+`typeNodeDefinitelyNonNullish` fallbacks alone have NO observable.** The flip
+compiled, all preservation controls passed, but the leak-kill could not be
+made to FAIL pre-flip OR fire post-flip: for every constructible shape the
+narrowing survives through `resolvedCallReturnTypeForFlow`'s assignment-reset
+arm, which resolves the SAME return annotation via `getTypeFromTypeNode` →
+`resolveTypeNameToSymbol`'s still-legacy globals fallback — the syntactic
+classifier's leak is fully shadowed by the general-resolution leak (they
+consult the same merged map; the classifier's extra power — barrel-imported
+alias bodies — is exactly the case the visibility probe PRESERVES, so no
+kill shape exists there either). Landing an unpinnable flip would break the
+(c)-migration's stash-verified leak-kill discipline, so the code was
+reverted and the ORDER CONSTRAINT written into the (iv) queue item:
+`resolveTypeNameToSymbol`'s Identifier fallback must flip FIRST (or jointly
+in one commit) — it is also the highest-risk site (general type resolution:
+nodeTypes caching, first-touch poisoning, the round-473/474 conflation
+ecology) and needs fresh context + the full battery. The joint observable
+and its verified preservation fixtures are recorded in the queue item. No
+tree change; suite state carries over (10,302 / 0 / 3).
+
+**Round 507b (2026-07-13, same session as 507) — INV.3(c)(iii) phase 3
+LANDED: `getTypeOfIdentifier`'s globals fallback node-keyed — (iii) is
+COMPLETE.** The round-442 measured dead-end (by-NAME nulling of the fallback
+broke cross-file initializer inference / redeclare / .d.ts emit — 5 corpus
+regressions) does NOT reproduce for the per-FILE flip: the visibility probe
+resolves every imported/own/script/lib name to the SAME merged instance
+(an import alias probes non-null through `resolveImportedSymbolGeneral`
+whatever its kind), so only a name with NO per-file meaning changes — it
+types as `any` instead of the foreign leaked local, which is what real tsc
+sees (TS2304 → any). Companion perf guard: `lookupPerFileForNode` gained a
+fast path — a non-module-only name resolves identically under every file's
+visibility (`globalsForFile` ignores the file for it), so it goes straight
+to `globals[name]` with NO parent-chain walk; the fallback serves ~2M
+identifier typings per self-compile and only ~126k module-only names walk
+(the pre-1b2 empty set degrades everything to the legacy consult — the
+init-order gotcha handled by construction). MEASURED: conflated 10,034 →
+6,165 (cumulative from the round-505 baseline 20,941 → 6,165, −71%);
+`factory` (3.3k, the phase-2 residue's dominant name — a function param in
+non-importing files typing through nodeFactory.ts's leaked export) is GONE;
+by-pass checkImplicitAnyParameters 2,608 → 171, checkUncalledFunctions 968
+→ 189, checkConstAssignment 206 → 131. The remaining ~6.2k = the (c)(iv)
+type-position tail (types.ts type names via typeNodeDefinitelyNonNullish /
+resolveTypeNameToSymbol / getTypeFromBaseTypeExpression) + ~500 value
+names in the deliberately-legacy shadow-detection ecology (INV.3(d) scope)
++ tiny tail sites folded into (iv)'s re-measure. Verified: suite green
+10,298 → 10,302 (+4 Inv3IdentifierTypingNodeKeyTest — the leak-kill FAILS
+on the pre-flip checker via stash: a bogus TS2322 typed a non-importing
+file's bare identifier from a foreign module's const; 3 preservation
+controls pass both sides, including the import-driven initializer-inference
+shape from the round-442 regression family); `--listAll` byte-identical on
+compiler AND services; bench row 27,972 ms self (+4.0% single-run = the
+documented box-drift band; the walk cost is bounded by the fast path).
+CLAUDE.md updated in BOTH places (the INV.3(c) entry + a clarifying line
+inside the round-442 dead-end entry so the two records don't read as
+contradicting). NEXT: (c)(iv) — the type-position tail, then the
+re-measure that unlocks INV.3(d).
+
+**Round 507 (2026-07-13) — INV.3(c)(iii) phase 2 LANDED: the bare-Identifier
+VALUE/receiver/callee cluster node-keyed (11 consults, one commit).** The
+round opened by re-running the round-503 stack-sampling probe on HEAD (1:20,
+937 samples over the remaining ~18.7k conflated lookups — probe reverted):
+the measured per-site distribution was checkPrivateMemberAccess ~2.7k /
+computeRawTypeOfPropertyAccess's direct ns-fallback ~2.9k / getTypeOfIdentifier
+via isCalleeResolvable+receiver typing ~3.2k / typeNodeDefinitelyNonNullish
+~2.7k + resolveTypeNameToSymbol ~1.9k (the (iv) type tail) /
+resolveFlowCalleeDecl ~1.6k / resolveNamespaceMemberFnDecl ~1.1k, dominant
+name `factory` (~38% — a function PARAM in non-importing files like
+emitter.ts, resolving through nodeFactory.ts's leaked export). Flipped onto
+`lookupPerFileForNode` (keyed by the name's own Identifier node — uniform
+with (c)(ii), equals current-file keying for own nodes): the TS2341 receiver
+consult (`checkPrivateMemberAccess` — a private-access verdict about an
+invisible class is always bogus), `getCalleeType`'s Identifier branch (args
+must not check against a foreign leaked signature), `resolveFlowCalleeDecl`
++ `resolveNamespaceMemberFnDecl` (guards/asserts with no per-file meaning
+must not narrow — tsc sees TS2304 there; the round-471 per-file predicate
+selection is preserved via the extracted `currentFileNestedPredicateDecl`,
+now also reachable from the direct==null fallback so an own-file nested
+guard keeps narrowing when several files nest same-named guards), the three
+ns-fallback receiver resolvers (`computeRawTypeOfPropertyAccess` /
+`resolvePropertyAccessToSymbol` / `propertyAccessChainIsNamespaceQualified`
+— a leaked root now bails exactly like an unleaked one),
+`isCalleeResolvable` (an unresolvable callee provides no contextual
+signature → TS7006 legitimately fires; lexical/nested checks below the
+consult keep param callees resolvable), `checkPropertyAccessAssignment`'s
+ns base, the two mam receiver consults (B589's gate is unreachable for
+conflated names by construction — lib-visible ⇒ SHARED; B586's foreign
+`{}`-annotation emission), and the two protected-CONSTRUCTOR heritage walks
+(`findEffectiveConstructorVisibility`/`classExtendsOrIs` — the round-506
+cluster's missed siblings). MEASURED: conflated 20,941 → 10,034 (−52%);
+by-pass checkPropertyAccess 7,038 → 3,136, checkCallExpressionTypes 5,743 →
+1,430, checkProtectedMemberReadAccess 2,198 → 0; remaining top names are
+`factory` 3.3k + the types.ts type-name tail (the (iv) sites) + clone/diag/
+toPath (getTypeOfIdentifier fallback + shadow ecology). Verified: suite
+green 10,289 → 10,298 (+9 Inv3ValueCalleeNodeKeyTest — 4 leak-kill tests
+FAIL on the pre-flip checker via stash: bogus TS2341 from a leaked
+private-membered var vs a same-named param, bogus TS2345 from an unimported
+foreign callee, and two narrowing-leak kills where killing the foreign
+guard/namespace-guard resolution makes the genuine union TS2339/TS2345
+fire; 5 preservation controls pass both sides: same-file private, imported
+callee, cross-file script callee, imported guard, same-file namespace
+guard); `--listAll` byte-identical on compiler AND services; bench row in
+band (26,902 ms self, −1.8%, same 46 env-legit diagnostics). Test-design
+note: `v.length` on a `string | number` param draws NO union TS2339 from
+our checker (pre-existing FN — the leak-kill observables use an
+interface-member union TS2339 and a union-arg TS2345 instead). NEXT:
+(c)(iii) phase 3 = `getTypeOfIdentifier`'s fallback node-keyed (the ~3.2k
+receiver-typing tail — needs its own battery per the round-442 caution),
+then (c)(iv) the type-position tail.
+
+**Round 506 (2026-07-13, same session as 500–505) — INV.3(c)(iii) phase 1
+LANDED: the protected-member cluster node-keyed.** The pw/pmr/pm walkers
+(TS2445/TS2446 protected-access + the assignment-mismatch companion —
+`checkProtectedMemberReadAccess` was #4 in the post-505 conflated-by-pass
+table at 2,198) key their merged-globals fallbacks by the name IDENTIFIER
+node via `lookupPerFileForNode`: the `pwResolveClass`/`pmrResolveClass`
+funnels (which every heritage walker, param-annotation resolution, and
+derives-from chain feeds) plus the two direct consults (`pmrCheckAccess`'s
+static-class receiver, the top-var ctor-init resolution). KEY TECHNIQUE
+(the template for the remaining (iii) sites): the heritage walkers all wrap
+a REAL indexed Identifier in a synthesized `TypeReference(typeName =
+baseName)` — keying by `typeName` (never the wrapper, whose parent is null)
+attributes correctly with ZERO signature changes; a fully-synthesized
+identifier (pmrLocalClass's from-text `Identifier(it)`) has no owner and
+degrades to the legacy merged consult inside the primitive. Suppression-only
+by construction: every consumer resolves a CLASS for a protected-visibility
+verdict, and a conflated resolution could only manufacture a bogus TS2445
+about a class the file never imports (real tsc: TS2304 territory; note the
+imported-class case was ALREADY a silent FN here — the locals hit returns
+the alias with no ClassDeclaration and the walker bails — so the flip
+cannot lose real diagnostics). Verified: suite green 10,284 → 10,289 (+5
+Inv3ProtectedNodeKeyTest — BOTH leak-kill tests FAIL on the pre-flip
+checker via stash: the leaked resolution manufactured TS2445 for an
+unimported foreign class's protected static and for a param annotated with
+an unimported foreign class; 3 preservation controls — same-file instance,
+same-file static, cross-file script — pass both sides); `--listAll`
+byte-identical on compiler AND services vs the pre-505 baseline (46/46);
+bench row in band. NEXT: (iii) phase 2 — the typing-path sites, starting
+with the per-site consumer classification (identifier.fallback is
+round-442 dead-end territory).
+
+**Round 505 (2026-07-13, same session as 500–504) — INV.3(c)(ii) LANDED: the
+kind-domain/enum-discriminant family flipped onto the node-keyed primitive.**
+The ~82% conflated family (round-503 measurement) now keys its merged-globals
+fallbacks by the NODE'S OWNING FILE: `resolveEnumSymbolForDiscriminant` and
+`kindDomainTypeDeclSymbol` thread a `keyNode` parameter (all 5 call sites pass
+the AST node the name was read from — the annotation TypeReference, the
+heritage `base`, the comparison PropertyAccess), and the alias fallbacks
+inside `enumSwitchKeysFromTypeNode`/`enumMemberKeysOfTypeNode` (incl. the
+round-477 import-alias fallback) consult `lookupPerFileForNode(node, name)`
+instead of raw `globals[name]`. `currentFileLocals` stays the FIRST consult at
+every site (own-file semantics unchanged — minimal-diff, byte-identity-first);
+the recursion into an alias BODY naturally re-keys by the body node = the
+declaring file (tsc-faithful alias-body scoping for free). Effect: a types.ts
+member annotation resolves under TYPES.TS's visibility whatever file is being
+checked — the owning file declares/imports those names, so the probe passes
+and the merged INSTANCE returns (resolution PRESERVED, the acceptance bar) —
+while a checking-file expression naming a module-only enum its file never
+imports nulls (the leak killed: real tsc sees TS2304 there and never narrows;
+killing the narrowing is FAITHFUL, and the readers' null contract is
+conservative — members kept, structural verdicts kept). Companion
+instrumentation-integrity piece: `globalsForFile`'s proven-visible branch now
+reads UNCLASSIFIED (`InstrumentedSymbolTable.getUnclassified`) under
+`--passTiming` — a node-keyed flip's legitimate foreign-node hit classifies
+CONFLATED against the CHECKING file's locals, which would have polluted the
+migration tables; the round-502 "tables measure only un-migrated traffic"
+contract now holds for node-keyed flips too. MEASURED (instrumented compiler
+profile): conflated 157k → 20,941 (−87%), total keyed lookups 2.71M → 2.36M;
+remaining top conflated names are the (c)(iii) value/callee sites (`factory`
+12k, `toPath` 500, `createDiagnosticForNode` 317, `isIdentifier` 298, `clone`
+276, `map`, `diag`) plus a types.ts type-name tail for (c)(iv)
+(NoSubstitutionTemplateLiteral 224 / NumericLiteral / BigIntLiteral /
+AccessorDeclaration ~100–133 each); by-pass: checkPropertyAccess 7,038 /
+checkCallExpressionTypes 5,743 / checkImplicitAnyParameters 2,744 /
+checkProtectedMemberReadAccess 2,198 / checkTypeAssignability 1,765.
+Verified: suite green 10,279 → 10,284 (+5 Inv3KindDomainNodeKeyTest — the
+leak-kill test FAILS on the pre-flip checker via stash: the leaked resolution
+narrowed `x.kind === Kind.A` in a file that never imports `Kind`, hiding the
+TS2339 on the un-narrowed union member; 4 preservation controls pass on BOTH
+sides: foreign-node alias annotation, imported-alias fallback,
+same-module-file, cross-file script); `--listAll` byte-identical on compiler
+AND services (46/46 env-legit each); bench row in band (27,173 ms self /
+927 MB, −0.5% vs previous, same diagnostics). Out of scope, noted:
+`canonicalEnumSymbol`'s memoized `globals[sym.name]` consult (self-guarding
+shared-decl identity check, tiny traffic — not in the round-503 family list)
+and `resolveNamespaceQualifiedTypeAlias` (currentCheckFileName-keyed
+fileResults reads, not a globals consult). CLAUDE.md gotcha extended (the
+node-keyed rule + the readers' names). NEXT: INV.3(c)(iii) — the
+current-file-keyed value/callee sites.
+
 **Round 503 (2026-07-13, same session as 500–502) — INV.3(c) DECOMPOSED from a
 measured per-site attribution (probe-and-revert; no code landed).** The
 round-502 lesson (per-PASS ≠ per-SITE) applied: tagging the GUESSED hot sites
