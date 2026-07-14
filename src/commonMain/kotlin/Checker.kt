@@ -6942,7 +6942,15 @@ class Checker(
                     }
                     is ImportDeclaration -> {
                         val specifier = (decl.moduleSpecifier as? StringLiteralNode)?.text ?: continue
-                        val targetFile = resolveModuleSpecifier(specifier, decl) ?: continue
+                        // Round 512 (the round-511 dir-relative lesson): the bare
+                        // resolver only knows flat corpus-style keys — a path-shaped
+                        // layout (`/proj/src/a.ts` importing `./b`) needs the
+                        // directory-relative leg or the alias never resolves on
+                        // real on-disk projects.
+                        val targetFile = resolveModuleSpecifier(specifier, decl)
+                            ?: owningSourceFile(decl)?.fileName?.let {
+                                resolveModuleSpecifierRelative(specifier, it)
+                            } ?: continue
                         val targetResult = fileResults[targetFile] ?: continue
 
                         // Namespace import: import * as Foo from "mod"
@@ -122597,7 +122605,10 @@ interface DataView {
     ): Boolean {
         if (propName.isEmpty() || propName in RUNTIME_PROPERTIES) return false
         val nsIdent = access.expression as? Identifier ?: return false
-        val nsSym = globals[nsIdent.text] ?: return false
+        // INV.3(d): the namespace-import alias is the current file's own
+        // top-level local — no longer in the retired merged [globals].
+        val nsSym = currentFileLocals?.get(nsIdent.text)
+            ?: lookupPerFileForNode(nsIdent, nsIdent.text) ?: return false
         if (!nsSym.flags.hasAny(SymbolFlags.Alias)) return false
         val resolved = resolveAliasTarget(nsSym) ?: return false
         if (!resolved.flags.hasAny(SymbolFlags.Module)) return false
