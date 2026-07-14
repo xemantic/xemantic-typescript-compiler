@@ -94162,27 +94162,18 @@ interface DataView {
             // node-keyed null.
             ?: (node.typeName as? QualifiedName)?.let { globals[name] }
         if (symbol != null) {
-            // Round 473 (Blocker #3): a CONFLATED top-level interface (declared in ≥2
-            // module files — the merged symbol is a chimera of both member tables)
-            // resolves to the PER-FILE view its context selects: `protocol.Diagnostic`
-            // → server/protocol.ts's declaration, a bare `Diagnostic` → the checking
-            // file's own/imported declaration. Unresolvable contexts keep the merged
-            // status quo. Non-generic only (the conflated tsc pairs all are).
-            // The resolved symbol may be the MERGED interface (bare name via globals) or
-            // the checking file's import ALIAS (bare name via file locals) — the per-file
-            // resolver re-derives the target from context, so both flags qualify. A
-            // QUALIFIED name whose symbol resolved THROUGH a module/namespace (parent is
-            // a module symbol) is already per-file-precise with the module-qualified
-            // display (`import("a").F`, the errorWithSameNameType corpus pin) — defer.
-            if (node.typeArguments.isNullOrEmpty() && conflatedInterfaceFiles.isNotEmpty() &&
-                symbol.flags.hasAny(SymbolFlags.Interface or SymbolFlags.Alias) &&
-                name in conflatedInterfaceFiles &&
-                !(node.typeName is QualifiedName && symbol.parent?.flags?.hasAny(
-                    SymbolFlags.Module or SymbolFlags.NamespaceModule or SymbolFlags.ValueModule,
-                ) == true)
-            ) {
-                conflatedPerFileInterfaceType(name, node)?.let { return it }
-            }
+            // Round 512 — INV.3(d)(v) first deletion: the round-473 CONFLATED-interface
+            // per-file-view DISPATCH is retired with the merge. Post-retire the
+            // node-keyed symbol resolution already yields each file's own clean
+            // interface (the chimera the views compensated for no longer exists), and
+            // the view minting had become actively WRONG: a per-context instance of
+            // protocol.ts's `Diagnostic` resolved its NESTED member annotation
+            // (`DiagnosticRelatedInformation`) in a DIFFERENT file's view than a
+            // sibling instance, so two same-declaration instances failed to relate
+            // (server session.ts TS2322×2, harness ×2 — measured: removing the
+            // dispatch restores the pre-retire profile baselines; compiler/services
+            // byte-identical). The [conflatedPerFileInterfaceType] machinery itself
+            // stays for the heritage/type-alias consumers until their (v) turns.
             // Round 477 (Blocker #3): a QUALIFIED `ns.Name` naming an interface SHADOWED
             // by a same-named `type Name` alias in a DIFFERENT module file (the last-wins
             // Interface+TypeAlias merge — session.ts's `type Event` vs protocol.ts's
@@ -123177,7 +123168,16 @@ interface DataView {
         // local type and bail when the member is present. Bounded to shadowed names.
         if (objectExpr is Identifier && !isThisAccess && objectExpr.text in currentShadowedNames) {
             val localType = currentLocalTypes[objectExpr.text]
-            if (localType != null && localType !== anyType && localType !== errorType) {
+            // Round 512: an UN-INFERABLE shadow (the anyType registration from
+            // applyBodyLocalShadowing's global/import-collision branches) makes the
+            // receiver unknowable — every symbol-based branch below would type it
+            // from the OUTER declaration, a categorically different binding
+            // (deprecate.ts's body-local `const version` vs the barrel-imported
+            // corePublic `const version: string` → FP `.compareTo` on string;
+            // pre-retire the merged symbol's polluted flags dodged the string-var
+            // branch by accident). Suppression-only.
+            if (localType === anyType) return
+            if (localType != null && localType !== errorType) {
                 val app = try { getApparentType(localType) } catch (_: Exception) { null }
                 if (app != null && getPropertyOfType(app, propName) != null) return
             }
@@ -142831,7 +142831,18 @@ interface DataView {
         val base = member.substringBefore('<').removePrefix("readonly ").trim()
         if (base.isEmpty() || !base[0].isLetter() || !base[0].isUpperCase()) return false
         if (base == "Array" || base == "ReadonlyArray") return true
-        val sym = currentFileLocals?.get(base) ?: globals[base] ?: return false
+        var sym = currentFileLocals?.get(base) ?: globals[base] ?: return false
+        // INV.3(d): the alias is typically IMPORTED (fourslashImpl's
+        // `import ArrayOrSingle = FourSlashInterface.ArrayOrSingle` through the
+        // ns-import barrel) — the retired merge no longer leaks the declaring
+        // file's alias into [globals]; hop ImportSpecifiers like [lookupPerFile]
+        // does and every other alias shape through [resolveAlias] (whose
+        // QualifiedName arm now walks ns-import barrels).
+        if (sym.flags.hasAny(SymbolFlags.Alias)) {
+            sym = (if (sym.declarations.any { it is ImportSpecifier })
+                resolveImportedSymbolGeneral(sym) else null)
+                ?: resolveAlias(sym)
+        }
         for (decl in sym.declarations) {
             if (decl is TypeAliasDeclaration && typeNodeContainsArrayIsh(decl.type, 0)) return true
         }
