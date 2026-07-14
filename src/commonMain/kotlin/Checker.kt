@@ -22837,7 +22837,10 @@ class Checker(
     private fun namespaceMemberVarAnnotationCtx(left: PropertyAccessExpression): Type? {
         val recv = left.expression as? PropertyAccessExpression ?: return null
         val rootIdent = recv.expression as? Identifier ?: return null
-        val rootSym = currentFileLocals?.get(rootIdent.text) ?: globals[rootIdent.text] ?: return null
+        // INV.3(d): node-keyed — the root is the current file's own import alias,
+        // no longer in the retired merged [globals].
+        val rootSym = currentFileLocals?.get(rootIdent.text)
+            ?: lookupPerFileForNode(rootIdent, rootIdent.text) ?: return null
         if (!rootSym.flags.hasAny(SymbolFlags.Alias)) return null
         // A namespace-import alias's declaration is the whole ImportDeclaration —
         // gate on its clause carrying a NamespaceImport binding named like the root.
@@ -22847,7 +22850,11 @@ class Checker(
         }
         if (!isNsImport) return null
         val moduleFlags = SymbolFlags.Module or SymbolFlags.NamespaceModule or SymbolFlags.ValueModule
-        val nsSym = globals[recv.name.text]?.takeIf { it.flags.hasAny(moduleFlags) } ?: return null
+        // INV.3(d): the sub-namespace is a module file's top-level namespace, no
+        // longer merged into [globals] — walk the import alias's target through the
+        // barrel star chain instead (the legacy consult stays first for kept names).
+        val nsSym = (globals[recv.name.text] ?: namespaceAliasMemberSymbol(rootSym, recv.name.text))
+            ?.takeIf { it.flags.hasAny(moduleFlags) } ?: return null
         val member = nsSym.exports?.get(left.name.text) ?: return null
         val vd = member.declarations.firstOrNull { it is VariableDeclaration } as? VariableDeclaration ?: return null
         return vd.type?.let { getTypeFromTypeNodeSafeNsAware(it) }
@@ -123960,7 +123967,26 @@ interface DataView {
                     }
                     val missingMembers = members.filter { !memberHasIt(it) }
                     val anyHasIt = members.any { memberHasIt(it) }
-                    if (missingMembers.isNotEmpty() && (anyHasIt || allWellResolved)) {
+                    // Round 512 (post-retire FN unmasked): a union of ALL-ANONYMOUS plain
+                    // object members (`type Shape = {width} | {height}`) missing the
+                    // property EVERYWHERE is a genuine tsc error — pre-retire the
+                    // conflated receiver resolved to a sibling interface and fired
+                    // through the single-interface branch by accident. Anonymous
+                    // TypeLiteral members have reliably-synthesized member tables, so
+                    // the all-missing verdict is trustworthy; index-signature /
+                    // callable members bail (an index sig legitimately provides any
+                    // property). tsc emits NO member chain for the all-missing case.
+                    val allAnonPlainObjects = members.isNotEmpty() && members.all { m ->
+                        m is Type.Object && m !is Type.Interface && m !is Type.Reference &&
+                            m.symbol == null && run {
+                                resolveStructuredTypeMembers(m)
+                                m.stringIndexInfo == null && m.numberIndexInfo == null &&
+                                    m.callSignatures.isNullOrEmpty() &&
+                                    m.constructSignatures.isNullOrEmpty() &&
+                                    !m.members.isNullOrEmpty()
+                            }
+                    }
+                    if (missingMembers.isNotEmpty() && (anyHasIt || allWellResolved || allAnonPlainObjects)) {
                         val orderedMissing = if (allWellResolved) missingMembers.sortedBy { it.id } else missingMembers
                         val missingMember = orderedMissing.first()
                         // Receiver annotated with a bare alias-of-union reference displays
@@ -123998,7 +124024,12 @@ interface DataView {
                             category = DiagnosticCategory.Error, code = if (suggestion != null) 2551 else 2339,
                             fileName = fileName, line = line, character = character,
                             start = diagStart, length = diagLength,
-                            messageChain = listOf("  Property '$propName' does not exist on type '$memberDisplay'."),
+                            // The round-512 all-missing anonymous case carries no member
+                            // chain (tsc names a member only when SOME member has it);
+                            // the pre-existing partial/well-resolved paths keep theirs.
+                            messageChain = if (anyHasIt || allWellResolved)
+                                listOf("  Property '$propName' does not exist on type '$memberDisplay'.")
+                            else emptyList(),
                         ))
                         return
                     }
@@ -134171,7 +134202,26 @@ interface DataView {
                 // required named param — undefined is the sole failure (see helper).
                 if (arg is PropertyAccessExpression &&
                     tryEmitOptionalMemberArgVsRequiredNamedTs2345(arg, paramType, params[i], source, fileName)) continue
-                if (!(argIsPrimitive && paramIsNamedType) && !hasPrivateBrand && !allowFuncToFunc && !allowArityMismatch && !allowVoidReturnMismatch && !allowFuncReturnMismatch && !allowChainObjObj) continue
+                // Round 512 (post-retire FN unmasked): a PRIMITIVE arg vs an anonymous
+                // plain property-bag param (`type SFL = { x: number }` — pre-retire the
+                // alias name resolved to a sibling interface chimera and rode the
+                // paramIsNamedType rule). Same rationale as the named-interface rule; a
+                // callable / index-signature / empty shape bails (a primitive CAN
+                // satisfy those via its apparent members — the B418b asymmetry), and
+                // every member type must resolve CONCRETE — an any/error member marks
+                // an unresolved shape (tsc sys.ts's `getModifiedTime:
+                // NonNullable<System["getModifiedTime"]>` closure param, whose name our
+                // callee resolution mis-binds to the file-level function — B83.5).
+                val paramIsPlainObjectBag = paramType is Type.Object && paramType !is Type.Interface &&
+                    paramType !is Type.Reference && paramType.symbol == null &&
+                    paramType.callSignatures.isNullOrEmpty() && paramType.constructSignatures.isNullOrEmpty() &&
+                    paramType.stringIndexInfo == null && paramType.numberIndexInfo == null &&
+                    !paramType.members.isNullOrEmpty() &&
+                    paramType.members!!.values.all { ms ->
+                        val mt = getTypeOfSymbol(ms)
+                        mt !== anyType && mt !== errorType
+                    }
+                if (!(argIsPrimitive && (paramIsNamedType || paramIsPlainObjectBag)) && !hasPrivateBrand && !allowFuncToFunc && !allowArityMismatch && !allowVoidReturnMismatch && !allowFuncReturnMismatch && !allowChainObjObj) continue
                 // Round 79l (orchestrated — Agent A plan): for a contextually-typed
                 // ARROW / FUNCTION-EXPRESSION argument whose ONLY mismatch is the
                 // body-return type (allowFuncReturnMismatch), TypeScript reports a
@@ -142193,6 +142243,24 @@ interface DataView {
                 val ctx = owningSourceFile(nsImport)?.fileName ?: return null
                 val spec = (nsImport.moduleSpecifier as? StringLiteralNode)?.text ?: return null
                 val target = resolveModuleSpecifier(spec, nsImport)
+                    ?: resolveAliasJsModuleSpecifier(spec, ctx) ?: return null
+                val tr = fileResults[target] ?: return null
+                if (memberName in moduleNamedExportsOf(tr.sourceFile)) {
+                    tr.locals[memberName]?.let { return it }
+                }
+                return resolveExportedSymbolThroughStars(tr.sourceFile, memberName)
+            }
+            // An `export * as NS from "./x"` re-publication (the tsc `_namespaces`
+            // barrel idiom) — the binder binds NS as an Alias declared by the
+            // ExportDeclaration itself; resolve its specifier and read the member.
+            val nsExport = cur.declarations.firstOrNull {
+                it is ExportDeclaration && it.exportClause is NamespaceExport &&
+                    it.moduleSpecifier is StringLiteralNode
+            } as? ExportDeclaration
+            if (nsExport != null) {
+                val ctx = owningSourceFile(nsExport)?.fileName ?: return null
+                val spec = (nsExport.moduleSpecifier as? StringLiteralNode)?.text ?: return null
+                val target = resolveModuleSpecifier(spec, nsExport)
                     ?: resolveAliasJsModuleSpecifier(spec, ctx) ?: return null
                 val tr = fileResults[target] ?: return null
                 if (memberName in moduleNamedExportsOf(tr.sourceFile)) {
