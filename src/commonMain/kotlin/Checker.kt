@@ -88829,16 +88829,16 @@ interface DataView {
                 // round-462 shape test (conservative = today's behavior).
                 val tpDecl = t.symbol?.declarations?.firstOrNull() as? TypeParameter
                 if (tpDecl != null) return tpDecl !== ownDecl
-                // Declarations-less instance (fresh-minted, B199): the shape test
-                // decides where shapes differ (round 462); when BOTH are constrained
-                // the origin is ambiguous — default FOREIGN (a fresh-minted
-                // constrained TP nested in a Reference arg is an inference artifact:
-                // checker.ts's `setTextRangeWorker(factory.createNodeArray(…), …)`
-                // returning `NodeArray<T>` with createNodeArray's own `T extends
-                // Node` sharing the enclosing `T extends Node`'s name AND shape).
-                // Both-unconstrained stays OWN (the classic `fn<T>(x: T): number {
-                // return x }` corpus pins).
-                if (ownDecl.constraint != null && t.constraint != null) return true
+                // Declarations-less instance (fresh-minted, B199): the round-462
+                // shape test decides — mismatched constraint SHAPE = foreign; a
+                // both-constrained same-name instance stays OWN. (The round-510
+                // ambiguous→FOREIGN default here regressed ~11 corpus TP pins —
+                // typeParametersShouldNotBeEqual2/3, genericTypeAssertions4/5, … —
+                // where a fresh-minted own constrained TP must keep its checks; the
+                // checker.ts:7358 leak that leg patched is killed at the INFERENCE
+                // side instead: tryInferSingleTypeParamFromArgs soft-skips a
+                // CallExpression arg still carrying a TypeParam at forReturnType
+                // sites, so the leaked NodeArray<T> never anchors the outer tp.)
                 (ownDecl.constraint == null) != (t.constraint == null)
             }
             is Type.Union -> t.types.any { typeContainsForeignTypeParam(it, ownTpNames, depth + 1) }
@@ -104288,6 +104288,24 @@ interface DataView {
                         // inference there could emit, not just suppress).
                         if (forReturnType && rawArgType === anyType) { tpSawAnyArg = true; continue }
                         return null
+                    }
+                    // INV.3(d)(i): a CALL-EXPRESSION arg whose type still carries a
+                    // TypeParam is a nested call whose own inference did not complete
+                    // (checker.ts:7358's `setTextRangeWorker(factory.createNodeArray(
+                    // undefined, …), nodes)` — createNodeArray's un-inferred `T extends
+                    // Node` leaks through `NodeArray<T>`, name-AND-shape-colliding with
+                    // the enclosing fn's `T extends Node`, so the foreign-TP return gate
+                    // cannot classify it). Contribute no candidate and let the tp degrade
+                    // to anyType (the tpSawAnyArg mechanism) — exactly the pre-INV.3(d)
+                    // behavior where the merged-alias callee degraded the whole arg to
+                    // any. The round-468 CallExpression gate keeps an own-TP
+                    // identifier/parameter arg anchoring (`append(arr, item)` with
+                    // `arr: T[]` stays inferred). forReturnType-only: the arg-vs-param
+                    // site's consumers CHECK args against substituted params, where a
+                    // partial mapper could emit rather than merely suppress.
+                    if (forReturnType && arg is CallExpression &&
+                        typeContainsForeignTypeParam(rawArgType, emptySet())) {
+                        tpSawAnyArg = true; continue
                     }
                     if (rawArgType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) {
                         // A purely-nullish arg for a NULLABLE union param contributes no
