@@ -644,6 +644,35 @@ diagnostics, `--listAll` diff empty vs a stash-built BEFORE binary):
   TS2320, so group by the cheap base name first and run occOf only for names appearing 2+
   times — the common `interface X extends A, B` case (distinct names, pervasive in tsc's
   Node hierarchy) skips the scan. `occOf`'s lambda was the #6 self-time frame (13 samples).
+
+**Round 504 (2026-07-13, same session as 500–503) — INV.3(c)(i) LANDED: the
+node-keyed resolution primitive, additive and unconsumed.** The round-503
+measurement's design consequence made concrete: `owningSourceFile(node)`
+(NodeWalk.kt — the first general consumer of the INV.2(a) parent chains
+outside the lexical binder: walk `parent` to the SourceFile; null for an
+unindexed node — data-class `copy()` / Transformer-synthesized / detached —
+whose links were never stamped; defensive 4096-hop bound so a corrupted link
+cannot hang a lookup) + `lookupPerFileForNode(node, name)` =
+`globalsForFile(owner.fileName, name)`, degrading to the legacy merged
+consult when no owner exists (mirrors `globalsForFile`'s unknown-file
+degradation). This is the key the (c)(ii) kind-domain flip needs: a types.ts
+`.kind` annotation read while checking parser.ts resolves under TYPES.TS's
+visibility (where the name is an own local → the merged instance, i.e.
+resolution PRESERVED), while the same name asked of a node owned by a file
+with no meaning for it returns null (the leak, killed). Pinned by
+Inv3NodeKeyedLookupTest (direct `Checker(options, binderResults)`
+construction, path-shaped fixtures): foreign-node annotation → the declaring
+file's own symbol instance (assertSame vs binder locals); node owned by a
+non-importing module file → null; importing owner → still the merged
+instance; `copy()` → `owningSourceFile` null + legacy consult still answers;
+lib names never nulled regardless of owner. Suite green 10,273 → 10,279
+(+6); primitive unconsumed by checker paths (behavior provably unchanged —
+compiler-profile `--listAll` spot-check byte-identical); bench row 27,302 ms
+self / 887 MB (+3.9% single-run vs previous = the documented box-drift band;
+the primitive is dead code until (c)(ii) consumes it; same 46 env-legit
+diagnostics). NEXT: INV.3(c)(ii) — flip the kind-domain/enum-discriminant
+family (~82% of conflated traffic) onto `lookupPerFileForNode`,
+listAll-gated.
   +3 local `MultiBaseTs2320OccOfTest`.
 - **Verification:** all byte-identical (46-diagnostic `--listAll` diff empty); full corpus
   suite green 10,180 → 10,190 (+10 local across 3 test files, 0 regressions). Clean

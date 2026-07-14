@@ -59,6 +59,46 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 512 (2026-07-14) — INV.3(d)(ii)+(iii)+(iv) ALL DONE; the retire branch is
+MERGED TO MAIN: suite fully green, ALL 8 profiles byte-identical to pre-retire.**
+Six commits. (ii) the last 6 corpus multi-file failures, one per-consult-flip family
+each (union-discriminant objlit drill node-keyed — indirectDiscriminant; ns-import
+static TS2339 + the DIR-RELATIVE legs in resolveAlias's ImportDeclaration AND
+ImportSpecifier branches (the round-511 lesson class — the corpus test passed while
+the path-shaped MainKt repro still failed, twice) — exportStarFromEmptyModule;
+TS2749 file-keyed + the NEW `typeSideImportFallback` gate (a local `function
+NodeLinks(this: NodeLinks)` shadowing a TYPE import stays type-eligible — the naive
+flip manufactured TS2749×48 on both profiles) — allowImportClauses; the B585
+contextual-display hops — allowJscheckJs; JSDoc ImportType own-specifier resolution
+— checkJsdocTypeTag2; the TS2415 imported-base heritage flip —
+declarationEmitPrivateSymbol2). (iii) the last 4 local pins: 2 resolver gaps (the
+`export * as NS` re-publication arm in namespaceAliasMemberSymbol; the ns-member
+objlit ctx root/sub-namespace flips) + 2 PRE-RETIRE ACCIDENTAL PASSES — the
+conflated receiver used to resolve to a sibling interface and fire through
+Interface-gated emitters; post-retire the correct anonymous resolution exposed two
+genuine FNs, fixed tsc-faithfully (mam all-missing ALL-ANONYMOUS union TS2339, no
+member chain; TS2345 `paramIsPlainObjectBag` gated to all-concrete member types —
+the sys.ts B83.5 closure-param mis-binding FP'd until the gate). (iv) all three
+profile-residual families: deprecate.ts `compareTo` (an anyType shadow now BAILS
+mam — the outer-import fall-through was categorically wrong; pre-retire the merged
+symbol's polluted flags dodged the string branch by accident); **server/harness
+session.ts Diagnostic — the round-473 Identifier DISPATCH into
+`conflatedPerFileInterfaceType` is REMOVED (the first (v) deletion): post-retire
+the node-keyed resolution already yields clean per-file interfaces, and the view
+minting had turned actively wrong — two instances of protocol.ts's SAME
+`Diagnostic` declaration resolved their nested `DiagnosticRelatedInformation`
+member in DIFFERENT files' views (probe: srcElem riFile=types.ts cat=
+DiagnosticCategory vs tgtElem riFile=protocol.ts cat=string) and failed to relate;
+an env-gated experiment proved removal restores the pre-retire baselines exactly**;
+fourslashImpl `'array'` (namedUnionMemberCouldAcceptArray hops import aliases —
+ImportSpecifier via resolveImportedSymbolGeneral, ImportEquals via resolveAlias).
+VERIFIED: full suite green; **all 8 profiles listAll byte-identical vs a
+main-worktree pre-retire build** (the (iv) exit gate). Local pins:
+UnionDiscriminantModuleAliasTest(3), NamespaceImportStaticMemberTest(2, incl.
+path-shaped), PostRetirePerFileConsultsTest(7), PostRetireProfileResidualsTest(4).
+NEXT: (v) — delete the remaining conflation ecology walker-by-walker (the
+Identifier dispatch removal is the template: measure each against all 8 profiles).
+
 **Round 511 (2026-07-14) — INV.3(d)(i) DONE + (ii) 8/14 + (iii) 4 flips & 2 pin-updates
 (all on branch `wip/inv3d-merge-retire`, rebased onto main; 4 commits): branch
 failures 42 → 10.** (i) The ambiguous-constrained→foreign TP leg reverted
@@ -405,35 +445,6 @@ and `resolveNamespaceQualifiedTypeAlias` (currentCheckFileName-keyed
 fileResults reads, not a globals consult). CLAUDE.md gotcha extended (the
 node-keyed rule + the readers' names). NEXT: INV.3(c)(iii) — the
 current-file-keyed value/callee sites.
-
-**Round 504 (2026-07-13, same session as 500–503) — INV.3(c)(i) LANDED: the
-node-keyed resolution primitive, additive and unconsumed.** The round-503
-measurement's design consequence made concrete: `owningSourceFile(node)`
-(NodeWalk.kt — the first general consumer of the INV.2(a) parent chains
-outside the lexical binder: walk `parent` to the SourceFile; null for an
-unindexed node — data-class `copy()` / Transformer-synthesized / detached —
-whose links were never stamped; defensive 4096-hop bound so a corrupted link
-cannot hang a lookup) + `lookupPerFileForNode(node, name)` =
-`globalsForFile(owner.fileName, name)`, degrading to the legacy merged
-consult when no owner exists (mirrors `globalsForFile`'s unknown-file
-degradation). This is the key the (c)(ii) kind-domain flip needs: a types.ts
-`.kind` annotation read while checking parser.ts resolves under TYPES.TS's
-visibility (where the name is an own local → the merged instance, i.e.
-resolution PRESERVED), while the same name asked of a node owned by a file
-with no meaning for it returns null (the leak, killed). Pinned by
-Inv3NodeKeyedLookupTest (direct `Checker(options, binderResults)`
-construction, path-shaped fixtures): foreign-node annotation → the declaring
-file's own symbol instance (assertSame vs binder locals); node owned by a
-non-importing module file → null; importing owner → still the merged
-instance; `copy()` → `owningSourceFile` null + legacy consult still answers;
-lib names never nulled regardless of owner. Suite green 10,273 → 10,279
-(+6); primitive unconsumed by checker paths (behavior provably unchanged —
-compiler-profile `--listAll` spot-check byte-identical); bench row 27,302 ms
-self / 887 MB (+3.9% single-run vs previous = the documented box-drift band;
-the primitive is dead code until (c)(ii) consumes it; same 46 env-legit
-diagnostics). NEXT: INV.3(c)(ii) — flip the kind-domain/enum-discriminant
-family (~82% of conflated traffic) onto `lookupPerFileForNode`,
-listAll-gated.
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
@@ -849,10 +860,12 @@ interrupt the arc).
     `conflatedEnumFileSubsets`, the per-file interface views, and the chimera
     bails — walker-by-walker, each deletion suite- and listAll-gated (each
     removes hot-path work from `checkMemberAccessMissing`).
-    **IN PROGRESS round 510 — the retire itself lives on branch
-    `wip/inv3d-merge-retire` (033598b6), compiler + services listAll
-    BYTE-IDENTICAL, with an enumerated 36-failure/2-profile-residual worklist;
-    main untouched.** What the branch proves (measured round 510): the retire
+    **THE RETIRE IS MERGED TO MAIN (round 512): sub-items (i)–(iv) all DONE —
+    suite fully green (10,346/0/3) and ALL 8 profiles byte-identical to the
+    pre-retire baselines. Remaining: (v) the ecology deletions (the round-473
+    Identifier dispatch is already deleted as the (iv) residual fix — its
+    removal is what restored the server/harness baselines).** What the branch
+    proved (measured round 510): the retire
     must be STAGED BY NAME CLASS — retire only MODULE-ONLY names; SHARED names
     (module local colliding with a lib/script global: `Symbol`/`Node`/
     `Performance` riding the lib names) must KEEP merging until every lib-name
@@ -871,7 +884,12 @@ interrupt the arc).
       CallExpression gate keeps own-TP identifier args anchoring). Pinned by
       ForeignTpInferenceSoftSkipTest (6); compiler+services listAll
       byte-identical.
-    - (ii) IN PROGRESS round 511 — 8 of 14 fixed, one commit each family:
+    - (ii) DONE round 512 — all 14 corpus multi-file failures fixed (the last 6:
+      union-discriminant objlit drill node-keyed; ns-import static TS2339 +
+      the dir-relative resolveAlias legs; TS2749 file-keyed with the
+      typeSideImportFallback gate; the B585 contextual-display hops; the JSDoc
+      ImportType own-specifier resolution; the TS2415 imported-base flip).
+      Round-511 record follows:
       heritage/implements walkers node-keyed (interfaceDeclaration3,
       interfaceImplementation6 — incl. the B563 ownership-gate mirror that
       killed the double TS2420), checkConstraintsForTypeArgs keyNode +
@@ -899,7 +917,11 @@ interrupt the arc).
       member-vs-discriminant `"foo" | "bar"` — the objlit-member drill's
       resolution; NOT tryEmitObjectVsNamedUnionArg, whose anonymous
       constituents defer to the discriminant walker).
-    - (iii) IN PROGRESS round 511 — 2 pin-updates landed
+    - (iii) DONE round 512 — the last 4 were 2 real resolver gaps (the
+      `export * as` arm in namespaceAliasMemberSymbol; the ns-member objlit ctx
+      flips) + 2 pre-retire ACCIDENTAL PASSES fixed tsc-faithfully (all-missing
+      all-anonymous union TS2339; primitive-vs-plain-object-bag TS2345).
+      Round-511 record follows:
       (Inv3NodeKeyedLookupTest's unindexed-copy degradation → null for
       module-only names; Inv3GlobalsLookupTest's leak assertions inverted to
       the emptied-worklist victory condition); 3 more of the original 9
@@ -914,14 +936,14 @@ interrupt the arc).
       NamespaceQualifiedBaseInheritanceTest (export-star-as barrel base →
       TS2339 FP returned), BuilderChainAndNsMemberCtxTest (ns-member objlit
       contextual params → TS7006 FP returned).
-    - (iv) Close the remaining profile residuals: harness +5 / server +2
-      (deprecate.ts `compareTo` — the applyBodyLocalShadowing importCollision
-      branch is on the branch UNTESTED; session.ts protocol.Diagnostic objlit
-      member — suspect the conflated per-file-view QualifiedName machinery
-      post-retire; fourslashImpl `'array'` — the STRING-relation
-      `isAssignableTo` path resolving `ArrayOrSingle` through retired
-      globals). Then full 8-profile listAll A/B + suite green → merge the
-      branch to main as one reviewed commit stack.
+    - (iv) DONE round 512 — all three residual families closed: deprecate.ts
+      `compareTo` (an anyType shadow now BAILS mam instead of falling through
+      to the outer import); session.ts protocol.Diagnostic (the round-473
+      Identifier DISPATCH into conflatedPerFileInterfaceType REMOVED — the
+      first (v) deletion, see the session note); fourslashImpl `'array'`
+      (namedUnionMemberCouldAcceptArray hops import aliases). **Full 8-profile
+      listAll A/B vs pre-retire main: ALL BYTE-IDENTICAL**; suite fully green;
+      branch merged to main.
     - (v) THEN the deletions: `moduleFileLocalVarNames`,
       `conflatedTypeAliasFiles`, `conflatedInterfaceFiles`,
       `conflatedEnumFileSubsets`, `conflatedPerFileInterfaceType` + chimera
