@@ -7035,7 +7035,13 @@ class Checker(
                         for ((_, stmt) in enclosingImportsOf(decl)) {
                             val specifier2 = (stmt.moduleSpecifier as? StringLiteralNode)?.text
                                 ?: continue
+                            // Round 512 (the round-511 dir-relative lesson): the bare
+                            // resolver only knows flat corpus-style keys — path-shaped
+                            // on-disk layouts need the directory-relative leg.
                             val targetFile2 = resolveModuleSpecifier(specifier2, stmt)
+                                ?: owningSourceFile(stmt)?.fileName?.let {
+                                    resolveModuleSpecifierRelative(specifier2, it)
+                                }
                             if (targetFile2 == null) {
                                 // Ambient module fallback — `declare module "X"` in a .d.ts file.
                                 val ambient = globals[specifier2]
@@ -27942,13 +27948,22 @@ class Checker(
         if (name in KNOWN_GLOBALS && name !in VALUE_ONLY_GLOBALS) return false
         // Look up the binder symbol — if it carries any type/module/alias flag, treat
         // as type-eligible (alias may resolve to a type cross-file; conservative pass).
-        val sym = currentFileLocals?.get(name) ?: globals[name]
+        // INV.3(d): file-keyed — the name is read from [fileName]'s own AST and a
+        // module file's import alias / top-level local left the retired [globals].
+        val sym = currentFileLocals?.get(name) ?: globalsForFile(fileName, name)
         if (sym != null) {
             if (sym.flags.hasAny(SymbolFlags.Type or SymbolFlags.Module)) return false
             // B466: an alias MAY resolve to a type cross-file → conservatively suppress,
             // EXCEPT a default import whose target's default export is unambiguously a
             // value (no type meaning) — that IS a value used as a type (TS2749).
             if (sym.flags.hasAny(SymbolFlags.Alias)) return defaultImportIsStrictlyValue(name, fileName)
+            // INV.3(d): a local VALUE can shadow a same-named import whose target is a
+            // TYPE — tsc merges the import's type side with the local's value side
+            // (checker.ts's `function NodeLinks(this: NodeLinks)` over the imported
+            // interface), so the name stays type-eligible. Pre-retire the merged
+            // globals chimera carried the Type flag and suppressed this implicitly.
+            if (fileResults[fileName]?.sourceFile
+                    ?.let { typeSideImportFallback(it, name) } != null) return false
             // Only fire when symbol is unambiguously a value (Variable/Function/etc.).
             return sym.flags.hasAny(SymbolFlags.Value)
         }
@@ -84553,7 +84568,12 @@ interface DataView {
     private fun objLitArgCalleeParamTypeNode(call: CallExpression, argIndex: Int): TypeNode? {
         val callee = call.expression as? Identifier ?: return null
         if (currentLocalTypes.containsKey(callee.text)) return null
-        var sym = resolveAlias(currentFileLocals?.get(callee.text) ?: globals[callee.text] ?: return null)
+        // INV.3(d): node-keyed fallbacks — the callee is the current file's own
+        // node; the var-initializer hop lands on the DECLARING file's node
+        // (`export var vextend = extend` — `extend` is that file's local, no
+        // longer in the retired merged [globals]).
+        var sym = resolveAlias(currentFileLocals?.get(callee.text)
+            ?: lookupPerFileForNode(callee, callee.text) ?: return null)
         var hops = 0
         while (hops++ < 4) {
             val fnDecl = sym.declarations.filterIsInstance<FunctionDeclaration>().singleOrNull()
@@ -84563,7 +84583,8 @@ interface DataView {
             }
             val varInit = sym.declarations.filterIsInstance<VariableDeclaration>()
                 .firstOrNull()?.initializer as? Identifier ?: return null
-            sym = resolveAlias(currentFileLocals?.get(varInit.text) ?: globals[varInit.text] ?: return null)
+            sym = resolveAlias(currentFileLocals?.get(varInit.text)
+                ?: lookupPerFileForNode(varInit, varInit.text) ?: return null)
         }
         return null
     }
@@ -84577,7 +84598,11 @@ interface DataView {
             is TypeLiteral -> ctxNode.members
             is TypeReference -> {
                 val name = getTypeReferenceLastName(ctxNode.typeName) ?: return null
-                val resolved = resolveAlias(currentFileLocals?.get(name) ?: globals[name] ?: return null)
+                // INV.3(d): the ctx node is the CALLEE's param annotation — it may
+                // live in another module file, whose top-level interface/alias left
+                // the retired merged [globals]; key by the node's owning file.
+                val resolved = resolveAlias(currentFileLocals?.get(name)
+                    ?: lookupPerFileForNode(ctxNode.typeName, name) ?: return null)
                 resolved.declarations.filterIsInstance<InterfaceDeclaration>().firstOrNull()?.members
                     ?: (resolved.declarations.filterIsInstance<TypeAliasDeclaration>()
                         .firstOrNull()?.type as? TypeLiteral)?.members
@@ -113651,7 +113676,7 @@ interface DataView {
             for (stmt in result.sourceFile.statements) {
                 if (stmt !is ExportAssignment) continue
                 val typeNode = stmt.type ?: continue
-                val (targetType, displayTarget) = resolveJsDocExportType(typeNode, source) ?: continue
+                val (targetType, displayTarget) = resolveJsDocExportType(typeNode, source, fileName) ?: continue
                 // B148d: primitive `@typedef {number} Foo` target → assignability check (TS2322).
                 if (targetType is Type.Intrinsic && targetType !== anyType && targetType !== errorType) {
                     val expr0 = stmt.expression
@@ -113708,13 +113733,17 @@ interface DataView {
 
     /** Resolve the (type, display-name) of a JSDoc `@type {T}` on an export-default, LOCALLY (no
      *  global `getTypeFromTypeNode` ImportType change). Two resolvable shapes:
-     *   - `import("X").Foo` → the cross-file named interface (via the init-time `globals` merge);
+     *   - `import("X").Foo` → the cross-file named interface (resolved through the ImportType's
+     *     OWN specifier — INV.3(d): the target module's local no longer leaks into `globals`);
      *   - a bare `Foo` that names a file-local `@typedef {Object} Foo` (synthesized from source).
      *  Everything else (incl. a `@typedef {primitive} Foo`) returns null → no emit. */
-    private fun resolveJsDocExportType(typeNode: TypeNode, source: String): Pair<Type, String>? {
+    private fun resolveJsDocExportType(typeNode: TypeNode, source: String, fileName: String): Pair<Type, String>? {
         if (typeNode is ImportType) {
             val qual = typeNode.qualifier as? Identifier ?: return null
-            val sym = globals[qual.text] ?: return null
+            val spec = ((typeNode.argument as? LiteralType)?.literal as? StringLiteralNode)?.text
+            val sym = spec?.let { resolveSpecifierAnywhere(it, fileName) }
+                ?.let { fileResults[it]?.locals?.get(qual.text) }
+                ?: globals[qual.text] ?: return null
             val t = getDeclaredTypeOfSymbol(sym)
             return t to typeToString(t)
         }
@@ -117270,7 +117299,10 @@ interface DataView {
                                     return@run s
                                 }
                             }
-                            globals[tnExpr.text]
+                            // INV.3(d): node-keyed — an IMPORTED base class left the
+                            // retired merged [globals]; the per-file consult hops the
+                            // import alias to the declaring file's own class symbol.
+                            lookupPerFileForNode(tnExpr, tnExpr.text)
                         }
                         is PropertyAccessExpression -> resolveQualifiedValueSymbol(tnExpr) ?: globals[baseName]
                         else -> globals[baseName]
