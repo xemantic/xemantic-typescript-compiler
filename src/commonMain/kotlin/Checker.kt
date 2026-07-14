@@ -2576,8 +2576,9 @@ class Checker(
         // 51. TS2371 (parameter initializer in non-implementation context)
         // migrated to the check spine (INV.4(b) batch 8) — see
         // spineCheckParamInitNonImpl.
-        // 51b. Check parameter initializer references later parameter (TS2373)
-        pass("checkParamInitForwardRef") { checkParamInitForwardRef() }
+        // 51b. TS2373 (parameter initializer references a later parameter)
+        // migrated to the check spine (INV.4(b) batch 10) — see
+        // spineCheckParamForwardRefs.
         // 52. Check strict mode reserved words as identifiers (TS1212)
         pass("checkStrictModeReservedWords") { checkStrictModeReservedWords() }
         // 53. Check class/interface named 'undefined' (TS2414/TS2427)
@@ -17530,7 +17531,13 @@ class Checker(
                 spineCheckDupModifiers(node)
                 spineCheckAmbientRelativeModuleName(node)
             }
-            is MethodDeclaration -> spineCheckReservedWordInterfaceParams(node)
+            is MethodDeclaration -> {
+                spineCheckReservedWordInterfaceParams(node)
+                spineCheckParamForwardRefs(node.parameters, node.body)
+            }
+            is Constructor -> spineCheckParamForwardRefs(node.parameters, node.body)
+            is ArrowFunction -> spineCheckParamForwardRefs(node.parameters, node.body)
+            is FunctionExpression -> spineCheckParamForwardRefs(node.parameters, node.body)
             is Parameter -> {
                 spineCheckRestParam(node)
                 spineCheckRestParamLast(node)
@@ -17565,6 +17572,7 @@ class Checker(
                 spineCheckSetAccessorGrammar(node)
                 spineCheckSetAccessorParamGrammar(node)
                 spineCheckSetterReturns(node)
+                spineCheckParamForwardRefs(node.parameters, node.body)
             }
             is ClassDeclaration -> {
                 spineCheckAccessorPairVisibility(node)
@@ -17584,6 +17592,7 @@ class Checker(
             is FunctionDeclaration -> {
                 spineCheckDupModifiers(node)
                 spineCheckAmbientImplFn(node)
+                spineCheckParamForwardRefs(node.parameters, node.body)
             }
             is VariableStatement -> {
                 spineCheckDupModifiers(node)
@@ -17657,6 +17666,28 @@ class Checker(
             cur = (cur as NodeBase).parent
         }
         return false
+    }
+
+    /**
+     * TS2373 (+ the ES5 hoisted-body-var TS2454 companion): a parameter
+     * initializer referencing a LATER parameter — migrated from the deleted
+     * `checkParamInitForwardRef` / `walkForParamInitForwardRef` walk family
+     * (INV.4(b) batch 10). [checkForwardRefsInParams] stays the per-function
+     * core (later-param set, IIFE descent, class-expression eager members,
+     * the sub-ES2015 hoisted-`var` leg); the spine dispatches it from every
+     * BODIED function-like's enter. The old statement walk reached
+     * function/class DECLARATIONS only — arrows, function expressions,
+     * object-literal methods, and class-EXPRESSION members are faithful
+     * widenings (TS2373 is per-signature tsc grammar, position-independent).
+     * Bodyless signatures (overloads / ambient / interface members) keep the
+     * old no-check (an initializer in a signature is TS2371 territory); an
+     * arrow's EXPRESSION body counts as a body but contributes no hoisted
+     * vars. GetAccessor parameters stay unchecked (old behavior — a get
+     * accessor with parameters is TS1054 territory).
+     */
+    private fun spineCheckParamForwardRefs(params: List<Parameter>, body: Node?) {
+        if (spineIsDts || body == null || params.isEmpty()) return
+        checkForwardRefsInParams(params, spineSource, spineFileName, body as? Block)
     }
 
     /**
@@ -71624,76 +71655,9 @@ interface DataView {
     // TS2373: Parameter 'X' cannot reference identifier 'Y' declared after it.
     // Narrow: later-parameter references only (body-var case is deferred because
     // of TS2304 interaction under ES2015+ parameter-scope rules).
+    // Dispatched from the check spine (INV.4(b) batch 10) — see
+    // spineCheckParamForwardRefs; the helpers below are the per-function core.
     // -----------------------------------------------------------------------
-
-    private fun checkParamInitForwardRef() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            walkForParamInitForwardRef(result.sourceFile.statements, source, fileName)
-        }
-    }
-
-    private fun walkForParamInitForwardRef(stmts: List<Statement>, source: String, fileName: String) {
-        for (stmt in stmts) {
-            when (stmt) {
-                is FunctionDeclaration -> {
-                    stmt.body?.let { body ->
-                        checkForwardRefsInParams(stmt.parameters, source, fileName, body)
-                        walkForParamInitForwardRef(body.statements, source, fileName)
-                    }
-                }
-                is ClassDeclaration -> {
-                    for (member in stmt.members) {
-                        when (member) {
-                            is MethodDeclaration -> member.body?.let { body ->
-                                checkForwardRefsInParams(member.parameters, source, fileName, body)
-                                walkForParamInitForwardRef(body.statements, source, fileName)
-                            }
-                            is Constructor -> member.body?.let { body ->
-                                checkForwardRefsInParams(member.parameters, source, fileName, body)
-                                walkForParamInitForwardRef(body.statements, source, fileName)
-                            }
-                            is GetAccessor -> member.body?.let { body ->
-                                walkForParamInitForwardRef(body.statements, source, fileName)
-                            }
-                            is SetAccessor -> member.body?.let { body ->
-                                checkForwardRefsInParams(member.parameters, source, fileName, body)
-                                walkForParamInitForwardRef(body.statements, source, fileName)
-                            }
-                            else -> {}
-                        }
-                    }
-                }
-                is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkForParamInitForwardRef(it.statements, source, fileName) }
-                is Block -> walkForParamInitForwardRef(stmt.statements, source, fileName)
-                is IfStatement -> {
-                    walkForParamInitForwardRef(listOf(stmt.thenStatement), source, fileName)
-                    stmt.elseStatement?.let { walkForParamInitForwardRef(listOf(it), source, fileName) }
-                }
-                is ForStatement -> walkForParamInitForwardRef(listOf(stmt.statement), source, fileName)
-                is ForInStatement -> walkForParamInitForwardRef(listOf(stmt.statement), source, fileName)
-                is ForOfStatement -> walkForParamInitForwardRef(listOf(stmt.statement), source, fileName)
-                is WhileStatement -> walkForParamInitForwardRef(listOf(stmt.statement), source, fileName)
-                is DoStatement -> walkForParamInitForwardRef(listOf(stmt.statement), source, fileName)
-                is SwitchStatement -> for (clause in stmt.caseBlock) {
-                    when (clause) {
-                        is CaseClause -> walkForParamInitForwardRef(clause.statements, source, fileName)
-                        is DefaultClause -> walkForParamInitForwardRef(clause.statements, source, fileName)
-                        else -> {}
-                    }
-                }
-                is TryStatement -> {
-                    walkForParamInitForwardRef(stmt.tryBlock.statements, source, fileName)
-                    stmt.catchClause?.block?.statements?.let { walkForParamInitForwardRef(it, source, fileName) }
-                    stmt.finallyBlock?.statements?.let { walkForParamInitForwardRef(it, source, fileName) }
-                }
-                is LabeledStatement -> walkForParamInitForwardRef(listOf(stmt.statement), source, fileName)
-                else -> {}
-            }
-        }
-    }
 
     private fun checkForwardRefsInParams(
         params: List<Parameter>,
