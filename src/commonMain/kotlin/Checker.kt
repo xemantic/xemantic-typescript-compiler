@@ -131038,8 +131038,12 @@ interface DataView {
     ): Boolean {
         val annot = (paramSym.valueDeclaration as? Parameter)?.type as? TypeReference ?: return false
         if (annot.typeArguments != null) return false
-        val aliasName = (annot.typeName as? Identifier)?.text ?: return false
-        val aliasSym = globals[aliasName] ?: return false
+        val aliasNameNode = annot.typeName as? Identifier ?: return false
+        val aliasName = aliasNameNode.text
+        // INV.3(d): the alias is typically a module-file top-level `type` no
+        // longer merged into [globals] — resolve under the annotation node's
+        // owning file (the declaring file's own local).
+        val aliasSym = lookupPerFileForNode(aliasNameNode, aliasName) ?: return false
         if (!aliasSym.flags.hasAny(SymbolFlags.TypeAlias)) return false
         val constituents = paramType.types
         if (constituents.size < 2) return false
@@ -131070,7 +131074,8 @@ interface DataView {
             if (!allHave || discTypes.isEmpty()) continue
             val valueType: Type? = literalTypeOfExpression(pa.initializer) ?: run {
                 val id = pa.initializer as? Identifier ?: return@run null
-                val sym = currentFileLocals?.get(id.text) ?: globals[id.text] ?: return@run null
+                val sym = currentFileLocals?.get(id.text)
+                    ?: lookupPerFileForNode(id, id.text) ?: return@run null
                 val vd = (sym.valueDeclaration ?: sym.declarations.firstOrNull())
                     as? VariableDeclaration ?: return@run null
                 vd.type?.let {
