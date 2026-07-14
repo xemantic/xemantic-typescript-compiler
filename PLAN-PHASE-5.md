@@ -1461,11 +1461,22 @@ interrupt the arc).
     deleted, 1 init dispatch removed. Suite +25 (Inv4SpineBatch14Test —
     ALL 25 pre-verified against the OLD walker; a pure reach-preserving
     migration, no widenings); listAll error lines IDENTICAL on ALL 8
-    profiles (520b vs 520a). NEXT batches: checkConflictMarkers (a text
-    scan — may not need the spine); checkAwaitContext (stateful isAsync
-    threading + module-top-level rules — decompose when reached);
-    checkMixinClassConstructor is TP-scope-stateful — (d) territory;
-    re-measure --passTiming to pick the next tail cohort.
+    profiles (520b vs 520a). --passTiming RE-MEASURE (round 520, post
+    batch 14): checker-init 20.0 s (21.6 s pre-batch-8); spine 718 ms
+    carrying ~34 migrated passes; 459 passes recorded (~55 dispatches
+    removed since INV.0's 514); top-3 giants unchanged
+    (checkPropertyAccess 3.53 s / checkTypeAssignability 2.33 s /
+    checkCallExpressionTypes 2.06 s = 7.9 s); the next-biggest non-giant
+    passes are EXACTLY the INV.4(c) pair — checkUnresolvedNames 744 ms +
+    checkTypeUsedAsValue 739 ms — then the (d) cohort
+    (checkUncalledFunctionsInConditions 454 ms, checkArithmeticOperandTypes
+    335 ms, checkImplicitAnyParameters 279 ms); the remaining zero-typing
+    tail is mostly sub-100 ms each (checkAwaitContext 93 ms — stateful
+    isAsync threading + the TS1262 top-level prepass + the batch-8 TS2524
+    param-default ownership boundary; decompose when reached, low yield).
+    NEXT: INV.4(c) is the natural next arc; residual (b) candidates:
+    checkAwaitContext, checkConflictMarkers (a text scan — may not need
+    the spine); checkMixinClassConstructor is TP-scope-stateful — (d).
   - [ ] **INV.4(c) The name-resolution pair.** checkUnresolvedNames (846 ms) +
     checkTypeUsedAsValue (734 ms): fold their private NameScope chains into
     spine-maintained authoritative lexical state backed by the INV.2(c)
