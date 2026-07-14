@@ -105,10 +105,36 @@ fixAddMissingMember.ts:410 `{ kind: InfoKind.Enum, token, parentDeclaration }`
 vs `Info | undefined` was the sole 3-profile diff), WITH an explicit-value type
 firewall (ConflatedAliasBodyOwnerContextTest's negative control caught the
 name-only version over-suppressing `{ errors: "not an array" }`). Pins:
-FileLocalAliasUnionReturnTest (3). VERIFIED: suite green (10,351/0/3 + the new
-pins targeted; 10,354 next full run); ALL 8 profiles listAll byte-identical.
-NEXT: deletion #3 — the `conflatedInterfaceFiles` objlit/relation chimera
-bails, then #4 (enum subsets + the per-file-view core + heritage threading).
+FileLocalAliasUnionReturnTest (3); suite + 8 profiles green.
+**Deletions #3+#4 (same session): the `conflatedInterfaceFiles` chimera bails
+AND the per-file-view core + enum subsets DELETED — INV.3(d)(v) COMPLETE, the
+whole conflation ecology is gone** (~24k chars of Checker.kt): the five objlit
+chimera helpers + all callers (ternary/var-decl/return/or-and-nested/ARG), the
+three relation-entry twin bails + argIsConflatedTwin, the TS2430 view, the
+heritage ctx threading, `conflatedPerFileInterfaceType`/`perFileInterfaceType`/
+`conflatedPerFileViewForContext`/`resolveTypeAliasBodyWithOwnerContext`/
+`collectConflatedRefNames`, `conflatedOwnerFile`/`conflatedCtxMissing`
+(getTypeOfSymbol caches unconditionally again), `conflatedEnumFileSubsets` +
+the exhaustiveness relaxation, and the 1a4/1a5 builders (reduced to
+`moduleInterfaceNames`). The gates caught TWO more masked residuals, both
+fixed re-keyed: (a) the 4 codefix-`Info` sites (useDefaultImport etc.) = the
+round-445 INTERFACE flavor of the narrow-DOWN residue — the alias-union bridge
+gained an interface leg GATED to `multiFileModuleTypeNames` (an ungated leg
+over-suppressed 10 narrowing negative controls — reference-value exemption
+must not apply to single-file interfaces); (b) **the `nodeTypes` bypass is NOT
+conflation-specific**: the cache is STRUCTURALLY keyed and positions COLLIDE
+across files, so two codefix files' identically-positioned `Info | undefined`
+annotations shared one cached resolution → post-retire that leaks another
+file's interface (fixForgottenThisPropertyAccess excess-'node' FP); restored
+re-keyed as `isPerFileDependentRefNode` over type names declared in ≥2 module
+files. Also reinstated re-keyed: the round-473 `A && objlit` falsy-remainder
+TS2322 emitter (combineBinaryTypes deliberately skips the primitive→literal
+falsy decomposition — `count && obj` is `0 | {…}` in tsc; the deleted
+conflation block had been carrying this GENUINE-error emission, pinned by
+ConflatedObjLitReturnArmsTest's negative control). Pins:
+PerFileTypeNameCacheCollisionTest (2). VERIFIED: suite 10,356/0/3; ALL 8
+profiles listAll byte-identical vs the pre-deletion baseline. **INV.3(d) and
+the INV.3 arc are COMPLETE — next: INV.4 (single-pass check spine).**
 
 **Round 512 (2026-07-14) — INV.3(d)(ii)+(iii)+(iv) ALL DONE; the retire branch is
 MERGED TO MAIN: suite fully green, ALL 8 profiles byte-identical to pre-retire.**
@@ -995,13 +1021,21 @@ interrupt the arc).
       (namedUnionMemberCouldAcceptArray hops import aliases). **Full 8-profile
       listAll A/B vs pre-retire main: ALL BYTE-IDENTICAL**; suite fully green;
       branch merged to main.
-    - (v) THEN the deletions, walker-by-walker, each suite- and listAll-gated:
-      `moduleFileLocalVarNames` DONE round 513 (+2 masked narrowing gaps fixed);
-      remaining: `conflatedTypeAliasFiles` (re-key the round-468b
-      augmentation-merge compensation first), `conflatedInterfaceFiles`,
-      `conflatedEnumFileSubsets`, `conflatedPerFileInterfaceType` + chimera
-      bails (heritage threading, type-alias-body owner context, QualifiedName
-      dispatch, relation-entry bails).
+    - (v) DONE round 513 — ALL FOUR deletion groups landed (each suite- and
+      8-profile-listAll-gated byte-identical): `moduleFileLocalVarNames` (+2
+      masked narrowing gaps fixed), `conflatedTypeAliasFiles` (2 helpers
+      re-keyed onto non-conflation conditions), `conflatedInterfaceFiles`
+      objlit/relation chimera bails + TS2430/heritage view arms, and the
+      per-file-view core (`conflatedPerFileInterfaceType`/`perFileInterfaceType`/
+      owner-context threading) + `conflatedEnumFileSubsets`. SURVIVORS
+      (deliberate): `moduleInterfaceNames`+`isLibPhantomMemberOfModuleInterface`
+      (lib+module SHARED merges persist), `interfaceDeclsForCurrentFileView`
+      discriminant reading, the re-keyed augmentation/alias-union bridges, the
+      `A && objlit` falsy-remainder emitter, and the `nodeTypes` bypass re-keyed
+      as `isPerFileDependentRefNode` on `multiFileModuleTypeNames` (the
+      structural cache's cross-file position collisions are NOT
+      conflation-specific — see the session note). **INV.3(d) is COMPLETE; the
+      INV.3 arc is COMPLETE. NEXT: INV.4.**
 - [ ] **INV.4 Single-pass check spine.** `checkSourceFileOnce` per-node dispatch;
   migrate walker families in INV.0's cost order — every migration deletes a full-tree
   pass and its private scope machinery. Once ONE authoritative walk state exists, land

@@ -520,30 +520,6 @@ class Checker(
     // Perf: HashSet (order unused, copied per scope entry) — see [currentLocalTypes].
     private var currentParamBindingNames: MutableSet<String> = HashSet()
 
-    /** Blocker #3 (round 445): name X → the set of MODULE files declaring a top-level
-     *  `interface X`, for names X declared as `interface X` in ≥2 DISTINCT module files.
-     *  Such interfaces MERGE via `mergeSymbolTable` into one polluted `globals[X]` (the
-     *  union of every file's members), even though each module's `interface X` is really
-     *  module-scoped and separate. So an object literal matching a file's OWN local
-     *  `interface X` looks "missing properties" against the merged union (tsc's own
-     *  codefixes all declare a private `interface Info`). The RETURN/var-decl object-literal
-     *  assignability paths bail when the target is such a conflated interface X, the current
-     *  file declares its own `interface X`, and the source object literal satisfies the
-     *  FILE-LOCAL X (checked AST-side from the raw declaration — the merged symbol's
-     *  `declarations` list is polluted). FP-safe: tsc checks against the file-local X only,
-     *  which is exactly what the gate replicates. Populated after the globals merge. */
-    private var conflatedInterfaceFiles: Map<String, Set<String>> = emptyMap()
-
-    /** Round 477 (Blocker #3): a same-named top-level `enum X` declared in ≥2 DISTINCT
-     *  MODULE files merges into one globals symbol (real tsc never merges module-scoped
-     *  enums — server protocol.ts's `NewLineKind { Crlf, Lf }` vs compiler types.ts's
-     *  `NewLineKind { CarriageReturnLineFeed, LineFeed }`). Merged-symbol id → the
-     *  per-file member-NAME sets. Consulted by the switch-exhaustiveness comparison:
-     *  covering EVERY member of ONE declaring file's declaration satisfies that enum's
-     *  requirement (in real tsc the annotation and the cases can only reference ONE
-     *  file's version — getNewLineCharacter's switch is exhaustive). */
-    private var conflatedEnumFileSubsets: Map<Int, List<Set<String>>> = emptyMap()
-
     /** Round 477: memo for [resolveNamespaceQualifiedTypeAlias], key `"file|ns|member"`
      *  (null = doesn't resolve). Declared before `init` — the discriminant-key readers
      *  consult it during the init-run passes. */
@@ -553,46 +529,15 @@ class Checker(
      *  key `"aliasSymId|member"` (null = doesn't resolve). Declared before `init`. */
     private val nsImportMemberFnCache = HashMap<String, Node?>()
 
-    /** Round 473 (Blocker #3, the server-profile protocol.ts family): interface name →
-     *  ALL module files declaring it top-level (the un-filtered companion of
-     *  [conflatedInterfaceFiles]) — used to derive a HERITAGE context file: a derived
-     *  interface declared in exactly ONE file resolves a conflated base name from that
-     *  file's view. */
-    private var interfaceDeclFilesAll: Map<String, Set<String>> = emptyMap()
-
-    /** Round 473: memo for [perFileInterfaceType], key `"file|name"` (null = the file
-     *  declares no such top-level interface). The per-file Type.Interface is built from a
-     *  TRANSIENT checker-local symbol carrying ONLY that file's declarations — the merged
-     *  globals symbol is a chimera of every same-named module interface (server
-     *  protocol.ts's `Diagnostic { start: Location }` vs compiler types.ts's `Diagnostic
-     *  { start: number | undefined }`). */
-    private val perFileInterfaceTypeCache = HashMap<String, Type?>()
-
-    /** Round 473: transient per-file interface symbol id → its file, so heritage
-     *  resolution inside the per-file view keeps the SAME file context (`FileSpan
-     *  extends TextSpan` within protocol.ts). */
-    private val perFileInterfaceSymbolFile = HashMap<Int, String>()
-
-    /** Round 473: set when [conflatedPerFileInterfaceType] had to bail because NO file
-     *  context was available (a lazy first touch with `currentCheckFileName == null`) —
-     *  [getTypeOfSymbol] then skips caching the worker result, so the annotation
-     *  re-resolves correctly once an in-context consumer reads it. Declared before
-     *  `init` per the init-order trap (lazy touches happen during init passes). */
-    private var conflatedCtxMissing = false
-
-    /** Round 473: the file OWNING the annotation currently being resolved — an interface
-     *  MEMBER's annotation must resolve conflated names in ITS OWN file's view, not the
-     *  checking file's (protocol.ts's `focusLocations?: TextSpan[][]` read from
-     *  session.ts must stay protocol's TextSpan even though session.ts's bare `TextSpan`
-     *  import is the compiler one). Pushed around member-annotation resolution in
-     *  [getTypeOfVariableOrProperty] when the member's parent interface has a knowable
-     *  unique file; consulted FIRST by [conflatedPerFileInterfaceType]. Declared before
-     *  `init` per the init-order trap. */
-    private var conflatedOwnerFile: String? = null
-
-    /** Round 471: top-level interface names declared in ≥1 MODULE file (see the
-     *  conflatedInterfaceFiles build). */
+    /** Round 471: top-level interface names declared in ≥1 MODULE file (built at
+     *  init 1a4). */
     private var moduleInterfaceNames: Set<String> = emptySet()
+
+    /** Round 513: TYPE-space names declared top-level in ≥2 DISTINCT module files —
+     *  their per-file resolutions are DIFFERENT symbols, so annotation nodes
+     *  referencing them must bypass the structurally-keyed [nodeTypes] cache
+     *  (position keys collide across files). Built at init 1a4. */
+    private var multiFileModuleTypeNames: Set<String> = emptySet()
 
     /** Round 471b: per-symbol-id memo for [isLibPhantomMemberOfModuleInterface] —
      *  null = not a mixed lib+module interface; else the lib-phantom member names. */
@@ -1781,78 +1726,38 @@ class Checker(
                 mergeSymbolTable(globals, result.locals)
             }
         }
-        // 1a4 (round 445, Blocker #3): the INTERFACE-vs-interface merge analog — a name X
-        // declared as a top-level `interface X` in ≥2 DISTINCT MODULE files merges into one
-        // polluted `globals[X]` even though each module's interface is really module-local
-        // (see [conflatedInterfaceFiles]). Record which module files declare each such X.
+        // 1a4 (round 471; the round-445 conflatedInterfaceFiles ecology is deleted —
+        // round 513, INV.3(d)(v)): names of top-level interfaces declared in ANY module
+        // file — consulted by isLibPhantomMemberOfModuleInterface (a lib+module-interface
+        // merge is a SHARED-name artifact the retire keeps; tsc never merges a
+        // module-scoped interface with the same-named lib global). ALSO (round 513):
+        // [multiFileModuleTypeNames] — TYPE-space names declared top-level in ≥2
+        // DISTINCT module files. Post-retire such a name resolves PER-FILE to a
+        // DIFFERENT symbol in each declaring file, so an annotation node referencing
+        // one must never enter the STRUCTURAL [nodeTypes] cache: nodeKey is
+        // position-based and COLLIDES across files, so two codefix files'
+        // identically-positioned `Info | undefined` annotations would share one
+        // cached resolution (a cross-file leak the old conflated-ref bypass guarded).
         run {
-            val ifaceFiles = HashMap<String, MutableSet<String>>()
-            val classFiles = HashMap<String, MutableSet<String>>()
-            for (result in binderResults) {
-                val fn = result.sourceFile.fileName
-                val stmts = result.sourceFile.statements
-                if (!isModuleFile(stmts)) continue
-                for (stmt in stmts) {
-                    if (stmt is InterfaceDeclaration) {
-                        ifaceFiles.getOrPut(stmt.name.text) { HashSet() }.add(fn)
-                    } else if (stmt is ClassDeclaration) {
-                        stmt.name?.text?.let { classFiles.getOrPut(it) { HashSet() }.add(fn) }
-                    }
-                }
-            }
-            // Round 475: a top-level module-file CLASS X merging (canMerge Class+Interface)
-            // with a DIFFERENT module file's `interface X` is the same conflation — the
-            // merged instance type demands the class's members everywhere the interface is
-            // meant (scriptVersionCache's `class TextChange` vs services types.ts's
-            // `interface TextChange`). The map keeps only the INTERFACE-declaring files
-            // (consumers check satisfaction against those declarations).
-            conflatedInterfaceFiles = ifaceFiles.filterKeys { name ->
-                val ifs = ifaceFiles[name] ?: return@filterKeys false
-                ifs.size >= 2 || classFiles[name]?.any { it !in ifs } == true
-            }
-            interfaceDeclFilesAll = ifaceFiles
-            // Round 471: names of top-level interfaces declared in ANY module file —
-            // consulted by isLibPhantomMemberOfModuleInterface (a lib+module-interface
-            // merge is a conflation artifact; tsc never merges a module-scoped
-            // interface with the same-named lib global).
-            moduleInterfaceNames = ifaceFiles.keys.toSet()
-        }
-        // 1a5 (round 477, Blocker #3): a same-named top-level `enum X` in ≥2 distinct
-        // MODULE files is a merge conflation (see [conflatedEnumFileSubsets]). Record the
-        // per-file member-name sets keyed by the MERGED globals symbol id (the canonical
-        // id every discriminant-key builder resolves to via canonicalEnumSymbol).
-        run {
-            val enumFiles = HashMap<String, HashMap<String, MutableSet<String>>>()
+            val names = HashSet<String>()
+            val typeNameFiles = HashMap<String, MutableSet<String>>()
             for (result in binderResults) {
                 val stmts = result.sourceFile.statements
                 if (!isModuleFile(stmts)) continue
                 val fn = result.sourceFile.fileName
                 for (stmt in stmts) {
-                    if (stmt !is EnumDeclaration) continue
-                    val perFile = enumFiles.getOrPut(stmt.name.text) { HashMap() }
-                        .getOrPut(fn) { HashSet() }
-                    for (m in stmt.members) {
-                        // Same name extraction as computeEnumSymbolValues — the required
-                        // set is built from enumValues, so the subsets must match its
-                        // member-name domain exactly.
-                        val nm = when (val n = m.name) {
-                            is Identifier -> n.text
-                            is StringLiteralNode -> n.text
-                            is NumericLiteralNode -> n.text
-                            else -> null
-                        } ?: continue
-                        perFile.add(nm)
-                    }
+                    val tn = when (stmt) {
+                        is InterfaceDeclaration -> { names.add(stmt.name.text); stmt.name.text }
+                        is ClassDeclaration -> stmt.name?.text
+                        is EnumDeclaration -> stmt.name.text
+                        is TypeAliasDeclaration -> stmt.name.text
+                        else -> null
+                    } ?: continue
+                    typeNameFiles.getOrPut(tn) { HashSet() }.add(fn)
                 }
             }
-            val subsets = HashMap<Int, List<Set<String>>>()
-            for ((name, byFile) in enumFiles) {
-                if (byFile.size < 2) continue
-                val gsym = globals[name] ?: continue
-                if (!gsym.flags.hasAny(SymbolFlags.Enum)) continue
-                subsets[gsym.id] = byFile.values.toList()
-            }
-            conflatedEnumFileSubsets = subsets
+            moduleInterfaceNames = names
+            multiFileModuleTypeNames = typeNameFiles.filterValues { it.size >= 2 }.keys.toSet()
         }
         // 1b. Merge module augmentation exports into target module symbols
         // (snapshot the pre-augmentation key set so the per-file visibility
@@ -80325,26 +80230,12 @@ interface DataView {
             // forEachChild(node, cb)` typing as `T | undefined`) — same foreign-TP
             // rule as checkReturnAssignability's gate.
             if (typeContainsForeignTypeParam(branchType, typeParams)) { allVerified = false; continue }
-            // Round 468 (Blocker #3): an object-literal ARM whose target is a conflated
-            // file-local interface (`cond ? { node } : undefined` vs `Info | undefined`
-            // — tsc fixExpectedComma's getInfo / importTracker's getExportInfo) — same
-            // rule as the direct-return path in checkReturnAssignability: tsc checks
-            // against the FILE-LOCAL interface, so the merged siblings' "missing"
-            // members are a conflation artifact. Verified arm; suppression-only.
-            if (inner is ObjectLiteralExpression &&
-                objectLiteralMatchesConflatedFileLocalInterface(inner, targetType, fileName)) continue
             // Round 474 (session.ts toFileSpanWithContext): an object-literal ARM that
             // SPREADS an any/error-typed value is `any` in tsc (the spread poisons the
             // whole object — the round-445 rule, extended to the ternary-arm path):
             // `context ? { ...fileSpan, contextStart: …, contextEnd: … } : fileSpan`
             // where fileSpan's type is unresolvable here.
             if (inner is ObjectLiteralExpression && objectLiteralHasUnresolvedSpread(inner)) continue
-            // Round 477 (Blocker #3): an object-literal ARM spreading a CONFLATED-
-            // interface-typed value is unknowable — the spread source resolved as the
-            // merged chimera, poisoning the literal's shape (`{ ...textSpan,
-            // contextStart, contextEnd }` where protocol.TextSpan is the
-            // protocol-vs-compiler chimera — session.ts:3994). Suppression-only.
-            if (inner is ObjectLiteralExpression && objectLiteralSpreadsConflatedInterface(inner)) continue
             // Round 446: an array-literal ARM matching a variadic-tuple member of the
             // target (`cond ? [Diagnostics.X, a] : [Diagnostics.Y]` vs
             // DiagnosticOrDiagnosticAndArguments) — same array→tuple-union rule as the
@@ -81308,36 +81199,7 @@ interface DataView {
         }
         // REQUIRED: the discriminant's full value set.
         val required = requiredEnumSwitchKeys(stmt.expression) ?: return false
-        if (covered.containsAll(required)) return true
-        return coveredExhaustsConflatedEnumSubset(covered, required)
-    }
-
-    /**
-     * Round 477: the conflated-enum relaxation of `covered ⊇ required` — every MISSING
-     * required key must belong to a cross-module-file conflated enum
-     * ([conflatedEnumFileSubsets]) whose SOME-file member subset is FULLY covered. Real
-     * tsc never merges module-scoped enums, so a bare-enum annotation's "all members"
-     * requirement really means "all members of the one file-version the annotation
-     * references"; a switch covering one complete file-version is exhaustive
-     * (`NewLineKind` in getNewLineCharacter — the compiler pair + undefined). Non-enum
-     * keys (`@undefined`/`@null`/`lit:s:`) get no relaxation.
-     */
-    private fun coveredExhaustsConflatedEnumSubset(covered: Set<String>, required: Set<String>): Boolean {
-        if (conflatedEnumFileSubsets.isEmpty()) return false
-        val verdictBySym = HashMap<Int, Boolean>()
-        for (key in required) {
-            if (key in covered) continue
-            val hash = key.indexOf('#')
-            if (hash <= 0) return false
-            val symId = key.substring(0, hash).toIntOrNull() ?: return false
-            val ok = verdictBySym.getOrPut(symId) {
-                conflatedEnumFileSubsets[symId]?.any { fileMembers ->
-                    fileMembers.all { m -> "$symId#$m" in covered }
-                } == true
-            }
-            if (!ok) return false
-        }
-        return true
+        return covered.containsAll(required)
     }
 
     /** The exhaustive value set of a switch discriminant, or null if it doesn't resolve to a
@@ -81417,8 +81279,7 @@ interface DataView {
 
     /** The CURRENT check file's view of `interface [name]`: its own top-level
      *  declarations, else the file's identity-matched import of [name] followed through
-     *  `.js` barrels to the declaring leaf file (the [conflatedPerFileInterfaceType]
-     *  bare-branch resolution, without the conflatedInterfaceFiles gate). Null when no
+     *  `.js` barrels to the declaring leaf file. Null when no
      *  view resolves. */
     private fun interfaceDeclsForCurrentFileView(name: String): List<InterfaceDeclaration>? {
         val ctxFile = currentCheckFileName ?: return null
@@ -87546,15 +87407,6 @@ interface DataView {
         // precise per-key TS2741 (with TS6500) — suppress the coarse whole-init TS2322
         // chain that would otherwise double-report the same `something.a.b.thing` failure.
         if (canUse && !isAssignable && !nestedMissingEmitted) {
-            // Round 468 (Blocker #3): the VAR-DECL variant of the round-445 return-path
-            // rule — `const identifiers: Identifiers = { original: …, additional: … }`
-            // where `interface Identifiers` is CONFLATED across module files (tsc
-            // convertToEsModule.ts vs addMissingAwait.ts each declare their own): tsc
-            // checks against the FILE-LOCAL interface, so the merged siblings' members
-            // are a conflation artifact. Suppression-only (a genuine mismatch against
-            // the file-local interface still falls through and fires).
-            if (init is ObjectLiteralExpression &&
-                objectLiteralMatchesConflatedFileLocalInterface(init, targetType, fileName)) return
             // Round 468b/513 (Blocker #3 residue): the annotation names an
             // AUGMENTATION-extended interface — check against the MERGED member table
             // (base + module-augmentation members) AST-side (textChanges.ts's
@@ -88799,98 +88651,6 @@ interface DataView {
     }
 
     /**
-     * Blocker #3 (round 445): true when [obj] provides every REQUIRED member of the
-     * file-LOCAL `interface [ifaceName]` declared in [fileName]. Used to suppress a
-     * missing-property TS2322/TS2739/TS2740 when a conflated interface name (one merged
-     * across module files, see [conflatedInterfaceFiles]) is the assignment/return target:
-     * tsc checks against the FILE-LOCAL interface, so an object literal that satisfies it is
-     * correct even though it "misses" other files' merged members. The check is AST-based —
-     * the merged symbol's `declarations` list is polluted, so we read the raw declaration.
-     * Conservative (returns false → keeps firing) for interfaces with heritage clauses
-     * (inherited required members we can't collect AST-side) and object literals with spreads.
-     */
-    private fun objectLiteralSatisfiesFileLocalInterface(
-        obj: ObjectLiteralExpression, ifaceName: String, fileName: String,
-    ): Boolean {
-        val stmts = binderResults.firstOrNull { it.sourceFile.fileName == fileName }
-            ?.sourceFile?.statements ?: return false
-        val iface = stmts.filterIsInstance<InterfaceDeclaration>()
-            .firstOrNull { it.name.text == ifaceName } ?: return false
-        if (!iface.heritageClauses.isNullOrEmpty()) return false
-        if (obj.properties.any { it is SpreadAssignment }) return false
-        val provided = HashSet<String>()
-        for (p in obj.properties) {
-            val nm = when (p) {
-                is PropertyAssignment -> (p.name as? Identifier)?.text
-                is ShorthandPropertyAssignment -> p.name.text
-                is MethodDeclaration -> (p.name as? Identifier)?.text
-                is GetAccessor -> (p.name as? Identifier)?.text
-                is SetAccessor -> (p.name as? Identifier)?.text
-                else -> null
-            }
-            if (nm != null) provided.add(nm)
-        }
-        for (m in iface.members) {
-            val (nm, optional) = when (m) {
-                is PropertyDeclaration -> (m.name as? Identifier)?.text to m.questionToken
-                is MethodDeclaration -> (m.name as? Identifier)?.text to m.questionToken
-                else -> null to true // index/call signatures — not a named required prop
-            }
-            if (nm != null && !optional && nm !in provided) return false
-        }
-        return true
-    }
-
-    /**
-     * Blocker #3 (round 445): the target [t] (or the sole non-nullish member of an
-     * `X | undefined` union) is a conflated interface X (merged across module files) that
-     * [fileName] declares its OWN `interface X` for, and [obj] satisfies that file-local X.
-     * Round 447: also handles a target union with MULTIPLE non-nullish members
-     * (`FunctionInfo | RefactorErrorInfo | undefined` — tsc's refactor `getInfo` shape): the
-     * object is assignable to the union iff it EXACTLY satisfies (no excess + required) some
-     * member that is a conflated file-local interface.
-     */
-    private fun objectLiteralMatchesConflatedFileLocalInterface(
-        obj: ObjectLiteralExpression, t: Type, fileName: String,
-    ): Boolean {
-        if (conflatedInterfaceFiles.isEmpty()) return false
-        fun matchesSingle(iface: Type.Interface): Boolean {
-            val name = iface.symbol?.name ?: return false
-            val files = conflatedInterfaceFiles[name] ?: return false
-            if (fileName !in files) return false
-            return objectLiteralSatisfiesFileLocalInterface(obj, name, fileName)
-        }
-        if (t is Type.Interface) return matchesSingle(t)
-        if (t is Type.Union) {
-            val nonNullish = t.types.filter { !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) }
-            val single = nonNullish.singleOrNull() as? Type.Interface
-            if (single != null) return matchesSingle(single) // round-445 single-member behavior
-            // Multiple non-nullish members: an object assignable to a union member must not have
-            // excess vs it, so use the strict (no-excess + required) check.
-            for (m in nonNullish) {
-                val name = (m as? Type.Interface)?.symbol?.name ?: continue
-                val files = conflatedInterfaceFiles[name] ?: continue
-                if (fileName !in files) continue
-                if (objectLiteralExactlySatisfiesFileLocalInterface(obj, name, fileName)) return true
-            }
-        }
-        return false
-    }
-
-    /**
-     * Round 468 (Blocker #3): a returned object literal whose target interface is
-     * FILE-LOCAL (declared in [fileName]) and NOT necessarily conflated itself, but has a
-     * MEMBER whose declared type NAMES a conflated interface X that this file also
-     * declares — tsc importTracker's `ExportedSymbol { kind; symbol; exportInfo:
-     * ExportInfo }` where `ExportInfo` is conflated with convertExport.ts's own. The
-     * NESTED object-literal value checks against the file-local X (AST-side, exact);
-     * every OTHER provided member must relate to its resolved declared type (any/error
-     * pass); all required members must be provided; no excess. True only when ≥1 nested
-     * conflated member was actually checked (otherwise the standard paths own the
-     * verdict). Conservative bails (heritage, methods, index sigs, non-identifier
-     * keys) → false → keeps firing. Suppression-only.
-     */
-    /**
      * Round 468b, re-keyed round 513 (Blocker #3 residue — the cross-file AUGMENTATION
      * MEMBER merge our symbol tables still do not model): the target annotation names an
      * interface X that a `declare module` AUGMENTATION extends (services'
@@ -88965,27 +88725,6 @@ interface DataView {
         return memberOptional.all { (nm, opt) -> opt || nm in provided }
     }
 
-    /**
-     * Round 468 (Blocker #3): the ARG variant of the conflated-interface rule — the
-     * param annotation names a CONFLATED interface (declared in ≥2 module files; the
-     * merged symbol carries every file's members) that the CALLING file merely
-     * IMPORTS, so the round-445 "this file declares its own X" gate never holds. The
-     * annotation really resolves to ONE declaring file's interface (tsc
-     * findAllReferences passes `{ exportingModuleSymbol, exportKind }` to
-     * importTracker's `ExportInfo` param, conflated with convertExport.ts's own), so
-     * an object literal that EXACTLY satisfies (required + no-excess) SOME declaring
-     * file's version is accepted. A mismatch against the true target is a false
-     * NEGATIVE here, never a false positive — the conservative direction for
-     * Blocker-#3 suppressions. Suppression-only.
-     */
-    private fun objectLiteralMatchesSomeConflatedDeclaration(
-        obj: ObjectLiteralExpression, t: Type,
-    ): Boolean {
-        if (conflatedInterfaceFiles.isEmpty()) return false
-        val name = (t as? Type.Interface)?.symbol?.name ?: return false
-        val files = conflatedInterfaceFiles[name] ?: return false
-        return files.any { objectLiteralExactlySatisfiesFileLocalInterface(obj, name, it) }
-    }
 
     /**
      * Round 447, re-keyed round 513 (an M3-relation residue, NOT conflation): the
@@ -89024,6 +88763,21 @@ interface DataView {
         val stmts = binderResults.firstOrNull { it.sourceFile.fileName == fileName }
             ?.sourceFile?.statements ?: return false
         for (name in names) {
+            // Round 445, re-keyed round 513: the INTERFACE-target leg — THIS file
+            // declares a top-level `interface X` and the objlit exactly
+            // name-satisfies it; same narrow-DOWN-invisibility rationale, same
+            // explicit-value firewall (useDefaultImport.ts's `{ importNode: parent,
+            // … }` where `parent` is guard-narrowed from `Node`). GATED to names
+            // declared in ≥2 module files (tsc's private codefix `Info` pattern —
+            // the shape our per-file resolution + narrowing provably under-serve);
+            // a single-file interface keeps the standard paths, whose negative
+            // controls (10 narrowing tests) rely on genuine reference-value
+            // mismatches still firing.
+            if (name in multiFileModuleTypeNames &&
+                stmts.any { it is InterfaceDeclaration && it.name.text == name } &&
+                objectLiteralExactlySatisfiesFileLocalInterface(obj, name, fileName) &&
+                objLitExplicitValuesRelate(obj, fileLocalInterfaceMemberTypeNodes(name, fileName))
+            ) return true
             val aliasDecl = stmts.filterIsInstance<TypeAliasDeclaration>()
                 .firstOrNull { it.name.text == name } ?: continue
             val memberNames = LinkedHashSet<String>()
@@ -89102,6 +88856,32 @@ interface DataView {
         return map
     }
 
+    /** Round 513 (the round-473 conflated-ref bypass, re-keyed): does [node] reference —
+     *  directly or nested in a shallow composite (TypeLiteral members resolve EAGERLY
+     *  in getTypeFromTypeLiteral, baking the reference into the composite's type) — a
+     *  type name declared in ≥2 module files ([multiFileModuleTypeNames])? Such nodes
+     *  must never enter the structural [nodeTypes] cache. Depth-bounded. */
+    private fun isPerFileDependentRefNode(node: TypeNode, depth: Int = 0): Boolean {
+        if (multiFileModuleTypeNames.isEmpty() || depth > 4) return false
+        return when (node) {
+            is TypeReference -> when (val tn = node.typeName) {
+                is Identifier -> tn.text in multiFileModuleTypeNames
+                is QualifiedName -> tn.right.text in multiFileModuleTypeNames
+                else -> false
+            } || node.typeArguments?.any { isPerFileDependentRefNode(it, depth + 1) } == true
+            is ArrayType -> isPerFileDependentRefNode(node.elementType, depth + 1)
+            is UnionType -> node.types.any { isPerFileDependentRefNode(it, depth + 1) }
+            is IntersectionType -> node.types.any { isPerFileDependentRefNode(it, depth + 1) }
+            is ParenthesizedType -> isPerFileDependentRefNode(node.type, depth + 1)
+            is TypeOperator -> isPerFileDependentRefNode(node.type, depth + 1)
+            is TypeLiteral -> node.members.any { m ->
+                (m as? PropertyDeclaration)?.type?.let { isPerFileDependentRefNode(it, depth + 1) } == true
+            }
+            is TupleType -> node.elements.any { isPerFileDependentRefNode(it, depth + 1) }
+            else -> false
+        }
+    }
+
     /**
      * The TypeLiteral-constituent sibling of
      * [objectLiteralExactlySatisfiesFileLocalInterface] — an alias body may be a
@@ -89142,58 +88922,6 @@ interface DataView {
         return true
     }
 
-    private fun objectLiteralMatchesViaNestedConflatedMember(
-        obj: ObjectLiteralExpression, t: Type, fileName: String,
-    ): Boolean {
-        if (conflatedInterfaceFiles.isEmpty()) return false
-        val iface = (t as? Type.Interface)
-            ?: ((t as? Type.Union)?.types
-                ?.filter { !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) }
-                ?.singleOrNull() as? Type.Interface) ?: return false
-        val name = iface.symbol?.name ?: return false
-        val stmts = binderResults.firstOrNull { it.sourceFile.fileName == fileName }
-            ?.sourceFile?.statements ?: return false
-        val decl = stmts.filterIsInstance<InterfaceDeclaration>()
-            .firstOrNull { it.name.text == name } ?: return false
-        if (!decl.heritageClauses.isNullOrEmpty()) return false
-        val memberNodes = HashMap<String, Pair<TypeNode?, Boolean>>()
-        for (m in decl.members) {
-            when (m) {
-                is PropertyDeclaration ->
-                    (m.name as? Identifier)?.text?.let { memberNodes[it] = m.type to m.questionToken }
-                else -> return false // methods / index / call sigs — out of scope
-            }
-        }
-        var sawNestedConflated = false
-        val provided = HashSet<String>()
-        for (p in obj.properties) {
-            val (nm, value) = when (p) {
-                is PropertyAssignment -> ((p.name as? Identifier)?.text ?: return false) to p.initializer
-                is ShorthandPropertyAssignment -> p.name.text to p.name
-                else -> return false
-            }
-            val (tn, _) = memberNodes[nm] ?: return false // excess property
-            provided.add(nm)
-            val refName = ((tn as? TypeReference)?.typeName as? Identifier)?.text
-            val innerObj = value as? ObjectLiteralExpression
-            if (innerObj != null && refName != null &&
-                conflatedInterfaceFiles[refName]?.contains(fileName) == true) {
-                if (!objectLiteralExactlySatisfiesFileLocalInterface(innerObj, refName, fileName)) return false
-                sawNestedConflated = true
-            } else {
-                val mt = tn?.let { getTypeFromTypeNodeSafe(it) } ?: return false
-                if (mt === anyType || mt === errorType) continue
-                val vt = getTypeOfExpression(value)
-                if (vt === anyType || vt === errorType) continue
-                if (!checkTypeRelatedTo(vt, mt, assignableRelation)) return false
-            }
-        }
-        for ((nm, pair) in memberNodes) {
-            if (!pair.second && nm !in provided) return false
-        }
-        return sawNestedConflated
-    }
-
     /**
      * True when [obj] has a spread `...x` whose type is `any`/error (unresolved). tsc types
      * an object literal that spreads `any` as `any` (the spread poisons the whole object), so
@@ -89213,28 +88941,9 @@ interface DataView {
         return false
     }
 
-    /** Round 477 (Blocker #3): an object-literal SPREAD whose resolved type names a
-     *  CONFLATED interface ([conflatedInterfaceFiles]) is unknowable at emission — the
-     *  spread source resolved as the merged chimera (a fn return shell caches eagerly
-     *  with null context, B198), so the merged members poison the literal's shape:
-     *  `{ ...textSpan, contextStart, contextEnd }` where toProtocolTextSpan's return
-     *  annotation `protocol.TextSpan` mixed compiler's `{start: number, length}` into
-     *  protocol's `{start: Location, end}` (session.ts:3994). Suppression-only. */
-    private fun objectLiteralSpreadsConflatedInterface(obj: ObjectLiteralExpression): Boolean {
-        if (conflatedInterfaceFiles.isEmpty()) return false
-        for (p in obj.properties) {
-            if (p !is SpreadAssignment) continue
-            val st = try { getTypeOfExpression(p.expression) } catch (_: Exception) { continue }
-            val nm = (st as? Type.Interface)?.symbol?.name ?: continue
-            if (nm in conflatedInterfaceFiles) return true
-        }
-        return false
-    }
-
-
     /**
-     * Like [objectLiteralSatisfiesFileLocalInterface] but ALSO enforces no EXCESS property
-     * (that helper only checks required-provided). Reads the file-local `interface [ifaceName]`
+     * Exact AST-side satisfaction: required members provided AND no EXCESS property.
+     * Reads the file-local `interface [ifaceName]`
      * members AST-side — pollution-proof, since the merged symbol's members fold sibling files'
      * same-named interfaces. Returns false (conservative → keeps firing) for a heritage-bearing
      * interface, a non-plain object property, or when the interface isn't found in [fileName].
@@ -89653,34 +89362,6 @@ interface DataView {
             ) {
                 return
             }
-            // Blocker #3 (round 445): a `return { ... }` whose target is a CONFLATED interface
-            // X (merged across module files) that THIS file declares its own `interface X`
-            // for, and the object literal satisfies the FILE-LOCAL X. tsc checks the return
-            // against the module-local interface, so the "missing properties" from other
-            // files' merged members are a conflation artifact (tsc's codefixes each declare a
-            // private `interface Info` / `interface Fix` → getInfo(): Info | undefined). Runs
-            // AFTER the per-property drills (so a genuine inner-key type mismatch still fires)
-            // and BEFORE the coarse missing-property / relation paths. Suppression-only.
-            if (expr is ObjectLiteralExpression &&
-                objectLiteralMatchesConflatedFileLocalInterface(expr, targetType, fileName)) {
-                return
-            }
-            // Round 468 (Blocker #3): the NESTED-member variant — the target interface is
-            // file-local but a MEMBER's declared type names a conflated interface this
-            // file also declares (importTracker's ExportedSymbol.exportInfo: ExportInfo).
-            if (expr is ObjectLiteralExpression &&
-                objectLiteralMatchesViaNestedConflatedMember(expr, targetType, fileName)) {
-                return
-            }
-            // Round 475 (Blocker #3): the RETURN sibling of the round-468 ARG rule — the
-            // returning file only IMPORTS the conflated name (services/utilities.ts's
-            // createTextChange returns `{ span, newText }` vs `TextChange`, whose merged
-            // instance demands scriptVersionCache's same-named CLASS members). Exact
-            // satisfaction of ANY declaring file's interface version; FN-not-FP direction.
-            if (expr is ObjectLiteralExpression &&
-                objectLiteralMatchesSomeConflatedDeclaration(expr, targetType)) {
-                return
-            }
             // Round 468b/513 (Blocker #3 residue): the annotation names an
             // AUGMENTATION-extended interface — check the objlit against the MERGED
             // member table (base + module-augmentation members) AST-side.
@@ -89688,85 +89369,57 @@ interface DataView {
                 objectLiteralSatisfiesAugmentationMergedInterface(expr, returnTypeNode, fileName)) {
                 return
             }
-            // Round 467 — the round-445 note's prescribed `||`-nested extension:
-            // `return noSymbolError(node.name) || { exportNode, exportName, … }` (tsc
-            // convertExport.ts) — the RIGHT object literal checks against the
-            // conflated file-local interface, the LEFT operand's non-falsy type must
-            // relate to the target on its own (`{ error: string } ⊂ RefactorErrorInfo`).
-            // Round 468: the `&&` mirror — `return sides && { identifiers: sides,
-            // isCompleteFix }` (tsc addMissingAwait.ts): the result is falsy(LEFT) |
-            // RIGHT, so the LEFT's NULLISH members must relate (a definitely-truthy
-            // member — array/object — contributes nothing to the falsy remainder; a
-            // possibly-falsy primitive member keeps the standard path firing).
-            // Suppression-only: either side failing keeps the standard path firing.
+            // Round 473, re-keyed round 513: `return A && { … }` — combineBinaryTypes
+            // models falsy(A) | B but deliberately NOT the primitive→literal falsy
+            // decomposition (number→0, string→""), so a possibly-falsy PRIMITIVE left
+            // survives into tsc's result (`count && obj` is `0 | {…}`) while our
+            // source types as the bare objlit and the coarse relation passes silently.
+            // When the RIGHT objlit relates to the target but a non-nullish
+            // falsy-remainder member of the LEFT does not, emit the TS2322 tsc reports.
+            // (`||`/`??` need no arm — their falsy left members are DROPPED.)
             run {
                 val bin = expr as? BinaryExpression ?: return@run
-                val isAndAnd = bin.operator == SyntaxKind.AmpersandAmpersand
-                if (bin.operator != SyntaxKind.BarBar && bin.operator != SyntaxKind.QuestionQuestion &&
-                    !isAndAnd) return@run
+                if (bin.operator != SyntaxKind.AmpersandAmpersand) return@run
                 val rightObj = unwrapParens(bin.right) as? ObjectLiteralExpression ?: return@run
-                if (!objectLiteralMatchesConflatedFileLocalInterface(rightObj, targetType, fileName)) return@run
+                val rightT = getTypeOfExpression(rightObj)
+                if (rightT === anyType || rightT === errorType) return@run
+                if (!withFreshObjLitSource(rightObj) {
+                        checkTypeRelatedTo(rightT, targetType, assignableRelation)
+                    }) return@run
                 val leftT = getTypeOfExpression(bin.left)
                 if (leftT === anyType || leftT === errorType) return@run
-                if (isAndAnd) {
-                    val members = if (leftT is Type.Union) leftT.types else listOf(leftT)
-                    val falsyRemainder = members.filter { !isDefinitelyTruthyMember(it) }
-                    val nonNullishFalsy = falsyRemainder.filter {
-                        !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)
+                val members = if (leftT is Type.Union) leftT.types else listOf(leftT)
+                val nonNullishFalsy = members.filter { !isDefinitelyTruthyMember(it) }
+                    .filter { !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void) }
+                if (nonNullishFalsy.isEmpty()) return@run
+                if (nonNullishFalsy.all { checkTypeRelatedTo(it, targetType, assignableRelation) }) return
+                val falsyDisplay = nonNullishFalsy.joinToString(" | ") { m ->
+                    when {
+                        m === numberType -> "0"
+                        m === stringType -> "\"\""
+                        m === booleanType -> "false"
+                        else -> typeToString(m)
                     }
-                    if (nonNullishFalsy.isEmpty()) {
-                        if (falsyRemainder.all { checkTypeRelatedTo(it, targetType, assignableRelation) }) return
-                        return@run
-                    }
-                    // Round 473: the RIGHT arm satisfies the file-local interface, so the
-                    // coarse relation below now PASSES (per-file resolution) — but tsc
-                    // types `count && obj` as falsy(LEFT) | RIGHT, and a non-nullish
-                    // falsy member (`0`/`""`/`false`) that cannot relate to the target is
-                    // a GENUINE error (the chimera-era coarse path reported it by
-                    // accident). Emit it directly.
-                    if (nonNullishFalsy.all { checkTypeRelatedTo(it, targetType, assignableRelation) }) return
-                    val falsyDisplay = nonNullishFalsy.joinToString(" | ") { m ->
-                        when {
-                            m === numberType -> "0"
-                            m === stringType -> "\"\""
-                            m === booleanType -> "false"
-                            else -> typeToString(m)
-                        }
-                    }
-                    val (fLine, fChar) = getLineAndCharacterOfPosition(source, stmt.pos)
-                    diagnostics.add(Diagnostic(
-                        message = "Type '$falsyDisplay | ${typeToString(getTypeOfExpression(rightObj))}' " +
-                            "is not assignable to type '${typeToString(targetType)}'.",
-                        category = DiagnosticCategory.Error,
-                        code = 2322,
-                        fileName = fileName,
-                        line = fLine,
-                        character = fChar,
-                        start = stmt.pos,
-                        length = 6,
-                    ))
-                    return
                 }
-                val leftNonFalsy = if (leftT is Type.Union) {
-                    val kept = leftT.types.filter {
-                        !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)
-                    }
-                    if (kept.isEmpty()) return
-                    if (kept.size == 1) kept[0] else getUnionType(kept)
-                } else leftT
-                if (checkTypeRelatedTo(leftNonFalsy, targetType, assignableRelation)) return
+                val (fLine, fChar) = getLineAndCharacterOfPosition(source, stmt.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Type '$falsyDisplay | ${typeToString(rightT)}' " +
+                        "is not assignable to type '${typeToString(targetType)}'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2322,
+                    fileName = fileName,
+                    line = fLine,
+                    character = fChar,
+                    start = stmt.pos,
+                    length = 6,
+                ))
+                return
             }
             // A `return { ...anyExpr, ... }` — an object literal spreading an any/unresolved
             // type — is typed `any` by tsc (the spread poisons the object), so it cannot be
             // "missing" required target properties (the spread may provide them). Runs after
             // the per-property drills (a genuine explicit-prop type mismatch still fires).
             if (expr is ObjectLiteralExpression && objectLiteralHasUnresolvedSpread(expr)) {
-                return
-            }
-            // Round 477 (Blocker #3): a spread of a CONFLATED-interface-typed value —
-            // the chimera members poison the literal's shape (see
-            // [objectLiteralSpreadsConflatedInterface]). Suppression-only.
-            if (expr is ObjectLiteralExpression && objectLiteralSpreadsConflatedInterface(expr)) {
                 return
             }
             // Round 448: a fresh object literal returned against a UNION of object types
@@ -93410,12 +93063,13 @@ interface DataView {
      * have been cached.
      */
     private fun getTypeFromTypeNode(node: TypeNode): Type {
-        // Round 473: a reference to a CONFLATED interface name resolves per-FILE
-        // (see [conflatedPerFileInterfaceType]) — and nodeTypes is keyed by the
+        // Rounds 473/513: a reference to a type name declared in ≥2 module files
+        // resolves per-FILE to a DIFFERENT symbol — and nodeTypes is keyed by the
         // STRUCTURAL node (data-class equality), so same-shaped annotation nodes in
-        // DIFFERENT files collide; both reasons force a bypass for those names.
+        // DIFFERENT files collide (two codefix files' identically-positioned
+        // `Info | undefined` would share one cached resolution); bypass for those.
         val cacheable = currentTypeParamScope == null && inferenceNamespaceStack.isEmpty() &&
-            currentTypeAliasArgs == null && !isConflatedInterfaceRefNode(node)
+            currentTypeAliasArgs == null && !isPerFileDependentRefNode(node)
         // INV.0 cacheable-vs-bypassed counters — inert unless --passTiming enabled it.
         if (PassTiming.enabled) {
             if (cacheable) PassTiming.typeNodeCacheable++ else PassTiming.typeNodeBypassed++
@@ -94242,7 +93896,7 @@ interface DataView {
                 // Store sentinel in cache first to prevent circular type alias StackOverflow
                 declaredTypes[symbol.id] = errorType
                 val decl = symbol.declarations.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration
-                val resolved = if (decl != null) resolveTypeAliasBodyWithOwnerContext(symbol, decl) else errorType
+                val resolved = if (decl != null) getTypeFromTypeNode(decl.type) else errorType
                 declaredTypes[symbol.id] = resolved
                 // B50.4: register alias-name display for non-generic type aliases
                 // whose body resolved to a NEW Type.Object (NOT Union/Intersection).
@@ -94389,13 +94043,6 @@ interface DataView {
             currentTypeParamScope = scope
         }
         try {
-            // Round 473: the HERITAGE context file for conflated base names — a derived
-            // interface declared in exactly ONE module file resolves a conflated base
-            // (`FileSpan extends TextSpan`, both server/protocol.ts vs compiler/types.ts's
-            // own `TextSpan`) from that file's per-file view; a transient per-file symbol
-            // carries its file directly.
-            val ctxFile = perFileInterfaceSymbolFile[symbol.id]
-                ?: interfaceDeclFilesAll[symbol.name]?.singleOrNull()
             val baseTypes = mutableListOf<Type>()
             for (d in symbol.declarations) {
                 val heritageClauses = when (d) {
@@ -94412,7 +94059,7 @@ interface DataView {
                     //  and TS2344 via-constraint failures.)
                     if (clause.token == SyntaxKind.ImplementsKeyword) continue
                     for (exprWithArgs in clause.types) {
-                        val baseType = getTypeFromBaseTypeExpression(exprWithArgs, ctxFile)
+                        val baseType = getTypeFromBaseTypeExpression(exprWithArgs)
                         if (baseType !== errorType) {
                             baseTypes.add(baseType)
                         }
@@ -94481,29 +94128,8 @@ interface DataView {
     /** Resolve a base type expression (e.g., `extends Foo<T>`) to a Type. */
     private fun getTypeFromBaseTypeExpression(
         expr: ExpressionWithTypeArguments,
-        contextFile: String? = null,
     ): Type {
         val baseExpr = expr.expression
-        // Round 473 (Blocker #3): a CONFLATED base name resolves from the DERIVED
-        // declaration's file view — the merged chimera would graft the other module's
-        // same-named members into every subtype (protocol.ts's `FileSpan extends
-        // TextSpan` inherited compiler/types.ts's `start: number; length: number`).
-        if (contextFile != null && baseExpr is Identifier &&
-            conflatedInterfaceFiles[baseExpr.text]?.contains(contextFile) == true
-        ) {
-            perFileInterfaceType(baseExpr.text, contextFile)?.let { return it }
-        }
-        // Round 480: the derived file may merely IMPORT the conflated base —
-        // `ServerHost extends System` (server/types.ts) must inherit compiler/
-        // sys.ts's interface view, not the chimera polluted by fakesHosts'
-        // `class System` members (vfs/output/exitCode demanded from every
-        // ServerHost implementer). Follows the ctx file's own ImportSpecifier
-        // through the barrel star chain to the declaring leaf.
-        if (contextFile != null && baseExpr is Identifier) {
-            conflatedInterfaceFiles[baseExpr.text]?.let { files ->
-                conflatedPerFileViewForContext(baseExpr.text, contextFile, files)?.let { return it }
-            }
-        }
         // B100: `class C extends (X as new () => T)` — the base is an AsExpression
         // (usually paren-wrapped) whose asserted type is a CONSTRUCTOR type; the
         // class's instance type is that construct signature's RETURN type `T`. Mirrors
@@ -94595,16 +94221,8 @@ interface DataView {
         // self-references hit the cache fast-path above and never reach this check.
         if (!symbolTypeResolutionInProgress.add(symbol.id)) return anyType
         try {
-            // Round 473: a resolution that touched a CONFLATED interface name without a
-            // file context (lazy first touch) must not be cached — the merged-chimera
-            // fallback would poison every later in-context read. The flag propagates to
-            // the OUTER symbol resolutions embedding it (their results embed the same
-            // context-dependent type).
-            val savedMissing = conflatedCtxMissing
-            conflatedCtxMissing = false
             val type = getTypeOfSymbolWorker(symbol)
-            if (!conflatedCtxMissing) symbolTypes[symbol.id] = type
-            conflatedCtxMissing = conflatedCtxMissing || savedMissing
+            symbolTypes[symbol.id] = type
             return type
         } finally {
             symbolTypeResolutionInProgress.remove(symbol.id)
@@ -94804,131 +94422,6 @@ interface DataView {
         return null
     }
 
-    /**
-     * Round 473 (Blocker #3, the server-profile protocol.ts family): the PER-FILE view of
-     * a CONFLATED top-level interface. tsc scopes each module's `interface X` to that
-     * module; our mergeSymbolTable chimeras every same-named module interface into one
-     * globals symbol (server/protocol.ts `Diagnostic { start: Location; text: string }` +
-     * compiler/types.ts `Diagnostic { start: number | undefined; category:
-     * DiagnosticCategory }` → a member table drawn from BOTH, wrong in every file).
-     * Builds a Type.Interface from a TRANSIENT checker-local symbol carrying ONLY [file]'s
-     * top-level declarations of [name] — never published to binder tables (the B83.5
-     * transient-symbol discipline). Cross-file `declare module` augmentation members are
-     * NOT folded in (none of the conflated protocol/compiler pairs have any; the round-469
-     * AST assembler is the reference if one surfaces). Memoized per `"file|name"`.
-     */
-    /** Round 473: true when [source]/[target] are the SAME conflated interface name and
-     *  exactly one side is a per-file TRANSIENT view while the other is the MERGED
-     *  globals chimera — the pair is a resolution artifact (see the checkTypeRelatedTo
-     *  call site). Two per-file views of DIFFERENT files stay structural (a genuine
-     *  cross-module comparison). */
-    private fun conflatedMergedPairRelated(source: Type.Interface, target: Type.Interface): Boolean {
-        val sSym = source.symbol ?: return false
-        val tSym = target.symbol ?: return false
-        if (sSym.name != tSym.name || sSym.name.isEmpty()) return false
-        if (sSym.name !in conflatedInterfaceFiles) return false
-        val sTransient = sSym.id in perFileInterfaceSymbolFile
-        val tTransient = tSym.id in perFileInterfaceSymbolFile
-        if (sTransient == tTransient) return false
-        val mergedSym = if (sTransient) tSym else sSym
-        return globals[mergedSym.name] === mergedSym
-    }
-
-    /** Round 480: is [target] the MERGED chimera of a conflated name whose PER-FILE
-     *  view sits in [source]'s base chain? The derived-interface sibling of
-     *  [conflatedMergedPairRelated] — our per-file heritage resolution makes the
-     *  derived instance carry the per-file base while bare-name annotations still
-     *  resolve the chimera; tsc would have resolved both to one module's interface. */
-    private fun conflatedChimeraTargetSourceHasPerFileBase(
-        source: Type.Interface, target: Type.Interface,
-    ): Boolean {
-        val tSym = target.symbol ?: return false
-        if (tSym.name.isEmpty() || tSym.name !in conflatedInterfaceFiles) return false
-        if (tSym.id in perFileInterfaceSymbolFile) return false
-        if (globals[tSym.name] !== tSym) return false
-        val seen = HashSet<Int>()
-        fun walk(t: Type?): Boolean {
-            val ti = t as? Type.Interface ?: return false
-            if (!seen.add(ti.id)) return false
-            val sy = ti.symbol
-            if (sy != null && sy.name == tSym.name && sy.id in perFileInterfaceSymbolFile) return true
-            return ti.baseTypes?.any { walk(it) } == true
-        }
-        return walk(source)
-    }
-
-    /** Round 481: the STRUCTURAL sibling of [conflatedChimeraTargetSourceHasPerFileBase] —
-     *  a source with NO heritage link to the conflated name that nevertheless satisfies
-     *  SOME declaring file's per-file view of the chimera target (editorServices'
-     *  `CachedDirectoryStructureHost` vs the `ParseConfigHost` chimera: the fakesHosts
-     *  `class ParseConfigHost` merge demands a required `getCurrentDirectory` where the
-     *  compiler interface's — the view tsc resolves — is optional). Name-presence +
-     *  relation against each per-file view; any-view-satisfies is FN-not-FP (tsc would
-     *  have resolved the annotation to exactly one module's interface). */
-    private fun sourceSatisfiesConflatedTargetPerFileView(source: Type.Interface, target: Type.Interface): Boolean {
-        val tSym = target.symbol ?: return false
-        if (tSym.name.isEmpty()) return false
-        val files = conflatedInterfaceFiles[tSym.name] ?: return false
-        if (tSym.id in perFileInterfaceSymbolFile) return false
-        if (globals[tSym.name] !== tSym) return false
-        // A same-named source is the twin/derived artifact family — owned by the
-        // sibling helpers above.
-        if (source.symbol?.name == tSym.name) return false
-        for (f in files) {
-            val view = perFileInterfaceType(tSym.name, f) as? Type.Interface ?: continue
-            if (view === target) continue
-            resolveStructuredTypeMembers(source)
-            resolveStructuredTypeMembers(view)
-            if (collectMissingProperties(source, view).isEmpty() &&
-                checkTypeRelatedTo(source, view, assignableRelation)
-            ) return true
-        }
-        return false
-    }
-
-    /** Round 473: does [node] reference a conflated interface name (directly or nested
-     *  in a shallow composite — TypeLiteral members resolve EAGERLY in
-     *  getTypeFromTypeLiteral, baking the reference into the composite's type)? Such
-     *  nodes must never enter the structural [nodeTypes] cache (context-dependent
-     *  resolution + cross-file structural node collisions). Depth-bounded. */
-    private fun isConflatedInterfaceRefNode(node: TypeNode, depth: Int = 0): Boolean {
-        if (conflatedInterfaceFiles.isEmpty() || depth > 4) return false
-        return when (node) {
-            is TypeReference -> when (val tn = node.typeName) {
-                is Identifier -> tn.text in conflatedInterfaceFiles
-                is QualifiedName -> tn.right.text in conflatedInterfaceFiles
-                else -> false
-            } || node.typeArguments?.any { isConflatedInterfaceRefNode(it, depth + 1) } == true
-            is ArrayType -> isConflatedInterfaceRefNode(node.elementType, depth + 1)
-            is UnionType -> node.types.any { isConflatedInterfaceRefNode(it, depth + 1) }
-            is IntersectionType -> node.types.any { isConflatedInterfaceRefNode(it, depth + 1) }
-            is ParenthesizedType -> isConflatedInterfaceRefNode(node.type, depth + 1)
-            is TypeOperator -> isConflatedInterfaceRefNode(node.type, depth + 1)
-            is TypeLiteral -> node.members.any { m ->
-                (m as? PropertyDeclaration)?.type?.let { isConflatedInterfaceRefNode(it, depth + 1) } == true
-            }
-            is TupleType -> node.elements.any { isConflatedInterfaceRefNode(it, depth + 1) }
-            else -> false
-        }
-    }
-
-    private fun perFileInterfaceType(name: String, file: String): Type? {
-        val key = "$file|$name"
-        perFileInterfaceTypeCache[key]?.let { return it }
-        if (perFileInterfaceTypeCache.containsKey(key)) return null
-        val decls = fileResults[file]?.sourceFile?.statements
-            ?.filterIsInstance<InterfaceDeclaration>()?.filter { it.name.text == name }
-            .orEmpty()
-        val result = if (decls.isEmpty()) null else {
-            val syn = Symbol(SymbolFlags.Interface, name)
-            syn.declarations.addAll(decls)
-            perFileInterfaceSymbolFile[syn.id] = file
-            getDeclaredTypeOfSymbol(syn) as? Type.Interface
-        }
-        perFileInterfaceTypeCache[key] = result
-        return result
-    }
-
     /** Round 473: the FILE-returning sibling of [computeExportedVarDeclThroughStars] for
      *  INTERFACE targets — the leaf file whose OWN top-level exports include
      *  `interface [name]`, following `export *` barrels. */
@@ -94964,197 +94457,6 @@ interface DataView {
             }
         }
         return null
-    }
-
-    /**
-     * Round 473: resolve a CONFLATED interface reference to the per-file view its
-     * CONTEXT selects. Two context shapes:
-     *
-     * - a QUALIFIED `ns.Name` where `ns` is a namespace import (`import * as protocol
-     *   from "./protocol.js"`) — the target FILE is the import's module (context-free:
-     *   every same-named namespace import of these barrels resolves to one file);
-     * - a BARE `Name` — the CURRENT check file's view: its own declaration if it is a
-     *   declaring file, else its import of [name] followed through `.js` barrels
-     *   (identity-matched ImportDeclaration, like [importedTopLevelVarAnnotationType]).
-     *
-     * Returns null (→ the merged-symbol status quo) for every unresolvable context —
-     * including the lazy-resolution case where `currentCheckFileName` is null.
-     */
-    private fun conflatedPerFileInterfaceType(
-        name: String, node: TypeReference,
-        // Round 477: callers may pass an alternative interface-file set —
-        // [interfaceDeclFilesAll] for an ALIAS-shadowed interface (the qualified
-        // `protocol.Event` dispatch); default = the interface-vs-interface conflations.
-        filesOverride: Set<String>? = null,
-    ): Type? {
-        val files = filesOverride ?: conflatedInterfaceFiles[name] ?: return null
-        val qn = node.typeName as? QualifiedName
-        if (qn != null) {
-            val nsName = (qn.left as? Identifier)?.text ?: return null
-            val nsSym = currentFileLocals?.get(nsName) ?: globals[nsName] ?: return null
-            for (decl in nsSym.declarations) {
-                val stmt = decl as? ImportDeclaration ?: continue
-                if (stmt.importClause?.namedBindings !is NamespaceImport) continue
-                val spec = (stmt.moduleSpecifier as? StringLiteralNode)?.text ?: continue
-                // A namespace whose specifier the GENERAL resolver handles (extensionless
-                // commonjs `./a`) already resolves per-file through the qualified-name
-                // path WITH the module-qualified display (`import("a").F`, the
-                // errorWithSameNameType corpus pin) — defer. Only the deliberately
-                // unresolvable ESM `.js` barrels need the per-file view here.
-                if (resolveModuleSpecifier(spec, stmt) != null) return null
-                val targetFile = resolveAliasJsModuleSpecifier(spec, currentCheckFileName)
-                    ?: continue
-                if (targetFile in files) return perFileInterfaceType(name, targetFile)
-                // Round 479: the namespace import may target a BARREL
-                // (`import * as ts from "./_namespaces/ts.js"` — harness files),
-                // not the declaring file itself — follow the barrel's `export *`
-                // chain to the interface's declaring leaf (harnessIO's
-                // `ts.ParseConfigHost` vs fakesHosts' `class ParseConfigHost`
-                // chimera: the compiler interface is the per-file target).
-                val targetSource = fileResults[targetFile]?.sourceFile
-                if (targetSource != null) {
-                    val leaf = computeExportedInterfaceFileThroughStars(
-                        targetSource, name, mutableSetOf(), 0,
-                    )
-                    if (leaf != null && leaf in files) return perFileInterfaceType(name, leaf)
-                }
-            }
-            // Round 479: the namespace itself imported by NAME through a barrel —
-            // harness/client.ts's `import { protocol } from "./_namespaces/ts.server.js"`,
-            // where the barrel chain re-exports server/_namespaces/ts.server.ts's
-            // `import * as protocol from "./ts.server.protocol.js"; export { protocol };`.
-            // Follow the ImportSpecifier through the star chain to the namespace-import
-            // alias, then the alias's own module through ITS star exports to the
-            // interface's declaring leaf (protocol.ts). Same defer/null discipline as
-            // the NamespaceImport arm above.
-            for (decl in nsSym.declarations) {
-                if (decl !is ImportSpecifier) continue
-                val originalName = decl.propertyName?.text ?: decl.name.text
-                val entry = enclosingImportsOf(decl).firstOrNull { (_, stmt) ->
-                    (stmt.importClause?.namedBindings as? NamedImports)?.elements?.any { it === decl } == true
-                } ?: continue
-                val (contextFile, importDecl) = entry
-                val barrelSpec = (importDecl.moduleSpecifier as? StringLiteralNode)?.text ?: continue
-                val barrelFile = resolveModuleSpecifier(barrelSpec, importDecl)
-                    ?: resolveAliasJsModuleSpecifier(barrelSpec, contextFile) ?: continue
-                val barrel = fileResults[barrelFile]?.sourceFile ?: continue
-                val nsAlias = resolveExportedSymbolThroughStars(barrel, originalName) ?: continue
-                val nsImportDecl = nsAlias.declarations.firstOrNull { d ->
-                    d is ImportDeclaration &&
-                        (d.importClause?.namedBindings as? NamespaceImport)?.name?.text == originalName
-                } as? ImportDeclaration ?: continue
-                // The declaring file of the namespace-import (needed as the relative-
-                // resolution context): the file whose locals hold THIS alias symbol.
-                val nsDeclFile = fileResults.entries.firstOrNull { (_, r) ->
-                    r.locals[originalName] === nsAlias
-                }?.key ?: continue
-                val nsSpec = (nsImportDecl.moduleSpecifier as? StringLiteralNode)?.text ?: continue
-                val nsFile = resolveModuleSpecifier(nsSpec, nsImportDecl)
-                    ?: resolveAliasJsModuleSpecifier(nsSpec, nsDeclFile) ?: continue
-                val nsSource = fileResults[nsFile]?.sourceFile ?: continue
-                val leaf = if (nsFile in files) nsFile
-                else computeExportedInterfaceFileThroughStars(nsSource, name, mutableSetOf(), 0)
-                    ?: continue
-                if (leaf in files) return perFileInterfaceType(name, leaf)
-            }
-            if (currentCheckFileName == null) conflatedCtxMissing = true
-            return null
-        }
-        val ctxFile = conflatedOwnerFile ?: currentCheckFileName ?: run {
-            conflatedCtxMissing = true
-            return null
-        }
-        return conflatedPerFileViewForContext(name, ctxFile, files)
-    }
-
-    /** Round 480: the bare-name context selection of [conflatedPerFileInterfaceType],
-     *  extracted so HERITAGE resolution can use it for a derived file that merely
-     *  IMPORTS the conflated base (`ServerHost extends System` in server/types.ts —
-     *  System's declaring file is compiler/sys.ts, reached through the ts barrel). */
-    private fun conflatedPerFileViewForContext(name: String, ctxFile: String, files: Set<String>): Type? {
-        if (ctxFile in files) return perFileInterfaceType(name, ctxFile)
-        val localSym = fileResults[ctxFile]?.locals?.get(name) ?: return null
-        if (!localSym.flags.hasAny(SymbolFlags.Alias)) return null
-        for (decl in localSym.declarations) {
-            if (decl !is ImportSpecifier) continue
-            val originalName = decl.propertyName?.text ?: decl.name.text
-            val entry = enclosingImportsOf(decl).firstOrNull { (f, stmt) ->
-                f == ctxFile &&
-                    (stmt.importClause?.namedBindings as? NamedImports)?.elements?.any { it === decl } == true
-            } ?: continue
-            val (contextFile, importDecl) = entry
-            val spec = (importDecl.moduleSpecifier as? StringLiteralNode)?.text ?: continue
-            val targetFile = resolveModuleSpecifier(spec, importDecl)
-                ?: resolveAliasJsModuleSpecifier(spec, contextFile)
-                ?: continue
-            val tr = fileResults[targetFile] ?: continue
-            val leaf = computeExportedInterfaceFileThroughStars(
-                tr.sourceFile, originalName, mutableSetOf(), 0,
-            ) ?: continue
-            if (leaf in files) return perFileInterfaceType(name, leaf)
-        }
-        return null
-    }
-
-    /**
-     * Round 474: resolve a type-alias BODY with the alias's DECLARING file threaded as
-     * [conflatedOwnerFile] when the body references a CONFLATED interface name — a type
-     * alias's body resolves in its declaring file's lexical scope (tsc semantics), so
-     * `type RangeToExtract = { errors: readonly Diagnostic[] }` in extractSymbol.ts must
-     * see extractSymbol's IMPORTED per-file `Diagnostic` view, never the merged chimera
-     * a lazy null-context first touch would bake into [declaredTypes]. The declaring
-     * file is recovered by IDENTITY-matching the declaration in [localTypeAliasIndex]
-     * (a same-named alias in another file is a different node). No conflated reference
-     * in the body → the plain resolution, byte-identical.
-     */
-    private fun resolveTypeAliasBodyWithOwnerContext(symbol: Symbol, decl: TypeAliasDeclaration): Type {
-        if (conflatedInterfaceFiles.isEmpty()) return getTypeFromTypeNode(decl.type)
-        val names = HashSet<String>()
-        collectConflatedRefNames(decl.type, names, 0)
-        if (names.isEmpty()) return getTypeFromTypeNode(decl.type)
-        val owner = localTypeAliasIndex.entries.firstOrNull { (_, m) -> m[symbol.name] === decl }?.key
-            ?: return getTypeFromTypeNode(decl.type)
-        // The owner file DECLARING one of the referenced conflated interfaces itself
-        // (importTracker.ts's own `interface AmbientModuleDeclaration` inside its leaked
-        // `type SourceFileLike = SourceFile | AmbientModuleDeclaration`) keeps the
-        // merged-chimera status quo — the round-443 leaked-alias suppression ecology
-        // (display-keyed) depends on it, and threading the own-file view there regressed
-        // the whole SourceFileLike family (+41 server FPs, measured round 474).
-        if (names.any { owner in (conflatedInterfaceFiles[it] ?: emptySet()) })
-            return getTypeFromTypeNode(decl.type)
-        val saved = conflatedOwnerFile
-        conflatedOwnerFile = owner
-        return try {
-            getTypeFromTypeNode(decl.type)
-        } finally {
-            conflatedOwnerFile = saved
-        }
-    }
-
-    /** Collect the CONFLATED interface names referenced by [node] (the name-yielding
-     *  sibling of [isConflatedInterfaceRefNode] — same shapes, same depth bound). */
-    private fun collectConflatedRefNames(node: TypeNode, out: MutableSet<String>, depth: Int) {
-        if (depth > 4) return
-        when (node) {
-            is TypeReference -> {
-                when (val tn = node.typeName) {
-                    is Identifier -> if (tn.text in conflatedInterfaceFiles) out.add(tn.text)
-                    is QualifiedName -> if (tn.right.text in conflatedInterfaceFiles) out.add(tn.right.text)
-                    else -> {}
-                }
-                node.typeArguments?.forEach { collectConflatedRefNames(it, out, depth + 1) }
-            }
-            is ArrayType -> collectConflatedRefNames(node.elementType, out, depth + 1)
-            is UnionType -> node.types.forEach { collectConflatedRefNames(it, out, depth + 1) }
-            is IntersectionType -> node.types.forEach { collectConflatedRefNames(it, out, depth + 1) }
-            is ParenthesizedType -> collectConflatedRefNames(node.type, out, depth + 1)
-            is TypeOperator -> collectConflatedRefNames(node.type, out, depth + 1)
-            is TypeLiteral -> node.members.forEach { m ->
-                (m as? PropertyDeclaration)?.type?.let { collectConflatedRefNames(it, out, depth + 1) }
-            }
-            is TupleType -> node.elements.forEach { collectConflatedRefNames(it, out, depth + 1) }
-            else -> {}
-        }
     }
 
     /** Get the type of a variable or property from its declaration. */
@@ -95202,23 +94504,6 @@ interface DataView {
             }
             is PropertyDeclaration -> {
                 decl.type?.let { ann ->
-                    // Round 473: an interface MEMBER's annotation resolves conflated
-                    // names in its OWNING file's view — derivable when the parent
-                    // interface has a unique declaring file (or is a per-file transient).
-                    val parent = symbol.parent
-                    val owner = if (parent != null && parent.flags.hasAny(SymbolFlags.Interface))
-                        perFileInterfaceSymbolFile[parent.id]
-                            ?: interfaceDeclFilesAll[parent.name]?.singleOrNull()
-                    else null
-                    if (owner != null && conflatedInterfaceFiles.isNotEmpty()) {
-                        val saved = conflatedOwnerFile
-                        conflatedOwnerFile = owner
-                        try {
-                            return getTypeFromTypeNode(ann)
-                        } finally {
-                            conflatedOwnerFile = saved
-                        }
-                    }
                     return getTypeFromTypeNode(ann)
                 }
                 // Infer from initializer
@@ -115625,15 +114910,8 @@ interface DataView {
                 } ?: continue
                 if (!baseSymbol.flags.hasAny(SymbolFlags.Interface)) continue
 
-                // Get base interface type and resolve members. Round 473: a CONFLATED
-                // base name compares against THIS file's view — the merged chimera's
-                // member types come from whichever module won the merge (protocol.ts's
-                // `TextSpan { start: Location }` vs compiler/types.ts's
-                // `TextSpan { start: number }` → FP TS2430 on every subtype).
-                val baseType = (
-                    if (conflatedInterfaceFiles[baseName]?.contains(fileName) == true)
-                        perFileInterfaceType(baseName, fileName) else null
-                    ) ?: getDeclaredTypeOfSymbol(baseSymbol)
+                // Get base interface type and resolve members.
+                val baseType = getDeclaredTypeOfSymbol(baseSymbol)
                 if (baseType !is Type.Object) continue
                 resolveStructuredTypeMembers(baseType)
                 val baseProps = baseType.properties ?: continue
@@ -130666,14 +129944,6 @@ interface DataView {
                 c is Type.Object && checkTypeRelatedTo(argType, c, assignableRelation)
             }
             if (noUnionExcess && structurallyAssignable) return false
-            // Round 477 (Blocker #3): every constituent may be a CHIMERA (a conflated
-            // interface's merged member table demands BOTH files' members — the
-            // editorServices-vs-protocol event interfaces), so the structural test
-            // fails for a literal that EXACTLY satisfies one declaring file's version.
-            // Same FN-not-FP rule as the round-468 arg-position bail.
-            if (noUnionExcess && constituents.any {
-                    objectLiteralMatchesSomeConflatedDeclaration(arg, it)
-                }) return false
         } else {
             if (constituents.any { checkTypeRelatedTo(argType, it, assignableRelation) }) return false
         }
@@ -132988,14 +132258,6 @@ interface DataView {
                                 missing.add(targetProp)
                             }
                         }
-                        // Round 468 (Blocker #3): the "missing" members may be a
-                        // conflation artifact — the param names a conflated interface
-                        // the calling file imports, and the objlit exactly satisfies
-                        // some declaring file's version. Suppression-only.
-                        if (missing.isNotEmpty() &&
-                            objectLiteralMatchesSomeConflatedDeclaration(arg, paramType)) {
-                            missing.clear()
-                        }
                         if (missing.isNotEmpty()) {
                             val argDisplay = typeToString(argType)
                             val argStart = arg.pos
@@ -133608,22 +132870,7 @@ interface DataView {
                 argType.callSignatures.isNullOrEmpty() && argType.constructSignatures.isNullOrEmpty() &&
                 argType.stringIndexInfo == null && argType.numberIndexInfo == null &&
                 argHasCompleteObjectLiteralProvenance(arg)
-            // Round 473: a per-file view of a conflated interface vs the merged chimera
-            // of the SAME name is a resolution artifact, never a user mismatch — this
-            // emitter compares member sets directly (no checkTypeRelatedTo), so it
-            // needs the same bail as the relation entry.
-            val argIsConflatedTwin = argType is Type.Interface && paramType is Type.Interface &&
-                conflatedInterfaceFiles.isNotEmpty() &&
-                (conflatedMergedPairRelated(argType, paramType) ||
-                    // Round 480: the DERIVED sibling — the arg's base chain carries the
-                    // per-file view of the chimera param's name (ParseConfigFileHost →
-                    // per-file ParseConfigHost, passed to a chimera ParseConfigHost param).
-                    conflatedChimeraTargetSourceHasPerFileBase(argType, paramType) ||
-                    // Round 481: the STRUCTURAL sibling — no heritage link, but the arg
-                    // satisfies some declaring file's per-file view of the chimera
-                    // (CachedDirectoryStructureHost vs chimera ParseConfigHost).
-                    sourceSatisfiesConflatedTargetPerFileView(argType, paramType))
-            if (!isRestParam && !argIsConflatedTwin &&
+            if (!isRestParam &&
                 (argIsRefForArgCheck || argIsDistinctNamedClass || argIsThisAnonObj || argIsAnonObjBag) &&
                 paramType is Type.Interface && paramType.symbol != null) {
                 resolveStructuredTypeMembers(argType)
@@ -134503,33 +133750,6 @@ interface DataView {
         relation: Relation,
     ): Boolean {
         if (source === target) return true
-        // Round 473 (Blocker #3): a PER-FILE view of a conflated interface vs the MERGED
-        // chimera of the same name is OUR artifact, not a user type mismatch — a lazily
-        // resolved annotation (null file context, e.g. a function type first-touched
-        // outside any file's check) still yields the merged symbol's chimera while
-        // in-context references resolve per-file. tsc would have resolved both to ONE
-        // module's interface. Lenient (suppression-only): a genuine cross-module
-        // mismatch (two different per-file views) keeps the structural comparison.
-        if (source is Type.Interface && target is Type.Interface &&
-            conflatedInterfaceFiles.isNotEmpty() && conflatedMergedPairRelated(source, target)
-        ) return true
-        // Round 480: the DERIVED sibling of the pair above — a source whose BASE
-        // CHAIN contains a per-file view of the target's conflated name, against
-        // the merged chimera of that name (`ParseConfigFileHost` — whose heritage
-        // now resolves the per-file `ParseConfigHost` — passed to a chimera-typed
-        // `host: ParseConfigHost` param). Same artifact rationale, same leniency.
-        if (source is Type.Interface && target is Type.Interface &&
-            conflatedInterfaceFiles.isNotEmpty() &&
-            conflatedChimeraTargetSourceHasPerFileBase(source, target)
-        ) return true
-        // Round 481: the STRUCTURAL sibling — a source with no heritage link that
-        // satisfies some declaring file's per-file view of the chimera target
-        // (CachedDirectoryStructureHost vs the chimera ParseConfigHost — tsc relates
-        // them structurally against the ONE interface it resolves). FN-not-FP.
-        if (source is Type.Interface && target is Type.Interface &&
-            conflatedInterfaceFiles.isNotEmpty() &&
-            sourceSatisfiesConflatedTargetPerFileView(source, target)
-        ) return true
         // Fast check
         if (isSimpleTypeRelatedTo(source, target)) return true
         // Check cache
