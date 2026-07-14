@@ -1431,18 +1431,41 @@ interrupt the arc).
     val) deleted, 2 init dispatches removed. Suite +23 (Inv4SpineBatch13Test
     — 16 pre-verified against the OLD walkers, 7 widening pins fail
     pre-migration as expected); listAll error lines IDENTICAL on ALL 8
-    profiles (520a vs 519c). NEXT batches: checkStrictModeReservedWords
-    (TS1212/TS1213/TS1214/TS2480/TS18006 — a BIG stateful one: per-file
-    strictness flags (isStrict/isExpressionStrict/explicitNonStrict/
-    realStrict incl. nested "use strict" prologue upgrades) + inClass/
-    isModule threading + a load-bearing reach QUIRK — the FunctionDeclaration
-    case is entirely `if (isStrict)`-gated, so statements inside fn bodies
-    are UNVISITED in non-strict files (no TS2480 for `let let` there);
-    reproduce as a parent-chain context computation, pin the quirk, one
-    dedicated sub-batch); checkConflictMarkers (a text scan — may not need
-    the spine); checkAwaitContext (stateful isAsync threading +
-    module-top-level rules — decompose when reached);
-    checkMixinClassConstructor is TP-scope-stateful — (d) territory.
+    profiles (520a vs 519c). Batch 14 DONE same round:
+    checkStrictModeReservedWords (TS1212/TS1213/TS1214/TS2480/TS18006 — the
+    most stateful zero-typing walker yet): the threaded isStrict/
+    isExpressionStrict/inClass/realStrict flags became ONE shared
+    ancestor-chain context (`spineStrictReservedCtx`: collect the parent
+    chain, walk it DOWN applying the old descent arms —
+    Block/If/ForIn/ForOf/ModuleBlock/ModuleDeclaration transparent, a
+    FunctionDeclaration entered ONLY under the strictness at ITS position
+    with a "use strict" prologue upgrading realStrict for its subtree, a
+    ClassDeclaration entered only through METHOD/CONSTRUCTOR members
+    (auto-strict: inClass + both strictness flags forced), any other
+    ancestor kind → null = the old no-visit); ten per-statement-kind
+    handlers (var-statement incl. fn-expr-name/type-annot/class-expr-init
+    legs, for-in/of header decls, fn decl, class decl incl. TS18006 +
+    member params, interface, enum, import-equals, import bindings,
+    namespace name, expression statement); per-file flags
+    (spineStrictFile* — binding strictness by effectiveTarget, EXPRESSION
+    strictness by RAW target, the explicitNonStrict suppression) computed
+    in checkSpine's loop; the two strictReserved* instance flags moved to
+    the pre-init spine block, assigned per position from the ctx. Reach
+    deliberately NOT widened (corpus-tuned family — interfaceNaming1 /
+    commonMissingSemicolons / constructorStaticParamName): while/do/for/
+    switch/try bodies, accessor bodies, arrow/fn-expr bodies, and
+    class-expression members stay unvisited, pinned negative as
+    signal-driven widening candidates; the load-bearing reach QUIRK — fn
+    bodies UNVISITED in non-strict files (no TS2480 for `let let` there) —
+    is reproduced by the ctx walk and pinned. 3 walker funs (~250 lines)
+    deleted, 1 init dispatch removed. Suite +25 (Inv4SpineBatch14Test —
+    ALL 25 pre-verified against the OLD walker; a pure reach-preserving
+    migration, no widenings); listAll error lines IDENTICAL on ALL 8
+    profiles (520b vs 520a). NEXT batches: checkConflictMarkers (a text
+    scan — may not need the spine); checkAwaitContext (stateful isAsync
+    threading + module-top-level rules — decompose when reached);
+    checkMixinClassConstructor is TP-scope-stateful — (d) territory;
+    re-measure --passTiming to pick the next tail cohort.
   - [ ] **INV.4(c) The name-resolution pair.** checkUnresolvedNames (846 ms) +
     checkTypeUsedAsValue (734 ms): fold their private NameScope chains into
     spine-maintained authoritative lexical state backed by the INV.2(c)

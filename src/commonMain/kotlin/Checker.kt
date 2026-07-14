@@ -966,6 +966,30 @@ class Checker(
     // parameter-initializer family — the deleted walk family carried one per
     // file (emitDiagAtPos / emitParamInitForbidden consult it).
     private val spineParamForbiddenEmitted = HashSet<String>()
+    // INV.4(b) batch 14 per-file strict-mode flags (computed per file in
+    // checkSpine, from the deleted checkStrictModeReservedWords preamble):
+    // binding-position strictness (effectiveTarget-derived), expression-position
+    // strictness (RAW target-derived — the two deliberately differ), and the
+    // real-strict base (module / "use strict" / strict / alwaysStrict) that
+    // spineStrictReservedCtx upgrades through nested fn-body prologues.
+    private var spineStrictFileIsStrict: Boolean = false
+    private var spineStrictFileIsExprStrict: Boolean = false
+    private var spineStrictFileRealStrict: Boolean = false
+
+    /** True for a file that is EXPLICITLY non-strict (strict/alwaysStrict false,
+     *  no module/"use strict") — the let/const-implies-strict TS1212 shortcut must
+     *  not fire there (tsc only has TS2480 for `let let` in non-strict code;
+     *  commonMissingSemicolons). Assigned per file in checkSpine. */
+    private var strictReservedExplicitNonStrict = false
+
+    /** True when the current strict-reserved POSITION is in REAL strict mode
+     *  (module / "use strict" incl. nested fn prologues / strict / alwaysStrict).
+     *  Gates the `interface`/`implements` TS1212 emission — tsc does NOT fire it
+     *  for those two future-reserved declaration keywords under merely
+     *  target-derived ES2015 strictness (interfaceNaming1). Assigned from
+     *  SpineStrictCtx.realStrict by every spineCheckStrict* handler before its
+     *  emission calls. */
+    private var strictReservedRealStrict = false
 
     // B283: identifier names guarded by a `typeof x === "..."` condition in an
     // enclosing if — the arithmetic walker has no flow narrowing, so union-typed
@@ -2582,8 +2606,9 @@ class Checker(
         // 51b. TS2373 (parameter initializer references a later parameter)
         // migrated to the check spine (INV.4(b) batch 10) — see
         // spineCheckParamForwardRefs.
-        // 52. Check strict mode reserved words as identifiers (TS1212)
-        pass("checkStrictModeReservedWords") { checkStrictModeReservedWords() }
+        // 52. TS1212/TS1213/TS1214/TS2480/TS18006 (strict mode reserved words)
+        // migrated to the check spine (INV.4(b) batch 14) — see the
+        // spineCheckStrict* handlers + spineStrictReservedCtx.
         // 53. Check class/interface named 'undefined' (TS2414/TS2427)
         pass("checkUndefinedClassInterfaceName") { checkUndefinedClassInterfaceName() }
         // 54. Check multiple default exports (TS2528)
@@ -17463,6 +17488,34 @@ class Checker(
                 spineIsJsLike = spineFileName.endsWith(".js") || spineFileName.endsWith(".jsx") ||
                     spineFileName.endsWith(".mjs") || spineFileName.endsWith(".cjs")
                 spineFileIsModule = isModuleFile(sf.statements)
+                // Batch 14 per-file strict-mode flags (the deleted
+                // checkStrictModeReservedWords preamble, verbatim): binding
+                // strictness uses effectiveTarget, EXPRESSION strictness the
+                // RAW target; an explicitly non-strict file (strict/
+                // alwaysStrict false, no module/"use strict") suppresses the
+                // target-derived paths AND the let/const-implies-strict
+                // TS1212 shortcut (strictReservedExplicitNonStrict).
+                val hasUseStrict = stmtsHaveUseStrictPrologue(sf.statements)
+                val explicitNonStrict = options.alwaysStrict == false ||
+                    (options.alwaysStrict != true && options.strictExplicitlyFalse)
+                strictReservedExplicitNonStrict =
+                    explicitNonStrict && !spineFileIsModule && !hasUseStrict
+                spineStrictFileIsStrict = if (explicitNonStrict) {
+                    spineFileIsModule || hasUseStrict
+                } else {
+                    options.effectiveTarget >= ScriptTarget.ES2015 ||
+                        options.strict == true || options.alwaysStrict == true ||
+                        spineFileIsModule || hasUseStrict
+                }
+                spineStrictFileIsExprStrict = if (explicitNonStrict) {
+                    spineFileIsModule || hasUseStrict
+                } else {
+                    options.target >= ScriptTarget.ES2015 ||
+                        options.strict == true || options.alwaysStrict == true ||
+                        spineFileIsModule || hasUseStrict
+                }
+                spineStrictFileRealStrict = spineFileIsModule || hasUseStrict ||
+                    options.strict == true || options.alwaysStrict == true
                 currentFileLocals = result.locals
                 spineObjLitVars.clear()
                 spineBadIterVars.clear()
@@ -17533,6 +17586,7 @@ class Checker(
                 spineCheckGlobalAugmentation(node)
                 spineCheckDupModifiers(node)
                 spineCheckAmbientRelativeModuleName(node)
+                spineCheckStrictModuleName(node)
             }
             is MethodDeclaration -> {
                 spineCheckReservedWordInterfaceParams(node)
@@ -17571,8 +17625,12 @@ class Checker(
             is ForOfStatement -> {
                 spineNoteIterationPosition(node.expression)
                 spineCheckForOfNonIterable(node)
+                spineCheckStrictForInOfDecls(node.initializer)
             }
-            is ForInStatement -> spineCheckForInLhsType(node)
+            is ForInStatement -> {
+                spineCheckForInLhsType(node)
+                spineCheckStrictForInOfDecls(node.initializer)
+            }
             is SpreadElement -> spineNoteIterationPosition(node.expression)
             is YieldExpression -> spineNoteYieldStar(node)
             is CallExpression -> spineCheckEmptyTypeArgs(node.typeArguments, node.expression)
@@ -17596,6 +17654,7 @@ class Checker(
                 spineCheckDupModifiers(node)
                 spineCheckAmbientClassMembers(node)
                 spineCheckAmbientImplClass(node)
+                spineCheckStrictClassDecl(node)
             }
             is SwitchStatement -> {
                 spineCheckMultipleDefaults(node)
@@ -17605,29 +17664,40 @@ class Checker(
                 spineCheckInterfacePropertyInitializers(node)
                 spineCheckDupModifiers(node)
                 spineCheckAmbientImplInterface(node)
+                spineCheckStrictInterfaceDecl(node)
             }
             is FunctionDeclaration -> {
                 spineCheckDupModifiers(node)
                 spineCheckAmbientImplFn(node)
                 spineCheckParamForwardRefs(node.parameters, node.body)
                 spineCheckAsyncAwaitParams(node.modifiers, node.parameters)
+                spineCheckStrictFunctionDecl(node)
             }
             is VariableStatement -> {
                 spineCheckDupModifiers(node)
                 spineCheckAmbientVarInitializers(node)
+                spineCheckStrictVarStatement(node)
             }
             is EnumDeclaration -> {
                 spineCheckDupModifiers(node)
                 spineCheckAmbientEnumInitializers(node)
                 spineCheckReservedEnumName(node)
+                spineCheckStrictEnumName(node)
             }
             is TypeAliasDeclaration -> {
                 spineCheckDupModifiers(node)
                 spineCheckAmbientImplAlias(node)
             }
             is ExportDeclaration -> spineCheckDupModifiers(node)
-            is ImportDeclaration -> spineCheckDupModifiers(node)
-            is ImportEqualsDeclaration -> spineCheckDupModifiers(node)
+            is ImportDeclaration -> {
+                spineCheckDupModifiers(node)
+                spineCheckStrictImportDecl(node)
+            }
+            is ImportEqualsDeclaration -> {
+                spineCheckDupModifiers(node)
+                spineCheckStrictImportEqualsName(node)
+            }
+            is ExpressionStatement -> spineCheckStrictExpressionStatement(node)
             else -> {}
         }
     }
@@ -17973,6 +18043,243 @@ class Checker(
         if (name == "void" || name == "await" || name == "yield") {
             emitTS1359(node.name, spineSource, spineFileName, name)
         }
+    }
+
+    // ── INV.4(b) batch 14: strict-mode reserved words (TS1212/TS1213/TS1214/
+    // TS2480/TS18006) — migrated from the deleted checkStrictModeReservedWords
+    // / walkForStrictReserved / walkStmtForStrictReserved family. The emission
+    // helpers (checkIdentForStrictReserved / checkNodeForStrictReserved /
+    // checkParamsForStrictReserved / checkTypeForStrictReserved /
+    // checkExprForStrictReserved / checkClassExprForStrictReserved /
+    // checkLetInLetOrConst / emitReservedParamImplicitAny) are all retained;
+    // the threaded isStrict/isExpressionStrict/inClass/realStrict flags became
+    // ONE shared ancestor-chain context ([spineStrictReservedCtx]). Reach is
+    // deliberately NOT widened — this family is corpus-tuned per position
+    // (interfaceNaming1 / commonMissingSemicolons / constructorStaticParamName
+    // / convertKeywordsYes): while/do/for/switch/try bodies, accessor bodies,
+    // arrow/fn-expression bodies, and class-expression members stay unvisited
+    // (pinned negative; signal-driven widening candidates). ─────────────────
+
+    /** The per-position strict-mode context (the old walk's threaded flags). */
+    private class SpineStrictCtx(
+        val isStrict: Boolean,
+        val isExprStrict: Boolean,
+        val inClass: Boolean,
+        val realStrict: Boolean,
+    )
+
+    /**
+     * Reproduces the old walk's REACH + flag threading for a statement: collect
+     * the parent chain, then walk it DOWN applying the old descent arms —
+     * Block/If/ForIn/ForOf/ModuleBlock/ModuleDeclaration are transparent, a
+     * FunctionDeclaration body is entered ONLY under the strictness at ITS
+     * position (the load-bearing quirk: statements inside fn bodies are
+     * UNVISITED in non-strict files — no TS2480 for `let let` there) and a
+     * `"use strict"` prologue upgrades real-strict for its subtree, a
+     * ClassDeclaration is entered only through METHOD/CONSTRUCTOR members
+     * (auto-strict: inClass + both strictness flags forced), and ANY other
+     * ancestor kind returns null = the old no-visit (while/do/for/switch/try,
+     * accessor/property/static-block members, arrow/fn-expr bodies,
+     * class expressions, expression positions).
+     */
+    private fun spineStrictReservedCtx(node: Node): SpineStrictCtx? {
+        val chain = ArrayList<Node>(8)
+        var cur = (node as NodeBase).parent
+        while (cur != null && cur !is SourceFile) {
+            chain.add(cur)
+            cur = (cur as NodeBase).parent
+        }
+        if (cur == null) return null // detached/unindexed tree — no old-walk equivalent
+        var isStrict = spineStrictFileIsStrict
+        var isExprStrict = spineStrictFileIsExprStrict
+        var realStrict = spineStrictFileRealStrict
+        var inClass = false
+        var i = chain.size - 1
+        while (i >= 0) {
+            when (val n = chain[i]) {
+                is Block, is IfStatement, is ForInStatement, is ForOfStatement,
+                is ModuleBlock, is ModuleDeclaration -> {}
+                is FunctionDeclaration -> {
+                    if (!isStrict) return null
+                    if (stmtsHaveUseStrictPrologue(n.body?.statements)) realStrict = true
+                }
+                is ClassDeclaration -> {
+                    val member = chain.getOrNull(i - 1)
+                    if (member !is MethodDeclaration && member !is Constructor) return null
+                    inClass = true
+                    isStrict = true
+                    isExprStrict = true
+                    i -= 1
+                }
+                else -> return null
+            }
+            i -= 1
+        }
+        return SpineStrictCtx(isStrict, isExprStrict, inClass, realStrict)
+    }
+
+    private fun spineCheckStrictVarStatement(node: VariableStatement) {
+        if (spineIsDts) return
+        val ctx = spineStrictReservedCtx(node) ?: return
+        strictReservedRealStrict = ctx.realStrict
+        val flags = node.declarationList.flags
+        val isLetOrConst = flags == SyntaxKind.LetKeyword || flags == SyntaxKind.ConstKeyword
+        for (decl in node.declarationList.declarations) {
+            if (ctx.isStrict || (isLetOrConst && !strictReservedExplicitNonStrict)) {
+                checkNodeForStrictReserved(decl.name, spineSource, spineFileName, ctx.inClass, spineFileIsModule)
+            }
+            checkLetInLetOrConst(decl.name, flags, spineSource, spineFileName)
+            if (ctx.isStrict) {
+                (decl.initializer as? FunctionExpression)?.name?.let {
+                    checkIdentForStrictReserved(it, spineSource, spineFileName, ctx.inClass, spineFileIsModule)
+                }
+                checkTypeForStrictReserved(decl.type, spineSource, spineFileName, ctx.inClass, spineFileIsModule)
+                (decl.initializer as? ClassExpression)?.let {
+                    checkClassExprForStrictReserved(it, spineSource, spineFileName)
+                }
+            }
+        }
+    }
+
+    /** The for-in / for-of header declaration leg of the old VariableStatement rule
+     * (names + TS2480 only — no type-annotation / initializer checks). */
+    private fun spineCheckStrictForInOfDecls(initializer: Node?) {
+        if (spineIsDts) return
+        val init = initializer as? VariableDeclarationList ?: return
+        val ctx = spineStrictReservedCtx(init) ?: return
+        strictReservedRealStrict = ctx.realStrict
+        val isLetOrConst = init.flags == SyntaxKind.LetKeyword || init.flags == SyntaxKind.ConstKeyword
+        for (d in init.declarations) {
+            if (ctx.isStrict || (isLetOrConst && !strictReservedExplicitNonStrict)) {
+                checkNodeForStrictReserved(d.name, spineSource, spineFileName, ctx.inClass, spineFileIsModule)
+            }
+            checkLetInLetOrConst(d.name, init.flags, spineSource, spineFileName)
+        }
+    }
+
+    private fun spineCheckStrictFunctionDecl(node: FunctionDeclaration) {
+        if (spineIsDts) return
+        val ctx = spineStrictReservedCtx(node) ?: return
+        if (!ctx.isStrict) return
+        strictReservedRealStrict = ctx.realStrict
+        node.name?.let { checkIdentForStrictReserved(it, spineSource, spineFileName, ctx.inClass, spineFileIsModule) }
+        checkParamsForStrictReserved(node.parameters, spineSource, spineFileName, ctx.inClass, spineFileIsModule)
+        emitReservedParamImplicitAny(node.parameters, spineSource, spineFileName)
+        node.typeParameters?.forEach { tp ->
+            checkIdentForStrictReserved(tp.name, spineSource, spineFileName, ctx.inClass, spineFileIsModule)
+        }
+        for (p in node.parameters) {
+            checkTypeForStrictReserved(p.type, spineSource, spineFileName, ctx.inClass, spineFileIsModule)
+        }
+    }
+
+    private fun spineCheckStrictClassDecl(node: ClassDeclaration) {
+        if (spineIsDts) return
+        val ctx = spineStrictReservedCtx(node) ?: return
+        strictReservedRealStrict = ctx.realStrict
+        // Class definitions are AUTOMATICALLY strict (tsc): the class NAME
+        // reports TS1213 regardless of file strictness, and a STRING-named
+        // "constructor" field is TS18006.
+        node.name?.let { checkIdentForStrictReserved(it, spineSource, spineFileName, inClass = true, isModule = false) }
+        node.typeParameters?.forEach { tp ->
+            checkIdentForStrictReserved(tp.name, spineSource, spineFileName, inClass = true, isModule = false)
+        }
+        for (member in node.members) {
+            val nm = (member as? PropertyDeclaration)?.name as? StringLiteralNode ?: continue
+            if (nm.text != "constructor") continue
+            val (l18, c18) = getLineAndCharacterOfPosition(spineSource, nm.pos)
+            diagnostics.add(Diagnostic(
+                message = "Classes may not have a field named 'constructor'.",
+                category = DiagnosticCategory.Error, code = 18006,
+                fileName = spineFileName, line = l18, character = c18,
+                start = nm.pos, length = (nm.rawText?.length ?: nm.text.length) + 2,
+            ))
+        }
+        // Class INTERIORS are automatically strict too: method/ctor PARAMS
+        // (their body statements get their own spine enters with the
+        // class-forced ctx).
+        for (member in node.members) {
+            when (member) {
+                is MethodDeclaration -> {
+                    checkParamsForStrictReserved(member.parameters, spineSource, spineFileName, inClass = true, isModule = spineFileIsModule)
+                    checkParamTypeAnnotsForStrictReserved(member.parameters, spineSource, spineFileName, inClass = true, isModule = spineFileIsModule)
+                }
+                is Constructor -> {
+                    checkParamsForStrictReserved(member.parameters, spineSource, spineFileName, inClass = true, isModule = spineFileIsModule)
+                    checkParamTypeAnnotsForStrictReserved(member.parameters, spineSource, spineFileName, inClass = true, isModule = spineFileIsModule)
+                }
+                else -> {}
+            }
+        }
+    }
+
+    private fun spineCheckStrictInterfaceDecl(node: InterfaceDeclaration) {
+        if (spineIsDts) return
+        val ctx = spineStrictReservedCtx(node) ?: return
+        if (!ctx.isStrict) return
+        strictReservedRealStrict = ctx.realStrict
+        checkIdentForStrictReserved(node.name, spineSource, spineFileName, ctx.inClass, spineFileIsModule)
+        for (member in node.members) {
+            when (member) {
+                is MethodDeclaration -> checkParamsForStrictReserved(member.parameters, spineSource, spineFileName, ctx.inClass, spineFileIsModule)
+                is Constructor -> checkParamsForStrictReserved(member.parameters, spineSource, spineFileName, ctx.inClass, spineFileIsModule)
+                is IndexSignature -> checkParamsForStrictReserved(member.parameters, spineSource, spineFileName, ctx.inClass, spineFileIsModule)
+                else -> {}
+            }
+        }
+    }
+
+    private fun spineCheckStrictEnumName(node: EnumDeclaration) {
+        if (spineIsDts) return
+        val ctx = spineStrictReservedCtx(node) ?: return
+        if (!ctx.isStrict) return
+        strictReservedRealStrict = ctx.realStrict
+        checkIdentForStrictReserved(node.name, spineSource, spineFileName, ctx.inClass, spineFileIsModule)
+    }
+
+    private fun spineCheckStrictImportEqualsName(node: ImportEqualsDeclaration) {
+        if (spineIsDts) return
+        val ctx = spineStrictReservedCtx(node) ?: return
+        if (!ctx.isStrict) return
+        strictReservedRealStrict = ctx.realStrict
+        checkIdentForStrictReserved(node.name, spineSource, spineFileName, ctx.inClass, spineFileIsModule)
+    }
+
+    private fun spineCheckStrictImportDecl(node: ImportDeclaration) {
+        if (spineIsDts) return
+        val ctx = spineStrictReservedCtx(node) ?: return
+        if (!ctx.isStrict) return
+        strictReservedRealStrict = ctx.realStrict
+        val clause = node.importClause ?: return
+        clause.name?.let { checkIdentForStrictReserved(it, spineSource, spineFileName, ctx.inClass, spineFileIsModule) }
+        when (val bindings = clause.namedBindings) {
+            is NamespaceImport -> checkIdentForStrictReserved(bindings.name, spineSource, spineFileName, ctx.inClass, spineFileIsModule)
+            // tsc: `yield` is a valid import binding identifier at module top
+            // level — only the future-reserved words trip TS1214 here
+            // (es6ImportNamedImportIdentifiersParsing vs
+            // strictModeWordInImportDeclaration).
+            is NamedImports -> for (spec in bindings.elements) {
+                if (spec.name.text == "yield") continue
+                checkIdentForStrictReserved(spec.name, spineSource, spineFileName, ctx.inClass, spineFileIsModule)
+            }
+            else -> {}
+        }
+    }
+
+    private fun spineCheckStrictModuleName(node: ModuleDeclaration) {
+        if (spineIsDts) return
+        val ctx = spineStrictReservedCtx(node) ?: return
+        if (!ctx.isStrict) return
+        strictReservedRealStrict = ctx.realStrict
+        checkExprForStrictReservedIdents(node.name, spineSource, spineFileName, ctx.inClass)
+    }
+
+    private fun spineCheckStrictExpressionStatement(node: ExpressionStatement) {
+        if (spineIsDts) return
+        val ctx = spineStrictReservedCtx(node) ?: return
+        if (!ctx.isExprStrict) return
+        strictReservedRealStrict = ctx.realStrict
+        checkExprForStrictReserved(node.expression, spineSource, spineFileName, ctx.inClass)
     }
 
     /**
@@ -71359,256 +71666,10 @@ interface DataView {
     }
 
     // -----------------------------------------------------------------------
-    // TS1212: Strict mode reserved word as identifier
+    // TS1212: Strict mode reserved word as identifier — emission helpers for
+    // the batch-14 spine handlers (spineCheckStrict*); the walk family is
+    // deleted, the strictReserved* flags live in the spine field block.
     // -----------------------------------------------------------------------
-
-    private fun checkStrictModeReservedWords() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            // Determine if file is in strict mode:
-            // - target >= ES2015 (implicit strict)
-            // - "use strict" prologue directive
-            // - module file (ESM is strict)
-            val isModule = isModuleFile(result.sourceFile.statements)
-            val hasUseStrict = result.sourceFile.statements.firstOrNull()?.let { stmt ->
-                stmt is ExpressionStatement && stmt.expression is StringLiteralNode &&
-                    (stmt.expression).text == "use strict"
-            } == true
-            // Use effectiveTarget so ES3/ES5 targets also fire TS1212 for binding names
-            // (TypeScript fires TS1212 for reserved words in binding positions at all targets)
-            // — EXCEPT when the file is EXPLICITLY non-strict (tsc derives alwaysStrict from
-            // strict, so `@strict: false` alone suffices; an explicit `@alwaysStrict: true`
-            // overrides): then only a module or "use strict" prologue makes file-level
-            // bindings strict (convertKeywordsYes alwaysstrict=false, commonMissingSemicolons).
-            val explicitNonStrict = options.alwaysStrict == false ||
-                (options.alwaysStrict != true && options.strictExplicitlyFalse)
-            strictReservedExplicitNonStrict = explicitNonStrict && !isModule && !hasUseStrict
-            val isStrict = if (explicitNonStrict) {
-                isModule || hasUseStrict
-            } else {
-                options.effectiveTarget >= ScriptTarget.ES2015 ||
-                    options.strict == true ||
-                    options.alwaysStrict == true ||
-                    isModule ||
-                    hasUseStrict
-            }
-            // For expression-position TS1212: fire when explicitly strict, NOT just target >= ES2015.
-            // Target alone doesn't make file-level code strict — only classes, modules, and explicit flags do.
-            // When the file is explicitly non-strict, suppress the target-based strictness.
-            val isExpressionStrict = if (explicitNonStrict) {
-                // Explicitly non-strict: only fire if module or has "use strict"
-                isModule || hasUseStrict
-            } else {
-                options.target >= ScriptTarget.ES2015 ||
-                    options.strict == true ||
-                    options.alwaysStrict == true ||
-                    isModule ||
-                    hasUseStrict
-            }
-            // interfaceNaming1: `interface`/`implements` are future-reserved DECLARATION
-            // keywords; tsc emits TS1212 for them ONLY under REAL strict mode (module /
-            // "use strict" / strict / alwaysStrict), NOT target-derived ES2015 strictness
-            // (let/yield/public/... keep the target-derived path). Class (TS1213) / module
-            // (TS1214) contexts are themselves real-strict and still fire.
-            strictReservedRealStrict = isModule || hasUseStrict ||
-                options.strict == true || options.alwaysStrict == true
-            // TS2480 runs unconditionally; TS1212 runs in let/const contexts even without global strict
-            walkForStrictReserved(result.sourceFile.statements, source, fileName, isStrict = isStrict, isExpressionStrict = isExpressionStrict, isModule = isModule)
-        }
-    }
-
-    /** True while walking a file that is EXPLICITLY non-strict (strict/alwaysStrict false,
-     *  no module/"use strict") — the let/const-implies-strict TS1212 shortcut must not fire
-     *  there (tsc only has TS2480 for `let let` in non-strict code; commonMissingSemicolons). */
-    private var strictReservedExplicitNonStrict = false
-
-    /** True when the file is in REAL strict mode (module / "use strict" / strict / alwaysStrict).
-     *  Gates the `interface`/`implements` TS1212 emission — tsc does NOT fire it for those two
-     *  future-reserved declaration keywords under merely target-derived ES2015 strictness
-     *  (interfaceNaming1). Assigned imperatively in checkStrictModeReservedWords before the walk. */
-    private var strictReservedRealStrict = false
-
-    private fun walkForStrictReserved(stmts: List<Statement>, source: String, fileName: String, inClass: Boolean = false, isStrict: Boolean = true, isExpressionStrict: Boolean = isStrict, isModule: Boolean = false) {
-        for (stmt in stmts) walkStmtForStrictReserved(stmt, source, fileName, inClass, isStrict, isExpressionStrict, isModule)
-    }
-
-    private fun walkStmtForStrictReserved(stmt: Statement, source: String, fileName: String, inClass: Boolean = false, isStrict: Boolean = true, isExpressionStrict: Boolean = isStrict, isModule: Boolean = false) {
-        when (stmt) {
-            is VariableStatement -> {
-                val isLetOrConst = stmt.declarationList.flags == SyntaxKind.LetKeyword || stmt.declarationList.flags == SyntaxKind.ConstKeyword
-                for (decl in stmt.declarationList.declarations) {
-                    // TS1212 fires in strict mode OR in let/const declarations (let/const implies strict for reserved words)
-                    // — except in EXPLICITLY non-strict files, where TS2480 alone owns `let let` (tsc).
-                    if (isStrict || (isLetOrConst && !strictReservedExplicitNonStrict)) checkNodeForStrictReserved(decl.name, source, fileName, inClass, isModule)
-                    // TS2480 fires unconditionally for 'let' in let/const declarations
-                    checkLetInLetOrConst(decl.name, stmt.declarationList.flags, source, fileName)
-                    // strictModeReservedWordInClassDeclaration: a named function EXPRESSION
-                    // initializer (`var z = function let() {}`) — its name is an identifier
-                    // position too. The function-expression body isn't a Statement so it's
-                    // not otherwise walked here.
-                    if (isStrict) {
-                        (decl.initializer as? FunctionExpression)?.name?.let {
-                            checkIdentForStrictReserved(it, source, fileName, inClass, isModule)
-                        }
-                        // strictModeReservedWord: a var TYPE annotation `var b: public.bar`
-                        // fires TS1212 at the leftmost qualifier, and a class-EXPRESSION
-                        // initializer `var c = class package extends public {}` fires TS1213.
-                        checkTypeForStrictReserved(decl.type, source, fileName, inClass, isModule)
-                        (decl.initializer as? ClassExpression)?.let { checkClassExprForStrictReserved(it, source, fileName) }
-                    }
-                }
-            }
-            is FunctionDeclaration -> if (isStrict) {
-                val name = stmt.name
-                if (name != null) checkIdentForStrictReserved(name, source, fileName, inClass, isModule)
-                checkParamsForStrictReserved(stmt.parameters, source, fileName, inClass, isModule)
-                // strictModeReservedWord: a reserved-word param name also implicitly has 'any'
-                // (TS7006) even without noImplicitAny (`function bar(private, implements, let)`).
-                emitReservedParamImplicitAny(stmt.parameters, source, fileName)
-                // TYPE-PARAMETER names and TYPE-annotation identifier positions are
-                // identifier positions too — `function f<implements>(i: implements)`
-                // reports TS1212 at both (convertKeywordsYes bigGeneric); a qualified
-                // annotation `x: private.x` fires at the leftmost `private`, an inline
-                // function type `cb: (private) => void` fires at each param.
-                stmt.typeParameters?.forEach { tp ->
-                    checkIdentForStrictReserved(tp.name, source, fileName, inClass, isModule)
-                }
-                for (p in stmt.parameters) {
-                    checkTypeForStrictReserved(p.type, source, fileName, inClass, isModule)
-                }
-                // A nested `"use strict"` prologue makes the body REAL-strict (interface/implements
-                // TS1212 fires there — strictModeReservedWord's `foo() { "use strict"; ... }`).
-                val savedRealStrict = strictReservedRealStrict
-                if (stmtsHaveUseStrictPrologue(stmt.body?.statements)) strictReservedRealStrict = true
-                stmt.body?.let { walkForStrictReserved(it.statements, source, fileName, inClass, isStrict, isExpressionStrict, isModule) }
-                strictReservedRealStrict = savedRealStrict
-            }
-            is ClassDeclaration -> {
-                // Class definitions are AUTOMATICALLY strict (tsc): the class NAME
-                // reports TS1213 regardless of file strictness, and a STRING-named
-                // "constructor" field is TS18006 (both convertKeywordsYes variants).
-                stmt.name?.let { checkIdentForStrictReserved(it, source, fileName, inClass = true, isModule = false) }
-                // strictModeReservedWordInClassDeclaration: class TYPE-PARAMETER names
-                // are identifier positions too — `class D<public, private>` → TS1213 at each.
-                stmt.typeParameters?.forEach { tp ->
-                    checkIdentForStrictReserved(tp.name, source, fileName, inClass = true, isModule = false)
-                }
-                for (member in stmt.members) {
-                    val nm = (member as? PropertyDeclaration)?.name as? StringLiteralNode ?: continue
-                    if (nm.text != "constructor") continue
-                    val (l18, c18) = getLineAndCharacterOfPosition(source, nm.pos)
-                    diagnostics.add(Diagnostic(
-                        message = "Classes may not have a field named 'constructor'.",
-                        category = DiagnosticCategory.Error, code = 18006,
-                        fileName = fileName, line = l18, character = c18,
-                        start = nm.pos, length = (nm.rawText?.length ?: nm.text.length) + 2,
-                    ))
-                }
-                // Class INTERIORS are automatically strict too (tsc): member params and
-                // bodies report TS1213 regardless of file strictness — `@strict: false`
-                // does not exempt `constructor (static)` (constructorStaticParamName) or
-                // a method-body `var let` (jsFileCompilationBindStrictModeErrors b.js).
-                for (member in stmt.members) {
-                    when (member) {
-                        is MethodDeclaration -> {
-                            checkParamsForStrictReserved(member.parameters, source, fileName, inClass = true, isModule = isModule)
-                            checkParamTypeAnnotsForStrictReserved(member.parameters, source, fileName, inClass = true, isModule = isModule)
-                            member.body?.let { walkForStrictReserved(it.statements, source, fileName, inClass = true, isStrict = true, isExpressionStrict = true, isModule = isModule) }
-                        }
-                        is Constructor -> {
-                            checkParamsForStrictReserved(member.parameters, source, fileName, inClass = true, isModule = isModule)
-                            checkParamTypeAnnotsForStrictReserved(member.parameters, source, fileName, inClass = true, isModule = isModule)
-                            member.body?.let { walkForStrictReserved(it.statements, source, fileName, inClass = true, isStrict = true, isExpressionStrict = true, isModule = isModule) }
-                        }
-                        else -> {}
-                    }
-                }
-            }
-            is InterfaceDeclaration -> if (isStrict) {
-                checkIdentForStrictReserved(stmt.name, source, fileName, inClass, isModule)
-                for (member in stmt.members) {
-                    when (member) {
-                        is MethodDeclaration -> checkParamsForStrictReserved(member.parameters, source, fileName, inClass, isModule)
-                        is Constructor -> checkParamsForStrictReserved(member.parameters, source, fileName, inClass, isModule)
-                        is IndexSignature -> checkParamsForStrictReserved(member.parameters, source, fileName, inClass, isModule)
-                        else -> {}
-                    }
-                }
-            }
-            is EnumDeclaration -> if (isStrict) {
-                checkIdentForStrictReserved(stmt.name, source, fileName, inClass, isModule)
-            }
-            is ImportEqualsDeclaration -> if (isStrict) {
-                checkIdentForStrictReserved(stmt.name, source, fileName, inClass, isModule)
-            }
-            is ImportDeclaration -> if (isStrict) {
-                val clause = stmt.importClause
-                if (clause != null) {
-                    clause.name?.let { checkIdentForStrictReserved(it, source, fileName, inClass, isModule) }
-                    when (val bindings = clause.namedBindings) {
-                        is NamespaceImport -> checkIdentForStrictReserved(bindings.name, source, fileName, inClass, isModule)
-                        // tsc: `yield` is a valid import binding identifier at module top
-                        // level (not in a generator context) — only the future-reserved
-                        // words (private/public/package/…) trip TS1214 here; `default`-style
-                        // hard keywords are owned by the parser's TS1003.
-                        // (es6ImportNamedImportIdentifiersParsing vs strictModeWordInImportDeclaration.)
-                        is NamedImports -> for (spec in bindings.elements) {
-                            if (spec.name.text == "yield") continue
-                            checkIdentForStrictReserved(spec.name, source, fileName, inClass, isModule)
-                        }
-                        else -> {}
-                    }
-                }
-            }
-            is ModuleDeclaration -> {
-                // The namespace's own name is an identifier position only under
-                // strictness, but the BODY must be walked regardless — class
-                // definitions inside are automatically strict (TS1213 on reserved
-                // class names fires even in a fully non-strict file).
-                if (isStrict) checkExprForStrictReservedIdents(stmt.name, source, fileName, inClass)
-                when (val body = stmt.body) {
-                    is ModuleBlock -> walkForStrictReserved(body.statements, source, fileName, inClass, isStrict, isExpressionStrict, isModule)
-                    is ModuleDeclaration -> walkStmtForStrictReserved(body, source, fileName, inClass, isStrict, isExpressionStrict, isModule)
-                    else -> {}
-                }
-            }
-            is ForInStatement -> {
-                val init = stmt.initializer
-                if (init is VariableDeclarationList) {
-                    val isLetOrConst = init.flags == SyntaxKind.LetKeyword || init.flags == SyntaxKind.ConstKeyword
-                    for (d in init.declarations) {
-                        if (isStrict || (isLetOrConst && !strictReservedExplicitNonStrict)) checkNodeForStrictReserved(d.name, source, fileName, inClass, isModule)
-                        checkLetInLetOrConst(d.name, init.flags, source, fileName)
-                    }
-                }
-                walkStmtForStrictReserved(stmt.statement, source, fileName, inClass, isStrict, isExpressionStrict, isModule)
-            }
-            is ForOfStatement -> {
-                val init = stmt.initializer
-                if (init is VariableDeclarationList) {
-                    val isLetOrConst = init.flags == SyntaxKind.LetKeyword || init.flags == SyntaxKind.ConstKeyword
-                    for (d in init.declarations) {
-                        if (isStrict || (isLetOrConst && !strictReservedExplicitNonStrict)) checkNodeForStrictReserved(d.name, source, fileName, inClass, isModule)
-                        checkLetInLetOrConst(d.name, init.flags, source, fileName)
-                    }
-                }
-                walkStmtForStrictReserved(stmt.statement, source, fileName, inClass, isStrict, isExpressionStrict, isModule)
-            }
-            is Block -> walkForStrictReserved(stmt.statements, source, fileName, inClass, isStrict, isExpressionStrict, isModule)
-            is IfStatement -> {
-                walkStmtForStrictReserved(stmt.thenStatement, source, fileName, inClass, isStrict, isExpressionStrict, isModule)
-                stmt.elseStatement?.let { walkStmtForStrictReserved(it, source, fileName, inClass, isStrict, isExpressionStrict, isModule) }
-            }
-            is ExpressionStatement -> if (isExpressionStrict) {
-                // TS1212 for reserved words in expression position only when explicitly strict
-                // (alwaysStrict, "use strict", module, strict:true) — NOT just target >= ES2015.
-                checkExprForStrictReserved(stmt.expression, source, fileName, inClass)
-            }
-            else -> {}
-        }
-    }
 
     private fun checkNodeForStrictReserved(node: Node, source: String, fileName: String, inClass: Boolean = false, isModule: Boolean = false) {
         when (node) {
