@@ -520,23 +520,9 @@ class Checker(
     // Perf: HashSet (order unused, copied per scope entry) — see [currentLocalTypes].
     private var currentParamBindingNames: MutableSet<String> = HashSet()
 
-    /** Blocker #3 (round 442): names that are EXCLUSIVELY top-level `let`/`var`/`const`
-     *  VARIABLE declarations in MODULE files — with NO other global meaning (no
-     *  script-file top-level declaration, no global function/class/interface/enum/
-     *  type-alias/namespace of that name anywhere). Such a name leaks into `globals`
-     *  via the file-locals merge but is NOT legitimately visible by bare name in another
-     *  file (a module-local variable requires an import). A common local name like
-     *  `parent` (navigationBar.ts's module-level `let parent: NavigationBarNode`)
-     *  otherwise shadows every OTHER file's local `parent` in `getTypeOfIdentifier`'s
-     *  globals fallback → FP TS2339 on `Node`/`BinaryExpression` members (279 on the
-     *  services profile). Populated after the globals merge; consulted in the globals
-     *  fallback to return `anyType` (suppression-only — same-file uses hit
-     *  `currentFileLocals` first, so navigationBar's own `parent` is unaffected). */
-    private var moduleFileLocalVarNames: Set<String> = emptySet()
-
     /** Blocker #3 (round 443): name X → the set of files declaring `type X = ...` (a type
      *  alias), for names X that are ALSO declared as `interface X` somewhere else — the
-     *  TYPE-space analog of [moduleFileLocalVarNames]. A module-file-local `type X` leaks
+     *  TYPE-space analog of the retired round-442 value leak. A module-file-local `type X` leaks
      *  into `globals` and shadows the real global `interface X` in every OTHER file, so a
      *  receiver typed `X` there resolves to the leaked alias's UNION instead of the interface
      *  → FP TS2339. `checkMemberAccessMissing` bails a UNION-receiver TS2339 when the receiver
@@ -1804,36 +1790,6 @@ class Checker(
             } else {
                 mergeSymbolTable(globals, result.locals)
             }
-        }
-        // 1a2 (round 442, Blocker #3): compute the module-file-local-variable name set
-        // (see [moduleFileLocalVarNames]). A name qualifies only if it is a top-level
-        // variable in a MODULE file AND has NO competing global meaning (script-file
-        // top-level decl, or a function/class/interface/enum/type/namespace anywhere) —
-        // so returning anyType for it in the globals fallback can only suppress a
-        // cross-file conflation FP, never mask a legitimate global.
-        run {
-            val moduleVar = HashSet<String>()
-            val otherGlobal = HashSet<String>()
-            for (result in binderResults) {
-                val stmts = result.sourceFile.statements
-                val isMod = isModuleFile(stmts)
-                for (stmt in stmts) {
-                    when (stmt) {
-                        is VariableStatement -> for (d in stmt.declarationList.declarations) {
-                            val nm = (d.name as? Identifier)?.text ?: continue
-                            if (isMod) moduleVar.add(nm) else otherGlobal.add(nm)
-                        }
-                        is FunctionDeclaration -> stmt.name?.text?.let { otherGlobal.add(it) }
-                        is ClassDeclaration -> stmt.name?.text?.let { otherGlobal.add(it) }
-                        is InterfaceDeclaration -> otherGlobal.add(stmt.name.text)
-                        is EnumDeclaration -> otherGlobal.add(stmt.name.text)
-                        is TypeAliasDeclaration -> otherGlobal.add(stmt.name.text)
-                        is ModuleDeclaration -> (stmt.name as? Identifier)?.text?.let { otherGlobal.add(it) }
-                        else -> {}
-                    }
-                }
-            }
-            moduleFileLocalVarNames = moduleVar - otherGlobal
         }
         // 1a3 (round 443, Blocker #3): the TYPE-space analog — a module-file-local `type X`
         // alias that conflates with a global `interface X` in a DIFFERENT file (see
@@ -84051,12 +84007,11 @@ interface DataView {
             }
             for (d in s.declarationList.declarations) {
                 // Round 450: a DESTRUCTURED-const local (`const { parent } = node`) that
-                // shadows a same-named outer binding (typically a leaked module-file var,
-                // moduleFileLocalVarNames) is NOT bound (B83.5), so a body read of `parent`
-                // resolved to the OUTER declaration (navigationBar.ts's `let parent:
-                // NavigationBarNode`) and FP'd TS2339 on `parent.operatorToken`. Register the
-                // binding names as shadowed and resolve each from the destructured property
-                // type so a following user type-guard narrows the RIGHT type.
+                // shadows a same-named outer binding is NOT bound (B83.5), so a body read
+                // of `parent` resolved to the OUTER declaration and FP'd TS2339 on
+                // `parent.operatorToken`. Register the binding names as shadowed and
+                // resolve each from the destructured property type so a following user
+                // type-guard narrows the RIGHT type.
                 if (d.name is ObjectBindingPattern && d.initializer != null) {
                     applyDestructuredShadow(d.name, d.initializer, paramNames)
                     continue
@@ -86913,21 +86868,6 @@ interface DataView {
         val typeAnnotation = decl.type
         if (typeAnnotation == null) {
             val init = decl.initializer ?: return
-            // Blocker #3 (round 448): a local ALIASED directly from a leaked module var
-            // (`const invocation = parent`, where navigationBar.ts's module-level
-            // `let parent: NavigationBarNode` leaked into globals per round 442 and the
-            // block/destructured `parent` is unbound per B83.5) inherits the wrong
-            // cross-file type — which then poisons downstream uses our bare-Identifier
-            // moduleFileLocalVarNames bails can't reach (e.g. a nested object-literal value
-            // `{ node: invocation }` in a returned object, signatureHelp.ts's ArgumentListInfo).
-            // Infer anyType so the alias resolves permissively. Gated: the initializer is a
-            // bare leaked-module-var Identifier that is NOT this file's own binding AND is NOT
-            // already a properly-typed param/local (currentLocalTypes) — so a genuine same-named
-            // param `(parent: Node)` keeps propagating its real type. Suppression-only (anyType).
-            if (init is Identifier && init.text in moduleFileLocalVarNames &&
-                currentFileLocals?.get(init.text) == null && currentLocalTypes[init.text] == null) {
-                return
-            }
             val inferred = getTypeOfExpression(init)
             // 16.0: Allow void from explicit super()/CallExpression — for super(...)
             // returning void, we want `x = 5` later to fire TS2322. Filter void
@@ -89402,17 +89342,6 @@ interface DataView {
     ) {
         val expr = stmt.expression
 
-        // Blocker #3 (round 445): `return <leakedModuleVar>` where the returned bare identifier
-        // is a module-file-local variable leaked into `globals` (round 442's
-        // moduleFileLocalVarNames — e.g. inferFromUsage.ts's `return parent` where a
-        // block-const `const parent` is unbound per B83.5 and resolves to navigationBar.ts's
-        // module-level `let parent: NavigationBarNode`). Its resolved type is a cross-file
-        // conflation, so the return relation FP-fires (NavigationBarNode ≁ Declaration |
-        // undefined). Skip UNLESS it IS this file's own top-level binding. Mirrors the
-        // checkMemberAccessMissing / arg-check bails; suppression-only.
-        if (expr is Identifier && expr.text in moduleFileLocalVarNames &&
-            currentFileLocals?.get(expr.text) == null) return
-
         // Round 435: a GENERATOR's `return expr` checks against the annotation's
         // TReturn (tsc getIterationTypeOfGeneratorFunctionReturnType), never the
         // iterator type itself — a bare `return;` in `function* g():
@@ -90349,19 +90278,6 @@ interface DataView {
             if (expr.right is BinaryExpression) {
                 checkAssignmentExpression(expr.right, source, fileName, varTypes, typeParams)
             }
-            // Blocker #3 (round 445): `<ident> = <leakedModuleVar>` — the RHS bare identifier
-            // is a module-file-local variable leaked into `globals` (moduleFileLocalVarNames),
-            // resolving to a cross-file-conflated type (navigationBar.ts's NavigationBarNode for
-            // a local `parent`), so the assignment relation FP-fires (checker.ts `lastParent =
-            // parent`). Skip UNLESS it IS this file's own top-level binding. Gated to a simple
-            // Identifier target (nothing else to walk). Mirrors the return/arg/property bails;
-            // suppression-only.
-            run {
-                val rhs = expr.right
-                if (expr.left is Identifier && rhs is Identifier &&
-                    rhs.text in moduleFileLocalVarNames &&
-                    currentFileLocals?.get(rhs.text) == null) return
-            }
             // 16.4dp: `arguments = <primitive>` inside a non-arrow function body fires
             // TS2322 because `arguments` is the implicit `IArguments` parameter. Only
             // emit when the RHS is clearly a primitive (number/string/boolean literal
@@ -90678,20 +90594,7 @@ interface DataView {
                 // name — prefer the LOCAL type, do NOT consult globals (which would
                 // resolve the outer declaration).
                 val isShadowed = target.text in currentShadowedNames
-                // Round 450: the assignment TARGET's name is a module-file-local variable
-                // leaked into `globals` (moduleFileLocalVarNames) — e.g. `parent = parent.parent`
-                // inside a NESTED block where `let parent = node.parent` shadows navigationBar.ts's
-                // module-level `let parent: NavigationBarNode`. applyBodyLocalShadowing only scans
-                // function-body-TOP-LEVEL statements, so a nested `let parent` isn't in
-                // currentShadowedNames — the target then resolves to the leaked `NavigationBarNode`
-                // annotation and FP-fires TS2740 ('Node' missing NavigationBarNode's props).
-                // Skip the globals lookup for such a name (unless it IS this file's own top-level
-                // binding) so the target type comes from the genuine function-local
-                // currentLocalTypes entry. FP-safe: a cross-file leaked module var is TS2304 in
-                // real tsc, never a TS2740 assignment mismatch.
-                val isLeakedModuleVar = target.text in moduleFileLocalVarNames &&
-                    currentFileLocals?.get(target.text) == null
-                if (!isShadowed && !isLeakedModuleVar) {
+                if (!isShadowed) {
                     val symbol = globals[target.text]
                     if (symbol != null) {
                         val decl = symbol.valueDeclaration ?: symbol.declarations.firstOrNull()
@@ -97902,6 +97805,26 @@ interface DataView {
                     return if (kept.size == 1) kept[0] else getUnionType(kept)
                 }
             }
+            // The NEW-EXPRESSION sibling (tsc getAssignmentReducedType): `if (sys
+            // instanceof vfs.FileSystem) sys = new System(sys);` (tsc fakesHosts.ts
+            // ctor) — the post-assignment type keeps only the declared members the
+            // constructed instance relates to, so the branch join collapses back to
+            // `System` and post-if reads resolve its members. The blanket non-nullish
+            // overwrite below would reset to the FULL declared union instead. An
+            // empty kept set (unrelated class) keeps the conservative fallthrough.
+            if (rhs is NewExpression && declaredType is Type.Union) {
+                val newT = getTypeOfExpression(rhs)
+                if ((newT is Type.Interface || newT is Type.Reference) &&
+                    newT !== anyType && newT !== errorType
+                ) {
+                    val kept = declaredType.types.filter { m ->
+                        checkTypeRelatedTo(newT, m, assignableRelation)
+                    }
+                    if (kept.isNotEmpty() && kept.size < declaredType.types.size) {
+                        return if (kept.size == 1) kept[0] else getUnionType(kept)
+                    }
+                }
+            }
         }
         if (rhs != null && rhsIsDefinitelyNonNullish(rhs)) {
             // Round 416: an assignment OVERWRITES the reference, so its post-state is the
@@ -101279,6 +101202,12 @@ interface DataView {
         }
         val symbol = when (e) {
             is Identifier -> currentFileLocals?.get(e.text) ?: globals[e.text]
+            // INV.3(d)(v): a namespace-import-qualified class — `sys instanceof
+            // vfs.FileSystem` (tsc fakesHosts.ts ctor) — the general resolveAlias
+            // cannot follow NamespaceImports (round 444), so resolve the dotted
+            // chain through the ns-alias machinery. Null for a plain-namespace
+            // root (unchanged conservative no-narrow).
+            is PropertyAccessExpression -> resolveNamespaceQualifiedSymbol(e)
             else -> null
         } ?: return null
         if (!symbol.flags.hasAny(SymbolFlags.Class)) return null
@@ -123136,30 +123065,6 @@ interface DataView {
         val ts2576Length = ts2576SquiggleLength
         val isThisAccess = objectExpr is Identifier && objectExpr.text == "this"
 
-        // Blocker #3 (round 442): a bare-Identifier receiver that is EXCLUSIVELY a
-        // module-file-local variable (see [moduleFileLocalVarNames]) leaked into globals
-        // is NOT this file's own binding — the many symbol-based branches below resolve it
-        // through globals and type an unrelated same-named local (`parent`, a block-scoped
-        // const / nested-fn param our scope machinery misses) as e.g. navigationBar.ts's
-        // `NavigationBarNode` → FP TS2339 on `Node`/`BinaryExpression` members (279 on the
-        // services profile). Skip UNLESS `parent` IS the current file's own top-level var
-        // (currentFileLocals — then the receiver genuinely IS that module's variable).
-        // Round 444: the leaked-var ROOT may be behind a PROPERTY-ACCESS chain — `parent.parent.kind`
-        // (checker.ts): the bare `parent` leaks NavigationBarNode, so `parent.parent` resolves to
-        // NavigationBarNode (it has a `.parent`) and `.kind` FP's on the CHAIN, not the bare identifier.
-        // Walk to the root identifier; if IT is a leaked module var, the whole chain is resolved through
-        // the wrong leaked type, so every member access on it is a false positive → bail (FP-safe: a
-        // cross-file leaked module var access is TS2304 in real tsc, never TS2339). The bare-Identifier
-        // case (root == receiver) is the same walk with zero steps.
-        val leakRoot = run {
-            var e: Expression = objectExpr
-            while (e is PropertyAccessExpression) e = e.expression
-            e as? Identifier
-        }
-        if (leakRoot != null && !isThisAccess && leakRoot.text != "this" &&
-            leakRoot.text in moduleFileLocalVarNames &&
-            currentFileLocals?.get(leakRoot.text) == null) return
-
         // Scope shadowing: a function-local var (currentShadowedNames) shadows an outer
         // binding. The symbol-based branches below resolve the receiver via globals/
         // currentFileLocals (the OUTER declaration) and would FP TS2339 for a member
@@ -132908,22 +132813,6 @@ interface DataView {
      * the union is the genuine local type). FP-safe: tsc resolves X to the INTERFACE here (the arg
      * satisfies it) — same reasoning as the round-443 receiver bail. Suppression-only.
      */
-    /**
-     * Blocker #3 (round 447): true when [arg] is a bare leaked module var (round 442) OR a
-     * PROPERTY-ACCESS chain rooted at one (`parent.parent` where `parent` leaks navigationBar.ts's
-     * `NavigationBarNode` — the arg-side complement of round 444's receiver chain-walk). The whole
-     * chain resolves through the wrong leaked type, so a TS2345 against a real param is a false
-     * positive (a cross-file leaked module var is TS2304 in real tsc, never TS2345). A CALL in the
-     * chain breaks the walk (only pure property chains bail). Skips the current file's own binding.
-     */
-    private fun argRootIsLeakedModuleVar(arg: Expression): Boolean {
-        if (moduleFileLocalVarNames.isEmpty()) return false
-        var e: Expression = arg
-        while (e is PropertyAccessExpression) e = e.expression
-        val root = e as? Identifier ?: return false
-        return root.text in moduleFileLocalVarNames && currentFileLocals?.get(root.text) == null
-    }
-
     private fun paramTypeIsLeakedConflatedAlias(paramType: Type, fileName: String): Boolean {
         if (conflatedTypeAliasFiles.isEmpty()) return false
         val displays = buildList {
@@ -133028,17 +132917,6 @@ interface DataView {
             if (i >= params.size) break // extra args handled by TS2554
             // Skip spread arguments — complex handling
             if (arg is SpreadElement) continue
-            // Blocker #3 (round 442): a bare-Identifier arg that is EXCLUSIVELY a
-            // module-file-local variable leaked into `globals` is not this file's own
-            // binding — its resolved type (navigationBar.ts's `NavigationBarNode` for a
-            // local `parent`) is a cross-file conflation, so the standard relation
-            // FP-fires TS2345 against the real param (153 on the services profile). Skip
-            // it UNLESS it IS the current file's own top-level var. Mirrors the
-            // checkMemberAccessMissing bail; suppression-only (only affects TS2345 here).
-            // Round 447: the leaked-var ROOT may sit behind a property-access chain —
-            // `isCallExpression(parent.parent)` where `parent` leaks NavigationBarNode
-            // (the arg-side complement of round 444's receiver chain-walk).
-            if (argRootIsLeakedModuleVar(arg)) continue
             val paramType = getTypeOfSymbol(params[i])
             if (paramType === anyType || paramType === errorType) continue
             // Blocker #3 (round 447): the param is typed as a conflated `type X` leaked into
@@ -142242,8 +142120,12 @@ interface DataView {
             if (nsImport != null) {
                 val ctx = owningSourceFile(nsImport)?.fileName ?: return null
                 val spec = (nsImport.moduleSpecifier as? StringLiteralNode)?.text ?: return null
+                // Round 513: the DIR-RELATIVE leg (the round-511 lesson class) — a
+                // path-shaped extensionless specifier resolves only relative to the
+                // importing file's directory. Purely additive.
                 val target = resolveModuleSpecifier(spec, nsImport)
-                    ?: resolveAliasJsModuleSpecifier(spec, ctx) ?: return null
+                    ?: resolveAliasJsModuleSpecifier(spec, ctx)
+                    ?: resolveModuleSpecifierRelativeJsAware(spec, ctx) ?: return null
                 val tr = fileResults[target] ?: return null
                 if (memberName in moduleNamedExportsOf(tr.sourceFile)) {
                     tr.locals[memberName]?.let { return it }
@@ -142261,7 +142143,8 @@ interface DataView {
                 val ctx = owningSourceFile(nsExport)?.fileName ?: return null
                 val spec = (nsExport.moduleSpecifier as? StringLiteralNode)?.text ?: return null
                 val target = resolveModuleSpecifier(spec, nsExport)
-                    ?: resolveAliasJsModuleSpecifier(spec, ctx) ?: return null
+                    ?: resolveAliasJsModuleSpecifier(spec, ctx)
+                    ?: resolveModuleSpecifierRelativeJsAware(spec, ctx) ?: return null
                 val tr = fileResults[target] ?: return null
                 if (memberName in moduleNamedExportsOf(tr.sourceFile)) {
                     tr.locals[memberName]?.let { return it }
@@ -142276,7 +142159,8 @@ interface DataView {
             val (ctxFile, importDecl) = findEnclosingImport(spec2) ?: return null
             val modSpec = (importDecl.moduleSpecifier as? StringLiteralNode)?.text ?: return null
             val target = resolveModuleSpecifier(modSpec, importDecl)
-                ?: resolveAliasJsModuleSpecifier(modSpec, ctxFile) ?: return null
+                ?: resolveAliasJsModuleSpecifier(modSpec, ctxFile)
+                ?: resolveModuleSpecifierRelativeJsAware(modSpec, ctxFile) ?: return null
             val tr = fileResults[target] ?: return null
             cur = if (originalName in moduleNamedExportsOf(tr.sourceFile)) {
                 tr.locals[originalName] ?: resolveExportedSymbolThroughStars(tr.sourceFile, originalName)
@@ -156015,22 +155899,6 @@ interface DataView {
      * errors), and it is local to this pass (no touch to global expression typing).
      */
     private fun arithOperandType(e: Expression): Type {
-        // Round 460 (the round-442 module-var-leak family, arithmetic-pass arm): a bare
-        // Identifier operand whose name is EXCLUSIVELY a top-level module-file variable
-        // in ANOTHER file resolved through the leaked global — parser.ts's body-local
-        // `let indent` (number) read `margin - indent` resolved to program.ts's
-        // module-level `const indent = "    "` (string) → FP TS2363. FP-safe by the
-        // round-442 doctrine: a cross-file bare module var is TS2304 in real tsc,
-        // never an arithmetic-category error; the own-file gate keeps the genuine
-        // module var firing in its own file, and a concrete pass-local recording
-        // (currentLocalTypes) still wins.
-        run {
-            var bare: Expression = e
-            while (bare is ParenthesizedExpression) bare = bare.expression
-            if (bare is Identifier && bare.text in moduleFileLocalVarNames &&
-                currentFileLocals?.get(bare.text) == null && currentLocalTypes[bare.text] == null
-            ) return anyType
-        }
         val t = getTypeOfExpression(e)
         if (t !is Type.Union) return t
         // Strip nullish members from (a) an explicit NonNull `x!` operand (tsc types

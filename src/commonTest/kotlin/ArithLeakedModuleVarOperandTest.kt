@@ -30,14 +30,14 @@ import com.xemantic.kotlin.test.should
 import kotlin.test.Test
 
 /**
- * Round 460: the arithmetic pass's operand typing must not resolve a bare
- * Identifier through a LEAKED cross-file module variable (the round-442
- * `moduleFileLocalVarNames` family) — tsc program.ts's module-level
- * `const indent = "    "` leaked into globals and parser.ts's body-local
- * `let indent` (a number the pass leaves unrecorded) read `margin - indent`
- * as the leaked `string` → FP TS2363 (parser.ts:8974). `arithOperandType`
- * now bails such names to anyType UNLESS they are the current file's own
- * binding.
+ * INV.3(d) retire pin (originally round 460's `moduleFileLocalVarNames` bail,
+ * deleted in INV.3(d)(v)): the arithmetic pass's operand typing must not
+ * resolve a bare Identifier through a foreign module file's top-level variable
+ * — tsc program.ts's module-level `const indent = "    "` used to leak into
+ * `globals` and poison parser.ts's body-local `let indent` (`margin - indent`
+ * read the leaked `string` → FP TS2363). Post-retire the merge never publishes
+ * module-only names, so the foreign const is simply invisible; the fixture
+ * keeps it as leak bait.
  */
 class ArithLeakedModuleVarOperandTest {
 

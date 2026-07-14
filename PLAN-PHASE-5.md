@@ -59,6 +59,33 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 513 (2026-07-14) — INV.3(d)(v) deletion #1: the `moduleFileLocalVarNames`
+value-leak ecology DELETED (the round-442/445/447/448/450/453/460 family).**
+Removed: the field, the 1a2 builder, all seven consult bails (mam receiver-chain
+walk, arg-loop root walk via `argRootIsLeakedModuleVar`, return-path, assignment
+RHS + TARGET, var-decl alias inference, `arithOperandType` operand bail).
+Post-retire every consult was hypothesized inert — the gates found exactly TWO
+pre-retire accidental masks (the round-512 (iii) lesson class): (1) the suite
+caught ModuleVarLeakAssignReturnTest's fixture genuinely erroring in tsc
+(`Named ⊄ Target | undefined` — the destructured local now resolves CORRECTLY;
+the bail had been suppressing a genuine error; fixture rewritten into a sharp
+leak-kill pin). (2) the 8-profile A/B caught harness +2 TS2339 (fakesHosts.ts
+`sys.vfs` on `System | FileSystem`) = TWO real narrowing gaps the bail masked —
+it over-suppressed EVERY `sys`-rooted member chain program-wide because
+compiler/sys.ts exports a module-level `let sys`. Fixed tsc-faithfully:
+`resolveInstanceOfRhsType` resolves a ns-import-QUALIFIED class
+(`sys instanceof vfs.FileSystem`) via `resolveNamespaceQualifiedSymbol` (both
+branches narrow); `narrowByAssignmentRhs` gained the NEW-EXPRESSION
+assignment-reduction arm (tsc getAssignmentReducedType — the 4th round-477
+sibling); plus the DIR-RELATIVE resolver leg in `namespaceAliasMemberSymbol`'s
+three arms (the THIRD instance of the round-511 lesson class, purely additive).
+Pins: InstanceofNsQualifiedNarrowingTest (5). VERIFIED: suite 10,346 → 10,351
+(0/3); ALL 8 profiles listAll byte-identical vs pre-deletion. NEXT: deletion #2
+— the `conflatedTypeAliasFiles` ecology (re-key the round-468b
+augmentation-merge compensation onto its OWN gate first — it compensates for
+the still-unmodeled cross-file augmentation MEMBER merge, not the retired
+conflation).
+
 **Round 512 (2026-07-14) — INV.3(d)(ii)+(iii)+(iv) ALL DONE; the retire branch is
 MERGED TO MAIN: suite fully green, ALL 8 profiles byte-identical to pre-retire.**
 Six commits. (ii) the last 6 corpus multi-file failures, one per-consult-flip family
@@ -944,10 +971,13 @@ interrupt the arc).
       (namedUnionMemberCouldAcceptArray hops import aliases). **Full 8-profile
       listAll A/B vs pre-retire main: ALL BYTE-IDENTICAL**; suite fully green;
       branch merged to main.
-    - (v) THEN the deletions: `moduleFileLocalVarNames`,
-      `conflatedTypeAliasFiles`, `conflatedInterfaceFiles`,
+    - (v) THEN the deletions, walker-by-walker, each suite- and listAll-gated:
+      `moduleFileLocalVarNames` DONE round 513 (+2 masked narrowing gaps fixed);
+      remaining: `conflatedTypeAliasFiles` (re-key the round-468b
+      augmentation-merge compensation first), `conflatedInterfaceFiles`,
       `conflatedEnumFileSubsets`, `conflatedPerFileInterfaceType` + chimera
-      bails, walker-by-walker, each suite- and listAll-gated.
+      bails (heritage threading, type-alias-body owner context, QualifiedName
+      dispatch, relation-entry bails).
 - [ ] **INV.4 Single-pass check spine.** `checkSourceFileOnce` per-node dispatch;
   migrate walker families in INV.0's cost order — every migration deletes a full-tree
   pass and its private scope machinery. Once ONE authoritative walk state exists, land

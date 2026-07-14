@@ -30,15 +30,13 @@ import com.xemantic.kotlin.test.should
 import kotlin.test.Test
 
 /**
- * Round 445 (Blocker #3, self-compile burn-down): round 442's `moduleFileLocalVarNames` bail
- * (a top-level `let`/`var`/`const` in a MODULE file leaks into `globals` and shadows every
- * OTHER file's same-named block-scoped local, which is unbound per B83.5) covered TS2339 /
- * TS2345. This round extends it to the TS2322 RETURN and simple-ASSIGNMENT paths: a
- * `return parent` / `lastParent = parent` where a block/destructured `parent` leaks to
- * navigationBar.ts's `let parent: NavigationBarNode` FP'd against the real target type
- * (inferFromUsage.ts `return parent`, checker.ts `lastParent = parent`). Both bail UNLESS the
- * identifier IS the current file's own top-level binding. Suppression-only (a cross-file
- * module var is TS2304 in real tsc, never TS2322).
+ * INV.3(d) retire pins (originally round 445's `moduleFileLocalVarNames` bail family,
+ * deleted in INV.3(d)(v)): a top-level `let`/`var`/`const` in a MODULE file must NOT
+ * leak into another file's resolution — post-retire the merge no longer publishes
+ * module-only names into `globals`, so a same-named block/destructured local (unbound
+ * per B83.5) resolves from its OWN initializer, never from the foreign module var.
+ * The fixtures keep a cross-file same-named module var as leak bait: if resolution
+ * ever leaked again, the bait's incompatible type would FP TS2322/TS2740.
  */
 class ModuleVarLeakAssignReturnTest {
 
@@ -46,7 +44,7 @@ class ModuleVarLeakAssignReturnTest {
         TypeScriptCompiler().compile(source.trimIndent(), "entry.ts").diagnostics
 
     @Test
-    fun `return and assignment of a leaked module-var local do not FP TS2322`() {
+    fun `return and assignment of a destructured local resolve its member type, not a foreign module var`() {
         compile(
             """
             // @strict: true
@@ -55,8 +53,8 @@ class ModuleVarLeakAssignReturnTest {
             export let parent: { aaa: number };
 
             // @Filename: b.ts
-            interface Named { parent: Named; kind: number; }
             interface Target { bbb: number; }
+            interface Named { parent: Target; kind: number; }
             declare function getNamed(): Named;
             export function f(cond: boolean): Target | undefined {
                 const { parent } = getNamed();

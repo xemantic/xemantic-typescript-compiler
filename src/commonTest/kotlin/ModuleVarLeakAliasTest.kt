@@ -30,14 +30,13 @@ import com.xemantic.kotlin.test.should
 import kotlin.test.Test
 
 /**
- * Round 448 (self-compile burn-down, Blocker #3): a function-body local ALIASED directly from a
- * leaked module var (`const invocation = parent`, where a.ts's module-level `let parent: NavNode`
- * leaked into globals per round 442 and b.ts's block/destructured `parent` is unbound per B83.5)
- * inherits the wrong cross-file type. That poisons downstream uses the bare-Identifier
- * `moduleFileLocalVarNames` bails can't reach — e.g. a nested object-literal value `{ node:
- * invocation }` in a returned object (signatureHelp.ts ArgumentListInfo). The un-annotated var-decl
- * inference now infers anyType (→ not recorded) when the initializer is a bare leaked-module-var
- * identifier that is not this file's own binding and not already a properly-typed local.
+ * INV.3(d) retire pin (originally round 448's leaked-alias bail, deleted in
+ * INV.3(d)(v)): a function-body local ALIASED from a destructured binding
+ * (`const { parent } = …; const invocation = parent`) must resolve from the
+ * destructured member type, never from a foreign module file's same-named
+ * top-level `let parent` (which pre-retire leaked into `globals` and poisoned
+ * nested object-literal values — signatureHelp.ts ArgumentListInfo). The
+ * fixture keeps the foreign module var as leak bait.
  */
 class ModuleVarLeakAliasTest {
 
