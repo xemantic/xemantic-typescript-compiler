@@ -59,6 +59,44 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 522 (2026-07-15) — INV.4(c) decomposed + (c)(i) LANDED: the spine
+maintains the authoritative lexical scope state.** Decomposition first (facts
+verified in-code): the checkUnresolvedNames family is ~3,000 lines whose
+NameScope content closely mirrors the INV.2(c) `lexicalScopes` tables plus
+per-file root extras and walk-threaded flags; checkTypeUsedAsValue is ~700
+lines threading THREE ScopeNameSet chains built from AST surveys with
+corpus-tuned reach (the round-42 no-loop/switch/try-descent gotcha) — sub-plan
+(c)(i)–(c)(iv) on the queue item. (c)(i): `spineCurrentScope` is maintained by
+the walk itself — [spineScopeEnterIfOwner] pushes BEFORE a node's own enter
+handlers dispatch (params/type-params visible to the node's handlers),
+[spineScopeLeaveIfOwner] pops after leave; the per-node cost is ONE
+nodeId-indexed array read on enter and leave (the INV.2(b) boxing-avoidance
+trick — the array is filled per file from `result.lexicalScopes` and cleared
+by re-nulling only the written ids). Two structural rules encoded at FILL
+time, not per node: a SwitchStatement's scope (binder-keyed by the SWITCH's
+nodeId) is RE-KEYED onto its CLAUSE nodeIds so the switch EXPRESSION — visited
+between the switch's enter and the clauses — stays in the outer scope (the
+binder's routing); function-body Blocks share the fn scope by map ABSENCE.
+`spineScopeLookup(name)` resolves symbols → existing → parent. Pinned by a
+test-only AUDIT mode (companion statics — tests cannot reach the Checker
+instance): every spine enter compares the incremental scope against an
+independent parent-chain derivation, and every Identifier records its
+resolution into a trace (`file:pos:name=symbolId`). Inv4SpineScopeStateTest
+(15): kitchen-sink zero-mismatch, shadowing id splits ([main, scope, scope,
+main] across positions), switch-expression isolation (∅ at the expression,
+scope-space in the clause), type params through signature+body, catch/for-of/
+var-hoist/fn-expr-self-name/class-expr-self-name shapes, enum-sibling +
+namespace/dotted-namespace mains, multi-file, undeclared-∅ negative control.
+SHARPNESS VERIFIED by deliberate breakage: keying the switch scope at the
+switch's own nodeId (instead of the clauses) fails exactly the two
+switch-bearing tests with node-precise mismatch messages. Session trap worth
+recording: a first sharpness probe used `if (false && …)` — the always-false
+condition failed the WARNING-CLEAN build, so the test run silently reused
+STALE green XMLs (the documented stale-XML gotcha) and the probe looked
+inert; the second probe removed the branch instead. VERIFIED: suite +15
+(10,655 → 10,670, 0 regressions); listAll error lines IDENTICAL on ALL 8 profiles (522a vs 521a; only the trailing time: line differs). Bench: single-runs 27.3/26.0 s landed in a box-drift episode (the round-517 pattern) — the SAME-window signal is the listAll pair, new 24,884 ms vs the 521a baseline's 24,648 ms (+1.0%, in band; the added work is two nodeId array reads per node by construction). NEXT: (c)(ii) — the
+checkUnresolvedNames STATE swap onto lexicalScopes-chain derivations.
+
 **Round 519 (2026-07-14) — INV.4(b) batches 10+11: TS2373 param-init forward
 refs + the break/continue jump-target family migrated onto the check spine;
 6 walker functions (~376 lines) deleted, 2 init dispatches removed.**
@@ -615,52 +653,6 @@ worklist is the victory condition). Every commit gated on compiler AND services
 6 corpus (roots noted per-test in the (ii) item) + 4 local (all suspected REAL
 suppressions — r7/r8 scratch repros exist for the ConflatedTypeAliasLeak pair) +
 the (iv) profile residuals. Main untouched.
-
-**Round 510 (2026-07-13) — INV.3(d) merge retire: BUILT AND PROFILE-VERIFIED on
-branch `wip/inv3d-merge-retire` (033598b6); main untouched pending the
-enumerated 36-failure worklist.** The retire (skip a MODULE file's module-only
-top-level locals in the step-1 merge) landed with every consult flip the
-empirical loop demanded, and reached **compiler AND services `--listAll`
-BYTE-IDENTICAL vs pre-retire HEAD**. Method (the session's real product): (1)
-naive full retire → 861 compiler FPs, dominated by SHARED names — module
-interfaces riding same-named LIB globals (`Symbol`/`Node`/`Performance`),
-whose importers free-ride on the merge because the general resolver can't
-follow `.js` barrels → **the retire must stage by NAME CLASS: module-only
-first, SHARED later** (predicate: lib-keys ∪ script-locals computed pre-merge,
-kept as `mergeSharedKeepNames`); (2) module-only cut → 34 FPs; a
-classifier-MISS stack-sampling probe (a miss on a retired name was a hit
-pre-retire = exactly the at-risk traffic) + the Diagnostic-init emitter probe
-traced every family to its consult: the shadow-ecology collision questions
-(gain a `currentFileLocals` disjunct — imports no longer sit in globals),
-checkMemberAccessMissing's bare-Identifier receiver, checkTypeArgCount's
-enum-member gate, aliasUnionContainsNullishKeyword,
-calleeDeclaredCtxParams/resolveClassCtorParamsForCtx,
-computeImportedCalleeFunctionType's collision gate (globalsForFile),
-getTypeFromTypeQuery, resolveTypeOfValueEntityName, resolveQualifiedName +
-resolveQualifiedValueSymbol (the QualifiedName-root convention is untenable
-post-retire), findVariadicTupleInTarget/arrayElementTypeNode; (3) services
-flood (TS2339×5355!) rooted in ONE line: `mergeModuleAugmentations`' else-add
-put an AUGMENTATION-ONLY stub into globals when the retired base missed, and
-the 1b visibility delta then marked `SourceFile`/`Node` non-module-only so
-every fast-path consult returned the stub — fixed by resolving `.js`
-augmentation targets (`resolveModuleSpecifierRelativeJsAware`; the
-locals-merge now fires, so augmentation members reach the target file's own
-symbol) and gating the globals-add to FILELESS ambient targets; (4) the
-remaining services families forced real per-file machinery:
-`typeSideImportFallback` (import-TYPE shadowed by a same-named local VALUE —
-utilities.ts's `SourceMapSource`; recovered via the ImportSpecifier's
-nodeToSymbol-recorded alias), `namespaceAliasMemberSymbol` (dotted
-`ts.server.X` chains + the round-479 `import * as NS; export { NS }` barrel
-re-publication), and `ternaryBranchType` (a ternary condition narrows a
-`??`/`||` branch's LEFT reference — deprecatedCompat's Version idiom). The
-full suite then enumerated 36 failures (~11 from the foreign-TP
-ambiguous-constrained leg — revert it, re-solve checker.ts:7358 on the
-inference side; ~13 corpus multi-file; ~10 of the (c)-era local tests pinning
-pre-retire semantics) + harness +5 / server +2 residuals — more than the
-session budget, so per protocol the working state is preserved on the branch
-with the worklist decomposed into queue sub-items (d)(i)–(v). Suite on main
-UNCHANGED (10,316 / 0 / 3). NEXT: (d)(i)–(iv) on the branch, then merge, then
-the (v) deletions.
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 

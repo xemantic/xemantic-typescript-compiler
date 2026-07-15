@@ -984,6 +984,30 @@ class Checker(
     // binds `await` at module top level resolves the call).
     private var spineAwaitFileIsModule: Boolean = false
     private var currentFileBindsAwaitTopLevel: Boolean = false
+    // ── INV.4(c)(i) spine-maintained lexical scope state (round 522) ──────
+    // The authoritative lexical scope at the spine's current position, backed
+    // by the INV.2(c) lexicalScopes tables. Maintained by the walk itself
+    // ([spineScopeEnterIfOwner]/[spineScopeLeaveIfOwner] in [spineWalkFile]):
+    // a scope owner's enter pushes BEFORE [spineEnterNode] dispatches (a
+    // node's own handlers see its own scope — params/type-params visible),
+    // the paired leave pops AFTER [spineLeaveNode]. Per-node cost is one
+    // nodeId-indexed ARRAY read on enter and leave (the INV.2(b)
+    // boxing-avoidance trick — a HashMap<Int,·> probe per node would box the
+    // key); the array is filled per file from `result.lexicalScopes` and
+    // cleared by re-nulling only the written ids ([spineScopeWrittenIds]).
+    // A SwitchStatement's scope is re-keyed onto its CLAUSE nodeIds at fill
+    // (the binder routes the switch EXPRESSION to the OUTER scope). Decorator
+    // outer-scope routing is a documented deferred divergence (the binder
+    // tables themselves route decorators under the decorated node's scope
+    // for chain-walk consumers, so both derivations agree today).
+    private var spineCurrentScope: LexicalScope? = null
+    private val spineScopeSaved = ArrayList<LexicalScope?>(64)
+    private var spineScopeByNode: Array<LexicalScope?> = arrayOfNulls(0)
+    private val spineScopeWrittenIds = ArrayList<Int>(128)
+    private var spineLexicalScopes: Map<Int, LexicalScope> = emptyMap()
+    /** Per-file snapshot of the companion audit flag — one instance-field read
+     *  per enter instead of a companion access. */
+    private var spineScopeAuditActive = false
 
     /** True for a file that is EXPLICITLY non-strict (strict/alwaysStrict false,
      *  no module/"use strict") — the let/const-implies-strict TS1212 shortcut must
@@ -17548,7 +17572,13 @@ class Checker(
                 spineIterPositionIds.clear()
                 spineYieldStarNodes.clear()
                 spineParamForbiddenEmitted.clear()
-                spineWalkFile(sf)
+                spineScopeAuditActive = spineScopeAuditEnabled
+                spineScopeFill(result)
+                try {
+                    spineWalkFile(sf)
+                } finally {
+                    spineScopeClear()
+                }
                 spineResolveDeferredIterationChecks()
             }
         } finally {
@@ -17580,13 +17610,17 @@ class Checker(
             val node = nodes.removeAt(top)
             if (phases[top]) {
                 spineLeaveNode(node)
+                spineScopeLeaveIfOwner(node)
                 continue
             }
+            spineScopeEnterIfOwner(node)
+            if (spineScopeAuditActive) spineScopeAuditNode(node)
             spineEnterNode(node)
             buf.clear()
             forEachChild(node, collect)
             if (buf.isEmpty()) {
                 spineLeaveNode(node)
+                spineScopeLeaveIfOwner(node)
                 continue
             }
             if (nodes.size + buf.size + 1 > phases.size) {
@@ -17740,6 +17774,140 @@ class Checker(
             else -> {}
         }
     }
+
+    // ── INV.4(c)(i) spine-maintained lexical scope state ───────────────────
+
+    /**
+     * Fill the per-file nodeId→scope array from the binder's INV.2(c) tables.
+     * A SwitchStatement's entry (keyed by the switch's nodeId, per the binder)
+     * is re-keyed onto each CLAUSE node: the binder routes the switch
+     * EXPRESSION to the OUTER scope, and on the spine the expression child is
+     * visited between the switch's enter and the clauses, so activating the
+     * case scope at the clause enters reproduces that routing exactly.
+     * Function-body Blocks share the function's scope by map ABSENCE (the
+     * binder registers no entry for them) — nothing to special-case here.
+     */
+    private fun spineScopeFill(result: BinderResult) {
+        spineCurrentScope = null
+        spineScopeSaved.clear()
+        spineLexicalScopes = result.lexicalScopes
+        val n = result.sourceFile.nodeCount
+        if (n == 0 || spineLexicalScopes.isEmpty()) return
+        if (spineScopeByNode.size < n) {
+            spineScopeByNode = arrayOfNulls(maxOf(n, spineScopeByNode.size * 2))
+        }
+        for ((id, scope) in spineLexicalScopes) {
+            val owner = scope.owner
+            if (owner is SwitchStatement) {
+                for (clause in owner.caseBlock) {
+                    val cid = (clause as NodeBase).nodeId
+                    if (cid in 0 until n) {
+                        spineScopeByNode[cid] = scope
+                        spineScopeWrittenIds.add(cid)
+                    }
+                }
+            } else if (id in 0 until n) {
+                spineScopeByNode[id] = scope
+                spineScopeWrittenIds.add(id)
+            }
+        }
+    }
+
+    /** Re-null only the ids [spineScopeFill] wrote — O(#scopes), not O(nodeCount). */
+    private fun spineScopeClear() {
+        for (id in spineScopeWrittenIds) spineScopeByNode[id] = null
+        spineScopeWrittenIds.clear()
+        spineCurrentScope = null
+        spineScopeSaved.clear()
+        spineLexicalScopes = emptyMap()
+    }
+
+    /** Activate [node]'s scope if it owns one — called before [spineEnterNode],
+     *  so a node's own handlers already see its scope (params/type-params). */
+    private fun spineScopeEnterIfOwner(node: Node) {
+        val arr = spineScopeByNode
+        val nid = (node as NodeBase).nodeId
+        if (nid < 0 || nid >= arr.size) return
+        val sc = arr[nid] ?: return
+        spineScopeSaved.add(spineCurrentScope)
+        spineCurrentScope = sc
+    }
+
+    /** Paired pop — called after [spineLeaveNode]; the same array probe decides,
+     *  so pairing with [spineScopeEnterIfOwner] is exact by construction. */
+    private fun spineScopeLeaveIfOwner(node: Node) {
+        val arr = spineScopeByNode
+        val nid = (node as NodeBase).nodeId
+        if (nid < 0 || nid >= arr.size) return
+        if (arr[nid] == null) return
+        spineCurrentScope = spineScopeSaved.removeAt(spineScopeSaved.size - 1)
+    }
+
+    /**
+     * Resolve [name] through the spine's current lexical scope chain —
+     * scope-space bindings first, then the aliased main-binder table, then
+     * the parent (the [LexicalScope] KDoc's resolution order). Null when
+     * nothing binds the name lexically — future consumers layer their own
+     * file-root extras (KNOWN_GLOBALS seeding etc.) on top, per the (c)(ii)
+     * plan. Consumed today by the audit trace only.
+     */
+    private fun spineScopeLookup(name: String): Symbol? {
+        var s = spineCurrentScope
+        while (s != null) {
+            s.symbols[name]?.let { return it }
+            s.existing?.get(name)?.let { return it }
+            s = s.parent
+        }
+        return null
+    }
+
+    /**
+     * Audit-only reference implementation: derive the scope that should be
+     * active AT [node] by walking its parent chain over the raw
+     * [spineLexicalScopes] map (boxing probes are fine here). Mirrors the
+     * walk's activation rules: a node owning a scope sees it at its own enter
+     * (the walk pushes before dispatch); a SwitchStatement's scope applies
+     * only when reached from a CLAUSE subtree — never at the switch itself
+     * (prev == null) or through its expression child.
+     */
+    private fun spineScopeChainDerivedAt(node: Node): LexicalScope? {
+        val scopes = spineLexicalScopes
+        if (scopes.isEmpty()) return null
+        var prev: Node? = null
+        var cur: Node? = node
+        while (cur != null) {
+            val base = cur as NodeBase
+            val sc = scopes[base.nodeId]
+            if (sc != null) {
+                if (cur is SwitchStatement) {
+                    if (prev != null && prev !== cur.expression) return sc
+                } else return sc
+            }
+            prev = cur
+            cur = base.parent
+        }
+        return null
+    }
+
+    /** Test-only per-enter audit (see the companion hooks): scope-identity
+     *  equivalence + the Identifier resolution trace. */
+    private fun spineScopeAuditNode(node: Node) {
+        val derived = spineScopeChainDerivedAt(node)
+        if (derived !== spineCurrentScope) {
+            val nid = (node as NodeBase).nodeId
+            spineScopeAuditMismatches.add(
+                "$spineFileName@$nid ${node::class.simpleName}: " +
+                    "derived=${spineScopeAuditDesc(derived)} spine=${spineScopeAuditDesc(spineCurrentScope)}"
+            )
+        }
+        if (node is Identifier) {
+            val sym = spineScopeLookup(node.text)
+            spineScopeAuditTrace.add("$spineFileName:${node.pos}:${node.text}=${sym?.id ?: "∅"}")
+        }
+    }
+
+    private fun spineScopeAuditDesc(scope: LexicalScope?): String =
+        if (scope == null) "null" else "${scope.owner::class.simpleName}@${(scope.owner as NodeBase).nodeId}"
 
     /**
      * TS18045: `accessor` properties require target ES2015+ (the INV.4 pilot,
@@ -42607,6 +42775,19 @@ class Checker(
          *  `init`, so an instance field declared after `init` would read null. */
         private val OBJLIT_ACCESS_MODIFIERS =
             setOf(ModifierFlag.Public, ModifierFlag.Private, ModifierFlag.Protected)
+
+        // ── INV.4(c)(i) test-only audit hooks (Inv4SpineScopeStateTest) ────
+        // Companion-hosted because tests cannot reach the Checker instance
+        // constructed inside TypeScriptCompiler.compile. When [spineScopeAuditEnabled]
+        // is set BEFORE a compile, every spine ENTER verifies the incrementally
+        // maintained [spineCurrentScope] against the parent-chain derivation
+        // ([spineScopeChainDerivedAt]) and records every Identifier's
+        // [spineScopeLookup] resolution into [spineScopeAuditTrace]
+        // ("file:pos:name=symbolId" / "…=∅"). Never enabled in production —
+        // the walk pays one instance-field branch per enter when off.
+        internal var spineScopeAuditEnabled = false
+        internal val spineScopeAuditMismatches = ArrayList<String>()
+        internal val spineScopeAuditTrace = ArrayList<String>()
 
         /** Maximum antecedent walk depth for control-flow narrowing, aligned with tsc's
          *  `flowDepth === 2000` stack guard (M1.2b, round 386 — was 50). Do NOT lower it
