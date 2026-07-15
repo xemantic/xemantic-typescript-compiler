@@ -1009,6 +1009,49 @@ class Checker(
      *  per enter instead of a companion access. */
     private var spineScopeAuditActive = false
 
+    // ── INV.4(c)(iii) batch 1: spine-maintained unresolved-names NameScope ──
+    // The check spine maintains the checkUnresolvedNames family's NameScope
+    // chain (push at scope-owner enters, pop at leaves) so later batches can
+    // move the family's emissions onto the spine. The per-file ROOT scope is
+    // built once and SHARED with the legacy walk ([unresolvedFileRoots]) —
+    // whoever runs first builds it; content is identical by construction
+    // (the type-lib strip is computed before the spine via
+    // [computeTypeLibResolution]). All fields pre-init (the spine runs
+    // during init).
+    /** One pushed level of the family's scope chain. [active] false = the
+     *  level exists but queries skip it (class-decorator tail, switch
+     *  expression region, mapped-type constraint, conditional-type non-true
+     *  branches). [tpsDone]/[paramsDone] drive the lazy signature population
+     *  that reproduces the legacy walk's sequential-mutation order (a method
+     *  COMPUTED NAME must not see the method's own TPs/params — B98.r111). */
+    private class UnresolvedSpineLevel(
+        val owner: Node,
+        val scope: NameScope,
+        var active: Boolean = true,
+        var tpsDone: Boolean = false,
+        var paramsDone: Boolean = false,
+        /** Class levels: ctor param-property names for PropertyDeclaration children. */
+        val ctorParamNames: Set<String> = emptySet(),
+        /** Method levels: the pre-population view used for trailing Decorator
+         *  children (the legacy walk checks member decorators BEFORE registering
+         *  TPs/params; forEachChild visits decorators LAST). */
+        val decoratorScope: NameScope? = null,
+    )
+    private val spineUResStack = ArrayList<UnresolvedSpineLevel>(32)
+    private var spineUResActive = false
+    private var spineUResRoot: NameScope? = null
+    /** Per-file snapshot of the companion audit flag. */
+    private var spineUResAuditActive = false
+    private var typeLibResolutionComputed = false
+    private var typeLibUnresolvedEntries: List<String> = emptyList()
+    /** Per-file shared root records; null value = the family skips this file. */
+    private val unresolvedFileRoots = HashMap<String, UnresolvedFileRoot?>()
+    private class UnresolvedFileRoot(
+        val scope: NameScope,
+        val lexRootExcluded: Set<String>,
+        val isModule: Boolean,
+    )
+
     /** True for a file that is EXPLICITLY non-strict (strict/alwaysStrict false,
      *  no module/"use strict") — the let/const-implies-strict TS1212 shortcut must
      *  not fire there (tsc only has TS2480 for `let let` in non-strict code;
@@ -17513,6 +17556,11 @@ class Checker(
         // TS1101 fires unless alwaysStrict is EXPLICITLY false (the old
         // checkWithStatements gate).
         spineWithStrictActive = options.alwaysStrict != false
+        // INV.4(c)(iii): the unresolved-names file roots are built at THIS slot
+        // (shared with the legacy walk) — the type-lib strip they consult is
+        // computed here instead of at its later pass (pure split; the TS2688
+        // emission stays at checkTypeLibraryEntryPoints).
+        computeTypeLibResolution()
         val savedLocals = currentFileLocals
         try {
             for (result in binderResults) {
@@ -17574,10 +17622,13 @@ class Checker(
                 spineParamForbiddenEmitted.clear()
                 spineScopeAuditActive = spineScopeAuditEnabled
                 spineScopeFill(result)
+                spineUResSetup(result)
+                spineUResAuditActive = unresolvedAuditEnabled && spineUResActive
                 try {
                     spineWalkFile(sf)
                 } finally {
                     spineScopeClear()
+                    spineUResTeardown()
                 }
                 spineResolveDeferredIterationChecks()
             }
@@ -17611,16 +17662,19 @@ class Checker(
             if (phases[top]) {
                 spineLeaveNode(node)
                 spineScopeLeaveIfOwner(node)
+                if (spineUResActive) spineUResLeave(node)
                 continue
             }
             spineScopeEnterIfOwner(node)
             if (spineScopeAuditActive) spineScopeAuditNode(node)
+            if (spineUResActive) spineUResEnter(node)
             spineEnterNode(node)
             buf.clear()
             forEachChild(node, collect)
             if (buf.isEmpty()) {
                 spineLeaveNode(node)
                 spineScopeLeaveIfOwner(node)
+                if (spineUResActive) spineUResLeave(node)
                 continue
             }
             if (nodes.size + buf.size + 1 > phases.size) {
@@ -17908,6 +17962,433 @@ class Checker(
 
     private fun spineScopeAuditDesc(scope: LexicalScope?): String =
         if (scope == null) "null" else "${scope.owner::class.simpleName}@${(scope.owner as NodeBase).nodeId}"
+
+    // ── INV.4(c)(iii) batch 1: spine-maintained unresolved-names NameScope ──
+    // The spine maintains the checkUnresolvedNames family's NameScope chain so
+    // later batches can move the family's emissions onto the spine. Levels are
+    // pushed at the SAME boundaries where the legacy recursive walk creates
+    // child scopes, with the walk's sequential-mutation order reproduced by
+    // LAZY signature population (TPs at the first TypeParameter child, params
+    // at the first Parameter/late child — a method's computed NAME must not
+    // see its own TPs/params, B98.r111) and DEFERRED-activation regions
+    // (class-decorator tails / switch expressions / mapped-type constraints /
+    // conditional-type non-true branches are checked in an OUTER scope by the
+    // legacy walk; forEachChild visits decorators LAST, so a Decorator child
+    // DEACTIVATES its class level). Audited against the legacy walk via
+    // per-Identifier scope fingerprints (companion maps below).
+
+    /** Per-file activation, called from [checkSpine]'s loop. Shares the root
+     *  record with the legacy walk via [unresolvedFileRootFor]. */
+    private fun spineUResSetup(result: BinderResult) {
+        spineUResStack.clear()
+        val root = unresolvedFileRootFor(result)
+        spineUResRoot = root?.scope
+        spineUResActive = root != null
+    }
+
+    private fun spineUResTeardown() {
+        spineUResStack.clear()
+        spineUResRoot = null
+        spineUResActive = false
+    }
+
+    /** The family's effective scope at the current walk position — the innermost
+     *  ACTIVE level. */
+    private fun spineUResScope(): NameScope? {
+        val stack = spineUResStack
+        for (i in stack.indices.reversed()) {
+            val l = stack[i]
+            if (l.active) return l.scope
+        }
+        return spineUResRoot
+    }
+
+    /** Enter hook (before children): direct-child triggers on the innermost
+     *  level, then this node's own level push per the legacy scope-creation
+     *  boundaries, then the audit fingerprint for Identifier nodes. */
+    private fun spineUResEnter(node: Node) {
+        val stack = spineUResStack
+        if (stack.isNotEmpty()) {
+            val top = stack[stack.size - 1]
+            if ((node as NodeBase).parent === top.owner) spineUResOnDirectChild(top, node)
+        }
+        when (node) {
+            is SourceFile -> {
+                val root = spineUResRoot ?: return
+                stack.add(UnresolvedSpineLevel(node, root))
+                val lexHit = unresolvedLexOf(node)
+                val s = root.child(lex = lexHit)
+                if (lexHit == null) collectDeclaredNames(node.statements, s)
+                else collectDeclaredTypeNames(node.statements, s)
+                stack.add(UnresolvedSpineLevel(node, s))
+            }
+            is Block -> {
+                val cur = spineUResScope() ?: return
+                val parent = (node as NodeBase).parent
+                // A function-like's immediate body shares ONE level owned by the
+                // function (the binder registers no entry for body Blocks — the
+                // (c)(ii) owner convention); any other Block is its own owner.
+                val lexOwner: Node? = if (parent != null && spineUResIsFnBodyOwner(parent, node)) parent else node
+                val lexHit = unresolvedLexOf(lexOwner)
+                val s = cur.child(lex = lexHit)
+                if (lexHit == null) collectDeclaredNames(node.statements, s)
+                else collectDeclaredTypeNames(node.statements, s)
+                stack.add(UnresolvedSpineLevel(node, s))
+            }
+            is ModuleBlock -> {
+                // The legacy walk passes owner = null for namespace bodies (the
+                // binder module table is unfiltered merged exports) → threaded.
+                val cur = spineUResScope() ?: return
+                val s = cur.child()
+                collectDeclaredNames(node.statements, s)
+                stack.add(UnresolvedSpineLevel(node, s))
+            }
+            is SwitchStatement -> {
+                val cur = spineUResScope() ?: return
+                val lexHit = unresolvedLexOf(node)
+                val s = cur.child(lex = lexHit)
+                if (lexHit == null) {
+                    for (clause in node.caseBlock) {
+                        when (clause) {
+                            is CaseClause -> collectDeclaredNames(clause.statements, s)
+                            is DefaultClause -> collectDeclaredNames(clause.statements, s)
+                            else -> {}
+                        }
+                    }
+                }
+                // Inactive until a CLAUSE child — the switch EXPRESSION is
+                // checked in the outer scope (the binder's routing).
+                stack.add(UnresolvedSpineLevel(node, s, active = false))
+            }
+            is ForStatement -> spineUResPushForHeader(node, node.initializer)
+            is ForInStatement -> spineUResPushForHeader(node, node.initializer)
+            is ForOfStatement -> spineUResPushForHeader(node, node.initializer)
+            is CatchClause -> {
+                val cur = spineUResScope() ?: return
+                val lexHit = unresolvedLexOf(node)
+                val s = cur.child(lex = lexHit)
+                if (lexHit == null) {
+                    node.variableDeclaration?.let { addBindingName(it.name, s) }
+                }
+                stack.add(UnresolvedSpineLevel(node, s))
+            }
+            is FunctionDeclaration -> {
+                val cur = spineUResScope() ?: return
+                stack.add(UnresolvedSpineLevel(node, cur.child(hasArguments = true, classContext = null)))
+            }
+            is FunctionExpression -> {
+                val cur = spineUResScope() ?: return
+                val s = cur.child(hasArguments = true, classContext = null)
+                node.name?.let { s.names.add(it.text) }
+                stack.add(UnresolvedSpineLevel(node, s))
+            }
+            is ArrowFunction -> {
+                val cur = spineUResScope() ?: return
+                stack.add(UnresolvedSpineLevel(node, cur.child(hasArguments = false, inFunction = true)))
+            }
+            is ClassDeclaration -> {
+                val cur = spineUResScope() ?: return
+                val classCtx = buildClassContext(node, cur, spineFileName)
+                val classLex = unresolvedLexOf(node)
+                val s = cur.child(classContext = classCtx, lex = classLex)
+                if (classLex == null) {
+                    node.typeParameters?.forEach { s.addTypeParam(it.name.text, it.constraint) }
+                }
+                stack.add(UnresolvedSpineLevel(node, s, ctorParamNames = extractCtorParamNames(node.members)))
+            }
+            is ClassExpression -> {
+                val cur = spineUResScope() ?: return
+                val classCtx = buildClassContext(node, cur, spineFileName)
+                val classLex = unresolvedLexOf(node)
+                val s = cur.child(classContext = classCtx, lex = classLex)
+                if (classLex == null) {
+                    node.name?.let { s.names.add(it.text) }
+                    node.typeParameters?.forEach { s.addTypeParam(it.name.text, it.constraint) }
+                }
+                stack.add(UnresolvedSpineLevel(node, s, ctorParamNames = extractCtorParamNames(node.members)))
+            }
+            is InterfaceDeclaration -> {
+                val cur = spineUResScope() ?: return
+                val ifaceLex = unresolvedLexOf(node)
+                val s = cur.child(lex = ifaceLex)
+                if (ifaceLex == null) {
+                    node.typeParameters?.forEach { s.addTypeParam(it.name.text, it.constraint) }
+                }
+                stack.add(UnresolvedSpineLevel(node, s))
+            }
+            is TypeAliasDeclaration -> {
+                val cur = spineUResScope() ?: return
+                val aliasLex = unresolvedLexOf(node)
+                val s = cur.child(lex = aliasLex)
+                if (aliasLex == null) {
+                    node.typeParameters?.forEach { s.addTypeParam(it.name.text, it.constraint) }
+                }
+                stack.add(UnresolvedSpineLevel(node, s))
+            }
+            is EnumDeclaration -> {
+                val cur = spineUResScope() ?: return
+                val s = cur.child()
+                val enumResult = fileResults[spineFileName]
+                val enumSymbol = enumResult?.nodeToSymbol?.get(nodeKey(node))
+                if (enumSymbol?.exports != null) {
+                    for ((exportName, sym) in enumSymbol.exports!!) {
+                        if (sym.flags.hasAny(SymbolFlags.EnumMember)) s.names.add(exportName)
+                    }
+                }
+                for (member in node.members) {
+                    val memberName = member.name
+                    if (memberName is Identifier) s.names.add(memberName.text)
+                    else if (memberName is StringLiteralNode) s.names.add(memberName.text)
+                }
+                if (enumSymbol != null && enumResult.locals[node.name.text] === enumSymbol &&
+                    !isModuleFile(enumResult.sourceFile.statements)
+                ) {
+                    scriptEnumMembersByName()[node.name.text]?.keys?.forEach { s.names.add(it) }
+                }
+                stack.add(UnresolvedSpineLevel(node, s))
+            }
+            is ModuleDeclaration -> {
+                val cur = spineUResScope() ?: return
+                stack.add(UnresolvedSpineLevel(node, buildNamespaceScope(node, cur, spineFileName)))
+            }
+            is MethodDeclaration -> {
+                val cur = spineUResScope() ?: return
+                when ((node as NodeBase).parent) {
+                    is ClassDeclaration, is ClassExpression -> {
+                        val ctx = spineUResMemberCtx(cur, ModifierFlag.Static in node.modifiers)
+                        stack.add(UnresolvedSpineLevel(
+                            node, cur.child(hasArguments = true, classContext = ctx),
+                            decoratorScope = cur.child(hasArguments = true, classContext = ctx),
+                        ))
+                    }
+                    is InterfaceDeclaration, is TypeLiteral ->
+                        stack.add(UnresolvedSpineLevel(node, cur.child()))
+                    is ObjectLiteralExpression ->
+                        stack.add(UnresolvedSpineLevel(node, cur.child(hasArguments = true)))
+                    else -> {}
+                }
+            }
+            is Constructor -> {
+                val cur = spineUResScope() ?: return
+                when ((node as NodeBase).parent) {
+                    is ClassDeclaration, is ClassExpression -> {
+                        val ctx = spineUResMemberCtx(cur, isStatic = false)
+                        stack.add(UnresolvedSpineLevel(node, cur.child(hasArguments = true, classContext = ctx)))
+                    }
+                    is TypeLiteral -> stack.add(UnresolvedSpineLevel(node, cur.child()))
+                    else -> {}
+                }
+            }
+            is GetAccessor -> {
+                val cur = spineUResScope() ?: return
+                when ((node as NodeBase).parent) {
+                    is ClassDeclaration, is ClassExpression -> {
+                        val ctx = spineUResMemberCtx(cur, ModifierFlag.Static in node.modifiers)
+                        stack.add(UnresolvedSpineLevel(node, cur.child(hasArguments = true, classContext = ctx)))
+                    }
+                    // interface / type-literal / object-literal get accessors are
+                    // checked in the enclosing scope (no level in the legacy walk)
+                    else -> {}
+                }
+            }
+            is SetAccessor -> {
+                val cur = spineUResScope() ?: return
+                when ((node as NodeBase).parent) {
+                    is ClassDeclaration, is ClassExpression -> {
+                        val ctx = spineUResMemberCtx(cur, ModifierFlag.Static in node.modifiers)
+                        stack.add(UnresolvedSpineLevel(node, cur.child(hasArguments = true, classContext = ctx)))
+                    }
+                    is InterfaceDeclaration -> stack.add(UnresolvedSpineLevel(node, cur.child()))
+                    is ObjectLiteralExpression ->
+                        stack.add(UnresolvedSpineLevel(node, cur.child(hasArguments = true)))
+                    // type-literal set accessors: no level (params unchecked names)
+                    else -> {}
+                }
+            }
+            is PropertyDeclaration -> {
+                val parent = (node as NodeBase).parent
+                if (parent is ClassDeclaration || parent is ClassExpression) {
+                    val cur = spineUResScope() ?: return
+                    val isStatic = ModifierFlag.Static in node.modifiers
+                    val ctx = spineUResMemberCtx(cur, isStatic)
+                    val s = cur.child(classContext = ctx)
+                    if (!isStatic) {
+                        val top = stack.lastOrNull()
+                        if (top != null && top.owner === parent && top.ctorParamNames.isNotEmpty()) {
+                            s.names.addAll(top.ctorParamNames)
+                        }
+                    }
+                    stack.add(UnresolvedSpineLevel(node, s))
+                }
+            }
+            is ClassStaticBlockDeclaration -> {
+                val cur = spineUResScope() ?: return
+                stack.add(UnresolvedSpineLevel(node, cur.child(classContext = spineUResMemberCtx(cur, isStatic = true))))
+            }
+            is FunctionType -> {
+                val cur = spineUResScope() ?: return
+                stack.add(UnresolvedSpineLevel(node, cur.child()))
+            }
+            is ConstructorType -> {
+                val cur = spineUResScope() ?: return
+                stack.add(UnresolvedSpineLevel(node, cur.child()))
+            }
+            is MappedType -> {
+                val cur = spineUResScope() ?: return
+                val s = cur.child()
+                s.addTypeParam(node.typeParameter.name.text, node.typeParameter.constraint)
+                // Inactive over the typeParameter child — the mapped TP's
+                // constraint is checked in the OUTER scope (CLAUDE.md gotcha).
+                stack.add(UnresolvedSpineLevel(node, s, active = false))
+            }
+            is ConditionalType -> {
+                val cur = spineUResScope() ?: return
+                val s = cur.child()
+                collectInferTypeNames(node.extendsType, s)
+                // Active ONLY within the trueType child (infer names scope there).
+                stack.add(UnresolvedSpineLevel(node, s, active = false))
+            }
+            else -> {}
+        }
+        if (spineUResAuditActive && node is Identifier) {
+            val nid = (node as NodeBase).nodeId
+            if (nid >= 0) {
+                spineUResScope()?.let { scope ->
+                    unresolvedAuditSpine["$spineFileName#$nid"] =
+                        unresolvedScopeFingerprint(scope, node.text)
+                }
+            }
+        }
+    }
+
+    /** Leave hook (after children): pop every level this node owns. */
+    private fun spineUResLeave(node: Node) {
+        val stack = spineUResStack
+        while (stack.isNotEmpty() && stack[stack.size - 1].owner === node) {
+            stack.removeAt(stack.size - 1)
+        }
+    }
+
+    private fun spineUResPushForHeader(stmt: Statement, initializer: Node?) {
+        val cur = spineUResScope() ?: return
+        val lexHit = unresolvedLexOf(stmt)
+        val s = cur.child(lex = lexHit)
+        if (lexHit == null) {
+            (initializer as? VariableDeclarationList)?.declarations?.forEach { addBindingName(it.name, s) }
+        }
+        spineUResStack.add(UnresolvedSpineLevel(stmt, s))
+    }
+
+    /** The legacy class-element walker's memberClassCtx: adjust the class
+     *  context's static flag to the member's. */
+    private fun spineUResMemberCtx(cur: NameScope, isStatic: Boolean): ClassContext? =
+        cur.classContext?.let {
+            if (it.inStaticContext != isStatic) ClassContext(it.className, it.staticMembers, it.instanceMembers, isStatic)
+            else it
+        }
+
+    /** Direct-child triggers: deferred activation regions + lazy signature
+     *  population + the member-decorator pre-population view. */
+    private fun spineUResOnDirectChild(level: UnresolvedSpineLevel, child: Node) {
+        when (val o = level.owner) {
+            // The legacy walk checks class DECL decorators in the OUTER scope;
+            // forEachChild visits decorators LAST → deactivate from there on.
+            is ClassDeclaration -> if (child is Decorator) level.active = false
+            is ClassExpression -> if (child is Decorator) level.active = false
+            is SwitchStatement ->
+                if (!level.active && (child is CaseClause || child is DefaultClause)) level.active = true
+            is MappedType -> if (child !== o.typeParameter) level.active = true
+            is ConditionalType -> {
+                if (child === o.trueType) level.active = true
+                else if (child === o.falseType) level.active = false
+            }
+            is FunctionDeclaration -> spineUResFnChild(level, child, o.name, o.typeParameters, o.parameters, o.body)
+            is FunctionExpression -> spineUResFnChild(level, child, o.name, o.typeParameters, o.parameters, o.body)
+            is ArrowFunction -> spineUResFnChild(level, child, null, o.typeParameters, o.parameters, o.body as? Block)
+            is MethodDeclaration -> {
+                // Class-member method decorators are checked BEFORE the method's
+                // TPs/params are registered in the legacy walk — give the trailing
+                // Decorator subtree the pre-population view.
+                if (child is Decorator) {
+                    if (level.decoratorScope != null) {
+                        spineUResStack.add(UnresolvedSpineLevel(child, level.decoratorScope))
+                    }
+                } else spineUResFnChild(level, child, o.name, o.typeParameters, o.parameters, null)
+            }
+            is Constructor -> spineUResFnChild(level, child, null, null, o.parameters, null)
+            is GetAccessor -> {}
+            is SetAccessor -> spineUResFnChild(level, child, o.name, null, o.parameters, null)
+            is FunctionType -> spineUResFnChild(level, child, null, o.typeParameters, o.parameters, null)
+            is ConstructorType -> spineUResFnChild(level, child, null, o.typeParameters, o.parameters, null)
+            else -> {}
+        }
+    }
+
+    /** Lazy signature population: ALL TPs register at the first TypeParameter
+     *  child (mutually visible in constraints, params invisible there); ALL
+     *  params (+ the sub-ES2015 hoisted-body-var collect) at the first
+     *  Parameter or later (type/body) child. The NAME child never populates —
+     *  a computed method name sees the empty member scope (B98.r111). */
+    private fun spineUResFnChild(
+        level: UnresolvedSpineLevel,
+        child: Node,
+        nameNode: Node?,
+        tps: List<TypeParameter>?,
+        params: List<Parameter>,
+        es5HoistBody: Block?,
+    ) {
+        if (child is TypeParameter) {
+            spineUResEnsureTps(level, tps)
+        } else if (child is Parameter || (child !== nameNode && child !is Decorator)) {
+            spineUResEnsureTps(level, tps)
+            spineUResEnsureParams(level, params, es5HoistBody)
+        }
+    }
+
+    private fun spineUResEnsureTps(level: UnresolvedSpineLevel, tps: List<TypeParameter>?) {
+        if (level.tpsDone) return
+        level.tpsDone = true
+        tps?.forEach { level.scope.addTypeParam(it.name.text, it.constraint) }
+    }
+
+    private fun spineUResEnsureParams(level: UnresolvedSpineLevel, params: List<Parameter>, es5HoistBody: Block?) {
+        if (level.paramsDone) return
+        level.paramsDone = true
+        addParamsToScope(params, level.scope)
+        if (es5HoistBody != null && options.target < ScriptTarget.ES2015) {
+            collectDeclaredNames(es5HoistBody.statements, level.scope)
+        }
+    }
+
+    /** A function-like whose immediate body Block shares the function's scope
+     *  level (the legacy walk's checkUnresolvedInStatements owner convention). */
+    private fun spineUResIsFnBodyOwner(parent: Node, block: Block): Boolean = when (parent) {
+        is FunctionDeclaration -> parent.body === block
+        is FunctionExpression -> parent.body === block
+        is ArrowFunction -> parent.body === block
+        is MethodDeclaration -> parent.body === block
+        is Constructor -> parent.body === block
+        is GetAccessor -> parent.body === block
+        is SetAccessor -> parent.body === block
+        is ClassStaticBlockDeclaration -> parent.body === block
+        else -> false
+    }
+
+    /** Audit fingerprint: every scope-content query surface the family's
+     *  emissions consult, for one name. */
+    private fun unresolvedScopeFingerprint(scope: NameScope, name: String): String =
+        "${scope.has(name)}|${scope.hasLocalShadow(name)}|${scope.isTypeParam(name)}|" +
+            "${scope.hasType(name)}|${scope.typeParamConstraintOf(name) != null}|" +
+            "${scope.inFunction}|${scope.hasArguments}|" +
+            (scope.classContext?.let { "${it.className}:${it.inStaticContext}" } ?: "-")
+
+    /** Legacy-walk audit record (called from the emission workhorses). */
+    private fun recordUnresolvedAuditOld(node: Node, name: String, scope: NameScope, fileName: String) {
+        if (node !is Identifier) return
+        val nid = (node as NodeBase).nodeId
+        if (nid < 0) return
+        unresolvedAuditOld["$fileName#$nid"] = unresolvedScopeFingerprint(scope, name)
+    }
 
     /**
      * TS18045: `accessor` properties require target ES2015+ (the INV.4 pilot,
@@ -25699,139 +26180,171 @@ class Checker(
 
     private fun checkUnresolvedNames() {
         for (result in binderResults) {
+            val root = unresolvedFileRootFor(result) ?: continue
             val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            unresolvedCurrentFileIsModule = isModuleFile(result.sourceFile.statements)
-            // Skip JS files without checkJs — TS2304/TS2552 not applicable
-            if (!options.checkJs && (fileName.endsWith(".js") || fileName.endsWith(".jsx"))) continue
             val source = result.sourceFile.text
-            // File-level scope: binder locals + globals + known globals.
-            // Skip ambient external modules (`declare module "foo"`) — their string-literal names
-            // are NOT accessible as identifiers in code. TypeScript reports TS2304 for bare uses.
-            val ambientExternalModuleNames = result.sourceFile.statements
-                .filterIsInstance<ModuleDeclaration>()
-                .filter { it.name is StringLiteralNode }
-                .map { (it.name as StringLiteralNode).text }
-                .toSet()
-            // INV.4(c)(ii): activate the file's lexical tables for the hybrid
-            // NameScope queries. The root exclusion set mirrors the two legacy
-            // file-root filters applied to names the main binder DOES bind into
-            // file locals: ambient external module names, and the `declare global`
-            // augmentation quirk (added below once the quirk gate is computed).
-            // An ambient name is excluded ONLY while every declaration of the
-            // symbol is a StringLiteral-named ModuleDeclaration — an
-            // `import fs = require("fs")` OVERWRITES the ambient module symbol
-            // (the alias-overwrite gotcha) and the legacy file-list collect
-            // re-added such names, so the bare identifier must stay resolvable
-            // (ambientExternalModuleInAnotherExternalModule).
-            unresolvedLexScopes = result.lexicalScopes
-            unresolvedLexRootExcluded = ambientExternalModuleNames.filterTo(mutableSetOf()) { name ->
-                val sym = result.locals[name]
-                sym == null || sym.declarations.all { d ->
-                    d is ModuleDeclaration && d.name is StringLiteralNode
-                }
-            }
-            val fileScope = NameScope(null, lex = unresolvedLexOf(result.sourceFile))
-            // 17.32e: file-root TS2304 visibility uses [perFileScope] (lib +
-            // script-file locals + own-file locals) instead of the over-merged
-            // [globals] map. Other module files' locals are not visible without
-            // an explicit import. Defensive fallback to legacy globals iteration
-            // when [perFileScope] is unbuilt (matches 17.32b/c/d pattern).
-            val perFile = perFileScope[fileName]
-            if (perFile != null) {
-                for ((name, _) in perFile) {
-                    if (name !in ambientExternalModuleNames) fileScope.names.add(name)
-                }
-            } else {
-                for ((name, _) in result.locals) {
-                    if (name !in ambientExternalModuleNames) fileScope.names.add(name)
-                }
-                for ((name, _) in globals) {
-                    if (name !in ambientExternalModuleNames) fileScope.names.add(name)
-                }
-            }
-            // 17.122: Filter DOM/host globals when @lib explicitly excludes both
-            // `dom` and `webworker` and `scripthost`. Without this, tests with
-            // `@lib: es5` (or any es-only subset) miss TS2304 for `window`/`top`/
-            // `setTimeout`/etc. — they're declared in lib.dom.d.ts /
-            // lib.scripthost.d.ts which the user has opted out of. Conservative
-            // gate: ONLY when @lib is non-empty AND has zero entries that would
-            // pull in DOM/host. Default-empty `options.lib` means full lib.d.ts
-            // is loaded (including dom + scripthost).
-            val libExcludesDomHost = options.lib.isNotEmpty() &&
-                options.lib.none { lname ->
-                    val lower = lname.lowercase()
-                    lower == "dom" || lower == "webworker" || lower == "scripthost" ||
-                        lower.startsWith("dom.") || lower.startsWith("webworker.")
-                }
-            if (libExcludesDomHost) {
-                for (g in KNOWN_GLOBALS) {
-                    if (g !in DOM_GLOBAL_NAMES && g !in HOST_ONLY_GLOBALS) fileScope.names.add(g)
-                }
-            } else {
-                fileScope.names.addAll(KNOWN_GLOBALS)
-            }
-            // B66.1: In `.js`/`.jsx` files, CommonJS implicit globals (`module`,
-            // `process`, `require`, `Buffer`) are always available (no TS2304/TS2591).
-            // Same for names augmented via any file's `declare global { var X }`.
-            if (fileName.endsWith(".js") || fileName.endsWith(".jsx")) {
-                fileScope.names.addAll(NODE_BUILTIN_GLOBALS_TS2591)
-                fileScope.names.addAll(TEST_RUNNER_GLOBALS_TS2593)
-                fileScope.names.addAll(JQUERY_GLOBALS_TS2592)
-                // B423: a JSDoc `@typedef NAME` declares a type-eligible name that the binder
-                // does NOT bind (raw-source only) — register it so a `@param {NAME}` /
-                // `@property {NAME}` reference resolves instead of FP-ing TS2304. Both forms:
-                // `@typedef {type} NAME` and the object-style `@typedef NAME`.
-                for (m in Regex("""@typedef\s+(?:\{[^\n]*\}\s+)?([A-Za-z_$][\w$]*)""").findAll(source)) {
-                    fileScope.addType(m.groupValues[1])
-                }
-            }
-            fileScope.names.addAll(globalAugmentationNames)
-            // B98.r97 (GH#42209): `declare global { ... }` does NOT introduce a
-            // value/namespace binding named "global" — it augments the global
-            // scope. The binder nonetheless binds it as a ModuleDeclaration symbol
-            // "global", which would otherwise make a bare `global` reference (e.g.
-            // `global.x`) resolvable and suppress TS2304/TS2552. Remove it UNLESS
-            // some declaration of "global" is a real binding (`var global` /
-            // `const global` / a non-`declare`-augmentation namespace).
-            val globalSym = result.locals["global"] ?: globals["global"]
-            if (globalSym != null && globalSym.declarations.isNotEmpty() &&
-                globalSym.declarations.all { d ->
-                    d is ModuleDeclaration && (d.name as? Identifier)?.text == "global" &&
-                        ModifierFlag.Declare in d.modifiers
-                }) {
-                fileScope.names.remove("global")
-                // INV.4(c)(ii): the binder's file locals also carry the augmentation-only
-                // "global" symbol — exclude it from the lexical root level too.
-                unresolvedLexRootExcluded = unresolvedLexRootExcluded + "global"
-            }
-
-            // libReplacement (@libReplacement): when the DOM lib is replaced by a
-            // user stub under /node_modules/@typescript/lib-dom/, the embedded
-            // lib.dom.d.ts globals (window/document/…) must NOT be in scope — only
-            // what the stub declares. Strip them so e.g. `window.localStorage`
-            // correctly errors TS2304. The gate is matched by exactly the four
-            // `@typescript/lib-` fixtures in the corpus → zero FP surface.
-            if (isDomLibReplaced()) {
-                fileScope.names.removeAll(DOM_GLOBAL_NAMES)
-                fileScope.names.removeAll(HOST_ONLY_GLOBALS)
-            }
-
-            // B263: names declared only in typeRoot packages that did NOT resolve from
-            // the `types` option are not part of the program — strip them so their uses
-            // fire TS2304/TS2552.
-            if (unresolvedTypeLibNames.isNotEmpty()) {
-                fileScope.names.removeAll(unresolvedTypeLibNames)
-            }
-
             checkUnresolvedInStatements(
                 result.sourceFile.statements,
                 result.sourceFile,
-                fileScope,
+                root.scope,
                 source,
                 fileName,
             )
         }
+    }
+
+    /**
+     * INV.4(c)(iii): build (once per file — the record is SHARED between the
+     * legacy walk and the spine maintenance, whichever runs first) and ACTIVATE
+     * the family's per-file state: sets [unresolvedLexScopes] /
+     * [unresolvedLexRootExcluded] / [unresolvedCurrentFileIsModule]. Null means
+     * the family skips this file (.d.ts, or JS without checkJs).
+     */
+    private fun unresolvedFileRootFor(result: BinderResult): UnresolvedFileRoot? {
+        val fileName = result.sourceFile.fileName
+        // The root NameScope links the SourceFile's lexical scope — the tables
+        // must be active BEFORE the build (and for every later query).
+        unresolvedLexScopes = result.lexicalScopes
+        if (unresolvedFileRoots.containsKey(fileName)) {
+            val cached = unresolvedFileRoots[fileName]
+            if (cached != null) {
+                unresolvedLexRootExcluded = cached.lexRootExcluded
+                unresolvedCurrentFileIsModule = cached.isModule
+            }
+            return cached
+        }
+        val built = buildUnresolvedFileRoot(result)
+        unresolvedFileRoots[fileName] = built
+        return built
+    }
+
+    private fun buildUnresolvedFileRoot(result: BinderResult): UnresolvedFileRoot? {
+        val fileName = result.sourceFile.fileName
+        if (isDtsFile(fileName)) return null
+        // Skip JS files without checkJs — TS2304/TS2552 not applicable
+        if (!options.checkJs && (fileName.endsWith(".js") || fileName.endsWith(".jsx"))) return null
+        unresolvedCurrentFileIsModule = isModuleFile(result.sourceFile.statements)
+        val source = result.sourceFile.text
+        // File-level scope: binder locals + globals + known globals.
+        // Skip ambient external modules (`declare module "foo"`) — their string-literal names
+        // are NOT accessible as identifiers in code. TypeScript reports TS2304 for bare uses.
+        val ambientExternalModuleNames = result.sourceFile.statements
+            .filterIsInstance<ModuleDeclaration>()
+            .filter { it.name is StringLiteralNode }
+            .map { (it.name as StringLiteralNode).text }
+            .toSet()
+        // INV.4(c)(ii): activate the file's lexical tables for the hybrid
+        // NameScope queries. The root exclusion set mirrors the two legacy
+        // file-root filters applied to names the main binder DOES bind into
+        // file locals: ambient external module names, and the `declare global`
+        // augmentation quirk (added below once the quirk gate is computed).
+        // An ambient name is excluded ONLY while every declaration of the
+        // symbol is a StringLiteral-named ModuleDeclaration — an
+        // `import fs = require("fs")` OVERWRITES the ambient module symbol
+        // (the alias-overwrite gotcha) and the legacy file-list collect
+        // re-added such names, so the bare identifier must stay resolvable
+        // (ambientExternalModuleInAnotherExternalModule).
+        unresolvedLexScopes = result.lexicalScopes
+        unresolvedLexRootExcluded = ambientExternalModuleNames.filterTo(mutableSetOf()) { name ->
+            val sym = result.locals[name]
+            sym == null || sym.declarations.all { d ->
+                d is ModuleDeclaration && d.name is StringLiteralNode
+            }
+        }
+        val fileScope = NameScope(null, lex = unresolvedLexOf(result.sourceFile))
+        // 17.32e: file-root TS2304 visibility uses [perFileScope] (lib +
+        // script-file locals + own-file locals) instead of the over-merged
+        // [globals] map. Other module files' locals are not visible without
+        // an explicit import. Defensive fallback to legacy globals iteration
+        // when [perFileScope] is unbuilt (matches 17.32b/c/d pattern).
+        val perFile = perFileScope[fileName]
+        if (perFile != null) {
+            for ((name, _) in perFile) {
+                if (name !in ambientExternalModuleNames) fileScope.names.add(name)
+            }
+        } else {
+            for ((name, _) in result.locals) {
+                if (name !in ambientExternalModuleNames) fileScope.names.add(name)
+            }
+            for ((name, _) in globals) {
+                if (name !in ambientExternalModuleNames) fileScope.names.add(name)
+            }
+        }
+        // 17.122: Filter DOM/host globals when @lib explicitly excludes both
+        // `dom` and `webworker` and `scripthost`. Without this, tests with
+        // `@lib: es5` (or any es-only subset) miss TS2304 for `window`/`top`/
+        // `setTimeout`/etc. — they're declared in lib.dom.d.ts /
+        // lib.scripthost.d.ts which the user has opted out of. Conservative
+        // gate: ONLY when @lib is non-empty AND has zero entries that would
+        // pull in DOM/host. Default-empty `options.lib` means full lib.d.ts
+        // is loaded (including dom + scripthost).
+        val libExcludesDomHost = options.lib.isNotEmpty() &&
+            options.lib.none { lname ->
+                val lower = lname.lowercase()
+                lower == "dom" || lower == "webworker" || lower == "scripthost" ||
+                    lower.startsWith("dom.") || lower.startsWith("webworker.")
+            }
+        if (libExcludesDomHost) {
+            for (g in KNOWN_GLOBALS) {
+                if (g !in DOM_GLOBAL_NAMES && g !in HOST_ONLY_GLOBALS) fileScope.names.add(g)
+            }
+        } else {
+            fileScope.names.addAll(KNOWN_GLOBALS)
+        }
+        // B66.1: In `.js`/`.jsx` files, CommonJS implicit globals (`module`,
+        // `process`, `require`, `Buffer`) are always available (no TS2304/TS2591).
+        // Same for names augmented via any file's `declare global { var X }`.
+        if (fileName.endsWith(".js") || fileName.endsWith(".jsx")) {
+            fileScope.names.addAll(NODE_BUILTIN_GLOBALS_TS2591)
+            fileScope.names.addAll(TEST_RUNNER_GLOBALS_TS2593)
+            fileScope.names.addAll(JQUERY_GLOBALS_TS2592)
+            // B423: a JSDoc `@typedef NAME` declares a type-eligible name that the binder
+            // does NOT bind (raw-source only) — register it so a `@param {NAME}` /
+            // `@property {NAME}` reference resolves instead of FP-ing TS2304. Both forms:
+            // `@typedef {type} NAME` and the object-style `@typedef NAME`.
+            for (m in Regex("""@typedef\s+(?:\{[^\n]*\}\s+)?([A-Za-z_$][\w$]*)""").findAll(source)) {
+                fileScope.addType(m.groupValues[1])
+            }
+        }
+        fileScope.names.addAll(globalAugmentationNames)
+        // B98.r97 (GH#42209): `declare global { ... }` does NOT introduce a
+        // value/namespace binding named "global" — it augments the global
+        // scope. The binder nonetheless binds it as a ModuleDeclaration symbol
+        // "global", which would otherwise make a bare `global` reference (e.g.
+        // `global.x`) resolvable and suppress TS2304/TS2552. Remove it UNLESS
+        // some declaration of "global" is a real binding (`var global` /
+        // `const global` / a non-`declare`-augmentation namespace).
+        val globalSym = result.locals["global"] ?: globals["global"]
+        if (globalSym != null && globalSym.declarations.isNotEmpty() &&
+            globalSym.declarations.all { d ->
+                d is ModuleDeclaration && (d.name as? Identifier)?.text == "global" &&
+                    ModifierFlag.Declare in d.modifiers
+            }) {
+            fileScope.names.remove("global")
+            // INV.4(c)(ii): the binder's file locals also carry the augmentation-only
+            // "global" symbol — exclude it from the lexical root level too.
+            unresolvedLexRootExcluded = unresolvedLexRootExcluded + "global"
+        }
+
+        // libReplacement (@libReplacement): when the DOM lib is replaced by a
+        // user stub under /node_modules/@typescript/lib-dom/, the embedded
+        // lib.dom.d.ts globals (window/document/…) must NOT be in scope — only
+        // what the stub declares. Strip them so e.g. `window.localStorage`
+        // correctly errors TS2304. The gate is matched by exactly the four
+        // `@typescript/lib-` fixtures in the corpus → zero FP surface.
+        if (isDomLibReplaced()) {
+            fileScope.names.removeAll(DOM_GLOBAL_NAMES)
+            fileScope.names.removeAll(HOST_ONLY_GLOBALS)
+        }
+
+        // B263: names declared only in typeRoot packages that did NOT resolve from
+        // the `types` option are not part of the program — strip them so their uses
+        // fire TS2304/TS2552.
+        if (unresolvedTypeLibNames.isNotEmpty()) {
+            fileScope.names.removeAll(unresolvedTypeLibNames)
+        }
+
+        return UnresolvedFileRoot(fileScope, unresolvedLexRootExcluded, unresolvedCurrentFileIsModule)
     }
 
     /**
@@ -28484,6 +28997,9 @@ class Checker(
                 // Check the leftmost part of A.B.C
                 var leftmost: Node = name
                 while (leftmost is QualifiedName) leftmost = leftmost.left
+                if (unresolvedAuditEnabled && leftmost is Identifier) {
+                    recordUnresolvedAuditOld(leftmost, leftmost.text, scope, fileName)
+                }
                 // strictModeReservedWord: a strict-reserved word (interface/public/private/…)
                 // can NEVER name a namespace, so a qualified TYPE reference rooted at one is
                 // TS2503 "Cannot find namespace" — plus a TS2728 "declared here" when the word
@@ -29873,6 +30389,7 @@ class Checker(
         inTypePosition: Boolean = false,
         suppressClassSuggestion: Boolean = false,
     ) {
+        if (unresolvedAuditEnabled) recordUnresolvedAuditOld(node, name, scope, fileName)
         // Skip empty/synthetic names or non-identifier text from parser recovery
         if (name.isEmpty()) return
         if (name[0] !in 'A'..'Z' && name[0] !in 'a'..'z' && name[0] != '_' && name[0] != '$') return
@@ -43065,6 +43582,15 @@ class Checker(
         internal var spineScopeAuditEnabled = false
         internal val spineScopeAuditMismatches = ArrayList<String>()
         internal val spineScopeAuditTrace = ArrayList<String>()
+
+        // INV.4(c)(iii) batch 1 audit: per-Identifier scope fingerprints —
+        // the LEGACY walk records at its emission workhorses
+        // (checkIdentifierResolved / checkTypeNameResolved), the SPINE
+        // maintenance records at every Identifier enter; keys "file#nodeId".
+        // A test asserts every legacy record has an identical spine record.
+        internal var unresolvedAuditEnabled = false
+        internal val unresolvedAuditOld = HashMap<String, String>()
+        internal val unresolvedAuditSpine = HashMap<String, String>()
 
         /** Maximum antecedent walk depth for control-flow narrowing, aligned with tsc's
          *  `flowDepth === 2000` stack guard (M1.2b, round 386 — was 50). Do NOT lower it
@@ -142515,7 +143041,15 @@ interface DataView {
      * declared ONLY in typeRoot package dirs that did NOT resolve (they are not part
      * of the program; the unresolved-name walk strips them from scope).
      */
-    private fun checkTypeLibraryEntryPoints() {
+    /**
+     * INV.4(c)(iii): the [unresolvedTypeLibNames] computation, split out of
+     * [checkTypeLibraryEntryPoints] so the unresolved-names file-root scopes can
+     * be built at the (earlier) check-spine slot with identical content. Idempotent;
+     * pure computation — the TS2688 emission stays at its original pass.
+     */
+    private fun computeTypeLibResolution() {
+        if (typeLibResolutionComputed) return
+        typeLibResolutionComputed = true
         val types = options.types ?: return
         val typeRoots = options.typeRoots ?: return
         if (types.isEmpty() || typeRoots.isEmpty()) return
@@ -142534,17 +143068,7 @@ interface DataView {
             val dir = typeRoots.firstNotNullOfOrNull { resolveDir(it, e) }
             if (dir != null) resolvedDirs.add(dir) else unresolved.add(e)
         }
-        for (e in unresolved.sorted()) {
-            diagnostics.add(Diagnostic(
-                message = "Cannot find type definition file for '$e'.",
-                category = DiagnosticCategory.Error, code = 2688,
-                fileName = null, line = null, character = null, start = -1, length = 0,
-                messageChain = listOf(
-                    "  The file is in the program because:",
-                    "    Entry point of type library '$e' specified in compilerOptions",
-                ),
-            ))
-        }
+        typeLibUnresolvedEntries = unresolved
         // names declared only in unresolved typeRoot packages
         val candidates = mutableSetOf<String>()
         val declaredElsewhere = mutableSetOf<String>()
@@ -142576,6 +143100,21 @@ interface DataView {
             }
         }
         unresolvedTypeLibNames = candidates - declaredElsewhere
+    }
+
+    private fun checkTypeLibraryEntryPoints() {
+        computeTypeLibResolution()
+        for (e in typeLibUnresolvedEntries.sorted()) {
+            diagnostics.add(Diagnostic(
+                message = "Cannot find type definition file for '$e'.",
+                category = DiagnosticCategory.Error, code = 2688,
+                fileName = null, line = null, character = null, start = -1, length = 0,
+                messageChain = listOf(
+                    "  The file is in the program because:",
+                    "    Entry point of type library '$e' specified in compilerOptions",
+                ),
+            ))
+        }
     }
 
     /**

@@ -1,3 +1,43 @@
+**Round 512 (2026-07-14) — INV.3(d)(ii)+(iii)+(iv) ALL DONE; the retire branch is
+MERGED TO MAIN: suite fully green, ALL 8 profiles byte-identical to pre-retire.**
+Six commits. (ii) the last 6 corpus multi-file failures, one per-consult-flip family
+each (union-discriminant objlit drill node-keyed — indirectDiscriminant; ns-import
+static TS2339 + the DIR-RELATIVE legs in resolveAlias's ImportDeclaration AND
+ImportSpecifier branches (the round-511 lesson class — the corpus test passed while
+the path-shaped MainKt repro still failed, twice) — exportStarFromEmptyModule;
+TS2749 file-keyed + the NEW `typeSideImportFallback` gate (a local `function
+NodeLinks(this: NodeLinks)` shadowing a TYPE import stays type-eligible — the naive
+flip manufactured TS2749×48 on both profiles) — allowImportClauses; the B585
+contextual-display hops — allowJscheckJs; JSDoc ImportType own-specifier resolution
+— checkJsdocTypeTag2; the TS2415 imported-base heritage flip —
+declarationEmitPrivateSymbol2). (iii) the last 4 local pins: 2 resolver gaps (the
+`export * as NS` re-publication arm in namespaceAliasMemberSymbol; the ns-member
+objlit ctx root/sub-namespace flips) + 2 PRE-RETIRE ACCIDENTAL PASSES — the
+conflated receiver used to resolve to a sibling interface and fire through
+Interface-gated emitters; post-retire the correct anonymous resolution exposed two
+genuine FNs, fixed tsc-faithfully (mam all-missing ALL-ANONYMOUS union TS2339, no
+member chain; TS2345 `paramIsPlainObjectBag` gated to all-concrete member types —
+the sys.ts B83.5 closure-param mis-binding FP'd until the gate). (iv) all three
+profile-residual families: deprecate.ts `compareTo` (an anyType shadow now BAILS
+mam — the outer-import fall-through was categorically wrong; pre-retire the merged
+symbol's polluted flags dodged the string branch by accident); **server/harness
+session.ts Diagnostic — the round-473 Identifier DISPATCH into
+`conflatedPerFileInterfaceType` is REMOVED (the first (v) deletion): post-retire
+the node-keyed resolution already yields clean per-file interfaces, and the view
+minting had turned actively wrong — two instances of protocol.ts's SAME
+`Diagnostic` declaration resolved their nested `DiagnosticRelatedInformation`
+member in DIFFERENT files' views (probe: srcElem riFile=types.ts cat=
+DiagnosticCategory vs tgtElem riFile=protocol.ts cat=string) and failed to relate;
+an env-gated experiment proved removal restores the pre-retire baselines exactly**;
+fourslashImpl `'array'` (namedUnionMemberCouldAcceptArray hops import aliases —
+ImportSpecifier via resolveImportedSymbolGeneral, ImportEquals via resolveAlias).
+VERIFIED: full suite green; **all 8 profiles listAll byte-identical vs a
+main-worktree pre-retire build** (the (iv) exit gate). Local pins:
+UnionDiscriminantModuleAliasTest(3), NamespaceImportStaticMemberTest(2, incl.
+path-shaped), PostRetirePerFileConsultsTest(7), PostRetireProfileResidualsTest(4).
+NEXT: (v) — delete the remaining conflation ecology walker-by-walker (the
+Identifier dispatch removal is the template: measure each against all 8 profiles).
+
 **Round 511 (2026-07-14) — INV.3(d)(i) DONE + (ii) 8/14 + (iii) 4 flips & 2 pin-updates
 (all on branch `wip/inv3d-merge-retire`, rebased onto main; 4 commits): branch
 failures 42 → 10.** (i) The ambiguous-constrained→foreign TP leg reverted

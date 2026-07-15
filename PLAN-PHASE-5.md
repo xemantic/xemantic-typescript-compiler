@@ -59,6 +59,61 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 524 (2026-07-15) — INV.4(c)(iii) batch 1: the spine maintains the
+checkUnresolvedNames family's NameScope chain (infrastructure, always-on,
+audited — emissions still on the legacy walk).** `spineUResStack` (wired into
+spineWalkFile's enter/leave) pushes levels at the SAME boundaries where the
+legacy recursive walk creates child scopes: file root + statement-list levels
+(SourceFile / Block — a fn's immediate body probes the FN node's lex per the
+(c)(ii) owner convention / ModuleBlock threaded / switch shared-clause scope /
+for-headers / catch), function-like signature levels per PARENT kind (class
+members get memberClassCtx + hasArguments + the ctor-param-property names for
+PropertyDeclaration; interface/type-literal members plain children; objlit
+methods hasArguments-only; objlit/interface/type-literal GET accessors
+deliberately none), class/class-expr/interface/type-alias TP scopes
+(lex-linked), enum member scopes (binder-exports EnumMember-filtered + AST +
+cross-file script merge), namespace scopes (buildNamespaceScope), and the
+type-level scopes (mapped TP / conditional-infer / fn-type). Three mechanisms
+reproduce the legacy walk's sequential-mutation semantics on the spine's fixed
+preorder: (1) LAZY signature population — ALL TPs register at the first
+TypeParameter child (mutually visible in constraints, params NOT — tsc
+evaluates constraints without params), ALL params (+ the sub-ES2015
+hoisted-body-var collect) at the first Parameter/type/body child, and the
+NAME child never populates (a method's computed name sees the empty member
+scope, B98.r111); (2) DEFERRED-ACTIVATION regions (the effective scope is the
+innermost ACTIVE level) — the switch level activates at the first CLAUSE
+child, the mapped-type level past its typeParameter child (constraint in
+OUTER scope), the conditional-type infer level only between trueType and
+falseType, and a CLASS level DEACTIVATES at its first Decorator child
+(forEachChild visits decorators LAST; the legacy walk checks class decorators
+in the OUTER scope); (3) member-DECORATOR pre-population views — class-method
+decorators are checked before TP/param registration in the legacy walk, so a
+trailing Decorator child pushes a fresh unpopulated sibling view
+(`decoratorScope`), popped at the decorator's leave. The per-file ROOT scope
+is built ONCE and SHARED between the spine and the legacy pass
+(`unresolvedFileRootFor` cache; whoever runs first builds), which required
+splitting `unresolvedTypeLibNames` out of checkTypeLibraryEntryPoints
+(`computeTypeLibResolution()`, called at checkSpine's top — the TS2688
+emission stays at its pass). AUDITED, not assumed: the legacy walk records a
+scope fingerprint (has/hasLocalShadow/isTypeParam/hasType/constraint-presence/
+inFunction/hasArguments/classContext) at every checkIdentifierResolved /
+checkTypeNameResolved position; the spine records the same at every
+Identifier enter; Inv4UnresolvedSpineScopeTest (15 tests) asserts every
+legacy record has an IDENTICAL spine record across a kitchen-sink fixture +
+the sharp shapes (computed method names, TP-constraints-vs-params, switch
+subject, conditional infer, mapped constraint, class+method decorators, ES5
+hoist, checkJs @typedef, enum siblings, merged namespaces, objlit accessors,
+fn-expr self-name, NaN shadow, catch). Sharpness verified by TWO deliberate
+breakages (an eager-active switch level; eager param population at the TP
+trigger) — each fails exactly the right test with the exact diverging
+fingerprint. VERIFIED: suite 10,698 → 10,713 (+15, 0 regressions); listAll
+error lines IDENTICAL on ALL 8 profiles (524a vs 523a); bench row recorded
+(the maintenance temporarily doubles the family's scope construction — it
+shrinks back when the emission batches delete the legacy walk). NEXT:
+(c)(iii) batch 2 — swap the statement-level emissions onto the spine against
+this state, then expressions/types/JSX, deleting the recursive walkers as
+their positions migrate.
+
 **Round 523 (2026-07-15) — INV.4(c)(ii) LANDED: the checkUnresolvedNames STATE
 swap onto the INV.2(c) lexicalScopes tables.** The ~3,000-line walk family keeps
 its recursive structure (that deletion is (c)(iii)), but its name-visibility
@@ -651,46 +706,6 @@ ConflatedObjLitReturnArmsTest's negative control). Pins:
 PerFileTypeNameCacheCollisionTest (2). VERIFIED: suite 10,356/0/3; ALL 8
 profiles listAll byte-identical vs the pre-deletion baseline. **INV.3(d) and
 the INV.3 arc are COMPLETE — next: INV.4 (single-pass check spine).**
-
-**Round 512 (2026-07-14) — INV.3(d)(ii)+(iii)+(iv) ALL DONE; the retire branch is
-MERGED TO MAIN: suite fully green, ALL 8 profiles byte-identical to pre-retire.**
-Six commits. (ii) the last 6 corpus multi-file failures, one per-consult-flip family
-each (union-discriminant objlit drill node-keyed — indirectDiscriminant; ns-import
-static TS2339 + the DIR-RELATIVE legs in resolveAlias's ImportDeclaration AND
-ImportSpecifier branches (the round-511 lesson class — the corpus test passed while
-the path-shaped MainKt repro still failed, twice) — exportStarFromEmptyModule;
-TS2749 file-keyed + the NEW `typeSideImportFallback` gate (a local `function
-NodeLinks(this: NodeLinks)` shadowing a TYPE import stays type-eligible — the naive
-flip manufactured TS2749×48 on both profiles) — allowImportClauses; the B585
-contextual-display hops — allowJscheckJs; JSDoc ImportType own-specifier resolution
-— checkJsdocTypeTag2; the TS2415 imported-base heritage flip —
-declarationEmitPrivateSymbol2). (iii) the last 4 local pins: 2 resolver gaps (the
-`export * as NS` re-publication arm in namespaceAliasMemberSymbol; the ns-member
-objlit ctx root/sub-namespace flips) + 2 PRE-RETIRE ACCIDENTAL PASSES — the
-conflated receiver used to resolve to a sibling interface and fire through
-Interface-gated emitters; post-retire the correct anonymous resolution exposed two
-genuine FNs, fixed tsc-faithfully (mam all-missing ALL-ANONYMOUS union TS2339, no
-member chain; TS2345 `paramIsPlainObjectBag` gated to all-concrete member types —
-the sys.ts B83.5 closure-param mis-binding FP'd until the gate). (iv) all three
-profile-residual families: deprecate.ts `compareTo` (an anyType shadow now BAILS
-mam — the outer-import fall-through was categorically wrong; pre-retire the merged
-symbol's polluted flags dodged the string branch by accident); **server/harness
-session.ts Diagnostic — the round-473 Identifier DISPATCH into
-`conflatedPerFileInterfaceType` is REMOVED (the first (v) deletion): post-retire
-the node-keyed resolution already yields clean per-file interfaces, and the view
-minting had turned actively wrong — two instances of protocol.ts's SAME
-`Diagnostic` declaration resolved their nested `DiagnosticRelatedInformation`
-member in DIFFERENT files' views (probe: srcElem riFile=types.ts cat=
-DiagnosticCategory vs tgtElem riFile=protocol.ts cat=string) and failed to relate;
-an env-gated experiment proved removal restores the pre-retire baselines exactly**;
-fourslashImpl `'array'` (namedUnionMemberCouldAcceptArray hops import aliases —
-ImportSpecifier via resolveImportedSymbolGeneral, ImportEquals via resolveAlias).
-VERIFIED: full suite green; **all 8 profiles listAll byte-identical vs a
-main-worktree pre-retire build** (the (iv) exit gate). Local pins:
-UnionDiscriminantModuleAliasTest(3), NamespaceImportStaticMemberTest(2, incl.
-path-shaped), PostRetirePerFileConsultsTest(7), PostRetireProfileResidualsTest(4).
-NEXT: (v) — delete the remaining conflation ecology walker-by-walker (the
-Identifier dispatch removal is the template: measure each against all 8 profiles).
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
@@ -1590,9 +1605,23 @@ interrupt the arc).
       positions onto the spine (delete the ~15 recursive walkers); reach
       reproduced per the emission-direction rule (this family is (b)-class —
       direct emitters — so under-visits are reproduced via parent-chain
-      gates, widenings only on a signal); classContext / inFunction /
-      hasArguments become parent-chain context. Expect multiple batches
-      (statements / class elements / expressions / types / JSX).
+      gates, widenings only on a signal). Batch 1 DONE round 524 (2026-07-15):
+      the spine maintains the family's NameScope chain (`spineUResStack` —
+      lazy signature population / deferred-activation regions / decorator
+      pre-population views reproduce the legacy walk's sequential-mutation
+      order on the spine's fixed preorder; per-file ROOT shared via
+      `unresolvedFileRootFor`, enabled by the `computeTypeLibResolution`
+      split), audited per-Identifier against the legacy walk's scope
+      fingerprints (Inv4UnresolvedSpineScopeTest, 2 deliberate-breakage
+      sharpness probes). classContext / inFunction / hasArguments ride the
+      maintained NameScope levels (no parent-chain re-derivation needed).
+      Remaining batches: swap the emissions group-by-group against this
+      state (statements / class elements / expressions / types / JSX),
+      deleting each recursive walker as its positions migrate; the
+      declare-namespace TS2304-only post-FILTER becomes a per-emission gate
+      (a diagnostics-range filter cannot work on the interleaved spine), and
+      the WithStatement-body / outside-function-return / ambient under-visits
+      become suppression gates.
     - [ ] **(c)(iv) checkTypeUsedAsValue.** Its own arc: the three
       ScopeNameSet chains become spine-maintained set state pushed at the
       same boundaries the old walker created children (statement lists =
