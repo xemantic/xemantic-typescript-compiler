@@ -59,6 +59,73 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 523 (2026-07-15) — INV.4(c)(ii) LANDED: the checkUnresolvedNames STATE
+swap onto the INV.2(c) lexicalScopes tables.** The ~3,000-line walk family keeps
+its recursive structure (that deletion is (c)(iii)), but its name-visibility
+STATE is now served by the binder's lexical tables wherever they are
+trustworthy: `NameScope` (now an inner class) carries `lex` — the
+[LexicalScope] a TRUSTED scope-owner site links — and every content query
+(`has` / `hasLocalShadow` / `isTypeParam` / `hasType` / `typeParamConstraintOf`
+/ both TS2552 candidate pools) interleaves the threaded sets with the lex
+levels each NameScope level introduced (walk `lex` down to — exclusive —
+`parent.lex`, so shadowing order is preserved across the two sources). At a
+linked site the corresponding threaded population is SKIPPED: statement lists
+(via a new `owner: Node?` param on `checkUnresolvedInStatements` — the Block
+node, the SourceFile, or the FUNCTION node for a fn body, since body Blocks
+share the fn's binder scope by map absence), for/for-in/for-of headers, catch
+(variable incl. destructuring), switch (the binder keys the case scope by the
+SWITCH's nodeId; the walk checks the expression BEFORE linking, so no
+re-keying is needed — unlike the spine), and class/class-expr/interface/
+type-alias TP scopes (+ the class-expr self-name). DESIGN LINES that make it
+equivalence-safe: (1) function-like scopes link at the BODY only — params/TPs
+stay threaded at signature positions because the binder's flat fn table also
+holds body declarations, which must NOT be visible in param defaults above
+ES2015 (pinned both directions; the legacy sub-ES2015 pre-collect stays);
+(2) ModuleDeclaration and EnumDeclaration lexical levels are UNTRUSTED and
+skipped in the level probes — buildNamespaceScope is EXPORT-filtered and the
+enum branch EnumMember-filtered, while the binder tables alias ALL merged
+members (the flat-merge gotcha), so linking them would suppress genuine
+TS2304 (sibling-block non-export invisibility pinned); (3) the SourceFile
+level filters its aliased file locals by a per-file exclusion set (ambient
+external module names + the declare-global GH#42209 quirk) — its scope-space
+symbols (file-level block-hoisted `var`s, which the main binder never binds
+per B83.5) stay unfiltered; (4) unindexed trees probe-miss everywhere →
+threaded legacy behavior by construction. hasLocalShadow gains the lexical
+levels INCLUDING the SourceFile root (the legacy file-statement-list child
+was a non-root scope carrying file-level decls — TS2845 NaN pins).
+THE FIRST FULL-SUITE RUN CAUGHT FIVE REAL EQUIVALENCE GAPS (10 corpus
+failures, all fixed same round — the corpus IS the equivalence oracle this
+sub-item was designed around): (a+b) BINDER — `bindLexicalScopes` never
+declared a ModuleDeclaration's NAME or nested import names into fresh scopes
+(a block-nested `namespace M` is TS1235 but tsc still binds it — `export = M`
+in the same block resolves; moduleElementsInWrongContext ×3,
+unreachableDeclarations ×2, errorRecoveryWithDotFollowedByNamespaceKeyword);
+now declared with the checker-collect's rules (dotted → leftmost segment,
+declare-global quirk, StringLiteral skip; imports get Alias flags); (c) the
+fn-INTERMEDIATE leak — a nested function INSIDE a param default links its own
+body scope whose binder parent chain crosses the OUTER fn's flat table (which
+holds the outer BODY's decls), so the interleave walks now skip NON-HEAD
+function-like levels (functionLikeInParameterInitializer: `f(cb = function ()
+{ return foo }) { let foo }` must TS2304 — only the head of a link may be
+fn-owned, and fn signature content is always threaded so nothing is lost);
+(d) hasType stays AST-based at linked lists via `collectDeclaredTypeNames` —
+the binder merge can LOSE a type meaning to an alias OVERWRITE
+(`export default interface zzz` + `import zzz from "./b"` — TS2749 FP,
+allowImportClausesToMergeWithTypes); (e) the root exclusion applies to an
+ambient module name ONLY while ALL declarations of the file-local symbol are
+StringLiteral-named ModuleDeclarations — `import fs = require("fs")`
+OVERWRITES the ambient symbol (the alias-overwrite gotcha) and the legacy
+file-list collect re-added such names
+(ambientExternalModuleInAnotherExternalModule,
+constructorWithIncompleteTypeAnnotation).
+VERIFIED: suite 10,670 → 10,698 (+28 Inv4c2LexicalStateSwapTest, 0
+regressions); listAll error lines IDENTICAL on ALL 8 profiles (523a vs 522a);
+warning-clean; bench row in band. NEXT: (c)(iii) — the WALK swap (emission
+positions onto the spine, delete the recursive walkers); the threaded flags
+(hasArguments / classContext / inFunction) + the untrusted-level threading
+(namespaces/enums/type-level scopes + fn signature positions) migrate there
+as parent-chain context.
+
 **Round 522 (2026-07-15) — INV.4(c) decomposed + (c)(i) LANDED: the spine
 maintains the authoritative lexical scope state.** Decomposition first (facts
 verified in-code): the checkUnresolvedNames family is ~3,000 lines whose
@@ -624,35 +691,6 @@ UnionDiscriminantModuleAliasTest(3), NamespaceImportStaticMemberTest(2, incl.
 path-shaped), PostRetirePerFileConsultsTest(7), PostRetireProfileResidualsTest(4).
 NEXT: (v) — delete the remaining conflation ecology walker-by-walker (the
 Identifier dispatch removal is the template: measure each against all 8 profiles).
-
-**Round 511 (2026-07-14) — INV.3(d)(i) DONE + (ii) 8/14 + (iii) 4 flips & 2 pin-updates
-(all on branch `wip/inv3d-merge-retire`, rebased onto main; 4 commits): branch
-failures 42 → 10.** (i) The ambiguous-constrained→foreign TP leg reverted
-(declaration-identity kept) — 17 tests flipped incl. the WhileTrue/tsx collateral;
-checker.ts:7358 re-solved inference-side (CallExpression args carrying a TypeParam
-soft-skip at forReturnType sites, pinned by ForeignTpInferenceSoftSkipTest ×6).
-(ii) Per-consult flips per the round-510 method: heritage/implements walkers
-node-keyed + the B563 ownership-gate mirror (the double-TS2420 lesson: when a
-walker's ownership gate is "the OTHER walker resolves it", both must consult the
-SAME primitive), checkConstraintsForTypeArgs keyNode/presetSymbol (ImportType
-resolves through its OWN specifier), checkTypeNameResolved's leftSym →
-globalsForFile (the pass runs unscoped — currentFileLocals is null there), the mam
-type-only-winner + ns-import value-side bail. **Critical find: the import hop
-lacked a DIR-RELATIVE resolver leg — path-shaped extensionless imports never
-hopped, so post-retire EVERY import-mediated type died on real on-disk projects
-(repro: `const x: number = importedString` drew NOTHING); pre-retire the merge
-masked it, and the tsc profiles' `.js` specifiers take the separate stripping leg,
-so listAll byte-identity NEVER covered this class — the local direct-construction
-pins (EnclosingImportIndexTest) were the only net that caught it. Lesson recorded
-as a CLAUDE.md gotcha: profile byte-identity is NOT sufficient verification for
-resolution changes; scratch-project MainKt repros are cheap and decisive.**
-(iii) Two pin-updates to the post-retire contract (unindexed-copy degradation
-nulls module-only names; the leak worklist assertion inverted — an emptied
-worklist is the victory condition). Every commit gated on compiler AND services
-`--listAll` byte-identical vs the round-510 captures. Remaining on the branch:
-6 corpus (roots noted per-test in the (ii) item) + 4 local (all suspected REAL
-suppressions — r7/r8 scratch repros exist for the ConflatedTypeAliasLeak pair) +
-the (iv) profile residuals. Main untouched.
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
@@ -1503,8 +1541,10 @@ interrupt the arc).
     and its reach is corpus-tuned per the round-42 over-emission gotcha (no
     loop/switch/try descent)). Sub-items, one commit each, every step suite-
     and 8-profile-listAll-gated:
-    - [ ] **(c)(i) Spine-maintained lexical scope state (infrastructure,
-      always-on).** The walk maintains `spineCurrentScope` — push at a scope
+    - [x] **(c)(i) Spine-maintained lexical scope state (infrastructure,
+      always-on).** DONE round 522 (2026-07-15 — the checkbox was missed in
+      that round's commit; see the round-522 session note for the full
+      landing record). The walk maintains `spineCurrentScope` — push at a scope
       owner's enter (BEFORE its own handlers dispatch), pop after its leave —
       via a per-file nodeId→LexicalScope ARRAY built from
       `result.lexicalScopes` (the INV.2(b) boxing-avoidance trick; cleared by
@@ -1521,13 +1561,31 @@ interrupt the arc).
       assert on (shadowing id splits, scope-space ids ≤ −2, switch-expression
       isolation, catch/enum/self-name/var-hoist shapes). Bench row (the walk
       gains one array probe per enter+leave).
-    - [ ] **(c)(ii) checkUnresolvedNames STATE swap.** Replace the NameScope
-      chain's CONTENT queries (`has` / `isTypeParam` / `hasType` /
-      `typeParamConstraintOf` / the TS2552 candidate-pool iteration) with
-      lexicalScopes-chain derivations at the query node, keeping the
-      recursive walk and the file-root extras verbatim (the extras stay a
-      per-file NameScope root). Equivalence-gated (corpus + 8-profile
-      listAll); the walk-threaded flags stay threaded until (c)(iii).
+    - [x] **(c)(ii) checkUnresolvedNames STATE swap.** DONE round 523
+      (2026-07-15): the NameScope content queries (`has` / `isTypeParam` /
+      `hasType` / `typeParamConstraintOf` / `hasLocalShadow` / the TS2552
+      candidate pool) are hybrid — each NameScope carries `lex` (the binder
+      [LexicalScope] a TRUSTED scope-owner site links; population SKIPPED
+      when linked) and queries interleave the threaded sets with the lex
+      levels each NameScope level introduced (`lex` down to `parent.lex`,
+      preserving shadowing order). Trusted links: statement lists via a new
+      `checkUnresolvedInStatements(owner)` param (Block / SourceFile / the
+      FUNCTION node for fn bodies — body Blocks have no binder entry),
+      for/for-in/for-of headers, catch, switch (binder keys the case scope
+      by the switch nodeId — the expression is checked before linking, so
+      no re-keying needed), class/class-expr/interface/type-alias TP scopes.
+      Function SIGNATURE positions stay threaded (params/TPs) — the binder's
+      flat fn table would leak body decls into param defaults (sub-ES2015
+      pre-collect is the only path that may see them; pinned both ways).
+      Untrusted levels skipped in queries: ModuleDeclaration (the walk's
+      buildNamespaceScope is EXPORT-filtered; binder aliases ALL merged
+      members), EnumDeclaration (EnumMember-filtered), SourceFile existing
+      filtered by a per-file exclusion set (ambient external module names +
+      the declare-global quirk); type-level scopes (mapped TP / infer /
+      fn-TYPE params) stay threaded. Unindexed trees: every probe misses →
+      legacy behavior by construction. Equivalence-gated: corpus green +
+      8-profile listAll error-line-identical; walk-threaded flags stay
+      threaded until (c)(iii).
     - [ ] **(c)(iii) checkUnresolvedNames WALK swap.** Move the emission
       positions onto the spine (delete the ~15 recursive walkers); reach
       reproduced per the emission-direction rule (this family is (b)-class —

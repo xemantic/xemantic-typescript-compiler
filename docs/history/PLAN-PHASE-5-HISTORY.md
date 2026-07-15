@@ -1,3 +1,33 @@
+**Round 511 (2026-07-14) — INV.3(d)(i) DONE + (ii) 8/14 + (iii) 4 flips & 2 pin-updates
+(all on branch `wip/inv3d-merge-retire`, rebased onto main; 4 commits): branch
+failures 42 → 10.** (i) The ambiguous-constrained→foreign TP leg reverted
+(declaration-identity kept) — 17 tests flipped incl. the WhileTrue/tsx collateral;
+checker.ts:7358 re-solved inference-side (CallExpression args carrying a TypeParam
+soft-skip at forReturnType sites, pinned by ForeignTpInferenceSoftSkipTest ×6).
+(ii) Per-consult flips per the round-510 method: heritage/implements walkers
+node-keyed + the B563 ownership-gate mirror (the double-TS2420 lesson: when a
+walker's ownership gate is "the OTHER walker resolves it", both must consult the
+SAME primitive), checkConstraintsForTypeArgs keyNode/presetSymbol (ImportType
+resolves through its OWN specifier), checkTypeNameResolved's leftSym →
+globalsForFile (the pass runs unscoped — currentFileLocals is null there), the mam
+type-only-winner + ns-import value-side bail. **Critical find: the import hop
+lacked a DIR-RELATIVE resolver leg — path-shaped extensionless imports never
+hopped, so post-retire EVERY import-mediated type died on real on-disk projects
+(repro: `const x: number = importedString` drew NOTHING); pre-retire the merge
+masked it, and the tsc profiles' `.js` specifiers take the separate stripping leg,
+so listAll byte-identity NEVER covered this class — the local direct-construction
+pins (EnclosingImportIndexTest) were the only net that caught it. Lesson recorded
+as a CLAUDE.md gotcha: profile byte-identity is NOT sufficient verification for
+resolution changes; scratch-project MainKt repros are cheap and decisive.**
+(iii) Two pin-updates to the post-retire contract (unindexed-copy degradation
+nulls module-only names; the leak worklist assertion inverted — an emptied
+worklist is the victory condition). Every commit gated on compiler AND services
+`--listAll` byte-identical vs the round-510 captures. Remaining on the branch:
+6 corpus (roots noted per-test in the (ii) item) + 4 local (all suspected REAL
+suppressions — r7/r8 scratch repros exist for the ConflatedTypeAliasLeak pair) +
+the (iv) profile residuals. Main untouched.
+
+
 **Round 510 (2026-07-13) — INV.3(d) merge retire: BUILT AND PROFILE-VERIFIED on
 branch `wip/inv3d-merge-retire` (033598b6); main untouched pending the
 enumerated 36-failure worklist.** The retire (skip a MODULE file's module-only

@@ -25398,7 +25398,7 @@ class Checker(
         val inStaticContext: Boolean = false,
     )
 
-    private class NameScope(
+    private inner class NameScope(
         val parent: NameScope?,
         val names: MutableSet<String> = mutableSetOf(),
         val hasArguments: Boolean = false,
@@ -25412,27 +25412,87 @@ class Checker(
         val typeNames: MutableSet<String> = mutableSetOf(),
         /** Constraint TypeNode of each type parameter (when declared with `extends`). */
         val typeParamConstraints: MutableMap<String, TypeNode> = mutableMapOf(),
+        /**
+         * INV.4(c)(ii): the INV.2(c) lexical scope active at this walk point (STATE
+         * swap). A TRUSTED scope-owner site links its binder [LexicalScope] here and
+         * SKIPS the corresponding threaded population; queries union the threaded sets
+         * with the lex levels this NameScope level introduced (`lex` down to — but
+         * excluding — `parent.lex`), interleaved per level so shadowing order is
+         * preserved. Untrusted levels (see [lexLevelHasName]) never link: namespaces
+         * (buildNamespaceScope is EXPORT-filtered — the binder table carries ALL
+         * members per the flat-merge gotcha), enums (EnumMember-filtered), and the
+         * type-level scopes the binder doesn't model (mapped/infer/fn-type). On an
+         * unindexed tree every probe misses, nothing links, and the threaded
+         * population runs everywhere — byte-identical legacy behavior by construction.
+         */
+        val lex: LexicalScope? = parent?.lex,
     ) {
-        fun has(name: String): Boolean =
-            name in names || (hasArguments && name == "arguments") || parent?.has(name) == true
+        fun has(name: String): Boolean {
+            if (name in names) return true
+            if (hasArguments && name == "arguments") return true
+            var l = lex
+            val stop = parent?.lex
+            var head = true
+            while (l != null && l !== stop) {
+                if (lexLevelHasName(l, name, head)) return true
+                head = false
+                l = l.parent
+            }
+            return parent?.has(name) == true
+        }
 
         /**
          * True if [name] is bound in a NON-ROOT scope — i.e. a genuine local shadow
          * (parameter / local var / block binding), NOT the global itself. The root file
          * scope (parent == null) seeds KNOWN_GLOBALS into [names], so plain [has] cannot
          * distinguish "global NaN" from "a local NaN parameter". Used by the TS2845
-         * NaN-comparison check to fire only for the true global.
+         * NaN-comparison check to fire only for the true global. Lexical levels COUNT
+         * (including the SourceFile root's own-file locals — the legacy walk's
+         * file-statement-list child was a non-root scope carrying file-level decls).
          */
-        fun hasLocalShadow(name: String): Boolean =
-            parent != null && (name in names || parent.hasLocalShadow(name))
+        fun hasLocalShadow(name: String): Boolean {
+            if (parent != null && name in names) return true
+            var l = lex
+            val stop = parent?.lex
+            var head = true
+            while (l != null && l !== stop) {
+                if (lexLevelHasName(l, name, head)) return true
+                head = false
+                l = l.parent
+            }
+            return parent?.hasLocalShadow(name) == true
+        }
 
         /** Returns true if [name] is a type parameter in this scope or any ancestor scope. */
-        fun isTypeParam(name: String): Boolean =
-            name in typeParamNames || parent?.isTypeParam(name) == true
+        fun isTypeParam(name: String): Boolean {
+            if (name in typeParamNames) return true
+            var l = lex
+            val stop = parent?.lex
+            var head = true
+            while (l != null && l !== stop) {
+                if (head || !isFnLikeScopeOwner(l.owner)) {
+                    val sym = l.symbols[name]
+                    if (sym != null && sym.flags.hasAny(SymbolFlags.TypeParameter)) return true
+                }
+                head = false
+                l = l.parent
+            }
+            return parent?.isTypeParam(name) == true
+        }
 
         /** Returns true if [name] was added via [addType] or [addTypeParam] anywhere in the scope chain. */
-        fun hasType(name: String): Boolean =
-            name in typeNames || name in typeParamNames || parent?.hasType(name) == true
+        fun hasType(name: String): Boolean {
+            if (name in typeNames || name in typeParamNames) return true
+            var l = lex
+            val stop = parent?.lex
+            var head = true
+            while (l != null && l !== stop) {
+                if (lexLevelHasType(l, name, head)) return true
+                head = false
+                l = l.parent
+            }
+            return parent?.hasType(name) == true
+        }
 
         /** Add a type parameter name to both [names] and [typeParamNames]. */
         fun addTypeParam(name: String, constraint: TypeNode? = null) {
@@ -25441,9 +25501,28 @@ class Checker(
             if (constraint != null) typeParamConstraints[name] = constraint
         }
 
-        /** Returns the constraint TypeNode of type parameter [name] (chain-walked), or null. */
-        fun typeParamConstraintOf(name: String): TypeNode? =
-            typeParamConstraints[name] ?: parent?.typeParamConstraintOf(name)
+        /** Returns the constraint TypeNode of type parameter [name] (chain-walked), or null.
+         *  Legacy semantics preserved: an UNCONSTRAINED type parameter does not stop the
+         *  search (`typeParamConstraints[name] ?: parent?…` fell through to an outer
+         *  same-named constrained TP). */
+        fun typeParamConstraintOf(name: String): TypeNode? {
+            typeParamConstraints[name]?.let { return it }
+            var l = lex
+            val stop = parent?.lex
+            var head = true
+            while (l != null && l !== stop) {
+                if (head || !isFnLikeScopeOwner(l.owner)) {
+                    val sym = l.symbols[name]
+                    if (sym != null && sym.flags.hasAny(SymbolFlags.TypeParameter)) {
+                        val c = (sym.declarations.firstOrNull() as? TypeParameter)?.constraint
+                        if (c != null) return c
+                    }
+                }
+                head = false
+                l = l.parent
+            }
+            return parent?.typeParamConstraintOf(name)
+        }
 
         /** Add a type-eligible name (class/interface/type-alias/enum) — populates both [names] and [typeNames]. */
         fun addType(name: String) {
@@ -25455,8 +25534,70 @@ class Checker(
             hasArguments: Boolean = false,
             classContext: ClassContext? = this.classContext,
             inFunction: Boolean = this.inFunction || hasArguments,
-        ): NameScope = NameScope(parent = this, hasArguments = hasArguments, classContext = classContext, inFunction = inFunction)
+            lex: LexicalScope? = null,
+        ): NameScope = NameScope(parent = this, hasArguments = hasArguments, classContext = classContext, inFunction = inFunction,
+            lex = lex ?: this.lex)
     }
+
+    /**
+     * INV.4(c)(ii): the current file's [BinderResult.lexicalScopes] + the names the
+     * legacy file-root seeding EXCLUDED from the root even though the main binder
+     * binds them into file locals (ambient external module names `declare module
+     * "foo"`, and `global` when it is only a `declare global {}` augmentation —
+     * GH#42209). Both set per file at the top of [checkUnresolvedNames]; empty maps
+     * make every probe miss → legacy behavior.
+     */
+    private var unresolvedLexScopes: Map<Int, LexicalScope> = emptyMap()
+    private var unresolvedLexRootExcluded: Set<String> = emptySet()
+
+    /** Probe [node]'s lexical scope — null for unindexed/synthesized nodes or non-owners. */
+    private fun unresolvedLexOf(node: Node?): LexicalScope? {
+        if (node == null || unresolvedLexScopes.isEmpty()) return null
+        val id = (node as NodeBase).nodeId
+        if (id < 0) return null
+        return unresolvedLexScopes[id]
+    }
+
+    /**
+     * Does one lexical level bind [name] for the unresolved-names walk? Namespace and
+     * enum levels are UNTRUSTED (the walk's threaded population owns them — the binder
+     * table aliases the merged exports, which carry ALL members while the walk applies
+     * export-/EnumMember-filtering); a NON-[head] function-like level is skipped too —
+     * it means the query sits in that function's SIGNATURE position (its body link
+     * never happened on this walk path), where the binder's flat fn table would leak
+     * body declarations into parameter defaults (functionLikeInParameterInitializer:
+     * `function f(cb = function () { return foo }) { let foo; }` must TS2304 on foo);
+     * the fn's params/TPs are threaded at signature positions, so nothing is lost.
+     * The SourceFile root applies the per-file exclusion set to its aliased file
+     * locals ([unresolvedLexRootExcluded]) — its scope-space [LexicalScope.symbols]
+     * (block-hoisted `var`s the main binder never binds, B83.5) stay unfiltered.
+     */
+    private fun lexLevelHasName(l: LexicalScope, name: String, head: Boolean): Boolean {
+        val owner = l.owner
+        if (owner is ModuleDeclaration || owner is EnumDeclaration) return false
+        if (!head && isFnLikeScopeOwner(owner)) return false
+        if (l.symbols.containsKey(name)) return true
+        val ex = l.existing ?: return false
+        if (owner is SourceFile && name in unresolvedLexRootExcluded) return false
+        return ex.containsKey(name)
+    }
+
+    /** [lexLevelHasName]'s type-position sibling: the bound symbol must carry a type meaning. */
+    private fun lexLevelHasType(l: LexicalScope, name: String, head: Boolean): Boolean {
+        val owner = l.owner
+        if (owner is ModuleDeclaration || owner is EnumDeclaration) return false
+        if (!head && isFnLikeScopeOwner(owner)) return false
+        val sym = l.symbols[name]
+            ?: (if (owner is SourceFile && name in unresolvedLexRootExcluded) null else l.existing?.get(name))
+            ?: return false
+        return sym.flags.hasAny(UNRESOLVED_TYPE_ELIGIBLE_FLAGS)
+    }
+
+    /** A lexical level owned by one of the binder's function-like container kinds. */
+    private fun isFnLikeScopeOwner(owner: Node): Boolean =
+        owner is FunctionDeclaration || owner is FunctionExpression || owner is ArrowFunction ||
+            owner is MethodDeclaration || owner is Constructor || owner is GetAccessor ||
+            owner is SetAccessor || owner is ClassStaticBlockDeclaration
 
     /**
      * B98.r95: TS2503 for a top-level `import X = <bare-Identifier>` in a `.d.ts`
@@ -25572,7 +25713,25 @@ class Checker(
                 .filter { it.name is StringLiteralNode }
                 .map { (it.name as StringLiteralNode).text }
                 .toSet()
-            val fileScope = NameScope(null)
+            // INV.4(c)(ii): activate the file's lexical tables for the hybrid
+            // NameScope queries. The root exclusion set mirrors the two legacy
+            // file-root filters applied to names the main binder DOES bind into
+            // file locals: ambient external module names, and the `declare global`
+            // augmentation quirk (added below once the quirk gate is computed).
+            // An ambient name is excluded ONLY while every declaration of the
+            // symbol is a StringLiteral-named ModuleDeclaration — an
+            // `import fs = require("fs")` OVERWRITES the ambient module symbol
+            // (the alias-overwrite gotcha) and the legacy file-list collect
+            // re-added such names, so the bare identifier must stay resolvable
+            // (ambientExternalModuleInAnotherExternalModule).
+            unresolvedLexScopes = result.lexicalScopes
+            unresolvedLexRootExcluded = ambientExternalModuleNames.filterTo(mutableSetOf()) { name ->
+                val sym = result.locals[name]
+                sym == null || sym.declarations.all { d ->
+                    d is ModuleDeclaration && d.name is StringLiteralNode
+                }
+            }
+            val fileScope = NameScope(null, lex = unresolvedLexOf(result.sourceFile))
             // 17.32e: file-root TS2304 visibility uses [perFileScope] (lib +
             // script-file locals + own-file locals) instead of the over-merged
             // [globals] map. Other module files' locals are not visible without
@@ -25642,6 +25801,9 @@ class Checker(
                         ModifierFlag.Declare in d.modifiers
                 }) {
                 fileScope.names.remove("global")
+                // INV.4(c)(ii): the binder's file locals also carry the augmentation-only
+                // "global" symbol — exclude it from the lexical root level too.
+                unresolvedLexRootExcluded = unresolvedLexRootExcluded + "global"
             }
 
             // libReplacement (@libReplacement): when the DOM lib is replaced by a
@@ -25664,6 +25826,7 @@ class Checker(
 
             checkUnresolvedInStatements(
                 result.sourceFile.statements,
+                result.sourceFile,
                 fileScope,
                 source,
                 fileName,
@@ -25704,19 +25867,61 @@ class Checker(
         }
     }
 
+    /**
+     * INV.4(c)(ii): [owner] is the scope-owning node for this statement list — the
+     * Block itself, the FUNCTION node for a function-like's immediate body (the
+     * binder registers no entry for a body Block; probing the function yields its
+     * scope), the SourceFile for top-level statements, and null where the walk's
+     * threaded population must stay authoritative (namespace bodies — the binder
+     * table is unfiltered merged exports). A probe hit links the lexical scope and
+     * SKIPS the threaded [collectDeclaredNames]; a miss (unindexed tree, untrusted
+     * owner) reproduces legacy behavior exactly.
+     */
     private fun checkUnresolvedInStatements(
         statements: List<Statement>,
+        owner: Node?,
         parentScope: NameScope,
         source: String,
         fileName: String,
     ) {
         if (checkDepth > maxCheckDepth) return
         // Create child scope with declarations from this statement list
-        val scope = parentScope.child()
-        collectDeclaredNames(statements, scope)
+        val lexHit = unresolvedLexOf(owner)
+        val scope = parentScope.child(lex = lexHit)
+        if (lexHit == null) collectDeclaredNames(statements, scope)
+        // Even when linked, type-NAME classification stays AST-based: the binder
+        // merge can LOSE a type meaning to a same-named value/alias overwrite
+        // (`export default interface zzz {}` + `import zzz from "./b"` — the
+        // alias overwrites the interface symbol, allowImportClausesToMergeWithTypes),
+        // while the legacy walk classified from declarations. hasType/TS2749 depend
+        // on it.
+        else collectDeclaredTypeNames(statements, scope)
 
         for (stmt in statements) {
             checkUnresolvedInStatement(stmt, scope, source, fileName)
+        }
+    }
+
+    /** The addType arms of [collectDeclaredNames], for LINKED statement lists —
+     *  see the call site above for why type names stay AST-threaded. */
+    private fun collectDeclaredTypeNames(statements: List<Statement>, scope: NameScope) {
+        for (stmt in statements) {
+            when (stmt) {
+                is ClassDeclaration -> stmt.name?.let { scope.addType(it.text) }
+                is InterfaceDeclaration -> scope.addType(stmt.name.text)
+                is TypeAliasDeclaration -> scope.addType(stmt.name.text)
+                is EnumDeclaration -> scope.addType(stmt.name.text)
+                is IfStatement -> {
+                    collectEmbeddedTypeNames(stmt.thenStatement, scope)
+                    stmt.elseStatement?.let { collectEmbeddedTypeNames(it, scope) }
+                }
+                is WhileStatement -> collectEmbeddedTypeNames(stmt.statement, scope)
+                is DoStatement -> collectEmbeddedTypeNames(stmt.statement, scope)
+                is ForStatement -> collectEmbeddedTypeNames(stmt.statement, scope)
+                is ForInStatement -> collectEmbeddedTypeNames(stmt.statement, scope)
+                is ForOfStatement -> collectEmbeddedTypeNames(stmt.statement, scope)
+                else -> {}
+            }
         }
     }
 
@@ -25954,14 +26159,15 @@ class Checker(
                 stmt.elseStatement?.let { checkUnresolvedInStatement(it, scope, source, fileName) }
             }
             is Block -> {
-                checkUnresolvedInStatements(stmt.statements, scope, source, fileName)
+                checkUnresolvedInStatements(stmt.statements, stmt, scope, source, fileName)
             }
             is ForStatement -> {
-                val forScope = scope.child()
+                val forLex = unresolvedLexOf(stmt)
+                val forScope = scope.child(lex = forLex)
                 when (val init = stmt.initializer) {
                     is VariableDeclarationList -> {
                         for (decl in init.declarations) {
-                            addBindingName(decl.name, forScope)
+                            if (forLex == null) addBindingName(decl.name, forScope)
                             decl.initializer?.let { checkUnresolvedInExpr(it, forScope, source, fileName) }
                             decl.type?.let { checkUnresolvedInType(it, forScope, source, fileName) }
                         }
@@ -25974,27 +26180,33 @@ class Checker(
                 checkUnresolvedInStatement(stmt.statement, forScope, source, fileName)
             }
             is ForInStatement -> {
-                val forScope = scope.child()
-                when (val init = stmt.initializer) {
-                    is VariableDeclarationList -> {
-                        for (decl in init.declarations) {
-                            addBindingName(decl.name, forScope)
+                val forLex = unresolvedLexOf(stmt)
+                val forScope = scope.child(lex = forLex)
+                if (forLex == null) {
+                    when (val init = stmt.initializer) {
+                        is VariableDeclarationList -> {
+                            for (decl in init.declarations) {
+                                addBindingName(decl.name, forScope)
+                            }
                         }
+                        else -> {}
                     }
-                    else -> {}
                 }
                 checkUnresolvedInExpr(stmt.expression, forScope, source, fileName)
                 checkUnresolvedInStatement(stmt.statement, forScope, source, fileName)
             }
             is ForOfStatement -> {
-                val forScope = scope.child()
-                when (val init = stmt.initializer) {
-                    is VariableDeclarationList -> {
-                        for (decl in init.declarations) {
-                            addBindingName(decl.name, forScope)
+                val forLex = unresolvedLexOf(stmt)
+                val forScope = scope.child(lex = forLex)
+                if (forLex == null) {
+                    when (val init = stmt.initializer) {
+                        is VariableDeclarationList -> {
+                            for (decl in init.declarations) {
+                                addBindingName(decl.name, forScope)
+                            }
                         }
+                        else -> {}
                     }
-                    else -> {}
                 }
                 checkUnresolvedInExpr(stmt.expression, forScope, source, fileName)
                 checkUnresolvedInStatement(stmt.statement, forScope, source, fileName)
@@ -26012,12 +26224,15 @@ class Checker(
                 // Switch case clauses share a single block scope (per ECMA-262 / TS semantics):
                 // `let x` in case 0 is visible in case 1 of the same switch (fall-through pattern).
                 // Collect declared names from ALL clauses into one shared child scope before walking.
-                val switchScope = scope.child()
-                for (clause in stmt.caseBlock) {
-                    when (clause) {
-                        is CaseClause -> collectDeclaredNames(clause.statements, switchScope)
-                        is DefaultClause -> collectDeclaredNames(clause.statements, switchScope)
-                        else -> {}
+                val switchLex = unresolvedLexOf(stmt)
+                val switchScope = scope.child(lex = switchLex)
+                if (switchLex == null) {
+                    for (clause in stmt.caseBlock) {
+                        when (clause) {
+                            is CaseClause -> collectDeclaredNames(clause.statements, switchScope)
+                            is DefaultClause -> collectDeclaredNames(clause.statements, switchScope)
+                            else -> {}
+                        }
                     }
                 }
                 for (clause in stmt.caseBlock) {
@@ -26037,16 +26252,19 @@ class Checker(
                 stmt.expression?.let { checkUnresolvedInExpr(it, scope, source, fileName) }
             }
             is TryStatement -> {
-                checkUnresolvedInStatements(stmt.tryBlock.statements, scope, source, fileName)
+                checkUnresolvedInStatements(stmt.tryBlock.statements, stmt.tryBlock, scope, source, fileName)
                 stmt.catchClause?.let { clause ->
-                    val catchScope = scope.child()
-                    clause.variableDeclaration?.let { decl ->
-                        addBindingName(decl.name, catchScope)
+                    val catchLex = unresolvedLexOf(clause)
+                    val catchScope = scope.child(lex = catchLex)
+                    if (catchLex == null) {
+                        clause.variableDeclaration?.let { decl ->
+                            addBindingName(decl.name, catchScope)
+                        }
                     }
-                    checkUnresolvedInStatements(clause.block.statements, catchScope, source, fileName)
+                    checkUnresolvedInStatements(clause.block.statements, clause.block, catchScope, source, fileName)
                 }
                 stmt.finallyBlock?.let {
-                    checkUnresolvedInStatements(it.statements, scope, source, fileName)
+                    checkUnresolvedInStatements(it.statements, it, scope, source, fileName)
                 }
             }
             is LabeledStatement -> {
@@ -26088,7 +26306,7 @@ class Checker(
                     param.initializer?.let { checkUnresolvedInExpr(it, fnScope, source, fileName) }
                 }
                 stmt.body?.let {
-                    checkUnresolvedInStatements(it.statements, fnScope, source, fileName)
+                    checkUnresolvedInStatements(it.statements, stmt, fnScope, source, fileName)
                 }
             }
             is ClassDeclaration -> {
@@ -26107,8 +26325,11 @@ class Checker(
                 // Check class decorators
                 stmt.decorators?.forEach { checkUnresolvedInExpr(it.expression, scope, source, fileName) }
                 val classCtx = buildClassContext(stmt, scope, fileName)
-                val classScope = scope.child(classContext = classCtx)
-                stmt.typeParameters?.forEach { classScope.addTypeParam(it.name.text, it.constraint) }
+                val classLex = unresolvedLexOf(stmt)
+                val classScope = scope.child(classContext = classCtx, lex = classLex)
+                if (classLex == null) {
+                    stmt.typeParameters?.forEach { classScope.addTypeParam(it.name.text, it.constraint) }
+                }
                 stmt.typeParameters?.forEach { tp ->
                     tp.constraint?.let { checkUnresolvedInType(it, classScope, source, fileName) }
                     tp.default?.let { checkUnresolvedInType(it, classScope, source, fileName) }
@@ -26218,8 +26439,11 @@ class Checker(
                 }
             }
             is InterfaceDeclaration -> {
-                val ifaceScope = scope.child()
-                stmt.typeParameters?.forEach { ifaceScope.addTypeParam(it.name.text, it.constraint) }
+                val ifaceLex = unresolvedLexOf(stmt)
+                val ifaceScope = scope.child(lex = ifaceLex)
+                if (ifaceLex == null) {
+                    stmt.typeParameters?.forEach { ifaceScope.addTypeParam(it.name.text, it.constraint) }
+                }
                 stmt.typeParameters?.forEach { tp ->
                     tp.constraint?.let { checkUnresolvedInType(it, ifaceScope, source, fileName) }
                     tp.default?.let { checkUnresolvedInType(it, ifaceScope, source, fileName) }
@@ -26287,8 +26511,11 @@ class Checker(
                 }
             }
             is TypeAliasDeclaration -> {
-                val typeScope = scope.child()
-                stmt.typeParameters?.forEach { typeScope.addTypeParam(it.name.text, it.constraint) }
+                val aliasLex = unresolvedLexOf(stmt)
+                val typeScope = scope.child(lex = aliasLex)
+                if (aliasLex == null) {
+                    stmt.typeParameters?.forEach { typeScope.addTypeParam(it.name.text, it.constraint) }
+                }
                 stmt.typeParameters?.forEach { tp ->
                     tp.constraint?.let { checkUnresolvedInType(it, typeScope, source, fileName) }
                     tp.default?.let { checkUnresolvedInType(it, typeScope, source, fileName) }
@@ -26344,7 +26571,9 @@ class Checker(
                     checkHeritageClausesInDeclareNamespace(stmt, nsScope, source, fileName)
                     val before = diagnostics.size
                     when (val body = stmt.body) {
-                        is ModuleBlock -> checkUnresolvedInStatements(body.statements, nsScope, source, fileName)
+                        // owner = null: namespace bodies keep the threaded population
+                        // (the binder module table is unfiltered merged exports).
+                        is ModuleBlock -> checkUnresolvedInStatements(body.statements, null, nsScope, source, fileName)
                         is ModuleDeclaration -> checkUnresolvedInStatement(body, nsScope, source, fileName)
                         else -> {}
                     }
@@ -26360,7 +26589,7 @@ class Checker(
                     return
                 }
                 when (val body = stmt.body) {
-                    is ModuleBlock -> checkUnresolvedInStatements(body.statements, nsScope, source, fileName)
+                    is ModuleBlock -> checkUnresolvedInStatements(body.statements, null, nsScope, source, fileName)
                     is ModuleDeclaration -> checkUnresolvedInStatement(body, nsScope, source, fileName)
                     else -> {}
                 }
@@ -27007,7 +27236,7 @@ class Checker(
                 }
                 element.type?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
                 element.body?.let {
-                    checkUnresolvedInStatements(it.statements, methodScope, source, fileName)
+                    checkUnresolvedInStatements(it.statements, element, methodScope, source, fileName)
                 }
             }
             is IndexSignature -> {
@@ -27026,14 +27255,14 @@ class Checker(
                     param.initializer?.let { checkUnresolvedInExpr(it, ctorScope, source, fileName) }
                 }
                 element.body?.let {
-                    checkUnresolvedInStatements(it.statements, ctorScope, source, fileName)
+                    checkUnresolvedInStatements(it.statements, element, ctorScope, source, fileName)
                 }
             }
             is GetAccessor -> {
                 val getScope = classScope.child(hasArguments = true, classContext = memberClassCtx)
                 element.type?.let { checkUnresolvedInType(it, getScope, source, fileName) }
                 element.body?.let {
-                    checkUnresolvedInStatements(it.statements, getScope, source, fileName)
+                    checkUnresolvedInStatements(it.statements, element, getScope, source, fileName)
                 }
             }
             is SetAccessor -> {
@@ -27043,12 +27272,12 @@ class Checker(
                     param.type?.let { checkUnresolvedInType(it, setScope, source, fileName) }
                 }
                 element.body?.let {
-                    checkUnresolvedInStatements(it.statements, setScope, source, fileName)
+                    checkUnresolvedInStatements(it.statements, element, setScope, source, fileName)
                 }
             }
             is ClassStaticBlockDeclaration -> {
                 val staticBlockScope = classScope.child(classContext = memberClassCtx)
-                checkUnresolvedInStatements(element.body.statements, staticBlockScope, source, fileName)
+                checkUnresolvedInStatements(element.body.statements, element, staticBlockScope, source, fileName)
             }
             else -> {}
         }
@@ -27223,7 +27452,7 @@ class Checker(
                 }
                 expr.type?.let { checkUnresolvedInType(it, arrowScope, source, fileName) }
                 when (val body = expr.body) {
-                    is Block -> checkUnresolvedInStatements(body.statements, arrowScope, source, fileName)
+                    is Block -> checkUnresolvedInStatements(body.statements, expr, arrowScope, source, fileName)
                     is Expression -> checkUnresolvedInExpr(body, arrowScope, source, fileName)
                     else -> {}
                 }
@@ -27243,14 +27472,17 @@ class Checker(
                     param.initializer?.let { checkUnresolvedInExpr(it, fnScope, source, fileName) }
                 }
                 expr.type?.let { checkUnresolvedInType(it, fnScope, source, fileName) }
-                checkUnresolvedInStatements(expr.body.statements, fnScope, source, fileName)
+                checkUnresolvedInStatements(expr.body.statements, expr, fnScope, source, fileName)
             }
             is ClassExpression -> {
                 val classCtx = buildClassContext(expr, scope, fileName)
-                val classScope = scope.child(classContext = classCtx)
-                // Class expression name is in scope within its own body
-                expr.name?.let { classScope.names.add(it.text) }
-                expr.typeParameters?.forEach { classScope.addTypeParam(it.name.text, it.constraint) }
+                val classLex = unresolvedLexOf(expr)
+                val classScope = scope.child(classContext = classCtx, lex = classLex)
+                if (classLex == null) {
+                    // Class expression name is in scope within its own body
+                    expr.name?.let { classScope.names.add(it.text) }
+                    expr.typeParameters?.forEach { classScope.addTypeParam(it.name.text, it.constraint) }
+                }
                 expr.heritageClauses?.forEach { clause ->
                     emitTS2864ForPrimitiveImplements(clause, classScope, source, fileName)
                     for (type in clause.types) {
@@ -27314,19 +27546,19 @@ class Checker(
                             }
                             prop.type?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
                             prop.body?.let {
-                                checkUnresolvedInStatements(it.statements, methodScope, source, fileName)
+                                checkUnresolvedInStatements(it.statements, prop, methodScope, source, fileName)
                             }
                         }
                         is GetAccessor -> {
                             prop.body?.let {
-                                checkUnresolvedInStatements(it.statements, scope, source, fileName)
+                                checkUnresolvedInStatements(it.statements, prop, scope, source, fileName)
                             }
                         }
                         is SetAccessor -> {
                             val setScope = scope.child(hasArguments = true)
                             addParamsToScope(prop.parameters, setScope)
                             prop.body?.let {
-                                checkUnresolvedInStatements(it.statements, setScope, source, fileName)
+                                checkUnresolvedInStatements(it.statements, prop, setScope, source, fileName)
                             }
                         }
                         else -> {}
@@ -29978,6 +30210,24 @@ class Checker(
             while (s != null) {
                 candidates.addAll(s.typeParamNames)
                 candidates.addAll(s.typeNames)
+                // INV.4(c)(ii): lex levels this NameScope level introduced. The
+                // SourceFile root is covered by typeEligibleLocalNames above;
+                // namespace/enum levels stay threaded (untrusted).
+                var l = s.lex
+                val stop = s.parent?.lex
+                var head = true
+                while (l != null && l !== stop) {
+                    val owner = l.owner
+                    if (owner !is ModuleDeclaration && owner !is EnumDeclaration && owner !is SourceFile &&
+                        (head || !isFnLikeScopeOwner(owner))
+                    ) {
+                        for ((n, sym) in l.symbols) {
+                            if (sym.flags.hasAny(UNRESOLVED_TYPE_ELIGIBLE_FLAGS)) candidates.add(n)
+                        }
+                    }
+                    head = false
+                    l = l.parent
+                }
                 s = s.parent
             }
         } else {
@@ -30001,6 +30251,25 @@ class Checker(
                     } else {
                         candidates.addAll(s.names)
                     }
+                }
+                // INV.4(c)(ii): lex levels this NameScope level introduced. The
+                // SourceFile root's aliased file locals are covered by the
+                // perFileScope branch above (its scope-space symbols — hoisted
+                // vars from file-level blocks — ARE added); namespace/enum levels
+                // stay threaded (untrusted).
+                var l = s.lex
+                val stop = s.parent?.lex
+                var head = true
+                while (l != null && l !== stop) {
+                    val owner = l.owner
+                    if (owner !is ModuleDeclaration && owner !is EnumDeclaration &&
+                        (head || !isFnLikeScopeOwner(owner))
+                    ) {
+                        candidates.addAll(l.symbols.keys)
+                        if (owner !is SourceFile) l.existing?.let { candidates.addAll(it.keys) }
+                    }
+                    head = false
+                    l = l.parent
                 }
                 s = s.parent
             }
@@ -42775,6 +43044,14 @@ class Checker(
          *  `init`, so an instance field declared after `init` would read null. */
         private val OBJLIT_ACCESS_MODIFIERS =
             setOf(ModifierFlag.Public, ModifierFlag.Private, ModifierFlag.Protected)
+
+        /** INV.4(c)(ii): the flag set mirroring the unresolved-names walk's `addType`/
+         *  `addTypeParam` classification (class/interface/type-alias/enum/type-param) —
+         *  deliberately NARROWER than [SymbolFlags.Type] (no EnumMember: enum members
+         *  were only ever added to `names`, never `typeNames`). */
+        private val UNRESOLVED_TYPE_ELIGIBLE_FLAGS =
+            SymbolFlags.Class or SymbolFlags.Interface or SymbolFlags.TypeAlias or
+                SymbolFlags.RegularEnum or SymbolFlags.ConstEnum or SymbolFlags.TypeParameter
 
         // ── INV.4(c)(i) test-only audit hooks (Inv4SpineScopeStateTest) ────
         // Companion-hosted because tests cannot reach the Checker instance

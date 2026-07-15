@@ -643,7 +643,54 @@ class Binder(private val options: CompilerOptions) {
                     // A static block is a var-hoisting boundary (tsc: IsContainer).
                     pushChildren(node, newLexicalScope(node, scope, scopes))
                 }
-                is ModuleDeclaration -> pushChildren(node, moduleLexicalScope(node, scope, scopes))
+                is ModuleDeclaration -> {
+                    // The namespace NAME binds into an enclosing FRESH scope (a
+                    // block-/function-body-nested namespace is a TS1235 grammar
+                    // error, but tsc still binds it — `export = M` in the same
+                    // block resolves M). Mirrors the checker's legacy collect:
+                    // dotted names bind the LEFTMOST segment; `declare global`
+                    // is an augmentation, not a binding (GH#42209); a
+                    // StringLiteral-named ambient module has no identifier name.
+                    if (scope.existing == null) {
+                        when (val mname = node.name) {
+                            is Identifier ->
+                                if (!(mname.text == "global" && ModifierFlag.Declare in node.modifiers)) {
+                                    declareLexical(scope, mname.text, SymbolFlags.ValueModule, node)
+                                }
+                            is PropertyAccessExpression -> {
+                                var cur: Expression = mname
+                                while (cur is PropertyAccessExpression) cur = cur.expression
+                                (cur as? Identifier)?.let {
+                                    declareLexical(scope, it.text, SymbolFlags.ValueModule, node)
+                                }
+                            }
+                            else -> {}
+                        }
+                    }
+                    pushChildren(node, moduleLexicalScope(node, scope, scopes))
+                }
+                is ImportEqualsDeclaration -> {
+                    // Nested imports are grammar errors (TS1232) tsc still binds.
+                    if (scope.existing == null) {
+                        declareLexical(scope, node.name.text, SymbolFlags.Alias, node)
+                    }
+                    pushChildren(node, scope)
+                }
+                is ImportDeclaration -> {
+                    if (scope.existing == null) {
+                        val clause = node.importClause
+                        clause?.name?.let { declareLexical(scope, it.text, SymbolFlags.Alias, node) }
+                        when (val bindings = clause?.namedBindings) {
+                            is NamedImports -> for (spec in bindings.elements) {
+                                declareLexical(scope, spec.name.text, SymbolFlags.Alias, spec)
+                            }
+                            is NamespaceImport ->
+                                declareLexical(scope, bindings.name.text, SymbolFlags.Alias, bindings)
+                            else -> {}
+                        }
+                    }
+                    pushChildren(node, scope)
+                }
                 is VariableDeclarationList -> {
                     bindLexicalVariableList(node, scope)
                     pushChildren(node, scope)
