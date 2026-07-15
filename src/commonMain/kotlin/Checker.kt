@@ -1036,10 +1036,26 @@ class Checker(
          *  children (the legacy walk checks member decorators BEFORE registering
          *  TPs/params; forEachChild visits decorators LAST). */
         val decoratorScope: NameScope? = null,
+        /** Batch 2: the family emits NOTHING inside this level's subtree — the
+         *  legacy walk's under-visits reproduced as regions (a WithStatement's
+         *  body, a skipped outside-function return expression, a `declare`
+         *  function/class). Set via [spineUResMarkSuppressed] only (counter). */
+        var suppressed: Boolean = false,
+        /** Batch 2: the declare-`module`/`namespace` body post-filter — only
+         *  TS2304/TS2552 survive from emissions inside this level's subtree.
+         *  Set via [spineUResMarkFilter] only (counter). */
+        var filter2304: Boolean = false,
     )
     private val spineUResStack = ArrayList<UnresolvedSpineLevel>(32)
     private var spineUResActive = false
     private var spineUResRoot: NameScope? = null
+    /** Count of stack levels with [UnresolvedSpineLevel.suppressed] set. */
+    private var spineUResSuppressCount = 0
+    /** Count of stack levels with [UnresolvedSpineLevel.filter2304] set. */
+    private var spineUResFilterCount = 0
+    /** True while the declarationOnly minimal driver runs [spineWalkFile] for the
+     *  unresolved-names family ONLY (every other spine handler skipped). */
+    private var spineUResOnly = false
     /** Per-file snapshot of the companion audit flag. */
     private var spineUResAuditActive = false
     private var typeLibResolutionComputed = false
@@ -2206,8 +2222,9 @@ class Checker(
         // 7d (B263). TS2688 for unresolvable `types` compiler-option entries + populate
         // the unresolved-type-lib name strip BEFORE the unresolved-name walk.
         pass("checkTypeLibraryEntryPoints") { checkTypeLibraryEntryPoints() }
-        // 8. Check for unresolved names (TS2304)
-        pass("checkUnresolvedNames") { checkUnresolvedNames() }
+        // 8. Unresolved names (TS2304 family): migrated onto the check spine
+        // (INV.4(c)(iii) batch 2, spineUResDispatch) — checkUnresolvedNames
+        // remains only as the declarationOnly-mode driver.
         pass("checkDtsImportEqualsAliasResolved") { checkDtsImportEqualsAliasResolved() }
         // B98.r101: TS2367 for a const-literal compared to a different literal.
         pass("checkConstLiteralComparisons") { checkConstLiteralComparisons() }
@@ -17660,20 +17677,29 @@ class Checker(
             val top = nodes.size - 1
             val node = nodes.removeAt(top)
             if (phases[top]) {
-                spineLeaveNode(node)
-                spineScopeLeaveIfOwner(node)
+                if (!spineUResOnly) {
+                    spineLeaveNode(node)
+                    spineScopeLeaveIfOwner(node)
+                }
                 if (spineUResActive) spineUResLeave(node)
                 continue
             }
-            spineScopeEnterIfOwner(node)
-            if (spineScopeAuditActive) spineScopeAuditNode(node)
-            if (spineUResActive) spineUResEnter(node)
-            spineEnterNode(node)
+            if (!spineUResOnly) {
+                spineScopeEnterIfOwner(node)
+                if (spineScopeAuditActive) spineScopeAuditNode(node)
+            }
+            if (spineUResActive) {
+                spineUResEnter(node)
+                spineUResDispatch(node)
+            }
+            if (!spineUResOnly) spineEnterNode(node)
             buf.clear()
             forEachChild(node, collect)
             if (buf.isEmpty()) {
-                spineLeaveNode(node)
-                spineScopeLeaveIfOwner(node)
+                if (!spineUResOnly) {
+                    spineLeaveNode(node)
+                    spineScopeLeaveIfOwner(node)
+                }
                 if (spineUResActive) spineUResLeave(node)
                 continue
             }
@@ -17981,6 +18007,8 @@ class Checker(
      *  record with the legacy walk via [unresolvedFileRootFor]. */
     private fun spineUResSetup(result: BinderResult) {
         spineUResStack.clear()
+        spineUResSuppressCount = 0
+        spineUResFilterCount = 0
         val root = unresolvedFileRootFor(result)
         spineUResRoot = root?.scope
         spineUResActive = root != null
@@ -17988,8 +18016,84 @@ class Checker(
 
     private fun spineUResTeardown() {
         spineUResStack.clear()
+        spineUResSuppressCount = 0
+        spineUResFilterCount = 0
         spineUResRoot = null
         spineUResActive = false
+    }
+
+    private fun spineUResMarkSuppressed(level: UnresolvedSpineLevel) {
+        if (!level.suppressed) {
+            level.suppressed = true
+            spineUResSuppressCount++
+        }
+    }
+
+    private fun spineUResMarkFilter(level: UnresolvedSpineLevel) {
+        if (!level.filter2304) {
+            level.filter2304 = true
+            spineUResFilterCount++
+        }
+    }
+
+    /**
+     * Batch 2 emission wrapper — every family dispatch site routes its work
+     * through this. Reproduces the legacy walk's two region rules: a SUPPRESSED
+     * region emits nothing (the legacy walk never visited it), and inside a
+     * `declare module`/`namespace` body only the bare-name family (TS2304 +
+     * its spelling variant TS2552) survives — the legacy walk's post-filter
+     * around the body walk, applied per emission batch here (the filter is
+     * per-diagnostic, so slicing it per dispatch yields the identical set).
+     */
+    private inline fun spineUResEmit(block: () -> Unit) {
+        if (spineUResSuppressCount > 0) return
+        // The legacy pass ran with currentFileLocals = null (the INV.3(d)(ii)
+        // "unscoped class" note); the spine sets it per file for OTHER handlers.
+        // Null it around family emissions so every `currentFileLocals?.get`
+        // consult in the family (strict-reserved heritage, TS2833/TS2503
+        // qualifiers, checkIdentifierResolved …) resolves as before.
+        val savedLocals = currentFileLocals
+        currentFileLocals = null
+        try {
+            if (spineUResFilterCount == 0) {
+                block()
+                return
+            }
+            val before = diagnostics.size
+            block()
+            if (diagnostics.size > before) {
+                val kept = diagnostics.subList(before, diagnostics.size)
+                    .filter { it.code == 2304 || it.code == 2552 }.toList()
+                while (diagnostics.size > before) diagnostics.removeAt(diagnostics.size - 1)
+                diagnostics.addAll(kept)
+            }
+        } finally {
+            currentFileLocals = savedLocals
+        }
+    }
+
+    /** The innermost active level's scope EXCLUDING levels owned by [node] —
+     *  the scope the legacy walk saw AT the statement (batch-2 handlers for
+     *  nodes whose own level was already pushed at enter). */
+    private fun spineUResOuterScope(node: Node): NameScope? {
+        val stack = spineUResStack
+        for (i in stack.indices.reversed()) {
+            val l = stack[i]
+            if (l.owner === node) continue
+            if (l.active) return l.scope
+        }
+        return spineUResRoot
+    }
+
+    /** The level [spineUResEnter] pushed for [node] (top-of-stack search),
+     *  or null when the node pushed none. */
+    private fun spineUResOwnLevel(node: Node): UnresolvedSpineLevel? {
+        val stack = spineUResStack
+        for (i in stack.indices.reversed()) {
+            val l = stack[i]
+            if (l.owner === node) return l
+        }
+        return null
     }
 
     /** The family's effective scope at the current walk position — the innermost
@@ -18248,6 +18352,28 @@ class Checker(
                 // Active ONLY within the trueType child (infer names scope there).
                 stack.add(UnresolvedSpineLevel(node, s, active = false))
             }
+            is WithStatement -> {
+                // Batch 2: the legacy walk checked the with EXPRESSION but never
+                // its BODY (dynamic resolution). Pass-through level; the direct-
+                // child trigger flips it suppressed at the statement child.
+                val cur = spineUResScope() ?: return
+                stack.add(UnresolvedSpineLevel(node, cur))
+            }
+            is ReturnStatement -> {
+                // Batch 2: tsc checkReturnStatement — an outside-function return's
+                // EXPRESSION is never checked (see the legacy ReturnStatement arm's
+                // rationale, reachabilityChecksNoCrash1); reproduce the un-visit as
+                // a suppressed region over the whole return.
+                val cur = spineUResScope() ?: return
+                val checked = cur.inFunction ||
+                    (!unresolvedCurrentFileIsModule &&
+                        node.expression?.let { exprContainsThisOrCall(it) } == true)
+                if (!checked) {
+                    val level = UnresolvedSpineLevel(node, cur)
+                    stack.add(level)
+                    spineUResMarkSuppressed(level)
+                }
+            }
             else -> {}
         }
         if (spineUResAuditActive && node is Identifier) {
@@ -18265,7 +18391,9 @@ class Checker(
     private fun spineUResLeave(node: Node) {
         val stack = spineUResStack
         while (stack.isNotEmpty() && stack[stack.size - 1].owner === node) {
-            stack.removeAt(stack.size - 1)
+            val popped = stack.removeAt(stack.size - 1)
+            if (popped.suppressed) spineUResSuppressCount--
+            if (popped.filter2304) spineUResFilterCount--
         }
     }
 
@@ -18302,7 +18430,31 @@ class Checker(
                 if (child === o.trueType) level.active = true
                 else if (child === o.falseType) level.active = false
             }
-            is FunctionDeclaration -> spineUResFnChild(level, child, o.name, o.typeParameters, o.parameters, o.body)
+            is WithStatement -> if (child === o.statement) spineUResMarkSuppressed(level)
+            is FunctionDeclaration -> {
+                spineUResFnChild(level, child, o.name, o.typeParameters, o.parameters, o.body)
+                // Batch 2: the legacy FunctionDeclaration statement arm's
+                // signature-position checks, dispatched at the child positions so
+                // the lazy population above provides the exact legacy staging
+                // (TP constraints see TPs but not params; param/return types see
+                // both). A `declare` function's level is suppressed at its enter
+                // (the legacy arm returned before any of these).
+                val returnType = o.type
+                when {
+                    child is TypeParameter -> spineUResEmit {
+                        child.constraint?.let { checkUnresolvedInType(it, level.scope, spineSource, spineFileName) }
+                        child.default?.let { checkUnresolvedInType(it, level.scope, spineSource, spineFileName) }
+                    }
+                    child is Parameter -> spineUResEmit {
+                        child.type?.let { checkUnresolvedInType(it, level.scope, spineSource, spineFileName) }
+                        child.initializer?.let { checkUnresolvedInExpr(it, level.scope, spineSource, spineFileName) }
+                    }
+                    returnType != null && child === returnType -> spineUResEmit {
+                        checkUnresolvedInType(returnType, level.scope, spineSource, spineFileName)
+                    }
+                    else -> {}
+                }
+            }
             is FunctionExpression -> spineUResFnChild(level, child, o.name, o.typeParameters, o.parameters, o.body)
             is ArrowFunction -> spineUResFnChild(level, child, null, o.typeParameters, o.parameters, o.body as? Block)
             is MethodDeclaration -> {
@@ -18388,6 +18540,373 @@ class Checker(
         val nid = (node as NodeBase).nodeId
         if (nid < 0) return
         unresolvedAuditOld["$fileName#$nid"] = unresolvedScopeFingerprint(scope, name)
+    }
+
+    // ── INV.4(c)(iii) batch 2: statement-level emissions on the spine ──────
+    // The legacy checkUnresolvedInStatementCore arms, dispatched per node from
+    // spineWalkFile (right after spineUResEnter, so a statement's own level —
+    // for headers, switch clause scope, class/interface/enum/namespace scopes —
+    // is already pushed) MINUS their nested-statement recursion (the spine
+    // reaches nested statements itself; the 10 statement descents in the
+    // expression/class-element walkers are cut) and MINUS the
+    // FunctionDeclaration signature positions (dispatched at child enters via
+    // spineUResOnDirectChild so the lazy population provides the legacy
+    // staging). Under-visits reproduce as suppressed regions (with-body /
+    // skipped return / declare fn+class) and the declare-module body
+    // post-filter as the filter2304 level flag — see [spineUResEmit].
+
+    /** The legacy ClassDeclaration statement arm (verbatim) minus the member
+     *  BODY reach (the class-element walker's statement descents are cut; the
+     *  spine reaches member bodies). classScope = the level [spineUResEnter]
+     *  pushed (identical construction); outer = the statement's own scope. */
+    private fun spineUResClassDeclaration(node: ClassDeclaration) {
+        val level = spineUResOwnLevel(node) ?: return
+        val classScope = level.scope
+        val outer = spineUResOuterScope(node) ?: return
+        val source = spineSource
+        val fileName = spineFileName
+        if (ModifierFlag.Declare in node.modifiers) {
+            // B295: an AMBIENT class skips the unresolved-name walk, but its
+            // heritage clause still gets the TS2314 arity check.
+            spineUResEmit {
+                for (clause in node.heritageClauses ?: emptyList()) {
+                    for (type in clause.types) {
+                        checkHeritageTypeArgCount(type, outer, source, fileName)
+                    }
+                }
+            }
+            spineUResMarkSuppressed(level)
+            return
+        }
+        spineUResEmit {
+            // Class decorators are checked in the OUTER scope (the level also
+            // deactivates at its Decorator child for the maintained walk).
+            node.decorators?.forEach { checkUnresolvedInExpr(it.expression, outer, source, fileName) }
+            node.typeParameters?.forEach { tp ->
+                tp.constraint?.let { checkUnresolvedInType(it, classScope, source, fileName) }
+                tp.default?.let { checkUnresolvedInType(it, classScope, source, fileName) }
+            }
+            node.heritageClauses?.forEach { clause ->
+                emitTS2864ForPrimitiveImplements(clause, classScope, source, fileName)
+                for (type in clause.types) {
+                    // 17.209: `implements <bareTypeParam>` → TS2422 directly, skip
+                    // the value-position TS2304.
+                    val isImplementsTypeParam = clause.token == SyntaxKind.ImplementsKeyword &&
+                        type.expression is Identifier &&
+                        classScope.isTypeParam((type.expression).text) &&
+                        !outer.has((type.expression).text)
+                    if (isImplementsTypeParam) {
+                        val ident = type.expression
+                        val (line, character) = getLineAndCharacterOfPosition(source, ident.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "A class can only implement an object type or intersection of object types with statically known members.",
+                            category = DiagnosticCategory.Error,
+                            code = 2422,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = ident.pos,
+                            length = ident.text.length,
+                        ))
+                        continue
+                    }
+                    checkUnresolvedInExpr(type.expression, classScope, source, fileName)
+                    // indexSignatureInOtherFile (piece A): skip the arity check for an
+                    // extends clause whose base has a value var declaration.
+                    val skipArityForValueExtends = clause.token == SyntaxKind.ExtendsKeyword &&
+                        type.typeArguments.isNullOrEmpty() &&
+                        (type.expression as? Identifier)?.text?.let { heritageBaseHasValueVarDecl(it) } == true
+                    if (!skipArityForValueExtends) {
+                        checkHeritageTypeArgCount(type, classScope, source, fileName)
+                    }
+                    type.typeArguments?.forEach { checkUnresolvedInType(it, classScope, source, fileName) }
+                    // 17.163: TS2304 for `class C<T> extends T {}`.
+                    emitTs2304ForHeritageExtendsTypeParam(type.expression, classScope, outer, source, fileName)
+                    // B67.2: TS2562 — heritage expression referencing own type params.
+                    if (clause.token == SyntaxKind.ExtendsKeyword && !node.typeParameters.isNullOrEmpty()) {
+                        val ownTypeParamNames = node.typeParameters.mapNotNull { (it.name).text }.toSet()
+                        if (ownTypeParamNames.isNotEmpty()) {
+                            checkBaseExprForOwnTypeParamRefs(type.expression, ownTypeParamNames, source, fileName)
+                        }
+                    }
+                    // 17.226: TS2694 for `implements ns.Member`.
+                    if (clause.token == SyntaxKind.ImplementsKeyword) {
+                        checkHeritagePropertyAccessForNamespaceMember(type.expression, source, fileName)
+                    }
+                    // strictModeReservedWordInClassDeclaration: heritage base whose
+                    // LEFTMOST identifier is a strict-mode reserved word.
+                    run {
+                        val leftmost = heritageLeftmostIdentifier(type.expression)
+                        if (leftmost != null && leftmost.text in STRICT_MODE_RESERVED_WORDS) {
+                            val lname = leftmost.text
+                            checkIdentForStrictReserved(leftmost, source, fileName, inClass = true, isModule = false)
+                            val leftSym = globals[lname] ?: currentFileLocals?.get(lname)
+                            val (l2702, c2702) = getLineAndCharacterOfPosition(source, leftmost.pos)
+                            if (type.expression is PropertyAccessExpression && leftSym != null &&
+                                leftSym.flags.hasAny(SymbolFlags.Class or SymbolFlags.Interface or SymbolFlags.TypeAlias) &&
+                                !leftSym.flags.hasAny(SymbolFlags.Module or SymbolFlags.Enum)) {
+                                diagnostics.add(Diagnostic(
+                                    message = "'$lname' only refers to a type, but is being used as a namespace here.",
+                                    category = DiagnosticCategory.Error, code = 2702,
+                                    fileName = fileName, line = l2702, character = c2702,
+                                    start = leftmost.pos, length = lname.length,
+                                ))
+                            } else if (leftSym == null && !outer.has(lname) && !classScope.isTypeParam(lname)) {
+                                diagnostics.add(Diagnostic(
+                                    message = "Cannot find name '$lname'.",
+                                    category = DiagnosticCategory.Error, code = 2304,
+                                    fileName = fileName, line = l2702, character = c2702,
+                                    start = leftmost.pos, length = lname.length,
+                                ))
+                            }
+                        }
+                    }
+                }
+            }
+            for (member in node.members) {
+                checkUnresolvedInClassElement(member, classScope, source, fileName, level.ctorParamNames)
+            }
+        }
+    }
+
+    /** The legacy InterfaceDeclaration statement arm (verbatim — interfaces
+     *  contain no statements, so nothing is cut). */
+    private fun spineUResInterfaceDeclaration(node: InterfaceDeclaration) {
+        val level = spineUResOwnLevel(node) ?: return
+        val ifaceScope = level.scope
+        val outer = spineUResOuterScope(node) ?: return
+        val source = spineSource
+        val fileName = spineFileName
+        spineUResEmit {
+            node.typeParameters?.forEach { tp ->
+                tp.constraint?.let { checkUnresolvedInType(it, ifaceScope, source, fileName) }
+                tp.default?.let { checkUnresolvedInType(it, ifaceScope, source, fileName) }
+            }
+            node.heritageClauses?.forEach { clause ->
+                for (type in clause.types) {
+                    checkUnresolvedInExpr(type.expression, ifaceScope, source, fileName)
+                    checkHeritageTypeArgCount(type, ifaceScope, source, fileName)
+                    type.typeArguments?.forEach { checkUnresolvedInType(it, ifaceScope, source, fileName) }
+                    // 17.163: TS2312 for `interface I<T> extends T {}`.
+                    emitTs2312ForInterfaceExtendsTypeParam(type.expression, ifaceScope, outer, source, fileName)
+                    // B582: TS2312 for extends of a bare-TP `as`-remapped mapped type.
+                    emitTs2312ForInterfaceExtendsBadMapped(type, source, fileName)
+                    // 17.172: TS2499 — non-entity-name heritage expression.
+                    emitTs2499ForInterfaceExtendsNonEntityName(type.expression, source, fileName)
+                }
+            }
+            for (member in node.members) {
+                when (member) {
+                    is PropertyDeclaration -> {
+                        if (member.name is ComputedPropertyName) {
+                            checkUnresolvedInExpr((member.name).expression, ifaceScope, source, fileName)
+                        }
+                        member.type?.let { checkUnresolvedInType(it, ifaceScope, source, fileName) }
+                    }
+                    is MethodDeclaration -> {
+                        val methodScope = ifaceScope.child()
+                        member.typeParameters?.forEach { methodScope.addTypeParam(it.name.text, it.constraint) }
+                        member.typeParameters?.forEach { tp ->
+                            tp.constraint?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
+                            tp.default?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
+                        }
+                        addParamsToScope(member.parameters, methodScope)
+                        for (param in member.parameters) {
+                            param.type?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
+                        }
+                        member.type?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
+                        checkUnusedDestructuredRenames(member.parameters, member.type, source, fileName)
+                    }
+                    is IndexSignature -> {
+                        member.type?.let { checkUnresolvedInType(it, ifaceScope, source, fileName) }
+                        for (param in member.parameters) {
+                            param.type?.let { checkUnresolvedInType(it, ifaceScope, source, fileName) }
+                        }
+                    }
+                    is SetAccessor -> {
+                        val setScope = ifaceScope.child()
+                        addParamsToScope(member.parameters, setScope)
+                        for (param in member.parameters) {
+                            param.type?.let { checkUnresolvedInType(it, setScope, source, fileName) }
+                        }
+                        checkUnusedDestructuredRenames(member.parameters, null, source, fileName)
+                    }
+                    is GetAccessor -> {
+                        member.type?.let { checkUnresolvedInType(it, ifaceScope, source, fileName) }
+                    }
+                    else -> {}
+                }
+            }
+        }
+    }
+
+    /** Batch 2 per-statement dispatch. Every emission batch routes through
+     *  [spineUResEmit] (region suppression + the declare-module filter). */
+    private fun spineUResDispatch(node: Node) {
+        when (node) {
+            is VariableStatement -> {
+                val scope = spineUResScope() ?: return
+                spineUResEmit {
+                    for (decl in node.declarationList.declarations) {
+                        decl.initializer?.let { checkUnresolvedInExpr(it, scope, spineSource, spineFileName) }
+                        // 17.65: JSDoc-derived type nodes carry sub-parser positions —
+                        // never check them here (wrong source locations).
+                        if (!decl.typeFromJSDoc) {
+                            decl.type?.let { checkUnresolvedInType(it, scope, spineSource, spineFileName) }
+                        }
+                    }
+                }
+            }
+            is ExpressionStatement -> {
+                val scope = spineUResScope() ?: return
+                spineUResEmit { checkUnresolvedInExpr(node.expression, scope, spineSource, spineFileName) }
+            }
+            is ReturnStatement -> {
+                // The skip (outside-function return) is a suppressed region pushed
+                // at spineUResEnter — spineUResEmit is a no-op there.
+                val scope = spineUResScope() ?: return
+                node.expression?.let { e ->
+                    spineUResEmit { checkUnresolvedInExpr(e, scope, spineSource, spineFileName) }
+                }
+            }
+            is IfStatement -> {
+                val scope = spineUResScope() ?: return
+                spineUResEmit { checkUnresolvedInExpr(node.expression, scope, spineSource, spineFileName) }
+            }
+            is WhileStatement -> {
+                val scope = spineUResScope() ?: return
+                spineUResEmit { checkUnresolvedInExpr(node.expression, scope, spineSource, spineFileName) }
+            }
+            is DoStatement -> {
+                val scope = spineUResScope() ?: return
+                spineUResEmit { checkUnresolvedInExpr(node.expression, scope, spineSource, spineFileName) }
+            }
+            is ForStatement -> {
+                // The for-header level is pushed (active) at enter — spineUResScope()
+                // IS the legacy forScope.
+                val scope = spineUResScope() ?: return
+                spineUResEmit {
+                    when (val init = node.initializer) {
+                        is VariableDeclarationList -> {
+                            for (decl in init.declarations) {
+                                decl.initializer?.let { checkUnresolvedInExpr(it, scope, spineSource, spineFileName) }
+                                decl.type?.let { checkUnresolvedInType(it, scope, spineSource, spineFileName) }
+                            }
+                        }
+                        is Expression -> checkUnresolvedInExpr(init, scope, spineSource, spineFileName)
+                        else -> {}
+                    }
+                    node.condition?.let { checkUnresolvedInExpr(it, scope, spineSource, spineFileName) }
+                    node.incrementor?.let { checkUnresolvedInExpr(it, scope, spineSource, spineFileName) }
+                }
+            }
+            is ForInStatement -> {
+                val scope = spineUResScope() ?: return
+                spineUResEmit { checkUnresolvedInExpr(node.expression, scope, spineSource, spineFileName) }
+            }
+            is ForOfStatement -> {
+                val scope = spineUResScope() ?: return
+                spineUResEmit { checkUnresolvedInExpr(node.expression, scope, spineSource, spineFileName) }
+            }
+            is SwitchStatement -> {
+                // The switch level is pushed INACTIVE — spineUResScope() is the
+                // OUTER scope, where the legacy walk checked the subject.
+                val scope = spineUResScope() ?: return
+                spineUResEmit { checkUnresolvedInExpr(node.expression, scope, spineSource, spineFileName) }
+            }
+            is CaseClause -> {
+                // The switch level activated at this clause's enter (direct-child
+                // trigger) — spineUResScope() is the shared clause scope.
+                val scope = spineUResScope() ?: return
+                spineUResEmit { checkUnresolvedInExpr(node.expression, scope, spineSource, spineFileName) }
+            }
+            is ThrowStatement -> {
+                val scope = spineUResScope() ?: return
+                node.expression?.let { e ->
+                    spineUResEmit { checkUnresolvedInExpr(e, scope, spineSource, spineFileName) }
+                }
+            }
+            is WithStatement -> {
+                // Expression checked in the enclosing scope; the with level flips
+                // suppressed at the STATEMENT child (dynamic resolution in body).
+                val scope = spineUResOuterScope(node) ?: return
+                spineUResEmit { checkUnresolvedInExpr(node.expression, scope, spineSource, spineFileName) }
+            }
+            is FunctionDeclaration -> {
+                // B98.r11: TS2842 for unused destructured-renames in a BODYLESS
+                // declaration (ambient or overload signature).
+                if (node.body == null) {
+                    spineUResEmit {
+                        checkUnusedDestructuredRenames(node.parameters, node.type, spineSource, spineFileName)
+                    }
+                }
+                // The legacy arm returned before any signature/body checks for a
+                // `declare` function — suppress the whole subtree.
+                if (ModifierFlag.Declare in node.modifiers) {
+                    spineUResOwnLevel(node)?.let { spineUResMarkSuppressed(it) }
+                }
+            }
+            is ClassDeclaration -> spineUResClassDeclaration(node)
+            is InterfaceDeclaration -> spineUResInterfaceDeclaration(node)
+            is TypeAliasDeclaration -> {
+                val level = spineUResOwnLevel(node) ?: return
+                spineUResEmit {
+                    node.typeParameters?.forEach { tp ->
+                        tp.constraint?.let { checkUnresolvedInType(it, level.scope, spineSource, spineFileName) }
+                        tp.default?.let { checkUnresolvedInType(it, level.scope, spineSource, spineFileName) }
+                    }
+                    checkUnresolvedInType(node.type, level.scope, spineSource, spineFileName)
+                }
+            }
+            is EnumDeclaration -> {
+                val level = spineUResOwnLevel(node) ?: return
+                spineUResEmit {
+                    for (member in node.members) {
+                        member.initializer?.let { checkUnresolvedInExpr(it, level.scope, spineSource, spineFileName) }
+                    }
+                }
+            }
+            is ModuleDeclaration -> {
+                if (ModifierFlag.Declare in node.modifiers) {
+                    val level = spineUResOwnLevel(node) ?: return
+                    // Heritage TS2314 in declare namespaces is checked BEFORE the
+                    // legacy body filter took its snapshot — emit it before this
+                    // level's own filter flag is set (an ENCLOSING declare-module
+                    // filter still applies, as in the legacy nesting).
+                    spineUResEmit {
+                        checkHeritageClausesInDeclareNamespace(node, level.scope, spineSource, spineFileName)
+                    }
+                    // B367: the body walk keeps ONLY bare-name TS2304/TS2552 —
+                    // qualified-name resolution and body-position TS2314 are still
+                    // FP-prone in ambient cross-namespace scope (Blocker #3).
+                    spineUResMarkFilter(level)
+                }
+            }
+            is ExportDeclaration -> {
+                if (node.moduleSpecifier == null) {
+                    val scope = spineUResScope() ?: return
+                    when (val clause = node.exportClause) {
+                        is NamedExports -> spineUResEmit {
+                            for (spec in clause.elements) {
+                                val name = spec.propertyName?.text ?: spec.name.text
+                                val specNode = spec.propertyName ?: spec.name
+                                checkIdentifierResolved(name, specNode, scope, spineSource, spineFileName)
+                            }
+                        }
+                        else -> {}
+                    }
+                }
+            }
+            is ExportAssignment -> {
+                val scope = spineUResScope() ?: return
+                spineUResEmit { checkUnresolvedInExpr(node.expression, scope, spineSource, spineFileName) }
+            }
+            is ImportEqualsDeclaration -> {
+                val scope = spineUResScope() ?: return
+                spineUResEmit { checkUnresolvedInImportEquals(node, scope, spineSource, spineFileName) }
+            }
+            else -> {}
+        }
     }
 
     /**
@@ -26178,18 +26697,32 @@ class Checker(
         return false
     }
 
+    /**
+     * INV.4(c)(iii) batch 2: the family's emissions live on the check spine
+     * ([spineUResDispatch] + the expression/type/class-element walkers it
+     * invokes). This driver remains ONLY for declarationOnly mode — checkSpine
+     * does not run there — walking each file with every non-family spine
+     * handler disabled ([spineUResOnly]). Deliberately does NOT call
+     * [computeTypeLibResolution]: the legacy declarationOnly path ran without
+     * checkTypeLibraryEntryPoints, so the type-lib strip stays empty there.
+     */
     private fun checkUnresolvedNames() {
-        for (result in binderResults) {
-            val root = unresolvedFileRootFor(result) ?: continue
-            val fileName = result.sourceFile.fileName
-            val source = result.sourceFile.text
-            checkUnresolvedInStatements(
-                result.sourceFile.statements,
-                result.sourceFile,
-                root.scope,
-                source,
-                fileName,
-            )
+        spineUResOnly = true
+        try {
+            for (result in binderResults) {
+                val sf = result.sourceFile
+                spineFileName = sf.fileName
+                spineSource = sf.text
+                spineUResSetup(result)
+                spineUResAuditActive = unresolvedAuditEnabled && spineUResActive
+                try {
+                    spineWalkFile(sf)
+                } finally {
+                    spineUResTeardown()
+                }
+            }
+        } finally {
+            spineUResOnly = false
         }
     }
 
@@ -26377,41 +26910,6 @@ class Checker(
                 start = ident.pos,
                 length = ident.text.length,
             ))
-        }
-    }
-
-    /**
-     * INV.4(c)(ii): [owner] is the scope-owning node for this statement list — the
-     * Block itself, the FUNCTION node for a function-like's immediate body (the
-     * binder registers no entry for a body Block; probing the function yields its
-     * scope), the SourceFile for top-level statements, and null where the walk's
-     * threaded population must stay authoritative (namespace bodies — the binder
-     * table is unfiltered merged exports). A probe hit links the lexical scope and
-     * SKIPS the threaded [collectDeclaredNames]; a miss (unindexed tree, untrusted
-     * owner) reproduces legacy behavior exactly.
-     */
-    private fun checkUnresolvedInStatements(
-        statements: List<Statement>,
-        owner: Node?,
-        parentScope: NameScope,
-        source: String,
-        fileName: String,
-    ) {
-        if (checkDepth > maxCheckDepth) return
-        // Create child scope with declarations from this statement list
-        val lexHit = unresolvedLexOf(owner)
-        val scope = parentScope.child(lex = lexHit)
-        if (lexHit == null) collectDeclaredNames(statements, scope)
-        // Even when linked, type-NAME classification stays AST-based: the binder
-        // merge can LOSE a type meaning to a same-named value/alias overwrite
-        // (`export default interface zzz {}` + `import zzz from "./b"` — the
-        // alias overwrites the interface symbol, allowImportClausesToMergeWithTypes),
-        // while the legacy walk classified from declarations. hasType/TS2749 depend
-        // on it.
-        else collectDeclaredTypeNames(statements, scope)
-
-        for (stmt in statements) {
-            checkUnresolvedInStatement(stmt, scope, source, fileName)
         }
     }
 
@@ -26611,739 +27109,231 @@ class Checker(
         }
     }
 
-    private fun checkUnresolvedInStatement(
-        stmt: Statement,
+    /**
+     * The legacy ImportEqualsDeclaration statement arm (batch 2, verbatim):
+     * TS2503/TS2694/TS2708/TS2591/TS2304/TS2303 for a NON-external module
+     * reference (`import a = b.c`). Dispatched from [spineUResDispatch].
+     */
+    private fun checkUnresolvedInImportEquals(
+        stmt: ImportEqualsDeclaration,
         scope: NameScope,
         source: String,
         fileName: String,
     ) {
-        if (checkDepth > maxCheckDepth) return
-        checkDepth++
-        try { checkUnresolvedInStatementCore(stmt, scope, source, fileName) }
-        finally { checkDepth-- }
-    }
-
-    private fun checkUnresolvedInStatementCore(
-        stmt: Statement,
-        scope: NameScope,
-        source: String,
-        fileName: String,
-    ) {
-        when (stmt) {
-            is VariableStatement -> {
-                for (decl in stmt.declarationList.declarations) {
-                    decl.initializer?.let { checkUnresolvedInExpr(it, scope, source, fileName) }
-                    // 17.65: skip unresolved-name checks for JSDoc-derived types — the
-                    // sub-Parser positions don't reference the original source, so
-                    // TS2503/TS2304 emitted here would land on wrong source locations
-                    // (the regression that 17.61 hit on `jsdocReferenceGlobalTypeInCommonJs_ts`).
-                    // The JSDoc bridge is best-effort; unresolvable refs silently resolve
-                    // to errorType downstream.
-                    if (!decl.typeFromJSDoc) {
-                        decl.type?.let { checkUnresolvedInType(it, scope, source, fileName) }
+        // Check the module reference for TS2503 (internal namespace alias)
+        // Only for non-external (non-require) references: import a = b or import a = b.c
+        val ref = stmt.moduleReference
+        if (ref is ExternalModuleReference) return
+        // Find the leftmost identifier in the module reference
+        val leftmost: Identifier? = when (ref) {
+            is Identifier -> ref
+            is QualifiedName -> {
+                var n: Node = ref
+                while (n is QualifiedName) n = n.left
+                n as? Identifier
+            }
+            else -> null
+        }
+        // B61.5b/c: For `import a = x.c[.d.e...]` where x is a top-level
+        // non-declare namespace and the rightmost identifier refers to an
+        // existing but non-exported member, emit TS2694 at the rightmost
+        // identifier. Walks nested QualifiedName segments — intermediate
+        // segments must be sub-namespaces (Module flag, implicitly exported).
+        if (ref is QualifiedName) {
+            // Walk left-most identifier
+            var leftN: Node = ref
+            val segments = mutableListOf<Identifier>()
+            segments.add(ref.right)
+            while (leftN is QualifiedName) {
+                leftN = leftN.left
+                if (leftN is QualifiedName) {
+                    segments.add(0, leftN.right)
+                }
+            }
+            val rootIdent = leftN as? Identifier
+            val rightIdent = segments.last()
+            val intermediateIdents = segments.dropLast(1)  // segments BETWEEN root and rightIdent
+            val fileLocals = fileResults[fileName]?.locals
+            val rootSym = if (rootIdent != null)
+                fileLocals?.get(rootIdent.text) ?: globals[rootIdent.text]
+            else null
+            // Walk intermediate segments — must all be sub-namespaces.
+            // B61.5i: if an intermediate segment doesn't exist in the parent
+            // namespace's exports at all (e.g. `globals.toString.X` where
+            // `toString` isn't in globals), emit TS2694 at that segment.
+            var currentNs: Symbol? = rootSym
+            var walkOk = currentNs != null
+            // Track running qualified path for error message
+            val pathSoFar = mutableListOf<String>()
+            if (rootIdent != null) pathSoFar.add(rootIdent.text)
+            for (seg in intermediateIdents) {
+                val nextSym = currentNs?.exports?.get(seg.text)
+                if (nextSym == null) {
+                    // Intermediate segment doesn't exist — emit TS2694 here
+                    // (only when root is a non-declare namespace).
+                    val isRootNonDeclare = rootSym?.declarations?.any { d ->
+                        d is ModuleDeclaration && ModifierFlag.Declare !in d.modifiers
+                    } == true
+                    if (isRootNonDeclare) {
+                        val segStart = seg.pos
+                        val (line, character) = getLineAndCharacterOfPosition(source, segStart)
+                        val nsPath = pathSoFar.joinToString(".")
+                        diagnostics.add(Diagnostic(
+                            message = "Namespace '$nsPath' has no exported member '${seg.text}'.",
+                            category = DiagnosticCategory.Error,
+                            code = 2694,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = segStart,
+                            length = seg.text.length,
+                        ))
                     }
+                    walkOk = false
+                    break
                 }
+                if (!nextSym.flags.hasAny(SymbolFlags.Module)) {
+                    walkOk = false
+                    break
+                }
+                currentNs = nextSym
+                pathSoFar.add(seg.text)
             }
-            is ExpressionStatement -> {
-                checkUnresolvedInExpr(stmt.expression, scope, source, fileName)
+            val finalNs = currentNs
+            // Skip declare-namespace (its members are implicitly exported).
+            val isNonDeclareNamespace = walkOk && finalNs != null &&
+                finalNs.declarations.any { d ->
+                    d is ModuleDeclaration && ModifierFlag.Declare !in d.modifiers
+                }
+            // B61.5d: TS2708 — "Cannot use namespace 'X' as a value." When the
+            // import-equals has `export` (and not `declare`) and the root namespace
+            // is purely type-side AND not itself exported, emit TS2708 at the root
+            // identifier's position. The not-exported gate prevents FP when the
+            // root namespace is a module-level export (which gives it a value
+            // binding even if its members are type-only).
+            val isTopLevel = fileResults[fileName]?.sourceFile?.statements?.contains(stmt) == true
+            val rootNamespaceExported = rootSym?.declarations?.any { d ->
+                d is ModuleDeclaration && ModifierFlag.Export in d.modifiers
+            } == true
+            if (isTopLevel && rootIdent != null && walkOk && rootSym != null &&
+                ModifierFlag.Export in stmt.modifiers &&
+                ModifierFlag.Declare !in stmt.modifiers &&
+                !rootNamespaceExported &&
+                rootSym.flags.hasAny(SymbolFlags.NamespaceModule) &&
+                !rootSym.flags.hasAny(SymbolFlags.ValueModule)) {
+                val rootStart = rootIdent.pos
+                val (line, character) = getLineAndCharacterOfPosition(source, rootStart)
+                diagnostics.add(Diagnostic(
+                    message = "Cannot use namespace '${rootIdent.text}' as a value.",
+                    category = DiagnosticCategory.Error,
+                    code = 2708,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = rootStart,
+                    length = rootIdent.text.length,
+                ))
             }
-            is ReturnStatement -> {
-                // tsc checkReturnStatement: NO containing function → grammarErrorOnFirstToken
-                // (TS1108, suppressed under parse errors) and the EXPRESSION IS NEVER CHECKED —
-                // a top-level `return out;` gets no TS2304 (reachabilityChecksNoCrash1). The
-                // file-root scope has parent == null; every function-like arm creates a child.
-                // The pre-emit skip is observable only in MODULE files (reachability) — a
-                // SCRIPT file's skipped names come back via tsc's emit resolver post-emit
-                // ONLY when the expression contains `this` or a CALL (the this-capture /
-                // helper analysis is what re-checks the subtree:
-                // multiLinePropertyAccessAndArrowFunctionIndent1's `return this.edit(role)…`
-                // and parseErrorIncorrectReturnToken's `return n.toString()` TS-1 relateds),
-                // which our single-pass union-emission models by checking those normally. A
-                // BARE outside-function return in a script is never checked at all
-                // (constructorWithIncompleteTypeAnnotation's `{ return val; }` block).
-                if (scope.inFunction ||
-                    (!unresolvedCurrentFileIsModule && stmt.expression?.let { exprContainsThisOrCall(it) } == true)) {
-                    stmt.expression?.let { checkUnresolvedInExpr(it, scope, source, fileName) }
-                }
-            }
-            is IfStatement -> {
-                checkUnresolvedInExpr(stmt.expression, scope, source, fileName)
-                checkUnresolvedInStatement(stmt.thenStatement, scope, source, fileName)
-                stmt.elseStatement?.let { checkUnresolvedInStatement(it, scope, source, fileName) }
-            }
-            is Block -> {
-                checkUnresolvedInStatements(stmt.statements, stmt, scope, source, fileName)
-            }
-            is ForStatement -> {
-                val forLex = unresolvedLexOf(stmt)
-                val forScope = scope.child(lex = forLex)
-                when (val init = stmt.initializer) {
-                    is VariableDeclarationList -> {
-                        for (decl in init.declarations) {
-                            if (forLex == null) addBindingName(decl.name, forScope)
-                            decl.initializer?.let { checkUnresolvedInExpr(it, forScope, source, fileName) }
-                            decl.type?.let { checkUnresolvedInType(it, forScope, source, fileName) }
+            if (rootIdent != null && isNonDeclareNamespace) {
+                val memberSym = finalNs.exports?.get(rightIdent.text)
+                if (memberSym != null) {
+                    // Sub-namespaces (Module flag) are implicitly exported when
+                    // declared via the dotted form `namespace A.B { ... }`. Skip the
+                    // export check for them.
+                    val isSubNamespace = memberSym.flags.hasAny(SymbolFlags.Module)
+                    // Check if member is actually exported via AST scan.
+                    val isExported = isSubNamespace || memberSym.declarations.any { d ->
+                        when (d) {
+                            is FunctionDeclaration -> ModifierFlag.Export in d.modifiers
+                            is ClassDeclaration -> ModifierFlag.Export in d.modifiers
+                            is InterfaceDeclaration -> ModifierFlag.Export in d.modifiers
+                            is TypeAliasDeclaration -> ModifierFlag.Export in d.modifiers
+                            is EnumDeclaration -> ModifierFlag.Export in d.modifiers
+                            is ModuleDeclaration -> ModifierFlag.Export in d.modifiers
+                            else -> false
                         }
-                    }
-                    is Expression -> checkUnresolvedInExpr(init, forScope, source, fileName)
-                    else -> {}
-                }
-                stmt.condition?.let { checkUnresolvedInExpr(it, forScope, source, fileName) }
-                stmt.incrementor?.let { checkUnresolvedInExpr(it, forScope, source, fileName) }
-                checkUnresolvedInStatement(stmt.statement, forScope, source, fileName)
-            }
-            is ForInStatement -> {
-                val forLex = unresolvedLexOf(stmt)
-                val forScope = scope.child(lex = forLex)
-                if (forLex == null) {
-                    when (val init = stmt.initializer) {
-                        is VariableDeclarationList -> {
-                            for (decl in init.declarations) {
-                                addBindingName(decl.name, forScope)
-                            }
-                        }
-                        else -> {}
-                    }
-                }
-                checkUnresolvedInExpr(stmt.expression, forScope, source, fileName)
-                checkUnresolvedInStatement(stmt.statement, forScope, source, fileName)
-            }
-            is ForOfStatement -> {
-                val forLex = unresolvedLexOf(stmt)
-                val forScope = scope.child(lex = forLex)
-                if (forLex == null) {
-                    when (val init = stmt.initializer) {
-                        is VariableDeclarationList -> {
-                            for (decl in init.declarations) {
-                                addBindingName(decl.name, forScope)
-                            }
-                        }
-                        else -> {}
-                    }
-                }
-                checkUnresolvedInExpr(stmt.expression, forScope, source, fileName)
-                checkUnresolvedInStatement(stmt.statement, forScope, source, fileName)
-            }
-            is WhileStatement -> {
-                checkUnresolvedInExpr(stmt.expression, scope, source, fileName)
-                checkUnresolvedInStatement(stmt.statement, scope, source, fileName)
-            }
-            is DoStatement -> {
-                checkUnresolvedInStatement(stmt.statement, scope, source, fileName)
-                checkUnresolvedInExpr(stmt.expression, scope, source, fileName)
-            }
-            is SwitchStatement -> {
-                checkUnresolvedInExpr(stmt.expression, scope, source, fileName)
-                // Switch case clauses share a single block scope (per ECMA-262 / TS semantics):
-                // `let x` in case 0 is visible in case 1 of the same switch (fall-through pattern).
-                // Collect declared names from ALL clauses into one shared child scope before walking.
-                val switchLex = unresolvedLexOf(stmt)
-                val switchScope = scope.child(lex = switchLex)
-                if (switchLex == null) {
-                    for (clause in stmt.caseBlock) {
-                        when (clause) {
-                            is CaseClause -> collectDeclaredNames(clause.statements, switchScope)
-                            is DefaultClause -> collectDeclaredNames(clause.statements, switchScope)
-                            else -> {}
-                        }
-                    }
-                }
-                for (clause in stmt.caseBlock) {
-                    when (clause) {
-                        is CaseClause -> {
-                            checkUnresolvedInExpr(clause.expression, switchScope, source, fileName)
-                            for (s in clause.statements) checkUnresolvedInStatement(s, switchScope, source, fileName)
-                        }
-                        is DefaultClause -> {
-                            for (s in clause.statements) checkUnresolvedInStatement(s, switchScope, source, fileName)
-                        }
-                        else -> {}
-                    }
-                }
-            }
-            is ThrowStatement -> {
-                stmt.expression?.let { checkUnresolvedInExpr(it, scope, source, fileName) }
-            }
-            is TryStatement -> {
-                checkUnresolvedInStatements(stmt.tryBlock.statements, stmt.tryBlock, scope, source, fileName)
-                stmt.catchClause?.let { clause ->
-                    val catchLex = unresolvedLexOf(clause)
-                    val catchScope = scope.child(lex = catchLex)
-                    if (catchLex == null) {
-                        clause.variableDeclaration?.let { decl ->
-                            addBindingName(decl.name, catchScope)
-                        }
-                    }
-                    checkUnresolvedInStatements(clause.block.statements, clause.block, catchScope, source, fileName)
-                }
-                stmt.finallyBlock?.let {
-                    checkUnresolvedInStatements(it.statements, it, scope, source, fileName)
-                }
-            }
-            is LabeledStatement -> {
-                checkUnresolvedInStatement(stmt.statement, scope, source, fileName)
-            }
-            is WithStatement -> {
-                checkUnresolvedInExpr(stmt.expression, scope, source, fileName)
-                // Inside with() body, name resolution is dynamic — skip checking
-            }
-            is FunctionDeclaration -> {
-                // B98.r11: TS2842 for a destructured-rename param `{ a: b }` whose binding `b`
-                // is unused in a BODYLESS function declaration (ambient `declare function` OR an
-                // overload signature). With no body the binding can't be a valid local, so it's
-                // an "unused renaming" — "Did you intend to use it as a type annotation?".
-                // Implementation functions (with a body) are TS6133 territory, not TS2842.
-                if (stmt.body == null) {
-                    checkUnusedDestructuredRenames(stmt.parameters, stmt.type, source, fileName)
-                }
-                if (ModifierFlag.Declare in stmt.modifiers) return
-                // Regular functions break 'this' binding — clear class context
-                val fnScope = scope.child(hasArguments = true, classContext = null)
-                stmt.typeParameters?.forEach { fnScope.addTypeParam(it.name.text, it.constraint) }
-                // Check type parameter constraints BEFORE adding params to scope:
-                // TypeScript evaluates type constraints without function params in scope.
-                stmt.typeParameters?.forEach { tp ->
-                    tp.constraint?.let { checkUnresolvedInType(it, fnScope, source, fileName) }
-                    tp.default?.let { checkUnresolvedInType(it, fnScope, source, fileName) }
-                }
-                addParamsToScope(stmt.parameters, fnScope)
-                // For ES5 target, `let`/`const` is downleveled to `var` which is function-scoped
-                // and hoisted, making it visible in parameter defaults. Suppress TS2304 for body
-                // variables when targeting ES5 (matching TypeScript's behavior).
-                if (options.target < ScriptTarget.ES2015) {
-                    stmt.body?.let { collectDeclaredNames(it.statements, fnScope) }
-                }
-                stmt.type?.let { checkUnresolvedInType(it, fnScope, source, fileName) }
-                for (param in stmt.parameters) {
-                    param.type?.let { checkUnresolvedInType(it, fnScope, source, fileName) }
-                    param.initializer?.let { checkUnresolvedInExpr(it, fnScope, source, fileName) }
-                }
-                stmt.body?.let {
-                    checkUnresolvedInStatements(it.statements, stmt, fnScope, source, fileName)
-                }
-            }
-            is ClassDeclaration -> {
-                if (ModifierFlag.Declare in stmt.modifiers) {
-                    // B295: an AMBIENT class skips the unresolved-name walk, but its
-                    // heritage clause still gets the TS2314 arity check
-                    // (`declare class xyz extends abc {` where abc is generic) —
-                    // mirrors checkHeritageClausesInDeclareNamespace for top level.
-                    for (clause in stmt.heritageClauses ?: emptyList()) {
-                        for (type in clause.types) {
-                            checkHeritageTypeArgCount(type, scope, source, fileName)
-                        }
-                    }
-                    return
-                }
-                // Check class decorators
-                stmt.decorators?.forEach { checkUnresolvedInExpr(it.expression, scope, source, fileName) }
-                val classCtx = buildClassContext(stmt, scope, fileName)
-                val classLex = unresolvedLexOf(stmt)
-                val classScope = scope.child(classContext = classCtx, lex = classLex)
-                if (classLex == null) {
-                    stmt.typeParameters?.forEach { classScope.addTypeParam(it.name.text, it.constraint) }
-                }
-                stmt.typeParameters?.forEach { tp ->
-                    tp.constraint?.let { checkUnresolvedInType(it, classScope, source, fileName) }
-                    tp.default?.let { checkUnresolvedInType(it, classScope, source, fileName) }
-                }
-                stmt.heritageClauses?.forEach { clause ->
-                    emitTS2864ForPrimitiveImplements(clause, classScope, source, fileName)
-                    for (type in clause.types) {
-                        // 17.209: For `implements <bareTypeParam>` (e.g. `class C<T>
-                        // implements T {}`), TypeScript treats T as a TYPE-position
-                        // reference that resolves to the type parameter, then
-                        // rejects it with TS2422 ("class can only implement an
-                        // object type"). Skip the value-position TS2304 emission
-                        // and the typeArguments walk (none on a bare identifier),
-                        // and emit TS2422 directly.
-                        val isImplementsTypeParam = clause.token == SyntaxKind.ImplementsKeyword &&
-                            type.expression is Identifier &&
-                            classScope.isTypeParam((type.expression).text) &&
-                            !scope.has((type.expression).text)
-                        if (isImplementsTypeParam) {
-                            val ident = type.expression
-                            val (line, character) = getLineAndCharacterOfPosition(source, ident.pos)
-                            diagnostics.add(Diagnostic(
-                                message = "A class can only implement an object type or intersection of object types with statically known members.",
-                                category = DiagnosticCategory.Error,
-                                code = 2422,
-                                fileName = fileName,
-                                line = line,
-                                character = character,
-                                start = ident.pos,
-                                length = ident.text.length,
-                            ))
-                            continue
-                        }
-                        checkUnresolvedInExpr(type.expression, classScope, source, fileName)
-                        // indexSignatureInOtherFile (piece A): `class C extends B` where B is
-                        // BOTH a generic interface AND a value var (`declare var B: BCtor` whose
-                        // `new(): B<any>`) extends the VALUE (the non-generic ctor) — tsc does NOT
-                        // arity-check the generic interface, so no TS2314. Skip the arity check
-                        // for an extends clause (no explicit type args) whose base has a value var
-                        // declaration anywhere in the program. Proven net-zero (round 209).
-                        val skipArityForValueExtends = clause.token == SyntaxKind.ExtendsKeyword &&
-                            type.typeArguments.isNullOrEmpty() &&
-                            (type.expression as? Identifier)?.text?.let { heritageBaseHasValueVarDecl(it) } == true
-                        if (!skipArityForValueExtends) {
-                            checkHeritageTypeArgCount(type, classScope, source, fileName)
-                        }
-                        type.typeArguments?.forEach { checkUnresolvedInType(it, classScope, source, fileName) }
-                        // 17.163: TS2304 for `class C<T> extends T {}` — heritage clause
-                        // requires a value, but T resolves only to an enclosing type
-                        // parameter (no value-side binding in any outer scope).
-                        emitTs2304ForHeritageExtendsTypeParam(type.expression, classScope, scope, source, fileName)
-                        // B67.2: TS2562 — `class C<T> extends Base<T>()` references C's
-                        // own type parameters in the heritage expression's call/new
-                        // type-args. T isn't in scope at the heritage expression's
-                        // evaluation point.
-                        if (clause.token == SyntaxKind.ExtendsKeyword && !stmt.typeParameters.isNullOrEmpty()) {
-                            val ownTypeParamNames = stmt.typeParameters.mapNotNull { (it.name).text }.toSet()
-                            if (ownTypeParamNames.isNotEmpty()) {
-                                checkBaseExprForOwnTypeParamRefs(type.expression, ownTypeParamNames, source, fileName)
-                            }
-                        }
-                        // 17.226: TS2694 for `implements ns.Member` where ns is a namespace and
-                        // Member is missing from its exports. Limited to implements clause +
-                        // single-level PropertyAccess to keep regression risk low.
-                        if (clause.token == SyntaxKind.ImplementsKeyword) {
-                            checkHeritagePropertyAccessForNamespaceMember(type.expression, source, fileName)
-                        }
-                        // strictModeReservedWordInClassDeclaration: a heritage base whose
-                        // LEFTMOST identifier is a strict-mode reserved word. Classes are
-                        // automatically strict → TS1213 always; plus TS2702 when it resolves
-                        // to a TYPE used as a namespace qualifier (`implements public.private.B`)
-                        // or TS2304 when it doesn't resolve at all (`extends package`/`package.A`).
-                        // The reserved-word gate is the FP firewall — the only `extends/implements
-                        // <reserved>` corpus tests are this + strictModeReservedWord.ts — so this
-                        // never touches legitimate `implements Namespace.Member` heritage.
-                        run {
-                            val leftmost = heritageLeftmostIdentifier(type.expression)
-                            if (leftmost != null && leftmost.text in STRICT_MODE_RESERVED_WORDS) {
-                                val lname = leftmost.text
-                                checkIdentForStrictReserved(leftmost, source, fileName, inClass = true, isModule = false)
-                                val leftSym = globals[lname] ?: currentFileLocals?.get(lname)
-                                val (l2702, c2702) = getLineAndCharacterOfPosition(source, leftmost.pos)
-                                if (type.expression is PropertyAccessExpression && leftSym != null &&
-                                    leftSym.flags.hasAny(SymbolFlags.Class or SymbolFlags.Interface or SymbolFlags.TypeAlias) &&
-                                    !leftSym.flags.hasAny(SymbolFlags.Module or SymbolFlags.Enum)) {
-                                    diagnostics.add(Diagnostic(
-                                        message = "'$lname' only refers to a type, but is being used as a namespace here.",
-                                        category = DiagnosticCategory.Error, code = 2702,
-                                        fileName = fileName, line = l2702, character = c2702,
-                                        start = leftmost.pos, length = lname.length,
-                                    ))
-                                } else if (leftSym == null && !scope.has(lname) && !classScope.isTypeParam(lname)) {
-                                    diagnostics.add(Diagnostic(
-                                        message = "Cannot find name '$lname'.",
-                                        category = DiagnosticCategory.Error, code = 2304,
-                                        fileName = fileName, line = l2702, character = c2702,
-                                        start = leftmost.pos, length = lname.length,
-                                    ))
-                                }
-                            }
-                        }
-                    }
-                }
-                val ctorParamNames = extractCtorParamNames(stmt.members)
-                for (member in stmt.members) {
-                    checkUnresolvedInClassElement(member, classScope, source, fileName, ctorParamNames)
-                }
-            }
-            is InterfaceDeclaration -> {
-                val ifaceLex = unresolvedLexOf(stmt)
-                val ifaceScope = scope.child(lex = ifaceLex)
-                if (ifaceLex == null) {
-                    stmt.typeParameters?.forEach { ifaceScope.addTypeParam(it.name.text, it.constraint) }
-                }
-                stmt.typeParameters?.forEach { tp ->
-                    tp.constraint?.let { checkUnresolvedInType(it, ifaceScope, source, fileName) }
-                    tp.default?.let { checkUnresolvedInType(it, ifaceScope, source, fileName) }
-                }
-                stmt.heritageClauses?.forEach { clause ->
-                    for (type in clause.types) {
-                        checkUnresolvedInExpr(type.expression, ifaceScope, source, fileName)
-                        checkHeritageTypeArgCount(type, ifaceScope, source, fileName)
-                        type.typeArguments?.forEach { checkUnresolvedInType(it, ifaceScope, source, fileName) }
-                        // 17.163: TS2312 for `interface I<T> extends T {}` — interface
-                        // can only extend an object type, not a bare type parameter.
-                        emitTs2312ForInterfaceExtendsTypeParam(type.expression, ifaceScope, scope, source, fileName)
-                        // B582: TS2312 for `interface I extends RemapRecord<K,V>` where
-                        // RemapRecord = { [_ in never as K]: V } (bare-TP `as` remap).
-                        emitTs2312ForInterfaceExtendsBadMapped(type, source, fileName)
-                        // 17.172: TS2499 — interface extends expression must be an
-                        // entity name (Identifier or QualifiedName, with optional
-                        // type arguments). `interface X extends (typeof A) {}` and
-                        // similar non-entity-name expressions fire TS2499.
-                        emitTs2499ForInterfaceExtendsNonEntityName(type.expression, source, fileName)
-                    }
-                }
-                for (member in stmt.members) {
-                    when (member) {
-                        is PropertyDeclaration -> {
-                            // Check computed property name (e.g. [x]: string — x must be in scope)
-                            if (member.name is ComputedPropertyName) {
-                                checkUnresolvedInExpr((member.name).expression, ifaceScope, source, fileName)
-                            }
-                            member.type?.let { checkUnresolvedInType(it, ifaceScope, source, fileName) }
-                        }
-                        is MethodDeclaration -> {
-                            val methodScope = ifaceScope.child()
-                            member.typeParameters?.forEach { methodScope.addTypeParam(it.name.text, it.constraint) }
-                            member.typeParameters?.forEach { tp ->
-                                tp.constraint?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
-                                tp.default?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
-                            }
-                            addParamsToScope(member.parameters, methodScope)
-                            for (param in member.parameters) {
-                                param.type?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
-                            }
-                            member.type?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
-                            checkUnusedDestructuredRenames(member.parameters, member.type, source, fileName)
-                        }
-                        is IndexSignature -> {
-                            member.type?.let { checkUnresolvedInType(it, ifaceScope, source, fileName) }
-                            for (param in member.parameters) {
-                                param.type?.let { checkUnresolvedInType(it, ifaceScope, source, fileName) }
-                            }
-                        }
-                        is SetAccessor -> {
-                            val setScope = ifaceScope.child()
-                            addParamsToScope(member.parameters, setScope)
-                            for (param in member.parameters) {
-                                param.type?.let { checkUnresolvedInType(it, setScope, source, fileName) }
-                            }
-                            checkUnusedDestructuredRenames(member.parameters, null, source, fileName)
-                        }
-                        is GetAccessor -> {
-                            member.type?.let { checkUnresolvedInType(it, ifaceScope, source, fileName) }
-                        }
-                        else -> {}
-                    }
-                }
-            }
-            is TypeAliasDeclaration -> {
-                val aliasLex = unresolvedLexOf(stmt)
-                val typeScope = scope.child(lex = aliasLex)
-                if (aliasLex == null) {
-                    stmt.typeParameters?.forEach { typeScope.addTypeParam(it.name.text, it.constraint) }
-                }
-                stmt.typeParameters?.forEach { tp ->
-                    tp.constraint?.let { checkUnresolvedInType(it, typeScope, source, fileName) }
-                    tp.default?.let { checkUnresolvedInType(it, typeScope, source, fileName) }
-                }
-                checkUnresolvedInType(stmt.type, typeScope, source, fileName)
-            }
-            is EnumDeclaration -> {
-                // Enum member initializers can reference other members and the enum itself
-                val enumScope = scope.child()
-                // Add members from ALL merged enum declarations (via binder symbol)
-                // Only add EnumMember symbols, not namespace exports that merged with the same symbol
-                val enumResult = fileResults[fileName]
-                val enumSymbol = enumResult?.nodeToSymbol?.get(nodeKey(stmt))
-                if (enumSymbol?.exports != null) {
-                    for ((exportName, sym) in enumSymbol.exports!!) {
-                        if (sym.flags.hasAny(SymbolFlags.EnumMember)) {
-                            enumScope.names.add(exportName)
-                        }
-                    }
-                }
-                // Also add members from this specific declaration (covers cases without binder symbol)
-                for (member in stmt.members) {
-                    val memberName = member.name
-                    if (memberName is Identifier) enumScope.names.add(memberName.text)
-                    else if (memberName is StringLiteralNode) enumScope.names.add(memberName.text)
-                }
-                // B162: CROSS-FILE merged-enum members — same-named top-level enums in script
-                // (non-module) files merge via the global scope, so `enum Enum { E = A }` sees
-                // an `A` declared by `enum Enum { A }` in another script file. The per-file
-                // binder symbol's exports only cover same-file declarations. Identity-gated to
-                // the file's TOP-LEVEL enum (a namespace-nested enum of the same name must not
-                // inherit the global one's members).
-                if (enumSymbol != null && enumResult.locals[stmt.name.text] === enumSymbol &&
-                    !isModuleFile(enumResult.sourceFile.statements)
-                ) {
-                    scriptEnumMembersByName()[stmt.name.text]?.keys?.forEach { enumScope.names.add(it) }
-                }
-                for (member in stmt.members) {
-                    member.initializer?.let { checkUnresolvedInExpr(it, enumScope, source, fileName) }
-                }
-            }
-            is ModuleDeclaration -> {
-                // Build namespace scope that includes merged exports from all declarations
-                val nsScope = buildNamespaceScope(stmt, scope, fileName)
-                if (ModifierFlag.Declare in stmt.modifiers) {
-                    // In declare namespaces heritage TS2314 IS checked, but the body was
-                    // historically skipped for TS2304 (ambient types expected). B367: run the
-                    // body check too — `globals` now carries cross-file ambient types — but
-                    // keep ONLY bare-name TS2304 from it. Qualified-name resolution
-                    // (TS2694/TS2503/TS2833) and body-position generic arg-count (TS2314)
-                    // are still incomplete in ambient cross-namespace scope (Blocker #3) and
-                    // FP-prone, so a post-filter drops everything except TS2304.
-                    checkHeritageClausesInDeclareNamespace(stmt, nsScope, source, fileName)
-                    val before = diagnostics.size
-                    when (val body = stmt.body) {
-                        // owner = null: namespace bodies keep the threaded population
-                        // (the binder module table is unfiltered merged exports).
-                        is ModuleBlock -> checkUnresolvedInStatements(body.statements, null, nsScope, source, fileName)
-                        is ModuleDeclaration -> checkUnresolvedInStatement(body, nsScope, source, fileName)
-                        else -> {}
-                    }
-                    if (diagnostics.size > before) {
-                        // Keep only the bare-NAME unresolved family: TS2304 ("cannot find
-                        // name") and its spelling variant TS2552 ("did you mean"). Drop the
-                        // namespace family (TS2503/TS2833/TS2694) and arg-count (TS2314).
-                        val kept = diagnostics.subList(before, diagnostics.size)
-                            .filter { it.code == 2304 || it.code == 2552 }.toList()
-                        while (diagnostics.size > before) diagnostics.removeAt(diagnostics.size - 1)
-                        diagnostics.addAll(kept)
-                    }
-                    return
-                }
-                when (val body = stmt.body) {
-                    is ModuleBlock -> checkUnresolvedInStatements(body.statements, null, nsScope, source, fileName)
-                    is ModuleDeclaration -> checkUnresolvedInStatement(body, nsScope, source, fileName)
-                    else -> {}
-                }
-            }
-            is ExportDeclaration -> {
-                // export { X } — check that X exists
-                if (stmt.moduleSpecifier == null) {
-                    when (val clause = stmt.exportClause) {
-                        is NamedExports -> {
-                            for (spec in clause.elements) {
-                                val name = spec.propertyName?.text ?: spec.name.text
-                                val node = spec.propertyName ?: spec.name
-                                checkIdentifierResolved(name, node, scope, source, fileName)
-                            }
-                        }
-                        else -> {}
-                    }
-                }
-            }
-            is ExportAssignment -> {
-                checkUnresolvedInExpr(stmt.expression, scope, source, fileName)
-            }
-            is ImportEqualsDeclaration -> {
-                // Check the module reference for TS2503 (internal namespace alias)
-                // Only for non-external (non-require) references: import a = b or import a = b.c
-                val ref = stmt.moduleReference
-                if (ref !is ExternalModuleReference) {
-                    // Find the leftmost identifier in the module reference
-                    val leftmost: Identifier? = when (ref) {
-                        is Identifier -> ref
-                        is QualifiedName -> {
-                            var n: Node = ref
-                            while (n is QualifiedName) n = n.left
-                            n as? Identifier
-                        }
-                        else -> null
-                    }
-                    // B61.5b/c: For `import a = x.c[.d.e...]` where x is a top-level
-                    // non-declare namespace and the rightmost identifier refers to an
-                    // existing but non-exported member, emit TS2694 at the rightmost
-                    // identifier. Walks nested QualifiedName segments — intermediate
-                    // segments must be sub-namespaces (Module flag, implicitly exported).
-                    if (ref is QualifiedName) {
-                        // Walk left-most identifier
-                        var leftN: Node = ref
-                        val segments = mutableListOf<Identifier>()
-                        segments.add(ref.right)
-                        while (leftN is QualifiedName) {
-                            leftN = leftN.left
-                            if (leftN is QualifiedName) {
-                                segments.add(0, leftN.right)
-                            }
-                        }
-                        val rootIdent = leftN as? Identifier
-                        val rightIdent = segments.last()
-                        val intermediateIdents = segments.dropLast(1)  // segments BETWEEN root and rightIdent
-                        val fileLocals = fileResults[fileName]?.locals
-                        val rootSym = if (rootIdent != null)
-                            fileLocals?.get(rootIdent.text) ?: globals[rootIdent.text]
-                        else null
-                        // Walk intermediate segments — must all be sub-namespaces.
-                        // B61.5i: if an intermediate segment doesn't exist in the parent
-                        // namespace's exports at all (e.g. `globals.toString.X` where
-                        // `toString` isn't in globals), emit TS2694 at that segment.
-                        var currentNs: Symbol? = rootSym
-                        var walkOk = currentNs != null
-                        // Track running qualified path for error message
-                        val pathSoFar = mutableListOf<String>()
-                        if (rootIdent != null) pathSoFar.add(rootIdent.text)
-                        for (seg in intermediateIdents) {
-                            val nextSym = currentNs?.exports?.get(seg.text)
-                            if (nextSym == null) {
-                                // Intermediate segment doesn't exist — emit TS2694 here
-                                // (only when root is a non-declare namespace).
-                                val isRootNonDeclare = rootSym?.declarations?.any { d ->
-                                    d is ModuleDeclaration && ModifierFlag.Declare !in d.modifiers
-                                } == true
-                                if (isRootNonDeclare) {
-                                    val segStart = seg.pos
-                                    val (line, character) = getLineAndCharacterOfPosition(source, segStart)
-                                    val nsPath = pathSoFar.joinToString(".")
-                                    diagnostics.add(Diagnostic(
-                                        message = "Namespace '$nsPath' has no exported member '${seg.text}'.",
-                                        category = DiagnosticCategory.Error,
-                                        code = 2694,
-                                        fileName = fileName,
-                                        line = line,
-                                        character = character,
-                                        start = segStart,
-                                        length = seg.text.length,
-                                    ))
-                                }
-                                walkOk = false
-                                break
-                            }
-                            if (!nextSym.flags.hasAny(SymbolFlags.Module)) {
-                                walkOk = false
-                                break
-                            }
-                            currentNs = nextSym
-                            pathSoFar.add(seg.text)
-                        }
-                        val finalNs = currentNs
-                        // Skip declare-namespace (its members are implicitly exported).
-                        val isNonDeclareNamespace = walkOk && finalNs != null &&
-                            finalNs.declarations.any { d ->
-                                d is ModuleDeclaration && ModifierFlag.Declare !in d.modifiers
-                            }
-                        // B61.5d: TS2708 — "Cannot use namespace 'X' as a value." When the
-                        // import-equals has `export` (and not `declare`) and the root namespace
-                        // is purely type-side AND not itself exported, emit TS2708 at the root
-                        // identifier's position. The not-exported gate prevents FP when the
-                        // root namespace is a module-level export (which gives it a value
-                        // binding even if its members are type-only).
-                        val isTopLevel = fileResults[fileName]?.sourceFile?.statements?.contains(stmt) == true
-                        val rootNamespaceExported = rootSym?.declarations?.any { d ->
-                            d is ModuleDeclaration && ModifierFlag.Export in d.modifiers
-                        } == true
-                        if (isTopLevel && rootIdent != null && walkOk && rootSym != null &&
-                            ModifierFlag.Export in stmt.modifiers &&
-                            ModifierFlag.Declare !in stmt.modifiers &&
-                            !rootNamespaceExported &&
-                            rootSym.flags.hasAny(SymbolFlags.NamespaceModule) &&
-                            !rootSym.flags.hasAny(SymbolFlags.ValueModule)) {
-                            val rootStart = rootIdent.pos
-                            val (line, character) = getLineAndCharacterOfPosition(source, rootStart)
-                            diagnostics.add(Diagnostic(
-                                message = "Cannot use namespace '${rootIdent.text}' as a value.",
-                                category = DiagnosticCategory.Error,
-                                code = 2708,
-                                fileName = fileName,
-                                line = line,
-                                character = character,
-                                start = rootStart,
-                                length = rootIdent.text.length,
-                            ))
-                        }
-                        if (rootIdent != null && isNonDeclareNamespace) {
-                            val memberSym = finalNs.exports?.get(rightIdent.text)
-                            if (memberSym != null) {
-                                // Sub-namespaces (Module flag) are implicitly exported when
-                                // declared via the dotted form `namespace A.B { ... }`. Skip the
-                                // export check for them.
-                                val isSubNamespace = memberSym.flags.hasAny(SymbolFlags.Module)
-                                // Check if member is actually exported via AST scan.
-                                val isExported = isSubNamespace || memberSym.declarations.any { d ->
-                                    when (d) {
-                                        is FunctionDeclaration -> ModifierFlag.Export in d.modifiers
-                                        is ClassDeclaration -> ModifierFlag.Export in d.modifiers
-                                        is InterfaceDeclaration -> ModifierFlag.Export in d.modifiers
-                                        is TypeAliasDeclaration -> ModifierFlag.Export in d.modifiers
-                                        is EnumDeclaration -> ModifierFlag.Export in d.modifiers
-                                        is ModuleDeclaration -> ModifierFlag.Export in d.modifiers
-                                        else -> false
+                    } || run {
+                        // Variable declarations: scan namespace body for export VarStatement.
+                        finalNs.declarations.any { nsDecl ->
+                            val body = (nsDecl as? ModuleDeclaration)?.body as? ModuleBlock
+                                ?: return@any false
+                            body.statements.any { s ->
+                                s is VariableStatement && ModifierFlag.Export in s.modifiers &&
+                                    s.declarationList.declarations.any { vd ->
+                                        (vd.name as? Identifier)?.text == rightIdent.text
                                     }
-                                } || run {
-                                    // Variable declarations: scan namespace body for export VarStatement.
-                                    finalNs.declarations.any { nsDecl ->
-                                        val body = (nsDecl as? ModuleDeclaration)?.body as? ModuleBlock
-                                            ?: return@any false
-                                        body.statements.any { s ->
-                                            s is VariableStatement && ModifierFlag.Export in s.modifiers &&
-                                                s.declarationList.declarations.any { vd ->
-                                                    (vd.name as? Identifier)?.text == rightIdent.text
-                                                }
-                                        }
-                                    }
-                                }
-                                if (!isExported) {
-                                    val rightStart = rightIdent.pos
-                                    val (line, character) = getLineAndCharacterOfPosition(source, rightStart)
-                                    // Build qualified namespace path: root.intermediate1.intermediate2...
-                                    val nsPath = (listOf(rootIdent.text) + intermediateIdents.map { it.text }).joinToString(".")
-                                    diagnostics.add(Diagnostic(
-                                        message = "Namespace '$nsPath' has no exported member '${rightIdent.text}'.",
-                                        category = DiagnosticCategory.Error,
-                                        code = 2694,
-                                        fileName = fileName,
-                                        line = line,
-                                        character = character,
-                                        start = rightStart,
-                                        length = rightIdent.text.length,
-                                    ))
-                                }
                             }
                         }
                     }
-                    if (leftmost != null) {
-                        val name = leftmost.text
-                        // Skip invalid identifier starts (numbers, strings) — parser already emits TS1003
-                        // Skip keyword identifiers (null, true, false, this, etc.)
-                        val validIdStart = name.isNotEmpty() &&
-                            (name[0] in 'A'..'Z' || name[0] in 'a'..'z' || name[0] == '_' || name[0] == '$')
-                        // Skip synthetic literal refs produced by parser recovery for `import X = <literal>`
-                        // (string literal → rawText starts with quote; `null` → text == "null").
-                        val isSyntheticLiteral = name == "null" ||
-                            (leftmost.rawText?.let { it.startsWith("\"") || it.startsWith("'") } == true)
-                        // `module` is in KEYWORD_IDENTIFIERS (contextual keyword) but is a
-                        // legitimate identifier reference as an import-equals target —
-                        // `import fs = module("fs")` parses as `import fs = module` and tsc
-                        // resolves the entity name (constructorWithIncompleteTypeAnnotation).
-                        val contextualRefOk = name == "module" && ref is Identifier
-                        if (validIdStart && (name !in KEYWORD_IDENTIFIERS || contextualRefOk) && !isSyntheticLiteral &&
-                            (!scope.has(name) || name in VALUE_ONLY_GLOBALS || name == "undefined")) {
-                            emitTS2503(name, leftmost, source, fileName)
-                            // tsc also resolves the aliased entity in VALUE meaning when the
-                            // alias is used as a value (`local5 instanceof fs.File`) — an
-                            // unresolvable node-global name gets the TS2591 @types/node hint
-                            // at the same moduleReference position.
-                            if (name in NODE_BUILTIN_GLOBALS_TS2591 && importAliasUsedAsValue(fileName, stmt.name.text, stmt)) {
-                                val (line2591, char2591) = getLineAndCharacterOfPosition(source, leftmost.pos)
-                                diagnostics.add(Diagnostic(
-                                    message = "Cannot find name '$name'. Do you need to install type definitions for node? Try `npm i --save-dev @types/node` and then add 'node' to the types field in your tsconfig.",
-                                    category = DiagnosticCategory.Error,
-                                    code = 2591,
-                                    fileName = fileName,
-                                    line = line2591,
-                                    character = char2591,
-                                    start = leftmost.pos,
-                                    length = name.length,
-                                ))
-                            }
-                            // 16.4ee: When the whole module reference is a bare Identifier that
-                            // does NOT resolve in scope AND the alias is exported from a file
-                            // under `declaration: true`, TypeScript's declaration-emit path
-                            // fails to resolve the target and reports the alias as "circular"
-                            // (TS2303) + identifier as not-found (TS2304). Non-exported or
-                            // non-declaration-emit files emit TS2503 only.
-                            if (ref is Identifier && !scope.has(name) && options.declaration) {
-                                val isExported = ModifierFlag.Export in stmt.modifiers
-                                    || isImportAliasReExported(fileName, stmt.name.text)
-                                if (isExported) {
-                                    emitTS2304ForImportRef(name, leftmost, source, fileName)
-                                    emitTS2303ForImportEquals(stmt, source, fileName)
-                                }
-                            }
-                        }
+                    if (!isExported) {
+                        val rightStart = rightIdent.pos
+                        val (line, character) = getLineAndCharacterOfPosition(source, rightStart)
+                        // Build qualified namespace path: root.intermediate1.intermediate2...
+                        val nsPath = (listOf(rootIdent.text) + intermediateIdents.map { it.text }).joinToString(".")
+                        diagnostics.add(Diagnostic(
+                            message = "Namespace '$nsPath' has no exported member '${rightIdent.text}'.",
+                            category = DiagnosticCategory.Error,
+                            code = 2694,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = rightStart,
+                            length = rightIdent.text.length,
+                        ))
                     }
                 }
             }
-            else -> {}
+        }
+        if (leftmost != null) {
+            val name = leftmost.text
+            // Skip invalid identifier starts (numbers, strings) — parser already emits TS1003
+            // Skip keyword identifiers (null, true, false, this, etc.)
+            val validIdStart = name.isNotEmpty() &&
+                (name[0] in 'A'..'Z' || name[0] in 'a'..'z' || name[0] == '_' || name[0] == '$')
+            // Skip synthetic literal refs produced by parser recovery for `import X = <literal>`
+            // (string literal → rawText starts with quote; `null` → text == "null").
+            val isSyntheticLiteral = name == "null" ||
+                (leftmost.rawText?.let { it.startsWith("\"") || it.startsWith("'") } == true)
+            // `module` is in KEYWORD_IDENTIFIERS (contextual keyword) but is a
+            // legitimate identifier reference as an import-equals target —
+            // `import fs = module("fs")` parses as `import fs = module` and tsc
+            // resolves the entity name (constructorWithIncompleteTypeAnnotation).
+            val contextualRefOk = name == "module" && ref is Identifier
+            if (validIdStart && (name !in KEYWORD_IDENTIFIERS || contextualRefOk) && !isSyntheticLiteral &&
+                (!scope.has(name) || name in VALUE_ONLY_GLOBALS || name == "undefined")) {
+                emitTS2503(name, leftmost, source, fileName)
+                // tsc also resolves the aliased entity in VALUE meaning when the
+                // alias is used as a value (`local5 instanceof fs.File`) — an
+                // unresolvable node-global name gets the TS2591 @types/node hint
+                // at the same moduleReference position.
+                if (name in NODE_BUILTIN_GLOBALS_TS2591 && importAliasUsedAsValue(fileName, stmt.name.text, stmt)) {
+                    val (line2591, char2591) = getLineAndCharacterOfPosition(source, leftmost.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Cannot find name '$name'. Do you need to install type definitions for node? Try `npm i --save-dev @types/node` and then add 'node' to the types field in your tsconfig.",
+                        category = DiagnosticCategory.Error,
+                        code = 2591,
+                        fileName = fileName,
+                        line = line2591,
+                        character = char2591,
+                        start = leftmost.pos,
+                        length = name.length,
+                    ))
+                }
+                // 16.4ee: When the whole module reference is a bare Identifier that
+                // does NOT resolve in scope AND the alias is exported from a file
+                // under `declaration: true`, TypeScript's declaration-emit path
+                // fails to resolve the target and reports the alias as "circular"
+                // (TS2303) + identifier as not-found (TS2304). Non-exported or
+                // non-declaration-emit files emit TS2503 only.
+                if (ref is Identifier && !scope.has(name) && options.declaration) {
+                    val isExported = ModifierFlag.Export in stmt.modifiers
+                        || isImportAliasReExported(fileName, stmt.name.text)
+                    if (isExported) {
+                        emitTS2304ForImportRef(name, leftmost, source, fileName)
+                        emitTS2303ForImportEquals(stmt, source, fileName)
+                    }
+                }
+            }
         }
     }
 
@@ -27748,9 +27738,7 @@ class Checker(
                     param.initializer?.let { checkUnresolvedInExpr(it, methodScope, source, fileName) }
                 }
                 element.type?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
-                element.body?.let {
-                    checkUnresolvedInStatements(it.statements, element, methodScope, source, fileName)
-                }
+                // Body statements reached by the spine (batch 2).
             }
             is IndexSignature -> {
                 element.type?.let { checkUnresolvedInType(it, classScope, source, fileName) }
@@ -27767,16 +27755,12 @@ class Checker(
                     param.type?.let { checkUnresolvedInType(it, ctorScope, source, fileName) }
                     param.initializer?.let { checkUnresolvedInExpr(it, ctorScope, source, fileName) }
                 }
-                element.body?.let {
-                    checkUnresolvedInStatements(it.statements, element, ctorScope, source, fileName)
-                }
+                // Body statements reached by the spine (batch 2).
             }
             is GetAccessor -> {
                 val getScope = classScope.child(hasArguments = true, classContext = memberClassCtx)
                 element.type?.let { checkUnresolvedInType(it, getScope, source, fileName) }
-                element.body?.let {
-                    checkUnresolvedInStatements(it.statements, element, getScope, source, fileName)
-                }
+                // Body statements reached by the spine (batch 2).
             }
             is SetAccessor -> {
                 val setScope = classScope.child(hasArguments = true, classContext = memberClassCtx)
@@ -27784,13 +27768,10 @@ class Checker(
                 for (param in element.parameters) {
                     param.type?.let { checkUnresolvedInType(it, setScope, source, fileName) }
                 }
-                element.body?.let {
-                    checkUnresolvedInStatements(it.statements, element, setScope, source, fileName)
-                }
+                // Body statements reached by the spine (batch 2).
             }
             is ClassStaticBlockDeclaration -> {
-                val staticBlockScope = classScope.child(classContext = memberClassCtx)
-                checkUnresolvedInStatements(element.body.statements, element, staticBlockScope, source, fileName)
+                // Body statements reached by the spine (batch 2).
             }
             else -> {}
         }
@@ -27965,7 +27946,7 @@ class Checker(
                 }
                 expr.type?.let { checkUnresolvedInType(it, arrowScope, source, fileName) }
                 when (val body = expr.body) {
-                    is Block -> checkUnresolvedInStatements(body.statements, expr, arrowScope, source, fileName)
+                    // Block bodies: statements reached by the spine (batch 2).
                     is Expression -> checkUnresolvedInExpr(body, arrowScope, source, fileName)
                     else -> {}
                 }
@@ -27985,7 +27966,7 @@ class Checker(
                     param.initializer?.let { checkUnresolvedInExpr(it, fnScope, source, fileName) }
                 }
                 expr.type?.let { checkUnresolvedInType(it, fnScope, source, fileName) }
-                checkUnresolvedInStatements(expr.body.statements, expr, fnScope, source, fileName)
+                // Body statements reached by the spine (batch 2).
             }
             is ClassExpression -> {
                 val classCtx = buildClassContext(expr, scope, fileName)
@@ -28058,21 +28039,14 @@ class Checker(
                                 param.initializer?.let { checkUnresolvedInExpr(it, methodScope, source, fileName) }
                             }
                             prop.type?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
-                            prop.body?.let {
-                                checkUnresolvedInStatements(it.statements, prop, methodScope, source, fileName)
-                            }
+                            // Body statements reached by the spine (batch 2).
                         }
                         is GetAccessor -> {
-                            prop.body?.let {
-                                checkUnresolvedInStatements(it.statements, prop, scope, source, fileName)
-                            }
+                            // Body statements reached by the spine (batch 2).
                         }
                         is SetAccessor -> {
-                            val setScope = scope.child(hasArguments = true)
-                            addParamsToScope(prop.parameters, setScope)
-                            prop.body?.let {
-                                checkUnresolvedInStatements(it.statements, prop, setScope, source, fileName)
-                            }
+                            // Params register on the spine's accessor level; body
+                            // statements reached by the spine (batch 2).
                         }
                         else -> {}
                     }

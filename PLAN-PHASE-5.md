@@ -59,6 +59,67 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 525 (2026-07-15) — INV.4(c)(iii) batch 2: the checkUnresolvedNames
+STATEMENT-LEVEL walk swap — the recursive statement walkers are DELETED.**
+`checkUnresolvedInStatements`/`checkUnresolvedInStatement(Core)` (~770 lines,
+the family's driver + per-statement dispatcher) are gone; per-statement
+dispatch lives in `spineUResDispatch` (called from spineWalkFile right after
+spineUResEnter, so a statement's own maintained level — for headers, the
+switch shared-clause scope, class/interface/enum/namespace scopes — is already
+pushed). Mechanics: (1) simple statement kinds (var/expr/return/if/while/do/
+for/for-in/for-of/switch-subject/case-expr/throw/with-expr/export/export=/
+import-equals) check their IMMEDIATE expression/type children against
+spineUResScope(), the still-legacy expression/type/class-element walkers doing
+the recursion; (2) FunctionDeclaration signature positions dispatch at CHILD
+enters inside spineUResOnDirectChild (TypeParameter child → constraint/default
+with TPs-but-no-params, Parameter child → type/init with params, return-type
+child → type) so the batch-1 lazy population provides the exact legacy
+staging; (3) the class/interface arms moved verbatim into
+spineUResClassDeclaration/spineUResInterfaceDeclaration (classScope = the
+level spineUResEnter pushed — identical construction; outer scope via
+spineUResOuterScope), the ImportEquals arm extracted verbatim as
+checkUnresolvedInImportEquals. Under-visits reproduce as SUPPRESSED-REGION
+levels (`UnresolvedSpineLevel.suppressed` + a counter): a WithStatement body
+(pass-through level flipped at the statement child), a skipped
+outside-function return (module files always; script files unless the
+expression contains this/a call), and `declare` functions/classes (level
+marked at dispatch; declare-class heritage keeps its TS2314 arity check
+first); the declare-module body post-filter became the `filter2304` level
+flag — `spineUResEmit` wraps EVERY dispatch site (suppressed → no-op; filter →
+keep only TS2304/TS2552 from that batch — per-diagnostic, so slicing the
+legacy one-shot filter per dispatch yields the identical set). spineUResEmit
+also NULLS `currentFileLocals` around family emissions — the legacy pass ran
+with it null (the INV.3(d)(ii) "unscoped class" note) while checkSpine sets it
+per file; without the null, the strict-reserved heritage TS2702/TS2304 split
+and the TS2833/TS2503 qualifier resolution would take different paths. The 10
+statement descents in the expression/class-element walkers are CUT (arrow/
+fn-expr/objlit-method/get/set bodies + class method/ctor/get/set/static-block
+bodies) — the spine reaches nested bodies with the batch-1-audited maintained
+scopes. `checkUnresolvedNames` remains ONLY as the declarationOnly-mode driver
+(checkSpine doesn't run there): it walks each file with every non-family spine
+handler disabled (`spineUResOnly`), deliberately NOT computing the type-lib
+strip (the legacy declarationOnly path never ran checkTypeLibraryEntryPoints);
+the normal-mode `pass("checkUnresolvedNames")` dispatch is removed. KNOWN
+semantic deltas accepted (suite/listAll-arbitrated, none observed): statement
+nesting no longer consumes checkDepth (the expression/type walkers keep their
+own guards), and within-file emission ORDER shifts (object-literal/class
+method bodies now emit after all signature-position checks of the enclosing
+statement; params before return type) — this re-orders the TS2552
+10-per-program suggestion budget within a file in principle. VERIFIED: suite
+10,713 → 10,747 (+34 Inv4SpineBatch16Test — with-body/return/declare-region
+suppression pins with negative controls, declare-module filter keep/drop,
+TP-constraint-vs-params staging, ES5 hoist, switch shared-clause scope,
+emitDeclarationOnly still reporting; 0 regressions); listAll error-line SETS
+IDENTICAL on ALL 8 profiles (525a vs 524a — every file:line:col:code:message
+equal; within-file PRINT order shifts per the emission-order note above, the
+first (c)(iii) batch where raw-order byte-identity is deliberately traded —
+the corpus suite gates the SORTED output byte-identical); bench 25,823 ms
+self (−2.7% vs 524 — deleting the legacy walk pays back batch 1's doubled
+scope maintenance), 46 errors unchanged (all env-legit offline artifacts).
+NEXT: (c)(iii) batch 3 — the class-element walker's positions onto the spine
+(member signature dispatch at child enters against the maintained member
+levels), then expressions/types/JSX.**
+
 **Round 524 (2026-07-15) — INV.4(c)(iii) batch 1: the spine maintains the
 checkUnresolvedNames family's NameScope chain (infrastructure, always-on,
 audited — emissions still on the legacy walk).** `spineUResStack` (wired into
@@ -629,83 +690,6 @@ checkNonArrayRestParameters (read its value-position walk first; two
 differently-shaped walks) + the per-file-prepass pair
 (checkIteratorMethodExtraParameters / checkAsyncYieldStarThenable, the
 file-enter hook pattern).**
-
-**Round 513 (2026-07-14) — INV.3(d)(v) deletion #1: the `moduleFileLocalVarNames`
-value-leak ecology DELETED (the round-442/445/447/448/450/453/460 family).**
-Removed: the field, the 1a2 builder, all seven consult bails (mam receiver-chain
-walk, arg-loop root walk via `argRootIsLeakedModuleVar`, return-path, assignment
-RHS + TARGET, var-decl alias inference, `arithOperandType` operand bail).
-Post-retire every consult was hypothesized inert — the gates found exactly TWO
-pre-retire accidental masks (the round-512 (iii) lesson class): (1) the suite
-caught ModuleVarLeakAssignReturnTest's fixture genuinely erroring in tsc
-(`Named ⊄ Target | undefined` — the destructured local now resolves CORRECTLY;
-the bail had been suppressing a genuine error; fixture rewritten into a sharp
-leak-kill pin). (2) the 8-profile A/B caught harness +2 TS2339 (fakesHosts.ts
-`sys.vfs` on `System | FileSystem`) = TWO real narrowing gaps the bail masked —
-it over-suppressed EVERY `sys`-rooted member chain program-wide because
-compiler/sys.ts exports a module-level `let sys`. Fixed tsc-faithfully:
-`resolveInstanceOfRhsType` resolves a ns-import-QUALIFIED class
-(`sys instanceof vfs.FileSystem`) via `resolveNamespaceQualifiedSymbol` (both
-branches narrow); `narrowByAssignmentRhs` gained the NEW-EXPRESSION
-assignment-reduction arm (tsc getAssignmentReducedType — the 4th round-477
-sibling); plus the DIR-RELATIVE resolver leg in `namespaceAliasMemberSymbol`'s
-three arms (the THIRD instance of the round-511 lesson class, purely additive).
-Pins: InstanceofNsQualifiedNarrowingTest (5). VERIFIED: suite 10,346 → 10,351
-(0/3); ALL 8 profiles listAll byte-identical vs pre-deletion.
-**Deletion #2 (same session, resumed after an OOM kill): the
-`conflatedTypeAliasFiles` alias-shadow ecology DELETED** (rounds
-443/444/447/464/468b/474/475/476/477): the field, the 1a3 builder, the mam
-receiver bail (+ aliasOwnFileHasProp), `paramTypeIsLeakedConflatedAlias`,
-`returnSourceSatisfiesFileLocalAliasBody`,
-`objectLiteralMatchesConflatedFileLocalTypeAlias`,
-`implicitAnyMemberAnnotationConflated`, the round-477 QualifiedName
-per-file-view dispatch, `qualifiedAliasShadowedTarget` + its return-path
-early-return, the round-474 keyof recovery (2 helpers), the round-464 negative
-gate in typeNodeDefinitelyNonNullish, and isConflatedInterfaceRefNode's alias
-arms. TWO pieces RE-KEYED onto their true conditions (both are NON-conflation
-gaps the alias table happened to gate): (1)
-`objectLiteralSatisfiesAugmentationMergedInterface` — fires on
-augmentation-block `interface X` presence (the un-modeled cross-file
-augmentation MEMBER merge); the gates caught a same-named-CLASS hole
-(jsExportMemberMergedWithModuleAugmentation: `class Abcde { x }` merges
-invisible-to-the-scan members → bail). (2)
-`objectLiteralMatchesFileLocalAliasUnion` — a returned objlit vs a FILE-LOCAL
-alias union name-covering some constituent (the round-438 nullish-strip-only
-objlit gate makes REFERENCE-valued members' guard narrow-DOWNs invisible —
-fixAddMissingMember.ts:410 `{ kind: InfoKind.Enum, token, parentDeclaration }`
-vs `Info | undefined` was the sole 3-profile diff), WITH an explicit-value type
-firewall (ConflatedAliasBodyOwnerContextTest's negative control caught the
-name-only version over-suppressing `{ errors: "not an array" }`). Pins:
-FileLocalAliasUnionReturnTest (3); suite + 8 profiles green.
-**Deletions #3+#4 (same session): the `conflatedInterfaceFiles` chimera bails
-AND the per-file-view core + enum subsets DELETED — INV.3(d)(v) COMPLETE, the
-whole conflation ecology is gone** (~24k chars of Checker.kt): the five objlit
-chimera helpers + all callers (ternary/var-decl/return/or-and-nested/ARG), the
-three relation-entry twin bails + argIsConflatedTwin, the TS2430 view, the
-heritage ctx threading, `conflatedPerFileInterfaceType`/`perFileInterfaceType`/
-`conflatedPerFileViewForContext`/`resolveTypeAliasBodyWithOwnerContext`/
-`collectConflatedRefNames`, `conflatedOwnerFile`/`conflatedCtxMissing`
-(getTypeOfSymbol caches unconditionally again), `conflatedEnumFileSubsets` +
-the exhaustiveness relaxation, and the 1a4/1a5 builders (reduced to
-`moduleInterfaceNames`). The gates caught TWO more masked residuals, both
-fixed re-keyed: (a) the 4 codefix-`Info` sites (useDefaultImport etc.) = the
-round-445 INTERFACE flavor of the narrow-DOWN residue — the alias-union bridge
-gained an interface leg GATED to `multiFileModuleTypeNames` (an ungated leg
-over-suppressed 10 narrowing negative controls — reference-value exemption
-must not apply to single-file interfaces); (b) **the `nodeTypes` bypass is NOT
-conflation-specific**: the cache is STRUCTURALLY keyed and positions COLLIDE
-across files, so two codefix files' identically-positioned `Info | undefined`
-annotations shared one cached resolution → post-retire that leaks another
-file's interface (fixForgottenThisPropertyAccess excess-'node' FP); restored
-re-keyed as `isPerFileDependentRefNode` over type names declared in ≥2 module
-files. Also reinstated re-keyed: the round-473 `A && objlit` falsy-remainder
-TS2322 emitter (combineBinaryTypes deliberately skips the primitive→literal
-falsy decomposition — `count && obj` is `0 | {…}` in tsc; the deleted
-conflation block had been carrying this GENUINE-error emission, pinned by
-ConflatedObjLitReturnArmsTest's negative control). Pins:
-PerFileTypeNameCacheCollisionTest (2). VERIFIED: suite 10,356/0/3; ALL 8
-profiles listAll byte-identical vs the pre-deletion baseline. **INV.3(d) and
-the INV.3 arc are COMPLETE — next: INV.4 (single-pass check spine).**
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
@@ -1615,13 +1599,24 @@ interrupt the arc).
       fingerprints (Inv4UnresolvedSpineScopeTest, 2 deliberate-breakage
       sharpness probes). classContext / inFunction / hasArguments ride the
       maintained NameScope levels (no parent-chain re-derivation needed).
-      Remaining batches: swap the emissions group-by-group against this
-      state (statements / class elements / expressions / types / JSX),
-      deleting each recursive walker as its positions migrate; the
-      declare-namespace TS2304-only post-FILTER becomes a per-emission gate
-      (a diagnostics-range filter cannot work on the interleaved spine), and
-      the WithStatement-body / outside-function-return / ambient under-visits
-      become suppression gates.
+      Batch 2 DONE round 525 (2026-07-15): the STATEMENT-LEVEL walk swap —
+      checkUnresolvedInStatements/InStatement(Core) DELETED; per-statement
+      dispatch in spineUResDispatch against the maintained levels;
+      FunctionDeclaration signature positions at child enters
+      (lazy-population staging); the with-body / skipped-return /
+      declare-fn+class under-visits as suppressed-region levels and the
+      declare-module post-filter as the filter2304 level flag, both enforced
+      by the spineUResEmit wrapper (which also nulls currentFileLocals — the
+      legacy pass ran unscoped); the 10 statement descents in the
+      expr/class-element walkers cut; checkUnresolvedNames retained only as
+      the declarationOnly minimal driver (spineUResOnly). listAll gate:
+      error-line SETS identical on all 8 profiles; within-file PRINT order
+      shifts (emission order — the corpus suite gates the sorted output
+      byte-identical). Remaining batches: swap the remaining groups against
+      this state (class elements / expressions / types / JSX), deleting each
+      recursive walker as its positions migrate — class elements next
+      (member signature dispatch at child enters against the maintained
+      member levels).
     - [ ] **(c)(iv) checkTypeUsedAsValue.** Its own arc: the three
       ScopeNameSet chains become spine-maintained set state pushed at the
       same boundaries the old walker created children (statement lists =

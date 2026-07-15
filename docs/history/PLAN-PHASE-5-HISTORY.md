@@ -1,3 +1,80 @@
+**Round 513 (2026-07-14) — INV.3(d)(v) deletion #1: the `moduleFileLocalVarNames`
+value-leak ecology DELETED (the round-442/445/447/448/450/453/460 family).**
+Removed: the field, the 1a2 builder, all seven consult bails (mam receiver-chain
+walk, arg-loop root walk via `argRootIsLeakedModuleVar`, return-path, assignment
+RHS + TARGET, var-decl alias inference, `arithOperandType` operand bail).
+Post-retire every consult was hypothesized inert — the gates found exactly TWO
+pre-retire accidental masks (the round-512 (iii) lesson class): (1) the suite
+caught ModuleVarLeakAssignReturnTest's fixture genuinely erroring in tsc
+(`Named ⊄ Target | undefined` — the destructured local now resolves CORRECTLY;
+the bail had been suppressing a genuine error; fixture rewritten into a sharp
+leak-kill pin). (2) the 8-profile A/B caught harness +2 TS2339 (fakesHosts.ts
+`sys.vfs` on `System | FileSystem`) = TWO real narrowing gaps the bail masked —
+it over-suppressed EVERY `sys`-rooted member chain program-wide because
+compiler/sys.ts exports a module-level `let sys`. Fixed tsc-faithfully:
+`resolveInstanceOfRhsType` resolves a ns-import-QUALIFIED class
+(`sys instanceof vfs.FileSystem`) via `resolveNamespaceQualifiedSymbol` (both
+branches narrow); `narrowByAssignmentRhs` gained the NEW-EXPRESSION
+assignment-reduction arm (tsc getAssignmentReducedType — the 4th round-477
+sibling); plus the DIR-RELATIVE resolver leg in `namespaceAliasMemberSymbol`'s
+three arms (the THIRD instance of the round-511 lesson class, purely additive).
+Pins: InstanceofNsQualifiedNarrowingTest (5). VERIFIED: suite 10,346 → 10,351
+(0/3); ALL 8 profiles listAll byte-identical vs pre-deletion.
+**Deletion #2 (same session, resumed after an OOM kill): the
+`conflatedTypeAliasFiles` alias-shadow ecology DELETED** (rounds
+443/444/447/464/468b/474/475/476/477): the field, the 1a3 builder, the mam
+receiver bail (+ aliasOwnFileHasProp), `paramTypeIsLeakedConflatedAlias`,
+`returnSourceSatisfiesFileLocalAliasBody`,
+`objectLiteralMatchesConflatedFileLocalTypeAlias`,
+`implicitAnyMemberAnnotationConflated`, the round-477 QualifiedName
+per-file-view dispatch, `qualifiedAliasShadowedTarget` + its return-path
+early-return, the round-474 keyof recovery (2 helpers), the round-464 negative
+gate in typeNodeDefinitelyNonNullish, and isConflatedInterfaceRefNode's alias
+arms. TWO pieces RE-KEYED onto their true conditions (both are NON-conflation
+gaps the alias table happened to gate): (1)
+`objectLiteralSatisfiesAugmentationMergedInterface` — fires on
+augmentation-block `interface X` presence (the un-modeled cross-file
+augmentation MEMBER merge); the gates caught a same-named-CLASS hole
+(jsExportMemberMergedWithModuleAugmentation: `class Abcde { x }` merges
+invisible-to-the-scan members → bail). (2)
+`objectLiteralMatchesFileLocalAliasUnion` — a returned objlit vs a FILE-LOCAL
+alias union name-covering some constituent (the round-438 nullish-strip-only
+objlit gate makes REFERENCE-valued members' guard narrow-DOWNs invisible —
+fixAddMissingMember.ts:410 `{ kind: InfoKind.Enum, token, parentDeclaration }`
+vs `Info | undefined` was the sole 3-profile diff), WITH an explicit-value type
+firewall (ConflatedAliasBodyOwnerContextTest's negative control caught the
+name-only version over-suppressing `{ errors: "not an array" }`). Pins:
+FileLocalAliasUnionReturnTest (3); suite + 8 profiles green.
+**Deletions #3+#4 (same session): the `conflatedInterfaceFiles` chimera bails
+AND the per-file-view core + enum subsets DELETED — INV.3(d)(v) COMPLETE, the
+whole conflation ecology is gone** (~24k chars of Checker.kt): the five objlit
+chimera helpers + all callers (ternary/var-decl/return/or-and-nested/ARG), the
+three relation-entry twin bails + argIsConflatedTwin, the TS2430 view, the
+heritage ctx threading, `conflatedPerFileInterfaceType`/`perFileInterfaceType`/
+`conflatedPerFileViewForContext`/`resolveTypeAliasBodyWithOwnerContext`/
+`collectConflatedRefNames`, `conflatedOwnerFile`/`conflatedCtxMissing`
+(getTypeOfSymbol caches unconditionally again), `conflatedEnumFileSubsets` +
+the exhaustiveness relaxation, and the 1a4/1a5 builders (reduced to
+`moduleInterfaceNames`). The gates caught TWO more masked residuals, both
+fixed re-keyed: (a) the 4 codefix-`Info` sites (useDefaultImport etc.) = the
+round-445 INTERFACE flavor of the narrow-DOWN residue — the alias-union bridge
+gained an interface leg GATED to `multiFileModuleTypeNames` (an ungated leg
+over-suppressed 10 narrowing negative controls — reference-value exemption
+must not apply to single-file interfaces); (b) **the `nodeTypes` bypass is NOT
+conflation-specific**: the cache is STRUCTURALLY keyed and positions COLLIDE
+across files, so two codefix files' identically-positioned `Info | undefined`
+annotations shared one cached resolution → post-retire that leaks another
+file's interface (fixForgottenThisPropertyAccess excess-'node' FP); restored
+re-keyed as `isPerFileDependentRefNode` over type names declared in ≥2 module
+files. Also reinstated re-keyed: the round-473 `A && objlit` falsy-remainder
+TS2322 emitter (combineBinaryTypes deliberately skips the primitive→literal
+falsy decomposition — `count && obj` is `0 | {…}` in tsc; the deleted
+conflation block had been carrying this GENUINE-error emission, pinned by
+ConflatedObjLitReturnArmsTest's negative control). Pins:
+PerFileTypeNameCacheCollisionTest (2). VERIFIED: suite 10,356/0/3; ALL 8
+profiles listAll byte-identical vs the pre-deletion baseline. **INV.3(d) and
+the INV.3 arc are COMPLETE — next: INV.4 (single-pass check spine).**
+
 **Round 512 (2026-07-14) — INV.3(d)(ii)+(iii)+(iv) ALL DONE; the retire branch is
 MERGED TO MAIN: suite fully green, ALL 8 profiles byte-identical to pre-retire.**
 Six commits. (ii) the last 6 corpus multi-file failures, one per-consult-flip family
