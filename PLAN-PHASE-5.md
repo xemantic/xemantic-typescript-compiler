@@ -59,6 +59,35 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 526 (2026-07-15) — INV.4(c)(iii) batch 3: the class-element walk swap —
+`checkUnresolvedInClassElement` is DELETED (101 lines).** Class-member signature
+emissions dispatch on the spine against the batch-1 maintained member levels
+(identical construction to the legacy per-member scopes): property/method
+DECORATORS + computed NAMES at the member's ENTER — the level is unpopulated at
+that moment, which IS the legacy pre-registration view (B98.r111: a computed
+method name must not see its own TPs/params); TP-constraint/param/return-type
+positions at child enters via the shared `spineUResFnSigDispatch` (extracted
+from the batch-2 FunctionDeclaration dispatch), with per-member-kind flags
+reproducing each legacy arm's EXACT coverage — methods/constructors check param
+decorators + initializers, function declarations initializers only, class
+set-accessors param TYPES only, get-accessors just the return type; index
+signatures at enter in the CLASS scope (the legacy arm used classScope — no
+level). ALL dispatch gated to class decl/expr parents (`spineUResIsClassMember`)
+— interface members stay with the batch-2 interface handler, objlit/type-literal
+members with their still-legacy walkers (no double-emission; pinned). The member
+loops are removed from spineUResClassDeclaration AND the expr walker's
+ClassExpression arm (class-expression members ride the same dispatch — their
+levels carry ctorParamNames). VERIFIED: suite 10,747 → 10,767 (+20
+Inv4SpineBatch17Test — the B98.r111 emission pin, per-kind coverage pins incl.
+set-param-TYPES-only and static-property-no-ctorParamNames, exactly-once counts
+for class AND interface members, declare-class members staying silent; 0
+regressions); listAll RAW-identical on 7/8 profiles, harness SET-identical with
+the expected emission-order movement (member signature positions vs method-body
+positions); bench 27,402 ms self (+6.1% = box drift — the same-procedure listAll
+pair ran 526a FASTER, 27.3 s vs 525a's 28.3 s), 46 errors unchanged. NEXT:
+(c)(iii) batch 4 — expressions (checkIdentifierResolved positions +
+arrow/fn-expr/objlit signature dispatch), then types, then JSX.**
+
 **Round 525 (2026-07-15) — INV.4(c)(iii) batch 2: the checkUnresolvedNames
 STATEMENT-LEVEL walk swap — the recursive statement walkers are DELETED.**
 `checkUnresolvedInStatements`/`checkUnresolvedInStatement(Core)` (~770 lines,
@@ -627,69 +656,6 @@ Session total: FIVE passes migrated, 22 walker functions (~600 lines)
 deleted, suite +30. NEXT: INV.4(b) batch 4 — checkMixinClassConstructor is
 TP-scope-stateful (likely (d) territory); re-consult the round-491
 `--passTiming` table for the next most-mechanical tail passes.**
-
-**Round 514 (2026-07-14) — INV.4 DECOMPOSED into (a)–(f) + INV.4(a) LANDED: the
-single-pass check spine exists with its first migrated pass.** (Session start:
-recovered from an OOM-killed predecessor — all round-513 work was verified
-committed; nothing was lost.) Queue restructure first (`chore(queue)`): INV.4
-split into (a) skeleton+pilot / (b) sub-100 ms tail batches / (c) the
-name-resolution pair onto the INV.2(c) lexical tables / (d) mid-weight stateful
-walkers / (e) the top-3 giants / (f) the per-node type cache + folded flow
-narrowing, with the cross-cutting rules captured on the parent item: the spine
-is ONE `pass("checkSpine")` at a FIXED init position (stable diagnostic sort
-hides insertion-order deltas except exact 4-tuple ties — per-migration gates
-decide); a spine handler sees ALL nodes so each migration decides
-widen-vs-gate by the CLAUDE.md emission-direction rule; every migrated pass
-gets local pins BEFORE migration (corpus pins emit bytes, not checker
-diagnostics). INV.4(a) then landed: `spineWalkFile` (iterative enter/leave
-preorder, explicit parallel stacks — same push-reversed convention as
-indexSourceFile), `spineEnterNode`/`spineLeaveNode` `when` dispatch, spine
-context fields pre-`init`, and the active-handler gate (all handlers off →
-walk skipped entirely). Pilot migration: TS18045 accessor-modifier-vs-target —
-the old walker's threaded `inAmbient` dissolved into a parent-chain ancestry
-check, the class-parent gate keeps interface/type-literal members excluded
-(they share ClassElement), and the old hand-walk's under-visits (class
-EXPRESSIONS, arrow bodies) became visits — deliberate faithful widening for a
-position-independent tsc grammar rule, pinned in both directions. Also fixed
-two round-513 leftover warnings (always-true `!==` Intrinsic comparisons in
-the NEW-EXPRESSION assignment-reduction arm — the predecessor session died
-before its warning sweep). VERIFIED: suite 10,356 → 10,365 (+9
-Inv4SpineAccessorModifierTest incl. the 10k-term iterative-walk sharp-signal
-pin: TS18045 present AND TS2589 absent); `--listAll` byte-identical on
-compiler AND services vs the round-513 baselines (46/46 diagnostics; only the
-header's argv form differs); wall in band (compiler 25.8 s vs 26.1 s
-baseline). INV.4(b) BATCH 1 landed same session: checkInvalidGlobalAugmentations
-(TS2669/TS2670) + checkReservedWordInterfaceParams (TS7051/TS7006) became
-spine handlers and their private walks were deleted. Both old walks descended
-ONLY through module bodies, so reachability is reproduced as a module-chain
-parent-walk gate — "every ancestor is ModuleBlock/ModuleDeclaration up to
-SourceFile" — computing the threaded flags (insideRegularNamespace /
-insideAmbientModule) in the SAME walk; this is the template for
-module-scope-only walkers. The reserved-params handler deliberately does NOT
-widen to function/class-nested interfaces (tsc does flag them, but that
-behavior change wants a signal, not a migration side effect — noted in the
-KDoc). Structural consequences: the spine walk is ALWAYS-ON from this batch
-(the TS2669 handler is unconditional and covers .d.ts — the file-level dts
-fast-skip lifted into per-handler gates), and checkSpine's file loop now
-sets currentFileLocals per file (isTypeLikeParamName consults it; saved and
-restored around the whole pass). Test-authoring note: TS7051 needs a
-STRICT_MODE_RESERVED_WORD that also names an in-scope type — `string` is a
-type keyword, NOT a reserved word, so the 7051 branch is near-unreachable
-and is pinned via its negative gate instead. VERIFIED: suite 10,365 →
-10,375 (+10 Inv4SpineBatch1Test); listAll byte-identical on compiler AND
-services. THE MEASUREMENT LESSON: the 3-iteration bench read +5.2% — the
-round-493 interleave rule applied (3 old/new pairs, same box, back-to-back)
-split that into ~+1.0 s REAL walk cost + drift; the first-cut walk paid a
-boxed ArrayList<Boolean> frame per node and a leave ROUND-TRIP per leaf.
-Fixed in-session (primitive BooleanArray phase stack; leaf shortcut — leave
-fires inline for childless nodes) → re-interleaved neutral within noise
-(mean +124 ms over 3 pairs). Enter/leave SEQUENCE is unchanged (a leaf's
-leave always fired before the next node), so handler semantics are
-byte-identical. NEXT: INV.4(b) batch 2 —
-checkNonArrayRestParameters (read its value-position walk first; two
-differently-shaped walks) + the per-file-prepass pair
-(checkIteratorMethodExtraParameters / checkAsyncYieldStarThenable, the
-file-enter hook pattern).**
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
@@ -1612,11 +1578,16 @@ interrupt the arc).
       the declarationOnly minimal driver (spineUResOnly). listAll gate:
       error-line SETS identical on all 8 profiles; within-file PRINT order
       shifts (emission order — the corpus suite gates the sorted output
-      byte-identical). Remaining batches: swap the remaining groups against
-      this state (class elements / expressions / types / JSX), deleting each
-      recursive walker as its positions migrate — class elements next
-      (member signature dispatch at child enters against the maintained
-      member levels).
+      byte-identical). Batch 3 DONE round 526 (2026-07-15):
+      checkUnresolvedInClassElement DELETED — class-member decorators/
+      computed-names at member enter (the pre-population moment = the legacy
+      B98.r111 view), TP/param/return positions via the shared
+      spineUResFnSigDispatch with per-member-kind coverage flags, index
+      signatures in the class scope; gated to class decl/expr parents
+      (interface members stay with the batch-2 handler). Remaining batches:
+      expressions (checkIdentifierResolved positions + arrow/fn-expr/objlit
+      signature dispatch), then types, then JSX — deleting each recursive
+      walker as its positions migrate.
     - [ ] **(c)(iv) checkTypeUsedAsValue.** Its own arc: the three
       ScopeNameSet chains become spine-maintained set state pushed at the
       same boundaries the old walker created children (statement lists =

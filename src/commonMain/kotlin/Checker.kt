@@ -18439,21 +18439,7 @@ class Checker(
                 // (TP constraints see TPs but not params; param/return types see
                 // both). A `declare` function's level is suppressed at its enter
                 // (the legacy arm returned before any of these).
-                val returnType = o.type
-                when {
-                    child is TypeParameter -> spineUResEmit {
-                        child.constraint?.let { checkUnresolvedInType(it, level.scope, spineSource, spineFileName) }
-                        child.default?.let { checkUnresolvedInType(it, level.scope, spineSource, spineFileName) }
-                    }
-                    child is Parameter -> spineUResEmit {
-                        child.type?.let { checkUnresolvedInType(it, level.scope, spineSource, spineFileName) }
-                        child.initializer?.let { checkUnresolvedInExpr(it, level.scope, spineSource, spineFileName) }
-                    }
-                    returnType != null && child === returnType -> spineUResEmit {
-                        checkUnresolvedInType(returnType, level.scope, spineSource, spineFileName)
-                    }
-                    else -> {}
-                }
+                spineUResFnSigDispatch(level, child, o.type, paramDecorators = false, paramInits = true)
             }
             is FunctionExpression -> spineUResFnChild(level, child, o.name, o.typeParameters, o.parameters, o.body)
             is ArrowFunction -> spineUResFnChild(level, child, null, o.typeParameters, o.parameters, o.body as? Block)
@@ -18465,11 +18451,31 @@ class Checker(
                     if (level.decoratorScope != null) {
                         spineUResStack.add(UnresolvedSpineLevel(child, level.decoratorScope))
                     }
-                } else spineUResFnChild(level, child, o.name, o.typeParameters, o.parameters, null)
+                } else {
+                    spineUResFnChild(level, child, o.name, o.typeParameters, o.parameters, null)
+                    // Batch 3: class-member method signature positions (the legacy
+                    // class-element arm; interface/objlit/type-literal parents keep
+                    // their legacy walkers).
+                    if (spineUResIsClassMember(o)) {
+                        spineUResFnSigDispatch(level, child, o.type, paramDecorators = true, paramInits = true)
+                    }
+                }
             }
-            is Constructor -> spineUResFnChild(level, child, null, null, o.parameters, null)
+            is Constructor -> {
+                spineUResFnChild(level, child, null, null, o.parameters, null)
+                if (spineUResIsClassMember(o)) {
+                    spineUResFnSigDispatch(level, child, null, paramDecorators = true, paramInits = true)
+                }
+            }
             is GetAccessor -> {}
-            is SetAccessor -> spineUResFnChild(level, child, o.name, null, o.parameters, null)
+            is SetAccessor -> {
+                spineUResFnChild(level, child, o.name, null, o.parameters, null)
+                // Batch 3: the legacy class-element SetAccessor arm checks param
+                // TYPES only (no initializers, no decorators).
+                if (spineUResIsClassMember(o)) {
+                    spineUResFnSigDispatch(level, child, null, paramDecorators = false, paramInits = false)
+                }
+            }
             is FunctionType -> spineUResFnChild(level, child, null, o.typeParameters, o.parameters, null)
             is ConstructorType -> spineUResFnChild(level, child, null, o.typeParameters, o.parameters, null)
             else -> {}
@@ -18509,6 +18515,107 @@ class Checker(
         addParamsToScope(params, level.scope)
         if (es5HoistBody != null && options.target < ScriptTarget.ES2015) {
             collectDeclaredNames(es5HoistBody.statements, level.scope)
+        }
+    }
+
+    /** Batch 3: is this member node a CLASS member (class decl/expr parent)?
+     *  Interface members are dispatched by [spineUResInterfaceDeclaration],
+     *  object-literal / type-literal members by their still-legacy walkers. */
+    private fun spineUResIsClassMember(node: Node): Boolean {
+        val parent = (node as NodeBase).parent
+        return parent is ClassDeclaration || parent is ClassExpression
+    }
+
+    /**
+     * Batch 2/3: the shared function-like SIGNATURE-position dispatch, run at
+     * each direct child's enter AFTER the lazy population trigger — so a
+     * TypeParameter child's constraint/default sees TPs but not params, and a
+     * Parameter/return-type child sees both (the legacy staging). Flags select
+     * the legacy arm's exact coverage: class methods/constructors check param
+     * DECORATORS and initializers; function declarations initializers only;
+     * class set-accessors param TYPES only.
+     */
+    private fun spineUResFnSigDispatch(
+        level: UnresolvedSpineLevel,
+        child: Node,
+        returnType: TypeNode?,
+        paramDecorators: Boolean,
+        paramInits: Boolean,
+    ) {
+        when {
+            child is TypeParameter -> spineUResEmit {
+                child.constraint?.let { checkUnresolvedInType(it, level.scope, spineSource, spineFileName) }
+                child.default?.let { checkUnresolvedInType(it, level.scope, spineSource, spineFileName) }
+            }
+            child is Parameter -> spineUResEmit {
+                if (paramDecorators) {
+                    child.decorators?.forEach { checkUnresolvedInExpr(it.expression, level.scope, spineSource, spineFileName) }
+                }
+                child.type?.let { checkUnresolvedInType(it, level.scope, spineSource, spineFileName) }
+                if (paramInits) {
+                    child.initializer?.let { checkUnresolvedInExpr(it, level.scope, spineSource, spineFileName) }
+                }
+            }
+            returnType != null && child === returnType -> spineUResEmit {
+                checkUnresolvedInType(returnType, level.scope, spineSource, spineFileName)
+            }
+            else -> {}
+        }
+    }
+
+    /** Batch 3: class-member PropertyDeclaration positions (decorators,
+     *  computed name, type annotation, initializer) — the level
+     *  [spineUResEnter] pushed carries the member class context plus the ctor
+     *  param-property names for instance members (the legacy propScope). */
+    private fun spineUResClassPropertyMember(node: PropertyDeclaration) {
+        if (!spineUResIsClassMember(node)) return
+        val level = spineUResOwnLevel(node) ?: return
+        spineUResEmit {
+            node.decorators?.forEach { checkUnresolvedInExpr(it.expression, level.scope, spineSource, spineFileName) }
+            (node.name as? ComputedPropertyName)?.let {
+                checkUnresolvedInExpr(it.expression, level.scope, spineSource, spineFileName)
+            }
+            node.type?.let { checkUnresolvedInType(it, level.scope, spineSource, spineFileName) }
+            node.initializer?.let { checkUnresolvedInExpr(it, level.scope, spineSource, spineFileName) }
+        }
+    }
+
+    /** Batch 3: class-member method DECORATORS + computed NAME, checked at the
+     *  method's enter — the level is still unpopulated at that moment, which IS
+     *  the legacy pre-registration view (B98.r111: a computed method name must
+     *  not see the method's own TPs/params). TP/param/return positions dispatch
+     *  at their child enters (see [spineUResOnDirectChild]). */
+    private fun spineUResClassMethodEnter(node: MethodDeclaration) {
+        if (!spineUResIsClassMember(node)) return
+        val level = spineUResOwnLevel(node) ?: return
+        spineUResEmit {
+            node.decorators?.forEach { checkUnresolvedInExpr(it.expression, level.scope, spineSource, spineFileName) }
+            (node.name as? ComputedPropertyName)?.let {
+                checkUnresolvedInExpr(it.expression, level.scope, spineSource, spineFileName)
+            }
+        }
+    }
+
+    /** Batch 3: class-member get-accessor RETURN type (the legacy arm's only
+     *  signature position; get accessors have no params/TPs). */
+    private fun spineUResClassGetAccessorEnter(node: GetAccessor) {
+        if (!spineUResIsClassMember(node)) return
+        val level = spineUResOwnLevel(node) ?: return
+        val t = node.type ?: return
+        spineUResEmit { checkUnresolvedInType(t, level.scope, spineSource, spineFileName) }
+    }
+
+    /** Batch 3: class-member index signature — value type + key param types,
+     *  checked in the CLASS scope (the legacy arm used classScope directly;
+     *  index signatures push no level). */
+    private fun spineUResClassIndexSignature(node: IndexSignature) {
+        if (!spineUResIsClassMember(node)) return
+        val scope = spineUResScope() ?: return
+        spineUResEmit {
+            node.type?.let { checkUnresolvedInType(it, scope, spineSource, spineFileName) }
+            for (param in node.parameters) {
+                param.type?.let { checkUnresolvedInType(it, scope, spineSource, spineFileName) }
+            }
         }
     }
 
@@ -18663,9 +18770,10 @@ class Checker(
                     }
                 }
             }
-            for (member in node.members) {
-                checkUnresolvedInClassElement(member, classScope, source, fileName, level.ctorParamNames)
-            }
+            // Members: dispatched per member at their own enters (batch 3 —
+            // spineUResClassPropertyMember / spineUResClassMethodEnter /
+            // spineUResClassGetAccessorEnter / spineUResClassIndexSignature +
+            // the fn-sig child dispatch in spineUResOnDirectChild).
         }
     }
 
@@ -18905,6 +19013,13 @@ class Checker(
                 val scope = spineUResScope() ?: return
                 spineUResEmit { checkUnresolvedInImportEquals(node, scope, spineSource, spineFileName) }
             }
+            // Batch 3: class-member positions (class decl/expr parents only —
+            // interface members are dispatched by spineUResInterfaceDeclaration,
+            // objlit/type-literal members by their still-legacy walkers).
+            is PropertyDeclaration -> spineUResClassPropertyMember(node)
+            is MethodDeclaration -> spineUResClassMethodEnter(node)
+            is GetAccessor -> spineUResClassGetAccessorEnter(node)
+            is IndexSignature -> spineUResClassIndexSignature(node)
             else -> {}
         }
     }
@@ -27676,107 +27791,6 @@ class Checker(
         ctor.body?.let { collectVarDeclaredNamesInBlock(it.statements, names) }
     }
 
-    private fun checkUnresolvedInClassElement(
-        element: ClassElement,
-        classScope: NameScope,
-        source: String,
-        fileName: String,
-        ctorParamNames: Set<String> = emptySet(),
-    ) {
-        // Determine class context with correct static flag for the member
-        val isStatic = when (element) {
-            is PropertyDeclaration -> ModifierFlag.Static in element.modifiers
-            is MethodDeclaration -> ModifierFlag.Static in element.modifiers
-            is GetAccessor -> ModifierFlag.Static in element.modifiers
-            is SetAccessor -> ModifierFlag.Static in element.modifiers
-            is ClassStaticBlockDeclaration -> true
-            else -> false
-        }
-        val memberClassCtx = classScope.classContext?.let {
-            if (it.inStaticContext != isStatic) ClassContext(it.className, it.staticMembers, it.instanceMembers, isStatic)
-            else it
-        }
-        when (element) {
-            is PropertyDeclaration -> {
-                val propScope = classScope.child(classContext = memberClassCtx)
-                // Add constructor param names to suppress TS2304/TS2552 for names handled by TS2301
-                // (TypeScript knows ctor params are "in scope" conceptually, but TS2301 handles the semantic error)
-                if (!isStatic && ctorParamNames.isNotEmpty()) {
-                    propScope.names.addAll(ctorParamNames)
-                }
-                // Check decorators
-                element.decorators?.forEach { checkUnresolvedInExpr(it.expression, propScope, source, fileName) }
-                // Check computed property name (e.g. [x]: string — x must be in scope)
-                if (element.name is ComputedPropertyName) {
-                    checkUnresolvedInExpr((element.name).expression, propScope, source, fileName)
-                }
-                element.type?.let { checkUnresolvedInType(it, propScope, source, fileName) }
-                element.initializer?.let { checkUnresolvedInExpr(it, propScope, source, fileName) }
-            }
-            is MethodDeclaration -> {
-                val methodScope = classScope.child(hasArguments = true, classContext = memberClassCtx)
-                // Check decorators
-                element.decorators?.forEach { checkUnresolvedInExpr(it.expression, methodScope, source, fileName) }
-                // B98.r111: check a computed method name (`[foo<T>(a)]() {}`) in the OUTER
-                // scope — it is a value-position expression evaluated at class-definition time,
-                // so the method's OWN type parameters and parameters are NOT yet in scope (T/a
-                // are unresolved → TS2304/TS2552). Must run BEFORE addTypeParam/addParamsToScope
-                // below. Mirrors the PropertyDeclaration branch's computed-name check.
-                if (element.name is ComputedPropertyName) {
-                    checkUnresolvedInExpr((element.name).expression, methodScope, source, fileName)
-                }
-                element.typeParameters?.forEach { methodScope.addTypeParam(it.name.text, it.constraint) }
-                element.typeParameters?.forEach { tp ->
-                    tp.constraint?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
-                    tp.default?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
-                }
-                addParamsToScope(element.parameters, methodScope)
-                for (param in element.parameters) {
-                    // Check parameter decorators
-                    param.decorators?.forEach { checkUnresolvedInExpr(it.expression, methodScope, source, fileName) }
-                    param.type?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
-                    param.initializer?.let { checkUnresolvedInExpr(it, methodScope, source, fileName) }
-                }
-                element.type?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
-                // Body statements reached by the spine (batch 2).
-            }
-            is IndexSignature -> {
-                element.type?.let { checkUnresolvedInType(it, classScope, source, fileName) }
-                for (param in element.parameters) {
-                    param.type?.let { checkUnresolvedInType(it, classScope, source, fileName) }
-                }
-            }
-            is Constructor -> {
-                val ctorScope = classScope.child(hasArguments = true, classContext = memberClassCtx)
-                addParamsToScope(element.parameters, ctorScope)
-                for (param in element.parameters) {
-                    // Check parameter decorators
-                    param.decorators?.forEach { checkUnresolvedInExpr(it.expression, ctorScope, source, fileName) }
-                    param.type?.let { checkUnresolvedInType(it, ctorScope, source, fileName) }
-                    param.initializer?.let { checkUnresolvedInExpr(it, ctorScope, source, fileName) }
-                }
-                // Body statements reached by the spine (batch 2).
-            }
-            is GetAccessor -> {
-                val getScope = classScope.child(hasArguments = true, classContext = memberClassCtx)
-                element.type?.let { checkUnresolvedInType(it, getScope, source, fileName) }
-                // Body statements reached by the spine (batch 2).
-            }
-            is SetAccessor -> {
-                val setScope = classScope.child(hasArguments = true, classContext = memberClassCtx)
-                addParamsToScope(element.parameters, setScope)
-                for (param in element.parameters) {
-                    param.type?.let { checkUnresolvedInType(it, setScope, source, fileName) }
-                }
-                // Body statements reached by the spine (batch 2).
-            }
-            is ClassStaticBlockDeclaration -> {
-                // Body statements reached by the spine (batch 2).
-            }
-            else -> {}
-        }
-    }
-
     private fun addParamsToScope(params: List<Parameter>, scope: NameScope) {
         for (param in params) {
             addBindingName(param.name, scope)
@@ -27985,10 +27999,8 @@ class Checker(
                         type.typeArguments?.forEach { checkUnresolvedInType(it, classScope, source, fileName) }
                     }
                 }
-                val ctorParamNames = extractCtorParamNames(expr.members)
-                for (member in expr.members) {
-                    checkUnresolvedInClassElement(member, classScope, source, fileName, ctorParamNames)
-                }
+                // Members: dispatched per member at their own enters (batch 3 —
+                // the class-expression member levels carry ctorParamNames).
             }
             is ObjectLiteralExpression -> {
                 for (prop in expr.properties) {

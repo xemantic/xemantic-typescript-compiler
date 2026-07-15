@@ -1,3 +1,66 @@
+**Round 514 (2026-07-14) — INV.4 DECOMPOSED into (a)–(f) + INV.4(a) LANDED: the
+single-pass check spine exists with its first migrated pass.** (Session start:
+recovered from an OOM-killed predecessor — all round-513 work was verified
+committed; nothing was lost.) Queue restructure first (`chore(queue)`): INV.4
+split into (a) skeleton+pilot / (b) sub-100 ms tail batches / (c) the
+name-resolution pair onto the INV.2(c) lexical tables / (d) mid-weight stateful
+walkers / (e) the top-3 giants / (f) the per-node type cache + folded flow
+narrowing, with the cross-cutting rules captured on the parent item: the spine
+is ONE `pass("checkSpine")` at a FIXED init position (stable diagnostic sort
+hides insertion-order deltas except exact 4-tuple ties — per-migration gates
+decide); a spine handler sees ALL nodes so each migration decides
+widen-vs-gate by the CLAUDE.md emission-direction rule; every migrated pass
+gets local pins BEFORE migration (corpus pins emit bytes, not checker
+diagnostics). INV.4(a) then landed: `spineWalkFile` (iterative enter/leave
+preorder, explicit parallel stacks — same push-reversed convention as
+indexSourceFile), `spineEnterNode`/`spineLeaveNode` `when` dispatch, spine
+context fields pre-`init`, and the active-handler gate (all handlers off →
+walk skipped entirely). Pilot migration: TS18045 accessor-modifier-vs-target —
+the old walker's threaded `inAmbient` dissolved into a parent-chain ancestry
+check, the class-parent gate keeps interface/type-literal members excluded
+(they share ClassElement), and the old hand-walk's under-visits (class
+EXPRESSIONS, arrow bodies) became visits — deliberate faithful widening for a
+position-independent tsc grammar rule, pinned in both directions. Also fixed
+two round-513 leftover warnings (always-true `!==` Intrinsic comparisons in
+the NEW-EXPRESSION assignment-reduction arm — the predecessor session died
+before its warning sweep). VERIFIED: suite 10,356 → 10,365 (+9
+Inv4SpineAccessorModifierTest incl. the 10k-term iterative-walk sharp-signal
+pin: TS18045 present AND TS2589 absent); `--listAll` byte-identical on
+compiler AND services vs the round-513 baselines (46/46 diagnostics; only the
+header's argv form differs); wall in band (compiler 25.8 s vs 26.1 s
+baseline). INV.4(b) BATCH 1 landed same session: checkInvalidGlobalAugmentations
+(TS2669/TS2670) + checkReservedWordInterfaceParams (TS7051/TS7006) became
+spine handlers and their private walks were deleted. Both old walks descended
+ONLY through module bodies, so reachability is reproduced as a module-chain
+parent-walk gate — "every ancestor is ModuleBlock/ModuleDeclaration up to
+SourceFile" — computing the threaded flags (insideRegularNamespace /
+insideAmbientModule) in the SAME walk; this is the template for
+module-scope-only walkers. The reserved-params handler deliberately does NOT
+widen to function/class-nested interfaces (tsc does flag them, but that
+behavior change wants a signal, not a migration side effect — noted in the
+KDoc). Structural consequences: the spine walk is ALWAYS-ON from this batch
+(the TS2669 handler is unconditional and covers .d.ts — the file-level dts
+fast-skip lifted into per-handler gates), and checkSpine's file loop now
+sets currentFileLocals per file (isTypeLikeParamName consults it; saved and
+restored around the whole pass). Test-authoring note: TS7051 needs a
+STRICT_MODE_RESERVED_WORD that also names an in-scope type — `string` is a
+type keyword, NOT a reserved word, so the 7051 branch is near-unreachable
+and is pinned via its negative gate instead. VERIFIED: suite 10,365 →
+10,375 (+10 Inv4SpineBatch1Test); listAll byte-identical on compiler AND
+services. THE MEASUREMENT LESSON: the 3-iteration bench read +5.2% — the
+round-493 interleave rule applied (3 old/new pairs, same box, back-to-back)
+split that into ~+1.0 s REAL walk cost + drift; the first-cut walk paid a
+boxed ArrayList<Boolean> frame per node and a leave ROUND-TRIP per leaf.
+Fixed in-session (primitive BooleanArray phase stack; leaf shortcut — leave
+fires inline for childless nodes) → re-interleaved neutral within noise
+(mean +124 ms over 3 pairs). Enter/leave SEQUENCE is unchanged (a leaf's
+leave always fired before the next node), so handler semantics are
+byte-identical. NEXT: INV.4(b) batch 2 —
+checkNonArrayRestParameters (read its value-position walk first; two
+differently-shaped walks) + the per-file-prepass pair
+(checkIteratorMethodExtraParameters / checkAsyncYieldStarThenable, the
+file-enter hook pattern).**
+
 **Round 513 (2026-07-14) — INV.3(d)(v) deletion #1: the `moduleFileLocalVarNames`
 value-leak ecology DELETED (the round-442/445/447/448/450/453/460 family).**
 Removed: the field, the 1a2 builder, all seven consult bails (mam receiver-chain
