@@ -1498,7 +1498,62 @@ interrupt the arc).
   - [ ] **INV.4(c) The name-resolution pair.** checkUnresolvedNames (846 ms) +
     checkTypeUsedAsValue (734 ms): fold their private NameScope chains into
     spine-maintained authoritative lexical state backed by the INV.2(c)
-    `lexicalScopes` tables (their planned mass consumption).
+    `lexicalScopes` tables (their planned mass consumption). Decomposed round
+    522 (facts verified in-code: the checkUnresolvedNames family is ~3,000
+    lines — statement/class-element/expression/type/JSX walkers threading a
+    `NameScope` chain whose content closely mirrors `lexicalScopes` (params,
+    hoisted vars, block bindings, type params + constraints) plus per-file
+    root extras (KNOWN_GLOBALS seeding, DOM/host @lib filtering, ambient-
+    module-name exclusion, `declare global` handling, JS @typedef regex
+    types) and walk-threaded flags (classContext / inFunction / hasArguments);
+    checkTypeUsedAsValue is ~700 lines threading THREE ScopeNameSet chains
+    (typeOnly/value/namespaceOnly) built from AST surveys — NOT symbol-shaped,
+    and its reach is corpus-tuned per the round-42 over-emission gotcha (no
+    loop/switch/try descent)). Sub-items, one commit each, every step suite-
+    and 8-profile-listAll-gated:
+    - [ ] **(c)(i) Spine-maintained lexical scope state (infrastructure,
+      always-on).** The walk maintains `spineCurrentScope` — push at a scope
+      owner's enter (BEFORE its own handlers dispatch), pop after its leave —
+      via a per-file nodeId→LexicalScope ARRAY built from
+      `result.lexicalScopes` (the INV.2(b) boxing-avoidance trick; cleared by
+      re-nulling only written ids); a SwitchStatement's scope is re-keyed
+      onto its CLAUSE nodeIds at fill so the switch EXPRESSION stays in the
+      outer scope (the binder's routing); function-body Blocks share the fn
+      scope automatically (no map entry); decorator outer-scope routing is a
+      documented deferred divergence (both the walk and the binder tables
+      currently agree). `spineScopeLookup(name)` resolves symbols → existing
+      → parent. Pinned by a test-only AUDIT mode (companion statics — tests
+      cannot reach the Checker instance): every spine enter verifies the
+      incremental scope against a parent-chain derivation, and identifier
+      enters record `spineScopeLookup` resolutions into a trace the tests
+      assert on (shadowing id splits, scope-space ids ≤ −2, switch-expression
+      isolation, catch/enum/self-name/var-hoist shapes). Bench row (the walk
+      gains one array probe per enter+leave).
+    - [ ] **(c)(ii) checkUnresolvedNames STATE swap.** Replace the NameScope
+      chain's CONTENT queries (`has` / `isTypeParam` / `hasType` /
+      `typeParamConstraintOf` / the TS2552 candidate-pool iteration) with
+      lexicalScopes-chain derivations at the query node, keeping the
+      recursive walk and the file-root extras verbatim (the extras stay a
+      per-file NameScope root). Equivalence-gated (corpus + 8-profile
+      listAll); the walk-threaded flags stay threaded until (c)(iii).
+    - [ ] **(c)(iii) checkUnresolvedNames WALK swap.** Move the emission
+      positions onto the spine (delete the ~15 recursive walkers); reach
+      reproduced per the emission-direction rule (this family is (b)-class —
+      direct emitters — so under-visits are reproduced via parent-chain
+      gates, widenings only on a signal); classContext / inFunction /
+      hasArguments become parent-chain context. Expect multiple batches
+      (statements / class elements / expressions / types / JSX).
+    - [ ] **(c)(iv) checkTypeUsedAsValue.** Its own arc: the three
+      ScopeNameSet chains become spine-maintained set state pushed at the
+      same boundaries the old walker created children (statement lists =
+      hoist surveys, fn boundaries = TP/param registration, namespace-body
+      surveys), with the corpus-tuned NON-descent (for/while/do/switch/try)
+      reproduced as a dead-reach suppression gate; assignment-LHS /
+      new-ctor / typeof positional context via local parent checks. May stay
+      set-based rather than lexicalScopes-backed — re-deriving typeOnly/
+      value/namespaceOnly from symbol flags is a behavior-change minefield
+      (KNOWN_GLOBALS gates, moduleInstantiated, body-less ambient modules,
+      lib value gates).
   - [ ] **INV.4(d) Mid-weight stateful walkers.** checkUncalledFunctionsInConditions
     (506 ms), checkArithmeticOperandTypes (271 ms), checkImplicitReturns,
     checkArgumentCounts, checkDefiniteAssignment, … — each moves its scope
