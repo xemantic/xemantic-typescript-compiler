@@ -59,6 +59,53 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 534 (2026-07-16) — INV.4(d) walker 5: checkDefiniteAssignment (the
+SET-based TS2454 pass, 241 ms in the round-529 cost table) migrated onto the
+spine — the per-file driver and the two recursion walkers
+(checkDefiniteAssignmentInNestedScopes / checkDefiniteAssignmentInExprContext,
+~370 lines) are DELETED.** The first per-statement-LIST ordered walker with a
+DOWNWARD leak context, and the design is a hybrid of the earlier templates:
+(1) each legacy `checkDefiniteAssignmentInStatements` activation becomes a
+CORE FRAME (SpineDaFrame — the statement-ordered `uninitialized` set, the
+round-469 closure pre-scan, the per-statement B78.2 nested-leak snapshot)
+pushed at its owner's enter (SourceFile with leak computation disabled +
+fileLocals; fn-like BODY Blocks with params-as-preInitialized + the incoming
+leak; Block-statements and ModuleBlocks fresh) and popped at its leave; the
+legacy loop body (collect → closure-removal → checkUses → mark → nestedLeak)
+runs at each DIRECT-child statement's enter (`parent === top.owner` — no
+classifier needed for the step), reproducing the legacy check-then-recurse
+emission order because children walk after the enter. (2) The deleted
+recursion's reach is a memoized 10-STATE ancestor classifier
+(spineDaStatus/spineDaEdge — STMT/EXPR/MEMBER × leak-flavor + CORE/PASS/
+NONE/ROOT, the deleted arms verbatim): try/catch/finally blocks and switch
+clauses are PASS (statements descend leak-dropped with NO frame — no
+collect/checkUses/mark for those lists, pinned), if/loop/labeled descent and
+Block/ModuleBlock cores drop the leak, fn-boundary + expression-context edges
+carry it. (3) The downward leak SET is not threaded at all — a LEAK-flavored
+status reads the TOP frame's per-statement `currentLeak` at core-spawn time,
+sound because a leak-preserving path can never cross another core spawn (the
+only core-spawning nodes are Blocks/ModuleBlocks, which all drop or consume
+the leak). ORDER COUPLING RESOLVED BY SLOT PLACEMENT: the sibling
+checkDefiniteAssignmentViaFlowGraph DEDUPS one-directionally against this
+pass's emitted TS2454 positions, so it and checkTryCatchOnlyAssignedVarReads
+moved to right AFTER the spine dispatch, preserving the legacy
+set-pass-first order; the slot-move pre-gate (intact pass before the spine,
+siblings after) measured error-line-identical listAll ×8. Reach quirks
+pinned as negative controls (ALL 38/39 pins pre-verified on the OLD walker;
+one pin fixed pre-verification: an `any`-typed heritage var is never
+tracked): if-CONDITION arrows and throw-expression closures unreached;
+class-DECLARATION property-initializer arrows unreached while
+class-EXPRESSION ones ARE (the legacy ClassDeclaration-arm vs
+ClassExpression-arm asymmetry); a statement-order-LATE `let` is absent from
+an earlier class expression's leak; round-469 closure-assignment suppression
+kills even the straight-line read; while-true definite assignment; the
+arrow EXPRESSION body passes the leak through to a nested block-bodied
+arrow. VERIFIED: suite 11,052 → 11,091 (+39 Inv4SpineBatch25Test, 0
+regressions, XML-verified); listAll error lines IDENTICAL on ALL 8 profiles
+(534a vs 533a); bench row recorded. NEXT: INV.4(d) walker 6 —
+checkArgumentCounts (230 ms; the M1.11 lexical-shadowing overlays), then
+checkUseBeforeDeclaration (205 ms).**
+
 **Round 533 (2026-07-16) — INV.4(d) walker 4: checkDuplicateIdentifiers
 (TS2300 family — 2300/2451/2374/2687/2717/2699/2502/7023/1061/…, 260 ms
 zero-typing in the round-529 cost table) migrated onto the spine — the
@@ -481,61 +528,6 @@ scope maintenance), 46 errors unchanged (all env-legit offline artifacts).
 NEXT: (c)(iii) batch 3 — the class-element walker's positions onto the spine
 (member signature dispatch at child enters against the maintained member
 levels), then expressions/types/JSX.**
-
-**Round 524 (2026-07-15) — INV.4(c)(iii) batch 1: the spine maintains the
-checkUnresolvedNames family's NameScope chain (infrastructure, always-on,
-audited — emissions still on the legacy walk).** `spineUResStack` (wired into
-spineWalkFile's enter/leave) pushes levels at the SAME boundaries where the
-legacy recursive walk creates child scopes: file root + statement-list levels
-(SourceFile / Block — a fn's immediate body probes the FN node's lex per the
-(c)(ii) owner convention / ModuleBlock threaded / switch shared-clause scope /
-for-headers / catch), function-like signature levels per PARENT kind (class
-members get memberClassCtx + hasArguments + the ctor-param-property names for
-PropertyDeclaration; interface/type-literal members plain children; objlit
-methods hasArguments-only; objlit/interface/type-literal GET accessors
-deliberately none), class/class-expr/interface/type-alias TP scopes
-(lex-linked), enum member scopes (binder-exports EnumMember-filtered + AST +
-cross-file script merge), namespace scopes (buildNamespaceScope), and the
-type-level scopes (mapped TP / conditional-infer / fn-type). Three mechanisms
-reproduce the legacy walk's sequential-mutation semantics on the spine's fixed
-preorder: (1) LAZY signature population — ALL TPs register at the first
-TypeParameter child (mutually visible in constraints, params NOT — tsc
-evaluates constraints without params), ALL params (+ the sub-ES2015
-hoisted-body-var collect) at the first Parameter/type/body child, and the
-NAME child never populates (a method's computed name sees the empty member
-scope, B98.r111); (2) DEFERRED-ACTIVATION regions (the effective scope is the
-innermost ACTIVE level) — the switch level activates at the first CLAUSE
-child, the mapped-type level past its typeParameter child (constraint in
-OUTER scope), the conditional-type infer level only between trueType and
-falseType, and a CLASS level DEACTIVATES at its first Decorator child
-(forEachChild visits decorators LAST; the legacy walk checks class decorators
-in the OUTER scope); (3) member-DECORATOR pre-population views — class-method
-decorators are checked before TP/param registration in the legacy walk, so a
-trailing Decorator child pushes a fresh unpopulated sibling view
-(`decoratorScope`), popped at the decorator's leave. The per-file ROOT scope
-is built ONCE and SHARED between the spine and the legacy pass
-(`unresolvedFileRootFor` cache; whoever runs first builds), which required
-splitting `unresolvedTypeLibNames` out of checkTypeLibraryEntryPoints
-(`computeTypeLibResolution()`, called at checkSpine's top — the TS2688
-emission stays at its pass). AUDITED, not assumed: the legacy walk records a
-scope fingerprint (has/hasLocalShadow/isTypeParam/hasType/constraint-presence/
-inFunction/hasArguments/classContext) at every checkIdentifierResolved /
-checkTypeNameResolved position; the spine records the same at every
-Identifier enter; Inv4UnresolvedSpineScopeTest (15 tests) asserts every
-legacy record has an IDENTICAL spine record across a kitchen-sink fixture +
-the sharp shapes (computed method names, TP-constraints-vs-params, switch
-subject, conditional infer, mapped constraint, class+method decorators, ES5
-hoist, checkJs @typedef, enum siblings, merged namespaces, objlit accessors,
-fn-expr self-name, NaN shadow, catch). Sharpness verified by TWO deliberate
-breakages (an eager-active switch level; eager param population at the TP
-trigger) — each fails exactly the right test with the exact diverging
-fingerprint. VERIFIED: suite 10,698 → 10,713 (+15, 0 regressions); listAll
-error lines IDENTICAL on ALL 8 profiles (524a vs 523a); bench row recorded
-(the maintenance temporarily doubles the family's scope construction — it
-shrinks back when the emission batches delete the legacy walk). NEXT:
-(c)(iii) batch 2 — swap the statement-level emissions onto the spine against
-this state, then expressions/types/JSX, deleting the recursive walkers as
-their positions migrate.
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
@@ -1584,6 +1576,21 @@ interrupt the arc).
       identical on ALL 8 profiles; the pass driver deleted (the recursive
       walkers stay as checkComputedDestructKey's utility). See the round-531
       session note.
+    - (w5) DONE round 534 (2026-07-16): checkDefiniteAssignment (the SET-based
+      TS2454 pass) — the first per-statement-LIST ordered walker with a
+      DOWNWARD leak context: legacy list activations become CORE FRAMES
+      (pushed at SourceFile/fn-body/Block/ModuleBlock owners, per-statement
+      steps at direct-child enters — the collect/checkUses/mark/nestedLeak
+      loop body retained verbatim), the recursion walkers become a memoized
+      10-state ancestor classifier (spineDaStatus/spineDaEdge), and the
+      downward leak set is READ from the top frame's per-statement
+      currentLeak via LEAK-flavored statuses (sound: leak-preserving paths
+      never cross a core spawn). The flow-graph siblings (ViaFlowGraph
+      dedups one-directionally against this pass) moved to right after the
+      spine, preserving set-pass-first order; slot-move pre-gate ×8
+      identical. 39 pins (Inv4SpineBatch25Test) pre-verified on the OLD
+      walker; suite 11,052 → 11,091; listAll error-line identical on ALL 8
+      profiles; ~370 walker lines deleted. See the round-534 session note.
     - (w4) DONE round 533 (2026-07-16): checkDuplicateIdentifiers (TS2300
       family) — the lightest (d) shape: STATELESS (the two
       checkDuplicateDeclarations flags derive at the anchor) and ZERO-TYPING,

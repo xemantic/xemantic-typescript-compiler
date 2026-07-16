@@ -1048,6 +1048,48 @@ class Checker(
     /** Reusable ascent buffer for [spineDupIdReached]. */
     private val spineDupIdChain = ArrayList<Node>()
 
+    // ── INV.4(d) walker 5: checkDefiniteAssignment (the SET-based TS2454 pass)
+    // on the spine (round 534) ──
+    // All MUST be declared before init {} (consumed by checkSpine during init).
+    // The per-statement-LIST core (collect → closure-removal → checkUses →
+    // mark → nestedLeak, statement-ordered) runs as FRAME steps at core-list
+    // statement enters; the deleted recursion walkers'
+    // (checkDefiniteAssignmentInNestedScopes / -InExprContext) reach is the
+    // memoized multi-state ancestor classifier [spineDaStatus] over
+    // [spineDaEdge]. The bounded per-statement leaf utilities
+    // (collectUninitializedVars / checkUsesOfUninitialized / markAssignments /
+    // collectLetUninitializedSoFar / collectAllAssignmentsAnywhere /
+    // collectClosureAssignedNames) are retained unchanged.
+    /** Per-file activation: the legacy strict/strictNullChecks gate + non-.d.ts. */
+    private var spineDaActive = false
+    /** Per-file nodeId memo for [spineDaStatus] — 0 unknown, else a DA_* state. */
+    private var spineDaReachMemo = ByteArray(0)
+    /** Reusable ascent buffer for [spineDaStatus]. */
+    private val spineDaChain = ArrayList<Node>()
+    /** The file's binder locals (the legacy driver passed them to the FILE core only). */
+    private var spineDaFileLocals: SymbolTable? = null
+    /**
+     * One active CORE statement list (a legacy checkDefiniteAssignmentInStatements
+     * activation): the `uninitialized` set evolving in statement order, the
+     * round-469 closure pre-scan result, and the B78.2 per-statement nested-leak
+     * snapshot ([currentLeak] — read by fn-boundary core spawns inside the
+     * CURRENT statement's subtree; stable there because a leak-preserving path
+     * never crosses another core spawn). Pushed at the owner's enter (before
+     * its children), popped at its leave.
+     */
+    private class SpineDaFrame(
+        val owner: Node,
+        val statements: List<Statement>,
+        val preInitialized: Set<String>,
+        val fileLocals: SymbolTable?,
+        val enableLeak: Boolean,
+    ) {
+        val uninitialized = mutableSetOf<String>()
+        val closureAssigned = mutableSetOf<String>()
+        var currentLeak: Set<String> = emptySet()
+    }
+    private val spineDaFrames = ArrayList<SpineDaFrame>()
+
     // Positions of ObjectLiteralExpression nodes that are destructuring-assignment
     // TARGETS (LHS of `=`, incl. nested through array/object/default nesting). Consumed
     // by the shorthand-with-initializer TS1312/TS18004 selection in
@@ -2199,16 +2241,12 @@ class Checker(
                 currentFlowGraph = null
             }
         }
-        // Suppressed when strict is explicitly false OR strictNullChecks is explicitly false.
-        val shouldCheckDefiniteAssignment = !options.strictExplicitlyFalse && !options.strictNullChecksExplicitlyFalse
-        if (shouldCheckDefiniteAssignment) {
-            pass("checkDefiniteAssignment") { checkDefiniteAssignment() }
-            pass("checkDefiniteAssignmentViaFlowGraph") { checkDefiniteAssignmentViaFlowGraph() }
-            // B223: TS2454 for vars whose ONLY assignment sits inside a try block
-            // with a normally-completing catch (the catch-entry path leaves them
-            // unassigned at the post-try merge).
-            pass("checkTryCatchOnlyAssignedVarReads") { checkTryCatchOnlyAssignedVarReads() }
-        }
+        // 5x. The SET-based definite-assignment pass (TS2454) + its two sibling
+        // flow passes moved to the check-spine slot (INV.4(d) walker 5, round
+        // 534) — the set pass's emissions ride the spine; the flow-graph pass
+        // (which DEDUPS against the set pass's emitted positions) and the B223
+        // try/catch walker follow it, preserving the legacy relative order.
+        // See the pass("checkSpine") site.
         // 6. Check for class properties without initializer (TS2564)
         // Suppressed when strict=false, or when strictPropertyInitialization=false explicitly set
         if (!options.strictExplicitlyFalse && !options.strictPropertyInitializationExplicitlyFalse) {
@@ -2293,7 +2331,20 @@ class Checker(
         // spine stays at this FIXED init position as later passes migrate in —
         // the stable diagnostic sort hides insertion-order deltas except exact
         // 4-tuple ties (per-migration corpus + listAll gates decide those).
+        // The SET-based definite-assignment pass (TS2454) rides the spine
+        // (INV.4(d) walker 5, round 534 — see spineDaSetup/spineDaEnterNode);
+        // its two flow-graph siblings follow the spine, preserving the legacy
+        // set-pass-first order (checkDefiniteAssignmentViaFlowGraph DEDUPS
+        // against the set pass's emitted positions).
+        val shouldCheckDefiniteAssignment = !options.strictExplicitlyFalse && !options.strictNullChecksExplicitlyFalse
         pass("checkSpine") { checkSpine() }
+        if (shouldCheckDefiniteAssignment) {
+            pass("checkDefiniteAssignmentViaFlowGraph") { checkDefiniteAssignmentViaFlowGraph() }
+            // B223: TS2454 for vars whose ONLY assignment sits inside a try block
+            // with a normally-completing catch (the catch-entry path leaves them
+            // unassigned at the post-try merge).
+            pass("checkTryCatchOnlyAssignedVarReads") { checkTryCatchOnlyAssignedVarReads() }
+        }
         // B72.1: TS2545 — A mixin class must have a constructor with a single rest
         // parameter of type 'any[]'. NARROW gate: fires only when the
         // class-extends-TypeParam's constraint's construct signature has a
@@ -12556,104 +12607,394 @@ class Checker(
     // Definite assignment checking (TS2454)
     // -----------------------------------------------------------------------
 
+    // INV.4(d) walker 5 (round 534): the SET-based definite-assignment pass
+    // (TS2454) runs ON the check spine. The legacy per-file driver
+    // (checkDefiniteAssignment) and the two recursion walkers
+    // (checkDefiniteAssignmentInNestedScopes / checkDefiniteAssignmentInExprContext)
+    // are DELETED; their statement-list loop is the FRAME step below and their
+    // reach is the [spineDaStatus]/[spineDaEdge] classifier. B78.2 semantics
+    // preserved exactly: the FILE frame disables leak computation (script-file
+    // `let X` may be assigned externally), fn-boundary edges carry the leak,
+    // every block-statement boundary (if/loop/switch/labeled descent, fresh
+    // Block cores, ModuleBlocks) drops it.
+
+    /** Per-file setup for the spine-hosted definite-assignment pass. */
+    private fun spineDaSetup(result: BinderResult) {
+        spineDaActive = !options.strictExplicitlyFalse &&
+            !options.strictNullChecksExplicitlyFalse && !spineIsDts
+        spineDaFrames.clear()
+        if (!spineDaActive) {
+            spineDaReachMemo = ByteArray(0)
+            spineDaFileLocals = null
+            return
+        }
+        val n = result.sourceFile.nodeCount
+        spineDaReachMemo = if (n > 0) ByteArray(n) else ByteArray(0)
+        spineDaFileLocals = result.locals
+    }
+
+    private fun spineDaTeardown() {
+        spineDaActive = false
+        spineDaFrames.clear()
+        spineDaFileLocals = null
+        spineDaReachMemo = ByteArray(0)
+    }
+
     /**
-     * Check for variables used before being definitively assigned.
-     * Emits TS2454 "Variable 'X' is used before being assigned."
+     * Construct a CORE frame (a legacy checkDefiniteAssignmentInStatements
+     * activation): seed with the B78.2 outer leak minus parameter shadows, then
+     * run the round-469 closure-assignment pre-scan over the whole list.
      */
-    private fun checkDefiniteAssignment() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            // B78.2: file-level scope does NOT participate in outer-leak computation.
-            // TypeScript treats file-level `let X` (in script files) as potentially
-            // assigned externally, so reads of `X` inside function bodies don't fire
-            // TS2454. Disable leak at the entry point; nested function bodies enable it.
-            checkDefiniteAssignmentInStatements(
-                result.sourceFile.statements, source, fileName,
-                fileLocals = result.locals,
-                enableLeakComputation = false,
-            )
+    private fun spineDaNewFrame(
+        owner: Node,
+        statements: List<Statement>,
+        preInitialized: Set<String>,
+        fileLocals: SymbolTable?,
+        enableLeak: Boolean,
+        outerLeak: Set<String>,
+    ): SpineDaFrame {
+        val frame = SpineDaFrame(owner, statements, preInitialized, fileLocals, enableLeak)
+        frame.uninitialized.addAll(outerLeak)
+        // preInitialized (function parameters) shadows leaked outer names — params
+        // are local declarations that take precedence over the outer-scope binding.
+        frame.uninitialized.removeAll(preInitialized)
+        // Round 469: a name assigned inside a NESTED function-like of this list can
+        // be assigned at any time relative to an outer read (function declarations
+        // hoist; the closure may run first) — tsc's definite-assignment never fires
+        // for it. Removal-only — straight-line use-before-assign with no closure
+        // assignment keeps firing.
+        val allCandidates = mutableSetOf<String>()
+        for (s in statements) collectUninitializedVars(s, allCandidates, preInitialized, fileLocals)
+        if (allCandidates.isNotEmpty()) {
+            for (s in statements) collectClosureAssignedNames(s, allCandidates, frame.closureAssigned)
+        }
+        return frame
+    }
+
+    /**
+     * The legacy per-statement loop body, run at a core-list statement's enter
+     * (children — nested scopes included — are walked by the spine afterwards,
+     * reproducing the legacy check-then-recurse order).
+     */
+    private fun spineDaFrameStep(frame: SpineDaFrame, stmt: Statement) {
+        // Collect variable declarations that are uninitialized
+        collectUninitializedVars(stmt, frame.uninitialized, frame.preInitialized, frame.fileLocals)
+        if (frame.closureAssigned.isNotEmpty()) frame.uninitialized.removeAll(frame.closureAssigned)
+
+        // Check for uses of uninitialized variables in this statement
+        if (frame.uninitialized.isNotEmpty()) {
+            checkUsesOfUninitialized(stmt, frame.uninitialized, spineSource, spineFileName)
+        }
+
+        // Mark variables as assigned if they appear on left side of assignment
+        markAssignments(stmt, frame.uninitialized)
+
+        // Compute the B78.2 leak set for nested scopes inside THIS statement:
+        // only `let`-declared outer vars with NO assignment anywhere in any
+        // nested function body of the current scope. Disabled at the file level
+        // (enableLeak=false — file-level `let X` may be assigned externally).
+        frame.currentLeak = if (!frame.enableLeak || frame.uninitialized.isEmpty()) emptySet() else {
+            val letUninitialized = collectLetUninitializedSoFar(frame.statements, frame.uninitialized)
+            if (letUninitialized.isEmpty()) emptySet()
+            else {
+                val anywhereAssigned = mutableSetOf<String>()
+                for (other in frame.statements) {
+                    collectAllAssignmentsAnywhere(other, letUninitialized, anywhereAssigned)
+                }
+                letUninitialized - anywhereAssigned
+            }
+        }
+    }
+
+    /** Per-node ENTER hook for the definite-assignment pass. */
+    private fun spineDaEnterNode(node: Node) {
+        val frames = spineDaFrames
+        // 1. The per-statement frame step — a DIRECT statement of the innermost
+        //    core list (its parent IS the top frame's owner; frames for deeper
+        //    lists are pushed/popped strictly inside this statement's subtree).
+        if (node is Statement && frames.isNotEmpty() &&
+            (node as NodeBase).parent === frames[frames.size - 1].owner
+        ) {
+            spineDaFrameStep(frames[frames.size - 1], node)
+        }
+        // 2. Core spawns (AFTER the step — a Block statement first runs the
+        //    outer frame's step, then opens its own fresh core, matching the
+        //    legacy checkUses-then-recurse order).
+        when (node) {
+            is SourceFile -> frames.add(spineDaNewFrame(
+                node, node.statements, emptySet(), spineDaFileLocals,
+                enableLeak = false, outerLeak = emptySet(),
+            ))
+            is Block -> if (spineDaStatus(node) == DA_CORE) spineDaSpawnCore(node, node.statements)
+            is ModuleBlock -> if (spineDaStatus(node) == DA_CORE) spineDaSpawnCore(node, node.statements)
+            else -> {}
+        }
+    }
+
+    /** Per-node LEAVE hook: pop the frame this node owns (at most one). */
+    private fun spineDaLeaveNode(node: Node) {
+        val frames = spineDaFrames
+        while (frames.isNotEmpty() && frames[frames.size - 1].owner === node) {
+            frames.removeAt(frames.size - 1)
         }
     }
 
     /**
-     * Walk statements tracking which variables are uninitialized.
-     * When a reference to an uninitialized variable is found, emit TS2454.
+     * Open a core frame at a CORE-classified Block/ModuleBlock: a fn-like BODY
+     * gets its parameters as [SpineDaFrame.preInitialized] and the B78.2 leak
+     * per the fn-like's own LEAK-flavored status; a Block-statement/ModuleBlock
+     * core is fresh (the legacy Block/ModuleBlock arms dropped both).
      */
-    private fun checkDefiniteAssignmentInStatements(
-        statements: List<Statement>,
-        source: String,
-        fileName: String,
-        preInitialized: Set<String> = emptySet(),
-        fileLocals: SymbolTable? = null,
-        outerLeak: Set<String> = emptySet(),
-        enableLeakComputation: Boolean = true,
-    ) {
-        // Track variables declared with type but no initializer
-        // B78.2: seed with outer-scope leak names — outer-function-scope `let` vars
-        // declared without initializer AND never assigned anywhere in the outer
-        // function body (including its nested function bodies). The leak set is
-        // pre-filtered at the call site so we never leak names that have an
-        // assignment anywhere — that handles the `var x11 = ...; function bar() { x11 = ... }`
-        // sibling-assignment-suppression case without per-stmt tracking.
-        val uninitialized = mutableSetOf<String>().apply { addAll(outerLeak) }
-        // preInitialized (function parameters) shadows leaked outer names — params
-        // are local declarations that take precedence over the outer-scope binding.
-        uninitialized.removeAll(preInitialized)
+    private fun spineDaSpawnCore(owner: Node, statements: List<Statement>) {
+        var preInit: Set<String> = emptySet()
+        var leak: Set<String> = emptySet()
+        when (val parent = (owner as NodeBase).parent) {
+            is FunctionDeclaration -> if (parent.body === owner) {
+                preInit = collectParamNames(parent.parameters); leak = spineDaLeakOf(parent)
+            }
+            is MethodDeclaration -> if (parent.body === owner) {
+                preInit = collectParamNames(parent.parameters); leak = spineDaLeakOf(parent)
+            }
+            is Constructor -> if (parent.body === owner) {
+                preInit = collectParamNames(parent.parameters); leak = spineDaLeakOf(parent)
+            }
+            is GetAccessor -> if (parent.body === owner) {
+                preInit = collectParamNames(parent.parameters); leak = spineDaLeakOf(parent)
+            }
+            is SetAccessor -> if (parent.body === owner) {
+                preInit = collectParamNames(parent.parameters); leak = spineDaLeakOf(parent)
+            }
+            is FunctionExpression -> if (parent.body === owner) {
+                preInit = collectParamNames(parent.parameters); leak = spineDaLeakOf(parent)
+            }
+            is ArrowFunction -> if (parent.body === owner) {
+                preInit = collectParamNames(parent.parameters); leak = spineDaLeakOf(parent)
+            }
+            else -> {} // Block-as-statement / ModuleBlock: fresh core
+        }
+        spineDaFrames.add(spineDaNewFrame(
+            owner, statements, preInit, fileLocals = null,
+            enableLeak = true, outerLeak = leak,
+        ))
+    }
 
-        // Round 469: a name assigned inside a NESTED function-like of this list can be
-        // assigned at any time relative to an outer read (function declarations hoist;
-        // the closure may run first) — tsc's definite-assignment never fires for it
-        // (tsc formatting.ts formatSpanWorker's `previousRange`, assigned only inside
-        // the nested processRange/processPair helpers, read in the trailing-edit
-        // block ABOVE their declarations). One AST pre-pass: collect this scope's
-        // uninitialized candidates, then their closure-nested assignments via the
-        // B78.2 collectAllAssignmentsAnywhere walker. Removal-only — straight-line
-        // use-before-assign with no closure assignment keeps firing.
-        val closureAssigned = mutableSetOf<String>()
+    /**
+     * The B78.2 leak reaching a fn-like boundary: the innermost core frame's
+     * per-statement [SpineDaFrame.currentLeak] when the fn-like sits on a
+     * leak-PRESERVING path from its core-list statement (a LEAK-flavored
+     * status), else empty (the legacy default-argument drop).
+     */
+    private fun spineDaLeakOf(fnLike: Node): Set<String> {
+        val st = spineDaStatus(fnLike)
+        return if ((st == DA_STMT_LEAK || st == DA_EXPR_LEAK || st == DA_MEMBER_LEAK) &&
+            spineDaFrames.isNotEmpty()
+        ) spineDaFrames[spineDaFrames.size - 1].currentLeak else emptySet()
+    }
+
+    /**
+     * Memoized multi-state reach classifier — the deleted recursion walkers'
+     * dispatch arms verbatim (see the DA_* constants). Ascends to the first
+     * memoized/terminal ancestor, then walks back down over [spineDaEdge].
+     */
+    private fun spineDaStatus(node: Node): Int {
+        if (node is SourceFile) return DA_ROOT
+        val memo = spineDaReachMemo
         run {
-            val allCandidates = mutableSetOf<String>()
-            for (s in statements) collectUninitializedVars(s, allCandidates, preInitialized, fileLocals)
-            if (allCandidates.isNotEmpty()) {
-                for (s in statements) collectClosureAssignedNames(s, allCandidates, closureAssigned)
+            val id = (node as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) {
+                val m = memo[id].toInt()
+                if (m != 0) return m
             }
         }
+        val chain = spineDaChain
+        chain.clear()
+        var cur: Node = node
+        var anchor: Node? = null
+        var anchorStatus = DA_NONE
+        while (true) {
+            chain.add(cur)
+            val parent = (cur as NodeBase).parent
+            if (parent == null) { anchor = null; break } // detached/unindexed → NONE
+            if (parent is SourceFile) { anchor = parent; anchorStatus = DA_ROOT; break }
+            val pid = (parent as NodeBase).nodeId
+            val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
+            if (pm != 0) { anchor = parent; anchorStatus = pm; break }
+            cur = parent
+        }
+        var pNode: Node? = anchor
+        var pStatus = anchorStatus
+        var result = DA_NONE
+        for (i in chain.indices.reversed()) {
+            val c = chain[i]
+            result = if (pNode == null || pStatus == DA_NONE) DA_NONE
+                else spineDaEdge(pNode, pStatus, c)
+            val cid = (c as NodeBase).nodeId
+            if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
+            pNode = c
+            pStatus = result
+        }
+        chain.clear()
+        return result
+    }
 
-        for (stmt in statements) {
-            // Collect variable declarations that are uninitialized
-            collectUninitializedVars(stmt, uninitialized, preInitialized, fileLocals)
-            if (closureAssigned.isNotEmpty()) uninitialized.removeAll(closureAssigned)
+    /** A statement position under a reached list/descent arm: Blocks open their
+     *  own fresh core, every other statement is nested-scope-processed. */
+    private fun spineDaStmtOrCore(child: Node, leak: Boolean): Int = when {
+        child !is Statement -> DA_NONE
+        child is Block -> DA_CORE
+        leak -> DA_STMT_LEAK
+        else -> DA_STMT_NOLEAK
+    }
 
-            // Check for uses of uninitialized variables in this statement
-            if (uninitialized.isNotEmpty()) {
-                checkUsesOfUninitialized(stmt, uninitialized, source, fileName)
-            }
-
-            // Mark variables as assigned if they appear on left side of assignment
-            markAssignments(stmt, uninitialized)
-
-            // Compute leak set for nested scopes inside this statement:
-            // only `let`-declared outer vars with NO assignment anywhere in any
-            // nested function body of the current scope. This conservative gate
-            // avoids regressions in tests that rely on nested-function reads being
-            // silent (e.g. `let x: T; bar() { x = ... }` patterns).
-            // Skip when leak computation is disabled (file-level scope, see B78.2 entry point).
-            val nestedLeak = if (!enableLeakComputation || uninitialized.isEmpty()) emptySet() else {
-                val letUninitialized = collectLetUninitializedSoFar(statements, uninitialized)
-                if (letUninitialized.isEmpty()) emptySet()
-                else {
-                    val anywhereAssigned = mutableSetOf<String>()
-                    for (other in statements) {
-                        collectAllAssignmentsAnywhere(other, letUninitialized, anywhereAssigned)
-                    }
-                    letUninitialized - anywhereAssigned
+    /**
+     * The edge rules — the deleted checkDefiniteAssignmentInNestedScopes (STMT_*
+     * arms) and checkDefiniteAssignmentInExprContext (EXPR_* arms) verbatim.
+     * Unlisted edges are NONE (the legacy `else -> {}`s: if/loop CONDITIONS,
+     * for headers, parameter defaults, class-DECLARATION property initializers,
+     * throw expressions, decorators, computed names, type positions).
+     */
+    private fun spineDaEdge(parent: Node, pStatus: Int, child: Node): Int = when (pStatus) {
+        DA_ROOT, DA_CORE -> spineDaStmtOrCore(child, leak = true)
+        DA_PASS -> when (parent) {
+            // try/catch/finally block statements + switch clause statements:
+            // nested-scope descent WITHOUT a core (the legacy forEach arms).
+            is Block -> spineDaStmtOrCore(child, leak = false)
+            is CatchClause -> if (child === parent.block) DA_PASS else DA_NONE
+            is CaseClause, is DefaultClause -> spineDaStmtOrCore(child, leak = false)
+            else -> DA_NONE
+        }
+        DA_STMT_LEAK, DA_STMT_NOLEAK -> {
+            val leak = pStatus == DA_STMT_LEAK
+            when (parent) {
+                is FunctionDeclaration ->
+                    if (ModifierFlag.Declare !in parent.modifiers && child === parent.body) DA_CORE
+                    else DA_NONE
+                is ClassDeclaration ->
+                    if (ModifierFlag.Declare !in parent.modifiers &&
+                        (child is MethodDeclaration || child is Constructor ||
+                            child is GetAccessor || child is SetAccessor)
+                    ) (if (leak) DA_MEMBER_LEAK else DA_MEMBER_NOLEAK)
+                    else DA_NONE
+                is ModuleDeclaration -> when {
+                    ModifierFlag.Declare in parent.modifiers -> DA_NONE
+                    child !== parent.body -> DA_NONE
+                    child is ModuleBlock -> DA_CORE
+                    // dotted `namespace A.B` body: re-enter the nested-scopes arm
+                    // (the legacy recursion dropped the leak here).
+                    child is ModuleDeclaration -> DA_STMT_NOLEAK
+                    else -> DA_NONE
                 }
+                is IfStatement ->
+                    if (child === parent.thenStatement || child === parent.elseStatement)
+                        spineDaStmtOrCore(child, leak = false) else DA_NONE
+                is ForStatement -> if (child === parent.statement) spineDaStmtOrCore(child, false) else DA_NONE
+                is ForInStatement -> if (child === parent.statement) spineDaStmtOrCore(child, false) else DA_NONE
+                is ForOfStatement -> if (child === parent.statement) spineDaStmtOrCore(child, false) else DA_NONE
+                is WhileStatement -> if (child === parent.statement) spineDaStmtOrCore(child, false) else DA_NONE
+                is DoStatement -> if (child === parent.statement) spineDaStmtOrCore(child, false) else DA_NONE
+                is SwitchStatement -> if (child is CaseClause || child is DefaultClause) DA_PASS else DA_NONE
+                is TryStatement ->
+                    if (child === parent.tryBlock || child === parent.finallyBlock ||
+                        child === parent.catchClause) DA_PASS else DA_NONE
+                is LabeledStatement -> if (child === parent.statement) spineDaStmtOrCore(child, false) else DA_NONE
+                // VariableStatement declarator initializers → expression context
+                // (the legacy VariableStatement arm), carried through the
+                // declaration-list/declaration nodes.
+                is VariableStatement -> if (child is VariableDeclarationList)
+                    (if (leak) DA_STMT_LEAK else DA_STMT_NOLEAK) else DA_NONE
+                is VariableDeclarationList -> if (child is VariableDeclaration)
+                    (if (leak) DA_STMT_LEAK else DA_STMT_NOLEAK) else DA_NONE
+                is VariableDeclaration -> if (child === parent.initializer)
+                    (if (leak) DA_EXPR_LEAK else DA_EXPR_NOLEAK) else DA_NONE
+                is ExpressionStatement -> if (child === parent.expression)
+                    (if (leak) DA_EXPR_LEAK else DA_EXPR_NOLEAK) else DA_NONE
+                is ReturnStatement -> if (child === parent.expression)
+                    (if (leak) DA_EXPR_LEAK else DA_EXPR_NOLEAK) else DA_NONE
+                else -> DA_NONE
             }
-
-            // Recurse into nested scopes
-            checkDefiniteAssignmentInNestedScopes(stmt, source, fileName, outerLeak = nestedLeak)
         }
+        DA_MEMBER_LEAK, DA_MEMBER_NOLEAK -> {
+            val leak = pStatus == DA_MEMBER_LEAK
+            when (parent) {
+                is MethodDeclaration -> if (child === parent.body) DA_CORE else DA_NONE
+                is Constructor -> if (child === parent.body) DA_CORE else DA_NONE
+                is GetAccessor -> if (child === parent.body) DA_CORE else DA_NONE
+                is SetAccessor -> if (child === parent.body) DA_CORE else DA_NONE
+                // class-EXPRESSION property initializers ARE reached (the legacy
+                // ClassExpression arm); class-DECLARATION members never mint a
+                // PropertyDeclaration MEMBER status, preserving the asymmetry.
+                is PropertyDeclaration -> if (child === parent.initializer)
+                    (if (leak) DA_EXPR_LEAK else DA_EXPR_NOLEAK) else DA_NONE
+                is PropertyAssignment -> if (child === parent.initializer)
+                    (if (leak) DA_EXPR_LEAK else DA_EXPR_NOLEAK) else DA_NONE
+                is SpreadAssignment -> if (child === parent.expression)
+                    (if (leak) DA_EXPR_LEAK else DA_EXPR_NOLEAK) else DA_NONE
+                is TemplateSpan -> if (child === parent.expression)
+                    (if (leak) DA_EXPR_LEAK else DA_EXPR_NOLEAK) else DA_NONE
+                else -> DA_NONE
+            }
+        }
+        DA_EXPR_LEAK, DA_EXPR_NOLEAK -> {
+            val leak = pStatus == DA_EXPR_LEAK
+            val expr = if (leak) DA_EXPR_LEAK else DA_EXPR_NOLEAK
+            val member = if (leak) DA_MEMBER_LEAK else DA_MEMBER_NOLEAK
+            when (parent) {
+                is ClassExpression ->
+                    if (child is MethodDeclaration || child is Constructor ||
+                        child is GetAccessor || child is SetAccessor ||
+                        child is PropertyDeclaration) member else DA_NONE
+                is FunctionExpression -> if (child === parent.body) DA_CORE else DA_NONE
+                is ArrowFunction -> when {
+                    child !== parent.body -> DA_NONE
+                    child is Block -> DA_CORE
+                    else -> expr // expression body passes the leak through
+                }
+                is CallExpression ->
+                    if (child === parent.expression || parent.arguments.any { it === child }) expr
+                    else DA_NONE
+                is NewExpression ->
+                    if (child === parent.expression || parent.arguments?.any { it === child } == true) expr
+                    else DA_NONE
+                is BinaryExpression -> if (child === parent.left || child === parent.right) expr else DA_NONE
+                is ParenthesizedExpression -> if (child === parent.expression) expr else DA_NONE
+                is AsExpression -> if (child === parent.expression) expr else DA_NONE
+                is TypeAssertionExpression -> if (child === parent.expression) expr else DA_NONE
+                is SatisfiesExpression -> if (child === parent.expression) expr else DA_NONE
+                is NonNullExpression -> if (child === parent.expression) expr else DA_NONE
+                is ConditionalExpression ->
+                    if (child === parent.condition || child === parent.whenTrue ||
+                        child === parent.whenFalse) expr else DA_NONE
+                is PropertyAccessExpression -> if (child === parent.expression) expr else DA_NONE
+                is ElementAccessExpression ->
+                    if (child === parent.expression || child === parent.argumentExpression) expr
+                    else DA_NONE
+                is ArrayLiteralExpression -> if (parent.elements.any { it === child }) expr else DA_NONE
+                is ObjectLiteralExpression -> when (child) {
+                    // ShorthandPropertyAssignment (incl. its default initializer)
+                    // was NOT descended by the legacy object-literal arm.
+                    is PropertyAssignment, is SpreadAssignment,
+                    is MethodDeclaration, is GetAccessor, is SetAccessor -> member
+                    else -> DA_NONE
+                }
+                is SpreadElement -> if (child === parent.expression) expr else DA_NONE
+                is AwaitExpression -> if (child === parent.expression) expr else DA_NONE
+                is YieldExpression -> if (child === parent.expression) expr else DA_NONE
+                is VoidExpression -> if (child === parent.expression) expr else DA_NONE
+                is DeleteExpression -> if (child === parent.expression) expr else DA_NONE
+                is TypeOfExpression -> if (child === parent.expression) expr else DA_NONE
+                is PrefixUnaryExpression -> if (child === parent.operand) expr else DA_NONE
+                is PostfixUnaryExpression -> if (child === parent.operand) expr else DA_NONE
+                is TemplateExpression -> if (child is TemplateSpan) member else DA_NONE
+                is TaggedTemplateExpression -> when {
+                    child === parent.tag -> expr
+                    child === parent.template && child is TemplateExpression -> expr
+                    else -> DA_NONE
+                }
+                is CommaListExpression -> if (parent.elements.any { it === child }) expr else DA_NONE
+                else -> DA_NONE
+            }
+        }
+        else -> DA_NONE
     }
 
     /**
@@ -13588,281 +13929,6 @@ class Checker(
             }
         }
         return names
-    }
-
-    /**
-     * Recurse into function bodies and other nested scopes for TS2454 checking.
-     * B78.2: `outerLeak` carries outer-scope uninitialized vars so nested function
-     * bodies can fire TS2454 for captured-but-unassigned reads. Block-scope
-     * (Block/If/For/While/Try/Switch) recursion propagates the leak through;
-     * function-scope boundaries (FunctionDeclaration/Method/Constructor/Accessor/
-     * ArrowFunction/FunctionExpression) ARE the leak target.
-     */
-    private fun checkDefiniteAssignmentInNestedScopes(
-        stmt: Statement,
-        source: String,
-        fileName: String,
-        outerLeak: Set<String> = emptySet(),
-    ) {
-        when (stmt) {
-            is FunctionDeclaration -> {
-                if (ModifierFlag.Declare in stmt.modifiers) return
-                stmt.body?.let {
-                    checkDefiniteAssignmentInStatements(
-                        it.statements, source, fileName,
-                        preInitialized = collectParamNames(stmt.parameters),
-                        outerLeak = outerLeak,
-                    )
-                }
-            }
-            is ClassDeclaration -> {
-                if (ModifierFlag.Declare in stmt.modifiers) return
-                for (member in stmt.members) {
-                    when (member) {
-                        is MethodDeclaration -> member.body?.let {
-                            checkDefiniteAssignmentInStatements(
-                                it.statements, source, fileName,
-                                preInitialized = collectParamNames(member.parameters),
-                                outerLeak = outerLeak,
-                            )
-                        }
-                        is Constructor -> member.body?.let {
-                            checkDefiniteAssignmentInStatements(
-                                it.statements, source, fileName,
-                                preInitialized = collectParamNames(member.parameters),
-                                outerLeak = outerLeak,
-                            )
-                        }
-                        is GetAccessor -> member.body?.let {
-                            checkDefiniteAssignmentInStatements(
-                                it.statements, source, fileName,
-                                preInitialized = collectParamNames(member.parameters),
-                                outerLeak = outerLeak,
-                            )
-                        }
-                        is SetAccessor -> member.body?.let {
-                            checkDefiniteAssignmentInStatements(
-                                it.statements, source, fileName,
-                                preInitialized = collectParamNames(member.parameters),
-                                outerLeak = outerLeak,
-                            )
-                        }
-                        else -> {}
-                    }
-                }
-            }
-            is ModuleDeclaration -> {
-                if (ModifierFlag.Declare in stmt.modifiers) return // skip ambient
-                when (val body = stmt.body) {
-                    is ModuleBlock -> checkDefiniteAssignmentInStatements(
-                        body.statements, source, fileName,
-                    )
-                    is ModuleDeclaration -> checkDefiniteAssignmentInNestedScopes(
-                        body, source, fileName,
-                    )
-                    else -> {}
-                }
-            }
-            // B78.2: control-flow block bodies (Block / If / For / While / Try / Switch /
-            // Labeled) do NOT propagate outerLeak — they share the outer scope's
-            // `uninitialized` set via the standard recursion, and that set already
-            // emitted TS2454 at the first read. Re-injecting via outerLeak would
-            // cause duplicate emissions at every subsequent read inside the block.
-            // Only true function-scope boundaries (FunctionDeclaration, Method, etc.)
-            // get outerLeak.
-            is Block -> checkDefiniteAssignmentInStatements(
-                stmt.statements, source, fileName,
-            )
-            is IfStatement -> {
-                checkDefiniteAssignmentInNestedScopes(stmt.thenStatement, source, fileName)
-                stmt.elseStatement?.let { checkDefiniteAssignmentInNestedScopes(it, source, fileName) }
-            }
-            is ForStatement -> checkDefiniteAssignmentInNestedScopes(stmt.statement, source, fileName)
-            is ForInStatement -> checkDefiniteAssignmentInNestedScopes(stmt.statement, source, fileName)
-            is ForOfStatement -> checkDefiniteAssignmentInNestedScopes(stmt.statement, source, fileName)
-            is WhileStatement -> checkDefiniteAssignmentInNestedScopes(stmt.statement, source, fileName)
-            is DoStatement -> checkDefiniteAssignmentInNestedScopes(stmt.statement, source, fileName)
-            is SwitchStatement -> {
-                for (clause in stmt.caseBlock) {
-                    when (clause) {
-                        is CaseClause -> clause.statements.forEach {
-                            checkDefiniteAssignmentInNestedScopes(it, source, fileName)
-                        }
-                        is DefaultClause -> clause.statements.forEach {
-                            checkDefiniteAssignmentInNestedScopes(it, source, fileName)
-                        }
-                        else -> {}
-                    }
-                }
-            }
-            is TryStatement -> {
-                stmt.tryBlock.statements.forEach {
-                    checkDefiniteAssignmentInNestedScopes(it, source, fileName)
-                }
-                stmt.catchClause?.block?.statements?.forEach {
-                    checkDefiniteAssignmentInNestedScopes(it, source, fileName)
-                }
-                stmt.finallyBlock?.statements?.forEach {
-                    checkDefiniteAssignmentInNestedScopes(it, source, fileName)
-                }
-            }
-            is LabeledStatement -> checkDefiniteAssignmentInNestedScopes(stmt.statement, source, fileName)
-            is VariableStatement -> {
-                // Recurse into class/function expressions in variable initializers
-                for (decl in stmt.declarationList.declarations) {
-                    decl.initializer?.let { checkDefiniteAssignmentInExprContext(it, source, fileName, outerLeak) }
-                }
-            }
-            is ExpressionStatement -> checkDefiniteAssignmentInExprContext(stmt.expression, source, fileName, outerLeak)
-            is ReturnStatement -> stmt.expression?.let { checkDefiniteAssignmentInExprContext(it, source, fileName, outerLeak) }
-            else -> {}
-        }
-    }
-
-    /**
-     * Walk an expression for nested function/class expressions, recursing into
-     * their bodies to check for TS2454. B78.2: `outerLeak` carries outer-scope
-     * uninitialized vars so object-literal methods, arrow functions, function
-     * expressions, and class-expression methods can fire TS2454 for
-     * captured-but-unassigned reads (mirrors the FunctionDeclaration handling
-     * in `checkDefiniteAssignmentInNestedScopes`).
-     */
-    private fun checkDefiniteAssignmentInExprContext(
-        expr: Expression, source: String, fileName: String, outerLeak: Set<String> = emptySet(),
-    ) {
-        when (expr) {
-            is ClassExpression -> {
-                for (member in expr.members) {
-                    when (member) {
-                        is MethodDeclaration -> member.body?.let {
-                            checkDefiniteAssignmentInStatements(
-                                it.statements, source, fileName,
-                                preInitialized = collectParamNames(member.parameters),
-                                outerLeak = outerLeak,
-                            )
-                        }
-                        is Constructor -> member.body?.let {
-                            checkDefiniteAssignmentInStatements(
-                                it.statements, source, fileName,
-                                preInitialized = collectParamNames(member.parameters),
-                                outerLeak = outerLeak,
-                            )
-                        }
-                        is GetAccessor -> member.body?.let {
-                            checkDefiniteAssignmentInStatements(
-                                it.statements, source, fileName,
-                                preInitialized = collectParamNames(member.parameters),
-                                outerLeak = outerLeak,
-                            )
-                        }
-                        is SetAccessor -> member.body?.let {
-                            checkDefiniteAssignmentInStatements(
-                                it.statements, source, fileName,
-                                preInitialized = collectParamNames(member.parameters),
-                                outerLeak = outerLeak,
-                            )
-                        }
-                        is PropertyDeclaration -> member.initializer?.let {
-                            checkDefiniteAssignmentInExprContext(it, source, fileName, outerLeak)
-                        }
-                        else -> {}
-                    }
-                }
-            }
-            is FunctionExpression -> expr.body.let {
-                checkDefiniteAssignmentInStatements(
-                    it.statements, source, fileName,
-                    preInitialized = collectParamNames(expr.parameters),
-                    outerLeak = outerLeak,
-                )
-            }
-            is ArrowFunction -> {
-                when (val body = expr.body) {
-                    is Block -> checkDefiniteAssignmentInStatements(
-                        body.statements, source, fileName,
-                        preInitialized = collectParamNames(expr.parameters),
-                        outerLeak = outerLeak,
-                    )
-                    is Expression -> checkDefiniteAssignmentInExprContext(body, source, fileName, outerLeak)
-                    else -> {}
-                }
-            }
-            is CallExpression -> {
-                checkDefiniteAssignmentInExprContext(expr.expression, source, fileName, outerLeak)
-                expr.arguments.forEach { checkDefiniteAssignmentInExprContext(it, source, fileName, outerLeak) }
-            }
-            is NewExpression -> {
-                checkDefiniteAssignmentInExprContext(expr.expression, source, fileName, outerLeak)
-                expr.arguments?.forEach { checkDefiniteAssignmentInExprContext(it, source, fileName, outerLeak) }
-            }
-            is BinaryExpression -> {
-                // Iterative left-spine walk to avoid StackOverflow on deep binary chains
-                var current: Expression = expr
-                val rightStack = ArrayDeque<Expression>()
-                while (current is BinaryExpression) { rightStack.addLast(current.right); current = current.left }
-                checkDefiniteAssignmentInExprContext(current, source, fileName, outerLeak)
-                while (rightStack.isNotEmpty()) checkDefiniteAssignmentInExprContext(rightStack.removeLast(), source, fileName, outerLeak)
-            }
-            is ParenthesizedExpression -> checkDefiniteAssignmentInExprContext(expr.expression, source, fileName, outerLeak)
-            is AsExpression -> checkDefiniteAssignmentInExprContext(expr.expression, source, fileName, outerLeak)
-            is TypeAssertionExpression -> checkDefiniteAssignmentInExprContext(expr.expression, source, fileName, outerLeak)
-            is SatisfiesExpression -> checkDefiniteAssignmentInExprContext(expr.expression, source, fileName, outerLeak)
-            is NonNullExpression -> checkDefiniteAssignmentInExprContext(expr.expression, source, fileName, outerLeak)
-            is ConditionalExpression -> {
-                checkDefiniteAssignmentInExprContext(expr.condition, source, fileName, outerLeak)
-                checkDefiniteAssignmentInExprContext(expr.whenTrue, source, fileName, outerLeak)
-                checkDefiniteAssignmentInExprContext(expr.whenFalse, source, fileName, outerLeak)
-            }
-            is PropertyAccessExpression -> checkDefiniteAssignmentInExprContext(expr.expression, source, fileName, outerLeak)
-            is ElementAccessExpression -> {
-                checkDefiniteAssignmentInExprContext(expr.expression, source, fileName, outerLeak)
-                checkDefiniteAssignmentInExprContext(expr.argumentExpression, source, fileName, outerLeak)
-            }
-            is ArrayLiteralExpression -> for (e in expr.elements) checkDefiniteAssignmentInExprContext(e, source, fileName, outerLeak)
-            is ObjectLiteralExpression -> for (p in expr.properties) when (p) {
-                is PropertyAssignment -> checkDefiniteAssignmentInExprContext(p.initializer, source, fileName, outerLeak)
-                is SpreadAssignment -> checkDefiniteAssignmentInExprContext(p.expression, source, fileName, outerLeak)
-                is MethodDeclaration -> p.body?.let {
-                    checkDefiniteAssignmentInStatements(
-                        it.statements, source, fileName,
-                        preInitialized = collectParamNames(p.parameters),
-                        outerLeak = outerLeak,
-                    )
-                }
-                is GetAccessor -> p.body?.let {
-                    checkDefiniteAssignmentInStatements(
-                        it.statements, source, fileName,
-                        preInitialized = collectParamNames(p.parameters),
-                        outerLeak = outerLeak,
-                    )
-                }
-                is SetAccessor -> p.body?.let {
-                    checkDefiniteAssignmentInStatements(
-                        it.statements, source, fileName,
-                        preInitialized = collectParamNames(p.parameters),
-                        outerLeak = outerLeak,
-                    )
-                }
-                else -> {}
-            }
-            is SpreadElement -> checkDefiniteAssignmentInExprContext(expr.expression, source, fileName, outerLeak)
-            is AwaitExpression -> checkDefiniteAssignmentInExprContext(expr.expression, source, fileName, outerLeak)
-            is YieldExpression -> expr.expression?.let { checkDefiniteAssignmentInExprContext(it, source, fileName, outerLeak) }
-            is VoidExpression -> checkDefiniteAssignmentInExprContext(expr.expression, source, fileName, outerLeak)
-            is DeleteExpression -> checkDefiniteAssignmentInExprContext(expr.expression, source, fileName, outerLeak)
-            is TypeOfExpression -> checkDefiniteAssignmentInExprContext(expr.expression, source, fileName, outerLeak)
-            is PrefixUnaryExpression -> checkDefiniteAssignmentInExprContext(expr.operand, source, fileName, outerLeak)
-            is PostfixUnaryExpression -> checkDefiniteAssignmentInExprContext(expr.operand, source, fileName, outerLeak)
-            is TemplateExpression -> for (span in expr.templateSpans) checkDefiniteAssignmentInExprContext(span.expression, source, fileName, outerLeak)
-            is TaggedTemplateExpression -> {
-                checkDefiniteAssignmentInExprContext(expr.tag, source, fileName, outerLeak)
-                if (expr.template is TemplateExpression) {
-                    for (span in (expr.template).templateSpans) checkDefiniteAssignmentInExprContext(span.expression, source, fileName, outerLeak)
-                }
-            }
-            is CommaListExpression -> for (e in expr.elements) checkDefiniteAssignmentInExprContext(e, source, fileName, outerLeak)
-            else -> {}
-        }
     }
 
     // -----------------------------------------------------------------------
@@ -17811,6 +17877,7 @@ class Checker(
                 spineArithSetup(result)
                 spineIanySetup(result)
                 spineDupIdSetup(result)
+                spineDaSetup(result)
                 spineUResAuditActive = unresolvedAuditEnabled && spineUResActive
                 try {
                     spineWalkFile(sf)
@@ -17823,6 +17890,7 @@ class Checker(
                     spineArithTeardown()
                     spineIanyTeardown()
                     spineDupIdTeardown()
+                    spineDaTeardown()
                 }
                 spineResolveDeferredIterationChecks()
             }
@@ -17900,6 +17968,9 @@ class Checker(
         if (spineArithActive) spineArithEnterNode(node)
         // INV.4(d) walker 3: the implicit-any pass (same edge-first discipline).
         if (spineIanyActive) spineIanyEnterNode(node)
+        // INV.4(d) walker 5: the set-based definite-assignment pass — the
+        // per-statement frame step + core-frame spawns.
+        if (spineDaActive) spineDaEnterNode(node)
         when (node) {
             is Identifier -> spineTavIdentifier(node)
             is PropertyDeclaration -> {
@@ -18068,6 +18139,8 @@ class Checker(
         if (spineArithActive) spineArithLeaveNode(node)
         // INV.4(d) walker 3: the implicit-any pass's frame pops.
         if (spineIanyActive) spineIanyLeaveNode(node)
+        // INV.4(d) walker 5: the definite-assignment pass's core-frame pops.
+        if (spineDaActive) spineDaLeaveNode(node)
     }
 
     // ── INV.4(c)(i) spine-maintained lexical scope state ───────────────────
@@ -43764,6 +43837,27 @@ class Checker(
         private const val TAV_REACHED = 1
         private const val TAV_REACHED_NONS = 2
         private const val TAV_UNREACHED = 3
+
+        // INV.4(d) walker 5: [spineDaStatus] states (Byte memo; 0 = unknown).
+        // STMT_* = a statement processed by the deleted
+        // checkDefiniteAssignmentInNestedScopes with (LEAK) / without (NOLEAK)
+        // the B78.2 outer leak; EXPR_* = an expression processed by the deleted
+        // checkDefiniteAssignmentInExprContext; MEMBER_* = a reached carrier
+        // between the two (class/objlit member, property assignment, template
+        // span); CORE = a Block/ModuleBlock that spawns a fresh statement-list
+        // frame; PASS = a try/catch/finally block or switch clause whose
+        // STATEMENTS descend leak-dropped with NO frame of their own; ROOT =
+        // the SourceFile (the file-level frame, leak computation disabled).
+        private const val DA_STMT_LEAK = 1
+        private const val DA_STMT_NOLEAK = 2
+        private const val DA_EXPR_LEAK = 3
+        private const val DA_EXPR_NOLEAK = 4
+        private const val DA_NONE = 5
+        private const val DA_CORE = 6
+        private const val DA_PASS = 7
+        private const val DA_MEMBER_LEAK = 8
+        private const val DA_MEMBER_NOLEAK = 9
+        private const val DA_ROOT = 10
 
         /** Maximum antecedent walk depth for control-flow narrowing, aligned with tsc's
          *  `flowDepth === 2000` stack guard (M1.2b, round 386 — was 50). Do NOT lower it

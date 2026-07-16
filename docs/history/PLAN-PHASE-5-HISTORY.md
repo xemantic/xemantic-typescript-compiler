@@ -1,3 +1,58 @@
+**Round 524 (2026-07-15) — INV.4(c)(iii) batch 1: the spine maintains the
+checkUnresolvedNames family's NameScope chain (infrastructure, always-on,
+audited — emissions still on the legacy walk).** `spineUResStack` (wired into
+spineWalkFile's enter/leave) pushes levels at the SAME boundaries where the
+legacy recursive walk creates child scopes: file root + statement-list levels
+(SourceFile / Block — a fn's immediate body probes the FN node's lex per the
+(c)(ii) owner convention / ModuleBlock threaded / switch shared-clause scope /
+for-headers / catch), function-like signature levels per PARENT kind (class
+members get memberClassCtx + hasArguments + the ctor-param-property names for
+PropertyDeclaration; interface/type-literal members plain children; objlit
+methods hasArguments-only; objlit/interface/type-literal GET accessors
+deliberately none), class/class-expr/interface/type-alias TP scopes
+(lex-linked), enum member scopes (binder-exports EnumMember-filtered + AST +
+cross-file script merge), namespace scopes (buildNamespaceScope), and the
+type-level scopes (mapped TP / conditional-infer / fn-type). Three mechanisms
+reproduce the legacy walk's sequential-mutation semantics on the spine's fixed
+preorder: (1) LAZY signature population — ALL TPs register at the first
+TypeParameter child (mutually visible in constraints, params NOT — tsc
+evaluates constraints without params), ALL params (+ the sub-ES2015
+hoisted-body-var collect) at the first Parameter/type/body child, and the
+NAME child never populates (a method's computed name sees the empty member
+scope, B98.r111); (2) DEFERRED-ACTIVATION regions (the effective scope is the
+innermost ACTIVE level) — the switch level activates at the first CLAUSE
+child, the mapped-type level past its typeParameter child (constraint in
+OUTER scope), the conditional-type infer level only between trueType and
+falseType, and a CLASS level DEACTIVATES at its first Decorator child
+(forEachChild visits decorators LAST; the legacy walk checks class decorators
+in the OUTER scope); (3) member-DECORATOR pre-population views — class-method
+decorators are checked before TP/param registration in the legacy walk, so a
+trailing Decorator child pushes a fresh unpopulated sibling view
+(`decoratorScope`), popped at the decorator's leave. The per-file ROOT scope
+is built ONCE and SHARED between the spine and the legacy pass
+(`unresolvedFileRootFor` cache; whoever runs first builds), which required
+splitting `unresolvedTypeLibNames` out of checkTypeLibraryEntryPoints
+(`computeTypeLibResolution()`, called at checkSpine's top — the TS2688
+emission stays at its pass). AUDITED, not assumed: the legacy walk records a
+scope fingerprint (has/hasLocalShadow/isTypeParam/hasType/constraint-presence/
+inFunction/hasArguments/classContext) at every checkIdentifierResolved /
+checkTypeNameResolved position; the spine records the same at every
+Identifier enter; Inv4UnresolvedSpineScopeTest (15 tests) asserts every
+legacy record has an IDENTICAL spine record across a kitchen-sink fixture +
+the sharp shapes (computed method names, TP-constraints-vs-params, switch
+subject, conditional infer, mapped constraint, class+method decorators, ES5
+hoist, checkJs @typedef, enum siblings, merged namespaces, objlit accessors,
+fn-expr self-name, NaN shadow, catch). Sharpness verified by TWO deliberate
+breakages (an eager-active switch level; eager param population at the TP
+trigger) — each fails exactly the right test with the exact diverging
+fingerprint. VERIFIED: suite 10,698 → 10,713 (+15, 0 regressions); listAll
+error lines IDENTICAL on ALL 8 profiles (524a vs 523a); bench row recorded
+(the maintenance temporarily doubles the family's scope construction — it
+shrinks back when the emission batches delete the legacy walk). NEXT:
+(c)(iii) batch 2 — swap the statement-level emissions onto the spine against
+this state, then expressions/types/JSX, deleting the recursive walkers as
+their positions migrate.
+
 **Round 523 (2026-07-15) — INV.4(c)(ii) LANDED: the checkUnresolvedNames STATE
 swap onto the INV.2(c) lexicalScopes tables.** The ~3,000-line walk family keeps
 its recursive structure (that deletion is (c)(iii)), but its name-visibility
