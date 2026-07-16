@@ -59,6 +59,49 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 529 (2026-07-16) — INV.4(c)(iv): checkTypeUsedAsValue onto the spine —
+INV.4(c) COMPLETE; the family's recursive walkers + ScopeNameSet are DELETED
+(~700 lines).** The last name-resolution-pair member (TS2693/TS2708/TS2689/
+TS2585/TS18042, 734 ms in the round-520 table) migrated in ONE commit — much
+smaller than checkUnresolvedNames because the design fits the family: (1) REACH
+is a memoized 3-STATE ancestor classifier (`spineTavStatus` over `spineTavEdge`
+— the deleted dispatch arms verbatim, incl. the corpus-tuned round-42
+NON-descent into for/while/do/switch/try bodies, class accessors/EXPRESSIONS,
+shorthand properties, objlit-method param defaults, and the
+while-body-labeled-empty parse-recovery quirk); unlike batch 4's boolean memo
+the verdict carries the plain-`=`-LHS TS2708 suppression as a status
+(REACHED_NONS, minted on the Equals-left edge and inherited downward — the old
+walker threaded an EMPTY namespace-set into the whole LHS subtree;
+checkConstAssignment owns the assignment-target TS2708, pinned as
+exactly-once). (2) SCOPE is pull-based memoized levels (`tavLevelAt`/
+`tavLevelFor` keyed by owner nodeId) — the family's surveys are
+position-independent (params all registered before any default walks per
+B86.9, hoisted names list-wide), so none of the batch-1 lazy-staging machinery
+is needed; the ONE order-sensitive spot (an objlit method's computed NAME is
+checked in the OUTER scope, before the method's params exist) is a
+came-from-child owner skip in the ascent. Level surveys fold the old
+two-set-per-boundary structure into one level each (module survey + statement
+hoist survey merged — emission-equivalent because every rule consults values
+FIRST); typeOnly-gate ordering differences are invisible for the same reason.
+(3) The file survey (TS18042 emission + currentForwardLibTypeNames + the
+Array/Symbol/Promise lib synthesis) moved verbatim into `tavBuildFileRoot`,
+built eagerly per file in checkSpine's loop. (4) TS2689 classifies at the
+CLASS enter (`spineTavClassHeritage`) and marks `spineTavHeritageSkip` before
+the heritage subtree walks — the deleted either/or (TS2689 OR the generic
+expression walk) reproduced exactly; `tryClassifyExtendsInterface` retained,
+re-keyed from ScopeNameSet onto the level chain (it now runs with
+currentFileLocals = the CURRENT file per the spine convention — the old pass
+ran with whatever the previous pass left; 8-profile A/B showed zero drift).
+VERIFIED: 40 pins ALL green against the OLD walker first, then against the
+migration (Inv4SpineBatch20Test — one pin flipped during pre-verification:
+`N = 5` fires ONE TS2708 from checkConstAssignment, so the pin asserts
+exactly-once, the no-double-emit invariant); suite 10,832 → 10,872 (0
+regressions); listAll error lines IDENTICAL on ALL 8 profiles (529a vs 528a);
+bench row recorded. NEXT: INV.4(d) — the mid-weight stateful walkers
+(checkUncalledFunctionsInConditions 506 ms, checkArithmeticOperandTypes
+335 ms, checkImplicitReturns, checkArgumentCounts, checkDefiniteAssignment),
+decompose per walker when reached.**
+
 **Round 528 (2026-07-16) — INV.4(c)(iii) batch 5: the TYPE walk swap — (c)(iii)
 COMPLETE, the checkUnresolvedNames family's recursive walkers are ALL DELETED.**
 checkUnresolvedInType(Core), the batch-4-retained checkUnresolvedInExpr(Core),
@@ -531,92 +574,6 @@ lines) deleted, 10 init dispatches removed, suite +47. Ops note: a
 `pgrep -af "MainKt"` LITERAL sat earlier in the same compound command — the
 bracket trick must cover every occurrence of the pattern in the command
 line, not just the pkill's own argument.
-
-**Round 517 (2026-07-14) — INV.4(b) batch 6: duplicate-modifier grammar +
-ambient initializers + switch/case comparability migrated onto the spine;
-9 walker functions (~453 lines) deleted, 3 init slots removed.** Three passes:
-(1) `checkDuplicateModifiers` (TS1030/TS1029 + TS1044 via
-`checkInvalidImportEqualsModifiers`) — dispatched for the exact 10 statement
-kinds the old walk checked (class/interface members handled inside the
-class/interface handler, preserving member-kind coverage); the TWO threaded
-flags with DIFFERENT reset rules (inAmbientContext: reset by fn/member
-bodies, set by declare-module descent; atTopLevel: false in Blocks, reset
-TRUE in ModuleBlocks, preserved through if/else) became one parent-chain walk
-(`spineDupModContext`) where the innermost flag-deciding ancestor wins per
-flag and any ancestor kind the old walk never descended (loops, switch, try,
-labeled, arrow/fn-expr bodies, class expressions) returns null = no-visit.
-Reach deliberately NOT widened: `checkModifiers` is an FP-firewalled TEXT
-heuristic (B69.6 `as const` firewall, B459b TS1184-ownership suppression for
-non-top-level functions, B61.5g ambient import-equals TS1029 skip) — the
-negative pins (for-loop body, nested fn) hold the line. (2)
-`checkAmbientInitializers` (TS1039/TS1254/TS1066/TS1031) — EnumDeclaration /
-VariableStatement / ClassDeclaration enter handlers over
-`spineAmbientInitContext` (pass-through for the old walk's full statement-
-container set incl. loops/switch/try/labeled; declare-module sets ambient,
-fn bodies reset it, SourceFile terminal returns `spineIsDts` = the
-.d.ts-top-level-ambient rule — this pass has NO dts skip). Class-member and
-arrow/fn-expr bodies stay unreached (pinned negative — tsc WOULD emit TS1039
-for `declare var x = 1` in a method body; widening is a signal-driven change,
-noted in the KDoc). The B162 same-enum member-reference exception's sibling
-scan reproduced via `spineSiblingStatements` (parent statement list;
-single-statement positions degrade to `listOf(stmt)`). The class-EXPRESSION
-member path (TS1031 fires regardless of ambient) retained via the unchanged
-`visitExprForClassExpression` Paren/Binary-only descent from VariableStatement
-initializers. (3) `checkSwitchCaseComparable` (TS2678) — the old walker's
-per-statement-LIST const/annotated binding maps (FRESH per nested block,
-accumulated in statement order, annotated-wins-over-const, non-classifiable
-writes preserve earlier entries) reproduced as a preceding-sibling scan AT
-the SwitchStatement node (`spineSwitchSubjectBinding` breaks at the switch,
-so declared-after bindings stay invisible — pinned); the old broad expression
-descent (arrow/fn-expr/class-expr bodies) is subsumed by the spine, widening
-faithfully to the few positions it missed (parameter defaults). VERIFIED:
-27 pins written FIRST and run against the OLD walkers (all green), then the
-migration — suite 10,443 → 10,470 (+27 Inv4SpineBatch6Test, 0 regressions);
-listAll error lines IDENTICAL on ALL 8 profiles (517a vs 516b); bench in
-band (27,212 ms self, +1.3% = noise; 46 errors unchanged). BATCH 7 same
-session: FOUR more passes migrated (15 walker funs, ~551 lines deleted, 4
-init slots removed): (1) `checkRestElementPropertyNames` (TS2566) — a
-pure-syntax grammar rule became an ObjectBindingPattern-enter handler; the
-manual nested-pattern recursion dissolves (every nested pattern gets its own
-enter) and coverage widens faithfully to catch-clause patterns (pinned).
-(2) `checkRestBindingPatternElements` (TS1186/TS2493/TS2322) —
-`checkRestBindingParam` + its three emission helpers retained verbatim as
-the Parameter-dispatch core (third Parameter handler); the old
-statement/expression scan pair deleted; coverage widens to object-literal
-methods and class-expression members (pinned). (3) `checkAmbientImplementation`
-(TS1183) — the most intricate reach reconstruction so far
-(`spineAmbientImplContext`): an AMBIENT FunctionDeclaration / class-DECLARATION
-member body was never descended (its `{` already reported) — own-`declare`
-returns null immediately and a declare-module found ABOVE such a body
-returns null too (the `passedDeclBody` flag); arrow / fn-expr /
-class-EXPRESSION-member / objlit-method bodies RESET ambient to false
-UNCONDITIONALLY (the old expression walk descended them with `false` even
-under ambient — so `passedDeclBody` must be CLEARED at those boundaries, or
-a fn nested arrow-deep inside a declare-module wrongly nulls); statement
-containers are position-checked (if-conditions, for-headers, switch
-subjects, case expressions stay unreached) while expressions pass through
-generically (the old expression walk was comprehensive). PIN CORRECTION
-found pre-migration: `interface I { m() { } }` draws NO TS1183 from the old
-walker — the interface member parse never STORES a body (the TS1246
-situation again), so the interface arm is de-facto dormant and migrated
-as-is. (4) `checkAmbientRelativeModuleNames` (TS2436) — the old
-non-recursive top-level-of-script-file loop became a ModuleDeclaration-enter
-handler gated on `parent is SourceFile` + `!spineFileIsModule`. VERIFIED:
-21 pins run against the OLD walkers first (19 green; the 2 widening pins
-fail pre-migration as expected, proving them genuine); suite
-10,470 → 10,491 (+21 Inv4SpineBatch7Test, 0 regressions); listAll error
-lines IDENTICAL on ALL 8 profiles (517b vs 517a). BENCH-DRIFT episode
-(round-493 rule vindicated): single-run bench read +11.7% then +16.1% ON
-THE SAME BINARY — the box had degraded to 864 MB free after the session's
-JVM churn (two suites + 16 listAll runs + a foreign project's 2.3 GB gradle
-daemon); after `./gradlew --stop` + kotlin-daemon kill (6.3 GB available),
-the INTERLEAVED 3-pair A/B measured batch-7 vs batch-6 at −461/−801/+408 ms
-(mean −285 ms) = NEUTRAL, both binaries back at the ~26 s session-start
-band. The two drift-inflated TSV rows (30.4 s / 35.3 s) are artifacts —
-trust the interleaved verdict. Session total: SEVEN passes, 24 walker funs
-(~1,004 lines) deleted, 7 init slots removed, suite +48. NEXT: INV.4(b)
-batch 8 — re-measure --passTiming for the next cost-ordered candidates;
-checkMixinClassConstructor stays (d).**
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
@@ -1451,7 +1408,9 @@ interrupt the arc).
     init pass (a per-file TEXT scan — the spine walks nodes; there is no walk
     to delete); checkMixinClassConstructor is TP-scope-stateful → (d). The
     remaining stateful walkers are (c)/(d) territory.
-  - [ ] **INV.4(c) The name-resolution pair.** checkUnresolvedNames (846 ms) +
+  - [x] **INV.4(c) The name-resolution pair** — COMPLETE round 529 (all four
+    sub-items landed; both families' recursive walkers deleted).
+    checkUnresolvedNames (846 ms) +
     checkTypeUsedAsValue (734 ms): fold their private NameScope chains into
     spine-maintained authoritative lexical state backed by the INV.2(c)
     `lexicalScopes` tables (their planned mass consumption). Decomposed round
@@ -1581,17 +1540,29 @@ interrupt the arc).
       reach-preserving; 0 regressions); listAll error lines IDENTICAL on
       ALL 8 profiles (528a vs 527a; header-only timing diffs); bench row
       recorded.
-    - [ ] **(c)(iv) checkTypeUsedAsValue.** Its own arc: the three
-      ScopeNameSet chains become spine-maintained set state pushed at the
-      same boundaries the old walker created children (statement lists =
-      hoist surveys, fn boundaries = TP/param registration, namespace-body
-      surveys), with the corpus-tuned NON-descent (for/while/do/switch/try)
-      reproduced as a dead-reach suppression gate; assignment-LHS /
-      new-ctor / typeof positional context via local parent checks. May stay
-      set-based rather than lexicalScopes-backed — re-deriving typeOnly/
-      value/namespaceOnly from symbol flags is a behavior-change minefield
-      (KNOWN_GLOBALS gates, moduleInstantiated, body-less ambient modules,
-      lib value gates).
+    - [x] **(c)(iv) checkTypeUsedAsValue.** DONE round 529 (2026-07-16): the
+      recursive checkTypeAsValueInStatement(s)/checkTypeAsValueInExpr walkers
+      + ScopeNameSet DELETED (~700 lines). Identifiers self-emit
+      TS2693/TS2708 (+ the TS2585 forward-lib routing) at their enters, gated
+      by `spineTavStatus` — a memoized 3-state ancestor-chain classifier over
+      `spineTavEdge` (the deleted walker's exact dispatch arms, incl. the
+      corpus-tuned NON-descent into for/while/do/switch/try bodies, class
+      accessors/EXPRESSIONS, shorthand properties, and objlit-method param
+      defaults; the plain-`=`-LHS TS2708 suppression is the REACHED_NONS
+      status minted on the Equals-left edge — checkConstAssignment owns the
+      assignment-target TS2708). The set chains stayed set-based as planned
+      but became PULL-BASED memoized levels (`tavLevelAt`/`tavLevelFor` —
+      the family's surveys are position-independent, so no batch-1-style
+      lazy staging; the one order-sensitive spot, an objlit method's
+      computed NAME seeing the OUTER scope, is a came-from-child owner
+      skip). The file survey (TS18042 emission + currentForwardLibTypeNames
+      included, verbatim) builds eagerly per file in checkSpine's loop
+      (`tavBuildFileRoot`); TS2689 classifies at the CLASS enter and marks
+      `spineTavHeritageSkip` before the heritage subtree walks (the deleted
+      either/or: TS2689 OR the generic walk, never both). Suite
+      10,832 → 10,872 (+40 Inv4SpineBatch20Test, ALL verified against the
+      OLD walker first; 0 regressions); listAll error lines IDENTICAL on
+      ALL 8 profiles (529a vs 528a); bench row recorded.
   - [ ] **INV.4(d) Mid-weight stateful walkers.** checkUncalledFunctionsInConditions
     (506 ms), checkArithmeticOperandTypes (271 ms), checkImplicitReturns,
     checkArgumentCounts, checkDefiniteAssignment, … — each moves its scope

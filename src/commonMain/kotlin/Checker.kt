@@ -1095,6 +1095,30 @@ class Checker(
         val isModule: Boolean,
     )
 
+    // ── INV.4(c)(iv) checkTypeUsedAsValue spine state ───────────────────────
+    /** Per-file activation for the type-used-as-value family (TS2693/TS2708/
+     *  TS2689/TS2585/TS18042) — false for .d.ts and for JS-like files without
+     *  checkJs (the deleted driver's gates). */
+    private var spineTavActive = false
+    /** The file-level scope triple — the deleted driver's survey (type-only /
+     *  value / namespace-only names) merged with the root statement list's
+     *  hoist survey. Built per file by [tavBuildFileRoot]. */
+    private var spineTavRoot: TavLevel? = null
+    /** Per-file nodeId memo for [spineTavStatus] — 0 unknown / 1 reached /
+     *  2 reached with TS2708 suppressed (inside a plain-`=` assignment LHS) /
+     *  3 unreached by the deleted walker. */
+    private var spineTavStatusMemo = ByteArray(0)
+    /** Memoized pull-based scope levels keyed by owner nodeId ([tavLevelFor]).
+     *  Per file; only owners with a reached query beneath them are surveyed. */
+    private val spineTavLevelMemo = HashMap<Int, TavLevel>()
+    /** ExpressionWithTypeArguments nodeIds whose heritage expression must NOT
+     *  be walked — the class-enter handler emitted TS2689 for them (the
+     *  deleted walker emitted TS2689 INSTEAD of walking the expression).
+     *  Populated at the class's enter, before its heritage subtree walks. */
+    private val spineTavHeritageSkip = HashSet<Int>()
+    /** Reusable ascent buffer for [spineTavStatus]. */
+    private val spineTavChain = ArrayList<Node>(32)
+
     /** True for a file that is EXPLICITLY non-strict (strict/alwaysStrict false,
      *  no module/"use strict") — the let/const-implies-strict TS1212 shortcut must
      *  not fire there (tsc only has TS2480 for `let let` in non-strict code;
@@ -2470,8 +2494,9 @@ class Checker(
             pass("checkExportTypeAliasPrivateNameRef") { checkExportTypeAliasPrivateNameRef() }
             pass("checkExportedAnonClassExprPrivateMembers") { checkExportedAnonClassExprPrivateMembers() }
         }
-        // 19. Check type used as value (TS2693)
-        pass("checkTypeUsedAsValue") { checkTypeUsedAsValue() }
+        // 19. Type used as value (TS2693/TS2708/TS2689/TS2585/TS18042) migrated
+        // to the check spine (INV.4(c)(iv), round 529) — see [spineTavIdentifier],
+        // [spineTavClassHeritage], and [tavBuildFileRoot].
         // 19c. B514: namespace-`typeof` assignability (TS2741) + `typeof <type-only
         // namespace alias>` value-use (TS2708) — internal namespace aliases.
         pass("checkNamespaceTypeofAssignability") { checkNamespaceTypeofAssignability() }
@@ -17667,12 +17692,14 @@ class Checker(
                 spineScopeAuditActive = spineScopeAuditEnabled
                 spineScopeFill(result)
                 spineUResSetup(result)
+                spineTavSetup(result)
                 spineUResAuditActive = unresolvedAuditEnabled && spineUResActive
                 try {
                     spineWalkFile(sf)
                 } finally {
                     spineScopeClear()
                     spineUResTeardown()
+                    spineTavTeardown()
                 }
                 spineResolveDeferredIterationChecks()
             }
@@ -17745,6 +17772,7 @@ class Checker(
     /** Per-node dispatch, preorder position (before children). */
     private fun spineEnterNode(node: Node) {
         when (node) {
+            is Identifier -> spineTavIdentifier(node)
             is PropertyDeclaration -> {
                 spineCheckAccessorModifier(node)
                 spineCheckComputedPropName(node)
@@ -17827,6 +17855,7 @@ class Checker(
                 spineCheckAmbientClassMembers(node)
                 spineCheckAmbientImplClass(node)
                 spineCheckStrictClassDecl(node)
+                spineTavClassHeritage(node)
             }
             is SwitchStatement -> {
                 spineCheckMultipleDefaults(node)
@@ -19533,6 +19562,673 @@ class Checker(
                 }
             }
         }
+    }
+
+    // ── INV.4(c)(iv): checkTypeUsedAsValue on the spine ─────────────────────
+    // The recursive checkTypeAsValueInStatement(s)/checkTypeAsValueInExpr
+    // walkers are DELETED. Reach is reproduced by a memoized ancestor-chain
+    // classifier ([spineTavStatus] over [spineTavEdge] — the deleted walker's
+    // exact dispatch arms, including the corpus-tuned NON-descent into
+    // for/while/do/switch/try bodies, class accessors/expressions, shorthand
+    // properties, and object-literal method parameter defaults — see the
+    // round-42 over-emission gotcha; widenings only on a signal). The three
+    // ScopeNameSet chains become pull-based memoized levels ([tavLevelAt]):
+    // the family's per-scope surveys are position-independent (all params
+    // registered before any default walks — B86.9; hoisted names list-wide),
+    // so unlike the checkUnresolvedNames migration no lazy staging is needed;
+    // the one order-sensitive spot — an object-literal method's computed NAME
+    // sees the OUTER scope, never its own params — is the came-from-child
+    // owner skip in [tavLevelAt].
+
+    /** Per-file activation + root build, called from [checkSpine]'s loop.
+     *  Builds the file survey (which itself emits TS18042) eagerly — the
+     *  deleted driver emitted it during the survey regardless of any
+     *  identifier use. */
+    private fun spineTavSetup(result: BinderResult) {
+        spineTavLevelMemo.clear()
+        spineTavHeritageSkip.clear()
+        val fileName = result.sourceFile.fileName
+        spineTavActive = !isDtsFile(fileName) &&
+            !(isJsLikeFileName(fileName) && !options.checkJs)
+        if (!spineTavActive) {
+            spineTavRoot = null
+            spineTavStatusMemo = ByteArray(0)
+            currentForwardLibTypeNames = emptySet()
+            return
+        }
+        spineTavStatusMemo = ByteArray(result.sourceFile.nodeCount)
+        spineTavRoot = tavBuildFileRoot(result)
+    }
+
+    private fun spineTavTeardown() {
+        spineTavActive = false
+        spineTavRoot = null
+        spineTavStatusMemo = ByteArray(0)
+        spineTavLevelMemo.clear()
+        spineTavHeritageSkip.clear()
+        currentForwardLibTypeNames = emptySet()
+    }
+
+    /**
+     * One scope level of the deleted walker's three ScopeNameSet chains.
+     * Null set = the level contributes nothing in that dimension. Queries
+     * walk the parent links to the file root ([spineTavRoot]).
+     */
+    private class TavLevel(
+        val values: HashSet<String>?,
+        val typeOnly: HashSet<String>?,
+        val nsOnly: HashSet<String>?,
+        val parent: TavLevel?,
+    )
+
+    private fun tavHasValue(level: TavLevel?, name: String): Boolean {
+        var l = level
+        while (l != null) {
+            if (l.values?.contains(name) == true) return true
+            l = l.parent
+        }
+        return false
+    }
+
+    private fun tavIsTypeOnly(level: TavLevel?, name: String): Boolean {
+        var l = level
+        while (l != null) {
+            if (l.typeOnly?.contains(name) == true) return true
+            l = l.parent
+        }
+        return false
+    }
+
+    private fun tavIsNsOnly(level: TavLevel?, name: String): Boolean {
+        var l = level
+        while (l != null) {
+            if (l.nsOnly?.contains(name) == true) return true
+            l = l.parent
+        }
+        return false
+    }
+
+    /** The node kinds at which the deleted walker created child ScopeNameSets:
+     *  statement lists (hoist surveys), namespace bodies (the module survey),
+     *  and the function-like kinds that register type params / param names.
+     *  Accessors deliberately absent — the walker never scoped (or descended)
+     *  them. */
+    private fun tavIsLevelOwner(n: Node): Boolean = n is Block || n is ModuleBlock ||
+        n is FunctionDeclaration || n is FunctionExpression || n is ArrowFunction ||
+        n is MethodDeclaration || n is Constructor
+
+    /** The scope chain at [node]'s position: the nearest level-owner ancestor's
+     *  memoized level. An object-literal method's computed NAME must see the
+     *  OUTER scope (the deleted walker checked it before creating the method's
+     *  sets), hence the came-from-child skip. */
+    private fun tavLevelAt(node: Node): TavLevel? {
+        var child: Node = node
+        var p: Node? = (node as NodeBase).parent
+        while (p != null) {
+            if (tavIsLevelOwner(p)) {
+                if (!(p is MethodDeclaration && child === p.name)) return tavLevelFor(p)
+            }
+            child = p
+            p = (p as NodeBase).parent
+        }
+        return spineTavRoot
+    }
+
+    private fun tavLevelFor(owner: Node): TavLevel? {
+        val id = (owner as NodeBase).nodeId
+        if (id >= 0) spineTavLevelMemo[id]?.let { return it }
+        val parent = tavLevelAt(owner)
+        val level = tavBuildLevel(owner, parent)
+        if (id >= 0 && level != null) spineTavLevelMemo[id] = level
+        return level
+    }
+
+    private fun tavBuildLevel(owner: Node, parent: TavLevel?): TavLevel? = when (owner) {
+        is ModuleBlock -> tavModuleLevel(owner, parent)
+        is Block -> tavListLevel(owner.statements, parent)
+        is FunctionDeclaration -> tavFnLevel(owner.typeParameters, owner.parameters, parent)
+        is FunctionExpression -> tavFnLevel(null, owner.parameters, parent)
+        is ArrowFunction -> tavFnLevel(null, owner.parameters, parent)
+        // Only class methods registered their type params; object-literal
+        // methods registered params only (and never walked param defaults).
+        is MethodDeclaration -> tavFnLevel(
+            if ((owner as NodeBase).parent is ObjectLiteralExpression) null else owner.typeParameters,
+            owner.parameters, parent,
+        )
+        is Constructor -> tavFnLevel(null, owner.parameters, parent)
+        else -> parent
+    }
+
+    private fun tavFnLevel(
+        tps: List<TypeParameter>?, params: List<Parameter>, parent: TavLevel?,
+    ): TavLevel? {
+        val typeOnly = if (tps.isNullOrEmpty()) null else {
+            HashSet<String>().also { s -> tps.forEach { s.add(it.name.text) } }
+        }
+        val values = if (params.isEmpty()) null else HashSet<String>().also { s ->
+            for (p in params) forEachParamBindingName(p.name) { s.add(it) }
+        }
+        return if (values == null && typeOnly == null) parent
+        else TavLevel(values, typeOnly, null, parent)
+    }
+
+    /** The deleted checkTypeAsValueInStatements hoist prologue: the list's own
+     *  value declarations — `var`s at any depth (function-scoped) plus
+     *  directly-declared var/let/const (binding-pattern element names
+     *  included), function, class, and enum names. */
+    private fun tavCollectListValues(statements: List<Statement>, into: HashSet<String>) {
+        collectHoistedVarNamesFromStmts(statements, into)
+        for (s in statements) when (s) {
+            is VariableStatement -> for (d in s.declarationList.declarations) {
+                when (val nm = d.name) {
+                    is Identifier -> into.add(nm.text)
+                    else -> forEachParamBindingName(nm) { into.add(it) }
+                }
+            }
+            is FunctionDeclaration -> s.name?.text?.let { into.add(it) }
+            is ClassDeclaration -> s.name?.text?.let { into.add(it) }
+            is EnumDeclaration -> into.add(s.name.text)
+            else -> {}
+        }
+    }
+
+    private fun tavListLevel(statements: List<Statement>, parent: TavLevel?): TavLevel? {
+        val values = HashSet<String>()
+        tavCollectListValues(statements, values)
+        return if (values.isEmpty()) parent else TavLevel(values, null, null, parent)
+    }
+
+    /** The deleted ModuleDeclaration arm's body survey (B86.8): the namespace's
+     *  self-name masks TS2708 from inside its own body; direct-child value /
+     *  type-only / namespace-only classification (the nested survey has NO
+     *  cross-declaration merge — deliberately weaker than the file-level
+     *  moduleHasValues OR-merge, bug-compat); plus the statement-list hoist
+     *  survey the nested checkTypeAsValueInStatements call ran. Folding both
+     *  into one level is emission-equivalent because every emission consults
+     *  values FIRST. */
+    private fun tavModuleLevel(body: ModuleBlock, parent: TavLevel?): TavLevel {
+        val md = (body as NodeBase).parent as? ModuleDeclaration
+        val values = HashSet<String>()
+        ((md?.name) as? Identifier)?.text?.let { values.add(it) }
+        for (s in body.statements) when (s) {
+            is ClassDeclaration -> s.name?.text?.let { values.add(it) }
+            is FunctionDeclaration -> s.name?.text?.let { values.add(it) }
+            is VariableStatement -> for (decl in s.declarationList.declarations) {
+                (decl.name as? Identifier)?.text?.let { values.add(it) }
+            }
+            is EnumDeclaration -> values.add(s.name.text)
+            else -> {}
+        }
+        val typeOnly = HashSet<String>()
+        val nsOnly = HashSet<String>()
+        for (s in body.statements) when (s) {
+            is InterfaceDeclaration -> {
+                val n = s.name.text
+                if (n !in values && !tavHasValue(parent, n) && n !in KNOWN_GLOBALS) typeOnly.add(n)
+            }
+            is TypeAliasDeclaration -> {
+                val n = s.name.text
+                if (n !in values && !tavHasValue(parent, n) && n !in KNOWN_GLOBALS) typeOnly.add(n)
+            }
+            is ModuleDeclaration -> {
+                val n = (s.name as? Identifier)?.text
+                if (n != null && n !in values && !tavHasValue(parent, n)) {
+                    val subBody = s.body
+                    val hasValues = subBody is ModuleBlock && subBody.statements.any { ss ->
+                        ss is FunctionDeclaration || ss is ClassDeclaration ||
+                            ss is VariableStatement || ss is EnumDeclaration ||
+                            ss is ModuleDeclaration
+                    }
+                    if (!hasValues) nsOnly.add(n)
+                }
+            }
+            else -> {}
+        }
+        tavCollectListValues(body.statements, values)
+        return TavLevel(
+            values,
+            if (typeOnly.isEmpty()) null else typeOnly,
+            if (nsOnly.isEmpty()) null else nsOnly,
+            parent,
+        )
+    }
+
+    /**
+     * Does the deleted walker reach [child] from [parent], and with which
+     * namespace-set state? Mirrors checkTypeAsValueInStatement(s)/InExpr's
+     * dispatch arms exactly — every kind absent here fell to their `else`
+     * arms (for/while/do/switch/try/throw statements, class expressions, JSX,
+     * accessor bodies, shorthand properties, heritage of non-class owners).
+     */
+    private fun spineTavEdge(parent: Node, child: Node): Int = when (parent) {
+        // ── statement dispatch ──
+        is SourceFile -> if (child is Statement) TAV_CONT else TAV_STOP
+        is Block -> TAV_CONT
+        is ModuleBlock -> TAV_CONT
+        is ModuleDeclaration -> if (child is ModuleBlock) TAV_CONT else TAV_STOP
+        is LabeledStatement -> if (child === parent.statement) TAV_CONT else TAV_STOP
+        // Parse-recovery ONLY: a while body that is a LabeledStatement with a
+        // MISSING label keeps the value-position check tsc runs there
+        // (constructorWithIncompleteTypeAnnotation); general loop descent is
+        // deliberately absent (the round-42 over-emission gotcha).
+        is WhileStatement ->
+            if (child === parent.statement && child is LabeledStatement &&
+                child.label.text.isEmpty()
+            ) TAV_CONT else TAV_STOP
+        is IfStatement ->
+            if (child === parent.expression || child === parent.thenStatement ||
+                child === parent.elseStatement
+            ) TAV_CONT else TAV_STOP
+        is ExpressionStatement -> if (child === parent.expression) TAV_CONT else TAV_STOP
+        is ReturnStatement -> if (child === parent.expression) TAV_CONT else TAV_STOP
+        is VariableStatement -> if (child === parent.declarationList) TAV_CONT else TAV_STOP
+        // For-header declaration lists die at the for-statement's (absent) arm.
+        is VariableDeclarationList -> if (child is VariableDeclaration) TAV_CONT else TAV_STOP
+        is VariableDeclaration -> if (child === parent.initializer) TAV_CONT else TAV_STOP
+        is FunctionDeclaration ->
+            if (child === parent.body || child is Parameter) TAV_CONT else TAV_STOP
+        is ClassDeclaration -> when (child) {
+            is HeritageClause -> if (child.token == SyntaxKind.ExtendsKeyword) TAV_CONT else TAV_STOP
+            is MethodDeclaration, is Constructor, is PropertyDeclaration -> TAV_CONT
+            else -> TAV_STOP // accessors, static blocks, index signatures: never walked
+        }
+        is HeritageClause -> if ((parent as NodeBase).parent is ClassDeclaration) TAV_CONT else TAV_STOP
+        is ExpressionWithTypeArguments ->
+            if (child === parent.expression && (parent as NodeBase).nodeId !in spineTavHeritageSkip)
+                TAV_CONT else TAV_STOP
+        is MethodDeclaration -> when {
+            child === parent.body -> TAV_CONT
+            // Object-literal methods never walked their param defaults.
+            child is Parameter ->
+                if ((parent as NodeBase).parent is ObjectLiteralExpression) TAV_STOP else TAV_CONT
+            // Only object-literal member computed NAMES were walked (B240);
+            // class-member computed names were not.
+            child === parent.name && child is ComputedPropertyName ->
+                if ((parent as NodeBase).parent is ObjectLiteralExpression) TAV_CONT else TAV_STOP
+            else -> TAV_STOP
+        }
+        is Constructor -> if (child === parent.body || child is Parameter) TAV_CONT else TAV_STOP
+        is PropertyDeclaration -> if (child === parent.initializer) TAV_CONT else TAV_STOP
+        is Parameter -> if (child === parent.initializer) TAV_CONT else TAV_STOP
+        // ── expression dispatch ──
+        is NewExpression -> if (child is Expression) TAV_CONT else TAV_STOP
+        is CallExpression -> if (child is Expression) TAV_CONT else TAV_STOP
+        is BinaryExpression ->
+            if (child === parent.left && parent.operator == SyntaxKind.Equals) TAV_CONT_NONS
+            else TAV_CONT
+        // Only an Identifier operand of expression `typeof` was inspected.
+        is TypeOfExpression -> if (child is Identifier) TAV_CONT else TAV_STOP
+        is ParenthesizedExpression -> if (child === parent.expression) TAV_CONT else TAV_STOP
+        is ConditionalExpression ->
+            if (child === parent.condition || child === parent.whenTrue ||
+                child === parent.whenFalse
+            ) TAV_CONT else TAV_STOP
+        is PropertyAccessExpression -> if (child === parent.expression) TAV_CONT else TAV_STOP
+        is ElementAccessExpression ->
+            if (child === parent.expression || child === parent.argumentExpression)
+                TAV_CONT else TAV_STOP
+        is FunctionExpression -> if (child === parent.body || child is Parameter) TAV_CONT else TAV_STOP
+        is ArrowFunction -> if (child === parent.body || child is Parameter) TAV_CONT else TAV_STOP
+        is ArrayLiteralExpression -> TAV_CONT
+        is ObjectLiteralExpression -> when (child) {
+            is PropertyAssignment, is SpreadAssignment, is MethodDeclaration,
+            is GetAccessor, is SetAccessor -> TAV_CONT
+            else -> TAV_STOP // shorthand properties: never walked
+        }
+        is PropertyAssignment ->
+            if (child === parent.initializer || child is ComputedPropertyName) TAV_CONT else TAV_STOP
+        is SpreadAssignment -> if (child === parent.expression) TAV_CONT else TAV_STOP
+        // Object-literal accessors: computed NAME only, body never.
+        is GetAccessor ->
+            if (child === parent.name && child is ComputedPropertyName &&
+                (parent as NodeBase).parent is ObjectLiteralExpression
+            ) TAV_CONT else TAV_STOP
+        is SetAccessor ->
+            if (child === parent.name && child is ComputedPropertyName &&
+                (parent as NodeBase).parent is ObjectLiteralExpression
+            ) TAV_CONT else TAV_STOP
+        is ComputedPropertyName -> if (child === parent.expression) TAV_CONT else TAV_STOP
+        is AsExpression -> if (child === parent.expression) TAV_CONT else TAV_STOP
+        is TypeAssertionExpression -> if (child === parent.expression) TAV_CONT else TAV_STOP
+        is SatisfiesExpression -> if (child === parent.expression) TAV_CONT else TAV_STOP
+        is NonNullExpression -> if (child === parent.expression) TAV_CONT else TAV_STOP
+        is PrefixUnaryExpression -> TAV_CONT
+        is PostfixUnaryExpression -> TAV_CONT
+        is SpreadElement -> if (child === parent.expression) TAV_CONT else TAV_STOP
+        is AwaitExpression -> if (child === parent.expression) TAV_CONT else TAV_STOP
+        is YieldExpression -> if (child === parent.expression) TAV_CONT else TAV_STOP
+        is VoidExpression -> if (child === parent.expression) TAV_CONT else TAV_STOP
+        is DeleteExpression -> if (child === parent.expression) TAV_CONT else TAV_STOP
+        is TemplateExpression -> if (child is TemplateSpan) TAV_CONT else TAV_STOP
+        is TemplateSpan -> if (child === parent.expression) TAV_CONT else TAV_STOP
+        is TaggedTemplateExpression -> when {
+            child === parent.tag -> TAV_CONT
+            child === parent.template && child is TemplateExpression -> TAV_CONT
+            else -> TAV_STOP
+        }
+        is CommaListExpression -> TAV_CONT
+        else -> TAV_STOP
+    }
+
+    private fun spineTavApply(parentStatus: Int, edge: Int): Int = when {
+        parentStatus == TAV_UNREACHED || edge == TAV_STOP -> TAV_UNREACHED
+        edge == TAV_CONT_NONS -> TAV_REACHED_NONS
+        else -> parentStatus
+    }
+
+    /**
+     * Is [node] reached by the deleted walker, and under the plain-`=`-LHS
+     * namespace suppression? A pure function of the ancestor chain, memoized
+     * per file by nodeId (unlike the batch-4 boolean memo the verdict is
+     * 3-state, and the NONS transform applies DOWNWARD — the ascent collects
+     * the chain, the descent applies [spineTavApply] and backfills).
+     */
+    private fun spineTavStatus(node: Node): Int {
+        val memo = spineTavStatusMemo
+        run {
+            val id = (node as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) {
+                val m = memo[id].toInt()
+                if (m != 0) return m
+            }
+        }
+        val chain = spineTavChain
+        chain.clear()
+        var cur: Node = node
+        var status: Int
+        while (true) {
+            val parent = (cur as NodeBase).parent
+            if (parent == null) {
+                status = if (cur is SourceFile) TAV_REACHED else TAV_UNREACHED
+                break
+            }
+            val edge = spineTavEdge(parent, cur)
+            if (edge == TAV_STOP) {
+                status = TAV_UNREACHED
+                break
+            }
+            val pid = (parent as NodeBase).nodeId
+            val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
+            if (pm != 0) {
+                status = spineTavApply(pm, edge)
+                break
+            }
+            chain.add(cur)
+            cur = parent
+        }
+        run {
+            val id = (cur as NodeBase).nodeId
+            if (id >= 0 && id < memo.size && memo[id].toInt() == 0) memo[id] = status.toByte()
+        }
+        for (i in chain.indices.reversed()) {
+            val n = chain[i]
+            status = spineTavApply(status, spineTavEdge((n as NodeBase).parent!!, n))
+            val id = n.nodeId
+            if (id >= 0 && id < memo.size) memo[id] = status.toByte()
+        }
+        chain.clear()
+        return status
+    }
+
+    /** The deleted checkTypeAsValueInExpr Identifier / NewExpression-ctor /
+     *  typeof-operand emissions, dispatched at every reached Identifier's
+     *  enter. Values are consulted FIRST in every rule; the `new` ctor rule
+     *  never fires TS2708; the typeof rule skips the type-keyword set. */
+    private fun spineTavIdentifier(id: Identifier) {
+        if (!spineTavActive) return
+        val status = spineTavStatus(id)
+        if (status == TAV_UNREACHED) return
+        val name = id.text
+        val parent = (id as NodeBase).parent
+        val isNewCtor = parent is NewExpression && parent.expression === id
+        val isTypeofOperand = parent is TypeOfExpression && parent.expression === id
+        val level = tavLevelAt(id)
+        if (tavHasValue(level, name)) return
+        val typeOnlyHit = if (isTypeofOperand) tavIsTypeOnly(level, name)
+        else name in TYPE_ONLY_KEYWORDS || tavIsTypeOnly(level, name)
+        if (typeOnlyHit) {
+            emitTS2693(name, id, spineSource, spineFileName)
+            return
+        }
+        if (isNewCtor) return
+        // A plain-`=` assignment target: checkConstAssignment owns TS2708 there.
+        if (status == TAV_REACHED_NONS) return
+        if (tavIsNsOnly(level, name)) {
+            val start = id.pos
+            val (line, character) = getLineAndCharacterOfPosition(spineSource, start)
+            diagnostics.add(Diagnostic(
+                message = "Cannot use namespace '$name' as a value.",
+                category = DiagnosticCategory.Error,
+                code = 2708,
+                fileName = spineFileName,
+                line = line,
+                character = character,
+                start = start,
+                length = name.length,
+            ))
+        }
+    }
+
+    /** The deleted ClassDeclaration arm's `extends` handling: a pure-interface
+     *  heritage target emits TS2689 INSTEAD of the generic walk (its
+     *  ExpressionWithTypeArguments is registered in [spineTavHeritageSkip],
+     *  consulted by [spineTavEdge] before the subtree walks); every other
+     *  extends expression self-emits via the reached identifiers. */
+    private fun spineTavClassHeritage(node: ClassDeclaration) {
+        if (!spineTavActive) return
+        val clauses = node.heritageClauses ?: return
+        if (clauses.none { it.token == SyntaxKind.ExtendsKeyword }) return
+        if (spineTavStatus(node) == TAV_UNREACHED) return
+        val level = tavLevelAt(node)
+        for (clause in clauses) {
+            if (clause.token != SyntaxKind.ExtendsKeyword) continue
+            for (ewta in clause.types) {
+                val ts2689 = tryClassifyExtendsInterface(ewta.expression, level) ?: continue
+                val (leftmost, displayName) = ts2689
+                val ewtaId = (ewta as NodeBase).nodeId
+                if (ewtaId >= 0) spineTavHeritageSkip.add(ewtaId)
+                val (line, character) = getLineAndCharacterOfPosition(spineSource, leftmost.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Cannot extend an interface '$displayName'. Did you mean 'implements'?",
+                    category = DiagnosticCategory.Error,
+                    code = 2689,
+                    fileName = spineFileName,
+                    line = line,
+                    character = character,
+                    start = leftmost.pos,
+                    length = leftmost.text.length,
+                ))
+            }
+        }
+    }
+
+    /** The deleted checkTypeUsedAsValue driver's per-file survey, verbatim:
+     *  builds the root scope triple, sets [currentForwardLibTypeNames], and
+     *  emits TS18042 for JS-checkJs default imports of type-only
+     *  ambient-module namespaces (the survey's own emission). The root
+     *  statement list's hoist survey (the deleted checkTypeAsValueInStatements
+     *  prologue) is folded into the same level — emission-equivalent because
+     *  every emission consults values FIRST. */
+    private fun tavBuildFileRoot(result: BinderResult): TavLevel {
+        val fileName = result.sourceFile.fileName
+        val source = result.sourceFile.text
+        // Collect interface/type alias names at file level (type-only declarations)
+        // Skip names that also have a class/function/variable declaration (merged)
+        val typeOnlyNames = HashSet<String>()
+        val valueNames = HashSet<String>()
+        val namespaceOnlyNames = HashSet<String>()
+        for (stmt in result.sourceFile.statements) {
+            when (stmt) {
+                is ClassDeclaration -> stmt.name?.text?.let { valueNames.add(it) }
+                is FunctionDeclaration -> stmt.name?.text?.let { valueNames.add(it) }
+                is VariableStatement -> for (decl in stmt.declarationList.declarations) {
+                    (decl.name as? Identifier)?.text?.let { valueNames.add(it) }
+                }
+                is EnumDeclaration -> valueNames.add(stmt.name.text)
+                // Import declarations create value bindings (aliases), not type-only names
+                is ImportDeclaration -> {
+                    val clause = stmt.importClause ?: continue
+                    // B508: a JS-file (checkJs) DEFAULT import binding to a type-only
+                    // ambient-module namespace (`export default <type-only namespace>`)
+                    // is itself type-only — tsc emits TS18042 at the import binding and
+                    // routes value-position uses of the name to TS2708. Route to
+                    // namespaceOnlyNames instead of valueNames (narrow: JS+checkJs only).
+                    val defaultName = clause.name?.text
+                    val jsTypeOnlyDefaultSpec = if (defaultName != null &&
+                        isJsLikeFileName(fileName) && options.checkJs) {
+                        ((stmt.moduleSpecifier as? StringLiteralNode)?.text)
+                            ?.takeIf { ambientDefaultExportTypeOnlyNamespace(it) != null }
+                    } else null
+                    if (jsTypeOnlyDefaultSpec != null) {
+                        namespaceOnlyNames.add(defaultName!!)
+                        val nameNode = clause.name
+                        val (l, c) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "'$defaultName' is a type and cannot be imported in JavaScript files. " +
+                                "Use 'import(\"$jsTypeOnlyDefaultSpec\").$defaultName' in a JSDoc type annotation.",
+                            category = DiagnosticCategory.Error, code = 18042,
+                            fileName = fileName, line = l, character = c,
+                            start = nameNode.pos, length = defaultName.length,
+                        ))
+                    } else {
+                        clause.name?.text?.let { valueNames.add(it) }
+                    }
+                    when (val nb = clause.namedBindings) {
+                        is NamespaceImport -> valueNames.add(nb.name.text)
+                        is NamedImports -> nb.elements.forEach { spec -> valueNames.add(spec.name.text) }
+                        else -> {}
+                    }
+                }
+                is ImportEqualsDeclaration -> {
+                    // 17.228: `import X = require("./m")` where m has
+                    // `export = X` and that X is a type-only entity
+                    // (interface/type alias) imports a type-only name —
+                    // using `X` as a value is TS2693 just like a local
+                    // type-only declaration. Other forms (QualifiedName,
+                    // Identifier module reference) stay value-side.
+                    //
+                    // 17.230: Exclude body-less ambient modules
+                    // (`declare module "foo";` with no `{...}` block) —
+                    // those are `any`-typed at runtime, so the local name
+                    // is value-side. `isAmbientModuleTypeOnly` treats
+                    // body-less as type-only (used by Transformer elision)
+                    // but for TS2693 emission we need the opposite.
+                    //
+                    // 17.231: When `export = X` resolves to a type-only
+                    // namespace (no value exports), the local name should
+                    // fire TS2708 "Cannot use namespace 'X' as a value"
+                    // instead of TS2693. Route to `namespaceOnlyNames`.
+                    val ref = stmt.moduleReference
+                    val spec = (ref as? ExternalModuleReference)?.expression?.let {
+                        (it as? StringLiteralNode)?.text
+                    }
+                    val isBodyless = spec != null && isBodylessAmbientModule(spec)
+                    val isTypeOnly = spec != null && isTypeOnlyImportRequire(spec, fileName) && !isBodyless
+                    val isTypeOnlyNamespace = isTypeOnly && exportEqualsIsNamespace(spec)
+                    when {
+                        isTypeOnlyNamespace -> namespaceOnlyNames.add(stmt.name.text)
+                        isTypeOnly -> typeOnlyNames.add(stmt.name.text)
+                        else -> valueNames.add(stmt.name.text)
+                    }
+                }
+                else -> {}
+            }
+        }
+        // When @lib explicitly excludes es2015+, user-declared interfaces matching
+        // well-known forward-declarable lib types (Promise, Symbol, Map, …) ARE
+        // type-only — the lib doesn't provide a value-side counterpart for them.
+        // Use as a value fires TS2585 with a lib-hint message instead of TS2693.
+        val libExcludesEs2015 = options.lib.isNotEmpty() &&
+            options.lib.none { lname ->
+                lname.startsWith("es2") || lname.equals("esnext", ignoreCase = true) ||
+                    lname.startsWith("ES2") || lname.equals("ESNext", ignoreCase = true)
+            }
+        val forwardLibTypeNames = HashSet<String>()
+        // iter17 B86.10: aggregate ModuleDeclaration hasValues across ALL
+        // declarations with the same name BEFORE deciding namespaceOnly.
+        // Without this, a merged-namespace pair like
+        //   namespace M { interface T {} }       // type-only
+        //   namespace M { export const x = 1 }   // value-bearing
+        // mis-classifies M as namespace-only (the first decl wins, second
+        // never removes it). Tightening the gate prevents FP TS2708 when
+        // the per-decl walk treats hybrid M as a runtime-erased namespace.
+        val moduleHasValues = HashMap<String, Boolean>()
+        // Names whose namespace is GENUINELY instantiated (has a runtime value, recursing
+        // into nested namespaces) — stricter than `moduleHasValues` (which counts any nested
+        // ModuleDeclaration). Only these are added to valueNames (a `type X` + instantiated
+        // `namespace X` clodule provides a value); a namespace holding only an uninstantiated
+        // nested namespace (`Mod { namespace Nested { interface I } }`) must NOT become a value.
+        val moduleInstantiated = HashSet<String>()
+        for (stmt in result.sourceFile.statements) {
+            when (stmt) {
+                is InterfaceDeclaration -> {
+                    val n = stmt.name.text
+                    if (n !in valueNames && n !in KNOWN_GLOBALS) typeOnlyNames.add(n)
+                    if (libExcludesEs2015 && n !in valueNames &&
+                        n in FORWARD_DECLARABLE_LIB_TYPES_ES2015) {
+                        forwardLibTypeNames.add(n)
+                        typeOnlyNames.add(n)
+                    }
+                }
+                is TypeAliasDeclaration -> {
+                    val n = stmt.name.text
+                    if (n !in valueNames && n !in KNOWN_GLOBALS) typeOnlyNames.add(n)
+                }
+                is ModuleDeclaration -> {
+                    val n = (stmt.name as? Identifier)?.text ?: continue
+                    if (n !in valueNames) {
+                        val body = stmt.body
+                        val hasValues = when (body) {
+                            is ModuleBlock -> body.statements.any { s ->
+                                s is FunctionDeclaration || s is ClassDeclaration ||
+                                    s is VariableStatement || s is EnumDeclaration ||
+                                    s is ModuleDeclaration // nested namespace may have value exports
+                            }
+                            else -> false
+                        }
+                        // OR-merge across all declarations of the same name
+                        moduleHasValues[n] = (moduleHasValues[n] ?: false) || hasValues
+                        if (isNamespaceInstantiated(stmt)) moduleInstantiated.add(n)
+                    }
+                }
+                else -> {}
+            }
+        }
+        // Finalize: a namespace with NO value-bearing declarations is namespace-only; a
+        // namespace WITH value members provides a VALUE, so a `type X` + `namespace X`
+        // clodule (e.g. factory/utilities.ts's `type BinaryExpressionState = <fn type>` +
+        // `namespace BinaryExpressionState { … }`) can be used as a value (`X.enter`) — add
+        // it to valueNames so the TS2693 check (gated `name !in valueNames`) does not fire.
+        for ((n, hasValues) in moduleHasValues) {
+            if (!hasValues) namespaceOnlyNames.add(n) else if (n in moduleInstantiated) valueNames.add(n)
+        }
+        // B87.3 (round 73): under a dotted-only `@lib` (no full es-lib), the
+        // base-lib VALUE `declare var Array: ArrayConstructor` (lib.es5.d.ts)
+        // is unavailable, so `Array` used as a value is TS2693 even though the
+        // Array TYPE is provided by the sub-library. Our embedded lib always
+        // loads the value; synthesize the type-only treatment for that name.
+        if (!libProvidesBaseValues() && "Array" !in valueNames) {
+            typeOnlyNames.add("Array")
+        }
+        // B228: the `Symbol` VALUE (`declare var Symbol`) lives in lib.es2015.symbol —
+        // an explicit @lib of only es5/es2015.core etc. provides the wrapper TYPE but
+        // not the value, so `Symbol.isConcatSpreadable` in value position is TS2585
+        // ("change your target library"). Our embedded lib always loads the value;
+        // synthesize the type-only treatment + the TS2585 message routing.
+        if (!libProvidesSymbolValue() && "Symbol" !in valueNames) {
+            typeOnlyNames.add("Symbol")
+            forwardLibTypeNames.add("Symbol")
+        }
+        // B237: same treatment for the `Promise` VALUE (`declare var Promise`,
+        // lib.es2015.promise) — the es5 lib has the Promise TYPE only, so
+        // `Promise.resolve(...)` under a restrictive @lib is TS2585.
+        if (!libProvidesPromiseValue() && "Promise" !in valueNames) {
+            typeOnlyNames.add("Promise")
+            forwardLibTypeNames.add("Promise")
+        }
+        currentForwardLibTypeNames = forwardLibTypeNames
+        tavCollectListValues(result.sourceFile.statements, valueNames)
+        return TavLevel(valueNames, typeOnlyNames, namespaceOnlyNames, null)
     }
 
     /**
@@ -43585,6 +44281,19 @@ class Checker(
         private const val URES_EDGE_DESCEND = 1
         private const val URES_EDGE_ROOT = 2
 
+        // INV.4(c)(iv) checkTypeUsedAsValue spine edges/statuses. The edge
+        // values double as the status values ([spineTavApply]): a CONT edge
+        // inherits the parent status, a CONT_NONS edge (the LEFT operand of a
+        // plain `=` BinaryExpression — the deleted walker passed an EMPTY
+        // namespace-only set into the whole LHS subtree) forces the
+        // TS2708-suppressed status, a STOP edge is unreached.
+        private const val TAV_CONT = 1
+        private const val TAV_CONT_NONS = 2
+        private const val TAV_STOP = 3
+        private const val TAV_REACHED = 1
+        private const val TAV_REACHED_NONS = 2
+        private const val TAV_UNREACHED = 3
+
         /** Maximum antecedent walk depth for control-flow narrowing, aligned with tsc's
          *  `flowDepth === 2000` stack guard (M1.2b, round 386 — was 50). Do NOT lower it
          *  back "to save time": truncated subtrees are never memo-stored (the clean-only
@@ -48180,36 +48889,6 @@ interface DataView {
         }
     }
 
-    /**
-     * Two-level name set for the type-as-value (TS2693/TS2708) walker: a shared,
-     * never-copied [base] (the file-level type-only / value / namespace-only names)
-     * plus a small per-scope [overlay] of names a nested function/class/param
-     * introduces. [child] copies only the tiny overlay, so descending into a nested
-     * scope no longer copies the large file-level base (round 487 — the base copy was
-     * the top allocation churn on tsc's own checker.ts: one `createTypeChecker` with
-     * hundreds of nested functions, each `HashSet(parent)`-copying a ~1000-name
-     * file-level set). Membership is base∪overlay = depth-independent (≤2 lookups),
-     * NOT a parent-chain walk.
-     *
-     * Every read of the type-only / namespace-only sets is value-gated
-     * (`name !in valueNames && name in typeOnlyNames`) and every scope grows the sets
-     * purely additively inward, so the former per-scope `remove` (a param / namespace
-     * self-name shadowing an outer type-only name) is subsumed by the value overlay —
-     * this structure is add / contains only.
-     */
-    private class ScopeNameSet private constructor(
-        private val base: Set<String>,
-        private val overlay: HashSet<String>,
-    ) {
-        constructor(base: Set<String>) : this(base, HashSet())
-        fun add(name: String) { overlay.add(name) }
-        fun addAll(names: Collection<String>) { overlay.addAll(names) }
-        operator fun contains(name: String): Boolean =
-            if (overlay.isEmpty()) name in base else name in overlay || name in base
-        fun containsAll(names: Collection<String>): Boolean = names.all { it in this }
-        fun child(): ScopeNameSet = ScopeNameSet(base, HashSet(overlay))
-    }
-
     /** Recursively visit every local name a parameter/variable binding introduces. */
     private fun forEachParamBindingName(name: Node, action: (String) -> Unit) {
         when (name) {
@@ -48217,429 +48896,6 @@ interface DataView {
             is ObjectBindingPattern -> for (element in name.elements) forEachParamBindingName(element.name, action)
             is ArrayBindingPattern -> for (element in name.elements) {
                 if (element is BindingElement) forEachParamBindingName(element.name, action)
-            }
-            else -> {}
-        }
-    }
-
-    private fun checkTypeUsedAsValue() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            // tsc: an allowJs file WITHOUT checkJs receives no semantic diagnostics.
-            if (isJsLikeFileName(fileName) && !options.checkJs) continue
-            val source = result.sourceFile.text
-            // Collect interface/type alias names at file level (type-only declarations)
-            // Skip names that also have a class/function/variable declaration (merged)
-            val typeOnlyNames = mutableSetOf<String>()
-            val valueNames = mutableSetOf<String>()
-            val namespaceOnlyNames = mutableSetOf<String>()
-            for (stmt in result.sourceFile.statements) {
-                when (stmt) {
-                    is ClassDeclaration -> stmt.name?.text?.let { valueNames.add(it) }
-                    is FunctionDeclaration -> stmt.name?.text?.let { valueNames.add(it) }
-                    is VariableStatement -> for (decl in stmt.declarationList.declarations) {
-                        (decl.name as? Identifier)?.text?.let { valueNames.add(it) }
-                    }
-                    is EnumDeclaration -> valueNames.add(stmt.name.text)
-                    // Import declarations create value bindings (aliases), not type-only names
-                    is ImportDeclaration -> {
-                        val clause = stmt.importClause ?: continue
-                        // B508: a JS-file (checkJs) DEFAULT import binding to a type-only
-                        // ambient-module namespace (`export default <type-only namespace>`)
-                        // is itself type-only — tsc emits TS18042 at the import binding and
-                        // routes value-position uses of the name to TS2708. Route to
-                        // namespaceOnlyNames instead of valueNames (narrow: JS+checkJs only).
-                        val defaultName = clause.name?.text
-                        val jsTypeOnlyDefaultSpec = if (defaultName != null &&
-                            isJsLikeFileName(fileName) && options.checkJs) {
-                            ((stmt.moduleSpecifier as? StringLiteralNode)?.text)
-                                ?.takeIf { ambientDefaultExportTypeOnlyNamespace(it) != null }
-                        } else null
-                        if (jsTypeOnlyDefaultSpec != null) {
-                            namespaceOnlyNames.add(defaultName!!)
-                            val nameNode = clause.name
-                            val (l, c) = getLineAndCharacterOfPosition(source, nameNode.pos)
-                            diagnostics.add(Diagnostic(
-                                message = "'$defaultName' is a type and cannot be imported in JavaScript files. " +
-                                    "Use 'import(\"$jsTypeOnlyDefaultSpec\").$defaultName' in a JSDoc type annotation.",
-                                category = DiagnosticCategory.Error, code = 18042,
-                                fileName = fileName, line = l, character = c,
-                                start = nameNode.pos, length = defaultName.length,
-                            ))
-                        } else {
-                            clause.name?.text?.let { valueNames.add(it) }
-                        }
-                        when (val nb = clause.namedBindings) {
-                            is NamespaceImport -> valueNames.add(nb.name.text)
-                            is NamedImports -> nb.elements.forEach { spec -> valueNames.add(spec.name.text) }
-                            else -> {}
-                        }
-                    }
-                    is ImportEqualsDeclaration -> {
-                        // 17.228: `import X = require("./m")` where m has
-                        // `export = X` and that X is a type-only entity
-                        // (interface/type alias) imports a type-only name —
-                        // using `X` as a value is TS2693 just like a local
-                        // type-only declaration. Other forms (QualifiedName,
-                        // Identifier module reference) stay value-side.
-                        //
-                        // 17.230: Exclude body-less ambient modules
-                        // (`declare module "foo";` with no `{...}` block) —
-                        // those are `any`-typed at runtime, so the local name
-                        // is value-side. `isAmbientModuleTypeOnly` treats
-                        // body-less as type-only (used by Transformer elision)
-                        // but for TS2693 emission we need the opposite.
-                        //
-                        // 17.231: When `export = X` resolves to a type-only
-                        // namespace (no value exports), the local name should
-                        // fire TS2708 "Cannot use namespace 'X' as a value"
-                        // instead of TS2693. Route to `namespaceOnlyNames`.
-                        val ref = stmt.moduleReference
-                        val spec = (ref as? ExternalModuleReference)?.expression?.let {
-                            (it as? StringLiteralNode)?.text
-                        }
-                        val isBodyless = spec != null && isBodylessAmbientModule(spec)
-                        val isTypeOnly = spec != null && isTypeOnlyImportRequire(spec, fileName) && !isBodyless
-                        val isTypeOnlyNamespace = isTypeOnly && exportEqualsIsNamespace(spec)
-                        when {
-                            isTypeOnlyNamespace -> namespaceOnlyNames.add(stmt.name.text)
-                            isTypeOnly -> typeOnlyNames.add(stmt.name.text)
-                            else -> valueNames.add(stmt.name.text)
-                        }
-                    }
-                    else -> {}
-                }
-            }
-            // When @lib explicitly excludes es2015+, user-declared interfaces matching
-            // well-known forward-declarable lib types (Promise, Symbol, Map, …) ARE
-            // type-only — the lib doesn't provide a value-side counterpart for them.
-            // Use as a value fires TS2585 with a lib-hint message instead of TS2693.
-            val libExcludesEs2015 = options.lib.isNotEmpty() &&
-                options.lib.none { lname ->
-                    lname.startsWith("es2") || lname.equals("esnext", ignoreCase = true) ||
-                        lname.startsWith("ES2") || lname.equals("ESNext", ignoreCase = true)
-                }
-            val forwardLibTypeNames = mutableSetOf<String>()
-            // iter17 B86.10: aggregate ModuleDeclaration hasValues across ALL
-            // declarations with the same name BEFORE deciding namespaceOnly.
-            // Without this, a merged-namespace pair like
-            //   namespace M { interface T {} }       // type-only
-            //   namespace M { export const x = 1 }   // value-bearing
-            // mis-classifies M as namespace-only (the first decl wins, second
-            // never removes it). Tightening the gate prevents FP TS2708 when
-            // the per-decl walk treats hybrid M as a runtime-erased namespace.
-            val moduleHasValues = mutableMapOf<String, Boolean>()
-            // Names whose namespace is GENUINELY instantiated (has a runtime value, recursing
-            // into nested namespaces) — stricter than `moduleHasValues` (which counts any nested
-            // ModuleDeclaration). Only these are added to valueNames (a `type X` + instantiated
-            // `namespace X` clodule provides a value); a namespace holding only an uninstantiated
-            // nested namespace (`Mod { namespace Nested { interface I } }`) must NOT become a value.
-            val moduleInstantiated = mutableSetOf<String>()
-            for (stmt in result.sourceFile.statements) {
-                when (stmt) {
-                    is InterfaceDeclaration -> {
-                        val n = stmt.name.text
-                        if (n !in valueNames && n !in KNOWN_GLOBALS) typeOnlyNames.add(n)
-                        if (libExcludesEs2015 && n !in valueNames &&
-                            n in FORWARD_DECLARABLE_LIB_TYPES_ES2015) {
-                            forwardLibTypeNames.add(n)
-                            typeOnlyNames.add(n)
-                        }
-                    }
-                    is TypeAliasDeclaration -> {
-                        val n = stmt.name.text
-                        if (n !in valueNames && n !in KNOWN_GLOBALS) typeOnlyNames.add(n)
-                    }
-                    is ModuleDeclaration -> {
-                        val n = (stmt.name as? Identifier)?.text ?: continue
-                        if (n !in valueNames) {
-                            val body = stmt.body
-                            val hasValues = when (body) {
-                                is ModuleBlock -> body.statements.any { s ->
-                                    s is FunctionDeclaration || s is ClassDeclaration ||
-                                        s is VariableStatement || s is EnumDeclaration ||
-                                        s is ModuleDeclaration // nested namespace may have value exports
-                                }
-                                else -> false
-                            }
-                            // OR-merge across all declarations of the same name
-                            moduleHasValues[n] = (moduleHasValues[n] ?: false) || hasValues
-                            if (isNamespaceInstantiated(stmt)) moduleInstantiated.add(n)
-                        }
-                    }
-                    else -> {}
-                }
-            }
-            // Finalize: a namespace with NO value-bearing declarations is namespace-only; a
-            // namespace WITH value members provides a VALUE, so a `type X` + `namespace X`
-            // clodule (e.g. factory/utilities.ts's `type BinaryExpressionState = <fn type>` +
-            // `namespace BinaryExpressionState { … }`) can be used as a value (`X.enter`) — add
-            // it to valueNames so the TS2693 check (gated `name !in valueNames`) does not fire.
-            for ((n, hasValues) in moduleHasValues) {
-                if (!hasValues) namespaceOnlyNames.add(n) else if (n in moduleInstantiated) valueNames.add(n)
-            }
-            // B87.3 (round 73): under a dotted-only `@lib` (no full es-lib), the
-            // base-lib VALUE `declare var Array: ArrayConstructor` (lib.es5.d.ts)
-            // is unavailable, so `Array` used as a value is TS2693 even though the
-            // Array TYPE is provided by the sub-library. Our embedded lib always
-            // loads the value; synthesize the type-only treatment for that name.
-            if (!libProvidesBaseValues() && "Array" !in valueNames) {
-                typeOnlyNames.add("Array")
-            }
-            // B228: the `Symbol` VALUE (`declare var Symbol`) lives in lib.es2015.symbol —
-            // an explicit @lib of only es5/es2015.core etc. provides the wrapper TYPE but
-            // not the value, so `Symbol.isConcatSpreadable` in value position is TS2585
-            // ("change your target library"). Our embedded lib always loads the value;
-            // synthesize the type-only treatment + the TS2585 message routing.
-            if (!libProvidesSymbolValue() && "Symbol" !in valueNames) {
-                typeOnlyNames.add("Symbol")
-                forwardLibTypeNames.add("Symbol")
-            }
-            // B237: same treatment for the `Promise` VALUE (`declare var Promise`,
-            // lib.es2015.promise) — the es5 lib has the Promise TYPE only, so
-            // `Promise.resolve(...)` under a restrictive @lib is TS2585.
-            if (!libProvidesPromiseValue() && "Promise" !in valueNames) {
-                typeOnlyNames.add("Promise")
-                forwardLibTypeNames.add("Promise")
-            }
-            currentForwardLibTypeNames = forwardLibTypeNames
-            try {
-                checkTypeAsValueInStatements(result.sourceFile.statements, source, fileName,
-                    ScopeNameSet(typeOnlyNames), ScopeNameSet(valueNames), ScopeNameSet(namespaceOnlyNames))
-            } finally {
-                currentForwardLibTypeNames = emptySet()
-            }
-        }
-    }
-
-    private fun checkTypeAsValueInStatements(
-        statements: List<Statement>,
-        source: String,
-        fileName: String,
-        typeOnlyNames: ScopeNameSet,
-        valueNames: ScopeNameSet = ScopeNameSet(emptySet()),
-        namespaceOnlyNames: ScopeNameSet = ScopeNameSet(emptySet()),
-    ) {
-        // Hoist the statement list's OWN value declarations (vars at any depth — they are
-        // function-scoped — plus directly-declared let/const/function/class/enum names) so a
-        // body-local `var number = 0;` makes a later `any + number + string` resolve the
-        // NAMES as values, not type keywords (tsc resolves the hoisted var → no TS2693;
-        // constructorWithIncompleteTypeAnnotation's VARIABLES() method).
-        var effValues = valueNames
-        run {
-            val declared = HashSet<String>()
-            collectHoistedVarNamesFromStmts(statements, declared)
-            for (s in statements) when (s) {
-                is VariableStatement -> for (d in s.declarationList.declarations) {
-                    // A destructuring declaration (`const { symbol } = node`) binds its element
-                    // names as VALUES — so a later `symbol.foo` resolves to the binding, not the
-                    // `symbol` type keyword (binder.ts's constEnumOnlyModule shape). Simple
-                    // Identifier names + binding-pattern element names both count.
-                    when (val nm = d.name) {
-                        is Identifier -> declared.add(nm.text)
-                        else -> forEachParamBindingName(nm) { declared.add(it) }
-                    }
-                }
-                is FunctionDeclaration -> s.name?.text?.let { declared.add(it) }
-                is ClassDeclaration -> s.name?.text?.let { declared.add(it) }
-                is EnumDeclaration -> declared.add(s.name.text)
-                else -> {}
-            }
-            if (declared.isNotEmpty() && !valueNames.containsAll(declared)) {
-                effValues = valueNames.child().also { it.addAll(declared) }
-            }
-        }
-        for (stmt in statements) {
-            checkTypeAsValueInStatement(stmt, source, fileName, typeOnlyNames, effValues, namespaceOnlyNames)
-        }
-    }
-
-    private fun checkTypeAsValueInStatement(
-        stmt: Statement,
-        source: String,
-        fileName: String,
-        typeOnlyNames: ScopeNameSet,
-        valueNames: ScopeNameSet = ScopeNameSet(emptySet()),
-        namespaceOnlyNames: ScopeNameSet = ScopeNameSet(emptySet()),
-    ) {
-        when (stmt) {
-            is ExpressionStatement -> checkTypeAsValueInExpr(stmt.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
-            is LabeledStatement -> checkTypeAsValueInStatement(stmt.statement, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
-            is VariableStatement -> {
-                for (decl in stmt.declarationList.declarations) {
-                    decl.initializer?.let { checkTypeAsValueInExpr(it, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames) }
-                }
-            }
-            is ReturnStatement -> stmt.expression?.let { checkTypeAsValueInExpr(it, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames) }
-            is WhileStatement -> {
-                // Parse-recovery ONLY: a while body that is a LABELED statement with a
-                // MISSING label (`while ( : string, ;` — constructorWithIncompleteTypeAnnotation)
-                // keeps the value-position check tsc runs there. General loop descent is
-                // deliberately absent (the round-42 over-emission, see CLAUDE.md).
-                val body = stmt.statement
-                if (body is LabeledStatement && body.label.text.isEmpty()) {
-                    checkTypeAsValueInStatement(body, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
-                }
-            }
-            is Block -> checkTypeAsValueInStatements(stmt.statements, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
-            is IfStatement -> {
-                checkTypeAsValueInExpr(stmt.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
-                checkTypeAsValueInStatement(stmt.thenStatement, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
-                stmt.elseStatement?.let { checkTypeAsValueInStatement(it, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames) }
-            }
-            is FunctionDeclaration -> {
-                // Collect type parameters as type-only within this function
-                // But exclude names that are also parameter names (parameter shadows type param)
-                val innerTypeOnly = typeOnlyNames.child()
-                stmt.typeParameters?.forEach { innerTypeOnly.add(it.name.text) }
-                // Register parameter names as values — they shadow same-named type names
-                val innerValues = valueNames.child()
-                for (p in stmt.parameters) {
-                    forEachParamBindingName(p.name) { innerValues.add(it) }
-                }
-                // B86.9c: walk parameter default initializers AFTER binding names are
-                // registered so self-referential defaults `function f(x = x) {}` resolve
-                // correctly. Mirror of B86.9b for FunctionExpression/ArrowFunction.
-                for (p in stmt.parameters) {
-                    p.initializer?.let { checkTypeAsValueInExpr(it, source, fileName, innerTypeOnly, innerValues, namespaceOnlyNames) }
-                }
-                stmt.body?.let { checkTypeAsValueInStatements(it.statements, source, fileName, innerTypeOnly, innerValues, namespaceOnlyNames) }
-            }
-            is ClassDeclaration -> {
-                // `extends X` takes a value expression, so type-only names in it are TS2693.
-                // `implements X` is a type position and is handled elsewhere.
-                // Specialization: when the extended name resolves to a pure interface (no
-                // Class/Variable/Function backing), emit TS2689 "Cannot extend an interface
-                // 'X'. Did you mean 'implements'?" instead of the generic TS2693. Only the
-                // bare-Identifier form (`extends Comparable`, `extends Comparable<T>`) is
-                // specialized — qualified names and computed expressions fall through to
-                // the existing TS2693 path.
-                stmt.heritageClauses?.forEach { clause ->
-                    if (clause.token == SyntaxKind.ExtendsKeyword) {
-                        clause.types.forEach { ewta ->
-                            val ts2689 = tryClassifyExtendsInterface(ewta.expression, valueNames)
-                            if (ts2689 != null) {
-                                val (leftmost, displayName) = ts2689
-                                val (line, character) = getLineAndCharacterOfPosition(source, leftmost.pos)
-                                diagnostics.add(Diagnostic(
-                                    message = "Cannot extend an interface '$displayName'. Did you mean 'implements'?",
-                                    category = DiagnosticCategory.Error,
-                                    code = 2689,
-                                    fileName = fileName,
-                                    line = line,
-                                    character = character,
-                                    start = leftmost.pos,
-                                    length = leftmost.text.length,
-                                ))
-                            } else {
-                                checkTypeAsValueInExpr(ewta.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
-                            }
-                        }
-                    }
-                }
-                for (member in stmt.members) {
-                    when (member) {
-                        is MethodDeclaration -> {
-                            val innerTypeOnly = typeOnlyNames.child()
-                            member.typeParameters?.forEach { innerTypeOnly.add(it.name.text) }
-                            // iter18 B86.11: register method parameter binding names as
-                            // values so a parameter named `N` shadows an outer
-                            // namespace-only `N` and doesn't trigger spurious TS2708
-                            // / TS2693 inside the method body.
-                            val innerValues = valueNames.child()
-                            for (p in member.parameters) {
-                                forEachParamBindingName(p.name) { innerValues.add(it) }
-                            }
-                            for (p in member.parameters) {
-                                p.initializer?.let { checkTypeAsValueInExpr(it, source, fileName, innerTypeOnly, innerValues, namespaceOnlyNames) }
-                            }
-                            member.body?.let { checkTypeAsValueInStatements(it.statements, source, fileName, innerTypeOnly, innerValues, namespaceOnlyNames) }
-                        }
-                        is Constructor -> {
-                            val innerTypeOnly = typeOnlyNames.child()
-                            val innerValues = valueNames.child()
-                            for (p in member.parameters) {
-                                forEachParamBindingName(p.name) { innerValues.add(it) }
-                            }
-                            for (p in member.parameters) {
-                                p.initializer?.let { checkTypeAsValueInExpr(it, source, fileName, innerTypeOnly, innerValues, namespaceOnlyNames) }
-                            }
-                            member.body?.let {
-                                checkTypeAsValueInStatements(it.statements, source, fileName, innerTypeOnly, innerValues, namespaceOnlyNames)
-                            }
-                        }
-                        is PropertyDeclaration -> member.initializer?.let {
-                            // iter17 B86.10b: re-attempt B86.9d on top of tightened
-                            // namespaceOnlyNames classification (merged-namespace
-                            // value+type aggregate). Propagate namespaceOnlyNames so
-                            // `class C { x = N }` where N is a pure type-only namespace
-                            // fires TS2708 in property initializers.
-                            checkTypeAsValueInExpr(it, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
-                        }
-                        else -> {}
-                    }
-                }
-            }
-            is ModuleDeclaration -> {
-                // B86.8: recurse into namespace bodies for TS2708/TS2693. The file-level
-                // walker only collected sub-namespaces at the top scope; expressions
-                // inside `namespace M { ... }` like `var z = N.X` need their own
-                // scope-aware namespace-only set (so a nested `namespace N { }`
-                // sibling can fire TS2708). Build inner sets by surveying the
-                // namespace body's direct child statements only — recursion handles
-                // any deeper nesting. Outer names propagate (a type alias declared
-                // at the file level is still type-only inside any namespace body).
-                val body = stmt.body ?: return
-                if (body !is ModuleBlock) return
-                // Self-reference: a namespace's own name is a valid value-side
-                // self-reference from inside its body (the JS emit binds the name
-                // locally via the IIFE arg). Drop it from inherited
-                // `namespaceOnlyNames` so e.g. `namespace N { N; }` does NOT fire
-                // TS2708 on the inner `N`.
-                val selfName = (stmt.name as? Identifier)?.text
-                val innerValueNames = valueNames.child().also {
-                    // Adding the namespace's own name to values masks it out of the
-                    // value-gated namespaceOnly read (no explicit `remove` needed).
-                    if (selfName != null) it.add(selfName)
-                }
-                val innerTypeOnlyNames = typeOnlyNames.child()
-                val innerNamespaceOnlyNames = namespaceOnlyNames.child()
-                for (s in body.statements) {
-                    when (s) {
-                        is ClassDeclaration -> s.name?.text?.let { innerValueNames.add(it) }
-                        is FunctionDeclaration -> s.name?.text?.let { innerValueNames.add(it) }
-                        is VariableStatement -> for (decl in s.declarationList.declarations) {
-                            (decl.name as? Identifier)?.text?.let { innerValueNames.add(it) }
-                        }
-                        is EnumDeclaration -> innerValueNames.add(s.name.text)
-                        is InterfaceDeclaration -> {
-                            val n = s.name.text
-                            if (n !in innerValueNames && n !in KNOWN_GLOBALS) innerTypeOnlyNames.add(n)
-                        }
-                        is TypeAliasDeclaration -> {
-                            val n = s.name.text
-                            if (n !in innerValueNames && n !in KNOWN_GLOBALS) innerTypeOnlyNames.add(n)
-                        }
-                        is ModuleDeclaration -> {
-                            val n = (s.name as? Identifier)?.text ?: continue
-                            if (n !in innerValueNames) {
-                                val subBody = s.body
-                                val hasValues = when (subBody) {
-                                    is ModuleBlock -> subBody.statements.any { ss ->
-                                        ss is FunctionDeclaration || ss is ClassDeclaration ||
-                                            ss is VariableStatement || ss is EnumDeclaration ||
-                                            ss is ModuleDeclaration
-                                    }
-                                    else -> false
-                                }
-                                if (!hasValues) innerNamespaceOnlyNames.add(n)
-                            }
-                        }
-                        else -> {}
-                    }
-                }
-                checkTypeAsValueInStatements(body.statements, source, fileName, innerTypeOnlyNames, innerValueNames, innerNamespaceOnlyNames)
             }
             else -> {}
         }
@@ -48653,7 +48909,7 @@ interface DataView {
      * value-side flags (Class/Variable/Function) — those are valid `extends` targets.
      */
     private fun tryClassifyExtendsInterface(
-        expr: Expression, valueNames: ScopeNameSet,
+        expr: Expression, valueNames: TavLevel?,
     ): Pair<Identifier, String>? {
         // Walk the property-access chain leftward, collecting names.
         val names = mutableListOf<String>()
@@ -48673,7 +48929,7 @@ interface DataView {
                 else -> return null
             }
         }
-        if (leftmost.text in valueNames) return null
+        if (tavHasValue(valueNames, leftmost.text)) return null
         // B51.1: skip built-in lib types that are ALSO values (e.g. `Array`,
         // `Object`, `Function`) — TypeScript's full lib.d.ts has both
         // `interface X { ... }` AND `declare const X: XConstructor`, making
@@ -48690,205 +48946,6 @@ interface DataView {
         if (!resolved.flags.hasAny(SymbolFlags.Interface)) return null
         if (resolved.flags.hasAny(SymbolFlags.Class or SymbolFlags.Variable or SymbolFlags.Function)) return null
         return leftmost to names.joinToString(".")
-    }
-
-    private fun checkTypeAsValueInExpr(
-        expr: Expression,
-        source: String,
-        fileName: String,
-        typeOnlyNames: ScopeNameSet,
-        valueNames: ScopeNameSet = ScopeNameSet(emptySet()),
-        namespaceOnlyNames: ScopeNameSet = ScopeNameSet(emptySet()),
-    ) {
-        when (expr) {
-            is Identifier -> {
-                val name = expr.text
-                // Skip if the name is declared as a value (variable/parameter shadows type keyword)
-                if (name !in valueNames && (name in TYPE_ONLY_KEYWORDS || name in typeOnlyNames)) {
-                    emitTS2693(name, expr, source, fileName)
-                } else if (name !in valueNames && name in namespaceOnlyNames) {
-                    // TS2708: Cannot use namespace 'X' as a value.
-                    val start = expr.pos
-                    val (line, character) = getLineAndCharacterOfPosition(source, start)
-                    diagnostics.add(Diagnostic(
-                        message = "Cannot use namespace '$name' as a value.",
-                        category = DiagnosticCategory.Error,
-                        code = 2708,
-                        fileName = fileName,
-                        line = line,
-                        character = character,
-                        start = start,
-                        length = name.length,
-                    ))
-                }
-            }
-            is NewExpression -> {
-                // Check the constructor expression
-                val ctorExpr = expr.expression
-                if (ctorExpr is Identifier) {
-                    val name = ctorExpr.text
-                    if (name !in valueNames && (name in TYPE_ONLY_KEYWORDS || name in typeOnlyNames)) {
-                        emitTS2693(name, ctorExpr, source, fileName)
-                    }
-                } else {
-                    // Non-Identifier ctor expressions may still contain type-only names
-                    // in value positions (e.g. `new number[]` parses as
-                    // `new (ElementAccess(number, missing))` — the `number` is value-pos).
-                    checkTypeAsValueInExpr(ctorExpr, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
-                }
-                // Recurse into arguments
-                expr.arguments?.forEach { checkTypeAsValueInExpr(it, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames) }
-            }
-            is CallExpression -> {
-                checkTypeAsValueInExpr(expr.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
-                expr.arguments.forEach { checkTypeAsValueInExpr(it, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames) }
-            }
-            is BinaryExpression -> {
-                // Iteratively walk binary chains to avoid StackOverflow on deep trees
-                // For `=` assignment, skip left side for TS2708 (checkConstAssignment handles it)
-                var current: Expression = expr
-                while (current is BinaryExpression) {
-                    checkTypeAsValueInExpr(current.right, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
-                    if (current.operator == SyntaxKind.Equals) {
-                        // Assignment: check left side for TS2693 only, not TS2708 (avoid duplicate with checkConstAssignment)
-                        checkTypeAsValueInExpr(current.left, source, fileName, typeOnlyNames, valueNames)
-                        return
-                    }
-                    current = current.left
-                }
-                checkTypeAsValueInExpr(current, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
-            }
-            is TypeOfExpression -> {
-                // typeof T where T is a type param → TS2693
-                val operand = expr.expression
-                if (operand is Identifier) {
-                    val name = operand.text
-                    if (name !in valueNames && name in typeOnlyNames) {
-                        emitTS2693(name, operand, source, fileName)
-                    } else if (name !in valueNames && name in namespaceOnlyNames) {
-                        // B508: `typeof <type-only namespace>` in value position → TS2708.
-                        val start = operand.pos
-                        val (line, character) = getLineAndCharacterOfPosition(source, start)
-                        diagnostics.add(Diagnostic(
-                            message = "Cannot use namespace '$name' as a value.",
-                            category = DiagnosticCategory.Error, code = 2708,
-                            fileName = fileName, line = line, character = character,
-                            start = start, length = name.length,
-                        ))
-                    }
-                }
-            }
-            is ParenthesizedExpression -> checkTypeAsValueInExpr(expr.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
-            is ConditionalExpression -> {
-                checkTypeAsValueInExpr(expr.condition, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
-                checkTypeAsValueInExpr(expr.whenTrue, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
-                checkTypeAsValueInExpr(expr.whenFalse, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
-            }
-            is PropertyAccessExpression -> checkTypeAsValueInExpr(expr.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
-            is ElementAccessExpression -> {
-                checkTypeAsValueInExpr(expr.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
-                checkTypeAsValueInExpr(expr.argumentExpression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
-            }
-            // Descend into function/arrow bodies — type-as-value checks apply inside
-            // IIFE-style `(function() { new ForwardLibType; })` patterns.
-            is FunctionExpression -> {
-                val innerTypeOnly = typeOnlyNames.child()
-                val innerValues = valueNames.child()
-                for (p in expr.parameters) {
-                    forEachParamBindingName(p.name) { innerValues.add(it) }
-                }
-                // B86.9b: walk parameter default initializers AFTER binding names are
-                // registered so self-referential defaults `(x = x) =>` resolve correctly.
-                for (p in expr.parameters) {
-                    p.initializer?.let { checkTypeAsValueInExpr(it, source, fileName, innerTypeOnly, innerValues, namespaceOnlyNames) }
-                }
-                checkTypeAsValueInStatements(expr.body.statements, source, fileName, innerTypeOnly, innerValues, namespaceOnlyNames)
-            }
-            is ArrowFunction -> {
-                val innerTypeOnly = typeOnlyNames.child()
-                val innerValues = valueNames.child()
-                for (p in expr.parameters) {
-                    forEachParamBindingName(p.name) { innerValues.add(it) }
-                }
-                // B86.9b: walk parameter default initializers AFTER binding names are
-                // registered so self-referential defaults `(x = x) =>` resolve correctly.
-                for (p in expr.parameters) {
-                    p.initializer?.let { checkTypeAsValueInExpr(it, source, fileName, innerTypeOnly, innerValues, namespaceOnlyNames) }
-                }
-                when (val body = expr.body) {
-                    is Block -> checkTypeAsValueInStatements(body.statements, source, fileName, innerTypeOnly, innerValues, namespaceOnlyNames)
-                    is Expression -> checkTypeAsValueInExpr(body, source, fileName, innerTypeOnly, innerValues, namespaceOnlyNames)
-                    else -> {}
-                }
-            }
-            is ArrayLiteralExpression -> expr.elements.forEach { checkTypeAsValueInExpr(it, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames) }
-            // B240: object literals — walk member COMPUTED NAMES (`[Symbol.hasInstance](v) {}`
-            // is a value-use of `Symbol`), property initializers, and method/accessor bodies.
-            is ObjectLiteralExpression -> for (prop in expr.properties) {
-                when (prop) {
-                    is PropertyAssignment -> {
-                        (prop.name as? ComputedPropertyName)?.let {
-                            checkTypeAsValueInExpr(it.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
-                        }
-                        checkTypeAsValueInExpr(prop.initializer, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
-                    }
-                    is SpreadAssignment -> checkTypeAsValueInExpr(prop.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
-                    is MethodDeclaration -> {
-                        (prop.name as? ComputedPropertyName)?.let {
-                            checkTypeAsValueInExpr(it.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
-                        }
-                        val innerTypeOnly = typeOnlyNames.child()
-                        val innerValues = valueNames.child()
-                        for (p in prop.parameters) {
-                            forEachParamBindingName(p.name) { innerValues.add(it) }
-                        }
-                        prop.body?.let { checkTypeAsValueInStatements(it.statements, source, fileName, innerTypeOnly, innerValues, namespaceOnlyNames) }
-                    }
-                    is GetAccessor -> {
-                        (prop.name as? ComputedPropertyName)?.let {
-                            checkTypeAsValueInExpr(it.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
-                        }
-                    }
-                    is SetAccessor -> {
-                        (prop.name as? ComputedPropertyName)?.let {
-                            checkTypeAsValueInExpr(it.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
-                        }
-                    }
-                    else -> {}
-                }
-            }
-            // Value-preserving wrappers — recurse through the inner expression
-            is AsExpression -> checkTypeAsValueInExpr(expr.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
-            is TypeAssertionExpression -> checkTypeAsValueInExpr(expr.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
-            is SatisfiesExpression -> checkTypeAsValueInExpr(expr.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
-            is NonNullExpression -> checkTypeAsValueInExpr(expr.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
-            // Unary / expression wrappers
-            is PrefixUnaryExpression -> checkTypeAsValueInExpr(expr.operand, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
-            is PostfixUnaryExpression -> checkTypeAsValueInExpr(expr.operand, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
-            is SpreadElement -> checkTypeAsValueInExpr(expr.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
-            is AwaitExpression -> checkTypeAsValueInExpr(expr.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
-            is YieldExpression -> expr.expression?.let { checkTypeAsValueInExpr(it, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames) }
-            is VoidExpression -> checkTypeAsValueInExpr(expr.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
-            is DeleteExpression -> checkTypeAsValueInExpr(expr.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
-            // Note: TypeOfExpression handled above with TS2693 logic
-            // Template / tagged template — recurse into spans (tag is checked for TaggedTemplate)
-            is TemplateExpression -> for (span in expr.templateSpans) {
-                checkTypeAsValueInExpr(span.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
-            }
-            is TaggedTemplateExpression -> {
-                checkTypeAsValueInExpr(expr.tag, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
-                val template = expr.template
-                if (template is TemplateExpression) {
-                    for (span in template.templateSpans) {
-                        checkTypeAsValueInExpr(span.expression, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
-                    }
-                }
-            }
-            is CommaListExpression -> for (e in expr.elements) {
-                checkTypeAsValueInExpr(e, source, fileName, typeOnlyNames, valueNames, namespaceOnlyNames)
-            }
-            else -> {}
-        }
     }
 
     private fun emitTS2693(name: String, node: Node, source: String, fileName: String) {
