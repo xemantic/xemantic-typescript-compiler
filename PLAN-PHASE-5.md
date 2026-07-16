@@ -59,6 +59,61 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 532 (2026-07-16) — INV.4(d) walker 3: checkImplicitAnyParameters
+(TS7005/TS7006/TS7008/TS7013/TS7019/TS7031/TS7032/TS7051, 272 ms in the
+round-529 cost table) migrated onto the spine — the recursive
+checkImplicitAnyInStatements/-InClassElement(Core)/-InExpr walkers and the
+per-file pass driver are DELETED (~770 lines).** The first
+DOWNWARD-CONTEXT-THREADING migration; the design extends the (d) template:
+(1) the expression recursion's FIVE explicit context parameters
+(contextuallyTyped / contextualType / ctxViaUnionWithPrimitive /
+ctxAnnotation / ctxViaAssignment) become ONE immutable `SpineIanyCtx` value
+push-maintained on the frames LIFO, defined at EXACTLY the edges the legacy
+recursion passed explicit arguments over — the load-bearing rule is that
+every REACHED expression-position edge must define the context (even to
+null/all-defaults): a missed edge silently INHERITS the parent context where
+the legacy call passed defaults. Kinded carrier values keep one-level-deep
+special states off the general rule (kind 1 = call-args ctxProp computed
+once per call like the legacy single `isCalleeResolvable` call; kind 2 =
+destructure-default typed-keys; kind 3 = the object-literal enrichment —
+fresh viaUnionWithPrimitive verdict + the lazily-shared computed-key
+mapped-value arity, stored ON the ctx value so all the literal's props share
+one computation). (2) The binary left-spine LOOP dissolves into PER-EDGE
+rules with no chain-root machinery (unlike arith's leave-emissions): the
+loop's per-operand actions depend only on each binary's own operator and the
+inherited state — right operand: assignment-family ops run the
+resolveAssignTargetCtxTypeForImplicitAny block (+ the implicitAnyCtxUnknowable
+side channel) at the right child's enter, `||`/`??`/`&&`/comma inherit;
+left operand: inherits for `||`/`??` only. viaUnion is inert with a null
+type, so resetting both together on non-inherit edges is behavior-identical
+to the legacy loop's viaUnion pass-through. (3) The statement-walk THREADED
+flags pull-derive from parent chains gated by the reach classifier:
+returnCtxAnnotation = the nearest fn-like boundary's annotation through
+Block/If/For only (Constructor/SetAccessor → null); inAmbientContext = a
+`declare` on the unbroken ModuleBlock/ModuleDeclaration chain (every other
+parent kind resets, incl. plain Blocks — the legacy recursion did not pass
+it there). (4) The three implicit-any scope stacks + ns stack +
+enclosing-class-members stay the SAME checker fields, pushed at fn-BODY
+edges / module-body edges / class-element enters and recorded at declarator
+ENTERS (legacy recorded before walking the initializer, so `var f =
+function(){ f(); }` sees itself); the eager shape-B annotation resolution is
+mirrored at the declarator enter (stashed for the initializer edge) so
+first-touch order stays close. (5) No ambient install wrapper: the pass
+never consulted the shared walk fields deliberately, and the SLOT-MOVE
+pre-gate (intact pass moved from slot 2180 past the 4 sibling TS7xxx passes
+to the spine slot) measured error-line-identical listAll ×8 AND corpus-green
+(11,004 incl. the new pins) — unlike w2 there is no giants-residue coupling
+(the pass ran BEFORE the giants at its old slot). Reach quirks pinned as
+negative controls, all pre-verified on the OLD walker: while/do/switch/try/
+for-in/for-of bodies UNREACHED, for-headers/call CALLEES/conditional
+CONDITIONS/as-cast operands/objlit accessors/class static blocks unwalked,
+class-expression setters fire TS7032 even with a sibling getter (empty
+legacy siblings), ambient-class private members unchecked. VERIFIED: 56 pins
+(Inv4SpineBatch23Test) green on OLD and NEW; suite 10,948 → 11,004 (0
+regressions, XML-verified); listAll error lines IDENTICAL on ALL 8 profiles
+(532a vs 531b); bench row recorded. NEXT: INV.4(d) walker 4 —
+checkDuplicateIdentifiers 260 ms (zero-typing), decompose when reached.**
+
 **Round 531 (2026-07-16) — INV.4(d) walker 2: checkArithmeticOperandTypes
 (TS2362/TS2363/TS2365/TS2447/TS2358/TS2848/TS2736 + the in/instanceof/equality
 arms, 309 ms in the round-529 cost table) migrated onto the spine — the per-file
@@ -504,43 +559,6 @@ positions onto the spine, delete the recursive walkers); the threaded flags
 (namespaces/enums/type-level scopes + fn signature positions) migrate there
 as parent-chain context.
 
-**Round 522 (2026-07-15) — INV.4(c) decomposed + (c)(i) LANDED: the spine
-maintains the authoritative lexical scope state.** Decomposition first (facts
-verified in-code): the checkUnresolvedNames family is ~3,000 lines whose
-NameScope content closely mirrors the INV.2(c) `lexicalScopes` tables plus
-per-file root extras and walk-threaded flags; checkTypeUsedAsValue is ~700
-lines threading THREE ScopeNameSet chains built from AST surveys with
-corpus-tuned reach (the round-42 no-loop/switch/try-descent gotcha) — sub-plan
-(c)(i)–(c)(iv) on the queue item. (c)(i): `spineCurrentScope` is maintained by
-the walk itself — [spineScopeEnterIfOwner] pushes BEFORE a node's own enter
-handlers dispatch (params/type-params visible to the node's handlers),
-[spineScopeLeaveIfOwner] pops after leave; the per-node cost is ONE
-nodeId-indexed array read on enter and leave (the INV.2(b) boxing-avoidance
-trick — the array is filled per file from `result.lexicalScopes` and cleared
-by re-nulling only the written ids). Two structural rules encoded at FILL
-time, not per node: a SwitchStatement's scope (binder-keyed by the SWITCH's
-nodeId) is RE-KEYED onto its CLAUSE nodeIds so the switch EXPRESSION — visited
-between the switch's enter and the clauses — stays in the outer scope (the
-binder's routing); function-body Blocks share the fn scope by map ABSENCE.
-`spineScopeLookup(name)` resolves symbols → existing → parent. Pinned by a
-test-only AUDIT mode (companion statics — tests cannot reach the Checker
-instance): every spine enter compares the incremental scope against an
-independent parent-chain derivation, and every Identifier records its
-resolution into a trace (`file:pos:name=symbolId`). Inv4SpineScopeStateTest
-(15): kitchen-sink zero-mismatch, shadowing id splits ([main, scope, scope,
-main] across positions), switch-expression isolation (∅ at the expression,
-scope-space in the clause), type params through signature+body, catch/for-of/
-var-hoist/fn-expr-self-name/class-expr-self-name shapes, enum-sibling +
-namespace/dotted-namespace mains, multi-file, undeclared-∅ negative control.
-SHARPNESS VERIFIED by deliberate breakage: keying the switch scope at the
-switch's own nodeId (instead of the clauses) fails exactly the two
-switch-bearing tests with node-precise mismatch messages. Session trap worth
-recording: a first sharpness probe used `if (false && …)` — the always-false
-condition failed the WARNING-CLEAN build, so the test run silently reused
-STALE green XMLs (the documented stale-XML gotcha) and the probe looked
-inert; the second probe removed the branch instead. VERIFIED: suite +15
-(10,655 → 10,670, 0 regressions); listAll error lines IDENTICAL on ALL 8 profiles (522a vs 521a; only the trailing time: line differs). Bench: single-runs 27.3/26.0 s landed in a box-drift episode (the round-517 pattern) — the SAME-window signal is the listAll pair, new 24,884 ms vs the 521a baseline's 24,648 ms (+1.0%, in band; the added work is two nodeId array reads per node by construction). NEXT: (c)(ii) — the
-checkUnresolvedNames STATE swap onto lexicalScopes-chain derivations.
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
@@ -1552,6 +1570,29 @@ interrupt the arc).
       on the OLD walker; suite 10,872 → 10,908; listAll error-line identical
       on ALL 8 profiles; ~270 walker lines deleted. See the round-530
       session note for the quirks pinned.
+    - (w3) DONE round 532 (2026-07-16): checkImplicitAnyParameters
+      (TS7005/TS7006/TS7008/TS7013/TS7019/TS7031/TS7032/TS7051) — the first
+      DOWNWARD-CONTEXT-THREADING migration: the checkImplicitAnyInExpr
+      recursion's five explicit context parameters (contextuallyTyped /
+      contextualType / viaUnionWithPrimitive / ctxAnnotation / ctxViaAssignment)
+      become ONE push-maintained SpineIanyCtx value with frames defined at
+      EXACTLY the edges the legacy recursion passed arguments over (a missed
+      edge silently LEAKS the parent context — every reached expression-position
+      edge must define, even to null); the binary left-spine loop dissolves into
+      per-edge rules (right operand by operator; left inherits for `||`/`??`
+      only); returnCtxAnnotation + inAmbientContext pull-derive from parent
+      chains; the three implicit-any scope stacks stay the same checker fields,
+      pushed at body edges + recorded at declarator enters. No ambient install
+      needed (slot-move A/B ×8 error-identical + corpus green pre-gated the
+      move past the 4 sibling TS7xxx passes). 56 pins (Inv4SpineBatch23Test)
+      ALL pre-verified on the OLD walker — incl. the reach quirks (while/do/
+      switch/try/for-in/for-of bodies, call CALLEES, conditional CONDITIONS,
+      as-casts, objlit accessors, static blocks all unreached) and the
+      class-expression setter TS7032-with-sibling-getter bug-compat fire.
+      The recursive walkers (checkImplicitAnyInStatements/-InClassElement(Core)/
+      -InExpr) + the pass driver are DELETED (~770 lines); suite 10,948 →
+      11,004; listAll error lines identical on ALL 8 profiles. See the
+      round-532 session note.
     - (w2) DONE round 531 (2026-07-16): checkArithmeticOperandTypes — the
       first ORDER-DEPENDENT stateful migration (statement-ordered recordings
       that leak across blocks → PUSH-maintained frames on the spine, not the

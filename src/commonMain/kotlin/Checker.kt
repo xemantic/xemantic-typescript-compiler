@@ -977,6 +977,61 @@ class Checker(
     )
     private val spineArithFrames = ArrayList<SpineArithFrame>()
 
+    // ── INV.4(d) walker 3: checkImplicitAnyParameters on the spine ──
+    // All MUST be declared before init {} (consumed by checkSpine during init).
+    // The walker's downward CONTEXTUAL-TYPING state (contextuallyTyped /
+    // contextualType / ctxViaUnionWithPrimitive / ctxAnnotation /
+    // ctxViaAssignment — the checkImplicitAnyInExpr parameters) is
+    // PUSH-maintained as [SpineIanyCtx] values with frames keyed on the CHILD
+    // node at every reached edge that the legacy recursion passed explicit
+    // arguments over; the three implicit-any scope stacks + the ns stack +
+    // the enclosing-class-members field are the SAME checker fields the
+    // legacy walkers maintained, pushed/popped at the same tree positions.
+    /** Per-RUN activation: the legacy `noImplicitAny || strict` pass gate. */
+    private var spineIanyActive = false
+    /** Per-file nodeId memo for [spineIanyReached] — 0 unknown / 1 reached / 2 not. */
+    private var spineIanyReachMemo = ByteArray(0)
+    /** Reusable ascent buffer. */
+    private val spineIanyChain = ArrayList<Node>()
+    /**
+     * The maintained contextual-typing state at the current walk position; null
+     * means all-defaults (the legacy recursion's default arguments). kind 0 is
+     * the plain expression context; kind 1 is the call-arguments carrier
+     * (typed = isCalleeResolvable(callee), read by argument edges); kind 2 is
+     * the destructuring-default mode (names = the typed-default keys, read by
+     * PropertyAssignment initializer edges); kind 3 is the object-literal
+     * enrichment (viaUnion computed from the literal's own contextual type,
+     * plus the lazily-computed computed-key mapped-value arity shared across
+     * the literal's properties).
+     */
+    private class SpineIanyCtx(
+        val kind: Int,
+        val typed: Boolean = false,
+        val type: Type? = null,
+        val viaUnion: Boolean = false,
+        val ann: TypeNode? = null,
+        val viaAssign: Boolean = false,
+        val names: Set<String>? = null,
+    ) {
+        var arity: Int? = null
+        var arityComputed: Boolean = false
+    }
+    private var spineIanyCtx: SpineIanyCtx? = null
+    /** LIFO frame stack: each frame records the node that pushed it plus the saved
+     *  value of exactly one state channel; popped at that node's leave. */
+    private class SpineIanyFrame(
+        val node: Node,
+        val kind: Int, // 0=ctx, 1=implicit-any scope pop, 2=ns-stack pop, 3=enclosing-class-members
+        val savedCtx: SpineIanyCtx? = null,
+        val savedMembers: List<ClassElement>? = null,
+    )
+    private val spineIanyFrames = ArrayList<SpineIanyFrame>()
+    /** The eager shape-B annotation resolution stashed between a declarator's
+     *  enter and its initializer edge (mirrors the legacy per-declarator
+     *  resolution timing). */
+    private var spineIanyPendingAnnDecl: VariableDeclaration? = null
+    private var spineIanyPendingAnnType: Type? = null
+
     // Positions of ObjectLiteralExpression nodes that are destructuring-assignment
     // TARGETS (LHS of `=`, incl. nested through array/object/default nesting). Consumed
     // by the shorthand-with-initializer TS1312/TS18004 selection in
@@ -1642,8 +1697,9 @@ class Checker(
      *  body var-decls register `decl.type ?: (init as? AsExpression)?.type`. Consulted
      *  by [isCalleeResolvable] (a lexically-declared callee resolves) and
      *  [resolveAssignTargetCtxTypeForImplicitAny] (assignment-RHS contextual typing).
-     *  Maintained ONLY inside checkImplicitAnyInStatements/-Expr/-ClassElement
-     *  (push/pop in try/finally at every function-like boundary). Declared before
+     *  Maintained ONLY by the spine (INV.4(d) walker 3 — [spineIanyPushScope] at
+     *  function-BODY edges, frame-popped at the body's leave; recorded at
+     *  declarator enters in [spineIanyVarDeclEnter]). Declared before
      *  `init` per the init-order trap (the walker runs during init). */
     private val implicitAnyScopes = ArrayDeque<HashMap<String, TypeNode?>>()
 
@@ -1668,7 +1724,7 @@ class Checker(
     private val implicitAnyScopeDestructures = ArrayDeque<HashMap<String, Pair<Expression, String>>>()
 
     /** Round 470: the ENCLOSING CLASS's members for the implicit-any walker — set
-     *  around [checkImplicitAnyInClassElement] (save/restore) so a `this.prop =
+     *  around each class element ([spineIanyClassElementEnter]'s frame) so a `this.prop =
      *  <arrow>` assignment target resolves its contextual type from the class
      *  property's annotation (`this.skipTrivia = skipTrivia || (pos => pos)` where
      *  `skipTrivia?: ((pos: number) => number) | undefined` — tsc services.ts
@@ -1676,7 +1732,7 @@ class Checker(
     private var implicitAnyEnclosingClassMembers: List<ClassElement>? = null
 
     /** Round 435c: the enclosing-namespace stack for the implicit-any walker —
-     *  pushed at [checkImplicitAnyInStatements]'s ModuleDeclaration branch (the
+     *  pushed at the spine's ModuleDeclaration body edge ([spineIanyEdgeEnter]; the
      *  namespace's merged binder symbol), consulted by
      *  [getTypeFromTypeNodeSafeNsAware] which bridges the innermost entry onto
      *  [inferenceNamespaceStack] ONLY around one type-node resolution (the
@@ -2176,9 +2232,7 @@ class Checker(
         // named `T`. Same display name, unrelated identities. (16.4da)
         pass("checkIdenticallyNamedTypeAssignment") { checkIdenticallyNamedTypeAssignment() }
         // 7. Check for implicit any parameters (TS7006)
-        if (options.noImplicitAny || options.strict) {
-            pass("checkImplicitAnyParameters") { checkImplicitAnyParameters() }
-        } else if (!options.strictExplicitlyFalse) {
+        if (!(options.noImplicitAny || options.strict) && !options.strictExplicitlyFalse) {
             // Pure-default mode (neither strict/noImplicitAny set, nor @strict:false):
             // the harness still fires TS7006 for the unannotated `var x = arrow/fn-expr`
             // shape. Narrow walker — see checkImplicitAnyDefaultVarFunctions docs.
@@ -16655,28 +16709,6 @@ class Checker(
     // -----------------------------------------------------------------------
 
     /**
-     * Check for function/method parameters without type annotations when
-     * noImplicitAny is enabled. Emits TS7006.
-     */
-    private fun checkImplicitAnyParameters() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            val source = result.sourceFile.text
-            val savedLocals = currentFileLocals
-            currentFileLocals = result.locals
-            implicitAnyScopes.clear() // per-file hygiene (every push pops via finally; belt-and-braces)
-            implicitAnyScopeInits.clear()
-            implicitAnyScopeDestructures.clear()
-            implicitAnyNsStack.clear()
-            try {
-                checkImplicitAnyInStatements(result.sourceFile.statements, source, fileName)
-            } finally {
-                currentFileLocals = savedLocals
-            }
-        }
-    }
-
-    /**
      * Narrow default-mode TS7006: an unannotated `var/let/const NAME = <arrow|function-expr>`
      * whose parameter has no type, no default, no contextual type → TS7006. This is the
      * ONE TS7006 sub-shape the TypeScript compiler-test harness fires by DEFAULT (no
@@ -17760,6 +17792,7 @@ class Checker(
                 spineTavSetup(result)
                 spineUncalledSetup(result)
                 spineArithSetup(result)
+                spineIanySetup(result)
                 spineUResAuditActive = unresolvedAuditEnabled && spineUResActive
                 try {
                     spineWalkFile(sf)
@@ -17769,6 +17802,7 @@ class Checker(
                     spineTavTeardown()
                     spineUncalledTeardown()
                     spineArithTeardown()
+                    spineIanyTeardown()
                 }
                 spineResolveDeferredIterationChecks()
             }
@@ -17844,6 +17878,8 @@ class Checker(
         // emissions for the arithmetic pass (must precede the kind dispatch —
         // a node's own frames nest inside its parent-edge frames).
         if (spineArithActive) spineArithEnterNode(node)
+        // INV.4(d) walker 3: the implicit-any pass (same edge-first discipline).
+        if (spineIanyActive) spineIanyEnterNode(node)
         when (node) {
             is Identifier -> spineTavIdentifier(node)
             is PropertyDeclaration -> {
@@ -17990,6 +18026,8 @@ class Checker(
         // INV.4(d) walker 2: leave-position emissions (left-spine chain roots,
         // per-declarator recordings) + this node's frame pops.
         if (spineArithActive) spineArithLeaveNode(node)
+        // INV.4(d) walker 3: the implicit-any pass's frame pops.
+        if (spineIanyActive) spineIanyLeaveNode(node)
     }
 
     // ── INV.4(c)(i) spine-maintained lexical scope state ───────────────────
@@ -25980,323 +26018,6 @@ class Checker(
         }
     }
 
-    private fun checkImplicitAnyInStatements(
-        statements: List<Statement>,
-        source: String,
-        fileName: String,
-        inAmbientContext: Boolean = false,
-        // M1.6(b): the ENCLOSING function's return-type ANNOTATION, threaded so
-        // `return { member: arrow }` contextually types the arrow's params from the
-        // annotation's matching member fn type (the factory idiom `function createX():
-        // TypeChecker { return { isUndefinedSymbol: symbol => … } }`). Reset at every
-        // function boundary to that function's own annotation; resolved LAZILY at the
-        // ReturnStatement (only for expr shapes that can consume a contextual type) so
-        // first-touch type-resolution order stays unchanged for other functions.
-        returnCtxAnnotation: TypeNode? = null,
-    ) {
-        for (stmt in statements) {
-            when (stmt) {
-                is FunctionDeclaration -> {
-                    // Check params for TS7006 for ALL function declarations (both regular and declare)
-                    // TypeScript emits TS7006 for untyped parameters in declare functions too
-                    checkParamsForImplicitAny(stmt.parameters, source, fileName)
-                    stmt.body?.let {
-                        pushImplicitAnyScope(stmt.parameters)
-                        try {
-                            checkImplicitAnyInStatements(it.statements, source, fileName, returnCtxAnnotation = stmt.type)
-                        } finally {
-                            popImplicitAnyScope()
-                        }
-                    }
-                    // TS7010 for bodyless functions is now in checkBodylessFunctionReturnTypes (unconditional)
-                }
-                is ClassDeclaration -> {
-                    val isAmbientClass = ModifierFlag.Declare in stmt.modifiers || inAmbientContext
-                    for (member in stmt.members) {
-                        if (isAmbientClass) {
-                            when (member) {
-                                is MethodDeclaration -> {
-                                    // Public method params in ambient classes get TS7006
-                                    // Private methods: no TS7006, TypeScript doesn't check them
-                                    if (ModifierFlag.Private !in member.modifiers) {
-                                        checkParamsForImplicitAny(member.parameters, source, fileName)
-                                    }
-                                }
-                                is PropertyDeclaration -> {
-                                    // TS7008: Member without type annotation in ambient class (public only)
-                                    if (member.type == null && member.initializer == null
-                                        && ModifierFlag.Private !in member.modifiers) {
-                                        val name = member.name
-                                        if (name is Identifier && name.text.isNotEmpty()) {
-                                            val start = name.pos
-                                            val (line, character) = getLineAndCharacterOfPosition(source, start)
-                                            diagnostics.add(Diagnostic(
-                                                message = "Member '${name.text}' implicitly has an 'any' type.",
-                                                category = DiagnosticCategory.Error,
-                                                code = 7008,
-                                                fileName = fileName,
-                                                line = line,
-                                                character = character,
-                                                start = start,
-                                                length = name.text.length,
-                                            ))
-                                        }
-                                    }
-                                    // Property with function type gets TS7006 for both public AND private
-                                    // e.g. `pub_f10: (x) => string` and `priv_f10: (x) => string`
-                                    checkImplicitAnyInTypeAnnotation(member.type, source, fileName)
-                                }
-                                is Constructor -> {
-                                    // Public (or unqualified) ambient constructors get TS7006 for untyped params.
-                                    // Private constructors are skipped (TypeScript doesn't check them).
-                                    if (ModifierFlag.Private !in member.modifiers) {
-                                        checkParamsForImplicitAny(member.parameters, source, fileName)
-                                    }
-                                }
-                                else -> {}
-                            }
-                        } else {
-                            checkImplicitAnyInClassElement(member, source, fileName, stmt.members)
-                        }
-                    }
-                }
-                is InterfaceDeclaration -> {
-                    // Interface method signatures (and call signatures with empty name) get TS7006
-                    // for parameters without type annotations. All methods in interfaces are checked
-                    // (interfaces are implicitly ambient). TYPE-position: type-like param names get TS7051.
-                    for (member in stmt.members) {
-                        when (member) {
-                            is MethodDeclaration -> checkParamsForImplicitAny(member.parameters, source, fileName, typePosition = true)
-                            is PropertyDeclaration -> {
-                                if (member.type == null && member.initializer == null) {
-                                    // TS7008: Member implicitly has an 'any' type
-                                    val name = member.name
-                                    if (name is Identifier && name.text.isNotEmpty()) {
-                                        val start = name.pos
-                                        val (line, character) = getLineAndCharacterOfPosition(source, start)
-                                        diagnostics.add(Diagnostic(
-                                            message = "Member '${name.text}' implicitly has an 'any' type.",
-                                            category = DiagnosticCategory.Error,
-                                            code = 7008,
-                                            fileName = fileName,
-                                            line = line,
-                                            character = character,
-                                            start = start,
-                                            length = name.text.length,
-                                        ))
-                                    }
-                                }
-                                // Property with function type annotation: `f10: (x) => string`
-                                // Parameters in function type annotations also get TS7006
-                                checkImplicitAnyInTypeAnnotation(member.type, source, fileName)
-                            }
-                            else -> {}
-                        }
-                    }
-                }
-                is VariableStatement -> {
-                    for (decl in stmt.declarationList.declarations) {
-                        // M3.2 (round 431): register the local in the innermost implicit-any
-                        // scope — annotation, or an `as T` cast's type (`const host = x as
-                        // WatchCompilerHost` types host as T), or null (declared UNTYPED —
-                        // an assignment to it must keep TS7006 firing). Function-level
-                        // granularity: only inside a function-like (the stack is empty at
-                        // file level, where the binder-symbol fallback resolves).
-                        implicitAnyScopes.lastOrNull()?.let { scope ->
-                            val dn = decl.name
-                            if (dn is Identifier && dn.text.isNotEmpty()) {
-                                scope[dn.text] = decl.type
-                                    ?: (decl.initializer as? AsExpression)?.type
-                                    // M3.2 (round 431b): a call-initialized local types as
-                                    // the callee's declared RETURN annotation (`const
-                                    // builderProgram = createRedirectedBuilderProgram(…)`)
-                                    // — AST-only at registration (the TypeNode resolves
-                                    // lazily, only if an assignment consumes it).
-                                    ?: calleeReturnAnnotationForImplicitAny(decl.initializer)
-                                // Round 435c: an annotation-less initialized local also
-                                // records its INITIALIZER (a `name = arrow` assignment
-                                // derives context from the declared-by-initializer type —
-                                // resolved lazily in initializerCtxTypeForImplicitAny).
-                                // A local with NEITHER stays the evolving-any that keeps
-                                // TS7006 firing (the pinned uncalledFunctionChecks rule).
-                                if (decl.type == null) decl.initializer?.let {
-                                    implicitAnyScopeInits.lastOrNull()?.put(dn.text, it)
-                                }
-                            } else {
-                                collectBindingNamesForImplicitAny(dn, scope)
-                                // Round 464: record each TOP-LEVEL object-destructured
-                                // element's source + property name so an assignment
-                                // target rooted at the element resolves its contextual
-                                // type from the source's declared member (nested
-                                // patterns / rest elements stay unrecorded — bounded).
-                                val dInit = decl.initializer
-                                if (dn is ObjectBindingPattern && dInit != null) {
-                                    implicitAnyScopeDestructures.lastOrNull()?.let { dmap ->
-                                        for (el in dn.elements) {
-                                            val inner = el.name as? Identifier ?: continue
-                                            if (inner.text.isEmpty() || el.dotDotDotToken) continue
-                                            val prop = (el.propertyName as? Identifier)?.text ?: inner.text
-                                            dmap[inner.text] = dInit to prop
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        // TS7005: Variable implicitly has an 'any' type (ambient/declare declarations only)
-                        if (decl.type == null && decl.initializer == null
-                            && (ModifierFlag.Declare in stmt.modifiers || inAmbientContext)) {
-                            val name = decl.name
-                            if (name is Identifier && name.text.isNotEmpty()) {
-                                val start = name.pos
-                                val (line, character) = getLineAndCharacterOfPosition(source, start)
-                                diagnostics.add(Diagnostic(
-                                    message = "Variable '${name.text}' implicitly has an 'any' type.",
-                                    category = DiagnosticCategory.Error,
-                                    code = 7005,
-                                    fileName = fileName,
-                                    line = line,
-                                    character = character,
-                                    start = start,
-                                    length = name.text.length,
-                                ))
-                            }
-                        }
-                        // Check function type annotation: `var f: (x) => string` → TS7006 for `x`
-                        checkImplicitAnyInTypeAnnotation(decl.type, source, fileName)
-                        val declName = decl.name
-                        val declInit = decl.initializer
-                        if (declName is ObjectBindingPattern && declInit is ObjectLiteralExpression) {
-                            // Destructuring with a default value that is a typed function:
-                            // `const { fn1 = (x: number) => 0 } = { fn1: x => x + 1 }`.
-                            // The default supplies a contextual signature for the matched
-                            // RHS property — walk those properties with ctx=true so the
-                            // inner arrow's params escape TS7006. Other properties walk
-                            // normally with ctx=false (matches TypeScript's intra-pattern
-                            // reference semantics — e.g. `fn2 = fn1` resolves to any).
-                            val typedDefaults = mutableSetOf<String>()
-                            for (be in declName.elements) {
-                                val beInit = be.initializer ?: continue
-                                if (!isTypedFunctionExpr(beInit)) continue
-                                val key = ((be.propertyName as? Identifier)?.text)
-                                    ?: ((be.name as? Identifier)?.text)
-                                    ?: continue
-                                typedDefaults.add(key)
-                            }
-                            for (prop in declInit.properties) {
-                                if (prop is PropertyAssignment) {
-                                    val propName = (prop.name as? Identifier)?.text
-                                    val ctx = propName != null && propName in typedDefaults
-                                    checkImplicitAnyInExpr(prop.initializer, source, fileName, contextuallyTyped = ctx)
-                                }
-                            }
-                        } else {
-                            // For Identifier-named decls with a type annotation and an
-                            // ObjectLiteralExpression initializer, resolve the annotation
-                            // type and propagate it into the literal so nested arrow values
-                            // whose slot is a union-with-primitive-and-function can suppress
-                            // TS7006 (B6.1 — `contextualOverloadListFromUnionWithPrimitive*`).
-                            // Round 466: with a nested-interface retry for a bare `X`/`X[]`
-                            // annotation naming a B83.5-unbound function-body-local interface
-                            // (inferFromUsage.ts's `const priorities: Priority[]`).
-                            val annotatedType = decl.type?.let { resolveImplicitAnyCtxAnnotation(it) }
-                            // When the var decl has a type annotation AND the initializer
-                            // is an arrow/function expression, the params are contextually
-                            // typed by the annotation. Suppress TS7006 by setting
-                            // contextuallyTyped=true. The annotation node directly being a
-                            // FunctionType / ConstructorType / IntersectionType containing
-                            // function types is the common shape. Conservative: any
-                            // annotation when the initializer is an arrow/function.
-                            val arrowInit = declInit is ArrowFunction || declInit is FunctionExpression
-                            // B437c: in a JS file, a leading JSDoc whose @param tags document
-                            // EVERY param of the arrow/fn-expr initializer types those params
-                            // (tsc never emits TS7006 for a JSDoc-documented param). Suppress
-                            // the FP TS7006 for that shape (all-params-documented gate keeps
-                            // partially-documented arrows reporting the undocumented ones).
-                            val jsDocParamCtx = arrowInit && isJsLikeFileName(fileName) && run {
-                                val ip = when (declInit) {
-                                    is ArrowFunction -> declInit.parameters
-                                    is FunctionExpression -> declInit.parameters
-                                }
-                                if (ip.isEmpty()) return@run false
-                                val documented = jsDocDocumentedParamNames(stmt.leadingComments) +
-                                    jsDocDocumentedParamNames(decl.leadingComments)
-                                if (documented.isEmpty()) return@run false
-                                ip.all { p -> p.type != null || (p.name as? Identifier)?.text?.let { it in documented } == true }
-                            }
-                            val ctxFn = (arrowInit && decl.type != null) || jsDocParamCtx
-                            // B224: a bare rest-free FunctionType annotation contextually
-                            // types only its OWN arity worth of params — `const f7: () =>
-                            // any = (x?) => 0` leaves `x` un-contextually-typed → TS7006.
-                            val annNode = decl.type
-                            if (arrowInit && annNode is FunctionType
-                                && annNode.parameters.none { it.dotDotDotToken }) {
-                                val ctxArity = annNode.parameters.count {
-                                    !it.isCommentPlaceholder && (it.name as? Identifier)?.text != "this"
-                                }
-                                val initParams = when (declInit) {
-                                    is ArrowFunction -> declInit.parameters
-                                    is FunctionExpression -> declInit.parameters
-                                }
-                                emitTs7006BeyondCtxArity(initParams, ctxArity, source, fileName)
-                            }
-                            declInit?.let {
-                                checkImplicitAnyInExpr(it, source, fileName, contextuallyTyped = ctxFn, contextualType = annotatedType,
-                                    ctxAnnotation = decl.type)
-                            }
-                        }
-                    }
-                }
-                is ExpressionStatement -> {
-                    checkImplicitAnyInExpr(stmt.expression, source, fileName)
-                }
-                is ModuleDeclaration -> {
-                    val childAmbient = inAmbientContext || ModifierFlag.Declare in stmt.modifiers
-                    // Round 435c: track the enclosing namespace so annotation resolution
-                    // inside the body can see namespace-local type names (bridged one call
-                    // at a time via getTypeFromTypeNodeSafeNsAware — never a whole-walk
-                    // inferenceNamespaceStack push, per the TS2576 gotcha). The dotted-name
-                    // binder rule records the INNERMOST segment's merged symbol on the node.
-                    val nsSym = fileResults[fileName]?.nodeToSymbol?.get(nodeKey(stmt))?.takeIf {
-                        it.flags.hasAny(SymbolFlags.Module or SymbolFlags.NamespaceModule or SymbolFlags.ValueModule)
-                    }
-                    if (nsSym != null) implicitAnyNsStack.addLast(nsSym)
-                    try {
-                        when (val body = stmt.body) {
-                            is ModuleBlock -> checkImplicitAnyInStatements(body.statements, source, fileName, childAmbient)
-                            is ModuleDeclaration -> checkImplicitAnyInStatements(listOf(body), source, fileName, childAmbient)
-                            else -> {}
-                        }
-                    } finally {
-                        if (nsSym != null) implicitAnyNsStack.removeLast()
-                    }
-                }
-                is Block -> checkImplicitAnyInStatements(stmt.statements, source, fileName, returnCtxAnnotation = returnCtxAnnotation)
-                is IfStatement -> {
-                    checkImplicitAnyInStatements(listOf(stmt.thenStatement), source, fileName, returnCtxAnnotation = returnCtxAnnotation)
-                    stmt.elseStatement?.let { checkImplicitAnyInStatements(listOf(it), source, fileName, returnCtxAnnotation = returnCtxAnnotation) }
-                }
-                is ForStatement -> {
-                    checkImplicitAnyInStatements(listOf(stmt.statement), source, fileName, returnCtxAnnotation = returnCtxAnnotation)
-                }
-                is ReturnStatement -> {
-                    stmt.expression?.let { retExpr ->
-                        // M1.6(b): resolve the enclosing return annotation only for expr
-                        // shapes that can consume a contextual type (bounds first-touch
-                        // resolution-order changes to functions that return such shapes).
-                        val retCtx = if (returnCtxAnnotation != null && (
-                                retExpr is ObjectLiteralExpression || retExpr is ArrowFunction ||
-                                retExpr is FunctionExpression || retExpr is ParenthesizedExpression ||
-                                retExpr is ConditionalExpression))
-                            getTypeFromTypeNodeSafeNsAware(returnCtxAnnotation) else null
-                        checkImplicitAnyInExpr(retExpr, source, fileName, contextualType = retCtx,
-                            ctxAnnotation = returnCtxAnnotation)
-                    }
-                }
-                else -> {}
-            }
-        }
-    }
-
     /**
      * Check function types in type annotations for implicit-any parameters.
      * e.g. `f10: (x) => string` — the `x` has no type annotation → TS7006.
@@ -26354,144 +26075,6 @@ class Checker(
                             ))
                         }
                         checkParamsForImplicitAny(member.parameters, source, fileName, typePosition = true)
-                    }
-                }
-            }
-            else -> {}
-        }
-    }
-
-    private fun checkImplicitAnyInClassElement(
-        element: ClassElement,
-        source: String,
-        fileName: String,
-        siblings: List<ClassElement> = emptyList(),
-    ) {
-        val savedEnclosingClass = implicitAnyEnclosingClassMembers
-        implicitAnyEnclosingClassMembers = siblings.ifEmpty { savedEnclosingClass }
-        try {
-            checkImplicitAnyInClassElementCore(element, source, fileName, siblings)
-        } finally {
-            implicitAnyEnclosingClassMembers = savedEnclosingClass
-        }
-    }
-
-    private fun checkImplicitAnyInClassElementCore(
-        element: ClassElement,
-        source: String,
-        fileName: String,
-        siblings: List<ClassElement>,
-    ) {
-        when (element) {
-            is MethodDeclaration -> {
-                checkParamsForImplicitAny(element.parameters, source, fileName)
-                element.body?.let {
-                    pushImplicitAnyScope(element.parameters)
-                    try {
-                        checkImplicitAnyInStatements(it.statements, source, fileName, returnCtxAnnotation = element.type)
-                    } finally {
-                        popImplicitAnyScope()
-                    }
-                }
-            }
-            is Constructor -> {
-                checkParamsForImplicitAny(element.parameters, source, fileName)
-                element.body?.let {
-                    pushImplicitAnyScope(element.parameters)
-                    try {
-                        checkImplicitAnyInStatements(it.statements, source, fileName)
-                    } finally {
-                        popImplicitAnyScope()
-                    }
-                }
-            }
-            is GetAccessor -> {
-                element.body?.let {
-                    pushImplicitAnyScope(element.parameters)
-                    try {
-                        checkImplicitAnyInStatements(it.statements, source, fileName, returnCtxAnnotation = element.type)
-                    } finally {
-                        popImplicitAnyScope()
-                    }
-                }
-            }
-            is SetAccessor -> {
-                // Setter value parameters are contextually typed from a sibling getter
-                // (its declared OR inferred return type). When ANY sibling getter with
-                // the same name exists, suppress TS7032/TS7006. Otherwise emit BOTH
-                // TS7032 (on the property name) AND TS7006 (on the param) under
-                // noImplicitAny. Applies to both abstract and concrete setters, as
-                // well as bodyless overload signatures.
-                val nameNode = element.name as? Identifier
-                val firstParam = element.parameters.firstOrNull()
-                if (nameNode != null && firstParam != null && firstParam.type == null) {
-                    val hasSiblingGetter = siblings.filterIsInstance<GetAccessor>().any {
-                        (it.name as? Identifier)?.text == nameNode.text
-                    }
-                    if (!hasSiblingGetter && nameNode.text.isNotEmpty()) {
-                        val (line, character) = getLineAndCharacterOfPosition(source, nameNode.pos)
-                        diagnostics.add(Diagnostic(
-                            message = "Property '${nameNode.text}' implicitly has type 'any', because its set accessor lacks a parameter type annotation.",
-                            category = DiagnosticCategory.Error,
-                            code = 7032,
-                            fileName = fileName,
-                            line = line, character = character,
-                            start = nameNode.pos, length = nameNode.text.length,
-                        ))
-                        checkParamsForImplicitAny(element.parameters, source, fileName)
-                    }
-                }
-                element.body?.let {
-                    pushImplicitAnyScope(element.parameters)
-                    try {
-                        checkImplicitAnyInStatements(it.statements, source, fileName)
-                    } finally {
-                        popImplicitAnyScope()
-                    }
-                }
-            }
-            is PropertyDeclaration -> {
-                // Check function type annotation: `pub_f10: (x) => string` → TS7006 for `x`
-                checkImplicitAnyInTypeAnnotation(element.type, source, fileName)
-                element.initializer?.let { init ->
-                    // classPropertyErrorOnNameOnly: when the property has a type annotation AND
-                    // the initializer is an arrow/function expression, the params are
-                    // contextually typed by the annotation (mirrors the var-decl path's `ctxFn`
-                    // at the VariableStatement branch). Without this, `prop: FnType = function(x){}`
-                    // FPs TS7006 on `x` even though `x` is contextually typed.
-                    val arrowInit = init is ArrowFunction || init is FunctionExpression
-                    val ctxFn = arrowInit && element.type != null
-                    val annotatedType = element.type?.let { getTypeFromTypeNodeSafe(it) }
-                    checkImplicitAnyInExpr(init, source, fileName, contextuallyTyped = ctxFn, contextualType = annotatedType)
-                }
-                // TS7008: Static property without type annotation or initializer has implicit any.
-                // Only static — instance properties may be assigned in the constructor, so we can't
-                // flag them without flow analysis. Private is also skipped (TypeScript does not
-                // emit TS7008 for private members). The caller gates on noImplicitAny.
-                if (element.type == null && element.initializer == null
-                    && ModifierFlag.Static in element.modifiers
-                    && ModifierFlag.Private !in element.modifiers
-                    && !element.exclamationToken) {
-                    val name = element.name
-                    if (name is Identifier && name.text.isNotEmpty()) {
-                        // Skip if a static initializer block assigns to this property via `this.<name> = ...`
-                        // (flow analysis approximation — any assignment suffices).
-                        val assignedInStaticBlock = siblings.any { sib ->
-                            sib is ClassStaticBlockDeclaration &&
-                                blockAssignsToThisProperty(sib.body.statements, name.text)
-                        }
-                        if (!assignedInStaticBlock) {
-                            val start = name.pos
-                            val (line, character) = getLineAndCharacterOfPosition(source, start)
-                            diagnostics.add(Diagnostic(
-                                message = "Member '${name.text}' implicitly has an 'any' type.",
-                                category = DiagnosticCategory.Error,
-                                code = 7008,
-                                fileName = fileName,
-                                line = line, character = character,
-                                start = start, length = name.text.length,
-                            ))
-                        }
                     }
                 }
             }
@@ -27172,300 +26755,6 @@ class Checker(
             if (s.parameters.size > max) max = s.parameters.size
         }
         return max
-    }
-
-    private fun checkImplicitAnyInExpr(
-        expr: Expression,
-        source: String,
-        fileName: String,
-        contextuallyTyped: Boolean = false,
-        contextualType: Type? = null,
-        // M1.6(b): true when [contextualType] is a member type reached THROUGH an
-        // object literal whose own contextual type was a UNION containing a
-        // non-object constituent — tsc does not discriminate such unions for member
-        // contextual typing (contextualOverloadListFromUnionWithPrimitiveNoImplicitAny
-        // pins TS7006 on `normalize: match => …` under `Rule = string | FullRule`),
-        // so the callable-arity suppression must not apply; the pre-existing
-        // union-with-primitive overload-list rule (unionHasFunctionAndPrimitive)
-        // still does.
-        ctxViaUnionWithPrimitive: Boolean = false,
-        // M1.6(a): the contextual type's ANNOTATION node (the var-decl annotation or
-        // the enclosing return annotation) — consulted only for COMPUTED-key members
-        // of an object literal whose annotation unaliases to a mapped type with a
-        // fn-typed value (`{ [SyntaxKind.X]: function (node, …) {…} }` against
-        // `VisitEachChildTable`); the engine cannot resolve those member sets.
-        ctxAnnotation: TypeNode? = null,
-        // M3.2 (round 431): [contextualType] came from an ASSIGNMENT TARGET — apply the
-        // single-applicable-signature rule (a 2-sig LHS gives NO ctx: the pinned
-        // contextualTypingWithGenericAndNonGenericSignature FIRE) instead of the
-        // permissive max-arity rule the annotation/member paths use.
-        ctxViaAssignment: Boolean = false,
-    ) {
-        when (expr) {
-            is ArrowFunction -> {
-                val unionSuppress = contextualType != null && unionHasFunctionAndPrimitive(contextualType)
-                if (!contextuallyTyped && !unionSuppress) {
-                    // M1.6(b): a callable contextual type supplies param types up to
-                    // its arity — TS7006 only beyond it.
-                    val ctxArity = when {
-                        ctxViaUnionWithPrimitive -> null
-                        ctxViaAssignment -> singleApplicableSigArity(contextualType, requiredParamPrefixCount(expr.parameters))
-                        else -> contextualCallableArity(contextualType)
-                    }
-                    if (ctxArity != null) {
-                        emitTs7006BeyondCtxArity(expr.parameters, ctxArity, source, fileName)
-                    } else {
-                        checkParamsForImplicitAny(expr.parameters, source, fileName)
-                    }
-                }
-                pushImplicitAnyScope(expr.parameters)
-                try {
-                    when (val body = expr.body) {
-                        is Block -> checkImplicitAnyInStatements(body.statements, source, fileName, returnCtxAnnotation = expr.type)
-                        // Round 472: an EXPRESSION body inherits the contextual
-                        // signature's RETURN type — a builder chain `overload:
-                        // overloads => ({ bind: binder => ({ … }) })` against
-                        // `OverloadBuilder` contextually types each nested returned
-                        // objlit's fn members, so `binder`/`deprecations` are not
-                        // implicit any (tsc deprecations.ts buildOverload).
-                        is Expression -> checkImplicitAnyInExpr(
-                            body, source, fileName,
-                            contextualType = contextualSigReturnTypeForCtx(contextualType),
-                        )
-                        else -> {}
-                    }
-                } finally {
-                    popImplicitAnyScope()
-                }
-            }
-            is FunctionExpression -> {
-                val unionSuppress = contextualType != null && unionHasFunctionAndPrimitive(contextualType)
-                if (!contextuallyTyped && !unionSuppress) {
-                    val ctxArity = when {
-                        ctxViaUnionWithPrimitive -> null
-                        ctxViaAssignment -> singleApplicableSigArity(contextualType, requiredParamPrefixCount(expr.parameters))
-                        else -> contextualCallableArity(contextualType)
-                    }
-                    if (ctxArity != null) {
-                        emitTs7006BeyondCtxArity(expr.parameters, ctxArity, source, fileName)
-                    } else {
-                        checkParamsForImplicitAny(expr.parameters, source, fileName)
-                    }
-                }
-                pushImplicitAnyScope(expr.parameters)
-                try {
-                    checkImplicitAnyInStatements(expr.body.statements, source, fileName, returnCtxAnnotation = expr.type)
-                } finally {
-                    popImplicitAnyScope()
-                }
-            }
-            is ClassExpression -> {
-                for (member in expr.members) {
-                    checkImplicitAnyInClassElement(member, source, fileName)
-                }
-            }
-            is ObjectLiteralExpression -> {
-                // M1.6(b): members looked up through a union-with-non-object literal
-                // context get NO callable-arity suppression (see the param doc).
-                // Round 435c: NULLISH constituents don't count — tsc discriminates
-                // undefined/null out of a contextual union (`CachedDirectoryStructureHost
-                // | undefined` return annotations still contextually type the literal's
-                // member arrows — watchUtilities.ts readFile); the pinned FIRING case
-                // (`Rule = string | FullRule`) has a REAL primitive alternative.
-                val viaUnionWithPrimitive = contextualType is Type.Union &&
-                    contextualType.types.any {
-                        it !is Type.Object && !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)
-                    }
-                // M1.6(a): computed-key members against a mapped-table annotation get
-                // their contextual arity from the mapped VALUE's fn-type node (lazy —
-                // resolved on the first computed-key member only).
-                var mappedValueArity: Int? = null
-                var mappedValueArityComputed = false
-                fun computedKeyCtxArity(): Int? {
-                    if (!mappedValueArityComputed) {
-                        mappedValueArityComputed = true
-                        mappedValueArity = if (ctxAnnotation != null) mappedAnnotationValueFnArity(ctxAnnotation) else null
-                    }
-                    return mappedValueArity
-                }
-                for (prop in expr.properties) {
-                    when (prop) {
-                        is MethodDeclaration -> {
-                            if (!contextuallyTyped) {
-                                // M1.6(b): an object-literal METHOD is contextually typed
-                                // by the matching member's fn type, same as an arrow value.
-                                val mName = (prop.name as? Identifier)?.text
-                                val mType = if (mName != null && contextualType != null) {
-                                    lookupPropertyTypeForCtx(contextualType, mName)
-                                } else null
-                                val mArity = if (viaUnionWithPrimitive) null else
-                                    contextualCallableArity(mType)
-                                        ?: (if (prop.name is ComputedPropertyName) computedKeyCtxArity() else null)
-                                if (mArity != null) {
-                                    emitTs7006BeyondCtxArity(prop.parameters, mArity, source, fileName)
-                                } else {
-                                    checkParamsForImplicitAny(prop.parameters, source, fileName)
-                                }
-                            }
-                            prop.body?.let {
-                                pushImplicitAnyScope(prop.parameters)
-                                try {
-                                    checkImplicitAnyInStatements(it.statements, source, fileName, returnCtxAnnotation = prop.type)
-                                } finally {
-                                    popImplicitAnyScope()
-                                }
-                            }
-                        }
-                        is PropertyAssignment -> {
-                            // Propagate contextual typing to property initializers.
-                            // Look up the property's type in the parent contextual type so that
-                            // arrow values whose slot is a union-with-primitive-and-function can
-                            // suppress TS7006 (TypeScript's "overload list from union" rule).
-                            val propName = (prop.name as? Identifier)?.text
-                            val propType = if (propName != null && contextualType != null) {
-                                lookupPropertyTypeForCtx(contextualType, propName)
-                            } else null
-                            // M1.6(a): a COMPUTED-key fn-expr/arrow value of a mapped-table
-                            // literal — emit only beyond the mapped value's arity, then walk
-                            // the fn body with its own params marked contextually typed.
-                            val initExpr = prop.initializer
-                            if (propName == null && prop.name is ComputedPropertyName &&
-                                !contextuallyTyped && !viaUnionWithPrimitive &&
-                                (initExpr is ArrowFunction || initExpr is FunctionExpression)) {
-                                val cArity = computedKeyCtxArity()
-                                if (cArity != null) {
-                                    val ps = when (initExpr) {
-                                        is ArrowFunction -> initExpr.parameters
-                                        is FunctionExpression -> initExpr.parameters
-                                    }
-                                    emitTs7006BeyondCtxArity(ps, cArity, source, fileName)
-                                    checkImplicitAnyInExpr(initExpr, source, fileName, contextuallyTyped = true)
-                                    continue
-                                }
-                            }
-                            checkImplicitAnyInExpr(prop.initializer, source, fileName, contextuallyTyped, propType,
-                                ctxViaUnionWithPrimitive = viaUnionWithPrimitive)
-                        }
-                        else -> {}
-                    }
-                }
-            }
-            is CallExpression -> {
-                // Args get contextual typing from parameter types — BUT only if the
-                // callee actually resolves. A call to an unresolved identifier has
-                // no contextual signature, so callback params should still get TS7006.
-                val ctxProp = isCalleeResolvable(expr.expression)
-                for ((argIndex, arg) in expr.arguments.withIndex()) {
-                    // B224: an arrow/fn-expr arg whose contextual signature (from the
-                    // callee param's FunctionType or own-TP constraint) has FEWER params
-                    // leaves the excess params un-contextually-typed → TS7006.
-                    if (arg is ArrowFunction || arg is FunctionExpression) {
-                        val ctxArity = contextualFnArityForCallArg(expr.expression, argIndex)
-                        if (ctxArity != null) {
-                            val argParams = when (arg) {
-                                is ArrowFunction -> arg.parameters
-                                is FunctionExpression -> arg.parameters
-                            }
-                            emitTs7006BeyondCtxArity(argParams, ctxArity, source, fileName)
-                        }
-                    }
-                    checkImplicitAnyInExpr(arg, source, fileName, contextuallyTyped = ctxProp)
-                }
-            }
-            is NewExpression -> {
-                // Same as CallExpression — constructor args get contextual typing
-                val ctxProp = isCalleeResolvable(expr.expression)
-                for (arg in (expr.arguments ?: emptyList())) {
-                    checkImplicitAnyInExpr(arg, source, fileName, contextuallyTyped = ctxProp)
-                }
-            }
-            is BinaryExpression -> {
-                // M3.2 (round 431): contextual typing flows through binary operators the
-                // way tsc's getContextualTypeForBinaryOperand does — an assignment's RHS
-                // is contextually typed by the LHS's declared type; `||`/`??` pass the
-                // incoming context to BOTH operands; `&&` and comma to the RIGHT only
-                // (contextuallyTypeLogicalAnd03/contextuallyTypeCommaOperator03 pin the
-                // left FIRING). Left-spine iteration preserved (binderBinaryExpressionStress).
-                var current: Expression = expr
-                var leftTyped = contextuallyTyped
-                var leftType = contextualType
-                var leftAssign = ctxViaAssignment
-                while (current is BinaryExpression) {
-                    when (current.operator) {
-                        SyntaxKind.Equals, SyntaxKind.BarBarEquals,
-                        SyntaxKind.AmpersandAmpersandEquals, SyntaxKind.QuestionQuestionEquals -> {
-                            // Resolve the LHS type ONLY when the RHS can consume a fn
-                            // context (bounds first-touch resolution-order changes and
-                            // per-assignment cost to the shapes that need it).
-                            implicitAnyCtxUnknowable = false
-                            val lhsT = if (rhsCanConsumeFnCtx(current.right))
-                                resolveAssignTargetCtxTypeForImplicitAny(current.left) else null
-                            if (implicitAnyCtxUnknowable) {
-                                // Round 474: the target member's annotation names a
-                                // conflated alias-shadowed interface — tsc HAS a
-                                // contextual type here; treat the RHS as contextually
-                                // typed rather than propagate the wrong resolution.
-                                implicitAnyCtxUnknowable = false
-                                checkImplicitAnyInExpr(current.right, source, fileName,
-                                    contextuallyTyped = true)
-                            } else {
-                                checkImplicitAnyInExpr(current.right, source, fileName,
-                                    contextualType = lhsT, ctxViaAssignment = lhsT != null)
-                            }
-                            leftTyped = false; leftType = null; leftAssign = false
-                        }
-                        SyntaxKind.BarBar, SyntaxKind.QuestionQuestion -> {
-                            checkImplicitAnyInExpr(current.right, source, fileName, leftTyped, leftType,
-                                ctxViaUnionWithPrimitive, ctxViaAssignment = leftAssign)
-                            // left operand keeps inheriting the context
-                        }
-                        SyntaxKind.AmpersandAmpersand, SyntaxKind.Comma -> {
-                            checkImplicitAnyInExpr(current.right, source, fileName, leftTyped, leftType,
-                                ctxViaUnionWithPrimitive, ctxViaAssignment = leftAssign)
-                            leftTyped = false; leftType = null; leftAssign = false
-                        }
-                        else -> {
-                            checkImplicitAnyInExpr(current.right, source, fileName)
-                            leftTyped = false; leftType = null; leftAssign = false
-                        }
-                    }
-                    current = current.left
-                }
-                checkImplicitAnyInExpr(current, source, fileName, leftTyped, leftType,
-                    ctxViaUnionWithPrimitive, ctxViaAssignment = leftAssign)
-            }
-            is ParenthesizedExpression -> checkImplicitAnyInExpr(expr.expression, source, fileName, contextuallyTyped, contextualType, ctxViaUnionWithPrimitive, ctxViaAssignment = ctxViaAssignment)
-            is ConditionalExpression -> {
-                checkImplicitAnyInExpr(expr.whenTrue, source, fileName, contextuallyTyped, contextualType, ctxViaUnionWithPrimitive, ctxViaAssignment = ctxViaAssignment)
-                checkImplicitAnyInExpr(expr.whenFalse, source, fileName, contextuallyTyped, contextualType, ctxViaUnionWithPrimitive, ctxViaAssignment = ctxViaAssignment)
-            }
-            is ArrayLiteralExpression -> {
-                // Propagate contextual typing through arrays ONLY for non-arrow elements
-                // (e.g. ObjectLiteralExpression whose properties have function-typed values).
-                // Bare arrows directly in arrays stay un-propagated because TypeScript itself
-                // cannot resolve their param types when the array's contextual type is a
-                // union (`Record<string,F1> | Array<F2>` — see contextualSignatureInArrayElement*).
-                // Round 466: an OBJECT-LITERAL element receives the array's ELEMENT type as
-                // its contextual type, so its fn-typed member slots suppress TS7006
-                // (`const priorities: Priority[] = [{ high: t => …, low: t => … }]`).
-                // A UNION contextual type yields NO element type here (arrayRefElement
-                // is Array/ReadonlyArray-Reference-only), so the pinned
-                // contextualSignatureInArrayElement* rule (arrows in union-typed
-                // arrays keep TS7006) is preserved; an arrow element under a DIRECT
-                // `Cb[]` annotation is suppressed via the callable-arity path.
-                val elemCtx = contextualType?.let { arrayRefElement(it) }
-                    ?.takeIf { it !== anyType && it !== errorType }
-                expr.elements.forEach { el ->
-                    val ctx = if (el is ArrowFunction || el is FunctionExpression) false else contextuallyTyped
-                    checkImplicitAnyInExpr(
-                        el, source, fileName, ctx,
-                        contextualType = elemCtx,
-                        ctxViaUnionWithPrimitive = ctxViaUnionWithPrimitive,
-                    )
-                }
-            }
-            else -> {}
-        }
     }
 
     /**
@@ -48231,6 +47520,889 @@ interface DataView {
                 }
             }
         }
+    }
+
+    // ── INV.4(d) walker 3: checkImplicitAnyParameters on the spine ──────────
+    // The per-file pass driver and the recursive checkImplicitAnyInStatements/
+    // -InClassElement(Core)/-InExpr walkers are DELETED. Reach is a memoized
+    // ancestor-chain classifier over [spineIanyEdge] (the legacy dispatch arms
+    // verbatim — while/do/switch/try/for-in/for-of bodies, for-headers, call
+    // CALLEES, conditional CONDITIONS, as-casts, object-literal accessors and
+    // class static blocks were never walked). The downward contextual-typing
+    // state is PUSH-maintained as [SpineIanyCtx] frames at exactly the edges
+    // the legacy recursion passed arguments over; the implicit-any scope
+    // stacks, ns stack, and enclosing-class-members field are the same
+    // checker fields, pushed/popped at the same tree positions. No ambient
+    // install is needed: the pass never consulted the shared walk fields
+    // (currentLocalTypes etc.) deliberately, and the slot-move A/B proved the
+    // spine slot's ambient state is behavior-identical for its typing calls.
+
+    /** Per-file activation + state, called from [checkSpine]'s loop. */
+    private fun spineIanySetup(result: BinderResult) {
+        spineIanyActive = options.noImplicitAny || options.strict
+        if (!spineIanyActive) {
+            spineIanyReachMemo = ByteArray(0)
+            return
+        }
+        spineIanyReachMemo = ByteArray(result.sourceFile.nodeCount)
+        // The legacy per-file hygiene (every push pops via frames; belt-and-braces).
+        implicitAnyScopes.clear()
+        implicitAnyScopeInits.clear()
+        implicitAnyScopeDestructures.clear()
+        implicitAnyNsStack.clear()
+        spineIanyCtx = null
+        spineIanyFrames.clear()
+    }
+
+    private fun spineIanyTeardown() {
+        spineIanyActive = false
+        spineIanyReachMemo = ByteArray(0)
+        spineIanyFrames.clear()
+        spineIanyCtx = null
+    }
+
+    /**
+     * The legacy statement walker's ambient-context threading, reproduced as a
+     * parent-chain walk: ambient accumulates only along an UNBROKEN
+     * ModuleBlock/ModuleDeclaration chain (a `declare` on any module on it);
+     * every other parent kind — fn bodies, plain Blocks, if/for arms — RESET
+     * it (the legacy recursion did not pass inAmbientContext there).
+     */
+    private fun spineIanyAmbientAt(node: Node): Boolean {
+        var cur: Node? = (node as NodeBase).parent
+        while (cur != null) {
+            cur = when (cur) {
+                is ModuleBlock -> (cur as NodeBase).parent
+                is ModuleDeclaration -> {
+                    if (ModifierFlag.Declare in cur.modifiers) return true
+                    (cur as NodeBase).parent
+                }
+                else -> return false
+            }
+        }
+        return false
+    }
+
+    /** The legacy ClassDeclaration arm's isAmbientClass. */
+    private fun spineIanyClassIsAmbient(cls: ClassDeclaration): Boolean =
+        ModifierFlag.Declare in cls.modifiers || spineIanyAmbientAt(cls)
+
+    /** Is [lit] the legacy destructuring-default shape's initializer (an
+     *  ObjectBindingPattern var-decl's object-literal initializer, walked
+     *  per-PropertyAssignment with typed-default context instead of the normal
+     *  object-literal arm)? */
+    private fun spineIanyObjLitIsDestructureDefault(lit: ObjectLiteralExpression): Boolean {
+        val decl = (lit as NodeBase).parent as? VariableDeclaration ?: return false
+        if (decl.initializer !== lit || decl.name !is ObjectBindingPattern) return false
+        val list = (decl as NodeBase).parent as? VariableDeclarationList ?: return false
+        return (list as NodeBase).parent is VariableStatement
+    }
+
+    /**
+     * The legacy M1.6(b) returnCtxAnnotation threading, reproduced as a
+     * parent-chain walk from a reached ReturnStatement: threaded through
+     * Block/If/For only (the only statement arms that passed it on); the first
+     * function-like boundary decides — its return annotation for
+     * FunctionDeclaration/MethodDeclaration/GetAccessor/ArrowFunction/
+     * FunctionExpression, null for Constructor/SetAccessor (the legacy body
+     * walks passed nothing there); a module/file boundary yields null.
+     */
+    private fun spineIanyReturnCtxAt(ret: ReturnStatement): TypeNode? {
+        var cur: Node? = (ret as NodeBase).parent
+        while (cur != null) {
+            when (cur) {
+                is FunctionDeclaration -> return cur.type
+                is MethodDeclaration -> return cur.type
+                is GetAccessor -> return cur.type
+                is ArrowFunction -> return cur.type
+                is FunctionExpression -> return cur.type
+                is Constructor, is SetAccessor -> return null
+                is Block, is IfStatement, is ForStatement -> cur = (cur as NodeBase).parent
+                else -> return null
+            }
+        }
+        return null
+    }
+
+    /**
+     * Does the deleted pass reach [child] from [parent]? Mirrors
+     * checkImplicitAnyInStatements/-InClassElement(Core)/-InExpr's dispatch
+     * arms exactly — every kind absent here fell to their `else` arms.
+     */
+    private fun spineIanyEdge(parent: Node, child: Node): Boolean = when (parent) {
+        // ── statement dispatch ──
+        is SourceFile -> child is Statement
+        is FunctionDeclaration -> child === parent.body
+        // Ambient class members are handled INLINE at the class enter (the
+        // legacy isAmbientClass branch — no element walk, no body descent).
+        is ClassDeclaration -> child is ClassElement && !spineIanyClassIsAmbient(parent)
+        is VariableStatement -> child === parent.declarationList
+        is VariableDeclarationList -> child is VariableDeclaration &&
+            (parent as NodeBase).parent is VariableStatement
+        is VariableDeclaration -> child === parent.initializer
+        is ExpressionStatement -> child === parent.expression
+        is ModuleDeclaration -> child === parent.body &&
+            (child is ModuleBlock || child is ModuleDeclaration)
+        is ModuleBlock -> child is Statement
+        is Block -> child is Statement
+        is IfStatement -> child === parent.thenStatement || child === parent.elseStatement
+        is ForStatement -> child === parent.statement
+        is ReturnStatement -> child === parent.expression
+        // ── class elements (non-ambient class decls + class expressions) ──
+        is MethodDeclaration -> child === parent.body
+        is Constructor -> child === parent.body
+        is GetAccessor -> child === parent.body
+        is SetAccessor -> child === parent.body
+        is PropertyDeclaration -> child === parent.initializer
+        is ClassExpression -> child is ClassElement
+        // ── expression dispatch ──
+        is ArrowFunction -> child === parent.body
+        is FunctionExpression -> child === parent.body
+        is ObjectLiteralExpression ->
+            if (spineIanyObjLitIsDestructureDefault(parent)) child is PropertyAssignment
+            else child is PropertyAssignment || child is MethodDeclaration
+        is PropertyAssignment -> child === parent.initializer
+        is CallExpression -> parent.arguments.any { it === child }
+        is NewExpression -> parent.arguments?.any { it === child } == true
+        is BinaryExpression -> child === parent.left || child === parent.right
+        is ParenthesizedExpression -> child === parent.expression
+        is ConditionalExpression -> child === parent.whenTrue || child === parent.whenFalse
+        is ArrayLiteralExpression -> true
+        else -> false
+    }
+
+    /** Is [node] reached by the deleted pass? Memoized per file by nodeId (same
+     *  ascent/backfill scheme as [spineArithReached]). */
+    private fun spineIanyReached(node: Node): Boolean {
+        val memo = spineIanyReachMemo
+        run {
+            val id = (node as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) {
+                val m = memo[id].toInt()
+                if (m != 0) return m == 1
+            }
+        }
+        val chain = spineIanyChain
+        chain.clear()
+        var cur: Node = node
+        val reached: Boolean
+        while (true) {
+            val parent = (cur as NodeBase).parent
+            if (parent == null) {
+                reached = cur is SourceFile
+                break
+            }
+            if (!spineIanyEdge(parent, cur)) {
+                reached = false
+                break
+            }
+            val pid = (parent as NodeBase).nodeId
+            val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
+            if (pm != 0) {
+                reached = pm == 1
+                break
+            }
+            chain.add(cur)
+            cur = parent
+        }
+        run {
+            val id = (cur as NodeBase).nodeId
+            if (id >= 0 && id < memo.size && memo[id].toInt() == 0) {
+                memo[id] = if (reached) 1 else 2
+            }
+        }
+        val fill: Byte = if (reached) 1 else 2
+        for (i in chain.indices.reversed()) {
+            val id = (chain[i] as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) memo[id] = fill
+        }
+        chain.clear()
+        return reached
+    }
+
+    /** Define the contextual-typing state for [child]'s subtree (the legacy
+     *  recursion's explicit-argument pass); no-op when both states are the
+     *  all-defaults null. */
+    private fun spineIanyDefineCtx(child: Node, newCtx: SpineIanyCtx?) {
+        val cur = spineIanyCtx
+        if (cur == null && newCtx == null) return
+        spineIanyFrames.add(SpineIanyFrame(child, 0, savedCtx = cur))
+        spineIanyCtx = newCtx
+    }
+
+    /** The legacy function-body scope push (pushImplicitAnyScope around the
+     *  body walk), keyed on the BODY node so the leave pops it. */
+    private fun spineIanyPushScope(bodyNode: Node, params: List<Parameter>) {
+        pushImplicitAnyScope(params)
+        spineIanyFrames.add(SpineIanyFrame(bodyNode, 1))
+    }
+
+    /** Per-node ENTER hook — edge-triggered frames/emissions first (so a node's
+     *  own frames nest inside its parent-edge frames), then node-kind handling. */
+    private fun spineIanyEnterNode(node: Node) {
+        val p = (node as NodeBase).parent
+        if (p != null) spineIanyEdgeEnter(p, node)
+        when (node) {
+            is FunctionDeclaration -> if (spineIanyReached(node)) {
+                // Params checked for ALL function declarations (declare included).
+                checkParamsForImplicitAny(node.parameters, spineSource, spineFileName)
+            }
+            is ClassDeclaration -> if (spineIanyClassIsAmbient(node) && spineIanyReached(node)) {
+                spineIanyAmbientClassMembers(node)
+            }
+            is InterfaceDeclaration -> if (spineIanyReached(node)) {
+                spineIanyInterfaceMembers(node)
+            }
+            is VariableDeclaration -> if ((node as NodeBase).parent.let {
+                    it is VariableDeclarationList && (it as NodeBase).parent is VariableStatement
+                } && spineIanyReached(node)) {
+                spineIanyVarDeclEnter(node)
+            }
+            is MethodDeclaration -> if (spineIanyReached(node)) {
+                when ((node as NodeBase).parent) {
+                    is ClassDeclaration, is ClassExpression -> spineIanyClassElementEnter(node)
+                    is ObjectLiteralExpression -> spineIanyObjLitMethodEnter(node)
+                    else -> {}
+                }
+            }
+            is Constructor -> if (spineIanyIsClassElement(node) && spineIanyReached(node)) {
+                spineIanyClassElementEnter(node)
+            }
+            is GetAccessor -> if (spineIanyIsClassElement(node) && spineIanyReached(node)) {
+                spineIanyClassElementEnter(node)
+            }
+            is SetAccessor -> if (spineIanyIsClassElement(node) && spineIanyReached(node)) {
+                spineIanyClassElementEnter(node)
+            }
+            is PropertyDeclaration -> if (spineIanyIsClassElement(node) && spineIanyReached(node)) {
+                spineIanyClassElementEnter(node)
+            }
+            is ArrowFunction -> if (spineIanyReached(node)) {
+                spineIanyFnExprEnter(node.parameters)
+            }
+            is FunctionExpression -> if (spineIanyReached(node)) {
+                spineIanyFnExprEnter(node.parameters)
+            }
+            is ObjectLiteralExpression -> if (spineIanyReached(node) &&
+                !spineIanyObjLitIsDestructureDefault(node)) {
+                // The legacy object-literal arm's per-literal state: the
+                // union-with-primitive verdict from the literal's OWN contextual
+                // type + the lazily-shared computed-key mapped-value arity.
+                val cur = spineIanyCtx?.takeIf { it.kind == 0 }
+                val ctxType = cur?.type
+                val viaUnion = ctxType is Type.Union && ctxType.types.any {
+                    it !is Type.Object && !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)
+                }
+                spineIanyDefineCtx(node, SpineIanyCtx(kind = 3,
+                    typed = cur?.typed == true, type = ctxType, viaUnion = viaUnion,
+                    ann = cur?.ann))
+            }
+            is CallExpression -> if (spineIanyReached(node)) {
+                // The legacy CallExpression arm computed ctxProp once per call
+                // (before any argument walk, args or not).
+                spineIanyDefineCtx(node,
+                    SpineIanyCtx(kind = 1, typed = isCalleeResolvable(node.expression)))
+            }
+            is NewExpression -> if (spineIanyReached(node)) {
+                spineIanyDefineCtx(node,
+                    SpineIanyCtx(kind = 1, typed = isCalleeResolvable(node.expression)))
+            }
+            else -> {}
+        }
+    }
+
+    private fun spineIanyIsClassElement(node: Node): Boolean =
+        (node as NodeBase).parent.let { it is ClassDeclaration || it is ClassExpression }
+
+    /** Per-node LEAVE hook — pop every frame this node pushed (LIFO). */
+    private fun spineIanyLeaveNode(node: Node) {
+        val frames = spineIanyFrames
+        while (frames.isNotEmpty() && frames[frames.size - 1].node === node) {
+            val f = frames.removeAt(frames.size - 1)
+            when (f.kind) {
+                0 -> spineIanyCtx = f.savedCtx
+                1 -> popImplicitAnyScope()
+                2 -> implicitAnyNsStack.removeLast()
+                3 -> implicitAnyEnclosingClassMembers = f.savedMembers
+            }
+        }
+    }
+
+    /** Edge-triggered handling at [node]'s enter (parent [p]): scope pushes,
+     *  ns pushes, and the contextual-typing definitions of every edge the
+     *  legacy recursion passed explicit arguments over. */
+    private fun spineIanyEdgeEnter(p: Node, node: Node) {
+        when (p) {
+            is FunctionDeclaration -> if (node === p.body && spineIanyReached(node)) {
+                spineIanyPushScope(node, p.parameters)
+            }
+            is MethodDeclaration -> if (node === p.body && spineIanyReached(node)) {
+                spineIanyPushScope(node, p.parameters)
+            }
+            is Constructor -> if (node === p.body && spineIanyReached(node)) {
+                spineIanyPushScope(node, p.parameters)
+            }
+            is GetAccessor -> if (node === p.body && spineIanyReached(node)) {
+                spineIanyPushScope(node, p.parameters)
+            }
+            is SetAccessor -> if (node === p.body && spineIanyReached(node)) {
+                spineIanyPushScope(node, p.parameters)
+            }
+            is FunctionExpression -> if (node === p.body && spineIanyReached(node)) {
+                spineIanyPushScope(node, p.parameters)
+            }
+            is ArrowFunction -> if (node === p.body && spineIanyReached(node)) {
+                spineIanyPushScope(node, p.parameters)
+                if (node !is Block) {
+                    // Round 472: an EXPRESSION body inherits the contextual
+                    // signature's RETURN type (nothing else).
+                    val cur = spineIanyCtx?.takeIf { it.kind == 0 }
+                    val retT = contextualSigReturnTypeForCtx(cur?.type)
+                    spineIanyDefineCtx(node,
+                        if (retT != null) SpineIanyCtx(kind = 0, type = retT) else null)
+                }
+            }
+            is ModuleDeclaration -> if (node === p.body && spineIanyReached(node)) {
+                // Round 435c: the enclosing-namespace bridge for annotation
+                // resolution inside the body.
+                val nsSym = fileResults[spineFileName]?.nodeToSymbol?.get(nodeKey(p))?.takeIf {
+                    it.flags.hasAny(SymbolFlags.Module or SymbolFlags.NamespaceModule or SymbolFlags.ValueModule)
+                }
+                if (nsSym != null) {
+                    implicitAnyNsStack.addLast(nsSym)
+                    spineIanyFrames.add(SpineIanyFrame(node, 2))
+                }
+            }
+            is VariableDeclaration -> if (node === p.initializer && spineIanyReached(node)) {
+                spineIanyVarInitEdge(p, node as Expression)
+            }
+            is ExpressionStatement -> if (node === p.expression && spineIanyReached(node)) {
+                spineIanyDefineCtx(node, null)
+            }
+            is ReturnStatement -> if (node === p.expression && spineIanyReached(node)) {
+                val retAnn = spineIanyReturnCtxAt(p)
+                // M1.6(b): resolve the annotation only for expr shapes that can
+                // consume a contextual type (bounds first-touch resolution-order
+                // changes to functions that return such shapes).
+                val retCtx = if (retAnn != null && (
+                        node is ObjectLiteralExpression || node is ArrowFunction ||
+                        node is FunctionExpression || node is ParenthesizedExpression ||
+                        node is ConditionalExpression))
+                    getTypeFromTypeNodeSafeNsAware(retAnn) else null
+                spineIanyDefineCtx(node, if (retCtx != null || retAnn != null)
+                    SpineIanyCtx(kind = 0, type = retCtx, ann = retAnn) else null)
+            }
+            is PropertyDeclaration -> if (node === p.initializer && spineIanyReached(node) &&
+                spineIanyIsClassElement(p)) {
+                // classPropertyErrorOnNameOnly: annotated class prop with an
+                // arrow/fn-expr initializer contextually types the params.
+                val arrowInit = node is ArrowFunction || node is FunctionExpression
+                val ctxFn = arrowInit && p.type != null
+                val annotatedType = p.type?.let { getTypeFromTypeNodeSafe(it) }
+                spineIanyDefineCtx(node, if (ctxFn || annotatedType != null)
+                    SpineIanyCtx(kind = 0, typed = ctxFn, type = annotatedType) else null)
+            }
+            is PropertyAssignment -> if (node === p.initializer && spineIanyReached(node)) {
+                spineIanyPropAssignEdge(p, node as Expression)
+            }
+            is CallExpression -> if (p.arguments.any { it === node } && spineIanyReached(node)) {
+                if (node is ArrowFunction || node is FunctionExpression) {
+                    // B224: contextual arity for an arrow/fn-expr ARGUMENT.
+                    val argIndex = p.arguments.indexOfFirst { it === node }
+                    val ctxArity = contextualFnArityForCallArg(p.expression, argIndex)
+                    if (ctxArity != null) {
+                        val argParams = when (node) {
+                            is ArrowFunction -> node.parameters
+                            is FunctionExpression -> node.parameters
+                            else -> emptyList()
+                        }
+                        emitTs7006BeyondCtxArity(argParams, ctxArity, spineSource, spineFileName)
+                    }
+                }
+                val callCtx = spineIanyCtx
+                spineIanyDefineCtx(node, if (callCtx != null && callCtx.kind == 1 && callCtx.typed)
+                    SpineIanyCtx(kind = 0, typed = true) else null)
+            }
+            is NewExpression -> if (p.arguments?.any { it === node } == true && spineIanyReached(node)) {
+                val callCtx = spineIanyCtx
+                spineIanyDefineCtx(node, if (callCtx != null && callCtx.kind == 1 && callCtx.typed)
+                    SpineIanyCtx(kind = 0, typed = true) else null)
+            }
+            is BinaryExpression -> if (spineIanyReached(node)) {
+                spineIanyBinaryEdge(p, node)
+            }
+            is ParenthesizedExpression -> if (node === p.expression && spineIanyReached(node)) {
+                spineIanyPassThroughEdge(node)
+            }
+            is ConditionalExpression -> if ((node === p.whenTrue || node === p.whenFalse) &&
+                spineIanyReached(node)) {
+                spineIanyPassThroughEdge(node)
+            }
+            is ArrayLiteralExpression -> if (spineIanyReached(node)) {
+                // Contextual typing through arrays: object-literal elements get
+                // the array's ELEMENT type; bare arrows stay un-propagated.
+                val cur = spineIanyCtx?.takeIf { it.kind == 0 }
+                val elemCtx = cur?.type?.let { arrayRefElement(it) }
+                    ?.takeIf { it !== anyType && it !== errorType }
+                val typed = if (node is ArrowFunction || node is FunctionExpression) false
+                    else cur?.typed == true
+                spineIanyDefineCtx(node, if (typed || elemCtx != null || cur?.viaUnion == true)
+                    SpineIanyCtx(kind = 0, typed = typed, type = elemCtx,
+                        viaUnion = cur?.viaUnion == true) else null)
+            }
+            else -> {}
+        }
+    }
+
+    /** The legacy Parenthesized/Conditional pass-through: (typed, type,
+     *  viaUnion, viaAssign) inherited, ctxAnnotation RESET (omitted in the
+     *  legacy calls). */
+    private fun spineIanyPassThroughEdge(node: Node) {
+        val cur = spineIanyCtx
+        when {
+            cur == null -> {}
+            cur.kind != 0 -> spineIanyDefineCtx(node, null)
+            cur.ann == null -> {} // unchanged
+            else -> spineIanyDefineCtx(node, SpineIanyCtx(kind = 0, typed = cur.typed,
+                type = cur.type, viaUnion = cur.viaUnion, viaAssign = cur.viaAssign))
+        }
+    }
+
+    /**
+     * The legacy BinaryExpression left-spine loop, expressed per edge (the
+     * loop's per-operand actions depend only on each binary's own operator and
+     * the inherited state): the RIGHT operand of an assignment-family operator
+     * gets the M3.2 assignment-target context; `||`/`??`/`&&`/comma RIGHT
+     * operands inherit the incoming context; the LEFT operand inherits it for
+     * `||`/`??` only (the loop kept leftTyped across those and cleared it for
+     * everything else); ctxAnnotation resets on every operand (omitted in the
+     * legacy calls).
+     */
+    private fun spineIanyBinaryEdge(b: BinaryExpression, node: Node) {
+        val cur = spineIanyCtx?.takeIf { it.kind == 0 }
+        if (node === b.right) {
+            when (b.operator) {
+                SyntaxKind.Equals, SyntaxKind.BarBarEquals,
+                SyntaxKind.AmpersandAmpersandEquals, SyntaxKind.QuestionQuestionEquals -> {
+                    // Resolve the LHS type ONLY when the RHS can consume a fn
+                    // context (bounds first-touch resolution-order changes and
+                    // per-assignment cost to the shapes that need it).
+                    implicitAnyCtxUnknowable = false
+                    val lhsT = if (rhsCanConsumeFnCtx(b.right))
+                        resolveAssignTargetCtxTypeForImplicitAny(b.left) else null
+                    if (implicitAnyCtxUnknowable) {
+                        // Round 474: the target member's annotation names an
+                        // alias-shadowed interface — tsc HAS a contextual type
+                        // here; treat the RHS as contextually typed rather than
+                        // propagate the wrong resolution.
+                        implicitAnyCtxUnknowable = false
+                        spineIanyDefineCtx(node, SpineIanyCtx(kind = 0, typed = true))
+                    } else {
+                        spineIanyDefineCtx(node, if (lhsT != null)
+                            SpineIanyCtx(kind = 0, type = lhsT, viaAssign = true) else null)
+                    }
+                }
+                SyntaxKind.BarBar, SyntaxKind.QuestionQuestion,
+                SyntaxKind.AmpersandAmpersand, SyntaxKind.Comma -> {
+                    spineIanyInheritOperandEdge(node, cur)
+                }
+                else -> spineIanyDefineCtx(node, null)
+            }
+        } else { // node === b.left
+            when (b.operator) {
+                SyntaxKind.BarBar, SyntaxKind.QuestionQuestion ->
+                    spineIanyInheritOperandEdge(node, cur)
+                else -> spineIanyDefineCtx(node, null)
+            }
+        }
+    }
+
+    /** An operand edge that inherits (typed, type, viaUnion, viaAssign) with
+     *  ctxAnnotation reset. */
+    private fun spineIanyInheritOperandEdge(node: Node, cur: SpineIanyCtx?) {
+        when {
+            cur == null -> spineIanyDefineCtx(node, null)
+            cur.ann == null -> {} // unchanged
+            else -> spineIanyDefineCtx(node, SpineIanyCtx(kind = 0, typed = cur.typed,
+                type = cur.type, viaUnion = cur.viaUnion, viaAssign = cur.viaAssign))
+        }
+    }
+
+    /** The legacy object-literal PropertyAssignment initializer edge: the
+     *  member's contextual type looked up on the literal's contextual type,
+     *  the computed-key mapped-table special case, and the destructuring-
+     *  default typed-key mode. */
+    private fun spineIanyPropAssignEdge(prop: PropertyAssignment, init: Expression) {
+        val ctx = spineIanyCtx
+        if (ctx != null && ctx.kind == 2) {
+            // Destructuring-default mode: the matched RHS property of a typed
+            // default gets a contextual signature; others walk normally.
+            val propName = (prop.name as? Identifier)?.text
+            val t = propName != null && ctx.names?.contains(propName) == true
+            spineIanyDefineCtx(init, if (t) SpineIanyCtx(kind = 0, typed = true) else null)
+            return
+        }
+        val octx = ctx?.takeIf { it.kind == 3 }
+        val typed = octx?.typed == true
+        val viaUnion = octx?.viaUnion == true
+        val propName = (prop.name as? Identifier)?.text
+        val octxType = octx?.type
+        val propType = if (propName != null && octxType != null)
+            lookupPropertyTypeForCtx(octxType, propName) else null
+        // M1.6(a): a COMPUTED-key fn-expr/arrow value of a mapped-table
+        // literal — emit only beyond the mapped value's arity, then walk the
+        // fn with its own params marked contextually typed.
+        if (propName == null && prop.name is ComputedPropertyName && !typed && !viaUnion &&
+            (init is ArrowFunction || init is FunctionExpression)) {
+            val cArity = spineIanyComputedKeyArity(octx)
+            if (cArity != null) {
+                val ps = when (init) {
+                    is ArrowFunction -> init.parameters
+                    is FunctionExpression -> init.parameters
+                    else -> emptyList()
+                }
+                emitTs7006BeyondCtxArity(ps, cArity, spineSource, spineFileName)
+                spineIanyDefineCtx(init, SpineIanyCtx(kind = 0, typed = true))
+                return
+            }
+        }
+        spineIanyDefineCtx(init, if (typed || propType != null || viaUnion)
+            SpineIanyCtx(kind = 0, typed = typed, type = propType, viaUnion = viaUnion)
+            else null)
+    }
+
+    /** The lazily-computed (once per literal) computed-key mapped-value arity
+     *  (M1.6(a)) — stored on the literal's kind-3 ctx. */
+    private fun spineIanyComputedKeyArity(octx: SpineIanyCtx?): Int? {
+        if (octx == null) return null
+        if (!octx.arityComputed) {
+            octx.arityComputed = true
+            octx.arity = octx.ann?.let { mappedAnnotationValueFnArity(it) }
+        }
+        return octx.arity
+    }
+
+    /** The legacy arrow/function-expression parameter emission (uses the
+     *  node's incoming contextual-typing state). */
+    private fun spineIanyFnExprEnter(params: List<Parameter>) {
+        val cur = spineIanyCtx?.takeIf { it.kind == 0 }
+        if (cur?.typed == true) return
+        val ctxType = cur?.type
+        val unionSuppress = ctxType != null && unionHasFunctionAndPrimitive(ctxType)
+        if (unionSuppress) return
+        // M1.6(b): a callable contextual type supplies param types up to its
+        // arity — TS7006 only beyond it.
+        val ctxArity = when {
+            cur?.viaUnion == true -> null
+            cur?.viaAssign == true -> singleApplicableSigArity(ctxType, requiredParamPrefixCount(params))
+            else -> contextualCallableArity(ctxType)
+        }
+        if (ctxArity != null) {
+            emitTs7006BeyondCtxArity(params, ctxArity, spineSource, spineFileName)
+        } else {
+            checkParamsForImplicitAny(params, spineSource, spineFileName)
+        }
+    }
+
+    /** The legacy object-literal METHOD member emission (contextually typed by
+     *  the matching member's fn type, same as an arrow value). */
+    private fun spineIanyObjLitMethodEnter(prop: MethodDeclaration) {
+        val octx = spineIanyCtx?.takeIf { it.kind == 3 }
+        if (octx?.typed == true) return
+        val mName = (prop.name as? Identifier)?.text
+        val octxType = octx?.type
+        val mType = if (mName != null && octxType != null)
+            lookupPropertyTypeForCtx(octxType, mName) else null
+        val mArity = if (octx?.viaUnion == true) null else
+            contextualCallableArity(mType)
+                ?: (if (prop.name is ComputedPropertyName) spineIanyComputedKeyArity(octx) else null)
+        if (mArity != null) {
+            emitTs7006BeyondCtxArity(prop.parameters, mArity, spineSource, spineFileName)
+        } else {
+            checkParamsForImplicitAny(prop.parameters, spineSource, spineFileName)
+        }
+    }
+
+    /** The legacy non-ambient class-element enter: the enclosing-class-members
+     *  frame (round 470 — ClassExpression members KEEP the outer value, the
+     *  siblings.ifEmpty quirk) plus the element's own emissions. Bodies are
+     *  handled at their body edges; initializers at the initializer edge. */
+    private fun spineIanyClassElementEnter(element: ClassElement) {
+        val parentCls = (element as NodeBase).parent
+        if (parentCls is ClassDeclaration) {
+            spineIanyFrames.add(SpineIanyFrame(element, 3,
+                savedMembers = implicitAnyEnclosingClassMembers))
+            implicitAnyEnclosingClassMembers = parentCls.members
+        }
+        when (element) {
+            is MethodDeclaration ->
+                checkParamsForImplicitAny(element.parameters, spineSource, spineFileName)
+            is Constructor ->
+                checkParamsForImplicitAny(element.parameters, spineSource, spineFileName)
+            is SetAccessor -> {
+                // Setter value parameters are contextually typed from a sibling
+                // getter. When ANY sibling getter with the same name exists,
+                // suppress TS7032/TS7006; otherwise emit BOTH. Class-EXPRESSION
+                // members passed EMPTY siblings in the legacy walk (the
+                // checkImplicitAnyInClassElement default) — bug-compat: their
+                // setters always fire.
+                val siblings = (parentCls as? ClassDeclaration)?.members ?: emptyList()
+                val nameNode = element.name as? Identifier
+                val firstParam = element.parameters.firstOrNull()
+                if (nameNode != null && firstParam != null && firstParam.type == null) {
+                    val hasSiblingGetter = siblings.filterIsInstance<GetAccessor>().any {
+                        (it.name as? Identifier)?.text == nameNode.text
+                    }
+                    if (!hasSiblingGetter && nameNode.text.isNotEmpty()) {
+                        val (line, character) = getLineAndCharacterOfPosition(spineSource, nameNode.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Property '${nameNode.text}' implicitly has type 'any', because its set accessor lacks a parameter type annotation.",
+                            category = DiagnosticCategory.Error,
+                            code = 7032,
+                            fileName = spineFileName,
+                            line = line, character = character,
+                            start = nameNode.pos, length = nameNode.text.length,
+                        ))
+                        checkParamsForImplicitAny(element.parameters, spineSource, spineFileName)
+                    }
+                }
+            }
+            is PropertyDeclaration -> {
+                // Check function type annotation: `pub_f10: (x) => string`.
+                checkImplicitAnyInTypeAnnotation(element.type, spineSource, spineFileName)
+                // TS7008: static property without type annotation or initializer.
+                if (element.type == null && element.initializer == null
+                    && ModifierFlag.Static in element.modifiers
+                    && ModifierFlag.Private !in element.modifiers
+                    && !element.exclamationToken) {
+                    val name = element.name
+                    if (name is Identifier && name.text.isNotEmpty()) {
+                        val siblings = (parentCls as? ClassDeclaration)?.members ?: emptyList()
+                        val assignedInStaticBlock = siblings.any { sib ->
+                            sib is ClassStaticBlockDeclaration &&
+                                blockAssignsToThisProperty(sib.body.statements, name.text)
+                        }
+                        if (!assignedInStaticBlock) {
+                            val start = name.pos
+                            val (line, character) = getLineAndCharacterOfPosition(spineSource, start)
+                            diagnostics.add(Diagnostic(
+                                message = "Member '${name.text}' implicitly has an 'any' type.",
+                                category = DiagnosticCategory.Error,
+                                code = 7008,
+                                fileName = spineFileName,
+                                line = line, character = character,
+                                start = start, length = name.text.length,
+                            ))
+                        }
+                    }
+                }
+            }
+            else -> {}
+        }
+    }
+
+    /** The legacy ambient-class member handling, inline at the class enter
+     *  (no element walk, no body descent). */
+    private fun spineIanyAmbientClassMembers(stmt: ClassDeclaration) {
+        for (member in stmt.members) {
+            when (member) {
+                is MethodDeclaration -> {
+                    // Public method params in ambient classes get TS7006;
+                    // private methods are not checked.
+                    if (ModifierFlag.Private !in member.modifiers) {
+                        checkParamsForImplicitAny(member.parameters, spineSource, spineFileName)
+                    }
+                }
+                is PropertyDeclaration -> {
+                    // TS7008: member without type annotation (public only).
+                    if (member.type == null && member.initializer == null
+                        && ModifierFlag.Private !in member.modifiers) {
+                        val name = member.name
+                        if (name is Identifier && name.text.isNotEmpty()) {
+                            val start = name.pos
+                            val (line, character) = getLineAndCharacterOfPosition(spineSource, start)
+                            diagnostics.add(Diagnostic(
+                                message = "Member '${name.text}' implicitly has an 'any' type.",
+                                category = DiagnosticCategory.Error,
+                                code = 7008,
+                                fileName = spineFileName,
+                                line = line, character = character,
+                                start = start, length = name.text.length,
+                            ))
+                        }
+                    }
+                    // Fn-typed property annotations get TS7006 (public AND private).
+                    checkImplicitAnyInTypeAnnotation(member.type, spineSource, spineFileName)
+                }
+                is Constructor -> {
+                    if (ModifierFlag.Private !in member.modifiers) {
+                        checkParamsForImplicitAny(member.parameters, spineSource, spineFileName)
+                    }
+                }
+                else -> {}
+            }
+        }
+    }
+
+    /** The legacy interface member handling, inline at the interface enter
+     *  (interfaces are implicitly ambient — no member walk). */
+    private fun spineIanyInterfaceMembers(stmt: InterfaceDeclaration) {
+        for (member in stmt.members) {
+            when (member) {
+                is MethodDeclaration ->
+                    checkParamsForImplicitAny(member.parameters, spineSource, spineFileName, typePosition = true)
+                is PropertyDeclaration -> {
+                    if (member.type == null && member.initializer == null) {
+                        val name = member.name
+                        if (name is Identifier && name.text.isNotEmpty()) {
+                            val start = name.pos
+                            val (line, character) = getLineAndCharacterOfPosition(spineSource, start)
+                            diagnostics.add(Diagnostic(
+                                message = "Member '${name.text}' implicitly has an 'any' type.",
+                                category = DiagnosticCategory.Error,
+                                code = 7008,
+                                fileName = spineFileName,
+                                line = line, character = character,
+                                start = start, length = name.text.length,
+                            ))
+                        }
+                    }
+                    checkImplicitAnyInTypeAnnotation(member.type, spineSource, spineFileName)
+                }
+                else -> {}
+            }
+        }
+    }
+
+    /** The legacy VariableStatement per-declarator processing that ran BEFORE
+     *  the initializer walk: the M3.2 scope recording, the ambient TS7005, and
+     *  the annotation walk. */
+    private fun spineIanyVarDeclEnter(decl: VariableDeclaration) {
+        val list = (decl as NodeBase).parent as? VariableDeclarationList ?: return
+        val stmt = (list as NodeBase).parent as? VariableStatement ?: return
+        // M3.2 (round 431): register the local in the innermost implicit-any
+        // scope — annotation, `as T` cast type, or callee return annotation;
+        // null = declared UNTYPED (keeps TS7006 firing on assignments).
+        implicitAnyScopes.lastOrNull()?.let { scope ->
+            val dn = decl.name
+            if (dn is Identifier && dn.text.isNotEmpty()) {
+                scope[dn.text] = decl.type
+                    ?: (decl.initializer as? AsExpression)?.type
+                    ?: calleeReturnAnnotationForImplicitAny(decl.initializer)
+                // Round 435c: an annotation-less initialized local also records
+                // its INITIALIZER (resolved lazily at a consuming assignment).
+                if (decl.type == null) decl.initializer?.let {
+                    implicitAnyScopeInits.lastOrNull()?.put(dn.text, it)
+                }
+            } else {
+                collectBindingNamesForImplicitAny(dn, scope)
+                // Round 464: record each TOP-LEVEL object-destructured element's
+                // source + property name.
+                val dInit = decl.initializer
+                if (dn is ObjectBindingPattern && dInit != null) {
+                    implicitAnyScopeDestructures.lastOrNull()?.let { dmap ->
+                        for (el in dn.elements) {
+                            val inner = el.name as? Identifier ?: continue
+                            if (inner.text.isEmpty() || el.dotDotDotToken) continue
+                            val prop = (el.propertyName as? Identifier)?.text ?: inner.text
+                            dmap[inner.text] = dInit to prop
+                        }
+                    }
+                }
+            }
+        }
+        // TS7005: variable implicitly has an 'any' type (ambient declarations only).
+        if (decl.type == null && decl.initializer == null
+            && (ModifierFlag.Declare in stmt.modifiers || spineIanyAmbientAt(stmt))) {
+            val name = decl.name
+            if (name is Identifier && name.text.isNotEmpty()) {
+                val start = name.pos
+                val (line, character) = getLineAndCharacterOfPosition(spineSource, start)
+                diagnostics.add(Diagnostic(
+                    message = "Variable '${name.text}' implicitly has an 'any' type.",
+                    category = DiagnosticCategory.Error,
+                    code = 7005,
+                    fileName = spineFileName,
+                    line = line, character = character,
+                    start = start, length = name.text.length,
+                ))
+            }
+        }
+        // `var f: (x) => string` → TS7006 for `x`.
+        checkImplicitAnyInTypeAnnotation(decl.type, spineSource, spineFileName)
+        // The legacy walker resolved the shape-B contextual annotation EAGERLY
+        // at the declarator (initializer or not); mirror the resolution here so
+        // first-touch cache order stays close, stashing the result for the
+        // initializer edge.
+        if (!(decl.name is ObjectBindingPattern && decl.initializer is ObjectLiteralExpression)) {
+            spineIanyPendingAnnDecl = decl
+            spineIanyPendingAnnType = decl.type?.let { resolveImplicitAnyCtxAnnotation(it) }
+        } else {
+            spineIanyPendingAnnDecl = null
+            spineIanyPendingAnnType = null
+        }
+    }
+
+    /** The legacy VariableStatement initializer walk's context computation
+     *  (shape A: the destructuring-default typed-key mode; shape B: the
+     *  annotated/arrow/jsDoc contextual typing + the B224 arity emission). */
+    private fun spineIanyVarInitEdge(decl: VariableDeclaration, init: Expression) {
+        val declName = decl.name
+        if (declName is ObjectBindingPattern && init is ObjectLiteralExpression) {
+            // Destructuring with typed-function default values: those RHS
+            // properties get a contextual signature; others walk normally.
+            val typedDefaults = HashSet<String>()
+            for (be in declName.elements) {
+                val beInit = be.initializer ?: continue
+                if (!isTypedFunctionExpr(beInit)) continue
+                val key = ((be.propertyName as? Identifier)?.text)
+                    ?: ((be.name as? Identifier)?.text)
+                    ?: continue
+                typedDefaults.add(key)
+            }
+            spineIanyDefineCtx(init, SpineIanyCtx(kind = 2, names = typedDefaults))
+            return
+        }
+        val annotatedType = if (spineIanyPendingAnnDecl === decl) spineIanyPendingAnnType
+            else decl.type?.let { resolveImplicitAnyCtxAnnotation(it) }
+        spineIanyPendingAnnDecl = null
+        spineIanyPendingAnnType = null
+        val arrowInit = init is ArrowFunction || init is FunctionExpression
+        // B437c: in a JS file, a leading JSDoc whose @param tags document EVERY
+        // param of the arrow/fn-expr initializer types those params.
+        val list = (decl as NodeBase).parent as? VariableDeclarationList
+        val stmt = list?.let { (it as NodeBase).parent } as? VariableStatement
+        val jsDocParamCtx = arrowInit && isJsLikeFileName(spineFileName) && run {
+            val ip = when (init) {
+                is ArrowFunction -> init.parameters
+                is FunctionExpression -> init.parameters
+                else -> return@run false
+            }
+            if (ip.isEmpty()) return@run false
+            val documented = jsDocDocumentedParamNames(stmt?.leadingComments ?: emptyList()) +
+                jsDocDocumentedParamNames(decl.leadingComments)
+            if (documented.isEmpty()) return@run false
+            ip.all { p -> p.type != null || (p.name as? Identifier)?.text?.let { it in documented } == true }
+        }
+        val ctxFn = (arrowInit && decl.type != null) || jsDocParamCtx
+        // B224: a bare rest-free FunctionType annotation contextually types
+        // only its OWN arity worth of params.
+        val annNode = decl.type
+        if (arrowInit && annNode is FunctionType
+            && annNode.parameters.none { it.dotDotDotToken }) {
+            val ctxArity = annNode.parameters.count {
+                !it.isCommentPlaceholder && (it.name as? Identifier)?.text != "this"
+            }
+            val initParams = when (init) {
+                is ArrowFunction -> init.parameters
+                is FunctionExpression -> init.parameters
+                else -> emptyList()
+            }
+            emitTs7006BeyondCtxArity(initParams, ctxArity, spineSource, spineFileName)
+        }
+        spineIanyDefineCtx(init, if (ctxFn || annotatedType != null || decl.type != null)
+            SpineIanyCtx(kind = 0, typed = ctxFn, type = annotatedType, ann = decl.type)
+            else null)
     }
 
     /**

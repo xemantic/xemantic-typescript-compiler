@@ -1,3 +1,41 @@
+**Round 522 (2026-07-15) — INV.4(c) decomposed + (c)(i) LANDED: the spine
+maintains the authoritative lexical scope state.** Decomposition first (facts
+verified in-code): the checkUnresolvedNames family is ~3,000 lines whose
+NameScope content closely mirrors the INV.2(c) `lexicalScopes` tables plus
+per-file root extras and walk-threaded flags; checkTypeUsedAsValue is ~700
+lines threading THREE ScopeNameSet chains built from AST surveys with
+corpus-tuned reach (the round-42 no-loop/switch/try-descent gotcha) — sub-plan
+(c)(i)–(c)(iv) on the queue item. (c)(i): `spineCurrentScope` is maintained by
+the walk itself — [spineScopeEnterIfOwner] pushes BEFORE a node's own enter
+handlers dispatch (params/type-params visible to the node's handlers),
+[spineScopeLeaveIfOwner] pops after leave; the per-node cost is ONE
+nodeId-indexed array read on enter and leave (the INV.2(b) boxing-avoidance
+trick — the array is filled per file from `result.lexicalScopes` and cleared
+by re-nulling only the written ids). Two structural rules encoded at FILL
+time, not per node: a SwitchStatement's scope (binder-keyed by the SWITCH's
+nodeId) is RE-KEYED onto its CLAUSE nodeIds so the switch EXPRESSION — visited
+between the switch's enter and the clauses — stays in the outer scope (the
+binder's routing); function-body Blocks share the fn scope by map ABSENCE.
+`spineScopeLookup(name)` resolves symbols → existing → parent. Pinned by a
+test-only AUDIT mode (companion statics — tests cannot reach the Checker
+instance): every spine enter compares the incremental scope against an
+independent parent-chain derivation, and every Identifier records its
+resolution into a trace (`file:pos:name=symbolId`). Inv4SpineScopeStateTest
+(15): kitchen-sink zero-mismatch, shadowing id splits ([main, scope, scope,
+main] across positions), switch-expression isolation (∅ at the expression,
+scope-space in the clause), type params through signature+body, catch/for-of/
+var-hoist/fn-expr-self-name/class-expr-self-name shapes, enum-sibling +
+namespace/dotted-namespace mains, multi-file, undeclared-∅ negative control.
+SHARPNESS VERIFIED by deliberate breakage: keying the switch scope at the
+switch's own nodeId (instead of the clauses) fails exactly the two
+switch-bearing tests with node-precise mismatch messages. Session trap worth
+recording: a first sharpness probe used `if (false && …)` — the always-false
+condition failed the WARNING-CLEAN build, so the test run silently reused
+STALE green XMLs (the documented stale-XML gotcha) and the probe looked
+inert; the second probe removed the branch instead. VERIFIED: suite +15
+(10,655 → 10,670, 0 regressions); listAll error lines IDENTICAL on ALL 8 profiles (522a vs 521a; only the trailing time: line differs). Bench: single-runs 27.3/26.0 s landed in a box-drift episode (the round-517 pattern) — the SAME-window signal is the listAll pair, new 24,884 ms vs the 521a baseline's 24,648 ms (+1.0%, in band; the added work is two nodeId array reads per node by construction). NEXT: (c)(ii) — the
+checkUnresolvedNames STATE swap onto lexicalScopes-chain derivations.
+
 **Round 519 (2026-07-14) — INV.4(b) batches 10+11: TS2373 param-init forward
 refs + the break/continue jump-target family migrated onto the check spine;
 6 walker functions (~376 lines) deleted, 2 init dispatches removed.**
