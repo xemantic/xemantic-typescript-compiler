@@ -59,6 +59,49 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 530 (2026-07-16) — INV.4(d) walker 1: checkUncalledFunctionsInConditions
+(TS2774/TS2801, 435 ms in the round-529 cost table) migrated onto the spine —
+the recursive walkUncalledChecksInStatement(s)/walkUncalledChecksInExpression
+walkers and the withUncalledScope/withUncalledBlockScope push/pop pair are
+DELETED (~270 lines).** First (d)-class migration — the design extends the
+(c)(iv) template to a TYPING pass with per-emission ambient state: (1) REACH is
+a memoized BOOLEAN ancestor classifier (`spineUncalledReached` over
+`spineUncalledEdge` — the deleted arms verbatim, incl. the quirks pinned in
+Inv4SpineBatch21Test: switch subjects / case expressions / for headers / enum
+initializers / param defaults unreached; try/catch/finally + switch-clause
+statements walked WITHOUT a block scope; object-literal method and
+class-EXPRESSION member bodies walked WITHOUT a param scope or this-type;
+dotted-namespace bodies ARE walked — the parser keeps one ModuleDeclaration
+with a dotted name and a ModuleBlock body, the one pin that flipped during
+pre-verification). (2) SCOPE: the three legacy stacks (shadowed / typed-locals
+/ this-type) are REBUILT pull-based at each emission from the anchor's
+ancestor chain (`spineUncalledWithScopes`) with per-owner memoized levels
+(`spineUncalledLevelFor`) — sound because the level collection is
+position-independent (params + top-level body statements only) and each level
+computes LAZILY under exactly the already-pushed OUTER levels, the state the
+legacy walk had at its scope entry; the this-type chain SKIPS a class whose
+STATIC METHOD body contains the anchor (the legacy temporary pop — static
+property initializers and static accessors keep it, bug-compat). LAZY levels
+mean functions containing no conditions never pay the collection's typing
+calls (the legacy pass collected for every walked function — part of its
+38,986 getTypeOfExpression calls). (3) Emissions dispatch at
+If/While/Do/For/ExpressionStatement/ConditionalExpression/ArrowFunction
+enters; the ArrowFunction expression-body case anchors the scope rebuild at
+the BODY so the arrow's own param level is included (pinned by the
+`arrow expression-body sees its OWN param scope` negative control). (4)
+`currentFlowGraph`/`currentCheckFileName` save-set-restored around EACH
+dispatch, never walk-wide (the currentArithmeticFlowGraph 78-test gotcha) —
+note the DELETED pass used to LEAK last-file currentCheckFileName/
+currentFileLocals to downstream passes; the 8-profile A/B confirms no
+downstream pass depended on it. VERIFIED: 36 pins ALL green against the OLD
+walker first; suite 10,872 → 10,908 (0 regressions); listAll error lines
+IDENTICAL on ALL 8 profiles (530a vs 529a, re-verified from files after the
+A/B script's 10-min background timeout truncated the first server run — an
+orphaned java kept an open fd on the output file, kill + solo re-run);
+bench 25,956 ms self / 46 errors unchanged (+1.3% vs the 529 single run, in
+the box-drift band; RSS 1,224 → 1,049 MB). NEXT: INV.4(d) walker 2 —
+checkArithmeticOperandTypes (309 ms), decompose when reached.**
+
 **Round 529 (2026-07-16) — INV.4(c)(iv): checkTypeUsedAsValue onto the spine —
 INV.4(c) COMPLETE; the family's recursive walkers + ScopeNameSet are DELETED
 (~700 lines).** The last name-resolution-pair member (TS2693/TS2708/TS2689/
@@ -492,88 +535,6 @@ destructuring-assignment-LHS skip needs a came-from-child parent walk,
 checkReservedWordIdentifiers, checkStrictModeReservedWords,
 checkAwaitContext — the last is stateful isAsync threading, decompose when
 reached).
-
-**Round 518 (2026-07-14) — INV.4(b) batch 8: the parameter-initializer family
-migrated onto the spine; 24 walker functions (~902 lines) deleted, 6 init
-dispatches removed.** Session opened with the queued `--passTiming` re-measure
-(compiler profile, daemons stopped): checker-init 21.6 s of 24.9 s wall; the
-spine pass now carries 24 migrated passes at 529 ms; top-3 unchanged
-(checkPropertyAccess 3.73 s / checkTypeAssignability 2.43 s /
-checkCallExpressionTypes 2.27 s); the name-resolution pair (INV.4(c)) at
-932.7 + 681.8 ms; the zero-typing tail remains the batch pool. Batch 8 took
-the six-pass parameter-initializer family as THREE Parameter-enter handlers +
-ONE SetAccessor-enter handler: (1) `checkOptionalParamWithInitializer`
-(TS1015) — parent-kind dispatch reproduces the old reach exactly: the
-corpus-tuned requireType gate (tsc's checkGrammarParameterList fires
-unconditionally; ours needs a type annotation or a param-property modifier in
-DECLARATIONS, fires bare in arrow/fn-expr params — lifting it is signal-driven,
-not a migration side effect), interface/type-literal signatures + function
-TYPES + objlit/class-expr GET accessors stay excluded; widened faithfully to
-class property initializers / parameter defaults / dotted-namespace bodies.
-(2) `checkOptionalBindingPatternParams` (TS2463) — the per-parent
-owner-has-body gate (overload/ambient signatures exempt); widened to
-parameter defaults. (3) `checkParamInitializerForbidden`
-(TS2523/TS2524/TS2372/TS2502/TS18048) — `walkParamInitForbidden`, the
-binding-name walk, and `collectParamSelfRefs` retained verbatim as the
-per-parameter core (all stop at nested fn/class boundaries); the per-FILE
-(code@pos) dedup set became `spineParamForbiddenEmitted` (cleared in
-checkSpine's file loop); the `walkParamForbiddenExprForFns` nested-fn descent
-DISSOLVES into per-Parameter enters (its whole purpose was reaching nested
-functions' params — the spine visits them directly); `findParamSelfRef`
-deleted as already-dead code (orphaned by B519's collectParamSelfRefs — only
-self-recursive references remained). (4) `checkParameterInitializerInNonImpl`
-(TS2371) — verified against tsc checker.ts:45130 (checkParameter: initializer
-+ `nodeIsMissing(getContainingFunction(node).body)`) and WIDENED faithfully to
-every FunctionType/ConstructorType position (the old walk reached fn-types
-only under var annotations / type aliases / casts via a 35-branch manual
-type-node descent — a fn-type in a PARAMETER annotation was silently
-unchecked); bodyless fn/method/ctor declarations + interface/type-literal
-methods fire as before; accessors stay excluded (old behavior);
-`reportTS2371ForParam` retained as the per-param emitter (binding-element
-defaults included). (5) `checkSetAccessorInitializer` +
-`checkSetAccessorRestParameter` (TS1052/TS1053, one SetAccessor-enter
-handler) — parent gate widened from class DECLARATIONS to class expressions +
-object literals per tsc checkGrammarAccessor (verified at checker.ts:52894/52900);
-interface/type-literal setters stay excluded (their parse may drop
-initializers — signal-driven candidate); emission shapes preserved exactly
-(ONE TS1052 per setter at the name; TS1053 per rest param at the `...`).
-VERIFIED: 29 pins written FIRST and run against the OLD walkers (23 green,
-the 6 widening pins fail pre-migration as expected — exactly the widened
-positions); suite 10,491 → 10,520 (+29 Inv4SpineBatch8Test, 0 regressions);
-listAll error lines IDENTICAL on ALL 8 profiles (518a vs 517b); warning-clean
-(--rerun-tasks). Bench row: 26,357 ms self, 46 errors unchanged (the TSV's
-−25% vs-previous compares against round 517's documented drift-artifact row —
-vs the clean 517 band ~26–27 s this is neutral). BATCH 9 same session: FOUR
-more passes (16 walker funs, ~606 lines deleted, 4 init slots removed):
-(1) `checkForInLhsTypeAnnotation` (TS2404) — ForInStatement-enter handler;
-widened faithfully to arrow/fn-expr bodies (the old statement walk had no
-expression descent at all). (2) `checkEmptyTypeArguments` (TS1099 on
-calls/new) — CallExpression/NewExpression-enter; the `<>` source scan from
-the callee start preserved; the type-POSITION TS1099 emitter (emitTS1099's
-other caller at ~27072) untouched; `reportEmptyTypeArgs` deleted as orphaned.
-(3) `checkSetterReturns` (TS2408) — SetAccessor-enter with body;
-`checkSetterBodyReturns` retained (does not cross fn/class boundaries);
-interface/type-literal setters have no body so no parent gate is needed;
-widened to expression positions the finder walk missed (await operands —
-pinned). (4) `checkWithStatements` (TS1101/TS1300/TS2410) — the threaded
-isInWith/isInAsync pair became ONE parent-chain walk from the WithStatement:
-a WithStatement ancestor hit BEFORE any function-like boundary suppresses
-TS1300/TS2410 (inner with of a chain); the nearest function-like boundary
-decides isInAsync (Async modifier on fn-decl/fn-expr/method; ARROWS reset to
-false — the old walker's rule, tsc's AwaitContext would fire for async
-arrows, a signal-driven widening candidate pinned negative; ctors/accessors/
-static blocks/namespaces reset too); TS1101 gated on `spineWithStrictActive`
-(alwaysStrict != false); TS2410's balanced-paren span scan preserved
-verbatim; widened to class property initializers (pinned). VERIFIED: 18 pins
-pre-run against the OLD walkers (14 green, 4 widening pins fail
-pre-migration as expected); suite 10,520 → 10,538 (+18 Inv4SpineBatch9Test,
-0 regressions); listAll error lines IDENTICAL on ALL 8 profiles (518b vs
-518a); warning-clean. Session total: TEN passes, 40 walker funs (~1,508
-lines) deleted, 10 init dispatches removed, suite +47. Ops note: a
-`pkill -f "MainK[t]"` bracket pattern still matched ITSELF because a
-`pgrep -af "MainKt"` LITERAL sat earlier in the same compound command — the
-bracket trick must cover every occurrence of the pattern in the command
-line, not just the pkill's own argument.
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
@@ -1575,6 +1536,16 @@ interrupt the arc).
     241 ms, checkArgumentCounts 230 ms, checkUseBeforeDeclaration 205 ms,
     checkImplicitReturns 199 ms, checkConstAssignment 170 ms, then a long
     ~100–165 ms tail (checkAlwaysTruthy, checkNullUndefinedUsage, …).
+    - (w1) DONE round 530 (2026-07-16): checkUncalledFunctionsInConditions
+      (TS2774/TS2801) — the first (d)-class TYPING-pass migration; template
+      extends (c)(iv): boolean reach classifier + PULL-BASED per-emission
+      stack rebuild with per-owner memoized LAZY levels (functions with no
+      conditions never pay the collection's typing calls), ambient state
+      (currentFlowGraph/currentCheckFileName) save-set-restored around EACH
+      dispatch never walk-wide. 36 pins (Inv4SpineBatch21Test) pre-verified
+      on the OLD walker; suite 10,872 → 10,908; listAll error-line identical
+      on ALL 8 profiles; ~270 walker lines deleted. See the round-530
+      session note for the quirks pinned.
   - [ ] **INV.4(e) The top-3 giants.** checkPropertyAccess (3.8 s) →
     checkTypeAssignability (2.2 s) → checkCallExpressionTypes (1.7 s) — one at
     a time, each with its own sub-plan when reached (together 38.6% of

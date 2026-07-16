@@ -1,3 +1,85 @@
+**Round 518 (2026-07-14) — INV.4(b) batch 8: the parameter-initializer family
+migrated onto the spine; 24 walker functions (~902 lines) deleted, 6 init
+dispatches removed.** Session opened with the queued `--passTiming` re-measure
+(compiler profile, daemons stopped): checker-init 21.6 s of 24.9 s wall; the
+spine pass now carries 24 migrated passes at 529 ms; top-3 unchanged
+(checkPropertyAccess 3.73 s / checkTypeAssignability 2.43 s /
+checkCallExpressionTypes 2.27 s); the name-resolution pair (INV.4(c)) at
+932.7 + 681.8 ms; the zero-typing tail remains the batch pool. Batch 8 took
+the six-pass parameter-initializer family as THREE Parameter-enter handlers +
+ONE SetAccessor-enter handler: (1) `checkOptionalParamWithInitializer`
+(TS1015) — parent-kind dispatch reproduces the old reach exactly: the
+corpus-tuned requireType gate (tsc's checkGrammarParameterList fires
+unconditionally; ours needs a type annotation or a param-property modifier in
+DECLARATIONS, fires bare in arrow/fn-expr params — lifting it is signal-driven,
+not a migration side effect), interface/type-literal signatures + function
+TYPES + objlit/class-expr GET accessors stay excluded; widened faithfully to
+class property initializers / parameter defaults / dotted-namespace bodies.
+(2) `checkOptionalBindingPatternParams` (TS2463) — the per-parent
+owner-has-body gate (overload/ambient signatures exempt); widened to
+parameter defaults. (3) `checkParamInitializerForbidden`
+(TS2523/TS2524/TS2372/TS2502/TS18048) — `walkParamInitForbidden`, the
+binding-name walk, and `collectParamSelfRefs` retained verbatim as the
+per-parameter core (all stop at nested fn/class boundaries); the per-FILE
+(code@pos) dedup set became `spineParamForbiddenEmitted` (cleared in
+checkSpine's file loop); the `walkParamForbiddenExprForFns` nested-fn descent
+DISSOLVES into per-Parameter enters (its whole purpose was reaching nested
+functions' params — the spine visits them directly); `findParamSelfRef`
+deleted as already-dead code (orphaned by B519's collectParamSelfRefs — only
+self-recursive references remained). (4) `checkParameterInitializerInNonImpl`
+(TS2371) — verified against tsc checker.ts:45130 (checkParameter: initializer
++ `nodeIsMissing(getContainingFunction(node).body)`) and WIDENED faithfully to
+every FunctionType/ConstructorType position (the old walk reached fn-types
+only under var annotations / type aliases / casts via a 35-branch manual
+type-node descent — a fn-type in a PARAMETER annotation was silently
+unchecked); bodyless fn/method/ctor declarations + interface/type-literal
+methods fire as before; accessors stay excluded (old behavior);
+`reportTS2371ForParam` retained as the per-param emitter (binding-element
+defaults included). (5) `checkSetAccessorInitializer` +
+`checkSetAccessorRestParameter` (TS1052/TS1053, one SetAccessor-enter
+handler) — parent gate widened from class DECLARATIONS to class expressions +
+object literals per tsc checkGrammarAccessor (verified at checker.ts:52894/52900);
+interface/type-literal setters stay excluded (their parse may drop
+initializers — signal-driven candidate); emission shapes preserved exactly
+(ONE TS1052 per setter at the name; TS1053 per rest param at the `...`).
+VERIFIED: 29 pins written FIRST and run against the OLD walkers (23 green,
+the 6 widening pins fail pre-migration as expected — exactly the widened
+positions); suite 10,491 → 10,520 (+29 Inv4SpineBatch8Test, 0 regressions);
+listAll error lines IDENTICAL on ALL 8 profiles (518a vs 517b); warning-clean
+(--rerun-tasks). Bench row: 26,357 ms self, 46 errors unchanged (the TSV's
+−25% vs-previous compares against round 517's documented drift-artifact row —
+vs the clean 517 band ~26–27 s this is neutral). BATCH 9 same session: FOUR
+more passes (16 walker funs, ~606 lines deleted, 4 init slots removed):
+(1) `checkForInLhsTypeAnnotation` (TS2404) — ForInStatement-enter handler;
+widened faithfully to arrow/fn-expr bodies (the old statement walk had no
+expression descent at all). (2) `checkEmptyTypeArguments` (TS1099 on
+calls/new) — CallExpression/NewExpression-enter; the `<>` source scan from
+the callee start preserved; the type-POSITION TS1099 emitter (emitTS1099's
+other caller at ~27072) untouched; `reportEmptyTypeArgs` deleted as orphaned.
+(3) `checkSetterReturns` (TS2408) — SetAccessor-enter with body;
+`checkSetterBodyReturns` retained (does not cross fn/class boundaries);
+interface/type-literal setters have no body so no parent gate is needed;
+widened to expression positions the finder walk missed (await operands —
+pinned). (4) `checkWithStatements` (TS1101/TS1300/TS2410) — the threaded
+isInWith/isInAsync pair became ONE parent-chain walk from the WithStatement:
+a WithStatement ancestor hit BEFORE any function-like boundary suppresses
+TS1300/TS2410 (inner with of a chain); the nearest function-like boundary
+decides isInAsync (Async modifier on fn-decl/fn-expr/method; ARROWS reset to
+false — the old walker's rule, tsc's AwaitContext would fire for async
+arrows, a signal-driven widening candidate pinned negative; ctors/accessors/
+static blocks/namespaces reset too); TS1101 gated on `spineWithStrictActive`
+(alwaysStrict != false); TS2410's balanced-paren span scan preserved
+verbatim; widened to class property initializers (pinned). VERIFIED: 18 pins
+pre-run against the OLD walkers (14 green, 4 widening pins fail
+pre-migration as expected); suite 10,520 → 10,538 (+18 Inv4SpineBatch9Test,
+0 regressions); listAll error lines IDENTICAL on ALL 8 profiles (518b vs
+518a); warning-clean. Session total: TEN passes, 40 walker funs (~1,508
+lines) deleted, 10 init dispatches removed, suite +47. Ops note: a
+`pkill -f "MainK[t]"` bracket pattern still matched ITSELF because a
+`pgrep -af "MainKt"` LITERAL sat earlier in the same compound command — the
+bracket trick must cover every occurrence of the pattern in the command
+line, not just the pkill's own argument.
+
 **Round 517 (2026-07-14) — INV.4(b) batch 6: duplicate-modifier grammar +
 ambient initializers + switch/case comparability migrated onto the spine;
 9 walker functions (~453 lines) deleted, 3 init slots removed.** Three passes:

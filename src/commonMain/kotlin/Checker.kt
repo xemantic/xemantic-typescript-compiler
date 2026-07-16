@@ -910,7 +910,8 @@ class Checker(
     // MUST be declared before init {} (populated lazily during the check pipeline).
     private var scriptEnumMembersCache: Map<String, Map<String, Set<String>>>? = null
 
-    // Stack of scope-shadowed names for TS2774 (push on function entry, pop on exit).
+    // Stack of scope-shadowed names for TS2774 (rebuilt pull-based per emission
+    // since INV.4(d) walker 1 — see [spineUncalledWithScopes]).
     // MUST be declared before init {} to avoid Kotlin property initialization order issue.
     private val uncalledShadowedScopes: ArrayDeque<MutableSet<String>> = ArrayDeque()
     // Parallel stack of typed locals (param/local-fn/local-var with annotated or
@@ -919,6 +920,22 @@ class Checker(
     private val uncalledTypedLocalsStack: ArrayDeque<MutableMap<String, Type>> = ArrayDeque()
     // Stack of `this` types for TS2774 (instance type when inside a class method).
     private val uncalledThisTypeStack: ArrayDeque<Type> = ArrayDeque()
+    // ── INV.4(d) walker 1: checkUncalledFunctionsInConditions on the spine ──
+    // All MUST be declared before init {} (consumed by checkSpine during init).
+    /** Per-file activation for the TS2774/TS2801 spine handlers. */
+    private var spineUncalledActive = false
+    /** The current file's flow graph (the deleted pass set currentFlowGraph
+     *  pass-wide; the spine sets it only around each emission dispatch). */
+    private var spineUncalledFlow: FlowGraph? = null
+    /** Per-file nodeId memo for [spineUncalledReached] — 0 unknown / 1 reached / 2 not. */
+    private var spineUncalledReachMemo = ByteArray(0)
+    /** Memoized pull-based scope levels keyed by owner nodeId ([spineUncalledLevelFor]). */
+    private val spineUncalledLevelMemo = HashMap<Int, UncalledLevel>()
+    /** Memoized class this-types keyed by class nodeId (null memoized via containsKey). */
+    private val spineUncalledThisMemo = HashMap<Int, Type?>()
+    /** Reusable ascent buffers for [spineUncalledReached] / [spineUncalledWithScopes]. */
+    private val spineUncalledChain = ArrayList<Node>()
+    private val spineUncalledOwnerBuf = ArrayList<Node>()
 
     // Positions of ObjectLiteralExpression nodes that are destructuring-assignment
     // TARGETS (LHS of `=`, incl. nested through array/object/default nesting). Consumed
@@ -2502,9 +2519,9 @@ class Checker(
         pass("checkNamespaceTypeofAssignability") { checkNamespaceTypeofAssignability() }
         // 20. Check always-truthy expressions (TS2872)
         pass("checkAlwaysTruthy") { checkAlwaysTruthy() }
-        // 20a. Check uncalled function in conditional position (TS2774)
-        // Strict-null-checks-only — see helper for full conditions.
-        pass("checkUncalledFunctionsInConditions") { checkUncalledFunctionsInConditions() }
+        // 20a. Uncalled function in conditional position (TS2774/TS2801) migrated
+        // to the check spine (INV.4(d) walker 1, round 530) — see
+        // [spineUncalledDispatch], [spineUncalledReached], [spineUncalledWithScopes].
         // 20b. Check comma operator left side unused (TS2695)
         pass("checkCommaOperatorUnused") { checkCommaOperatorUnused() }
         // B277: TS2871/TS2869 `??` nullish predicates + while/do TS2872/TS2873 truthiness.
@@ -17693,6 +17710,7 @@ class Checker(
                 spineScopeFill(result)
                 spineUResSetup(result)
                 spineTavSetup(result)
+                spineUncalledSetup(result)
                 spineUResAuditActive = unresolvedAuditEnabled && spineUResActive
                 try {
                     spineWalkFile(sf)
@@ -17700,6 +17718,7 @@ class Checker(
                     spineScopeClear()
                     spineUResTeardown()
                     spineTavTeardown()
+                    spineUncalledTeardown()
                 }
                 spineResolveDeferredIterationChecks()
             }
@@ -17792,6 +17811,7 @@ class Checker(
             is ArrowFunction -> {
                 spineCheckParamForwardRefs(node.parameters, node.body)
                 spineCheckAsyncAwaitParams(node.modifiers, node.parameters)
+                spineUncalledDispatch(node)
             }
             is FunctionExpression -> {
                 spineCheckParamForwardRefs(node.parameters, node.body)
@@ -17823,6 +17843,11 @@ class Checker(
                 spineCheckStrictForInOfDecls(node.initializer)
                 spineCheckForAwait(node)
             }
+            is IfStatement -> spineUncalledDispatch(node)
+            is WhileStatement -> spineUncalledDispatch(node)
+            is DoStatement -> spineUncalledDispatch(node)
+            is ForStatement -> spineUncalledDispatch(node)
+            is ConditionalExpression -> spineUncalledDispatch(node)
             is ForInStatement -> {
                 spineCheckForInLhsType(node)
                 spineCheckStrictForInOfDecls(node.initializer)
@@ -17898,7 +17923,10 @@ class Checker(
                 spineCheckDupModifiers(node)
                 spineCheckStrictImportEqualsName(node)
             }
-            is ExpressionStatement -> spineCheckStrictExpressionStatement(node)
+            is ExpressionStatement -> {
+                spineCheckStrictExpressionStatement(node)
+                spineUncalledDispatch(node)
+            }
             else -> {}
         }
     }
@@ -47162,20 +47190,375 @@ interface DataView {
     //     `if (foo) { foo() }` is intentional defined-check + call)
     // -----------------------------------------------------------------------
 
-    private fun checkUncalledFunctionsInConditions() {
-        if (!strictNullChecks) return
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            currentFileLocals = result.locals
-            currentCheckFileName = fileName
-            currentFlowGraph = result.flowGraph
+    // ── INV.4(d) walker 1: checkUncalledFunctionsInConditions on the spine ──
+    // The recursive walkUncalledChecksInStatement(s)/walkUncalledChecksInExpression
+    // walkers and the withUncalledScope/withUncalledBlockScope push/pop pair are
+    // DELETED. Reach is a memoized boolean ancestor-chain classifier
+    // ([spineUncalledReached] over [spineUncalledEdge] — the deleted walker's
+    // exact dispatch arms, incl. the corpus quirks: switch subjects / case
+    // expressions / for headers / enum initializers / param defaults unreached;
+    // try/catch/finally and switch-clause statements walked WITHOUT a block
+    // scope; object-literal method and class-EXPRESSION member bodies walked
+    // WITHOUT a param scope or this-type). The three scope stacks are REBUILT
+    // pull-based at each emission from the ancestor chain
+    // ([spineUncalledWithScopes], per-owner memoized levels — the level
+    // collection is position-independent: it scans only the owner's params +
+    // top-level body statements, consulting the already-pushed OUTER levels,
+    // exactly the state the legacy walk had at scope entry). Emissions dispatch
+    // at If/While/Do/For/ExpressionStatement/ConditionalExpression/ArrowFunction
+    // enters with currentFlowGraph/currentCheckFileName save-set-restore (the
+    // flow graph must NOT be set walk-wide — the currentArithmeticFlowGraph
+    // gotcha).
+
+    /** One scope level of the legacy parallel stacks. */
+    private class UncalledLevel(
+        val shadowed: MutableSet<String>,
+        val typed: MutableMap<String, Type>,
+    )
+
+    /** Per-file activation + state, called from [checkSpine]'s loop. */
+    private fun spineUncalledSetup(result: BinderResult) {
+        spineUncalledLevelMemo.clear()
+        spineUncalledThisMemo.clear()
+        spineUncalledActive = strictNullChecks && !spineIsDts
+        if (!spineUncalledActive) {
+            spineUncalledFlow = null
+            spineUncalledReachMemo = ByteArray(0)
+            return
+        }
+        spineUncalledFlow = result.flowGraph
+        spineUncalledReachMemo = ByteArray(result.sourceFile.nodeCount)
+    }
+
+    private fun spineUncalledTeardown() {
+        spineUncalledActive = false
+        spineUncalledFlow = null
+        spineUncalledReachMemo = ByteArray(0)
+        spineUncalledLevelMemo.clear()
+        spineUncalledThisMemo.clear()
+    }
+
+    /**
+     * Does the deleted walker reach [child] from [parent]? Mirrors
+     * walkUncalledChecksInStatement(s)/walkUncalledChecksInExpression's dispatch
+     * arms exactly — every kind absent here fell to their `else` arms.
+     * Member-body edges are grandparent-agnostic: an interface member's body
+     * cannot exist, and the OWNER edge (class decl/expr, object literal) already
+     * gates which containers admit their members.
+     */
+    private fun spineUncalledEdge(parent: Node, child: Node): Boolean = when (parent) {
+        // ── statement dispatch ──
+        is SourceFile -> child is Statement
+        is IfStatement -> child === parent.expression || child === parent.thenStatement ||
+            child === parent.elseStatement
+        is WhileStatement -> child === parent.expression || child === parent.statement
+        is DoStatement -> child === parent.expression || child === parent.statement
+        // For headers (initializer/incrementor) were never walked — condition + body only.
+        is ForStatement -> child === parent.condition || child === parent.statement
+        is Block -> child is Statement
+        is ExpressionStatement -> child === parent.expression
+        is ReturnStatement -> child === parent.expression
+        is VariableStatement -> child === parent.declarationList
+        // For-header declaration lists die here (their parent is the for statement).
+        is VariableDeclarationList -> child is VariableDeclaration && parent.parent is VariableStatement
+        // Only the initializer — binding-pattern DEFAULT values were never walked.
+        is VariableDeclaration -> child === parent.initializer
+        is FunctionDeclaration -> child === parent.body
+        is ClassDeclaration, is ClassExpression ->
+            child is MethodDeclaration || child is Constructor || child is GetAccessor ||
+                child is SetAccessor || child is PropertyDeclaration
+        is MethodDeclaration -> child === parent.body
+        is Constructor -> child === parent.body
+        is GetAccessor -> child === parent.body
+        is SetAccessor -> child === parent.body
+        is PropertyDeclaration -> child === parent.initializer
+        is ForInStatement -> child === parent.expression || child === parent.statement
+        is ForOfStatement -> child === parent.expression || child === parent.statement
+        // Switch subjects and case-clause EXPRESSIONS were never walked.
+        is SwitchStatement -> child is CaseClause || child is DefaultClause
+        is CaseClause -> child is Statement
+        is DefaultClause -> child is Statement
+        is TryStatement -> child is Block || child is CatchClause
+        is CatchClause -> child is Block
+        is ModuleDeclaration -> child is ModuleBlock
+        is ModuleBlock -> child is Statement
+        is LabeledStatement -> child === parent.statement
+        is ThrowStatement -> child === parent.expression
+        is ExportAssignment -> child === parent.expression
+        // ── expression dispatch ──
+        is ConditionalExpression -> child === parent.condition || child === parent.whenTrue ||
+            child === parent.whenFalse
+        is BinaryExpression -> true
+        is ParenthesizedExpression -> child === parent.expression
+        is CallExpression -> child === parent.expression || parent.arguments.any { it === child }
+        is NewExpression -> child === parent.expression || parent.arguments?.any { it === child } == true
+        // Param defaults were never walked — the body only (both body forms).
+        is ArrowFunction -> child === parent.body
+        is FunctionExpression -> child === parent.body
+        is PropertyAccessExpression -> child === parent.expression
+        is ElementAccessExpression -> child === parent.expression || child === parent.argumentExpression
+        is PrefixUnaryExpression -> true
+        is PostfixUnaryExpression -> true
+        is SpreadElement -> child === parent.expression
+        is TemplateExpression -> child is TemplateSpan
+        is TemplateSpan -> child === parent.expression
+        is ArrayLiteralExpression -> true
+        is ObjectLiteralExpression ->
+            child is PropertyAssignment || child is ShorthandPropertyAssignment ||
+                child is SpreadAssignment || child is MethodDeclaration ||
+                child is GetAccessor || child is SetAccessor
+        // Only the initializer — computed property NAMES were never walked.
+        is PropertyAssignment -> child === parent.initializer
+        is ShorthandPropertyAssignment -> child === parent.objectAssignmentInitializer
+        is SpreadAssignment -> child === parent.expression
+        is AsExpression -> child === parent.expression
+        is TypeAssertionExpression -> child === parent.expression
+        is SatisfiesExpression -> child === parent.expression
+        is NonNullExpression -> child === parent.expression
+        is YieldExpression -> child === parent.expression
+        is AwaitExpression -> child === parent.expression
+        is VoidExpression -> child === parent.expression
+        is DeleteExpression -> child === parent.expression
+        is TypeOfExpression -> child === parent.expression
+        is TaggedTemplateExpression ->
+            child === parent.tag || (child === parent.template && child is TemplateExpression)
+        is CommaListExpression -> true
+        else -> false
+    }
+
+    /** Is [node] reached by the deleted walker? Memoized per file by nodeId
+     *  (ascent collects the chain, the descent backfills — a boolean AND over
+     *  edges, so one verdict serves the whole walked chain). */
+    private fun spineUncalledReached(node: Node): Boolean {
+        val memo = spineUncalledReachMemo
+        run {
+            val id = (node as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) {
+                val m = memo[id].toInt()
+                if (m != 0) return m == 1
+            }
+        }
+        val chain = spineUncalledChain
+        chain.clear()
+        var cur: Node = node
+        val reached: Boolean
+        while (true) {
+            val parent = (cur as NodeBase).parent
+            if (parent == null) {
+                reached = cur is SourceFile
+                break
+            }
+            if (!spineUncalledEdge(parent, cur)) {
+                reached = false
+                break
+            }
+            val pid = (parent as NodeBase).nodeId
+            val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
+            if (pm != 0) {
+                reached = pm == 1
+                break
+            }
+            chain.add(cur)
+            cur = parent
+        }
+        run {
+            val id = (cur as NodeBase).nodeId
+            if (id >= 0 && id < memo.size && memo[id].toInt() == 0) {
+                memo[id] = if (reached) 1 else 2
+            }
+        }
+        val fill: Byte = if (reached) 1 else 2
+        for (i in chain.indices.reversed()) {
+            val id = (chain[i] as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) memo[id] = fill
+        }
+        chain.clear()
+        return reached
+    }
+
+    /** Which Blocks got the legacy withUncalledBlockScope: those dispatched via
+     *  the statement Block arm — free-standing statement positions. Function
+     *  bodies (the fn level owns their locals), try/catch/finally blocks, and
+     *  any other structural Block position got NO block scope. */
+    private fun spineUncalledBlockHasScope(b: Block): Boolean = when (val p = b.parent) {
+        is SourceFile, is ModuleBlock, is CaseClause, is DefaultClause -> true
+        is Block -> true
+        is IfStatement -> b === p.thenStatement || b === p.elseStatement
+        is WhileStatement -> b === p.statement
+        is DoStatement -> b === p.statement
+        is ForStatement -> b === p.statement
+        is ForInStatement -> b === p.statement
+        is ForOfStatement -> b === p.statement
+        is LabeledStatement -> b === p.statement
+        else -> false
+    }
+
+    private fun spineUncalledLevelFor(owner: Node): UncalledLevel {
+        val id = (owner as NodeBase).nodeId
+        if (id >= 0) spineUncalledLevelMemo[id]?.let { return it }
+        val shadowed = HashSet<String>()
+        val typed = HashMap<String, Type>()
+        when (owner) {
+            is Block -> collectUncalledTypedLocalsFromBody(owner, typed, shadowed)
+            is FunctionDeclaration -> spineUncalledFnLevel(owner.parameters, owner.body, typed, shadowed)
+            is FunctionExpression -> spineUncalledFnLevel(owner.parameters, owner.body, typed, shadowed)
+            is ArrowFunction -> spineUncalledFnLevel(owner.parameters, owner.body as? Block, typed, shadowed)
+            is MethodDeclaration -> spineUncalledFnLevel(owner.parameters, owner.body, typed, shadowed)
+            is Constructor -> spineUncalledFnLevel(owner.parameters, owner.body, typed, shadowed)
+            is GetAccessor -> spineUncalledFnLevel(owner.parameters, owner.body, typed, shadowed)
+            is SetAccessor -> spineUncalledFnLevel(owner.parameters, owner.body, typed, shadowed)
+            else -> {}
+        }
+        val level = UncalledLevel(shadowed, typed)
+        if (id >= 0) spineUncalledLevelMemo[id] = level
+        return level
+    }
+
+    /** The legacy withUncalledScope collection: params (binding names + annotated
+     *  types) first, then the body's top-level locals. Must run with the OUTER
+     *  levels already on the stacks — the initializer-typing branch consults them. */
+    private fun spineUncalledFnLevel(
+        params: List<Parameter>,
+        body: Block?,
+        typed: MutableMap<String, Type>,
+        shadowed: MutableSet<String>,
+    ) {
+        for (p in params) {
+            collectBindingNames(p.name, shadowed)
+            val pName = (p.name as? Identifier)?.text
+            if (pName != null) {
+                resolveUncalledParamType(p)?.let { typed[pName] = it }
+            }
+        }
+        if (body != null) collectUncalledTypedLocalsFromBody(body, typed, shadowed)
+    }
+
+    private fun spineUncalledThisTypeFor(cls: ClassDeclaration): Type? {
+        val id = (cls as NodeBase).nodeId
+        if (id >= 0 && spineUncalledThisMemo.containsKey(id)) return spineUncalledThisMemo[id]
+        val t = resolveUncalledThisType(cls)
+        if (id >= 0) spineUncalledThisMemo[id] = t
+        return t
+    }
+
+    /**
+     * Rebuild the legacy scope stacks for an emission at [anchor]: collect the
+     * scope-contributing ancestors (fn-like bodies under their legacy owners,
+     * statement Blocks, ClassDeclarations for the this-type — SKIPPING a class
+     * whose STATIC METHOD body contains the anchor, the legacy temporary pop),
+     * push levels outermost-in (each level's lazy computation sees exactly the
+     * outer stack state the legacy walk had at its scope entry), run, clear.
+     */
+    private inline fun spineUncalledWithScopes(anchor: Node, run: () -> Unit) {
+        val owners = spineUncalledOwnerBuf
+        owners.clear()
+        var child: Node = anchor
+        var p: Node? = (anchor as NodeBase).parent
+        while (p != null) {
+            when {
+                p is FunctionDeclaration && child === p.body -> owners.add(p)
+                p is FunctionExpression && child === p.body -> owners.add(p)
+                p is ArrowFunction && child === p.body -> owners.add(p)
+                p is MethodDeclaration && child === p.body && p.parent is ClassDeclaration -> owners.add(p)
+                p is Constructor && child === p.body && p.parent is ClassDeclaration -> owners.add(p)
+                p is GetAccessor && child === p.body && p.parent is ClassDeclaration -> owners.add(p)
+                p is SetAccessor && child === p.body && p.parent is ClassDeclaration -> owners.add(p)
+                p is Block && spineUncalledBlockHasScope(p) -> owners.add(p)
+                p is ClassDeclaration ->
+                    if (!(child is MethodDeclaration && ModifierFlag.Static in child.modifiers)) {
+                        owners.add(p)
+                    }
+                else -> {}
+            }
+            child = p
+            p = (p as NodeBase).parent
+        }
+        try {
+            for (i in owners.indices.reversed()) {
+                when (val owner = owners[i]) {
+                    is ClassDeclaration ->
+                        spineUncalledThisTypeFor(owner)?.let { uncalledThisTypeStack.addLast(it) }
+                    is Block -> {
+                        // The legacy block scope was pushed only when non-empty
+                        // (invisible to lookups either way — kept for parity).
+                        val level = spineUncalledLevelFor(owner)
+                        if (level.shadowed.isNotEmpty() || level.typed.isNotEmpty()) {
+                            uncalledShadowedScopes.addLast(level.shadowed)
+                            uncalledTypedLocalsStack.addLast(level.typed)
+                        }
+                    }
+                    else -> {
+                        val level = spineUncalledLevelFor(owner)
+                        uncalledShadowedScopes.addLast(level.shadowed)
+                        uncalledTypedLocalsStack.addLast(level.typed)
+                    }
+                }
+            }
+            run()
+        } finally {
             uncalledShadowedScopes.clear()
             uncalledTypedLocalsStack.clear()
             uncalledThisTypeStack.clear()
-            walkUncalledChecksInStatements(result.sourceFile.statements, source, fileName)
-            currentFlowGraph = null
+        }
+    }
+
+    /** The TS2774/TS2801 emission dispatch — the node kinds the deleted walker
+     *  ran checkUncalledInCondition at. The ArrowFunction case anchors the scope
+     *  rebuild at the BODY so the arrow's own param level is included (the
+     *  legacy emission ran inside the arrow's withUncalledScope). */
+    private fun spineUncalledDispatch(node: Node) {
+        if (!spineUncalledActive || !spineUncalledReached(node)) return
+        val savedFlow = currentFlowGraph
+        val savedCheckFile = currentCheckFileName
+        currentFlowGraph = spineUncalledFlow
+        currentCheckFileName = spineFileName
+        try {
+            when (node) {
+                is IfStatement -> spineUncalledWithScopes(node) {
+                    checkUncalledInCondition(node.expression, node.thenStatement, spineSource, spineFileName)
+                }
+                is WhileStatement -> spineUncalledWithScopes(node) {
+                    checkUncalledInCondition(node.expression, node.statement, spineSource, spineFileName)
+                }
+                is DoStatement -> spineUncalledWithScopes(node) {
+                    checkUncalledInCondition(node.expression, node.statement, spineSource, spineFileName)
+                }
+                is ForStatement -> {
+                    val cond = node.condition
+                    if (cond != null) spineUncalledWithScopes(node) {
+                        checkUncalledInCondition(cond, node.statement, spineSource, spineFileName)
+                    }
+                }
+                is ExpressionStatement -> if (isTruthinessChain(node.expression)) {
+                    spineUncalledWithScopes(node) {
+                        checkUncalledInCondition(
+                            node.expression, null, spineSource, spineFileName,
+                            inTestPosition = false,
+                        )
+                    }
+                }
+                is ConditionalExpression -> spineUncalledWithScopes(node) {
+                    checkUncalledInCondition(
+                        node.condition, null, spineSource, spineFileName,
+                        extraBodies = listOf(node.whenTrue, node.whenFalse),
+                    )
+                }
+                is ArrowFunction -> {
+                    val body = node.body
+                    if (body is Expression && isTruthinessChain(body)) {
+                        spineUncalledWithScopes(body) {
+                            checkUncalledInCondition(
+                                body, null, spineSource, spineFileName,
+                                inTestPosition = false,
+                            )
+                        }
+                    }
+                }
+                else -> {}
+            }
+        } finally {
+            currentFlowGraph = savedFlow
+            currentCheckFileName = savedCheckFile
         }
     }
 
@@ -47317,268 +47700,11 @@ interface DataView {
         return obj
     }
 
-    private inline fun withUncalledScope(params: List<Parameter>, body: Block?, doBody: () -> Unit) {
-        val shadowed = mutableSetOf<String>()
-        val typed = mutableMapOf<String, Type>()
-        for (p in params) {
-            collectBindingNames(p.name, shadowed)
-            val pName = (p.name as? Identifier)?.text
-            if (pName != null) {
-                resolveUncalledParamType(p)?.let { typed[pName] = it }
-            }
-        }
-        if (body != null) collectUncalledTypedLocalsFromBody(body, typed, shadowed)
-        uncalledShadowedScopes.addLast(shadowed)
-        uncalledTypedLocalsStack.addLast(typed)
-        try { doBody() } finally {
-            uncalledShadowedScopes.removeLast()
-            uncalledTypedLocalsStack.removeLast()
-        }
-    }
-
-    // 17.30c.i: typed-locals scope for a free-standing Block (top-level or
-    // inside an if/while/for body). Without this, declarations like
-    // `{ const perf = window.performance; if (perf && perf.measure) ... }`
-    // resolve to anyType through the file-level fallback in
-    // `getTypeOfIdentifier` because block-scoped consts/lets are not in
-    // `currentLocalTypes` / `currentFileLocals`. Function bodies don't go
-    // through this branch — they walk via `withUncalledScope` against the
-    // statements directly, so no double-push.
-    private inline fun withUncalledBlockScope(block: Block, doBody: () -> Unit) {
-        val shadowed = mutableSetOf<String>()
-        val typed = mutableMapOf<String, Type>()
-        collectUncalledTypedLocalsFromBody(block, typed, shadowed)
-        if (typed.isEmpty() && shadowed.isEmpty()) {
-            doBody()
-            return
-        }
-        uncalledShadowedScopes.addLast(shadowed)
-        uncalledTypedLocalsStack.addLast(typed)
-        try { doBody() } finally {
-            uncalledShadowedScopes.removeLast()
-            uncalledTypedLocalsStack.removeLast()
-        }
-    }
-
-    private fun walkUncalledChecksInStatements(stmts: List<Statement>, source: String, fileName: String) {
-        for (stmt in stmts) walkUncalledChecksInStatement(stmt, source, fileName)
-    }
-
-    private fun walkUncalledChecksInStatement(stmt: Statement, source: String, fileName: String) {
-        when (stmt) {
-            is IfStatement -> {
-                checkUncalledInCondition(stmt.expression, stmt.thenStatement, source, fileName)
-                walkUncalledChecksInExpression(stmt.expression, source, fileName)
-                walkUncalledChecksInStatement(stmt.thenStatement, source, fileName)
-                stmt.elseStatement?.let { walkUncalledChecksInStatement(it, source, fileName) }
-            }
-            is WhileStatement -> {
-                checkUncalledInCondition(stmt.expression, stmt.statement, source, fileName)
-                walkUncalledChecksInExpression(stmt.expression, source, fileName)
-                walkUncalledChecksInStatement(stmt.statement, source, fileName)
-            }
-            is DoStatement -> {
-                checkUncalledInCondition(stmt.expression, stmt.statement, source, fileName)
-                walkUncalledChecksInExpression(stmt.expression, source, fileName)
-                walkUncalledChecksInStatement(stmt.statement, source, fileName)
-            }
-            is ForStatement -> {
-                stmt.condition?.let { cond ->
-                    checkUncalledInCondition(cond, stmt.statement, source, fileName)
-                    walkUncalledChecksInExpression(cond, source, fileName)
-                }
-                walkUncalledChecksInStatement(stmt.statement, source, fileName)
-            }
-            is Block -> withUncalledBlockScope(stmt) {
-                walkUncalledChecksInStatements(stmt.statements, source, fileName)
-            }
-            is ExpressionStatement -> {
-                // Treat top-level `&&`/`||`/`??` BinaryExpression as a truthiness-test
-                // site (mirrors TypeScript's check on every BE with these operators).
-                // ExpressionStatement discards the expression's value, so the
-                // statement itself is NOT a test position — only LHS operands of
-                // short-circuit operators inherit "tested" status from the operator
-                // semantics; RHS operands do not. Pass inTestPosition = false.
-                if (isTruthinessChain(stmt.expression)) {
-                    checkUncalledInCondition(stmt.expression, null, source, fileName, inTestPosition = false)
-                }
-                walkUncalledChecksInExpression(stmt.expression, source, fileName)
-            }
-            is ReturnStatement -> stmt.expression?.let { walkUncalledChecksInExpression(it, source, fileName) }
-            is VariableStatement -> for (d in stmt.declarationList.declarations) {
-                d.initializer?.let { walkUncalledChecksInExpression(it, source, fileName) }
-            }
-            is FunctionDeclaration -> stmt.body?.let { body ->
-                withUncalledScope(stmt.parameters, body) {
-                    walkUncalledChecksInStatements(body.statements, source, fileName)
-                }
-            }
-            is ClassDeclaration -> {
-                val classThisType = resolveUncalledThisType(stmt)
-                if (classThisType != null) uncalledThisTypeStack.addLast(classThisType)
-                try {
-                    for (m in stmt.members) {
-                        when (m) {
-                            is MethodDeclaration -> m.body?.let { body ->
-                                val isStatic = ModifierFlag.Static in m.modifiers
-                                if (isStatic && classThisType != null) uncalledThisTypeStack.removeLast()
-                                try {
-                                    withUncalledScope(m.parameters, body) {
-                                        walkUncalledChecksInStatements(body.statements, source, fileName)
-                                    }
-                                } finally {
-                                    if (isStatic && classThisType != null) uncalledThisTypeStack.addLast(classThisType)
-                                }
-                            }
-                            is Constructor -> m.body?.let { body ->
-                                withUncalledScope(m.parameters, body) {
-                                    walkUncalledChecksInStatements(body.statements, source, fileName)
-                                }
-                            }
-                            is GetAccessor -> m.body?.let { body ->
-                                withUncalledScope(m.parameters, body) {
-                                    walkUncalledChecksInStatements(body.statements, source, fileName)
-                                }
-                            }
-                            is SetAccessor -> m.body?.let { body ->
-                                withUncalledScope(m.parameters, body) {
-                                    walkUncalledChecksInStatements(body.statements, source, fileName)
-                                }
-                            }
-                            is PropertyDeclaration -> m.initializer?.let { walkUncalledChecksInExpression(it, source, fileName) }
-                            else -> {}
-                        }
-                    }
-                } finally {
-                    if (classThisType != null) uncalledThisTypeStack.removeLast()
-                }
-            }
-            is ForInStatement -> {
-                walkUncalledChecksInExpression(stmt.expression, source, fileName)
-                walkUncalledChecksInStatement(stmt.statement, source, fileName)
-            }
-            is ForOfStatement -> {
-                walkUncalledChecksInExpression(stmt.expression, source, fileName)
-                walkUncalledChecksInStatement(stmt.statement, source, fileName)
-            }
-            is SwitchStatement -> for (c in stmt.caseBlock) {
-                val clauseStmts = when (c) { is CaseClause -> c.statements; is DefaultClause -> c.statements; else -> emptyList() }
-                walkUncalledChecksInStatements(clauseStmts, source, fileName)
-            }
-            is TryStatement -> {
-                walkUncalledChecksInStatements(stmt.tryBlock.statements, source, fileName)
-                stmt.catchClause?.let { walkUncalledChecksInStatements(it.block.statements, source, fileName) }
-                stmt.finallyBlock?.let { walkUncalledChecksInStatements(it.statements, source, fileName) }
-            }
-            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkUncalledChecksInStatements(it.statements, source, fileName) }
-            is LabeledStatement -> walkUncalledChecksInStatement(stmt.statement, source, fileName)
-            is ThrowStatement -> stmt.expression?.let { walkUncalledChecksInExpression(it, source, fileName) }
-            is ExportAssignment -> stmt.expression.let { walkUncalledChecksInExpression(it, source, fileName) }
-            else -> {}
-        }
-    }
-
-    private fun walkUncalledChecksInExpression(expr: Expression, source: String, fileName: String) {
-        when (expr) {
-            is ConditionalExpression -> {
-                checkUncalledInCondition(expr.condition, null, source, fileName, extraBodies = listOf(expr.whenTrue, expr.whenFalse))
-                walkUncalledChecksInExpression(expr.condition, source, fileName)
-                walkUncalledChecksInExpression(expr.whenTrue, source, fileName)
-                walkUncalledChecksInExpression(expr.whenFalse, source, fileName)
-            }
-            is BinaryExpression -> {
-                // Flatten the left-spine iteratively to avoid StackOverflow.
-                val rightStack = ArrayDeque<Expression>()
-                var cur: Expression = expr
-                while (cur is BinaryExpression) {
-                    rightStack.addLast(cur.right)
-                    cur = cur.left
-                }
-                walkUncalledChecksInExpression(cur, source, fileName)
-                while (rightStack.isNotEmpty()) {
-                    walkUncalledChecksInExpression(rightStack.removeLast(), source, fileName)
-                }
-            }
-            is ParenthesizedExpression -> walkUncalledChecksInExpression(expr.expression, source, fileName)
-            is CallExpression -> {
-                walkUncalledChecksInExpression(expr.expression, source, fileName)
-                for (arg in expr.arguments) walkUncalledChecksInExpression(arg, source, fileName)
-            }
-            is NewExpression -> {
-                walkUncalledChecksInExpression(expr.expression, source, fileName)
-                expr.arguments?.forEach { walkUncalledChecksInExpression(it, source, fileName) }
-            }
-            is ArrowFunction -> {
-                val body = expr.body
-                withUncalledScope(expr.parameters, body as? Block) {
-                    if (body is Block) walkUncalledChecksInStatements(body.statements, source, fileName)
-                    else if (body is Expression) {
-                        // Expression-bodied arrow: treat top-level `&&`/`||`/`??` as a
-                        // check site. The arrow's body produces a value rather than
-                        // being a tested condition; same in-test-position rule as
-                        // ExpressionStatement above.
-                        if (isTruthinessChain(body)) {
-                            checkUncalledInCondition(body, null, source, fileName, inTestPosition = false)
-                        }
-                        walkUncalledChecksInExpression(body, source, fileName)
-                    }
-                }
-            }
-            is FunctionExpression -> {
-                withUncalledScope(expr.parameters, expr.body) {
-                    walkUncalledChecksInStatements(expr.body.statements, source, fileName)
-                }
-            }
-            is PropertyAccessExpression -> walkUncalledChecksInExpression(expr.expression, source, fileName)
-            is ElementAccessExpression -> {
-                walkUncalledChecksInExpression(expr.expression, source, fileName)
-                walkUncalledChecksInExpression(expr.argumentExpression, source, fileName)
-            }
-            is PrefixUnaryExpression -> walkUncalledChecksInExpression(expr.operand, source, fileName)
-            is PostfixUnaryExpression -> walkUncalledChecksInExpression(expr.operand, source, fileName)
-            is SpreadElement -> walkUncalledChecksInExpression(expr.expression, source, fileName)
-            is TemplateExpression -> for (span in expr.templateSpans) walkUncalledChecksInExpression(span.expression, source, fileName)
-            is ArrayLiteralExpression -> for (e in expr.elements) walkUncalledChecksInExpression(e, source, fileName)
-            is ObjectLiteralExpression -> for (p in expr.properties) {
-                when (p) {
-                    is PropertyAssignment -> walkUncalledChecksInExpression(p.initializer, source, fileName)
-                    is ShorthandPropertyAssignment -> p.objectAssignmentInitializer?.let { walkUncalledChecksInExpression(it, source, fileName) }
-                    is SpreadAssignment -> walkUncalledChecksInExpression(p.expression, source, fileName)
-                    is MethodDeclaration -> p.body?.let { walkUncalledChecksInStatements(it.statements, source, fileName) }
-                    is GetAccessor -> p.body?.let { walkUncalledChecksInStatements(it.statements, source, fileName) }
-                    is SetAccessor -> p.body?.let { walkUncalledChecksInStatements(it.statements, source, fileName) }
-                    else -> {}
-                }
-            }
-            is AsExpression -> walkUncalledChecksInExpression(expr.expression, source, fileName)
-            is TypeAssertionExpression -> walkUncalledChecksInExpression(expr.expression, source, fileName)
-            is SatisfiesExpression -> walkUncalledChecksInExpression(expr.expression, source, fileName)
-            is NonNullExpression -> walkUncalledChecksInExpression(expr.expression, source, fileName)
-            is YieldExpression -> expr.expression?.let { walkUncalledChecksInExpression(it, source, fileName) }
-            is AwaitExpression -> walkUncalledChecksInExpression(expr.expression, source, fileName)
-            is VoidExpression -> walkUncalledChecksInExpression(expr.expression, source, fileName)
-            is DeleteExpression -> walkUncalledChecksInExpression(expr.expression, source, fileName)
-            is TypeOfExpression -> walkUncalledChecksInExpression(expr.expression, source, fileName)
-            is TaggedTemplateExpression -> {
-                walkUncalledChecksInExpression(expr.tag, source, fileName)
-                (expr.template as? TemplateExpression)?.templateSpans?.forEach {
-                    walkUncalledChecksInExpression(it.expression, source, fileName)
-                }
-            }
-            is CommaListExpression -> for (e in expr.elements) walkUncalledChecksInExpression(e, source, fileName)
-            is ClassExpression -> for (m in expr.members) {
-                when (m) {
-                    is MethodDeclaration -> m.body?.let { walkUncalledChecksInStatements(it.statements, source, fileName) }
-                    is Constructor -> m.body?.let { walkUncalledChecksInStatements(it.statements, source, fileName) }
-                    is GetAccessor -> m.body?.let { walkUncalledChecksInStatements(it.statements, source, fileName) }
-                    is SetAccessor -> m.body?.let { walkUncalledChecksInStatements(it.statements, source, fileName) }
-                    is PropertyDeclaration -> m.initializer?.let { walkUncalledChecksInExpression(it, source, fileName) }
-                    else -> {}
-                }
-            }
-            else -> {}
-        }
-    }
+    // (withUncalledScope / withUncalledBlockScope deleted — INV.4(d) walker 1:
+    // the levels are rebuilt pull-based in [spineUncalledWithScopes]. The old
+    // 17.30c.i note survives there: a free-standing statement Block contributes
+    // a typed-locals level because block-scoped consts/lets are not in
+    // `currentLocalTypes` / `currentFileLocals`.)
 
     /**
      * Walk a truthiness-test expression and emit TS2774 for each operand that
