@@ -1563,10 +1563,18 @@ interrupt the arc).
       10,832 → 10,872 (+40 Inv4SpineBatch20Test, ALL verified against the
       OLD walker first; 0 regressions); listAll error lines IDENTICAL on
       ALL 8 profiles (529a vs 528a); bench row recorded.
-  - [ ] **INV.4(d) Mid-weight stateful walkers.** checkUncalledFunctionsInConditions
-    (506 ms), checkArithmeticOperandTypes (271 ms), checkImplicitReturns,
-    checkArgumentCounts, checkDefiniteAssignment, … — each moves its scope
+  - [ ] **INV.4(d) Mid-weight stateful walkers.** Each moves its scope
     machinery onto the shared spine state; decompose per walker when reached.
+    MEASURED cost order (round-529 --passTiming, post-(c): checker-init
+    20.6 s; spine 2,247 ms carrying both name-resolution families + ~40 tail
+    passes; giants unchanged 3.92/2.34/2.17 s):
+    checkUncalledFunctionsInConditions 435 ms (38,986 getTypeOfExpression
+    calls — a typing pass, not zero-typing), checkArithmeticOperandTypes
+    309 ms (68,946 calls), checkImplicitAnyParameters 272 ms,
+    checkDuplicateIdentifiers 260 ms (zero-typing), checkDefiniteAssignment
+    241 ms, checkArgumentCounts 230 ms, checkUseBeforeDeclaration 205 ms,
+    checkImplicitReturns 199 ms, checkConstAssignment 170 ms, then a long
+    ~100–165 ms tail (checkAlwaysTruthy, checkNullUndefinedUsage, …).
   - [ ] **INV.4(e) The top-3 giants.** checkPropertyAccess (3.8 s) →
     checkTypeAssignability (2.2 s) → checkCallExpressionTypes (1.7 s) — one at
     a time, each with its own sub-plan when reached (together 38.6% of
