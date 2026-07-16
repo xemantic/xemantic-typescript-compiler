@@ -59,6 +59,64 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 531 (2026-07-16) — INV.4(d) walker 2: checkArithmeticOperandTypes
+(TS2362/TS2363/TS2365/TS2447/TS2358/TS2848/TS2736 + the in/instanceof/equality
+arms, 309 ms in the round-529 cost table) migrated onto the spine — the per-file
+pass driver is DELETED; the recursive checkArithmeticInExpr/InStatement(s)
+walkers are RETAINED solely as checkComputedDestructKey's expression utility
+(their only remaining caller), with the per-declarator recording block extracted
+to the shared `spineArithRecordVarDecl`.** The design EXTENDS the (d) template to
+an ORDER-DEPENDENT stateful typing pass, three new lessons: (1) SLOT-MOVE
+PRE-GATE — this was the first migrated pass that sat AFTER the three giants
+(64d); moving the INTACT legacy pass to the spine slot produced EXACTLY ONE new
+FP on all 8 profiles (builder.ts:2390 TS2322 — arrayToMap's `Path` key inference
+degrading to `string`), bisected by a cheap probe to the currentParamBindingNames
+LEAK (populateParameterLocalTypes adds TP-referencing-fn param names that the
+giants used to see only AFTER their own runs; restoring the set post-pass =
+error-line identical ×8, so the leak is the ONLY order coupling — cache
+first-touch reordering across the giants is empirically inert). The migration
+runs with a PASS-PRIVATE set (seeded at checkSpine entry, accumulating across
+files like legacy, never published back). (2) STATE is PUSH-maintained, not
+pull-rebuilt — the recordings are statement-ordered and deliberately LEAK across
+blocks/if-branches/accessor bodies (bug-compat, pinned), so a position-independent
+level rebuild is impossible; `spineArithEnterNode`/`spineArithLeaveNode` maintain
+the per-file map copy, the typeof/truthy narrowing sets, and the B475 ctx frames
+on ONE LIFO of (node, saved-value) frames — edge-triggered frames keyed on the
+CHILD node (if-branches, &&-right, ternary arms, for-in body, `=`-objlit RHS,
+property-value ctx), popped at that node's leave AFTER its own emissions run;
+shared checker fields are touched only inside `spineArithInstalled` around each
+emission/recording (currentLocalTypes/currentParamBindingNames swapped to the
+pass-private structures, currentArithmeticFlowGraph per-dispatch, TP scope
+nulled = the legacy pass-ambient). (3) The LEFT-SPINE FLATTEN reproduces as
+chain-root LEAVE emission: checkBinaryOperatorTypes runs for every left-spine
+member innermost-first at the chain ROOT's leave, where root = a reached binary
+that is not `&&`/`=`-objlit (the two pre-flatten special branches) and not
+left-ABSORBED into an enclosing flatten (`spineArithChainAbsorbed` — iterative
+left-edge ancestor walk; absorbed iff ANY such ancestor has a non-special
+operator; the flatten descends unconditionally, so an absorbed `&&` gets NO
+truthy narrowing — a quirk that turned out MASKED by the round-453 flow-graph
+layer, the one pin that flipped during pre-verification). (4) THE CORPUS CAUGHT
+WHAT THE 8-PROFILE A/B COULD NOT — a RESIDUE dependence: qualify.ts regressed
+(+1 FP TS2365 `'number' and 'I'` on a namespace-level `n + y`) because at the
+OLD slot the pass INHERITED the TS2322 walk's currentLocalTypes residue — the
+assignability walk records namespace/top-level vars (unannotated → widened
+inferred at ~85406; annotated → FIRST-WINS at ~85431), so the namespace
+`var y = m` → number landed first and blocked the later file-level `var y: I`;
+the clean-base migration lost that, and `y` fell through the block-UNAWARE
+fileLocalTypeMaps to the file-level `I`. Fix: the pass records the chain
+ITSELF — a NAMESPACE-level unannotated identifier-init var whose initializer is
+a pass-recorded primitive records the chained type (`spineArithRecordVarDecl`'s
+new Identifier branch, ModuleBlock-gated: function-body recordings never
+persisted into the old residue because checkFunctionBody save/restores, so the
+gate IS the residue-faithful scope). Lesson: a migrating pass that CONSUMED
+upstream residue needs the corpus suite run on the slot-move experiment too —
+the tsc profiles carried zero instances of the shape. VERIFIED: 39 pins
+(Inv4SpineBatch22Test; 37 pre-verified against the OLD walker + the qualify
+shape + the fn-body negative control), suite 10,908 → 10,948 (0 regressions, XML-verified);
+listAll error lines IDENTICAL on ALL 8 profiles (531b vs 530a); bench 26,081 ms
+self / 46 errors, histogram unchanged (+0.5% vs 530, box-drift band). NEXT: INV.4(d) walker 3 — checkImplicitAnyParameters 272 ms /
+checkDuplicateIdentifiers 260 ms (zero-typing), decompose when reached.**
+
 **Round 530 (2026-07-16) — INV.4(d) walker 1: checkUncalledFunctionsInConditions
 (TS2774/TS2801, 435 ms in the round-529 cost table) migrated onto the spine —
 the recursive walkUncalledChecksInStatement(s)/walkUncalledChecksInExpression
@@ -483,58 +541,6 @@ STALE green XMLs (the documented stale-XML gotcha) and the probe looked
 inert; the second probe removed the branch instead. VERIFIED: suite +15
 (10,655 → 10,670, 0 regressions); listAll error lines IDENTICAL on ALL 8 profiles (522a vs 521a; only the trailing time: line differs). Bench: single-runs 27.3/26.0 s landed in a box-drift episode (the round-517 pattern) — the SAME-window signal is the listAll pair, new 24,884 ms vs the 521a baseline's 24,648 ms (+1.0%, in band; the added work is two nodeId array reads per node by construction). NEXT: (c)(ii) — the
 checkUnresolvedNames STATE swap onto lexicalScopes-chain derivations.
-
-**Round 519 (2026-07-14) — INV.4(b) batches 10+11: TS2373 param-init forward
-refs + the break/continue jump-target family migrated onto the check spine;
-6 walker functions (~376 lines) deleted, 2 init dispatches removed.**
-Batch 10: `checkParamInitForwardRef`/`walkForParamInitForwardRef` deleted;
-`checkForwardRefsInParams` (+ `findForwardParamRefs`/`findForwardParamRefsInBlock`/
-`collectHoistedVarNamesFromStmts`) retained as the per-function core,
-dispatched from `spineCheckParamForwardRefs` at every BODIED function-like's
-enter — the old statement walk reached function/class DECLARATIONS only, so
-arrows / function expressions / object-literal methods / class-EXPRESSION
-members are faithful widenings (TS2373 is per-signature tsc grammar,
-position-independent); bodyless signatures keep the old no-check (TS2371
-territory), GetAccessor params stay unchecked (TS1054 territory); the ES5
-hoisted-body-var TS2454 companion rides along unchanged (raw
-`options.target < ES2015` gate). Batch 11: the `checkJumpTargets` family
-(TS1104/TS1105/TS1107/TS1115/TS1116 + TS1344) — the threaded
-inIteration/inSwitch/labelNames/crossedFunctionBoundary flags became ONE
-parent-chain walk (`spineCheckJumpTarget`) that is a direct mirror of tsc
-checkGrammarBreakOrContinueStatement's `while (current)` loop: the first
-function-like ancestor → TS1107 (class static blocks now count — the old
-walk never descended them); a matching LabeledStatement resolves the jump,
-with tsc's isIterationStatement(lookInLabeledStatements=true) nested-label
-unwrap for labeled `continue` — a faithfulness FIX over the old
-immediate-child test (`L1: L2: for(;;){continue L1}` no longer false-fires
-TS1115); an iteration ancestor legalizes unlabeled jumps, a SwitchStatement
-legalizes unlabeled `break`, and a ModuleBlock ancestor suppresses unlabeled
-`break` (the old inSwitch=true namespace rule — TS1036 owns ambient-context
-statements); TS1344 label-on-declaration became a LabeledStatement-enter
-handler (widened to arrow-in-condition positions the old expression walk
-missed); `emitJumpDiagnostic`/`isDeclarationStatement` retained as the
-per-jump core. VERIFIED: 32 pins written FIRST and pre-run against the OLD
-walkers (batch 10: 10 green + 4 widening pins fail pre-migration; batch 11:
-14 green + 3 widening + 1 faithfulness-fix pins fail pre-migration); suite
-10,538 → 10,552 → 10,570 (+14 Inv4SpineBatch10Test, +18
-Inv4SpineBatch11Test, 0 regressions); `--listAll` error lines IDENTICAL on
-ALL 8 profiles after EACH batch (519a vs 518b, 519b vs 519a); warning-clean; bench 25,491 ms self, 46 errors unchanged (single-run −7.9% = the box-drift band). Batch 12 same session:
-checkObjectLiteralModifiers (TS1042/TS1184) — the near-full-tree
-explicit-stack expression walk became a pure ObjectLiteralExpression-enter
-handler (spineCheckObjLitModifiers; OBJLIT_ACCESS_MODIFIERS
-companion-hosted per the init-order gotcha — the spine runs during init, an
-instance field declared after init would read null); nested literals get
-their own enters; parameter-default + spread-operand positions are faithful
-widenings. 3 walker funs (~206 lines) deleted, 1 init dispatch removed.
-Suite 10,570 → 10,580 (+10 Inv4SpineBatch12Test — 8 pre-verified against
-the OLD walker, 2 widening pins fail pre-migration as expected); listAll
-error lines IDENTICAL on ALL 8 profiles (519c vs 519b). NEXT: INV.4(b)
-batch 13 — the remaining zero-typing tail
-(checkDuplicateObjectLiteralProperties — NOTE its
-destructuring-assignment-LHS skip needs a came-from-child parent walk,
-checkReservedWordIdentifiers, checkStrictModeReservedWords,
-checkAwaitContext — the last is stateful isAsync threading, decompose when
-reached).
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
@@ -1546,6 +1552,20 @@ interrupt the arc).
       on the OLD walker; suite 10,872 → 10,908; listAll error-line identical
       on ALL 8 profiles; ~270 walker lines deleted. See the round-530
       session note for the quirks pinned.
+    - (w2) DONE round 531 (2026-07-16): checkArithmeticOperandTypes — the
+      first ORDER-DEPENDENT stateful migration (statement-ordered recordings
+      that leak across blocks → PUSH-maintained frames on the spine, not the
+      pull-based rebuild) and the first pass from AFTER the three giants
+      (slot-move pre-gate found the currentParamBindingNames leak as the ONLY
+      order coupling — kept pass-private now). Left-spine flatten = chain-root
+      LEAVE emission; ambient install per emission/recording. The CORPUS caught
+      a second, subtler coupling the profiles could not: the pass CONSUMED the
+      TS2322 walk's namespace-level recording residue (qualify.ts) — reproduced
+      as the pass's own ModuleBlock-gated identifier-init chain recording. 39
+      pins (Inv4SpineBatch22Test); suite 10,908 → 10,948; listAll error-line
+      identical on ALL 8 profiles; the pass driver deleted (the recursive
+      walkers stay as checkComputedDestructKey's utility). See the round-531
+      session note.
   - [ ] **INV.4(e) The top-3 giants.** checkPropertyAccess (3.8 s) →
     checkTypeAssignability (2.2 s) → checkCallExpressionTypes (1.7 s) — one at
     a time, each with its own sub-plan when reached (together 38.6% of

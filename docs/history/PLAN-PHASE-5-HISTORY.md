@@ -1,3 +1,55 @@
+**Round 519 (2026-07-14) — INV.4(b) batches 10+11: TS2373 param-init forward
+refs + the break/continue jump-target family migrated onto the check spine;
+6 walker functions (~376 lines) deleted, 2 init dispatches removed.**
+Batch 10: `checkParamInitForwardRef`/`walkForParamInitForwardRef` deleted;
+`checkForwardRefsInParams` (+ `findForwardParamRefs`/`findForwardParamRefsInBlock`/
+`collectHoistedVarNamesFromStmts`) retained as the per-function core,
+dispatched from `spineCheckParamForwardRefs` at every BODIED function-like's
+enter — the old statement walk reached function/class DECLARATIONS only, so
+arrows / function expressions / object-literal methods / class-EXPRESSION
+members are faithful widenings (TS2373 is per-signature tsc grammar,
+position-independent); bodyless signatures keep the old no-check (TS2371
+territory), GetAccessor params stay unchecked (TS1054 territory); the ES5
+hoisted-body-var TS2454 companion rides along unchanged (raw
+`options.target < ES2015` gate). Batch 11: the `checkJumpTargets` family
+(TS1104/TS1105/TS1107/TS1115/TS1116 + TS1344) — the threaded
+inIteration/inSwitch/labelNames/crossedFunctionBoundary flags became ONE
+parent-chain walk (`spineCheckJumpTarget`) that is a direct mirror of tsc
+checkGrammarBreakOrContinueStatement's `while (current)` loop: the first
+function-like ancestor → TS1107 (class static blocks now count — the old
+walk never descended them); a matching LabeledStatement resolves the jump,
+with tsc's isIterationStatement(lookInLabeledStatements=true) nested-label
+unwrap for labeled `continue` — a faithfulness FIX over the old
+immediate-child test (`L1: L2: for(;;){continue L1}` no longer false-fires
+TS1115); an iteration ancestor legalizes unlabeled jumps, a SwitchStatement
+legalizes unlabeled `break`, and a ModuleBlock ancestor suppresses unlabeled
+`break` (the old inSwitch=true namespace rule — TS1036 owns ambient-context
+statements); TS1344 label-on-declaration became a LabeledStatement-enter
+handler (widened to arrow-in-condition positions the old expression walk
+missed); `emitJumpDiagnostic`/`isDeclarationStatement` retained as the
+per-jump core. VERIFIED: 32 pins written FIRST and pre-run against the OLD
+walkers (batch 10: 10 green + 4 widening pins fail pre-migration; batch 11:
+14 green + 3 widening + 1 faithfulness-fix pins fail pre-migration); suite
+10,538 → 10,552 → 10,570 (+14 Inv4SpineBatch10Test, +18
+Inv4SpineBatch11Test, 0 regressions); `--listAll` error lines IDENTICAL on
+ALL 8 profiles after EACH batch (519a vs 518b, 519b vs 519a); warning-clean; bench 25,491 ms self, 46 errors unchanged (single-run −7.9% = the box-drift band). Batch 12 same session:
+checkObjectLiteralModifiers (TS1042/TS1184) — the near-full-tree
+explicit-stack expression walk became a pure ObjectLiteralExpression-enter
+handler (spineCheckObjLitModifiers; OBJLIT_ACCESS_MODIFIERS
+companion-hosted per the init-order gotcha — the spine runs during init, an
+instance field declared after init would read null); nested literals get
+their own enters; parameter-default + spread-operand positions are faithful
+widenings. 3 walker funs (~206 lines) deleted, 1 init dispatch removed.
+Suite 10,570 → 10,580 (+10 Inv4SpineBatch12Test — 8 pre-verified against
+the OLD walker, 2 widening pins fail pre-migration as expected); listAll
+error lines IDENTICAL on ALL 8 profiles (519c vs 519b). NEXT: INV.4(b)
+batch 13 — the remaining zero-typing tail
+(checkDuplicateObjectLiteralProperties — NOTE its
+destructuring-assignment-LHS skip needs a came-from-child parent walk,
+checkReservedWordIdentifiers, checkStrictModeReservedWords,
+checkAwaitContext — the last is stateful isAsync threading, decompose when
+reached).
+
 **Round 518 (2026-07-14) — INV.4(b) batch 8: the parameter-initializer family
 migrated onto the spine; 24 walker functions (~902 lines) deleted, 6 init
 dispatches removed.** Session opened with the queued `--passTiming` re-measure

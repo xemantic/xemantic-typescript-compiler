@@ -937,6 +937,46 @@ class Checker(
     private val spineUncalledChain = ArrayList<Node>()
     private val spineUncalledOwnerBuf = ArrayList<Node>()
 
+    // ── INV.4(d) walker 2: checkArithmeticOperandTypes on the spine ──
+    // All MUST be declared before init {} (consumed by checkSpine during init).
+    // The pass state is PUSH-maintained by [spineArithEnterNode]/[spineArithLeaveNode]
+    // (the recordings are statement-ordered and leak across blocks — pull-based
+    // rebuild would have to replay them) and INSTALLED into the shared checker
+    // fields only around each emission/recording ([spineArithInstalled]).
+    /** Per-file activation: !d.ts && !.js/.jsx (the legacy pass's exact skip). */
+    private var spineArithActive = false
+    /** The current file's flow graph for currentArithmeticFlowGraph (the round-453
+     *  narrowing; the legacy pass set the dedicated field pass-wide). */
+    private var spineArithFlow: FlowGraph? = null
+    /** Per-file nodeId memo for [spineArithReached] — 0 unknown / 1 reached / 2 not. */
+    private var spineArithReachMemo = ByteArray(0)
+    /** Reusable ascent/chain buffers. */
+    private val spineArithChain = ArrayList<Node>()
+    private val spineArithChainBuf = ArrayList<BinaryExpression>()
+    /** The pass's live currentLocalTypes map (per-file copy of [spineArithBase],
+     *  mutated by recordings/param population under install). */
+    private var spineArithLocals: MutableMap<String, Type> = HashMap()
+    /** The pass-entry base map — captured once at checkSpine entry (the legacy
+     *  per-file `HashMap(currentLocalTypes)` copy source). */
+    private var spineArithBase: MutableMap<String, Type> = HashMap()
+    /** The pass's currentParamBindingNames — seeded at checkSpine entry, accumulates
+     *  across files like the legacy pass, and is NEVER published back (the legacy
+     *  pass LEAKED its additions to downstream passes at its old post-giants slot;
+     *  the slot-move A/B proved dropping the leak is byte-identical). */
+    private var spineArithParamBindingNames: MutableSet<String> = HashSet()
+    /** The maintained contextualType value for the B475 frames. */
+    private var spineArithCtx: Type? = null
+    /** LIFO frame stack: each frame records the node that pushed it plus the saved
+     *  value of exactly one state channel; popped at that node's leave. */
+    private class SpineArithFrame(
+        val node: Node,
+        val kind: Int, // 0=localsMap, 1=ctx, 2=typeofSet, 3=truthySet
+        val savedLocals: MutableMap<String, Type>? = null,
+        val savedCtx: Type? = null,
+        val savedSet: Set<String>? = null,
+    )
+    private val spineArithFrames = ArrayList<SpineArithFrame>()
+
     // Positions of ObjectLiteralExpression nodes that are destructuring-assignment
     // TARGETS (LHS of `=`, incl. nested through array/object/default nesting). Consumed
     // by the shorthand-with-initializer TS1312/TS18004 selection in
@@ -2841,8 +2881,10 @@ class Checker(
         pass("checkPropertyAccess") { checkPropertyAccess() }
         // 64c. Check call expression argument types (TS2345)
         pass("checkCallExpressionTypes") { checkCallExpressionTypes() }
-        // 64d. Check arithmetic operator types (TS2362/TS2363)
-        pass("checkArithmeticOperandTypes") { checkArithmeticOperandTypes() }
+        // 64d. Check arithmetic operator types (TS2362/TS2363) — MIGRATED to the
+        // check spine (INV.4(d) walker 2, round 531): spineArithEnterNode/
+        // spineArithLeaveNode dispatch the emissions; the recursive walkers are
+        // retained only as checkComputedDestructKey's utility.
         // 64d1. checkJs cross-category relational comparison (TS2365). The full arithmetic
         // pass above SKIPS .js/.jsx files (load-bearing — the naive pass FP'd broadly), but
         // a numeric-literal vs string/boolean relational comparison ALWAYS errors in tsc
@@ -17647,6 +17689,12 @@ class Checker(
         // computed here instead of at its later pass (pure split; the TS2688
         // emission stays at checkTypeLibraryEntryPoints).
         computeTypeLibResolution()
+        // INV.4(d) walker 2: the arithmetic pass's run-entry state — the base
+        // map its per-file copies start from, and its pass-private
+        // currentParamBindingNames (seeded here, accumulating across files like
+        // the legacy pass, never published back — the proven-inert leak).
+        spineArithBase = HashMap(currentLocalTypes)
+        spineArithParamBindingNames = HashSet(currentParamBindingNames)
         val savedLocals = currentFileLocals
         try {
             for (result in binderResults) {
@@ -17711,6 +17759,7 @@ class Checker(
                 spineUResSetup(result)
                 spineTavSetup(result)
                 spineUncalledSetup(result)
+                spineArithSetup(result)
                 spineUResAuditActive = unresolvedAuditEnabled && spineUResActive
                 try {
                     spineWalkFile(sf)
@@ -17719,6 +17768,7 @@ class Checker(
                     spineUResTeardown()
                     spineTavTeardown()
                     spineUncalledTeardown()
+                    spineArithTeardown()
                 }
                 spineResolveDeferredIterationChecks()
             }
@@ -17790,6 +17840,10 @@ class Checker(
 
     /** Per-node dispatch, preorder position (before children). */
     private fun spineEnterNode(node: Node) {
+        // INV.4(d) walker 2: edge-triggered scope frames + enter-position
+        // emissions for the arithmetic pass (must precede the kind dispatch —
+        // a node's own frames nest inside its parent-edge frames).
+        if (spineArithActive) spineArithEnterNode(node)
         when (node) {
             is Identifier -> spineTavIdentifier(node)
             is PropertyDeclaration -> {
@@ -17931,12 +17985,11 @@ class Checker(
         }
     }
 
-    /** Per-node dispatch, postorder position (after all children) — the scope-pop
-     * hook for stateful migrations; no current handler needs it. */
+    /** Per-node dispatch, postorder position (after all children). */
     private fun spineLeaveNode(node: Node) {
-        when (node) {
-            else -> {}
-        }
+        // INV.4(d) walker 2: leave-position emissions (left-spine chain roots,
+        // per-declarator recordings) + this node's frame pops.
+        if (spineArithActive) spineArithLeaveNode(node)
     }
 
     // ── INV.4(c)(i) spine-maintained lexical scope state ───────────────────
@@ -47602,6 +47655,582 @@ interface DataView {
         if (resolved === errorType || resolved === anyType) return null
         if (p.questionToken) return getUnionType(listOf(resolved, undefinedType))
         return resolved
+    }
+
+    // ── INV.4(d) walker 2: checkArithmeticOperandTypes on the spine ─────────
+    // The per-file pass driver is DELETED; the recursive checkArithmeticInExpr/
+    // checkArithmeticInStatement(s) walkers are RETAINED as the utility for
+    // checkComputedDestructKey (their only remaining caller). Reach is a
+    // memoized ancestor-chain classifier over [spineArithEdge] (the legacy
+    // dispatch arms verbatim). The order-dependent pass state — the per-file
+    // currentLocalTypes copy with its statement-ordered recordings (which
+    // deliberately LEAK across blocks/if-branches/accessor bodies, bug-compat),
+    // the typeof/truthy narrowing sets, and the B475 contextualType frames —
+    // is PUSH-maintained by [spineArithEnterNode]/[spineArithLeaveNode] on the
+    // [spineArithFrames] LIFO (edge-triggered frames keyed on the CHILD node,
+    // popped at its leave AFTER the node's own emissions run). The shared
+    // checker fields are only touched inside [spineArithInstalled] around each
+    // emission/recording; the pass-private currentParamBindingNames additions
+    // are never published back (the proven-inert legacy leak).
+
+    /** Per-file activation + state, called from [checkSpine]'s loop. */
+    private fun spineArithSetup(result: BinderResult) {
+        spineArithActive = !spineIsDts &&
+            !spineFileName.endsWith(".js") && !spineFileName.endsWith(".jsx")
+        if (!spineArithActive) {
+            spineArithFlow = null
+            spineArithReachMemo = ByteArray(0)
+            return
+        }
+        spineArithFlow = result.flowGraph
+        spineArithReachMemo = ByteArray(result.sourceFile.nodeCount)
+        // The legacy per-file snapshot: copy the pass-entry map so recordings
+        // never leak across files.
+        spineArithLocals = HashMap(spineArithBase)
+    }
+
+    private fun spineArithTeardown() {
+        spineArithActive = false
+        spineArithFlow = null
+        spineArithReachMemo = ByteArray(0)
+        spineArithFrames.clear()
+    }
+
+    /**
+     * Install the pass's ambient state into the shared checker fields around one
+     * emission/recording — never walk-wide (the currentArithmeticFlowGraph
+     * 78-test gotcha; other spine handlers must not see the pass's map/sets).
+     * currentFileLocals is already per-file at the spine (same as the legacy
+     * pass); currentTypeParamScope installs null (the legacy pass-ambient —
+     * the body walk ran with the function's TP scope already restored).
+     */
+    private inline fun spineArithInstalled(run: () -> Unit) {
+        val savedLocals = currentLocalTypes
+        val savedPbn = currentParamBindingNames
+        val savedCheckFile = currentCheckFileName
+        val savedArithFlow = currentArithmeticFlowGraph
+        val savedCtx = contextualType
+        val savedTpScope = currentTypeParamScope
+        currentLocalTypes = spineArithLocals
+        currentParamBindingNames = spineArithParamBindingNames
+        currentCheckFileName = spineFileName
+        currentArithmeticFlowGraph = spineArithFlow
+        contextualType = spineArithCtx
+        currentTypeParamScope = null
+        try {
+            run()
+        } finally {
+            currentLocalTypes = savedLocals
+            currentParamBindingNames = savedPbn
+            currentCheckFileName = savedCheckFile
+            currentArithmeticFlowGraph = savedArithFlow
+            contextualType = savedCtx
+            currentTypeParamScope = savedTpScope
+        }
+    }
+
+    /**
+     * Does the deleted pass driver reach [child] from [parent]? Mirrors
+     * checkArithmeticInStatement(s)/checkArithmeticInExpr's dispatch arms
+     * exactly — every kind absent here fell to their `else` arms (param
+     * defaults, enum initializers, computed property names, object-literal
+     * METHOD bodies, with-statements, JSX, decorators, heritage args).
+     */
+    private fun spineArithEdge(parent: Node, child: Node): Boolean = when (parent) {
+        // ── statement dispatch ──
+        is SourceFile -> child is Statement
+        is ExpressionStatement -> child === parent.expression
+        is VariableStatement -> child === parent.declarationList
+        // Both VariableStatement lists and for-HEADER lists walk their
+        // declarations' initializers (only the former RECORDS); for-in/for-of
+        // header lists were never walked.
+        is VariableDeclarationList -> child is VariableDeclaration &&
+            (parent.parent is VariableStatement || parent.parent is ForStatement)
+        is VariableDeclaration -> child === parent.initializer
+        is ReturnStatement -> child === parent.expression
+        is Block -> child is Statement
+        is IfStatement -> child === parent.expression || child === parent.thenStatement ||
+            child === parent.elseStatement
+        is ForStatement -> child === parent.initializer || child === parent.condition ||
+            child === parent.incrementor || child === parent.statement
+        is ForInStatement -> child === parent.expression || child === parent.statement
+        is ForOfStatement -> child === parent.expression || child === parent.statement
+        is WhileStatement -> child === parent.expression || child === parent.statement
+        is DoStatement -> child === parent.statement || child === parent.expression
+        // Unlike the TS2774 walker, the arithmetic pass DID walk switch
+        // subjects and case-clause expressions.
+        is SwitchStatement -> child === parent.expression || child is CaseClause ||
+            child is DefaultClause
+        is CaseClause -> child === parent.expression || child is Statement
+        is DefaultClause -> child is Statement
+        is TryStatement -> child is Block || child is CatchClause
+        is CatchClause -> child is Block
+        is FunctionDeclaration -> child === parent.body
+        is ClassDeclaration, is ClassExpression ->
+            child is MethodDeclaration || child is Constructor || child is GetAccessor ||
+                child is SetAccessor || child is PropertyDeclaration
+        is MethodDeclaration -> child === parent.body
+        is Constructor -> child === parent.body
+        is GetAccessor -> child === parent.body
+        is SetAccessor -> child === parent.body
+        is PropertyDeclaration -> child === parent.initializer
+        is ThrowStatement -> child === parent.expression
+        is LabeledStatement -> child === parent.statement
+        is ExportAssignment -> child === parent.expression
+        is ModuleDeclaration -> child is ModuleBlock
+        is ModuleBlock -> child is Statement
+        // ── expression dispatch ──
+        is BinaryExpression -> child === parent.left || child === parent.right
+        is ParenthesizedExpression -> child === parent.expression
+        is ConditionalExpression -> child === parent.condition || child === parent.whenTrue ||
+            child === parent.whenFalse
+        is CallExpression -> child === parent.expression || parent.arguments.any { it === child }
+        is NewExpression -> child === parent.expression || parent.arguments?.any { it === child } == true
+        is PropertyAccessExpression -> child === parent.expression
+        is ElementAccessExpression -> child === parent.expression || child === parent.argumentExpression
+        is PrefixUnaryExpression -> child === parent.operand
+        is PostfixUnaryExpression -> child === parent.operand
+        is ArrayLiteralExpression -> true
+        // Param defaults were never walked — the body only (both body forms).
+        is ArrowFunction -> child === parent.body
+        is FunctionExpression -> child === parent.body
+        is TemplateExpression -> child is TemplateSpan
+        is TemplateSpan -> child === parent.expression
+        is AsExpression -> child === parent.expression
+        is TypeAssertionExpression -> child === parent.expression
+        is NonNullExpression -> child === parent.expression
+        is SatisfiesExpression -> child === parent.expression
+        // Property VALUES and spreads only — methods/accessors/shorthands and
+        // computed NAMES were never walked.
+        is ObjectLiteralExpression -> child is PropertyAssignment || child is SpreadAssignment
+        is PropertyAssignment -> child === parent.initializer
+        is SpreadAssignment -> child === parent.expression
+        is SpreadElement -> child === parent.expression
+        is AwaitExpression -> child === parent.expression
+        is YieldExpression -> child === parent.expression
+        is DeleteExpression -> child === parent.expression
+        is VoidExpression -> child === parent.expression
+        is TypeOfExpression -> child === parent.expression
+        is TaggedTemplateExpression -> child === parent.tag ||
+            (child === parent.template && child is TemplateExpression)
+        is CommaListExpression -> true
+        else -> false
+    }
+
+    /** Is [node] reached by the deleted pass driver? Memoized per file by nodeId
+     *  (same ascent/backfill scheme as [spineUncalledReached]). */
+    private fun spineArithReached(node: Node): Boolean {
+        val memo = spineArithReachMemo
+        run {
+            val id = (node as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) {
+                val m = memo[id].toInt()
+                if (m != 0) return m == 1
+            }
+        }
+        val chain = spineArithChain
+        chain.clear()
+        var cur: Node = node
+        val reached: Boolean
+        while (true) {
+            val parent = (cur as NodeBase).parent
+            if (parent == null) {
+                reached = cur is SourceFile
+                break
+            }
+            if (!spineArithEdge(parent, cur)) {
+                reached = false
+                break
+            }
+            val pid = (parent as NodeBase).nodeId
+            val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
+            if (pm != 0) {
+                reached = pm == 1
+                break
+            }
+            chain.add(cur)
+            cur = parent
+        }
+        run {
+            val id = (cur as NodeBase).nodeId
+            if (id >= 0 && id < memo.size && memo[id].toInt() == 0) {
+                memo[id] = if (reached) 1 else 2
+            }
+        }
+        val fill: Byte = if (reached) 1 else 2
+        for (i in chain.indices.reversed()) {
+            val id = (chain[i] as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) memo[id] = fill
+        }
+        chain.clear()
+        return reached
+    }
+
+    /**
+     * Is [b] ABSORBED into an enclosing left-spine flatten? The legacy driver's
+     * `while (cur is BinaryExpression) { …; cur = cur.left }` loop descends
+     * UNCONDITIONALLY (any operator), so a `&&` / `=`-objlit node that is the
+     * LEFT operand of a flattened chain is consumed by the loop and its special
+     * branch (truthy narrowing / contextual typing) never runs — while the same
+     * node as a direct walk argument (statement level, a RIGHT operand, a paren
+     * inner) takes the special branch. Unrolled: [b] is absorbed iff ANY node
+     * on the maximal left-edge ancestor path above it has a NON-special
+     * operator (that ancestor starts a flatten which descends through
+     * everything below). Iterative — a 6,452-term chain is a corpus input.
+     */
+    private fun spineArithChainAbsorbed(b: BinaryExpression): Boolean {
+        var child: Node = b
+        var p: Node? = (b as NodeBase).parent
+        while (p is BinaryExpression && child === p.left) {
+            if (!spineArithSpecialBinary(p)) return true
+            child = p
+            p = (p as NodeBase).parent
+        }
+        return false
+    }
+
+    /** The two operators the legacy expression dispatch special-cases BEFORE the
+     *  left-spine flatten: `&&` (truthy narrowing) and `=` with an
+     *  object-literal RHS (B475 contextual typing). */
+    private fun spineArithSpecialBinary(b: BinaryExpression): Boolean =
+        b.operator == SyntaxKind.AmpersandAmpersand ||
+            (b.operator == SyntaxKind.Equals && b.right is ObjectLiteralExpression)
+
+    /** Is [b] the ROOT of a legacy left-spine flatten (the node whose
+     *  checkArithmeticInExpr call ran the flatten loop)? */
+    private fun spineArithChainRoot(b: BinaryExpression): Boolean =
+        !spineArithSpecialBinary(b) && !spineArithChainAbsorbed(b)
+
+    /** Per-node ENTER hook — edge-triggered frames first (so a node's own
+     *  frames nest inside them), then node-kind frames/recordings/emissions. */
+    private fun spineArithEnterNode(node: Node) {
+        // ── edge-triggered frames (keyed on the CHILD node) ──
+        when (val p = (node as NodeBase).parent) {
+            is IfStatement -> if ((node === p.thenStatement || node === p.elseStatement) &&
+                spineArithReached(node)) {
+                // B283: the legacy arm computed the guard set once before both
+                // branches; collectTypeofGuardNames is pure/syntactic, so
+                // computing per branch is state-identical.
+                spineArithFrames.add(SpineArithFrame(node, 2, savedSet = arithTypeofNarrowedNames))
+                val guarded = collectTypeofGuardNames(p.expression)
+                if (guarded.isNotEmpty()) arithTypeofNarrowedNames = arithTypeofNarrowedNames + guarded
+            }
+            is BinaryExpression -> if (node === p.right && !spineArithChainAbsorbed(p) &&
+                spineArithReached(node)) {
+                if (p.operator == SyntaxKind.AmpersandAmpersand) {
+                    spineArithFrames.add(SpineArithFrame(node, 3, savedSet = arithTruthyNarrowedNames))
+                    val truthy = collectArithTruthyNarrowableNames(p.left)
+                    if (truthy.isNotEmpty()) arithTruthyNarrowedNames = arithTruthyNarrowedNames + truthy
+                } else if (p.operator == SyntaxKind.Equals && node is ObjectLiteralExpression) {
+                    // B475: the legacy branch computed the LHS type after walking
+                    // the LEFT — the spine visits the left subtree before this
+                    // right-child enter, so the relative order is identical.
+                    spineArithFrames.add(SpineArithFrame(node, 1, savedCtx = spineArithCtx))
+                    var lhsType: Type? = null
+                    spineArithInstalled {
+                        lhsType = try { getTypeOfExpression(p.left) } catch (_: Exception) { null }
+                    }
+                    val lt = lhsType
+                    if (lt != null && lt !== anyType && lt !== errorType) spineArithCtx = lt
+                }
+            }
+            is ConditionalExpression -> if (spineArithReached(node)) {
+                if (node === p.whenTrue) {
+                    spineArithFrames.add(SpineArithFrame(node, 3, savedSet = arithTruthyNarrowedNames))
+                    val names = collectArithTruthyNarrowableNames(p.condition)
+                    if (names.isNotEmpty()) arithTruthyNarrowedNames = arithTruthyNarrowedNames + names
+                } else if (node === p.whenFalse) {
+                    spineArithFrames.add(SpineArithFrame(node, 3, savedSet = arithTruthyNarrowedNames))
+                    val names = collectArithFalsyNonNullNames(p.condition)
+                    if (names.isNotEmpty()) arithTruthyNarrowedNames = arithTruthyNarrowedNames + names
+                }
+            }
+            is ForInStatement -> if (node === p.statement && spineArithReached(node)) {
+                val forInVar = ((p.initializer as? VariableDeclarationList)
+                    ?.declarations?.singleOrNull()?.name as? Identifier)?.text
+                if (forInVar != null) {
+                    spineArithFrames.add(SpineArithFrame(node, 0, savedLocals = spineArithLocals))
+                    spineArithLocals = HashMap(spineArithLocals)
+                    spineArithLocals[forInVar] = stringType
+                }
+            }
+            is PropertyAssignment -> if (node === p.initializer && spineArithReached(node)) {
+                // B475 property-value contextual typing: only when the enclosing
+                // object literal is contextually typed AND the property's value
+                // type resolves — otherwise the ambient ctx is INHERITED
+                // unchanged (the legacy else-branch).
+                val ctxObj = spineArithCtx
+                if (ctxObj != null) {
+                    val propName = when (val n = p.name) {
+                        is Identifier -> n.text
+                        is StringLiteralNode -> n.text
+                        is NumericLiteralNode -> n.text
+                        else -> null
+                    }
+                    if (propName != null) {
+                        var propCtx: Type? = null
+                        spineArithInstalled {
+                            propCtx = try { lookupPropertyTypeForCtx(ctxObj, propName) } catch (_: Exception) { null }
+                        }
+                        val pc = propCtx
+                        if (pc != null) {
+                            spineArithFrames.add(SpineArithFrame(node, 1, savedCtx = spineArithCtx))
+                            spineArithCtx = pc
+                        }
+                    }
+                }
+            }
+            else -> {}
+        }
+        // ── node-kind frames / recordings / emissions ──
+        when (node) {
+            is FunctionDeclaration -> if (node.body != null && spineArithReached(node)) {
+                spineArithFnFrame(node, node.typeParameters, node.parameters,
+                    withTpScope = true, isArrowOrFnExpr = false)
+            }
+            is MethodDeclaration -> if (node.parent is ClassDeclaration && node.body != null &&
+                spineArithReached(node)) {
+                spineArithFnFrame(node, node.typeParameters, node.parameters,
+                    withTpScope = true, isArrowOrFnExpr = false)
+            }
+            is Constructor -> if (node.parent is ClassDeclaration && node.body != null &&
+                spineArithReached(node)) {
+                // The legacy Constructor arm populated params WITHOUT a TP-scope push.
+                spineArithFnFrame(node, null, node.parameters,
+                    withTpScope = false, isArrowOrFnExpr = false)
+            }
+            is ArrowFunction -> if (spineArithReached(node)) {
+                spineArithFnFrame(node, node.typeParameters, node.parameters,
+                    withTpScope = true, isArrowOrFnExpr = true)
+            }
+            is FunctionExpression -> if (spineArithReached(node)) {
+                spineArithFnFrame(node, node.typeParameters, node.parameters,
+                    withTpScope = true, isArrowOrFnExpr = true)
+            }
+            is PrefixUnaryExpression -> if (node.operator == SyntaxKind.Plus &&
+                spineArithReached(node)) {
+                // Legacy order: the TS2736 emission ran BEFORE the operand walk.
+                spineArithInstalled {
+                    checkUnaryPlusBigIntOperand(node, spineSource, spineFileName)
+                }
+            }
+            else -> {}
+        }
+    }
+
+    /** The legacy function-like scope entry: copy the map, push the TP scope,
+     *  populate param types (+ B475 contextual arrow params), restore the TP
+     *  scope. The map copy is restored at the node's leave; ArrowFunction/
+     *  FunctionExpression additionally clear the contextual type for the body
+     *  (the legacy "body is not contextually typed by the param fn type"). */
+    private fun spineArithFnFrame(
+        node: Node,
+        typeParameters: List<TypeParameter>?,
+        parameters: List<Parameter>,
+        withTpScope: Boolean,
+        isArrowOrFnExpr: Boolean,
+    ) {
+        spineArithFrames.add(SpineArithFrame(node, 0, savedLocals = spineArithLocals))
+        spineArithLocals = HashMap(spineArithLocals)
+        val ctxFn = spineArithCtx
+        spineArithInstalled {
+            if (withTpScope) {
+                val savedScope = pushFunctionTypeParamsScope(typeParameters)
+                try {
+                    populateParameterLocalTypes(parameters)
+                    if (isArrowOrFnExpr) applyContextualParamTypesForArrow(parameters, ctxFn)
+                } finally {
+                    currentTypeParamScope = savedScope
+                }
+            } else {
+                populateParameterLocalTypes(parameters)
+            }
+        }
+        if (isArrowOrFnExpr) {
+            spineArithFrames.add(SpineArithFrame(node, 1, savedCtx = spineArithCtx))
+            spineArithCtx = null
+        }
+    }
+
+    /** Per-node LEAVE hook — the node's own emissions/recordings first (they run
+     *  inside any frames keyed on this node), then pop this node's frames. */
+    private fun spineArithLeaveNode(node: Node) {
+        when (node) {
+            is BinaryExpression -> if (spineArithChainRoot(node) && spineArithReached(node)) {
+                // The legacy flatten emitted per-spine-node diagnostics AFTER
+                // walking the leaf + all rights, innermost (deepest-left) first.
+                val members = spineArithChainBuf
+                members.clear()
+                var cur: Expression = node
+                while (cur is BinaryExpression) {
+                    members.add(cur)
+                    cur = cur.left
+                }
+                spineArithInstalled {
+                    for (i in members.indices.reversed()) {
+                        checkBinaryOperatorTypes(members[i], spineSource, spineFileName)
+                    }
+                }
+                members.clear()
+            }
+            is VariableDeclaration -> {
+                val list = (node as NodeBase).parent as? VariableDeclarationList
+                if (list != null && list.parent is VariableStatement && spineArithReached(node)) {
+                    // The legacy recording ran AFTER the declarator's own
+                    // initializer walk, per declarator — the leave position.
+                    spineArithInstalled {
+                        spineArithRecordVarDecl(node, list.flags == SyntaxKind.ConstKeyword)
+                    }
+                }
+            }
+            else -> {}
+        }
+        // Pop every frame this node pushed (LIFO — restores in reverse).
+        val frames = spineArithFrames
+        while (frames.isNotEmpty() && frames[frames.size - 1].node === node) {
+            val f = frames.removeAt(frames.size - 1)
+            when (f.kind) {
+                0 -> spineArithLocals = f.savedLocals!!
+                1 -> spineArithCtx = f.savedCtx
+                2 -> arithTypeofNarrowedNames = f.savedSet!!
+                3 -> arithTruthyNarrowedNames = f.savedSet!!
+            }
+        }
+    }
+
+    /**
+     * The legacy VariableStatement per-declarator recording, verbatim (see the
+     * inline comments at the original site — now this function). Runs under
+     * [spineArithInstalled], so currentLocalTypes IS [spineArithLocals].
+     */
+    private fun spineArithRecordVarDecl(decl: VariableDeclaration, isConst: Boolean) {
+        val declName = (decl.name as? Identifier)?.text
+        if (declName != null && decl.type != null) {
+            // expr.ts: record an ANNOTATED function-body local's declared type
+            // so later arithmetic/comparison checks resolve interface/enum/
+            // primitive operands (`var i!: I` / `var e!: E`) — the binder does
+            // not bind function-body vars, so getTypeOfExpression otherwise
+            // returns `any` for them. Gated to a concrete non-any/error/unknown
+            // resolution (FN over FP — an unresolvable annotation stays `any` =
+            // prior behavior). Scoped to the pass's per-file map, so this does
+            // not leak into other checker passes.
+            val annotType = getTypeFromTypeNode(decl.type)
+            // Skip UNION types: a `let x: number | undefined` (or any union) is
+            // routinely flow-NARROWED before an arithmetic/comparison use, and this
+            // pass has no flow narrowing — recording the un-narrowed union FP's
+            // (narrowingPastLastAssignment: `let i: number|undefined; i = 0; i + 1`).
+            if (annotType !== anyType && annotType !== errorType &&
+                annotType !== unknownType && annotType !is Type.Union) {
+                currentLocalTypes[declName] = annotType
+            }
+        } else {
+            val lit = if (declName != null && decl.type == null) {
+                decl.initializer?.let { literalTypeOfExpression(it) }
+            } else null
+            if (lit != null && lit !== nullType && lit !== undefinedType) {
+                currentLocalTypes[declName!!] = getWidenedLiteralType(lit)
+            } else if (declName != null && decl.type == null && decl.initializer is BinaryExpression) {
+                // A BINARY initializer whose operator pins a concrete primitive
+                // result also records: comparisons → boolean, arithmetic/compound
+                // arithmetic → number/bigint (`var any = 0 ^= <missing>` is number;
+                // `var string = 0 / <missing> > <missing>` is boolean — the sum3
+                // chain of constructorWithIncompleteTypeAnnotation needs both).
+                // Gated to a primitive intrinsic result (never unions/objects/any),
+                // mirroring the literal-init convention above.
+                val bin = decl.initializer
+                val binT = when (bin.operator) {
+                    SyntaxKind.LessThan, SyntaxKind.GreaterThan,
+                    SyntaxKind.LessThanEquals, SyntaxKind.GreaterThanEquals,
+                    SyntaxKind.EqualsEquals, SyntaxKind.ExclamationEquals,
+                    SyntaxKind.EqualsEqualsEquals, SyntaxKind.ExclamationEqualsEquals,
+                    SyntaxKind.InstanceOfKeyword, SyntaxKind.InKeyword -> booleanType
+                    SyntaxKind.Minus, SyntaxKind.Asterisk, SyntaxKind.Slash,
+                    SyntaxKind.Percent, SyntaxKind.AsteriskAsterisk,
+                    SyntaxKind.Ampersand, SyntaxKind.Bar, SyntaxKind.Caret,
+                    SyntaxKind.LessThanLessThan, SyntaxKind.GreaterThanGreaterThan,
+                    SyntaxKind.GreaterThanGreaterThanGreaterThan,
+                    SyntaxKind.MinusEquals, SyntaxKind.AsteriskEquals,
+                    SyntaxKind.SlashEquals, SyntaxKind.PercentEquals,
+                    SyntaxKind.AmpersandEquals, SyntaxKind.BarEquals,
+                    SyntaxKind.CaretEquals, SyntaxKind.LessThanLessThanEquals,
+                    SyntaxKind.GreaterThanGreaterThanEquals,
+                    SyntaxKind.GreaterThanGreaterThanGreaterThanEquals -> numberType
+                    else -> null
+                }
+                if (binT != null) currentLocalTypes[declName] = binT
+            } else if (declName != null && decl.type == null &&
+                decl.initializer is ObjectLiteralExpression) {
+                // An object-literal initializer records too, so a member chain
+                // rooted at the local resolves (`var anony = { a: new CLASS() };
+                // retVal += anony.a.d();` needs anony.a.d()'s void return —
+                // constructorWithIncompleteTypeAnnotation line 166). Same
+                // concrete-only gate as the annotation branch above.
+                val objT = getTypeOfObjectLiteral(decl.initializer)
+                if (objT !== anyType && objT !== errorType && objT !is Type.Union) {
+                    currentLocalTypes[declName] = objT
+                }
+            } else if (declName != null && decl.type == null && decl.initializer is Identifier &&
+                ((decl.parent as? VariableDeclarationList)?.parent as? VariableStatement)
+                    ?.parent is ModuleBlock) {
+                // Round 531 (qualify.ts pin): a NAMESPACE-level unannotated `var y = m`
+                // whose initializer is itself a pass-recorded primitive records the
+                // chained type. At the pass's old post-giants slot this fell out of the
+                // TS2322 walk's RESIDUE (its namespace/top-level recordings leaked into
+                // this pass's inherited map, where the namespace `y = m` → number
+                // first-wins-blocked the later FILE-level `var y: I`); the migrated pass
+                // runs before the giants, so the chain is recorded here directly.
+                // Without it, `y` falls through the block-UNAWARE fileLocalTypeMaps to
+                // the file-level annotation → FP TS2365 on `n + y`. Namespace-level
+                // ONLY: function-body recordings never persisted into the old residue
+                // (checkFunctionBody save/restores), so this is the residue-faithful gate.
+                val srcT = currentLocalTypes[decl.initializer.text]
+                if (srcT === numberType || srcT === stringType || srcT === booleanType ||
+                    srcT === bigintType) {
+                    currentLocalTypes[declName] = srcT
+                }
+            } else if (declName != null && decl.type == null &&
+                declName !in currentLocalTypes &&
+                (decl.initializer is PropertyAccessExpression ||
+                    decl.initializer is ElementAccessExpression ||
+                    decl.initializer is CallExpression ||
+                    decl.initializer is NonNullExpression)) {
+                // A function-body local whose name SHADOWS an outer same-named
+                // FUNCTION records so a later bare-identifier operand resolves to the
+                // shadowing local, not past it to the outer function. tsc's own
+                // core.ts exports `function length/min/max(...): number`, which a
+                // local `const length = arr.length` / `let min = Number.POSITIVE_INFINITY`
+                // shadows — without this, `i < length` / `min < args.length` types the
+                // operand as the imported function → FP TS2365.
+                //
+                // The SHADOW gate is load-bearing: a non-shadowing local like
+                // `const numStatements = source.length` must NOT record `number`,
+                // or it UNMASKS a pre-existing narrowing FP on the OTHER operand
+                // (`statementOffset < numStatements` where statementOffset is an
+                // un-narrowed `number | undefined` param — this pass has no flow
+                // narrowing). Leaving non-shadowing locals as `any` keeps the pass's
+                // default suppression. Gated to a bare property-access/element-access/
+                // call/non-null initializer (never union/any/object/function).
+                val outerT = getTypeOfExpression(decl.name)
+                if (outerT is Type.Object && outerT.callSignatures?.isNotEmpty() == true) {
+                    // A `const` (stable type) records the concrete primitive when
+                    // determinable so a later comparison can still catch a real error
+                    // on the OTHER operand; a `let`/`var` (round 416: checker.ts's
+                    // `let min = Number.POSITIVE_INFINITY` shadowing `function min`)
+                    // records `anyType` — the shadow is what kills the FP, and `any`
+                    // is reassignment-proof (a `let` may be reassigned to a different
+                    // primitive, so recording its INITIAL type could FP a later
+                    // comparison; `any` only ever SUPPRESSES the bogus operand check).
+                    // The `any` fallback for a const also catches an initializer
+                    // (`outer.length` on a narrowed-union receiver this pass can't
+                    // resolve) that types to `any`.
+                    val initT = getTypeOfExpression(decl.initializer)
+                    currentLocalTypes[declName] =
+                        if (isConst && (initT === numberType || initT === stringType ||
+                            initT === booleanType || initT === bigintType)) initT
+                        else anyType
+                }
+            }
+        }
     }
 
     /**
@@ -151979,33 +152608,11 @@ interface DataView {
     // arithmetic in test code. Needs conservative approach: only check when operand
     // type is DEFINITIVELY non-numeric (literal string, literal boolean, etc.)
     // and not just any resolved type.
-    private fun checkArithmeticOperandTypes() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            if (fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
-            val source = result.sourceFile.text
-            currentFileLocals = result.locals
-            currentCheckFileName = fileName
-            // inKeywordAndUnknown: expose the flow graph via a DEDICATED field so
-            // checkInOperatorRhs can consult narrowing (TS2638) without making the
-            // rest of the arithmetic pass flow-aware (which regressed 78 tests).
-            currentArithmeticFlowGraph = result.flowGraph
-            // Per-file snapshot: the VariableStatement branch records literal-typed
-            // locals into currentLocalTypes (so `const t = true; x >= t` can resolve
-            // `t`); restore afterwards so entries never leak across files.
-            val savedLocalTypes = currentLocalTypes
-            currentLocalTypes = HashMap(currentLocalTypes)
-            try {
-                checkArithmeticInStatements(result.sourceFile.statements, source, fileName)
-            }
-            finally { currentLocalTypes = savedLocalTypes }
-        }
-        currentFileLocals = null
-        currentCheckFileName = null
-        currentArithmeticFlowGraph = null
-    }
-
+    // NOTE (INV.4(d) walker 2, round 531): the per-file pass driver
+    // (checkArithmeticOperandTypes) is DELETED — the spine dispatches the
+    // emissions (spineArithEnterNode/spineArithLeaveNode) with push-maintained
+    // pass state. checkArithmeticInStatement(s)/checkArithmeticInExpr below are
+    // RETAINED solely as checkComputedDestructKey's expression utility.
     private fun checkArithmeticInStatements(stmts: List<Statement>, source: String, fileName: String) {
         for (stmt in stmts) checkArithmeticInStatement(stmt, source, fileName)
     }
@@ -152089,120 +152696,9 @@ interface DataView {
                     decl.initializer?.let { checkArithmeticInExpr(it, source, fileName) }
                     // Record literal-typed locals so later arithmetic/comparison checks
                     // in this scope can resolve a bare-identifier operand (e.g.
-                    // `const t = true; onethree >= t`). Gated to a literal initializer
-                    // (unambiguous type) and no overriding annotation. Mirrors the
-                    // existing currentLocalTypes convention: WIDEN the literal (3 →
-                    // number) and SKIP null/undefined initializers (they widen to `any`
-                    // in non-strict mode — otherwise `var x = null; 3 + x` FP's TS2365).
-                    val declName = (decl.name as? Identifier)?.text
-                    if (declName != null && decl.type != null) {
-                        // expr.ts: record an ANNOTATED function-body local's declared type
-                        // so later arithmetic/comparison checks resolve interface/enum/
-                        // primitive operands (`var i!: I` / `var e!: E`) — the binder does
-                        // not bind function-body vars, so getTypeOfExpression otherwise
-                        // returns `any` for them. Gated to a concrete non-any/error/unknown
-                        // resolution (FN over FP — an unresolvable annotation stays `any` =
-                        // prior behavior). Scoped to currentLocalTypes (the arithmetic pass's
-                        // per-file snapshot), so this does not leak into other checker passes.
-                        val annotType = getTypeFromTypeNode(decl.type)
-                        // Skip UNION types: a `let x: number | undefined` (or any union) is
-                        // routinely flow-NARROWED before an arithmetic/comparison use, and this
-                        // pass has no flow narrowing — recording the un-narrowed union FP's
-                        // (narrowingPastLastAssignment: `let i: number|undefined; i = 0; i + 1`).
-                        if (annotType !== anyType && annotType !== errorType &&
-                            annotType !== unknownType && annotType !is Type.Union) {
-                            currentLocalTypes[declName] = annotType
-                        }
-                    } else {
-                        val lit = if (declName != null && decl.type == null) {
-                            decl.initializer?.let { literalTypeOfExpression(it) }
-                        } else null
-                        if (lit != null && lit !== nullType && lit !== undefinedType) {
-                            currentLocalTypes[declName!!] = getWidenedLiteralType(lit)
-                        } else if (declName != null && decl.type == null && decl.initializer is BinaryExpression) {
-                            // A BINARY initializer whose operator pins a concrete primitive
-                            // result also records: comparisons → boolean, arithmetic/compound
-                            // arithmetic → number/bigint (`var any = 0 ^= <missing>` is number;
-                            // `var string = 0 / <missing> > <missing>` is boolean — the sum3
-                            // chain of constructorWithIncompleteTypeAnnotation needs both).
-                            // Gated to a primitive intrinsic result (never unions/objects/any),
-                            // mirroring the literal-init convention above.
-                            val bin = decl.initializer
-                            val binT = when (bin.operator) {
-                                SyntaxKind.LessThan, SyntaxKind.GreaterThan,
-                                SyntaxKind.LessThanEquals, SyntaxKind.GreaterThanEquals,
-                                SyntaxKind.EqualsEquals, SyntaxKind.ExclamationEquals,
-                                SyntaxKind.EqualsEqualsEquals, SyntaxKind.ExclamationEqualsEquals,
-                                SyntaxKind.InstanceOfKeyword, SyntaxKind.InKeyword -> booleanType
-                                SyntaxKind.Minus, SyntaxKind.Asterisk, SyntaxKind.Slash,
-                                SyntaxKind.Percent, SyntaxKind.AsteriskAsterisk,
-                                SyntaxKind.Ampersand, SyntaxKind.Bar, SyntaxKind.Caret,
-                                SyntaxKind.LessThanLessThan, SyntaxKind.GreaterThanGreaterThan,
-                                SyntaxKind.GreaterThanGreaterThanGreaterThan,
-                                SyntaxKind.MinusEquals, SyntaxKind.AsteriskEquals,
-                                SyntaxKind.SlashEquals, SyntaxKind.PercentEquals,
-                                SyntaxKind.AmpersandEquals, SyntaxKind.BarEquals,
-                                SyntaxKind.CaretEquals, SyntaxKind.LessThanLessThanEquals,
-                                SyntaxKind.GreaterThanGreaterThanEquals,
-                                SyntaxKind.GreaterThanGreaterThanGreaterThanEquals -> numberType
-                                else -> null
-                            }
-                            if (binT != null) currentLocalTypes[declName] = binT
-                        } else if (declName != null && decl.type == null &&
-                            decl.initializer is ObjectLiteralExpression) {
-                            // An object-literal initializer records too, so a member chain
-                            // rooted at the local resolves (`var anony = { a: new CLASS() };
-                            // retVal += anony.a.d();` needs anony.a.d()'s void return —
-                            // constructorWithIncompleteTypeAnnotation line 166). Same
-                            // concrete-only gate as the annotation branch above.
-                            val objT = getTypeOfObjectLiteral(decl.initializer)
-                            if (objT !== anyType && objT !== errorType && objT !is Type.Union) {
-                                currentLocalTypes[declName] = objT
-                            }
-                        } else if (declName != null && decl.type == null &&
-                            declName !in currentLocalTypes &&
-                            (decl.initializer is PropertyAccessExpression ||
-                                decl.initializer is ElementAccessExpression ||
-                                decl.initializer is CallExpression ||
-                                decl.initializer is NonNullExpression)) {
-                            // A function-body local whose name SHADOWS an outer same-named
-                            // FUNCTION records so a later bare-identifier operand resolves to the
-                            // shadowing local, not past it to the outer function. tsc's own
-                            // core.ts exports `function length/min/max(...): number`, which a
-                            // local `const length = arr.length` / `let min = Number.POSITIVE_INFINITY`
-                            // shadows — without this, `i < length` / `min < args.length` types the
-                            // operand as the imported function → FP TS2365.
-                            //
-                            // The SHADOW gate is load-bearing: a non-shadowing local like
-                            // `const numStatements = source.length` must NOT record `number`,
-                            // or it UNMASKS a pre-existing narrowing FP on the OTHER operand
-                            // (`statementOffset < numStatements` where statementOffset is an
-                            // un-narrowed `number | undefined` param — this pass has no flow
-                            // narrowing). Leaving non-shadowing locals as `any` keeps the pass's
-                            // default suppression. Gated to a bare property-access/element-access/
-                            // call/non-null initializer (never union/any/object/function).
-                            val outerT = getTypeOfExpression(decl.name)
-                            if (outerT is Type.Object && outerT.callSignatures?.isNotEmpty() == true) {
-                                // A `const` (stable type) records the concrete primitive when
-                                // determinable so a later comparison can still catch a real error
-                                // on the OTHER operand; a `let`/`var` (round 416: checker.ts's
-                                // `let min = Number.POSITIVE_INFINITY` shadowing `function min`)
-                                // records `anyType` — the shadow is what kills the FP, and `any`
-                                // is reassignment-proof (a `let` may be reassigned to a different
-                                // primitive, so recording its INITIAL type could FP a later
-                                // comparison; `any` only ever SUPPRESSES the bogus operand check).
-                                // The `any` fallback for a const also catches an initializer
-                                // (`outer.length` on a narrowed-union receiver this pass can't
-                                // resolve) that types to `any`.
-                                val isConst = stmt.declarationList.flags == SyntaxKind.ConstKeyword
-                                val initT = getTypeOfExpression(decl.initializer)
-                                currentLocalTypes[declName] =
-                                    if (isConst && (initT === numberType || initT === stringType ||
-                                        initT === booleanType || initT === bigintType)) initT
-                                    else anyType
-                            }
-                        }
-                    }
+                    // `const t = true; onethree >= t`) — the shared per-declarator
+                    // recording (see spineArithRecordVarDecl for the full rules).
+                    spineArithRecordVarDecl(decl, stmt.declarationList.flags == SyntaxKind.ConstKeyword)
                 }
             }
             is ReturnStatement -> stmt.expression?.let { checkArithmeticInExpr(it, source, fileName) }
