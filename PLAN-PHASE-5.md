@@ -59,6 +59,54 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 527 (2026-07-16) — INV.4(c)(iii) batch 4: the EXPRESSION walk swap —
+expression positions self-emit on the spine.** The recursive expression
+walker's reach is reproduced STATICALLY: `spineUResExprEdge(parent, child)`
+classifies every edge as ROOT (a position the batch-2/3 arms called
+checkUnresolvedInExpr on — statement expression slots, var/enum/class-member
+initializers, class-member computed names + decorators, class-decl decorators
+(outer scope via the deactivated level), param initializers/decorators per
+owner kind, heritage types under class-decl/interface owners), DESCEND (an
+edge the legacy walker recursed through — incl. objlit structure, arrow
+param-defaults/expression bodies, class-EXPRESSION heritage chains, JSX
+containers/attributes/property-access tags), or NONE (names, types, closing
+JSX tags, for-in/of binding positions, type-literal member names);
+`spineUResExprChecked(node)` walks the ancestor chain over those verdicts,
+memoized per file by nodeId (a 6k-term binary chain stays linear — the
+backfill writes the whole walked chain). Emissions dispatch per node kind in
+spineUResDispatch (Identifier → checkIdentifierResolved; BinaryExpression →
+NaN check + the destructuring-pattern marks laid at the assignment's enter,
+strictly before the shorthand TS1312/TS18004 selection reads them;
+ShorthandPropertyAssignment → the TS1312-vs-TS18004 branch; as/satisfies/
+type-assertion target types + call/new type args → checkUnresolvedInType;
+ClassExpression → TS2864/arity/heritage-typeArgs gated on exprChecked;
+Jsx* → Identifier-tag intrinsic rule + factory check), all through
+spineUResEmit so suppression/filter/currentFileLocals-null state applies at
+the node's own position, with scopes provided by the batch-1 maintained level
+chain by construction (switch-inactive, decorator-deactivation, method
+pre-population views included). spineUResFnSigDispatch reduces to TYPE
+positions with a `checkTps` flag reproducing the legacy asymmetry (fn-decls/
+class-methods/arrows check TP constraints/defaults; fn-exprs/objlit-methods
+only REGISTER TPs); arrow/fn-expr/objlit-method levels carry `exprOwned` so
+functions inside recursion-owned regions keep the retained walker's arms.
+TS2422's implements-bare-TP `continue` became the per-file
+`spineUResHeritageSkip` nodeId set (registered at the class arm before the
+heritage subtree walks). The recursive checkUnresolvedInExpr(Core) is
+RETAINED solely for the type walker's TypeLiteral computed-property-name
+positions (+ its internal recursion incl. the JSX helpers) — the types batch
+deletes both together. VERIFIED: suite 10,767 → 10,804 (+37
+Inv4SpineBatch18Test — ALL pre-verified against the OLD walker, a pure
+reach-preserving migration incl. the legacy quirks pinned negative: fn-expr/
+objlit-method TP constraints unchecked, objlit method computed names
+unchecked, with-body/declare-fn suppression, for-in LHS unchecked,
+property-access NAMES unchecked; 0 regressions); listAll error-line SETS
+IDENTICAL on ALL 8 profiles (527a vs 526a; compiler raw order shifts 12 line
+pairs — the moved emission positions); bench 27,057 ms self (−1.3% vs 526, in
+band), error histograms unchanged on all 8 (46×7 + harness 94, all
+env-legit). NEXT: (c)(iii) batch 5 — types (the checkUnresolvedInType
+walkers; deletes the retained expression walker + JSX helpers with it), then
+(c)(iv) checkTypeUsedAsValue.**
+
 **Round 526 (2026-07-15) — INV.4(c)(iii) batch 3: the class-element walk swap —
 `checkUnresolvedInClassElement` is DELETED (101 lines).** Class-member signature
 emissions dispatch on the spine against the batch-1 maintained member levels
@@ -1584,10 +1632,21 @@ interrupt the arc).
       B98.r111 view), TP/param/return positions via the shared
       spineUResFnSigDispatch with per-member-kind coverage flags, index
       signatures in the class scope; gated to class decl/expr parents
-      (interface members stay with the batch-2 handler). Remaining batches:
-      expressions (checkIdentifierResolved positions + arrow/fn-expr/objlit
-      signature dispatch), then types, then JSX — deleting each recursive
-      walker as its positions migrate.
+      (interface members stay with the batch-2 handler). Batch 4 DONE round
+      527 (2026-07-16): the EXPRESSION walk swap — expression positions
+      self-emit at their own enters, gated by `spineUResExprChecked` (a
+      per-file nodeId-memoized ancestor walk over `spineUResExprEdge`
+      ROOT/DESCEND/NONE verdicts reproducing the recursive walker's exact
+      reach); NaN/shorthand/embedded-type/class-expr-heritage/JSX handlers
+      dispatch per node kind; spineUResFnSigDispatch reduced to TYPE
+      positions (checkTps flag = the legacy fn-expr/objlit-method
+      no-constraint-check asymmetry); the TS2422 skip became the
+      spineUResHeritageSkip nodeId set; arrow/fn-expr/objlit-method levels
+      carry exprOwned so recursion-owned regions keep the retained walker.
+      checkUnresolvedInExpr(Core) retained SOLELY for the type walker's
+      TypeLiteral computed-name positions. Remaining: batch 5 — types (the
+      checkUnresolvedInType walkers; deletes the retained expression walker
+      and the JSX helpers with it).
     - [ ] **(c)(iv) checkTypeUsedAsValue.** Its own arc: the three
       ScopeNameSet chains become spine-maintained set state pushed at the
       same boundaries the old walker created children (statement lists =

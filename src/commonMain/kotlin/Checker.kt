@@ -1045,6 +1045,13 @@ class Checker(
          *  TS2304/TS2552 survive from emissions inside this level's subtree.
          *  Set via [spineUResMarkFilter] only (counter). */
         var filter2304: Boolean = false,
+        /** Batch 4: arrow/fn-expr/objlit-method levels only — true when the
+         *  function sits in spine-checked expression territory
+         *  ([spineUResExprChecked] at push), gating the signature TYPE dispatch
+         *  (a function inside a recursion-owned region — a type-literal
+         *  computed name — keeps the retained walker's arm). Statement-level
+         *  and class-member owners stay unconditionally true. */
+        val exprOwned: Boolean = true,
     )
     private val spineUResStack = ArrayList<UnresolvedSpineLevel>(32)
     private var spineUResActive = false
@@ -1056,6 +1063,15 @@ class Checker(
     /** True while the declarationOnly minimal driver runs [spineWalkFile] for the
      *  unresolved-names family ONLY (every other spine handler skipped). */
     private var spineUResOnly = false
+    /** Batch 4: per-file nodeId memo for [spineUResExprChecked] — 0 unknown /
+     *  1 checked / 2 not (a deep binary chain would otherwise cost O(n²)
+     *  across its operand identifiers). */
+    private var spineUResExprMemo = ByteArray(0)
+    /** Batch 4: heritage-type (ExpressionWithTypeArguments) nodeIds whose
+     *  expression must NOT self-emit — the class arm's TS2422
+     *  implements-bare-type-param `continue` skipped the name check. Per file,
+     *  populated at the class's enter (before its heritage subtree walks). */
+    private val spineUResHeritageSkip = HashSet<Int>()
     /** Per-file snapshot of the companion audit flag. */
     private var spineUResAuditActive = false
     private var typeLibResolutionComputed = false
@@ -18012,6 +18028,9 @@ class Checker(
         val root = unresolvedFileRootFor(result)
         spineUResRoot = root?.scope
         spineUResActive = root != null
+        spineUResExprMemo =
+            if (root != null) ByteArray(result.sourceFile.nodeCount) else ByteArray(0)
+        spineUResHeritageSkip.clear()
     }
 
     private fun spineUResTeardown() {
@@ -18020,6 +18039,8 @@ class Checker(
         spineUResFilterCount = 0
         spineUResRoot = null
         spineUResActive = false
+        spineUResExprMemo = ByteArray(0)
+        spineUResHeritageSkip.clear()
     }
 
     private fun spineUResMarkSuppressed(level: UnresolvedSpineLevel) {
@@ -18184,11 +18205,14 @@ class Checker(
                 val cur = spineUResScope() ?: return
                 val s = cur.child(hasArguments = true, classContext = null)
                 node.name?.let { s.names.add(it.text) }
-                stack.add(UnresolvedSpineLevel(node, s))
+                stack.add(UnresolvedSpineLevel(node, s, exprOwned = spineUResExprChecked(node)))
             }
             is ArrowFunction -> {
                 val cur = spineUResScope() ?: return
-                stack.add(UnresolvedSpineLevel(node, cur.child(hasArguments = false, inFunction = true)))
+                stack.add(UnresolvedSpineLevel(
+                    node, cur.child(hasArguments = false, inFunction = true),
+                    exprOwned = spineUResExprChecked(node),
+                ))
             }
             is ClassDeclaration -> {
                 val cur = spineUResScope() ?: return
@@ -18268,7 +18292,10 @@ class Checker(
                     is InterfaceDeclaration, is TypeLiteral ->
                         stack.add(UnresolvedSpineLevel(node, cur.child()))
                     is ObjectLiteralExpression ->
-                        stack.add(UnresolvedSpineLevel(node, cur.child(hasArguments = true)))
+                        stack.add(UnresolvedSpineLevel(
+                            node, cur.child(hasArguments = true),
+                            exprOwned = spineUResExprChecked(node),
+                        ))
                     else -> {}
                 }
             }
@@ -18438,11 +18465,24 @@ class Checker(
                 // the lazy population above provides the exact legacy staging
                 // (TP constraints see TPs but not params; param/return types see
                 // both). A `declare` function's level is suppressed at its enter
-                // (the legacy arm returned before any of these).
-                spineUResFnSigDispatch(level, child, o.type, paramDecorators = false, paramInits = true)
+                // (the legacy arm returned before any of these). Since batch 4
+                // the dispatch covers TYPE positions only — param initializers
+                // self-emit via the expression edges.
+                spineUResFnSigDispatch(level, child, o.type, checkTps = true)
             }
-            is FunctionExpression -> spineUResFnChild(level, child, o.name, o.typeParameters, o.parameters, o.body)
-            is ArrowFunction -> spineUResFnChild(level, child, null, o.typeParameters, o.parameters, o.body as? Block)
+            is FunctionExpression -> {
+                spineUResFnChild(level, child, o.name, o.typeParameters, o.parameters, o.body)
+                // Batch 4: fn-expr signature TYPE positions — the legacy arm
+                // registered TPs without checking their constraints (checkTps
+                // false, an asymmetry vs arrows); gated to spine-checked
+                // expression territory (recursion-owned regions keep the
+                // retained walker's arm).
+                if (level.exprOwned) spineUResFnSigDispatch(level, child, o.type, checkTps = false)
+            }
+            is ArrowFunction -> {
+                spineUResFnChild(level, child, null, o.typeParameters, o.parameters, o.body as? Block)
+                if (level.exprOwned) spineUResFnSigDispatch(level, child, o.type, checkTps = true)
+            }
             is MethodDeclaration -> {
                 // Class-member method decorators are checked BEFORE the method's
                 // TPs/params are registered in the legacy walk — give the trailing
@@ -18454,17 +18494,22 @@ class Checker(
                 } else {
                     spineUResFnChild(level, child, o.name, o.typeParameters, o.parameters, null)
                     // Batch 3: class-member method signature positions (the legacy
-                    // class-element arm; interface/objlit/type-literal parents keep
-                    // their legacy walkers).
+                    // class-element arm; interface/type-literal parents keep
+                    // their legacy walkers). Batch 4: object-literal methods
+                    // dispatch too when in spine-checked expression territory.
                     if (spineUResIsClassMember(o)) {
-                        spineUResFnSigDispatch(level, child, o.type, paramDecorators = true, paramInits = true)
+                        spineUResFnSigDispatch(level, child, o.type, checkTps = true)
+                    } else if ((o as NodeBase).parent is ObjectLiteralExpression && level.exprOwned) {
+                        // The legacy objlit arm registered TPs without checking
+                        // their constraints (same asymmetry as fn-exprs).
+                        spineUResFnSigDispatch(level, child, o.type, checkTps = false)
                     }
                 }
             }
             is Constructor -> {
                 spineUResFnChild(level, child, null, null, o.parameters, null)
                 if (spineUResIsClassMember(o)) {
-                    spineUResFnSigDispatch(level, child, null, paramDecorators = true, paramInits = true)
+                    spineUResFnSigDispatch(level, child, null, checkTps = false)
                 }
             }
             is GetAccessor -> {}
@@ -18473,7 +18518,7 @@ class Checker(
                 // Batch 3: the legacy class-element SetAccessor arm checks param
                 // TYPES only (no initializers, no decorators).
                 if (spineUResIsClassMember(o)) {
-                    spineUResFnSigDispatch(level, child, null, paramDecorators = false, paramInits = false)
+                    spineUResFnSigDispatch(level, child, null, checkTps = false)
                 }
             }
             is FunctionType -> spineUResFnChild(level, child, null, o.typeParameters, o.parameters, null)
@@ -18527,34 +18572,30 @@ class Checker(
     }
 
     /**
-     * Batch 2/3: the shared function-like SIGNATURE-position dispatch, run at
+     * Batch 2/3/4: the shared function-like SIGNATURE-position dispatch, run at
      * each direct child's enter AFTER the lazy population trigger — so a
      * TypeParameter child's constraint/default sees TPs but not params, and a
-     * Parameter/return-type child sees both (the legacy staging). Flags select
-     * the legacy arm's exact coverage: class methods/constructors check param
-     * DECORATORS and initializers; function declarations initializers only;
-     * class set-accessors param TYPES only.
+     * Parameter/return-type child sees both (the legacy staging). TYPE
+     * positions only since batch 4 — parameter initializers and decorators are
+     * expression territory (self-emitting via [spineUResExprEdge]). [checkTps]
+     * reproduces the legacy asymmetry: function declarations, class methods,
+     * and arrows check TP constraints/defaults; function expressions and
+     * object-literal methods only REGISTER their TPs (the legacy arms had no
+     * constraint loop).
      */
     private fun spineUResFnSigDispatch(
         level: UnresolvedSpineLevel,
         child: Node,
         returnType: TypeNode?,
-        paramDecorators: Boolean,
-        paramInits: Boolean,
+        checkTps: Boolean,
     ) {
         when {
-            child is TypeParameter -> spineUResEmit {
+            child is TypeParameter -> if (checkTps) spineUResEmit {
                 child.constraint?.let { checkUnresolvedInType(it, level.scope, spineSource, spineFileName) }
                 child.default?.let { checkUnresolvedInType(it, level.scope, spineSource, spineFileName) }
             }
             child is Parameter -> spineUResEmit {
-                if (paramDecorators) {
-                    child.decorators?.forEach { checkUnresolvedInExpr(it.expression, level.scope, spineSource, spineFileName) }
-                }
                 child.type?.let { checkUnresolvedInType(it, level.scope, spineSource, spineFileName) }
-                if (paramInits) {
-                    child.initializer?.let { checkUnresolvedInExpr(it, level.scope, spineSource, spineFileName) }
-                }
             }
             returnType != null && child === returnType -> spineUResEmit {
                 checkUnresolvedInType(returnType, level.scope, spineSource, spineFileName)
@@ -18563,37 +18604,18 @@ class Checker(
         }
     }
 
-    /** Batch 3: class-member PropertyDeclaration positions (decorators,
-     *  computed name, type annotation, initializer) — the level
+    /** Batch 3/4: class-member PropertyDeclaration TYPE annotation — the level
      *  [spineUResEnter] pushed carries the member class context plus the ctor
-     *  param-property names for instance members (the legacy propScope). */
+     *  param-property names for instance members (the legacy propScope).
+     *  Decorators, computed names, and the initializer self-emit via the
+     *  batch-4 expression edges (same level scope by construction; a method's
+     *  computed name still sees the PRE-population view — B98.r111 — because
+     *  the NAME child never triggers the lazy population). */
     private fun spineUResClassPropertyMember(node: PropertyDeclaration) {
         if (!spineUResIsClassMember(node)) return
         val level = spineUResOwnLevel(node) ?: return
-        spineUResEmit {
-            node.decorators?.forEach { checkUnresolvedInExpr(it.expression, level.scope, spineSource, spineFileName) }
-            (node.name as? ComputedPropertyName)?.let {
-                checkUnresolvedInExpr(it.expression, level.scope, spineSource, spineFileName)
-            }
-            node.type?.let { checkUnresolvedInType(it, level.scope, spineSource, spineFileName) }
-            node.initializer?.let { checkUnresolvedInExpr(it, level.scope, spineSource, spineFileName) }
-        }
-    }
-
-    /** Batch 3: class-member method DECORATORS + computed NAME, checked at the
-     *  method's enter — the level is still unpopulated at that moment, which IS
-     *  the legacy pre-registration view (B98.r111: a computed method name must
-     *  not see the method's own TPs/params). TP/param/return positions dispatch
-     *  at their child enters (see [spineUResOnDirectChild]). */
-    private fun spineUResClassMethodEnter(node: MethodDeclaration) {
-        if (!spineUResIsClassMember(node)) return
-        val level = spineUResOwnLevel(node) ?: return
-        spineUResEmit {
-            node.decorators?.forEach { checkUnresolvedInExpr(it.expression, level.scope, spineSource, spineFileName) }
-            (node.name as? ComputedPropertyName)?.let {
-                checkUnresolvedInExpr(it.expression, level.scope, spineSource, spineFileName)
-            }
-        }
+        val t = node.type ?: return
+        spineUResEmit { checkUnresolvedInType(t, level.scope, spineSource, spineFileName) }
     }
 
     /** Batch 3: class-member get-accessor RETURN type (the legacy arm's only
@@ -18686,9 +18708,8 @@ class Checker(
             return
         }
         spineUResEmit {
-            // Class decorators are checked in the OUTER scope (the level also
-            // deactivates at its Decorator child for the maintained walk).
-            node.decorators?.forEach { checkUnresolvedInExpr(it.expression, outer, source, fileName) }
+            // Class decorators self-emit via the batch-4 edges in the OUTER
+            // scope (the level deactivates at its Decorator child).
             node.typeParameters?.forEach { tp ->
                 tp.constraint?.let { checkUnresolvedInType(it, classScope, source, fileName) }
                 tp.default?.let { checkUnresolvedInType(it, classScope, source, fileName) }
@@ -18703,6 +18724,10 @@ class Checker(
                         classScope.isTypeParam((type.expression).text) &&
                         !outer.has((type.expression).text)
                     if (isImplementsTypeParam) {
+                        // Batch 4: the heritage expression must NOT self-emit a
+                        // name error (the legacy `continue` skipped its check).
+                        val skipId = (type as NodeBase).nodeId
+                        if (skipId >= 0) spineUResHeritageSkip.add(skipId)
                         val ident = type.expression
                         val (line, character) = getLineAndCharacterOfPosition(source, ident.pos)
                         diagnostics.add(Diagnostic(
@@ -18717,7 +18742,8 @@ class Checker(
                         ))
                         continue
                     }
-                    checkUnresolvedInExpr(type.expression, classScope, source, fileName)
+                    // The heritage EXPRESSION self-emits via the batch-4 edges
+                    // (classScope = the active class level at that position).
                     // indexSignatureInOtherFile (piece A): skip the arity check for an
                     // extends clause whose base has a value var declaration.
                     val skipArityForValueExtends = clause.token == SyntaxKind.ExtendsKeyword &&
@@ -18771,9 +18797,10 @@ class Checker(
                 }
             }
             // Members: dispatched per member at their own enters (batch 3 —
-            // spineUResClassPropertyMember / spineUResClassMethodEnter /
-            // spineUResClassGetAccessorEnter / spineUResClassIndexSignature +
-            // the fn-sig child dispatch in spineUResOnDirectChild).
+            // spineUResClassPropertyMember / spineUResClassGetAccessorEnter /
+            // spineUResClassIndexSignature + the fn-sig child dispatch in
+            // spineUResOnDirectChild; decorators / computed names /
+            // initializers self-emit via the batch-4 expression edges).
         }
     }
 
@@ -18792,7 +18819,7 @@ class Checker(
             }
             node.heritageClauses?.forEach { clause ->
                 for (type in clause.types) {
-                    checkUnresolvedInExpr(type.expression, ifaceScope, source, fileName)
+                    // The heritage EXPRESSION self-emits via the batch-4 edges.
                     checkHeritageTypeArgCount(type, ifaceScope, source, fileName)
                     type.typeArguments?.forEach { checkUnresolvedInType(it, ifaceScope, source, fileName) }
                     // 17.163: TS2312 for `interface I<T> extends T {}`.
@@ -18806,9 +18833,8 @@ class Checker(
             for (member in node.members) {
                 when (member) {
                     is PropertyDeclaration -> {
-                        if (member.name is ComputedPropertyName) {
-                            checkUnresolvedInExpr((member.name).expression, ifaceScope, source, fileName)
-                        }
+                        // Computed property names self-emit via the batch-4
+                        // edges (the interface level is the active scope there).
                         member.type?.let { checkUnresolvedInType(it, ifaceScope, source, fileName) }
                     }
                     is MethodDeclaration -> {
@@ -18848,15 +18874,32 @@ class Checker(
         }
     }
 
-    /** Batch 2 per-statement dispatch. Every emission batch routes through
-     *  [spineUResEmit] (region suppression + the declare-module filter). */
+    /** Batch 2 per-statement + batch 4 per-expression dispatch. Every emission
+     *  batch routes through [spineUResEmit] (region suppression + the
+     *  declare-module filter). Since batch 4 all expression positions self-emit
+     *  at their own enters ([spineUResExprChecked] gates them to the deleted
+     *  recursive walker's exact reach); the statement arms keep only their
+     *  TYPE-position and special-emission legs. */
     private fun spineUResDispatch(node: Node) {
         when (node) {
+            // ── batch 4: expression territory (hot kinds first) ──
+            is Identifier -> spineUResIdentifierExpr(node)
+            is BinaryExpression -> spineUResBinaryExpr(node)
+            is CallExpression -> spineUResTypeArgsInExpr(node, node.typeArguments)
+            is NewExpression -> spineUResTypeArgsInExpr(node, node.typeArguments)
+            is ShorthandPropertyAssignment -> spineUResShorthandProp(node)
+            is TypeAssertionExpression -> spineUResTypeInExpr(node, node.type)
+            is AsExpression -> spineUResTypeInExpr(node, node.type)
+            is SatisfiesExpression -> spineUResTypeInExpr(node, node.type)
+            is ClassExpression -> spineUResClassExpressionEnter(node)
+            is JsxElement -> spineUResJsxEnter(node, node.openingElement.tagName)
+            is JsxSelfClosingElement -> spineUResJsxEnter(node, node.tagName)
+            is JsxFragment -> spineUResJsxEnter(node, null)
+            // ── batch 2: statement-level positions (TYPE legs only since 4) ──
             is VariableStatement -> {
                 val scope = spineUResScope() ?: return
                 spineUResEmit {
                     for (decl in node.declarationList.declarations) {
-                        decl.initializer?.let { checkUnresolvedInExpr(it, scope, spineSource, spineFileName) }
                         // 17.65: JSDoc-derived type nodes carry sub-parser positions —
                         // never check them here (wrong source locations).
                         if (!decl.typeFromJSDoc) {
@@ -18865,80 +18908,15 @@ class Checker(
                     }
                 }
             }
-            is ExpressionStatement -> {
-                val scope = spineUResScope() ?: return
-                spineUResEmit { checkUnresolvedInExpr(node.expression, scope, spineSource, spineFileName) }
-            }
-            is ReturnStatement -> {
-                // The skip (outside-function return) is a suppressed region pushed
-                // at spineUResEnter — spineUResEmit is a no-op there.
-                val scope = spineUResScope() ?: return
-                node.expression?.let { e ->
-                    spineUResEmit { checkUnresolvedInExpr(e, scope, spineSource, spineFileName) }
-                }
-            }
-            is IfStatement -> {
-                val scope = spineUResScope() ?: return
-                spineUResEmit { checkUnresolvedInExpr(node.expression, scope, spineSource, spineFileName) }
-            }
-            is WhileStatement -> {
-                val scope = spineUResScope() ?: return
-                spineUResEmit { checkUnresolvedInExpr(node.expression, scope, spineSource, spineFileName) }
-            }
-            is DoStatement -> {
-                val scope = spineUResScope() ?: return
-                spineUResEmit { checkUnresolvedInExpr(node.expression, scope, spineSource, spineFileName) }
-            }
             is ForStatement -> {
                 // The for-header level is pushed (active) at enter — spineUResScope()
                 // IS the legacy forScope.
                 val scope = spineUResScope() ?: return
                 spineUResEmit {
-                    when (val init = node.initializer) {
-                        is VariableDeclarationList -> {
-                            for (decl in init.declarations) {
-                                decl.initializer?.let { checkUnresolvedInExpr(it, scope, spineSource, spineFileName) }
-                                decl.type?.let { checkUnresolvedInType(it, scope, spineSource, spineFileName) }
-                            }
-                        }
-                        is Expression -> checkUnresolvedInExpr(init, scope, spineSource, spineFileName)
-                        else -> {}
+                    (node.initializer as? VariableDeclarationList)?.declarations?.forEach { decl ->
+                        decl.type?.let { checkUnresolvedInType(it, scope, spineSource, spineFileName) }
                     }
-                    node.condition?.let { checkUnresolvedInExpr(it, scope, spineSource, spineFileName) }
-                    node.incrementor?.let { checkUnresolvedInExpr(it, scope, spineSource, spineFileName) }
                 }
-            }
-            is ForInStatement -> {
-                val scope = spineUResScope() ?: return
-                spineUResEmit { checkUnresolvedInExpr(node.expression, scope, spineSource, spineFileName) }
-            }
-            is ForOfStatement -> {
-                val scope = spineUResScope() ?: return
-                spineUResEmit { checkUnresolvedInExpr(node.expression, scope, spineSource, spineFileName) }
-            }
-            is SwitchStatement -> {
-                // The switch level is pushed INACTIVE — spineUResScope() is the
-                // OUTER scope, where the legacy walk checked the subject.
-                val scope = spineUResScope() ?: return
-                spineUResEmit { checkUnresolvedInExpr(node.expression, scope, spineSource, spineFileName) }
-            }
-            is CaseClause -> {
-                // The switch level activated at this clause's enter (direct-child
-                // trigger) — spineUResScope() is the shared clause scope.
-                val scope = spineUResScope() ?: return
-                spineUResEmit { checkUnresolvedInExpr(node.expression, scope, spineSource, spineFileName) }
-            }
-            is ThrowStatement -> {
-                val scope = spineUResScope() ?: return
-                node.expression?.let { e ->
-                    spineUResEmit { checkUnresolvedInExpr(e, scope, spineSource, spineFileName) }
-                }
-            }
-            is WithStatement -> {
-                // Expression checked in the enclosing scope; the with level flips
-                // suppressed at the STATEMENT child (dynamic resolution in body).
-                val scope = spineUResOuterScope(node) ?: return
-                spineUResEmit { checkUnresolvedInExpr(node.expression, scope, spineSource, spineFileName) }
             }
             is FunctionDeclaration -> {
                 // B98.r11: TS2842 for unused destructured-renames in a BODYLESS
@@ -18966,14 +18944,8 @@ class Checker(
                     checkUnresolvedInType(node.type, level.scope, spineSource, spineFileName)
                 }
             }
-            is EnumDeclaration -> {
-                val level = spineUResOwnLevel(node) ?: return
-                spineUResEmit {
-                    for (member in node.members) {
-                        member.initializer?.let { checkUnresolvedInExpr(it, level.scope, spineSource, spineFileName) }
-                    }
-                }
-            }
+            // Enum member INITIALIZERS self-emit via the batch-4 edges (the
+            // enum level is the active scope during the member subtrees).
             is ModuleDeclaration -> {
                 if (ModifierFlag.Declare in node.modifiers) {
                     val level = spineUResOwnLevel(node) ?: return
@@ -19005,23 +18977,341 @@ class Checker(
                     }
                 }
             }
-            is ExportAssignment -> {
-                val scope = spineUResScope() ?: return
-                spineUResEmit { checkUnresolvedInExpr(node.expression, scope, spineSource, spineFileName) }
-            }
             is ImportEqualsDeclaration -> {
                 val scope = spineUResScope() ?: return
                 spineUResEmit { checkUnresolvedInImportEquals(node, scope, spineSource, spineFileName) }
             }
-            // Batch 3: class-member positions (class decl/expr parents only —
+            // Batch 3: class-member TYPE positions (class decl/expr parents only —
             // interface members are dispatched by spineUResInterfaceDeclaration,
-            // objlit/type-literal members by their still-legacy walkers).
+            // objlit/type-literal members by their still-legacy walkers; member
+            // decorators / computed names / initializers self-emit — batch 4).
             is PropertyDeclaration -> spineUResClassPropertyMember(node)
-            is MethodDeclaration -> spineUResClassMethodEnter(node)
             is GetAccessor -> spineUResClassGetAccessorEnter(node)
             is IndexSignature -> spineUResClassIndexSignature(node)
             else -> {}
         }
+    }
+
+    /** Batch 4: an Identifier in spine-checked expression territory resolves
+     *  itself — the deleted recursive walker's Identifier arm, with the scope
+     *  taken from the maintained level chain (batch-1-audited equal to the
+     *  legacy threaded scopes at every identifier). */
+    private fun spineUResIdentifierExpr(node: Identifier) {
+        if (spineUResSuppressCount > 0) return
+        if (!spineUResExprChecked(node)) return
+        val scope = spineUResScope() ?: return
+        spineUResEmit { checkIdentifierResolved(node.text, node, scope, spineSource, spineFileName) }
+    }
+
+    /** Batch 4: the deleted walker's BinaryExpression arm — the NaN-comparison
+     *  check plus the destructuring-pattern marking for `=` targets (laid
+     *  BEFORE the LHS subtree walks: preorder, so the shorthand TS1312/TS18004
+     *  selection sees the marks — same staging as the legacy right-spine loop). */
+    private fun spineUResBinaryExpr(node: BinaryExpression) {
+        if (spineUResSuppressCount > 0) return
+        if (!spineUResExprChecked(node)) return
+        if (node.operator == SyntaxKind.Equals) markDestructuringTargets(node.left)
+        val scope = spineUResScope() ?: return
+        spineUResEmit { checkNaNComparison(node, scope, spineSource, spineFileName) }
+    }
+
+    /** Batch 4: type positions embedded in expressions — an as/satisfies/
+     *  type-assertion target type, dispatched at the expression's enter (the
+     *  deleted walker's checkUnresolvedInType calls). */
+    private fun spineUResTypeInExpr(node: Node, type: TypeNode) {
+        if (spineUResSuppressCount > 0) return
+        if (!spineUResExprChecked(node)) return
+        val scope = spineUResScope() ?: return
+        spineUResEmit { checkUnresolvedInType(type, scope, spineSource, spineFileName) }
+    }
+
+    /** Batch 4: call/new TYPE ARGUMENTS (the deleted walker's typeArguments
+     *  loops). */
+    private fun spineUResTypeArgsInExpr(node: Node, typeArgs: List<TypeNode>?) {
+        if (typeArgs.isNullOrEmpty()) return
+        if (spineUResSuppressCount > 0) return
+        if (!spineUResExprChecked(node)) return
+        val scope = spineUResScope() ?: return
+        spineUResEmit { typeArgs.forEach { checkUnresolvedInType(it, scope, spineSource, spineFileName) } }
+    }
+
+    /** Batch 4: the deleted walker's object-literal SHORTHAND arm — TS1312 for
+     *  `{ s = 5 }` OUTSIDE a destructuring pattern (the name is never
+     *  resolved; tsc checks the initializer instead, so no TS18004), TS18004
+     *  resolution otherwise ([checkShorthandPropertyResolved]). The
+     *  destructuring marks come from [spineUResBinaryExpr] at the enclosing
+     *  assignment's enter — strictly before this fires. */
+    private fun spineUResShorthandProp(node: ShorthandPropertyAssignment) {
+        if (spineUResSuppressCount > 0) return
+        if (!spineUResExprChecked(node)) return
+        val objlit = (node as NodeBase).parent as? ObjectLiteralExpression ?: return
+        val scope = spineUResScope() ?: return
+        val shInit = node.objectAssignmentInitializer
+        if (shInit != null && objlit.pos !in destructuringPatternPos) {
+            spineUResEmit {
+                val eqPos = spineSource.indexOf('=', node.name.pos + node.name.text.length)
+                if (eqPos in 0 until shInit.pos) {
+                    val (eqLine, eqChar) = getLineAndCharacterOfPosition(spineSource, eqPos)
+                    diagnostics.add(Diagnostic(
+                        message = "Did you mean to use a ':'? An '=' can only follow a property name when the containing object literal is part of a destructuring pattern.",
+                        category = DiagnosticCategory.Error,
+                        code = 1312,
+                        fileName = spineFileName,
+                        line = eqLine,
+                        character = eqChar,
+                        start = eqPos,
+                        length = 1,
+                    ))
+                }
+            }
+        } else {
+            spineUResEmit { checkShorthandPropertyResolved(node, scope, spineSource, spineFileName) }
+        }
+    }
+
+    /** Batch 4: the deleted walker's ClassExpression arm minus the heritage
+     *  EXPRESSION resolution (self-emitting via the edges) and minus members
+     *  (batch 3). Gated to spine-checked expression territory — a class
+     *  expression inside a recursion-owned region (a type-literal computed
+     *  name) keeps the retained walker's arm. */
+    private fun spineUResClassExpressionEnter(node: ClassExpression) {
+        if (spineUResSuppressCount > 0) return
+        if (!spineUResExprChecked(node)) return
+        val level = spineUResOwnLevel(node) ?: return
+        val classScope = level.scope
+        node.heritageClauses?.forEach { clause ->
+            spineUResEmit {
+                emitTS2864ForPrimitiveImplements(clause, classScope, spineSource, spineFileName)
+                for (type in clause.types) {
+                    checkHeritageTypeArgCount(type, classScope, spineSource, spineFileName)
+                    type.typeArguments?.forEach { checkUnresolvedInType(it, classScope, spineSource, spineFileName) }
+                }
+            }
+        }
+    }
+
+    /** Batch 4: JSX element/fragment enters in spine-checked expression
+     *  territory — tag-name resolution (Identifier tags via the intrinsic
+     *  rule; a property-access tag's ROOT identifier self-emits via the
+     *  edges) plus the factory-in-scope check. Attribute and child
+     *  expressions self-emit via the JSX descent edges. */
+    private fun spineUResJsxEnter(node: Node, tagName: Expression?) {
+        if (spineUResSuppressCount > 0) return
+        if (!spineUResExprChecked(node)) return
+        val scope = spineUResScope() ?: return
+        spineUResEmit {
+            if (tagName is Identifier) checkJsxTagName(tagName, scope, spineSource, spineFileName)
+            checkJsxFactoryInScope(node, scope, spineSource, spineFileName)
+        }
+    }
+
+    /** Owners whose parameter INITIALIZERS the legacy family checked (the
+     *  batch-4 expression-edge gate): function declarations, arrows, function
+     *  expressions, class methods/constructors, object-literal methods —
+     *  NOT accessors, interface/type-literal members, or function TYPES. */
+    private fun spineUResParamInitsChecked(param: Parameter): Boolean =
+        when (val fn = (param as NodeBase).parent) {
+            is FunctionDeclaration, is ArrowFunction, is FunctionExpression -> true
+            is MethodDeclaration ->
+                spineUResIsClassMember(fn) || (fn as NodeBase).parent is ObjectLiteralExpression
+            is Constructor -> spineUResIsClassMember(fn)
+            else -> false
+        }
+
+    /**
+     * Batch 4 (INV.4(c)(iii)): classify the [parent]→[child] edge for the
+     * spine expression-territory walk — the static reproduction of the deleted
+     * recursive expression walker's reach. [URES_EDGE_ROOT] = a dispatch-root
+     * position (the legacy statement/class-member arms called
+     * checkUnresolvedInExpr on exactly this child); [URES_EDGE_DESCEND] = an
+     * edge the legacy expression walker recursed through; [URES_EDGE_NONE] = a
+     * position the legacy walk never reached as an expression (names, types,
+     * function bodies — statements dispatch themselves; type-literal computed
+     * names and other recursion-owned regions keep the retained walker).
+     */
+    private fun spineUResExprEdge(parent: Node, child: Node): Int = when (parent) {
+        // ── intra-expression descent (the deleted walker's recursion arms) ──
+        is PropertyAccessExpression ->
+            if (child === parent.expression) URES_EDGE_DESCEND else URES_EDGE_NONE
+        is ElementAccessExpression -> URES_EDGE_DESCEND
+        is CallExpression -> if (child is Expression) URES_EDGE_DESCEND else URES_EDGE_NONE
+        is NewExpression -> if (child is Expression) URES_EDGE_DESCEND else URES_EDGE_NONE
+        is BinaryExpression -> URES_EDGE_DESCEND
+        is PrefixUnaryExpression -> URES_EDGE_DESCEND
+        is PostfixUnaryExpression -> URES_EDGE_DESCEND
+        is ConditionalExpression -> URES_EDGE_DESCEND
+        is ParenthesizedExpression ->
+            if (child === parent.expression) URES_EDGE_DESCEND else URES_EDGE_NONE
+        is TypeAssertionExpression ->
+            if (child === parent.expression) URES_EDGE_DESCEND else URES_EDGE_NONE
+        is AsExpression -> if (child === parent.expression) URES_EDGE_DESCEND else URES_EDGE_NONE
+        is SatisfiesExpression ->
+            if (child === parent.expression) URES_EDGE_DESCEND else URES_EDGE_NONE
+        is NonNullExpression -> URES_EDGE_DESCEND
+        is ArrayLiteralExpression -> URES_EDGE_DESCEND
+        is SpreadElement -> URES_EDGE_DESCEND
+        is TemplateExpression -> if (child is TemplateSpan) URES_EDGE_DESCEND else URES_EDGE_NONE
+        is TemplateSpan -> if (child === parent.expression) URES_EDGE_DESCEND else URES_EDGE_NONE
+        is TaggedTemplateExpression ->
+            if (child === parent.tag || child === parent.template) URES_EDGE_DESCEND else URES_EDGE_NONE
+        is TypeOfExpression -> URES_EDGE_DESCEND
+        is VoidExpression -> URES_EDGE_DESCEND
+        is DeleteExpression -> URES_EDGE_DESCEND
+        is AwaitExpression -> URES_EDGE_DESCEND
+        is YieldExpression -> URES_EDGE_DESCEND
+        is CommaListExpression -> URES_EDGE_DESCEND
+        // ── object-literal structure ──
+        is ObjectLiteralExpression -> when (child) {
+            is PropertyAssignment, is ShorthandPropertyAssignment, is SpreadAssignment,
+            is MethodDeclaration -> URES_EDGE_DESCEND
+            else -> URES_EDGE_NONE // get/set accessors: no expression positions
+        }
+        is PropertyAssignment ->
+            if (child === parent.initializer || child is ComputedPropertyName) URES_EDGE_DESCEND
+            else URES_EDGE_NONE
+        is SpreadAssignment -> URES_EDGE_DESCEND
+        is ComputedPropertyName -> when (val owner = (parent as NodeBase).parent) {
+            // objlit property computed names descend with the literal
+            is PropertyAssignment -> URES_EDGE_DESCEND
+            // class-member computed names are batch-3 roots (checked in the
+            // member level's PRE-population view — B98.r111); interface
+            // PROPERTY computed names were the interface arm's; interface
+            // METHOD and type-literal member names stay unchecked/retained.
+            is MethodDeclaration -> if (spineUResIsClassMember(owner)) URES_EDGE_ROOT else URES_EDGE_NONE
+            is PropertyDeclaration -> when ((owner as NodeBase).parent) {
+                is ClassDeclaration, is ClassExpression, is InterfaceDeclaration -> URES_EDGE_ROOT
+                else -> URES_EDGE_NONE
+            }
+            else -> URES_EDGE_NONE
+        }
+        // ── function-like signature legs reached through expressions ──
+        is Parameter -> when {
+            child === parent.initializer ->
+                if (spineUResParamInitsChecked(parent)) URES_EDGE_DESCEND else URES_EDGE_NONE
+            child is Decorator -> {
+                val fn = (parent as NodeBase).parent
+                if ((fn is MethodDeclaration || fn is Constructor) && spineUResIsClassMember(fn))
+                    URES_EDGE_DESCEND else URES_EDGE_NONE
+            }
+            else -> URES_EDGE_NONE // name / type (types: the signature dispatch)
+        }
+        is FunctionDeclaration -> if (child is Parameter) URES_EDGE_ROOT else URES_EDGE_NONE
+        is MethodDeclaration -> when {
+            child is Parameter ->
+                if (spineUResIsClassMember(parent)) URES_EDGE_ROOT
+                else if ((parent as NodeBase).parent is ObjectLiteralExpression) URES_EDGE_DESCEND
+                else URES_EDGE_NONE
+            child is Decorator -> if (spineUResIsClassMember(parent)) URES_EDGE_ROOT else URES_EDGE_NONE
+            else -> URES_EDGE_NONE
+        }
+        is Constructor ->
+            if (child is Parameter && spineUResIsClassMember(parent)) URES_EDGE_ROOT else URES_EDGE_NONE
+        is ArrowFunction -> when {
+            child is Parameter -> URES_EDGE_DESCEND
+            child === parent.body && child is Expression -> URES_EDGE_DESCEND
+            else -> URES_EDGE_NONE // Block bodies: statements dispatch themselves
+        }
+        is FunctionExpression -> if (child is Parameter) URES_EDGE_DESCEND else URES_EDGE_NONE
+        is Decorator -> URES_EDGE_DESCEND // gated at the (owner, Decorator) edge
+        // ── class-member roots (batch 3: unconditional for class decl/expr) ──
+        is PropertyDeclaration -> when {
+            child === parent.initializer ->
+                if (spineUResIsClassMember(parent)) URES_EDGE_ROOT else URES_EDGE_NONE
+            child is Decorator -> if (spineUResIsClassMember(parent)) URES_EDGE_ROOT else URES_EDGE_NONE
+            else -> URES_EDGE_NONE
+        }
+        is ClassDeclaration -> if (child is Decorator) URES_EDGE_ROOT else URES_EDGE_NONE
+        is ClassExpression -> if (child is HeritageClause) URES_EDGE_DESCEND else URES_EDGE_NONE
+        is HeritageClause -> when ((parent as NodeBase).parent) {
+            is ClassDeclaration, is InterfaceDeclaration ->
+                if ((child as NodeBase).nodeId in spineUResHeritageSkip) URES_EDGE_NONE
+                else URES_EDGE_ROOT
+            is ClassExpression -> URES_EDGE_DESCEND
+            else -> URES_EDGE_NONE
+        }
+        is ExpressionWithTypeArguments ->
+            if (child === parent.expression) URES_EDGE_DESCEND else URES_EDGE_NONE
+        // ── statement dispatch roots (the batch-2 arms' expression calls) ──
+        is ExpressionStatement -> URES_EDGE_ROOT
+        is IfStatement -> if (child === parent.expression) URES_EDGE_ROOT else URES_EDGE_NONE
+        is WhileStatement -> if (child === parent.expression) URES_EDGE_ROOT else URES_EDGE_NONE
+        is DoStatement -> if (child === parent.expression) URES_EDGE_ROOT else URES_EDGE_NONE
+        is ForStatement ->
+            if (child === parent.condition || child === parent.incrementor ||
+                (child === parent.initializer && child is Expression)
+            ) URES_EDGE_ROOT else URES_EDGE_NONE
+        is ForInStatement -> if (child === parent.expression) URES_EDGE_ROOT else URES_EDGE_NONE
+        is ForOfStatement -> if (child === parent.expression) URES_EDGE_ROOT else URES_EDGE_NONE
+        is SwitchStatement -> if (child === parent.expression) URES_EDGE_ROOT else URES_EDGE_NONE
+        is CaseClause -> if (child === parent.expression) URES_EDGE_ROOT else URES_EDGE_NONE
+        is ThrowStatement -> URES_EDGE_ROOT
+        is ReturnStatement -> URES_EDGE_ROOT // outside-function: suppressed region
+        is WithStatement -> if (child === parent.expression) URES_EDGE_ROOT else URES_EDGE_NONE
+        is ExportAssignment -> if (child === parent.expression) URES_EDGE_ROOT else URES_EDGE_NONE
+        is VariableDeclaration -> if (child === parent.initializer) {
+            when (val list = (parent as NodeBase).parent) {
+                is VariableDeclarationList -> when ((list as NodeBase).parent) {
+                    is VariableStatement, is ForStatement -> URES_EDGE_ROOT
+                    else -> URES_EDGE_NONE // for-in/for-of headers: never checked
+                }
+                else -> URES_EDGE_NONE
+            }
+        } else URES_EDGE_NONE
+        is EnumMember -> if (child === parent.initializer) URES_EDGE_ROOT else URES_EDGE_NONE
+        // ── JSX (Identifier tags at the element handler; property-access tags
+        //     descend — only their ROOT identifier resolves; closing tags and
+        //     for-in/of binding positions never) ──
+        is JsxExpressionContainer -> URES_EDGE_DESCEND
+        is JsxSpreadAttribute -> URES_EDGE_DESCEND
+        is JsxAttribute -> URES_EDGE_DESCEND
+        is JsxOpeningElement ->
+            if (child is JsxAttribute || child is JsxSpreadAttribute ||
+                (child === parent.tagName && child is PropertyAccessExpression)
+            ) URES_EDGE_DESCEND else URES_EDGE_NONE
+        is JsxSelfClosingElement ->
+            if (child is JsxAttribute || child is JsxSpreadAttribute ||
+                (child === parent.tagName && child is PropertyAccessExpression)
+            ) URES_EDGE_DESCEND else URES_EDGE_NONE
+        is JsxElement -> if (child === parent.closingElement) URES_EDGE_NONE else URES_EDGE_DESCEND
+        is JsxFragment -> URES_EDGE_DESCEND
+        else -> URES_EDGE_NONE
+    }
+
+    /**
+     * Batch 4: is [node] reached by the deleted recursive expression walker —
+     * every parent edge up from it classifies DESCEND until a ROOT edge. A
+     * pure function of the ancestor chain, memoized per file by nodeId (a
+     * 6k-term binary chain would otherwise cost O(n²) across its operand
+     * identifiers). Unindexed nodes (nodeId −1) compute without the memo.
+     */
+    private fun spineUResExprChecked(node: Node): Boolean {
+        val memo = spineUResExprMemo
+        var cur: Node = node
+        var verdict = 0
+        while (verdict == 0) {
+            val id = (cur as NodeBase).nodeId
+            if (id >= 0 && id < memo.size && memo[id].toInt() != 0) {
+                verdict = memo[id].toInt()
+                break
+            }
+            val parent = (cur as NodeBase).parent
+            if (parent == null) { verdict = 2; break }
+            when (spineUResExprEdge(parent, cur)) {
+                URES_EDGE_ROOT -> verdict = 1
+                URES_EDGE_DESCEND -> cur = parent
+                else -> verdict = 2
+            }
+        }
+        // Backfill the walked chain (node..cur) so sibling queries are O(1).
+        val v = verdict.toByte()
+        var n: Node = node
+        while (true) {
+            val id = (n as NodeBase).nodeId
+            if (id >= 0 && id < memo.size && memo[id].toInt() == 0) memo[id] = v
+            if (n === cur) break
+            n = (n as NodeBase).parent ?: break
+        }
+        return verdict == 1
     }
 
     /**
@@ -27797,6 +28087,17 @@ class Checker(
         }
     }
 
+    /**
+     * INV.4(c)(iii) batch 4: the spine owns EVERY expression position reached
+     * from statement/class-member/signature dispatch (see [spineUResExprEdge] /
+     * [spineUResExprChecked] — identifiers, NaN comparisons, shorthands,
+     * embedded type positions, class-expression heritage, and JSX self-emit at
+     * their own enters). The ONLY remaining entries into this recursive walker
+     * are the TYPE walker's TypeLiteral computed-property-name positions —
+     * recursion-owned regions the batch-4 edges deliberately do NOT classify —
+     * plus its own internal recursion (incl. the JSX helpers). The types batch
+     * deletes both together.
+     */
     private fun checkUnresolvedInExpr(
         expr: Expression,
         scope: NameScope,
@@ -43577,6 +43878,12 @@ class Checker(
         internal var unresolvedAuditEnabled = false
         internal val unresolvedAuditOld = HashMap<String, String>()
         internal val unresolvedAuditSpine = HashMap<String, String>()
+
+        // INV.4(c)(iii) batch 4: edge verdicts for the spine expression-
+        // territory classification (see [spineUResExprEdge]).
+        private const val URES_EDGE_NONE = 0
+        private const val URES_EDGE_DESCEND = 1
+        private const val URES_EDGE_ROOT = 2
 
         /** Maximum antecedent walk depth for control-flow narrowing, aligned with tsc's
          *  `flowDepth === 2000` stack guard (M1.2b, round 386 — was 50). Do NOT lower it
