@@ -59,6 +59,51 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 533 (2026-07-16) — INV.4(d) walker 4: checkDuplicateIdentifiers
+(TS2300 family — 2300/2451/2374/2687/2717/2699/2502/7023/1061/…, 260 ms
+zero-typing in the round-529 cost table) migrated onto the spine — the
+recursive checkDuplicatesInStatement(s)/checkDuplicatesInExpr/
+checkDuplicatesInClassElement walkers and the per-file pass driver are
+DELETED (~215 lines).** The lightest (d) shape so far — the pass is STATELESS
+(no threaded walk state; the two checkDuplicateDeclarations flags
+isAmbientContext/inNamespaceBody derive at the anchor) and ZERO-TYPING (0
+getTypeOfExpression calls in the 529 table), so the migration is a pure
+boolean reach classifier + anchor dispatch: (1) `spineDupIdReached` over
+`spineDupIdEdge` (the deleted walkers' arms verbatim, ByteArray memo per
+file) gates per-kind emissions at node enters — fn/class/interface/alias/
+enum/var-statement/module/export-decl/arrow/fn-expr anchors run the RETAINED
+bounded leaf utilities (checkDuplicateTypeParams/Params,
+checkDuplicatesInType(Member), the member-list checks,
+checkDuplicateDeclarations) minus the body/initializer recursion, which the
+spine edges own; class/objlit MEMBER emissions dispatch uniformly at the
+member's own enter (a reached MethodDeclaration is a class OR objlit member
+— both emitted TPs+params in the legacy loops; a reached SetAccessor/
+Constructor is class-only since the objlit edge never admits accessors; a
+GetAccessor emits nothing). (2) The per-file top-level scans ride checkSpine's
+loop preserving the legacy within-file order: TS2502 self-typeof +
+circular-inference at file ENTER (spineDupIdSetup), the file-level
+declaration-group + merged-namespace/lib-shadow/cross-interface/prototype/
+clodule scans after the walk (spineDupIdFinish). (3) The legacy pass ran with
+currentFileLocals = null (its old slot set nothing); checkSpine sets it per
+file — every scan is wrapped in a null install, which the
+checkClassNamespacePrototypeConflict `currentFileLocals ?: globals` consult
+makes load-bearing. SLOT-MOVE PRE-GATE: the intact pass moved from slot 2408
+(before the giants) to the spine slot measured error-line-identical listAll
+×8 — statelessness confirmed empirically, no residue coupling (unlike w2).
+Reach quirks pinned as negative controls, all pre-verified on the OLD walker
+(48/48 green first run): call arguments / binary operands / if-and-loop
+CONDITIONS / case EXPRESSIONS / for-header initializers / param defaults /
+class property initializers / object-literal ACCESSOR bodies all unreached;
+duplicate-declaration GROUPS fire only at file level, FunctionDeclaration
+bodies, and ModuleBlocks — an arrow/method body's `class X{} class X{}` is
+legacy-silent and stays so. Also cleared the 6 pre-existing round-532
+compiler warnings (2 redundant casts, 4 redundant else arms — the
+warning-clean rule). VERIFIED: 48 pins (Inv4SpineBatch24Test) green on OLD
+and NEW; suite 11,004 → 11,052 (0 regressions, XML-verified); listAll error
+lines IDENTICAL on ALL 8 profiles (533a vs 532a); bench row recorded. NEXT:
+INV.4(d) walker 5 — checkDefiniteAssignment 241 ms / checkArgumentCounts
+230 ms, decompose when reached.**
+
 **Round 532 (2026-07-16) — INV.4(d) walker 3: checkImplicitAnyParameters
 (TS7005/TS7006/TS7008/TS7013/TS7019/TS7031/TS7032/TS7051, 272 ms in the
 round-529 cost table) migrated onto the spine — the recursive
@@ -491,74 +536,6 @@ shrinks back when the emission batches delete the legacy walk). NEXT:
 (c)(iii) batch 2 — swap the statement-level emissions onto the spine against
 this state, then expressions/types/JSX, deleting the recursive walkers as
 their positions migrate.
-
-**Round 523 (2026-07-15) — INV.4(c)(ii) LANDED: the checkUnresolvedNames STATE
-swap onto the INV.2(c) lexicalScopes tables.** The ~3,000-line walk family keeps
-its recursive structure (that deletion is (c)(iii)), but its name-visibility
-STATE is now served by the binder's lexical tables wherever they are
-trustworthy: `NameScope` (now an inner class) carries `lex` — the
-[LexicalScope] a TRUSTED scope-owner site links — and every content query
-(`has` / `hasLocalShadow` / `isTypeParam` / `hasType` / `typeParamConstraintOf`
-/ both TS2552 candidate pools) interleaves the threaded sets with the lex
-levels each NameScope level introduced (walk `lex` down to — exclusive —
-`parent.lex`, so shadowing order is preserved across the two sources). At a
-linked site the corresponding threaded population is SKIPPED: statement lists
-(via a new `owner: Node?` param on `checkUnresolvedInStatements` — the Block
-node, the SourceFile, or the FUNCTION node for a fn body, since body Blocks
-share the fn's binder scope by map absence), for/for-in/for-of headers, catch
-(variable incl. destructuring), switch (the binder keys the case scope by the
-SWITCH's nodeId; the walk checks the expression BEFORE linking, so no
-re-keying is needed — unlike the spine), and class/class-expr/interface/
-type-alias TP scopes (+ the class-expr self-name). DESIGN LINES that make it
-equivalence-safe: (1) function-like scopes link at the BODY only — params/TPs
-stay threaded at signature positions because the binder's flat fn table also
-holds body declarations, which must NOT be visible in param defaults above
-ES2015 (pinned both directions; the legacy sub-ES2015 pre-collect stays);
-(2) ModuleDeclaration and EnumDeclaration lexical levels are UNTRUSTED and
-skipped in the level probes — buildNamespaceScope is EXPORT-filtered and the
-enum branch EnumMember-filtered, while the binder tables alias ALL merged
-members (the flat-merge gotcha), so linking them would suppress genuine
-TS2304 (sibling-block non-export invisibility pinned); (3) the SourceFile
-level filters its aliased file locals by a per-file exclusion set (ambient
-external module names + the declare-global GH#42209 quirk) — its scope-space
-symbols (file-level block-hoisted `var`s, which the main binder never binds
-per B83.5) stay unfiltered; (4) unindexed trees probe-miss everywhere →
-threaded legacy behavior by construction. hasLocalShadow gains the lexical
-levels INCLUDING the SourceFile root (the legacy file-statement-list child
-was a non-root scope carrying file-level decls — TS2845 NaN pins).
-THE FIRST FULL-SUITE RUN CAUGHT FIVE REAL EQUIVALENCE GAPS (10 corpus
-failures, all fixed same round — the corpus IS the equivalence oracle this
-sub-item was designed around): (a+b) BINDER — `bindLexicalScopes` never
-declared a ModuleDeclaration's NAME or nested import names into fresh scopes
-(a block-nested `namespace M` is TS1235 but tsc still binds it — `export = M`
-in the same block resolves; moduleElementsInWrongContext ×3,
-unreachableDeclarations ×2, errorRecoveryWithDotFollowedByNamespaceKeyword);
-now declared with the checker-collect's rules (dotted → leftmost segment,
-declare-global quirk, StringLiteral skip; imports get Alias flags); (c) the
-fn-INTERMEDIATE leak — a nested function INSIDE a param default links its own
-body scope whose binder parent chain crosses the OUTER fn's flat table (which
-holds the outer BODY's decls), so the interleave walks now skip NON-HEAD
-function-like levels (functionLikeInParameterInitializer: `f(cb = function ()
-{ return foo }) { let foo }` must TS2304 — only the head of a link may be
-fn-owned, and fn signature content is always threaded so nothing is lost);
-(d) hasType stays AST-based at linked lists via `collectDeclaredTypeNames` —
-the binder merge can LOSE a type meaning to an alias OVERWRITE
-(`export default interface zzz` + `import zzz from "./b"` — TS2749 FP,
-allowImportClausesToMergeWithTypes); (e) the root exclusion applies to an
-ambient module name ONLY while ALL declarations of the file-local symbol are
-StringLiteral-named ModuleDeclarations — `import fs = require("fs")`
-OVERWRITES the ambient symbol (the alias-overwrite gotcha) and the legacy
-file-list collect re-added such names
-(ambientExternalModuleInAnotherExternalModule,
-constructorWithIncompleteTypeAnnotation).
-VERIFIED: suite 10,670 → 10,698 (+28 Inv4c2LexicalStateSwapTest, 0
-regressions); listAll error lines IDENTICAL on ALL 8 profiles (523a vs 522a);
-warning-clean; bench row in band. NEXT: (c)(iii) — the WALK swap (emission
-positions onto the spine, delete the recursive walkers); the threaded flags
-(hasArguments / classContext / inFunction) + the untrusted-level threading
-(namespaces/enums/type-level scopes + fn signature positions) migrate there
-as parent-chain context.
-
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
@@ -1606,6 +1583,24 @@ interrupt the arc).
       pins (Inv4SpineBatch22Test); suite 10,908 → 10,948; listAll error-line
       identical on ALL 8 profiles; the pass driver deleted (the recursive
       walkers stay as checkComputedDestructKey's utility). See the round-531
+      session note.
+    - (w4) DONE round 533 (2026-07-16): checkDuplicateIdentifiers (TS2300
+      family) — the lightest (d) shape: STATELESS (the two
+      checkDuplicateDeclarations flags derive at the anchor) and ZERO-TYPING,
+      so the migration is a pure boolean reach classifier
+      ([spineDupIdReached] over [spineDupIdEdge], the deleted
+      checkDuplicatesInStatement(s)/InExpr/InClassElement arms verbatim) +
+      anchor dispatch at node enters running the RETAINED bounded leaf
+      utilities; class/objlit MEMBER emissions dispatch uniformly at the
+      member's own enter (objlit edges never admit accessors, so a reached
+      SetAccessor/Constructor is class-only). Per-file top-level scans ride
+      checkSpine's loop in the legacy within-file order, each wrapped in a
+      currentFileLocals=null install (the legacy pass ran with it null —
+      checkClassNamespacePrototypeConflict's `?: globals` consult makes it
+      load-bearing). Slot-move pre-gate: error-line-identical ×8 (no residue
+      coupling). 48 pins (Inv4SpineBatch24Test) ALL pre-verified on the OLD
+      walker first run; suite 11,004 → 11,052; listAll error-line identical
+      on ALL 8 profiles; ~215 walker lines deleted. See the round-533
       session note.
   - [ ] **INV.4(e) The top-3 giants.** checkPropertyAccess (3.8 s) →
     checkTypeAssignability (2.2 s) → checkCallExpressionTypes (1.7 s) — one at

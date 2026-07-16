@@ -1032,6 +1032,22 @@ class Checker(
     private var spineIanyPendingAnnDecl: VariableDeclaration? = null
     private var spineIanyPendingAnnType: Type? = null
 
+    // ── INV.4(d) walker 4: checkDuplicateIdentifiers on the spine ──
+    // All MUST be declared before init {} (consumed by checkSpine during init).
+    // The pass is stateless and zero-typing: reach is a memoized boolean
+    // ancestor classifier ([spineDupIdReached] over [spineDupIdEdge] — the
+    // deleted checkDuplicatesInStatement(s)/InExpr/InClassElement dispatch
+    // arms verbatim); the bounded leaf utilities (checkDuplicateTypeParams/
+    // Params, checkDuplicatesInType(Member), the member-list checks,
+    // checkDuplicateDeclarations) stay intact, called at anchor enters.
+    /** Per-file activation for the duplicate-identifier walk (non-.d.ts —
+     *  the legacy pass's ambient-merge skip). */
+    private var spineDupIdActive = false
+    /** Per-file nodeId memo for [spineDupIdReached] — 0 unknown / 1 reached / 2 not. */
+    private var spineDupIdReachMemo = ByteArray(0)
+    /** Reusable ascent buffer for [spineDupIdReached]. */
+    private val spineDupIdChain = ArrayList<Node>()
+
     // Positions of ObjectLiteralExpression nodes that are destructuring-assignment
     // TARGETS (LHS of `=`, incl. nested through array/object/default nesting). Consumed
     // by the shorthand-with-initializer TS1312/TS18004 selection in
@@ -2404,8 +2420,9 @@ class Checker(
             // returning a primitive (TS2786) + attr value vs Record<string,T> value type (TS2322).
             pass("checkJsxValueComponentReturnsPrimitive") { checkJsxValueComponentReturnsPrimitive() }
         }
-        // 10. Check for duplicate identifiers (TS2300)
-        pass("checkDuplicateIdentifiers") { checkDuplicateIdentifiers() }
+        // 10. Duplicate identifiers (TS2300 family): migrated onto the check
+        // spine (INV.4(d) walker 4) — see spineDupIdSetup/spineDupIdEnter/
+        // spineDupIdFinish.
         // 10b. B332: TS2300 '(Missing)' for the file-level empty-name group (parse
         // recovery — reservedWords2).
         pass("checkEmptyNameDeclarationConflicts") { checkEmptyNameDeclarationConflicts() }
@@ -17793,16 +17810,19 @@ class Checker(
                 spineUncalledSetup(result)
                 spineArithSetup(result)
                 spineIanySetup(result)
+                spineDupIdSetup(result)
                 spineUResAuditActive = unresolvedAuditEnabled && spineUResActive
                 try {
                     spineWalkFile(sf)
                 } finally {
+                    spineDupIdFinish(result)
                     spineScopeClear()
                     spineUResTeardown()
                     spineTavTeardown()
                     spineUncalledTeardown()
                     spineArithTeardown()
                     spineIanyTeardown()
+                    spineDupIdTeardown()
                 }
                 spineResolveDeferredIterationChecks()
             }
@@ -17891,21 +17911,28 @@ class Checker(
                 spineCheckDupModifiers(node)
                 spineCheckAmbientRelativeModuleName(node)
                 spineCheckStrictModuleName(node)
+                spineDupIdEnter(node)
             }
             is MethodDeclaration -> {
                 spineCheckReservedWordInterfaceParams(node)
                 spineCheckParamForwardRefs(node.parameters, node.body)
                 spineCheckAsyncAwaitParams(node.modifiers, node.parameters)
+                spineDupIdEnter(node)
             }
-            is Constructor -> spineCheckParamForwardRefs(node.parameters, node.body)
+            is Constructor -> {
+                spineCheckParamForwardRefs(node.parameters, node.body)
+                spineDupIdEnter(node)
+            }
             is ArrowFunction -> {
                 spineCheckParamForwardRefs(node.parameters, node.body)
                 spineCheckAsyncAwaitParams(node.modifiers, node.parameters)
                 spineUncalledDispatch(node)
+                spineDupIdEnter(node)
             }
             is FunctionExpression -> {
                 spineCheckParamForwardRefs(node.parameters, node.body)
                 spineCheckAsyncAwaitParams(node.modifiers, node.parameters)
+                spineDupIdEnter(node)
             }
             is Parameter -> {
                 spineCheckRestParam(node)
@@ -17926,7 +17953,10 @@ class Checker(
                 spineCheckConstInitializer(node)
                 spineCheckDestructuringInitializer(node)
             }
-            is ClassExpression -> spineCheckClassExprComputedProps(node)
+            is ClassExpression -> {
+                spineCheckClassExprComputedProps(node)
+                spineDupIdEnter(node)
+            }
             is ForOfStatement -> {
                 spineNoteIterationPosition(node.expression)
                 spineCheckForOfNonIterable(node)
@@ -17963,6 +17993,7 @@ class Checker(
                 spineCheckSetAccessorParamGrammar(node)
                 spineCheckSetterReturns(node)
                 spineCheckParamForwardRefs(node.parameters, node.body)
+                spineDupIdEnter(node)
             }
             is ClassDeclaration -> {
                 spineCheckAccessorPairVisibility(node)
@@ -17971,6 +18002,7 @@ class Checker(
                 spineCheckAmbientImplClass(node)
                 spineCheckStrictClassDecl(node)
                 spineTavClassHeritage(node)
+                spineDupIdEnter(node)
             }
             is SwitchStatement -> {
                 spineCheckMultipleDefaults(node)
@@ -17981,6 +18013,7 @@ class Checker(
                 spineCheckDupModifiers(node)
                 spineCheckAmbientImplInterface(node)
                 spineCheckStrictInterfaceDecl(node)
+                spineDupIdEnter(node)
             }
             is FunctionDeclaration -> {
                 spineCheckDupModifiers(node)
@@ -17988,23 +18021,30 @@ class Checker(
                 spineCheckParamForwardRefs(node.parameters, node.body)
                 spineCheckAsyncAwaitParams(node.modifiers, node.parameters)
                 spineCheckStrictFunctionDecl(node)
+                spineDupIdEnter(node)
             }
             is VariableStatement -> {
                 spineCheckDupModifiers(node)
                 spineCheckAmbientVarInitializers(node)
                 spineCheckStrictVarStatement(node)
+                spineDupIdEnter(node)
             }
             is EnumDeclaration -> {
                 spineCheckDupModifiers(node)
                 spineCheckAmbientEnumInitializers(node)
                 spineCheckReservedEnumName(node)
                 spineCheckStrictEnumName(node)
+                spineDupIdEnter(node)
             }
             is TypeAliasDeclaration -> {
                 spineCheckDupModifiers(node)
                 spineCheckAmbientImplAlias(node)
+                spineDupIdEnter(node)
             }
-            is ExportDeclaration -> spineCheckDupModifiers(node)
+            is ExportDeclaration -> {
+                spineCheckDupModifiers(node)
+                spineDupIdEnter(node)
+            }
             is ImportDeclaration -> {
                 spineCheckDupModifiers(node)
                 spineCheckStrictImportDecl(node)
@@ -34357,45 +34397,280 @@ class Checker(
         }
     }
 
-    private fun checkDuplicateIdentifiers() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            // TS2502 self-referential `typeof X` annotations (`declare const foo: typeof foo`,
-            // incl. inside `declare global`) are circular regardless of .ts vs .d.ts — run
-            // this narrow, FP-safe check for ALL non-node_modules files. The REST of the
-            // duplicate-identifier pipeline below stays .ts-only (B98.r81 ambient-merge skip).
-            if (!fileName.contains("node_modules/")) {
-                checkAccessorSelfTypeofInStatements(result.sourceFile.statements, result.sourceFile.text, fileName)
+    // ── INV.4(d) walker 4: checkDuplicateIdentifiers on the spine ───────────
+    // (round 533). The recursive checkDuplicatesInStatement(s)/InExpr/
+    // InClassElement walkers and the per-file pass driver are DELETED; anchor
+    // emissions dispatch at node enters ([spineDupIdEnter]) gated by the
+    // memoized reach classifier ([spineDupIdReached] over [spineDupIdEdge] —
+    // the deleted walkers' exact dispatch arms, incl. the corpus quirks: call
+    // arguments / binary operands / if-and-loop conditions / case expressions
+    // / for headers / param defaults / class property initializers /
+    // object-literal accessor bodies unreached; checkDuplicateDeclarations
+    // groups fire only at file level, FunctionDeclaration bodies, and
+    // ModuleBlocks — never arrow/method bodies). The per-file top-level scans
+    // run from checkSpine's loop: TS2502 self-typeof + circular-inference at
+    // file ENTER ([spineDupIdSetup]), the file-level declaration-group +
+    // merged-namespace/lib-shadow/cross-interface/prototype/clodule scans
+    // after the walk ([spineDupIdFinish] — the legacy within-file order). The
+    // legacy pass ran with currentFileLocals = null; checkSpine sets it per
+    // file, so every scan is wrapped in a null install (the
+    // checkClassNamespacePrototypeConflict globals-fallback consult).
+
+    /** Per-file activation + the legacy pre-walk components, called from
+     *  [checkSpine]'s loop before the walk. */
+    private fun spineDupIdSetup(result: BinderResult) {
+        spineDupIdActive = !spineIsDts
+        spineDupIdReachMemo =
+            if (spineDupIdActive) ByteArray(result.sourceFile.nodeCount) else ByteArray(0)
+        // TS2502 self-referential `typeof X` annotations (`declare const foo: typeof foo`,
+        // incl. inside `declare global`) are circular regardless of .ts vs .d.ts — run
+        // this narrow, FP-safe check for ALL non-node_modules files. The REST of the
+        // duplicate-identifier pipeline stays .ts-only (B98.r81 ambient-merge skip).
+        if (!spineFileName.contains("node_modules/")) {
+            val saved = currentFileLocals
+            currentFileLocals = null
+            try {
+                checkAccessorSelfTypeofInStatements(result.sourceFile.statements, spineSource, spineFileName)
                 // implicitAnyFromCircularInference: mutual var→typeof cycle (TS2502) + var-self-call
-                // fn (TS7023) + mutual fn-decl recursion (TS7023). Skips .d.ts/.js (handled below).
-                if (!isDtsFile(fileName) && !isJsLikeFileName(fileName)) {
-                    checkCircularInferenceImplicitAny(result.sourceFile.statements, result.sourceFile.text, fileName)
+                // fn (TS7023) + mutual fn-decl recursion (TS7023). Skips .d.ts/.js.
+                if (!spineIsDts && !isJsLikeFileName(spineFileName)) {
+                    checkCircularInferenceImplicitAny(result.sourceFile.statements, spineSource, spineFileName)
                 }
+            } finally {
+                currentFileLocals = saved
             }
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            checkDuplicatesInStatements(result.sourceFile.statements, source, fileName)
-            // Check file-level duplicate declarations
-            checkDuplicateDeclarations(result.sourceFile.statements, source, fileName)
+        }
+    }
+
+    private fun spineDupIdTeardown() {
+        spineDupIdActive = false
+        spineDupIdReachMemo = ByteArray(0)
+    }
+
+    /** The legacy post-walk file-level components, called from [checkSpine]'s
+     *  loop after the walk (the legacy within-file order: tree walk first). */
+    private fun spineDupIdFinish(result: BinderResult) {
+        if (spineIsDts) return
+        val stmts = result.sourceFile.statements
+        val saved = currentFileLocals
+        currentFileLocals = null
+        try {
+            // File-level duplicate declarations
+            checkDuplicateDeclarations(stmts, spineSource, spineFileName)
             // Cross-body duplicates in same-named (merged) top-level namespaces:
             // ≥2 CLASS decls of a name (TS2300) and duplicate index sigs in a merged
-            // interface (TS2374). Within-a-single-body duplicates are handled above.
-            checkMergedNamespaceDuplicates(result.sourceFile.statements, source, fileName)
+            // interface (TS2374). Within-a-single-body duplicates are handled by the walk.
+            checkMergedNamespaceDuplicates(stmts, spineSource, spineFileName)
             // B61.1: top-level non-declare class shadowing a built-in lib class
-            checkClassShadowsLibType(result.sourceFile.statements, source, fileName)
+            checkClassShadowsLibType(stmts, spineSource, spineFileName)
             // B61.6: cross-interface-declaration TS2717 for method-vs-property merge conflict
-            checkCrossInterfacePropertyConflict(result.sourceFile.statements, source, fileName)
+            checkCrossInterfacePropertyConflict(stmts, spineSource, spineFileName)
             // B96 (round 80): TS2300 for a `prototype` member declared in a namespace
             // that merges with a class of the same name (the class's implicit static
             // `prototype` conflicts).
-            checkClassNamespacePrototypeConflict(result.sourceFile.statements, source, fileName)
+            checkClassNamespacePrototypeConflict(stmts, spineSource, spineFileName)
             // B98.r82: TS2699 (+ TS2300 for the method form) for a `static prototype`
             // class member, which conflicts with the constructor function's built-in
             // `Function.prototype`.
-            checkStaticPrototypeMembers(result.sourceFile.statements, source, fileName)
+            checkStaticPrototypeMembers(stmts, spineSource, spineFileName)
             // B98.r93: TS2300 for a clodule (class + namespace merge) whose combined
             // STATIC value space has a name declared with ≥2 distinct merge-kinds.
-            checkCloduleValueSpaceConflicts(result.sourceFile.statements, source, fileName)
+            checkCloduleValueSpaceConflicts(stmts, spineSource, spineFileName)
+        } finally {
+            currentFileLocals = saved
+        }
+    }
+
+    /**
+     * Does the deleted duplicate-identifier walker reach [child] from
+     * [parent]? Mirrors checkDuplicatesInStatement(s)/InExpr/InClassElement's
+     * dispatch arms exactly — every kind absent here fell to their `else`
+     * arms (calls, binaries, parens, conditions, case expressions, for
+     * headers, param defaults, class property initializers, object-literal
+     * accessors, interface/type-literal member bodies).
+     */
+    private fun spineDupIdEdge(parent: Node, child: Node): Boolean = when (parent) {
+        // ── statement dispatch ──
+        is SourceFile -> child is Statement
+        is FunctionDeclaration -> child === parent.body
+        is Block -> child is Statement
+        is IfStatement -> child === parent.thenStatement || child === parent.elseStatement
+        is ForStatement -> child === parent.statement
+        is ForInStatement -> child === parent.statement
+        is ForOfStatement -> child === parent.statement
+        is WhileStatement -> child === parent.statement
+        is DoStatement -> child === parent.statement
+        is SwitchStatement -> child is CaseClause || child is DefaultClause
+        is CaseClause -> child is Statement
+        is DefaultClause -> child is Statement
+        is TryStatement -> child === parent.tryBlock || child === parent.finallyBlock ||
+            child is CatchClause
+        is CatchClause -> child === parent.block
+        is LabeledStatement -> child === parent.statement
+        is ModuleDeclaration -> child is ModuleBlock
+        is ModuleBlock -> child is Statement
+        is ExpressionStatement -> child === parent.expression
+        is ReturnStatement -> child === parent.expression
+        is ThrowStatement -> child === parent.expression
+        is ExportAssignment -> child === parent.expression
+        is VariableStatement -> child === parent.declarationList
+        // For-header declaration lists die here (their parent is the for statement).
+        is VariableDeclarationList -> child is VariableDeclaration && parent.parent is VariableStatement
+        // Only the initializer — annotation TYPE walks are anchored at the
+        // VariableStatement enter; binding-pattern defaults were never walked.
+        is VariableDeclaration -> child === parent.initializer
+        // ── class-element dispatch (class decls AND expressions; property
+        // declarations fell to the legacy `else` — initializers unreached) ──
+        is ClassDeclaration, is ClassExpression ->
+            child is MethodDeclaration || child is Constructor ||
+                child is GetAccessor || child is SetAccessor
+        is MethodDeclaration -> child === parent.body
+        is Constructor -> child === parent.body
+        is GetAccessor -> child === parent.body
+        is SetAccessor -> child === parent.body
+        // ── expression dispatch ──
+        is ArrowFunction -> child === parent.body
+        is FunctionExpression -> child === parent.body
+        // Object-literal accessors and spreads fell to the legacy `else`.
+        is ObjectLiteralExpression -> child is MethodDeclaration || child is PropertyAssignment
+        is PropertyAssignment -> child === parent.initializer
+        else -> false
+    }
+
+    /** Is [node] reached by the deleted duplicate-identifier walker? Memoized
+     *  per file by nodeId (ascent collects the chain, the descent backfills). */
+    private fun spineDupIdReached(node: Node): Boolean {
+        val memo = spineDupIdReachMemo
+        run {
+            val id = (node as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) {
+                val m = memo[id].toInt()
+                if (m != 0) return m == 1
+            }
+        }
+        val chain = spineDupIdChain
+        chain.clear()
+        var cur: Node = node
+        val reached: Boolean
+        while (true) {
+            val parent = (cur as NodeBase).parent
+            if (parent == null) {
+                reached = cur is SourceFile
+                break
+            }
+            if (!spineDupIdEdge(parent, cur)) {
+                reached = false
+                break
+            }
+            val pid = (parent as NodeBase).nodeId
+            val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
+            if (pm != 0) {
+                reached = pm == 1
+                break
+            }
+            chain.add(cur)
+            cur = parent
+        }
+        run {
+            val id = (cur as NodeBase).nodeId
+            if (id >= 0 && id < memo.size && memo[id].toInt() == 0) {
+                memo[id] = if (reached) 1 else 2
+            }
+        }
+        val fill: Byte = if (reached) 1 else 2
+        for (i in chain.indices.reversed()) {
+            val id = (chain[i] as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) memo[id] = fill
+        }
+        chain.clear()
+        return reached
+    }
+
+    /**
+     * Anchor emissions at node enter — the deleted walkers' per-kind emission
+     * blocks verbatim, minus the body/initializer recursion (spine edges).
+     * Class/object-literal MEMBER emissions dispatch at the member's own
+     * enter (reach requires the owner edge, which the legacy element loop
+     * gated identically): a reached MethodDeclaration is a class OR
+     * object-literal member (both emitted TPs + params), a reached
+     * SetAccessor/Constructor is class-only (params; object literals never
+     * admit accessor children), a GetAccessor emits nothing.
+     */
+    private fun spineDupIdEnter(node: Node) {
+        if (!spineDupIdActive) return
+        when (node) {
+            is FunctionDeclaration -> if (spineDupIdReached(node)) {
+                checkDuplicateTypeParams(node.typeParameters, spineSource, spineFileName)
+                checkDuplicateParams(node.parameters, spineSource, spineFileName)
+                checkDuplicatesInType(node.type, spineSource, spineFileName)
+                for (param in node.parameters) checkDuplicatesInType(param.type, spineSource, spineFileName)
+                // Duplicate declaration GROUPS fire only for FunctionDeclaration
+                // bodies (arrow/method/accessor bodies fell to the legacy else).
+                node.body?.let { checkDuplicateDeclarations(it.statements, spineSource, spineFileName) }
+            }
+            is ClassDeclaration -> if (spineDupIdReached(node)) {
+                checkDuplicateTypeParams(node.typeParameters, spineSource, spineFileName)
+                checkDuplicateClassMembers(node.members, spineSource, spineFileName)
+            }
+            // Class EXPRESSIONS got TPs + member walks but NOT the
+            // checkDuplicateClassMembers member-list check (legacy verbatim).
+            is ClassExpression -> if (spineDupIdReached(node)) {
+                checkDuplicateTypeParams(node.typeParameters, spineSource, spineFileName)
+            }
+            is InterfaceDeclaration -> if (spineDupIdReached(node)) {
+                checkDuplicateTypeParams(node.typeParameters, spineSource, spineFileName)
+                checkDuplicateInterfaceMembers(node.members, spineSource, spineFileName)
+                for (member in node.members) checkDuplicatesInTypeMember(member, spineSource, spineFileName)
+            }
+            is TypeAliasDeclaration -> if (spineDupIdReached(node)) {
+                checkDuplicateTypeParams(node.typeParameters, spineSource, spineFileName)
+                checkDuplicatesInType(node.type, spineSource, spineFileName)
+            }
+            is EnumDeclaration -> if (spineDupIdReached(node)) {
+                checkDuplicateEnumMembers(node, spineSource, spineFileName)
+            }
+            is VariableStatement -> if (spineDupIdReached(node)) {
+                for (decl in node.declarationList.declarations) {
+                    checkDuplicatesInType(decl.type, spineSource, spineFileName)
+                }
+            }
+            is ModuleDeclaration -> {
+                val body = node.body
+                if (body is ModuleBlock && spineDupIdReached(node)) {
+                    // Ambient = the declaration's OWN modifier only (legacy
+                    // verbatim — not inherited from an enclosing declare).
+                    val ambient = ModifierFlag.Declare in node.modifiers
+                    checkDuplicateDeclarations(
+                        body.statements, spineSource, spineFileName,
+                        isAmbientContext = ambient, inNamespaceBody = true,
+                    )
+                }
+            }
+            is ExportDeclaration -> {
+                val clause = node.exportClause
+                if (clause is NamedExports && spineDupIdReached(node)) {
+                    checkDuplicateExportSpecifiers(clause.elements, spineSource, spineFileName)
+                }
+            }
+            is ArrowFunction -> if (spineDupIdReached(node)) {
+                checkDuplicateTypeParams(node.typeParameters, spineSource, spineFileName)
+                checkDuplicateParams(node.parameters, spineSource, spineFileName)
+            }
+            is FunctionExpression -> if (spineDupIdReached(node)) {
+                checkDuplicateTypeParams(node.typeParameters, spineSource, spineFileName)
+                checkDuplicateParams(node.parameters, spineSource, spineFileName)
+            }
+            is MethodDeclaration -> if (spineDupIdReached(node)) {
+                checkDuplicateTypeParams(node.typeParameters, spineSource, spineFileName)
+                checkDuplicateParams(node.parameters, spineSource, spineFileName)
+            }
+            is Constructor -> if (spineDupIdReached(node)) {
+                checkDuplicateParams(node.parameters, spineSource, spineFileName)
+            }
+            is SetAccessor -> if (spineDupIdReached(node)) {
+                checkDuplicateParams(node.parameters, spineSource, spineFileName)
+            }
+            else -> {}
         }
     }
 
@@ -35349,109 +35624,6 @@ class Checker(
         }
     }
 
-    private fun checkDuplicatesInStatements(
-        statements: List<Statement>,
-        source: String,
-        fileName: String,
-    ) {
-        for (stmt in statements) {
-            checkDuplicatesInStatement(stmt, source, fileName)
-        }
-    }
-
-    private fun checkDuplicatesInStatement(
-        stmt: Statement,
-        source: String,
-        fileName: String,
-    ) {
-        when (stmt) {
-            is FunctionDeclaration -> {
-                checkDuplicateTypeParams(stmt.typeParameters, source, fileName)
-                checkDuplicateParams(stmt.parameters, source, fileName)
-                checkDuplicatesInType(stmt.type, source, fileName)
-                for (param in stmt.parameters) checkDuplicatesInType(param.type, source, fileName)
-                stmt.body?.let {
-                    checkDuplicatesInStatements(it.statements, source, fileName)
-                    // Check for duplicate declarations within function body
-                    checkDuplicateDeclarations(it.statements, source, fileName)
-                }
-            }
-            is ClassDeclaration -> {
-                checkDuplicateTypeParams(stmt.typeParameters, source, fileName)
-                for (member in stmt.members) {
-                    checkDuplicatesInClassElement(member, source, fileName)
-                }
-                checkDuplicateClassMembers(stmt.members, source, fileName)
-            }
-            is InterfaceDeclaration -> {
-                checkDuplicateTypeParams(stmt.typeParameters, source, fileName)
-                checkDuplicateInterfaceMembers(stmt.members, source, fileName)
-                for (member in stmt.members) {
-                    checkDuplicatesInTypeMember(member, source, fileName)
-                }
-            }
-            is TypeAliasDeclaration -> {
-                checkDuplicateTypeParams(stmt.typeParameters, source, fileName)
-                checkDuplicatesInType(stmt.type, source, fileName)
-            }
-            is EnumDeclaration -> {
-                checkDuplicateEnumMembers(stmt, source, fileName)
-            }
-            is VariableStatement -> {
-                for (decl in stmt.declarationList.declarations) {
-                    checkDuplicatesInType(decl.type, source, fileName)
-                    decl.initializer?.let { checkDuplicatesInExpr(it, source, fileName) }
-                }
-            }
-            is ExpressionStatement -> checkDuplicatesInExpr(stmt.expression, source, fileName)
-            is ReturnStatement -> stmt.expression?.let { checkDuplicatesInExpr(it, source, fileName) }
-            is Block -> checkDuplicatesInStatements(stmt.statements, source, fileName)
-            is IfStatement -> {
-                checkDuplicatesInStatement(stmt.thenStatement, source, fileName)
-                stmt.elseStatement?.let { checkDuplicatesInStatement(it, source, fileName) }
-            }
-            is ForStatement -> checkDuplicatesInStatement(stmt.statement, source, fileName)
-            is ForInStatement -> checkDuplicatesInStatement(stmt.statement, source, fileName)
-            is ForOfStatement -> checkDuplicatesInStatement(stmt.statement, source, fileName)
-            is WhileStatement -> checkDuplicatesInStatement(stmt.statement, source, fileName)
-            is DoStatement -> checkDuplicatesInStatement(stmt.statement, source, fileName)
-            is SwitchStatement -> {
-                for (clause in stmt.caseBlock) {
-                    when (clause) {
-                        is CaseClause -> checkDuplicatesInStatements(clause.statements, source, fileName)
-                        is DefaultClause -> checkDuplicatesInStatements(clause.statements, source, fileName)
-                        else -> {}
-                    }
-                }
-            }
-            is TryStatement -> {
-                checkDuplicatesInStatements(stmt.tryBlock.statements, source, fileName)
-                stmt.catchClause?.let { checkDuplicatesInStatements(it.block.statements, source, fileName) }
-                stmt.finallyBlock?.let { checkDuplicatesInStatements(it.statements, source, fileName) }
-            }
-            is LabeledStatement -> checkDuplicatesInStatement(stmt.statement, source, fileName)
-            is ModuleDeclaration -> {
-                when (val body = stmt.body) {
-                    is ModuleBlock -> {
-                        val ambient = ModifierFlag.Declare in stmt.modifiers
-                        checkDuplicatesInStatements(body.statements, source, fileName)
-                        checkDuplicateDeclarations(body.statements, source, fileName, isAmbientContext = ambient, inNamespaceBody = true)
-                    }
-                    else -> {}
-                }
-            }
-            is ExportDeclaration -> {
-                val exportClause = stmt.exportClause
-                if (exportClause is NamedExports) {
-                    checkDuplicateExportSpecifiers(exportClause.elements, source, fileName)
-                }
-            }
-            is ThrowStatement -> stmt.expression?.let { checkDuplicatesInExpr(it, source, fileName) }
-            is ExportAssignment -> stmt.expression.let { checkDuplicatesInExpr(it, source, fileName) }
-            else -> {}
-        }
-    }
-
     private fun checkDuplicateExportSpecifiers(
         specifiers: List<ExportSpecifier>,
         source: String,
@@ -35469,77 +35641,6 @@ class Checker(
                     emitDuplicate2300(spec.name, spec.nameNode, source, fileName)
                 }
             }
-        }
-    }
-
-    private fun checkDuplicatesInClassElement(
-        element: ClassElement,
-        source: String,
-        fileName: String,
-    ) {
-        when (element) {
-            is MethodDeclaration -> {
-                checkDuplicateTypeParams(element.typeParameters, source, fileName)
-                checkDuplicateParams(element.parameters, source, fileName)
-                element.body?.let { checkDuplicatesInStatements(it.statements, source, fileName) }
-            }
-            is Constructor -> {
-                checkDuplicateParams(element.parameters, source, fileName)
-                element.body?.let { checkDuplicatesInStatements(it.statements, source, fileName) }
-            }
-            is GetAccessor -> {
-                element.body?.let { checkDuplicatesInStatements(it.statements, source, fileName) }
-            }
-            is SetAccessor -> {
-                checkDuplicateParams(element.parameters, source, fileName)
-                element.body?.let { checkDuplicatesInStatements(it.statements, source, fileName) }
-            }
-            else -> {}
-        }
-    }
-
-    private fun checkDuplicatesInExpr(
-        expr: Expression,
-        source: String,
-        fileName: String,
-    ) {
-        when (expr) {
-            is ArrowFunction -> {
-                checkDuplicateTypeParams(expr.typeParameters, source, fileName)
-                checkDuplicateParams(expr.parameters, source, fileName)
-                when (val body = expr.body) {
-                    is Block -> checkDuplicatesInStatements(body.statements, source, fileName)
-                    is Expression -> checkDuplicatesInExpr(body, source, fileName)
-                    else -> {}
-                }
-            }
-            is FunctionExpression -> {
-                checkDuplicateTypeParams(expr.typeParameters, source, fileName)
-                checkDuplicateParams(expr.parameters, source, fileName)
-                checkDuplicatesInStatements(expr.body.statements, source, fileName)
-            }
-            is ClassExpression -> {
-                checkDuplicateTypeParams(expr.typeParameters, source, fileName)
-                for (member in expr.members) {
-                    checkDuplicatesInClassElement(member, source, fileName)
-                }
-            }
-            is ObjectLiteralExpression -> {
-                for (prop in expr.properties) {
-                    when (prop) {
-                        is MethodDeclaration -> {
-                            checkDuplicateTypeParams(prop.typeParameters, source, fileName)
-                            checkDuplicateParams(prop.parameters, source, fileName)
-                            prop.body?.let { checkDuplicatesInStatements(it.statements, source, fileName) }
-                        }
-                        is PropertyAssignment -> {
-                            checkDuplicatesInExpr(prop.initializer, source, fileName)
-                        }
-                        else -> {}
-                    }
-                }
-            }
-            else -> {}
         }
     }
 
@@ -47874,7 +47975,7 @@ interface DataView {
                 }
             }
             is VariableDeclaration -> if (node === p.initializer && spineIanyReached(node)) {
-                spineIanyVarInitEdge(p, node as Expression)
+                spineIanyVarInitEdge(p, node)
             }
             is ExpressionStatement -> if (node === p.expression && spineIanyReached(node)) {
                 spineIanyDefineCtx(node, null)
@@ -47903,7 +48004,7 @@ interface DataView {
                     SpineIanyCtx(kind = 0, typed = ctxFn, type = annotatedType) else null)
             }
             is PropertyAssignment -> if (node === p.initializer && spineIanyReached(node)) {
-                spineIanyPropAssignEdge(p, node as Expression)
+                spineIanyPropAssignEdge(p, node)
             }
             is CallExpression -> if (p.arguments.any { it === node } && spineIanyReached(node)) {
                 if (node is ArrowFunction || node is FunctionExpression) {
@@ -47914,7 +48015,6 @@ interface DataView {
                         val argParams = when (node) {
                             is ArrowFunction -> node.parameters
                             is FunctionExpression -> node.parameters
-                            else -> emptyList()
                         }
                         emitTs7006BeyondCtxArity(argParams, ctxArity, spineSource, spineFileName)
                     }
@@ -48059,7 +48159,6 @@ interface DataView {
                 val ps = when (init) {
                     is ArrowFunction -> init.parameters
                     is FunctionExpression -> init.parameters
-                    else -> emptyList()
                 }
                 emitTs7006BeyondCtxArity(ps, cArity, spineSource, spineFileName)
                 spineIanyDefineCtx(init, SpineIanyCtx(kind = 0, typed = true))
@@ -48376,7 +48475,6 @@ interface DataView {
             val ip = when (init) {
                 is ArrowFunction -> init.parameters
                 is FunctionExpression -> init.parameters
-                else -> return@run false
             }
             if (ip.isEmpty()) return@run false
             val documented = jsDocDocumentedParamNames(stmt?.leadingComments ?: emptyList()) +
@@ -48396,7 +48494,6 @@ interface DataView {
             val initParams = when (init) {
                 is ArrowFunction -> init.parameters
                 is FunctionExpression -> init.parameters
-                else -> emptyList()
             }
             emitTs7006BeyondCtxArity(initParams, ctxArity, spineSource, spineFileName)
         }

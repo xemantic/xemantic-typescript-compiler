@@ -1,3 +1,70 @@
+**Round 523 (2026-07-15) — INV.4(c)(ii) LANDED: the checkUnresolvedNames STATE
+swap onto the INV.2(c) lexicalScopes tables.** The ~3,000-line walk family keeps
+its recursive structure (that deletion is (c)(iii)), but its name-visibility
+STATE is now served by the binder's lexical tables wherever they are
+trustworthy: `NameScope` (now an inner class) carries `lex` — the
+[LexicalScope] a TRUSTED scope-owner site links — and every content query
+(`has` / `hasLocalShadow` / `isTypeParam` / `hasType` / `typeParamConstraintOf`
+/ both TS2552 candidate pools) interleaves the threaded sets with the lex
+levels each NameScope level introduced (walk `lex` down to — exclusive —
+`parent.lex`, so shadowing order is preserved across the two sources). At a
+linked site the corresponding threaded population is SKIPPED: statement lists
+(via a new `owner: Node?` param on `checkUnresolvedInStatements` — the Block
+node, the SourceFile, or the FUNCTION node for a fn body, since body Blocks
+share the fn's binder scope by map absence), for/for-in/for-of headers, catch
+(variable incl. destructuring), switch (the binder keys the case scope by the
+SWITCH's nodeId; the walk checks the expression BEFORE linking, so no
+re-keying is needed — unlike the spine), and class/class-expr/interface/
+type-alias TP scopes (+ the class-expr self-name). DESIGN LINES that make it
+equivalence-safe: (1) function-like scopes link at the BODY only — params/TPs
+stay threaded at signature positions because the binder's flat fn table also
+holds body declarations, which must NOT be visible in param defaults above
+ES2015 (pinned both directions; the legacy sub-ES2015 pre-collect stays);
+(2) ModuleDeclaration and EnumDeclaration lexical levels are UNTRUSTED and
+skipped in the level probes — buildNamespaceScope is EXPORT-filtered and the
+enum branch EnumMember-filtered, while the binder tables alias ALL merged
+members (the flat-merge gotcha), so linking them would suppress genuine
+TS2304 (sibling-block non-export invisibility pinned); (3) the SourceFile
+level filters its aliased file locals by a per-file exclusion set (ambient
+external module names + the declare-global GH#42209 quirk) — its scope-space
+symbols (file-level block-hoisted `var`s, which the main binder never binds
+per B83.5) stay unfiltered; (4) unindexed trees probe-miss everywhere →
+threaded legacy behavior by construction. hasLocalShadow gains the lexical
+levels INCLUDING the SourceFile root (the legacy file-statement-list child
+was a non-root scope carrying file-level decls — TS2845 NaN pins).
+THE FIRST FULL-SUITE RUN CAUGHT FIVE REAL EQUIVALENCE GAPS (10 corpus
+failures, all fixed same round — the corpus IS the equivalence oracle this
+sub-item was designed around): (a+b) BINDER — `bindLexicalScopes` never
+declared a ModuleDeclaration's NAME or nested import names into fresh scopes
+(a block-nested `namespace M` is TS1235 but tsc still binds it — `export = M`
+in the same block resolves; moduleElementsInWrongContext ×3,
+unreachableDeclarations ×2, errorRecoveryWithDotFollowedByNamespaceKeyword);
+now declared with the checker-collect's rules (dotted → leftmost segment,
+declare-global quirk, StringLiteral skip; imports get Alias flags); (c) the
+fn-INTERMEDIATE leak — a nested function INSIDE a param default links its own
+body scope whose binder parent chain crosses the OUTER fn's flat table (which
+holds the outer BODY's decls), so the interleave walks now skip NON-HEAD
+function-like levels (functionLikeInParameterInitializer: `f(cb = function ()
+{ return foo }) { let foo }` must TS2304 — only the head of a link may be
+fn-owned, and fn signature content is always threaded so nothing is lost);
+(d) hasType stays AST-based at linked lists via `collectDeclaredTypeNames` —
+the binder merge can LOSE a type meaning to an alias OVERWRITE
+(`export default interface zzz` + `import zzz from "./b"` — TS2749 FP,
+allowImportClausesToMergeWithTypes); (e) the root exclusion applies to an
+ambient module name ONLY while ALL declarations of the file-local symbol are
+StringLiteral-named ModuleDeclarations — `import fs = require("fs")`
+OVERWRITES the ambient symbol (the alias-overwrite gotcha) and the legacy
+file-list collect re-added such names
+(ambientExternalModuleInAnotherExternalModule,
+constructorWithIncompleteTypeAnnotation).
+VERIFIED: suite 10,670 → 10,698 (+28 Inv4c2LexicalStateSwapTest, 0
+regressions); listAll error lines IDENTICAL on ALL 8 profiles (523a vs 522a);
+warning-clean; bench row in band. NEXT: (c)(iii) — the WALK swap (emission
+positions onto the spine, delete the recursive walkers); the threaded flags
+(hasArguments / classContext / inFunction) + the untrusted-level threading
+(namespaces/enums/type-level scopes + fn signature positions) migrate there
+as parent-chain context.
+
 **Round 522 (2026-07-15) — INV.4(c) decomposed + (c)(i) LANDED: the spine
 maintains the authoritative lexical scope state.** Decomposition first (facts
 verified in-code): the checkUnresolvedNames family is ~3,000 lines whose
