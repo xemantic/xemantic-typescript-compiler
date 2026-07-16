@@ -1,3 +1,131 @@
+**Round 516 (2026-07-14) — INV.4(b) batch 4: the accessor-grammar family +
+TS1014/TS1113/TS1246 migrated onto the spine; 17 walker functions (~733 lines)
+deleted, 4 init slots removed.** (Session start: recovered from an OOM-killed
+predecessor — round-515 work was all committed; nothing lost.) Four passes
+migrated: (1) `checkSetterParameterCount` (the largest hand-walk family so far,
+~290 lines / 6 functions carrying FOUR codes) split into three handlers —
+`spineCheckGetAccessorGrammar` (TS1054, widened faithfully from
+class-decl+objlit to class-EXPRESSION and interface/type-literal getters — the
+old walk never checked class-expr getters at all), `spineCheckSetAccessorGrammar`
+(TS1049 preserved across all old contexts + widened to interface/type-literal
+setters; TS1095 widened from class declarations to class EXPRESSIONS — and
+PROVABLY no further: the objlit accessor parse never PARSES a setter return
+annotation and the interface parse drops it, a first-cut objlit pin caught
+this), and `spineCheckAccessorPairVisibility` (TS2808, deliberately KEPT at the
+ClassDeclaration gate — the old walker never checked class expressions; pinned
+negative). (2) `checkRestParameterLast` (TS1014) — a second Parameter-enter
+handler beside batch 2's `spineCheckRestParamLast` sibling: rest param not last
+among the parent's real params fires at the `...` (B18.2 comma-recovery
+suppression preserved); parent set = the old value positions + a faithful
+widening to FunctionType/ConstructorType/type-literal methods (tsc
+checkGrammarParameterList runs for every signature declaration — pinned);
+GetAccessor parents stay excluded (old behavior, TS1054 owns that shape).
+(3) `checkMultipleDefaults` (TS1113) — a trivial SwitchStatement-enter handler
+with the old one-per-switch errorEmitted latch preserved (three-defaults pin);
+widened to parameter-default initializers (pinned). (4)
+`checkInterfacePropertyInitializers` (TS1246) — an InterfaceDeclaration-enter
+handler; NOTE the parser owns the common `= init` shape (consumes without
+storing + reports at the initializer's first char), so the checker handler
+covers only initializer-CARRYING PropertyDeclarations (none of the current
+type-member parse paths store one — the handler is the faithful migration of
+the old walker's semantics, kept cheap). All handlers carry the old driver's
+`!spineIsDts` gate. VERIFIED: suite 10,405 → 10,427 (+22 Inv4SpineBatch4Test,
+0 regressions); listAll error lines IDENTICAL on ALL 8 profiles (vs the 515b
+baselines; header path-form + timing lines only); bench row in band (compiler
+26,738 ms self, +1.1% vs previous = noise). BATCH 5 same session: THREE more
+passes migrated (~318 lines / 7 walker funs deleted, 3 init slots removed):
+(1)+(2) `checkConstWithoutInitializer` (TS1155) + `checkDestructuringWithoutInitializer`
+(TS1182/TS7031) as VariableDeclaration-enter handlers sharing the owner gate
+(VariableStatement non-`declare`/non-ambient, or a plain `for(;;)` initializer;
+for-in/for-of iteration vars excluded — legal without init) — the old walkers'
+`isAmbient` threading was set ONLY by ModuleDeclaration descent and RESET by
+every other recursion, so the parent-chain equivalent
+(`spineInDeclareModuleChain`) walks up through ModuleBlock/ModuleDeclaration
+ONLY and terminates non-ambient at any other ancestor kind; `emitTs1182IfMissingInit`
+(the TS1182+TS7031 emission) retained; faithful widening: for-of/for-in BODIES
+(the old walks had no ForOf/ForIn statement case at all — TS1155 pinned) +
+arrow bodies. (3) `checkComputedPropertyNameLiteral` (TS1166/TS1169 + the
+class-expression TS1206 decorator short-circuit) — PropertyDeclaration-enter
+dispatching on parent (InterfaceDeclaration → TS1169, ClassDeclaration →
+TS1166, TypeLiteral unchecked as before) + a ClassExpression-enter handler
+(`spineCheckClassExprComputedProps`) DELIBERATELY position-gated to the old
+reach (expression-statement position through void/paren wrappers — a var-init
+class expr stays unchecked, pinned negative; per the round-42 TS1166
+direction-of-emission history, widening THAT is a change to make on a signal);
+`isLiteralLikeExpr` + `emitComputedPropNameNonLiteral` retained; faithful
+widening: class declarations in arrow bodies (pinned). VERIFIED: suite
+10,427 → 10,443 (+16 Inv4SpineBatch5Test, 0 regressions); listAll error lines
+IDENTICAL on ALL 8 profiles (516b vs 516a); bench in band (26,871 ms self,
++0.5% = noise). Session total: SEVEN passes migrated, 24 walker functions
+(~1,050 lines) deleted, 7 init slots removed, suite +38. NEXT: INV.4(b)
+batch 6 — checkDuplicateModifiers (TS1030/TS1029, threads inAmbientContext +
+atTopLevel — needs parent-walk equivalents), checkAmbientInitializers
+(TS1039/TS1254/TS1066/TS1031, .d.ts-topLevelAmbient + class-expr descent),
+checkSwitchCaseComparable (TS2678, block-scoped const tracking);
+checkMixinClassConstructor stays (d) territory (TP-scope machinery).**
+
+**Round 515 (2026-07-14) — INV.4(b) batch 2: TS2370 + the iterator/yield-star
+prepass pair migrated onto the spine; 16 walker functions (~460 lines) deleted.**
+(Session start: recovered from an OOM-killed predecessor — round-514 work was
+all committed; lesson re-confirmed: never start a listAll JVM while the suite
+runs.) Three passes migrated: (1) `checkNonArrayRestParameters` — the old
+VALUE-position statement/expression walk pair and the TYPE-context annotation
+walk collapsed into ONE `Parameter`-enter handler (`spineCheckRestParam`)
+dispatching on the parameter's PARENT kind: FunctionDeclaration / Constructor /
+ArrowFunction / FunctionExpression / method-of-{class, class-expr, interface,
+objlit} → the keyword rule; FunctionType / ConstructorType /
+method-of-TypeLiteral → the B71.2 optional-rest rule; anything else (accessors,
+index sigs) → skip. Both rules widened faithfully (position-independent
+per-signature tsc grammar — new visits: param default values, casts,
+decorators; pinned both directions). (2)+(3) `checkIteratorMethodExtraParameters`
+(TS2488/TS2504) + `checkAsyncYieldStarThenable` (TS1320) — the fused prepass
+pattern: collection happens ON the spine (`spineCollectObjLitVar`,
+VariableDeclaration enter gated to a VariableStatement parent; first-wins objlit
+map + last-bad-wins BadIterInfo map, exactly the old maps' write semantics) and
+iteration positions (for-of / spread / `yield*` operands) plus `yield*` thenable
+candidates are BUFFERED and resolved at file END
+(`spineResolveDeferredIterationChecks`) — use-before-declaration still matches
+(the old passes collected in a full prepass first) with NO second walk. This is
+the template for collect-then-scan walkers. TS1320's old statement-level-only
+reachability widened to a nearest-function-like-ancestor async-generator gate
+(`spineInAsyncGeneratorBody`; arrow/ctor/accessor boundaries return false —
+none can be a generator). All three old passes had NO option gates; the
+iterator/yield handlers keep the per-check `!spineIsDts` gates, TS2370 stays
+ungated (covers .d.ts as before). Deleted: 16 functions (~460 lines — the two
+TS2370 walk families, walkIterationPositions/walkIterPosStmt/walkIterPosExpr,
+both collect prepasses, both scan walks); retained shared helpers:
+nonArrayKeywordText (2 other consumers), BadIterInfo + badIteratorDisplay +
+inferGeneratorYieldDisplay, objLiteralYieldsNonPromiseThenable +
+isComputedSymbolMethod + singleReturnObjLiteral. VERIFIED: suite 10,375 →
+10,396 (+21 Inv4SpineBatch2Test: keyword-rest across all five value-position
+parent kinds, optional-rest in fn-type/type-literal/cast, use-before-decl
+deferred resolution, async TS2504 via yield*, widening pins for param-default
+arrows + class-property-initializer for-of + nested-if yield*, negative
+controls for sync generators / data-property `then` / match-all fn-type
+keyword rest); listAll error lines IDENTICAL on ALL 8 profiles (compiler +
+services vs the round-514c baselines, the other six vs 513d3e); wall in band
+(compiler 26.8 s vs 27.2 s baseline single-run). BATCH 3 same session:
+checkForOfNonIterable (TS2495) + checkAbstractAccessorReturnTypes (TS7033)
+migrated — TS2495's option gate (lib explicitly excludes es2015+/esnext, never
+under noLib) computed once per run (`spineForOfNonIterableActive`), the
+conservative verdict helper `checkForOfExprNonIterable` retained unchanged, the
+handler on ForOfStatement enter (the old walk already descended statements AND
+expressions, so widening is negligible — param defaults pinned); TS7033 as a
+GetAccessor-enter handler with THREE preserved gates: noImplicitAny/strict
+(`spineAbstractAccessorActive`), the `.js`/`.jsx` skip (deliberately NOT
+`spineIsJsLike` — the old pass ran on .mjs/.cjs), and the
+ClassDeclaration-PARENT gate (class-EXPRESSION members stay unchecked — a
+bodyless accessor there is a parse-recovery shape; pinned negative). Faithful
+widening pinned: a class DECLARATION nested in an arrow body (the old
+statement walk had no expression descent). 6 more walker funs deleted + the
+round-514 orphaned TS18045 KDoc swept. VERIFIED: suite 10,396 → 10,405 (+9
+Inv4SpineBatch3Test, 0 regressions); listAll error lines IDENTICAL on ALL 8
+profiles (vs the same-session 515a set); wall in band (compiler 26.5 s).
+Session total: FIVE passes migrated, 22 walker functions (~600 lines)
+deleted, suite +30. NEXT: INV.4(b) batch 4 — checkMixinClassConstructor is
+TP-scope-stateful (likely (d) territory); re-consult the round-491
+`--passTiming` table for the next most-mechanical tail passes.**
+
 **Round 514 (2026-07-14) — INV.4 DECOMPOSED into (a)–(f) + INV.4(a) LANDED: the
 single-pass check spine exists with its first migrated pass.** (Session start:
 recovered from an OOM-killed predecessor — all round-513 work was verified

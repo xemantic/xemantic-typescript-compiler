@@ -923,7 +923,7 @@ class Checker(
     // Positions of ObjectLiteralExpression nodes that are destructuring-assignment
     // TARGETS (LHS of `=`, incl. nested through array/object/default nesting). Consumed
     // by the shorthand-with-initializer TS1312/TS18004 selection in
-    // checkUnresolvedInExprCore (B276). MUST be declared before init {} (init-order).
+    // spineUResShorthandProp (B276). MUST be declared before init {} (init-order).
     private val destructuringPatternPos = HashSet<Int>()
 
     // B402: names of in-scope local vars initialized to an empty object literal `{}`,
@@ -1047,10 +1047,11 @@ class Checker(
         var filter2304: Boolean = false,
         /** Batch 4: arrow/fn-expr/objlit-method levels only — true when the
          *  function sits in spine-checked expression territory
-         *  ([spineUResExprChecked] at push), gating the signature TYPE dispatch
-         *  (a function inside a recursion-owned region — a type-literal
-         *  computed name — keeps the retained walker's arm). Statement-level
-         *  and class-member owners stay unconditionally true. */
+         *  ([spineUResExprChecked] at push), gating the signature TYPE dispatch.
+         *  Since batch 5 every expression region is spine territory (the
+         *  type-literal computed-name entry became a gated ROOT edge), so this
+         *  is false only for functions in positions the family never reached.
+         *  Statement-level and class-member owners stay unconditionally true. */
         val exprOwned: Boolean = true,
     )
     private val spineUResStack = ArrayList<UnresolvedSpineLevel>(32)
@@ -1067,6 +1068,16 @@ class Checker(
      *  1 checked / 2 not (a deep binary chain would otherwise cost O(n²)
      *  across its operand identifiers). */
     private var spineUResExprMemo = ByteArray(0)
+    /** Batch 5: per-file nodeId memo for [spineUResTypeChecked] — 0 unknown /
+     *  1 checked (a marked type root, or reached from one through the deleted
+     *  type walker's recursion arms — [spineUResTypeDescends]) / 2 not. ROOT
+     *  positions are MARKED by the dispatch sites via [spineUResMarkTypeRoot]
+     *  strictly before their subtrees walk, so the sites stay the single
+     *  source of truth for WHICH type annotations the family checks. */
+    private var spineUResTypeMemo = ByteArray(0)
+    /** Batch 5: marked type roots on an UNINDEXED tree (nodeId −1) — identity
+     *  list, empty in practice (every parsed file is indexed). */
+    private val spineUResTypeRootsFallback = ArrayList<Node>()
     /** Batch 4: heritage-type (ExpressionWithTypeArguments) nodeIds whose
      *  expression must NOT self-emit — the class arm's TS2422
      *  implements-bare-type-param `continue` skipped the name check. Per file,
@@ -18030,6 +18041,9 @@ class Checker(
         spineUResActive = root != null
         spineUResExprMemo =
             if (root != null) ByteArray(result.sourceFile.nodeCount) else ByteArray(0)
+        spineUResTypeMemo =
+            if (root != null) ByteArray(result.sourceFile.nodeCount) else ByteArray(0)
+        spineUResTypeRootsFallback.clear()
         spineUResHeritageSkip.clear()
     }
 
@@ -18040,6 +18054,8 @@ class Checker(
         spineUResRoot = null
         spineUResActive = false
         spineUResExprMemo = ByteArray(0)
+        spineUResTypeMemo = ByteArray(0)
+        spineUResTypeRootsFallback.clear()
         spineUResHeritageSkip.clear()
     }
 
@@ -18468,20 +18484,19 @@ class Checker(
                 // (the legacy arm returned before any of these). Since batch 4
                 // the dispatch covers TYPE positions only — param initializers
                 // self-emit via the expression edges.
-                spineUResFnSigDispatch(level, child, o.type, checkTps = true)
+                spineUResFnSigDispatch(child, o.type, checkTps = true)
             }
             is FunctionExpression -> {
                 spineUResFnChild(level, child, o.name, o.typeParameters, o.parameters, o.body)
                 // Batch 4: fn-expr signature TYPE positions — the legacy arm
                 // registered TPs without checking their constraints (checkTps
                 // false, an asymmetry vs arrows); gated to spine-checked
-                // expression territory (recursion-owned regions keep the
-                // retained walker's arm).
-                if (level.exprOwned) spineUResFnSigDispatch(level, child, o.type, checkTps = false)
+                // expression territory.
+                if (level.exprOwned) spineUResFnSigDispatch(child, o.type, checkTps = false)
             }
             is ArrowFunction -> {
                 spineUResFnChild(level, child, null, o.typeParameters, o.parameters, o.body as? Block)
-                if (level.exprOwned) spineUResFnSigDispatch(level, child, o.type, checkTps = true)
+                if (level.exprOwned) spineUResFnSigDispatch(child, o.type, checkTps = true)
             }
             is MethodDeclaration -> {
                 // Class-member method decorators are checked BEFORE the method's
@@ -18498,18 +18513,18 @@ class Checker(
                     // their legacy walkers). Batch 4: object-literal methods
                     // dispatch too when in spine-checked expression territory.
                     if (spineUResIsClassMember(o)) {
-                        spineUResFnSigDispatch(level, child, o.type, checkTps = true)
+                        spineUResFnSigDispatch(child, o.type, checkTps = true)
                     } else if ((o as NodeBase).parent is ObjectLiteralExpression && level.exprOwned) {
                         // The legacy objlit arm registered TPs without checking
                         // their constraints (same asymmetry as fn-exprs).
-                        spineUResFnSigDispatch(level, child, o.type, checkTps = false)
+                        spineUResFnSigDispatch(child, o.type, checkTps = false)
                     }
                 }
             }
             is Constructor -> {
                 spineUResFnChild(level, child, null, null, o.parameters, null)
                 if (spineUResIsClassMember(o)) {
-                    spineUResFnSigDispatch(level, child, null, checkTps = false)
+                    spineUResFnSigDispatch(child, null, checkTps = false)
                 }
             }
             is GetAccessor -> {}
@@ -18518,7 +18533,7 @@ class Checker(
                 // Batch 3: the legacy class-element SetAccessor arm checks param
                 // TYPES only (no initializers, no decorators).
                 if (spineUResIsClassMember(o)) {
-                    spineUResFnSigDispatch(level, child, null, checkTps = false)
+                    spineUResFnSigDispatch(child, null, checkTps = false)
                 }
             }
             is FunctionType -> spineUResFnChild(level, child, null, o.typeParameters, o.parameters, null)
@@ -18577,29 +18592,27 @@ class Checker(
      * TypeParameter child's constraint/default sees TPs but not params, and a
      * Parameter/return-type child sees both (the legacy staging). TYPE
      * positions only since batch 4 — parameter initializers and decorators are
-     * expression territory (self-emitting via [spineUResExprEdge]). [checkTps]
-     * reproduces the legacy asymmetry: function declarations, class methods,
-     * and arrows check TP constraints/defaults; function expressions and
-     * object-literal methods only REGISTER their TPs (the legacy arms had no
-     * constraint loop).
+     * expression territory (self-emitting via [spineUResExprEdge]). Since
+     * batch 5 the dispatch MARKS the type positions as roots
+     * ([spineUResMarkTypeRoot]) and the type nodes self-emit at their own
+     * enters (the maintained level provides the identical staging by
+     * construction). [checkTps] reproduces the legacy asymmetry: function
+     * declarations, class methods, and arrows check TP constraints/defaults;
+     * function expressions and object-literal methods only REGISTER their TPs
+     * (the legacy arms had no constraint loop).
      */
     private fun spineUResFnSigDispatch(
-        level: UnresolvedSpineLevel,
         child: Node,
         returnType: TypeNode?,
         checkTps: Boolean,
     ) {
         when {
-            child is TypeParameter -> if (checkTps) spineUResEmit {
-                child.constraint?.let { checkUnresolvedInType(it, level.scope, spineSource, spineFileName) }
-                child.default?.let { checkUnresolvedInType(it, level.scope, spineSource, spineFileName) }
+            child is TypeParameter -> if (checkTps) {
+                spineUResMarkTypeRoot(child.constraint)
+                spineUResMarkTypeRoot(child.default)
             }
-            child is Parameter -> spineUResEmit {
-                child.type?.let { checkUnresolvedInType(it, level.scope, spineSource, spineFileName) }
-            }
-            returnType != null && child === returnType -> spineUResEmit {
-                checkUnresolvedInType(returnType, level.scope, spineSource, spineFileName)
-            }
+            child is Parameter -> spineUResMarkTypeRoot(child.type)
+            returnType != null && child === returnType -> spineUResMarkTypeRoot(returnType)
             else -> {}
         }
     }
@@ -18613,18 +18626,16 @@ class Checker(
      *  the NAME child never triggers the lazy population). */
     private fun spineUResClassPropertyMember(node: PropertyDeclaration) {
         if (!spineUResIsClassMember(node)) return
-        val level = spineUResOwnLevel(node) ?: return
-        val t = node.type ?: return
-        spineUResEmit { checkUnresolvedInType(t, level.scope, spineSource, spineFileName) }
+        if (spineUResOwnLevel(node) == null) return
+        spineUResMarkTypeRoot(node.type)
     }
 
     /** Batch 3: class-member get-accessor RETURN type (the legacy arm's only
      *  signature position; get accessors have no params/TPs). */
     private fun spineUResClassGetAccessorEnter(node: GetAccessor) {
         if (!spineUResIsClassMember(node)) return
-        val level = spineUResOwnLevel(node) ?: return
-        val t = node.type ?: return
-        spineUResEmit { checkUnresolvedInType(t, level.scope, spineSource, spineFileName) }
+        if (spineUResOwnLevel(node) == null) return
+        spineUResMarkTypeRoot(node.type)
     }
 
     /** Batch 3: class-member index signature — value type + key param types,
@@ -18632,13 +18643,9 @@ class Checker(
      *  index signatures push no level). */
     private fun spineUResClassIndexSignature(node: IndexSignature) {
         if (!spineUResIsClassMember(node)) return
-        val scope = spineUResScope() ?: return
-        spineUResEmit {
-            node.type?.let { checkUnresolvedInType(it, scope, spineSource, spineFileName) }
-            for (param in node.parameters) {
-                param.type?.let { checkUnresolvedInType(it, scope, spineSource, spineFileName) }
-            }
-        }
+        if (spineUResScope() == null) return
+        spineUResMarkTypeRoot(node.type)
+        for (param in node.parameters) spineUResMarkTypeRoot(param.type)
     }
 
     /** A function-like whose immediate body Block shares the function's scope
@@ -18711,8 +18718,8 @@ class Checker(
             // Class decorators self-emit via the batch-4 edges in the OUTER
             // scope (the level deactivates at its Decorator child).
             node.typeParameters?.forEach { tp ->
-                tp.constraint?.let { checkUnresolvedInType(it, classScope, source, fileName) }
-                tp.default?.let { checkUnresolvedInType(it, classScope, source, fileName) }
+                spineUResMarkTypeRoot(tp.constraint)
+                spineUResMarkTypeRoot(tp.default)
             }
             node.heritageClauses?.forEach { clause ->
                 emitTS2864ForPrimitiveImplements(clause, classScope, source, fileName)
@@ -18752,7 +18759,7 @@ class Checker(
                     if (!skipArityForValueExtends) {
                         checkHeritageTypeArgCount(type, classScope, source, fileName)
                     }
-                    type.typeArguments?.forEach { checkUnresolvedInType(it, classScope, source, fileName) }
+                    type.typeArguments?.forEach { spineUResMarkTypeRoot(it) }
                     // 17.163: TS2304 for `class C<T> extends T {}`.
                     emitTs2304ForHeritageExtendsTypeParam(type.expression, classScope, outer, source, fileName)
                     // B67.2: TS2562 — heritage expression referencing own type params.
@@ -18814,14 +18821,14 @@ class Checker(
         val fileName = spineFileName
         spineUResEmit {
             node.typeParameters?.forEach { tp ->
-                tp.constraint?.let { checkUnresolvedInType(it, ifaceScope, source, fileName) }
-                tp.default?.let { checkUnresolvedInType(it, ifaceScope, source, fileName) }
+                spineUResMarkTypeRoot(tp.constraint)
+                spineUResMarkTypeRoot(tp.default)
             }
             node.heritageClauses?.forEach { clause ->
                 for (type in clause.types) {
                     // The heritage EXPRESSION self-emits via the batch-4 edges.
                     checkHeritageTypeArgCount(type, ifaceScope, source, fileName)
-                    type.typeArguments?.forEach { checkUnresolvedInType(it, ifaceScope, source, fileName) }
+                    type.typeArguments?.forEach { spineUResMarkTypeRoot(it) }
                     // 17.163: TS2312 for `interface I<T> extends T {}`.
                     emitTs2312ForInterfaceExtendsTypeParam(type.expression, ifaceScope, outer, source, fileName)
                     // B582: TS2312 for extends of a bare-TP `as`-remapped mapped type.
@@ -18830,44 +18837,31 @@ class Checker(
                     emitTs2499ForInterfaceExtendsNonEntityName(type.expression, source, fileName)
                 }
             }
+            // Member TYPE positions are batch-5 roots (self-emitting; the
+            // maintained method/set-accessor levels reproduce the legacy
+            // methodScope/setScope staging — computed property names self-emit
+            // via the batch-4 edges).
             for (member in node.members) {
                 when (member) {
-                    is PropertyDeclaration -> {
-                        // Computed property names self-emit via the batch-4
-                        // edges (the interface level is the active scope there).
-                        member.type?.let { checkUnresolvedInType(it, ifaceScope, source, fileName) }
-                    }
+                    is PropertyDeclaration -> spineUResMarkTypeRoot(member.type)
                     is MethodDeclaration -> {
-                        val methodScope = ifaceScope.child()
-                        member.typeParameters?.forEach { methodScope.addTypeParam(it.name.text, it.constraint) }
                         member.typeParameters?.forEach { tp ->
-                            tp.constraint?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
-                            tp.default?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
+                            spineUResMarkTypeRoot(tp.constraint)
+                            spineUResMarkTypeRoot(tp.default)
                         }
-                        addParamsToScope(member.parameters, methodScope)
-                        for (param in member.parameters) {
-                            param.type?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
-                        }
-                        member.type?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
+                        for (param in member.parameters) spineUResMarkTypeRoot(param.type)
+                        spineUResMarkTypeRoot(member.type)
                         checkUnusedDestructuredRenames(member.parameters, member.type, source, fileName)
                     }
                     is IndexSignature -> {
-                        member.type?.let { checkUnresolvedInType(it, ifaceScope, source, fileName) }
-                        for (param in member.parameters) {
-                            param.type?.let { checkUnresolvedInType(it, ifaceScope, source, fileName) }
-                        }
+                        spineUResMarkTypeRoot(member.type)
+                        for (param in member.parameters) spineUResMarkTypeRoot(param.type)
                     }
                     is SetAccessor -> {
-                        val setScope = ifaceScope.child()
-                        addParamsToScope(member.parameters, setScope)
-                        for (param in member.parameters) {
-                            param.type?.let { checkUnresolvedInType(it, setScope, source, fileName) }
-                        }
+                        for (param in member.parameters) spineUResMarkTypeRoot(param.type)
                         checkUnusedDestructuredRenames(member.parameters, null, source, fileName)
                     }
-                    is GetAccessor -> {
-                        member.type?.let { checkUnresolvedInType(it, ifaceScope, source, fileName) }
-                    }
+                    is GetAccessor -> spineUResMarkTypeRoot(member.type)
                     else -> {}
                 }
             }
@@ -18895,27 +18889,28 @@ class Checker(
             is JsxElement -> spineUResJsxEnter(node, node.openingElement.tagName)
             is JsxSelfClosingElement -> spineUResJsxEnter(node, node.tagName)
             is JsxFragment -> spineUResJsxEnter(node, null)
+            // ── batch 5: type territory (self-emitting type-node kinds) ──
+            is TypeReference -> spineUResTypeReferenceEnter(node)
+            is IndexedAccessType -> spineUResIndexedAccessEnter(node)
+            is TypeQuery -> spineUResTypeQueryEnter(node)
+            is FunctionType -> spineUResFnTypeEnter(node, node.parameters, node.type)
+            is ConstructorType -> spineUResFnTypeEnter(node, node.parameters, node.type)
+            is TypeLiteral -> spineUResTypeLiteralEnter(node)
             // ── batch 2: statement-level positions (TYPE legs only since 4) ──
             is VariableStatement -> {
-                val scope = spineUResScope() ?: return
-                spineUResEmit {
-                    for (decl in node.declarationList.declarations) {
-                        // 17.65: JSDoc-derived type nodes carry sub-parser positions —
-                        // never check them here (wrong source locations).
-                        if (!decl.typeFromJSDoc) {
-                            decl.type?.let { checkUnresolvedInType(it, scope, spineSource, spineFileName) }
-                        }
-                    }
+                if (spineUResScope() == null) return
+                for (decl in node.declarationList.declarations) {
+                    // 17.65: JSDoc-derived type nodes carry sub-parser positions —
+                    // never check them here (wrong source locations).
+                    if (!decl.typeFromJSDoc) spineUResMarkTypeRoot(decl.type)
                 }
             }
             is ForStatement -> {
-                // The for-header level is pushed (active) at enter — spineUResScope()
-                // IS the legacy forScope.
-                val scope = spineUResScope() ?: return
-                spineUResEmit {
-                    (node.initializer as? VariableDeclarationList)?.declarations?.forEach { decl ->
-                        decl.type?.let { checkUnresolvedInType(it, scope, spineSource, spineFileName) }
-                    }
+                // The for-header level is pushed (active) at enter — the marked
+                // annotations self-emit under it (the legacy forScope).
+                if (spineUResScope() == null) return
+                (node.initializer as? VariableDeclarationList)?.declarations?.forEach { decl ->
+                    spineUResMarkTypeRoot(decl.type)
                 }
             }
             is FunctionDeclaration -> {
@@ -18935,14 +18930,12 @@ class Checker(
             is ClassDeclaration -> spineUResClassDeclaration(node)
             is InterfaceDeclaration -> spineUResInterfaceDeclaration(node)
             is TypeAliasDeclaration -> {
-                val level = spineUResOwnLevel(node) ?: return
-                spineUResEmit {
-                    node.typeParameters?.forEach { tp ->
-                        tp.constraint?.let { checkUnresolvedInType(it, level.scope, spineSource, spineFileName) }
-                        tp.default?.let { checkUnresolvedInType(it, level.scope, spineSource, spineFileName) }
-                    }
-                    checkUnresolvedInType(node.type, level.scope, spineSource, spineFileName)
+                if (spineUResOwnLevel(node) == null) return
+                node.typeParameters?.forEach { tp ->
+                    spineUResMarkTypeRoot(tp.constraint)
+                    spineUResMarkTypeRoot(tp.default)
                 }
+                spineUResMarkTypeRoot(node.type)
             }
             // Enum member INITIALIZERS self-emit via the batch-4 edges (the
             // enum level is the active scope during the member subtrees).
@@ -19016,23 +19009,19 @@ class Checker(
     }
 
     /** Batch 4: type positions embedded in expressions — an as/satisfies/
-     *  type-assertion target type, dispatched at the expression's enter (the
-     *  deleted walker's checkUnresolvedInType calls). */
+     *  type-assertion target type, marked as a batch-5 type root at the
+     *  expression's enter (the deleted walker's checkUnresolvedInType calls). */
     private fun spineUResTypeInExpr(node: Node, type: TypeNode) {
-        if (spineUResSuppressCount > 0) return
         if (!spineUResExprChecked(node)) return
-        val scope = spineUResScope() ?: return
-        spineUResEmit { checkUnresolvedInType(type, scope, spineSource, spineFileName) }
+        spineUResMarkTypeRoot(type)
     }
 
     /** Batch 4: call/new TYPE ARGUMENTS (the deleted walker's typeArguments
-     *  loops). */
+     *  loops), marked as batch-5 type roots. */
     private fun spineUResTypeArgsInExpr(node: Node, typeArgs: List<TypeNode>?) {
         if (typeArgs.isNullOrEmpty()) return
-        if (spineUResSuppressCount > 0) return
         if (!spineUResExprChecked(node)) return
-        val scope = spineUResScope() ?: return
-        spineUResEmit { typeArgs.forEach { checkUnresolvedInType(it, scope, spineSource, spineFileName) } }
+        typeArgs.forEach { spineUResMarkTypeRoot(it) }
     }
 
     /** Batch 4: the deleted walker's object-literal SHORTHAND arm — TS1312 for
@@ -19071,9 +19060,7 @@ class Checker(
 
     /** Batch 4: the deleted walker's ClassExpression arm minus the heritage
      *  EXPRESSION resolution (self-emitting via the edges) and minus members
-     *  (batch 3). Gated to spine-checked expression territory — a class
-     *  expression inside a recursion-owned region (a type-literal computed
-     *  name) keeps the retained walker's arm. */
+     *  (batch 3). Gated to spine-checked expression territory. */
     private fun spineUResClassExpressionEnter(node: ClassExpression) {
         if (spineUResSuppressCount > 0) return
         if (!spineUResExprChecked(node)) return
@@ -19084,7 +19071,7 @@ class Checker(
                 emitTS2864ForPrimitiveImplements(clause, classScope, spineSource, spineFileName)
                 for (type in clause.types) {
                     checkHeritageTypeArgCount(type, classScope, spineSource, spineFileName)
-                    type.typeArguments?.forEach { checkUnresolvedInType(it, classScope, spineSource, spineFileName) }
+                    type.typeArguments?.forEach { spineUResMarkTypeRoot(it) }
                 }
             }
         }
@@ -19126,8 +19113,10 @@ class Checker(
      * checkUnresolvedInExpr on exactly this child); [URES_EDGE_DESCEND] = an
      * edge the legacy expression walker recursed through; [URES_EDGE_NONE] = a
      * position the legacy walk never reached as an expression (names, types,
-     * function bodies — statements dispatch themselves; type-literal computed
-     * names and other recursion-owned regions keep the retained walker).
+     * function bodies — statements dispatch themselves). Since batch 5 the
+     * last recursion-owned region — a TYPE-LITERAL member's computed name —
+     * is a ROOT gated on the literal being type-checked
+     * ([spineUResTypeLiteralMemberNameEdge]); the recursive walker is gone.
      */
     private fun spineUResExprEdge(parent: Node, child: Node): Int = when (parent) {
         // ── intra-expression descent (the deleted walker's recursion arms) ──
@@ -19176,12 +19165,18 @@ class Checker(
             // class-member computed names are batch-3 roots (checked in the
             // member level's PRE-population view — B98.r111); interface
             // PROPERTY computed names were the interface arm's; interface
-            // METHOD and type-literal member names stay unchecked/retained.
-            is MethodDeclaration -> if (spineUResIsClassMember(owner)) URES_EDGE_ROOT else URES_EDGE_NONE
+            // METHOD computed names stay unchecked; TYPE-LITERAL member names
+            // are batch-5 roots when the literal itself is type-checked (the
+            // deleted type walker's checkUnresolvedInExpr calls).
+            is MethodDeclaration -> when {
+                spineUResIsClassMember(owner) -> URES_EDGE_ROOT
+                else -> spineUResTypeLiteralMemberNameEdge(owner)
+            }
             is PropertyDeclaration -> when ((owner as NodeBase).parent) {
                 is ClassDeclaration, is ClassExpression, is InterfaceDeclaration -> URES_EDGE_ROOT
-                else -> URES_EDGE_NONE
+                else -> spineUResTypeLiteralMemberNameEdge(owner)
             }
+            is GetAccessor, is SetAccessor -> spineUResTypeLiteralMemberNameEdge(owner)
             else -> URES_EDGE_NONE
         }
         // ── function-like signature legs reached through expressions ──
@@ -19277,6 +19272,16 @@ class Checker(
         else -> URES_EDGE_NONE
     }
 
+    /** Batch 5: the computed-name EXPRESSION of a type-literal member is an
+     *  expression ROOT exactly when the containing TypeLiteral is reached by
+     *  the type walk (the deleted checkUnresolvedInTypeCore called
+     *  checkUnresolvedInExpr on it). [member] is the ComputedPropertyName's
+     *  owner (property/method/accessor). */
+    private fun spineUResTypeLiteralMemberNameEdge(member: Node): Int {
+        val tl = (member as NodeBase).parent
+        return if (tl is TypeLiteral && spineUResTypeChecked(tl)) URES_EDGE_ROOT else URES_EDGE_NONE
+    }
+
     /**
      * Batch 4: is [node] reached by the deleted recursive expression walker —
      * every parent edge up from it classifies DESCEND until a ROOT edge. A
@@ -19312,6 +19317,222 @@ class Checker(
             n = (n as NodeBase).parent ?: break
         }
         return verdict == 1
+    }
+
+    // ── INV.4(c)(iii) batch 5: TYPE positions self-emit on the spine ────────
+    // The recursive checkUnresolvedInType walker is deleted; its dispatch ROOT
+    // positions are MARKED by the (unchanged) dispatch sites via
+    // [spineUResMarkTypeRoot] — always strictly BEFORE the marked subtree
+    // walks (the sites run at the owner's or a dominating child's enter) —
+    // and its recursion arms are reproduced statically by
+    // [spineUResTypeDescends]. Each type-node kind with own emissions
+    // (TypeReference / IndexedAccessType / TypeQuery / FunctionType /
+    // ConstructorType / TypeLiteral) self-emits at its enter when
+    // [spineUResTypeChecked]; everything else contributes descent only.
+
+    /** Batch 5: mark [type] as a family type-check root (a position where the
+     *  legacy dispatch called checkUnresolvedInType). Marking never emits —
+     *  suppression/filter regions apply positionally at the self-emissions. */
+    private fun spineUResMarkTypeRoot(type: TypeNode?) {
+        if (type == null) return
+        val id = (type as NodeBase).nodeId
+        val memo = spineUResTypeMemo
+        if (id >= 0 && id < memo.size) memo[id] = 1
+        else spineUResTypeRootsFallback.add(type)
+    }
+
+    /**
+     * Batch 5: does the deleted type walker recurse from [parent] into
+     * [child]? Mirrors checkUnresolvedInTypeCore's arms exactly, including
+     * the deliberate non-descents: TypeQuery.exprName (self-emitted via
+     * [checkTypeQueryName]), InferType (introduces, never references),
+     * ImportType (never walked), LiteralType/keyword/this types, and
+     * TemplateLiteralType spans (the shallow parser leaves them ALWAYS empty
+     * — see the CLAUDE.md gotcha; classified faithfully to actual behavior).
+     * TypeParameter/Parameter/member edges are gated to the owners whose
+     * signature positions the TYPE walker itself reached (function TYPES and
+     * type-literal members) — declaration-owned signature positions are
+     * ROOT-marked directly by their dispatch sites instead.
+     */
+    private fun spineUResTypeDescends(parent: Node, child: Node): Boolean = when (parent) {
+        is TypeReference -> child is TypeNode && child !== parent.typeName
+        is ArrayType -> child === parent.elementType
+        is TupleType -> child is TypeNode
+        is UnionType, is IntersectionType -> child is TypeNode
+        is ParenthesizedType -> child === parent.type
+        is TypeOperator -> child === parent.type
+        is IndexedAccessType -> child === parent.objectType || child === parent.indexType
+        is MappedType -> child === parent.typeParameter || child === parent.type || child === parent.nameType
+        is ConditionalType -> true // checkType / extendsType / trueType / falseType
+        is FunctionType -> child is TypeParameter || child is Parameter || child === parent.type
+        is ConstructorType -> child is TypeParameter || child is Parameter || child === parent.type
+        is TypeParameter -> when (val owner = (parent as NodeBase).parent) {
+            // The mapped TP's constraint is walked (in the OUTER scope — the
+            // maintained level is inactive over the typeParameter child);
+            // mapped TPs carry no default.
+            is MappedType -> child === parent.constraint
+            is FunctionType, is ConstructorType ->
+                child === parent.constraint || child === parent.default
+            is MethodDeclaration -> (owner as NodeBase).parent is TypeLiteral &&
+                (child === parent.constraint || child === parent.default)
+            else -> false
+        }
+        is RestType -> child === parent.type
+        is OptionalType -> child === parent.type
+        is NamedTupleMember -> child === parent.type
+        is TypeLiteral -> child is PropertyDeclaration || child is MethodDeclaration ||
+            child is IndexSignature || child is Constructor ||
+            child is GetAccessor || child is SetAccessor
+        // ── type-literal member positions (the TypeLiteral arm's reach) ──
+        is PropertyDeclaration ->
+            (parent as NodeBase).parent is TypeLiteral && child === parent.type
+        is MethodDeclaration -> (parent as NodeBase).parent is TypeLiteral &&
+            (child is TypeParameter || child is Parameter || child === parent.type)
+        is IndexSignature -> (parent as NodeBase).parent is TypeLiteral &&
+            (child === parent.type || child is Parameter)
+        is Constructor -> (parent as NodeBase).parent is TypeLiteral && child is Parameter
+        is GetAccessor -> (parent as NodeBase).parent is TypeLiteral && child === parent.type
+        is SetAccessor -> (parent as NodeBase).parent is TypeLiteral && child is Parameter
+        is Parameter -> child === parent.type && when (val fn = (parent as NodeBase).parent) {
+            is FunctionType, is ConstructorType -> true
+            is MethodDeclaration, is Constructor, is SetAccessor, is IndexSignature ->
+                (fn as NodeBase).parent is TypeLiteral
+            else -> false
+        }
+        else -> false
+    }
+
+    /** Batch 5: is [node] reached by the deleted recursive type walker — a
+     *  marked root, or every parent edge up to one classifies as a walker
+     *  recursion arm. Memoized per file by nodeId (same discipline as
+     *  [spineUResExprChecked]). */
+    private fun spineUResTypeChecked(node: Node): Boolean {
+        val memo = spineUResTypeMemo
+        var cur: Node = node
+        var verdict = 0
+        while (verdict == 0) {
+            val id = (cur as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) {
+                val m = memo[id].toInt()
+                if (m != 0) { verdict = m; break }
+            } else if (spineUResTypeRootsFallback.isNotEmpty() &&
+                spineUResTypeRootsFallback.any { it === cur }
+            ) { verdict = 1; break }
+            val parent = (cur as NodeBase).parent
+            if (parent == null) { verdict = 2; break }
+            if (spineUResTypeDescends(parent, cur)) cur = parent else { verdict = 2; break }
+        }
+        val v = verdict.toByte()
+        var n: Node = node
+        while (true) {
+            val id = (n as NodeBase).nodeId
+            if (id >= 0 && id < memo.size && memo[id].toInt() == 0) memo[id] = v
+            if (n === cur) break
+            n = (n as NodeBase).parent ?: break
+        }
+        return verdict == 1
+    }
+
+    /** Batch 5: the deleted type walker's TypeReference arm — name resolution
+     *  (TS2304/TS2552/TS2694 family), TS2314 arity, the B407 utility-signature
+     *  TS2344, and the TS1099 empty-type-argument-list check. Type arguments
+     *  descend via [spineUResTypeDescends]. */
+    private fun spineUResTypeReferenceEnter(node: TypeReference) {
+        if (spineUResSuppressCount > 0) return
+        if (!spineUResTypeChecked(node)) return
+        val scope = spineUResScope() ?: return
+        spineUResEmit {
+            checkTypeNameResolved(node.typeName, scope, spineSource, spineFileName)
+            checkTypeArgCount(node, scope, spineSource, spineFileName)
+            checkUtilitySignatureConstraint(node, spineSource, spineFileName)
+            // TS1099: empty type argument list. Suppress when the typeName is an
+            // unresolved Identifier — TS2304 already fires and is primary.
+            if (node.typeArguments != null && node.typeArguments.isEmpty()) {
+                val nameUnresolved = (node.typeName as? Identifier)?.let { id ->
+                    val n = id.text
+                    n.isNotEmpty() &&
+                        (n[0] in 'A'..'Z' || n[0] in 'a'..'z' || n[0] == '_' || n[0] == '$') &&
+                        n !in KEYWORD_IDENTIFIERS && !scope.has(n) &&
+                        n !in KNOWN_GLOBALS
+                } ?: false
+                if (!nameUnresolved) {
+                    val ltIdx = spineSource.indexOf("<>", node.typeName.pos)
+                    if (ltIdx >= 0 && ltIdx < node.end) emitTS1099(ltIdx, spineSource, spineFileName)
+                }
+            }
+        }
+    }
+
+    /** Batch 5: the deleted type walker's IndexedAccessType arm's own checks
+     *  (both sides descend via the edges). */
+    private fun spineUResIndexedAccessEnter(node: IndexedAccessType) {
+        if (spineUResSuppressCount > 0) return
+        if (!spineUResTypeChecked(node)) return
+        val scope = spineUResScope() ?: return
+        spineUResEmit {
+            checkIndexTypeValidity(node.indexType, spineSource, spineFileName)
+            checkBadArrayStringLiteralIndex(node, scope, spineSource, spineFileName)
+        }
+    }
+
+    /** Batch 5: the deleted type walker's TypeQuery arm (`typeof expr`). */
+    private fun spineUResTypeQueryEnter(node: TypeQuery) {
+        if (spineUResSuppressCount > 0) return
+        if (!spineUResTypeChecked(node)) return
+        val scope = spineUResScope() ?: return
+        spineUResEmit { checkTypeQueryName(node.exprName, scope, spineSource, spineFileName) }
+    }
+
+    /** Batch 5: the deleted type walker's FunctionType/ConstructorType arms'
+     *  own emission (signature positions descend via the edges; the maintained
+     *  fn-type level provides the legacy fnScope staging). */
+    private fun spineUResFnTypeEnter(node: Node, parameters: List<Parameter>, returnType: TypeNode) {
+        if (spineUResSuppressCount > 0) return
+        if (!spineUResTypeChecked(node)) return
+        spineUResEmit {
+            checkUnusedDestructuredRenames(parameters, returnType, spineSource, spineFileName)
+        }
+    }
+
+    /** Batch 5: the deleted type walker's TypeLiteral arm — the per-member
+     *  computed-NAME emissions (type-only keyword TS2693, the B98.r91
+     *  TS2690/TS2693 pure-type name, the B98.r115 enum-object TS2464, and the
+     *  B98.r90 boolean-computed-name TS2464 for accessors) plus the
+     *  destructured-rename checks for method/constructor members. Member TYPE
+     *  positions descend via the edges; computed-name EXPRESSIONS self-emit
+     *  via the batch-4 expression edges (the type-literal-member
+     *  ComputedPropertyName arm of [spineUResExprEdge]). */
+    private fun spineUResTypeLiteralEnter(node: TypeLiteral) {
+        if (spineUResSuppressCount > 0) return
+        if (!spineUResTypeChecked(node)) return
+        val scope = spineUResScope() ?: return
+        spineUResEmit {
+            for (member in node.members) {
+                when (member) {
+                    is PropertyDeclaration -> {
+                        checkTypeOnlyKeywordInComputedName(member.name, scope, spineSource, spineFileName)
+                        emitTS2690Or2693ForTypeOnlyComputedName(member.name, node.members.size, spineSource, spineFileName)
+                        emitTS2464IfEnumComputedName(member.name, spineSource, spineFileName)
+                    }
+                    is MethodDeclaration -> {
+                        checkTypeOnlyKeywordInComputedName(member.name, scope, spineSource, spineFileName)
+                        emitTS2690Or2693ForTypeOnlyComputedName(member.name, node.members.size, spineSource, spineFileName)
+                        checkUnusedDestructuredRenames(member.parameters, member.type, spineSource, spineFileName)
+                    }
+                    is Constructor ->
+                        checkUnusedDestructuredRenames(member.parameters, null, spineSource, spineFileName)
+                    is GetAccessor -> {
+                        checkTypeOnlyKeywordInComputedName(member.name, scope, spineSource, spineFileName)
+                        emitTS2464IfBooleanComputedName(member.name, spineSource, spineFileName)
+                    }
+                    is SetAccessor -> {
+                        checkTypeOnlyKeywordInComputedName(member.name, scope, spineSource, spineFileName)
+                        emitTS2464IfBooleanComputedName(member.name, spineSource, spineFileName)
+                    }
+                    else -> {}
+                }
+            }
+        }
     }
 
     /**
@@ -28088,37 +28309,14 @@ class Checker(
     }
 
     /**
-     * INV.4(c)(iii) batch 4: the spine owns EVERY expression position reached
-     * from statement/class-member/signature dispatch (see [spineUResExprEdge] /
-     * [spineUResExprChecked] — identifiers, NaN comparisons, shorthands,
-     * embedded type positions, class-expression heritage, and JSX self-emit at
-     * their own enters). The ONLY remaining entries into this recursive walker
-     * are the TYPE walker's TypeLiteral computed-property-name positions —
-     * recursion-owned regions the batch-4 edges deliberately do NOT classify —
-     * plus its own internal recursion (incl. the JSX helpers). The types batch
-     * deletes both together.
-     */
-    private fun checkUnresolvedInExpr(
-        expr: Expression,
-        scope: NameScope,
-        source: String,
-        fileName: String,
-    ) {
-        if (checkDepth > maxCheckDepth) return
-        checkDepth++
-        try { checkUnresolvedInExprCore(expr, scope, source, fileName) }
-        finally { checkDepth-- }
-    }
-
-    /**
      * TS2845: comparing anything with the global `NaN` via `==`/`!=`/`===`/`!==` is a
      * constant condition — equality is always 'false', inequality always 'true'. Fires
      * when EITHER operand (after unwrapping parentheses) is the global `NaN` identifier.
      * `scope.has("NaN")` is true only when a local binding (parameter / var) shadows the
      * global, in which case the comparison is meaningful and no error is emitted (matches
      * TypeScript — see `nanEquality.ts` t1/t2/t3 which take `NaN` as a parameter). Squiggle
-     * spans the whole binary expression. Hooked into the scope-aware TS2304 expression
-     * walker so shadowing is detected for free.
+     * spans the whole binary expression. Dispatched from [spineUResBinaryExpr] with the
+     * spine's maintained scope so shadowing is detected for free.
      */
     private fun checkNaNComparison(expr: BinaryExpression, scope: NameScope, source: String, fileName: String) {
         val op = expr.operator
@@ -28178,274 +28376,17 @@ class Checker(
         else -> null
     }
 
-    private fun checkUnresolvedInExprCore(
-        expr: Expression,
-        scope: NameScope,
-        source: String,
-        fileName: String,
-    ) {
-        when (expr) {
-            is Identifier -> {
-                checkIdentifierResolved(expr.text, expr, scope, source, fileName)
-            }
-            is PropertyAccessExpression -> {
-                // Only check the object, not the property name
-                checkUnresolvedInExpr(expr.expression, scope, source, fileName)
-            }
-            is ElementAccessExpression -> {
-                checkUnresolvedInExpr(expr.expression, scope, source, fileName)
-                checkUnresolvedInExpr(expr.argumentExpression, scope, source, fileName)
-            }
-            is CallExpression -> {
-                checkUnresolvedInExpr(expr.expression, scope, source, fileName)
-                expr.arguments.forEach { checkUnresolvedInExpr(it, scope, source, fileName) }
-                expr.typeArguments?.forEach { checkUnresolvedInType(it, scope, source, fileName) }
-            }
-            is NewExpression -> {
-                checkUnresolvedInExpr(expr.expression, scope, source, fileName)
-                expr.arguments?.forEach { checkUnresolvedInExpr(it, scope, source, fileName) }
-                expr.typeArguments?.forEach { checkUnresolvedInType(it, scope, source, fileName) }
-            }
-            is BinaryExpression -> {
-                var current: Expression = expr
-                while (current is BinaryExpression) {
-                    checkNaNComparison(current, scope, source, fileName)
-                    if (current.operator == SyntaxKind.Equals) {
-                        markDestructuringTargets(current.left)
-                    }
-                    checkUnresolvedInExpr(current.right, scope, source, fileName)
-                    current = current.left
-                }
-                checkUnresolvedInExpr(current, scope, source, fileName)
-            }
-            is PrefixUnaryExpression -> {
-                checkUnresolvedInExpr(expr.operand, scope, source, fileName)
-            }
-            is PostfixUnaryExpression -> {
-                checkUnresolvedInExpr(expr.operand, scope, source, fileName)
-            }
-            is ConditionalExpression -> {
-                checkUnresolvedInExpr(expr.condition, scope, source, fileName)
-                checkUnresolvedInExpr(expr.whenTrue, scope, source, fileName)
-                checkUnresolvedInExpr(expr.whenFalse, scope, source, fileName)
-            }
-            is ParenthesizedExpression -> {
-                checkUnresolvedInExpr(expr.expression, scope, source, fileName)
-            }
-            is TypeAssertionExpression -> {
-                checkUnresolvedInType(expr.type, scope, source, fileName)
-                checkUnresolvedInExpr(expr.expression, scope, source, fileName)
-            }
-            is AsExpression -> {
-                checkUnresolvedInExpr(expr.expression, scope, source, fileName)
-                checkUnresolvedInType(expr.type, scope, source, fileName)
-            }
-            is NonNullExpression -> {
-                checkUnresolvedInExpr(expr.expression, scope, source, fileName)
-            }
-            is ArrowFunction -> {
-                val arrowScope = scope.child(hasArguments = false, inFunction = true)
-                expr.typeParameters?.forEach { arrowScope.addTypeParam(it.name.text, it.constraint) }
-                expr.typeParameters?.forEach { tp ->
-                    tp.constraint?.let { checkUnresolvedInType(it, arrowScope, source, fileName) }
-                    tp.default?.let { checkUnresolvedInType(it, arrowScope, source, fileName) }
-                }
-                addParamsToScope(expr.parameters, arrowScope)
-                // For ES5 target, let/const is downleveled to var (hoisted) — suppress TS2304
-                if (options.target < ScriptTarget.ES2015) {
-                    if (expr.body is Block) collectDeclaredNames((expr.body).statements, arrowScope)
-                }
-                for (param in expr.parameters) {
-                    param.type?.let { checkUnresolvedInType(it, arrowScope, source, fileName) }
-                    param.initializer?.let { checkUnresolvedInExpr(it, arrowScope, source, fileName) }
-                }
-                expr.type?.let { checkUnresolvedInType(it, arrowScope, source, fileName) }
-                when (val body = expr.body) {
-                    // Block bodies: statements reached by the spine (batch 2).
-                    is Expression -> checkUnresolvedInExpr(body, arrowScope, source, fileName)
-                    else -> {}
-                }
-            }
-            is FunctionExpression -> {
-                // Regular functions break 'this' binding — clear class context
-                val fnScope = scope.child(hasArguments = true, classContext = null)
-                expr.name?.let { fnScope.names.add(it.text) }
-                expr.typeParameters?.forEach { fnScope.addTypeParam(it.name.text, it.constraint) }
-                addParamsToScope(expr.parameters, fnScope)
-                // For ES5 target, let/const is downleveled to var (hoisted) — suppress TS2304
-                if (options.target < ScriptTarget.ES2015) {
-                    collectDeclaredNames(expr.body.statements, fnScope)
-                }
-                for (param in expr.parameters) {
-                    param.type?.let { checkUnresolvedInType(it, fnScope, source, fileName) }
-                    param.initializer?.let { checkUnresolvedInExpr(it, fnScope, source, fileName) }
-                }
-                expr.type?.let { checkUnresolvedInType(it, fnScope, source, fileName) }
-                // Body statements reached by the spine (batch 2).
-            }
-            is ClassExpression -> {
-                val classCtx = buildClassContext(expr, scope, fileName)
-                val classLex = unresolvedLexOf(expr)
-                val classScope = scope.child(classContext = classCtx, lex = classLex)
-                if (classLex == null) {
-                    // Class expression name is in scope within its own body
-                    expr.name?.let { classScope.names.add(it.text) }
-                    expr.typeParameters?.forEach { classScope.addTypeParam(it.name.text, it.constraint) }
-                }
-                expr.heritageClauses?.forEach { clause ->
-                    emitTS2864ForPrimitiveImplements(clause, classScope, source, fileName)
-                    for (type in clause.types) {
-                        checkUnresolvedInExpr(type.expression, classScope, source, fileName)
-                        checkHeritageTypeArgCount(type, classScope, source, fileName)
-                        type.typeArguments?.forEach { checkUnresolvedInType(it, classScope, source, fileName) }
-                    }
-                }
-                // Members: dispatched per member at their own enters (batch 3 —
-                // the class-expression member levels carry ctorParamNames).
-            }
-            is ObjectLiteralExpression -> {
-                for (prop in expr.properties) {
-                    when (prop) {
-                        is PropertyAssignment -> {
-                            // Check computed property names
-                            if (prop.name is ComputedPropertyName) {
-                                checkUnresolvedInExpr(
-                                    (prop.name).expression,
-                                    scope, source, fileName
-                                )
-                            }
-                            checkUnresolvedInExpr(prop.initializer, scope, source, fileName)
-                        }
-                        is ShorthandPropertyAssignment -> {
-                            val shInit = prop.objectAssignmentInitializer
-                            if (shInit != null && expr.pos !in destructuringPatternPos) {
-                                // B276/TS1312 (grammar): `{ s = 5 }` OUTSIDE a destructuring
-                                // pattern — error at the `=`; the NAME is never resolved
-                                // (tsc checks the initializer instead, so no TS18004).
-                                val eqPos = source.indexOf('=', prop.name.pos + prop.name.text.length)
-                                if (eqPos in 0 until shInit.pos) {
-                                    val (eqLine, eqChar) = getLineAndCharacterOfPosition(source, eqPos)
-                                    diagnostics.add(Diagnostic(
-                                        message = "Did you mean to use a ':'? An '=' can only follow a property name when the containing object literal is part of a destructuring pattern.",
-                                        category = DiagnosticCategory.Error,
-                                        code = 1312,
-                                        fileName = fileName,
-                                        line = eqLine,
-                                        character = eqChar,
-                                        start = eqPos,
-                                        length = 1,
-                                    ))
-                                }
-                            } else {
-                                checkShorthandPropertyResolved(prop, scope, source, fileName)
-                            }
-                        }
-                        is SpreadAssignment -> {
-                            checkUnresolvedInExpr(prop.expression, scope, source, fileName)
-                        }
-                        is MethodDeclaration -> {
-                            val methodScope = scope.child(hasArguments = true)
-                            prop.typeParameters?.forEach { methodScope.addTypeParam(it.name.text, it.constraint) }
-                            addParamsToScope(prop.parameters, methodScope)
-                            for (param in prop.parameters) {
-                                param.type?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
-                                param.initializer?.let { checkUnresolvedInExpr(it, methodScope, source, fileName) }
-                            }
-                            prop.type?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
-                            // Body statements reached by the spine (batch 2).
-                        }
-                        is GetAccessor -> {
-                            // Body statements reached by the spine (batch 2).
-                        }
-                        is SetAccessor -> {
-                            // Params register on the spine's accessor level; body
-                            // statements reached by the spine (batch 2).
-                        }
-                        else -> {}
-                    }
-                }
-            }
-            is ArrayLiteralExpression -> {
-                expr.elements.forEach { checkUnresolvedInExpr(it, scope, source, fileName) }
-            }
-            is SpreadElement -> {
-                checkUnresolvedInExpr(expr.expression, scope, source, fileName)
-            }
-            is TemplateExpression -> {
-                for (span in expr.templateSpans) {
-                    checkUnresolvedInExpr(span.expression, scope, source, fileName)
-                }
-            }
-            is TaggedTemplateExpression -> {
-                checkUnresolvedInExpr(expr.tag, scope, source, fileName)
-                when (val template = expr.template) {
-                    is TemplateExpression -> {
-                        for (span in template.templateSpans) {
-                            checkUnresolvedInExpr(span.expression, scope, source, fileName)
-                        }
-                    }
-                    else -> {}
-                }
-            }
-            is TypeOfExpression -> {
-                checkUnresolvedInExpr(expr.expression, scope, source, fileName)
-            }
-            is VoidExpression -> {
-                checkUnresolvedInExpr(expr.expression, scope, source, fileName)
-            }
-            is DeleteExpression -> {
-                checkUnresolvedInExpr(expr.expression, scope, source, fileName)
-            }
-            is AwaitExpression -> {
-                checkUnresolvedInExpr(expr.expression, scope, source, fileName)
-            }
-            is YieldExpression -> {
-                expr.expression?.let { checkUnresolvedInExpr(it, scope, source, fileName) }
-            }
-            is CommaListExpression -> {
-                expr.elements.forEach { checkUnresolvedInExpr(it, scope, source, fileName) }
-            }
-            is SatisfiesExpression -> {
-                checkUnresolvedInExpr(expr.expression, scope, source, fileName)
-                checkUnresolvedInType(expr.type, scope, source, fileName)
-            }
-            is JsxElement -> {
-                checkJsxTagName(expr.openingElement.tagName, scope, source, fileName)
-                checkJsxFactoryInScope(expr, scope, source, fileName)
-                expr.openingElement.attributes.forEach { checkUnresolvedInJsxAttribute(it, scope, source, fileName) }
-                expr.children.forEach { checkUnresolvedInJsxChild(it, scope, source, fileName) }
-            }
-            is JsxSelfClosingElement -> {
-                checkJsxTagName(expr.tagName, scope, source, fileName)
-                checkJsxFactoryInScope(expr, scope, source, fileName)
-                expr.attributes.forEach { checkUnresolvedInJsxAttribute(it, scope, source, fileName) }
-            }
-            is JsxFragment -> {
-                checkJsxFactoryInScope(expr, scope, source, fileName)
-                expr.children.forEach { checkUnresolvedInJsxChild(it, scope, source, fileName) }
-            }
-            else -> {}
-        }
-    }
-
     /**
-     * Check JSX tag-name for TS2304. Intrinsic elements (lowercase first char) are
-     * compiled to string literals and don't need name resolution. Custom components
-     * (uppercase first char) and qualified names (`Foo.Bar`) reference identifiers
-     * that must exist in scope.
+     * Check an IDENTIFIER JSX tag-name for TS2304. Intrinsic elements (lowercase
+     * first char) are compiled to string literals and don't need name resolution.
+     * A property-access tag (`Foo.Bar`) is not handled here — its ROOT identifier
+     * self-emits via the batch-4 JSX descent edges ([spineUResExprEdge]).
      */
     private fun checkJsxTagName(tagName: Expression, scope: NameScope, source: String, fileName: String) {
-        when (tagName) {
-            is Identifier -> {
-                // Intrinsic elements (lowercase first char) compile to string literals.
-                if (tagName.text.isNotEmpty() && tagName.text[0].isLowerCase()) return
-                checkIdentifierResolved(tagName.text, tagName, scope, source, fileName)
-            }
-            is PropertyAccessExpression -> {
-                checkUnresolvedInExpr(tagName.expression, scope, source, fileName)
-            }
-            else -> {}
-        }
+        if (tagName !is Identifier) return
+        // Intrinsic elements (lowercase first char) compile to string literals.
+        if (tagName.text.isNotEmpty() && tagName.text[0].isLowerCase()) return
+        checkIdentifierResolved(tagName.text, tagName, scope, source, fileName)
     }
 
     /**
@@ -28659,50 +28600,6 @@ class Checker(
                 length = tagLength,
             ))
         }
-    }
-
-    /** Check JSX attribute for TS2304 in any expression-containing value. */
-    private fun checkUnresolvedInJsxAttribute(attr: Node, scope: NameScope, source: String, fileName: String) {
-        when (attr) {
-            is JsxAttribute -> {
-                when (val value = attr.value) {
-                    is JsxExpressionContainer -> value.expression?.let {
-                        checkUnresolvedInExpr(it, scope, source, fileName)
-                    }
-                    is JsxElement -> checkUnresolvedInExpr(value, scope, source, fileName)
-                    is JsxSelfClosingElement -> checkUnresolvedInExpr(value, scope, source, fileName)
-                    is JsxFragment -> checkUnresolvedInExpr(value, scope, source, fileName)
-                    else -> {}
-                }
-            }
-            is JsxSpreadAttribute -> checkUnresolvedInExpr(attr.expression, scope, source, fileName)
-            else -> {}
-        }
-    }
-
-    /** Check JSX child for TS2304 in expressions and nested elements. */
-    private fun checkUnresolvedInJsxChild(child: Node, scope: NameScope, source: String, fileName: String) {
-        when (child) {
-            is JsxExpressionContainer -> child.expression?.let {
-                checkUnresolvedInExpr(it, scope, source, fileName)
-            }
-            is JsxElement -> checkUnresolvedInExpr(child, scope, source, fileName)
-            is JsxSelfClosingElement -> checkUnresolvedInExpr(child, scope, source, fileName)
-            is JsxFragment -> checkUnresolvedInExpr(child, scope, source, fileName)
-            else -> {}
-        }
-    }
-
-    private fun checkUnresolvedInType(
-        type: TypeNode,
-        scope: NameScope,
-        source: String,
-        fileName: String,
-    ) {
-        if (checkDepth > maxCheckDepth) return
-        checkDepth++
-        try { checkUnresolvedInTypeCore(type, scope, source, fileName) }
-        finally { checkDepth-- }
     }
 
     /**
@@ -28963,203 +28860,6 @@ class Checker(
             return defaultExportClassification(targetResult) == DefaultExportKind.VALUE_ONLY
         }
         return false
-    }
-
-    private fun checkUnresolvedInTypeCore(
-        type: TypeNode,
-        scope: NameScope,
-        source: String,
-        fileName: String,
-    ) {
-        when (type) {
-            is TypeReference -> {
-                // Check the type name (Identifier or QualifiedName)
-                checkTypeNameResolved(type.typeName, scope, source, fileName)
-                // Check type argument count (TS2314)
-                checkTypeArgCount(type, scope, source, fileName)
-                // B407: Parameters<T>/ReturnType<T> constraint violation (TS2344).
-                checkUtilitySignatureConstraint(type, source, fileName)
-                // Check TS1099: empty type argument list. Suppress when the typeName is
-                // an unresolved Identifier — TS2304 already fires for that case, and
-                // TypeScript treats the unresolved-name diagnostic as primary.
-                if (type.typeArguments != null && type.typeArguments.isEmpty()) {
-                    val nameUnresolved = (type.typeName as? Identifier)?.let { id ->
-                        val n = id.text
-                        n.isNotEmpty() &&
-                            (n[0] in 'A'..'Z' || n[0] in 'a'..'z' || n[0] == '_' || n[0] == '$') &&
-                            n !in KEYWORD_IDENTIFIERS && !scope.has(n) &&
-                            n !in KNOWN_GLOBALS
-                    } ?: false
-                    if (!nameUnresolved) {
-                        val ltIdx = source.indexOf("<>", type.typeName.pos)
-                        if (ltIdx >= 0 && ltIdx < type.end) emitTS1099(ltIdx, source, fileName)
-                    }
-                }
-                type.typeArguments?.forEach { checkUnresolvedInType(it, scope, source, fileName) }
-            }
-            is ArrayType -> checkUnresolvedInType(type.elementType, scope, source, fileName)
-            is TupleType -> type.elements.forEach { checkUnresolvedInType(it, scope, source, fileName) }
-            is UnionType -> type.types.forEach { checkUnresolvedInType(it, scope, source, fileName) }
-            is IntersectionType -> type.types.forEach { checkUnresolvedInType(it, scope, source, fileName) }
-            is ParenthesizedType -> checkUnresolvedInType(type.type, scope, source, fileName)
-            is TypeOperator -> checkUnresolvedInType(type.type, scope, source, fileName)
-            is IndexedAccessType -> {
-                checkUnresolvedInType(type.objectType, scope, source, fileName)
-                checkUnresolvedInType(type.indexType, scope, source, fileName)
-                checkIndexTypeValidity(type.indexType, source, fileName)
-                checkBadArrayStringLiteralIndex(type, scope, source, fileName)
-            }
-            is MappedType -> {
-                val mappedScope = scope.child()
-                type.typeParameter.let { mappedScope.addTypeParam(it.name.text, it.constraint) }
-                // The mapped TP's constraint is checked in the OUTER scope —
-                // the TP being introduced (e.g. `K` in `[K in keyof T]`) is
-                // NOT in scope inside its own constraint.
-                type.typeParameter.constraint?.let { checkUnresolvedInType(it, scope, source, fileName) }
-                type.type?.let { checkUnresolvedInType(it, mappedScope, source, fileName) }
-                type.nameType?.let { checkUnresolvedInType(it, mappedScope, source, fileName) }
-            }
-            is ConditionalType -> {
-                checkUnresolvedInType(type.checkType, scope, source, fileName)
-                checkUnresolvedInType(type.extendsType, scope, source, fileName)
-                // infer creates new type names in the true branch
-                val trueScope = scope.child()
-                collectInferTypeNames(type.extendsType, trueScope)
-                checkUnresolvedInType(type.trueType, trueScope, source, fileName)
-                checkUnresolvedInType(type.falseType, scope, source, fileName)
-            }
-            is FunctionType -> {
-                val fnScope = scope.child()
-                type.typeParameters?.forEach { fnScope.addTypeParam(it.name.text, it.constraint) }
-                type.typeParameters?.forEach { tp ->
-                    tp.constraint?.let { checkUnresolvedInType(it, fnScope, source, fileName) }
-                    tp.default?.let { checkUnresolvedInType(it, fnScope, source, fileName) }
-                }
-                addParamsToScope(type.parameters, fnScope)
-                for (param in type.parameters) {
-                    param.type?.let { checkUnresolvedInType(it, fnScope, source, fileName) }
-                }
-                checkUnresolvedInType(type.type, fnScope, source, fileName)
-                checkUnusedDestructuredRenames(type.parameters, type.type, source, fileName)
-            }
-            is ConstructorType -> {
-                val ctorScope = scope.child()
-                type.typeParameters?.forEach { ctorScope.addTypeParam(it.name.text, it.constraint) }
-                type.typeParameters?.forEach { tp ->
-                    tp.constraint?.let { checkUnresolvedInType(it, ctorScope, source, fileName) }
-                    tp.default?.let { checkUnresolvedInType(it, ctorScope, source, fileName) }
-                }
-                addParamsToScope(type.parameters, ctorScope)
-                for (param in type.parameters) {
-                    param.type?.let { checkUnresolvedInType(it, ctorScope, source, fileName) }
-                }
-                checkUnresolvedInType(type.type, ctorScope, source, fileName)
-                checkUnusedDestructuredRenames(type.parameters, type.type, source, fileName)
-            }
-            is TypeLiteral -> {
-                for (member in type.members) {
-                    when (member) {
-                        is PropertyDeclaration -> {
-                            checkTypeOnlyKeywordInComputedName(member.name, scope, source, fileName)
-                            // B98.r91: a type-only name (`type`/`interface`) used as a type-literal
-                            // computed property name (`{ [K]: number }`) is TS2690 (single-member —
-                            // a mistaken mapped type, with a "Did you mean '<TP> in K'?" hint) or
-                            // TS2693 (multi-member). Emit before the value-resolution walk below.
-                            emitTS2690Or2693ForTypeOnlyComputedName(member.name, type.members.size, source, fileName)
-                            emitTS2464IfEnumComputedName(member.name, source, fileName)
-                            // 17.229: ComputedPropertyName whose expression is a regular
-                            // Identifier should resolve in the value-position scope
-                            // (mirrors class-member walker at ~10357). Without this,
-                            // `{ [index]; }` silently passes when `index` is unbound.
-                            if (member.name is ComputedPropertyName) {
-                                checkUnresolvedInExpr((member.name).expression, scope, source, fileName)
-                            }
-                            member.type?.let { checkUnresolvedInType(it, scope, source, fileName) }
-                        }
-                        is MethodDeclaration -> {
-                            checkTypeOnlyKeywordInComputedName(member.name, scope, source, fileName)
-                            emitTS2690Or2693ForTypeOnlyComputedName(member.name, type.members.size, source, fileName)
-                            if (member.name is ComputedPropertyName) {
-                                checkUnresolvedInExpr((member.name).expression, scope, source, fileName)
-                            }
-                            val methodScope = scope.child()
-                            member.typeParameters?.forEach { methodScope.addTypeParam(it.name.text, it.constraint) }
-                            member.typeParameters?.forEach { tp ->
-                                tp.constraint?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
-                                tp.default?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
-                            }
-                            addParamsToScope(member.parameters, methodScope)
-                            for (param in member.parameters) {
-                                param.type?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
-                            }
-                            member.type?.let { checkUnresolvedInType(it, methodScope, source, fileName) }
-                            checkUnusedDestructuredRenames(member.parameters, member.type, source, fileName)
-                        }
-                        is IndexSignature -> {
-                            member.type?.let { checkUnresolvedInType(it, scope, source, fileName) }
-                            for (param in member.parameters) {
-                                param.type?.let { checkUnresolvedInType(it, scope, source, fileName) }
-                            }
-                        }
-                        is Constructor -> {
-                            val ctorScope = scope.child()
-                            addParamsToScope(member.parameters, ctorScope)
-                            for (param in member.parameters) {
-                                param.type?.let { checkUnresolvedInType(it, ctorScope, source, fileName) }
-                            }
-                            checkUnusedDestructuredRenames(member.parameters, null, source, fileName)
-                        }
-                        // B98.r90: GetAccessor/SetAccessor in a type literal were not
-                        // walked, so a computed name's expression (e.g. the mistaken
-                        // `get [K in WAT]()`) never got TS2304, and a boolean-typed
-                        // computed name never got TS2464. Mirror the MethodDeclaration arm.
-                        is GetAccessor -> {
-                            checkTypeOnlyKeywordInComputedName(member.name, scope, source, fileName)
-                            emitTS2464IfBooleanComputedName(member.name, source, fileName)
-                            if (member.name is ComputedPropertyName) {
-                                checkUnresolvedInExpr((member.name).expression, scope, source, fileName)
-                            }
-                            member.type?.let { checkUnresolvedInType(it, scope, source, fileName) }
-                        }
-                        is SetAccessor -> {
-                            checkTypeOnlyKeywordInComputedName(member.name, scope, source, fileName)
-                            emitTS2464IfBooleanComputedName(member.name, source, fileName)
-                            if (member.name is ComputedPropertyName) {
-                                checkUnresolvedInExpr((member.name).expression, scope, source, fileName)
-                            }
-                            for (param in member.parameters) {
-                                param.type?.let { checkUnresolvedInType(it, scope, source, fileName) }
-                            }
-                        }
-                        else -> {}
-                    }
-                }
-            }
-            is TypeQuery -> {
-                // typeof expr — check the expression name
-                checkTypeQueryName(type.exprName, scope, source, fileName)
-            }
-            is TemplateLiteralType -> {
-                type.templateSpans.forEach { span ->
-                    checkUnresolvedInType(span.type, scope, source, fileName)
-                }
-            }
-            is InferType -> {
-                // infer U — U is introduced, not referenced
-            }
-            is RestType -> {
-                checkUnresolvedInType(type.type, scope, source, fileName)
-            }
-            is OptionalType -> {
-                checkUnresolvedInType(type.type, scope, source, fileName)
-            }
-            is NamedTupleMember -> {
-                checkUnresolvedInType(type.type, scope, source, fileName)
-            }
-            else -> {
-                // LiteralType, KeywordType, ThisType, etc. — no name resolution needed
-            }
-        }
     }
 
     private fun collectInferTypeNames(type: TypeNode, scope: NameScope) {
