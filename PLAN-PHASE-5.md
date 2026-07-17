@@ -20,6 +20,29 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 569 (2026-07-17) — the fourslashImpl constraint delta ROOT-CAUSED
+(probe-verified, probe reverted): the sandwich resolves T's constraint
+CORRECTLY (`DocumentSpan` — println-probed) — the drift is DOWNSTREAM:
+constraint PRESENCE is behaviorally significant.** At cpa time in the green
+(legacy-order) state, the method's TP constraint is still NULL, so the
+TP-receiver member check on `span.prefixText` hits an uncertainty-BAIL
+(opaque TP → silent); with the constraint EAGERLY set, the check goes
+constraint-based — and since OUR contextual inference fails to bind
+T=RenameLocation at the getBaselineForDocumentSpansWithFileContents call
+(tsc infers it; RenameLocation extends DocumentSpan WITH prefixText), the
+bare-T receiver resolves through DocumentSpan → missing → FP. The green
+state was IMPLICIT gating by materialization order. THE CANONICALIZATION
+RULE this yields: (1) TP `.constraint` materialization must become
+order-free (eager or canonically lazy — either way DETERMINISTIC), and
+(2) the TP-receiver TS2339 family must be INFERENCE-AWARE (an un-inferred
+TP receiver in a contextually-typed callback position is our round-431
+inference-gap class — bail regardless of constraint presence). (2) is the
+enabling fix: it makes (1) safe, unblocking the fn-body tier AND removing
+a whole class of materialization-order landmines. NEXT: implement (2) —
+find the TP-receiver emission in checkMemberAccessMissing, add the
+callback-param-position inference-gap bail (corpus + fourslashImpl-probe
+gated), then re-attempt the always-on sandwich.
+
 **Round 568c (2026-07-17) — bench observation: post-568 HEAD is 28,697 ms vs
 the round-552 27,499 ms (~+4.4% cumulative over rounds 553-568), but the
 step deltas are inside the box-drift band (m3c-prep WITH the sandwich:
