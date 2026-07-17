@@ -20,6 +20,23 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 559b (2026-07-17) — cta pin batch: 10 reach + state pins for
+checkTypeAssignability (Inv4SpineCtaPinsTest), all verified on the CURRENT
+walker.** Coverage: var-decl TS2322 reach across all statement contexts
+(both dispatchers — checkTypeAssignabilityInStatements' inline
+VariableStatement handling + checkTypeAssignabilityInStmt's body arms +
+switch clauses + try/catch/finally); assignment reach (statement-level +
+the B127 nested `const x = a = b`); returnType NEAREST-function threading
+(inner annotation wins; un-annotated fns draw nothing); the B201/M1.9
+narrowing frame (`x = undefined` inside `if (x !== undefined)` checks the
+DECLARED type); the B85.1b `this.p` varTypes push in method bodies; B212
+enclosing-TP threading into nested generics (`return t: Top` vs target `T`
+fires — the bare-TP-vs-different-TP shape, NOT a concrete-vs-TP return,
+which stays silent); fn-expr/arrow body walks in initializer + call-arg
+positions; B183 fn-type annotation contextual params. Suite 11,292 →
+11,302 (+10). NEXT: the (g1c) cta migration implementation per the round-559
+design (cta FIRST; frame model recorded in the INV.4(e) item).
+
 **Round 558 (2026-07-17) — INV.4(e) g1b chunk 2: 14 expression-arm reach pins
 for checkPropertyAccess (Inv4SpineG1PinsExprTest), all verified on the
 CURRENT walker.** Coverage: the binary left-spine flatten (every operand),
