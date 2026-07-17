@@ -2210,7 +2210,29 @@ interrupt the arc).
     rule dies there).
   - [ ] **INV.5(c) `nodeTypes` keyed (node, mapper) — always valid.** Kills
     the context-bypass rule and the first-touch hazard class outright (the
-    round-543 blocker). Depends on (b).
+    round-543 blocker). DESIGN (scouted round 547b — the surface is TINY,
+    exactly 2 use sites inside getTypeFromTypeNode): a SECOND cache
+    (`mappedNodeTypes`) for context-bearing resolutions keyed by an
+    IDENTITY node key (=== equality with nodeId-based hashCode — cross-file
+    nodeId collisions only share buckets, never results; unindexed nodes
+    skip) + a context fingerprint (ns-stack symbol ids + sorted tpScope
+    name:id pairs + sorted aliasArgs name:id pairs). The existing
+    empty-context cache and its isPerFileDependentRefNode bypass stay
+    untouched (identity keys make that hazard structurally impossible in
+    the NEW cache). **SOUNDNESS CONSTRAINT (the reason this is not yet
+    implemented): context-bearing resolutions ALSO depend on the CHECKING
+    file — `currentFileLocals?.get ?: globals` consults are
+    checking-file-keyed (the conflation ecology), so a fingerprint that
+    excludes that dimension re-creates the first-touch disease inside the
+    cache. Either (i) include a reliable checking-file identity in the
+    fingerprint (currentCheckFileName is a stale-prone proxy — audit the
+    setters first), or (ii) wait for INV.3(d)'s completion to eliminate
+    checking-file-dependent resolution, or (iii) start with a
+    CONSERVATIVE fingerprint that additionally requires
+    currentFileLocals === the node's owning file's locals (node-keyed
+    consult, cheap via owningSourceFile with a per-file memo) and skips
+    caching otherwise.** Option (iii) is self-validating and incremental —
+    preferred.
   - [ ] **INV.5(d) Instantiated members cached ON the `Type.Reference`.**
     Delete `resolveGenericPropertyType` fresh-minting + its depth-4 OOM cap
     (the per-recursion-level cache-miss gotcha).
