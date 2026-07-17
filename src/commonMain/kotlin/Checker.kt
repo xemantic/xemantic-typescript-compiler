@@ -162,7 +162,6 @@ class Checker(
          *  swapped operands (contravariance) into an alternating (A,B)/(B,A) cycle that
          *  would otherwise overflow the stack (silently swallowed by callers). */
         val functionElaborationStack = HashSet<Long>()
-        var argCountDepth = 0
         var callTypeCheckDepth = 0
         var arithmeticCheckDepth = 0
         // LinkStore: checker-local side map for import alias targets.
@@ -241,9 +240,6 @@ class Checker(
     private var relationUsedCycleBreak: Boolean
         get() = state.relationUsedCycleBreak
         set(value) { state.relationUsedCycleBreak = value }
-    private var argCountDepth: Int
-        get() = state.argCountDepth
-        set(value) { state.argCountDepth = value }
     private var callTypeCheckDepth: Int
         get() = state.callTypeCheckDepth
         set(value) { state.callTypeCheckDepth = value }
@@ -289,15 +285,6 @@ class Checker(
      *  (a get-only accessor is never writable, even here); a write nested in a function/arrow,
      *  or in any method body, is TS2540. */
     private var currentThisMemberIsCtorDirect: Boolean = false
-
-    /** Base-class ctor param info for super() arity checking inside a derived ctor body. */
-    private var argCountSuperCtor: FuncParamInfo? = null
-
-    /** M1.11: >0 while the arity walker is inside a function-like BODY. Gates the
-     *  nested-list variable-shadow removal (a body-local `const f = …` shadows an
-     *  outer/file-level `function f` for calls in that body) so TOP-level
-     *  VariableStatement-derived entries (B64.2 var-arrow functions) keep their checks. */
-    private var argCountFnDepth = 0
 
     /** B154: per-importer-file cache of "CJS-default-namespace" call shapes (nodenext,
      *  ESM importer importing a CJS module that uses `export default`). `.first` =
@@ -1089,6 +1076,50 @@ class Checker(
         var currentLeak: Set<String> = emptySet()
     }
     private val spineDaFrames = ArrayList<SpineDaFrame>()
+
+    // ── INV.4(d) walker 6 (round 535): checkArgumentCounts on the spine ────
+    // The function-call arity pass (TS2554/TS2555/TS2575) — the recursion
+    // walkers (checkArgCountInStatements/-InStatement/-InExpr(Core)) are
+    // deleted; reach is the memoized DEPTH classifier [spineArgDepth] over
+    // [spineArgEdge] (the legacy argCountDepth recursion counter reproduced
+    // per node, with its ≤200 cap), and the downward map context
+    // (funcParams / classCtorParams / argCountFnDepth / argCountSuperCtor)
+    // is rebuilt PULL-based at each emission ([spineArgCtxAt]) with
+    // per-list-owner memoized levels ([spineArgListCtx]) — sound because
+    // every list overlay reads its WHOLE statement list (never a
+    // position-ordered prefix), so the context is a pure function of the
+    // ancestor chain. The bounded leaf utilities (collectFuncDecls /
+    // paramInfo / minusParamShadowedNames / resolveInheritedCtorArities /
+    // emitTS2554*/emitTS2555TooFew) are retained unchanged.
+    /** Per-file activation: the legacy non-.d.ts gate. */
+    private var spineArgActive = false
+    /** Per-file nodeId memo for [spineArgDepth] — 0 unknown, 1 unreached, else depth+2. */
+    private var spineArgDepthMemo = ShortArray(0)
+    /** Reusable ascent buffer for [spineArgDepth]. */
+    private val spineArgChain = ArrayList<Node>()
+    /** Reusable ascent buffer for [spineArgCtxAt]. */
+    private val spineArgCtxChain = ArrayList<Node>()
+    /** Per-list-owner memo for [spineArgListCtx], keyed by nodeId; cleared per file. */
+    private val spineArgListCtxMemo = HashMap<Int, SpineArgCtx>()
+    /** The current file's binder result (for the B434 own-locals shadow guard). */
+    private var spineArgBinderResult: BinderResult? = null
+    /** Lazily-computed per-file base context (collect + cross-file + ctor fixpoint). */
+    private var spineArgFileCtx: SpineArgCtx? = null
+    /** Program-wide B434 cross-file script-function overlay, computed once lazily. */
+    private var spineArgCrossFileFuncs: Map<String, FuncParamInfo>? = null
+
+    /**
+     * The legacy checkArgCountIn* threading snapshot in effect at one node:
+     * the funcParams/classCtorParams maps, the argCountFnDepth counter (gates
+     * the list-level var-shadow removal), and the argCountSuperCtor base-ctor
+     * info (set by the innermost enclosing class-DECLARATION constructor).
+     */
+    private data class SpineArgCtx(
+        val funcParams: Map<String, FuncParamInfo>,
+        val classCtorParams: Map<String, FuncParamInfo>,
+        val fnDepth: Int,
+        val superCtor: FuncParamInfo?,
+    )
 
     // Positions of ObjectLiteralExpression nodes that are destructuring-assignment
     // TARGETS (LHS of `=`, incl. nested through array/object/default nesting). Consumed
@@ -2337,6 +2368,11 @@ class Checker(
         // set-pass-first order (checkDefiniteAssignmentViaFlowGraph DEDUPS
         // against the set pass's emitted positions).
         val shouldCheckDefiniteAssignment = !options.strictExplicitlyFalse && !options.strictNullChecksExplicitlyFalse
+        // 15c (moved before the spine, INV.4(d) walker 6 slot-move): a spread
+        // `f(...x)` of a NON-ITERABLE operand into a fixed-arity (no-rest)
+        // function → TS2556 (+ TS2488/TS2461). Must run BEFORE the arg-count
+        // emissions so it can register the call to suppress the spurious TS2554.
+        pass("checkSpreadNonIterableIntoFixedArity") { checkSpreadNonIterableIntoFixedArity() }
         pass("checkSpine") { checkSpine() }
         if (shouldCheckDefiniteAssignment) {
             pass("checkDefiniteAssignmentViaFlowGraph") { checkDefiniteAssignmentViaFlowGraph() }
@@ -2612,10 +2648,8 @@ class Checker(
         // 15. Break/continue jump targets (TS1104/TS1105/TS1107/TS1115/TS1116
         // + TS1344) migrated to the check spine (INV.4(b) batch 11) — see
         // spineCheckJumpTarget / spineCheckLabelOnDeclaration.
-        // 15c. noImplicitAnyLoopCrash — a spread `f(...x)` of a NON-ITERABLE operand into a
-        // fixed-arity (no-rest) function → TS2556 (+ TS2488/TS2461). Runs BEFORE the arg-count
-        // pass so it can register the call to suppress the spurious TS2554.
-        pass("checkSpreadNonIterableIntoFixedArity") { checkSpreadNonIterableIntoFixedArity() }
+        // 15c. noImplicitAnyLoopCrash (checkSpreadNonIterableIntoFixedArity) moved
+        // BEFORE the spine — see the pass("checkSpine") site.
         // 15d. downlevelLetConst16 — `for ([binding] = []; …)` and `for ([binding]/{binding} of [])`
         // over an EMPTY array literal: the for-init `[]` is the empty tuple (TS2493 OOB), the for-of
         // `[]` is `undefined[]` (element undefined → TS2488/TS2461 array-destructure, TS2339 object).
@@ -2637,8 +2671,8 @@ class Checker(
         // 15h. unionSubtypeReductionErrors — an array literal with >1000 DISTINCT object-literal
         // elements collapses to a union too complex to represent → TS2590 at the array span.
         pass("checkArrayLiteralUnionTooComplex") { checkArrayLiteralUnionTooComplex() }
-        // 16. Check call expression argument counts (TS2554)
-        pass("checkArgumentCounts") { checkArgumentCounts() }
+        // 16. Check call expression argument counts (TS2554) — moved to the
+        // spine slot (INV.4(d) walker 6); see the pass("checkSpine") site.
         // 17. Check missing function implementations (TS2391)
         pass("checkMissingImplementations") { checkMissingImplementations() }
         // 17c. B460: generic-call contextual arrow-return mismatch (TS2741) for the
@@ -12809,7 +12843,7 @@ class Checker(
         val chain = spineDaChain
         chain.clear()
         var cur: Node = node
-        var anchor: Node? = null
+        val anchor: Node?
         var anchorStatus = DA_NONE
         while (true) {
             chain.add(cur)
@@ -17878,6 +17912,7 @@ class Checker(
                 spineIanySetup(result)
                 spineDupIdSetup(result)
                 spineDaSetup(result)
+                spineArgSetup(result)
                 spineUResAuditActive = unresolvedAuditEnabled && spineUResActive
                 try {
                     spineWalkFile(sf)
@@ -17891,6 +17926,7 @@ class Checker(
                     spineIanyTeardown()
                     spineDupIdTeardown()
                     spineDaTeardown()
+                    spineArgTeardown()
                 }
                 spineResolveDeferredIterationChecks()
             }
@@ -18048,8 +18084,13 @@ class Checker(
             is CallExpression -> {
                 spineCheckEmptyTypeArgs(node.typeArguments, node.expression)
                 spineCheckAwaitCall(node)
+                if (spineArgActive) spineArgCallEnter(node)
             }
-            is NewExpression -> spineCheckEmptyTypeArgs(node.typeArguments, node.expression)
+            is NewExpression -> {
+                spineCheckEmptyTypeArgs(node.typeArguments, node.expression)
+                if (spineArgActive) spineArgNewEnter(node)
+            }
+            is TaggedTemplateExpression -> if (spineArgActive) spineArgTaggedEnter(node)
             is AwaitExpression -> spineCheckAwaitExpr(node)
             is WithStatement -> spineCheckWithStatement(node)
             is BreakStatement -> spineCheckJumpTarget(node, node.label?.text, isBreak = true)
@@ -52493,19 +52534,48 @@ interface DataView {
         ))
     }
 
+    // ── INV.4(d) walker 6 (round 535): checkArgumentCounts on the spine ────
+    // (Fields + the SpineArgCtx snapshot are declared before init — see the
+    // spineArg field block. The legacy driver, the statement/expression
+    // recursion walkers, and the argCountDepth/argCountFnDepth/
+    // argCountSuperCtor threading fields are deleted; emissions dispatch at
+    // CallExpression/NewExpression/TaggedTemplateExpression enters.)
+
+    /** Per-file setup for the spine-hosted arg-count pass. */
+    private fun spineArgSetup(result: BinderResult) {
+        spineArgActive = !spineIsDts
+        spineArgListCtxMemo.clear()
+        spineArgFileCtx = null
+        spineArgBinderResult = result
+        if (!spineArgActive) {
+            spineArgDepthMemo = ShortArray(0)
+            return
+        }
+        val n = result.sourceFile.nodeCount
+        spineArgDepthMemo = if (n > 0) ShortArray(n) else ShortArray(0)
+    }
+
+    private fun spineArgTeardown() {
+        spineArgActive = false
+        spineArgDepthMemo = ShortArray(0)
+        spineArgListCtxMemo.clear()
+        spineArgFileCtx = null
+        spineArgBinderResult = null
+    }
+
     /**
-     * Only handles simple, direct function calls and class constructors
-     * in the same file. Skips overloaded functions and rest parameters.
+     * B434 (Blocker #3 substep): cross-file function-call arity. In SCRIPT-mode
+     * multi-file programs, a top-level `function f` declared in file A is globally
+     * visible in file B, but the per-file arity maps only see the current
+     * file's functions. Build a program-wide overlay of top-level FunctionDeclarations
+     * from NON-module (script) files; a NON-module file consults it for callees not
+     * declared locally. Names declared in 2+ files (cross-file overloads) are skipped
+     * (conservative — no FP). JS-param optionality is JSDoc-`@param`-aware (B434):
+     * a JS param is required only if a non-bracket `@param` tag documents it.
+     * Computed once lazily (program-wide, immutable inputs).
      */
-    private fun checkArgumentCounts() {
-        // B434 (Blocker #3 substep): cross-file function-call arity. In SCRIPT-mode
-        // multi-file programs, a top-level `function f` declared in file A is globally
-        // visible in file B, but the per-file arity check below only sees the current
-        // file's functions. Build a program-wide overlay of top-level FunctionDeclarations
-        // from NON-module (script) files; a NON-module file consults it for callees not
-        // declared locally. Names declared in 2+ files (cross-file overloads) are skipped
-        // (conservative — no FP). JS-param optionality is JSDoc-`@param`-aware (B434):
-        // a JS param is required only if a non-bracket `@param` tag documents it.
+    private fun spineArgCrossFileFuncsMap(): Map<String, FuncParamInfo> {
+        spineArgCrossFileFuncs?.let { return it }
         val crossFileFuncs = mutableMapOf<String, FuncParamInfo>()
         val crossFileDupNames = mutableSetOf<String>()
         for (br in binderResults) {
@@ -52521,42 +52591,422 @@ interface DataView {
                 crossFileFuncs[nm] = paramInfo(stmt.parameters, bIsJs, req).copy(declFileName = bfn, declSource = br.sourceFile.text)
             }
         }
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            // In JS files (allowJs/checkJs), all parameters are implicitly optional (min=0)
-            val isJsFile = fileName.endsWith(".js") || fileName.endsWith(".jsx") || fileName.endsWith(".mjs") || fileName.endsWith(".cjs")
+        spineArgCrossFileFuncs = crossFileFuncs
+        return crossFileFuncs
+    }
 
-            // Build function/class declaration maps for this file
-            val funcParams = mutableMapOf<String, FuncParamInfo>()
-            val classCtorParams = mutableMapOf<String, FuncParamInfo>()
-            collectFuncDecls(result.sourceFile.statements, funcParams, classCtorParams, isJsFile, source)
-            // B434: cross-file overlay (fallback) for NON-module files. Only for callees
-            // NOT declared locally (own funcParams win; a local binding of any kind shadows
-            // a cross-file function — guard via the file's own locals to avoid FP).
-            if (!isModuleFile(result.sourceFile.statements)) {
-                val ownLocals = result.locals
-                for ((nm, info) in crossFileFuncs) {
-                    if (nm in funcParams || ownLocals.containsKey(nm)) continue
-                    funcParams[nm] = info
+    /**
+     * The current file's base context — the legacy per-file driver preamble:
+     * collectFuncDecls over the file statements, the B434 cross-file overlay
+     * for NON-module files (own funcParams/locals win — a local binding of any
+     * kind shadows a cross-file function), and the B95c inherited-constructor
+     * fixpoint (a class with an `extends` base but NO own constructor inherits
+     * the base's ctor arity; forward references + `A extends B extends C`
+     * chains resolve here; an unresolvable base stays unrecorded → no TS2554).
+     */
+    private fun spineArgFileBaseCtx(): SpineArgCtx {
+        spineArgFileCtx?.let { return it }
+        val result = spineArgBinderResult
+            ?: return SpineArgCtx(emptyMap(), emptyMap(), 0, null)
+        val funcParams = mutableMapOf<String, FuncParamInfo>()
+        val classCtorParams = mutableMapOf<String, FuncParamInfo>()
+        collectFuncDecls(result.sourceFile.statements, funcParams, classCtorParams, spineIsJsLike, spineSource)
+        if (!spineFileIsModule) {
+            val ownLocals = result.locals
+            for ((nm, info) in spineArgCrossFileFuncsMap()) {
+                if (nm in funcParams || ownLocals.containsKey(nm)) continue
+                funcParams[nm] = info
+            }
+        }
+        resolveInheritedCtorArities(result.sourceFile.statements, classCtorParams)
+        val ctx = SpineArgCtx(funcParams, classCtorParams, 0, null)
+        spineArgFileCtx = ctx
+        return ctx
+    }
+
+    /**
+     * Memoized DEPTH classifier — the legacy argCountDepth recursion counter
+     * reproduced per node: -1 = unreached (a position the deleted walkers
+     * never visited, or an expression whose checkArgCountInExpr frame depth
+     * would exceed the legacy 200 cap); otherwise, for expression nodes the
+     * frame depth (≥1), for statement/list/member positions the ambient
+     * counter value. Ascends to the first memoized/terminal ancestor, then
+     * walks back down over [spineArgEdge].
+     */
+    private fun spineArgDepth(node: Node): Int {
+        if (node is SourceFile) return 0
+        val memo = spineArgDepthMemo
+        run {
+            val id = (node as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) {
+                val m = memo[id].toInt()
+                if (m != 0) return m - 2
+            }
+        }
+        val chain = spineArgChain
+        chain.clear()
+        var cur: Node = node
+        val anchor: Node?
+        var anchorDepth = -1
+        while (true) {
+            chain.add(cur)
+            val parent = (cur as NodeBase).parent
+            if (parent == null) { anchor = null; break } // detached/unindexed → unreached
+            if (parent is SourceFile) { anchor = parent; anchorDepth = 0; break }
+            val pid = (parent as NodeBase).nodeId
+            val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
+            if (pm != 0) { anchor = parent; anchorDepth = pm - 2; break }
+            cur = parent
+        }
+        var pNode: Node? = anchor
+        var pDepth = anchorDepth
+        var result = -1
+        for (i in chain.indices.reversed()) {
+            val c = chain[i]
+            result = if (pNode == null || pDepth < 0) -1 else spineArgEdge(pNode, pDepth, c)
+            val cid = (c as NodeBase).nodeId
+            if (cid >= 0 && cid < memo.size) memo[cid] = (result + 2).toShort()
+            pNode = c
+            pDepth = result
+        }
+        chain.clear()
+        return result
+    }
+
+    /** An expression-position child: one checkArgCountInExpr frame (+1), with
+     *  the legacy `++argCountDepth > 200` cap pruning the subtree. */
+    private fun spineArgExprChild(pDepth: Int): Int {
+        val d = pDepth + 1
+        return if (d > 200) -1 else d
+    }
+
+    /**
+     * The edge rules — the deleted checkArgCountInStatement(s) statement arms
+     * and checkArgCountInExprCore expression arms verbatim. Unlisted edges are
+     * unreached (the legacy `else -> {}`s: switch CASE expressions, `new`
+     * CALLEE expressions, parameter defaults, class heritage, enum member
+     * initializers, object-literal accessors and shorthand defaults, computed
+     * names, decorators, type positions). A BinaryExpression's RIGHT operand
+     * that is itself a BinaryExpression is ABSORBED into the parent's
+     * right-spine loop (no frame → no depth increment); every other operand
+     * costs one frame.
+     */
+    private fun spineArgEdge(parent: Node, pDepth: Int, child: Node): Int = when (parent) {
+        is SourceFile -> if (child is Statement) pDepth else -1
+        is Block -> if (child is Statement) pDepth else -1
+        is ModuleBlock -> if (child is Statement) pDepth else -1
+        is CaseClause -> if (child is Statement) pDepth else -1
+        is DefaultClause -> if (child is Statement) pDepth else -1
+        is SwitchStatement -> when {
+            child === parent.expression -> spineArgExprChild(pDepth)
+            child is CaseClause || child is DefaultClause -> pDepth
+            else -> -1
+        }
+        is ExpressionStatement -> if (child === parent.expression) spineArgExprChild(pDepth) else -1
+        is VariableStatement -> if (child === parent.declarationList) pDepth else -1
+        is VariableDeclarationList -> if (child is VariableDeclaration) pDepth else -1
+        is VariableDeclaration -> if (child === parent.initializer) spineArgExprChild(pDepth) else -1
+        is ReturnStatement -> if (child === parent.expression) spineArgExprChild(pDepth) else -1
+        is ThrowStatement -> if (child === parent.expression) spineArgExprChild(pDepth) else -1
+        is ExportAssignment -> if (child === parent.expression) spineArgExprChild(pDepth) else -1
+        is IfStatement -> when {
+            child === parent.expression -> spineArgExprChild(pDepth)
+            child === parent.thenStatement || child === parent.elseStatement -> pDepth
+            else -> -1
+        }
+        is ForStatement -> when {
+            child === parent.initializer ->
+                if (child is VariableDeclarationList) pDepth else spineArgExprChild(pDepth)
+            child === parent.condition || child === parent.incrementor -> spineArgExprChild(pDepth)
+            child === parent.statement -> pDepth
+            else -> -1
+        }
+        is ForInStatement -> when {
+            child === parent.expression -> spineArgExprChild(pDepth)
+            child === parent.statement -> pDepth
+            else -> -1
+        }
+        is ForOfStatement -> when {
+            child === parent.expression -> spineArgExprChild(pDepth)
+            child === parent.statement -> pDepth
+            else -> -1
+        }
+        is WhileStatement -> when {
+            child === parent.expression -> spineArgExprChild(pDepth)
+            child === parent.statement -> pDepth
+            else -> -1
+        }
+        is DoStatement -> when {
+            child === parent.expression -> spineArgExprChild(pDepth)
+            child === parent.statement -> pDepth
+            else -> -1
+        }
+        is LabeledStatement -> if (child === parent.statement) pDepth else -1
+        is TryStatement ->
+            if (child === parent.tryBlock || child === parent.finallyBlock ||
+                child === parent.catchClause) pDepth else -1
+        is CatchClause -> if (child === parent.block) pDepth else -1
+        is FunctionDeclaration -> if (child === parent.body) pDepth else -1
+        is ClassDeclaration ->
+            if (child is MethodDeclaration || child is Constructor ||
+                child is GetAccessor || child is SetAccessor ||
+                child is PropertyDeclaration) pDepth else -1
+        is ModuleDeclaration -> if (child === parent.body && child is ModuleBlock) pDepth else -1
+        is MethodDeclaration -> if (child === parent.body) pDepth else -1
+        is Constructor -> if (child === parent.body) pDepth else -1
+        is GetAccessor -> if (child === parent.body) pDepth else -1
+        is SetAccessor -> if (child === parent.body) pDepth else -1
+        is PropertyDeclaration -> if (child === parent.initializer) spineArgExprChild(pDepth) else -1
+        is CallExpression ->
+            if (child === parent.expression || parent.arguments.any { it === child })
+                spineArgExprChild(pDepth) else -1
+        is NewExpression ->
+            if (parent.arguments?.any { it === child } == true) spineArgExprChild(pDepth) else -1
+        is BinaryExpression -> when {
+            child === parent.left -> spineArgExprChild(pDepth)
+            child === parent.right -> if (child is BinaryExpression) pDepth else spineArgExprChild(pDepth)
+            else -> -1
+        }
+        is ParenthesizedExpression -> if (child === parent.expression) spineArgExprChild(pDepth) else -1
+        is ConditionalExpression ->
+            if (child === parent.condition || child === parent.whenTrue ||
+                child === parent.whenFalse) spineArgExprChild(pDepth) else -1
+        is ArrowFunction -> when {
+            child !== parent.body -> -1
+            child is Block -> pDepth
+            else -> spineArgExprChild(pDepth)
+        }
+        is FunctionExpression -> if (child === parent.body) pDepth else -1
+        is ArrayLiteralExpression -> if (parent.elements.any { it === child }) spineArgExprChild(pDepth) else -1
+        is ObjectLiteralExpression -> when (child) {
+            is PropertyAssignment, is SpreadAssignment, is MethodDeclaration -> pDepth
+            else -> -1
+        }
+        is PropertyAssignment -> if (child === parent.initializer) spineArgExprChild(pDepth) else -1
+        is SpreadAssignment -> if (child === parent.expression) spineArgExprChild(pDepth) else -1
+        is TemplateExpression -> if (child is TemplateSpan) pDepth else -1
+        is TemplateSpan -> if (child === parent.expression) spineArgExprChild(pDepth) else -1
+        is TaggedTemplateExpression -> when {
+            child === parent.tag -> spineArgExprChild(pDepth)
+            child === parent.template && child is TemplateExpression -> pDepth
+            else -> -1
+        }
+        is PropertyAccessExpression -> if (child === parent.expression) spineArgExprChild(pDepth) else -1
+        is ElementAccessExpression ->
+            if (child === parent.expression || child === parent.argumentExpression)
+                spineArgExprChild(pDepth) else -1
+        is PrefixUnaryExpression -> if (child === parent.operand) spineArgExprChild(pDepth) else -1
+        is PostfixUnaryExpression -> if (child === parent.operand) spineArgExprChild(pDepth) else -1
+        is TypeAssertionExpression -> if (child === parent.expression) spineArgExprChild(pDepth) else -1
+        is AsExpression -> if (child === parent.expression) spineArgExprChild(pDepth) else -1
+        is SatisfiesExpression -> if (child === parent.expression) spineArgExprChild(pDepth) else -1
+        is NonNullExpression -> if (child === parent.expression) spineArgExprChild(pDepth) else -1
+        is CommaListExpression -> if (parent.elements.any { it === child }) spineArgExprChild(pDepth) else -1
+        is ClassExpression ->
+            if (child is MethodDeclaration || child is Constructor ||
+                child is GetAccessor || child is SetAccessor ||
+                child is PropertyDeclaration) pDepth else -1
+        is SpreadElement -> if (child === parent.expression) spineArgExprChild(pDepth) else -1
+        is AwaitExpression -> if (child === parent.expression) spineArgExprChild(pDepth) else -1
+        is YieldExpression -> if (child === parent.expression) spineArgExprChild(pDepth) else -1
+        is VoidExpression -> if (child === parent.expression) spineArgExprChild(pDepth) else -1
+        is TypeOfExpression -> if (child === parent.expression) spineArgExprChild(pDepth) else -1
+        is DeleteExpression -> if (child === parent.expression) spineArgExprChild(pDepth) else -1
+        else -> -1
+    }
+
+    /**
+     * The context (funcParams/classCtorParams/fnDepth/superCtor) in effect at
+     * [node]'s walk position — the legacy checkArgCountIn* parameter threading
+     * rebuilt from the ancestor chain: ascend to the nearest statement-LIST
+     * owner (SourceFile / Block / ModuleBlock / switch clause), take its
+     * memoized [spineArgListCtx], then re-apply the transforming edges
+     * ([spineArgTransformEdge]) top-down. Only called at REACHED anchors.
+     */
+    private fun spineArgCtxAt(node: Node): SpineArgCtx {
+        // MARK-based reuse of the shared ascent buffer: this function
+        // RE-ENTERS itself through spineArgListCtx (each list owner's incoming
+        // context ascends to the NEXT owner up), so a clear()-based scheme
+        // would clobber the outer frame's recorded edges (measured: the for-of
+        // loop-shadow edge silently dropped). The base ascent below runs
+        // BEFORE the edge loop, so the recursive call's segment is fully
+        // popped by the time this frame reads its own entries.
+        val chain = spineArgCtxChain
+        val mark = chain.size
+        var cur: Node = node
+        val base: SpineArgCtx
+        while (true) {
+            val parent = (cur as NodeBase).parent
+            if (parent == null) { base = spineArgFileBaseCtx(); break }
+            if (parent is SourceFile || parent is Block || parent is ModuleBlock ||
+                parent is CaseClause || parent is DefaultClause
+            ) {
+                base = spineArgListCtx(parent)
+                break
+            }
+            chain.add(parent)
+            cur = parent
+        }
+        var ctx = base
+        for (i in chain.size - 1 downTo mark) {
+            val p = chain[i]
+            val c: Node = if (i == mark) node else chain[i - 1]
+            ctx = spineArgTransformEdge(p, c, ctx)
+        }
+        while (chain.size > mark) chain.removeAt(chain.size - 1)
+        return ctx
+    }
+
+    /**
+     * The `effective` context for statements of [owner]'s list — a legacy
+     * checkArgCountInStatements activation: the incoming context (via
+     * [spineArgCtxAt], which applies any fn-boundary transform on the owner's
+     * own parent edge), the M1.11 namespace collection for ModuleBlocks, and
+     * the 17.126 list overlay. Memoized per owner nodeId.
+     */
+    private fun spineArgListCtx(owner: Node): SpineArgCtx {
+        val id = (owner as NodeBase).nodeId
+        if (id >= 0) spineArgListCtxMemo[id]?.let { return it }
+        val ctx = when (owner) {
+            is SourceFile -> spineArgListOverlay(spineArgFileBaseCtx(), owner.statements)
+            is ModuleBlock -> {
+                // M1.11: namespace-internal functions/classes are visible only
+                // within the namespace body (collectFuncDecls does not flatten
+                // them file-wide). Collect them into body-scoped overlay copies,
+                // with the same overload/var-arrow/inherited-ctor logic the
+                // file level gets.
+                val incoming = spineArgCtxAt(owner)
+                val nsFuncs = incoming.funcParams.toMutableMap()
+                val nsCtors = incoming.classCtorParams.toMutableMap()
+                collectFuncDecls(owner.statements, nsFuncs, nsCtors, spineIsJsLike, spineSource)
+                resolveInheritedCtorArities(owner.statements, nsCtors)
+                spineArgListOverlay(
+                    incoming.copy(funcParams = nsFuncs, classCtorParams = nsCtors),
+                    owner.statements,
+                )
+            }
+            is Block -> spineArgListOverlay(spineArgCtxAt(owner), owner.statements)
+            is CaseClause -> spineArgListOverlay(spineArgCtxAt(owner), owner.statements)
+            is DefaultClause -> spineArgListOverlay(spineArgCtxAt(owner), owner.statements)
+            else -> spineArgFileBaseCtx()
+        }
+        if (id >= 0) spineArgListCtxMemo[id] = ctx
+        return ctx
+    }
+
+    /**
+     * The legacy checkArgCountInStatements preamble: (17.126) block-level
+     * FunctionDeclarations shadow outer same-named functions for
+     * arity-checking (a refinement — outer overload markers are not
+     * downgraded), and (M1.11) inside a function body (fnDepth > 0) a
+     * list-level variable declaration shadows a same-named outer/file-level
+     * function (removal-only, FN-safe; gated to nested lists so TOP-level
+     * B64.2 var-arrow entries keep their checks).
+     */
+    private fun spineArgListOverlay(incoming: SpineArgCtx, statements: List<Statement>): SpineArgCtx {
+        var effective = incoming.funcParams
+        val nestedFuncs = statements.asSequence()
+            .filterIsInstance<FunctionDeclaration>()
+            .filter { it.body != null && it.name != null }
+            .toList()
+        if (nestedFuncs.isNotEmpty()) {
+            val overlay = effective.toMutableMap()
+            for (fd in nestedFuncs) {
+                val name = fd.name?.text ?: continue
+                if (overlay[name]?.isOverloaded == true) continue
+                overlay[name] = paramInfo(fd.parameters, spineIsJsLike)
+            }
+            effective = overlay
+        }
+        if (incoming.fnDepth > 0) {
+            var shadowed: MutableSet<String>? = null
+            for (s in statements) {
+                if (s !is VariableStatement) continue
+                for (d in s.declarationList.declarations) {
+                    val names = mutableSetOf<String>()
+                    collectBindingNames(d.name, names)
+                    for (n in names) {
+                        if (n in effective) {
+                            (shadowed ?: mutableSetOf<String>().also { shadowed = it }).add(n)
+                        }
+                    }
                 }
             }
-
-            // B95c (round 82): a class with an `extends` base but NO own constructor inherits
-            // the base's constructor arity. collectFuncDecls records NOTHING for these (a
-            // forward reference like `class derived extends base {}` where `base` is declared
-            // later can't be resolved during the single linear pass), so `new derived()` was
-            // never arity-checked. Resolve inherited ctors here via a fixpoint (handles forward
-            // references and `A extends B extends C` chains). Conservative: a class whose base
-            // is unresolvable (imported, mixin-expression base, circular) stays unrecorded → no
-            // TS2554, never a false positive.
-            resolveInheritedCtorArities(result.sourceFile.statements, classCtorParams)
-
-            // Walk statements checking call expressions
-            checkArgCountInStatements(result.sourceFile.statements, funcParams, classCtorParams, source, fileName)
+            shadowed?.let { effective = effective - it }
         }
+        return if (effective === incoming.funcParams) incoming else incoming.copy(funcParams = effective)
     }
+
+    /**
+     * The context-transforming edges — the deleted walkers' scope handoffs:
+     * fn-boundary edges apply [minusParamShadowedNames] + fnDepth++ (a
+     * class-DECLARATION constructor additionally rebinds superCtor from the
+     * class's `extends` base; a GetAccessor has no params to shadow; a
+     * class-EXPRESSION member applies NO transform at all — the legacy
+     * ClassExpression arm passed funcParams through untouched, bug-compat);
+     * a ForOfStatement's body-statement edge shadows the loop binding names
+     * (round 468). Every other edge is identity.
+     */
+    private fun spineArgTransformEdge(parent: Node, child: Node, ctx: SpineArgCtx): SpineArgCtx = when (parent) {
+        is FunctionDeclaration -> if (child === parent.body) ctx.copy(
+            funcParams = minusParamShadowedNames(ctx.funcParams, parent.parameters),
+            fnDepth = ctx.fnDepth + 1,
+        ) else ctx
+        is MethodDeclaration -> if (child === parent.body &&
+            (parent as NodeBase).parent !is ClassExpression
+        ) ctx.copy(
+            funcParams = minusParamShadowedNames(ctx.funcParams, parent.parameters),
+            fnDepth = ctx.fnDepth + 1,
+        ) else ctx
+        is Constructor -> if (child === parent.body &&
+            (parent as NodeBase).parent is ClassDeclaration
+        ) {
+            val cls = (parent as NodeBase).parent as ClassDeclaration
+            ctx.copy(
+                funcParams = minusParamShadowedNames(ctx.funcParams, parent.parameters),
+                fnDepth = ctx.fnDepth + 1,
+                superCtor = spineArgBaseCtorInfo(cls, ctx),
+            )
+        } else ctx
+        is GetAccessor -> if (child === parent.body &&
+            (parent as NodeBase).parent is ClassDeclaration
+        ) ctx.copy(fnDepth = ctx.fnDepth + 1) else ctx
+        is SetAccessor -> if (child === parent.body &&
+            (parent as NodeBase).parent is ClassDeclaration
+        ) ctx.copy(
+            funcParams = minusParamShadowedNames(ctx.funcParams, parent.parameters),
+            fnDepth = ctx.fnDepth + 1,
+        ) else ctx
+        is ArrowFunction -> if (child === parent.body) ctx.copy(
+            funcParams = minusParamShadowedNames(ctx.funcParams, parent.parameters),
+            fnDepth = ctx.fnDepth + 1,
+        ) else ctx
+        is FunctionExpression -> if (child === parent.body) ctx.copy(
+            funcParams = minusParamShadowedNames(ctx.funcParams, parent.parameters, ownName = parent.name?.text),
+            fnDepth = ctx.fnDepth + 1,
+        ) else ctx
+        is ForOfStatement -> if (child === parent.statement) {
+            val loopNames = mutableSetOf<String>()
+            (parent.initializer as? VariableDeclarationList)?.declarations?.forEach {
+                collectBindingNames(it.name, loopNames)
+            }
+            if (loopNames.any { it in ctx.funcParams }) {
+                ctx.copy(funcParams = ctx.funcParams - loopNames)
+            } else ctx
+        } else ctx
+        else -> ctx
+    }
+
+    /** The legacy ClassDeclaration-arm base-ctor lookup for super() arity:
+     *  only a same-file single-Identifier `extends` base recorded in
+     *  classCtorParams resolves. */
+    private fun spineArgBaseCtorInfo(cls: ClassDeclaration, ctx: SpineArgCtx): FuncParamInfo? =
+        cls.heritageClauses
+            ?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
+            ?.types?.firstOrNull()
+            ?.expression
+            ?.let { (it as? Identifier)?.text }
+            ?.let { ctx.classCtorParams[it] }
 
     private data class FuncParamInfo(
         val minParams: Int,     // required params
@@ -52878,595 +53328,271 @@ interface DataView {
         return FuncParamInfo(required, total, hasRest, isOverloaded = false, parameters = parameters)
     }
 
-    private fun checkArgCountInStatements(
-        statements: List<Statement>,
-        funcParams: Map<String, FuncParamInfo>,
-        classCtorParams: Map<String, FuncParamInfo>,
-        source: String,
-        fileName: String,
-    ) {
-        // 17.126: Block-level FunctionDeclarations shadow outer same-named
-        // functions for arity-checking. Build an overlay map combining the
-        // outer funcParams with any FunctionDeclaration directly in this
-        // statement list. This frame goes out of scope when the enclosing
-        // call returns, so it doesn't leak past the block boundary.
-        val nestedFuncs = statements.asSequence()
-            .filterIsInstance<FunctionDeclaration>()
-            .filter { it.body != null && it.name != null }
-            .toList()
-        var effective: Map<String, FuncParamInfo> = if (nestedFuncs.isNotEmpty()) {
-            val isJsFile = fileName.endsWith(".js") || fileName.endsWith(".jsx") ||
-                    fileName.endsWith(".mjs") || fileName.endsWith(".cjs")
-            val overlay = funcParams.toMutableMap()
-            for (fd in nestedFuncs) {
-                val name = fd.name?.text ?: continue
-                // Don't downgrade overload markers from the outer scope (the
-                // overlay is a refinement, not a wholesale replacement).
-                if (overlay[name]?.isOverloaded == true) continue
-                overlay[name] = paramInfo(fd.parameters, isJsFile)
-            }
-            overlay
-        } else {
-            funcParams
-        }
-        // M1.11: inside a function body, a list-level variable declaration shadows a
-        // same-named outer/file-level function for calls in this list (program.ts's
-        // body-local `const fileOrDirectoryExistsUsingSource = …` vs the enclosing
-        // 2-param function of the same name). Removal-only — no new checks (FN-safe).
-        // Gated to nested lists so TOP-level B64.2 var-arrow entries keep their checks.
-        if (argCountFnDepth > 0) {
-            var shadowed: MutableSet<String>? = null
-            for (s in statements) {
-                if (s !is VariableStatement) continue
-                for (d in s.declarationList.declarations) {
-                    val names = mutableSetOf<String>()
-                    collectBindingNames(d.name, names)
-                    for (n in names) {
-                        if (n in effective) {
-                            (shadowed ?: mutableSetOf<String>().also { shadowed = it }).add(n)
-                        }
+    /**
+     * Call-arity emission at a REACHED CallExpression enter — the deleted
+     * checkArgCountInExprCore CallExpression arm's emission block verbatim
+     * (recursion into arguments/callee is owned by the spine edges; the
+     * context threading is [spineArgCtxAt]).
+     */
+    private fun spineArgCallEnter(expr: CallExpression) {
+        val calleeName = (expr.expression as? Identifier)?.text ?: return
+        if (spineArgDepth(expr) < 0) return
+        val ctx = spineArgCtxAt(expr)
+        val funcParams = ctx.funcParams
+        val source = spineSource
+        val fileName = spineFileName
+        val info = if (calleeName == "super") ctx.superCtor else funcParams[calleeName]
+        // M1.11 (Shape C): a SPREAD argument's expansion length is unknown, so a
+        // too-FEW conclusion from counting it as 1 is unsound (`createDiagnostic(
+        // ...diag)` / `reportRelationError(undefined, ...info)` — tsc accepts a
+        // tuple-typed spread covering the remaining params). Too-many stands
+        // (a spread expands to ≥0, so fixed args alone exceeding max still errors).
+        val hasSpreadArg = expr.arguments.any { it is SpreadElement }
+        if (info != null && !info.isOverloaded) {
+            val argCount = expr.arguments.size
+            if (!info.hasRest && argCount > info.maxParams) {
+                // noImplicitAnyLoopCrash: a non-tuple spread arg into a no-rest fn is a
+                // TS2556 (owned by checkSpreadNonIterableIntoFixedArity), NOT a TS2554.
+                if ("$fileName|${expr.pos}" in spreadNonIterableHandledCalls) return
+                emitTS2554TooMany(info.minParams, info.maxParams, argCount, expr.arguments, info.maxParams, source, fileName)
+            } else if (argCount < info.minParams && !hasSpreadArg) {
+                if (info.hasRest) {
+                    emitTS2555TooFew(info.minParams, argCount, expr.expression, source, fileName, info.parameters)
+                } else {
+                    emitTS2554TooFew(info.minParams, info.maxParams, argCount, expr.expression, source, fileName, info.parameters, info.declSource, info.declFileName)
+                }
+            } else if (info.hasRest && expr.typeArguments.isNullOrEmpty()) {
+                // B170: rest param typed `Parameters<Fn>` where another param is typed
+                // bare `Fn` and the call's arg there is an INLINE function — the rest
+                // tuple expands to the fn's REQUIRED parameters, making them required
+                // call arguments (spreadOfParamsFromGeneratorMakesRequiredParams:
+                // `call(function* (a:'a'){})` → "Expected 2 arguments, but got 1." +
+                // related TS6236 at the rest parameter). Optionals/defaults/rest in the
+                // inline fn contribute nothing (takeWhile stops at the first optional).
+                val restParam = info.parameters.lastOrNull()
+                val tpName = ((restParam?.type as? TypeReference)
+                    ?.takeIf { (it.typeName as? Identifier)?.text == "Parameters" && it.typeArguments?.size == 1 }
+                    ?.typeArguments?.get(0) as? TypeReference)
+                    ?.let { it.typeName as? Identifier }?.text
+                if (restParam != null && restParam.dotDotDotToken && tpName != null) {
+                    val anchorIdx = info.parameters.indexOfFirst { p ->
+                        !p.dotDotDotToken &&
+                            (p.type as? TypeReference)?.let { it.typeArguments == null && (it.typeName as? Identifier)?.text == tpName } == true
                     }
-                }
-            }
-            shadowed?.let { effective = effective - it }
-        }
-        for (stmt in statements) {
-            checkArgCountInStatement(stmt, effective, classCtorParams, source, fileName)
-        }
-    }
-
-    private fun checkArgCountInStatement(
-        stmt: Statement,
-        funcParams: Map<String, FuncParamInfo>,
-        classCtorParams: Map<String, FuncParamInfo>,
-        source: String,
-        fileName: String,
-    ) {
-        when (stmt) {
-            is ExpressionStatement -> checkArgCountInExpr(stmt.expression, funcParams, classCtorParams, source, fileName)
-            is VariableStatement -> {
-                for (decl in stmt.declarationList.declarations) {
-                    decl.initializer?.let { checkArgCountInExpr(it, funcParams, classCtorParams, source, fileName) }
-                }
-            }
-            is ReturnStatement -> stmt.expression?.let { checkArgCountInExpr(it, funcParams, classCtorParams, source, fileName) }
-            is IfStatement -> {
-                checkArgCountInExpr(stmt.expression, funcParams, classCtorParams, source, fileName)
-                checkArgCountInStatement(stmt.thenStatement, funcParams, classCtorParams, source, fileName)
-                stmt.elseStatement?.let { checkArgCountInStatement(it, funcParams, classCtorParams, source, fileName) }
-            }
-            is Block -> checkArgCountInStatements(stmt.statements, funcParams, classCtorParams, source, fileName)
-            is ForStatement -> {
-                when (val init = stmt.initializer) {
-                    is VariableDeclarationList -> {
-                        for (decl in init.declarations) {
-                            decl.initializer?.let { checkArgCountInExpr(it, funcParams, classCtorParams, source, fileName) }
-                        }
+                    val argFn = expr.arguments.getOrNull(anchorIdx)
+                    val fnParams = when (argFn) {
+                        is FunctionExpression -> argFn.parameters
+                        is ArrowFunction -> argFn.parameters
+                        else -> null
                     }
-                    is Expression -> checkArgCountInExpr(init, funcParams, classCtorParams, source, fileName)
-                    else -> {}
-                }
-                stmt.condition?.let { checkArgCountInExpr(it, funcParams, classCtorParams, source, fileName) }
-                stmt.incrementor?.let { checkArgCountInExpr(it, funcParams, classCtorParams, source, fileName) }
-                checkArgCountInStatement(stmt.statement, funcParams, classCtorParams, source, fileName)
-            }
-            is ForInStatement -> {
-                checkArgCountInExpr(stmt.expression, funcParams, classCtorParams, source, fileName)
-                checkArgCountInStatement(stmt.statement, funcParams, classCtorParams, source, fileName)
-            }
-            is ForOfStatement -> {
-                checkArgCountInExpr(stmt.expression, funcParams, classCtorParams, source, fileName)
-                // Round 468: the loop VAR's binding names — incl. destructured elements,
-                // `for (const { parse, body } of nodeKinds)` (tsc mapCode.ts, whose
-                // file-level 2-param `function parse` the element shadows) — shadow
-                // same-named outer/file-level functions for calls in the body.
-                // Removal-only (no new checks → FN-safe), mirroring the M1.11
-                // body-local shadowing rule.
-                val loopNames = mutableSetOf<String>()
-                (stmt.initializer as? VariableDeclarationList)?.declarations?.forEach {
-                    collectBindingNames(it.name, loopNames)
-                }
-                val inner = if (loopNames.any { it in funcParams }) funcParams - loopNames else funcParams
-                checkArgCountInStatement(stmt.statement, inner, classCtorParams, source, fileName)
-            }
-            is WhileStatement -> {
-                checkArgCountInExpr(stmt.expression, funcParams, classCtorParams, source, fileName)
-                checkArgCountInStatement(stmt.statement, funcParams, classCtorParams, source, fileName)
-            }
-            is DoStatement -> {
-                checkArgCountInStatement(stmt.statement, funcParams, classCtorParams, source, fileName)
-                checkArgCountInExpr(stmt.expression, funcParams, classCtorParams, source, fileName)
-            }
-            is SwitchStatement -> {
-                checkArgCountInExpr(stmt.expression, funcParams, classCtorParams, source, fileName)
-                for (clause in stmt.caseBlock) {
-                    val clauseStmts = when (clause) {
-                        is CaseClause -> clause.statements
-                        is DefaultClause -> clause.statements
-                        else -> emptyList()
-                    }
-                    checkArgCountInStatements(clauseStmts, funcParams, classCtorParams, source, fileName)
-                }
-            }
-            is FunctionDeclaration -> {
-                stmt.body?.let {
-                    val inner = minusParamShadowedNames(funcParams, stmt.parameters)
-                    argCountFnDepth++
-                    try {
-                        checkArgCountInStatements(it.statements, inner, classCtorParams, source, fileName)
-                    } finally { argCountFnDepth-- }
-                }
-            }
-            is ClassDeclaration -> {
-                // Look up base-class ctor info for super() arity checks inside this class's
-                // constructor body. Only handles same-file Identifier base names whose ctor
-                // params we've already collected.
-                val baseCtorInfo: FuncParamInfo? = stmt.heritageClauses
-                    ?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
-                    ?.types?.firstOrNull()
-                    ?.expression
-                    ?.let { (it as? Identifier)?.text }
-                    ?.let { classCtorParams[it] }
-                for (member in stmt.members) {
-                    when (member) {
-                        is MethodDeclaration -> member.body?.let {
-                            val inner = minusParamShadowedNames(funcParams, member.parameters)
-                            argCountFnDepth++
-                            try {
-                                checkArgCountInStatements(it.statements, inner, classCtorParams, source, fileName)
-                            } finally { argCountFnDepth-- }
-                        }
-                        is Constructor -> member.body?.let {
-                            val prevSuper = argCountSuperCtor
-                            argCountSuperCtor = baseCtorInfo
-                            val inner = minusParamShadowedNames(funcParams, member.parameters)
-                            argCountFnDepth++
-                            try {
-                                checkArgCountInStatements(it.statements, inner, classCtorParams, source, fileName)
-                            } finally {
-                                argCountSuperCtor = prevSuper
-                                argCountFnDepth--
-                            }
-                        }
-                        is GetAccessor -> member.body?.let {
-                            argCountFnDepth++
-                            try {
-                                checkArgCountInStatements(it.statements, funcParams, classCtorParams, source, fileName)
-                            } finally { argCountFnDepth-- }
-                        }
-                        is SetAccessor -> member.body?.let {
-                            val inner = minusParamShadowedNames(funcParams, member.parameters)
-                            argCountFnDepth++
-                            try {
-                                checkArgCountInStatements(it.statements, inner, classCtorParams, source, fileName)
-                            } finally { argCountFnDepth-- }
-                        }
-                        is PropertyDeclaration -> member.initializer?.let {
-                            checkArgCountInExpr(it, funcParams, classCtorParams, source, fileName)
-                        }
-                        else -> {}
-                    }
-                }
-            }
-            is TryStatement -> {
-                checkArgCountInStatements(stmt.tryBlock.statements, funcParams, classCtorParams, source, fileName)
-                stmt.catchClause?.let {
-                    checkArgCountInStatements(it.block.statements, funcParams, classCtorParams, source, fileName)
-                }
-                stmt.finallyBlock?.let {
-                    checkArgCountInStatements(it.statements, funcParams, classCtorParams, source, fileName)
-                }
-            }
-            is LabeledStatement -> checkArgCountInStatement(stmt.statement, funcParams, classCtorParams, source, fileName)
-            is ThrowStatement -> stmt.expression?.let { checkArgCountInExpr(it, funcParams, classCtorParams, source, fileName) }
-            is ExportAssignment -> stmt.expression.let { checkArgCountInExpr(it, funcParams, classCtorParams, source, fileName) }
-            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let {
-                // M1.11: namespace-internal functions/classes are visible only within the
-                // namespace body (collectFuncDecls no longer flattens them file-wide).
-                // Collect them into body-scoped overlay copies here, with the same
-                // overload/var-arrow/inherited-ctor logic the file level gets.
-                val isJsFile = fileName.endsWith(".js") || fileName.endsWith(".jsx") ||
-                        fileName.endsWith(".mjs") || fileName.endsWith(".cjs")
-                val nsFuncs = funcParams.toMutableMap()
-                val nsCtors = classCtorParams.toMutableMap()
-                collectFuncDecls(it.statements, nsFuncs, nsCtors, isJsFile, source)
-                resolveInheritedCtorArities(it.statements, nsCtors)
-                checkArgCountInStatements(it.statements, nsFuncs, nsCtors, source, fileName)
-            }
-            else -> {}
-        }
-    }
-
-    private fun checkArgCountInExpr(
-        expr: Expression,
-        funcParams: Map<String, FuncParamInfo>,
-        classCtorParams: Map<String, FuncParamInfo>,
-        source: String,
-        fileName: String,
-    ) {
-        if (++argCountDepth > 200) { argCountDepth--; return }
-        try { checkArgCountInExprCore(expr, funcParams, classCtorParams, source, fileName) }
-        finally { argCountDepth-- }
-    }
-
-    private fun checkArgCountInExprCore(
-        expr: Expression,
-        funcParams: Map<String, FuncParamInfo>,
-        classCtorParams: Map<String, FuncParamInfo>,
-        source: String,
-        fileName: String,
-    ) {
-        when (expr) {
-            is CallExpression -> {
-                // Check the callee
-                val calleeName = when (val e = expr.expression) {
-                    is Identifier -> e.text
-                    else -> null
-                }
-                if (calleeName != null) {
-                    val info = if (calleeName == "super") argCountSuperCtor else funcParams[calleeName]
-                    // M1.11 (Shape C): a SPREAD argument's expansion length is unknown, so a
-                    // too-FEW conclusion from counting it as 1 is unsound (`createDiagnostic(
-                    // ...diag)` / `reportRelationError(undefined, ...info)` — tsc accepts a
-                    // tuple-typed spread covering the remaining params). Too-many stands
-                    // (a spread expands to ≥0, so fixed args alone exceeding max still errors).
-                    val hasSpreadArg = expr.arguments.any { it is SpreadElement }
-                    if (info != null && !info.isOverloaded) {
-                        val argCount = expr.arguments.size
-                        if (!info.hasRest && argCount > info.maxParams) {
-                            // noImplicitAnyLoopCrash: a non-tuple spread arg into a no-rest fn is a
-                            // TS2556 (owned by checkSpreadNonIterableIntoFixedArity), NOT a TS2554.
-                            if ("$fileName|${expr.pos}" in spreadNonIterableHandledCalls) return
-                            emitTS2554TooMany(info.minParams, info.maxParams, argCount, expr.arguments, info.maxParams, source, fileName)
-                        } else if (argCount < info.minParams && !hasSpreadArg) {
-                            if (info.hasRest) {
-                                emitTS2555TooFew(info.minParams, argCount, expr.expression, source, fileName, info.parameters)
-                            } else {
-                                emitTS2554TooFew(info.minParams, info.maxParams, argCount, expr.expression, source, fileName, info.parameters, info.declSource, info.declFileName)
-                            }
-                        } else if (info.hasRest && expr.typeArguments.isNullOrEmpty()) {
-                            // B170: rest param typed `Parameters<Fn>` where another param is typed
-                            // bare `Fn` and the call's arg there is an INLINE function — the rest
-                            // tuple expands to the fn's REQUIRED parameters, making them required
-                            // call arguments (spreadOfParamsFromGeneratorMakesRequiredParams:
-                            // `call(function* (a:'a'){})` → "Expected 2 arguments, but got 1." +
-                            // related TS6236 at the rest parameter). Optionals/defaults/rest in the
-                            // inline fn contribute nothing (takeWhile stops at the first optional).
-                            val restParam = info.parameters.lastOrNull()
-                            val tpName = ((restParam?.type as? TypeReference)
-                                ?.takeIf { (it.typeName as? Identifier)?.text == "Parameters" && it.typeArguments?.size == 1 }
-                                ?.typeArguments?.get(0) as? TypeReference)
-                                ?.let { it.typeName as? Identifier }?.text
-                            if (restParam != null && restParam.dotDotDotToken && tpName != null) {
-                                val anchorIdx = info.parameters.indexOfFirst { p ->
-                                    !p.dotDotDotToken &&
-                                        (p.type as? TypeReference)?.let { it.typeArguments == null && (it.typeName as? Identifier)?.text == tpName } == true
-                                }
-                                val argFn = expr.arguments.getOrNull(anchorIdx)
-                                val fnParams = when (argFn) {
-                                    is FunctionExpression -> argFn.parameters
-                                    is ArrowFunction -> argFn.parameters
-                                    else -> null
-                                }
-                                if (anchorIdx >= 0 && fnParams != null) {
-                                    val required = fnParams.takeWhile {
-                                        !it.questionToken && it.initializer == null && !it.dotDotDotToken
-                                    }.count()
-                                    val expected = (info.parameters.size - 1) + required
-                                    if (argCount < expected) {
-                                        val start = expr.expression.pos
-                                        val length = expressionTrueEnd(expr.expression) - start
-                                        val (line, character) = getLineAndCharacterOfPosition(source, start)
-                                        val restName = (restParam.name as? Identifier)?.text ?: "args"
-                                        val (relLine, relChar) = getLineAndCharacterOfPosition(source, restParam.pos)
-                                        diagnostics.add(Diagnostic(
-                                            message = "Expected $expected arguments, but got $argCount.",
-                                            category = DiagnosticCategory.Error, code = 2554,
-                                            fileName = fileName, line = line, character = character,
-                                            start = start, length = length,
-                                            relatedInformation = listOf(Diagnostic(
-                                                message = "Arguments for the rest parameter '$restName' were not provided.",
-                                                category = DiagnosticCategory.Message, code = 6236,
-                                                fileName = fileName, line = relLine, character = relChar,
-                                                start = restParam.pos,
-                                                length = (restParam.end - restParam.pos).coerceAtLeast(1),
-                                            )),
-                                        ))
-                                    }
-                                }
-                            }
-                        }
-                    } else if (info != null && info.isOverloaded && expr.typeArguments.isNullOrEmpty()) {
-                        // B95 (round 80): overload-arity TS2554. Emit ONLY when the call's arg
-                        // count is outside the [min, max] arity RANGE of all overload signatures
-                        // — i.e. NO overload could match by arity. Within range, an overload may
-                        // match (type-based TS2769 handles type mismatches). No related TS6210/6211
-                        // (TypeScript omits the "argument for 'x'" hint for overload arity errors).
-                        // Skipped when explicit type args are present (those filter overloads to
-                        // generic ones, changing the applicable arity — out of scope here).
-                        val argCount = expr.arguments.size
-                        val spreads = expr.arguments.filterIsInstance<SpreadElement>()
-                        if (spreads.isNotEmpty() && spreads.all { it.expression is ArrayLiteralExpression }) {
-                            // B270: spread-of-array-literal args have a knowable effective count;
-                            // overflow inside the spread squiggles the spread argument itself.
-                            if (!info.hasRest) {
-                                val effective = expr.arguments.sumOf { a ->
-                                    if (a is SpreadElement) (a.expression as ArrayLiteralExpression).elements.size else 1
-                                }
-                                if (effective > info.maxParams) {
-                                    val sp = spreads.first()
-                                    val start = sp.pos
-                                    val len = (expressionTrueEnd(sp.expression) - start).coerceAtLeast(1)
-                                    val (line, ch) = getLineAndCharacterOfPosition(source, start)
-                                    val expected = if (info.minParams == info.maxParams) "${info.maxParams}" else "${info.minParams}-${info.maxParams}"
-                                    diagnostics.add(Diagnostic(
-                                        message = "Expected $expected arguments, but got $effective.",
-                                        category = DiagnosticCategory.Error, code = 2554,
-                                        fileName = fileName, line = line, character = ch,
-                                        start = start, length = len,
-                                    ))
-                                }
-                            }
-                        } else if (argCount < info.minParams && spreads.isEmpty()) {
-                            emitTS2554TooFew(info.minParams, info.maxParams, argCount, expr.expression, source, fileName, info.parameters, info.declSource, info.declFileName)
-                        } else if (!info.hasRest && argCount > info.maxParams) {
-                            emitTS2554TooMany(info.minParams, info.maxParams, argCount, expr.arguments, info.maxParams, source, fileName)
-                        } else if (spreads.isEmpty() && info.overloadSigs.isNotEmpty() &&
-                            info.overloadSigs.none { argCount >= it.minParams && (it.hasRest || argCount <= it.maxParams) }
-                        ) {
-                            // B270: TS2575 — argCount falls in a GAP between overload arities
-                            // (within the global range but accepted by no signature). Neighbors
-                            // come from per-signature MIN counts, mirroring TS's
-                            // getArgumentArityError below/above computation.
-                            var below = -1
-                            var above = Int.MAX_VALUE
-                            for (sig in info.overloadSigs) {
-                                val mc = sig.minParams
-                                if (mc < argCount && mc > below) below = mc
-                                else if (argCount < mc && mc < above) above = mc
-                            }
-                            if (below >= 0 && above != Int.MAX_VALUE) {
-                                val callee = expr.expression
-                                val start = callee.pos
-                                val len = ((callee as? Identifier)?.text?.length ?: 1).coerceAtLeast(1)
-                                val (line, ch) = getLineAndCharacterOfPosition(source, start)
-                                diagnostics.add(Diagnostic(
-                                    message = "No overload expects $argCount arguments, but overloads do exist that expect either $below or $above arguments.",
-                                    category = DiagnosticCategory.Error, code = 2575,
-                                    fileName = fileName, line = line, character = ch,
-                                    start = start, length = len,
-                                ))
-                            }
-                        }
-                    } else if (info != null && info.isOverloaded && !expr.typeArguments.isNullOrEmpty()
-                        && info.overloadSigs.isNotEmpty()
-                    ) {
-                        // B95b (round 81): overload call WITH explicit type args, e.g.
-                        // `foo<string>("hello")` against `foo<T>(a,b)` + `foo(a)`. Explicit type
-                        // args filter the overload set to the GENERIC signatures that can accept
-                        // this many type args (non-generic overloads are inapplicable). Arity-check
-                        // the call against ONLY that applicable subset. functionCall18 case.
-                        val typeArgCount = expr.typeArguments.size
-                        val applicable = info.overloadSigs.filter { sig ->
-                            sig.typeParamCount > 0 && typeArgCount in sig.minTypeParams..sig.typeParamCount
-                        }
-                        if (applicable.isNotEmpty()) {
-                            val argCount = expr.arguments.size
-                            val gMin = applicable.minOf { it.minParams }
-                            val gMax = applicable.maxOf { it.maxParams }
-                            val gRest = applicable.any { it.hasRest }
-                            // TS6210 "argument for 'x' not provided" only when the applicable subset
-                            // is unambiguous (single signature) — matches TypeScript's hint.
-                            val relParams = if (applicable.size == 1) applicable[0].parameters else emptyList()
-                            if (argCount < gMin) {
-                                emitTS2554TooFew(gMin, gMax, argCount, expr.expression, source, fileName, relParams)
-                            } else if (!gRest && argCount > gMax) {
-                                emitTS2554TooMany(gMin, gMax, argCount, expr.arguments, gMax, source, fileName)
-                            }
-                        }
-                    }
-                }
-                // Recurse into arguments
-                for (arg in expr.arguments) {
-                    checkArgCountInExpr(arg, funcParams, classCtorParams, source, fileName)
-                }
-                checkArgCountInExpr(expr.expression, funcParams, classCtorParams, source, fileName)
-            }
-            is NewExpression -> {
-                val className = when (val e = expr.expression) {
-                    is Identifier -> e.text
-                    else -> null
-                }
-                if (className != null) {
-                    // B238: builtin Error-family constructors have a target-dependent lib
-                    // arity — `(message?)` pre-es2022, `(message?, options?)` from es2022
-                    // (AggregateError: `(errors, message?[, options?])`). Fires only when
-                    // neither the class name nor ErrorConstructor has any user declaration.
-                    if (className in BUILTIN_ERROR_CTOR_NAMES && classCtorParams[className] == null &&
-                        funcParams[className] == null &&
-                        globals[className]?.declarations?.any { it !in builtinLibDecls } != true &&
-                        globals["${className}Constructor"]?.declarations?.any { it !in builtinLibDecls } != true) {
-                        val argCount = expr.arguments?.size ?: 0
-                        val isAggregate = className == "AggregateError"
-                        val maxArgs = (if (isAggregate) 2 else 1) +
-                            (if (libFeatureAvailable(ScriptTarget.ES2022)) 1 else 0)
-                        val minArgs = if (isAggregate) 1 else 0
-                        if (argCount > maxArgs) {
-                            emitTS2554TooMany(minArgs, maxArgs, argCount, expr.arguments ?: emptyList(), maxArgs, source, fileName)
-                        }
-                    }
-                    val info = classCtorParams[className]
-                    if (info != null && !info.isOverloaded) {
-                        val argCount = expr.arguments?.size ?: 0
-                        if (!info.hasRest && argCount > info.maxParams) {
-                            val args = expr.arguments ?: emptyList()
-                            emitTS2554TooMany(info.minParams, info.maxParams, argCount, args, info.maxParams, source, fileName)
-                        } else if (argCount < info.minParams &&
-                            expr.arguments?.any { it is SpreadElement } != true
-                        ) {
-                            // B95c (round 82): squiggle the WHOLE `new X(...)` (expr.pos .. after `)`),
-                            // not just the class identifier — matches TypeScript. Pass info.parameters
-                            // so the TS6210 "argument for 'x' not provided" related info fires (it points
-                            // at the ctor's param at the missing index; for an inherited ctor that's the
-                            // base class's param).
-                            if (info.hasRest) {
-                                emitTS2555TooFew(info.minParams, argCount, expr, source, fileName, info.parameters)
-                            } else {
-                                emitTS2554TooFew(info.minParams, info.maxParams, argCount, expr, source, fileName, info.parameters, info.declSource, info.declFileName)
-                            }
-                        }
-                    }
-                }
-                // Recurse
-                expr.arguments?.forEach { checkArgCountInExpr(it, funcParams, classCtorParams, source, fileName) }
-            }
-            is BinaryExpression -> {
-                // Iterative right-spine walk to prevent StackOverflow on deep chains
-                var current: Expression = expr
-                while (current is BinaryExpression) {
-                    checkArgCountInExpr(current.left, funcParams, classCtorParams, source, fileName)
-                    current = current.right
-                }
-                checkArgCountInExpr(current, funcParams, classCtorParams, source, fileName)
-            }
-            is ParenthesizedExpression -> checkArgCountInExpr(expr.expression, funcParams, classCtorParams, source, fileName)
-            is ConditionalExpression -> {
-                checkArgCountInExpr(expr.condition, funcParams, classCtorParams, source, fileName)
-                checkArgCountInExpr(expr.whenTrue, funcParams, classCtorParams, source, fileName)
-                checkArgCountInExpr(expr.whenFalse, funcParams, classCtorParams, source, fileName)
-            }
-            is ArrowFunction -> {
-                val inner = minusParamShadowedNames(funcParams, expr.parameters)
-                argCountFnDepth++
-                try {
-                    when (val body = expr.body) {
-                        is Block -> checkArgCountInStatements(body.statements, inner, classCtorParams, source, fileName)
-                        is Expression -> checkArgCountInExpr(body, inner, classCtorParams, source, fileName)
-                        else -> {}
-                    }
-                } finally { argCountFnDepth-- }
-            }
-            is FunctionExpression -> {
-                expr.body.let {
-                    val inner = minusParamShadowedNames(funcParams, expr.parameters, ownName = expr.name?.text)
-                    argCountFnDepth++
-                    try {
-                        checkArgCountInStatements(it.statements, inner, classCtorParams, source, fileName)
-                    } finally { argCountFnDepth-- }
-                }
-            }
-            is ArrayLiteralExpression -> {
-                for (el in expr.elements) {
-                    checkArgCountInExpr(el, funcParams, classCtorParams, source, fileName)
-                }
-            }
-            is ObjectLiteralExpression -> {
-                for (prop in expr.properties) {
-                    when (prop) {
-                        is PropertyAssignment -> checkArgCountInExpr(prop.initializer, funcParams, classCtorParams, source, fileName)
-                        is ShorthandPropertyAssignment -> {}
-                        is SpreadAssignment -> checkArgCountInExpr(prop.expression, funcParams, classCtorParams, source, fileName)
-                        is MethodDeclaration -> prop.body?.let {
-                            val inner = minusParamShadowedNames(funcParams, prop.parameters)
-                            argCountFnDepth++
-                            try {
-                                checkArgCountInStatements(it.statements, inner, classCtorParams, source, fileName)
-                            } finally { argCountFnDepth-- }
-                        }
-                        else -> {}
-                    }
-                }
-            }
-            is TemplateExpression -> {
-                for (span in expr.templateSpans) {
-                    checkArgCountInExpr(span.expression, funcParams, classCtorParams, source, fileName)
-                }
-            }
-            is TaggedTemplateExpression -> {
-                // Tagged template `f\`...${a}${b}...\`` calls `f([], a, b, ...)`.
-                // argCount = 1 (TemplateStringsArray) + spans.size.
-                // For unterminated templates, the parser may stop before adding the
-                // last span — count an extra substitution when isUnterminated is set.
-                val calleeName = (expr.tag as? Identifier)?.text
-                if (calleeName != null) {
-                    val info = funcParams[calleeName]
-                    if (info != null && !info.isOverloaded) {
-                        val templateExpr = expr.template as? TemplateExpression
-                        val spanCount = templateExpr?.templateSpans?.size ?: 0
-                        val unterminatedBonus = if (templateExpr?.isUnterminated == true) 1 else 0
-                        val argCount = 1 + spanCount + unterminatedBonus
-                        if (!info.hasRest && argCount > info.maxParams) {
-                            // Position the diagnostic at the template's end (close-backtick or EOF
-                            // for unterminated cases). Length 0 — matches TypeScript's emit.
-                            val pos = expr.template.end
-                            val (line, character) = getLineAndCharacterOfPosition(source, pos)
+                    if (anchorIdx >= 0 && fnParams != null) {
+                        val required = fnParams.takeWhile {
+                            !it.questionToken && it.initializer == null && !it.dotDotDotToken
+                        }.count()
+                        val expected = (info.parameters.size - 1) + required
+                        if (argCount < expected) {
+                            val start = expr.expression.pos
+                            val length = expressionTrueEnd(expr.expression) - start
+                            val (line, character) = getLineAndCharacterOfPosition(source, start)
+                            val restName = (restParam.name as? Identifier)?.text ?: "args"
+                            val (relLine, relChar) = getLineAndCharacterOfPosition(source, restParam.pos)
                             diagnostics.add(Diagnostic(
-                                message = "Expected ${formatExpectedArgs(info.minParams, info.maxParams)} arguments, but got $argCount.",
-                                category = DiagnosticCategory.Error,
-                                code = 2554,
-                                fileName = fileName,
-                                line = line,
-                                character = character,
-                                start = pos,
-                                length = 0,
+                                message = "Expected $expected arguments, but got $argCount.",
+                                category = DiagnosticCategory.Error, code = 2554,
+                                fileName = fileName, line = line, character = character,
+                                start = start, length = length,
+                                relatedInformation = listOf(Diagnostic(
+                                    message = "Arguments for the rest parameter '$restName' were not provided.",
+                                    category = DiagnosticCategory.Message, code = 6236,
+                                    fileName = fileName, line = relLine, character = relChar,
+                                    start = restParam.pos,
+                                    length = (restParam.end - restParam.pos).coerceAtLeast(1),
+                                )),
                             ))
                         }
                     }
                 }
-                checkArgCountInExpr(expr.tag, funcParams, classCtorParams, source, fileName)
-                (expr.template as? TemplateExpression)?.templateSpans?.forEach { span ->
-                    checkArgCountInExpr(span.expression, funcParams, classCtorParams, source, fileName)
+            }
+        } else if (info != null && info.isOverloaded && expr.typeArguments.isNullOrEmpty()) {
+            // B95 (round 80): overload-arity TS2554. Emit ONLY when the call's arg
+            // count is outside the [min, max] arity RANGE of all overload signatures
+            // — i.e. NO overload could match by arity. Within range, an overload may
+            // match (type-based TS2769 handles type mismatches). No related TS6210/6211
+            // (TypeScript omits the "argument for 'x'" hint for overload arity errors).
+            // Skipped when explicit type args are present (those filter overloads to
+            // generic ones, changing the applicable arity — out of scope here).
+            val argCount = expr.arguments.size
+            val spreads = expr.arguments.filterIsInstance<SpreadElement>()
+            if (spreads.isNotEmpty() && spreads.all { it.expression is ArrayLiteralExpression }) {
+                // B270: spread-of-array-literal args have a knowable effective count;
+                // overflow inside the spread squiggles the spread argument itself.
+                if (!info.hasRest) {
+                    val effective = expr.arguments.sumOf { a ->
+                        if (a is SpreadElement) (a.expression as ArrayLiteralExpression).elements.size else 1
+                    }
+                    if (effective > info.maxParams) {
+                        val sp = spreads.first()
+                        val start = sp.pos
+                        val len = (expressionTrueEnd(sp.expression) - start).coerceAtLeast(1)
+                        val (line, ch) = getLineAndCharacterOfPosition(source, start)
+                        val expected = if (info.minParams == info.maxParams) "${info.maxParams}" else "${info.minParams}-${info.maxParams}"
+                        diagnostics.add(Diagnostic(
+                            message = "Expected $expected arguments, but got $effective.",
+                            category = DiagnosticCategory.Error, code = 2554,
+                            fileName = fileName, line = line, character = ch,
+                            start = start, length = len,
+                        ))
+                    }
+                }
+            } else if (argCount < info.minParams && spreads.isEmpty()) {
+                emitTS2554TooFew(info.minParams, info.maxParams, argCount, expr.expression, source, fileName, info.parameters, info.declSource, info.declFileName)
+            } else if (!info.hasRest && argCount > info.maxParams) {
+                emitTS2554TooMany(info.minParams, info.maxParams, argCount, expr.arguments, info.maxParams, source, fileName)
+            } else if (spreads.isEmpty() && info.overloadSigs.isNotEmpty() &&
+                info.overloadSigs.none { argCount >= it.minParams && (it.hasRest || argCount <= it.maxParams) }
+            ) {
+                // B270: TS2575 — argCount falls in a GAP between overload arities
+                // (within the global range but accepted by no signature). Neighbors
+                // come from per-signature MIN counts, mirroring TS's
+                // getArgumentArityError below/above computation.
+                var below = -1
+                var above = Int.MAX_VALUE
+                for (sig in info.overloadSigs) {
+                    val mc = sig.minParams
+                    if (mc < argCount && mc > below) below = mc
+                    else if (argCount < mc && mc < above) above = mc
+                }
+                if (below >= 0 && above != Int.MAX_VALUE) {
+                    val start = expr.expression.pos
+                    val len = calleeName.length.coerceAtLeast(1)
+                    val (line, ch) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "No overload expects $argCount arguments, but overloads do exist that expect either $below or $above arguments.",
+                        category = DiagnosticCategory.Error, code = 2575,
+                        fileName = fileName, line = line, character = ch,
+                        start = start, length = len,
+                    ))
                 }
             }
-            is PropertyAccessExpression -> checkArgCountInExpr(expr.expression, funcParams, classCtorParams, source, fileName)
-            is ElementAccessExpression -> {
-                checkArgCountInExpr(expr.expression, funcParams, classCtorParams, source, fileName)
-                checkArgCountInExpr(expr.argumentExpression, funcParams, classCtorParams, source, fileName)
+        } else if (info != null && info.isOverloaded && !expr.typeArguments.isNullOrEmpty()
+            && info.overloadSigs.isNotEmpty()
+        ) {
+            // B95b (round 81): overload call WITH explicit type args, e.g.
+            // `foo<string>("hello")` against `foo<T>(a,b)` + `foo(a)`. Explicit type
+            // args filter the overload set to the GENERIC signatures that can accept
+            // this many type args (non-generic overloads are inapplicable). Arity-check
+            // the call against ONLY that applicable subset. functionCall18 case.
+            val typeArgCount = expr.typeArguments.size
+            val applicable = info.overloadSigs.filter { sig ->
+                sig.typeParamCount > 0 && typeArgCount in sig.minTypeParams..sig.typeParamCount
             }
-            is PrefixUnaryExpression -> checkArgCountInExpr(expr.operand, funcParams, classCtorParams, source, fileName)
-            is PostfixUnaryExpression -> checkArgCountInExpr(expr.operand, funcParams, classCtorParams, source, fileName)
-            is TypeAssertionExpression -> checkArgCountInExpr(expr.expression, funcParams, classCtorParams, source, fileName)
-            is AsExpression -> checkArgCountInExpr(expr.expression, funcParams, classCtorParams, source, fileName)
-            is SatisfiesExpression -> checkArgCountInExpr(expr.expression, funcParams, classCtorParams, source, fileName)
-            is NonNullExpression -> checkArgCountInExpr(expr.expression, funcParams, classCtorParams, source, fileName)
-            is CommaListExpression -> for (el in expr.elements) checkArgCountInExpr(el, funcParams, classCtorParams, source, fileName)
-            is ClassExpression -> for (m in expr.members) {
-                when (m) {
-                    is MethodDeclaration -> m.body?.let { checkArgCountInStatements(it.statements, funcParams, classCtorParams, source, fileName) }
-                    is Constructor -> m.body?.let { checkArgCountInStatements(it.statements, funcParams, classCtorParams, source, fileName) }
-                    is GetAccessor -> m.body?.let { checkArgCountInStatements(it.statements, funcParams, classCtorParams, source, fileName) }
-                    is SetAccessor -> m.body?.let { checkArgCountInStatements(it.statements, funcParams, classCtorParams, source, fileName) }
-                    is PropertyDeclaration -> m.initializer?.let { checkArgCountInExpr(it, funcParams, classCtorParams, source, fileName) }
-                    else -> {}
+            if (applicable.isNotEmpty()) {
+                val argCount = expr.arguments.size
+                val gMin = applicable.minOf { it.minParams }
+                val gMax = applicable.maxOf { it.maxParams }
+                val gRest = applicable.any { it.hasRest }
+                // TS6210 "argument for 'x' not provided" only when the applicable subset
+                // is unambiguous (single signature) — matches TypeScript's hint.
+                val relParams = if (applicable.size == 1) applicable[0].parameters else emptyList()
+                if (argCount < gMin) {
+                    emitTS2554TooFew(gMin, gMax, argCount, expr.expression, source, fileName, relParams)
+                } else if (!gRest && argCount > gMax) {
+                    emitTS2554TooMany(gMin, gMax, argCount, expr.arguments, gMax, source, fileName)
                 }
             }
-            is SpreadElement -> checkArgCountInExpr(expr.expression, funcParams, classCtorParams, source, fileName)
-            is AwaitExpression -> checkArgCountInExpr(expr.expression, funcParams, classCtorParams, source, fileName)
-            is YieldExpression -> expr.expression?.let { checkArgCountInExpr(it, funcParams, classCtorParams, source, fileName) }
-            is VoidExpression -> checkArgCountInExpr(expr.expression, funcParams, classCtorParams, source, fileName)
-            is TypeOfExpression -> checkArgCountInExpr(expr.expression, funcParams, classCtorParams, source, fileName)
-            is DeleteExpression -> checkArgCountInExpr(expr.expression, funcParams, classCtorParams, source, fileName)
-            else -> {}
+        }
+    }
+
+    /**
+     * Constructor-arity emission at a REACHED NewExpression enter — the
+     * deleted checkArgCountInExprCore NewExpression arm's emission block
+     * verbatim (the `new` CALLEE expression stays unreached, matching the
+     * legacy walker, which recursed into arguments only).
+     */
+    private fun spineArgNewEnter(expr: NewExpression) {
+        val className = (expr.expression as? Identifier)?.text ?: return
+        if (spineArgDepth(expr) < 0) return
+        val ctx = spineArgCtxAt(expr)
+        val funcParams = ctx.funcParams
+        val classCtorParams = ctx.classCtorParams
+        val source = spineSource
+        val fileName = spineFileName
+        // B238: builtin Error-family constructors have a target-dependent lib
+        // arity — `(message?)` pre-es2022, `(message?, options?)` from es2022
+        // (AggregateError: `(errors, message?[, options?])`). Fires only when
+        // neither the class name nor ErrorConstructor has any user declaration.
+        if (className in BUILTIN_ERROR_CTOR_NAMES && classCtorParams[className] == null &&
+            funcParams[className] == null &&
+            globals[className]?.declarations?.any { it !in builtinLibDecls } != true &&
+            globals["${className}Constructor"]?.declarations?.any { it !in builtinLibDecls } != true) {
+            val argCount = expr.arguments?.size ?: 0
+            val isAggregate = className == "AggregateError"
+            val maxArgs = (if (isAggregate) 2 else 1) +
+                (if (libFeatureAvailable(ScriptTarget.ES2022)) 1 else 0)
+            val minArgs = if (isAggregate) 1 else 0
+            if (argCount > maxArgs) {
+                emitTS2554TooMany(minArgs, maxArgs, argCount, expr.arguments ?: emptyList(), maxArgs, source, fileName)
+            }
+        }
+        val info = classCtorParams[className]
+        if (info != null && !info.isOverloaded) {
+            val argCount = expr.arguments?.size ?: 0
+            if (!info.hasRest && argCount > info.maxParams) {
+                val args = expr.arguments ?: emptyList()
+                emitTS2554TooMany(info.minParams, info.maxParams, argCount, args, info.maxParams, source, fileName)
+            } else if (argCount < info.minParams &&
+                expr.arguments?.any { it is SpreadElement } != true
+            ) {
+                // B95c (round 82): squiggle the WHOLE `new X(...)` (expr.pos .. after `)`),
+                // not just the class identifier — matches TypeScript. Pass info.parameters
+                // so the TS6210 "argument for 'x' not provided" related info fires (it points
+                // at the ctor's param at the missing index; for an inherited ctor that's the
+                // base class's param).
+                if (info.hasRest) {
+                    emitTS2555TooFew(info.minParams, argCount, expr, source, fileName, info.parameters)
+                } else {
+                    emitTS2554TooFew(info.minParams, info.maxParams, argCount, expr, source, fileName, info.parameters, info.declSource, info.declFileName)
+                }
+            }
+        }
+    }
+
+    /**
+     * Tagged-template arity emission at a REACHED TaggedTemplateExpression
+     * enter — the deleted checkArgCountInExprCore TaggedTemplateExpression
+     * arm's emission block verbatim. Tagged template `f`...${a}${b}...``
+     * calls `f([], a, b, ...)`: argCount = 1 (TemplateStringsArray) +
+     * spans.size (+1 when the template is unterminated — the parser may stop
+     * before adding the last span).
+     */
+    private fun spineArgTaggedEnter(expr: TaggedTemplateExpression) {
+        val calleeName = (expr.tag as? Identifier)?.text ?: return
+        if (spineArgDepth(expr) < 0) return
+        val ctx = spineArgCtxAt(expr)
+        val source = spineSource
+        val fileName = spineFileName
+        val info = ctx.funcParams[calleeName]
+        if (info != null && !info.isOverloaded) {
+            val templateExpr = expr.template as? TemplateExpression
+            val spanCount = templateExpr?.templateSpans?.size ?: 0
+            val unterminatedBonus = if (templateExpr?.isUnterminated == true) 1 else 0
+            val argCount = 1 + spanCount + unterminatedBonus
+            if (!info.hasRest && argCount > info.maxParams) {
+                // Position the diagnostic at the template's end (close-backtick or EOF
+                // for unterminated cases). Length 0 — matches TypeScript's emit.
+                val pos = expr.template.end
+                val (line, character) = getLineAndCharacterOfPosition(source, pos)
+                diagnostics.add(Diagnostic(
+                    message = "Expected ${formatExpectedArgs(info.minParams, info.maxParams)} arguments, but got $argCount.",
+                    category = DiagnosticCategory.Error,
+                    code = 2554,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = pos,
+                    length = 0,
+                ))
+            }
         }
     }
 

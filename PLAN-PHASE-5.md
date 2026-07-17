@@ -59,6 +59,58 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 535 (2026-07-17) — INV.4(d) walker 6: checkArgumentCounts (the
+TS2554/TS2555/TS2575 function-call arity pass, 230 ms in the round-529 cost
+table) migrated onto the spine — the per-file driver and the recursion
+walkers (checkArgCountInStatements / checkArgCountInStatement /
+checkArgCountInExpr(Core)) are DELETED, plus the argCountDepth /
+argCountFnDepth / argCountSuperCtor threading fields.** Two firsts in the
+(d) series: (1) **reach is a memoized DEPTH classifier, not a boolean/state
+one** — the legacy `argCountDepth` recursion counter (with its load-bearing
+≤200 cap: `++argCountDepth > 200` silently prunes a subtree, the
+anti-SOE guard for left-nested binary chains) is reproduced per node as an
+Int over `spineArgEdge` (ShortArray memo, 0/1/depth+2 encoding); an
+expression-position edge costs one frame (+1), a statement/list/member edge
+carries the ambient value, and a BinaryExpression's RIGHT operand that is
+itself a binary is ABSORBED (the legacy right-spine loop — no frame, so
+right-leaning `**`/`=` chains never consume depth while left-nested chains
+prune at 200; both pinned). (2) **the downward context is MAP-valued and
+rebuilt PULL-based** — the funcParams/classCtorParams/fnDepth/superCtor
+threading is a pure function of the ancestor chain (every list overlay
+reads its WHOLE statement list, never a position-ordered prefix), so
+`spineArgCtxAt` ascends to the nearest statement-LIST owner
+(SourceFile/Block/ModuleBlock/switch clause), takes its per-owner memoized
+`spineArgListCtx` (the checkArgCountInStatements activation: M1.11
+ModuleBlock namespace collection + 17.126 nested-fn overlay + fnDepth-gated
+var-shadow removal), and re-applies the transforming edges top-down
+(fn-boundary minusParamShadowedNames + fnDepth++, class-DECL-constructor
+superCtor rebind, for-of loop-name shadow). TRAP HIT AND PINNED IN THE
+DESIGN COMMENT: `spineArgCtxAt` RE-ENTERS itself through `spineArgListCtx`
+(each owner's incoming ctx ascends to the next owner up), so the shared
+ascent buffer must be MARK-based, not clear()-based — the first cut
+silently dropped the for-of loop-shadow edge (the one pin that caught it;
+45/46 on first migrated run). ORDER COUPLING: the producer sibling
+checkSpreadNonIterableIntoFixedArity moved BEFORE the spine (its
+spreadNonIterableHandledCalls set is consulted by the TS2554 too-many arm);
+checkCloduleTest2 (which REMOVES/EDITS TS2554 diagnostics at NewExpression
+positions) sits at a later slot than both orders, so it needed no move.
+Slot-move pre-gate: intact pass at the spine slot + SNI before = error-line
+identical listAll ×8 (the pass is self-contained — own maps, reads only
+AST + the SNI set — so no arith-style residue coupling). Bug-compat
+asymmetries pinned (46 pins, Inv4SpineBatch26Test, ALL pre-verified on the
+OLD walker): class-EXPRESSION member bodies get NEITHER the param shadow
+NOR the fnDepth increment (params don't shadow; top-level body-locals don't
+shadow) and a class-expression constructor never rebinds superCtor (a
+nested `super(1)` vs a 2-param base is silent); `new` CALLEE expressions,
+switch CASE expressions, param defaults, heritage arguments, enum member
+initializers, objlit accessor bodies, shorthand destructuring defaults,
+and computed names are unreached; the fnDepth-gated var-shadow removal is
+nested-lists-only (a top-level `var f` redeclaration keeps the check).
+VERIFIED: suite 11,091 → 11,137 (+46 Inv4SpineBatch26Test, 0
+regressions, XML-verified); listAll error lines IDENTICAL on ALL 8 profiles
+(535a vs 535base); bench row recorded. NEXT: INV.4(d) walker 7 —
+checkUseBeforeDeclaration (205 ms) / checkImplicitReturns (199 ms).
+
 **Round 534 (2026-07-16) — INV.4(d) walker 5: checkDefiniteAssignment (the
 SET-based TS2454 pass, 241 ms in the round-529 cost table) migrated onto the
 spine — the per-file driver and the two recursion walkers
@@ -1575,6 +1627,21 @@ interrupt the arc).
       pins (Inv4SpineBatch22Test); suite 10,908 → 10,948; listAll error-line
       identical on ALL 8 profiles; the pass driver deleted (the recursive
       walkers stay as checkComputedDestructKey's utility). See the round-531
+      session note.
+    - (w6) DONE round 535 (2026-07-17): checkArgumentCounts (TS2554/TS2555/
+      TS2575) — the first DEPTH-valued reach classifier (the legacy
+      argCountDepth recursion counter reproduced per edge, ≤200 cap; binary
+      right-spine absorption = no depth) and the first MAP-valued pull-based
+      downward context (funcParams/ctorParams/fnDepth/superCtor rebuilt at
+      each emission from per-list-owner memoized levels — sound because every
+      list overlay reads its WHOLE statement list). TRAP: a pull rebuild that
+      RE-ENTERS itself through its own memoized levels must reuse its shared
+      ascent buffer MARK-based, never clear()-based (the for-of loop-shadow
+      edge silently dropped; one pin caught it). Producer sibling
+      checkSpreadNonIterableIntoFixedArity moved BEFORE the spine. 46 pins
+      (Inv4SpineBatch26Test) ALL pre-verified on the OLD walker; suite
+      11,091 → 11,137; listAll error-line identical on ALL 8 profiles;
+      ~650 walker lines + 3 threading fields deleted. See the round-535
       session note.
     - (w5) DONE round 534 (2026-07-16): checkDefiniteAssignment (the SET-based
       TS2454 pass) — the first per-statement-LIST ordered walker with a
