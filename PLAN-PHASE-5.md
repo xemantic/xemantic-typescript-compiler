@@ -2112,6 +2112,21 @@ interrupt the arc).
     identical pairs). Verify: suite + listAll ×8 + re-run the round-542/543
     probe experiments to measure how much of the giant entanglement
     dissolves.
+    **FIRST ATTEMPT (round 544, REVERTED): a minimal interning of both
+    canonical constructors (CheckerState caches by member-id key; unions by
+    sorted order, intersections in-order) measured CORPUS 100% GREEN
+    (11,243/0) with EXACTLY ONE new FP, identical on all 8 profiles —
+    watch.ts:533:19 TS2322 `(string | DiagnosticMessage)[]` ⊄
+    `DiagnosticAndArguments` (the round-446 VARIADIC-TUPLE alias family).
+    Remarkably contained for a change canonicalizing every union in the
+    program — the hazard list's display fears did NOT materialize; the one
+    regression is a relation/suppression path keyed on union identity
+    (candidates: a relation-cache FALSE shared across contexts, an id-keyed
+    side channel hitting a shared instance, or the
+    arrayLiteralSatisfiesTupleTarget suppression's engine fallback). NEXT:
+    root-cause with a targeted probe (temporary Diagnostic-init stack-trace
+    probe keyed on code=2322 + the watch.ts:533 start per the round-472
+    recipe), fix the one path, re-land.**
   - [ ] **INV.5(b) Explicit mapper objects.** Replace the ambient
     `currentTypeAliasArgs`/`currentTypeParamScope` instantiation contexts
     with an explicit mapper threaded through the resolution entry points —
