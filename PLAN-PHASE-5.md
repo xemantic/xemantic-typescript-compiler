@@ -40,6 +40,12 @@ getTypeFromTypeNode returns for that TP's constraint at each time). Bench
 note: the always-on sandwich also cost +3.9% self-time — lazy construction
 is warranted regardless. The top-level/namespace tier (rounds 566/567)
 stays landed and green.
+**Round 568b: direction (c) partially probed — a currentCheckFileName
+install around the sandwich does NOT fix the harness drift (the delta is
+genuinely cold-cache resolution CONTENT for the TP constraint, not
+per-file keying). The fn-body tier formally DEFERS behind the INV.5
+canonicalization arc (direction (a)); when resumed, the fourslashImpl
+constraint is the standing acceptance probe.**
 
 **Round 567 (2026-07-17) — (cta-m3b) LANDED first-try: the ExpressionStatement
 and ReturnStatement arms join the spine anchor.** The generalized
