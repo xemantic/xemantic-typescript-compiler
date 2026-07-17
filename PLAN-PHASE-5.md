@@ -2041,6 +2041,26 @@ interrupt the arc).
     before any migration. (g1b) pins (~50, the largest batch yet — reach
     quirks per arm; pre-verify on OLD). (g1c) the migration. (g1d) after
     g1 lands, re-measure; g2/g3 decompose the same way when reached.**
+    **g1a MEASURED (round 542, both experiment directions run and REVERTED —
+    the working tree keeps the legacy giant order): the giants are
+    order-entangled in BOTH directions, and the couplings are CORPUS-ONLY
+    (all 8 profiles sorted-error-line-identical in both experiments).
+    (1) checkPropertyAccess moved before checkTypeAssignability →
+    noImplicitAnyForIn loses a TS7053: the element-access receiver's type
+    (`var k1 = x[i]` → `{}`) comes from the assignability walk's
+    currentLocalTypes RESIDUE — the w2 residue class; fix = the pass records
+    its own receiver types (w2's own-recording template).
+    (2) checkTypeAssignability moved to the spine slot →
+    typeArgumentDefaultUsesConstraintOnCircularDefault's TS2353 display
+    flips `Test<any>` → `Test` (aliasDisplayMap/declaredTypes first-touch)
+    AND relationComplexityError gains 2 FP TS2322 (relation-cache/
+    complexity-budget state) — CACHE first-touch couplings against the small
+    passes between the spine and slot 64, each needing a root-cause before
+    the giant can move. NEXT STEP for g1: bisect WHICH intermediate pass's
+    first-touch the two failures depend on (binary-search the slot
+    position), then either neutralize the dependency (pass-own state /
+    explicit cache warm) or migrate the giant IN PLACE (dispatch from the
+    spine but buffer emissions to the legacy slot — a new template).**
   - [ ] **INV.4(f) The two unlocked soundness wins.** Once one authoritative
     walk state exists: the per-node expression-type cache (594,779 calls over
     ~221,844 distinct nodes = ×2.6 recompute), and flow narrowing folded into
