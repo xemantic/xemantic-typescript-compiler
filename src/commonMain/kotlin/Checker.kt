@@ -84249,6 +84249,64 @@ interface DataView {
         }
     }
 
+    /** (cta-m2d) round 564: the PURE param-typing half of checkFunctionBody's
+     *  historical interleaved loop — writes innerTypes/currentLocalTypes only
+     *  (the 16.4ei emission stays in checkFunctionBody). Callers must have the
+     *  function's TP scope installed (getTypeFromTypeNode resolves under it).
+     *  The spine frame machinery reuses this against frame-installed maps. */
+    private fun ctaTypeParamsIntoLocals(
+        parameters: List<Parameter>, innerTypes: MutableMap<String, String>,
+    ) {
+        for (param in parameters) {
+            val paramType = param.type
+            val paramName = param.name
+            if (paramType != null && paramName is Identifier) {
+                // Rest parameter with clearly-non-array type annotation: TS2370 fires
+                // but the parameter's runtime type is effectively any[] — skip local
+                // type so downstream checks (TS2339 element access, TS2345 argument)
+                // treat it as any[].
+                if (param.dotDotDotToken && nonArrayKeywordText(paramType) != null) continue
+                val t = resolveSimpleTypeName(paramType)
+                if (t != null) innerTypes[paramName.text] = t
+                // Also populate Type engine local type map
+                val resolvedType = getTypeFromTypeNode(paramType)
+                if (resolvedType !== anyType && resolvedType !== errorType) {
+                    // B85.1a: optional param `value?: T` (without initializer) has effective
+                    // type `T | undefined`. Mirrors `resolveUncalledParamType` (Checker.kt:25081).
+                    val effectiveType = if (param.questionToken && param.initializer == null) {
+                        getUnionType(listOf(resolvedType, undefinedType))
+                    } else resolvedType
+                    currentLocalTypes[paramName.text] = effectiveType
+                }
+            } else if (paramType == null && paramName is Identifier && param.initializer is Identifier) {
+                // Round 464: an UN-ANNOTATED param defaulted from an ANNOTATED
+                // PRECEDING sibling param (`initialType = declaredType` — tsc
+                // checker.ts getFlowTypeOfReference) types as the sibling's
+                // annotation (tsc infers the param type from its initializer).
+                val sibName = param.initializer.text
+                val sib = parameters.takeWhile { it !== param }
+                    .firstOrNull { (it.name as? Identifier)?.text == sibName }
+                sib?.type?.let { tn ->
+                    val t = try { getTypeFromTypeNode(tn) } catch (_: Exception) { null }
+                    if (t != null && t !== anyType && t !== errorType) {
+                        currentLocalTypes[paramName.text] = t
+                    }
+                }
+            } else if (paramName is ObjectBindingPattern || paramName is ArrayBindingPattern) {
+                // Round 475: a BINDING-PATTERN param previously registered NOTHING in
+                // this pass, so a destructured element name read in the body — e.g. an
+                // object-literal SHORTHAND value (`return { enable, … }` in tsc's
+                // convertTypeAcquisition / referenceEntryToReferencesResponseItem) —
+                // fell through getTypeOfIdentifier to the merged globals and resolved
+                // a same-named CROSS-FILE function → FP TS2322. Register each element:
+                // the annotation member's type when resolvable (optional member →
+                // `| undefined`, a default initializer keeps the bare type), else
+                // anyType (suppression-only).
+                registerBindingPatternParamLocals(paramName, paramType)
+            }
+        }
+    }
+
     private fun checkFunctionBody(
         body: Block?, returnTypeNode: TypeNode?, parameters: List<Parameter>,
         funcTypeParams: List<TypeParameter>?,
@@ -84346,59 +84404,18 @@ interface DataView {
                 }
             }
             try {
+                // (cta-m2d) round 564: the 16.4ei EMISSION is split from the pure
+                // param-TYPING loop (ctaTypeParamsIntoLocals) so the spine frame
+                // machinery can reuse the typing without emitting. Both run under
+                // the TP scope; emissions first (a per-param emission never saw
+                // its own typing in the interleaved original).
                 for (param in parameters) {
-                    val paramType = param.type
                     val paramName = param.name
-                    // 16.4ei: `function fst({ s } = t) {}` where t has nullable-union type —
-                    // destructuring pattern as parameter name with a default initializer.
                     if (paramName is ObjectBindingPattern && param.initializer != null) {
                         checkDestructuringFromNullableUnion(paramName, param.initializer, source, fileName)
                     }
-                    if (paramType != null && paramName is Identifier) {
-                        // Rest parameter with clearly-non-array type annotation: TS2370 fires
-                        // but the parameter's runtime type is effectively any[] — skip local
-                        // type so downstream checks (TS2339 element access, TS2345 argument)
-                        // treat it as any[].
-                        if (param.dotDotDotToken && nonArrayKeywordText(paramType) != null) continue
-                        val t = resolveSimpleTypeName(paramType)
-                        if (t != null) innerTypes[paramName.text] = t
-                        // Also populate Type engine local type map
-                        val resolvedType = getTypeFromTypeNode(paramType)
-                        if (resolvedType !== anyType && resolvedType !== errorType) {
-                            // B85.1a: optional param `value?: T` (without initializer) has effective
-                            // type `T | undefined`. Mirrors `resolveUncalledParamType` (Checker.kt:25081).
-                            val effectiveType = if (param.questionToken && param.initializer == null) {
-                                getUnionType(listOf(resolvedType, undefinedType))
-                            } else resolvedType
-                            currentLocalTypes[paramName.text] = effectiveType
-                        }
-                    } else if (paramType == null && paramName is Identifier && param.initializer is Identifier) {
-                        // Round 464: an UN-ANNOTATED param defaulted from an ANNOTATED
-                        // PRECEDING sibling param (`initialType = declaredType` — tsc
-                        // checker.ts getFlowTypeOfReference) types as the sibling's
-                        // annotation (tsc infers the param type from its initializer).
-                        val sibName = param.initializer.text
-                        val sib = parameters.takeWhile { it !== param }
-                            .firstOrNull { (it.name as? Identifier)?.text == sibName }
-                        sib?.type?.let { tn ->
-                            val t = try { getTypeFromTypeNode(tn) } catch (_: Exception) { null }
-                            if (t != null && t !== anyType && t !== errorType) {
-                                currentLocalTypes[paramName.text] = t
-                            }
-                        }
-                    } else if (paramName is ObjectBindingPattern || paramName is ArrayBindingPattern) {
-                        // Round 475: a BINDING-PATTERN param previously registered NOTHING in
-                        // this pass, so a destructured element name read in the body — e.g. an
-                        // object-literal SHORTHAND value (`return { enable, … }` in tsc's
-                        // convertTypeAcquisition / referenceEntryToReferencesResponseItem) —
-                        // fell through getTypeOfIdentifier to the merged globals and resolved
-                        // a same-named CROSS-FILE function → FP TS2322. Register each element:
-                        // the annotation member's type when resolvable (optional member →
-                        // `| undefined`, a default initializer keeps the bare type), else
-                        // anyType (suppression-only).
-                        registerBindingPatternParamLocals(paramName, paramType)
-                    }
                 }
+                ctaTypeParamsIntoLocals(parameters, innerTypes)
             } finally {
                 currentTypeParamScope = savedTypeParamScope
             }

@@ -20,6 +20,23 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 564 (2026-07-17) — (cta-m2d) part 1: checkFunctionBody's interleaved
+param loop SPLIT into the pure typing helper `ctaTypeParamsIntoLocals`
+(innerTypes/currentLocalTypes writes only; TP scope required at call) + the
+16.4ei destructuring-emission loop kept in checkFunctionBody (emissions
+first — a per-param emission never saw its own typing in the interleaved
+original; measured behavior-identical: corpus 11,307/0, listAll ×8
+error-line identical vs 548a). This is the reuse enabler for the frame
+machinery's sandwich pattern: the spine installs frame-private maps and
+calls the SAME helpers the legacy uses (zero drift risk) — a first surgical
+python attempt broke brace balance and was reverted (exact-string Edit
+worked; lesson: no crude indent-shifting on Checker.kt). NEXT: (cta-m2d)
+part 2 — extend CtaFrame with the currentLocalTypes-family maps, install-
+sandwich the legacy helpers (ctaTypeParamsIntoLocals /
+applyBodyLocalShadowing / applyAmbiguousBlockScopedLocals /
+shadowNestedFunctionNames) at fn-body enters, add the localTypes digest to
+both audit fingerprints, iterate to green.
+
 **Round 563 (2026-07-17) — (cta-m2c): the audit fixtures WIDENED and green.**
 A second full-fixture diff (nested/exported namespaces, generic fn nesting
 with constrained TPs, overload clusters, class expressions, for/for-in/
