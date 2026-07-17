@@ -59,6 +59,45 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 537 (2026-07-17) — INV.4(d) walker 8: checkImplicitReturns (the
+TS7030/TS2355/TS2366/TS2378/TS7023 + arrow concise-body TS2322 pass, 199 ms
+in the round-529 cost table) migrated onto the spine — the per-file driver
+and the recursion walkers (walkForImplicitReturns / walkStmtForImplicitReturns
+/ walkExprForImplicitReturns) are DELETED (~140 lines), the five anchor
+functions retained minus their trailing body recursion.** Reach is a 4-state
+memoized classifier (`spineIrStatus` over `spineIrEdge` — STMT/EXPR/MEMBER/
+NONE, the deleted arms verbatim, with the descent GATES encoded on the body
+edges: generator bodies never descend, GetAccessor pos==-1 sentinel bodies
+skip, arrow CONCISE bodies never descend); anchors dispatch under
+`spineIrDispatch`'s per-dispatch ambient install (implicitReturnFlowGraph +
+currentCheckFileName + the PRE-SPINE resting currentFileLocals/
+currentFunctionParams captured at checkSpine entry — the legacy pass ran
+outside the spine's per-file locals install, and
+checkGetAccessorForImplicitReturn READS the resting currentFunctionParams
+without setting it). THE ROUND'S LESSON — ANCHORS DISPATCH AT LEAVE, NOT
+ENTER: the 17.135 TS2304/TS2314 suppression gates in
+checkBodyForImplicitReturnCore probe the DIAGNOSTICS LIST at the return
+annotation's position, and the annotation's own TS2304 is emitted by the
+spine-hosted ures family at the ANNOTATION node's enter — after the fn's
+enter. Enter-dispatch over-emitted TS2355 on exactly 2 corpus tests
+(unknownSymbols1, genericRecursiveImplicitConstructorErrors3 — the corpus
+caught what the 8 profiles could not, again); leave-dispatch sees the whole
+subtree's emissions, exactly what the slot-moved pass saw. Slot-move
+pre-gate landed separately (round-537 prep commit): corpus + listAll ×8
+identical, and the pass stays BEFORE checkTypeAssignability whose
+end-of-pass filter consumes this pass's TS7030s. Reach quirks pinned (19
+pins, Inv4SpineBatch28Test, pre-verified on the OLD walker): generator
+bodies, class-DECL Constructor/SetAccessor bodies and PropertyDeclaration
+initializers (class-EXPR prop inits ARE reached), objlit SetAccessor
+bodies, arrow concise bodies, return/throw expressions, if/while
+conditions, and for headers all unreached; the legacy JS gate is .js/.jsx
+ONLY (.mjs/.cjs stay checked — spineIsJsLike is the wrong predicate).
+VERIFIED: suite 11,170 → 11,189 (+19, 0 regressions, XML-verified); listAll
+error lines IDENTICAL on ALL 8 profiles (537b vs 537sm); bench errors
+unchanged (46, histogram identical; wall +6.4% single-run = the documented
+late-session box-drift band). NEXT: INV.4(d) walker 9 —
+checkConstAssignment (170 ms), then the ~100–165 ms tail.
+
 **Round 536 (2026-07-17) — INV.4(d) walker 7: checkUseBeforeDeclaration (the
 TS2448/TS2449/TS2450 TDZ pass + the TS2454 co-emit and static-init TS2729,
 205 ms in the round-529 cost table) migrated onto the spine — the per-file
@@ -1671,7 +1710,7 @@ interrupt the arc).
       identical on ALL 8 profiles; the pass driver deleted (the recursive
       walkers stay as checkComputedDestructKey's utility). See the round-531
       session note.
-    - (w8) IN PROGRESS (round 537 prep landed 2026-07-17): checkImplicitReturns
+    - (w8) DONE round 537 (2026-07-17): checkImplicitReturns
       (TS7030/TS2355/TS2366/TS2378/TS7023 + arrow concise-body TS2322).
       SLOT-MOVE PRE-GATE LANDED AND VERIFIED (intact pass at the spine slot;
       corpus 11,170/0 + listAll ×8 error-line identical) — the ambient
@@ -1698,7 +1737,12 @@ interrupt the arc).
       CONCISE (expression) bodies never descend (both annotated and not);
       return/throw/export= EXPRESSIONS and if/while conditions and for
       headers unreached in statement position; GetAccessor sentinel body
-      (pos == -1) skips.
+      (pos == -1) skips. LANDED: anchors dispatch at LEAVE (the 17.135
+      TS2304/TS2314 diagnostics-list probes must see the annotation's own
+      spine emissions — enter-dispatch over-emitted TS2355 on exactly 2
+      corpus tests); 19 pins (Inv4SpineBatch28Test); suite 11,170 → 11,189;
+      listAll ×8 identical; ~140 walker lines deleted. See the round-537
+      session note.
     - (w7) DONE round 536 (2026-07-17): checkUseBeforeDeclaration (TS2448/
       TS2449/TS2450 + TS2454 co-emit + static-init TS2729) — 5-state reach
       classifier + per-list-owner memoized blockScopedDecls; the retained

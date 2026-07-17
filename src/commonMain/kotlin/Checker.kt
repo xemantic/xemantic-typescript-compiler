@@ -1140,6 +1140,31 @@ class Checker(
     /** Per-list-owner memo for [spineUbdListDecls], keyed by nodeId; cleared per file. */
     private val spineUbdDeclsMemo = HashMap<Int, Map<String, BlockScopedDecl>>()
 
+    // ── INV.4(d) walker 8 (round 537): checkImplicitReturns on the spine ──
+    // The implicit-returns pass (TS7030/TS2355/TS2366/TS2378/TS7023 + the
+    // arrow concise-body TS2322) — the recursion walkers
+    // (walkForImplicitReturns / walkStmtForImplicitReturns /
+    // walkExprForImplicitReturns) are deleted; reach is the memoized 4-state
+    // classifier [spineIrStatus] over [spineIrEdge], and the five retained
+    // anchor functions (check*ForImplicitReturn, minus their trailing body
+    // recursion) dispatch at fn-like/member enters, each wrapped in the
+    // [spineIrDispatch] ambient install (implicitReturnFlowGraph +
+    // currentCheckFileName + the PRE-SPINE resting currentFileLocals /
+    // currentFunctionParams — checkGetAccessorForImplicitReturn READS the
+    // resting currentFunctionParams; it never sets it).
+    /** Per-file activation: the legacy non-.d.ts + (checkJs || !.js/.jsx) gate. */
+    private var spineIrActive = false
+    /** Per-file nodeId memo for [spineIrStatus] — 0 unknown, else an IR_* state. */
+    private var spineIrReachMemo = ByteArray(0)
+    /** Reusable ascent buffer for [spineIrStatus]. */
+    private val spineIrChain = ArrayList<Node>()
+    /** The current file's flow graph (the legacy per-file implicitReturnFlowGraph). */
+    private var spineIrFlowGraph: FlowGraph? = null
+    /** The PRE-SPINE resting values, captured at checkSpine entry — the legacy
+     *  pass ran outside the spine's per-file currentFileLocals install. */
+    private var spineIrRestingLocals: SymbolTable? = null
+    private var spineIrRestingParams: List<Parameter> = emptyList()
+
     // Positions of ObjectLiteralExpression nodes that are destructuring-assignment
     // TARGETS (LHS of `=`, incl. nested through array/object/default nesting). Consumed
     // by the shorthand-with-initializer TS1312/TS18004 selection in
@@ -2406,16 +2431,13 @@ class Checker(
         pass("checkCrossFileUseBeforeDeclaration") {
             if (binderResults.size > 1) checkCrossFileUseBeforeDeclaration()
         }
-        // 18d. Check not all code paths return a value (TS7030/TS2355/TS2366).
-        // Always run (not gated by noImplicitReturns) because TS2355 fires for functions with
-        // explicit non-void return type and no return statements, regardless of noImplicitReturns.
-        // When noImplicitReturns is true, TS2366 is emitted instead of TS7030/TS2355 for non-async
-        // functions with definitely-non-nullable return types.
-        // INV.4(d) walker 8 slot-move pre-gate (round 537): moved from its
-        // legacy slot 18d to the spine slot — still BEFORE checkTypeAssignability,
-        // whose end-of-pass filter suppresses TS7030 at its own TS2322 positions
+        // 18d. Not-all-code-paths-return (TS7030/TS2355/TS2366/TS2378/TS7023):
+        // rides the spine (INV.4(d) walker 8 — spineIrSetup/spineIrEnterNode).
+        // Always active (not gated by noImplicitReturns) because TS2355 fires
+        // for functions with explicit non-void return type and no return
+        // statements. Emissions stay BEFORE checkTypeAssignability, whose
+        // end-of-pass filter suppresses TS7030 at its own TS2322 positions
         // and so EXPECTS this pass's TS7030s to already exist.
-        pass("checkImplicitReturns") { checkImplicitReturns() }
         if (shouldCheckDefiniteAssignment) {
             pass("checkDefiniteAssignmentViaFlowGraph") { checkDefiniteAssignmentViaFlowGraph() }
             // B223: TS2454 for vars whose ONLY assignment sits inside a try block
@@ -17880,6 +17902,11 @@ class Checker(
         // the legacy pass, never published back — the proven-inert leak).
         spineArithBase = HashMap(currentLocalTypes)
         spineArithParamBindingNames = HashSet(currentParamBindingNames)
+        // INV.4(d) walker 8: the implicit-returns anchors run under the
+        // PRE-SPINE resting ambient (the legacy pass ran outside the spine's
+        // per-file currentFileLocals install) — capture it here.
+        spineIrRestingLocals = currentFileLocals
+        spineIrRestingParams = currentFunctionParams
         val savedLocals = currentFileLocals
         try {
             for (result in binderResults) {
@@ -17950,6 +17977,7 @@ class Checker(
                 spineDaSetup(result)
                 spineArgSetup(result)
                 spineUbdSetup(result)
+                spineIrSetup(result)
                 spineUResAuditActive = unresolvedAuditEnabled && spineUResActive
                 try {
                     spineWalkFile(sf)
@@ -17965,6 +17993,7 @@ class Checker(
                     spineDaTeardown()
                     spineArgTeardown()
                     spineUbdTeardown()
+                    spineIrTeardown()
                 }
                 spineResolveDeferredIterationChecks()
             }
@@ -18223,6 +18252,12 @@ class Checker(
         if (spineIanyActive) spineIanyLeaveNode(node)
         // INV.4(d) walker 5: the definite-assignment pass's core-frame pops.
         if (spineDaActive) spineDaLeaveNode(node)
+        // INV.4(d) walker 8: the implicit-returns anchors dispatch at LEAVE,
+        // not enter — the 17.135 TS2304/TS2314 diagnostics-list probes in
+        // checkBodyForImplicitReturnCore must see the return annotation's
+        // OWN spine emissions (the ures family fires at the annotation
+        // node's enter, i.e. after the fn's enter but before its leave).
+        if (spineIrActive) spineIrLeaveNode(node)
     }
 
     // ── INV.4(c)(i) spine-maintained lexical scope state ───────────────────
@@ -43954,6 +43989,18 @@ class Checker(
         private const val UBD_EXPR = 3
         private const val UBD_LIST = 4
         private const val UBD_MEMBER = 5
+
+        // INV.4(d) walker 8 (round 537) — [spineIrStatus] states. STMT = a
+        // statement position descended by the deleted
+        // walkStmtForImplicitReturns (Blocks/ModuleBlocks carry it through to
+        // their statements); EXPR = an expression position descended by the
+        // deleted walkExprForImplicitReturns; MEMBER = a reached carrier
+        // (class/objlit member, switch clause, catch clause, template span,
+        // variable-declaration chain); NONE = never reached.
+        private const val IR_NONE = 1
+        private const val IR_STMT = 2
+        private const val IR_EXPR = 3
+        private const val IR_MEMBER = 4
 
         /** Maximum antecedent walk depth for control-flow narrowing, aligned with tsc's
          *  `flowDepth === 2000` stack guard (M1.2b, round 386 — was 50). Do NOT lower it
@@ -78688,32 +78735,252 @@ interface DataView {
     // TS7030: Not all code paths return a value / TS2355
     // -----------------------------------------------------------------------
 
-    private fun checkImplicitReturns() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            // Skip JS files — return type checks (TS2355/TS7030/TS2366) don't apply
-            if (!options.checkJs && (fileName.endsWith(".js") || fileName.endsWith(".jsx"))) continue
-            val source = result.sourceFile.text
-            // Round 423: expose the file's flow graph via the pass-dedicated field so the
-            // exhaustive-switch analysis can guard-narrow a discriminant RECEIVER
-            // (`if (!target) return;` / an early-return type guard) — see
-            // [requiredUnionDiscriminantKeys], which lifts it into [currentFlowGraph]
-            // only around its own narrowing walk.
-            implicitReturnFlowGraph = result.flowGraph
-            // Round 477: the conflation-aware annotation resolution (per-file interface
-            // views, [interfaceDeclsForCurrentFileView]) keys on the CURRENT check file
-            // — previously stale from whatever pass ran before, so per-file views
-            // resolved against the WRONG file during this pass.
-            val savedCheckFile = currentCheckFileName
-            currentCheckFileName = fileName
-            try {
-                walkForImplicitReturns(result.sourceFile.statements, source, fileName)
-            } finally {
-                implicitReturnFlowGraph = null
-                currentCheckFileName = savedCheckFile
+    // ── INV.4(d) walker 8 (round 537): checkImplicitReturns on the spine ──
+    // (Fields + the IR_* states are declared before init — see the spineIr
+    // field block. The per-file driver and the recursion walkers
+    // walkForImplicitReturns / walkStmtForImplicitReturns /
+    // walkExprForImplicitReturns are deleted; the five anchor functions are
+    // retained MINUS their trailing body recursion, which the spine owns.)
+
+    /** Per-file setup for the spine-hosted implicit-returns pass. */
+    private fun spineIrSetup(result: BinderResult) {
+        val fileName = result.sourceFile.fileName
+        // Skip JS files — return type checks (TS2355/TS7030/TS2366) don't
+        // apply. NOTE the legacy gate is .js/.jsx ONLY (.mjs/.cjs stay
+        // checked), so spineIsJsLike is deliberately NOT used here.
+        spineIrActive = !spineIsDts &&
+            (options.checkJs || !(fileName.endsWith(".js") || fileName.endsWith(".jsx")))
+        if (!spineIrActive) {
+            spineIrReachMemo = ByteArray(0)
+            spineIrFlowGraph = null
+            return
+        }
+        val n = result.sourceFile.nodeCount
+        spineIrReachMemo = if (n > 0) ByteArray(n) else ByteArray(0)
+        // Round 423: the file's flow graph, exposed via the pass-dedicated
+        // field so the exhaustive-switch analysis can guard-narrow a
+        // discriminant RECEIVER — see [requiredUnionDiscriminantKeys], which
+        // lifts it into [currentFlowGraph] only around its own narrowing walk.
+        spineIrFlowGraph = result.flowGraph
+    }
+
+    private fun spineIrTeardown() {
+        spineIrActive = false
+        spineIrReachMemo = ByteArray(0)
+        spineIrFlowGraph = null
+    }
+
+    /**
+     * The legacy per-file ambient state installed around EACH anchor dispatch
+     * (never walk-wide — the currentArithmeticFlowGraph hazard):
+     * implicitReturnFlowGraph (round 423) + currentCheckFileName (round 477 —
+     * the conflation-aware per-file interface views key on it) + the
+     * PRE-SPINE resting currentFileLocals/currentFunctionParams (the legacy
+     * pass ran OUTSIDE the spine's per-file currentFileLocals install, and
+     * checkGetAccessorForImplicitReturn reads currentFunctionParams' resting
+     * value without setting it).
+     */
+    private inline fun spineIrDispatch(body: () -> Unit) {
+        val savedGraph = implicitReturnFlowGraph
+        val savedCheckFile = currentCheckFileName
+        val savedLocals = currentFileLocals
+        val savedParams = currentFunctionParams
+        implicitReturnFlowGraph = spineIrFlowGraph
+        currentCheckFileName = spineFileName
+        currentFileLocals = spineIrRestingLocals
+        currentFunctionParams = spineIrRestingParams
+        try {
+            body()
+        } finally {
+            implicitReturnFlowGraph = savedGraph
+            currentCheckFileName = savedCheckFile
+            currentFileLocals = savedLocals
+            currentFunctionParams = savedParams
+        }
+    }
+
+    /** Per-node LEAVE hook: the five anchor dispatches at reached fn-likes
+     *  (leave-position so the 17.135 diagnostics probes see the subtree's
+     *  own spine emissions — see the spineLeaveNode call site). */
+    private fun spineIrLeaveNode(node: Node) {
+        when (node) {
+            is FunctionDeclaration -> if (spineIrStatus(node) == IR_STMT) {
+                spineIrDispatch { checkFunctionForImplicitReturn(node, spineSource, spineFileName) }
+            }
+            is MethodDeclaration -> if (spineIrStatus(node) == IR_MEMBER) {
+                spineIrDispatch { checkMethodForImplicitReturn(node, spineSource, spineFileName) }
+            }
+            is GetAccessor -> if (spineIrStatus(node) == IR_MEMBER) {
+                spineIrDispatch { checkGetAccessorForImplicitReturn(node, spineSource, spineFileName) }
+            }
+            is FunctionExpression -> {
+                val st = spineIrStatus(node)
+                if (st == IR_EXPR || st == IR_MEMBER) {
+                    spineIrDispatch { checkFuncExprForImplicitReturn(node, spineSource, spineFileName) }
+                }
+            }
+            is ArrowFunction -> if (spineIrStatus(node) == IR_EXPR) {
+                spineIrDispatch { checkArrowForImplicitReturn(node, spineSource, spineFileName) }
+            }
+            else -> {}
+        }
+    }
+
+    /**
+     * Memoized reach classifier — the deleted walkStmtForImplicitReturns /
+     * walkExprForImplicitReturns dispatch arms verbatim (see the IR_*
+     * states). Ascends to the first memoized/terminal ancestor, then walks
+     * back down over [spineIrEdge].
+     */
+    private fun spineIrStatus(node: Node): Int {
+        if (node is SourceFile) return IR_STMT
+        val memo = spineIrReachMemo
+        run {
+            val id = (node as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) {
+                val m = memo[id].toInt()
+                if (m != 0) return m
             }
         }
+        val chain = spineIrChain
+        chain.clear()
+        var cur: Node = node
+        val anchor: Node?
+        var anchorStatus = IR_NONE
+        while (true) {
+            chain.add(cur)
+            val parent = (cur as NodeBase).parent
+            if (parent == null) { anchor = null; break } // detached/unindexed → NONE
+            if (parent is SourceFile) { anchor = parent; anchorStatus = IR_STMT; break }
+            val pid = (parent as NodeBase).nodeId
+            val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
+            if (pm != 0) { anchor = parent; anchorStatus = pm; break }
+            cur = parent
+        }
+        var pNode: Node? = anchor
+        var pStatus = anchorStatus
+        var result = IR_NONE
+        for (i in chain.indices.reversed()) {
+            val c = chain[i]
+            result = if (pNode == null || pStatus == IR_NONE) IR_NONE
+                else spineIrEdge(pNode, pStatus, c)
+            val cid = (c as NodeBase).nodeId
+            if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
+            pNode = c
+            pStatus = result
+        }
+        chain.clear()
+        return result
+    }
+
+    /**
+     * The edge rules — the deleted walkers' arms verbatim. Unlisted edges are
+     * NONE (the legacy `else -> {}`s: return/throw/export= EXPRESSIONS,
+     * if/while/do/switch conditions, for headers and for-in/of iterated
+     * expressions, class-DECLARATION property initializers and
+     * Constructor/SetAccessor bodies, object-literal SetAccessors, shorthand
+     * assignments, arrow CONCISE bodies, GENERATOR bodies, GetAccessor
+     * error-recovery sentinel bodies, type positions).
+     */
+    private fun spineIrEdge(parent: Node, pStatus: Int, child: Node): Int = when (pStatus) {
+        IR_STMT -> when (parent) {
+            is SourceFile -> if (child is Statement) IR_STMT else IR_NONE
+            is Block -> if (child is Statement) IR_STMT else IR_NONE
+            is ModuleBlock -> if (child is Statement) IR_STMT else IR_NONE
+            is FunctionDeclaration ->
+                if (child === parent.body && !parent.asteriskToken) IR_STMT else IR_NONE
+            is ClassDeclaration ->
+                if (child is MethodDeclaration || child is GetAccessor) IR_MEMBER else IR_NONE
+            is IfStatement ->
+                if (child === parent.thenStatement || child === parent.elseStatement) IR_STMT
+                else IR_NONE
+            is LabeledStatement -> if (child === parent.statement) IR_STMT else IR_NONE
+            is ForStatement -> if (child === parent.statement) IR_STMT else IR_NONE
+            is ForInStatement -> if (child === parent.statement) IR_STMT else IR_NONE
+            is ForOfStatement -> if (child === parent.statement) IR_STMT else IR_NONE
+            is WhileStatement -> if (child === parent.statement) IR_STMT else IR_NONE
+            is DoStatement -> if (child === parent.statement) IR_STMT else IR_NONE
+            is SwitchStatement -> if (child is CaseClause || child is DefaultClause) IR_MEMBER else IR_NONE
+            is TryStatement -> when {
+                child === parent.tryBlock || child === parent.finallyBlock -> IR_STMT
+                child === parent.catchClause -> IR_MEMBER
+                else -> IR_NONE
+            }
+            is ExpressionStatement -> if (child === parent.expression) IR_EXPR else IR_NONE
+            is VariableStatement -> if (child === parent.declarationList) IR_MEMBER else IR_NONE
+            is ModuleDeclaration -> if (child === parent.body && child is ModuleBlock) IR_STMT else IR_NONE
+            else -> IR_NONE
+        }
+        IR_MEMBER -> when (parent) {
+            is MethodDeclaration ->
+                if (child === parent.body && !parent.asteriskToken) IR_STMT else IR_NONE
+            is GetAccessor ->
+                if (child === parent.body && child.pos != -1) IR_STMT else IR_NONE
+            is FunctionExpression ->
+                if (child === parent.body && !parent.asteriskToken) IR_STMT else IR_NONE
+            is CaseClause -> if (child is Statement) IR_STMT else IR_NONE
+            is DefaultClause -> if (child is Statement) IR_STMT else IR_NONE
+            is CatchClause -> if (child === parent.block) IR_STMT else IR_NONE
+            is VariableDeclarationList -> if (child is VariableDeclaration) IR_MEMBER else IR_NONE
+            is VariableDeclaration -> if (child === parent.initializer) IR_EXPR else IR_NONE
+            is PropertyDeclaration -> if (child === parent.initializer) IR_EXPR else IR_NONE
+            is PropertyAssignment -> if (child === parent.initializer) IR_EXPR else IR_NONE
+            is SpreadAssignment -> if (child === parent.expression) IR_EXPR else IR_NONE
+            is TemplateSpan -> if (child === parent.expression) IR_EXPR else IR_NONE
+            else -> IR_NONE
+        }
+        IR_EXPR -> when (parent) {
+            is FunctionExpression ->
+                if (child === parent.body && !parent.asteriskToken) IR_STMT else IR_NONE
+            is ArrowFunction ->
+                if (child === parent.body && child is Block) IR_STMT else IR_NONE
+            is ClassExpression -> when (child) {
+                is MethodDeclaration, is GetAccessor, is PropertyDeclaration -> IR_MEMBER
+                else -> IR_NONE
+            }
+            is ObjectLiteralExpression -> when (child) {
+                is GetAccessor, is MethodDeclaration, is FunctionExpression,
+                is PropertyAssignment, is SpreadAssignment -> IR_MEMBER
+                else -> IR_NONE
+            }
+            is CallExpression ->
+                if (child === parent.expression || parent.arguments.any { it === child }) IR_EXPR
+                else IR_NONE
+            is NewExpression ->
+                if (child === parent.expression || parent.arguments?.any { it === child } == true) IR_EXPR
+                else IR_NONE
+            is ParenthesizedExpression -> if (child === parent.expression) IR_EXPR else IR_NONE
+            is BinaryExpression -> if (child === parent.left || child === parent.right) IR_EXPR else IR_NONE
+            is ConditionalExpression ->
+                if (child === parent.condition || child === parent.whenTrue ||
+                    child === parent.whenFalse) IR_EXPR else IR_NONE
+            is ArrayLiteralExpression -> if (parent.elements.any { it === child }) IR_EXPR else IR_NONE
+            is SpreadElement -> if (child === parent.expression) IR_EXPR else IR_NONE
+            is AsExpression -> if (child === parent.expression) IR_EXPR else IR_NONE
+            is TypeAssertionExpression -> if (child === parent.expression) IR_EXPR else IR_NONE
+            is NonNullExpression -> if (child === parent.expression) IR_EXPR else IR_NONE
+            is SatisfiesExpression -> if (child === parent.expression) IR_EXPR else IR_NONE
+            is PropertyAccessExpression -> if (child === parent.expression) IR_EXPR else IR_NONE
+            is ElementAccessExpression ->
+                if (child === parent.expression || child === parent.argumentExpression) IR_EXPR
+                else IR_NONE
+            is TemplateExpression -> if (child is TemplateSpan) IR_MEMBER else IR_NONE
+            is TaggedTemplateExpression -> when {
+                child === parent.tag -> IR_EXPR
+                child === parent.template && child is TemplateExpression -> IR_EXPR
+                else -> IR_NONE
+            }
+            is PrefixUnaryExpression -> if (child === parent.operand) IR_EXPR else IR_NONE
+            is PostfixUnaryExpression -> if (child === parent.operand) IR_EXPR else IR_NONE
+            is AwaitExpression -> if (child === parent.expression) IR_EXPR else IR_NONE
+            is YieldExpression -> if (child === parent.expression) IR_EXPR else IR_NONE
+            is VoidExpression -> if (child === parent.expression) IR_EXPR else IR_NONE
+            is DeleteExpression -> if (child === parent.expression) IR_EXPR else IR_NONE
+            is TypeOfExpression -> if (child === parent.expression) IR_EXPR else IR_NONE
+            is CommaListExpression -> if (parent.elements.any { it === child }) IR_EXPR else IR_NONE
+            else -> IR_NONE
+        }
+        else -> IR_NONE
     }
 
     private fun checkTypePredicateNullableRecovery() {
@@ -78886,148 +79153,6 @@ interface DataView {
         }
     }
 
-    private fun walkForImplicitReturns(stmts: List<Statement>, source: String, fileName: String) {
-        for (stmt in stmts) walkStmtForImplicitReturns(stmt, source, fileName)
-    }
-
-    private fun walkStmtForImplicitReturns(stmt: Statement, source: String, fileName: String) {
-        when (stmt) {
-            is FunctionDeclaration -> checkFunctionForImplicitReturn(stmt, source, fileName)
-            is ClassDeclaration -> {
-                for (m in stmt.members) {
-                    when (m) {
-                        is MethodDeclaration -> checkMethodForImplicitReturn(m, source, fileName)
-                        is Constructor -> {} // constructors don't need return value checks
-                        is GetAccessor -> checkGetAccessorForImplicitReturn(m, source, fileName)
-                        is SetAccessor -> {} // setters don't return
-                        else -> {}
-                    }
-                }
-            }
-            is Block -> walkForImplicitReturns(stmt.statements, source, fileName)
-            is IfStatement -> {
-                walkStmtForImplicitReturns(stmt.thenStatement, source, fileName)
-                stmt.elseStatement?.let { walkStmtForImplicitReturns(it, source, fileName) }
-            }
-            is LabeledStatement -> walkStmtForImplicitReturns(stmt.statement, source, fileName)
-            is ForStatement -> walkStmtForImplicitReturns(stmt.statement, source, fileName)
-            is ForInStatement -> walkStmtForImplicitReturns(stmt.statement, source, fileName)
-            is ForOfStatement -> walkStmtForImplicitReturns(stmt.statement, source, fileName)
-            is WhileStatement -> walkStmtForImplicitReturns(stmt.statement, source, fileName)
-            is DoStatement -> walkStmtForImplicitReturns(stmt.statement, source, fileName)
-            is SwitchStatement -> {
-                for (clause in stmt.caseBlock) {
-                    when (clause) {
-                        is CaseClause -> walkForImplicitReturns(clause.statements, source, fileName)
-                        is DefaultClause -> walkForImplicitReturns(clause.statements, source, fileName)
-                        else -> {}
-                    }
-                }
-            }
-            is TryStatement -> {
-                walkForImplicitReturns(stmt.tryBlock.statements, source, fileName)
-                stmt.catchClause?.let { walkForImplicitReturns(it.block.statements, source, fileName) }
-                stmt.finallyBlock?.let { walkForImplicitReturns(it.statements, source, fileName) }
-            }
-            is ExpressionStatement -> walkExprForImplicitReturns(stmt.expression, source, fileName)
-            is VariableStatement -> {
-                for (decl in stmt.declarationList.declarations) {
-                    decl.initializer?.let { walkExprForImplicitReturns(it, source, fileName) }
-                }
-            }
-            is ModuleDeclaration -> {
-                val body = stmt.body
-                if (body is ModuleBlock) walkForImplicitReturns(body.statements, source, fileName)
-            }
-            else -> {}
-        }
-    }
-
-    private fun walkExprForImplicitReturns(expr: Expression, source: String, fileName: String) {
-        when (expr) {
-            is FunctionExpression -> {
-                checkFuncExprForImplicitReturn(expr, source, fileName)
-            }
-            is ArrowFunction -> {
-                checkArrowForImplicitReturn(expr, source, fileName)
-            }
-            is ClassExpression -> {
-                for (m in expr.members) {
-                    when (m) {
-                        is MethodDeclaration -> checkMethodForImplicitReturn(m, source, fileName)
-                        is GetAccessor -> checkGetAccessorForImplicitReturn(m, source, fileName)
-                        is PropertyDeclaration -> m.initializer?.let { walkExprForImplicitReturns(it, source, fileName) }
-                        else -> {}
-                    }
-                }
-            }
-            is ObjectLiteralExpression -> {
-                for (prop in expr.properties) {
-                    when (prop) {
-                        is GetAccessor -> checkGetAccessorForImplicitReturn(prop, source, fileName)
-                        is MethodDeclaration -> checkMethodForImplicitReturn(prop, source, fileName)
-                        is FunctionExpression -> checkFuncExprForImplicitReturn(prop, source, fileName)
-                        is PropertyAssignment -> walkExprForImplicitReturns(prop.initializer, source, fileName)
-                        is SpreadAssignment -> walkExprForImplicitReturns(prop.expression, source, fileName)
-                        else -> {}
-                    }
-                }
-            }
-            // 16.0: Recurse into nested expressions to visit arrows in call args, etc.
-            is CallExpression -> {
-                walkExprForImplicitReturns(expr.expression, source, fileName)
-                for (arg in expr.arguments) walkExprForImplicitReturns(arg, source, fileName)
-            }
-            is NewExpression -> {
-                walkExprForImplicitReturns(expr.expression, source, fileName)
-                expr.arguments?.forEach { walkExprForImplicitReturns(it, source, fileName) }
-            }
-            is ParenthesizedExpression -> walkExprForImplicitReturns(expr.expression, source, fileName)
-            is BinaryExpression -> {
-                val rightStack = ArrayDeque<Expression>()
-                var cur: Expression = expr
-                while (cur is BinaryExpression) { rightStack.addLast(cur.right); cur = cur.left }
-                walkExprForImplicitReturns(cur, source, fileName)
-                while (rightStack.isNotEmpty()) walkExprForImplicitReturns(rightStack.removeLast(), source, fileName)
-            }
-            is ConditionalExpression -> {
-                walkExprForImplicitReturns(expr.condition, source, fileName)
-                walkExprForImplicitReturns(expr.whenTrue, source, fileName)
-                walkExprForImplicitReturns(expr.whenFalse, source, fileName)
-            }
-            is ArrayLiteralExpression -> expr.elements.forEach { walkExprForImplicitReturns(it, source, fileName) }
-            is SpreadElement -> walkExprForImplicitReturns(expr.expression, source, fileName)
-            is AsExpression -> walkExprForImplicitReturns(expr.expression, source, fileName)
-            is TypeAssertionExpression -> walkExprForImplicitReturns(expr.expression, source, fileName)
-            is NonNullExpression -> walkExprForImplicitReturns(expr.expression, source, fileName)
-            is SatisfiesExpression -> walkExprForImplicitReturns(expr.expression, source, fileName)
-            is PropertyAccessExpression -> walkExprForImplicitReturns(expr.expression, source, fileName)
-            is ElementAccessExpression -> {
-                walkExprForImplicitReturns(expr.expression, source, fileName)
-                walkExprForImplicitReturns(expr.argumentExpression, source, fileName)
-            }
-            is TemplateExpression -> for (span in expr.templateSpans) {
-                walkExprForImplicitReturns(span.expression, source, fileName)
-            }
-            is TaggedTemplateExpression -> {
-                walkExprForImplicitReturns(expr.tag, source, fileName)
-                val t = expr.template
-                if (t is TemplateExpression) {
-                    for (span in t.templateSpans) walkExprForImplicitReturns(span.expression, source, fileName)
-                }
-            }
-            is PrefixUnaryExpression -> walkExprForImplicitReturns(expr.operand, source, fileName)
-            is PostfixUnaryExpression -> walkExprForImplicitReturns(expr.operand, source, fileName)
-            is AwaitExpression -> walkExprForImplicitReturns(expr.expression, source, fileName)
-            is YieldExpression -> expr.expression?.let { walkExprForImplicitReturns(it, source, fileName) }
-            is VoidExpression -> walkExprForImplicitReturns(expr.expression, source, fileName)
-            is DeleteExpression -> walkExprForImplicitReturns(expr.expression, source, fileName)
-            is TypeOfExpression -> walkExprForImplicitReturns(expr.expression, source, fileName)
-            is CommaListExpression -> for (e in expr.elements) walkExprForImplicitReturns(e, source, fileName)
-            else -> {}
-        }
-    }
-
     /**
      * Get the return type annotation node position/length for a function, for TS7030 diagnostic span.
      */
@@ -79051,8 +79176,6 @@ interface DataView {
                 checkIndirectSelfReferenceReturn(name.text, name.pos, name.text.length, body.statements, source, fileName)
             }
         }
-        // Recurse into body for nested functions
-        walkForImplicitReturns(body.statements, source, fileName)
     }
 
     /**
@@ -79271,7 +79394,6 @@ interface DataView {
         } finally {
             currentFunctionParams = savedParams
         }
-        walkForImplicitReturns(body.statements, source, fileName)
     }
 
     /**
@@ -79381,7 +79503,6 @@ interface DataView {
                 ))
             }
         }
-        walkForImplicitReturns(body.statements, source, fileName)
     }
 
     private fun checkFuncExprForImplicitReturn(expr: FunctionExpression, source: String, fileName: String) {
@@ -79397,7 +79518,6 @@ interface DataView {
         } finally {
             currentFunctionParams = savedParams
         }
-        walkForImplicitReturns(body.statements, source, fileName)
     }
 
     private fun checkArrowForImplicitReturn(expr: ArrowFunction, source: String, fileName: String) {
@@ -79449,7 +79569,6 @@ interface DataView {
         } finally {
             currentFunctionParams = savedParams
         }
-        walkForImplicitReturns(bodyNode.statements, source, fileName)
     }
 
     /**
