@@ -1234,6 +1234,24 @@ class Checker(
     /** Reusable ascent buffer for [spineNuStatus]. */
     private val spineNuChain = ArrayList<Node>()
 
+    // ── INV.4(d) walkers 12+13 (round 541): the order-coupled pair
+    // checkCommaOperatorUnused (TS2695) + checkNullishPredicates (B277
+    // TS2871/TS2869 + while/do TS2872/TS2873) on the spine. Each keeps its
+    // own verbatim classifier (their reach differs: comma walks tagged
+    // templates/yield/delete/typeof/comma-lists but NOT objlit method
+    // bodies; np the reverse). ORDER CONTRACTS: comma's TS2695 is PRE-order
+    // (outer-before-inner) → anchors at ENTERS; np's `??` checks are
+    // POST-order (inner-before-outer, right subtree first) → anchors at the
+    // BinaryExpression's LEAVE; while/do truthiness at the CONDITION's leave
+    // (after the condition's own emissions, before the body's). Same-position
+    // comma-vs-np pairs stay comma-first because enters precede leaves.
+    private var spineCmActive = false
+    private var spineCmReachMemo = ByteArray(0)
+    private val spineCmChain = ArrayList<Node>()
+    private var spineNpActive = false
+    private var spineNpReachMemo = ByteArray(0)
+    private val spineNpChain = ArrayList<Node>()
+
     // Positions of ObjectLiteralExpression nodes that are destructuring-assignment
     // TARGETS (LHS of `=`, incl. nested through array/object/default nesting). Consumed
     // by the shorthand-with-initializer TS1312/TS18004 selection in
@@ -2500,6 +2518,10 @@ class Checker(
         pass("checkCrossFileUseBeforeDeclaration") {
             if (binderResults.size > 1) checkCrossFileUseBeforeDeclaration()
         }
+        // 20b/B277. Comma-operator TS2695 + the np TS2871/TS2869/TS2872/TS2873
+        // pair: ride the spine (INV.4(d) walkers 12+13 — comma anchors at
+        // ENTERS, np anchors at LEAVES, preserving the comma-first
+        // same-position order).
         // 21b. Null/undefined literal usage (TS18050 family): rides the spine
         // (INV.4(d) walker 11 — spineNuSetup/spineNuEnterNode).
         // 20b. Always-truthy/falsy conditions (TS2872/TS2873 + TS1345 +
@@ -2855,11 +2877,9 @@ class Checker(
         // 20a. Uncalled function in conditional position (TS2774/TS2801) migrated
         // to the check spine (INV.4(d) walker 1, round 530) — see
         // [spineUncalledDispatch], [spineUncalledReached], [spineUncalledWithScopes].
-        // 20b. Check comma operator left side unused (TS2695)
-        pass("checkCommaOperatorUnused") { checkCommaOperatorUnused() }
-        // B277: TS2871/TS2869 `??` nullish predicates + while/do TS2872/TS2873 truthiness.
-        // Must run AFTER checkCommaOperatorUnused so same-position TS2695 sorts first.
-        pass("checkNullishPredicates") { checkNullishPredicates() }
+        // 20b/B277. checkCommaOperatorUnused + checkNullishPredicates moved
+        // (as an ORDER-COUPLED pair) to the spine slot — see the
+        // pass("checkSpine") site (INV.4(d) walkers 12+13 slot-move pre-gate).
         // 21b. checkNullUndefinedUsage moved to the spine slot — see the
         // pass("checkSpine") site (INV.4(d) walker 11 slot-move pre-gate).
         // 22. Check for implicit this (TS2683)
@@ -18062,6 +18082,8 @@ class Checker(
                 spineCaSetup(result)
                 spineAtSetup(result)
                 spineNuSetup(result)
+                spineCmSetup(result)
+                spineNpSetup(result)
                 spineUResAuditActive = unresolvedAuditEnabled && spineUResActive
                 try {
                     spineWalkFile(sf)
@@ -18081,6 +18103,8 @@ class Checker(
                     spineCaTeardown()
                     spineAtTeardown()
                     spineNuTeardown()
+                    spineCmTeardown()
+                    spineNpTeardown()
                 }
                 spineResolveDeferredIterationChecks()
             }
@@ -18172,6 +18196,10 @@ class Checker(
         if (spineAtActive) spineAtEnterNode(node)
         // INV.4(d) walker 11: the null/undefined-usage pass — TS18050 anchors.
         if (spineNuActive) spineNuEnterNode(node)
+        // INV.4(d) walker 12: the comma-operator pass — TS2695 anchors
+        // (ENTER = the legacy pre-order; also keeps same-position pairs
+        // comma-before-np, since the np anchors fire at LEAVES).
+        if (spineCmActive) spineCmEnterNode(node)
         when (node) {
             is Identifier -> spineTavIdentifier(node)
             is PropertyDeclaration -> {
@@ -18349,6 +18377,10 @@ class Checker(
         if (spineDaActive) spineDaLeaveNode(node)
         // INV.4(d) walker 9: the const-assignment pass's frame pops.
         if (spineCaActive) spineCaLeaveNode(node)
+        // INV.4(d) walker 13: the nullish-predicates pass — `??` checks at
+        // binary LEAVES (the legacy post-order) + while/do condition
+        // truthiness at the condition's leave.
+        if (spineNpActive) spineNpLeaveNode(node)
         // INV.4(d) walker 8: the implicit-returns anchors dispatch at LEAVE,
         // not enter — the 17.135 TS2304/TS2314 diagnostics-list probes in
         // checkBodyForImplicitReturnCore must see the return annotation's
@@ -44135,6 +44167,16 @@ class Checker(
         private const val NU_EXPR = 3
         private const val NU_MEMBER = 4
 
+        // INV.4(d) walkers 12+13 (round 541) — [spineCmStatus]/[spineNpStatus] states.
+        private const val CM_NONE = 1
+        private const val CM_STMT = 2
+        private const val CM_EXPR = 3
+        private const val CM_MEMBER = 4
+        private const val NP_NONE = 1
+        private const val NP_STMT = 2
+        private const val NP_EXPR = 3
+        private const val NP_MEMBER = 4
+
         /** Maximum antecedent walk depth for control-flow narrowing, aligned with tsc's
          *  `flowDepth === 2000` stack guard (M1.2b, round 386 — was 50). Do NOT lower it
          *  back "to save time": truncated subtrees are never memo-stored (the clean-only
@@ -49518,103 +49560,235 @@ interface DataView {
     // Comma operator left side unused (TS2695)
     // -----------------------------------------------------------------------
 
-    private fun checkCommaOperatorUnused() {
-        // TypeScript suppresses TS2695 when allowUnreachableCode is explicitly true
-        if (options.allowUnreachableCode == true) return
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            // tsc: an allowJs file WITHOUT checkJs receives no semantic diagnostics.
-            if (isJsLikeFileName(fileName) && !options.checkJs) continue
-            val source = result.sourceFile.text
-            checkCommaInStatements(result.sourceFile.statements, source, fileName)
+    // ── INV.4(d) walker 12 (round 541): checkCommaOperatorUnused on the spine ──
+    // (Fields + CM_* states declared before init. The recursion walkers
+    // checkCommaInStatements/-InStatement/-InExpr are deleted; the leaf
+    // utilities hasSideEffects/isIndirectCallComma/commaLeftSpanLength are
+    // retained.)
+
+    /** Per-file setup: the legacy gates — allowUnreachableCode==true kills the
+     *  pass; a JS-like file without checkJs receives no semantic diagnostics. */
+    private fun spineCmSetup(result: BinderResult) {
+        spineCmActive = options.allowUnreachableCode != true && !spineIsDts &&
+            !(isJsLikeFileName(result.sourceFile.fileName) && !options.checkJs)
+        if (!spineCmActive) {
+            spineCmReachMemo = ByteArray(0)
+            return
+        }
+        val n = result.sourceFile.nodeCount
+        spineCmReachMemo = if (n > 0) ByteArray(n) else ByteArray(0)
+    }
+
+    private fun spineCmTeardown() {
+        spineCmActive = false
+        spineCmReachMemo = ByteArray(0)
+    }
+
+    /** The TS2695 anchor — the deleted left-spine loop's per-node emission,
+     *  at ENTER (spine preorder = the legacy outer-before-inner order). */
+    private fun spineCmEnterNode(node: Node) {
+        if (node !is BinaryExpression) return
+        if (node.operator != SyntaxKind.Comma) return
+        if (spineCmStatus(node) != CM_EXPR) return
+        if (!hasSideEffects(node.left) && !isIndirectCallComma(node)) {
+            val start = node.left.pos
+            val length = commaLeftSpanLength(node.left, start)
+            val (line, character) = getLineAndCharacterOfPosition(spineSource, start)
+            diagnostics.add(Diagnostic(
+                message = "Left side of comma operator is unused and has no side effects.",
+                category = DiagnosticCategory.Error,
+                code = 2695,
+                fileName = spineFileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
         }
     }
 
-    private fun checkCommaInStatements(stmts: List<Statement>, source: String, fileName: String) {
-        for (stmt in stmts) checkCommaInStatement(stmt, source, fileName)
+    /** Memoized reach classifier for the comma pass (the deleted arms verbatim). */
+    private fun spineCmStatus(node: Node): Int {
+        if (node is SourceFile) return CM_STMT
+        val memo = spineCmReachMemo
+        run {
+            val id = (node as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) {
+                val m = memo[id].toInt()
+                if (m != 0) return m
+            }
+        }
+        val chain = spineCmChain
+        chain.clear()
+        var cur: Node = node
+        val anchor: Node?
+        var anchorStatus = CM_NONE
+        while (true) {
+            chain.add(cur)
+            val parent = (cur as NodeBase).parent
+            if (parent == null) { anchor = null; break }
+            if (parent is SourceFile) { anchor = parent; anchorStatus = CM_STMT; break }
+            val pid = (parent as NodeBase).nodeId
+            val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
+            if (pm != 0) { anchor = parent; anchorStatus = pm; break }
+            cur = parent
+        }
+        var pNode: Node? = anchor
+        var pStatus = anchorStatus
+        var result = CM_NONE
+        for (i in chain.indices.reversed()) {
+            val c = chain[i]
+            result = if (pNode == null || pStatus == CM_NONE) CM_NONE
+                else spineCmEdge(pNode, pStatus, c)
+            val cid = (c as NodeBase).nodeId
+            if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
+            pNode = c
+            pStatus = result
+        }
+        chain.clear()
+        return result
     }
 
-    private fun checkCommaInStatement(stmt: Statement, source: String, fileName: String) {
-        when (stmt) {
-            is ExpressionStatement -> checkCommaInExpr(stmt.expression, source, fileName)
-            is VariableStatement -> for (d in stmt.declarationList.declarations) {
-                d.initializer?.let { checkCommaInExpr(it, source, fileName) }
+    /** The comma pass's edge rules — the deleted arms verbatim. NOTE the
+     *  quirk: object-literal METHOD/accessor bodies are NOT walked (unlike
+     *  the np pass); tagged templates, yield/delete/typeof/void operands,
+     *  comma-lists, and class expressions ARE. */
+    private fun spineCmEdge(parent: Node, pStatus: Int, child: Node): Int = when (pStatus) {
+        CM_STMT -> when (parent) {
+            is SourceFile -> if (child is Statement) CM_STMT else CM_NONE
+            is Block -> if (child is Statement) CM_STMT else CM_NONE
+            is ModuleBlock -> if (child is Statement) CM_STMT else CM_NONE
+            is ExpressionStatement -> if (child === parent.expression) CM_EXPR else CM_NONE
+            is VariableStatement -> if (child === parent.declarationList) CM_MEMBER else CM_NONE
+            is ReturnStatement -> if (child === parent.expression) CM_EXPR else CM_NONE
+            is ThrowStatement -> if (child === parent.expression) CM_EXPR else CM_NONE
+            is IfStatement -> when {
+                child === parent.expression -> CM_EXPR
+                child === parent.thenStatement || child === parent.elseStatement -> CM_STMT
+                else -> CM_NONE
             }
-            is ReturnStatement -> stmt.expression?.let { checkCommaInExpr(it, source, fileName) }
-            is IfStatement -> {
-                checkCommaInExpr(stmt.expression, source, fileName)
-                checkCommaInStatement(stmt.thenStatement, source, fileName)
-                stmt.elseStatement?.let { checkCommaInStatement(it, source, fileName) }
+            is FunctionDeclaration -> if (child === parent.body) CM_STMT else CM_NONE
+            is ClassDeclaration ->
+                if (child is MethodDeclaration || child is Constructor ||
+                    child is GetAccessor || child is SetAccessor ||
+                    child is PropertyDeclaration) CM_MEMBER else CM_NONE
+            is ForStatement -> when {
+                child === parent.initializer -> if (child is Expression) CM_EXPR else CM_MEMBER
+                child === parent.condition || child === parent.incrementor -> CM_EXPR
+                child === parent.statement -> CM_STMT
+                else -> CM_NONE
             }
-            is Block -> checkCommaInStatements(stmt.statements, source, fileName)
-            is FunctionDeclaration -> stmt.body?.let { checkCommaInStatements(it.statements, source, fileName) }
-            is ClassDeclaration -> for (m in stmt.members) {
-                when (m) {
-                    is MethodDeclaration -> m.body?.let { checkCommaInStatements(it.statements, source, fileName) }
-                    is Constructor -> m.body?.let { checkCommaInStatements(it.statements, source, fileName) }
-                    is PropertyDeclaration -> m.initializer?.let { checkCommaInExpr(it, source, fileName) }
-                    is GetAccessor -> m.body?.let { checkCommaInStatements(it.statements, source, fileName) }
-                    is SetAccessor -> m.body?.let { checkCommaInStatements(it.statements, source, fileName) }
-                    else -> {}
-                }
+            is ForInStatement -> when {
+                child === parent.expression -> CM_EXPR
+                child === parent.statement -> CM_STMT
+                else -> CM_NONE
             }
-            is ForStatement -> {
-                stmt.initializer?.let { init ->
-                    when (init) {
-                        is VariableDeclarationList -> for (d in init.declarations) {
-                            d.initializer?.let { checkCommaInExpr(it, source, fileName) }
-                        }
-                        is Expression -> checkCommaInExpr(init, source, fileName)
-                        else -> {}
-                    }
-                }
-                stmt.condition?.let { checkCommaInExpr(it, source, fileName) }
-                stmt.incrementor?.let { checkCommaInExpr(it, source, fileName) }
-                checkCommaInStatement(stmt.statement, source, fileName)
+            is ForOfStatement -> when {
+                child === parent.expression -> CM_EXPR
+                child === parent.statement -> CM_STMT
+                else -> CM_NONE
             }
-            is ForInStatement -> {
-                checkCommaInExpr(stmt.expression, source, fileName)
-                checkCommaInStatement(stmt.statement, source, fileName)
+            is WhileStatement -> when {
+                child === parent.expression -> CM_EXPR
+                child === parent.statement -> CM_STMT
+                else -> CM_NONE
             }
-            is ForOfStatement -> {
-                checkCommaInExpr(stmt.expression, source, fileName)
-                checkCommaInStatement(stmt.statement, source, fileName)
+            is DoStatement -> when {
+                child === parent.expression -> CM_EXPR
+                child === parent.statement -> CM_STMT
+                else -> CM_NONE
             }
-            is WhileStatement -> {
-                checkCommaInExpr(stmt.expression, source, fileName)
-                checkCommaInStatement(stmt.statement, source, fileName)
+            is SwitchStatement -> when {
+                child === parent.expression -> CM_EXPR
+                child is CaseClause || child is DefaultClause -> CM_MEMBER
+                else -> CM_NONE
             }
-            is DoStatement -> {
-                checkCommaInStatement(stmt.statement, source, fileName)
-                checkCommaInExpr(stmt.expression, source, fileName)
+            is TryStatement -> when {
+                child === parent.tryBlock || child === parent.finallyBlock -> CM_STMT
+                child === parent.catchClause -> CM_MEMBER
+                else -> CM_NONE
             }
-            is SwitchStatement -> {
-                checkCommaInExpr(stmt.expression, source, fileName)
-                for (c in stmt.caseBlock) {
-                    when (c) {
-                        is CaseClause -> {
-                            checkCommaInExpr(c.expression, source, fileName)
-                            checkCommaInStatements(c.statements, source, fileName)
-                        }
-                        is DefaultClause -> checkCommaInStatements(c.statements, source, fileName)
-                        else -> {}
-                    }
-                }
-            }
-            is TryStatement -> {
-                checkCommaInStatements(stmt.tryBlock.statements, source, fileName)
-                stmt.catchClause?.let { checkCommaInStatements(it.block.statements, source, fileName) }
-                stmt.finallyBlock?.let { checkCommaInStatements(it.statements, source, fileName) }
-            }
-            is ThrowStatement -> stmt.expression?.let { checkCommaInExpr(it, source, fileName) }
-            is LabeledStatement -> checkCommaInStatement(stmt.statement, source, fileName)
-            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { checkCommaInStatements(it.statements, source, fileName) }
-            is EnumDeclaration -> for (m in stmt.members) {
-                m.initializer?.let { checkCommaInExpr(it, source, fileName) }
-            }
-            else -> {}
+            is LabeledStatement -> if (child === parent.statement) CM_STMT else CM_NONE
+            is ModuleDeclaration -> if (child === parent.body && child is ModuleBlock) CM_STMT else CM_NONE
+            is EnumDeclaration -> if (child is EnumMember) CM_MEMBER else CM_NONE
+            else -> CM_NONE
         }
+        CM_MEMBER -> when (parent) {
+            is VariableDeclarationList -> if (child is VariableDeclaration) CM_MEMBER else CM_NONE
+            is VariableDeclaration -> if (child === parent.initializer) CM_EXPR else CM_NONE
+            is MethodDeclaration -> if (child === parent.body) CM_STMT else CM_NONE
+            is Constructor -> if (child === parent.body) CM_STMT else CM_NONE
+            is GetAccessor -> if (child === parent.body) CM_STMT else CM_NONE
+            is SetAccessor -> if (child === parent.body) CM_STMT else CM_NONE
+            is PropertyDeclaration -> if (child === parent.initializer) CM_EXPR else CM_NONE
+            is CaseClause -> when {
+                child === parent.expression -> CM_EXPR
+                child is Statement -> CM_STMT
+                else -> CM_NONE
+            }
+            is DefaultClause -> if (child is Statement) CM_STMT else CM_NONE
+            is CatchClause -> if (child === parent.block) CM_STMT else CM_NONE
+            is EnumMember -> if (child === parent.initializer) CM_EXPR else CM_NONE
+            is PropertyAssignment -> if (child === parent.initializer) CM_EXPR else CM_NONE
+            is ShorthandPropertyAssignment ->
+                if (child === parent.objectAssignmentInitializer) CM_EXPR else CM_NONE
+            is SpreadAssignment -> if (child === parent.expression) CM_EXPR else CM_NONE
+            is TemplateSpan -> if (child === parent.expression) CM_EXPR else CM_NONE
+            else -> CM_NONE
+        }
+        CM_EXPR -> when (parent) {
+            is BinaryExpression -> if (child === parent.left || child === parent.right) CM_EXPR else CM_NONE
+            is ParenthesizedExpression -> if (child === parent.expression) CM_EXPR else CM_NONE
+            is ConditionalExpression ->
+                if (child === parent.condition || child === parent.whenTrue ||
+                    child === parent.whenFalse) CM_EXPR else CM_NONE
+            is ArrowFunction -> when {
+                child !== parent.body -> CM_NONE
+                child is Block -> CM_STMT
+                else -> CM_EXPR
+            }
+            is FunctionExpression -> if (child === parent.body) CM_STMT else CM_NONE
+            is CallExpression ->
+                if (child === parent.expression || parent.arguments.any { it === child }) CM_EXPR
+                else CM_NONE
+            is NewExpression ->
+                if (child === parent.expression || parent.arguments?.any { it === child } == true) CM_EXPR
+                else CM_NONE
+            is PropertyAccessExpression -> if (child === parent.expression) CM_EXPR else CM_NONE
+            is ElementAccessExpression ->
+                if (child === parent.expression || child === parent.argumentExpression) CM_EXPR
+                else CM_NONE
+            is ArrayLiteralExpression -> if (parent.elements.any { it === child }) CM_EXPR else CM_NONE
+            is ObjectLiteralExpression -> when (child) {
+                is PropertyAssignment, is ShorthandPropertyAssignment, is SpreadAssignment -> CM_MEMBER
+                else -> CM_NONE
+            }
+            is PrefixUnaryExpression -> if (child === parent.operand) CM_EXPR else CM_NONE
+            is PostfixUnaryExpression -> if (child === parent.operand) CM_EXPR else CM_NONE
+            is TemplateExpression -> if (child is TemplateSpan) CM_MEMBER else CM_NONE
+            is TaggedTemplateExpression -> when {
+                child === parent.tag -> CM_EXPR
+                child === parent.template && child is TemplateExpression -> CM_EXPR
+                else -> CM_NONE
+            }
+            is TypeAssertionExpression -> if (child === parent.expression) CM_EXPR else CM_NONE
+            is AsExpression -> if (child === parent.expression) CM_EXPR else CM_NONE
+            is NonNullExpression -> if (child === parent.expression) CM_EXPR else CM_NONE
+            is SatisfiesExpression -> if (child === parent.expression) CM_EXPR else CM_NONE
+            is SpreadElement -> if (child === parent.expression) CM_EXPR else CM_NONE
+            is AwaitExpression -> if (child === parent.expression) CM_EXPR else CM_NONE
+            is YieldExpression -> if (child === parent.expression) CM_EXPR else CM_NONE
+            is VoidExpression -> if (child === parent.expression) CM_EXPR else CM_NONE
+            is DeleteExpression -> if (child === parent.expression) CM_EXPR else CM_NONE
+            is TypeOfExpression -> if (child === parent.expression) CM_EXPR else CM_NONE
+            is CommaListExpression -> if (parent.elements.any { it === child }) CM_EXPR else CM_NONE
+            is ClassExpression ->
+                if (child is MethodDeclaration || child is Constructor ||
+                    child is GetAccessor || child is SetAccessor ||
+                    child is PropertyDeclaration) CM_MEMBER else CM_NONE
+            else -> CM_NONE
+        }
+        else -> CM_NONE
     }
 
     /** Check if this comma expression is an indirect call pattern: (0, obj.prop)() */
@@ -49625,116 +49799,6 @@ interface DataView {
         // (0, eval)("code") — indirect eval pattern
         if (right is Identifier && right.text == "eval") return true
         return false
-    }
-
-    private fun checkCommaInExpr(expr: Expression, source: String, fileName: String) {
-        when (expr) {
-            is BinaryExpression -> {
-                // B64.3: iterative left-spine flatten to avoid StackOverflow on
-                // deeply nested binary chains (`a + b + c + ... + z`). For each
-                // BinaryExpression on the spine, check the Comma-operator rule
-                // BEFORE flattening so the per-node diagnostic emission is
-                // preserved. Rights are pushed onto a stack and processed at
-                // the end via the recursive helper (the standard recursive
-                // path handles them since they have bounded depth from the
-                // parser).
-                val rightStack = ArrayDeque<Expression>()
-                var cur: Expression = expr
-                while (cur is BinaryExpression) {
-                    if (cur.operator == SyntaxKind.Comma) {
-                        if (!hasSideEffects(cur.left) && !isIndirectCallComma(cur)) {
-                            val start = cur.left.pos
-                            val length = commaLeftSpanLength(cur.left, start)
-                            val (line, character) = getLineAndCharacterOfPosition(source, start)
-                            diagnostics.add(Diagnostic(
-                                message = "Left side of comma operator is unused and has no side effects.",
-                                category = DiagnosticCategory.Error,
-                                code = 2695,
-                                fileName = fileName,
-                                line = line,
-                                character = character,
-                                start = start,
-                                length = length,
-                            ))
-                        }
-                    }
-                    rightStack.addLast(cur.right)
-                    cur = cur.left
-                }
-                checkCommaInExpr(cur, source, fileName)
-                while (rightStack.isNotEmpty()) {
-                    checkCommaInExpr(rightStack.removeLast(), source, fileName)
-                }
-            }
-            is ParenthesizedExpression -> checkCommaInExpr(expr.expression, source, fileName)
-            is ConditionalExpression -> {
-                checkCommaInExpr(expr.condition, source, fileName)
-                checkCommaInExpr(expr.whenTrue, source, fileName)
-                checkCommaInExpr(expr.whenFalse, source, fileName)
-            }
-            is ArrowFunction -> when (val body = expr.body) {
-                is Block -> checkCommaInStatements(body.statements, source, fileName)
-                is Expression -> checkCommaInExpr(body, source, fileName)
-                else -> {}
-            }
-            is FunctionExpression -> expr.body.let { checkCommaInStatements(it.statements, source, fileName) }
-            is CallExpression -> {
-                checkCommaInExpr(expr.expression, source, fileName)
-                for (arg in expr.arguments) checkCommaInExpr(arg, source, fileName)
-            }
-            is NewExpression -> {
-                checkCommaInExpr(expr.expression, source, fileName)
-                expr.arguments?.forEach { checkCommaInExpr(it, source, fileName) }
-            }
-            is PropertyAccessExpression -> checkCommaInExpr(expr.expression, source, fileName)
-            is ElementAccessExpression -> {
-                checkCommaInExpr(expr.expression, source, fileName)
-                checkCommaInExpr(expr.argumentExpression, source, fileName)
-            }
-            is ArrayLiteralExpression -> for (el in expr.elements) checkCommaInExpr(el, source, fileName)
-            is ObjectLiteralExpression -> for (prop in expr.properties) {
-                when (prop) {
-                    is PropertyAssignment -> checkCommaInExpr(prop.initializer, source, fileName)
-                    is ShorthandPropertyAssignment -> prop.objectAssignmentInitializer?.let { checkCommaInExpr(it, source, fileName) }
-                    is SpreadAssignment -> checkCommaInExpr(prop.expression, source, fileName)
-                    else -> {}
-                }
-            }
-            is PrefixUnaryExpression -> checkCommaInExpr(expr.operand, source, fileName)
-            is PostfixUnaryExpression -> checkCommaInExpr(expr.operand, source, fileName)
-            is TemplateExpression -> for (span in expr.templateSpans) {
-                checkCommaInExpr(span.expression, source, fileName)
-            }
-            is TaggedTemplateExpression -> {
-                checkCommaInExpr(expr.tag, source, fileName)
-                val template = expr.template
-                if (template is TemplateExpression) {
-                    for (span in template.templateSpans) {
-                        checkCommaInExpr(span.expression, source, fileName)
-                    }
-                }
-            }
-            is TypeAssertionExpression -> checkCommaInExpr(expr.expression, source, fileName)
-            is AsExpression -> checkCommaInExpr(expr.expression, source, fileName)
-            is NonNullExpression -> checkCommaInExpr(expr.expression, source, fileName)
-            is SpreadElement -> checkCommaInExpr(expr.expression, source, fileName)
-            is AwaitExpression -> checkCommaInExpr(expr.expression, source, fileName)
-            is YieldExpression -> expr.expression?.let { checkCommaInExpr(it, source, fileName) }
-            is VoidExpression -> checkCommaInExpr(expr.expression, source, fileName)
-            is DeleteExpression -> checkCommaInExpr(expr.expression, source, fileName)
-            is TypeOfExpression -> checkCommaInExpr(expr.expression, source, fileName)
-            is SatisfiesExpression -> checkCommaInExpr(expr.expression, source, fileName)
-            is CommaListExpression -> for (el in expr.elements) checkCommaInExpr(el, source, fileName)
-            is ClassExpression -> for (m in expr.members) when (m) {
-                is MethodDeclaration -> m.body?.let { checkCommaInStatements(it.statements, source, fileName) }
-                is Constructor -> m.body?.let { checkCommaInStatements(it.statements, source, fileName) }
-                is GetAccessor -> m.body?.let { checkCommaInStatements(it.statements, source, fileName) }
-                is SetAccessor -> m.body?.let { checkCommaInStatements(it.statements, source, fileName) }
-                is PropertyDeclaration -> m.initializer?.let { checkCommaInExpr(it, source, fileName) }
-                else -> {}
-            }
-            else -> {}
-        }
     }
 
     /** Compute squiggle length for the left operand of a comma expression. */
@@ -146580,13 +146644,231 @@ interface DataView {
      * Runs AFTER checkCommaOperatorUnused so same-position TS2695 sorts first (stable
      * sort); within a `??` spine, INNER nodes emit before OUTER (tsc post-order).
      */
-    private fun checkNullishPredicates() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            npStmts(result.sourceFile.statements, source, fileName)
+    // ── INV.4(d) walker 13 (round 541): checkNullishPredicates on the spine ──
+    // (Fields + NP_* states declared before init. The recursion walkers
+    // npStmts/npStmt/npExpr are deleted; nullishSemanticsOf/truthySemanticsOf/
+    // npSkipOuter/npEmitNullish/npEmitTruthiness are retained. The `??`
+    // anchors dispatch at the BinaryExpression's LEAVE — the legacy emission
+    // is POST-order: inner-before-outer along the left spine, each node's
+    // check after its right subtree — and the while/do truthiness checks at
+    // the CONDITION node's leave, after the condition's own emissions.)
+
+    /** Per-file setup for the spine-hosted nullish-predicates pass. */
+    private fun spineNpSetup(result: BinderResult) {
+        spineNpActive = !spineIsDts
+        if (!spineNpActive) {
+            spineNpReachMemo = ByteArray(0)
+            return
         }
+        val n = result.sourceFile.nodeCount
+        spineNpReachMemo = if (n > 0) ByteArray(n) else ByteArray(0)
+    }
+
+    private fun spineNpTeardown() {
+        spineNpActive = false
+        spineNpReachMemo = ByteArray(0)
+    }
+
+    /** Per-node LEAVE hook: the `??` nullish checks and the while/do
+     *  condition truthiness checks. */
+    private fun spineNpLeaveNode(node: Node) {
+        when (node) {
+            is BinaryExpression ->
+                if (node.operator == SyntaxKind.QuestionQuestion && spineNpStatus(node) == NP_EXPR) {
+                    val leftTarget = npSkipOuter(node.left)
+                    when (nullishSemanticsOf(leftTarget)) {
+                        1 -> npEmitNullish(leftTarget, always = true, spineSource, spineFileName)
+                        2 -> npEmitNullish(leftTarget, always = false, spineSource, spineFileName)
+                    }
+                }
+            else -> {
+                if (node !is Expression) return
+                val parent = (node as NodeBase).parent
+                val isWhileDoCond = (parent is WhileStatement && node === parent.expression) ||
+                    (parent is DoStatement && node === parent.expression)
+                if (isWhileDoCond && spineNpStatus(node) == NP_EXPR) {
+                    when (truthySemanticsOf(node)) {
+                        1 -> npEmitTruthiness(node, always = true, spineSource, spineFileName)
+                        2 -> npEmitTruthiness(node, always = false, spineSource, spineFileName)
+                    }
+                }
+            }
+        }
+    }
+
+    /** Memoized reach classifier for the np pass (the deleted arms verbatim). */
+    private fun spineNpStatus(node: Node): Int {
+        if (node is SourceFile) return NP_STMT
+        val memo = spineNpReachMemo
+        run {
+            val id = (node as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) {
+                val m = memo[id].toInt()
+                if (m != 0) return m
+            }
+        }
+        val chain = spineNpChain
+        chain.clear()
+        var cur: Node = node
+        val anchor: Node?
+        var anchorStatus = NP_NONE
+        while (true) {
+            chain.add(cur)
+            val parent = (cur as NodeBase).parent
+            if (parent == null) { anchor = null; break }
+            if (parent is SourceFile) { anchor = parent; anchorStatus = NP_STMT; break }
+            val pid = (parent as NodeBase).nodeId
+            val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
+            if (pm != 0) { anchor = parent; anchorStatus = pm; break }
+            cur = parent
+        }
+        var pNode: Node? = anchor
+        var pStatus = anchorStatus
+        var result = NP_NONE
+        for (i in chain.indices.reversed()) {
+            val c = chain[i]
+            result = if (pNode == null || pStatus == NP_NONE) NP_NONE
+                else spineNpEdge(pNode, pStatus, c)
+            val cid = (c as NodeBase).nodeId
+            if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
+            pNode = c
+            pStatus = result
+        }
+        chain.clear()
+        return result
+    }
+
+    /** The np pass's edge rules — the deleted npStmt/npExpr arms verbatim.
+     *  NOTE the quirks vs the comma pass: object-literal METHOD bodies ARE
+     *  walked; tagged templates, yield/delete/typeof operands, and
+     *  comma-lists are NOT. */
+    private fun spineNpEdge(parent: Node, pStatus: Int, child: Node): Int = when (pStatus) {
+        NP_STMT -> when (parent) {
+            is SourceFile -> if (child is Statement) NP_STMT else NP_NONE
+            is Block -> if (child is Statement) NP_STMT else NP_NONE
+            is ModuleBlock -> if (child is Statement) NP_STMT else NP_NONE
+            is ExpressionStatement -> if (child === parent.expression) NP_EXPR else NP_NONE
+            is VariableStatement -> if (child === parent.declarationList) NP_MEMBER else NP_NONE
+            is ReturnStatement -> if (child === parent.expression) NP_EXPR else NP_NONE
+            is ThrowStatement -> if (child === parent.expression) NP_EXPR else NP_NONE
+            is IfStatement -> when {
+                child === parent.expression -> NP_EXPR
+                child === parent.thenStatement || child === parent.elseStatement -> NP_STMT
+                else -> NP_NONE
+            }
+            is FunctionDeclaration -> if (child === parent.body) NP_STMT else NP_NONE
+            is ClassDeclaration ->
+                if (child is MethodDeclaration || child is Constructor ||
+                    child is GetAccessor || child is SetAccessor ||
+                    child is PropertyDeclaration) NP_MEMBER else NP_NONE
+            is ForStatement -> when {
+                child === parent.initializer -> if (child is Expression) NP_EXPR else NP_MEMBER
+                child === parent.condition || child === parent.incrementor -> NP_EXPR
+                child === parent.statement -> NP_STMT
+                else -> NP_NONE
+            }
+            is ForInStatement -> when {
+                child === parent.expression -> NP_EXPR
+                child === parent.statement -> NP_STMT
+                else -> NP_NONE
+            }
+            is ForOfStatement -> when {
+                child === parent.expression -> NP_EXPR
+                child === parent.statement -> NP_STMT
+                else -> NP_NONE
+            }
+            is WhileStatement -> when {
+                child === parent.expression -> NP_EXPR
+                child === parent.statement -> NP_STMT
+                else -> NP_NONE
+            }
+            is DoStatement -> when {
+                child === parent.expression -> NP_EXPR
+                child === parent.statement -> NP_STMT
+                else -> NP_NONE
+            }
+            is SwitchStatement -> when {
+                child === parent.expression -> NP_EXPR
+                child is CaseClause || child is DefaultClause -> NP_MEMBER
+                else -> NP_NONE
+            }
+            is TryStatement -> when {
+                child === parent.tryBlock || child === parent.finallyBlock -> NP_STMT
+                child === parent.catchClause -> NP_MEMBER
+                else -> NP_NONE
+            }
+            is LabeledStatement -> if (child === parent.statement) NP_STMT else NP_NONE
+            is ModuleDeclaration -> if (child === parent.body && child is ModuleBlock) NP_STMT else NP_NONE
+            is EnumDeclaration -> if (child is EnumMember) NP_MEMBER else NP_NONE
+            else -> NP_NONE
+        }
+        NP_MEMBER -> when (parent) {
+            is VariableDeclarationList -> if (child is VariableDeclaration) NP_MEMBER else NP_NONE
+            is VariableDeclaration -> if (child === parent.initializer) NP_EXPR else NP_NONE
+            is MethodDeclaration -> if (child === parent.body) NP_STMT else NP_NONE
+            is Constructor -> if (child === parent.body) NP_STMT else NP_NONE
+            is GetAccessor -> if (child === parent.body) NP_STMT else NP_NONE
+            is SetAccessor -> if (child === parent.body) NP_STMT else NP_NONE
+            is PropertyDeclaration -> if (child === parent.initializer) NP_EXPR else NP_NONE
+            is CaseClause -> when {
+                child === parent.expression -> NP_EXPR
+                child is Statement -> NP_STMT
+                else -> NP_NONE
+            }
+            is DefaultClause -> if (child is Statement) NP_STMT else NP_NONE
+            is CatchClause -> if (child === parent.block) NP_STMT else NP_NONE
+            is EnumMember -> if (child === parent.initializer) NP_EXPR else NP_NONE
+            is PropertyAssignment -> if (child === parent.initializer) NP_EXPR else NP_NONE
+            is ShorthandPropertyAssignment ->
+                if (child === parent.objectAssignmentInitializer) NP_EXPR else NP_NONE
+            is SpreadAssignment -> if (child === parent.expression) NP_EXPR else NP_NONE
+            is TemplateSpan -> if (child === parent.expression) NP_EXPR else NP_NONE
+            else -> NP_NONE
+        }
+        NP_EXPR -> when (parent) {
+            is BinaryExpression -> if (child === parent.left || child === parent.right) NP_EXPR else NP_NONE
+            is ParenthesizedExpression -> if (child === parent.expression) NP_EXPR else NP_NONE
+            is PrefixUnaryExpression -> if (child === parent.operand) NP_EXPR else NP_NONE
+            is PostfixUnaryExpression -> if (child === parent.operand) NP_EXPR else NP_NONE
+            is ConditionalExpression ->
+                if (child === parent.condition || child === parent.whenTrue ||
+                    child === parent.whenFalse) NP_EXPR else NP_NONE
+            is CallExpression ->
+                if (child === parent.expression || parent.arguments.any { it === child }) NP_EXPR
+                else NP_NONE
+            is NewExpression ->
+                if (child === parent.expression || parent.arguments?.any { it === child } == true) NP_EXPR
+                else NP_NONE
+            is PropertyAccessExpression -> if (child === parent.expression) NP_EXPR else NP_NONE
+            is ElementAccessExpression ->
+                if (child === parent.expression || child === parent.argumentExpression) NP_EXPR
+                else NP_NONE
+            is AsExpression -> if (child === parent.expression) NP_EXPR else NP_NONE
+            is SatisfiesExpression -> if (child === parent.expression) NP_EXPR else NP_NONE
+            is TypeAssertionExpression -> if (child === parent.expression) NP_EXPR else NP_NONE
+            is NonNullExpression -> if (child === parent.expression) NP_EXPR else NP_NONE
+            is AwaitExpression -> if (child === parent.expression) NP_EXPR else NP_NONE
+            is VoidExpression -> if (child === parent.expression) NP_EXPR else NP_NONE
+            is SpreadElement -> if (child === parent.expression) NP_EXPR else NP_NONE
+            is ArrayLiteralExpression -> if (parent.elements.any { it === child }) NP_EXPR else NP_NONE
+            is ObjectLiteralExpression -> when (child) {
+                is PropertyAssignment, is ShorthandPropertyAssignment,
+                is SpreadAssignment, is MethodDeclaration -> NP_MEMBER
+                else -> NP_NONE
+            }
+            is ArrowFunction -> when {
+                child !== parent.body -> NP_NONE
+                child is Block -> NP_STMT
+                else -> NP_EXPR
+            }
+            is FunctionExpression -> if (child === parent.body) NP_STMT else NP_NONE
+            is ClassExpression ->
+                if (child is MethodDeclaration || child is Constructor ||
+                    child is PropertyDeclaration) NP_MEMBER else NP_NONE
+            is TemplateExpression -> if (child is TemplateSpan) NP_MEMBER else NP_NONE
+            else -> NP_NONE
+        }
+        else -> NP_NONE
     }
 
     /** Skips parens / as / satisfies / type-assertions / non-null (tsc skipOuterExpressions All). */
@@ -146710,182 +146992,6 @@ interface DataView {
             start = start,
             length = length,
         ))
-    }
-
-    private fun npStmts(stmts: List<Statement>, source: String, fileName: String) {
-        for (stmt in stmts) npStmt(stmt, source, fileName)
-    }
-
-    private fun npStmt(stmt: Statement, source: String, fileName: String) {
-        when (stmt) {
-            is ExpressionStatement -> npExpr(stmt.expression, source, fileName)
-            is VariableStatement -> for (d in stmt.declarationList.declarations) {
-                d.initializer?.let { npExpr(it, source, fileName) }
-            }
-            is ReturnStatement -> stmt.expression?.let { npExpr(it, source, fileName) }
-            is IfStatement -> {
-                npExpr(stmt.expression, source, fileName)
-                npStmt(stmt.thenStatement, source, fileName)
-                stmt.elseStatement?.let { npStmt(it, source, fileName) }
-            }
-            is Block -> npStmts(stmt.statements, source, fileName)
-            is FunctionDeclaration -> stmt.body?.let { npStmts(it.statements, source, fileName) }
-            is ClassDeclaration -> for (m in stmt.members) {
-                when (m) {
-                    is MethodDeclaration -> m.body?.let { npStmts(it.statements, source, fileName) }
-                    is Constructor -> m.body?.let { npStmts(it.statements, source, fileName) }
-                    is PropertyDeclaration -> m.initializer?.let { npExpr(it, source, fileName) }
-                    is GetAccessor -> m.body?.let { npStmts(it.statements, source, fileName) }
-                    is SetAccessor -> m.body?.let { npStmts(it.statements, source, fileName) }
-                    else -> {}
-                }
-            }
-            is ForStatement -> {
-                stmt.initializer?.let { init ->
-                    when (init) {
-                        is VariableDeclarationList -> for (d in init.declarations) {
-                            d.initializer?.let { npExpr(it, source, fileName) }
-                        }
-                        is Expression -> npExpr(init, source, fileName)
-                        else -> {}
-                    }
-                }
-                stmt.condition?.let { npExpr(it, source, fileName) }
-                stmt.incrementor?.let { npExpr(it, source, fileName) }
-                npStmt(stmt.statement, source, fileName)
-            }
-            is ForInStatement -> {
-                npExpr(stmt.expression, source, fileName)
-                npStmt(stmt.statement, source, fileName)
-            }
-            is ForOfStatement -> {
-                npExpr(stmt.expression, source, fileName)
-                npStmt(stmt.statement, source, fileName)
-            }
-            is WhileStatement -> {
-                npExpr(stmt.expression, source, fileName)
-                when (truthySemanticsOf(stmt.expression)) {
-                    1 -> npEmitTruthiness(stmt.expression, always = true, source, fileName)
-                    2 -> npEmitTruthiness(stmt.expression, always = false, source, fileName)
-                }
-                npStmt(stmt.statement, source, fileName)
-            }
-            is DoStatement -> {
-                npStmt(stmt.statement, source, fileName)
-                npExpr(stmt.expression, source, fileName)
-                when (truthySemanticsOf(stmt.expression)) {
-                    1 -> npEmitTruthiness(stmt.expression, always = true, source, fileName)
-                    2 -> npEmitTruthiness(stmt.expression, always = false, source, fileName)
-                }
-            }
-            is SwitchStatement -> {
-                npExpr(stmt.expression, source, fileName)
-                for (c in stmt.caseBlock) {
-                    when (c) {
-                        is CaseClause -> {
-                            npExpr(c.expression, source, fileName)
-                            npStmts(c.statements, source, fileName)
-                        }
-                        is DefaultClause -> npStmts(c.statements, source, fileName)
-                        else -> {}
-                    }
-                }
-            }
-            is TryStatement -> {
-                npStmts(stmt.tryBlock.statements, source, fileName)
-                stmt.catchClause?.let { npStmts(it.block.statements, source, fileName) }
-                stmt.finallyBlock?.let { npStmts(it.statements, source, fileName) }
-            }
-            is ThrowStatement -> stmt.expression?.let { npExpr(it, source, fileName) }
-            is LabeledStatement -> npStmt(stmt.statement, source, fileName)
-            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { npStmts(it.statements, source, fileName) }
-            is EnumDeclaration -> for (m in stmt.members) {
-                m.initializer?.let { npExpr(it, source, fileName) }
-            }
-            else -> {}
-        }
-    }
-
-    private fun npExpr(expr: Expression, source: String, fileName: String) {
-        when (expr) {
-            is BinaryExpression -> {
-                // iterative left spine; emit post-order (leftmost leaf, then per spine
-                // node ascending: right subtree, then the node's own ?? check) — matches
-                // tsc's inner-before-outer ordering for same-position duplicates.
-                val spine = ArrayList<BinaryExpression>()
-                var cur: Expression = expr
-                while (cur is BinaryExpression) {
-                    spine.add(cur)
-                    cur = cur.left
-                }
-                npExpr(cur, source, fileName)
-                for (i in spine.indices.reversed()) {
-                    val node = spine[i]
-                    npExpr(node.right, source, fileName)
-                    if (node.operator == SyntaxKind.QuestionQuestion) {
-                        val leftTarget = npSkipOuter(node.left)
-                        when (nullishSemanticsOf(leftTarget)) {
-                            1 -> npEmitNullish(leftTarget, always = true, source, fileName)
-                            2 -> npEmitNullish(leftTarget, always = false, source, fileName)
-                        }
-                    }
-                }
-            }
-            is ParenthesizedExpression -> npExpr(expr.expression, source, fileName)
-            is PrefixUnaryExpression -> npExpr(expr.operand, source, fileName)
-            is PostfixUnaryExpression -> npExpr(expr.operand, source, fileName)
-            is ConditionalExpression -> {
-                npExpr(expr.condition, source, fileName)
-                npExpr(expr.whenTrue, source, fileName)
-                npExpr(expr.whenFalse, source, fileName)
-            }
-            is CallExpression -> {
-                npExpr(expr.expression, source, fileName)
-                expr.arguments.forEach { npExpr(it, source, fileName) }
-            }
-            is NewExpression -> {
-                npExpr(expr.expression, source, fileName)
-                expr.arguments?.forEach { npExpr(it, source, fileName) }
-            }
-            is PropertyAccessExpression -> npExpr(expr.expression, source, fileName)
-            is ElementAccessExpression -> {
-                npExpr(expr.expression, source, fileName)
-                npExpr(expr.argumentExpression, source, fileName)
-            }
-            is AsExpression -> npExpr(expr.expression, source, fileName)
-            is SatisfiesExpression -> npExpr(expr.expression, source, fileName)
-            is TypeAssertionExpression -> npExpr(expr.expression, source, fileName)
-            is NonNullExpression -> npExpr(expr.expression, source, fileName)
-            is AwaitExpression -> npExpr(expr.expression, source, fileName)
-            is VoidExpression -> npExpr(expr.expression, source, fileName)
-            is SpreadElement -> npExpr(expr.expression, source, fileName)
-            is ArrayLiteralExpression -> expr.elements.forEach { npExpr(it, source, fileName) }
-            is ObjectLiteralExpression -> for (p in expr.properties) {
-                when (p) {
-                    is PropertyAssignment -> npExpr(p.initializer, source, fileName)
-                    is ShorthandPropertyAssignment -> p.objectAssignmentInitializer?.let { npExpr(it, source, fileName) }
-                    is SpreadAssignment -> npExpr(p.expression, source, fileName)
-                    is MethodDeclaration -> p.body?.let { npStmts(it.statements, source, fileName) }
-                    else -> {}
-                }
-            }
-            is ArrowFunction -> when (val b = expr.body) {
-                is Block -> npStmts(b.statements, source, fileName)
-                is Expression -> npExpr(b, source, fileName)
-                else -> {}
-            }
-            is FunctionExpression -> expr.body.let { npStmts(it.statements, source, fileName) }
-            is ClassExpression -> for (m in expr.members) {
-                when (m) {
-                    is MethodDeclaration -> m.body?.let { npStmts(it.statements, source, fileName) }
-                    is Constructor -> m.body?.let { npStmts(it.statements, source, fileName) }
-                    is PropertyDeclaration -> m.initializer?.let { npExpr(it, source, fileName) }
-                    else -> {}
-                }
-            }
-            is TemplateExpression -> expr.templateSpans.forEach { npExpr(it.expression, source, fileName) }
-            else -> {}
-        }
     }
 
     /**

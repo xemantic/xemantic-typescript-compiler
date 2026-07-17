@@ -59,6 +59,37 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 541 (2026-07-17) — INV.4(d) walkers 12+13: the ORDER-COUPLED pair
+checkCommaOperatorUnused (TS2695) + checkNullishPredicates (B277
+TS2871/TS2869 `??` nullish predicates + while/do TS2872/TS2873 truthiness;
+~100 ms each) migrated onto the spine TOGETHER — their six recursion
+walkers (checkCommaInStatements/-InStatement/-InExpr, npStmts/npStmt/npExpr)
+are DELETED (~470 lines).** The first COUPLED-pair migration, and the
+ordering contracts dissolve STRUCTURALLY instead of by slot bookkeeping:
+the comma pass's TS2695 emits PRE-order (outer-before-inner along the left
+spine) → its anchors dispatch at ENTERS; the np pass's `??` checks emit
+POST-order (tsc's inner-before-outer, each node's check after its right
+subtree) → its anchors dispatch at the BinaryExpression's LEAVE; the
+while/do truthiness checks — which must follow the condition subtree's own
+emissions but precede the body's — dispatch at the CONDITION node's leave;
+and the documented same-position comma-before-np insertion order holds
+BY CONSTRUCTION because enters precede leaves at every node (the legacy
+"np must run AFTER comma" slot contract is retired). Each pass keeps its
+own verbatim classifier — their reach DIFFERS subtly: comma walks tagged
+templates / yield-delete-typeof-void operands / comma-lists but NOT
+object-literal method bodies; np the reverse; both walk enum-member
+initializers, for-header declarator initializers, and
+shorthand-destructuring defaults. 10 pins (Inv4SpineBatch32Test, ALL
+pre-verified on the OLD walkers first run) incl. the chained-`??`
+double-emission (the outer left's semantics READ THROUGH the inner `??`'s
+right operand — nullishSemanticsOf recursion) and the indirect-call
+`(0, obj.m)()` exemption. VERIFIED: suite 11,233 → 11,243 (+10, 0
+regressions, XML-verified); listAll error lines IDENTICAL on ALL 8 profiles
+(541a vs 541sm; the joint slot-move pre-gate also corpus-green); bench 46
+errors, histogram unchanged (−0.6%, in band). NEXT: INV.4(d) tail —
+remaining ~100 ms walkers per the round-529 cost table, then INV.4(e) (the
+three giants).
+
 **Round 540 (2026-07-17) — INV.4(d) walker 11: checkNullUndefinedUsage (the
 TS18050 null/undefined-literal usage pass + the for-of empty-`[]` TS2488
 shape; ~130 ms tail) migrated onto the spine — the per-file driver and the
@@ -1818,6 +1849,18 @@ interrupt the arc).
       identical on ALL 8 profiles; the pass driver deleted (the recursive
       walkers stay as checkComputedDestructKey's utility). See the round-531
       session note.
+    - (w12+w13) DONE round 541 (2026-07-17): the ORDER-COUPLED pair
+      checkCommaOperatorUnused (TS2695) + checkNullishPredicates (TS2871/
+      TS2869 + while/do truthiness) migrated TOGETHER — the ordering
+      contracts dissolve structurally (comma pre-order → ENTER anchors; np
+      post-order → LEAVE anchors; while/do truthiness at the CONDITION's
+      leave; same-position comma-first BY CONSTRUCTION since enters precede
+      leaves — the legacy slot contract retired). Separate verbatim
+      classifiers (their reach differs: objlit method bodies np-only;
+      tagged-templates/yield/delete/typeof/comma-lists comma-only). 10 pins
+      (Inv4SpineBatch32Test) pre-verified; suite 11,233 → 11,243; listAll
+      ×8 identical; ~470 walker lines deleted. See the round-541 session
+      note.
     - (w11) DONE round 540 (2026-07-17): checkNullUndefinedUsage (TS18050 +
       the for-of empty-[] TS2488 shape) — pure anchors, no ambient; the
       classifier carries the legacy checkDepth ≤ 200 STATEMENT-frame cap as
