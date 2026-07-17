@@ -59,6 +59,36 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 545 (2026-07-17) — INV.5(a) LANDED: canonical union/intersection
+identity.** `getUnionType`/`getIntersectionType` now INTERN by member-id key
+(CheckerState.unionInternCache/intersectionInternCache — unions by their
+already-sorted member order, intersections by IN-ORDER ids so `A & B` and
+`B & A` keep distinct display order; direct `Type.Union(...)` builds
+elsewhere stay fresh, less canonical but never wrong). Identical member
+lists now share one instance and Type.id regardless of WHICH pass builds
+the type first — the direct lever on the round-543 first-touch blocker,
+and it multiplies relation-cache/reference-cache hits (an Array<union>
+reference now interns across contexts because its arg id is canonical).
+THE ONE EXPOSURE (found by the round-544 first attempt, root-caused this
+round via the round-472 Diagnostic-init stack-trace probe): watch.ts:533 —
+a TERNARY of array literals annotated with the variadic-tuple alias
+DiagnosticAndArguments. Pre-interning the arms' Array references had
+DISTINCT union-arg ids, so their union never collapsed and the B87.6b
+array-VARIABLE-vs-tuple gate could not match; canonical identity collapses
+the arms to ONE Array Reference and the gate fired. tsc contextually
+tuple-types those arms exactly like a bare array literal, so the fix
+extends the gate's existing literal exclusion to (nested, paren-wrapped)
+ternaries of array literals (`ternaryOfArrayLiterals`) — the same
+rationale, one clause. The round-544 hazard list's display fears did NOT
+materialize (aliasDisplayMap survived untouched; pinned). VERIFIED: suite
+11,243 → 11,247 (+4 Inv5UnionInterningTest incl. the minimized watch.ts
+shape with nested ternary, the B87.6b positive control, and the
+identical-alias display pin); listAll SORTED error lines IDENTICAL on ALL
+8 profiles (545a vs 541a); bench 25,947 ms self / 46 errors, histogram
+unchanged (−3.4%, the interning already pays for itself). NEXT: INV.5 —
+re-run the round-542/543 giant-entanglement probes to measure what the
+canonical identity dissolved, then (b) explicit mapper objects.
+
 **Round 541 (2026-07-17) — INV.4(d) walkers 12+13: the ORDER-COUPLED pair
 checkCommaOperatorUnused (TS2695) + checkNullishPredicates (B277
 TS2871/TS2869 `??` nullish predicates + while/do TS2872/TS2873 truthiness;
@@ -2093,7 +2123,7 @@ interrupt the arc).
   giants are blocked on exactly this: first-touch-order-sensitive shared
   caches). Decomposed round 544, one commit each, every step suite +
   listAll-×8 gated:
-  - [ ] **INV.5(a) Union/intersection interning.** `getUnionType` (Checker.kt
+  - [x] **INV.5(a) Union/intersection interning.** DONE round 545 (see the session note — landed with the ternaryOfArrayLiterals gate extension after the round-544 near-miss). `getUnionType` (Checker.kt
     ~103k, "mints a fresh Type.Union(sorted) with a new id — does NOT
     intern") + `getIntersectionType` intern by sorted member-id key (the
     `referenceCache` pattern; preserves display member order by keeping the

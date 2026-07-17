@@ -173,6 +173,8 @@ class Checker(
          *  id-based cycle detection in `relationComparisonStack` to catch logically
          *  identical recursive references like `interface List<T> { next: List<T> }`. */
         val referenceCache = HashMap<String, Type.Reference>()
+        val unionInternCache = HashMap<String, Type.Union>()
+        val intersectionInternCache = HashMap<String, Type.Intersection>()
         /** Stack of `target.id` for each `Type.Reference` SOURCE active in the
          *  comparison stack (parallel to `relationComparisonStack`). Used by
          *  `isDeeplyNested` to bail out of infinitely-expanding generic comparisons
@@ -87169,6 +87171,14 @@ interface DataView {
             ))
             return
         }
+        // INV.5(a) round 545: a TERNARY (possibly nested) whose leaves are all
+        // array LITERALS is contextually tuple-typed by tsc exactly like a bare
+        // array literal (the gate's existing exclusion rationale) — checked
+        // element-wise elsewhere and tuple-assignable. Pre-interning this shape
+        // was masked structurally: the arms' Array references had distinct
+        // union-arg ids, so their union never collapsed to a single Array
+        // Reference and the gate below could not match (watch.ts:533's
+        // DiagnosticAndArguments ternary). Canonical union identity exposes it.
         // B87.6b (round 73): array-VARIABLE source → tuple target tuple-arity TS2322 for
         // VAR-DECL — completes the tuple-arity feature uniformly with the async-return
         // path (B87.6). `var x: [number] = someNumberArray` → "Target allows only N
@@ -87176,7 +87186,7 @@ interface DataView {
         // target is a tuple `Type.Object` (`tupleElementTypes != null`), init is NOT an
         // array literal (literals are checked element-wise elsewhere and ARE tuple-
         // assignable), and not already assignable. Emits at the var name.
-        if (init !is ArrayLiteralExpression &&
+        if (init !is ArrayLiteralExpression && !ternaryOfArrayLiterals(init) &&
             sourceType is Type.Reference && sourceType.target.symbol?.name == "Array" &&
             targetType is Type.Object && targetType !is Type.Reference &&
             targetType.tupleElementTypes != null && !isAssignable &&
@@ -140644,8 +140654,8 @@ interface DataView {
                         if (b.flags.hasAny(TypeFlags.Any)) return b
                         if (a.id == b.id) return a
                         // Match the stable sort-by-flags-value of the general path.
-                        return if (a.flags.value <= b.flags.value) Type.Union(listOf(a, b))
-                        else Type.Union(listOf(b, a))
+                        return if (a.flags.value <= b.flags.value) internUnion(listOf(a, b))
+                        else internUnion(listOf(b, a))
                     }
                 }
             }
@@ -140673,7 +140683,26 @@ interface DataView {
         // Sort by TypeFlags value to match TypeScript's display order
         // TypeScript sorts: string(4) < number(8) < boolean(16) < bigint(64) < ...
         val sorted = deduped.sortedBy { it.flags.value }
-        return Type.Union(sorted)
+        return internUnion(sorted)
+    }
+
+    private fun internUnion(members: List<Type>): Type.Union {
+        val key = members.joinToString(",") { it.id.toString() }
+        return state.unionInternCache.getOrPut(key) { Type.Union(members) }
+    }
+
+    /** A (possibly nested, paren-wrapped) ternary whose leaves are ALL array
+     *  literals — contextually tuple-typed by tsc like a bare array literal
+     *  (see the B87.6b gate). */
+    private fun ternaryOfArrayLiterals(e: Expression?): Boolean {
+        var n = e ?: return false
+        while (n is ParenthesizedExpression) n = n.expression
+        return when (n) {
+            is ArrayLiteralExpression -> true
+            is ConditionalExpression ->
+                ternaryOfArrayLiterals(n.whenTrue) && ternaryOfArrayLiterals(n.whenFalse)
+            else -> false
+        }
     }
 
     /** Construct an intersection type from a list of constituent types, with basic normalization. */
@@ -140714,7 +140743,8 @@ interface DataView {
         // so TS2322 / TS2339 emitters can append the
         // "The intersection 'A & B' was reduced to 'never' ..." chain line.
         if (findConflictingPrivateInIntersection(filtered) != null) return neverType
-        return Type.Intersection(filtered)
+        val key = filtered.joinToString(",") { it.id.toString() }
+        return state.intersectionInternCache.getOrPut(key) { Type.Intersection(filtered) }
     }
 
     /**
