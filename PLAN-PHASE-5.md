@@ -20,6 +20,29 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 552 (2026-07-17) — INV.5(d1) LANDED: the generic-property relation
+depth-4 cap is replaced by a per-top-level-relation INSTANTIATION BUDGET.**
+`getPropertyTypeForRelation` now substitutes at ANY depth;
+`resolveGenericPropertyType` consumes `genericPropInstantiationBudget`
+(2,000 fresh worker computations, reset at every depth-0 relation entry,
+memo hits free, raw-`getTypeOfSymbol` fallback on trip = the old over-cap
+behavior; elaboration/display callers outside a relation are exempt). The
+perf-bomb corpus test stays green (the budget bounds its breadth explosion
+of genuinely-new refs). PAIRED FP firewall (found via the diagnostic-init
+probe): `tryEmitObjectVsNamedUnionArg` bails when the param union still
+carries an UN-INFERRED TypeParam — deeper substitution makes the
+whole-union relation fail on the unbound T (tsc's program.ts:2924
+`flatten<T>` FP'd on all 8 profiles without it; the round-431 foreign-TP
+rationale applied to the PARAM side). A TP-free gate on the substitution
+RESULT was tried first and does NOT work (the relation flips target-side,
+inside the walk) — the emitter-side gate is the correct cut. CAPABILITY
+GAIN pinned: a >4-deep nested generic mismatch with distinct per-level
+targets now FIRES (previously raw-fallback trivial-pass hid it;
+Inv5RelationBudgetTest, 4 pins incl. the flatten shape + a B561 firewall).
+Gates: corpus 11,256/0; listAll ×8 error-line identical vs 548a; bench
+27,499 ms (+0.6%, in band), 46 errors histogram unchanged. This unblocks
+(d)'s member-caching work and thins the (e) gate's risk surface.
+
 **Round 550d (2026-07-17) — INV.5(b2c'''): the last clean resolution-internal
 tpScope installers flipped.** getTypeFromTypeLiteral's method branch (pair-
 destructure; getParameterSymbols moved inside the region, matching its legacy
@@ -2414,7 +2437,12 @@ interrupt the arc).
     preferred.
   - [ ] **INV.5(d) Instantiated members cached ON the `Type.Reference`.**
     Delete `resolveGenericPropertyType` fresh-minting + its depth-4 OOM cap
-    (the per-recursion-level cache-miss gotcha).
+    (the per-recursion-level cache-miss gotcha). **(d1) DONE round 552: the
+    depth-4 cap is DELETED — replaced by the per-top-level-relation
+    instantiation budget + the param-side foreign-TP gate in
+    tryEmitObjectVsNamedUnionArg (see the session note). Remaining: the
+    member-table-on-reference allocation redesign ((d2), optional now that
+    the budget bounds allocation) and the fresh-minting deletion.**
     **CAP-LIFT PROBE FALSIFIED (round 551, reverted): removing
     `relationDepth < 4` with (a)-interning + the (ref.id, prop.id) memo in
     place still KILLS performanceComparisonOfStructurallyIdentical-

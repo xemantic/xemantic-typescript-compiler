@@ -204,6 +204,8 @@ class Checker(
          *  Symbol/Signature/Type.Object reallocation that OOMs Promise/IPromise-style
          *  deep generic-method comparisons. */
         val resolvedPropertyTypes = HashMap<Long, Type>()
+        /** INV.5(d1): per-top-level-relation budget of fresh worker computations. */
+        var genericPropInstantiationBudget = 0
         /** B8.1: side-channel for `IntersectionType` AST nodes that resolved to `never`
          *  due to a conflicting private property. Populated by
          *  [getTypeFromTypeNodeWorker]'s IntersectionType branch when reduction
@@ -91867,6 +91869,10 @@ interface DataView {
         // (matters for Promise/IPromise overload-permutation comparisons).
         val cacheKey = packRelationKey(ref.id, propSym.id)
         state.resolvedPropertyTypes[cacheKey]?.let { return it }
+        if (relationDepth > 0) {
+            if (state.genericPropInstantiationBudget <= 0) return null
+            state.genericPropInstantiationBudget--
+        }
         val computed = resolveGenericPropertyTypeWorker(ref, propSym)
         if (computed != null) state.resolvedPropertyTypes[cacheKey] = computed
         return computed
@@ -129953,6 +129959,14 @@ interface DataView {
         arg: Expression, argType: Type.Object, paramType: Type.Union, paramSym: Symbol,
         source: String, fileName: String,
     ): Boolean {
+        // INV.5(d1)/round 552: a param union still carrying an UN-INFERRED
+        // TypeParam (`flatten<T>(…: T[][] | readonly (T | …)[])` where our
+        // engine failed to infer T) is OUR inference gap, never a user error
+        // — the round-431 foreign-TP gate rationale applied to the PARAM
+        // side. Without this, lifting the generic-property relation depth
+        // cap makes the whole-union relation fail on the unbound T and this
+        // emitter FPs on tsc's own program.ts flatten call (all 8 profiles).
+        if (typeContainsUnresolvedTypeParam(paramType)) return false
         val constituents = paramType.types
         if (constituents.size < 2) return false
         var shapeCount = 0
@@ -133818,6 +133832,7 @@ interface DataView {
         state.relationComparisonStack.add(pairKey)
         if (srcRef != null) state.relationSourceTargets.add(srcRef.target.id)
         if (tgtRef != null) state.relationTargetTargets.add(tgtRef.target.id)
+        if (relationDepth == 0) state.genericPropInstantiationBudget = 2_000
         relationDepth++
         val savedCycleBreak = relationUsedCycleBreak
         relationUsedCycleBreak = false
@@ -134809,7 +134824,7 @@ interface DataView {
      * inherited property or non-Reference object type).
      */
     private fun getPropertyTypeForRelation(obj: Type.Object, prop: Symbol): Type {
-        if (obj is Type.Reference && relationDepth < 4) {
+        if (obj is Type.Reference) {
             // Skip when we're already deep in a comparison: deep generic-method
             // recursion (Promise/IPromise overload permutations, bluebird-style)
             // allocates a fresh Symbol/Signature/Type.Object per call, OOMing
