@@ -1206,6 +1206,20 @@ class Checker(
     private val spineCaFnParamMemo =
         HashMap<Int, Pair<MutableMap<String, Type>, MutableSet<String>>>()
 
+    // ── INV.4(d) walker 10 (round 539): checkAlwaysTruthy on the spine ──
+    // The always-truthy/falsy condition pass (TS2872/TS2873 + TS1345
+    // void-call conditions, TS2845 enum-member truthiness, the `!`-operand
+    // falsy check) — the recursion walkers are deleted; reach is
+    // [spineAtStatus] over [spineAtEdge]; the B69.11 inArrowExprBody flag
+    // and the if-else-chain prevTruthy state pull-derive per anchor from
+    // the ancestor chain (both position-independent).
+    /** Per-file activation: the legacy non-.d.ts gate. */
+    private var spineAtActive = false
+    /** Per-file nodeId memo for [spineAtStatus] — 0 unknown, else an AT_* state. */
+    private var spineAtReachMemo = ByteArray(0)
+    /** Reusable ascent buffer for [spineAtStatus]. */
+    private val spineAtChain = ArrayList<Node>()
+
     // Positions of ObjectLiteralExpression nodes that are destructuring-assignment
     // TARGETS (LHS of `=`, incl. nested through array/object/default nesting). Consumed
     // by the shorthand-with-initializer TS1312/TS18004 selection in
@@ -2472,6 +2486,9 @@ class Checker(
         pass("checkCrossFileUseBeforeDeclaration") {
             if (binderResults.size > 1) checkCrossFileUseBeforeDeclaration()
         }
+        // 20b. Always-truthy/falsy conditions (TS2872/TS2873 + TS1345 +
+        // TS2845): rides the spine (INV.4(d) walker 10 —
+        // spineAtSetup/spineAtEnterNode).
         // 25. Const-assignment (TS2588 family + TS2540 readonly writes +
         // TS2357 + the scanRegExpFull regex family): rides the spine
         // (INV.4(d) walker 9 — spineCaSetup/spineCaEnterNode).
@@ -2817,8 +2834,8 @@ class Checker(
         // 19c. B514: namespace-`typeof` assignability (TS2741) + `typeof <type-only
         // namespace alias>` value-use (TS2708) — internal namespace aliases.
         pass("checkNamespaceTypeofAssignability") { checkNamespaceTypeofAssignability() }
-        // 20. Check always-truthy expressions (TS2872)
-        pass("checkAlwaysTruthy") { checkAlwaysTruthy() }
+        // 20b. checkAlwaysTruthy moved to the spine slot — see the
+        // pass("checkSpine") site (INV.4(d) walker 10 slot-move pre-gate).
         // 20a. Uncalled function in conditional position (TS2774/TS2801) migrated
         // to the check spine (INV.4(d) walker 1, round 530) — see
         // [spineUncalledDispatch], [spineUncalledReached], [spineUncalledWithScopes].
@@ -18027,6 +18044,7 @@ class Checker(
                 spineUbdSetup(result)
                 spineIrSetup(result)
                 spineCaSetup(result)
+                spineAtSetup(result)
                 spineUResAuditActive = unresolvedAuditEnabled && spineUResActive
                 try {
                     spineWalkFile(sf)
@@ -18044,6 +18062,7 @@ class Checker(
                     spineUbdTeardown()
                     spineIrTeardown()
                     spineCaTeardown()
+                    spineAtTeardown()
                 }
                 spineResolveDeferredIterationChecks()
             }
@@ -18130,6 +18149,9 @@ class Checker(
         // INV.4(d) walker 9: the const-assignment pass — frame steps/spawns +
         // assignment/inc-dec/regex anchors.
         if (spineCaActive) spineCaEnterNode(node)
+        // INV.4(d) walker 10: the always-truthy pass — condition/operand
+        // anchors.
+        if (spineAtActive) spineAtEnterNode(node)
         when (node) {
             is Identifier -> spineTavIdentifier(node)
             is PropertyDeclaration -> {
@@ -44072,6 +44094,17 @@ class Checker(
         private const val CA_LIST = 4
         private const val CA_MEMBER = 5
 
+        // INV.4(d) walker 10 (round 539) — [spineAtStatus] states, mirroring
+        // the deleted checkAlwaysTruthyInStatement/-InExpr arms. NONE covers
+        // the legacy unreached positions: if/while/do and TERNARY conditions'
+        // SUB-expressions (whole-expression predicates only), for
+        // initializers/incrementors, for-in/of and switch subject
+        // expressions.
+        private const val AT_NONE = 1
+        private const val AT_STMT = 2
+        private const val AT_EXPR = 3
+        private const val AT_MEMBER = 4
+
         /** Maximum antecedent walk depth for control-flow narrowing, aligned with tsc's
          *  `flowDepth === 2000` stack guard (M1.2b, round 386 — was 50). Do NOT lower it
          *  back "to save time": truncated subtrees are never memo-stored (the clean-only
@@ -46449,99 +46482,297 @@ interface DataView {
      * Check for expressions that are always truthy in logical OR and if conditions.
      * Emits TS2872 "This kind of expression is always truthy."
      */
-    private fun checkAlwaysTruthy() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            checkAlwaysTruthyInStatements(result.sourceFile.statements, source, fileName)
+    // ── INV.4(d) walker 10 (round 539): checkAlwaysTruthy on the spine ──
+    // (Fields + the AT_* states are declared before init — see the spineAt
+    // field block. The per-file driver and the recursion walkers
+    // checkAlwaysTruthyInStatements/-InStatement/-InExpr are deleted; the
+    // bounded leaf utilities — isAlwaysTruthyExpr/isAlwaysFalsyExpr/
+    // isAlwaysTruthyForOrExpr, scanForNotFalsy, checkVoidConditionTruthiness,
+    // checkEnumReferenceFalsyCondition, checkAlwaysTruthyCondition, the
+    // emitters — are retained.)
+
+    /** Per-file setup for the spine-hosted always-truthy pass. */
+    private fun spineAtSetup(result: BinderResult) {
+        spineAtActive = !spineIsDts
+        if (!spineAtActive) {
+            spineAtReachMemo = ByteArray(0)
+            return
         }
+        val n = result.sourceFile.nodeCount
+        spineAtReachMemo = if (n > 0) ByteArray(n) else ByteArray(0)
     }
 
-    private fun checkAlwaysTruthyInStatements(stmts: List<Statement>, source: String, fileName: String) {
-        for (stmt in stmts) checkAlwaysTruthyInStatement(stmt, source, fileName)
+    private fun spineAtTeardown() {
+        spineAtActive = false
+        spineAtReachMemo = ByteArray(0)
     }
 
-    private fun checkAlwaysTruthyInStatement(stmt: Statement, source: String, fileName: String) {
-        when (stmt) {
-            is ExpressionStatement -> checkAlwaysTruthyInExpr(stmt.expression, source, fileName)
-            is VariableStatement -> for (d in stmt.declarationList.declarations) {
-                d.initializer?.let { checkAlwaysTruthyInExpr(it, source, fileName) }
+    /** Per-node ENTER hook: the condition/operand anchors. */
+    private fun spineAtEnterNode(node: Node) {
+        when (node) {
+            is IfStatement -> spineAtIfEnter(node)
+            is WhileStatement -> if (spineAtStatus(node) == AT_STMT) {
+                scanForNotFalsy(node.expression, spineSource, spineFileName)
+                checkVoidConditionTruthiness(node.expression, spineSource, spineFileName)
             }
-            is IfStatement -> {
-                // Check for always-falsy conditions (e.g. `void x`) → TS2873
-                if (isAlwaysFalsyExpr(stmt.expression)) {
-                    emitTS2873(stmt.expression, source, fileName)
+            is DoStatement -> if (spineAtStatus(node) == AT_STMT) {
+                scanForNotFalsy(node.expression, spineSource, spineFileName)
+                checkVoidConditionTruthiness(node.expression, spineSource, spineFileName)
+            }
+            is ForStatement -> if (spineAtStatus(node) == AT_STMT) {
+                node.condition?.let { checkVoidConditionTruthiness(it, spineSource, spineFileName) }
+            }
+            is BinaryExpression -> spineAtBinaryEnter(node)
+            is ConditionalExpression -> if (spineAtStatus(node) == AT_EXPR) {
+                if (isAlwaysFalsyExpr(node.condition)) {
+                    emitTS2873(node.condition, spineSource, spineFileName)
+                } else if (isAlwaysTruthyForOrExpr(node.condition)) {
+                    // tsc checkTruthinessOfType covers `?:` conditions too — an
+                    // always-truthy syntactic shape fires TS2872.
+                    emitTS2872(node.condition, spineSource, spineFileName)
                 }
-                // Also scan nested `!x` (always-falsy operand) inside the condition.
-                scanForNotFalsy(stmt.expression, source, fileName)
-                checkVoidConditionTruthiness(stmt.expression, source, fileName)
-                checkEnumReferenceFalsyCondition(stmt.expression, source, fileName)
-                // Walk the if-else chain: only flag always-truthy conditions that are
-                // UNREACHABLE because a preceding branch was always-truthy
-                var prevTruthy = isAlwaysTruthyExpr(stmt.expression)
-                checkAlwaysTruthyInStatement(stmt.thenStatement, source, fileName)
-                var elseStmt = stmt.elseStatement
-                while (elseStmt is IfStatement) {
-                    if (isAlwaysFalsyExpr(elseStmt.expression)) {
-                        emitTS2873(elseStmt.expression, source, fileName)
-                    }
-                    scanForNotFalsy(elseStmt.expression, source, fileName)
-                    checkVoidConditionTruthiness(elseStmt.expression, source, fileName)
-                    if (prevTruthy) {
-                        checkAlwaysTruthyCondition(elseStmt.expression, source, fileName)
-                    }
-                    checkEnumReferenceFalsyCondition(elseStmt.expression, source, fileName)
-                    if (isAlwaysTruthyExpr(elseStmt.expression)) prevTruthy = true
-                    checkAlwaysTruthyInStatement(elseStmt.thenStatement, source, fileName)
-                    elseStmt = elseStmt.elseStatement
+                checkEnumReferenceFalsyCondition(node.condition, spineSource, spineFileName)
+            }
+            is PrefixUnaryExpression ->
+                if (node.operator == SyntaxKind.Exclamation && spineAtStatus(node) == AT_EXPR &&
+                    isAlwaysFalsyExpr(node.operand)
+                ) {
+                    // The operand of a logical-not `!` is in a truthiness-test
+                    // position, so an always-falsy operand fires TS2873.
+                    emitTS2873(node.operand, spineSource, spineFileName)
                 }
-                elseStmt?.let { checkAlwaysTruthyInStatement(it, source, fileName) }
-            }
-            is Block -> checkAlwaysTruthyInStatements(stmt.statements, source, fileName)
-            is ReturnStatement -> stmt.expression?.let { checkAlwaysTruthyInExpr(it, source, fileName) }
-            is FunctionDeclaration -> stmt.body?.let { checkAlwaysTruthyInStatements(it.statements, source, fileName) }
-            is ClassDeclaration -> for (m in stmt.members) {
-                when (m) {
-                    is MethodDeclaration -> m.body?.let { checkAlwaysTruthyInStatements(it.statements, source, fileName) }
-                    is Constructor -> m.body?.let { checkAlwaysTruthyInStatements(it.statements, source, fileName) }
-                    is GetAccessor -> m.body?.let { checkAlwaysTruthyInStatements(it.statements, source, fileName) }
-                    is SetAccessor -> m.body?.let { checkAlwaysTruthyInStatements(it.statements, source, fileName) }
-                    is PropertyDeclaration -> m.initializer?.let { checkAlwaysTruthyInExpr(it, source, fileName) }
-                    else -> {}
-                }
-            }
-            is ForStatement -> {
-                stmt.condition?.let { checkAlwaysTruthyInExpr(it, source, fileName); checkVoidConditionTruthiness(it, source, fileName) }
-                checkAlwaysTruthyInStatement(stmt.statement, source, fileName)
-            }
-            is ForInStatement -> checkAlwaysTruthyInStatement(stmt.statement, source, fileName)
-            is ForOfStatement -> checkAlwaysTruthyInStatement(stmt.statement, source, fileName)
-            is WhileStatement -> {
-                scanForNotFalsy(stmt.expression, source, fileName)
-                checkVoidConditionTruthiness(stmt.expression, source, fileName)
-                checkAlwaysTruthyInStatement(stmt.statement, source, fileName)
-            }
-            is DoStatement -> {
-                scanForNotFalsy(stmt.expression, source, fileName)
-                checkVoidConditionTruthiness(stmt.expression, source, fileName)
-                checkAlwaysTruthyInStatement(stmt.statement, source, fileName)
-            }
-            is SwitchStatement -> for (c in stmt.caseBlock) {
-                val clauseStmts = when (c) { is CaseClause -> c.statements; is DefaultClause -> c.statements; else -> emptyList() }
-                checkAlwaysTruthyInStatements(clauseStmts, source, fileName)
-            }
-            is TryStatement -> {
-                checkAlwaysTruthyInStatements(stmt.tryBlock.statements, source, fileName)
-                stmt.catchClause?.let { checkAlwaysTruthyInStatements(it.block.statements, source, fileName) }
-                stmt.finallyBlock?.let { checkAlwaysTruthyInStatements(it.statements, source, fileName) }
-            }
-            is LabeledStatement -> checkAlwaysTruthyInStatement(stmt.statement, source, fileName)
-            is ThrowStatement -> stmt.expression?.let { checkAlwaysTruthyInExpr(it, source, fileName) }
-            is ExportAssignment -> stmt.expression.let { checkAlwaysTruthyInExpr(it, source, fileName) }
-            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { checkAlwaysTruthyInStatements(it.statements, source, fileName) }
             else -> {}
         }
+    }
+
+    /**
+     * The per-if condition anchor — the deleted IfStatement arm + its manual
+     * else-if chain loop, per chain node: falsy → TS2873, the nested-`!` scan,
+     * the TS1345 void-call check, and — for a chain LINK whose PRECEDING
+     * condition(s) include an always-truthy one (the legacy prevTruthy,
+     * pull-derived from the elseStatement ancestor links) — the
+     * always-truthy-because-unreachable TS2872, then the TS2845 enum check.
+     */
+    private fun spineAtIfEnter(stmt: IfStatement) {
+        if (spineAtStatus(stmt) != AT_STMT) return
+        if (isAlwaysFalsyExpr(stmt.expression)) {
+            emitTS2873(stmt.expression, spineSource, spineFileName)
+        }
+        scanForNotFalsy(stmt.expression, spineSource, spineFileName)
+        checkVoidConditionTruthiness(stmt.expression, spineSource, spineFileName)
+        var cur: Node = stmt
+        var p = (cur as NodeBase).parent
+        var prevTruthy = false
+        while (p is IfStatement && p.elseStatement === cur) {
+            if (isAlwaysTruthyExpr(p.expression)) {
+                prevTruthy = true
+                break
+            }
+            cur = p
+            p = (cur as NodeBase).parent
+        }
+        if (prevTruthy) {
+            checkAlwaysTruthyCondition(stmt.expression, spineSource, spineFileName)
+        }
+        checkEnumReferenceFalsyCondition(stmt.expression, spineSource, spineFileName)
+    }
+
+    /** The ||/&& left-operand anchor — the deleted left-spine loop's per-node
+     *  emission block: always-truthy → TS2872, always-falsy → TS2873, and the
+     *  B69.11 numeric-literal `||` left (suppressed anywhere below an arrow
+     *  EXPRESSION body edge — the legacy flag was never reset at nested
+     *  function boundaries, so the derivation walks the FULL chain). */
+    private fun spineAtBinaryEnter(expr: BinaryExpression) {
+        if (expr.operator != SyntaxKind.BarBar && expr.operator != SyntaxKind.AmpersandAmpersand) return
+        if (spineAtStatus(expr) != AT_EXPR) return
+        if (isAlwaysTruthyForOrExpr(expr.left)) {
+            emitTS2872(expr.left, spineSource, spineFileName)
+        } else if (isAlwaysFalsyExpr(expr.left)) {
+            emitTS2873(expr.left, spineSource, spineFileName)
+        }
+        if (expr.operator == SyntaxKind.BarBar && expr.left is NumericLiteralNode &&
+            !spineAtInArrowExprBody(expr)
+        ) {
+            val v = (expr.left).text.toDoubleOrNull()
+            if (v != null && v != 0.0 && !v.isNaN()) {
+                emitTS2872(expr.left, spineSource, spineFileName)
+            }
+        }
+    }
+
+    /** B69.11 pull-derivation: is [node] anywhere below an arrow EXPRESSION
+     *  body edge? (The legacy inArrowExprBody flag, set at that edge and never
+     *  reset — it survives into nested function-body blocks.) */
+    private fun spineAtInArrowExprBody(node: Node): Boolean {
+        var cur: Node = node
+        while (true) {
+            val parent = (cur as NodeBase).parent ?: return false
+            if (parent is ArrowFunction && parent.body === cur && cur !is Block) return true
+            cur = parent
+        }
+    }
+
+    /**
+     * Memoized reach classifier — the deleted checkAlwaysTruthyInStatement /
+     * -InExpr dispatch arms verbatim (see the AT_* states). Ascends to the
+     * first memoized/terminal ancestor, then walks back down over
+     * [spineAtEdge].
+     */
+    private fun spineAtStatus(node: Node): Int {
+        if (node is SourceFile) return AT_STMT
+        val memo = spineAtReachMemo
+        run {
+            val id = (node as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) {
+                val m = memo[id].toInt()
+                if (m != 0) return m
+            }
+        }
+        val chain = spineAtChain
+        chain.clear()
+        var cur: Node = node
+        val anchor: Node?
+        var anchorStatus = AT_NONE
+        while (true) {
+            chain.add(cur)
+            val parent = (cur as NodeBase).parent
+            if (parent == null) { anchor = null; break } // detached/unindexed → NONE
+            if (parent is SourceFile) { anchor = parent; anchorStatus = AT_STMT; break }
+            val pid = (parent as NodeBase).nodeId
+            val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
+            if (pm != 0) { anchor = parent; anchorStatus = pm; break }
+            cur = parent
+        }
+        var pNode: Node? = anchor
+        var pStatus = anchorStatus
+        var result = AT_NONE
+        for (i in chain.indices.reversed()) {
+            val c = chain[i]
+            result = if (pNode == null || pStatus == AT_NONE) AT_NONE
+                else spineAtEdge(pNode, pStatus, c)
+            val cid = (c as NodeBase).nodeId
+            if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
+            pNode = c
+            pStatus = result
+        }
+        chain.clear()
+        return result
+    }
+
+    /**
+     * The edge rules — the deleted walkers' arms verbatim. Unlisted edges are
+     * NONE (the legacy quirks: if/while/do and TERNARY condition
+     * SUB-expressions are checked only by the whole-expression predicates;
+     * for initializers/incrementors, for-in/of and switch SUBJECT
+     * expressions, heritage, and type positions are never walked).
+     */
+    private fun spineAtEdge(parent: Node, pStatus: Int, child: Node): Int = when (pStatus) {
+        AT_STMT -> when (parent) {
+            is SourceFile -> if (child is Statement) AT_STMT else AT_NONE
+            is Block -> if (child is Statement) AT_STMT else AT_NONE
+            is ModuleBlock -> if (child is Statement) AT_STMT else AT_NONE
+            is ExpressionStatement -> if (child === parent.expression) AT_EXPR else AT_NONE
+            is VariableStatement -> if (child === parent.declarationList) AT_MEMBER else AT_NONE
+            is IfStatement ->
+                if (child === parent.thenStatement || child === parent.elseStatement) AT_STMT
+                else AT_NONE
+            is ReturnStatement -> if (child === parent.expression) AT_EXPR else AT_NONE
+            is FunctionDeclaration -> if (child === parent.body) AT_STMT else AT_NONE
+            is ClassDeclaration ->
+                if (child is MethodDeclaration || child is Constructor ||
+                    child is GetAccessor || child is SetAccessor ||
+                    child is PropertyDeclaration) AT_MEMBER else AT_NONE
+            is ForStatement -> when {
+                child === parent.condition -> AT_EXPR
+                child === parent.statement -> AT_STMT
+                else -> AT_NONE
+            }
+            is ForInStatement -> if (child === parent.statement) AT_STMT else AT_NONE
+            is ForOfStatement -> if (child === parent.statement) AT_STMT else AT_NONE
+            is WhileStatement -> if (child === parent.statement) AT_STMT else AT_NONE
+            is DoStatement -> if (child === parent.statement) AT_STMT else AT_NONE
+            is SwitchStatement -> if (child is CaseClause || child is DefaultClause) AT_MEMBER else AT_NONE
+            is TryStatement -> when {
+                child === parent.tryBlock || child === parent.finallyBlock -> AT_STMT
+                child === parent.catchClause -> AT_MEMBER
+                else -> AT_NONE
+            }
+            is LabeledStatement -> if (child === parent.statement) AT_STMT else AT_NONE
+            is ThrowStatement -> if (child === parent.expression) AT_EXPR else AT_NONE
+            is ExportAssignment -> if (child === parent.expression) AT_EXPR else AT_NONE
+            is ModuleDeclaration -> if (child === parent.body && child is ModuleBlock) AT_STMT else AT_NONE
+            else -> AT_NONE
+        }
+        AT_MEMBER -> when (parent) {
+            is VariableDeclarationList -> if (child is VariableDeclaration) AT_MEMBER else AT_NONE
+            is VariableDeclaration -> if (child === parent.initializer) AT_EXPR else AT_NONE
+            is MethodDeclaration -> if (child === parent.body) AT_STMT else AT_NONE
+            is Constructor -> if (child === parent.body) AT_STMT else AT_NONE
+            is GetAccessor -> if (child === parent.body) AT_STMT else AT_NONE
+            is SetAccessor -> if (child === parent.body) AT_STMT else AT_NONE
+            is PropertyDeclaration -> if (child === parent.initializer) AT_EXPR else AT_NONE
+            is PropertyAssignment -> if (child === parent.initializer) AT_EXPR else AT_NONE
+            is SpreadAssignment -> if (child === parent.expression) AT_EXPR else AT_NONE
+            is TemplateSpan -> if (child === parent.expression) AT_EXPR else AT_NONE
+            is CaseClause -> if (child is Statement) AT_STMT else AT_NONE
+            is DefaultClause -> if (child is Statement) AT_STMT else AT_NONE
+            is CatchClause -> if (child === parent.block) AT_STMT else AT_NONE
+            else -> AT_NONE
+        }
+        AT_EXPR -> when (parent) {
+            is BinaryExpression -> if (child === parent.left || child === parent.right) AT_EXPR else AT_NONE
+            is ParenthesizedExpression -> if (child === parent.expression) AT_EXPR else AT_NONE
+            is AsExpression -> if (child === parent.expression) AT_EXPR else AT_NONE
+            is SatisfiesExpression -> if (child === parent.expression) AT_EXPR else AT_NONE
+            is NonNullExpression -> if (child === parent.expression) AT_EXPR else AT_NONE
+            is TypeAssertionExpression -> if (child === parent.expression) AT_EXPR else AT_NONE
+            is ConditionalExpression ->
+                if (child === parent.whenTrue || child === parent.whenFalse) AT_EXPR
+                else AT_NONE
+            is ArrowFunction -> when {
+                child !== parent.body -> AT_NONE
+                child is Block -> AT_STMT
+                else -> AT_EXPR
+            }
+            is FunctionExpression -> if (child === parent.body) AT_STMT else AT_NONE
+            is CallExpression ->
+                if (child === parent.expression || parent.arguments.any { it === child }) AT_EXPR
+                else AT_NONE
+            is NewExpression ->
+                if (child === parent.expression || parent.arguments?.any { it === child } == true) AT_EXPR
+                else AT_NONE
+            is PropertyAccessExpression -> if (child === parent.expression) AT_EXPR else AT_NONE
+            is ElementAccessExpression ->
+                if (child === parent.expression || child === parent.argumentExpression) AT_EXPR
+                else AT_NONE
+            is ArrayLiteralExpression -> if (parent.elements.any { it === child }) AT_EXPR else AT_NONE
+            is ObjectLiteralExpression -> when (child) {
+                is PropertyAssignment, is SpreadAssignment,
+                is MethodDeclaration, is GetAccessor, is SetAccessor -> AT_MEMBER
+                else -> AT_NONE
+            }
+            is TemplateExpression -> if (child is TemplateSpan) AT_MEMBER else AT_NONE
+            is TaggedTemplateExpression -> when {
+                child === parent.tag -> AT_EXPR
+                child === parent.template && child is TemplateExpression -> AT_EXPR
+                else -> AT_NONE
+            }
+            is PrefixUnaryExpression -> if (child === parent.operand) AT_EXPR else AT_NONE
+            is PostfixUnaryExpression -> if (child === parent.operand) AT_EXPR else AT_NONE
+            is SpreadElement -> if (child === parent.expression) AT_EXPR else AT_NONE
+            is AwaitExpression -> if (child === parent.expression) AT_EXPR else AT_NONE
+            is YieldExpression -> if (child === parent.expression) AT_EXPR else AT_NONE
+            is VoidExpression -> if (child === parent.expression) AT_EXPR else AT_NONE
+            is DeleteExpression -> if (child === parent.expression) AT_EXPR else AT_NONE
+            is TypeOfExpression -> if (child === parent.expression) AT_EXPR else AT_NONE
+            is CommaListExpression -> if (parent.elements.any { it === child }) AT_EXPR else AT_NONE
+            is ClassExpression ->
+                if (child is MethodDeclaration || child is Constructor ||
+                    child is GetAccessor || child is SetAccessor ||
+                    child is PropertyDeclaration) AT_MEMBER else AT_NONE
+            else -> AT_NONE
+        }
+        else -> AT_NONE
     }
 
     /** B378: TS1345 — a condition expression of type `void` (a void-returning CALL used in a
@@ -46566,153 +46797,6 @@ interface DataView {
             start = start, length = length,
         ))
     }
-
-    private fun checkAlwaysTruthyInExpr(expr: Expression, source: String, fileName: String) {
-        when (expr) {
-            is BinaryExpression -> {
-                if (expr.operator == SyntaxKind.BarBar || expr.operator == SyntaxKind.AmpersandAmpersand) {
-                    if (isAlwaysTruthyForOrExpr(expr.left)) {
-                        emitTS2872(expr.left, source, fileName)
-                    } else if (isAlwaysFalsyExpr(expr.left)) {
-                        emitTS2873(expr.left, source, fileName)
-                    }
-                    // B69.11: numeric-literal LHS — emit TS2872 only when NOT
-                    // inside an arrow expression body (TypeScript suppresses there;
-                    // the literal serves as a default-value pattern). ||-only: the
-                    // && path (B277) keeps numerics out (no 0/1 exemption here).
-                    if (expr.operator == SyntaxKind.BarBar &&
-                        !inArrowExprBody && expr.left is NumericLiteralNode) {
-                        val v = (expr.left).text.toDoubleOrNull()
-                        if (v != null && v != 0.0 && !v.isNaN()) {
-                            emitTS2872(expr.left, source, fileName)
-                        }
-                    }
-                }
-                // Iterative left spine to avoid StackOverflow
-                var current: Expression = expr
-                while (current is BinaryExpression) {
-                    if ((current.operator == SyntaxKind.BarBar ||
-                         current.operator == SyntaxKind.AmpersandAmpersand) && current !== expr) {
-                        if (isAlwaysTruthyForOrExpr(current.left)) {
-                            emitTS2872(current.left, source, fileName)
-                        } else if (isAlwaysFalsyExpr(current.left)) {
-                            emitTS2873(current.left, source, fileName)
-                        }
-                        if (current.operator == SyntaxKind.BarBar &&
-                            !inArrowExprBody && current.left is NumericLiteralNode) {
-                            val v = (current.left).text.toDoubleOrNull()
-                            if (v != null && v != 0.0 && !v.isNaN()) {
-                                emitTS2872(current.left, source, fileName)
-                            }
-                        }
-                    }
-                    checkAlwaysTruthyInExpr(current.right, source, fileName)
-                    current = current.left
-                }
-                checkAlwaysTruthyInExpr(current, source, fileName)
-            }
-            is ParenthesizedExpression -> checkAlwaysTruthyInExpr(expr.expression, source, fileName)
-            is AsExpression -> checkAlwaysTruthyInExpr(expr.expression, source, fileName)
-            is SatisfiesExpression -> checkAlwaysTruthyInExpr(expr.expression, source, fileName)
-            is NonNullExpression -> checkAlwaysTruthyInExpr(expr.expression, source, fileName)
-            is TypeAssertionExpression -> checkAlwaysTruthyInExpr(expr.expression, source, fileName)
-            is ConditionalExpression -> {
-                if (isAlwaysFalsyExpr(expr.condition)) {
-                    emitTS2873(expr.condition, source, fileName)
-                } else if (isAlwaysTruthyForOrExpr(expr.condition)) {
-                    // tsc checkTruthinessOfType covers `?:` conditions too — an
-                    // always-truthy syntactic shape (paren'd arrow/function/object/…)
-                    // fires TS2872 (fatarrowfunctionsOptionalArgs (85,1)).
-                    emitTS2872(expr.condition, source, fileName)
-                }
-                checkEnumReferenceFalsyCondition(expr.condition, source, fileName)
-                checkAlwaysTruthyInExpr(expr.whenTrue, source, fileName)
-                checkAlwaysTruthyInExpr(expr.whenFalse, source, fileName)
-            }
-            is ArrowFunction -> when (val body = expr.body) {
-                is Block -> checkAlwaysTruthyInStatements(body.statements, source, fileName)
-                is Expression -> {
-                    val saved = inArrowExprBody
-                    inArrowExprBody = true
-                    try {
-                        checkAlwaysTruthyInExpr(body, source, fileName)
-                    } finally {
-                        inArrowExprBody = saved
-                    }
-                }
-                else -> {}
-            }
-            is FunctionExpression -> expr.body.let { checkAlwaysTruthyInStatements(it.statements, source, fileName) }
-            is CallExpression -> {
-                checkAlwaysTruthyInExpr(expr.expression, source, fileName)
-                for (arg in expr.arguments) checkAlwaysTruthyInExpr(arg, source, fileName)
-            }
-            is NewExpression -> {
-                checkAlwaysTruthyInExpr(expr.expression, source, fileName)
-                expr.arguments?.forEach { checkAlwaysTruthyInExpr(it, source, fileName) }
-            }
-            is PropertyAccessExpression -> checkAlwaysTruthyInExpr(expr.expression, source, fileName)
-            is ElementAccessExpression -> {
-                checkAlwaysTruthyInExpr(expr.expression, source, fileName)
-                checkAlwaysTruthyInExpr(expr.argumentExpression, source, fileName)
-            }
-            is ArrayLiteralExpression -> for (e in expr.elements) checkAlwaysTruthyInExpr(e, source, fileName)
-            is ObjectLiteralExpression -> for (prop in expr.properties) {
-                when (prop) {
-                    is PropertyAssignment -> checkAlwaysTruthyInExpr(prop.initializer, source, fileName)
-                    is SpreadAssignment -> checkAlwaysTruthyInExpr(prop.expression, source, fileName)
-                    is MethodDeclaration -> prop.body?.let { checkAlwaysTruthyInStatements(it.statements, source, fileName) }
-                    is GetAccessor -> prop.body?.let { checkAlwaysTruthyInStatements(it.statements, source, fileName) }
-                    is SetAccessor -> prop.body?.let { checkAlwaysTruthyInStatements(it.statements, source, fileName) }
-                    else -> {}
-                }
-            }
-            is TemplateExpression -> for (span in expr.templateSpans) {
-                checkAlwaysTruthyInExpr(span.expression, source, fileName)
-            }
-            is TaggedTemplateExpression -> {
-                checkAlwaysTruthyInExpr(expr.tag, source, fileName)
-                val t = expr.template
-                if (t is TemplateExpression) {
-                    for (span in t.templateSpans) checkAlwaysTruthyInExpr(span.expression, source, fileName)
-                }
-            }
-            is PrefixUnaryExpression -> {
-                // The operand of a logical-not `!` is in a truthiness-test
-                // position, so an always-falsy operand (e.g. `!void 0`, `!null`)
-                // fires TS2873 just like a condition. (`null`/`undefined`/`void`
-                // are always falsy regardless of strict mode.)
-                if (expr.operator == SyntaxKind.Exclamation && isAlwaysFalsyExpr(expr.operand)) {
-                    emitTS2873(expr.operand, source, fileName)
-                }
-                checkAlwaysTruthyInExpr(expr.operand, source, fileName)
-            }
-            is PostfixUnaryExpression -> checkAlwaysTruthyInExpr(expr.operand, source, fileName)
-            is SpreadElement -> checkAlwaysTruthyInExpr(expr.expression, source, fileName)
-            is AwaitExpression -> checkAlwaysTruthyInExpr(expr.expression, source, fileName)
-            is YieldExpression -> expr.expression?.let { checkAlwaysTruthyInExpr(it, source, fileName) }
-            is VoidExpression -> checkAlwaysTruthyInExpr(expr.expression, source, fileName)
-            is DeleteExpression -> checkAlwaysTruthyInExpr(expr.expression, source, fileName)
-            is TypeOfExpression -> checkAlwaysTruthyInExpr(expr.expression, source, fileName)
-            is CommaListExpression -> for (e in expr.elements) checkAlwaysTruthyInExpr(e, source, fileName)
-            is ClassExpression -> for (m in expr.members) {
-                when (m) {
-                    is MethodDeclaration -> m.body?.let { checkAlwaysTruthyInStatements(it.statements, source, fileName) }
-                    is Constructor -> m.body?.let { checkAlwaysTruthyInStatements(it.statements, source, fileName) }
-                    is GetAccessor -> m.body?.let { checkAlwaysTruthyInStatements(it.statements, source, fileName) }
-                    is SetAccessor -> m.body?.let { checkAlwaysTruthyInStatements(it.statements, source, fileName) }
-                    is PropertyDeclaration -> m.initializer?.let { checkAlwaysTruthyInExpr(it, source, fileName) }
-                    else -> {}
-                }
-            }
-            else -> {}
-        }
-    }
-
-    /** B69.11: tracks whether we're inside an arrow expression body for the
-     *  always-truthy walker. TypeScript suppresses TS2872 for numeric-literal
-     *  LHS of `||` in this context (the literal is a default-value pattern). */
-    private var inArrowExprBody: Boolean = false
 
     /**
      * TS2845: "This condition will always return 'false'/'true'." for an enum

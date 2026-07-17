@@ -59,6 +59,40 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 539 (2026-07-17) — INV.4(d) walker 10: checkAlwaysTruthy (the
+TS2872/TS2873 always-truthy/falsy condition pass + TS1345 void-call
+conditions, TS2845 enum-member truthiness, and the `!`-operand falsy check;
+~160 ms tail) migrated onto the spine — the per-file driver and the
+recursion walkers (checkAlwaysTruthyInStatements/-InStatement/-InExpr) are
+DELETED (~230 lines), plus the B69.11 inArrowExprBody threading field.**
+The lightest stateful shape since dupId: NO frames — both walk states
+pull-derive per anchor from the ancestor chain: (1) the B69.11
+inArrowExprBody flag (suppresses the numeric-literal `||`-left TS2872)
+derives as "any ancestor edge crosses an arrow EXPRESSION body" — the
+legacy flag was set at that edge and NEVER reset, so it survives into
+nested function-body blocks (pinned: `() => (function(){ return 1 || y })()`
+stays suppressed); (2) the if-else-chain prevTruthy state (the legacy
+manual chain loop — TS2872 on an else-if condition fires only when a
+PRECEDING chain condition is always-truthy) derives by walking the
+elseStatement ancestor links. Anchors dispatch per chain NODE at
+IfStatement enters (each else-if is its own dispatch, chain-position-aware),
+While/Do/For/ternary/||-&&-binary/prefix-`!` enters. Reach quirks mirrored
+(13 pins, Inv4SpineBatch30Test, ALL pre-verified on the OLD walker first
+run): if/while/do and TERNARY condition SUB-expressions are checked only by
+the whole-expression predicates (never walked — the CLAUDE.md
+condition-scan gotcha), while FOR conditions are FULLY walked (the
+asymmetry pinned); for initializers/incrementors and for-in/of and switch
+SUBJECT expressions unreached; class-EXPRESSION member bodies reached
+(unlike walker 9). One edge bug caught pre-verification by design review:
+try blocks briefly classified through the carrier state whose arm lacked a
+Block case (their statements would have been unreached) — fixed before any
+run. VERIFIED: suite 11,208 → 11,221 (+13, 0 regressions, XML-verified);
+listAll error lines IDENTICAL on ALL 8 profiles (539a vs 539sm; slot-move
+pre-gate also corpus-green); bench 46 errors, histogram unchanged. NEXT:
+INV.4(d) tail — checkNullUndefinedUsage / checkCommaOperatorUnused /
+checkNullishPredicates (mind the np-walker's documented ORDER dependency on
+checkCommaOperatorUnused's same-position insertion order).
+
 **Round 538 (2026-07-17) — INV.4(d) walker 9: checkConstAssignment (the
 TS2588/TS2628/TS2629/TS2630/TS2708 const-family pass + the B510 TS2540
 readonly-write checks, TS2357 inc/dec targets, and the scanRegExpFull
@@ -1755,6 +1789,15 @@ interrupt the arc).
       identical on ALL 8 profiles; the pass driver deleted (the recursive
       walkers stay as checkComputedDestructKey's utility). See the round-531
       session note.
+    - (w10) DONE round 539 (2026-07-17): checkAlwaysTruthy (TS2872/TS2873 +
+      TS1345/TS2845 + the `!`-operand falsy check) — frameless: both walk
+      states pull-derive (the never-reset B69.11 inArrowExprBody flag; the
+      if-else-chain prevTruthy via elseStatement ancestor links); per-chain-
+      node dispatch at IfStatement enters. Condition-reach asymmetry pinned:
+      if/while/do/ternary condition sub-exprs never walked, FOR conditions
+      fully walked. 13 pins (Inv4SpineBatch30Test) pre-verified; suite
+      11,208 → 11,221; listAll ×8 identical; ~230 walker lines + the
+      threading field deleted. See the round-539 session note.
     - (w9) DONE round 538 (2026-07-17) — checkConstAssignment (TS2588/TS2628/TS2629/TS2630/TS2708 +
       TS2540 readonly writes + TS2357 inc/dec targets + scanRegExpFull's
       TS1538/regex-grammar family riding the same walker). SCOUTED
