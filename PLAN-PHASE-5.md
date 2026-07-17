@@ -62,6 +62,25 @@ spine copies must be INSIDE the filter window for the null/undefined
 suppression to keep working on them → the cutoff DOES move to checkSpine
 entry in the same commit (2322-emitting spine handlers ≈ none today, so
 the window widening is near-neutral; corpus arbitrates).**
+**(cta-m3a) ATTEMPTED AND REVERTED (round 566c): the full implementation
+(anchor + per-file production maps + legacy truncation + cutoff move) came
+back 11,307/1 — ONE corpus failure, qualify_ts, and it is NOT a truncation
+bug but VERDICT DRIFT: the anchor's early leaf run (during checkSpine)
+resolves the namespace-qualified annotation `T.I` under COLD caches,
+flipping checkVarDeclAssignability's historical load-bearing BAIL at
+qualify.ts:58 into a wrong-display TS2741 ('I' instead of 'T.I') that then
+coexists with the correct emission from the separate named→named walker.
+The emit-twice pattern preserves STATE semantics on both sides but cannot
+stop the EMISSION-owning run's first-touch drift — round 543's "the
+computation is order-sensitive" applies to the leaf's own verdict. The
+drift surface is TINY (1/11,307) — two viable directions, both recorded
+for the next attempt: (i) root-cause qualify's specific resolution
+difference (probe what the leaf sees at spine time vs giant time — likely
+declaredTypes/aliasDisplay for the namespace-local `I`; may be fixable by
+one more producer hoist or an INV.5(c)-gate widening); (ii) sequence the
+remaining INV.5 canonicalization work first so annotation resolution is
+order-insensitive before any emission moves. Attempt reverted; tree
+clean.**
 
 **Round 565 (2026-07-17) — (cta-m2d) part 2 LANDED with a STRATEGY PIVOT.**
 CtaFrame now carries the currentLocalTypes family (localTypes /
