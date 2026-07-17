@@ -30,10 +30,15 @@ loop BODY — the same "for-init unreached" reach quirk g1b pinned; the spine
 recording is now gated to VariableStatement-OWNED declarations). Audit: 5
 pins, all green — the frame skeleton agrees with the legacy context on
 every legacy-visited statement across both fixtures. Suite 11,307/0.
-NEXT: (cta-m3) emissions move arm-by-arm — VariableStatement first (the
-checkVarDeclAssignability anchor dispatches from the spine under an
-install of the frame's context; legacy arm deactivated same-commit),
-corpus + listAll gated per arm.
+NEXT: (cta-m2d) FIRST — extend CtaFrame + the audit fingerprint to the
+currentLocalTypes family (currentLocalTypes / currentLocalDeclTypeNodes /
+currentShadowedNames / narrowedDeclaredTypes — checkVarDeclAssignability
+and every leaf utility consume them, and the m2 frames deliberately
+excluded them; fingerprint a sorted name→Type.id digest and iterate to
+green like m2b/m2c). Only then (cta-m3): emissions arm-by-arm —
+VariableStatement first (the checkVarDeclAssignability anchor dispatches
+from the spine under a full frame-context install; legacy arm deactivated
+same-commit), corpus + listAll gated per arm.
 
 **Round 562 (2026-07-17) — (cta-m2b): the SPINE-side cta frame skeleton
 LANDED, AUDIT-VERIFIED.** Under the test-only flag, checkSpine now maintains
