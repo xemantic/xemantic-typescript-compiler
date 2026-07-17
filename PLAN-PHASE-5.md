@@ -2428,6 +2428,21 @@ interrupt the arc).
     (tsc's instantiationDepth/instantiationCount → TS2589) plus member
     tables cached ON the reference, NOT a cap lift. Keep the depth-4 cap
     until then.**
+    **BUDGETED-LIFT PROBE (round 551b, also reverted): a per-top-level-
+    relation budget of 2,000 fresh worker computations (reset at depth-0
+    relation entry, consumed on memo miss, raw fallback on trip) TAMES the
+    perf-bomb — corpus fully green 11,252/0 — but exposes exactly ONE new
+    FP on all 8 profiles: program.ts:2924 TS2345 `(readonly Diagnostic[] |
+    undefined)[]` ⊄ `T[][] | readonly (T | …)[]` (tsc's flatten<T> — the
+    documented M3.1 masked gap: tsc infers T, we don't, and the old
+    depth-≥4 trivial-pass masked it). A TP-free gate on DEEP substitution
+    results does NOT kill it — the outcome flips inside the relation
+    (target side), not at the substitution result. VERDICT: the cap
+    deletion is blocked on generic inference (M3.1) / the (e)-era
+    engine-opening work, not on allocation strategy — sequence (d) with
+    (e), and consider a param-side foreign-TP bail at the call-arg
+    emission as the enabling slice (corpus-gated; the round-431 gate
+    family's rationale applies verbatim to un-inferred PARAM types).**
   - [ ] **INV.5(e) Open `canUseTypeEngine`'s generic gate; delete superseded
     pin walkers** (suite-gated per deletion). Then RETURN to INV.4(e).
 
