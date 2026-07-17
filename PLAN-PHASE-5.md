@@ -20,6 +20,27 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 568 (2026-07-17) — (cta-m3c-prep) PARTIALLY REVERTED: the always-on
+fn-body sandwich drifts the harness profile.** Corpus was GREEN (11,307/0)
+but listAll found 4 new FPs on harness (fourslashImpl.ts:1977-78 TS2339
+'prefixText'/'suffixText' on type 'T') — the sandwich's TP-CONSTRAINT
+materialization (the set-once `typeParam.constraint = getTypeFromTypeNode`
+two-pass) now runs at SPINE time under cold caches, and the first-touch
+result differs from the legacy-time one that the property-access pass's
+TP-receiver member resolution depends on. This is the (c2)-family
+lazy-materialization mechanism, now with a MEASURED victim. The sandwich
+is re-gated to the audit flag; the neutral frame fields
+(fnTpScope/fnTpDecls capture) stay. THE FN-BODY TIER IS BLOCKED on making
+TP-constraint resolution order-insensitive — options: (a) canonicalize
+constraint resolution (the INV.5 (c)-gate widening / (d2) family), (b)
+build fn frames LAZILY at the first in-body anchor consult (still earlier
+than legacy — likely same drift), (c) root-cause the specific
+fourslashImpl constraint delta like round 566's qualify chain (probe what
+getTypeFromTypeNode returns for that TP's constraint at each time). Bench
+note: the always-on sandwich also cost +3.9% self-time — lazy construction
+is warranted regardless. The top-level/namespace tier (rounds 566/567)
+stays landed and green.
+
 **Round 567 (2026-07-17) — (cta-m3b) LANDED first-try: the ExpressionStatement
 and ReturnStatement arms join the spine anchor.** The generalized
 `ctaM3StmtAnchor` dispatches all three statement kinds at SourceFile/

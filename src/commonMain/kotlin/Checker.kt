@@ -722,6 +722,10 @@ class Checker(
         /** the legacy ModuleDeclaration arm's inferenceNamespaceStack push for
          *  this body, reproduced by the anchor's install (null = no push). */
         val nsSymbol: Symbol? = null,
+        /** the fn's BUILT TypeParam scope + decl map (checkFunctionBody's
+         *  installs), captured at the fn-body enter for the anchors. */
+        var fnTpScope: Map<String, Type.TypeParam>? = null,
+        var fnTpDecls: Map<String, TypeParameter>? = null,
         // (cta-m2d) part 2: the currentLocalTypes family — maintained via the
         // SANDWICH pattern (the frame's maps are installed into the ambient
         // fields, the SAME legacy helpers run against them, then the ambient
@@ -855,6 +859,11 @@ class Checker(
                 applyBodyLocalShadowing(body.statements, paramNames)
                 applyAmbiguousBlockScopedLocals(body.statements, paramNames)
                 shadowNestedFunctionNames(body.statements)
+                if (!tps.isNullOrEmpty()) {
+                    val decls = base.fnTpDecls?.toMutableMap() ?: mutableMapOf()
+                    for (tp in tps) decls[tp.name.text] = tp
+                    frame.fnTpDecls = decls
+                } else frame.fnTpDecls = base.fnTpDecls
                 val fnScope = if (!tps.isNullOrEmpty()) {
                     val scope = (currentTypeParamScope?.toMutableMap() ?: mutableMapOf())
                     val newTps = mutableListOf<Pair<TypeParameter, Type.TypeParam>>()
@@ -879,6 +888,7 @@ class Checker(
                     }
                     scope
                 } else currentTypeParamScope
+                frame.fnTpScope = fnScope
                 withInstantiationContext(scopeMapper(fnScope)) {
                     ctaTypeParamsIntoLocals(parameters, frame.varTypes)
                 }
