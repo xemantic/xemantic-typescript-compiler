@@ -2061,6 +2061,28 @@ interrupt the arc).
     position), then either neutralize the dependency (pass-own state /
     explicit cache warm) or migrate the giant IN PLACE (dispatch from the
     spine but buffer emissions to the legacy slot — a new template).**
+    **g1a BISECT COMPLETE (round 543) — STRATEGIC FINDING, the (e) tier is
+    BLOCKED ON INV.5: three targeted probes pinned both g1a' couplings to
+    exactly TWO small producer passes (checkTypeParameterDefaults — its
+    first-touch of the circular-default alias caches the `Test<any>`
+    display; checkTemplateUnionIntersectionComplexity — its TS2859
+    complexity verdicts make the giant's relation SKIP the failing
+    comparison), but applying the established producer-move pattern (both
+    before the spine + the giant at the spine slot) dragged a coupling
+    CHAIN: 5 NEW generic-family corpus failures
+    (genericsWithoutTypeParameters1, genericRecursiveImplicitConstructor-
+    Errors3, noTypeArgumentOnReturnType1, conflictingTypeParameterSymbol-
+    Transfer, returnTypeTypeArguments) + a harness listAll diff — the moved
+    producers have their OWN upstream first-touch dependencies. Buffered
+    emission does not help either: the COMPUTATION (type resolution into
+    shared caches) is what is order-sensitive, not the emission. CONCLUSION:
+    the giants cannot migrate by slot manipulation while nodeTypes/
+    declaredTypes/aliasDisplayMap/relation caches are first-touch-order-
+    sensitive. The (e) tier's prerequisite is INV.5's cache re-keying
+    (`nodeTypes` keyed (node, mapper) — always valid; canonical type
+    identity), which makes resolution order-INSENSITIVE. RE-SEQUENCED:
+    work INV.5 next; return to (e) when the caches are order-free. All
+    probe edits REVERTED — the tree keeps the legacy giant order.**
   - [ ] **INV.4(f) The two unlocked soundness wins.** Once one authoritative
     walk state exists: the per-node expression-type cache (594,779 calls over
     ~221,844 distinct nodes = ×2.6 recompute), and flow narrowing folded into
