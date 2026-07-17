@@ -2208,6 +2208,17 @@ interrupt the arc).
     resolution TIMING (the Test<any> display) and the relation/complexity
     verdict state — i.e. exactly the (b)/(c) territory (explicit mappers +
     keyed nodeTypes). The INV.5 sequencing holds; continue with (b).**
+    **PROBE RE-RUN 2 (round 548b, post-(c)): both g1a' couplings STILL
+    persist — the residual first-touch state is specifically (1)
+    `declaredTypes` (SYMBOL-keyed alias resolutions — the Test<any>
+    display; a different cache from nodeTypes) and (2) the TS2859
+    relation/complexity verdict state. The giant unblock therefore needs a
+    declaredTypes context-keying sibling of (c) plus a
+    complexity-verdict-state audit — queue them as (c2)/(c3) when
+    returning to the giants; the two probe tests
+    (typeArgumentDefaultUsesConstraintOnCircularDefault,
+    relationComplexityError) are the standing acceptance gate for any such
+    step. Probe reverted.**
   - [ ] **INV.5(b) Explicit mapper objects.** Replace the ambient
     `currentTypeAliasArgs`/`currentTypeParamScope` instantiation contexts
     with an explicit mapper threaded through the resolution entry points —
