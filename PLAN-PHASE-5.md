@@ -20,6 +20,24 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 557 (2026-07-17) — INV.4(e) g1b chunk 1: 19 statement-arm reach pins
+for checkPropertyAccess (Inv4SpineG1PinsTest), all verified on the CURRENT
+walker.** Coverage: the per-file `.js`/`.jsx`/`.d.ts` whole-pass skip; every
+statement arm's reach (expr-stmt / var-init / return / throw / if-else /
+while / do / with / labeled / switch subject+case-exprs+clause-bodies /
+try-catch-finally / enum member inits / namespace bodies / heritage exprs);
+the sharp bug-compat quirks — the FOR-INIT declarator is UNREACHED (cond +
+incrementor + body are), a FunctionDeclaration nested in a method LOSES the
+class `this` (enclosingClassType reset to null), and the block-scoped-class
+`this.X` resolves via the INV.2(d) lexical tables (emitting the TS2551
+spelling variant); loop-var typing state (for-in string, for-of array
+element); the this-param override (`m(this: A)` checks against A); B136
+call-init local recording; fn-body scope save/restore. Suite 11,259 →
+11,278 (+19). NEXT: g1b chunk 2 — the expression-arm pins
+(checkPropertyAccessInExpr's 26 arms: contextualType clear-before-body
+edges, arrow/fn-expr scope copies + applyBodyLocalShadowing, objlit method
+bodies, the walker's own quirks), then (g1c) the migration.
+
 **Round 556 (2026-07-17) — ALL THREE INV.4(e) GIANTS SLOT-MOVED to the spine
 block.** With the round-555 discovery (fixed probe position + the two
 producer hoists), g2 (checkPropertyAccess) and g3 (checkCallExpressionTypes)
