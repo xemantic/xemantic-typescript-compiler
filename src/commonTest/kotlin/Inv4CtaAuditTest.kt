@@ -80,6 +80,60 @@ class Inv4CtaAuditTest {
         assertTrue(audit.values.any { "tp[T,U]" in it }, "expected tp[T,U] in some print, got: ${audit.values}")
     }
 
+    private fun diffOnLegacyKeys(source: String): List<String> {
+        val options = CompilerOptions(strict = true)
+        val result = Binder(options).bind(Parser(source.trimIndent(), "t.ts").parse())
+        Checker.ctaAuditEnabled = true
+        try {
+            val checker = Checker(options, listOf(result))
+            val mismatches = mutableListOf<String>()
+            for ((id, legacyPrint) in checker.ctaAuditLegacy) {
+                val spinePrint = checker.ctaAuditSpine[id]
+                if (spinePrint != legacyPrint) {
+                    mismatches.add("node $id:\n  legacy: $legacyPrint\n  spine:  ${spinePrint ?: "<missing>"}")
+                }
+            }
+            return mismatches
+        } finally {
+            Checker.ctaAuditEnabled = false
+        }
+    }
+
+    @Test
+    fun `spine frames agree with the legacy context on every legacy-visited statement`() {
+        val mismatches = diffOnLegacyKeys("""
+            const a: number = 1;
+            let b = a;
+            { const c: string = "x"; b = 2; }
+            function f(x: string, q?: number): number {
+                const d = x;
+                if (d) { return 1; }
+                while (b) { b = 3; break; }
+                return 42;
+            }
+            async function g<T, U>(t: T): Promise<T> {
+                return t;
+            }
+            function* h() { yield 1; }
+            class K {
+                p: number = 1;
+                m(y: string): string { return y; }
+                static s() { const e = 1; }
+                constructor(z: number) { this.p = z; }
+                get gg(): number { return this.p; }
+                set ss(v: number) { this.p = v; }
+            }
+            namespace NS { const n: boolean = true; }
+            try { const t1 = 1; } catch (e) { const t2 = 2; } finally { const t3 = 3; }
+            switch (b) { case 1: { const s1 = 1; break; } default: { const s2 = 2; } }
+            const arrow = (w: number): number => { return w; };
+            const fe = function (v: string): string { return v; };
+        """)
+        kotlin.test.assertTrue(mismatches.isEmpty(),
+            "expected spine/legacy agreement, got ${mismatches.size} mismatches:\n" +
+                mismatches.take(8).joinToString("\n"))
+    }
+
     @Test
     fun `the audit is off by default`() {
         val options = CompilerOptions(strict = true)

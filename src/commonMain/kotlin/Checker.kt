@@ -702,6 +702,172 @@ class Checker(
      *  is null during recording, the documented Kotlin init-order trap). */
     internal val ctaAuditLegacy = HashMap<Int, String>()
 
+    /** (cta-m2b) round 562: the SPINE-side cta frame skeleton — dead machinery
+     *  active only under [ctaAuditEnabled]; replicates the legacy dispatchers'
+     *  threaded context at every statement and records the same fingerprints
+     *  into [ctaAuditSpine]. The audit diff (legacy keys ⊆ agreement) gates
+     *  the (g1c) emission moves. */
+    internal val ctaAuditSpine = HashMap<Int, String>()
+
+    private class CtaFrame(
+        val owner: Node,
+        val varTypes: MutableMap<String, String>,
+        val returnType: String?,
+        val returnTypeNode: TypeNode?,
+        val typeParams: Set<String>,
+        val inFn: Boolean,
+        val inAsync: Boolean,
+        val inGen: Boolean,
+        val inInstanceMember: Boolean,
+    )
+    private val ctaFrames = ArrayDeque<CtaFrame>()
+
+    private fun ctaSpineFileReset(sf: SourceFile) {
+        ctaFrames.clear()
+        ctaFrames.addLast(CtaFrame(sf, mutableMapOf(), null, null, emptySet(),
+            inFn = false, inAsync = false, inGen = false, inInstanceMember = false))
+    }
+
+    /** The checkFunctionBody context transform, reproduced for the spine frame:
+     *  varTypes copy + annotated-param entries; retType from the annotation. */
+    private fun ctaFnBodyFrame(
+        body: Node, parameters: List<Parameter>, returnAnn: TypeNode?,
+        tps: List<TypeParameter>?, isAsync: Boolean, isGenerator: Boolean,
+        base: CtaFrame, extraVarTypes: Map<String, String>? = null,
+        inInstanceMember: Boolean = false,
+        viaCheckFunctionBody: Boolean = true,
+    ): CtaFrame {
+        val inner = base.varTypes.toMutableMap()
+        extraVarTypes?.let { inner.putAll(it) }
+        for (param in parameters) {
+            val pt = param.type ?: continue
+            val pn = param.name as? Identifier ?: continue
+            if (param.dotDotDotToken && nonArrayKeywordText(pt) != null) continue
+            resolveSimpleTypeName(pt)?.let { inner[pn.text] = it }
+        }
+        val tpNames = base.typeParams + (tps?.map { it.name.text } ?: emptyList())
+        return CtaFrame(body, inner, returnAnn?.let { resolveSimpleTypeName(it) }, returnAnn,
+            tpNames,
+            inFn = if (viaCheckFunctionBody) true else base.inFn,
+            inAsync = if (viaCheckFunctionBody) isAsync else base.inAsync,
+            inGen = if (viaCheckFunctionBody) isGenerator else base.inGen,
+            inInstanceMember = inInstanceMember)
+    }
+
+    private fun ctaSpineEnter(node: Node) {
+        val parent = (node as NodeBase).parent
+        // Frame pushes — decided at the BODY/Block enter by its parent kind.
+        if (node is Block) {
+            when (parent) {
+                is FunctionDeclaration -> ctaFrames.addLast(ctaFnBodyFrame(
+                    node, parent.parameters, parent.type, parent.typeParameters,
+                    isAsync = ModifierFlag.Async in parent.modifiers,
+                    isGenerator = parent.asteriskToken, base = ctaFrames.last()))
+                is FunctionExpression -> ctaFrames.addLast(ctaFnBodyFrame(
+                    node, parent.parameters, parent.type, parent.typeParameters,
+                    isAsync = ModifierFlag.Async in parent.modifiers,
+                    isGenerator = parent.asteriskToken, base = ctaFrames.last()))
+                is ArrowFunction -> ctaFrames.addLast(ctaFnBodyFrame(
+                    node, parent.parameters, parent.type, parent.typeParameters,
+                    isAsync = ModifierFlag.Async in parent.modifiers,
+                    isGenerator = false, base = ctaFrames.last()))
+                is MethodDeclaration -> ctaFrames.addLast(ctaFnBodyFrame(
+                    node, parent.parameters, parent.type, parent.typeParameters,
+                    isAsync = ModifierFlag.Async in parent.modifiers,
+                    isGenerator = parent.asteriskToken, base = ctaFrames.last(),
+                    extraVarTypes = ctaClassThisVarTypes(parent),
+                    inInstanceMember = ModifierFlag.Static !in parent.modifiers))
+                // Constructor/SetAccessor bodies are walked WITHOUT
+                // checkFunctionBody in the legacy arms (inNonArrowFunctionBody
+                // stays as-is); GetAccessor goes through checkFunctionBody but
+                // gets NO B85.1b this.X push (the push mirrors Method/Ctor/
+                // SetAccessor only) — audit-verified quirks.
+                is Constructor -> ctaFrames.addLast(ctaFnBodyFrame(
+                    node, parent.parameters, null, null,
+                    isAsync = false, isGenerator = false, base = ctaFrames.last(),
+                    extraVarTypes = ctaClassThisVarTypes(parent),
+                    inInstanceMember = true, viaCheckFunctionBody = false))
+                is GetAccessor -> ctaFrames.addLast(ctaFnBodyFrame(
+                    node, parent.parameters, parent.type, null,
+                    isAsync = false, isGenerator = false, base = ctaFrames.last(),
+                    inInstanceMember = ModifierFlag.Static !in parent.modifiers))
+                is SetAccessor -> ctaFrames.addLast(ctaFnBodyFrame(
+                    node, parent.parameters, null, null,
+                    isAsync = false, isGenerator = false, base = ctaFrames.last(),
+                    extraVarTypes = ctaClassThisVarTypes(parent),
+                    inInstanceMember = ModifierFlag.Static !in parent.modifiers,
+                    viaCheckFunctionBody = false))
+                else -> {
+                    // statement-position / try-catch-finally block: varTypes copy
+                    val top = ctaFrames.last()
+                    ctaFrames.addLast(CtaFrame(node, top.varTypes.toMutableMap(),
+                        top.returnType, top.returnTypeNode, top.typeParams,
+                        top.inFn, top.inAsync, top.inGen, top.inInstanceMember))
+                }
+            }
+        }
+        // ModuleBlock: the legacy namespace arm walks the body with a varTypes
+        // COPY and RESETS returnType/returnTypeNode/typeParams (returnType =
+        // null, emptySet; the node param is not threaded). Body flags stay.
+        if (node is ModuleBlock) {
+            val top = ctaFrames.last()
+            ctaFrames.addLast(CtaFrame(node, top.varTypes.toMutableMap(),
+                null, null, emptySet(),
+                top.inFn, top.inAsync, top.inGen, top.inInstanceMember))
+        }
+        // Switch clauses: per-clause varTypes copies (returnType/typeParams
+        // threaded through unchanged).
+        if (node is CaseClause || node is DefaultClause) {
+            val top = ctaFrames.last()
+            ctaFrames.addLast(CtaFrame(node, top.varTypes.toMutableMap(),
+                top.returnType, top.returnTypeNode, top.typeParams,
+                top.inFn, top.inAsync, top.inGen, top.inInstanceMember))
+        }
+        // The legacy walk's ORDERED varTypes recording: an ANNOTATED
+        // Identifier declaration records its annotation string as
+        // checkVarDeclAssignability processes it — reproduced at the
+        // VariableDeclaration's OWN enter (before its initializer subtree,
+        // after the containing statement's fingerprint), preserving the
+        // legacy decl-by-decl ordering for multi-decl statements.
+        if (node is VariableDeclaration) {
+            val nm = node.name as? Identifier
+            val ann = node.type
+            if (nm != null && ann != null) {
+                val s = resolveSimpleTypeName(ann) ?: intersectionTypeNameForVarTypes(ann)
+                if (s != null) ctaFrames.last().varTypes[nm.text] = s
+            }
+        }
+        // Fingerprint every statement at its enter (spine-extra keys are
+        // ignored by the audit diff; only legacy-recorded keys must agree).
+        if (!spineIsDts && node is Statement && node.nodeId >= 0) {
+            val f = ctaFrames.last()
+            val vt = f.varTypes.entries.sortedBy { it.key }.joinToString(",") { "${it.key}=${it.value}" }
+            val tp = f.typeParams.sorted().joinToString(",")
+            val rtn = (f.returnTypeNode as? NodeBase)?.nodeId ?: -1
+            val flags = (if (f.inFn) 1 else 0) or (if (f.inAsync) 2 else 0) or
+                (if (f.inGen) 4 else 0) or (if (f.inInstanceMember) 8 else 0)
+            ctaAuditSpine[node.nodeId] = "vt[$vt]|rt=${f.returnType}|rtn=$rtn|tp[$tp]|f=$flags"
+        }
+    }
+
+    /** B85.1b: `this.X` varTypes entries from the enclosing class's property
+     *  declarations, for a class-member body frame. */
+    private fun ctaClassThisVarTypes(member: Node): Map<String, String>? {
+        val cls = (member as NodeBase).parent as? ClassDeclaration ?: return null
+        var out: MutableMap<String, String>? = null
+        for (m in cls.members) {
+            if (m !is PropertyDeclaration) continue
+            val nm = (m.name as? Identifier)?.text ?: continue
+            val t = m.type?.let { resolveSimpleTypeName(it) } ?: continue
+            (out ?: mutableMapOf<String, String>().also { out = it })["this.$nm"] = t
+        }
+        return out
+    }
+
+    private fun ctaSpineLeave(node: Node) {
+        if (ctaFrames.size > 1 && ctaFrames.last().owner === node) ctaFrames.removeLast()
+    }
+
     /** B72.1: value-scope tracking for mixin-class TS2545 check —
      *  maps function parameter names to their TypeParam-typed annotation. */
     private var mixinValueScope: Map<String, Type.TypeParam>? = null
@@ -18045,6 +18211,7 @@ class Checker(
                 spineIsJsLike = spineFileName.endsWith(".js") || spineFileName.endsWith(".jsx") ||
                     spineFileName.endsWith(".mjs") || spineFileName.endsWith(".cjs")
                 spineFileIsModule = isModuleFile(sf.statements)
+                if (ctaAuditEnabled) ctaSpineFileReset(sf)
                 // Batch 14 per-file strict-mode flags (the deleted
                 // checkStrictModeReservedWords preamble, verbatim): binding
                 // strictness uses effectiveTarget, EXPRESSION strictness the
@@ -18203,6 +18370,7 @@ class Checker(
 
     /** Per-node dispatch, preorder position (before children). */
     private fun spineEnterNode(node: Node) {
+        if (ctaAuditEnabled) ctaSpineEnter(node)
         // INV.4(d) walker 2: edge-triggered scope frames + enter-position
         // emissions for the arithmetic pass (must precede the kind dispatch —
         // a node's own frames nest inside its parent-edge frames).
@@ -18395,6 +18563,7 @@ class Checker(
 
     /** Per-node dispatch, postorder position (after all children). */
     private fun spineLeaveNode(node: Node) {
+        if (ctaAuditEnabled) ctaSpineLeave(node)
         // INV.4(d) walker 2: leave-position emissions (left-spine chain roots,
         // per-declarator recordings) + this node's frame pops.
         if (spineArithActive) spineArithLeaveNode(node)

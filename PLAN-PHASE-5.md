@@ -20,6 +20,29 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 562 (2026-07-17) — (cta-m2b): the SPINE-side cta frame skeleton
+LANDED, AUDIT-VERIFIED.** Under the test-only flag, checkSpine now maintains
+a CtaFrame stack (varTypes / returnType / returnTypeNode / typeParams +
+inFn/inAsync/inGen/inInstanceMember flags) with frames at: fn-like body
+Blocks (the checkFunctionBody transform: varTypes copy + annotated-param
+entries with the TS2370 rest-skip, retType via resolveSimpleTypeName, TP
+accumulation), statement/try/catch/finally Blocks (varTypes copy),
+ModuleBlocks (copy + returnType/typeParams RESET), switch clauses (per-
+clause copies), and the ORDERED per-VariableDeclaration varTypes recording
+(annotated Identifier decls, resolveSimpleTypeName ?:
+intersectionTypeNameForVarTypes). The audit-diff iteration EXTRACTED three
+undocumented legacy quirks in three cycles (40 → 17 → 3 → 0 mismatches):
+(1) the ordered varTypes recording itself; (2) the ModuleBlock reset; (3)
+class-member asymmetries — Constructor/SetAccessor bodies are walked
+WITHOUT checkFunctionBody (inNonArrowFunctionBody stays false!) while
+GetAccessor goes through it but gets NO B85.1b this.X push. The audit test
+(Inv4CtaAuditTest, now 4 pins incl. the full-fixture diff) is the standing
+gate: spine fingerprints agree with legacy on every legacy-visited
+statement. Production behavior-free (flag-gated; corpus 11,306/0). NEXT:
+(cta-m2c) widen fixture coverage (narrowing frames, ambiguous locals,
+nested namespaces, class expressions), then move emissions arm-by-arm
+(VariableStatement first) under the audit + corpus + listAll gates.
+
 **Round 561 (2026-07-17) — (cta-m2a): the legacy-side audit instrumentation
 LANDED.** Under the test-only companion flag `Checker.ctaAuditEnabled` (a
 companion var because the pipeline runs in init — an instance flag could
