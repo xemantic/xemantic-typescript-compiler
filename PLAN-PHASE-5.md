@@ -20,6 +20,26 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 558 (2026-07-17) — INV.4(e) g1b chunk 2: 14 expression-arm reach pins
+for checkPropertyAccess (Inv4SpineG1PinsExprTest), all verified on the
+CURRENT walker.** Coverage: the binary left-spine flatten (every operand),
+conditional 3-position reach, the wrapper-operand family (paren / as /
+non-null / prefix / typeof / void / await / spread), call+new callee/arg
+reach, element-access receiver+argument, array/objlit/template-span reach,
+yield operands — and the sharp quirks: TAGGED template SPANS are UNREACHED
+(only the tag is walked; the untagged twin fires), a FunctionExpression
+un-annotated param SHADOWS an outer function-local to any (the file-level
+declare twin resolves through a different path — pin shape corrected),
+fn-exprs LOSE the class `this` while ARROWS keep it, contextual arrow-param
+typing from single-sig callees + objlit member context, and the
+ClassExpression anonymous-class `this` check ("(Anonymous class)" display).
+Suite 11,278 → 11,292 (+14). g1b is COMPLETE (33 pins across the two
+chunks + the corpus itself). NEXT: (g1c) the checkPropertyAccess spine
+migration — state model per the round-542 sub-plan (push-frames for the
+scope copies, ctx threading per the w3 template, the propertyAccess-
+EnclosingNamespaces stack at ModuleDeclaration edges, per-dispatch ambient
+installs).
+
 **Round 557 (2026-07-17) — INV.4(e) g1b chunk 1: 19 statement-arm reach pins
 for checkPropertyAccess (Inv4SpineG1PinsTest), all verified on the CURRENT
 walker.** Coverage: the per-file `.js`/`.jsx`/`.d.ts` whole-pass skip; every
