@@ -1710,6 +1710,36 @@ interrupt the arc).
       identical on ALL 8 profiles; the pass driver deleted (the recursive
       walkers stay as checkComputedDestructKey's utility). See the round-531
       session note.
+    - (w9) NEXT — checkConstAssignment (TS2588/TS2628/TS2629/TS2630/TS2708 +
+      TS2540 readonly writes + TS2357 inc/dec targets + scanRegExpFull's
+      TS1538/regex-grammar family riding the same walker). SCOUTED
+      (2026-07-17, in-code): the most stateful (d) walker yet — a w2+w5
+      hybrid. (1) constNames is a statement-ordered LIVE MutableMap per
+      activated list (collect const/class/enum/fn/ns THEN check, let/var
+      REMOVES an inherited name) → DA-style core frames with per-statement
+      collect steps at direct-child enters; spawn rules are ASYMMETRIC:
+      Block/switch-clause/try-blocks/ModuleBlock/class-member bodies COPY
+      the top frame's live map, FunctionDeclaration/fn-expr/arrow-Block/
+      IIFE-arrow-Block bodies get a FRESH EMPTY map (an outer const is NOT
+      flagged inside a fn body — bug-compat), SourceFile seeds from the
+      program-wide sharedConsts overlay (script files only; module files
+      empty). (2) The For header is an EDGE overlay: condition/incrementor/
+      body see outer+header consts, the INIT EXPRESSION sees outer only.
+      (3) currentClassForThis/currentThisMemberIsCtorDirect pull-derive from
+      the ancestor chain: per-member staticness, Constructor→ctorDirect,
+      property-initializer→ctorDirect=false, fn-expr NULLS the class, arrow
+      keeps it with ctorDirect=false, and an IIFE-ARROW is TRANSPARENT to
+      ctorDirect (the CallExpression arm's immediatelyInvokedArrowCallee).
+      (4) FunctionDeclaration bodies install currentLocalTypes/
+      currentParamBindingNames copies + populateParameterLocalTypes (B116 —
+      fn DECLS only, not methods/fn-exprs/arrows) — cumulative through
+      nested fn decls; per-anchor pull-rebuild with per-owner memo (w1
+      template). (5) This is a TYPING pass (checkReadonlyAssignmentTarget
+      resolves receiver types) — slot-move pre-gate with the CORPUS
+      mandatory; check for diagnostics-list probes before choosing
+      enter-vs-leave dispatch (the round-537 lesson). Anchors: assignment-op
+      BinaryExpressions (left-spine loop — emissions are per-spine-node, at
+      each binary's own reach), ++/-- Prefix/Postfix, RegularExpressionLiteralNode.
     - (w8) DONE round 537 (2026-07-17): checkImplicitReturns
       (TS7030/TS2355/TS2366/TS2378/TS7023 + arrow concise-body TS2322).
       SLOT-MOVE PRE-GATE LANDED AND VERIFIED (intact pass at the spine slot;
