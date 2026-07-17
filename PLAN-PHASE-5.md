@@ -59,6 +59,26 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 547 (2026-07-17) — INV.5(b1) LANDED: the explicit-instantiation-
+context bridge.** `InstantiationMapper` (aliasArgs + tpScope + an
+inferenceNamespaceStack-depth fingerprint — the THIRD cacheable-gate
+context, carried as a depth only since explicit callers never synthesize
+namespace stacks) + `ambientMapper()` + `getTypeFromTypeNodeWithMapper(node,
+mapper)` (installs the mapper's contexts around the ambient-reading
+resolution core — identical to the legacy hand-rolled save-set-restore
+installers; the recursion still reads the ambient until (b2+) completes
+the threading). Pilot: checkTpListDefaults' TS2344 default/constraint
+resolutions route through the bridge with the ambient capture
+(install-idempotent — byte-identical by construction). NAME CLASH found
+in-flight: a `TypeMapper` fun-interface already exists (the relation
+engine's TP-substitution functional) — the value class is
+`InstantiationMapper`. This unblocks (c) directly: the keyed-nodeTypes
+re-key needs the mapper only AT THE CACHE CONSULT, with ambient-bridged
+installers still in place. VERIFIED: suite 11,247 → 11,249 (+2
+Inv5MapperBridgeTest); listAll SORTED error lines IDENTICAL on ALL 8
+profiles (547a vs 545a). NEXT: INV.5(b2+) — flip installer families
+(resolution-internal first) / or start (c) directly per the b1 insight.
+
 **Round 545 (2026-07-17) — INV.5(a) LANDED: canonical union/intersection
 identity.** `getUnionType`/`getIntersectionType` now INTERN by member-id key
 (CheckerState.unionInternCache/intersectionInternCache — unions by their

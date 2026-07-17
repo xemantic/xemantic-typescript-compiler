@@ -93034,6 +93034,48 @@ interface DataView {
      * namespace's exports, which may differ from the un-scoped resolution that would
      * have been cached.
      */
+    /**
+     * INV.5(b1) round 547: an EXPLICIT instantiation context — the ambient
+     * `currentTypeAliasArgs`/`currentTypeParamScope` pair captured as a value
+     * (the third cacheable-gate context, `inferenceNamespaceStack`, is carried
+     * as a depth fingerprint only — it is a stack of namespace symbols that
+     * explicit callers never need to synthesize). The bridge toward tsc-shaped
+     * explicit mappers: installers construct one and call
+     * [getTypeFromTypeNodeWithMapper] instead of hand-rolling the
+     * save-set-restore pair; (c) keys `nodeTypes` on (node, mapper
+     * fingerprint) at the cache consult.
+     */
+    internal class InstantiationMapper(
+        val aliasArgs: Map<String, Type>?,
+        val tpScope: Map<String, Type.TypeParam>?,
+        val nsDepth: Int = 0,
+    ) {
+        val isEmpty: Boolean get() = aliasArgs == null && tpScope == null && nsDepth == 0
+    }
+
+    /** The ambient instantiation context as a [TypeMapper] value. */
+    private fun ambientMapper(): InstantiationMapper =
+        InstantiationMapper(currentTypeAliasArgs, currentTypeParamScope, inferenceNamespaceStack.size)
+
+    /**
+     * INV.5(b1): resolve [node] under an EXPLICIT [mapper] — installs the
+     * mapper's contexts around the ambient-reading resolution core (identical
+     * to the legacy hand-rolled save-set-restore installers; the recursion
+     * still reads the ambient until (b) completes the threading).
+     */
+    private fun getTypeFromTypeNodeWithMapper(node: TypeNode, mapper: InstantiationMapper): Type {
+        val savedArgs = currentTypeAliasArgs
+        val savedScope = currentTypeParamScope
+        currentTypeAliasArgs = mapper.aliasArgs
+        currentTypeParamScope = mapper.tpScope
+        try {
+            return getTypeFromTypeNode(node)
+        } finally {
+            currentTypeAliasArgs = savedArgs
+            currentTypeParamScope = savedScope
+        }
+    }
+
     private fun getTypeFromTypeNode(node: TypeNode): Type {
         // Rounds 473/513: a reference to a type name declared in ≥2 module files
         // resolves per-FILE to a DIFFERENT symbol — and nodeTypes is keyed by the
@@ -118259,9 +118301,12 @@ interface DataView {
                     continue
                 }
                 // TS2344: default does not satisfy constraint.
+                // INV.5(b1) pilot: routed through the explicit-mapper entry with
+                // the ambient capture — install-idempotent (byte-identical), and
+                // exercises the bridge the (b2+) installer flips will use.
                 val cNode = tp.constraint ?: continue
-                val dType = getTypeFromTypeNode(defNode)
-                val cType = getTypeFromTypeNode(cNode)
+                val dType = getTypeFromTypeNodeWithMapper(defNode, ambientMapper())
+                val cType = getTypeFromTypeNodeWithMapper(cNode, ambientMapper())
                 if (dType === anyType || dType === errorType || cType === anyType || cType === errorType) continue
                 if (checkTypeRelatedTo(dType, cType, assignableRelation)) continue
                 // A TUPLE default satisfies an ARRAY constraint when each element relates to the
