@@ -20,6 +20,29 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 566 design — (cta-m3a): the VariableStatement emission move, scoped
+to DIRECT SourceFile children first (minimal ambient surface).** At a
+top-level VariableStatement's spine enter (non-dts files): install
+currentFileLocals/currentCheckFileName/currentFlowGraph per-dispatch (w1
+discipline) + currentScopeStatements = the file statement list + the root
+frame's maps via withCtaFrameLocals, then run the legacy arm's four calls
+(registerConstLiteralUnionNarrowing for const lists,
+checkVarDeclAssignability, the B183-contextualized
+walkFunctionBodiesInExpr descent — KEPT at the anchor for now so nested
+bodies get the full legacy context; the spine's own frame-based descent
+replaces it only when deeper arms migrate — and the B127 inner-assignment
+check). The legacy top dispatcher's VariableStatement arm gains a
+same-commit skip for direct SourceFile children (parent check). EMISSION-
+WINDOW HAZARD: ctaPostFilters' ctaDiagnosticsBefore cutoff is set at the
+giant's entry — spine-moved 2322s fall OUTSIDE the window (the null/
+undefined→NamedType suppression would stop covering them); the cutoff
+moves to checkSpine entry, accepting that OTHER spine-emitted 2322s enter
+the filter window (narrow message-regex criteria; corpus arbitrates).
+DOUBLE-DESCENT NOTE: keeping walkFunctionBodiesInExpr at the anchor means
+initializer fn bodies still get their legacy walk (no spine anchors fire
+inside them yet — the deeper arms are still legacy) — no double emission
+by construction. Gates: corpus + listAll ×8.
+
 **Round 565 (2026-07-17) — (cta-m2d) part 2 LANDED with a STRATEGY PIVOT.**
 CtaFrame now carries the currentLocalTypes family (localTypes /
 localDeclNodes / shadowedNames / ambiguousNames) with the audit-derived
