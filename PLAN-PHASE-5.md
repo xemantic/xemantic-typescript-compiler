@@ -20,6 +20,21 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 561 (2026-07-17) — (cta-m2a): the legacy-side audit instrumentation
+LANDED.** Under the test-only companion flag `Checker.ctaAuditEnabled` (a
+companion var because the pipeline runs in init — an instance flag could
+never be set beforehand; the recording map `ctaAuditLegacy` is declared
+BEFORE init per the init-order trap, which the first cut hit as an NPE),
+both legacy cta dispatchers record a per-statement fingerprint of the
+threaded context — sorted varTypes entries + returnType + returnTypeNode
+nodeId + sorted typeParams + the inNonArrowFunctionBody/async/generator/
+classForThis flag bits — keyed by nodeId. Inv4CtaAuditTest (3 pins:
+coverage + fn-body rt/flag content + generic tp content + off-by-default).
+Production behavior-free (flag off). Suite 11,302 → 11,305. NEXT:
+(cta-m2b) the spine-side frame skeleton recording the same fingerprints
+(dead machinery, no emissions) + the audit diff test over corpus-shaped
+fixtures; then emissions move arm-by-arm.
+
 **Round 560b (2026-07-17) — (cta-m2) IMPLEMENTATION PLAN (from the
 checkFunctionBody/dispatcher reads; the skeleton+audit build is the next
 session's deliverable — fresh-window work):** the migration template is

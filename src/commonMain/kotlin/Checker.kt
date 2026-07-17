@@ -697,6 +697,11 @@ class Checker(
      *  `class C<T>`). getTypeFromTypeReference consults this before falling back to globals. */
     private var currentTypeParamScope: Map<String, Type.TypeParam>? = null
 
+    /** (cta-m2a): legacy-side audit recordings (nodeId → context fingerprint).
+     *  Declared BEFORE init (the pipeline runs in init — a later declaration
+     *  is null during recording, the documented Kotlin init-order trap). */
+    internal val ctaAuditLegacy = HashMap<Int, String>()
+
     /** B72.1: value-scope tracking for mixin-class TS2545 check —
      *  maps function parameter names to their TypeParam-typed annotation. */
     private var mixinValueScope: Map<String, Type.TypeParam>? = null
@@ -44051,6 +44056,12 @@ class Checker(
     }
 
     companion object {
+        /** (cta-m2a): test-only switch for the cta migration audit — must be
+         *  a companion var because the Checker runs everything in init (an
+         *  instance flag could never be set beforehand). Always false in
+         *  production. */
+        internal var ctaAuditEnabled = false
+
         /** Access modifiers rejected on object-literal members (TS1042/TS1184,
          *  [spineCheckObjLitModifiers]). Companion-hosted: the spine runs during
          *  `init`, so an instance field declared after `init` would read null. */
@@ -82535,6 +82546,39 @@ interface DataView {
      *  [ctaPostFilters], which is its own dispatch step. */
     private var ctaDiagnosticsBefore = 0
 
+    /** (cta-m2a) round 561: LEGACY-side audit instrumentation for the (g1c)
+     *  cta spine migration. When [ctaAuditEnabled] (test-only; off in
+     *  production), the two legacy dispatchers record a fingerprint of the
+     *  threaded context at every DIRECT statement they visit, keyed by
+     *  nodeId. The spine-side frame skeleton ((cta-m2b)) records the same
+     *  and an audit test diffs the two maps — the gate before any emission
+     *  moves (the Inv4UnresolvedSpineScopeTest pattern). */
+
+
+    private fun ctaAuditFingerprint(
+        varTypes: Map<String, String>, returnType: String?,
+        typeParams: Set<String>, returnTypeNode: TypeNode?,
+    ): String {
+        val vt = varTypes.entries.sortedBy { it.key }.joinToString(",") { "${it.key}=${it.value}" }
+        val tp = typeParams.sorted().joinToString(",")
+        val rtn = (returnTypeNode as? NodeBase)?.nodeId ?: -1
+        val flags = (if (inNonArrowFunctionBody) 1 else 0) or
+            (if (inAsyncFunctionBody) 2 else 0) or
+            (if (inGeneratorFunctionBody) 4 else 0) or
+            (if (currentClassForThis != null) 8 else 0)
+        return "vt[$vt]|rt=$returnType|rtn=$rtn|tp[$tp]|f=$flags"
+    }
+
+    private fun ctaAuditRecord(
+        stmt: Statement, varTypes: Map<String, String>, returnType: String?,
+        typeParams: Set<String>, returnTypeNode: TypeNode?,
+    ) {
+        if (!ctaAuditEnabled) return
+        val id = (stmt as NodeBase).nodeId
+        if (id < 0) return
+        ctaAuditLegacy[id] = ctaAuditFingerprint(varTypes, returnType, typeParams, returnTypeNode)
+    }
+
     private fun checkTypeAssignability() {
         ctaDiagnosticsBefore = diagnostics.size
         for (result in binderResults) {
@@ -82625,6 +82669,7 @@ interface DataView {
         currentScopeStatements = statements
         try {
         for (stmt in statements) {
+            ctaAuditRecord(stmt, varTypes, returnType, typeParams, returnTypeNode)
             when (stmt) {
                 is VariableStatement -> {
                     for (decl in stmt.declarationList.declarations) {
@@ -84573,6 +84618,7 @@ interface DataView {
         typeParams: Set<String>,
         returnTypeNode: TypeNode? = null,
     ) {
+        ctaAuditRecord(stmt, varTypes, returnType, typeParams, returnTypeNode)
         when (stmt) {
             is Block -> checkTypeAssignabilityInStatements(stmt.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams, returnTypeNode)
             is ExpressionStatement -> checkAssignmentExpression(stmt.expression, source, fileName, varTypes, typeParams)
