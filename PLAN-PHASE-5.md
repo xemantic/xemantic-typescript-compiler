@@ -20,6 +20,18 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 550c (2026-07-17) — INV.5(b2c''): three more resolution-internal
+tpScope installers flipped to the region mapper.** buildBaseConstructorSignature-
+ForSuper (base-class ctor param resolution), buildSignatureForFunctionLikeType-
+Node (fn/ctor-type TypeNode sigs — the getParameterSymbols call moved inside
+the region, matching its legacy under-scope position), and
+reresolveSigParamsUnderClassScope. Gates: corpus 11,252/0; listAll ×8
+error-line identical vs 548a. tpScope installers still legacy: getTypeFrom-
+TypeLiteral's method branch, checkTpListDefaults/checkConstraintsForTypeArgs,
+checkClassPropertyOverrides, checkMixinClassInStatements, the paired
+pushFunctionTypeParamsScope (+ pop-sibling callers), spineArithTeardown, and
+the INV.4(e)-doomed walker-level installers.
+
 **Round 550b (2026-07-17) — INV.5(b2c'): the getTypeOf* lazies flipped to the
 region mapper.** getTypeOfVariableOrProperty's MethodDeclaration branch,
 getTypeOfFunction, and getTypeOfFunctionExpression converted to

@@ -128513,11 +128513,9 @@ interface DataView {
         sig: Signature,
         classTypeParams: List<Type.TypeParam>,
     ): Signature {
-        val savedScope = currentTypeParamScope
-        val newScope = (savedScope?.toMutableMap() ?: mutableMapOf())
+        val newScope = (currentTypeParamScope?.toMutableMap() ?: mutableMapOf())
         for (tp in classTypeParams) tp.symbol?.name?.let { newScope[it] = tp }
-        currentTypeParamScope = newScope
-        try {
+        return withInstantiationContext(scopeMapper(newScope)) {
             var changed = false
             val freshParams = sig.parameters.map { p ->
                 val decl = p.valueDeclaration as? Parameter
@@ -128535,15 +128533,13 @@ interface DataView {
                 symbolTypes[freshSym.id] = freshType
                 freshSym
             }
-            return if (!changed) sig else Signature(
+            if (!changed) sig else Signature(
                 declaration = sig.declaration,
                 typeParameters = sig.typeParameters,
                 parameters = freshParams,
                 resolvedReturnType = sig.resolvedReturnType,
                 minArgumentCount = sig.minArgumentCount,
             )
-        } finally {
-            currentTypeParamScope = savedScope
         }
     }
 
@@ -139768,15 +139764,14 @@ interface DataView {
         // Resolve param types in the base class's type-param scope so `T` resolves to
         // the base's TypeParam (not errorType). Cache into symbolTypes per param.
         if (ctor != null) {
-            val savedScope = currentTypeParamScope
-            try {
-                if (baseTypeParams.isNotEmpty()) {
-                    val scope = (currentTypeParamScope?.toMutableMap() ?: mutableMapOf())
-                    baseTypeParams.forEach { tp ->
-                        tp.symbol?.name?.let { scope[it] = tp }
-                    }
-                    currentTypeParamScope = scope
+            val ctorScope = if (baseTypeParams.isNotEmpty()) {
+                val scope = (currentTypeParamScope?.toMutableMap() ?: mutableMapOf())
+                baseTypeParams.forEach { tp ->
+                    tp.symbol?.name?.let { scope[it] = tp }
                 }
+                scope
+            } else currentTypeParamScope
+            withInstantiationContext(scopeMapper(ctorScope)) {
                 for ((pi, paramSym) in params.withIndex()) {
                     if (pi < ctor.parameters.size) {
                         val paramTypeNode = ctor.parameters[pi].type
@@ -139785,8 +139780,6 @@ interface DataView {
                         }
                     }
                 }
-            } finally {
-                currentTypeParamScope = savedScope
             }
         }
         val rawSig = Signature(
@@ -140020,31 +140013,27 @@ interface DataView {
                 }
             }
         }
-        val savedScope = currentTypeParamScope
-        if (!sigTypeParams.isNullOrEmpty()) {
+        val sigScope = if (!sigTypeParams.isNullOrEmpty()) {
             val scope = (currentTypeParamScope?.toMutableMap() ?: mutableMapOf())
             sigTypeParams.forEachIndexed { i, tp ->
                 scope[typeParamDecls[i].name.text] = tp
             }
-            currentTypeParamScope = scope
-        }
-        val paramSyms = getParameterSymbols(params)
-        val returnType: Type
-        try {
+            scope
+        } else currentTypeParamScope
+        val (returnType, paramSyms) = withInstantiationContext(scopeMapper(sigScope)) {
+            val ps = getParameterSymbols(params)
             sigTypeParams?.forEachIndexed { i, tp ->
                 typeParamDecls[i].constraint?.let { tp.constraint = getTypeFromTypeNode(it) }
                 typeParamDecls[i].default?.let { tp.default = getTypeFromTypeNode(it) }
             }
-            for ((pi, param) in paramSyms.withIndex()) {
+            for ((pi, param) in ps.withIndex()) {
                 if (pi < params.size) {
                     params[pi].type?.let { typeNode ->
                         symbolTypes[param.id] = getTypeFromTypeNode(typeNode)
                     }
                 }
             }
-            returnType = returnTypeNode?.let { getTypeFromTypeNode(it) } ?: anyType
-        } finally {
-            currentTypeParamScope = savedScope
+            (returnTypeNode?.let { getTypeFromTypeNode(it) } ?: anyType) to ps
         }
         return Signature(
             declaration = decl,
