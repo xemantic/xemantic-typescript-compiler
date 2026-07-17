@@ -445,6 +445,28 @@ item; decompose into the smallest standalone suite-gated commits; micro-opt roun
 against the flat profile are CLOSED (only an INV.0-evidenced ≥5% single lever may
 interrupt the arc).
 
+- [ ] **(cta-m3e) Lift the anchor-SIMPLE restriction — reproduce the legacy
+  nested-dispatch localTypes recordings spine-side (queued round 570c with the
+  design from the BarrelCheckDefinedReturnTest root-cause).** The blocker: legacy
+  nested-scope dispatches RECORD into the shared `currentLocalTypes` and the spine
+  frames have no reproduction, so an anchored statement after a switch/if/loop
+  reads an incomplete map. Design notes (verified in-code round 570): (a) the leak
+  is PER-ARM — switch clauses LEAK (clause dispatch shares the map), a NARROWING-
+  wrapped if-then (extractNullNarrowing non-null — a pure function of the
+  condition, callable at spine time) DISCARDS its recordings on restore, a
+  non-narrowed if-then Block LEAKS (the Block arm copies varTypes but NOT
+  currentLocalTypes), loop/try bodies leak via the same Block arm; (b) the
+  mechanism: a RECORDING-ONLY sandwich at nested VariableStatement enters within
+  an active fn frame — install the frame maps, run the real
+  checkVarDeclAssignability under a diagnostics mark, truncate ALL its
+  diagnostics (nested statements stay legacy-owned for emission), keep the map
+  writes; skip inside narrowing-discarded regions; (c) spine statement-position
+  Block/clause frames already model the map SHARING — the narrowed-if discard
+  needs a COPIED-map frame rule keyed on extractNullNarrowing; (d) gates: the
+  barrel repro shape as a local pin (switch-clause recording feeding a later
+  anchored statement's member reduction), corpus + listAll ×8. Alternative if the
+  recording-only sandwich disturbs first-touch caches: migrate the nested
+  dispatchers' arms themselves (bigger).
 - [x] **INV.0 Instrument the multiplier.** DONE round 491 (2026-07-13):
   `PassTiming.kt` + non-inline `pass(name) {}` around all 514 init dispatch calls +
   the three counters (`getTypeOfExpression` calls/distinct with per-pass attribution,
