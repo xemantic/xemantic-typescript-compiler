@@ -830,11 +830,19 @@ class Checker(
         // after the containing statement's fingerprint), preserving the
         // legacy decl-by-decl ordering for multi-decl statements.
         if (node is VariableDeclaration) {
-            val nm = node.name as? Identifier
-            val ann = node.type
-            if (nm != null && ann != null) {
-                val s = resolveSimpleTypeName(ann) ?: intersectionTypeNameForVarTypes(ann)
-                if (s != null) ctaFrames.last().varTypes[nm.text] = s
+            // FOR-header declarators are never recorded — the legacy For/
+            // ForIn/ForOf arms walk only the loop BODY (the g1b "for-init
+            // unreached" quirk); only VariableStatement-owned declarations
+            // reach checkVarDeclAssignability.
+            val list = node.parent as? NodeBase
+            val owner = (list as? VariableDeclarationList)?.let { (it as NodeBase).parent }
+            if (owner is VariableStatement) {
+                val nm = node.name as? Identifier
+                val ann = node.type
+                if (nm != null && ann != null) {
+                    val s = resolveSimpleTypeName(ann) ?: intersectionTypeNameForVarTypes(ann)
+                    if (s != null) ctaFrames.last().varTypes[nm.text] = s
+                }
             }
         }
         // Fingerprint every statement at its enter (spine-extra keys are

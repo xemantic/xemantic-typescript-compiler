@@ -20,6 +20,21 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 563 (2026-07-17) — (cta-m2c): the audit fixtures WIDENED and green.**
+A second full-fixture diff (nested/exported namespaces, generic fn nesting
+with constrained TPs, overload clusters, class expressions, for/for-in/
+for-of headers, do-while, labeled/with statements, if-else-if chains)
+surfaced ONE more legacy quirk, now reproduced: FOR-header declarators
+never record into varTypes (the legacy For/ForIn/ForOf arms walk only the
+loop BODY — the same "for-init unreached" reach quirk g1b pinned; the spine
+recording is now gated to VariableStatement-OWNED declarations). Audit: 5
+pins, all green — the frame skeleton agrees with the legacy context on
+every legacy-visited statement across both fixtures. Suite 11,307/0.
+NEXT: (cta-m3) emissions move arm-by-arm — VariableStatement first (the
+checkVarDeclAssignability anchor dispatches from the spine under an
+install of the frame's context; legacy arm deactivated same-commit),
+corpus + listAll gated per arm.
+
 **Round 562 (2026-07-17) — (cta-m2b): the SPINE-side cta frame skeleton
 LANDED, AUDIT-VERIFIED.** Under the test-only flag, checkSpine now maintains
 a CtaFrame stack (varTypes / returnType / returnTypeNode / typeParams +

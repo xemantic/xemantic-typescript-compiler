@@ -135,6 +135,48 @@ class Inv4CtaAuditTest {
     }
 
     @Test
+    fun `spine frames agree on the widened fixture shapes`() {
+        val mismatches = diffOnLegacyKeys("""
+            declare const cond: boolean;
+            namespace Outer {
+                export namespace Inner {
+                    const deep: number = 1;
+                    export function nf(p: string): string { return p; }
+                }
+                const mid: string = "m";
+            }
+            function withNested<A>(a: A): A {
+                function inner<B extends A>(b: B): B {
+                    const x: B = b;
+                    if (cond) { const y = x; return y; }
+                    return b;
+                }
+                for (let i: number = 0; i < 3; i++) { const li: number = i; }
+                for (const k in { a: 1 }) { const ki = k; }
+                for (const v of [1, 2]) { const vi = v; }
+                do { const di: number = 1; } while (cond);
+                return inner(a);
+            }
+            const ce = class {
+                cp: number = 1;
+                cm(): number { return this.cp; }
+            };
+            function overloaded(x: number): number;
+            function overloaded(x: string): string;
+            function overloaded(x: any): any {
+                const inside: number = 1;
+                return x;
+            }
+            label: { const lb: number = 1; }
+            with ({} as any) { const wb = 1; }
+            if (cond) { const thenB: number = 1; } else if (!cond) { const elifB: number = 2; } else { const elseB: number = 3; }
+        """)
+        kotlin.test.assertTrue(mismatches.isEmpty(),
+            "expected spine/legacy agreement on widened shapes, got ${mismatches.size} mismatches:\n" +
+                mismatches.take(8).joinToString("\n"))
+    }
+
+    @Test
     fun `the audit is off by default`() {
         val options = CompilerOptions(strict = true)
         val result = Binder(options).bind(Parser("const a: number = 1;", "t.ts").parse())
