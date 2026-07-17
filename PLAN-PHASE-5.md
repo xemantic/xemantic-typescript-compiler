@@ -20,6 +20,34 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 555 (2026-07-17) — INV.4(e) g1 UNBLOCKED AND SLOT-MOVED: the
+checkTypeAssignability giant now runs at the spine slot; the round-542/543
+"first-touch order-sensitivity" thesis mostly dissolves into a PROBE BUG +
+two producer hoists.** The discovery chain: (1) the round-554/555 giant
+probes (and move-giant.py, and possibly the ORIGINAL round-542/543 bisect)
+matched the FIRST line containing `pass("checkSpine")` — which since the
+INV.4(d) slot-move comments is a COMMENT at ~line 2421 — so every "giant at
+the spine slot" probe actually inserted the giant ~100 passes EARLY, before
+its producers; (2) at the CORRECT position the g1a' coupling set shrinks to
+exactly TWO producer-order dependencies, both fixed by the established
+producer-hoist pattern: checkTemplateUnionIntersectionComplexity (the B572
+relationComplexityHandled set consumed by checkAssignmentExpression — its
+own comment already said "must run BEFORE checkTypeAssignability") and
+checkTypeParameterDefaults (found by a 10-cycle automated pass-order
+bisection: checkTpListDefaults MATERIALIZES TypeParam .constraint/.default
+as a side effect, and the `Test` → `Test<any>` no-args annotation display —
+typeArgumentDefaultUsesConstraintOnCircularDefault — needs that before the
+excess-property emitter resolves the annotation). With both hoisted (each
+independently corpus-green + listAll-×8 identical at the legacy giant
+slot), the FULL corpus is 11,259/0 AND listAll ×8 error-line identical with
+the giant AT the spine slot — the slot-move pre-gate that failed at rounds
+542/543 now PASSES and is LANDED. The (c3) "TS2859 complexity-verdict
+state" and "declaredTypes timing" audits are CLOSED (both were the probe
+artifact + the two producers). NEXT: the actual INV.4(e) g1 spine MIGRATION
+(decompose checkTypeAssignability's recursion onto spineEnterNode/
+spineLeaveNode per the INV.4(d) playbook), and re-probe giants g2/g3 with
+the FIXED probe before any further (c-family) work.
+
 **Round 554 (2026-07-17) — giant probe re-run under (d1)+(e): both couplings
 PERSIST** (typeArgumentDefaultUsesConstraintOnCircularDefault +
 relationComplexityError still fail with checkTypeAssignability at the spine

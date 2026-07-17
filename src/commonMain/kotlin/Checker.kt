@@ -2518,7 +2518,25 @@ class Checker(
         // pre-populate the ambient-cyclic-base-class set so TS2449 can be
         // suppressed for those classes (the UBD emissions consult it).
         pass("populateAmbientCyclicBaseClasses") { populateAmbientCyclicBaseClasses() }
+        // B572 producer (moved before the spine, INV.5(c3) round 555): TS2859 for
+        // `x = y` (x: A|null, y: A & T2; A a high-cardinality template-literal
+        // union). Populates relationComplexityHandled, which checkTypeAssignability's
+        // TS2322 path consults — the producer must precede ANY slot the giant may
+        // occupy (it is a pure AST walker over binderResults: no dependence on
+        // prior passes, so hoisting is behavior-preserving at the current order too).
+        pass("checkTemplateUnionIntersectionComplexity") { checkTemplateUnionIntersectionComplexity() }
+        // 59b producer (moved before the spine, INV.5(c3) round 555): TP default
+        // self/forward-reference checks (TS2744/TS2716/TS2706) — checkTpListDefaults
+        // MATERIALIZES TypeParam .constraint/.default fields as a side effect, and
+        // the no-args generic annotation display (`Test` → `Test<any>`,
+        // typeArgumentDefaultUsesConstraintOnCircularDefault) depends on that
+        // materialization having happened BEFORE the excess-property emitter
+        // resolves the annotation. Found by the round-555 pass-order bisection;
+        // the producer must precede ANY slot the checkTypeAssignability giant may
+        // occupy.
+        pass("checkTypeParameterDefaults") { checkTypeParameterDefaults() }
         pass("checkSpine") { checkSpine() }
+        pass("checkTypeAssignability") { checkTypeAssignability() }
         // 37. Use-before-declaration (TS2448/2449/2450): the per-file leg rides
         // the spine (INV.4(d) walker 7 — spineUbdSetup/spineUbdEnterNode);
         // deliberately BEFORE checkDefiniteAssignmentViaFlowGraph, whose TS2454
@@ -3163,8 +3181,6 @@ class Checker(
         pass("checkDuplicateLabels") { checkDuplicateLabels() }
         // 59. TS1099 (empty type-argument list on calls/new) migrated to the
         // check spine (INV.4(b) batch 9) — see spineCheckEmptyTypeArgs.
-        // 59b. Check type parameter defaults for self/forward references (TS2744)
-        pass("checkTypeParameterDefaults") { checkTypeParameterDefaults() }
         // 60. Check TS2354: importHelpers without tslib
         pass("checkImportHelpersWithoutTslib") { checkImportHelpersWithoutTslib() }
         // 60b. Check TS2343: syntax requires helper not in tslib
@@ -3190,12 +3206,7 @@ class Checker(
         pass("checkOuterScopeVarShadowing") { checkOuterScopeVarShadowing() }
         // 63. Check class member initializers referencing constructor params/vars (TS2301)
         pass("checkConstructorParamInInitializers") { checkConstructorParamInInitializers() }
-        // B572: TS2859 for `x = y` (x: A|null, y: A & T2; A a high-cardinality
-        // template-literal union) — must run BEFORE checkTypeAssignability so the
-        // registered positions suppress the FP TS2322 it would otherwise emit.
-        pass("checkTemplateUnionIntersectionComplexity") { checkTemplateUnionIntersectionComplexity() }
         // 64. Check type assignability (TS2322) — basic primitive type mismatches
-        pass("checkTypeAssignability") { checkTypeAssignability() }
         // 64a2. Check bare `yield;` against an explicit generator yield-type (TS2322)
         pass("checkGeneratorBareYieldTypes") { checkGeneratorBareYieldTypes() }
         // 64b. Check property access on known types (TS2339)
