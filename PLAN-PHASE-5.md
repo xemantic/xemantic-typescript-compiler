@@ -20,6 +20,40 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 560b (2026-07-17) — (cta-m2) IMPLEMENTATION PLAN (from the
+checkFunctionBody/dispatcher reads; the skeleton+audit build is the next
+session's deliverable — fresh-window work):** the migration template is
+(534)-shaped: CORE FRAMES at list-owner enters + statement anchors running
+the retained leaf utilities (checkVarDeclAssignability /
+checkAssignmentExpression / checkReturnAssignability / walkFunctionBodies-
+InExpr stay INTACT as leaves). Frame-edge inventory:
+(1) SourceFile enter — fresh varTypes + currentLocalTypes, per-file ambient
+(currentFileLocals/currentCheckFileName/currentFlowGraph — the last
+per-DISPATCH once merged, never walk-wide); (2) statement-position Block
+enter — varTypes.toMutableMap() copy (same currentLocalTypes — the legacy
+Block arm copies ONLY varTypes); (3) fn-body enter = checkFunctionBody's
+SETUP split into an enter hook: copies of currentLocalTypes/
+currentLocalDeclTypeNodes/currentShadowedNames + fresh ambiguousBlockLocal-
+Names, applyBodyLocalShadowing → applyAmbiguousBlockScopedLocals →
+shadowNestedFunctionNames (ORDER load-bearing), inNonArrowFunctionBody=true
++ inAsyncFunctionBody/inGeneratorFunctionBody from modifiers,
+currentTypeParamDecls merge, currentTypeParamScope merge with TP interning
++ constraint/default resolution (two-pass), param typing into innerTypes +
+currentLocalTypes (B85.1a optional→|undefined, round-464 sibling-default,
+TS2370 rest-param skip, 16.4ei destructuring check fires AT ENTER);
+returnType/returnTypeNode/typeParams frame values from the fn node; leave =
+restore all; (4) IfStatement narrowing frames (B201 extractNullNarrowing →
+currentLocalTypes copy + narrowedDeclaredTypes record, then-branch only);
+(5) ClassDeclaration member enters — currentClassForThis (null for
+statics), currentTypeParamDecls merge, B85.1b this.X varTypes push;
+(6) currentScopeStatements per statement list. AUDIT GATE before any
+emission moves: legacy-side per-statement fingerprint recording (nodeId →
+hash of varTypes entries + returnType + typeParams + flag bits) under a
+test-only flag, spine-side frames recording the same, a test diffing the
+two maps over corpus-shaped fixtures (the Inv4UnresolvedSpineScopeTest
+audit pattern). Then emissions move arm-by-arm (VariableStatement first),
+each suite+listAll gated.**
+
 **Round 560 (2026-07-17) — (cta-m1): checkTypeAssignability's two tail
 post-filters decoupled into `ctaPostFilters` (own dispatch step right after
 the giant; the diagnosticsBefore cutoff became the `ctaDiagnosticsBefore`
