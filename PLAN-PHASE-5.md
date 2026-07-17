@@ -20,6 +20,23 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 553 (2026-07-17) — INV.5(e) first half LANDED: canUseTypeEngine's
+GENERIC GATE IS DELETED.** The historical `hasUnresolvedTypeParams(source/
+target) → return false` skip (the "#1 named→named blocker" per the gotcha
+corpus — generic instantiations skipped because instantiation was
+incomplete) is gone: bare-TP-arg References now flow through the structural
+relation. Probe-first landing: corpus 11,259/0 AND listAll ×8 error-line
+identical vs 548a with the skip lifted — the accumulated M3.1 work +
+round-552's instantiation budget have made the engine's verdicts match the
+bail everywhere it mattered on 3.5M lines of real tsc source. A/B-verified
+capability gain: `function f<T>(b: Box<T>) { const x: Box<string> = b; }`
+was a FALSE NEGATIVE at HEAD (emitted nothing) and now fires tsc's exact
+TS2322 with the `Box<T>`/`Box<string>` display (Inv5GenericGateTest, 3
+pins). NEXT — (e) second half: delete superseded pin walkers one at a time
+(suite-gated per deletion; candidates: the corpus-unique dedicated walkers
+whose shapes the open engine now covers), then RETURN to INV.4(e) per the
+queue.
+
 **Round 552 (2026-07-17) — INV.5(d1) LANDED: the generic-property relation
 depth-4 cap is replaced by a per-top-level-relation INSTANTIATION BUDGET.**
 `getPropertyTypeForRelation` now substitutes at ANY depth;
@@ -2473,6 +2490,10 @@ interrupt the arc).
     family's rationale applies verbatim to un-inferred PARAM types).**
   - [ ] **INV.5(e) Open `canUseTypeEngine`'s generic gate; delete superseded
     pin walkers** (suite-gated per deletion). Then RETURN to INV.4(e).
+    **FIRST HALF DONE round 553: the hasUnresolvedTypeParams skip is
+    DELETED (corpus + listAll ×8 identical; the Box<T>-vs-Box<string>
+    false negative now fires — Inv5GenericGateTest). Remaining: the
+    pin-walker deletion sweep.**
 
 - [ ] **INV.6 Parallelism** (absorbs M5.4). Share-nothing checker workers per
   `docs/parallel-caching.md` (trivially partitionable once INV.4 gives a per-file

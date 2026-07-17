@@ -82281,8 +82281,14 @@ interface DataView {
             val sourceIsArray = isArrayLikeType(sourceType)
             // Array→tuple needs contextual typing — skip
             if (sourceIsArray && targetType.tupleElementTypes != null) return false
-            // Skip types with unresolved type parameters (incomplete generic instantiation)
-            if (hasUnresolvedTypeParams(sourceType) || hasUnresolvedTypeParams(targetType)) return false
+            // INV.5(e) round 553: the historical unresolved-type-param skip
+            // (`hasUnresolvedTypeParams(source/target) → return false`) is
+            // DELETED — generic instantiations with bare-TP args flow through
+            // the structural relation (TypeParam↔TypeParam relates via
+            // apparent types; bare TP vs concrete correctly fails). Verified
+            // corpus-green + listAll ×8 identical under (d1)'s instantiation
+            // budget; the Box<T>-vs-Box<string> false negative now fires
+            // (Inv5GenericGateTest).
             resolveStructuredTypeMembers(sourceType)
             resolveStructuredTypeMembers(targetType)
             // Skip class-instance vs constructor-type comparison (typeof C / new() => T).
