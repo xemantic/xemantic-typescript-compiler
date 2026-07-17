@@ -89603,16 +89603,12 @@ interface DataView {
                         if (ct !== anyType && ct !== errorType) bindings[nm] = ct
                     }
                     if (bindings.isNotEmpty()) {
-                        val savedArgs = currentTypeAliasArgs
-                        val savedScope = currentTypeParamScope
-                        val retryTarget = try {
-                            currentTypeAliasArgs = (savedArgs ?: emptyMap()) + bindings
-                            if (savedScope != null) currentTypeParamScope = savedScope - bindings.keys
-                            getTypeFromTypeNode(returnTypeNode)
-                        } finally {
-                            currentTypeAliasArgs = savedArgs
-                            currentTypeParamScope = savedScope
-                        }
+                        val scope = currentTypeParamScope
+                        val retryTarget = getTypeFromTypeNodeWithMapper(returnTypeNode, InstantiationMapper(
+                            (currentTypeAliasArgs ?: emptyMap()) + bindings,
+                            if (scope != null) scope - bindings.keys else null,
+                            inferenceNamespaceStack.size,
+                        ))
                         if (retryTarget !== anyType && retryTarget !== errorType &&
                             checkTypeRelatedTo(sourceType, retryTarget, assignableRelation)) {
                             return
@@ -93813,10 +93809,12 @@ interface DataView {
                             // entries stable across re-resolution.
                             val cacheKey = "${symbol.id}|${resolvedArgs.joinToString(",") { it.id.toString() }}"
                             substitutionResultCache[cacheKey]?.let { return it }
-                            val saved = currentTypeAliasArgs
-                            // Round 472: the alias's OWN type-parameter NAMES must not
-                            // resolve through the ENCLOSING type-param scope inside the
-                            // body — currentTypeParamScope is consulted BEFORE
+                            // INV.5(b2b) round 549d: the install is an explicit mapper —
+                            // bindings layered onto the ambient alias-args, plus the
+                            // round-472 own-TP-name scope shadow: the alias's OWN
+                            // type-parameter NAMES must not resolve through the
+                            // ENCLOSING type-param scope inside the body —
+                            // currentTypeParamScope is consulted BEFORE
                             // currentTypeAliasArgs in getTypeFromTypeReference, so a
                             // callee TP named like an alias TP CAPTURED the body's
                             // reference (`binarySearchKey<T, U>(…, keyComparer:
@@ -93827,22 +93825,22 @@ interface DataView {
                             // utilities.ts:1750). Shadow exactly the alias's own TP
                             // names; every other scope entry stays visible (a nested
                             // sig-own TP re-pushes onto the scope inside and still wins).
-                            val savedScope = currentTypeParamScope
+                            val argMap = HashMap<String, Type>()
+                            currentTypeAliasArgs?.let { argMap.putAll(it) }
+                            for (i in declTPs.indices) {
+                                argMap[declTPs[i].name.text] = resolvedArgs[i]
+                            }
+                            val ambientScope = currentTypeParamScope
+                            val bodyScope = if (ambientScope != null && declTPs.any { it.name.text in ambientScope }) {
+                                ambientScope - declTPs.map { it.name.text }.toSet()
+                            } else ambientScope
+                            val mapper = InstantiationMapper(argMap, bodyScope, inferenceNamespaceStack.size)
                             try {
-                                val argMap = mutableMapOf<String, Type>()
-                                saved?.let { argMap.putAll(it) }
-                                for (i in declTPs.indices) {
-                                    argMap[declTPs[i].name.text] = resolvedArgs[i]
-                                }
-                                currentTypeAliasArgs = argMap
-                                if (savedScope != null && declTPs.any { it.name.text in savedScope }) {
-                                    currentTypeParamScope = savedScope - declTPs.map { it.name.text }.toSet()
-                                }
                                 typeAliasResolutionDepth++
                                 if (decl.type is TypeLiteral || decl.type is UnionType) aliasObjLiteralInstantiationStack.addLast(symbol.id)
                                 // (a UnionType body is pushed unconditionally — the pop below
                                 // matches; the cycle-break above re-checks deferability)
-                                val result = getTypeFromTypeNode(decl.type)
+                                val result = getTypeFromTypeNodeWithMapper(decl.type, mapper)
                                 // B50.2: register alias-display info so typeToString
                                 // renders `Foo<string>` instead of the structural form.
                                 // CRITICAL filters:
@@ -93867,8 +93865,6 @@ interface DataView {
                                 }
                                 return result
                             } finally {
-                                currentTypeAliasArgs = saved
-                                currentTypeParamScope = savedScope
                                 typeAliasResolutionDepth--
                                 if (decl.type is TypeLiteral || decl.type is UnionType) aliasObjLiteralInstantiationStack.removeLast()
                             }
@@ -140402,14 +140398,9 @@ interface DataView {
                     // the value type `T[K]` (and conditionals over it) resolve PER KEY instead
                     // of bailing to anyType — e.g. View<T> = { [K in keyof T]: T[K] extends
                     // object ? boolean | View<T[K]> : boolean }
-                    // (excessPropertyChecksWithNestedIntersections). currentTypeAliasArgs
-                    // bypasses the nodeTypes cache so each key resolves freshly.
-                    val savedArgs = currentTypeAliasArgs
-                    try {
-                        currentTypeAliasArgs = (savedArgs ?: emptyMap()) + (typeParamName to Type.StringLiteral(key))
-                        getTypeFromTypeNode(node.type)
-                    }
-                    finally { currentTypeAliasArgs = savedArgs }
+                    // (excessPropertyChecksWithNestedIntersections). An alias-args
+                    // mapper bypasses the plain nodeTypes cache so each key resolves freshly.
+                    getTypeFromTypeNodeWithMapper(node.type, layeredAliasMapper(mapOf(typeParamName to Type.StringLiteral(key))))
                 } else anyType
                 val sym = Symbol(SymbolFlags.Property, key)
                 homomorphicSourceType?.let { srcT ->

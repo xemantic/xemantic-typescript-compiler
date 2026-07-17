@@ -20,6 +20,24 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 549d (2026-07-17) — INV.5(b2b): the alias-args ambient is now
+SINGLE-WRITER (the mapper bridge).** The remaining 3 `currentTypeAliasArgs`
+installers flipped to explicit `InstantiationMapper`s: (1) the
+getTypeFromTypeReference generic-alias substitution (~93.8k — layered args + the
+round-472 own-TP-name scope shadow computed INTO the mapper; the depth counter and
+aliasObjLiteralInstantiationStack stay hand-managed around the bridged call; the
+B50.2 display registration now runs after ambient restore — pure map writes, no
+context reads); (2) the checkReturnAssignability constraint-retry (~89.6k, layered
++ scope-minus-bindings); (3) getTypeFromMappedType's per-key K binding (~140.4k,
+layeredAliasMapper) — the last two were missed by the round-549c survey grep
+(their merge expressions reference `savedArgs`, which the survey filtered).
+`grep 'currentTypeAliasArgs = '` now matches ONLY getTypeFromTypeNodeWithMapper's
+install/restore pair. 3 new pins in Inv5MapperBridgeTest (alias-substitution
+display, mapped-type per-key resolution, the round-472 shadow). Gates: corpus
+11,249/0; listAll ×8 error-line identical vs 548a. Next: the tpScope installer
+families (~84 write sites — walker-level scope pushes; flip the
+resolution-internal ones first), then (bN) ambient-field removal.
+
 **Round 549c (2026-07-17) — INV.5(b2a): the simple alias-args installer family
 flipped to the explicit mapper bridge.** Survey: only 7 real `currentTypeAliasArgs`
 write sites exist (the other ~84 ambient writes are `currentTypeParamScope`) — 6 are
@@ -2278,8 +2296,11 @@ interrupt the arc).
     identical bridge; the `cacheable` gate reads the param); (b2+) flip
     installer families to pass explicitly — (b2a) DONE round 549c: all 6
     simple aliasArgs installers flipped via aliasMapper/layeredAliasMapper
-    (only the complex getTypeFromTypeReference substitution remains on the
-    aliasArgs side = (b2b)); resolution-internal first
+    (b2b) DONE round 549d: the remaining 3
+    aliasArgs installers flipped too — alias substitution ~93.8k,
+    constraint-retry ~89.6k, mapped-type per-key ~140.4k; the aliasArgs
+    ambient is now single-writer (the bridge); tpScope families next);
+    resolution-internal first
     (getTypeFromTypeReference's alias substitution,
     resolveGenericPropertyTypeWorker, resolveInterfaceMembersCore,
     getTypeOf* lazies), then the walker-level installers (call-types /
