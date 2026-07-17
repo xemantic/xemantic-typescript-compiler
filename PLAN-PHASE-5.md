@@ -42,6 +42,26 @@ DOUBLE-DESCENT NOTE: keeping walkFunctionBodiesInExpr at the anchor means
 initializer fn bodies still get their legacy walk (no spine anchors fire
 inside them yet — the deeper arms are still legacy) — no double emission
 by construction. Gates: corpus + listAll ×8.
+**AMENDED (round 566b, the state-channel split): a plain legacy-arm SKIP is
+WRONG — checkVarDeclAssignability's recordings (currentLocalTypes/varTypes)
+feed the legacy walk's LATER statements in interleaved document order;
+skipping the arm starves them, while bridging the frame maps into the
+giant's driver would let use-before-decl reads see LATER vars (an order
+change). The correct intermediate is EMIT-TWICE-SUPPRESS-LEGACY: the spine
+anchor runs the leaf with full effects into the FRAME maps (emissions +
+recordings); the legacy arm KEEPS running the leaf for its own maps'
+interleaved state evolution but TRUNCATES the duplicate diagnostics it
+appends (size-mark + removeAt — the retraction pattern). Transient double
+computation, exact semantics both sides; when ALL arms are anchored the
+legacy walk becomes pure-state-duplicate and deletes in one step (frames
+become the sole state). This also makes the ctaDiagnosticsBefore cutoff
+move unnecessary until the deletion step — the legacy duplicates are
+truncated before the filters run, and the spine-emitted copies sit outside
+the window ONLY until the cutoff moves WITH the deletion. Wait — no: the
+spine copies must be INSIDE the filter window for the null/undefined
+suppression to keep working on them → the cutoff DOES move to checkSpine
+entry in the same commit (2322-emitting spine handlers ≈ none today, so
+the window widening is near-neutral; corpus arbitrates).**
 
 **Round 565 (2026-07-17) — (cta-m2d) part 2 LANDED with a STRATEGY PIVOT.**
 CtaFrame now carries the currentLocalTypes family (localTypes /
