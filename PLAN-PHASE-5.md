@@ -2400,9 +2400,42 @@ interrupt the arc).
     round-543 producers hoisted (landed round 555), ALL THREE giants
     slot-moved to the spine block corpus-green + listAll-×8-identical
     (landed round 556; legacy relative order g-cta → g-cpa → g-ccet
-    preserved). g1a/slot-move pre-gates: DONE for all three. NEXT: (g1b)
-    the ~50-pin batch for checkPropertyAccess per the sub-plan above
-    (pre-verified on the OLD walker), then (g1c) its migration.**
+    preserved). g1a/slot-move pre-gates: DONE for all three. (g1b) DONE
+    rounds 557/558 — 33 reach pins (Inv4SpineG1PinsTest statement arms,
+    Inv4SpineG1PinsExprTest expression arms), all verified on the current
+    walker.**
+    **(g1c) DESIGN (round 559, from the g1b arm reads): the migration ORDER
+    must be cta FIRST — the giants share a CROSS-PASS residue channel:
+    checkPropertyAccess's driver does NOT reset currentLocalTypes per file,
+    so it consumes checkTypeAssignability's recordings (round 542's
+    noImplicitAnyForIn TS7053 finding: the `var k1 = x[i]` receiver type is
+    cta residue). Migrating cpa into the spine FIRST would run its per-node
+    work BEFORE the still-slot-resident cta → the residue disappears.
+    Migrating cta first preserves cta-before-cpa; note per-node
+    interleaving ≠ pass-after-pass for BACKWARD residue reads (a node
+    consuming a LATER node's recording) — the pass-after-pass semantics let
+    cpa see cta's COMPLETE final state incl. later files; audit any
+    backward consumption during the cta migration (candidate remedy: the
+    w2 own-recording template — each pass records what it consumes).
+    Frame model per the INV.4(d) playbook: (1) per-dispatch ambient install
+    of currentFlowGraph/currentLexicalScopes (NEVER walk-wide on the spine
+    — the 78-test hazard; the legacy walk-wide set is reproduced by
+    installing around every g1 emission); (2) fn-like scope copies
+    (fn-decl/method/ctor/set-accessor/arrow/fn-expr) as push-frames at
+    body enters (save map refs, install copies + populateParameterLocalTypes
+    + applyBodyLocalShadowing/applyAmbiguousBlockScopedLocals), popped at
+    leaves — GetAccessor bodies deliberately have NO scope copy (chunk-1
+    pin); (3) contextualType as a kinded downward carrier at call-arg /
+    objlit-property / arrow-body edges (the w3 template; cleared at
+    fn-expr body and spread edges); (4) propertyAccessEnclosingNamespaces
+    pushed at non-declare ModuleDeclaration enters; (5) enclosingClassType
+    as a pull-derived member-chain context (null across fn-decl/fn-expr
+    boundaries, KEPT through arrows — chunk-2 pins), with the this-param
+    override at method enters; (6) inStaticClassMethod save/set/restore at
+    class-member enters; (7) currentEnclosingEnum at EnumDeclaration
+    enters; (8) reach quirks as classifier edges: for-INIT unreached,
+    tagged-template spans unreached, interface bodies unreached,
+    shorthand-property initializers unreached.**
   - [ ] **INV.4(f) The two unlocked soundness wins.** Once one authoritative
     walk state exists: the per-node expression-type cache (594,779 calls over
     ~221,844 distinct nodes = ×2.6 recompute), and flow narrowing folded into
