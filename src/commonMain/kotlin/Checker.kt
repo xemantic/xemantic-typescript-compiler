@@ -719,6 +719,14 @@ class Checker(
         val inAsync: Boolean,
         val inGen: Boolean,
         val inInstanceMember: Boolean,
+        // (cta-m2d) part 2: the currentLocalTypes family — maintained via the
+        // SANDWICH pattern (the frame's maps are installed into the ambient
+        // fields, the SAME legacy helpers run against them, then the ambient
+        // is restored — zero reimplementation drift).
+        val localTypes: HashMap<String, Type> = HashMap(),
+        val localDeclNodes: HashMap<String, TypeNode> = HashMap(),
+        val shadowedNames: HashSet<String> = HashSet(),
+        val ambiguousNames: MutableSet<String> = mutableSetOf(),
     )
     private val ctaFrames = ArrayDeque<CtaFrame>()
 
@@ -728,8 +736,28 @@ class Checker(
             inFn = false, inAsync = false, inGen = false, inInstanceMember = false))
     }
 
-    /** The checkFunctionBody context transform, reproduced for the spine frame:
-     *  varTypes copy + annotated-param entries; retType from the annotation. */
+    /** (cta-m2d) part 2: install [frame]'s localTypes-family maps into the
+     *  ambient fields, run [block] (the legacy helpers mutate the frame's maps
+     *  in place), restore. */
+    private inline fun withCtaFrameLocals(frame: CtaFrame, block: () -> Unit) {
+        val sLT = currentLocalTypes; val sDN = currentLocalDeclTypeNodes
+        val sSh = currentShadowedNames; val sAm = ambiguousBlockLocalNames
+        currentLocalTypes = frame.localTypes
+        currentLocalDeclTypeNodes = frame.localDeclNodes
+        currentShadowedNames = frame.shadowedNames
+        ambiguousBlockLocalNames = frame.ambiguousNames
+        try { block() } finally {
+            currentLocalTypes = sLT; currentLocalDeclTypeNodes = sDN
+            currentShadowedNames = sSh; ambiguousBlockLocalNames = sAm
+        }
+    }
+
+    /** The checkFunctionBody context transform, reproduced for the spine frame
+     *  via the SANDWICH pattern — the frame's maps are installed and the SAME
+     *  legacy helpers run against them (shadowing calls first, then the pure
+     *  param-typing helper under the fn's TP scope, matching checkFunctionBody's
+     *  order). Constructor/SetAccessor callers (viaCheckFunctionBody = false)
+     *  keep the m2b inline varTypes-only param entries. */
     private fun ctaFnBodyFrame(
         body: Node, parameters: List<Parameter>, returnAnn: TypeNode?,
         tps: List<TypeParameter>?, isAsync: Boolean, isGenerator: Boolean,
@@ -739,19 +767,59 @@ class Checker(
     ): CtaFrame {
         val inner = base.varTypes.toMutableMap()
         extraVarTypes?.let { inner.putAll(it) }
-        for (param in parameters) {
-            val pt = param.type ?: continue
-            val pn = param.name as? Identifier ?: continue
-            if (param.dotDotDotToken && nonArrayKeywordText(pt) != null) continue
-            resolveSimpleTypeName(pt)?.let { inner[pn.text] = it }
-        }
         val tpNames = base.typeParams + (tps?.map { it.name.text } ?: emptyList())
-        return CtaFrame(body, inner, returnAnn?.let { resolveSimpleTypeName(it) }, returnAnn,
+        val frame = CtaFrame(body, inner, returnAnn?.let { resolveSimpleTypeName(it) }, returnAnn,
             tpNames,
             inFn = if (viaCheckFunctionBody) true else base.inFn,
             inAsync = if (viaCheckFunctionBody) isAsync else base.inAsync,
             inGen = if (viaCheckFunctionBody) isGenerator else base.inGen,
             inInstanceMember = inInstanceMember)
+        frame.localTypes.putAll(base.localTypes)
+        frame.localDeclNodes.putAll(base.localDeclNodes)
+        frame.shadowedNames.addAll(base.shadowedNames)
+        if (viaCheckFunctionBody && body is Block) {
+            val paramNames = parameters.mapNotNull { p -> (p.name as? Identifier)?.text }.toSet()
+            withCtaFrameLocals(frame) {
+                applyBodyLocalShadowing(body.statements, paramNames)
+                applyAmbiguousBlockScopedLocals(body.statements, paramNames)
+                shadowNestedFunctionNames(body.statements)
+                val fnScope = if (!tps.isNullOrEmpty()) {
+                    val scope = (currentTypeParamScope?.toMutableMap() ?: mutableMapOf())
+                    val newTps = mutableListOf<Pair<TypeParameter, Type.TypeParam>>()
+                    for (tp in tps) {
+                        val typeParam = typeParamInternCache.getOrPut(internKey(tp)) {
+                            val p = Type.TypeParam()
+                            p.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
+                            p
+                        }
+                        scope[tp.name.text] = typeParam
+                        newTps.add(tp to typeParam)
+                    }
+                    withInstantiationContext(scopeMapper(scope)) {
+                        for ((tp, typeParam) in newTps) {
+                            if (typeParam.constraint == null) {
+                                tp.constraint?.let { typeParam.constraint = getTypeFromTypeNode(it) }
+                            }
+                            if (typeParam.default == null) {
+                                tp.default?.let { typeParam.default = getTypeFromTypeNode(it) }
+                            }
+                        }
+                    }
+                    scope
+                } else currentTypeParamScope
+                withInstantiationContext(scopeMapper(fnScope)) {
+                    ctaTypeParamsIntoLocals(parameters, frame.varTypes)
+                }
+            }
+        } else {
+            for (param in parameters) {
+                val pt = param.type ?: continue
+                val pn = param.name as? Identifier ?: continue
+                if (param.dotDotDotToken && nonArrayKeywordText(pt) != null) continue
+                resolveSimpleTypeName(pt)?.let { inner[pn.text] = it }
+            }
+        }
+        return frame
     }
 
     private fun ctaSpineEnter(node: Node) {
@@ -798,11 +866,16 @@ class Checker(
                     inInstanceMember = ModifierFlag.Static !in parent.modifiers,
                     viaCheckFunctionBody = false))
                 else -> {
-                    // statement-position / try-catch-finally block: varTypes copy
+                    // statement-position / try-catch-finally block: varTypes copy;
+                    // the localTypes family is SHARED with the parent (the legacy
+                    // walk copies currentLocalTypes ONLY at fn boundaries — the
+                    // audit's lt-digest experiment showed block/namespace/clause
+                    // recordings LEAK into the enclosing scope).
                     val top = ctaFrames.last()
                     ctaFrames.addLast(CtaFrame(node, top.varTypes.toMutableMap(),
                         top.returnType, top.returnTypeNode, top.typeParams,
-                        top.inFn, top.inAsync, top.inGen, top.inInstanceMember))
+                        top.inFn, top.inAsync, top.inGen, top.inInstanceMember,
+                        top.localTypes, top.localDeclNodes, top.shadowedNames, top.ambiguousNames))
                 }
             }
         }
@@ -813,7 +886,8 @@ class Checker(
             val top = ctaFrames.last()
             ctaFrames.addLast(CtaFrame(node, top.varTypes.toMutableMap(),
                 null, null, emptySet(),
-                top.inFn, top.inAsync, top.inGen, top.inInstanceMember))
+                top.inFn, top.inAsync, top.inGen, top.inInstanceMember,
+                top.localTypes, top.localDeclNodes, top.shadowedNames, top.ambiguousNames))
         }
         // Switch clauses: per-clause varTypes copies (returnType/typeParams
         // threaded through unchanged).
@@ -821,7 +895,8 @@ class Checker(
             val top = ctaFrames.last()
             ctaFrames.addLast(CtaFrame(node, top.varTypes.toMutableMap(),
                 top.returnType, top.returnTypeNode, top.typeParams,
-                top.inFn, top.inAsync, top.inGen, top.inInstanceMember))
+                top.inFn, top.inAsync, top.inGen, top.inInstanceMember,
+                top.localTypes, top.localDeclNodes, top.shadowedNames, top.ambiguousNames))
         }
         // The legacy walk's ORDERED varTypes recording: an ANNOTATED
         // Identifier declaration records its annotation string as

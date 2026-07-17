@@ -20,6 +20,30 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 565 (2026-07-17) — (cta-m2d) part 2 LANDED with a STRATEGY PIVOT.**
+CtaFrame now carries the currentLocalTypes family (localTypes /
+localDeclNodes / shadowedNames / ambiguousNames) with the audit-derived
+sharing structure: fn-body frames COPY (+ run the real setup helpers via the
+`withCtaFrameLocals` sandwich — applyBodyLocalShadowing →
+applyAmbiguousBlockScopedLocals → shadowNestedFunctionNames, then
+ctaTypeParamsIntoLocals under the fn's TP scope), while Block/ModuleBlock/
+clause frames SHARE the parent's maps by reference. THE PIVOT: a
+localTypes CONTENT digest in the audit fingerprints was tried and showed
+the legacy content comes from checkVarDeclAssignability's recording
+INTERLEAVED with its emissions (annotated + widened-inference recordings,
+leaking across blocks/namespaces in document order) — content fidelity
+therefore comes from the REAL LEAF RUNNING ON THE SPINE (the m3 emission
+move installs the frame maps ambient and dispatches the retained
+checkVarDeclAssignability, recordings and emissions together), NOT from
+audit replication; the digest was dropped and the audit stays green on the
+threaded-context dimensions (5 pins, both fixtures). The lt-digest diffs
+are preserved knowledge: legacy currentLocalTypes copies ONLY at fn
+boundaries; blocks/namespaces/clauses leak recordings into the enclosing
+scope. Corpus 11,307/0. NEXT: (cta-m3) — the VariableStatement emission
+move (install frame context ambient per-dispatch, run
+checkVarDeclAssignability + the B127/B183 initializer walks from the spine
+anchor, deactivate the legacy arm same-commit; corpus + listAll gated).
+
 **Round 564 (2026-07-17) — (cta-m2d) part 1: checkFunctionBody's interleaved
 param loop SPLIT into the pure typing helper `ctaTypeParamsIntoLocals`
 (innerTypes/currentLocalTypes writes only; TP scope required at call) + the
