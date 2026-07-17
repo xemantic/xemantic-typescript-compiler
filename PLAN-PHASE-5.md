@@ -59,6 +59,29 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 548 (2026-07-17) — INV.5(c) LANDED (option iii): context-KEYED
+`nodeTypes` for context-bearing resolutions.** getTypeFromTypeNode's
+context-bypass tail now consults `mappedNodeTypes` — keyed by NODE IDENTITY
+(NodeCtxKey: `===` equality with a nodeId hash, so cross-file nodeId
+collisions only share buckets, never results; unindexed nodes skip) + the
+instantiation-context fingerprint (inferenceNamespaceStack symbol ids +
+sorted tpScope name:id pairs + sorted aliasArgs name:id pairs) — under the
+CONSERVATIVE soundness gate from the round-547b analysis: caching only when
+the checking-file dimension is PINNED (currentFileLocals === the node's
+OWN file's locals via owningSourceFile + fileResults); every other consult
+keeps the legacy re-run. This kills the recompute multiplier for the
+dominant in-file context-bearing resolutions (alias substitution, TP-scope
+resolution) while structurally excluding the conflation-era
+checking-file-dependence hazard; the old empty-context cache and its
+isPerFileDependentRefNode bypass stay untouched. KNOWN COST FLAGGED: the
+fingerprint sorts context maps per consult — wall +5.4% single-run
+(late-session drift band overlaps; re-measure interleaved and cache the
+fingerprint per-install if real). VERIFIED: suite 11,249/0; listAll SORTED
+error lines IDENTICAL on ALL 8 profiles (548a vs 547a); bench 46 errors,
+histogram unchanged. NEXT: re-run the giant probes once more (the (c)
+cache may dissolve the declaredTypes-timing couplings), then (b2+) /
+fingerprint perf.
+
 **Round 547 (2026-07-17) — INV.5(b1) LANDED: the explicit-instantiation-
 context bridge.** `InstantiationMapper` (aliasArgs + tpScope + an
 inferenceNamespaceStack-depth fingerprint — the THIRD cacheable-gate
@@ -2208,7 +2231,11 @@ interrupt the arc).
     start right after (b1) with ambient-bridged installers still in place
     (key = (nodeId, mapper.fingerprint); the context-bypass `cacheable`
     rule dies there).
-  - [ ] **INV.5(c) `nodeTypes` keyed (node, mapper) — always valid.** Kills
+  - [x] **INV.5(c) `nodeTypes` keyed (node, mapper) — LANDED round 548
+    (option iii — the conservative pinned-checking-file gate; see the
+    session note; widen the gate as INV.3(d) retires checking-file-dependent
+    resolution, and cache the fingerprint per-install if the +5.4%
+    single-run wall cost proves real).** Kills
     the context-bypass rule and the first-touch hazard class outright (the
     round-543 blocker). DESIGN (scouted round 547b — the surface is TINY,
     exactly 2 use sites inside getTypeFromTypeNode): a SECOND cache

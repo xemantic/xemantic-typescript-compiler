@@ -175,6 +175,12 @@ class Checker(
         val referenceCache = HashMap<String, Type.Reference>()
         val unionInternCache = HashMap<String, Type.Union>()
         val intersectionInternCache = HashMap<String, Type.Intersection>()
+        /** INV.5(c) round 548 (option iii): context-KEYED cache for
+         *  context-bearing type-node resolutions — keyed by NODE IDENTITY
+         *  (=== equality, nodeId hash) + the instantiation-context
+         *  fingerprint, gated to consults whose checking-file dimension is
+         *  pinned to the node's OWN file (see [mappedNodeTypeKey]). */
+        val mappedNodeTypes = HashMap<Any, Type>()
         /** Stack of `target.id` for each `Type.Reference` SOURCE active in the
          *  comparison stack (parallel to `relationComparisonStack`). Used by
          *  `isDeeplyNested` to bail out of infinitely-expanding generic comparisons
@@ -93107,7 +93113,47 @@ interface DataView {
                 nodeTypeResolutionInProgress.remove(node)
             }
         }
+        // INV.5(c) option (iii): context-KEYED caching for context-BEARING
+        // resolutions — the conservative gate pins the checking-file dimension
+        // (currentFileLocals must be the node's OWN file's locals) so the
+        // fingerprint (ns-stack ids + tpScope ids + aliasArgs ids) fully
+        // determines the resolution; anything else keeps the legacy re-run.
+        val cKey = mappedNodeTypeKey(node)
+        if (cKey != null) {
+            state.mappedNodeTypes[cKey]?.let { return it }
+            val type = getTypeFromTypeNodeWorker(node)
+            state.mappedNodeTypes[cKey] = type
+            return type
+        }
         return getTypeFromTypeNodeWorker(node)
+    }
+
+    /** Node-IDENTITY + context-fingerprint key for [CheckerState.mappedNodeTypes]
+     *  — === equality (cross-file nodeId collisions only share hash buckets,
+     *  never results). */
+    private class NodeCtxKey(val node: TypeNode, val ctx: String) {
+        override fun equals(other: Any?): Boolean =
+            other is NodeCtxKey && other.node === node && other.ctx == ctx
+        override fun hashCode(): Int = (node as NodeBase).nodeId * 31 + ctx.hashCode()
+    }
+
+    /** Build the (c) cache key, or null when the consult is not safely
+     *  cacheable: unindexed node, or the checking-file dimension is not
+     *  pinned (currentFileLocals is not the node's own file's locals). */
+    private fun mappedNodeTypeKey(node: TypeNode): Any? {
+        val id = (node as NodeBase).nodeId
+        if (id < 0) return null
+        val owner = owningSourceFile(node) ?: return null
+        if (fileResults[owner.fileName]?.locals !== currentFileLocals) return null
+        val fp = StringBuilder()
+        for (s in inferenceNamespaceStack) fp.append('n').append(s.id)
+        currentTypeParamScope?.let { m ->
+            for (e in m.entries.sortedBy { it.key }) fp.append('s').append(e.key).append(':').append(e.value.id)
+        }
+        currentTypeAliasArgs?.let { m ->
+            for (e in m.entries.sortedBy { it.key }) fp.append('a').append(e.key).append(':').append(e.value.id)
+        }
+        return NodeCtxKey(node, fp.toString())
     }
 
     private fun getTypeFromTypeNodeWorker(node: TypeNode): Type {
