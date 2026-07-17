@@ -120342,6 +120342,15 @@ interface DataView {
                             val pName = param.name as? Identifier ?: continue
                             val pType = getTypeOfSymbol(sig.parameters[i])
                             if (pType === anyType || pType === errorType) continue
+                            // Round 569: an UN-INFERRED callee TP in the contextual
+                            // param type means OUR inference failed where tsc would
+                            // have bound it — registering the bare TP turns downstream
+                            // uncertainty-bails into constraint-based FP verdicts
+                            // (fourslashImpl span.prefixText), and makes the verdict
+                            // depend on WHEN the TP's constraint materialized. Skip
+                            // (the param stays any — suppression-only), matching the
+                            // B136 concreteness discipline.
+                            if (typeContainsUnresolvedTypeParam(pType)) continue
                             currentLocalTypes[pName.text] = pType
                         }
                         if (expr.body is Expression) {
@@ -120486,6 +120495,9 @@ interface DataView {
                             val pName = param.name as? Identifier ?: continue
                             val pType = getTypeOfSymbol(sig.parameters[i])
                             if (pType === anyType || pType === errorType) continue
+                            // Round 569: skip un-inferred callee TPs (see the
+                            // ArrowFunction twin above).
+                            if (typeContainsUnresolvedTypeParam(pType)) continue
                             currentLocalTypes[pName.text] = pType
                         }
                     }
