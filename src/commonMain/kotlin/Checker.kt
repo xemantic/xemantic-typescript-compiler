@@ -85794,14 +85794,9 @@ interface DataView {
     // the alias-substitution mechanism — getPropertyTypeForRelation does not reliably instantiate a
     // nested interface member's inner type parameters).
     private fun vmInstantiate(node: TypeNode, tpNames: List<String>, args: List<Type>): Type {
-        val saved = currentTypeAliasArgs
-        return try {
-            val map = mutableMapOf<String, Type>()
-            saved?.let { map.putAll(it) }
-            for (i in tpNames.indices) map[tpNames[i]] = args[i]
-            currentTypeAliasArgs = map
-            getTypeFromTypeNode(node)
-        } finally { currentTypeAliasArgs = saved }
+        val bindings = HashMap<String, Type>()
+        for (i in tpNames.indices) bindings[tpNames[i]] = args[i]
+        return getTypeFromTypeNodeWithMapper(node, layeredAliasMapper(bindings))
     }
 
     // Structural chain for an INVARIANT same-generic comparison (`Foo2<string>` vs `Foo2<unknown>`),
@@ -93064,6 +93059,20 @@ interface DataView {
         InstantiationMapper(currentTypeAliasArgs, currentTypeParamScope, inferenceNamespaceStack.size)
 
     /**
+     * INV.5(b2a): the ambient context with [bindings] REPLACING the alias-arg
+     * map (the "fresh substitution" installer shape).
+     */
+    private fun aliasMapper(bindings: Map<String, Type>): InstantiationMapper =
+        InstantiationMapper(bindings, currentTypeParamScope, inferenceNamespaceStack.size)
+
+    /**
+     * INV.5(b2a): the ambient context with [bindings] LAYERED onto the
+     * ambient alias-arg map (the "merge onto saved" installer shape).
+     */
+    private fun layeredAliasMapper(bindings: Map<String, Type>): InstantiationMapper =
+        aliasMapper((currentTypeAliasArgs ?: emptyMap()) + bindings)
+
+    /**
      * INV.5(b1): resolve [node] under an EXPLICIT [mapper] — installs the
      * mapper's contexts around the ambient-reading resolution core (identical
      * to the legacy hand-rolled save-set-restore installers; the recursion
@@ -99857,11 +99866,7 @@ interface DataView {
             if (bindings.isEmpty()) {
                 getTypeFromTypeNode(targetTypeNode)
             } else {
-                val saved = currentTypeAliasArgs
-                currentTypeAliasArgs = (saved ?: emptyMap()) + bindings
-                val resolved = getTypeFromTypeNode(targetTypeNode)
-                currentTypeAliasArgs = saved
-                resolved
+                getTypeFromTypeNodeWithMapper(targetTypeNode, layeredAliasMapper(bindings))
             }
         } else {
             getTypeFromTypeNode(targetTypeNode)
@@ -131185,13 +131190,7 @@ interface DataView {
                 if (!argType.callSignatures.isNullOrEmpty() || !argType.constructSignatures.isNullOrEmpty()) continue
                 if (argType.stringIndexInfo != null || argType.numberIndexInfo != null) continue
                 val argMembers = argType.members ?: continue
-                val saved = currentTypeAliasArgs
-                val inst = try {
-                    currentTypeAliasArgs = (saved ?: emptyMap()) + (tpAst.name.text to argType)
-                    getTypeFromTypeNode(m)
-                } finally {
-                    currentTypeAliasArgs = saved
-                }
+                val inst = getTypeFromTypeNodeWithMapper(m, layeredAliasMapper(mapOf(tpAst.name.text to argType)))
                 if (inst !is Type.Object) continue
                 val instMembers = inst.members ?: continue
                 if (instMembers.isEmpty()) continue
@@ -131364,10 +131363,8 @@ interface DataView {
             }
         }
         if (bindings.size != tpNames.size) return false   // EVERY sig TP must be inferred
-        // Instantiate the param with the inferred TPs (currentTypeAliasArgs bypasses the cache).
-        val savedArgs = currentTypeAliasArgs
-        val instantiated = try { currentTypeAliasArgs = bindings; getTypeFromTypeNode(paramNode) }
-            finally { currentTypeAliasArgs = savedArgs }
+        // Instantiate the param with the inferred TPs (an alias-args mapper bypasses the plain cache).
+        val instantiated = getTypeFromTypeNodeWithMapper(paramNode, aliasMapper(bindings))
         val instObj = instantiated as? Type.Object ?: return false
         // Contextually type the object literal against the instantiated param (keeps bare-TP literals).
         val savedCtx = contextualType
@@ -131387,9 +131384,7 @@ interface DataView {
             val nm = (pa.name as? Identifier)?.text ?: (pa.name as? StringLiteralNode)?.text ?: return false
             val memberDecl = ifaceProps.firstOrNull { (it.name as? Identifier)?.text == nm } ?: return false
             val instMemberType = memberDecl.type?.let {
-                val sa = currentTypeAliasArgs
-                try { currentTypeAliasArgs = bindings; getTypeFromTypeNode(it) }
-                finally { currentTypeAliasArgs = sa }
+                getTypeFromTypeNodeWithMapper(it, aliasMapper(bindings))
             }
             val ctxIsLiteral = instMemberType is Type.StringLiteral || instMemberType is Type.NumberLiteral ||
                 instMemberType is Type.BigIntLiteral || instMemberType === trueType || instMemberType === falseType
@@ -140520,17 +140515,8 @@ interface DataView {
         }
         // Related — resolve the true branch with the inferred bindings layered onto
         // the alias-arg substitution map (consulted by getTypeFromTypeReference's
-        // bare-name lookup; a non-null map also bypasses the nodeTypes cache → fresh).
-        val saved = currentTypeAliasArgs
-        val merged = HashMap<String, Type>()
-        if (saved != null) merged.putAll(saved)
-        merged.putAll(bindings)
-        currentTypeAliasArgs = merged
-        return try {
-            getTypeFromTypeNode(node.trueType)
-        } finally {
-            currentTypeAliasArgs = saved
-        }
+        // bare-name lookup; a non-null map also bypasses the plain nodeTypes cache).
+        return getTypeFromTypeNodeWithMapper(node.trueType, layeredAliasMapper(bindings))
     }
 
     private fun evaluateConditional(checkType: Type, extendsType: Type, node: ConditionalType): Type {

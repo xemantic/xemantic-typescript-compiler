@@ -20,6 +20,23 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 549c (2026-07-17) — INV.5(b2a): the simple alias-args installer family
+flipped to the explicit mapper bridge.** Survey: only 7 real `currentTypeAliasArgs`
+write sites exist (the other ~84 ambient writes are `currentTypeParamScope`) — 6 are
+simple wrap-one-`getTypeFromTypeNode` installers, 1 is the complex
+getTypeFromTypeReference alias substitution (~93.8k; conditional TP-scope shadow +
+depth counter + objlit stack — deferred to (b2b)). The 6 flipped to
+`getTypeFromTypeNodeWithMapper` via two new helpers `aliasMapper(bindings)`
+(REPLACING shape) / `layeredAliasMapper(bindings)` (merge-onto-ambient shape):
+vmInstantiate (~85.8k), narrowByCallPredicate's predicate-TP bind (~99.8k),
+the TS2345 single-TP missing-member emitter (~131.2k), the overload objlit
+instantiate pair (~131.4k), and tryEvaluateConditionalWithInfer's true-branch
+resolve (~140.5k). Behavior-identical (the bridge installs the same ambient pair;
+one site — the predicate-TP bind — gains a previously-missing try/finally restore
+on throw). Gates: corpus 11,249/0; listAll ×8 error-line identical vs 548a.
+Next: (b2b) the getTypeFromTypeReference alias-substitution flip, then the
+tpScope installer families.
+
 **Re-scope (2026-07-03, owner): the Phase 17 target narrowed from "any TypeScript
 project" to the TypeScript compiler itself.** Rationale: "any project" is asymptotic,
 while the tsc-source profiles are already the dashboard — v1 becomes a measurable
