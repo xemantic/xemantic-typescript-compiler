@@ -20,6 +20,21 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 550b (2026-07-17) — INV.5(b2c'): the getTypeOf* lazies flipped to the
+region mapper.** getTypeOfVariableOrProperty's MethodDeclaration branch,
+getTypeOfFunction, and getTypeOfFunctionExpression converted to
+`withInstantiationContext(scopeMapper(…)) { … }` with pair-destructure results
+(returnType/paramSymbols were definite-assignment-through-try before; the
+fn-expression site's getParameterSymbols call moved INSIDE the region — it ran
+under the installed scope in the legacy form). Gates: corpus 11,252/0;
+listAll ×8 error-line identical vs 548a. tpScope installers remaining:
+the paired pushFunctionTypeParamsScope (needs its pop-sibling callers audited),
+~6 more resolution-internal one-offs (buildBaseConstructorSignatureForSuper,
+buildSignatureForFunctionLikeTypeNode, getTypeFromTypeLiteral,
+reresolveSigParamsUnderClassScope, checkTpListDefaults/checkConstraintsForTypeArgs,
+checkClassPropertyOverrides), and the walker-level installers that die with
+INV.4(e).
+
 **Round 550a (2026-07-17) — INV.5(b2c): the resolution-internal tpScope
 installers flipped to the REGION mapper form.** New `withInstantiationContext
 (mapper) { … }` (inline — regions keep their non-local returns/continues;

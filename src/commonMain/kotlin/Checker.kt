@@ -94630,17 +94630,14 @@ interface DataView {
                             param.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
                             param
                         }
-                        val savedScope = currentTypeParamScope
-                        if (typeParams != null && typeParams.isNotEmpty()) {
+                        val mdScope = if (typeParams != null && typeParams.isNotEmpty()) {
                             val scope = (currentTypeParamScope?.toMutableMap() ?: mutableMapOf())
                             typeParams.forEachIndexed { i, tp ->
                                 scope[md.typeParameters[i].name.text] = tp
                             }
-                            currentTypeParamScope = scope
-                        }
-                        val returnType: Type
-                        val paramSymbols: List<Symbol>
-                        try {
+                            scope
+                        } else currentTypeParamScope
+                        val (returnType, paramSymbols) = withInstantiationContext(scopeMapper(mdScope)) {
                             // Resolve constraints/defaults AFTER scope is set
                             typeParams?.forEachIndexed { i, tp ->
                                 md.typeParameters[i].constraint?.let { tp.constraint = getTypeFromTypeNode(it) }
@@ -94652,19 +94649,18 @@ interface DataView {
                             // Keep the anyType default for no-return / unresolvable bodies — do
                             // NOT infer `void` here (B420: `() => void` vs `() => any` regresses
                             // accessor/override assignability in getAndSetNotIdenticalType2/3 etc.).
-                            returnType = md.type?.let { getTypeFromTypeNode(it) }
+                            val rt = md.type?.let { getTypeFromTypeNode(it) }
                                 ?: md.body?.let { b -> if (bodyHasReturnValue(b)) inferReturnTypeFromBody(b) else null }
                                 ?: anyType
-                            paramSymbols = getParameterSymbols(md.parameters)
-                            for ((pi, param) in paramSymbols.withIndex()) {
+                            val ps = getParameterSymbols(md.parameters)
+                            for ((pi, param) in ps.withIndex()) {
                                 if (pi < md.parameters.size) {
                                     md.parameters[pi].type?.let { typeNode ->
                                         symbolTypes[param.id] = getTypeFromTypeNode(typeNode)
                                     }
                                 }
                             }
-                        } finally {
-                            currentTypeParamScope = savedScope
+                            rt to ps
                         }
                         Signature(
                             declaration = md,
@@ -94758,14 +94754,13 @@ interface DataView {
                     param
                 }
             }
-            val savedScope = currentTypeParamScope
-            if (typeParams != null && typeParams.isNotEmpty()) {
+            val fnScope = if (typeParams != null && typeParams.isNotEmpty()) {
                 val scope = (currentTypeParamScope?.toMutableMap() ?: mutableMapOf())
                 typeParams.forEachIndexed { i, tp ->
                     scope[decl.typeParameters[i].name.text] = tp
                 }
-                currentTypeParamScope = scope
-            }
+                scope
+            } else currentTypeParamScope
             // 17.25: When the function has a body and contains no return statement at all,
             // infer return type as `void`. Mirrors TypeScript's `function f() {}` → `() => void`.
             // Conservative: only when there are zero return statements. Functions with mixed
@@ -94774,9 +94769,7 @@ interface DataView {
             // (number from arithmetic, string from string literal, etc.), use that inferred
             // type. Lets `function f() { return x * 2 }` infer `() => number` so a caller's
             // `f().length` fires TS2339 against the primitive `number`.
-            val returnType: Type
-            val paramSymbols: List<Symbol>
-            try {
+            val (returnType, paramSymbols) = withInstantiationContext(scopeMapper(fnScope)) {
                 // Resolve constraints AFTER scope is set (constraints may reference other type params)
                 // Guard against clobbering already-set constraint/default from another interning site.
                 typeParams?.forEachIndexed { i, tp ->
@@ -94787,12 +94780,12 @@ interface DataView {
                         decl.typeParameters[i].default?.let { tp.default = getTypeFromTypeNode(it) }
                     }
                 }
-                returnType = decl.type?.let { getTypeFromTypeNode(it) }
+                val rt = decl.type?.let { getTypeFromTypeNode(it) }
                     ?: decl.body?.let { if (bodyHasNoReturn(it)) voidType else null }
                     ?: decl.body?.let { inferReturnTypeFromBody(it) }
                     ?: anyType
                 // Resolve parameter types eagerly within the type param scope.
-                paramSymbols = getParameterSymbols(decl.parameters)
+                val ps = getParameterSymbols(decl.parameters)
                 val hasThisParam = (decl.parameters.firstOrNull()?.name as? Identifier)?.text == "this"
                 if (hasThisParam) {
                     // Round 460: getParameterSymbols DROPS the `this` pseudo-parameter,
@@ -94801,7 +94794,7 @@ interface DataView {
                     // MultiMap<K, V>, key: K, value: V)` displayed `key: MultiMap<K, V>,
                     // value: K` → FP TS2322 at `map.add = multiMapAdd`). Resolve each
                     // symbol's type from its OWN valueDeclaration instead.
-                    for (param in paramSymbols) {
+                    for (param in ps) {
                         (param.valueDeclaration as? Parameter)?.type?.let { typeNode ->
                             symbolTypes[param.id] = getTypeFromTypeNode(typeNode)
                         }
@@ -94816,7 +94809,7 @@ interface DataView {
                     // valueDeclaration-based resolution here regressed 19 sites).
                     // Aligning properly means synthesizing placeholder symbols for
                     // pattern params (blast radius) — deferred.
-                    for ((pi, param) in paramSymbols.withIndex()) {
+                    for ((pi, param) in ps.withIndex()) {
                         if (pi < decl.parameters.size) {
                             decl.parameters[pi].type?.let { typeNode ->
                                 symbolTypes[param.id] = getTypeFromTypeNode(typeNode)
@@ -94824,8 +94817,7 @@ interface DataView {
                         }
                     }
                 }
-            } finally {
-                currentTypeParamScope = savedScope
+                rt to ps
             }
             Signature(
                 declaration = decl,
@@ -102294,17 +102286,15 @@ interface DataView {
                 }
             }
         }
-        val savedScope = currentTypeParamScope
-        if (!sigTypeParams.isNullOrEmpty()) {
+        val exprScope = if (!sigTypeParams.isNullOrEmpty()) {
             val scope = (currentTypeParamScope?.toMutableMap() ?: mutableMapOf())
             sigTypeParams.forEachIndexed { i, tp ->
                 scope[expr.typeParameters[i].name.text] = tp
             }
-            currentTypeParamScope = scope
-        }
-        val params = getParameterSymbols(expr.parameters, forSignatureDisplay = true)
-        val returnType: Type
-        try {
+            scope
+        } else currentTypeParamScope
+        val (returnType, params) = withInstantiationContext(scopeMapper(exprScope)) {
+            val ps = getParameterSymbols(expr.parameters, forSignatureDisplay = true)
             sigTypeParams?.forEachIndexed { i, tp ->
                 expr.typeParameters[i].constraint?.let { tp.constraint = getTypeFromTypeNode(it) }
                 expr.typeParameters[i].default?.let { tp.default = getTypeFromTypeNode(it) }
@@ -102313,7 +102303,7 @@ interface DataView {
             // — later `getTypeOfSymbol(p)` calls won't have the scope active.
             // Skip leading `this` pseudo-parameter when mapping symbol index → AST index.
             val thisOffset = if (expr.parameters.firstOrNull()?.let { (it.name as? Identifier)?.text } == "this") 1 else 0
-            for ((pi, param) in params.withIndex()) {
+            for ((pi, param) in ps.withIndex()) {
                 val astIdx = pi + thisOffset
                 if (astIdx < expr.parameters.size) {
                     expr.parameters[astIdx].type?.let { typeNode ->
@@ -102321,13 +102311,12 @@ interface DataView {
                     }
                 }
             }
-            returnType = expr.type?.let { getTypeFromTypeNode(it) }
+            val rt = expr.type?.let { getTypeFromTypeNode(it) }
                 ?: when {
                     !hasReturnWithExpression(expr.body) -> voidType
-                    else -> inferReturnTypeFromFunctionExpressionBody(expr, params) ?: anyType
+                    else -> inferReturnTypeFromFunctionExpressionBody(expr, ps) ?: anyType
                 }
-        } finally {
-            currentTypeParamScope = savedScope
+            rt to ps
         }
         // Apply contextual typing: infer parameter types from contextual call signature
         applyContextualParameterTypes(params, expr.parameters)
