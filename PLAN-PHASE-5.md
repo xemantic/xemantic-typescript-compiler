@@ -2352,6 +2352,19 @@ interrupt the arc).
     identity), which makes resolution order-INSENSITIVE. RE-SEQUENCED:
     work INV.5 next; return to (e) when the caches are order-free. All
     probe edits REVERTED — the tree keeps the legacy giant order.**
+    **SUPERSEDED (rounds 555/556): the 542/543 conclusions above are STALE —
+    the probe/slot-move scripts matched a COMMENT containing
+    `pass("checkSpine")` and inserted the giant ~100 passes early (see the
+    round-555 CLAUDE.md gotcha), so the "coupling chain" / "blocked on
+    INV.5" findings were position artifacts (possibly compounded — the
+    INV.5 (a)/(c)/(d1)/(e) landings since may also have genuinely
+    order-freed some caches). At the CORRECT position, with exactly the two
+    round-543 producers hoisted (landed round 555), ALL THREE giants
+    slot-moved to the spine block corpus-green + listAll-×8-identical
+    (landed round 556; legacy relative order g-cta → g-cpa → g-ccet
+    preserved). g1a/slot-move pre-gates: DONE for all three. NEXT: (g1b)
+    the ~50-pin batch for checkPropertyAccess per the sub-plan above
+    (pre-verified on the OLD walker), then (g1c) its migration.**
   - [ ] **INV.4(f) The two unlocked soundness wins.** Once one authoritative
     walk state exists: the per-node expression-type cache (594,779 calls over
     ~221,844 distinct nodes = ×2.6 recompute), and flow narrowing folded into
