@@ -2232,6 +2232,19 @@ interrupt the arc).
     making the fields order-free; the 8 lazy setters become no-ops
     (already-set guards) and eventually delete. Acceptance: the two probe
     tests + full gates.**
+    **(c2) HYPOTHESIS FALSIFIED (round 549b, attempt REVERTED): a minimal
+    eager top-level TP materialization (constraint+default fields filled at
+    a fixed init point) did NOT dissolve the probe failure — the coupling's
+    mechanism is the EFFECTIVE-default-via-constraint computation inside
+    reference instantiation (the probe test's own name:
+    typeArgumentDefaultUsesConstraintOnCircularDefault — tsc substitutes
+    the CONSTRAINT when the default is circular), i.e. resolution-path
+    state beyond the raw fields. Next root-cause step: instrument WHAT
+    the legacy checkTpListDefaults slot changes that the later TS2353
+    display consumes (candidate: the referenceCache entry for Test<any>
+    minted during its constraint-relation checks, which the annotation
+    resolution then reuses vs mints bare). Deferred behind (b2+)/other
+    INV.5 work — the display-only coupling is cosmetic, not semantic.**
   - [ ] **INV.5(b) Explicit mapper objects.** Replace the ambient
     `currentTypeAliasArgs`/`currentTypeParamScope` instantiation contexts
     with an explicit mapper threaded through the resolution entry points —
