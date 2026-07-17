@@ -752,11 +752,72 @@ class Checker(
      *  varTypes copies, the inference-namespace pushes). The legacy arm keeps
      *  running for its own maps' state evolution but truncates its duplicate
      *  diagnostics. */
+    /** (cta-m3d): a statement is fn-body-anchored when its parent is the BODY
+     *  Block of a FunctionDeclaration and the whole ancestor chain up to the
+     *  SourceFile consists only of statement-list positions the MARKED legacy
+     *  dispatcher (checkTypeAssignabilityInStatements) walks with threading the
+     *  anchor reproduces: fn-body Blocks of FunctionDeclarations, ModuleBlock/
+     *  ModuleDeclaration chains, and the SourceFile. Classes, arrows/fn-exprs,
+     *  methods/accessors/ctors, and statement-position blocks (if/loop/try
+     *  nesting) all DISQUALIFY — those run through dispatch paths
+     *  (checkTypeAssignabilityInStmt / member walks / walkFunctionBodiesInExpr)
+     *  whose ambient the anchor does not reproduce. Shared by the spine
+     *  dispatch gate AND the legacy truncation marks — gate identity by
+     *  construction. */
+    private fun ctaM3FnBodyAnchorScope(stmt: Node): Block? {
+        val block = (stmt as NodeBase).parent as? Block ?: return null
+        val fn = (block as NodeBase).parent as? FunctionDeclaration ?: return null
+        if (!ctaM3SimpleBody(block)) return null
+        var cur: Node? = (fn as NodeBase).parent
+        while (cur != null) {
+            when (cur) {
+                is SourceFile -> return block
+                is ModuleBlock, is ModuleDeclaration -> cur = (cur as NodeBase).parent
+                is Block -> {
+                    val p = (cur as NodeBase).parent as? FunctionDeclaration ?: return null
+                    if (!ctaM3SimpleBody(cur)) return null
+                    cur = (p as NodeBase).parent
+                }
+                else -> return null
+            }
+        }
+        return null
+    }
+
+    /** (cta-m3d): a fn body is anchor-SIMPLE when its direct statement list
+     *  contains only anchored kinds + nested fn decls. The legacy walk's
+     *  nested-scope dispatches (switch clauses / if branches / loop and try
+     *  bodies) RECORD into the shared currentLocalTypes (the load-bearing
+     *  leak) — the spine frames have no reproduction of those recordings, so
+     *  a fn body containing any such statement would hand a later anchored
+     *  statement an INCOMPLETE localTypes map (the barrel switch-clause
+     *  `importLiteral` recording, round-570 repro). Lifting this requires
+     *  spine-side reproduction of the nested-dispatch recording order. */
+    private fun ctaM3SimpleBody(block: Block): Boolean = block.statements.all {
+        it is VariableStatement || it is ExpressionStatement ||
+            it is ReturnStatement || it is FunctionDeclaration
+    }
+
     private fun ctaM3StmtAnchor(stmt: Statement, scopeStatements: List<Statement>) {
         val frame = ctaFrames.last()
         val sFG = currentFlowGraph
         val sSS = currentScopeStatements
         val sCFN = currentCheckFileName
+        // (cta-m3d): the checkFunctionBody ambient, reproduced from the frame —
+        // byte-neutral at top-level/namespace scope (frame flags false, decls
+        // null → emptyMap = the legacy initial values; currentClassForThis is
+        // null both at legacy top-level time and inside a free function, the
+        // legacy FunctionDeclaration arm's B101 clear).
+        val sThis = currentClassForThis
+        val sInFn = inNonArrowFunctionBody
+        val sAsync = inAsyncFunctionBody
+        val sGen = inGeneratorFunctionBody
+        val sTpDecls = currentTypeParamDecls
+        currentClassForThis = null
+        inNonArrowFunctionBody = frame.inFn
+        inAsyncFunctionBody = frame.inAsync
+        inGeneratorFunctionBody = frame.inGen
+        currentTypeParamDecls = frame.fnTpDecls ?: emptyMap()
         currentCheckFileName = spineFileName
         currentFlowGraph = ctaM3FlowGraph
         currentScopeStatements = scopeStatements
@@ -776,14 +837,14 @@ class Checker(
                             if (stmt.declarationList.flags == SyntaxKind.ConstKeyword) {
                                 registerConstLiteralUnionNarrowing(decl)
                             }
-                            checkVarDeclAssignability(decl, spineSource, spineFileName, frame.varTypes, emptySet())
+                            checkVarDeclAssignability(decl, spineSource, spineFileName, frame.varTypes, frame.typeParams)
                             decl.initializer?.let {
                                 val ctxFn = contextualizeFnExprFromAnnotation(decl.type, it)
-                                walkFunctionBodiesInExpr(ctxFn ?: it, spineSource, spineFileName, frame.varTypes, emptySet())
+                                walkFunctionBodiesInExpr(ctxFn ?: it, spineSource, spineFileName, frame.varTypes, frame.typeParams)
                             }
                             val init = decl.initializer
                             if (init is BinaryExpression && init.operator == SyntaxKind.Equals) {
-                                checkAssignmentExpression(init, spineSource, spineFileName, frame.varTypes, emptySet())
+                                checkAssignmentExpression(init, spineSource, spineFileName, frame.varTypes, frame.typeParams)
                             }
                         }
                     }
@@ -809,6 +870,11 @@ class Checker(
             currentFlowGraph = sFG
             currentScopeStatements = sSS
             currentCheckFileName = sCFN
+            currentClassForThis = sThis
+            inNonArrowFunctionBody = sInFn
+            inAsyncFunctionBody = sAsync
+            inGeneratorFunctionBody = sGen
+            currentTypeParamDecls = sTpDecls
         }
     }
 
@@ -860,6 +926,19 @@ class Checker(
         // never registered, so no verdict depends on constraint presence).
         // Acceptance probe: harness listAll stays at the no-FP floor.
         if (viaCheckFunctionBody && body is Block) {
+            // (cta-m3d): the legacy checkFunctionBody for a fn nested in
+            // namespaces runs UNDER the ModuleDeclaration arms' inference-
+            // namespace pushes — the sandwich must too, or the round-461
+            // nameInEnclosingNamespaceExports consult in
+            // shadowNestedFunctionNames silently finds nothing and the frame's
+            // shadow state diverges (the namespace-export shadow FP).
+            var sandwichNsPushed = 0
+            for (f in ctaFrames) {
+                val s = f.nsSymbol ?: continue
+                inferenceNamespaceStack.addLast(s)
+                sandwichNsPushed++
+            }
+            try {
             val paramNames = parameters.mapNotNull { p -> (p.name as? Identifier)?.text }.toSet()
             withCtaFrameLocals(frame) {
                 applyBodyLocalShadowing(body.statements, paramNames)
@@ -898,6 +977,9 @@ class Checker(
                 withInstantiationContext(scopeMapper(fnScope)) {
                     ctaTypeParamsIntoLocals(parameters, frame.varTypes)
                 }
+            }
+            } finally {
+                repeat(sandwichNsPushed) { inferenceNamespaceStack.removeLast() }
             }
         } else {
             for (param in parameters) {
@@ -18564,6 +18646,11 @@ class Checker(
             when (val p = (node as NodeBase).parent) {
                 is SourceFile -> ctaM3StmtAnchor(node as Statement, p.statements)
                 is ModuleBlock -> ctaM3StmtAnchor(node as Statement, p.statements)
+                // (cta-m3d): fn-body-DIRECT statements of eligible
+                // FunctionDeclaration chains (see ctaM3FnBodyAnchorScope).
+                is Block -> if (ctaM3FnBodyAnchorScope(node) != null) {
+                    ctaM3StmtAnchor(node as Statement, p.statements)
+                }
                 else -> {}
             }
         }
@@ -83040,7 +83127,7 @@ interface DataView {
                     // moved to the spine anchor — this arm still runs for its maps'
                     // interleaved state evolution but truncates the duplicates.
                     val ctaM3Parent = (stmt as NodeBase).parent
-                    val ctaM3EmitMark = if (ctaM3Parent is SourceFile || ctaM3Parent is ModuleBlock) diagnostics.size else -1
+                    val ctaM3EmitMark = if (ctaM3Parent is SourceFile || ctaM3Parent is ModuleBlock || ctaM3FnBodyAnchorScope(stmt) != null) diagnostics.size else -1
                     for (decl in stmt.declarationList.declarations) {
                         if (stmt.declarationList.flags == SyntaxKind.ConstKeyword) {
                             registerConstLiteralUnionNarrowing(decl)
@@ -83069,7 +83156,7 @@ interface DataView {
                 }
                 is ExpressionStatement -> {
                     val ctaM3P = (stmt as NodeBase).parent
-                    val ctaM3Mark = if (ctaM3P is SourceFile || ctaM3P is ModuleBlock) diagnostics.size else -1
+                    val ctaM3Mark = if (ctaM3P is SourceFile || ctaM3P is ModuleBlock || ctaM3FnBodyAnchorScope(stmt) != null) diagnostics.size else -1
                     checkAssignmentExpression(stmt.expression, source, fileName, varTypes, typeParams)
                     walkFunctionBodiesInExpr(stmt.expression, source, fileName, varTypes, typeParams)
                     if (ctaM3Mark >= 0) {
@@ -83078,7 +83165,7 @@ interface DataView {
                 }
                 is ReturnStatement -> {
                     val ctaM3P = (stmt as NodeBase).parent
-                    val ctaM3Mark = if (ctaM3P is SourceFile || ctaM3P is ModuleBlock) diagnostics.size else -1
+                    val ctaM3Mark = if (ctaM3P is SourceFile || ctaM3P is ModuleBlock || ctaM3FnBodyAnchorScope(stmt) != null) diagnostics.size else -1
                     if (returnType != null || returnTypeNode != null) {
                         checkReturnAssignability(stmt, returnType ?: "", source, fileName, varTypes, typeParams, returnTypeNode)
                     }

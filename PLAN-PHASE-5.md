@@ -45,10 +45,32 @@ error-line IDENTICAL vs the round-570 baseline; corpus 11,310/0. The cta
 fn-body tier is UNBLOCKED — production fn frames carry real context
 (fnTpScope/fnTpDecls + typed varTypes/localTypes), so the m3 statement
 anchor can extend into function bodies. The +~4% frame-construction cost
-stands; the lazy/copy-on-write follow-up stays queued (round 568c). NEXT:
-(cta-m3d) extend `ctaM3StmtAnchor` to fn-body-direct statements
-(VariableStatement first), emit-twice-suppress-legacy per the m3a
-template.
+stands; the lazy/copy-on-write follow-up stays queued (round 568c).
+**Round 570c — (cta-m3d) LANDED: SIMPLE fn-body statement emissions join
+the spine anchor.** Fn-body-DIRECT VariableStatement/ExpressionStatement/
+ReturnStatement emissions of eligible FunctionDeclaration chains dispatch
+from the anchor; the legacy marks extend via the SHARED predicate
+`ctaM3FnBodyAnchorScope` (gate identity by construction). The corpus gate
+caught THREE drifts on the first attempt, each a lesson: (1) the anchor's
+VariableStatement arm threaded `emptySet()` typeParams (m3a artifact) —
+the fn's own TPs read as FOREIGN and the round-431e gate bailed genuine
+TS2322s (Inv5GenericGateTest); (2) the m3c sandwich ran with an EMPTY
+inferenceNamespaceStack — shadowNestedFunctionNames' round-461 ns-exports
+consult diverged the frame shadow state (m3c didn't notice because
+nothing CONSUMED the frames); (3) the STRUCTURAL one: legacy nested-scope
+dispatches (switch clauses/if branches/loop-try bodies) RECORD into the
+shared currentLocalTypes (the load-bearing leak) and the spine frames
+have NO reproduction — a later anchored statement reads an INCOMPLETE map
+(BarrelCheckDefinedReturnTest: the switch-clause `importLiteral`
+recording feeding `end = importLiteral.end`'s member reduction). Hence
+the anchor-SIMPLE rule: every fn body on the chain restricted to
+{Var/Expr/Return/FunctionDeclaration} statements. Lifting it = the next
+tier's work item: reproduce the nested-dispatch localTypes recording
+order spine-side (or migrate the nested dispatchers themselves). Pinned
+by CtaFnBodyAnchorTest (exactly-once across anchored + legacy-owned
+chains). Gates: corpus 11,316/0; listAll ×8 identical vs m3c. NEXT:
+either the nested-scope recording reproduction (lifts anchor-SIMPLE) or
+the remaining stmt kinds arm-by-arm at eligible scopes.
 
 **Round 569 (2026-07-17) — the fourslashImpl constraint delta ROOT-CAUSED
 (probe-verified, probe reverted): the sandwich resolves T's constraint
