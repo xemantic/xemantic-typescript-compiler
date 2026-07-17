@@ -20,6 +20,30 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 566 (2026-07-17) — (cta-m3a) LANDED: the FIRST cta emissions run
+from the spine.** Top-level AND namespace-body VariableStatement emissions
+(checkVarDeclAssignability + registerConstLiteralUnionNarrowing + the
+B183-contextualized walkFunctionBodiesInExpr descent + the B127 inner-
+assignment check) dispatch from a spine anchor under a per-dispatch install
+of the TOP FRAME's context; the legacy arm keeps running for its maps'
+interleaved state evolution but truncates its duplicate diagnostics
+(emit-twice-suppress-legacy); the TS2322-family post-filter window now
+opens at spine entry. Frames are ALWAYS-ON (the fn-body sandwich + audit
+fingerprints stay flag-gated; production fn-frames are cheap markers).
+The root-cause chain that got here (all probe-driven, one iteration each):
+(1) the first attempt failed 11,307/1 on qualify — twin ambient-dump
+marker diagnostics attributed it to lt=1-vs-9: the legacy leaf's verdict
+depends on NAMESPACE-LEAKED currentLocalTypes recordings (qualify's
+namespace `var x` reaches the shared map first → the first-decl-wins bail
+is LOAD-BEARING); (2) checkSpine's loop sets currentFileLocals but NOT
+currentCheckFileName — the anchor installs it (a trap for EVERY future
+emission move); (3) the fix = extending the anchor scope to ModuleBlock
+statements with the frames' exact structure (shared localTypes, copied
+varTypes, nsSymbol pushes reproduced from the frame chain). Gates: corpus
+11,307/0, listAll ×8 error-line identical vs 548a. NEXT: (cta-m3b) the
+ExpressionStatement + ReturnStatement top-level/namespace arms (same
+pattern), then descend scope-by-scope.
+
 **Round 566 design — (cta-m3a): the VariableStatement emission move, scoped
 to DIRECT SourceFile children first (minimal ambient surface).** At a
 top-level VariableStatement's spine enter (non-dts files): install

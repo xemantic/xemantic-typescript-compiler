@@ -719,6 +719,9 @@ class Checker(
         val inAsync: Boolean,
         val inGen: Boolean,
         val inInstanceMember: Boolean,
+        /** the legacy ModuleDeclaration arm's inferenceNamespaceStack push for
+         *  this body, reproduced by the anchor's install (null = no push). */
+        val nsSymbol: Symbol? = null,
         // (cta-m2d) part 2: the currentLocalTypes family — maintained via the
         // SANDWICH pattern (the frame's maps are installed into the ambient
         // fields, the SAME legacy helpers run against them, then the ambient
@@ -734,6 +737,56 @@ class Checker(
         ctaFrames.clear()
         ctaFrames.addLast(CtaFrame(sf, mutableMapOf(), null, null, emptySet(),
             inFn = false, inAsync = false, inGen = false, inInstanceMember = false))
+    }
+
+    private var ctaM3FlowGraph: FlowGraph? = null
+
+    /** (cta-m3a): the top-level + namespace-body VariableStatement emission —
+     *  the legacy arm's leaf calls run from the spine under a per-dispatch
+     *  install of the TOP FRAME's context (the frames reproduce the legacy
+     *  scoping: shared localTypes with the namespace leak, per-namespace
+     *  varTypes copies, the inference-namespace pushes). The legacy arm keeps
+     *  running for its own maps' state evolution but truncates its duplicate
+     *  diagnostics. */
+    private fun ctaM3VarStmtAnchor(stmt: VariableStatement, scopeStatements: List<Statement>) {
+        val frame = ctaFrames.last()
+        val sFG = currentFlowGraph
+        val sSS = currentScopeStatements
+        val sCFN = currentCheckFileName
+        currentCheckFileName = spineFileName
+        currentFlowGraph = ctaM3FlowGraph
+        currentScopeStatements = scopeStatements
+        // the legacy ModuleDeclaration arms' inference-namespace pushes,
+        // reproduced from the frame chain (outer→inner).
+        var nsPushed = 0
+        for (f in ctaFrames) {
+            val s = f.nsSymbol ?: continue
+            inferenceNamespaceStack.addLast(s)
+            nsPushed++
+        }
+        try {
+            withCtaFrameLocals(frame) {
+                for (decl in stmt.declarationList.declarations) {
+                    if (stmt.declarationList.flags == SyntaxKind.ConstKeyword) {
+                        registerConstLiteralUnionNarrowing(decl)
+                    }
+                    checkVarDeclAssignability(decl, spineSource, spineFileName, frame.varTypes, emptySet())
+                    decl.initializer?.let {
+                        val ctxFn = contextualizeFnExprFromAnnotation(decl.type, it)
+                        walkFunctionBodiesInExpr(ctxFn ?: it, spineSource, spineFileName, frame.varTypes, emptySet())
+                    }
+                    val init = decl.initializer
+                    if (init is BinaryExpression && init.operator == SyntaxKind.Equals) {
+                        checkAssignmentExpression(init, spineSource, spineFileName, frame.varTypes, emptySet())
+                    }
+                }
+            }
+        } finally {
+            repeat(nsPushed) { inferenceNamespaceStack.removeLast() }
+            currentFlowGraph = sFG
+            currentScopeStatements = sSS
+            currentCheckFileName = sCFN
+        }
     }
 
     /** (cta-m2d) part 2: install [frame]'s localTypes-family maps into the
@@ -777,7 +830,7 @@ class Checker(
         frame.localTypes.putAll(base.localTypes)
         frame.localDeclNodes.putAll(base.localDeclNodes)
         frame.shadowedNames.addAll(base.shadowedNames)
-        if (viaCheckFunctionBody && body is Block) {
+        if (viaCheckFunctionBody && body is Block && ctaAuditEnabled) {
             val paramNames = parameters.mapNotNull { p -> (p.name as? Identifier)?.text }.toSet()
             withCtaFrameLocals(frame) {
                 applyBodyLocalShadowing(body.statements, paramNames)
@@ -875,19 +928,31 @@ class Checker(
                     ctaFrames.addLast(CtaFrame(node, top.varTypes.toMutableMap(),
                         top.returnType, top.returnTypeNode, top.typeParams,
                         top.inFn, top.inAsync, top.inGen, top.inInstanceMember,
-                        top.localTypes, top.localDeclNodes, top.shadowedNames, top.ambiguousNames))
+                        localTypes = top.localTypes, localDeclNodes = top.localDeclNodes,
+                        shadowedNames = top.shadowedNames, ambiguousNames = top.ambiguousNames))
                 }
             }
         }
         // ModuleBlock: the legacy namespace arm walks the body with a varTypes
         // COPY and RESETS returnType/returnTypeNode/typeParams (returnType =
         // null, emptySet; the node param is not threaded). Body flags stay.
+        // The arm also pushes the namespace SYMBOL onto inferenceNamespaceStack
+        // (Identifier-named; resolved via file locals ?: globals) — recorded on
+        // the frame for the anchors' install.
         if (node is ModuleBlock) {
             val top = ctaFrames.last()
+            val md = parent as? ModuleDeclaration
+            val nameNode = md?.name
+            val moduleSymbol = if (nameNode is Identifier) {
+                currentFileLocals?.get(nameNode.text) ?: globals[nameNode.text]
+            } else null
+            val pushSym = if (moduleSymbol != null && moduleSymbol.flags.hasAny(SymbolFlags.Module)) moduleSymbol else null
             ctaFrames.addLast(CtaFrame(node, top.varTypes.toMutableMap(),
                 null, null, emptySet(),
                 top.inFn, top.inAsync, top.inGen, top.inInstanceMember,
-                top.localTypes, top.localDeclNodes, top.shadowedNames, top.ambiguousNames))
+                nsSymbol = pushSym,
+                localTypes = top.localTypes, localDeclNodes = top.localDeclNodes,
+                shadowedNames = top.shadowedNames, ambiguousNames = top.ambiguousNames))
         }
         // Switch clauses: per-clause varTypes copies (returnType/typeParams
         // threaded through unchanged).
@@ -896,7 +961,8 @@ class Checker(
             ctaFrames.addLast(CtaFrame(node, top.varTypes.toMutableMap(),
                 top.returnType, top.returnTypeNode, top.typeParams,
                 top.inFn, top.inAsync, top.inGen, top.inInstanceMember,
-                top.localTypes, top.localDeclNodes, top.shadowedNames, top.ambiguousNames))
+                localTypes = top.localTypes, localDeclNodes = top.localDeclNodes,
+                shadowedNames = top.shadowedNames, ambiguousNames = top.ambiguousNames))
         }
         // The legacy walk's ORDERED varTypes recording: an ANNOTATED
         // Identifier declaration records its annotation string as
@@ -922,7 +988,7 @@ class Checker(
         }
         // Fingerprint every statement at its enter (spine-extra keys are
         // ignored by the audit diff; only legacy-recorded keys must agree).
-        if (!spineIsDts && node is Statement && node.nodeId >= 0) {
+        if (ctaAuditEnabled && !spineIsDts && node is Statement && node.nodeId >= 0) {
             val f = ctaFrames.last()
             val vt = f.varTypes.entries.sortedBy { it.key }.joinToString(",") { "${it.key}=${it.value}" }
             val tp = f.typeParams.sorted().joinToString(",")
@@ -18284,6 +18350,9 @@ class Checker(
         // rebuild starts from the PRE-SPINE resting bases.
         spineCaRestingLocalTypes = currentLocalTypes
         spineCaRestingParamBindings = currentParamBindingNames
+        // (cta-m3a): the TS2322-family post-filter window opens at SPINE entry
+        // so the anchor-moved emissions sit inside it.
+        ctaDiagnosticsBefore = diagnostics.size
         val savedLocals = currentFileLocals
         try {
             for (result in binderResults) {
@@ -18294,7 +18363,9 @@ class Checker(
                 spineIsJsLike = spineFileName.endsWith(".js") || spineFileName.endsWith(".jsx") ||
                     spineFileName.endsWith(".mjs") || spineFileName.endsWith(".cjs")
                 spineFileIsModule = isModuleFile(sf.statements)
-                if (ctaAuditEnabled) ctaSpineFileReset(sf)
+                // (cta-m3a): frames always-on — the anchors consume them.
+                ctaSpineFileReset(sf)
+                ctaM3FlowGraph = result.flowGraph
                 // Batch 14 per-file strict-mode flags (the deleted
                 // checkStrictModeReservedWords preamble, verbatim): binding
                 // strictness uses effectiveTarget, EXPRESSION strictness the
@@ -18453,7 +18524,14 @@ class Checker(
 
     /** Per-node dispatch, preorder position (before children). */
     private fun spineEnterNode(node: Node) {
-        if (ctaAuditEnabled) ctaSpineEnter(node)
+        ctaSpineEnter(node)
+        if (node is VariableStatement && !spineIsDts) {
+            when (val p = (node as NodeBase).parent) {
+                is SourceFile -> ctaM3VarStmtAnchor(node, p.statements)
+                is ModuleBlock -> ctaM3VarStmtAnchor(node, p.statements)
+                else -> {}
+            }
+        }
         // INV.4(d) walker 2: edge-triggered scope frames + enter-position
         // emissions for the arithmetic pass (must precede the kind dispatch —
         // a node's own frames nest inside its parent-edge frames).
@@ -18646,7 +18724,7 @@ class Checker(
 
     /** Per-node dispatch, postorder position (after all children). */
     private fun spineLeaveNode(node: Node) {
-        if (ctaAuditEnabled) ctaSpineLeave(node)
+        ctaSpineLeave(node)
         // INV.4(d) walker 2: leave-position emissions (left-spine chain roots,
         // per-declarator recordings) + this node's frame pops.
         if (spineArithActive) spineArithLeaveNode(node)
@@ -82832,7 +82910,6 @@ interface DataView {
     }
 
     private fun checkTypeAssignability() {
-        ctaDiagnosticsBefore = diagnostics.size
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
@@ -82924,6 +83001,11 @@ interface DataView {
             ctaAuditRecord(stmt, varTypes, returnType, typeParams, returnTypeNode)
             when (stmt) {
                 is VariableStatement -> {
+                    // (cta-m3a): a top-level/namespace-body statement's emissions
+                    // moved to the spine anchor — this arm still runs for its maps'
+                    // interleaved state evolution but truncates the duplicates.
+                    val ctaM3Parent = (stmt as NodeBase).parent
+                    val ctaM3EmitMark = if (ctaM3Parent is SourceFile || ctaM3Parent is ModuleBlock) diagnostics.size else -1
                     for (decl in stmt.declarationList.declarations) {
                         if (stmt.declarationList.flags == SyntaxKind.ConstKeyword) {
                             registerConstLiteralUnionNarrowing(decl)
@@ -82945,6 +83027,9 @@ interface DataView {
                         if (init is BinaryExpression && init.operator == SyntaxKind.Equals) {
                             checkAssignmentExpression(init, source, fileName, varTypes, typeParams)
                         }
+                    }
+                    if (ctaM3EmitMark >= 0) {
+                        while (diagnostics.size > ctaM3EmitMark) diagnostics.removeAt(diagnostics.size - 1)
                     }
                 }
                 is ExpressionStatement -> {
