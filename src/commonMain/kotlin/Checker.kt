@@ -91922,9 +91922,7 @@ interface DataView {
             val name = tp.symbol?.name ?: continue
             scope[name] = tp
         }
-        val saved = currentTypeParamScope
-        currentTypeParamScope = scope
-        return try {
+        return withInstantiationContext(scopeMapper(scope)) {
             val mapper = createTypeMapper(typeParams, typeArgs)
             when (decl) {
                 is PropertyDeclaration -> {
@@ -91976,15 +91974,14 @@ interface DataView {
                                 tp.symbol = Symbol(SymbolFlags.TypeParameter, tpDecl.name.text)
                             }
                         }
-                        val savedMethodScope = currentTypeParamScope
-                        if (!methodTypeParams.isNullOrEmpty()) {
-                            val methodScope = (currentTypeParamScope?.toMutableMap() ?: mutableMapOf())
+                        val methodScope = if (!methodTypeParams.isNullOrEmpty()) {
+                            val ms = (currentTypeParamScope?.toMutableMap() ?: mutableMapOf())
                             methodTypeParams.forEachIndexed { i, tp ->
-                                methodScope[md.typeParameters[i].name.text] = tp
+                                ms[md.typeParameters[i].name.text] = tp
                             }
-                            currentTypeParamScope = methodScope
-                        }
-                        try {
+                            ms
+                        } else currentTypeParamScope
+                        withInstantiationContext(scopeMapper(methodScope)) {
                             methodTypeParams?.forEachIndexed { i, tp ->
                                 val tpDecl = md.typeParameters[i]
                                 tpDecl.constraint?.let { cNode ->
@@ -92046,8 +92043,6 @@ interface DataView {
                                     !it.questionToken && !it.dotDotDotToken && it.initializer == null
                                 },
                             )
-                        } finally {
-                            currentTypeParamScope = savedMethodScope
                         }
                     }
                     val fnType = Type.Object()
@@ -92057,8 +92052,6 @@ interface DataView {
                 }
                 else -> null
             }
-        } finally {
-            currentTypeParamScope = saved
         }
     }
 
@@ -93069,23 +93062,40 @@ interface DataView {
         aliasMapper((currentTypeAliasArgs ?: emptyMap()) + bindings)
 
     /**
-     * INV.5(b1): resolve [node] under an EXPLICIT [mapper] — installs the
-     * mapper's contexts around the ambient-reading resolution core (identical
-     * to the legacy hand-rolled save-set-restore installers; the recursion
-     * still reads the ambient until (b) completes the threading).
+     * INV.5(b2c): the ambient context with [tpScope] REPLACING the
+     * type-param scope (callers layer onto the ambient themselves when
+     * needed — the historical installer shape).
      */
-    private fun getTypeFromTypeNodeWithMapper(node: TypeNode, mapper: InstantiationMapper): Type {
+    private fun scopeMapper(tpScope: Map<String, Type.TypeParam>?): InstantiationMapper =
+        InstantiationMapper(currentTypeAliasArgs, tpScope, inferenceNamespaceStack.size)
+
+    /**
+     * INV.5(b2c): run [block] under an explicit instantiation context — the
+     * REGION form of [getTypeFromTypeNodeWithMapper] for installers that wrap
+     * multiple resolution calls. Inline so regions keep their non-local
+     * returns/continues; the finally restores on every exit path.
+     */
+    private inline fun <R> withInstantiationContext(mapper: InstantiationMapper, block: () -> R): R {
         val savedArgs = currentTypeAliasArgs
         val savedScope = currentTypeParamScope
         currentTypeAliasArgs = mapper.aliasArgs
         currentTypeParamScope = mapper.tpScope
         try {
-            return getTypeFromTypeNode(node)
+            return block()
         } finally {
             currentTypeAliasArgs = savedArgs
             currentTypeParamScope = savedScope
         }
     }
+
+    /**
+     * INV.5(b1): resolve [node] under an EXPLICIT [mapper] — installs the
+     * mapper's contexts around the ambient-reading resolution core (identical
+     * to the legacy hand-rolled save-set-restore installers; the recursion
+     * still reads the ambient until (b) completes the threading).
+     */
+    private fun getTypeFromTypeNodeWithMapper(node: TypeNode, mapper: InstantiationMapper): Type =
+        withInstantiationContext(mapper) { getTypeFromTypeNode(node) }
 
     private fun getTypeFromTypeNode(node: TypeNode): Type {
         // Rounds 473/513: a reference to a type name declared in ≥2 module files
@@ -94099,15 +94109,14 @@ interface DataView {
      *  Called lazily from resolveInterfaceMembers. */
     private fun resolveBaseTypesLazy(type: Type.Interface) {
         val symbol = type.symbol ?: return
-        val savedScope = currentTypeParamScope
         val tps = type.typeParameters
-        if (!tps.isNullOrEmpty()) {
+        val baseScope = if (!tps.isNullOrEmpty()) {
             val scope = mutableMapOf<String, Type.TypeParam>()
-            savedScope?.let { scope.putAll(it) }
+            currentTypeParamScope?.let { scope.putAll(it) }
             for (tp in tps) tp.symbol?.name?.let { scope[it] = tp }
-            currentTypeParamScope = scope
-        }
-        try {
+            scope
+        } else currentTypeParamScope
+        withInstantiationContext(scopeMapper(baseScope)) {
             val baseTypes = mutableListOf<Type>()
             for (d in symbol.declarations) {
                 val heritageClauses = when (d) {
@@ -94132,8 +94141,6 @@ interface DataView {
                 }
             }
             if (baseTypes.isNotEmpty()) type.baseTypes = baseTypes
-        } finally {
-            currentTypeParamScope = savedScope
         }
     }
 
@@ -95127,40 +95134,36 @@ interface DataView {
                             // Mirrors the named-method branch in `getTypeOfSymbolWorker`
                             // (line ~38876), but uses the enclosing interface's TPs since
                             // call/construct sigs don't declare their own typeParameters.
-                            val savedSigScope = currentTypeParamScope
                             val ifaceTps = type.typeParameters
                             val sigOwnTps = member.typeParameters?.map { tp ->
                                 val tpType = Type.TypeParam()
                                 tpType.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
                                 tpType
                             }
-                            if (!ifaceTps.isNullOrEmpty() || !sigOwnTps.isNullOrEmpty()) {
-                                val scope = (savedSigScope?.toMutableMap() ?: mutableMapOf())
+                            val sigScope = if (!ifaceTps.isNullOrEmpty() || !sigOwnTps.isNullOrEmpty()) {
+                                val scope = (currentTypeParamScope?.toMutableMap() ?: mutableMapOf())
                                 ifaceTps?.forEach { tp -> tp.symbol?.name?.let { scope[it] = tp } }
                                 sigOwnTps?.forEachIndexed { i, tp ->
                                     scope[member.typeParameters[i].name.text] = tp
                                 }
-                                currentTypeParamScope = scope
-                            }
-                            val returnType: Type
-                            val paramSymbols: List<Symbol>
-                            try {
+                                scope
+                            } else currentTypeParamScope
+                            val (returnType, paramSymbols) = withInstantiationContext(scopeMapper(sigScope)) {
                                 // Resolve sig-own TP constraints/defaults under combined scope
                                 sigOwnTps?.forEachIndexed { i, tp ->
                                     member.typeParameters[i].constraint?.let { tp.constraint = getTypeFromTypeNode(it) }
                                     member.typeParameters[i].default?.let { tp.default = getTypeFromTypeNode(it) }
                                 }
-                                returnType = member.type?.let { getTypeFromTypeNode(it) } ?: anyType
-                                paramSymbols = getParameterSymbols(member.parameters)
-                                for ((pi, param) in paramSymbols.withIndex()) {
+                                val rt = member.type?.let { getTypeFromTypeNode(it) } ?: anyType
+                                val ps = getParameterSymbols(member.parameters)
+                                for ((pi, param) in ps.withIndex()) {
                                     if (pi < member.parameters.size) {
                                         member.parameters[pi].type?.let { typeNode ->
                                             symbolTypes[param.id] = getTypeFromTypeNode(typeNode)
                                         }
                                     }
                                 }
-                            } finally {
-                                currentTypeParamScope = savedSigScope
+                                rt to ps
                             }
                             val newSig = Signature(
                                 declaration = member,
@@ -95269,21 +95272,18 @@ interface DataView {
                         // 16.0n: Push this interface's type parameters into scope so that
                         // `[n: number]: T` resolves T to our TypeParam (allowing later
                         // instantiation via the reference mapper).
-                        val savedIdxScope = currentTypeParamScope
                         val idxTps = type.typeParameters
-                        if (!idxTps.isNullOrEmpty()) {
+                        val idxScope = if (!idxTps.isNullOrEmpty()) {
                             val scope = mutableMapOf<String, Type.TypeParam>()
-                            savedIdxScope?.let { scope.putAll(it) }
+                            currentTypeParamScope?.let { scope.putAll(it) }
                             for (tp in idxTps) tp.symbol?.name?.let { scope[it] = tp }
-                            currentTypeParamScope = scope
-                        }
-                        val (keyType, valueType) = try {
+                            scope
+                        } else currentTypeParamScope
+                        val (keyType, valueType) = withInstantiationContext(scopeMapper(idxScope)) {
                             val keyParam = member.parameters.firstOrNull()
                             val kt = keyParam?.type?.let { getTypeFromTypeNode(it) } ?: stringType
                             val vt = member.type?.let { getTypeFromTypeNode(it) } ?: anyType
                             kt to vt
-                        } finally {
-                            currentTypeParamScope = savedIdxScope
                         }
                         val info = IndexInfo(keyType, valueType, member.modifiers.contains(ModifierFlag.Readonly), member)
                         if (keyType === numberType) {

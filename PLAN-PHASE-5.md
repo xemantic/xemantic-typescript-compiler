@@ -20,6 +20,27 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 550a (2026-07-17) — INV.5(b2c): the resolution-internal tpScope
+installers flipped to the REGION mapper form.** New `withInstantiationContext
+(mapper) { … }` (inline — regions keep their non-local returns/continues;
+installs BOTH mapper contexts, finally-restores on every exit path) +
+`scopeMapper(tpScope)` (ambient aliasArgs + a replacing scope);
+`getTypeFromTypeNodeWithMapper` now delegates to it (one install-semantics
+definition). Flipped 5 regions: resolveGenericPropertyTypeWorker's outer
+class-TP scope AND its inner per-method-TP scope (the `.map` lambda),
+resolveBaseTypesLazy, and resolveInterfaceMembersCore's call/construct-sig +
+index-signature scopes (both converted to pair-destructure results so no
+definite-assignment-through-lambda issues). Survey context: only 30 real
+tpScope installer sites exist; the walker-level ones (checkCallTypesInStatement
+×3, walkStmtsForTypeParamCasts ×3, checkConstraintsInStatements ×2, …) die
+with INV.4(e) so they are deliberately NOT flipped. Gates: corpus 11,252/0;
+listAll ×8 error-line identical vs 548a. Remaining resolution-internal
+candidates for (b2c'): getTypeOfVariableOrProperty, getTypeOfFunction(-Expression),
+buildBaseConstructorSignatureForSuper, buildSignatureForFunctionLikeTypeNode,
+getTypeFromTypeLiteral, reresolveSigParamsUnderClassScope, checkTpListDefaults,
+checkConstraintsForTypeArgs, pushFunctionTypeParamsScope (a PAIRED push/pop —
+needs its pop sibling audited before flipping).
+
 **Round 549d (2026-07-17) — INV.5(b2b): the alias-args ambient is now
 SINGLE-WRITER (the mapper bridge).** The remaining 3 `currentTypeAliasArgs`
 installers flipped to explicit `InstantiationMapper`s: (1) the
