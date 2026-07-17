@@ -20,6 +20,19 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 554 (2026-07-17) — giant probe re-run under (d1)+(e): both couplings
+PERSIST** (typeArgumentDefaultUsesConstraintOnCircularDefault +
+relationComplexityError still fail with checkTypeAssignability at the spine
+slot; probe reverted). The budget + open generic gate did not touch the two
+residual first-touch mechanisms — (1) declaredTypes/effective-default-via-
+constraint timing, (2) the TS2859 relation-complexity verdict state — so the
+INV.4(e) unblock remains exactly the (c3) audit queued at round 548b. NEXT:
+(c3) — instrument WHAT accumulated relation/complexity state the legacy
+checkTypeAssignability slot produces that the spine slot doesn't (start
+with relationComplexityError: where is TS2859 emitted and what state feeds
+it), and the checkTpListDefaults→referenceCache Test<any> lead from the
+(c2) falsification.
+
 **Round 553 (2026-07-17) — INV.5(e) first half LANDED: canUseTypeEngine's
 GENERIC GATE IS DELETED.** The historical `hasUnresolvedTypeParams(source/
 target) → return false` skip (the "#1 named→named blocker" per the gotcha
