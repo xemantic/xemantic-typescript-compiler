@@ -20,6 +20,18 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 560 (2026-07-17) — (cta-m1): checkTypeAssignability's two tail
+post-filters decoupled into `ctaPostFilters` (own dispatch step right after
+the giant; the diagnosticsBefore cutoff became the `ctaDiagnosticsBefore`
+field, set at the giant's entry).** The prep step the (g1c) migration
+requires: once the walk merges into the spine, the filters stay a
+post-spine step and the cutoff field gets set at spine entry instead.
+Behavior-preserving by construction at the current order. Gates: corpus
+11,302/0; listAll ×8 error-line identical vs 548a. NEXT: (cta-m2) the walk
+migration proper — frame stack for the threaded (varTypes / returnType /
+returnTypeNode / typeParams) context + the ambient save/restore families,
+statement anchors dispatching the retained leaf utilities.
+
 **Round 559b (2026-07-17) — cta pin batch: 10 reach + state pins for
 checkTypeAssignability (Inv4SpineCtaPinsTest), all verified on the CURRENT
 walker.** Coverage: var-decl TS2322 reach across all statement contexts

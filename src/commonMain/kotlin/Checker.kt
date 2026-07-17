@@ -2537,6 +2537,7 @@ class Checker(
         pass("checkTypeParameterDefaults") { checkTypeParameterDefaults() }
         pass("checkSpine") { checkSpine() }
         pass("checkTypeAssignability") { checkTypeAssignability() }
+        pass("ctaPostFilters") { ctaPostFilters() }
         pass("checkPropertyAccess") { checkPropertyAccess() }
         pass("checkCallExpressionTypes") { checkCallExpressionTypes() }
         // 37. Use-before-declaration (TS2448/2449/2450): the per-file leg rides
@@ -82528,8 +82529,14 @@ interface DataView {
         }
     }
 
+    /** (cta-m1) round 560: the TS2322-family post-filter cutoff — set at the
+     *  start of the pass that emits the family (checkTypeAssignability today;
+     *  the spine walk once the (g1c) migration lands) and read by
+     *  [ctaPostFilters], which is its own dispatch step. */
+    private var ctaDiagnosticsBefore = 0
+
     private fun checkTypeAssignability() {
-        val diagnosticsBefore = diagnostics.size
+        ctaDiagnosticsBefore = diagnostics.size
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
@@ -82542,6 +82549,13 @@ interface DataView {
             checkTypeAssignabilityInStatements(result.sourceFile.statements, source, fileName, varTypes, returnType = null, typeParams = emptySet())
             currentFlowGraph = null
         }
+    }
+
+    /** (cta-m1) round 560: the two checkTypeAssignability tail post-filters,
+     *  decoupled into their own dispatch step (must run AFTER the pass that
+     *  emits the TS2322 family — reads [ctaDiagnosticsBefore]). */
+    private fun ctaPostFilters() {
+        val diagnosticsBefore = ctaDiagnosticsBefore
         // Post-filter: suppress TS2322 for null/undefined→NamedType when the named type
         // also has TS2304 (unresolved) or TS2314 (wrong type arg count) in the same file
         // Collect type names with errors per file: "$fileName" -> set of type names
