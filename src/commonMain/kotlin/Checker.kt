@@ -118916,11 +118916,9 @@ interface DataView {
                 p
             }
         }
-        val savedScope = currentTypeParamScope
-        try {
-            val scope = (savedScope?.toMutableMap() ?: mutableMapOf())
-            typeParamNodes.forEachIndexed { i, tp -> scope[tp.name.text] = typeParams[i] }
-            currentTypeParamScope = scope
+        val tpScope = (currentTypeParamScope?.toMutableMap() ?: mutableMapOf())
+        typeParamNodes.forEachIndexed { i, tp -> tpScope[tp.name.text] = typeParams[i] }
+        withInstantiationContext(scopeMapper(tpScope)) {
             typeParamNodes.forEachIndexed { i, tp ->
                 // Resolve constraints/defaults in the scope that now includes the SIBLING
                 // params (108631) so a constraint referencing another param (`U extends
@@ -118935,8 +118933,6 @@ interface DataView {
                 typeParams[i].constraint = tp.constraint?.let { getTypeFromTypeNode(it) }
                 typeParams[i].default = tp.default?.let { getTypeFromTypeNode(it) }
             }
-        } finally {
-            currentTypeParamScope = savedScope
         }
 
         val argTypes = typeArgs.map { getTypeFromTypeNode(it) }
@@ -140104,31 +140100,27 @@ interface DataView {
                             }
                         }
                     }
-                    val savedScope = currentTypeParamScope
-                    if (!sigTypeParams.isNullOrEmpty()) {
+                    val memberScope = if (!sigTypeParams.isNullOrEmpty()) {
                         val scope = (currentTypeParamScope?.toMutableMap() ?: mutableMapOf())
                         sigTypeParams.forEachIndexed { i, tp ->
                             scope[member.typeParameters[i].name.text] = tp
                         }
-                        currentTypeParamScope = scope
-                    }
-                    val params = getParameterSymbols(member.parameters)
-                    val returnType: Type
-                    try {
+                        scope
+                    } else currentTypeParamScope
+                    val (returnType, params) = withInstantiationContext(scopeMapper(memberScope)) {
+                        val ps = getParameterSymbols(member.parameters)
                         sigTypeParams?.forEachIndexed { i, tp ->
                             member.typeParameters[i].constraint?.let { tp.constraint = getTypeFromTypeNode(it) }
                             member.typeParameters[i].default?.let { tp.default = getTypeFromTypeNode(it) }
                         }
-                        for ((pi, param) in params.withIndex()) {
+                        for ((pi, param) in ps.withIndex()) {
                             if (pi < member.parameters.size) {
                                 member.parameters[pi].type?.let { typeNode ->
                                     symbolTypes[param.id] = getTypeFromTypeNode(typeNode)
                                 }
                             }
                         }
-                        returnType = member.type?.let { getTypeFromTypeNode(it) } ?: anyType
-                    } finally {
-                        currentTypeParamScope = savedScope
+                        (member.type?.let { getTypeFromTypeNode(it) } ?: anyType) to ps
                     }
                     val sig = Signature(
                         declaration = member,

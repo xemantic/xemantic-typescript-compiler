@@ -20,6 +20,24 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 550d (2026-07-17) — INV.5(b2c'''): the last clean resolution-internal
+tpScope installers flipped.** getTypeFromTypeLiteral's method branch (pair-
+destructure; getParameterSymbols moved inside the region, matching its legacy
+under-scope position) and checkConstraintsForTypeArgs' TP-materialization
+region. The RESOLUTION-INTERNAL tpScope surface is now fully on the region
+mapper; what remains legacy is deliberate: walker-level installers
+(checkCallTypesInStatement ×3, walkStmtsForTypeParamCasts ×3,
+checkConstraintsInStatements' dual-field install with currentTypeParamDecls,
+checkMixinClassInStatements' dual-field install with mixinValueScope,
+checkClassPropertyOverrides' heritage region, the 84067 interleaved
+implicit-any site, checkFunctionBody, spineArithTeardown) — all either die
+with INV.4(e) or carry a second ambient field the mapper doesn't model —
+plus the paired pushFunctionTypeParamsScope (+ pop-sibling callers). Gates:
+corpus 11,252/0; listAll ×8 error-line identical vs 548a. (b2) is at a
+natural pause point; NEXT per the INV.5 decomposition: (d) instantiated
+members cached ON the Type.Reference, or the (c3) TS2859 complexity-verdict
+audit when returning to the giants.
+
 **Round 550c (2026-07-17) — INV.5(b2c''): three more resolution-internal
 tpScope installers flipped to the region mapper.** buildBaseConstructorSignature-
 ForSuper (base-class ctor param resolution), buildSignatureForFunctionLikeType-
