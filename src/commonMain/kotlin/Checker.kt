@@ -2537,6 +2537,8 @@ class Checker(
         pass("checkTypeParameterDefaults") { checkTypeParameterDefaults() }
         pass("checkSpine") { checkSpine() }
         pass("checkTypeAssignability") { checkTypeAssignability() }
+        pass("checkPropertyAccess") { checkPropertyAccess() }
+        pass("checkCallExpressionTypes") { checkCallExpressionTypes() }
         // 37. Use-before-declaration (TS2448/2449/2450): the per-file leg rides
         // the spine (INV.4(d) walker 7 — spineUbdSetup/spineUbdEnterNode);
         // deliberately BEFORE checkDefiniteAssignmentViaFlowGraph, whose TS2454
@@ -3210,9 +3212,7 @@ class Checker(
         // 64a2. Check bare `yield;` against an explicit generator yield-type (TS2322)
         pass("checkGeneratorBareYieldTypes") { checkGeneratorBareYieldTypes() }
         // 64b. Check property access on known types (TS2339)
-        pass("checkPropertyAccess") { checkPropertyAccess() }
         // 64c. Check call expression argument types (TS2345)
-        pass("checkCallExpressionTypes") { checkCallExpressionTypes() }
         // 64d. Check arithmetic operator types (TS2362/TS2363) — MIGRATED to the
         // check spine (INV.4(d) walker 2, round 531): spineArithEnterNode/
         // spineArithLeaveNode dispatch the emissions; the recursive walkers are

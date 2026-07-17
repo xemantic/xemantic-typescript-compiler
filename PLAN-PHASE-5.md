@@ -20,6 +20,20 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 556 (2026-07-17) — ALL THREE INV.4(e) GIANTS SLOT-MOVED to the spine
+block.** With the round-555 discovery (fixed probe position + the two
+producer hoists), g2 (checkPropertyAccess) and g3 (checkCallExpressionTypes)
+probed clean on the FIRST try: each moved to the spine block (g1 → g2 → g3
+in legacy relative order, right after `pass("checkSpine")`), full corpus
+11,259/0 and listAll ×8 error-line identical at every step (g2 alone:
+555c; all three: 555d — both vs the 548a baselines). LANDED. The INV.4(e)
+order-coupling barrier is fully gone; the remaining (e) work is the actual
+per-giant spine MIGRATION (decompose each giant's recursion onto
+spineEnterNode/spineLeaveNode per the INV.4(d) playbook — reach
+classifiers, ambient-state discipline, pin batches), now free of slot-order
+risk: every pass between the spine and the giants' legacy slots is
+provably insensitive to running after them.
+
 **Round 555 (2026-07-17) — INV.4(e) g1 UNBLOCKED AND SLOT-MOVED: the
 checkTypeAssignability giant now runs at the spine slot; the round-542/543
 "first-touch order-sensitivity" thesis mostly dissolves into a PROBE BUG +
