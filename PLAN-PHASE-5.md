@@ -20,6 +20,21 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 568c (2026-07-17) — bench observation: post-568 HEAD is 28,697 ms vs
+the round-552 27,499 ms (~+4.4% cumulative over rounds 553-568), but the
+step deltas are inside the box-drift band (m3c-prep WITH the sandwich:
+28,585; now WITHOUT it: 28,697 — an upward step from REMOVING work =
+drift, per the interleave gotcha). Attribution of the production frame-
+maintenance cost (Block/clause varTypes copies at every block) needs an
+interleaved A/B vs a no-frames build. IF real, the optimization is NOT a
+naive fn-depth skip — the round-566/567 green state depends on recordings
+and frames below fn boundaries feeding namespace-in-fn anchors (the
+production fn frames carry the m2b inline varTypes param entries; the
+VariableDeclaration recording writes into them) — a cheap cut must keep
+the ModuleBlock-feeding chain intact (e.g. copy-on-write varTypes for
+Block frames, or defer copies until a write occurs below the frame).
+Queued as a perf follow-up behind the INV.5 canonicalization work.**
+
 **Round 568 (2026-07-17) — (cta-m3c-prep) PARTIALLY REVERTED: the always-on
 fn-body sandwich drifts the harness profile.** Corpus was GREEN (11,307/0)
 but listAll found 4 new FPs on harness (fourslashImpl.ts:1977-78 TS2339
