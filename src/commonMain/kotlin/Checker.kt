@@ -748,7 +748,7 @@ class Checker(
      *  varTypes copies, the inference-namespace pushes). The legacy arm keeps
      *  running for its own maps' state evolution but truncates its duplicate
      *  diagnostics. */
-    private fun ctaM3VarStmtAnchor(stmt: VariableStatement, scopeStatements: List<Statement>) {
+    private fun ctaM3StmtAnchor(stmt: Statement, scopeStatements: List<Statement>) {
         val frame = ctaFrames.last()
         val sFG = currentFlowGraph
         val sSS = currentScopeStatements
@@ -766,19 +766,38 @@ class Checker(
         }
         try {
             withCtaFrameLocals(frame) {
-                for (decl in stmt.declarationList.declarations) {
-                    if (stmt.declarationList.flags == SyntaxKind.ConstKeyword) {
-                        registerConstLiteralUnionNarrowing(decl)
+                when (stmt) {
+                    is VariableStatement -> {
+                        for (decl in stmt.declarationList.declarations) {
+                            if (stmt.declarationList.flags == SyntaxKind.ConstKeyword) {
+                                registerConstLiteralUnionNarrowing(decl)
+                            }
+                            checkVarDeclAssignability(decl, spineSource, spineFileName, frame.varTypes, emptySet())
+                            decl.initializer?.let {
+                                val ctxFn = contextualizeFnExprFromAnnotation(decl.type, it)
+                                walkFunctionBodiesInExpr(ctxFn ?: it, spineSource, spineFileName, frame.varTypes, emptySet())
+                            }
+                            val init = decl.initializer
+                            if (init is BinaryExpression && init.operator == SyntaxKind.Equals) {
+                                checkAssignmentExpression(init, spineSource, spineFileName, frame.varTypes, emptySet())
+                            }
+                        }
                     }
-                    checkVarDeclAssignability(decl, spineSource, spineFileName, frame.varTypes, emptySet())
-                    decl.initializer?.let {
-                        val ctxFn = contextualizeFnExprFromAnnotation(decl.type, it)
-                        walkFunctionBodiesInExpr(ctxFn ?: it, spineSource, spineFileName, frame.varTypes, emptySet())
+                    is ExpressionStatement -> {
+                        checkAssignmentExpression(stmt.expression, spineSource, spineFileName, frame.varTypes, frame.typeParams)
+                        walkFunctionBodiesInExpr(stmt.expression, spineSource, spineFileName, frame.varTypes, frame.typeParams)
                     }
-                    val init = decl.initializer
-                    if (init is BinaryExpression && init.operator == SyntaxKind.Equals) {
-                        checkAssignmentExpression(init, spineSource, spineFileName, frame.varTypes, emptySet())
+                    is ReturnStatement -> {
+                        if (frame.returnType != null || frame.returnTypeNode != null) {
+                            checkReturnAssignability(stmt, frame.returnType ?: "", spineSource, spineFileName, frame.varTypes, frame.typeParams, frame.returnTypeNode)
+                        }
+                        stmt.expression?.let { retExpr ->
+                            if (retExpr is BinaryExpression && retExpr.operator == SyntaxKind.Equals) {
+                                checkAssignmentExpression(retExpr, spineSource, spineFileName, frame.varTypes, frame.typeParams)
+                            }
+                        }
                     }
+                    else -> {}
                 }
             }
         } finally {
@@ -18525,10 +18544,10 @@ class Checker(
     /** Per-node dispatch, preorder position (before children). */
     private fun spineEnterNode(node: Node) {
         ctaSpineEnter(node)
-        if (node is VariableStatement && !spineIsDts) {
+        if ((node is VariableStatement || node is ExpressionStatement || node is ReturnStatement) && !spineIsDts) {
             when (val p = (node as NodeBase).parent) {
-                is SourceFile -> ctaM3VarStmtAnchor(node, p.statements)
-                is ModuleBlock -> ctaM3VarStmtAnchor(node, p.statements)
+                is SourceFile -> ctaM3StmtAnchor(node as Statement, p.statements)
+                is ModuleBlock -> ctaM3StmtAnchor(node as Statement, p.statements)
                 else -> {}
             }
         }
@@ -83033,10 +83052,17 @@ interface DataView {
                     }
                 }
                 is ExpressionStatement -> {
+                    val ctaM3P = (stmt as NodeBase).parent
+                    val ctaM3Mark = if (ctaM3P is SourceFile || ctaM3P is ModuleBlock) diagnostics.size else -1
                     checkAssignmentExpression(stmt.expression, source, fileName, varTypes, typeParams)
                     walkFunctionBodiesInExpr(stmt.expression, source, fileName, varTypes, typeParams)
+                    if (ctaM3Mark >= 0) {
+                        while (diagnostics.size > ctaM3Mark) diagnostics.removeAt(diagnostics.size - 1)
+                    }
                 }
                 is ReturnStatement -> {
+                    val ctaM3P = (stmt as NodeBase).parent
+                    val ctaM3Mark = if (ctaM3P is SourceFile || ctaM3P is ModuleBlock) diagnostics.size else -1
                     if (returnType != null || returnTypeNode != null) {
                         checkReturnAssignability(stmt, returnType ?: "", source, fileName, varTypes, typeParams, returnTypeNode)
                     }
@@ -83046,6 +83072,9 @@ interface DataView {
                         if (retExpr is BinaryExpression && retExpr.operator == SyntaxKind.Equals) {
                             checkAssignmentExpression(retExpr, source, fileName, varTypes, typeParams)
                         }
+                    }
+                    if (ctaM3Mark >= 0) {
+                        while (diagnostics.size > ctaM3Mark) diagnostics.removeAt(diagnostics.size - 1)
                     }
                 }
                 is FunctionDeclaration -> {

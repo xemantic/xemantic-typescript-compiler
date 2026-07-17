@@ -20,6 +20,24 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 567 (2026-07-17) — (cta-m3b) LANDED first-try: the ExpressionStatement
+and ReturnStatement arms join the spine anchor.** The generalized
+`ctaM3StmtAnchor` dispatches all three statement kinds at SourceFile/
+ModuleBlock parents under the same frame install (the ReturnStatement arm
+includes the frame-conditional checkReturnAssignability — inert at these
+scopes where returnType is null, exact by construction); the legacy arms
+gained the same parent-scoped truncation marks. Gates: corpus 11,307/0,
+listAll ×8 error-line identical — clean on the FIRST run, validating the
+round-566 template's generality. THE TOP-LEVEL + NAMESPACE-BODY TIER of
+the cta walk is now fully emission-migrated (VariableStatement /
+ExpressionStatement / ReturnStatement — the only arms with own emissions
+at those scopes; the recursion arms carry no emissions). NEXT: the
+fn-body tier — extend the anchor scope to statements inside function-like
+bodies, which requires the production fn-body frames to carry REAL context
+(the audit-gated sandwich becomes always-on for fn frames: shadowing
+helpers + param typing at fn-body enters) — gate the added spine-time
+resolution cost with the bench; then the remaining stmt kinds arm-by-arm.
+
 **Round 566 (2026-07-17) — (cta-m3a) LANDED: the FIRST cta emissions run
 from the spine.** Top-level AND namespace-body VariableStatement emissions
 (checkVarDeclAssignability + registerConstLiteralUnionNarrowing + the
