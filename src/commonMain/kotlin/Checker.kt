@@ -1220,6 +1220,20 @@ class Checker(
     /** Reusable ascent buffer for [spineAtStatus]. */
     private val spineAtChain = ArrayList<Node>()
 
+    // ── INV.4(d) walker 11 (round 540): checkNullUndefinedUsage on the spine ──
+    // The TS18050 null/undefined-literal usage pass (+ the for-of empty-`[]`
+    // TS2488 shape) — the recursion walkers are deleted; reach is the
+    // DEPTH-carrying classifier [spineNuStatus] over [spineNuEdge] (the
+    // legacy checkDepth ≤ maxCheckDepth STATEMENT-frame cap reproduced:
+    // depth = ancestor statement count on the reached path; statuses encode
+    // kind*512 + depth in a ShortArray). Anchors are pure — no ambient.
+    /** Per-file activation: the legacy non-.d.ts gate. */
+    private var spineNuActive = false
+    /** Per-file nodeId memo for [spineNuStatus] — 0 unknown, 1 NONE, else kind*512+depth. */
+    private var spineNuReachMemo = ShortArray(0)
+    /** Reusable ascent buffer for [spineNuStatus]. */
+    private val spineNuChain = ArrayList<Node>()
+
     // Positions of ObjectLiteralExpression nodes that are destructuring-assignment
     // TARGETS (LHS of `=`, incl. nested through array/object/default nesting). Consumed
     // by the shorthand-with-initializer TS1312/TS18004 selection in
@@ -2486,6 +2500,8 @@ class Checker(
         pass("checkCrossFileUseBeforeDeclaration") {
             if (binderResults.size > 1) checkCrossFileUseBeforeDeclaration()
         }
+        // 21b. Null/undefined literal usage (TS18050 family): rides the spine
+        // (INV.4(d) walker 11 — spineNuSetup/spineNuEnterNode).
         // 20b. Always-truthy/falsy conditions (TS2872/TS2873 + TS1345 +
         // TS2845): rides the spine (INV.4(d) walker 10 —
         // spineAtSetup/spineAtEnterNode).
@@ -2844,8 +2860,8 @@ class Checker(
         // B277: TS2871/TS2869 `??` nullish predicates + while/do TS2872/TS2873 truthiness.
         // Must run AFTER checkCommaOperatorUnused so same-position TS2695 sorts first.
         pass("checkNullishPredicates") { checkNullishPredicates() }
-        // 21. Check null/undefined used in invalid positions (TS18050)
-        pass("checkNullUndefinedUsage") { checkNullUndefinedUsage() }
+        // 21b. checkNullUndefinedUsage moved to the spine slot — see the
+        // pass("checkSpine") site (INV.4(d) walker 11 slot-move pre-gate).
         // 22. Check for implicit this (TS2683)
         // Round 79h: mirror the TS2454/TS2564 convention — TS2683 fires by
         // default in the test harness unless `@strict: false` was set explicitly.
@@ -18045,6 +18061,7 @@ class Checker(
                 spineIrSetup(result)
                 spineCaSetup(result)
                 spineAtSetup(result)
+                spineNuSetup(result)
                 spineUResAuditActive = unresolvedAuditEnabled && spineUResActive
                 try {
                     spineWalkFile(sf)
@@ -18063,6 +18080,7 @@ class Checker(
                     spineIrTeardown()
                     spineCaTeardown()
                     spineAtTeardown()
+                    spineNuTeardown()
                 }
                 spineResolveDeferredIterationChecks()
             }
@@ -18152,6 +18170,8 @@ class Checker(
         // INV.4(d) walker 10: the always-truthy pass — condition/operand
         // anchors.
         if (spineAtActive) spineAtEnterNode(node)
+        // INV.4(d) walker 11: the null/undefined-usage pass — TS18050 anchors.
+        if (spineNuActive) spineNuEnterNode(node)
         when (node) {
             is Identifier -> spineTavIdentifier(node)
             is PropertyDeclaration -> {
@@ -44105,6 +44125,16 @@ class Checker(
         private const val AT_EXPR = 3
         private const val AT_MEMBER = 4
 
+        // INV.4(d) walker 11 (round 540) — [spineNuStatus] kinds (the value
+        // is kind*512 + depth; NU_NONE is the bare value 1). STMT depth
+        // increments at the legacy checkNullUndefinedInStatement frames
+        // (list/if/loop/labeled statement entries — NOT fn-body/member-body
+        // block carriers, which the legacy dispatched without a frame).
+        private const val NU_NONE = 1
+        private const val NU_STMT = 2
+        private const val NU_EXPR = 3
+        private const val NU_MEMBER = 4
+
         /** Maximum antecedent walk depth for control-flow narrowing, aligned with tsc's
          *  `flowDepth === 2000` stack guard (M1.2b, round 386 — was 50). Do NOT lower it
          *  back "to save time": truncated subtrees are never memo-stored (the clean-only
@@ -49787,237 +49817,300 @@ interface DataView {
      * property access base, binary operator operands, etc.
      * Emits TS18050: "The value 'null'/'undefined' cannot be used here."
      */
-    private fun checkNullUndefinedUsage() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            checkNullUndefinedInStatements(result.sourceFile.statements, source, fileName)
+    // ── INV.4(d) walker 11 (round 540): checkNullUndefinedUsage on the spine ──
+    // (Fields + the NU_* kinds are declared before init — see the spineNu
+    // field block. The per-file driver and the recursion walkers
+    // checkNullUndefinedInStatements/-InStatement/-InExpr are deleted; the
+    // bounded leaf utilities — checkNullUndefinedLiteral,
+    // emitNeverIteratorAt — are retained.)
+
+    /** Per-file setup for the spine-hosted null/undefined-usage pass. */
+    private fun spineNuSetup(result: BinderResult) {
+        spineNuActive = !spineIsDts
+        if (!spineNuActive) {
+            spineNuReachMemo = ShortArray(0)
+            return
+        }
+        val n = result.sourceFile.nodeCount
+        spineNuReachMemo = if (n > 0) ShortArray(n) else ShortArray(0)
+    }
+
+    private fun spineNuTeardown() {
+        spineNuActive = false
+        spineNuReachMemo = ShortArray(0)
+    }
+
+    /** Per-node ENTER hook: the TS18050-family anchors (all pure — the
+     *  deleted walkers installed no ambient state). */
+    private fun spineNuEnterNode(node: Node) {
+        when (node) {
+            is BinaryExpression -> spineNuBinaryEnter(node)
+            is PropertyAccessExpression ->
+                if (spineNuKind(node) == NU_EXPR) {
+                    // null.foo or undefined.foo
+                    checkNullUndefinedLiteral(node.expression, spineSource, spineFileName)
+                }
+            is ElementAccessExpression ->
+                if (spineNuKind(node) == NU_EXPR) {
+                    // null[x] or undefined[x]
+                    checkNullUndefinedLiteral(node.expression, spineSource, spineFileName)
+                }
+            is ForOfStatement -> if (spineNuKind(node) == NU_STMT) {
+                // A bare `null`/`undefined` as the for-of iterable cannot be
+                // iterated → TS18050. Gated on strictNullChecks (mirrors the
+                // arithmetic-operand path).
+                if (strictNullChecks) checkNullUndefinedLiteral(node.expression, spineSource, spineFileName)
+                // For-of array-destructuring an EMPTY array literal `[]` (element
+                // type `never` under noImplicitAny) with an array binding pattern
+                // → TS2488 at the pattern. FP-safe by exact shape.
+                if (options.noImplicitAny || options.strict) {
+                    val iter = node.expression
+                    if (iter is ArrayLiteralExpression && iter.elements.isEmpty()) {
+                        val abp = (node.initializer as? VariableDeclarationList)
+                            ?.declarations?.singleOrNull()?.name as? ArrayBindingPattern
+                        if (abp != null) emitNeverIteratorAt(abp.pos, spineSource, spineFileName)
+                    }
+                }
+            }
+            else -> {}
         }
     }
 
-    private fun checkNullUndefinedInStatements(stmts: List<Statement>, source: String, fileName: String) {
-        for (stmt in stmts) checkNullUndefinedInStatement(stmt, source, fileName)
+    /** The deleted BinaryExpression arm's emission block: null/undefined
+     *  literal operands of arithmetic/bitwise operators (strict only; `+`
+     *  with a string on the other side is exempt) and of `in` (all modes). */
+    private fun spineNuBinaryEnter(expr: BinaryExpression) {
+        val op = expr.operator
+        if (spineNuKind(expr) != NU_EXPR) return
+        val isArithmeticOrBitwise = op == SyntaxKind.Plus || op == SyntaxKind.Minus ||
+            op == SyntaxKind.Asterisk || op == SyntaxKind.Slash || op == SyntaxKind.Percent ||
+            op == SyntaxKind.AsteriskAsterisk ||
+            op == SyntaxKind.Ampersand || op == SyntaxKind.Bar || op == SyntaxKind.Caret ||
+            op == SyntaxKind.LessThanLessThan || op == SyntaxKind.GreaterThanGreaterThan ||
+            op == SyntaxKind.GreaterThanGreaterThanGreaterThan ||
+            op == SyntaxKind.PlusEquals || op == SyntaxKind.MinusEquals ||
+            op == SyntaxKind.AsteriskEquals || op == SyntaxKind.SlashEquals ||
+            op == SyntaxKind.PercentEquals || op == SyntaxKind.AsteriskAsteriskEquals ||
+            op == SyntaxKind.AmpersandEquals || op == SyntaxKind.BarEquals ||
+            op == SyntaxKind.CaretEquals || op == SyntaxKind.LessThanLessThanEquals ||
+            op == SyntaxKind.GreaterThanGreaterThanEquals ||
+            op == SyntaxKind.GreaterThanGreaterThanGreaterThanEquals
+        if (isArithmeticOrBitwise && strictNullChecks) {
+            // Under non-strict, TS2365 takes over from TS18050 for
+            // arithmetic-with-null/undefined. For '+', null/undefined is valid
+            // when the other side is a string.
+            val isPlus = op == SyntaxKind.Plus || op == SyntaxKind.PlusEquals
+            val leftIsString = expr.left is StringLiteralNode || expr.left is TemplateExpression ||
+                (expr.left is Identifier && (expr.left).text.let { it != "null" && it != "undefined" } && false)
+            val rightIsString = expr.right is StringLiteralNode || expr.right is TemplateExpression
+            if (!(isPlus && rightIsString)) {
+                checkNullUndefinedLiteral(expr.left, spineSource, spineFileName)
+            }
+            if (!(isPlus && leftIsString)) {
+                checkNullUndefinedLiteral(expr.right, spineSource, spineFileName)
+            }
+        }
+        // TS18050: a `null`/`undefined` literal operand of the `in` operator —
+        // tsc emits this in all modes for both operands.
+        if (op == SyntaxKind.InKeyword) {
+            checkNullUndefinedLiteral(expr.left, spineSource, spineFileName)
+            checkNullUndefinedLiteral(expr.right, spineSource, spineFileName)
+        }
     }
 
-    private fun checkNullUndefinedInStatement(stmt: Statement, source: String, fileName: String) {
-        if (checkDepth > maxCheckDepth) return
-        checkDepth++
-        try {
-            when (stmt) {
-                is VariableStatement -> {
-                    for (decl in stmt.declarationList.declarations) {
-                        decl.initializer?.let { checkNullUndefinedInExpr(it, source, fileName) }
-                    }
-                }
-                is ExpressionStatement -> checkNullUndefinedInExpr(stmt.expression, source, fileName)
-                is ReturnStatement -> stmt.expression?.let { checkNullUndefinedInExpr(it, source, fileName) }
-                is IfStatement -> {
-                    checkNullUndefinedInExpr(stmt.expression, source, fileName)
-                    checkNullUndefinedInStatement(stmt.thenStatement, source, fileName)
-                    stmt.elseStatement?.let { checkNullUndefinedInStatement(it, source, fileName) }
-                }
-                is Block -> checkNullUndefinedInStatements(stmt.statements, source, fileName)
-                is ForStatement -> {
-                    stmt.initializer?.let { if (it is Expression) checkNullUndefinedInExpr(it, source, fileName) }
-                    stmt.condition?.let { checkNullUndefinedInExpr(it, source, fileName) }
-                    stmt.incrementor?.let { checkNullUndefinedInExpr(it, source, fileName) }
-                    checkNullUndefinedInStatement(stmt.statement, source, fileName)
-                }
-                is WhileStatement -> {
-                    checkNullUndefinedInExpr(stmt.expression, source, fileName)
-                    checkNullUndefinedInStatement(stmt.statement, source, fileName)
-                }
-                is DoStatement -> {
-                    checkNullUndefinedInStatement(stmt.statement, source, fileName)
-                    checkNullUndefinedInExpr(stmt.expression, source, fileName)
-                }
-                is SwitchStatement -> {
-                    checkNullUndefinedInExpr(stmt.expression, source, fileName)
-                    for (clause in stmt.caseBlock) {
-                        when (clause) {
-                            is CaseClause -> {
-                                checkNullUndefinedInExpr(clause.expression, source, fileName)
-                                checkNullUndefinedInStatements(clause.statements, source, fileName)
-                            }
-                            is DefaultClause -> {
-                                checkNullUndefinedInStatements(clause.statements, source, fileName)
-                            }
-                            else -> {}
-                        }
-                    }
-                }
-                is FunctionDeclaration -> {
-                    stmt.body?.let { checkNullUndefinedInStatements(it.statements, source, fileName) }
-                }
-                is ClassDeclaration -> {
-                    for (member in stmt.members) {
-                        when (member) {
-                            is MethodDeclaration -> member.body?.let {
-                                checkNullUndefinedInStatements(it.statements, source, fileName)
-                            }
-                            is PropertyDeclaration -> member.initializer?.let {
-                                checkNullUndefinedInExpr(it, source, fileName)
-                            }
-                            is Constructor -> member.body?.let {
-                                checkNullUndefinedInStatements(it.statements, source, fileName)
-                            }
-                            // B18.4: descend into accessor bodies so TS18050 fires inside
-                            // `get x() { throw undefined.; }` and similar patterns.
-                            is GetAccessor -> member.body?.let {
-                                checkNullUndefinedInStatements(it.statements, source, fileName)
-                            }
-                            is SetAccessor -> member.body?.let {
-                                checkNullUndefinedInStatements(it.statements, source, fileName)
-                            }
-                            else -> {}
-                        }
-                    }
-                }
-                is ModuleDeclaration -> {
-                    when (val body = stmt.body) {
-                        is ModuleBlock -> checkNullUndefinedInStatements(body.statements, source, fileName)
-                        else -> {}
-                    }
-                }
-                is ThrowStatement -> stmt.expression?.let { checkNullUndefinedInExpr(it, source, fileName) }
-                is ForInStatement -> {
-                    checkNullUndefinedInExpr(stmt.expression, source, fileName)
-                    checkNullUndefinedInStatement(stmt.statement, source, fileName)
-                }
-                is ForOfStatement -> {
-                    // A bare `null`/`undefined` as the for-of iterable cannot be
-                    // iterated → TS18050 ("The value 'undefined' cannot be used here.").
-                    // Gated on strictNullChecks (mirrors the arithmetic-operand path).
-                    if (strictNullChecks) checkNullUndefinedLiteral(stmt.expression, source, fileName)
-                    // For-of array-destructuring an EMPTY array literal `[]` (element type
-                    // `never` under noImplicitAny) with an array binding pattern → TS2488 at
-                    // the pattern. FP-safe by exact shape; a contextually-typed iterable
-                    // (`[] as T[]`) is an AsExpression, not a bare ArrayLiteralExpression.
-                    if (options.noImplicitAny || options.strict) {
-                        val iter = stmt.expression
-                        if (iter is ArrayLiteralExpression && iter.elements.isEmpty()) {
-                            val abp = (stmt.initializer as? VariableDeclarationList)
-                                ?.declarations?.singleOrNull()?.name as? ArrayBindingPattern
-                            if (abp != null) emitNeverIteratorAt(abp.pos, source, fileName)
-                        }
-                    }
-                    checkNullUndefinedInExpr(stmt.expression, source, fileName)
-                    checkNullUndefinedInStatement(stmt.statement, source, fileName)
-                }
-                is TryStatement -> {
-                    checkNullUndefinedInStatements(stmt.tryBlock.statements, source, fileName)
-                    stmt.catchClause?.block?.let { checkNullUndefinedInStatements(it.statements, source, fileName) }
-                    stmt.finallyBlock?.let { checkNullUndefinedInStatements(it.statements, source, fileName) }
-                }
-                is LabeledStatement -> checkNullUndefinedInStatement(stmt.statement, source, fileName)
-                is ExportAssignment -> stmt.expression.let { checkNullUndefinedInExpr(it, source, fileName) }
-                else -> {}
-            }
-        } finally { checkDepth-- }
+    /** The KIND of [node]'s reach status (NU_NONE/NU_STMT/NU_EXPR/NU_MEMBER). */
+    private fun spineNuKind(node: Node): Int {
+        val v = spineNuStatus(node)
+        return if (v == NU_NONE) NU_NONE else v / 512
     }
 
-    private fun checkNullUndefinedInExpr(expr: Expression, source: String, fileName: String) {
-        when (expr) {
-            is BinaryExpression -> {
-                // Check if null/undefined is used as operand of arithmetic/bitwise operators
-                val op = expr.operator
-                val isArithmeticOrBitwise = op in setOf(
-                    SyntaxKind.Plus, SyntaxKind.Minus,
-                    SyntaxKind.Asterisk, SyntaxKind.Slash, SyntaxKind.Percent,
-                    SyntaxKind.AsteriskAsterisk,
-                    SyntaxKind.Ampersand, SyntaxKind.Bar, SyntaxKind.Caret,
-                    SyntaxKind.LessThanLessThan, SyntaxKind.GreaterThanGreaterThan,
-                    SyntaxKind.GreaterThanGreaterThanGreaterThan,
-                    SyntaxKind.PlusEquals, SyntaxKind.MinusEquals,
-                    SyntaxKind.AsteriskEquals, SyntaxKind.SlashEquals,
-                    SyntaxKind.PercentEquals, SyntaxKind.AsteriskAsteriskEquals,
-                    SyntaxKind.AmpersandEquals, SyntaxKind.BarEquals,
-                    SyntaxKind.CaretEquals, SyntaxKind.LessThanLessThanEquals,
-                    SyntaxKind.GreaterThanGreaterThanEquals,
-                    SyntaxKind.GreaterThanGreaterThanGreaterThanEquals,
-                )
-                if (isArithmeticOrBitwise && strictNullChecks) {
-                    // Under non-strict, TS2365 ("Operator cannot be applied to types 'X' and 'null'")
-                    // takes over from TS18050 for arithmetic-with-null/undefined.
-                    // For '+' operator, null/undefined is valid when other side is a string
-                    val isPlus = op == SyntaxKind.Plus || op == SyntaxKind.PlusEquals
-                    val leftIsString = expr.left is StringLiteralNode || expr.left is TemplateExpression ||
-                            (expr.left is Identifier && (expr.left).text.let { it != "null" && it != "undefined" } && false) // only literals
-                    val rightIsString = expr.right is StringLiteralNode || expr.right is TemplateExpression
-                    if (!(isPlus && rightIsString)) {
-                        checkNullUndefinedLiteral(expr.left, source, fileName)
-                    }
-                    if (!(isPlus && leftIsString)) {
-                        checkNullUndefinedLiteral(expr.right, source, fileName)
-                    }
+    /**
+     * Memoized DEPTH-carrying reach classifier — the deleted
+     * checkNullUndefinedInStatement/-InExpr dispatch arms verbatim, with the
+     * legacy `checkDepth > maxCheckDepth` STATEMENT-frame cap reproduced
+     * (a statement whose ancestor-statement count exceeds [maxCheckDepth] is
+     * skipped with its whole subtree). Status values: NU_NONE, else
+     * kind*512 + depth where depth = the nearest enclosing statement frame's
+     * ancestor count.
+     */
+    private fun spineNuStatus(node: Node): Int {
+        if (node is SourceFile) return NU_STMT * 512
+        val memo = spineNuReachMemo
+        run {
+            val id = (node as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) {
+                val m = memo[id].toInt()
+                if (m != 0) return m
+            }
+        }
+        val chain = spineNuChain
+        chain.clear()
+        var cur: Node = node
+        val anchor: Node?
+        var anchorStatus = NU_NONE
+        while (true) {
+            chain.add(cur)
+            val parent = (cur as NodeBase).parent
+            if (parent == null) { anchor = null; break } // detached/unindexed → NONE
+            if (parent is SourceFile) { anchor = parent; anchorStatus = NU_STMT * 512; break }
+            val pid = (parent as NodeBase).nodeId
+            val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
+            if (pm != 0) { anchor = parent; anchorStatus = pm; break }
+            cur = parent
+        }
+        var pNode: Node? = anchor
+        var pStatus = anchorStatus
+        var result = NU_NONE
+        for (i in chain.indices.reversed()) {
+            val c = chain[i]
+            result = if (pNode == null || pStatus == NU_NONE) NU_NONE
+                else spineNuEdge(pNode, pStatus, c)
+            val cid = (c as NodeBase).nodeId
+            if (cid >= 0 && cid < memo.size) memo[cid] = result.toShort()
+            pNode = c
+            pStatus = result
+        }
+        chain.clear()
+        return result
+    }
+
+    /** A statement CHILD entering a new legacy frame at depth d+1, or NONE
+     *  past the cap. */
+    private fun spineNuStmtChild(child: Node, d: Int): Int {
+        if (child !is Statement) return NU_NONE
+        val nd = d + 1
+        return if (nd > maxCheckDepth) NU_NONE else NU_STMT * 512 + nd
+    }
+
+    /**
+     * The edge rules — the deleted walkers' arms verbatim. Unlisted edges are
+     * NONE (the legacy `else -> {}`s: `new` expressions, as/angle-bracket
+     * casts, non-null assertions, await/yield/void/typeof/delete/spread
+     * operands, tagged templates, comma lists, class EXPRESSIONS,
+     * object-literal methods/accessors, for-header DECLARATOR initializers,
+     * type positions). Body Blocks the legacy dispatched WITHOUT a frame
+     * (fn/member/arrow bodies, module blocks, try blocks) carry the parent's
+     * depth so their statements land at d+1, matching the single legacy
+     * frame.
+     */
+    private fun spineNuEdge(parent: Node, pStatus: Int, child: Node): Int {
+        val kind = pStatus / 512
+        val d = pStatus % 512
+        val expr = NU_EXPR * 512 + d
+        val member = NU_MEMBER * 512 + d
+        val carrierBlock = NU_STMT * 512 + d
+        return when (kind) {
+            NU_STMT -> when (parent) {
+                is SourceFile -> spineNuStmtChild(child, d)
+                is Block -> spineNuStmtChild(child, d)
+                is ModuleBlock -> spineNuStmtChild(child, d)
+                is VariableStatement -> if (child === parent.declarationList) member else NU_NONE
+                is ExpressionStatement -> if (child === parent.expression) expr else NU_NONE
+                is ReturnStatement -> if (child === parent.expression) expr else NU_NONE
+                is ThrowStatement -> if (child === parent.expression) expr else NU_NONE
+                is ExportAssignment -> if (child === parent.expression) expr else NU_NONE
+                is IfStatement -> when {
+                    child === parent.expression -> expr
+                    child === parent.thenStatement || child === parent.elseStatement ->
+                        spineNuStmtChild(child, d)
+                    else -> NU_NONE
                 }
-                // TS18050: a `null`/`undefined` literal operand of the `in` operator
-                // ("The value 'null' cannot be used here.") — tsc emits this in all modes
-                // for both operands (widenedTypes `null in {}`, `"" in null`).
-                if (op == SyntaxKind.InKeyword) {
-                    checkNullUndefinedLiteral(expr.left, source, fileName)
-                    checkNullUndefinedLiteral(expr.right, source, fileName)
+                is ForStatement -> when {
+                    child === parent.initializer -> if (child is Expression) expr else NU_NONE
+                    child === parent.condition || child === parent.incrementor -> expr
+                    child === parent.statement -> spineNuStmtChild(child, d)
+                    else -> NU_NONE
                 }
-                // Iteratively walk left spine to avoid StackOverflow on deep binary chains
-                var current: Expression = expr
-                while (current is BinaryExpression) {
-                    checkNullUndefinedInExpr(current.right, source, fileName)
-                    current = current.left
+                is WhileStatement -> when {
+                    child === parent.expression -> expr
+                    child === parent.statement -> spineNuStmtChild(child, d)
+                    else -> NU_NONE
                 }
-                checkNullUndefinedInExpr(current, source, fileName)
-            }
-            is PropertyAccessExpression -> {
-                // null.foo or undefined.foo
-                checkNullUndefinedLiteral(expr.expression, source, fileName)
-                checkNullUndefinedInExpr(expr.expression, source, fileName)
-            }
-            is ElementAccessExpression -> {
-                // null[x] or undefined[x]
-                checkNullUndefinedLiteral(expr.expression, source, fileName)
-                checkNullUndefinedInExpr(expr.expression, source, fileName)
-                checkNullUndefinedInExpr(expr.argumentExpression, source, fileName)
-            }
-            is CallExpression -> {
-                checkNullUndefinedInExpr(expr.expression, source, fileName)
-                for (arg in expr.arguments) checkNullUndefinedInExpr(arg, source, fileName)
-            }
-            is ParenthesizedExpression -> checkNullUndefinedInExpr(expr.expression, source, fileName)
-            is ConditionalExpression -> {
-                checkNullUndefinedInExpr(expr.condition, source, fileName)
-                checkNullUndefinedInExpr(expr.whenTrue, source, fileName)
-                checkNullUndefinedInExpr(expr.whenFalse, source, fileName)
-            }
-            is PrefixUnaryExpression -> checkNullUndefinedInExpr(expr.operand, source, fileName)
-            is PostfixUnaryExpression -> checkNullUndefinedInExpr(expr.operand, source, fileName)
-            is TemplateExpression -> {
-                for (span in expr.templateSpans) {
-                    checkNullUndefinedInExpr(span.expression, source, fileName)
+                is DoStatement -> when {
+                    child === parent.expression -> expr
+                    child === parent.statement -> spineNuStmtChild(child, d)
+                    else -> NU_NONE
                 }
-            }
-            is ArrayLiteralExpression -> {
-                for (elem in expr.elements) checkNullUndefinedInExpr(elem, source, fileName)
-            }
-            is ObjectLiteralExpression -> {
-                for (prop in expr.properties) {
-                    when (prop) {
-                        is PropertyAssignment -> checkNullUndefinedInExpr(prop.initializer, source, fileName)
-                        is SpreadAssignment -> checkNullUndefinedInExpr(prop.expression, source, fileName)
-                        else -> {}
-                    }
+                is ForInStatement -> when {
+                    child === parent.expression -> expr
+                    child === parent.statement -> spineNuStmtChild(child, d)
+                    else -> NU_NONE
                 }
-            }
-            is ArrowFunction -> {
-                when (val body = expr.body) {
-                    is Block -> checkNullUndefinedInStatements(body.statements, source, fileName)
-                    is Expression -> checkNullUndefinedInExpr(body, source, fileName)
-                    else -> {}
+                is ForOfStatement -> when {
+                    child === parent.expression -> expr
+                    child === parent.statement -> spineNuStmtChild(child, d)
+                    else -> NU_NONE
                 }
+                is SwitchStatement -> when {
+                    child === parent.expression -> expr
+                    child is CaseClause || child is DefaultClause -> member
+                    else -> NU_NONE
+                }
+                is FunctionDeclaration -> if (child === parent.body) carrierBlock else NU_NONE
+                is ClassDeclaration ->
+                    if (child is MethodDeclaration || child is Constructor ||
+                        child is GetAccessor || child is SetAccessor ||
+                        child is PropertyDeclaration) member else NU_NONE
+                is ModuleDeclaration ->
+                    if (child === parent.body && child is ModuleBlock) carrierBlock else NU_NONE
+                is TryStatement -> when {
+                    child === parent.tryBlock || child === parent.finallyBlock -> carrierBlock
+                    child === parent.catchClause -> member
+                    else -> NU_NONE
+                }
+                is LabeledStatement -> if (child === parent.statement) spineNuStmtChild(child, d) else NU_NONE
+                else -> NU_NONE
             }
-            is FunctionExpression -> {
-                expr.body.let { checkNullUndefinedInStatements(it.statements, source, fileName) }
+            NU_MEMBER -> when (parent) {
+                is VariableDeclarationList -> if (child is VariableDeclaration) member else NU_NONE
+                is VariableDeclaration -> if (child === parent.initializer) expr else NU_NONE
+                is CaseClause -> when {
+                    child === parent.expression -> expr
+                    child is Statement -> spineNuStmtChild(child, d)
+                    else -> NU_NONE
+                }
+                is DefaultClause -> spineNuStmtChild(child, d)
+                is CatchClause -> if (child === parent.block) carrierBlock else NU_NONE
+                is MethodDeclaration -> if (child === parent.body) carrierBlock else NU_NONE
+                is Constructor -> if (child === parent.body) carrierBlock else NU_NONE
+                is GetAccessor -> if (child === parent.body) carrierBlock else NU_NONE
+                is SetAccessor -> if (child === parent.body) carrierBlock else NU_NONE
+                is PropertyDeclaration -> if (child === parent.initializer) expr else NU_NONE
+                is PropertyAssignment -> if (child === parent.initializer) expr else NU_NONE
+                is SpreadAssignment -> if (child === parent.expression) expr else NU_NONE
+                is TemplateSpan -> if (child === parent.expression) expr else NU_NONE
+                else -> NU_NONE
             }
-            else -> {}
+            NU_EXPR -> when (parent) {
+                is BinaryExpression -> if (child === parent.left || child === parent.right) expr else NU_NONE
+                is PropertyAccessExpression -> if (child === parent.expression) expr else NU_NONE
+                is ElementAccessExpression ->
+                    if (child === parent.expression || child === parent.argumentExpression) expr
+                    else NU_NONE
+                is CallExpression ->
+                    if (child === parent.expression || parent.arguments.any { it === child }) expr
+                    else NU_NONE
+                is ParenthesizedExpression -> if (child === parent.expression) expr else NU_NONE
+                is ConditionalExpression ->
+                    if (child === parent.condition || child === parent.whenTrue ||
+                        child === parent.whenFalse) expr else NU_NONE
+                is PrefixUnaryExpression -> if (child === parent.operand) expr else NU_NONE
+                is PostfixUnaryExpression -> if (child === parent.operand) expr else NU_NONE
+                is TemplateExpression -> if (child is TemplateSpan) member else NU_NONE
+                is ArrayLiteralExpression -> if (parent.elements.any { it === child }) expr else NU_NONE
+                is ObjectLiteralExpression -> when (child) {
+                    is PropertyAssignment, is SpreadAssignment -> member
+                    else -> NU_NONE
+                }
+                is ArrowFunction -> when {
+                    child !== parent.body -> NU_NONE
+                    child is Block -> carrierBlock
+                    else -> expr
+                }
+                is FunctionExpression -> if (child === parent.body) carrierBlock else NU_NONE
+                else -> NU_NONE
+            }
+            else -> NU_NONE
         }
     }
 

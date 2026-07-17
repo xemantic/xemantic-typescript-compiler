@@ -59,6 +59,35 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 540 (2026-07-17) — INV.4(d) walker 11: checkNullUndefinedUsage (the
+TS18050 null/undefined-literal usage pass + the for-of empty-`[]` TS2488
+shape; ~130 ms tail) migrated onto the spine — the per-file driver and the
+recursion walkers (checkNullUndefinedInStatements/-InStatement/-InExpr) are
+DELETED (~230 lines).** A pure-anchor migration (the deleted walkers
+installed NO ambient state) with one structural first: the classifier
+carries the legacy `checkDepth ≤ maxCheckDepth` STATEMENT-frame cap as a
+DEPTH-encoded status (ShortArray, kind*512 + depth; depth = ancestor
+statement-frame count) — and crucially the depth increments ONLY at the
+legacy per-statement frames: body Blocks the legacy dispatched WITHOUT a
+frame (fn/member/arrow bodies, module blocks, try blocks) are CARRIER
+blocks at the parent's depth, so their statements land exactly one frame
+deeper, matching the single legacy increment. Anchors at
+BinaryExpression (arithmetic/bitwise strict-gated operand checks with the
+`+`-string exemptions; `in` operands in all modes), PropertyAccess/
+ElementAccess (null-receiver), and ForOfStatement (bare-null iterable +
+the empty-`[]` TS2488 pattern) enters. Reach quirks mirrored (12 pins,
+Inv4SpineBatch31Test, ALL pre-verified on the OLD walker first run): `new`
+expressions, as/angle casts, non-null assertions, await/yield/void/typeof/
+delete/spread operands, tagged templates, comma lists, class EXPRESSIONS,
+object-literal methods/accessors, and for-header DECLARATOR initializers
+all unreached; switch subjects AND case expressions walked; objlit property
+VALUES walked. VERIFIED: suite 11,221 → 11,233 (+12, 0 regressions,
+XML-verified); listAll error lines IDENTICAL on ALL 8 profiles (540a vs
+540sm; slot-move pre-gate also corpus-green); bench 46 errors, histogram
+unchanged. NEXT: INV.4(d) tail — checkCommaOperatorUnused +
+checkNullishPredicates (the documented same-position insertion-order pair —
+migrate TOGETHER or comma-first), then the remaining ~100 ms walkers.
+
 **Round 539 (2026-07-17) — INV.4(d) walker 10: checkAlwaysTruthy (the
 TS2872/TS2873 always-truthy/falsy condition pass + TS1345 void-call
 conditions, TS2845 enum-member truthiness, and the `!`-operand falsy check;
@@ -1789,6 +1818,13 @@ interrupt the arc).
       identical on ALL 8 profiles; the pass driver deleted (the recursive
       walkers stay as checkComputedDestructKey's utility). See the round-531
       session note.
+    - (w11) DONE round 540 (2026-07-17): checkNullUndefinedUsage (TS18050 +
+      the for-of empty-[] TS2488 shape) — pure anchors, no ambient; the
+      classifier carries the legacy checkDepth ≤ 200 STATEMENT-frame cap as
+      a depth-encoded ShortArray status, with legacy frameless body Blocks
+      as CARRIER blocks at the parent's depth. 12 pins (Inv4SpineBatch31Test)
+      pre-verified; suite 11,221 → 11,233; listAll ×8 identical; ~230 walker
+      lines deleted. See the round-540 session note.
     - (w10) DONE round 539 (2026-07-17): checkAlwaysTruthy (TS2872/TS2873 +
       TS1345/TS2845 + the `!`-operand falsy check) — frameless: both walk
       states pull-derive (the never-reset B69.11 inArrowExprBody flag; the
