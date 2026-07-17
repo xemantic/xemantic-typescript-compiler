@@ -2415,6 +2415,19 @@ interrupt the arc).
   - [ ] **INV.5(d) Instantiated members cached ON the `Type.Reference`.**
     Delete `resolveGenericPropertyType` fresh-minting + its depth-4 OOM cap
     (the per-recursion-level cache-miss gotcha).
+    **CAP-LIFT PROBE FALSIFIED (round 551, reverted): removing
+    `relationDepth < 4` with (a)-interning + the (ref.id, prop.id) memo in
+    place still KILLS performanceComparisonOfStructurallyIdentical-
+    InterfacesWithGenericSignatures — the deep-stack thread dies after ~20 s
+    (OOM → NPE at runWithDeepStack's result unwrap). The blowup is BREADTH,
+    not depth: each comparison level mints genuinely NEW (target, args)
+    references (growing arg shapes), so the memo never hits and the
+    deeply-nested 5-occurrence heuristic (which fires at relation ENTRY)
+    doesn't bound the per-level member/signature instantiation between
+    bails. The real (d) fix is tsc-shaped: an instantiation-count budget
+    (tsc's instantiationDepth/instantiationCount → TS2589) plus member
+    tables cached ON the reference, NOT a cap lift. Keep the depth-4 cap
+    until then.**
   - [ ] **INV.5(e) Open `canUseTypeEngine`'s generic gate; delete superseded
     pin walkers** (suite-gated per deletion). Then RETURN to INV.4(e).
 
