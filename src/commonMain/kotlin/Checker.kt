@@ -853,7 +853,13 @@ class Checker(
         frame.localTypes.putAll(base.localTypes)
         frame.localDeclNodes.putAll(base.localDeclNodes)
         frame.shadowedNames.addAll(base.shadowedNames)
-        if (viaCheckFunctionBody && body is Block && ctaAuditEnabled) {
+        // (cta-m3c) round 570: the fn-body sandwich is ALWAYS-ON — the round-568
+        // fourslashImpl drift (TP-constraint materialization timing flipping a
+        // TS2339 verdict) is removed at its source by the round-569/570
+        // inference-aware contextual param typing (un-inferred callee TPs are
+        // never registered, so no verdict depends on constraint presence).
+        // Acceptance probe: harness listAll stays at the no-FP floor.
+        if (viaCheckFunctionBody && body is Block) {
             val paramNames = parameters.mapNotNull { p -> (p.name as? Identifier)?.text }.toSet()
             withCtaFrameLocals(frame) {
                 applyBodyLocalShadowing(body.statements, paramNames)

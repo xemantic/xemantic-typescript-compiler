@@ -35,9 +35,20 @@ un-inferred TP callback params → no TS2339; negative control: a concrete
 contextual param type still fires). Gates: corpus 11,310/0 (+3 local);
 listAll ×8 vs HEAD error-line IDENTICAL (the fix only removes the
 order-dependence — in legacy order the bare-TP verdicts were already
-silent bails on all profiles). NEXT: re-attempt the always-on fn-body
-sandwich (cta-m3c) with fourslashImpl as the standing acceptance probe
-(harness must stay at 94 = the no-FP floor).
+silent bails on all profiles).
+**Round 570b — (cta-m3c) RE-LANDED: the fn-body sandwich is ALWAYS-ON.**
+The round-568 revert is undone: `ctaFnBodyFrame`'s sandwich (shadowing
+helpers + TP scope/constraint materialization + param typing) runs
+unconditionally. The standing acceptance probe PASSED: harness listAll at
+the 94-error no-FP floor, ZERO fourslashImpl TS2339 lines, all 8 profiles
+error-line IDENTICAL vs the round-570 baseline; corpus 11,310/0. The cta
+fn-body tier is UNBLOCKED — production fn frames carry real context
+(fnTpScope/fnTpDecls + typed varTypes/localTypes), so the m3 statement
+anchor can extend into function bodies. The +~4% frame-construction cost
+stands; the lazy/copy-on-write follow-up stays queued (round 568c). NEXT:
+(cta-m3d) extend `ctaM3StmtAnchor` to fn-body-direct statements
+(VariableStatement first), emit-twice-suppress-legacy per the m3a
+template.
 
 **Round 569 (2026-07-17) — the fourslashImpl constraint delta ROOT-CAUSED
 (probe-verified, probe reverted): the sandwich resolves T's constraint
