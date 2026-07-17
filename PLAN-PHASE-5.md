@@ -2168,8 +2168,26 @@ interrupt the arc).
   - [ ] **INV.5(b) Explicit mapper objects.** Replace the ambient
     `currentTypeAliasArgs`/`currentTypeParamScope` instantiation contexts
     with an explicit mapper threaded through the resolution entry points —
-    the enabler for (c); decompose per entry-point family when reached (the
-    `getTypeFromTypeNode` `cacheable` gate is the load-bearing site).
+    the enabler for (c). MEASURED SURFACE (round 546): 87 write sites in 34
+    functions (top installers: checkCallTypesInStatement ×7,
+    walkStmtsForTypeParamCasts ×6, checkReturnAssignability /
+    resolveGenericPropertyTypeWorker / getTypeFromTypeReference /
+    resolveInterfaceMembersCore / checkConstraintsInStatements ×4 each) +
+    ~90 read sites inside the resolution family. DECOMPOSITION (bridge
+    pattern — each step suite + listAll-×8 gated): (b1) a `TypeMapper`
+    value (aliasArgs + tpScope + a stable fingerprint for cache keying) +
+    an optional `mapper` param on `getTypeFromTypeNode`/
+    `getTypeFromTypeReference` DEFAULTING to the ambient (behavior-
+    identical bridge; the `cacheable` gate reads the param); (b2+) flip
+    installer families to pass explicitly — resolution-internal first
+    (getTypeFromTypeReference's alias substitution,
+    resolveGenericPropertyTypeWorker, resolveInterfaceMembersCore,
+    getTypeOf* lazies), then the walker-level installers (call-types /
+    constraints / return paths / tp-cast walkers); (bN) remove the ambient
+    fields. NOTE (c) only needs the mapper AT THE CACHE CONSULT — it can
+    start right after (b1) with ambient-bridged installers still in place
+    (key = (nodeId, mapper.fingerprint); the context-bypass `cacheable`
+    rule dies there).
   - [ ] **INV.5(c) `nodeTypes` keyed (node, mapper) — always valid.** Kills
     the context-bypass rule and the first-touch hazard class outright (the
     round-543 blocker). Depends on (b).
