@@ -1790,7 +1790,12 @@ interrupt the arc).
       10,832 → 10,872 (+40 Inv4SpineBatch20Test, ALL verified against the
       OLD walker first; 0 regressions); listAll error lines IDENTICAL on
       ALL 8 profiles (529a vs 528a); bench row recorded.
-  - [ ] **INV.4(d) Mid-weight stateful walkers.** Each moves its scope
+  - [x] **INV.4(d) Mid-weight stateful walkers.** COMPLETE round 541 (walkers
+    1–13; the round-529 cost-ordered list is fully migrated — a fresh
+    --passTiming table at round 542 shows the remaining non-giant tail is a
+    flat sea of sub-160 ms mostly-stateless passes, none of them the
+    scope-machinery shape this item targeted; they get absorbed
+    opportunistically or superseded by (e)/(f)). Each walker moved its scope
     machinery onto the shared spine state; decompose per walker when reached.
     MEASURED cost order (round-529 --passTiming, post-(c): checker-init
     20.6 s; spine 2,247 ms carrying both name-resolution families + ~40 tail
@@ -2007,10 +2012,35 @@ interrupt the arc).
       walker first run; suite 11,004 → 11,052; listAll error-line identical
       on ALL 8 profiles; ~215 walker lines deleted. See the round-533
       session note.
-  - [ ] **INV.4(e) The top-3 giants.** checkPropertyAccess (3.8 s) →
-    checkTypeAssignability (2.2 s) → checkCallExpressionTypes (1.7 s) — one at
-    a time, each with its own sub-plan when reached (together 38.6% of
-    checker-init; 458k of 595k getTypeOfExpression calls).
+  - [ ] **INV.4(e) The top-3 giants.** checkPropertyAccess (3.66 s @ round-542
+    table) → checkTypeAssignability (2.62 s) → checkCallExpressionTypes
+    (2.13 s) — one at a time (together ~38% of checker-init; 458k of 595k
+    getTypeOfExpression calls). **g1 SUB-PLAN (scouted round 542, in-code):
+    checkPropertyAccess's walker core is compact (checkPropertyAccessInStatement
+    293 lines / 22 arms + checkPropertyAccessInExpr 414 lines / 26 arms —
+    the mass is in the called emission machinery, retained as leaf
+    utilities). State model per the (d) templates: (1) statement-ordered
+    currentLocalTypes recordings (w2 arith shape — PUSH-maintained frames,
+    PASS-PRIVATE on the spine per the w2 currentParamBindingNames lesson;
+    the pass also does applyBodyLocalShadowing at fn-decl/arrow/fn-expr
+    boundaries per the round-447 gotcha — those calls stay in the frame
+    installs); (2) contextualType downward threading with clear-before-body
+    edges (w3 iany shape — push ctx with frames at exactly the legacy
+    assignment edges); (3) enclosingClassType threaded param + inStaticClassMethod
+    (pull-derivable from the member chain); (4) propertyAccessEnclosingNamespaces
+    (its OWN stack, deliberately separate from inferenceNamespaceStack per
+    the two-stacks gotcha — push at ModuleDeclaration edges); (5) per-file
+    ambient currentFileLocals/currentCheckFileName/currentFlowGraph/
+    currentLexicalScopes (per-dispatch install, w1 discipline — NOTE
+    currentFlowGraph walk-wide is the 78-test hazard, so install around
+    emissions only). SUB-STEPS, one commit each: (g1a) slot-move pre-gate —
+    move the intact pass from its slot to the spine slot; this REORDERS it
+    before the other two giants, so expect residue coupling (the w2
+    corpus-only lesson): listAll ×8 + FULL corpus mandatory; if the
+    pre-gate diffs, bisect the coupling with restore-after-pass probes
+    before any migration. (g1b) pins (~50, the largest batch yet — reach
+    quirks per arm; pre-verify on OLD). (g1c) the migration. (g1d) after
+    g1 lands, re-measure; g2/g3 decompose the same way when reached.**
   - [ ] **INV.4(f) The two unlocked soundness wins.** Once one authoritative
     walk state exists: the per-node expression-type cache (594,779 calls over
     ~221,844 distinct nodes = ×2.6 recompute), and flow narrowing folded into
