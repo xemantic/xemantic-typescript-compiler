@@ -20,6 +20,33 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 571 (2026-07-18) — (cta-m3e) LANDED: anchor-SIMPLE lifted — the
+legacy nested-dispatch recordings are reproduced spine-side.** A NON-anchored
+VariableStatement's spine enter runs `ctaM3StmtAnchor(recordOnly = true)`:
+the EXACT nested legacy arm surface (checkVarDeclAssignability + B127 inner
+assignment — deliberately NOT registerConstLiteralUnionNarrowing /
+walkFunctionBodiesInExpr, those are top-level-arm-only), under frame maps +
+full anchor ambient, every diagnostic truncated. The frame sharing structure
+(clause/Block frames share localTypes, copy varTypes) already models the
+legacy leak; narrowing-DISCARD regions (the nested IfStatement arm's
+copy-restore) are classified at the IfStatement's spine enter
+(extractNullNarrowing under frame maps → `ctaM3DiscardThen` + depth
+tracking) and skipped. TWO iteration lessons: (a) the discard rule's local
+observability is genuinely poor (the then-recordings are block-scoped or
+hoisted-but-unread shapes — the corpus narrowing pins are its guardian);
+(b) the TS2563 trip machinery is STATEFUL across the emit-twice split — a
+recordOnly walk that trips must NOT reportFlowControlError
+(`ctaM3RecordOnlySuppress`): the truncation removes the TS2563 but a
+persisted flowDisabledRanges registration makes the legacy walk bail
+SILENTLY (CfaTooLargeBailTest caught it — the diagnostic would be lost and
+TS2454s mis-filtered). With recordings reproduced, the barrel switch shape
+became anchor-eligible and stayed green (BarrelCheckDefinedReturnTest + the
+new single-file switch-recording pin). Gates: corpus 11,318/0; listAll ×8
+error-line identical vs m3d. NEXT: the remaining stmt-kind arms at anchored
+scopes (If/Switch/For/While/Try dispatch arms with their narrowing wrappers)
+— or extend anchor eligibility to method/arrow/fn-expr bodies (needs
+currentClassForThis + the accessor quirks reproduced).
+
 **Round 570 (2026-07-17) — round 569's enabling fix LANDED: inference-aware
 contextual param typing (skip un-inferred callee TPs).** The property-access
 pass's contextual param registration (ArrowFunction + FunctionExpression
@@ -445,7 +472,7 @@ item; decompose into the smallest standalone suite-gated commits; micro-opt roun
 against the flat profile are CLOSED (only an INV.0-evidenced ≥5% single lever may
 interrupt the arc).
 
-- [ ] **(cta-m3e) Lift the anchor-SIMPLE restriction — reproduce the legacy
+- [x] **(cta-m3e) Lift the anchor-SIMPLE restriction — reproduce the legacy
   nested-dispatch localTypes recordings spine-side (queued round 570c with the
   design from the BarrelCheckDefinedReturnTest root-cause).** The blocker: legacy
   nested-scope dispatches RECORD into the shared `currentLocalTypes` and the spine
@@ -466,7 +493,9 @@ interrupt the arc).
   barrel repro shape as a local pin (switch-clause recording feeding a later
   anchored statement's member reduction), corpus + listAll ×8. Alternative if the
   recording-only sandwich disturbs first-touch caches: migrate the nested
-  dispatchers' arms themselves (bigger).
+  dispatchers' arms themselves (bigger). DONE round 571 — the recording-only
+  sandwich landed clean (one extra invariant found: TS2563 trip-state suppression
+  during recordOnly, CfaTooLargeBailTest); see the session note.
 - [x] **INV.0 Instrument the multiplier.** DONE round 491 (2026-07-13):
   `PassTiming.kt` + non-inline `pass(name) {}` around all 514 init dispatch calls +
   the three counters (`getTypeOfExpression` calls/distinct with per-pass attribution,

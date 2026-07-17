@@ -741,9 +741,28 @@ class Checker(
         ctaFrames.clear()
         ctaFrames.addLast(CtaFrame(sf, mutableMapOf(), null, null, emptySet(),
             inFn = false, inAsync = false, inGen = false, inInstanceMember = false))
+        ctaM3DiscardThen.clear()
+        ctaM3DiscardDepth = 0
     }
 
     private var ctaM3FlowGraph: FlowGraph? = null
+
+    /** (cta-m3e): nodeIds of if-THEN statements whose legacy dispatch runs under
+     *  the narrowing wrapper (extractNullNarrowing non-null — verdict computed
+     *  at the IfStatement's spine enter under the frame maps): recordings
+     *  inside are DISCARDED by the legacy restore, so the spine recording
+     *  reproduction must skip them. Per-file reset. */
+    private val ctaM3DiscardThen = HashSet<Int>()
+    private var ctaM3DiscardDepth = 0
+
+    /** (cta-m3e): true while a recordOnly reproduction runs — suppresses the
+     *  TS2563 trip REPORT (emission + flowDisabledRanges registration) inside
+     *  [flowWalkWithTripCheck]: the recording's diagnostics are truncated
+     *  anyway, and a persisted range registration would make the legacy-time
+     *  walk bail silently (losing the TS2563 and mis-filtering TS2454s —
+     *  CfaTooLargeBailTest). The legacy walk trips and reports in its own
+     *  order. */
+    private var ctaM3RecordOnlySuppress = false
 
     /** (cta-m3a): the top-level + namespace-body VariableStatement emission —
      *  the legacy arm's leaf calls run from the spine under a per-dispatch
@@ -767,7 +786,6 @@ class Checker(
     private fun ctaM3FnBodyAnchorScope(stmt: Node): Block? {
         val block = (stmt as NodeBase).parent as? Block ?: return null
         val fn = (block as NodeBase).parent as? FunctionDeclaration ?: return null
-        if (!ctaM3SimpleBody(block)) return null
         var cur: Node? = (fn as NodeBase).parent
         while (cur != null) {
             when (cur) {
@@ -775,7 +793,6 @@ class Checker(
                 is ModuleBlock, is ModuleDeclaration -> cur = (cur as NodeBase).parent
                 is Block -> {
                     val p = (cur as NodeBase).parent as? FunctionDeclaration ?: return null
-                    if (!ctaM3SimpleBody(cur)) return null
                     cur = (p as NodeBase).parent
                 }
                 else -> return null
@@ -784,22 +801,19 @@ class Checker(
         return null
     }
 
-    /** (cta-m3d): a fn body is anchor-SIMPLE when its direct statement list
-     *  contains only anchored kinds + nested fn decls. The legacy walk's
-     *  nested-scope dispatches (switch clauses / if branches / loop and try
-     *  bodies) RECORD into the shared currentLocalTypes (the load-bearing
-     *  leak) — the spine frames have no reproduction of those recordings, so
-     *  a fn body containing any such statement would hand a later anchored
-     *  statement an INCOMPLETE localTypes map (the barrel switch-clause
-     *  `importLiteral` recording, round-570 repro). Lifting this requires
-     *  spine-side reproduction of the nested-dispatch recording order. */
-    private fun ctaM3SimpleBody(block: Block): Boolean = block.statements.all {
-        it is VariableStatement || it is ExpressionStatement ||
-            it is ReturnStatement || it is FunctionDeclaration
-    }
 
-    private fun ctaM3StmtAnchor(stmt: Statement, scopeStatements: List<Statement>) {
+    private fun ctaM3StmtAnchor(stmt: Statement, scopeStatements: List<Statement>, recordOnly: Boolean = false) {
         val frame = ctaFrames.last()
+        // (cta-m3e): recordOnly reproduces the legacy NESTED dispatch's map
+        // evolution for a non-anchored VariableStatement — the map writes are
+        // kept, every diagnostic is truncated (nested statements stay
+        // legacy-owned for emission). The run surface is EXACTLY the nested
+        // legacy arm: checkVarDeclAssignability + the B127 inner assignment
+        // (no registerConstLiteralUnionNarrowing / walkFunctionBodiesInExpr —
+        // those are top-level-arm-only).
+        val recordMark = if (recordOnly) diagnostics.size else -1
+        val sRecSuppress = ctaM3RecordOnlySuppress
+        if (recordOnly) ctaM3RecordOnlySuppress = true
         val sFG = currentFlowGraph
         val sSS = currentScopeStatements
         val sCFN = currentCheckFileName
@@ -831,7 +845,17 @@ class Checker(
         }
         try {
             withCtaFrameLocals(frame) {
-                when (stmt) {
+                if (recordOnly) {
+                    if (stmt is VariableStatement) {
+                        for (decl in stmt.declarationList.declarations) {
+                            checkVarDeclAssignability(decl, spineSource, spineFileName, frame.varTypes, frame.typeParams)
+                            val init = decl.initializer
+                            if (init is BinaryExpression && init.operator == SyntaxKind.Equals) {
+                                checkAssignmentExpression(init, spineSource, spineFileName, frame.varTypes, frame.typeParams)
+                            }
+                        }
+                    }
+                } else when (stmt) {
                     is VariableStatement -> {
                         for (decl in stmt.declarationList.declarations) {
                             if (stmt.declarationList.flags == SyntaxKind.ConstKeyword) {
@@ -866,6 +890,10 @@ class Checker(
                 }
             }
         } finally {
+            ctaM3RecordOnlySuppress = sRecSuppress
+            if (recordMark >= 0) {
+                while (diagnostics.size > recordMark) diagnostics.removeAt(diagnostics.size - 1)
+            }
             repeat(nsPushed) { inferenceNamespaceStack.removeLast() }
             currentFlowGraph = sFG
             currentScopeStatements = sSS
@@ -993,7 +1021,23 @@ class Checker(
     }
 
     private fun ctaSpineEnter(node: Node) {
-        val parent = (node as NodeBase).parent
+        // (cta-m3e): classify narrowing-DISCARD regions. The legacy nested
+        // IfStatement arm copies currentLocalTypes around the then-branch when
+        // extractNullNarrowing fires (recordings there are discarded on
+        // restore) — the verdict is computed here under the frame maps, at the
+        // same preorder position the legacy wrapper decides it.
+        if (node is IfStatement && !spineIsDts) {
+            val thenId = (node.thenStatement as NodeBase).nodeId
+            if (thenId >= 0) {
+                var narrowed = false
+                withCtaFrameLocals(ctaFrames.last()) {
+                    narrowed = extractNullNarrowing(node.expression) != null
+                }
+                if (narrowed) ctaM3DiscardThen.add(thenId)
+            }
+        }
+        if ((node as NodeBase).nodeId.let { it >= 0 && it in ctaM3DiscardThen }) ctaM3DiscardDepth++
+        val parent = node.parent
         // Frame pushes — decided at the BODY/Block enter by its parent kind.
         if (node is Block) {
             when (parent) {
@@ -1132,6 +1176,7 @@ class Checker(
 
     private fun ctaSpineLeave(node: Node) {
         if (ctaFrames.size > 1 && ctaFrames.last().owner === node) ctaFrames.removeLast()
+        if ((node as NodeBase).nodeId.let { it >= 0 && it in ctaM3DiscardThen }) ctaM3DiscardDepth--
     }
 
     /** B72.1: value-scope tracking for mixin-class TS2545 check —
@@ -18643,15 +18688,30 @@ class Checker(
     private fun spineEnterNode(node: Node) {
         ctaSpineEnter(node)
         if ((node is VariableStatement || node is ExpressionStatement || node is ReturnStatement) && !spineIsDts) {
-            when (val p = (node as NodeBase).parent) {
-                is SourceFile -> ctaM3StmtAnchor(node as Statement, p.statements)
-                is ModuleBlock -> ctaM3StmtAnchor(node as Statement, p.statements)
+            val p = (node as NodeBase).parent
+            val anchored = when (p) {
+                is SourceFile -> { ctaM3StmtAnchor(node as Statement, p.statements); true }
+                is ModuleBlock -> { ctaM3StmtAnchor(node as Statement, p.statements); true }
                 // (cta-m3d): fn-body-DIRECT statements of eligible
                 // FunctionDeclaration chains (see ctaM3FnBodyAnchorScope).
                 is Block -> if (ctaM3FnBodyAnchorScope(node) != null) {
-                    ctaM3StmtAnchor(node as Statement, p.statements)
+                    ctaM3StmtAnchor(node as Statement, p.statements); true
+                } else false
+                else -> false
+            }
+            // (cta-m3e): a NON-anchored VariableStatement reproduces the legacy
+            // nested-dispatch RECORDING (map writes only — diagnostics
+            // truncated; emission stays legacy-owned) so anchored statements
+            // downstream read a legacy-parity localTypes/varTypes state.
+            // Skipped inside narrowing-DISCARD regions.
+            if (!anchored && node is VariableStatement && ctaM3DiscardDepth == 0) {
+                val list = when (p) {
+                    is Block -> p.statements
+                    is CaseClause -> p.statements
+                    is DefaultClause -> p.statements
+                    else -> listOf(node as Statement)
                 }
-                else -> {}
+                ctaM3StmtAnchor(node as Statement, list, recordOnly = true)
             }
         }
         // INV.4(d) walker 2: edge-triggered scope frames + enter-position
@@ -96806,7 +96866,7 @@ interface DataView {
         flowDepthTripped = false
         try {
             val result = walk()
-            if (flowDepthTripped) reportFlowControlError(reference)
+            if (flowDepthTripped && !ctaM3RecordOnlySuppress) reportFlowControlError(reference)
             return result
         } finally {
             flowDepthTripped = saved

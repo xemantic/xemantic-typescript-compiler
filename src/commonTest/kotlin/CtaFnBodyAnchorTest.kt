@@ -107,6 +107,52 @@ class CtaFnBodyAnchorTest {
     }
 
     @Test
+    fun `switch-clause recording feeds a later anchored statement's narrowing`() {
+        // (cta-m3e): the clause's `lit` recording must reach the fn-body frame
+        // (the legacy leak) so `end`'s assignment-reduction narrowing survives
+        // to the anchored final statement — the round-570 barrel shape,
+        // single-file. A missing recording reads `end` as number | undefined
+        // → FP TS2322.
+        diagnose("""
+            declare function pick(): { end: number };
+            function g(k: number): number {
+                let end: number | undefined;
+                switch (k) {
+                    case 1:
+                        const lit = pick();
+                        end = lit.end;
+                        break;
+                    default:
+                        end = 0;
+                        break;
+                }
+                return end;
+            }
+        """) should {
+            have(none { it.code == 2322 })
+        }
+    }
+
+    @Test
+    fun `narrowing-discarded then-branch recording adds no emissions`() {
+        // (cta-m3e) negative control: the then-branch runs under the legacy
+        // narrowing wrapper (recordings discarded — the spine reproduction
+        // skips the region), and recordOnly truncates every diagnostic — the
+        // shape must stay exactly as silent as it is on the legacy path (the
+        // param-source nullish var-decl is currently unchecked; the discard
+        // rule's behavioral pins are the corpus narrowing shapes).
+        val n = countTs2322("""
+            function h(a: number | undefined) {
+                if (a !== undefined) {
+                    const b = a;
+                }
+                const c: number = a;
+            }
+        """)
+        assert(n == 0) { "expected 0 TS2322 (legacy-parity silence), got $n" }
+    }
+
+    @Test
     fun `if-nested statement inside fn body stays legacy-owned and emits exactly once`() {
         val n = countTs2322("""
             declare const cond: boolean;
