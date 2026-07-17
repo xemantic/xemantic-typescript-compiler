@@ -2157,6 +2157,14 @@ interrupt the arc).
     root-cause with a targeted probe (temporary Diagnostic-init stack-trace
     probe keyed on code=2322 + the watch.ts:533 start per the round-472
     recipe), fix the one path, re-land.**
+    **PROBE RE-RUN (round 546, post-(a)): the g1a' couplings PERSIST under
+    canonical union identity (both typeArgumentDefaultUsesConstraintOn-
+    CircularDefault and relationComplexityError still fail with the giant at
+    the spine slot; probe reverted). The residual first-touch sensitivity is
+    NOT union-identity — it lives in declaredTypes/aliasDisplayMap
+    resolution TIMING (the Test<any> display) and the relation/complexity
+    verdict state — i.e. exactly the (b)/(c) territory (explicit mappers +
+    keyed nodeTypes). The INV.5 sequencing holds; continue with (b).**
   - [ ] **INV.5(b) Explicit mapper objects.** Replace the ambient
     `currentTypeAliasArgs`/`currentTypeParamScope` instantiation contexts
     with an explicit mapper threaded through the resolution entry points —
