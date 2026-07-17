@@ -2276,7 +2276,10 @@ interrupt the arc).
     an optional `mapper` param on `getTypeFromTypeNode`/
     `getTypeFromTypeReference` DEFAULTING to the ambient (behavior-
     identical bridge; the `cacheable` gate reads the param); (b2+) flip
-    installer families to pass explicitly — resolution-internal first
+    installer families to pass explicitly — (b2a) DONE round 549c: all 6
+    simple aliasArgs installers flipped via aliasMapper/layeredAliasMapper
+    (only the complex getTypeFromTypeReference substitution remains on the
+    aliasArgs side = (b2b)); resolution-internal first
     (getTypeFromTypeReference's alias substitution,
     resolveGenericPropertyTypeWorker, resolveInterfaceMembersCore,
     getTypeOf* lazies), then the walker-level installers (call-types /
