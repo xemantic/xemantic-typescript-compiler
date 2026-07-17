@@ -59,6 +59,49 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 536 (2026-07-17) — INV.4(d) walker 7: checkUseBeforeDeclaration (the
+TS2448/TS2449/TS2450 TDZ pass + the TS2454 co-emit and static-init TS2729,
+205 ms in the round-529 cost table) migrated onto the spine — the per-file
+driver, the per-list activation (checkUBDInStatements), and the nested-scope
+recursion walkers (checkUBDInStatement / checkUBDInExprForNested) are
+DELETED (~195 lines).** The lightest stateful shape since the dupId walker:
+reach is a 5-state memoized ancestor classifier (`spineUbdStatus` over
+`spineUbdEdge` — STMT/EXPR/LIST/MEMBER/NONE, the deleted arms verbatim), the
+per-LIST blockScopedDecls map (a pure WHOLE-list function: let/const/class/
+enum/namespace decls minus hoisted fn/var names) is memoized per list owner
+(`spineUbdListDecls`), the retained BOUNDED per-statement walk
+`checkUBDForwardRefs` (which recurses if/labeled descent itself — nested
+statements never re-anchor) runs at DIRECT statements of ACTIVATED lists,
+and the For/ForIn/ForOf loop-header SELF-ref checks re-host at the loop
+statements' enters (any UBD_STMT-reached loop, since the deleted recursion
+ran them at every statement position, not just list members). ORDER
+COUPLINGS, both resolved by slot placement and empirically gated: (1) the
+producer sibling populateAmbientCyclicBaseClasses (the TS2449
+ambient-cyclic suppression set consulted by emitTS2449) moved BEFORE the
+spine; (2) emitTS2448 CO-EMITS TS2454, and
+checkDefiniteAssignmentViaFlowGraph's position-dedup scan — which runs
+right after the spine since round 534 — now SEES those co-emissions where
+the legacy order hid them (UBD ran ~500 slots later); the slot-move
+pre-gate (intact pass between the spine and the DA-flowgraph siblings)
+measured error-line-identical listAll ×8 AND corpus-green, so the
+interplay is inert. The cross-file leg
+(checkCrossFileUseBeforeDeclaration) stays a separate pass at the spine
+slot, preserving per-file-first order. Reach quirks pinned (33 pins,
+Inv4SpineBatch27Test, ALL pre-verified on the OLD walker first run): the
+ForwardRefs walk descends if/labeled ONLY — an UNBRACED if-body statement
+IS forward-checked while a BRACED one is a fresh activation and is NOT;
+while bodies / do-statements (condition AND body) / for headers / for-in/of
+iterated expressions / try bodies / switch CLAUSE statements are never
+forward-checked against the OUTER list's later declarations; async IIFE
+self-refs exempt while plain IIFE self- and forward-refs fire (with body
+shadowing suppression); const enums / declare-decls have no TDZ; a hoisted
+var/function alongside the let disables the check; instance property
+initializers are deferred while static ones fire TS2729+TS2449. VERIFIED:
+suite 11,137 → 11,170 (+33, 0 regressions, XML-verified); listAll error
+lines IDENTICAL on ALL 8 profiles (536a vs 535a); bench row recorded.
+NEXT: INV.4(d) walker 8 — checkImplicitReturns (199 ms) / checkConstAssignment
+(170 ms).
+
 **Round 535 (2026-07-17) — INV.4(d) walker 6: checkArgumentCounts (the
 TS2554/TS2555/TS2575 function-call arity pass, 230 ms in the round-529 cost
 table) migrated onto the spine — the per-file driver and the recursion
@@ -1628,6 +1671,21 @@ interrupt the arc).
       identical on ALL 8 profiles; the pass driver deleted (the recursive
       walkers stay as checkComputedDestructKey's utility). See the round-531
       session note.
+    - (w7) DONE round 536 (2026-07-17): checkUseBeforeDeclaration (TS2448/
+      TS2449/TS2450 + TS2454 co-emit + static-init TS2729) — 5-state reach
+      classifier + per-list-owner memoized blockScopedDecls; the retained
+      BOUNDED checkUBDForwardRefs walk anchors at DIRECT statements of
+      activated lists (it recurses if/labeled itself — nested statements
+      never re-anchor); loop-header self-ref checks re-host at For/ForIn/
+      ForOf enters. TWO order couplings resolved by slot placement:
+      populateAmbientCyclicBaseClasses (the TS2449 suppression-set producer)
+      moved BEFORE the spine, and the TS2454 co-emits becoming visible to
+      checkDefiniteAssignmentViaFlowGraph's dedup scan measured INERT
+      (slot-move pre-gate: corpus green + listAll ×8 identical). Cross-file
+      leg stays a separate pass at the spine slot. 33 pins
+      (Inv4SpineBatch27Test) ALL pre-verified on the OLD walker first run;
+      suite 11,137 → 11,170; listAll error-line identical on ALL 8 profiles;
+      ~195 walker lines deleted. See the round-536 session note.
     - (w6) DONE round 535 (2026-07-17): checkArgumentCounts (TS2554/TS2555/
       TS2575) — the first DEPTH-valued reach classifier (the legacy
       argCountDepth recursion counter reproduced per edge, ≤200 cap; binary

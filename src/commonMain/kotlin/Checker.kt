@@ -1121,6 +1121,25 @@ class Checker(
         val superCtor: FuncParamInfo?,
     )
 
+    // ── INV.4(d) walker 7 (round 536): checkUseBeforeDeclaration on the spine ──
+    // The TDZ pass (TS2448/TS2449/TS2450 + the TS2454 co-emit and the
+    // static-init TS2729) — the nested-scope recursion walkers
+    // (checkUBDInStatement / checkUBDInExprForNested) are deleted; reach is
+    // the memoized multi-state classifier [spineUbdStatus] over [spineUbdEdge]
+    // (the deleted arms verbatim), the per-LIST blockScopedDecls map (a pure
+    // whole-list function) is memoized per list owner ([spineUbdListDecls]),
+    // the retained BOUNDED per-statement walk checkUBDForwardRefs runs at
+    // direct statements of activated lists, and the For/ForIn/ForOf
+    // loop-header SELF-ref checks re-host at the loop statements' enters.
+    /** Per-file activation: the legacy non-.d.ts gate. */
+    private var spineUbdActive = false
+    /** Per-file nodeId memo for [spineUbdStatus] — 0 unknown, else a UBD_* state. */
+    private var spineUbdReachMemo = ByteArray(0)
+    /** Reusable ascent buffer for [spineUbdStatus]. */
+    private val spineUbdChain = ArrayList<Node>()
+    /** Per-list-owner memo for [spineUbdListDecls], keyed by nodeId; cleared per file. */
+    private val spineUbdDeclsMemo = HashMap<Int, Map<String, BlockScopedDecl>>()
+
     // Positions of ObjectLiteralExpression nodes that are destructuring-assignment
     // TARGETS (LHS of `=`, incl. nested through array/object/default nesting). Consumed
     // by the shorthand-with-initializer TS1312/TS18004 selection in
@@ -2373,7 +2392,20 @@ class Checker(
         // function → TS2556 (+ TS2488/TS2461). Must run BEFORE the arg-count
         // emissions so it can register the call to suppress the spurious TS2554.
         pass("checkSpreadNonIterableIntoFixedArity") { checkSpreadNonIterableIntoFixedArity() }
+        // 36b (moved before the spine, INV.4(d) walker 7 slot-move): B18.3 v3 —
+        // pre-populate the ambient-cyclic-base-class set so TS2449 can be
+        // suppressed for those classes (the UBD emissions consult it).
+        pass("populateAmbientCyclicBaseClasses") { populateAmbientCyclicBaseClasses() }
         pass("checkSpine") { checkSpine() }
+        // 37. Use-before-declaration (TS2448/2449/2450): the per-file leg rides
+        // the spine (INV.4(d) walker 7 — spineUbdSetup/spineUbdEnterNode);
+        // deliberately BEFORE checkDefiniteAssignmentViaFlowGraph, whose TS2454
+        // position-dedup scan now sees the pass's TS2454 co-emissions (slot-move
+        // pre-gated: corpus + listAll ×8 identical). The cross-file leg stays a
+        // separate pass here, preserving the legacy per-file-first order.
+        pass("checkCrossFileUseBeforeDeclaration") {
+            if (binderResults.size > 1) checkCrossFileUseBeforeDeclaration()
+        }
         if (shouldCheckDefiniteAssignment) {
             pass("checkDefiniteAssignmentViaFlowGraph") { checkDefiniteAssignmentViaFlowGraph() }
             // B223: TS2454 for vars whose ONLY assignment sits inside a try block
@@ -2839,12 +2871,10 @@ class Checker(
         pass("checkWeakMapWeakSetCollision") { checkWeakMapWeakSetCollision() }
         // 36. Check import declarations with modifiers (TS1191)
         pass("checkImportModifiers") { checkImportModifiers() }
-        // 36b. B18.3 v3: Pre-populate the ambient-cyclic-base-class set so TS2449
-        // can be suppressed for those (TS2506 is the primary diagnostic; non-ambient
-        // cycles still fire BOTH). Must run before [checkUseBeforeDeclaration].
-        pass("populateAmbientCyclicBaseClasses") { populateAmbientCyclicBaseClasses() }
-        // 37. Check block-scoped variable use before declaration (TS2448)
-        pass("checkUseBeforeDeclaration") { checkUseBeforeDeclaration() }
+        // 36b. populateAmbientCyclicBaseClasses moved BEFORE the spine — see the
+        // pass("checkSpine") site (INV.4(d) walker 7).
+        // 37. checkUseBeforeDeclaration moved to the spine slot — see the
+        // pass("checkSpine") site (INV.4(d) walker 7).
         // 37a2. Cross-namespace class-heritage TDZ: a class in top-level namespace A
         //       extending `B.X` where namespace B is declared AFTER A (TS2449).
         pass("checkCrossNamespaceClassHeritageUBD") { checkCrossNamespaceClassHeritageUBD() }
@@ -17913,6 +17943,7 @@ class Checker(
                 spineDupIdSetup(result)
                 spineDaSetup(result)
                 spineArgSetup(result)
+                spineUbdSetup(result)
                 spineUResAuditActive = unresolvedAuditEnabled && spineUResActive
                 try {
                     spineWalkFile(sf)
@@ -17927,6 +17958,7 @@ class Checker(
                     spineDupIdTeardown()
                     spineDaTeardown()
                     spineArgTeardown()
+                    spineUbdTeardown()
                 }
                 spineResolveDeferredIterationChecks()
             }
@@ -18007,6 +18039,9 @@ class Checker(
         // INV.4(d) walker 5: the set-based definite-assignment pass — the
         // per-statement frame step + core-frame spawns.
         if (spineDaActive) spineDaEnterNode(node)
+        // INV.4(d) walker 7: the use-before-declaration pass — the per-list
+        // ForwardRefs anchor + loop-header self-ref checks.
+        if (spineUbdActive) spineUbdEnterNode(node)
         when (node) {
             is Identifier -> spineTavIdentifier(node)
             is PropertyDeclaration -> {
@@ -43900,6 +43935,20 @@ class Checker(
         private const val DA_MEMBER_NOLEAK = 9
         private const val DA_ROOT = 10
 
+        // INV.4(d) walker 7 (round 536) — [spineUbdStatus] states. STMT = a
+        // statement position descended by the deleted checkUBDInStatement;
+        // EXPR = an expression position descended by the deleted
+        // checkUBDInExprForNested; LIST = an ACTIVATED statement list owner (a
+        // legacy checkUBDInStatements activation — SourceFile / Block /
+        // ModuleBlock / switch clause); MEMBER = a reached carrier between the
+        // two (class/objlit member, property assignment, template span,
+        // variable-declaration chain, catch clause); NONE = never reached.
+        private const val UBD_NONE = 1
+        private const val UBD_STMT = 2
+        private const val UBD_EXPR = 3
+        private const val UBD_LIST = 4
+        private const val UBD_MEMBER = 5
+
         /** Maximum antecedent walk depth for control-flow narrowing, aligned with tsc's
          *  `flowDepth === 2000` stack guard (M1.2b, round 386 — was 50). Do NOT lower it
          *  back "to save time": truncated subtrees are never memo-stored (the clean-only
@@ -65308,17 +65357,285 @@ interface DataView {
     // Block-scoped variable use before declaration (TS2448/TS2450)
     // -----------------------------------------------------------------------
 
-    private fun checkUseBeforeDeclaration() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            checkUBDInStatements(result.sourceFile.statements, source, fileName)
+    // ── INV.4(d) walker 7 (round 536): checkUseBeforeDeclaration on the spine ──
+    // (Fields + the UBD_* states are declared before init — see the spineUbd
+    // field block. The per-file driver and the nested-scope recursion walkers
+    // checkUBDInStatement / checkUBDInExprForNested are deleted; the retained
+    // BOUNDED per-statement walk [checkUBDForwardRefs] runs at direct
+    // statements of ACTIVATED lists, the loop-header SELF-ref checks re-host
+    // at For/ForIn/ForOf enters, and the cross-file leg stays a separate pass
+    // at the spine slot.)
+
+    /** Per-file setup for the spine-hosted use-before-declaration pass. */
+    private fun spineUbdSetup(result: BinderResult) {
+        spineUbdActive = !spineIsDts
+        spineUbdDeclsMemo.clear()
+        if (!spineUbdActive) {
+            spineUbdReachMemo = ByteArray(0)
+            return
         }
-        // Cross-file: check if top-level identifiers reference block-scoped decls in later files
-        if (binderResults.size > 1) {
-            checkCrossFileUseBeforeDeclaration()
+        val n = result.sourceFile.nodeCount
+        spineUbdReachMemo = if (n > 0) ByteArray(n) else ByteArray(0)
+    }
+
+    private fun spineUbdTeardown() {
+        spineUbdActive = false
+        spineUbdReachMemo = ByteArray(0)
+        spineUbdDeclsMemo.clear()
+    }
+
+    /** Per-node ENTER hook for the use-before-declaration pass. */
+    private fun spineUbdEnterNode(node: Node) {
+        // 1. The legacy per-list loop's ForwardRefs step at a DIRECT statement
+        //    of an ACTIVATED list (the retained walk recurses if/labeled
+        //    descent itself, so nested statements never re-anchor).
+        if (node is Statement) {
+            val parent = (node as NodeBase).parent
+            if (parent != null && spineUbdIsActivatedList(parent)) {
+                checkUBDForwardRefs(node, spineUbdListDecls(parent), spineSource, spineFileName)
+            }
         }
+        // 2. The deleted checkUBDInStatement For/ForIn/ForOf arms' loop-header
+        //    SELF-ref checks, at any reached loop statement.
+        when (node) {
+            is ForStatement -> if (spineUbdStatus(node) == UBD_STMT) {
+                spineUbdForHeaderSelfCheck(node.initializer, null)
+            }
+            is ForInStatement -> if (spineUbdStatus(node) == UBD_STMT) {
+                spineUbdForHeaderSelfCheck(node.initializer, node.expression)
+            }
+            is ForOfStatement -> if (spineUbdStatus(node) == UBD_STMT) {
+                spineUbdForHeaderSelfCheck(node.initializer, node.expression)
+            }
+            else -> {}
+        }
+    }
+
+    /** Is [owner] a statement list the legacy walk ACTIVATED (a
+     *  checkUBDInStatements call)? SourceFile always; Block/ModuleBlock/switch
+     *  clauses per their reach status. */
+    private fun spineUbdIsActivatedList(owner: Node): Boolean = when (owner) {
+        is SourceFile -> true
+        is Block, is ModuleBlock, is CaseClause, is DefaultClause ->
+            spineUbdStatus(owner) == UBD_LIST
+        else -> false
+    }
+
+    /** The legacy checkUBDInStatement For/ForIn/ForOf header rule: a let/const
+     *  loop-header declarator's own names are checked for SELF-references in
+     *  its initializer (For) or the loop's iterated expression (ForIn/ForOf). */
+    private fun spineUbdForHeaderSelfCheck(init: Node?, forInOfExpr: Expression?) {
+        if (init !is VariableDeclarationList) return
+        val kind = init.flags
+        if (kind != SyntaxKind.LetKeyword && kind != SyntaxKind.ConstKeyword) return
+        for (d in init.declarations) {
+            val selfNames = mutableMapOf<String, Int>()
+            collectSelfRefNames(d.name, selfNames)
+            if (forInOfExpr != null) {
+                checkUBDInInitializer(forInOfExpr, selfNames, spineSource, spineFileName)
+            } else {
+                d.initializer?.let { checkUBDInInitializer(it, selfNames, spineSource, spineFileName) }
+            }
+        }
+    }
+
+    /**
+     * The per-LIST blockScopedDecls map — the legacy checkUBDInStatements
+     * preamble verbatim: all let/const/class/enum/namespace declarations of
+     * the WHOLE list, minus names that also have a hoisted (function/var)
+     * declaration in the same scope. Memoized per owner nodeId.
+     */
+    private fun spineUbdListDecls(owner: Node): Map<String, BlockScopedDecl> {
+        val id = (owner as NodeBase).nodeId
+        if (id >= 0) spineUbdDeclsMemo[id]?.let { return it }
+        val stmts: List<Statement> = when (owner) {
+            is SourceFile -> owner.statements
+            is Block -> owner.statements
+            is ModuleBlock -> owner.statements
+            is CaseClause -> owner.statements
+            is DefaultClause -> owner.statements
+            else -> emptyList()
+        }
+        val blockScopedDecls = collectBlockScopedDeclsEx(stmts, spineSource)
+        val hoistedNames = mutableSetOf<String>()
+        for (stmt in stmts) {
+            if (stmt is FunctionDeclaration && stmt.name != null) {
+                hoistedNames.add(stmt.name.text)
+            }
+            if (stmt is VariableStatement && stmt.declarationList.flags == SyntaxKind.VarKeyword) {
+                for (d in stmt.declarationList.declarations) {
+                    if (d.name is Identifier) hoistedNames.add((d.name).text)
+                }
+            }
+        }
+        for (name in hoistedNames) blockScopedDecls.remove(name)
+        if (id >= 0) spineUbdDeclsMemo[id] = blockScopedDecls
+        return blockScopedDecls
+    }
+
+    /**
+     * Memoized reach classifier — the deleted checkUBDInStatement /
+     * checkUBDInExprForNested dispatch arms verbatim (see the UBD_* states).
+     * Ascends to the first memoized/terminal ancestor, then walks back down
+     * over [spineUbdEdge].
+     */
+    private fun spineUbdStatus(node: Node): Int {
+        if (node is SourceFile) return UBD_LIST
+        val memo = spineUbdReachMemo
+        run {
+            val id = (node as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) {
+                val m = memo[id].toInt()
+                if (m != 0) return m
+            }
+        }
+        val chain = spineUbdChain
+        chain.clear()
+        var cur: Node = node
+        val anchor: Node?
+        var anchorStatus = UBD_NONE
+        while (true) {
+            chain.add(cur)
+            val parent = (cur as NodeBase).parent
+            if (parent == null) { anchor = null; break } // detached/unindexed → NONE
+            if (parent is SourceFile) { anchor = parent; anchorStatus = UBD_LIST; break }
+            val pid = (parent as NodeBase).nodeId
+            val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
+            if (pm != 0) { anchor = parent; anchorStatus = pm; break }
+            cur = parent
+        }
+        var pNode: Node? = anchor
+        var pStatus = anchorStatus
+        var result = UBD_NONE
+        for (i in chain.indices.reversed()) {
+            val c = chain[i]
+            result = if (pNode == null || pStatus == UBD_NONE) UBD_NONE
+                else spineUbdEdge(pNode, pStatus, c)
+            val cid = (c as NodeBase).nodeId
+            if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
+            pNode = c
+            pStatus = result
+        }
+        chain.clear()
+        return result
+    }
+
+    /** A statement position under a reached descent arm: Blocks open their own
+     *  ACTIVATION, every other statement is nested-scope-processed. */
+    private fun spineUbdStmtChild(child: Node): Int = when {
+        child !is Statement -> UBD_NONE
+        child is Block -> UBD_LIST
+        else -> UBD_STMT
+    }
+
+    /**
+     * The edge rules — the deleted checkUBDInStatement (STMT arms) and
+     * checkUBDInExprForNested (EXPR arms) verbatim. Unlisted edges are NONE
+     * (the legacy `else -> {}`s: if/while/do/switch CONDITIONS in statement
+     * position, for headers and for-in/of iterated expressions, catch
+     * variables, heritage clauses, computed names, shorthand assignments,
+     * type positions — the retained ForwardRefs walk covers the eager subset
+     * of those from its own list-statement anchor).
+     */
+    private fun spineUbdEdge(parent: Node, pStatus: Int, child: Node): Int = when (pStatus) {
+        UBD_LIST -> spineUbdStmtChild(child)
+        UBD_STMT -> when (parent) {
+            is VariableStatement -> if (child === parent.declarationList) UBD_MEMBER else UBD_NONE
+            is ExpressionStatement -> if (child === parent.expression) UBD_EXPR else UBD_NONE
+            is ReturnStatement -> if (child === parent.expression) UBD_EXPR else UBD_NONE
+            is ThrowStatement -> if (child === parent.expression) UBD_EXPR else UBD_NONE
+            is ExportAssignment -> if (child === parent.expression) UBD_EXPR else UBD_NONE
+            is IfStatement ->
+                if (child === parent.thenStatement || child === parent.elseStatement)
+                    spineUbdStmtChild(child) else UBD_NONE
+            is FunctionDeclaration -> if (child === parent.body) UBD_LIST else UBD_NONE
+            is ClassDeclaration ->
+                if (child is MethodDeclaration || child is Constructor ||
+                    child is GetAccessor || child is SetAccessor ||
+                    child is PropertyDeclaration) UBD_MEMBER else UBD_NONE
+            is ForStatement -> if (child === parent.statement) spineUbdStmtChild(child) else UBD_NONE
+            is ForInStatement -> if (child === parent.statement) spineUbdStmtChild(child) else UBD_NONE
+            is ForOfStatement -> if (child === parent.statement) spineUbdStmtChild(child) else UBD_NONE
+            is WhileStatement -> if (child === parent.statement) spineUbdStmtChild(child) else UBD_NONE
+            is DoStatement -> if (child === parent.statement) spineUbdStmtChild(child) else UBD_NONE
+            is SwitchStatement -> if (child is CaseClause || child is DefaultClause) UBD_LIST else UBD_NONE
+            is TryStatement -> when {
+                child === parent.tryBlock || child === parent.finallyBlock -> UBD_LIST
+                child === parent.catchClause -> UBD_MEMBER
+                else -> UBD_NONE
+            }
+            is LabeledStatement -> if (child === parent.statement) spineUbdStmtChild(child) else UBD_NONE
+            is ModuleDeclaration -> if (child === parent.body && child is ModuleBlock) UBD_LIST else UBD_NONE
+            else -> UBD_NONE
+        }
+        UBD_MEMBER -> when (parent) {
+            is VariableDeclarationList -> if (child is VariableDeclaration) UBD_MEMBER else UBD_NONE
+            is VariableDeclaration -> if (child === parent.initializer) UBD_EXPR else UBD_NONE
+            is MethodDeclaration -> if (child === parent.body) UBD_LIST else UBD_NONE
+            is Constructor -> if (child === parent.body) UBD_LIST else UBD_NONE
+            is GetAccessor -> if (child === parent.body) UBD_LIST else UBD_NONE
+            is SetAccessor -> if (child === parent.body) UBD_LIST else UBD_NONE
+            is PropertyDeclaration -> if (child === parent.initializer) UBD_EXPR else UBD_NONE
+            is PropertyAssignment -> if (child === parent.initializer) UBD_EXPR else UBD_NONE
+            is SpreadAssignment -> if (child === parent.expression) UBD_EXPR else UBD_NONE
+            is TemplateSpan -> if (child === parent.expression) UBD_EXPR else UBD_NONE
+            is CatchClause -> if (child === parent.block) UBD_LIST else UBD_NONE
+            else -> UBD_NONE
+        }
+        UBD_EXPR -> when (parent) {
+            is ArrowFunction -> when {
+                child !== parent.body -> UBD_NONE
+                child is Block -> UBD_LIST
+                else -> UBD_EXPR
+            }
+            is FunctionExpression -> if (child === parent.body) UBD_LIST else UBD_NONE
+            is ClassExpression ->
+                if (child is MethodDeclaration || child is Constructor ||
+                    child is GetAccessor || child is SetAccessor ||
+                    child is PropertyDeclaration) UBD_MEMBER else UBD_NONE
+            is ParenthesizedExpression -> if (child === parent.expression) UBD_EXPR else UBD_NONE
+            is AsExpression -> if (child === parent.expression) UBD_EXPR else UBD_NONE
+            is TypeAssertionExpression -> if (child === parent.expression) UBD_EXPR else UBD_NONE
+            is SatisfiesExpression -> if (child === parent.expression) UBD_EXPR else UBD_NONE
+            is NonNullExpression -> if (child === parent.expression) UBD_EXPR else UBD_NONE
+            is BinaryExpression -> if (child === parent.left || child === parent.right) UBD_EXPR else UBD_NONE
+            is ConditionalExpression ->
+                if (child === parent.condition || child === parent.whenTrue ||
+                    child === parent.whenFalse) UBD_EXPR else UBD_NONE
+            is CallExpression ->
+                if (child === parent.expression || parent.arguments.any { it === child }) UBD_EXPR
+                else UBD_NONE
+            is NewExpression ->
+                if (child === parent.expression || parent.arguments?.any { it === child } == true) UBD_EXPR
+                else UBD_NONE
+            is PropertyAccessExpression -> if (child === parent.expression) UBD_EXPR else UBD_NONE
+            is ElementAccessExpression ->
+                if (child === parent.expression || child === parent.argumentExpression) UBD_EXPR
+                else UBD_NONE
+            is ArrayLiteralExpression -> if (parent.elements.any { it === child }) UBD_EXPR else UBD_NONE
+            is ObjectLiteralExpression -> when (child) {
+                is PropertyAssignment, is SpreadAssignment,
+                is MethodDeclaration, is GetAccessor, is SetAccessor -> UBD_MEMBER
+                else -> UBD_NONE
+            }
+            is SpreadElement -> if (child === parent.expression) UBD_EXPR else UBD_NONE
+            is PrefixUnaryExpression -> if (child === parent.operand) UBD_EXPR else UBD_NONE
+            is PostfixUnaryExpression -> if (child === parent.operand) UBD_EXPR else UBD_NONE
+            is AwaitExpression -> if (child === parent.expression) UBD_EXPR else UBD_NONE
+            is YieldExpression -> if (child === parent.expression) UBD_EXPR else UBD_NONE
+            is VoidExpression -> if (child === parent.expression) UBD_EXPR else UBD_NONE
+            is DeleteExpression -> if (child === parent.expression) UBD_EXPR else UBD_NONE
+            is TypeOfExpression -> if (child === parent.expression) UBD_EXPR else UBD_NONE
+            is TemplateExpression -> if (child is TemplateSpan) UBD_MEMBER else UBD_NONE
+            is TaggedTemplateExpression -> when {
+                child === parent.tag -> UBD_EXPR
+                child === parent.template && child is TemplateExpression -> UBD_EXPR
+                else -> UBD_NONE
+            }
+            is CommaListExpression -> if (parent.elements.any { it === child }) UBD_EXPR else UBD_NONE
+            else -> UBD_NONE
+        }
+        else -> UBD_NONE
     }
 
     /**
@@ -67383,30 +67700,6 @@ interface DataView {
         ))
     }
 
-    private fun checkUBDInStatements(stmts: List<Statement>, source: String, fileName: String) {
-        // Collect all let/const/enum declaration names in this block with their positions
-        val blockScopedDecls = collectBlockScopedDeclsEx(stmts, source)
-        // Remove names that also have hoisted declarations (function/var) in the same scope
-        // because hoisted declarations make the name available before its let/const decl
-        val hoistedNames = mutableSetOf<String>()
-        for (stmt in stmts) {
-            if (stmt is FunctionDeclaration && stmt.name != null) {
-                hoistedNames.add(stmt.name.text)
-            }
-            if (stmt is VariableStatement && stmt.declarationList.flags == SyntaxKind.VarKeyword) {
-                for (d in stmt.declarationList.declarations) {
-                    if (d.name is Identifier) hoistedNames.add((d.name).text)
-                }
-            }
-        }
-        for (name in hoistedNames) blockScopedDecls.remove(name)
-
-        for (stmt in stmts) {
-            checkUBDForwardRefs(stmt, blockScopedDecls, source, fileName)
-            checkUBDInStatement(stmt, source, fileName, blockScopedDecls)
-        }
-    }
-
     /** Check all identifier usages in this statement for forward references to block-scoped declarations */
     private fun checkUBDForwardRefs(stmt: Statement, blockDecls: Map<String, BlockScopedDecl>, source: String, fileName: String) {
         when (stmt) {
@@ -67709,95 +68002,6 @@ interface DataView {
         }
     }
 
-    /** Recurse into nested block scopes (functions, classes, blocks) */
-    private fun checkUBDInStatement(stmt: Statement, source: String, fileName: String, blockDecls: Map<String, BlockScopedDecl>) {
-        when (stmt) {
-            is VariableStatement -> {
-                // Recurse into nested scopes in initializers
-                for (d in stmt.declarationList.declarations) {
-                    d.initializer?.let { checkUBDInExprForNested(it, source, fileName) }
-                }
-            }
-            is ExpressionStatement -> checkUBDInExprForNested(stmt.expression, source, fileName)
-            is ReturnStatement -> stmt.expression?.let { checkUBDInExprForNested(it, source, fileName) }
-            is IfStatement -> {
-                checkUBDInStatement(stmt.thenStatement, source, fileName, blockDecls)
-                stmt.elseStatement?.let { checkUBDInStatement(it, source, fileName, blockDecls) }
-            }
-            is Block -> checkUBDInStatements(stmt.statements, source, fileName)
-            is FunctionDeclaration -> stmt.body?.let { checkUBDInStatements(it.statements, source, fileName) }
-            is ClassDeclaration -> for (m in stmt.members) {
-                when (m) {
-                    is MethodDeclaration -> m.body?.let { checkUBDInStatements(it.statements, source, fileName) }
-                    is Constructor -> m.body?.let { checkUBDInStatements(it.statements, source, fileName) }
-                    is PropertyDeclaration -> m.initializer?.let { checkUBDInExprForNested(it, source, fileName) }
-                    is GetAccessor -> m.body?.let { checkUBDInStatements(it.statements, source, fileName) }
-                    is SetAccessor -> m.body?.let { checkUBDInStatements(it.statements, source, fileName) }
-                    else -> {}
-                }
-            }
-            is ForStatement -> {
-                // Self-references in for-loop let/const initializers
-                val init = stmt.initializer
-                if (init is VariableDeclarationList) {
-                    val kind = init.flags
-                    if (kind == SyntaxKind.LetKeyword || kind == SyntaxKind.ConstKeyword) {
-                        for (d in init.declarations) {
-                            val selfNames = mutableMapOf<String, Int>()
-                            collectSelfRefNames(d.name, selfNames)
-                            d.initializer?.let { checkUBDInInitializer(it, selfNames, source, fileName) }
-                        }
-                    }
-                }
-                checkUBDInStatement(stmt.statement, source, fileName, blockDecls)
-            }
-            is ForInStatement -> {
-                val init = stmt.initializer
-                if (init is VariableDeclarationList) {
-                    val kind = init.flags
-                    if (kind == SyntaxKind.LetKeyword || kind == SyntaxKind.ConstKeyword) {
-                        for (d in init.declarations) {
-                            val selfNames = mutableMapOf<String, Int>()
-                            collectSelfRefNames(d.name, selfNames)
-                            checkUBDInInitializer(stmt.expression, selfNames, source, fileName)
-                        }
-                    }
-                }
-                checkUBDInStatement(stmt.statement, source, fileName, blockDecls)
-            }
-            is ForOfStatement -> {
-                val init = stmt.initializer
-                if (init is VariableDeclarationList) {
-                    val kind = init.flags
-                    if (kind == SyntaxKind.LetKeyword || kind == SyntaxKind.ConstKeyword) {
-                        for (d in init.declarations) {
-                            val selfNames = mutableMapOf<String, Int>()
-                            collectSelfRefNames(d.name, selfNames)
-                            checkUBDInInitializer(stmt.expression, selfNames, source, fileName)
-                        }
-                    }
-                }
-                checkUBDInStatement(stmt.statement, source, fileName, blockDecls)
-            }
-            is WhileStatement -> checkUBDInStatement(stmt.statement, source, fileName, blockDecls)
-            is DoStatement -> checkUBDInStatement(stmt.statement, source, fileName, blockDecls)
-            is SwitchStatement -> for (c in stmt.caseBlock) {
-                val clauseStmts = when (c) { is CaseClause -> c.statements; is DefaultClause -> c.statements; else -> emptyList() }
-                checkUBDInStatements(clauseStmts, source, fileName)
-            }
-            is TryStatement -> {
-                checkUBDInStatements(stmt.tryBlock.statements, source, fileName)
-                stmt.catchClause?.let { checkUBDInStatements(it.block.statements, source, fileName) }
-                stmt.finallyBlock?.let { checkUBDInStatements(it.statements, source, fileName) }
-            }
-            is LabeledStatement -> checkUBDInStatement(stmt.statement, source, fileName, blockDecls)
-            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { checkUBDInStatements(it.statements, source, fileName) }
-            is ThrowStatement -> stmt.expression?.let { checkUBDInExprForNested(it, source, fileName) }
-            is ExportAssignment -> stmt.expression.let { checkUBDInExprForNested(it, source, fileName) }
-            else -> {}
-        }
-    }
-
     /** Check defaults in destructuring binding patterns for self-references */
     private fun checkUBDInBindingDefaults(name: Node, selfNames: Map<String, Int>, source: String, fileName: String) {
         // For binding patterns, earlier elements are available in later element defaults.
@@ -68027,87 +68231,6 @@ interface DataView {
             is LabeledStatement -> forEachUbdEvaluatedExpr(node.statement, handler)
             // An expression body (arrow `() => expr`).
             is Expression -> handler(node)
-            else -> {}
-        }
-    }
-
-    /** Recurse into nested scopes (functions, classes) to find new block-scoped declarations */
-    private fun checkUBDInExprForNested(expr: Expression, source: String, fileName: String) {
-        when (expr) {
-            is ArrowFunction -> when (val body = expr.body) {
-                is Block -> checkUBDInStatements(body.statements, source, fileName)
-                is Expression -> checkUBDInExprForNested(body, source, fileName)
-                else -> {}
-            }
-            is FunctionExpression -> expr.body.let { checkUBDInStatements(it.statements, source, fileName) }
-            is ClassExpression -> for (m in expr.members) {
-                when (m) {
-                    is MethodDeclaration -> m.body?.let { checkUBDInStatements(it.statements, source, fileName) }
-                    is Constructor -> m.body?.let { checkUBDInStatements(it.statements, source, fileName) }
-                    is GetAccessor -> m.body?.let { checkUBDInStatements(it.statements, source, fileName) }
-                    is SetAccessor -> m.body?.let { checkUBDInStatements(it.statements, source, fileName) }
-                    is PropertyDeclaration -> m.initializer?.let { checkUBDInExprForNested(it, source, fileName) }
-                    else -> {}
-                }
-            }
-            is ParenthesizedExpression -> checkUBDInExprForNested(expr.expression, source, fileName)
-            is AsExpression -> checkUBDInExprForNested(expr.expression, source, fileName)
-            is TypeAssertionExpression -> checkUBDInExprForNested(expr.expression, source, fileName)
-            is SatisfiesExpression -> checkUBDInExprForNested(expr.expression, source, fileName)
-            is NonNullExpression -> checkUBDInExprForNested(expr.expression, source, fileName)
-            is BinaryExpression -> {
-                var cur: Expression = expr
-                while (cur is BinaryExpression) {
-                    checkUBDInExprForNested(cur.right, source, fileName)
-                    cur = cur.left
-                }
-                checkUBDInExprForNested(cur, source, fileName)
-            }
-            is ConditionalExpression -> {
-                checkUBDInExprForNested(expr.condition, source, fileName)
-                checkUBDInExprForNested(expr.whenTrue, source, fileName)
-                checkUBDInExprForNested(expr.whenFalse, source, fileName)
-            }
-            is CallExpression -> {
-                checkUBDInExprForNested(expr.expression, source, fileName)
-                expr.arguments.forEach { checkUBDInExprForNested(it, source, fileName) }
-            }
-            is NewExpression -> {
-                checkUBDInExprForNested(expr.expression, source, fileName)
-                expr.arguments?.forEach { checkUBDInExprForNested(it, source, fileName) }
-            }
-            is PropertyAccessExpression -> checkUBDInExprForNested(expr.expression, source, fileName)
-            is ElementAccessExpression -> {
-                checkUBDInExprForNested(expr.expression, source, fileName)
-                checkUBDInExprForNested(expr.argumentExpression, source, fileName)
-            }
-            is ArrayLiteralExpression -> expr.elements.forEach { checkUBDInExprForNested(it, source, fileName) }
-            is ObjectLiteralExpression -> for (prop in expr.properties) {
-                when (prop) {
-                    is PropertyAssignment -> checkUBDInExprForNested(prop.initializer, source, fileName)
-                    is SpreadAssignment -> checkUBDInExprForNested(prop.expression, source, fileName)
-                    is MethodDeclaration -> prop.body?.let { checkUBDInStatements(it.statements, source, fileName) }
-                    is GetAccessor -> prop.body?.let { checkUBDInStatements(it.statements, source, fileName) }
-                    is SetAccessor -> prop.body?.let { checkUBDInStatements(it.statements, source, fileName) }
-                    else -> {}
-                }
-            }
-            is SpreadElement -> checkUBDInExprForNested(expr.expression, source, fileName)
-            is PrefixUnaryExpression -> checkUBDInExprForNested(expr.operand, source, fileName)
-            is PostfixUnaryExpression -> checkUBDInExprForNested(expr.operand, source, fileName)
-            is AwaitExpression -> checkUBDInExprForNested(expr.expression, source, fileName)
-            is YieldExpression -> expr.expression?.let { checkUBDInExprForNested(it, source, fileName) }
-            is VoidExpression -> checkUBDInExprForNested(expr.expression, source, fileName)
-            is DeleteExpression -> checkUBDInExprForNested(expr.expression, source, fileName)
-            is TypeOfExpression -> checkUBDInExprForNested(expr.expression, source, fileName)
-            is TemplateExpression -> expr.templateSpans.forEach { checkUBDInExprForNested(it.expression, source, fileName) }
-            is TaggedTemplateExpression -> {
-                checkUBDInExprForNested(expr.tag, source, fileName)
-                (expr.template as? TemplateExpression)?.templateSpans?.forEach {
-                    checkUBDInExprForNested(it.expression, source, fileName)
-                }
-            }
-            is CommaListExpression -> expr.elements.forEach { checkUBDInExprForNested(it, source, fileName) }
             else -> {}
         }
     }
