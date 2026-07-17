@@ -1671,6 +1671,34 @@ interrupt the arc).
       identical on ALL 8 profiles; the pass driver deleted (the recursive
       walkers stay as checkComputedDestructKey's utility). See the round-531
       session note.
+    - (w8) IN PROGRESS (round 537 prep landed 2026-07-17): checkImplicitReturns
+      (TS7030/TS2355/TS2366/TS2378/TS7023 + arrow concise-body TS2322).
+      SLOT-MOVE PRE-GATE LANDED AND VERIFIED (intact pass at the spine slot;
+      corpus 11,170/0 + listAll ×8 error-line identical) — the ambient
+      residue at the spine slot is proven equivalent, and the pass stays
+      BEFORE checkTypeAssignability, whose end-of-pass filter suppresses
+      TS7030 at its own TS2322 positions (it EXPECTS this pass's TS7030s to
+      exist — do not move it past the giants). SCOUTED migration design
+      (w1-template): 4-state reach classifier (STMT/EXPR/MEMBER/NONE) over
+      walkStmtForImplicitReturns/walkExprForImplicitReturns arms; anchors at
+      FunctionDeclaration/MethodDeclaration/GetAccessor/FunctionExpression/
+      ArrowFunction enters (the retained check*ForImplicitReturn bodies
+      minus their trailing walkForImplicitReturns recursion); per-dispatch
+      ambient install of implicitReturnFlowGraph + currentCheckFileName +
+      the PRE-SPINE resting currentFileLocals/currentFunctionParams
+      (checkGetAccessorForImplicitReturn reads currentFunctionParams'
+      RESTING value — it never sets it; capture both at checkSpine entry
+      like spineArithBase). Per-file gate: !isDts && (checkJs || !(.js|.jsx))
+      — NOTE .mjs/.cjs are NOT skipped by the legacy gate (spineIsJsLike is
+      the wrong predicate). Sharp reach quirks to pin (verified in-code):
+      GENERATOR bodies never descend (the anchors early-return before their
+      trailing recursion); class-DECL Constructor/SetAccessor bodies and
+      class-DECL PropertyDeclaration initializers unreached while class-EXPR
+      prop inits ARE reached; objlit SetAccessor bodies unreached; arrow
+      CONCISE (expression) bodies never descend (both annotated and not);
+      return/throw/export= EXPRESSIONS and if/while conditions and for
+      headers unreached in statement position; GetAccessor sentinel body
+      (pos == -1) skips.
     - (w7) DONE round 536 (2026-07-17): checkUseBeforeDeclaration (TS2448/
       TS2449/TS2450 + TS2454 co-emit + static-init TS2729) — 5-state reach
       classifier + per-list-owner memoized blockScopedDecls; the retained

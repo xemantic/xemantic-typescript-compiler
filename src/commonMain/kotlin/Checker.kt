@@ -2406,6 +2406,16 @@ class Checker(
         pass("checkCrossFileUseBeforeDeclaration") {
             if (binderResults.size > 1) checkCrossFileUseBeforeDeclaration()
         }
+        // 18d. Check not all code paths return a value (TS7030/TS2355/TS2366).
+        // Always run (not gated by noImplicitReturns) because TS2355 fires for functions with
+        // explicit non-void return type and no return statements, regardless of noImplicitReturns.
+        // When noImplicitReturns is true, TS2366 is emitted instead of TS7030/TS2355 for non-async
+        // functions with definitely-non-nullable return types.
+        // INV.4(d) walker 8 slot-move pre-gate (round 537): moved from its
+        // legacy slot 18d to the spine slot — still BEFORE checkTypeAssignability,
+        // whose end-of-pass filter suppresses TS7030 at its own TS2322 positions
+        // and so EXPECTS this pass's TS7030s to already exist.
+        pass("checkImplicitReturns") { checkImplicitReturns() }
         if (shouldCheckDefiniteAssignment) {
             pass("checkDefiniteAssignmentViaFlowGraph") { checkDefiniteAssignmentViaFlowGraph() }
             // B223: TS2454 for vars whose ONLY assignment sits inside a try block
@@ -2725,12 +2735,8 @@ class Checker(
         if (options.noFallthroughCasesInSwitch) {
             pass("checkFallthroughCases") { checkFallthroughCases() }
         }
-        // 18d. Check not all code paths return a value (TS7030/TS2355/TS2366).
-        // Always run (not gated by noImplicitReturns) because TS2355 fires for functions with
-        // explicit non-void return type and no return statements, regardless of noImplicitReturns.
-        // When noImplicitReturns is true, TS2366 is emitted instead of TS7030/TS2355 for non-async
-        // functions with definitely-non-nullable return types.
-        pass("checkImplicitReturns") { checkImplicitReturns() }
+        // 18d. checkImplicitReturns moved to the spine slot — see the
+        // pass("checkSpine") site (INV.4(d) walker 8 slot-move pre-gate).
         // 18d2. TS2677: type predicate's type must be assignable to its parameter's type.
         // Currently scoped to the `?T` JSDoc-nullable recovery pattern: `a: T` + `a is ?T`.
         pass("checkTypePredicateNullableRecovery") { checkTypePredicateNullableRecovery() }
