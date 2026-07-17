@@ -59,6 +59,51 @@ memoization, per the doc's § 4. Old M5.1–M5.7 are superseded/absorbed by the 
 items in the QUEUE below (M5.1 profiling → INV.0; M5.2/M5.3 → INV.5; M5.4 → INV.6;
 M5.5/M5.6 → INV.7; M5.7 targets → doc § 6).**
 
+**Round 538 (2026-07-17) — INV.4(d) walker 9: checkConstAssignment (the
+TS2588/TS2628/TS2629/TS2630/TS2708 const-family pass + the B510 TS2540
+readonly-write checks, TS2357 inc/dec targets, and the scanRegExpFull
+TS1538/regex-grammar family riding the same walker; 170 ms in the round-529
+cost table) migrated onto the spine — the per-file driver and the recursion
+walkers (checkConstAssignmentInStatements/-InStatement/-InExpr) are DELETED
+(~330 lines).** The most state-diverse (d) migration: (1) the
+statement-ordered per-list constNames maps become PUSH-maintained frames
+(SpineCaFrame; per-statement COLLECT step at direct statements of the top
+LIST frame — const records 2588, a let/var of the same name REMOVES the
+inherited entry) with the legacy ASYMMETRIC spawn rules pinned:
+fn-decl/fn-expr/arrow-Block/IIFE-arrow-Block bodies get FRESH EMPTY maps
+(an outer const reassigned inside a function body is NOT flagged —
+bug-compat), Block/switch-clause/try/ModuleBlock/class-MEMBER bodies
+inherit COPIES, an arrow EXPRESSION body SHARES the live map, and a
+ForStatement pushes a header-consts overlay frame (safe to install
+unconditionally: header const additions exist only when the initializer is
+a declaration list, whose declarator initializers are unreached, so the
+expression-form init sees an identical map). (2) The B510 class-this
+context (currentClassForThis/currentThisMemberIsCtorDirect) pull-derives
+per anchor from the ancestor chain — fn-expr rebinds (null), non-IIFE
+arrows clear ctor-directness, IIFE-arrows AND nested fn-decls are
+transparent (the latter bug-compat: the legacy arm never touched the
+fields), the nearest class-DECL member decides (static → null; Constructor
+→ ctor-direct; property initializers never). (3) The B116 fn-decl
+param-typing install (populateParameterLocalTypes — fn DECLS only)
+rebuilds pull-based per anchor from the enclosing fn-decl chain, memoized
+per fn-decl nodeId, based at the PRE-SPINE resting
+currentLocalTypes/currentParamBindingNames — installed around each
+readonly-check emission only (never walk-wide), because a walk-wide
+install would leak into OTHER spine handlers' ambient. Enter-dispatch is
+safe here (checked first: no diagnostics-list probes in
+checkReadonlyAssignmentTarget/scanRegExpFull — the round-537 hazard
+absent). Reach quirks mirrored (19 pins, Inv4SpineBatch29Test, ALL
+pre-verified on the OLD walker first run): for-header declarator
+initializers, class EXPRESSIONS (entirely!), objlit methods/accessors,
+await/yield/void/typeof/delete/comma/tagged-template operands all
+unreached; an assignment BEFORE the const in the same list is not flagged
+(statement order); for-of/for-in loop vars are never collected. VERIFIED:
+suite 11,189 → 11,208 (+19, 0 regressions, XML-verified); listAll error
+lines IDENTICAL on ALL 8 profiles (538a vs 538sm; slot-move pre-gate also
+corpus-green); bench 26,817 ms self / 46 errors, histogram unchanged.
+NEXT: INV.4(d) — the ~100–165 ms tail (checkAlwaysTruthy,
+checkNullUndefinedUsage, …); decompose the next walker when reached.
+
 **Round 537 (2026-07-17) — INV.4(d) walker 8: checkImplicitReturns (the
 TS7030/TS2355/TS2366/TS2378/TS7023 + arrow concise-body TS2322 pass, 199 ms
 in the round-529 cost table) migrated onto the spine — the per-file driver
@@ -1710,7 +1755,7 @@ interrupt the arc).
       identical on ALL 8 profiles; the pass driver deleted (the recursive
       walkers stay as checkComputedDestructKey's utility). See the round-531
       session note.
-    - (w9) NEXT — checkConstAssignment (TS2588/TS2628/TS2629/TS2630/TS2708 +
+    - (w9) DONE round 538 (2026-07-17) — checkConstAssignment (TS2588/TS2628/TS2629/TS2630/TS2708 +
       TS2540 readonly writes + TS2357 inc/dec targets + scanRegExpFull's
       TS1538/regex-grammar family riding the same walker). SCOUTED
       (2026-07-17, in-code): the most stateful (d) walker yet — a w2+w5
@@ -1740,6 +1785,10 @@ interrupt the arc).
       enter-vs-leave dispatch (the round-537 lesson). Anchors: assignment-op
       BinaryExpressions (left-spine loop — emissions are per-spine-node, at
       each binary's own reach), ++/-- Prefix/Postfix, RegularExpressionLiteralNode.
+      LANDED as scouted (enter-dispatch — no diagnostics probes); 19 pins
+      (Inv4SpineBatch29Test) pre-verified on the OLD walker; suite 11,189 →
+      11,208; listAll ×8 identical; ~330 walker lines deleted. See the
+      round-538 session note.
     - (w8) DONE round 537 (2026-07-17): checkImplicitReturns
       (TS7030/TS2355/TS2366/TS2378/TS7023 + arrow concise-body TS2322).
       SLOT-MOVE PRE-GATE LANDED AND VERIFIED (intact pass at the spine slot;

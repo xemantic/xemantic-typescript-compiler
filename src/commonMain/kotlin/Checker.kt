@@ -1165,6 +1165,47 @@ class Checker(
     private var spineIrRestingLocals: SymbolTable? = null
     private var spineIrRestingParams: List<Parameter> = emptyList()
 
+    // ── INV.4(d) walker 9 (round 538): checkConstAssignment on the spine ──
+    // The const-assignment pass (TS2588/TS2628/TS2629/TS2630/TS2708 + the
+    // TS2540 readonly-write checks, TS2357 inc/dec targets, and the
+    // scanRegExpFull regex family) — the recursion walkers are deleted;
+    // reach is [spineCaStatus] over [spineCaEdge]; the statement-ordered
+    // per-list constNames maps become PUSH-maintained frames
+    // ([SpineCaFrame], with the legacy ASYMMETRIC spawn rules: fn/arrow/
+    // fn-expr bodies FRESH, blocks/clauses/try/module/class-member bodies
+    // COPY, For statements an overlay of header consts); the B510 class-this
+    // context and the B116 fn-decl param typing rebuild PULL-based per
+    // anchor ([spineCaClassCtx] / [spineCaFnParamCtx], the latter memoized
+    // per fn-decl).
+    /** Per-file activation: the legacy non-.d.ts gate. */
+    private var spineCaActive = false
+    /** Per-file nodeId memo for [spineCaStatus] — 0 unknown, else a CA_* state. */
+    private var spineCaReachMemo = ByteArray(0)
+    /** Reusable ascent buffer for [spineCaStatus]. */
+    private val spineCaChain = ArrayList<Node>()
+    /** Reusable ascent buffer for [spineCaClassCtx]/[spineCaFnParamCtx]. */
+    private val spineCaCtxChain = ArrayList<Node>()
+    /** One live constNames scope (a legacy checkConstAssignmentInStatements
+     *  activation, or a For-header overlay): the name → diagnostic-code map
+     *  evolving in statement order for LIST frames ([isList]). */
+    private class SpineCaFrame(
+        val owner: Node,
+        val consts: MutableMap<String, Int>,
+        val isList: Boolean,
+    )
+    private val spineCaFrames = ArrayList<SpineCaFrame>()
+    /** Program-wide shared script-file const/class/enum/fn/ns names (the
+     *  legacy driver preamble), computed once lazily. */
+    private var spineCaSharedConsts: Map<String, Int>? = null
+    /** PRE-SPINE resting bases for the B116 fn-decl param-typing rebuild. */
+    private var spineCaRestingLocalTypes: MutableMap<String, Type> = HashMap()
+    private var spineCaRestingParamBindings: MutableSet<String> = HashSet()
+    /** Per-fn-decl memo of the CUMULATIVE (localTypes, paramBindings) context
+     *  (base + every enclosing reached fn-decl's populateParameterLocalTypes,
+     *  outermost→innermost), keyed by nodeId; cleared per file. */
+    private val spineCaFnParamMemo =
+        HashMap<Int, Pair<MutableMap<String, Type>, MutableSet<String>>>()
+
     // Positions of ObjectLiteralExpression nodes that are destructuring-assignment
     // TARGETS (LHS of `=`, incl. nested through array/object/default nesting). Consumed
     // by the shorthand-with-initializer TS1312/TS18004 selection in
@@ -2431,6 +2472,9 @@ class Checker(
         pass("checkCrossFileUseBeforeDeclaration") {
             if (binderResults.size > 1) checkCrossFileUseBeforeDeclaration()
         }
+        // 25. Const-assignment (TS2588 family + TS2540 readonly writes +
+        // TS2357 + the scanRegExpFull regex family): rides the spine
+        // (INV.4(d) walker 9 — spineCaSetup/spineCaEnterNode).
         // 18d. Not-all-code-paths-return (TS7030/TS2355/TS2366/TS2378/TS7023):
         // rides the spine (INV.4(d) walker 8 — spineIrSetup/spineIrEnterNode).
         // Always active (not gated by noImplicitReturns) because TS2355 fires
@@ -2848,8 +2892,8 @@ class Checker(
         pass("checkTupleDestructuringBounds") { checkTupleDestructuringBounds() }
         // 24. Check super called before this in derived constructors (TS17009)
         pass("checkSuperBeforeThis") { checkSuperBeforeThis() }
-        // 25. Check assignment to const variables (TS2540)
-        pass("checkConstAssignment") { checkConstAssignment() }
+        // 25. checkConstAssignment moved to the spine slot — see the
+        // pass("checkSpine") site (INV.4(d) walker 9 slot-move pre-gate).
         // 25b. Check delete operator (TS1102/TS2703)
         pass("checkDeleteOperator") { checkDeleteOperator() }
         // 26. Check parameter properties outside constructor (TS2369)
@@ -17907,6 +17951,10 @@ class Checker(
         // per-file currentFileLocals install) — capture it here.
         spineIrRestingLocals = currentFileLocals
         spineIrRestingParams = currentFunctionParams
+        // INV.4(d) walker 9: the const-assignment anchors' B116 param-typing
+        // rebuild starts from the PRE-SPINE resting bases.
+        spineCaRestingLocalTypes = currentLocalTypes
+        spineCaRestingParamBindings = currentParamBindingNames
         val savedLocals = currentFileLocals
         try {
             for (result in binderResults) {
@@ -17978,6 +18026,7 @@ class Checker(
                 spineArgSetup(result)
                 spineUbdSetup(result)
                 spineIrSetup(result)
+                spineCaSetup(result)
                 spineUResAuditActive = unresolvedAuditEnabled && spineUResActive
                 try {
                     spineWalkFile(sf)
@@ -17994,6 +18043,7 @@ class Checker(
                     spineArgTeardown()
                     spineUbdTeardown()
                     spineIrTeardown()
+                    spineCaTeardown()
                 }
                 spineResolveDeferredIterationChecks()
             }
@@ -18077,6 +18127,9 @@ class Checker(
         // INV.4(d) walker 7: the use-before-declaration pass — the per-list
         // ForwardRefs anchor + loop-header self-ref checks.
         if (spineUbdActive) spineUbdEnterNode(node)
+        // INV.4(d) walker 9: the const-assignment pass — frame steps/spawns +
+        // assignment/inc-dec/regex anchors.
+        if (spineCaActive) spineCaEnterNode(node)
         when (node) {
             is Identifier -> spineTavIdentifier(node)
             is PropertyDeclaration -> {
@@ -18252,6 +18305,8 @@ class Checker(
         if (spineIanyActive) spineIanyLeaveNode(node)
         // INV.4(d) walker 5: the definite-assignment pass's core-frame pops.
         if (spineDaActive) spineDaLeaveNode(node)
+        // INV.4(d) walker 9: the const-assignment pass's frame pops.
+        if (spineCaActive) spineCaLeaveNode(node)
         // INV.4(d) walker 8: the implicit-returns anchors dispatch at LEAVE,
         // not enter — the 17.135 TS2304/TS2314 diagnostics-list probes in
         // checkBodyForImplicitReturnCore must see the return annotation's
@@ -44002,6 +44057,21 @@ class Checker(
         private const val IR_EXPR = 3
         private const val IR_MEMBER = 4
 
+        // INV.4(d) walker 9 (round 538) — [spineCaStatus] states. STMT/EXPR =
+        // positions descended by the deleted checkConstAssignmentInStatement /
+        // -InExpr; LIST = an ACTIVATED statement list (a legacy
+        // checkConstAssignmentInStatements call — a live frame owner);
+        // MEMBER = a reached carrier (class member, catch clause, template
+        // span, variable-declaration chain, objlit property); NONE = never
+        // reached (await/yield/void/typeof/delete/comma/tagged-template
+        // operands, class EXPRESSIONS, objlit methods/accessors, for-header
+        // declarator initializers — the legacy `else -> {}`s).
+        private const val CA_NONE = 1
+        private const val CA_STMT = 2
+        private const val CA_EXPR = 3
+        private const val CA_LIST = 4
+        private const val CA_MEMBER = 5
+
         /** Maximum antecedent walk depth for control-flow narrowing, aligned with tsc's
          *  `flowDepth === 2000` stack guard (M1.2b, round 386 — was 50). Do NOT lower it
          *  back "to save time": truncated subtrees are never memo-stored (the clean-only
@@ -60114,17 +60184,49 @@ interface DataView {
     // Const assignment checking (TS2588)
     // -----------------------------------------------------------------------
 
-    private fun checkConstAssignment() {
-        // Script files (no imports/exports) share a global scope — a `const x` in
-        // fileA.ts is visible to `x++` in fileB.ts. Collect top-level immutable
-        // bindings from all script files first, then seed each file's check with
-        // those shared names. Module files keep their own file-local scope.
+    // ── INV.4(d) walker 9 (round 538): checkConstAssignment on the spine ──
+    // (Fields + the CA_* states are declared before init — see the spineCa
+    // field block. The per-file driver and the recursion walkers
+    // checkConstAssignmentInStatements/-InStatement/-InExpr are deleted; the
+    // bounded leaf utilities — emitReadonlyAssignment,
+    // checkReadonlyAssignmentTarget, emitTS2357IfInvalidIncDecTarget,
+    // scanRegExpFull, immediatelyInvokedArrowCallee — are retained.)
+
+    /** Per-file setup for the spine-hosted const-assignment pass. */
+    private fun spineCaSetup(result: BinderResult) {
+        spineCaActive = !spineIsDts
+        spineCaFrames.clear()
+        spineCaFnParamMemo.clear()
+        if (!spineCaActive) {
+            spineCaReachMemo = ByteArray(0)
+            return
+        }
+        val n = result.sourceFile.nodeCount
+        spineCaReachMemo = if (n > 0) ByteArray(n) else ByteArray(0)
+    }
+
+    private fun spineCaTeardown() {
+        spineCaActive = false
+        spineCaFrames.clear()
+        spineCaFnParamMemo.clear()
+        spineCaReachMemo = ByteArray(0)
+    }
+
+    /**
+     * The legacy driver preamble: script files (no imports/exports) share a
+     * global scope — a `const x` in fileA.ts is visible to `x++` in fileB.ts.
+     * Top-level immutable bindings from all script files, first-wins per
+     * name; module files keep their own file-local scope. Computed once
+     * lazily (program-wide, immutable inputs).
+     */
+    private fun spineCaSharedConstsMap(): Map<String, Int> {
+        spineCaSharedConsts?.let { return it }
         val sharedConsts = mutableMapOf<String, Int>()
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
+        for (br in binderResults) {
+            val fileName = br.sourceFile.fileName
             if (isDtsFile(fileName)) continue
-            if (isModuleFile(result.sourceFile.statements)) continue
-            for (stmt in result.sourceFile.statements) {
+            if (isModuleFile(br.sourceFile.statements)) continue
+            for (stmt in br.sourceFile.statements) {
                 if (stmt is VariableStatement && stmt.declarationList.flags == SyntaxKind.ConstKeyword) {
                     for (decl in stmt.declarationList.declarations) {
                         (decl.name as? Identifier)?.let { sharedConsts.getOrPut(it.text) { 2588 } }
@@ -60144,204 +60246,486 @@ interface DataView {
                 }
             }
         }
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            val seed = if (isModuleFile(result.sourceFile.statements)) mutableMapOf() else sharedConsts.toMutableMap()
-            checkConstAssignmentInStatements(result.sourceFile.statements, source, fileName, seed)
+        spineCaSharedConsts = sharedConsts
+        return sharedConsts
+    }
+
+    /**
+     * The legacy checkConstAssignmentInStatements per-statement COLLECT step:
+     * const declarations record 2588 (a `let`/`var` of the same name SHADOWS
+     * an enclosing const within this list, so it is REMOVED — otherwise
+     * reassigning the inner `let c` FP's TS2588); class 2629; enum 2628;
+     * function 2630; namespace 2708. Runs at a DIRECT statement of the top
+     * LIST frame's owner, BEFORE the statement's subtree walks (legacy
+     * collect-then-check order).
+     */
+    private fun spineCaCollect(stmt: Statement, constNames: MutableMap<String, Int>) {
+        if (stmt is VariableStatement) {
+            val isConst = stmt.declarationList.flags == SyntaxKind.ConstKeyword
+            for (decl in stmt.declarationList.declarations) {
+                val name = decl.name
+                if (name is Identifier) {
+                    if (isConst) constNames[name.text] = 2588 else constNames.remove(name.text)
+                }
+            }
+        }
+        if (stmt is ClassDeclaration && stmt.name != null) {
+            constNames[stmt.name.text] = 2629
+        }
+        if (stmt is EnumDeclaration) {
+            constNames[stmt.name.text] = 2628
+        }
+        if (stmt is FunctionDeclaration && stmt.name != null) {
+            constNames[stmt.name.text] = 2630
+        }
+        if (stmt is ModuleDeclaration && stmt.name is Identifier) {
+            constNames[(stmt.name).text] = 2708
         }
     }
 
-    // Map from name -> diagnostic code (2588=const, 2629=class, 2628=enum, 2630=func, 2708=namespace)
-    private fun checkConstAssignmentInStatements(
-        statements: List<Statement>,
-        source: String,
-        fileName: String,
-        constNames: MutableMap<String, Int>,
-    ) {
-        for (stmt in statements) {
-            // Collect const declarations; a `let`/`var` of the same name SHADOWS an enclosing
-            // `const` within this block, so it must be REMOVED from the inherited const set —
-            // otherwise reassigning the inner `let c` (which shadows an outer `const c`) FP's
-            // TS2588 (checker.ts's `compareTypes`: `const c = compareSymbols(...)` enclosing a
-            // nested `else { let c = compareNodes(...); c = compareTypeMappers(...); }`).
-            if (stmt is VariableStatement) {
-                val isConst = stmt.declarationList.flags == SyntaxKind.ConstKeyword
-                for (decl in stmt.declarationList.declarations) {
-                    val name = decl.name
-                    if (name is Identifier) {
-                        if (isConst) constNames[name.text] = 2588 else constNames.remove(name.text)
-                    }
-                }
+    /** Per-node ENTER hook for the const-assignment pass. */
+    private fun spineCaEnterNode(node: Node) {
+        val frames = spineCaFrames
+        // 1. The per-statement collect step (before the statement's subtree —
+        //    the legacy collect-then-check order).
+        if (node is Statement && frames.isNotEmpty()) {
+            val top = frames[frames.size - 1]
+            if (top.isList && (node as NodeBase).parent === top.owner) {
+                spineCaCollect(node, top.consts)
             }
-            // Collect class names — classes are also immutable bindings (TS2629)
-            if (stmt is ClassDeclaration && stmt.name != null) {
-                constNames[stmt.name.text] = 2629
-            }
-            // Collect enum names — enums are immutable bindings (TS2628)
-            if (stmt is EnumDeclaration) {
-                constNames[stmt.name.text] = 2628
-            }
-            // Collect function names — function declarations are immutable bindings (TS2630)
-            if (stmt is FunctionDeclaration && stmt.name != null) {
-                constNames[stmt.name.text] = 2630
-            }
-            // Collect namespace names — namespaces are not values (TS2708)
-            if (stmt is ModuleDeclaration && stmt.name is Identifier) {
-                constNames[(stmt.name).text] = 2708
-            }
-            // Check for assignments to const variables
-            checkConstAssignmentInStatement(stmt, source, fileName, constNames)
         }
-    }
-
-    private fun checkConstAssignmentInStatement(
-        stmt: Statement,
-        source: String,
-        fileName: String,
-        constNames: Map<String, Int>,
-    ) {
-        when (stmt) {
-            is ExpressionStatement -> checkConstAssignmentInExpr(stmt.expression, source, fileName, constNames)
-            is VariableStatement -> {
-                for (decl in stmt.declarationList.declarations) {
-                    decl.initializer?.let { checkConstAssignmentInExpr(it, source, fileName, constNames) }
-                }
+        // 2. Frame spawns.
+        when (node) {
+            is SourceFile -> frames.add(SpineCaFrame(
+                node,
+                if (spineFileIsModule) mutableMapOf() else HashMap(spineCaSharedConstsMap()),
+                isList = true,
+            ))
+            is Block -> if (spineCaStatus(node) == CA_LIST) {
+                frames.add(SpineCaFrame(node, spineCaSpawnMap(node), isList = true))
             }
-            is ReturnStatement -> stmt.expression?.let { checkConstAssignmentInExpr(it, source, fileName, constNames) }
-            is IfStatement -> {
-                checkConstAssignmentInExpr(stmt.expression, source, fileName, constNames)
-                checkConstAssignmentInStatement(stmt.thenStatement, source, fileName, constNames)
-                stmt.elseStatement?.let { checkConstAssignmentInStatement(it, source, fileName, constNames) }
+            is ModuleBlock -> if (spineCaStatus(node) == CA_LIST) {
+                frames.add(SpineCaFrame(node, spineCaCopyTop(), isList = true))
             }
-            is Block -> checkConstAssignmentInStatements(stmt.statements, source, fileName, constNames.toMutableMap())
-            is ForStatement -> {
-                // Collect const in for init
-                val forConsts = constNames.toMutableMap()
-                when (val init = stmt.initializer) {
-                    is VariableDeclarationList -> {
-                        if (init.flags == SyntaxKind.ConstKeyword) {
-                            for (decl in init.declarations) {
-                                val name = decl.name
-                                if (name is Identifier) forConsts[name.text] = 2588
-                            }
-                        }
-                    }
-                    is Expression -> checkConstAssignmentInExpr(init, source, fileName, constNames)
-                    else -> {}
-                }
-                stmt.condition?.let { checkConstAssignmentInExpr(it, source, fileName, forConsts) }
-                stmt.incrementor?.let { checkConstAssignmentInExpr(it, source, fileName, forConsts) }
-                checkConstAssignmentInStatement(stmt.statement, source, fileName, forConsts)
+            is CaseClause -> if (spineCaStatus(node) == CA_LIST) {
+                frames.add(SpineCaFrame(node, spineCaCopyTop(), isList = true))
             }
-            is ForInStatement -> {
-                checkConstAssignmentInExpr(stmt.expression, source, fileName, constNames)
-                checkConstAssignmentInStatement(stmt.statement, source, fileName, constNames)
+            is DefaultClause -> if (spineCaStatus(node) == CA_LIST) {
+                frames.add(SpineCaFrame(node, spineCaCopyTop(), isList = true))
             }
-            is ForOfStatement -> {
-                checkConstAssignmentInExpr(stmt.expression, source, fileName, constNames)
-                checkConstAssignmentInStatement(stmt.statement, source, fileName, constNames)
-            }
-            is WhileStatement -> {
-                checkConstAssignmentInExpr(stmt.expression, source, fileName, constNames)
-                checkConstAssignmentInStatement(stmt.statement, source, fileName, constNames)
-            }
-            is DoStatement -> {
-                checkConstAssignmentInStatement(stmt.statement, source, fileName, constNames)
-                checkConstAssignmentInExpr(stmt.expression, source, fileName, constNames)
-            }
-            is SwitchStatement -> {
-                checkConstAssignmentInExpr(stmt.expression, source, fileName, constNames)
-                for (clause in stmt.caseBlock) {
-                    val stmts = when (clause) {
-                        is CaseClause -> clause.statements
-                        is DefaultClause -> clause.statements
-                        else -> emptyList()
-                    }
-                    checkConstAssignmentInStatements(stmts, source, fileName, constNames.toMutableMap())
-                }
-            }
-            is TryStatement -> {
-                checkConstAssignmentInStatements(stmt.tryBlock.statements, source, fileName, constNames.toMutableMap())
-                stmt.catchClause?.block?.let {
-                    checkConstAssignmentInStatements(it.statements, source, fileName, constNames.toMutableMap())
-                }
-                stmt.finallyBlock?.let {
-                    checkConstAssignmentInStatements(it.statements, source, fileName, constNames.toMutableMap())
-                }
-            }
-            is FunctionDeclaration -> {
-                stmt.body?.let { body ->
-                    // B116-ext: populate parameter local types so `isReadonlyPropertyAccess`
-                    // (which calls getTypeOfExpression on the receiver) can resolve a param
-                    // receiver's type — e.g. `function f(x: B) { x.c = true }` where `B`'s
-                    // `c` is readonly → TS2540. Save/restore mirrors the property-access walker.
-                    val savedLocalTypes = currentLocalTypes
-                    val savedParamBindings = currentParamBindingNames
-                    currentLocalTypes = HashMap(currentLocalTypes)
-                    currentParamBindingNames = HashSet(currentParamBindingNames)
-                    try {
-                        populateParameterLocalTypes(stmt.parameters)
-                        checkConstAssignmentInStatements(body.statements, source, fileName, mutableMapOf())
-                    } finally {
-                        currentLocalTypes = savedLocalTypes
-                        currentParamBindingNames = savedParamBindings
+            // The legacy For arm's forConsts overlay: a copy of the outer map
+            // plus the header's const declarator names, in effect for the
+            // condition/incrementor/body. An EXPRESSION-form initializer sees
+            // the outer map in legacy — indistinguishable here because header
+            // const additions exist only when the initializer is a
+            // declaration list (whose declarator initializers are unreached).
+            is ForStatement -> if (spineCaStatus(node) == CA_STMT) {
+                val overlay = spineCaCopyTop()
+                val init = node.initializer
+                if (init is VariableDeclarationList && init.flags == SyntaxKind.ConstKeyword) {
+                    for (decl in init.declarations) {
+                        val name = decl.name
+                        if (name is Identifier) overlay[name.text] = 2588
                     }
                 }
+                frames.add(SpineCaFrame(node, overlay, isList = false))
             }
-            is ClassDeclaration -> {
-                // B100: track the enclosing class for instance members so `this.X = v`
-                // can resolve `this` to the class instance type in the readonly check
-                // (getTypeOfExpression(this) does not yield the class type — B101).
-                val savedClassForThis = currentClassForThis
-                val savedCtorDirect = currentThisMemberIsCtorDirect
-                try {
-                    for (member in stmt.members) {
-                        val memberStatic = when (member) {
-                            is MethodDeclaration -> ModifierFlag.Static in member.modifiers
-                            is GetAccessor -> ModifierFlag.Static in member.modifiers
-                            is SetAccessor -> ModifierFlag.Static in member.modifiers
-                            is PropertyDeclaration -> ModifierFlag.Static in member.modifiers
-                            else -> false
-                        }
-                        currentClassForThis = if (memberStatic) null else stmt
-                        // tsc allows an OWN readonly data property to be written ONLY directly in the
-                        // constructor body or a (non-static) property initializer of the declaring class.
-                        currentThisMemberIsCtorDirect = !memberStatic && member is Constructor
-                        val body = when (member) {
-                            is MethodDeclaration -> member.body
-                            is Constructor -> member.body
-                            is GetAccessor -> member.body
-                            is SetAccessor -> member.body
-                            else -> null
-                        }
-                        // Pass outer constNames so class/enum assignments in methods are caught
-                        body?.let { checkConstAssignmentInStatements(it.statements, source, fileName, constNames.toMutableMap()) }
-                        if (member is PropertyDeclaration) {
-                            // A property initializer is its OWN control-flow container in tsc
-                            // (getControlFlowContainer returns the PropertyDeclaration), so a
-                            // readonly `this.X` write there is NOT a ctor-direct write → TS2540.
-                            currentThisMemberIsCtorDirect = false
-                            member.initializer?.let { checkConstAssignmentInExpr(it, source, fileName, constNames) }
-                        }
-                    }
-                } finally {
-                    currentClassForThis = savedClassForThis
-                    currentThisMemberIsCtorDirect = savedCtorDirect
-                }
-            }
-            is ModuleDeclaration -> {
-                val body = stmt.body
-                if (body is ModuleBlock) {
-                    checkConstAssignmentInStatements(body.statements, source, fileName, constNames.toMutableMap())
-                }
-            }
-            is LabeledStatement -> checkConstAssignmentInStatement(stmt.statement, source, fileName, constNames)
-            is ThrowStatement -> stmt.expression?.let { checkConstAssignmentInExpr(it, source, fileName, constNames) }
-            is ExportAssignment -> checkConstAssignmentInExpr(stmt.expression, source, fileName, constNames)
             else -> {}
         }
+        // 3. Anchor emissions.
+        when (node) {
+            is BinaryExpression -> spineCaBinaryEnter(node)
+            is PrefixUnaryExpression ->
+                if (node.operator == SyntaxKind.PlusPlus || node.operator == SyntaxKind.MinusMinus) {
+                    spineCaIncDecEnter(node, unwrapParens(node.operand), node.operand)
+                }
+            is PostfixUnaryExpression ->
+                if (node.operator == SyntaxKind.PlusPlus || node.operator == SyntaxKind.MinusMinus) {
+                    spineCaIncDecEnter(node, unwrapNonNull(node.operand), node.operand)
+                }
+            is RegularExpressionLiteralNode -> if (spineCaStatus(node) == CA_EXPR) {
+                scanRegExpFull(node, spineSource, spineFileName)
+            }
+            else -> {}
+        }
+    }
+
+    /** Per-node LEAVE hook: pop the frame this node owns (at most one). */
+    private fun spineCaLeaveNode(node: Node) {
+        val frames = spineCaFrames
+        while (frames.isNotEmpty() && frames[frames.size - 1].owner === node) {
+            frames.removeAt(frames.size - 1)
+        }
+    }
+
+    private fun spineCaCopyTop(): MutableMap<String, Int> {
+        val frames = spineCaFrames
+        return if (frames.isEmpty()) mutableMapOf() else HashMap(frames[frames.size - 1].consts)
+    }
+
+    /** The legacy activation-seed rules for a Block body: fn-decl / fn-expr /
+     *  arrow (plain and IIFE) bodies get a FRESH EMPTY map (an outer const is
+     *  NOT flagged inside — bug-compat); class-member bodies, statement
+     *  Blocks, and try/catch/finally blocks inherit a COPY. */
+    private fun spineCaSpawnMap(block: Block): MutableMap<String, Int> =
+        when (val parent = (block as NodeBase).parent) {
+            is FunctionDeclaration -> if (parent.body === block) mutableMapOf() else spineCaCopyTop()
+            is FunctionExpression -> if (parent.body === block) mutableMapOf() else spineCaCopyTop()
+            is ArrowFunction -> if (parent.body === block) mutableMapOf() else spineCaCopyTop()
+            else -> spineCaCopyTop()
+        }
+
+    /** The assignment-operator anchor — the deleted left-spine loop's
+     *  emission block, per assignment-op BinaryExpression. */
+    private fun spineCaBinaryEnter(expr: BinaryExpression) {
+        val op = expr.operator
+        val isAssign = op == SyntaxKind.Equals || op == SyntaxKind.PlusEquals || op == SyntaxKind.MinusEquals
+            || op == SyntaxKind.AsteriskEquals || op == SyntaxKind.SlashEquals
+            || op == SyntaxKind.PercentEquals || op == SyntaxKind.AmpersandEquals
+            || op == SyntaxKind.BarEquals || op == SyntaxKind.CaretEquals
+            || op == SyntaxKind.LessThanLessThanEquals || op == SyntaxKind.GreaterThanGreaterThanEquals
+            || op == SyntaxKind.GreaterThanGreaterThanGreaterThanEquals
+            || op == SyntaxKind.AsteriskAsteriskEquals
+            || op == SyntaxKind.BarBarEquals || op == SyntaxKind.AmpersandAmpersandEquals
+            || op == SyntaxKind.QuestionQuestionEquals
+        if (!isAssign) return
+        if (spineCaStatus(expr) != CA_EXPR) return
+        val constNames = spineCaFrames.lastOrNull()?.consts ?: return
+        val left = expr.left
+        if (left is Identifier && left.text in constNames) {
+            emitReadonlyAssignment(left, spineSource, spineFileName, constNames[left.text] ?: 2588)
+        }
+        spineCaWithAmbient(expr) {
+            checkReadonlyAssignmentTarget(left, spineSource, spineFileName)
+        }
+    }
+
+    /** The ++/-- anchor: const-name check on the unwrapped operand (parens
+     *  for prefix, non-null for postfix — the legacy asymmetry), the TS2540
+     *  readonly check, and TS2357 on the ORIGINAL operand. */
+    private fun spineCaIncDecEnter(expr: Expression, operand: Expression, rawOperand: Expression) {
+        if (spineCaStatus(expr) != CA_EXPR) return
+        val constNames = spineCaFrames.lastOrNull()?.consts ?: return
+        if (operand is Identifier && operand.text in constNames) {
+            emitReadonlyAssignment(operand, spineSource, spineFileName, constNames[operand.text] ?: 2588)
+        }
+        spineCaWithAmbient(expr) {
+            checkReadonlyAssignmentTarget(operand, spineSource, spineFileName)
+        }
+        emitTS2357IfInvalidIncDecTarget(rawOperand, spineSource, spineFileName)
+    }
+
+    /**
+     * The legacy ambient state around a readonly-target check, rebuilt
+     * PULL-based from the anchor's ancestor chain: the B510 class-this
+     * context ([spineCaClassCtx]) and the B116 fn-decl param typing
+     * ([spineCaFnParamCtx]).
+     */
+    private inline fun spineCaWithAmbient(anchor: Node, body: () -> Unit) {
+        val savedCls = currentClassForThis
+        val savedCtorDirect = currentThisMemberIsCtorDirect
+        val savedLocalTypes = currentLocalTypes
+        val savedParamBindings = currentParamBindingNames
+        val (cls, ctorDirect) = spineCaClassCtx(anchor)
+        currentClassForThis = cls
+        currentThisMemberIsCtorDirect = ctorDirect
+        val paramCtx = spineCaFnParamCtx(anchor)
+        currentLocalTypes = paramCtx.first
+        currentParamBindingNames = paramCtx.second
+        try {
+            body()
+        } finally {
+            currentClassForThis = savedCls
+            currentThisMemberIsCtorDirect = savedCtorDirect
+            currentLocalTypes = savedLocalTypes
+            currentParamBindingNames = savedParamBindings
+        }
+    }
+
+    /**
+     * The B510 class-this context at [anchor] — the legacy field threading
+     * reproduced innermost-boundary-first: a FUNCTION EXPRESSION rebinds
+     * `this` (class = null); a NON-invoked arrow keeps the class but clears
+     * ctor-directness; an IMMEDIATELY-INVOKED arrow is TRANSPARENT (tsc's
+     * getControlFlowContainer); a nested FunctionDeclaration is (bug-compat)
+     * transparent too — the legacy arm never touched the fields; the nearest
+     * class-DECLARATION member decides: static → null; Constructor →
+     * ctor-direct (unless an arrow cleared it); a PropertyDeclaration
+     * initializer is its OWN control-flow container (never ctor-direct).
+     */
+    private fun spineCaClassCtx(anchor: Node): Pair<ClassDeclaration?, Boolean> {
+        var ctorDirectCleared = false
+        var cur: Node = anchor
+        while (true) {
+            val parent = (cur as NodeBase).parent ?: return null to false
+            when (parent) {
+                is FunctionExpression -> if (cur === parent.body) return null to false
+                is ArrowFunction -> if (cur === parent.body && !spineCaIsIifeArrow(parent)) {
+                    ctorDirectCleared = true
+                }
+                is ClassDeclaration -> {
+                    // `cur` is a class member whose subtree holds the anchor.
+                    val member = cur
+                    val memberStatic = when (member) {
+                        is MethodDeclaration -> ModifierFlag.Static in member.modifiers
+                        is GetAccessor -> ModifierFlag.Static in member.modifiers
+                        is SetAccessor -> ModifierFlag.Static in member.modifiers
+                        is PropertyDeclaration -> ModifierFlag.Static in member.modifiers
+                        else -> false
+                    }
+                    if (memberStatic) return null to false
+                    val ctorDirect = member is Constructor && !ctorDirectCleared
+                    return parent to ctorDirect
+                }
+                is SourceFile -> return null to false
+                else -> {}
+            }
+            cur = parent
+        }
+    }
+
+    /** Is [arrow] the (paren-unwrapped) callee of an immediately-invoked
+     *  call — i.e. transparent to ctor-directness? */
+    private fun spineCaIsIifeArrow(arrow: ArrowFunction): Boolean {
+        var cur: Node = arrow
+        var parent = (cur as NodeBase).parent
+        while (parent is ParenthesizedExpression && parent.expression === cur) {
+            cur = parent
+            parent = (cur as NodeBase).parent
+        }
+        return parent is CallExpression && parent.expression === cur
+    }
+
+    /**
+     * The B116 fn-decl param typing at [anchor]: the legacy pass wrapped each
+     * FunctionDeclaration body in currentLocalTypes/currentParamBindingNames
+     * copies + populateParameterLocalTypes (fn DECLS only — never methods,
+     * fn-exprs, or arrows), cumulative through nesting. Rebuilt from the
+     * chain of enclosing fn-decls (outermost→innermost), memoized per
+     * fn-decl nodeId; anchors outside any fn-decl use the PRE-SPINE resting
+     * base.
+     */
+    private fun spineCaFnParamCtx(anchor: Node): Pair<MutableMap<String, Type>, MutableSet<String>> {
+        // Find the innermost enclosing FunctionDeclaration whose BODY contains
+        // the anchor, collecting the chain bottom-up.
+        val chain = spineCaCtxChain
+        chain.clear()
+        var cur: Node = anchor
+        while (true) {
+            val parent = (cur as NodeBase).parent ?: break
+            if (parent is FunctionDeclaration && cur === parent.body) chain.add(parent)
+            cur = parent
+        }
+        if (chain.isEmpty()) {
+            chain.clear()
+            return spineCaRestingLocalTypes to spineCaRestingParamBindings
+        }
+        val result = spineCaFnDeclCtx(chain, 0)
+        chain.clear()
+        return result
+    }
+
+    /** Cumulative context for chain[idx] (chain is innermost-first): the
+     *  ENCLOSING context (next chain entry, or the resting base) copied +
+     *  this fn-decl's params populated. Memoized per fn-decl nodeId. */
+    private fun spineCaFnDeclCtx(
+        chain: List<Node>,
+        idx: Int,
+    ): Pair<MutableMap<String, Type>, MutableSet<String>> {
+        val fn = chain[idx] as FunctionDeclaration
+        val id = (fn as NodeBase).nodeId
+        if (id >= 0) spineCaFnParamMemo[id]?.let { return it }
+        val base = if (idx + 1 < chain.size) spineCaFnDeclCtx(chain, idx + 1)
+        else spineCaRestingLocalTypes to spineCaRestingParamBindings
+        val localTypes = HashMap(base.first)
+        val paramBindings = HashSet(base.second)
+        val savedLocalTypes = currentLocalTypes
+        val savedParamBindings = currentParamBindingNames
+        currentLocalTypes = localTypes
+        currentParamBindingNames = paramBindings
+        try {
+            populateParameterLocalTypes(fn.parameters)
+        } finally {
+            currentLocalTypes = savedLocalTypes
+            currentParamBindingNames = savedParamBindings
+        }
+        val ctx: Pair<MutableMap<String, Type>, MutableSet<String>> = localTypes to paramBindings
+        if (id >= 0) spineCaFnParamMemo[id] = ctx
+        return ctx
+    }
+
+    /**
+     * Memoized reach classifier — the deleted checkConstAssignmentInStatement
+     * / -InExpr dispatch arms verbatim (see the CA_* states). Ascends to the
+     * first memoized/terminal ancestor, then walks back down over
+     * [spineCaEdge].
+     */
+    private fun spineCaStatus(node: Node): Int {
+        if (node is SourceFile) return CA_LIST
+        val memo = spineCaReachMemo
+        run {
+            val id = (node as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) {
+                val m = memo[id].toInt()
+                if (m != 0) return m
+            }
+        }
+        val chain = spineCaChain
+        chain.clear()
+        var cur: Node = node
+        val anchor: Node?
+        var anchorStatus = CA_NONE
+        while (true) {
+            chain.add(cur)
+            val parent = (cur as NodeBase).parent
+            if (parent == null) { anchor = null; break } // detached/unindexed → NONE
+            if (parent is SourceFile) { anchor = parent; anchorStatus = CA_LIST; break }
+            val pid = (parent as NodeBase).nodeId
+            val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
+            if (pm != 0) { anchor = parent; anchorStatus = pm; break }
+            cur = parent
+        }
+        var pNode: Node? = anchor
+        var pStatus = anchorStatus
+        var result = CA_NONE
+        for (i in chain.indices.reversed()) {
+            val c = chain[i]
+            result = if (pNode == null || pStatus == CA_NONE) CA_NONE
+                else spineCaEdge(pNode, pStatus, c)
+            val cid = (c as NodeBase).nodeId
+            if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
+            pNode = c
+            pStatus = result
+        }
+        chain.clear()
+        return result
+    }
+
+    /** A statement position under a reached descent arm: Blocks open their
+     *  own ACTIVATION, every other statement is nested-processed. */
+    private fun spineCaStmtChild(child: Node): Int = when {
+        child !is Statement -> CA_NONE
+        child is Block -> CA_LIST
+        else -> CA_STMT
+    }
+
+    /**
+     * The edge rules — the deleted walkers' arms verbatim. Unlisted edges
+     * are NONE (the legacy `else -> {}`s: for-header declarator
+     * initializers, class EXPRESSIONS, object-literal methods/accessors,
+     * await/yield/void/typeof/delete/comma operands, tagged templates,
+     * shorthand assignments, type positions).
+     */
+    private fun spineCaEdge(parent: Node, pStatus: Int, child: Node): Int = when (pStatus) {
+        CA_LIST -> spineCaStmtChild(child)
+        CA_STMT -> when (parent) {
+            is ExpressionStatement -> if (child === parent.expression) CA_EXPR else CA_NONE
+            is VariableStatement -> if (child === parent.declarationList) CA_MEMBER else CA_NONE
+            is ReturnStatement -> if (child === parent.expression) CA_EXPR else CA_NONE
+            is ThrowStatement -> if (child === parent.expression) CA_EXPR else CA_NONE
+            is ExportAssignment -> if (child === parent.expression) CA_EXPR else CA_NONE
+            is IfStatement -> when {
+                child === parent.expression -> CA_EXPR
+                child === parent.thenStatement || child === parent.elseStatement -> spineCaStmtChild(child)
+                else -> CA_NONE
+            }
+            is ForStatement -> when {
+                child === parent.initializer -> if (child is Expression) CA_EXPR else CA_NONE
+                child === parent.condition || child === parent.incrementor -> CA_EXPR
+                child === parent.statement -> spineCaStmtChild(child)
+                else -> CA_NONE
+            }
+            is ForInStatement -> when {
+                child === parent.expression -> CA_EXPR
+                child === parent.statement -> spineCaStmtChild(child)
+                else -> CA_NONE
+            }
+            is ForOfStatement -> when {
+                child === parent.expression -> CA_EXPR
+                child === parent.statement -> spineCaStmtChild(child)
+                else -> CA_NONE
+            }
+            is WhileStatement -> when {
+                child === parent.expression -> CA_EXPR
+                child === parent.statement -> spineCaStmtChild(child)
+                else -> CA_NONE
+            }
+            is DoStatement -> when {
+                child === parent.expression -> CA_EXPR
+                child === parent.statement -> spineCaStmtChild(child)
+                else -> CA_NONE
+            }
+            is SwitchStatement -> when {
+                child === parent.expression -> CA_EXPR
+                child is CaseClause || child is DefaultClause -> CA_LIST
+                else -> CA_NONE
+            }
+            is TryStatement -> when {
+                child === parent.tryBlock || child === parent.finallyBlock -> CA_LIST
+                child === parent.catchClause -> CA_MEMBER
+                else -> CA_NONE
+            }
+            is FunctionDeclaration -> if (child === parent.body) CA_LIST else CA_NONE
+            is ClassDeclaration ->
+                if (child is MethodDeclaration || child is Constructor ||
+                    child is GetAccessor || child is SetAccessor ||
+                    child is PropertyDeclaration) CA_MEMBER else CA_NONE
+            is ModuleDeclaration -> if (child === parent.body && child is ModuleBlock) CA_LIST else CA_NONE
+            is LabeledStatement -> if (child === parent.statement) spineCaStmtChild(child) else CA_NONE
+            else -> CA_NONE
+        }
+        CA_MEMBER -> when (parent) {
+            is VariableDeclarationList -> if (child is VariableDeclaration) CA_MEMBER else CA_NONE
+            is VariableDeclaration -> if (child === parent.initializer) CA_EXPR else CA_NONE
+            is CatchClause -> if (child === parent.block) CA_LIST else CA_NONE
+            is MethodDeclaration -> if (child === parent.body) CA_LIST else CA_NONE
+            is Constructor -> if (child === parent.body) CA_LIST else CA_NONE
+            is GetAccessor -> if (child === parent.body) CA_LIST else CA_NONE
+            is SetAccessor -> if (child === parent.body) CA_LIST else CA_NONE
+            is PropertyDeclaration -> if (child === parent.initializer) CA_EXPR else CA_NONE
+            is PropertyAssignment -> if (child === parent.initializer) CA_EXPR else CA_NONE
+            is SpreadAssignment -> if (child === parent.expression) CA_EXPR else CA_NONE
+            is TemplateSpan -> if (child === parent.expression) CA_EXPR else CA_NONE
+            else -> CA_NONE
+        }
+        CA_EXPR -> when (parent) {
+            is BinaryExpression -> if (child === parent.left || child === parent.right) CA_EXPR else CA_NONE
+            is PrefixUnaryExpression -> if (child === parent.operand) CA_EXPR else CA_NONE
+            is PostfixUnaryExpression -> if (child === parent.operand) CA_EXPR else CA_NONE
+            is CallExpression ->
+                if (child === parent.expression || parent.arguments.any { it === child }) CA_EXPR
+                else CA_NONE
+            is NewExpression ->
+                if (child === parent.expression || parent.arguments?.any { it === child } == true) CA_EXPR
+                else CA_NONE
+            is ParenthesizedExpression -> if (child === parent.expression) CA_EXPR else CA_NONE
+            is AsExpression -> if (child === parent.expression) CA_EXPR else CA_NONE
+            is SatisfiesExpression -> if (child === parent.expression) CA_EXPR else CA_NONE
+            is NonNullExpression -> if (child === parent.expression) CA_EXPR else CA_NONE
+            is TypeAssertionExpression -> if (child === parent.expression) CA_EXPR else CA_NONE
+            is PropertyAccessExpression -> if (child === parent.expression) CA_EXPR else CA_NONE
+            is ElementAccessExpression ->
+                if (child === parent.expression || child === parent.argumentExpression) CA_EXPR
+                else CA_NONE
+            is ArrayLiteralExpression -> if (parent.elements.any { it === child }) CA_EXPR else CA_NONE
+            is ObjectLiteralExpression -> when (child) {
+                is PropertyAssignment, is SpreadAssignment -> CA_MEMBER
+                else -> CA_NONE
+            }
+            is SpreadElement -> if (child === parent.expression) CA_EXPR else CA_NONE
+            is TemplateExpression -> if (child is TemplateSpan) CA_MEMBER else CA_NONE
+            is ConditionalExpression ->
+                if (child === parent.condition || child === parent.whenTrue ||
+                    child === parent.whenFalse) CA_EXPR else CA_NONE
+            is ArrowFunction -> when {
+                child !== parent.body -> CA_NONE
+                child is Block -> CA_LIST
+                else -> CA_EXPR
+            }
+            is FunctionExpression -> if (child === parent.body) CA_LIST else CA_NONE
+            else -> CA_NONE
+        }
+        else -> CA_NONE
     }
 
     /** The ARROW callee of an immediately-invoked call `(() => …)()` (unwrapping parens), or null.
@@ -60351,143 +60735,6 @@ interface DataView {
         var callee: Expression = call.expression
         while (callee is ParenthesizedExpression) callee = callee.expression
         return callee as? ArrowFunction
-    }
-
-    private fun checkConstAssignmentInExpr(
-        expr: Expression,
-        source: String,
-        fileName: String,
-        constNames: Map<String, Int>,
-    ) {
-        when (expr) {
-            is BinaryExpression -> {
-                // Iteratively walk left spine to avoid StackOverflow on deep binary chains
-                var current: Expression = expr
-                while (current is BinaryExpression) {
-                    val op = current.operator
-                    if (op == SyntaxKind.Equals || op == SyntaxKind.PlusEquals || op == SyntaxKind.MinusEquals
-                        || op == SyntaxKind.AsteriskEquals || op == SyntaxKind.SlashEquals
-                        || op == SyntaxKind.PercentEquals || op == SyntaxKind.AmpersandEquals
-                        || op == SyntaxKind.BarEquals || op == SyntaxKind.CaretEquals
-                        || op == SyntaxKind.LessThanLessThanEquals || op == SyntaxKind.GreaterThanGreaterThanEquals
-                        || op == SyntaxKind.GreaterThanGreaterThanGreaterThanEquals
-                        || op == SyntaxKind.AsteriskAsteriskEquals
-                        || op == SyntaxKind.BarBarEquals || op == SyntaxKind.AmpersandAmpersandEquals
-                        || op == SyntaxKind.QuestionQuestionEquals) {
-                        val left = current.left
-                        if (left is Identifier && left.text in constNames) {
-                            emitReadonlyAssignment(left, source, fileName, constNames[left.text] ?: 2588)
-                        }
-                        // Check assignment to readonly property (TS2540)
-                        checkReadonlyAssignmentTarget(left, source, fileName)
-                    }
-                    checkConstAssignmentInExpr(current.right, source, fileName, constNames)
-                    current = current.left
-                }
-                checkConstAssignmentInExpr(current, source, fileName, constNames)
-            }
-            is PrefixUnaryExpression -> {
-                if (expr.operator == SyntaxKind.PlusPlus || expr.operator == SyntaxKind.MinusMinus) {
-                    val operand = unwrapParens(expr.operand)
-                    if (operand is Identifier && operand.text in constNames) {
-                        emitReadonlyAssignment(operand, source, fileName, constNames[operand.text] ?: 2588)
-                    }
-                    // Check readonly property (TS2540)
-                    checkReadonlyAssignmentTarget(operand, source, fileName)
-                    emitTS2357IfInvalidIncDecTarget(expr.operand, source, fileName)
-                }
-                checkConstAssignmentInExpr(expr.operand, source, fileName, constNames)
-            }
-            is PostfixUnaryExpression -> {
-                if (expr.operator == SyntaxKind.PlusPlus || expr.operator == SyntaxKind.MinusMinus) {
-                    val operand = unwrapNonNull(expr.operand)
-                    if (operand is Identifier && operand.text in constNames) {
-                        emitReadonlyAssignment(operand, source, fileName, constNames[operand.text] ?: 2588)
-                    }
-                    // Check readonly property (TS2540)
-                    checkReadonlyAssignmentTarget(operand, source, fileName)
-                    emitTS2357IfInvalidIncDecTarget(expr.operand, source, fileName)
-                }
-                checkConstAssignmentInExpr(expr.operand, source, fileName, constNames)
-            }
-            is CallExpression -> {
-                // tsc's getControlFlowContainer is TRANSPARENT to an immediately-invoked arrow
-                // (`(() => { ... })()`): its body runs during construction, so an OWN readonly
-                // DATA write inside it stays legal in the ctor (currentThisMemberIsCtorDirect
-                // preserved). A NON-invoked arrow / function expression IS a control-flow boundary.
-                val iifeArrow = immediatelyInvokedArrowCallee(expr)
-                if (iifeArrow != null) {
-                    when (val body = iifeArrow.body) {
-                        is Block -> checkConstAssignmentInStatements(body.statements, source, fileName, mutableMapOf())
-                        is Expression -> checkConstAssignmentInExpr(body, source, fileName, constNames)
-                        else -> {}
-                    }
-                } else {
-                    checkConstAssignmentInExpr(expr.expression, source, fileName, constNames)
-                }
-                expr.arguments.forEach { checkConstAssignmentInExpr(it, source, fileName, constNames) }
-            }
-            is NewExpression -> {
-                checkConstAssignmentInExpr(expr.expression, source, fileName, constNames)
-                expr.arguments?.forEach { checkConstAssignmentInExpr(it, source, fileName, constNames) }
-            }
-            is ParenthesizedExpression -> checkConstAssignmentInExpr(expr.expression, source, fileName, constNames)
-            is AsExpression -> checkConstAssignmentInExpr(expr.expression, source, fileName, constNames)
-            is SatisfiesExpression -> checkConstAssignmentInExpr(expr.expression, source, fileName, constNames)
-            is NonNullExpression -> checkConstAssignmentInExpr(expr.expression, source, fileName, constNames)
-            is TypeAssertionExpression -> checkConstAssignmentInExpr(expr.expression, source, fileName, constNames)
-            is PropertyAccessExpression -> checkConstAssignmentInExpr(expr.expression, source, fileName, constNames)
-            is ElementAccessExpression -> {
-                checkConstAssignmentInExpr(expr.expression, source, fileName, constNames)
-                checkConstAssignmentInExpr(expr.argumentExpression, source, fileName, constNames)
-            }
-            is ArrayLiteralExpression -> expr.elements.forEach { checkConstAssignmentInExpr(it, source, fileName, constNames) }
-            is ObjectLiteralExpression -> for (prop in expr.properties) {
-                when (prop) {
-                    is PropertyAssignment -> checkConstAssignmentInExpr(prop.initializer, source, fileName, constNames)
-                    is SpreadAssignment -> checkConstAssignmentInExpr(prop.expression, source, fileName, constNames)
-                    else -> {}
-                }
-            }
-            is SpreadElement -> checkConstAssignmentInExpr(expr.expression, source, fileName, constNames)
-            is TemplateExpression -> expr.templateSpans.forEach { checkConstAssignmentInExpr(it.expression, source, fileName, constNames) }
-            is ConditionalExpression -> {
-                checkConstAssignmentInExpr(expr.condition, source, fileName, constNames)
-                checkConstAssignmentInExpr(expr.whenTrue, source, fileName, constNames)
-                checkConstAssignmentInExpr(expr.whenFalse, source, fileName, constNames)
-            }
-            is ArrowFunction -> {
-                // A nested arrow preserves `this` but is no longer the ctor's direct body —
-                // an OWN readonly data write inside it is TS2540.
-                val savedCtorDirect = currentThisMemberIsCtorDirect
-                currentThisMemberIsCtorDirect = false
-                when (val body = expr.body) {
-                    is Block -> checkConstAssignmentInStatements(body.statements, source, fileName, mutableMapOf())
-                    is Expression -> checkConstAssignmentInExpr(body, source, fileName, constNames)
-                    else -> {}
-                }
-                currentThisMemberIsCtorDirect = savedCtorDirect
-            }
-            is FunctionExpression -> {
-                // A function expression REBINDS `this` (not the class instance), so `this.X`
-                // inside it must not be flagged against the enclosing class.
-                val savedThisCls = currentClassForThis
-                val savedCtorDirect = currentThisMemberIsCtorDirect
-                currentClassForThis = null
-                currentThisMemberIsCtorDirect = false
-                checkConstAssignmentInStatements(expr.body.statements, source, fileName, mutableMapOf())
-                currentClassForThis = savedThisCls
-                currentThisMemberIsCtorDirect = savedCtorDirect
-            }
-            // TS1538: braced `\u{...}` regex escapes require the u/v flag. This
-            // per-file walker already reaches every expression position; reuse it.
-            is RegularExpressionLiteralNode -> {
-                // Full faithful port of tsc's scanRegularExpressionWorker + flag scan
-                // (round 370) — replaces the 7 prior scoped emitters.
-                scanRegExpFull(expr, source, fileName)
-            }
-            else -> {}
-        }
     }
 
     private fun unwrapNonNull(expr: Expression): Expression {
