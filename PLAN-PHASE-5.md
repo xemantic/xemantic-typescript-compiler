@@ -2088,12 +2088,44 @@ interrupt the arc).
     ~221,844 distinct nodes = ×2.6 recompute), and flow narrowing folded into
     reference typing once (84,469 depth-0 walks, 68% from property access).
     Re-measure against the ≤10 s single-threaded compiler-profile target.
-- [ ] **INV.5 Canonical types + explicit instantiation** (absorbs M5.2/M5.3). Intern
-  unions/intersections by sorted member-id key; literal interning; explicit mapper
-  objects replace the ambient `currentTypeAliasArgs`/TP-scope contexts; instantiated
-  members cached ON the `Type.Reference` (delete `resolveGenericPropertyType`
-  fresh-minting + its depth-4 OOM cap); `nodeTypes` keyed (node, mapper) — always
-  valid; then open `canUseTypeEngine`'s generic gate and DELETE superseded pin walkers.
+- [ ] **INV.5 Canonical types + explicit instantiation** (absorbs M5.2/M5.3;
+  NOW THE ACTIVE ARC ITEM — the round-543 g1a bisect proved the INV.4(e)
+  giants are blocked on exactly this: first-touch-order-sensitive shared
+  caches). Decomposed round 544, one commit each, every step suite +
+  listAll-×8 gated:
+  - [ ] **INV.5(a) Union/intersection interning.** `getUnionType` (Checker.kt
+    ~103k, "mints a fresh Type.Union(sorted) with a new id — does NOT
+    intern") + `getIntersectionType` intern by sorted member-id key (the
+    `referenceCache` pattern; preserves display member order by keeping the
+    FIRST-built instance). Directly serves order-insensitivity: an interned
+    union has the same id regardless of which pass builds it first. KNOWN
+    HAZARDS (from the gotcha corpus): (1) aliasDisplayMap is id-keyed — an
+    interned union SHARED across contexts must not receive one context's
+    alias name (the singleton-intrinsic display-corruption hazard
+    generalized; union alias display already has the structural
+    `unionAliasStructural` map — union registrations in aliasDisplayMap may
+    need to move there entirely); (2) the id-only dedup gotcha (duplicate
+    structurally-identical members) is UNCHANGED by interning — do not
+    conflate the two; (3) the round-424 structural wash-gate workaround
+    stays correct (it stops RELYING on fresh ids but never assumed them);
+    (4) relation-cache/cycle-stack behavior only gains hits (same-id
+    identical pairs). Verify: suite + listAll ×8 + re-run the round-542/543
+    probe experiments to measure how much of the giant entanglement
+    dissolves.
+  - [ ] **INV.5(b) Explicit mapper objects.** Replace the ambient
+    `currentTypeAliasArgs`/`currentTypeParamScope` instantiation contexts
+    with an explicit mapper threaded through the resolution entry points —
+    the enabler for (c); decompose per entry-point family when reached (the
+    `getTypeFromTypeNode` `cacheable` gate is the load-bearing site).
+  - [ ] **INV.5(c) `nodeTypes` keyed (node, mapper) — always valid.** Kills
+    the context-bypass rule and the first-touch hazard class outright (the
+    round-543 blocker). Depends on (b).
+  - [ ] **INV.5(d) Instantiated members cached ON the `Type.Reference`.**
+    Delete `resolveGenericPropertyType` fresh-minting + its depth-4 OOM cap
+    (the per-recursion-level cache-miss gotcha).
+  - [ ] **INV.5(e) Open `canUseTypeEngine`'s generic gate; delete superseded
+    pin walkers** (suite-gated per deletion). Then RETURN to INV.4(e).
+
 - [ ] **INV.6 Parallelism** (absorbs M5.4). Share-nothing checker workers per
   `docs/parallel-caching.md` (trivially partitionable once INV.4 gives a per-file
   check entry); parallel emit on Default + IO write sink; deterministic partition +
