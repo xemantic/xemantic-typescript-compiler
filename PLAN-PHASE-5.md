@@ -2366,12 +2366,20 @@ interrupt the arc).
     aliasArgs installers flipped too — alias substitution ~93.8k,
     constraint-retry ~89.6k, mapped-type per-key ~140.4k; the aliasArgs
     ambient is now single-writer (the bridge); tpScope families next);
-    resolution-internal first
-    (getTypeFromTypeReference's alias substitution,
-    resolveGenericPropertyTypeWorker, resolveInterfaceMembersCore,
-    getTypeOf* lazies), then the walker-level installers (call-types /
-    constraints / return paths / tp-cast walkers); (bN) remove the ambient
-    fields. NOTE (c) only needs the mapper AT THE CACHE CONSULT — it can
+    (b2c/b2c'-''', rounds 550a-550d) DONE: ALL resolution-internal tpScope
+    installers flipped to the REGION form (`withInstantiationContext(
+    scopeMapper(...)) { ... }` — inline, non-local returns preserved):
+    resolveGenericPropertyTypeWorker (outer + inner method scope),
+    resolveBaseTypesLazy, resolveInterfaceMembersCore (sig + index), the
+    getTypeOf* lazies, buildBaseConstructorSignatureForSuper,
+    buildSignatureForFunctionLikeTypeNode, reresolveSigParamsUnderClassScope,
+    getTypeFromTypeLiteral's method branch, checkConstraintsForTypeArgs.
+    REMAINING (deliberately deferred): the walker-level installers (die
+    with INV.4(e)), the dual-ambient-field installers
+    (checkConstraintsInStatements + currentTypeParamDecls;
+    checkMixinClassInStatements + mixinValueScope), the 84067 interleaved
+    implicit-any site, and the paired pushFunctionTypeParamsScope; (bN)
+    remove the ambient fields (blocked on those). NOTE (c) only needs the mapper AT THE CACHE CONSULT — it can
     start right after (b1) with ambient-bridged installers still in place
     (key = (nodeId, mapper.fingerprint); the context-bypass `cacheable`
     rule dies there).
