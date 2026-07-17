@@ -2219,6 +2219,19 @@ interrupt the arc).
     (typeArgumentDefaultUsesConstraintOnCircularDefault,
     relationComplexityError) are the standing acceptance gate for any such
     step. Probe reverted.**
+    **(c2) SCOUTED (round 549): the Test<any> coupling is a
+    LAZY-MATERIALIZATION first-touch, not a cache-keying one —
+    `Type.TypeParam.constraint`/`.default` are MUTABLE fields set at 8+
+    scattered sites by whichever pass resolves the TP first (the
+    typeParamInternCache shares the instance program-wide), so a no-args
+    generic reference instantiates with defaults ONLY IF some earlier pass
+    already materialized `.default`. DESIGN: EAGER TP materialization — one
+    fixed init step (after globals merge, before any check pass) resolving
+    every TypeParameter's constraint/default under its declaration's
+    sibling-TP scope (the checkTpListDefaults scope-building pattern),
+    making the fields order-free; the 8 lazy setters become no-ops
+    (already-set guards) and eventually delete. Acceptance: the two probe
+    tests + full gates.**
   - [ ] **INV.5(b) Explicit mapper objects.** Replace the ambient
     `currentTypeAliasArgs`/`currentTypeParamScope` instantiation contexts
     with an explicit mapper threaded through the resolution entry points —
