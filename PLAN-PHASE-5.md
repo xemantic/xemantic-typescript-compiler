@@ -20,498 +20,223 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
-**Round 587 (2026-07-18) — dead-marks sweep + the retirement's measured
-payoff.** The 52 legacy-side truncation-mark lines (the emit-twice-era
-`cpaM3Mk`/`ctaM3EmitMark`/… val+truncate blocks in the surviving walkers)
-are deleted — provably dead since rounds 585/586 (only the retired drivers
-reached marked statements; anchor walks reach only never-marked nested
-positions). The m3l body gates + the marking sets stay (live: the
-decl-leave recording skip and the m3e recordOnly gating). MEASURED (CI
-bench, single-run caveat): the cpa retirement alone moved the compiler
-profile 35.67s → 30.79s wall (−14%); the cta-retire row lands next.
-Gates: corpus 11,341/0; listAll ×8 identical. NEXT: the g3
-(checkCallExpressionTypes) migration — the LAST giant — via the
-twice-proven m1..m3+retire sequence (open with the walker state-model
-scout in a fresh window).
+**Round 600 (2026-07-18) — (INV.5(e) DONE) the Generic-family pin-walker
+deletion sweep: 15/16 are STILL LOAD-BEARING; 1 deleted.** All 16
+`checkGeneric*`-family pass dispatches disabled in one experiment; the
+corpus answered with 21 failures across 15 walkers' pins (defaults
+validation, TP-fixing/contextual-arrow inference, conditional-return
+constraints, TS2862 index writes, curried/circular self-ref, generator
+yield args, pipe inference, mapped filtering-handler calls, JSDoc
+bare-generic tags, invariant-this elaboration, stricter-constraints
+assignment, then-chain constraints, Record cast access, mapped-fn-alias
+assignments) — the round-553 generic-gate opening does NOT supersede this
+family: their shapes are inference/constraint semantics the structural
+relation cannot decide. The ONE pin-less walker —
+checkGenericFnTypeBipartition (B484; its pin family noStrictGenericChecks
+is whole-file tsgo-skipped since 2026-07-02, so the pin left the suite) —
+is DELETED (~165 lines: walker + gfb* helpers + GfbConflict + dispatch).
+Gates: corpus 11,347/0; listAll ×8 byte-identical. INV.5(e) is DONE (both
+halves: round-553 hasUnresolvedTypeParams skip deletion + this sweep).
+NEXT: INV.5(b) explicit mapper objects, per queue order.
 
-**Round 586 (2026-07-18) — (cta-retire) LANDED: the checkTypeAssignability
-LEGACY PASS IS RETIRED — both migrated giants are off emit-twice in one
-day.** Same shape as round 585: the experiment's only failures were the
-cta audit scaffolding's own tests; the pass dispatch + driver +
-ctaAuditLegacy/ctaAuditSpine/ctaAuditEnabled + the fingerprint fns +
-Inv4CtaAuditTest are deleted (−5 tests; CtaFnBodyAnchorTest + the corpus
-remain the guards). The cta/cpa m3 truncation marks in the surviving
-walkers are dead code (only the retired drivers reached marked
-statements) — queued for a cleanup sweep with a listAll gate. Gates:
-corpus 11,341/0 (447 XMLs); listAll ×8 byte-identical. Wall-time deltas
-land via the CI bench rows for rounds 585/586. NEXT: the g3
-(checkCallExpressionTypes) migration (m1..m3 + retire — the last giant),
-or the dead-marks cleanup sweep.
+**Round 599 (2026-07-18) — (f2) MEASURED DEAD-END too; INV.4 is CLOSED and
+the arc moves to INV.5.** The walk-repeat shadow: 31,016 identical repeats
+/ 50 structural-union / 148 diff / 80k miss, savableNanos=1,412ms — a
+real proportional-cost target (unlike f1). The LIVE fold (the two
+Type-returning entries, epoch-fenced + declaredType-identity +
+confirm-once) was fully gate-green (corpus 11,347/0 + listAll ×8) but the
+interleaved A/B read NOISE (~1%): the confirm-once tax (every 2nd call
+still walks to confirm) + epoch churn (80k of 111k walks at fresh epochs)
+cap the served fraction below measurability. REVERTED (probes kept).
+STRATEGIC CONCLUSION: both INV.4(f) single-lever wins are measured
+dead-ends AT THE CURRENT COST STRUCTURE — the blockers are (a) fresh
+minting (unions/literals/objlits — INV.5(a) interning exists for
+union/intersection CALLS through getUnionType? no: the round-545 interning
+covers getUnionType — yet narrowing results still churn identity via
+rebuilt member LISTS...) and (b) epoch churn from the recording-heavy
+walk. The ≤10s target runs through INV.5's canonical types (which would
+make results identity-stable and REVIVE both memo designs) + INV.6
+parallelism. INV.4 CLOSES: the migration + retirements delivered the real
+win (35.7 → ~31s, −13%) and ONE authoritative walk — its structural goal.
+NEXT: INV.5(b) explicit mapper objects, or INV.5(e)'s second half (the
+superseded-pin-walker deletion sweep), per the queue order.
 
-**Round 585 (2026-07-18) — (cpa-retire) LANDED: THE checkPropertyAccess
-LEGACY PASS IS RETIRED — the first giant sheds its emit-twice runs.** The
-`pass("checkPropertyAccess")` dispatch is gone; every cpa emission runs
-once, from the spine anchors, and the walkers live on as anchor-called
-leaf machinery. The retirement experiment's ONLY failures were the audit
-scaffolding's own tests (no legacy side left to diff — by design), so the
-scaffolding is deleted with it: cpaAuditLegacy/cpaAuditSpine/
-cpaAuditEnabled, the fingerprint fns, the nearest-anchored symmetric-skip
-helper, and Inv4CpaAuditTest (−7 tests; its verification job — the m2
-skeleton parity — is complete and historical; CpaAnchorTest + the corpus
-remain the behavior guards). The legacy-side truncation marks (cpaM3Mk
-blocks) are now provably dead (only the retired driver reached marked
-statements; anchor walks reach only never-marked nested positions) — left
-in place, queued for a cleanup sweep. Gates: corpus 11,346/0 (448 XMLs);
-listAll ×8 byte-identical. The wall-time delta lands via the CI bench.
-NEXT: the g3 (checkCallExpressionTypes) migration via the same m1..m3
-sequence — its residue channel is already closed (round 584) — or the
-cta-retire evaluation (cta's consumer was cpa, now spine-fed; the cta
-emit-twice runs' remaining consumers need the same experiment).
+**Round 598 (2026-07-18) — the FULL checkSpine attribution: the walks are
+the only big single lever.** Depth-0-guarded accumulators on the three
+remaining suspects: relations(depth0)=927ms, typeNode(depth0)=520ms,
+memberResolve(depth0)=61ms — vs narrowWalks=4,986ms and typeOfExpr≤3.9s
+(categories OVERLAP: walk spans include nested resolution). The
+unattributed remainder is BROAD emitter machinery (leaf check* logic,
+dispatch overhead, frame constructions) — no second concentrated lever.
+CONCLUSION: (f2)'s walk fold (~5s target) is the one remaining
+concentrated checkSpine lever; beyond it the ≤10s target runs through
+INV.5 (canonical types) + INV.6 (parallelism), as the arc doc always
+said. Probes committed (inert off --passTiming; sentinel pins green).
+NEXT: the (f2) fold design — per-(reference-path, flow-node) walk-result
+reuse WITHIN the epoch fences (the round-595 infrastructure), evaluated
+shadow-first (the proven instrument).
 
-**Round 584 (2026-07-18) — (ccet-prep) LANDED: the cpa→ccet residue channel
-is closed — ZERO couplings.** checkCallExpressionTypes' driver resets
-`currentLocalTypes` per file (it previously inherited the cpa pass's
-LAST-file map as its starting state — the round-578 pattern, one giant
-downstream). Measured: corpus 11,353/0 AND listAll ×8 byte-identical with
-NO own-recording needed (unlike the cta→cpa channel's one corpus shape).
-This is the cpa-retire prerequisite: with ccet residue-free, the cpa
-legacy emit-twice runs' only remaining consumer is the cpa pass itself.
-NEXT: the (cpa-retire) EXPERIMENT — no-op the legacy checkPropertyAccess
-dispatch and gate; if identical, delete the legacy runs + the audit
-scaffolding (CpaAnchorTest + the corpus remain the guards) and re-measure
-the wall-time win.
+**Round 597 (2026-07-18) — the (f2) TIME ATTRIBUTION: the walks are 4.8s;
+~10s of checkSpine is NEITHER walks nor typeOfExpr.** Nanotime
+accumulators (--passTiming only, TimeSource-based) at the two hot
+surfaces: depth-0 narrowing walks = 4,806ms (~26% of checkSpine — a real
+(f2) lever); getTypeOfExpression total = 3,844ms (an OVERcount — nested
+spans double-counted — so exclusive is lower, consistent with the f1
+dead-end verdict). The REMAINING ~10s of checkSpine's 18.4s is relation
+checks (checkTypeRelatedTo verdicts), non-expression resolution
+(getTypeFromTypeNode / resolveStructuredTypeMembers), and the anchors'
+emitter machinery — the NEXT attribution target before committing to
+(f2)'s fold (the f1 lesson: attribute before building). Probe committed
+(inert off --passTiming); sentinel anchor pins green. NEXT: attribute the
+~10s (a relation-nanos accumulator + a resolveStructuredTypeMembers
+counter), then pick the lever: (f2) fold vs relation-engine work.
 
-**Round 583 (2026-07-18) — (cpa-m3c) LANDED: heritage + property-initializer
-walks join the anchor — the cpa statement-DISPATCH emission surface is
-fully anchored.** A ClassDECLARATION's heritage expressions anchor at the
-heritage EXPRESSION node's leave with the OUTER ect (legacy walks them
-before the classType resolution; member walks don't mutate the shared
-maps, so the class-position frame state is correct); member
-PropertyDeclaration initializers anchor at the member's leave with the
-member-loop ambient (cpaResolveClassType + per-member inStatic) installed
-locally (the cta-m3k pattern). ClassExpression heritage/members stay owned
-by the containing statement's anchor (pinned). Legacy marks: per-EWTA in
-the ClassDeclaration arm; the shared member dispatch's PropertyDeclaration
-arm (safe — ClassExpression members are never marked). GATE-PROCESS NOTE:
-the first gate chain's suite run FAILED silently (gradle daemon crash) and
-the verify script counted 43 STALE XMLs as "passing" — caught by the
-xml-file-count sanity check; the fresh `rm -rf build/test-results/jvmTest`
-rerun is the true gate (the background-task-verification memory hazard,
-now with the file-count guard in the verify snippet). Pins +2
-(CpaAnchorTest → 11). Gates: corpus 11,353/0 (449 XMLs); listAll ×8
-identical. Remaining legacy-owned cpa emissions: NONE at the statement
-dispatch — the emit-twice runs persist only for map evolution. NEXT:
-(cpa-retire) evaluate retiring the legacy emit-twice runs for cpa (the
-frames reproduce all map evolution; the residue channel is closed), or
-pivot to g3 (checkCallExpressionTypes) via the same m1..m3 sequence.
+**Round 596 (2026-07-18) — (f1b-ii) MEASURED DEAD-END, reverted: the live
+per-node expression-type memo is 1-3% SLOWER.** The flip served the 150k
+zero-wrong confirmed hits and was fully gate-green (corpus 11,347/0 +
+listAll ×8 byte-identical — the skipped-warming concern never
+materialized), but the interleaved wall A/B (3 B/A pairs, both class
+dirs) read B(no-serve) ≈ 30.7-31.5s vs A(serve) ≈ 31.5-31.8s: the
+SERVABLE calls are the CHEAP ones (instance-stable intrinsic/interface/
+reference lookups — already fast paths), while the EXPENSIVE recompute
+lives exactly in the NON-memoizable kinds (fresh unions/literals/objlits
++ the narrowing-dependent property accesses), and the bookkeeping (an
+epoch bump per mutation + map/set churn + Pair allocation per stable
+call) exceeds the savings. REVERTED to the round-595 state (the epoch
+infrastructure + the --passTiming shadow instrument STAY — measured
+noise-level, and the shadow remains the policy-evaluation tool).
+CONCLUSION: (f1) as a whole-entry memo is closed at the current cost
+structure; the checkSpine lever is now (f2) — folding the 111k depth-0
+narrowing walks (68% from property access) into per-reference typing,
+which targets exactly the expensive non-memoizable calls. NEXT: (f2)
+design — the narrowing-walk consumers and a per-(reference,flowNode)
+result reuse within the walk.
 
-**Round 582 (2026-07-18) — (cpa-m3b) LANDED first-try: the remaining
-statement arms' direct walks join the anchor.** Condition/subject/
-incrementor/case-expr walks anchor at the EXPRESSION node's OWN leave —
-after its subtree (probe-safe: the diagnostics-list probes see the
-subtree's spine emissions) and BEFORE the owner's body statements
-(state-correct: the legacy walk ran these before the body dispatch, whose
-recordings leak into the shared maps); the If/While/Do/For/Switch/With
-legacy arms truncate per-walk via marks keyed on the EXPRESSION node.
-Throw/ExportAssignment/TypeAliasDeclaration (the strictNullChecks-gated
-walkTypeNodeForUndefinedTypeQueryChain) and EnumDeclaration (member
-initializers under a currentEnclosingEnum install) anchor at the
-statement's leave with whole-arm truncation. Statements inside
-condition-nested arrow bodies stay owned by the condition anchor's walk
-(the forAnchor chain rejects them — the double-emit control pinned by the
-arrow-in-condition test). Pins +3 (CpaAnchorTest → 9). Gates: corpus
-11,351/0; listAll ×8 identical. The cpa statement-DISPATCH emission
-surface is now anchored except: class HERITAGE walks + member
-PropertyDeclaration initializer walks (the ClassDeclaration arm), and the
-B1.3 walkTypeNode inside... (TypeAlias done); NEXT: (cpa-m3c) the
-ClassDeclaration arm's heritage + property-initializer walks, then the
-emit-twice retirement question for cpa (cheaper than cta's: the legacy
-arms' only residual value is map evolution the frames already reproduce).
+**Round 595 (2026-07-18) — (f1b-i) LANDED: the epoch infrastructure + a
+VALIDATED live-memo policy — hitWRONG driven to ZERO.** The invalidation
+surface: property SETTERS on the 13 ambient fields getTypeOfExpression
+consults (swap-bumps, zero call-site changes) + `EpochMap`/`EpochSet`
+inner classes (HashMap/HashSet subclasses auto-bumping on
+put/remove/putAll/clear/add/addAll) substituted at 81 construction sites
+of the localTypes family (the frames alias the same instances, so both
+access paths bump). The SHADOW memo (--passTiming only) classified every
+repeat against the live recompute across three policy iterations:
+(1) raw: 212k correct / 375 WRONG — the wrongs were FRESH-MINTING kinds
+(getTypeOfObjectLiteral mints per call; objlit freshness is semantically
+load-bearing per freshObjLitRange), then negative-literal NumberLiterals
+and getUnionType's fresh unions, plus genuine cache-warming transitions
+(an AsExpression Intrinsic→Interface); (2) kind exclusions cut some;
+(3) THE VALIDATED POLICY — result-kind WHITELIST (instance-stable only:
+Intrinsic/Interface/Reference) + CONFIRM-ONCE (serve only after a second
+identical observation at the same epoch; warming transitions can never be
+served): **hitCorrect=149,781, hitWRONG=0, miss=334,847** — ~24% of all
+627k calls provably servable with zero observed divergence. Gates: corpus
+11,347/0; listAll ×8 identical (the epoch machinery is live but inert —
+one Long bump per mutation). NEXT: (f1b-ii) the LIVE memo — serve
+confirmed whitelisted hits in production + the interleaved wall A/B
+(revert if <5% per the INV ground rules); then (f2) the narrowing fold.
 
-**Round 581 (2026-07-18) — (cpa-m3a) LANDED: THE FIRST cpa EMISSIONS RUN
-FROM THE SPINE — frames always-on.** Var/Expr/Return statements' DIRECT
-expression walks dispatch from the spine anchor under the frame ambient
-(the walk IS the legacy expr walker, so nested arrow/fn-expr/class-expr
-bodies emit as part of it — the ANCHOR chain variant (`forAnchor`) rejects
-those crossings to prevent double-anchoring; the cta
-walkFunctionBodiesInExpr precedent); the legacy arms truncate via the
-recorded set. Var anchors run walk+record INTERLEAVED per decl (the legacy
-order); the decl-leave recording path serves the remaining non-anchored
-chains; audit fingerprints skip statements under anchored statements
-SYMMETRICALLY (the anchor's walk owns their context, not the frames).
-THREE quirks extracted by the gates: (1) `inStaticClassMethod` must be
-INSTALLED in the emission ambient (a FIELD the emitters consult — 8
-class-family corpus failures); (2) the anchor dispatches at the statement's
-LEAVE, never its enter — cpa emitters PROBE the diagnostics list for the
-subtree's own spine emissions (the ures TS2304 suppressing
-checkSingleElementAccess's TS2538 — the round-537 lesson recurs); (3)
-`cpaResolveClassType` installs the lexical tables (a BLOCK-level class's
-class+interface merge resolves via lexicalScopeSymbol — the Inv2 pilot
-pin caught the null-ambient miss). Pins +6 (CpaAnchorTest: exactly-once
-across top-level/ns/if/switch/arrow/fn-expr/method/this scopes + negative
-control). Gates: corpus 11,348/0; listAll ×8 identical. NEXT: (cpa-m3b)
-the remaining statement arms' direct walks (If/While/Do/For conditions,
-Switch subject+case exprs, Throw/With/ExportAssignment, TypeAlias's
-walkTypeNodeForUndefinedTypeQueryChain, Enum member initializers with
-currentEnclosingEnum) — then the class-member / heritage arms.
+**Round 594 (2026-07-18) — the (f1) EPOCH-RATE PROBE: 93% of repeats are
+memoizable.** The repeat-result probe (identity-classified, --passTiming
+only; getTypeOfExpression split into a wrapper + Core for it): 626,680
+calls → 379,157 same-result repeats vs 27,110 diff-result (~60% of ALL
+calls recompute the IDENTICAL instance). The memo design constraint: the
+27k diff-result cases are the state-dependent ones (recordings/narrowing
+overrides/frame swaps between calls). INVALIDATION-SURFACE ANALYSIS: the
+frame machinery centralizes MOST mutation points (~20 sites: the
+withXFrameAmbient installs/restores, frame pushes, scoped overrides,
+per-file resets) — but legacy leaf helpers still mutate currentLocalTypes
+IN PLACE mid-anchor (checkVarDeclAssignability recordings etc.), so a
+sound epoch needs either (a) enumerating those scattered mutation sites
+(risky), (b) a mutation-counting map wrapper around the localTypes family
+(a focused refactor — the mutation API surface is put/remove/putAll/clear;
+frames alias the SAME instances so a per-instance counter + a global sum
+works), or (c) keying the memo by (nodeId, identity of currentLocalTypes
+map + its size) as a cheap proxy — UNSOUND on in-place same-size
+overwrite (rare but real: the anyType overrides). RECOMMENDED: (b), the
+wrapper — one class, the alias structure preserved, every mutation
+auto-bumps; then memo keyed (nodeId, globalEpoch) cleared per file.
+Gates: corpus 11,347/0 (the probe is --passTiming-only; off-mode calls
+Core directly). NEXT: (f1b) the MutationCountedMap wrapper + the memo,
+A/B'd interleaved for the wall win.
 
-**Round 580 (2026-07-18) — (cpa-m2b) LANDED: tier 2 completes the cpa frame
-skeleton — 7/7 audit-green on the FIRST run (the round-579b design scout
-paid off).** The chain test became a unified per-EDGE reach walker
-(statement + expression edges with the legacy walkers' per-arm precision:
-TaggedTemplate tag-only, for-INIT / ForIn-ForOf iterables / decorators /
-objlit methods / shorthand / CommaList / param defaults fail closed);
-arrow Block-body frames (3-map copy, populate → shadowing/ambiguous → ctx
-param registration, ect/inStatic preserved) and fn-expr body frames (the
-OWN param loop: annotated → set, UN-annotated → REMOVE + destructured-name
-collection; ctx registration BEFORE shadowing — the asymmetric legacy
-orders; ect = null) replace the marker frames; class-member frames extend
-to ClassExpression owners via the per-visit synthetic anon-class type;
-`cpaCtxAt` pull-derives contextualType over the ctx edges (DEFINE at
-call-arg via the extracted-and-SHARED `cpaComputeArgCtxTypes` /
-objlit-prop / spread / arrow-expr-body; INHERIT through New's args and a
-Call's callee — the legacy quirks; STOP-null at statements), computed
-UNDER THE TOP AMBIENT BEFORE the frame push (cpaFrames.last() supplies the
-classType at the fn's own position); `cpaEctAt` handles the two
-ect-changing pure-expression edges (class-member PropertyDeclaration
-initializers; ClassExpression heritage → null vs ClassDeclaration heritage
-→ outer). The audit now asserts FULL BIDIRECTIONAL key equality
-(mismatches empty + legacy-only empty). Pins +1 net (Inv4CpaAuditTest → 7,
-two rewritten). Gates: corpus 11,342/0; listAll ×8 identical (flag off in
-production). NEXT: (cpa-m3) emission moves scope-by-scope with the
-recorded-set truncation template — the audit skeleton is the always-on
-frame base once the first emission moves.
+**Round 593 (2026-07-18) — the INV.4(f) RE-MEASURE: the consolidation
+succeeded.** Post-retirements `--passTiming` (compiler profile):
+checker-init 25.7s, **checkSpine 18.4s (72%)** with 619,908
+getTypeOfExpression calls + 111,055 depth-0 narrowing walks INSIDE the
+one walk; the remaining 441 passes are ALL sub-200ms (the multiplication
+tail ≈ 6.4s, top stragglers 100-160ms each). Wall ~31.2s at round 591
+(from 35.7 pre-retirements); round 592's row pending. The ≤10s
+single-threaded target now reduces to shrinking checkSpine — the two
+(f) soundness wins are the lever, both now SOUND because the frames give
+one authoritative state: (f1) the per-node expression-type cache — a
+getTypeOfExpression memo keyed (nodeId, state-epoch) where the epoch
+increments on any frame-map mutation (recordings/overrides/frame pushes)
+— the recompute factor is ~×2.8; (f2) flow narrowing folded into
+reference typing once per (reference, flow-node) instead of 111k
+independent depth-0 walks. Both are design tasks with the
+first-touch-order hazard now CONFINED to one walk (order within the walk
+is fixed by the tree). NEXT: (f1) design + a counter probe for the
+epoch-invalidation rate (how often do mutations actually occur between
+repeated calls on the same node — if rare, a simple epoch-tag memo wins
+big).
 
-**Round 579 (2026-07-18) — (cpa-m2a) LANDED: the SPINE-side statement-TIER
-frame skeleton for the g2 migration, audit-verified.** Dead machinery under
-`cpaAuditEnabled`: `CpaFrame`s reproduce the legacy cpa dispatchers'
-context — map COPIES only at function-like boundaries with the per-member-kind
-asymmetries (fn-decl: 4 maps + populate/shadowing/ambiguous, enumParams
-REPLACED via collectEnumConstrainedParams; method/ctor: 3 maps, enumParams
-SHARED, + populate/shadowing, method this-param override resolved under the
-CLASS-level ambient; setter: 2 maps (shadowed shared), populate only;
-getter: NO copies), ModuleBlock ns frames with the legacy nested-vs-top
-resolution split (dotted-namespace inners are legacy-UNREACHED — the arm
-walks only ModuleBlock bodies), ForIn/ForOf loop-var overrides applied at
-the BODY node's enter and restored at its leave, and the VariableStatement
-B136/B186 recordings applied at each VariableDeclaration's LEAVE (so a
-nested arrow body in decl k+1 sees only decls 1..k). `withCpaFrameAmbient`
-installs the frame maps + the frame-reproduced `propertyAccessEnclosingNamespaces`
-(the two-stacks bridging in populateParameterLocalTypes consults the REAL
-deque) + checkFileName/flowGraph. QUIRK EXTRACTED by the first audit cycle:
-a TryStatement's/CatchClause's own Blocks are reached via their statement
-LISTS, never dispatched AS statements, and a catch VariableDeclaration (a
-Statement subtype!) is never dispatched — the fingerprint gate needs the
-`cpaM2StmtPosition` immediate-position test alongside the chain test.
-Fingerprints agree on the widened fixtures (fns/classes incl. this-param
-methods + static/getter/setter/ctor, namespaces + nested + classes-in-ns,
-loops incl. for-in/for-of, switch/try/label, element-access + call-chain
-recordings); tier-2 chains (arrow/fn-expr bodies) stay spine-excluded.
-Pins +2 (Inv4CpaAuditTest → 6). Gates: corpus 11,341/0; listAll ×8
-identical (flag off in production). NEXT: (cpa-m2b) tier 2 — arrow/fn-expr
-body frames + the contextualType downward channel (call-arg /
-objlit-property / arrow-body edges, the w3 template) + objlit-method /
-class-expression bodies.
+**Round 592 (2026-07-18) — (ccet-retire) LANDED: THE LAST GIANT IS RETIRED
+— ALL THREE INV.4(e) GIANTS ARE OFF EMIT-TWICE.** The
+checkCallExpressionTypes pass dispatch + driver are deleted; every ccet
+emission runs once from the per-call spine anchors. Zero fallout (the
+pins-first decision meant no scaffolding to unwind). The walker family
+survives as leaf machinery (checkComputedDestructKey consumes
+checkCallTypesInExpr best-effort; those positions are never anchored).
+Gates: corpus 11,347/0; listAll ×8 identical (46 ×7 / 94 harness).
+THE INV.4(e) TIER IS COMPLETE: checkTypeAssignability (rounds 560-576,
+retired 586), checkPropertyAccess (577-583, retired 585), and
+checkCallExpressionTypes (588-591, retired 592) — the three giants that
+were 38% of checker-init at the round-542 measurement now emit once,
+from one authoritative walk. NEXT: INV.4(f) — the two unlocked soundness
+wins (the per-node expression-type cache; flow narrowing folded into
+reference typing once) + the ≤10 s single-threaded compiler-profile
+re-measure — or the remaining small INV.4 passes / INV.5(e)'s
+superseded-pin-walker deletion sweep.
 
-**Round 578 (2026-07-18) — (cpa-m2-prep) LANDED: the cta→cpa RESIDUE CHANNEL
-IS CLOSED — checkPropertyAccess is now per-file self-sufficient.** The cpa
-driver resets `currentLocalTypes` per file (it previously started from the
-cta pass's LAST-file residue and accumulated its own map across files —
-backward pass-after-pass reads a spine migration cannot reproduce, the
-round-542/559 finding). The experiment isolated the dependence to EXACTLY
-ONE corpus shape (noImplicitAnyForIn — round 542's prediction confirmed:
-`var k1 = x[i]`'s `{}` receiver type came from cta's un-annotated var
-recording); replaced by the pass's OWN recording — the B136 branch now also
-accepts ElementAccessExpression initializers under the same concreteness
-gates. Measured: corpus 11,339/0 AND listAll ×8 byte-identical — the
-residue fed NOTHING on the real tsc sources. This unblocks BOTH (cpa-m2)
-(frames can reproduce per-file state — no backward reads) and (cta-retire)
-(cpa no longer consumes cta's map evolution). NEXT: (cpa-m2) the spine-side
-frame skeleton — state model scouted in-code this round: fn-decl bodies
-copy 4 maps (+ shadowing + ambiguous, ect=null), method/ctor bodies copy 3
-(no enumParams, + shadowing), setters copy 2 (no shadowed, no shadowing
-call), getters copy NOTHING; ForIn/ForOf override the loop var around the
-body only (ForOf's elemType from getTypeOfExpression, Array/string only);
-the ns stack pushes at non-declare ModuleDeclarations with a nested-vs-top
-resolution split; VariableStatement B136/B186 recordings apply per-decl
-AFTER that decl's initializer walk (spine: at the VariableDeclaration's
-LEAVE, so nested arrow-body fingerprints see only PRIOR decls' recordings);
-arrows/fn-exprs copy 3 maps + contextual param registration gated on the
-downward contextualType channel (call-arg / objlit-property / arrow-body
-edges — the w3 template).**
+**Round 591 (2026-07-18) — (ccet-m3) LANDED (merged from
+wip/ccet-m3-anchors): THE LAST GIANT'S EMISSIONS RUN FROM THE SPINE.**
+Per-Call/New/TaggedTemplate anchors at their own leaves under the frame
+ambient + the full per-edge reach classifier + legacy truncation marks at
+the three emitter sites + decl-leave recordings (the spine's per-node
+order = the legacy interleave for free) + CcetAnchorTest (8 pins). The
+round-590 blocker resolved by the probe plan exactly as recorded: the
+Diagnostic-init probe identified checkReturnAssignability's engine-path
+TS2322 (fired from the cta RETURN anchor); a member-shape probe showed the
+TP never surfaces as Type.TypeParam — the ctor-value sig returns are RAW
+UNINSTANTIATED generic Type.Interfaces (the `NodeObject<TKind>` display);
+`typeContainsForeignTypeParam` gains the GAP-SIGNATURE rule (a
+nested-position raw generic interface = the un-inferred-generic signature
+→ bail; depth>0 keeps top-level sources checkable) — order-free in both
+cache states. Gates: corpus 11,347/0; listAll ×8 identical. NEXT:
+(ccet-retire) — the round-585 experiment template on the last giant.
 
-**Round 577 (2026-07-18) — (cpa-m1) LANDED: the g2 (checkPropertyAccess)
-migration opens with the legacy-side audit instrumentation.** Mirrors
-cta-m2a: under the test-only `cpaAuditEnabled`, `checkPropertyAccessInStatement`
-records a per-DIRECT-statement fingerprint keyed by nodeId into
-`cpaAuditLegacy` — channels: currentLocalTypes (by DISPLAY via typeToString,
-never Type.id — ids are resolution-order-sensitive between legacy-time and
-spine-time), currentParamBindingNames, currentEnumConstrainedParams,
-currentShadowedNames, propertyAccessEnclosingNamespaces (name stack),
-enclosingClassType (threaded param, by display), contextualType,
-inStaticClassMethod. Pins +4 (Inv4CpaAuditTest: coverage + annotated-param
-lt[] content + class ect=/static-flag + namespace ns[] stack +
-off-by-default). Gates: corpus 11,339/0; listAll ×8 identical (flag off in
-production — pure scaffolding). NEXT: (cpa-m2) the spine-side frame
-skeleton audited against this map (expect quirk-extraction cycles; the
-known quirks are listed in the queue item).
-
-**Round 576 (2026-07-18) — (cta-m3m) LANDED: the checkFunctionBody param-loop
-emission joins the anchor — the cta giant's EMISSION surface is complete
-across reproduced scopes.** The 16.4ei destructuring-from-nullable-union
-param emission anchors INSIDE the ctaFnBodyFrame sandwich at its exact
-legacy position (after shadowing, under the TP scope, BEFORE param typing —
-the m2d emissions-first order), with the anchor ambient installed around
-the loop only — currentFlowGraph is MANDATORY there (a null graph loses the
-round-425 narrowing suppression and would OVER-emit vs legacy);
-currentScopeStatements installs the fn's ENCLOSING list (the legacy value
-at that point — the body's own InStatements has not yet run). The legacy
-loop skips via the m3l recorded set; eligibility is ONE predicate
-(`ctaM3BodyWalkersEligible`) shared by the m3l Block dispatch, the sandwich
-emission, and (via the recorded set) all three legacy gates. Also removed
-the three dead ctaM3P/ctaM3Parent vars (m3h0 residue — restores the
-warning-clean build). Pins +3 (fn + method exactly-once, non-nullable
-negative control, block-bodied-arrow reach control — an EXPRESSION-bodied
-arrow never routes through checkFunctionBody, so its param defaults draw
-nothing on any path; the first pin cut used one and read a false 0). Gates:
-corpus 11,335/0; listAll ×8 identical vs 574c. Remaining legacy-owned in
-the giant: the emit-twice map-evolution runs only. NEXT: legacy-arm
-RETIREMENT for fully-covered scopes (the multiplier payoff) or the
-INV.4(e) pivot to g2 (checkPropertyAccess).
-
-**Round 575 (2026-07-18) — (cta-m3l) LANDED: the checkFunctionBody BODY-LEVEL
-walkers join the anchor + a latent reach over-shoot closed.** The B442
-for-in/numeric-for redeclare + B205 FlatArray depth-param walkers
-(ambient-independent AST scans at checkFunctionBody entry) dispatch at
-eligible body-Block spine enters (FunctionDeclaration + class
-Method/GetAccessor owners — ctor/SetAccessor bodies never route through
-checkFunctionBody, and the GetAccessor arm mirrors legacy's
-emptyList()/null so FlatArray stays a no-op there; objlit/arrow/fn-expr
-bodies stay owned by their containing statement's emit-twice); the legacy
-pair skips via the recorded set keyed on the body Block's nodeId (B205 has
-no internal dedup — the FlatArray pin is the sharp double-emit signal;
-B442's forInNumForProcessed dedup would mask one). REACH FIX: `ctaM3FnHop`
-now requires a statement-LIST landing — the bare InStmt dispatcher has NO
-FunctionDeclaration/ClassDeclaration arm (`else -> {}`), so a fn/class at a
-bare if-then/loop-body/labeled position is UNREACHED by the legacy giant;
-since m3d the chain test crossed those positions freely — a latent spine
-over-reach invisible to every gate (the shape is absent from the corpus and
-the tsc sources), now pinned by the bare-position parity test. Pins +5
-(CtaFnBodyAnchorTest → 22). Gates: corpus 11,332/0; listAll ×8 identical
-vs the 568a chain. Remaining legacy-owned in the giant: the
-ctor/getter/setter/method dispatch shells' non-statement bits and the
-emit-twice map-evolution runs. NEXT: the INV.4(e) pivot (g2
-checkPropertyAccess per the g1 playbook) or legacy-arm retirement for
-fully-covered scopes.
-
-**Round 574b (2026-07-18) — (cta-m3k) LANDED: class property initializers
-join the anchor.** checkPropertyInitAssignability dispatches at the
-PropertyDeclaration's spine enter (the anchor generalizes to Node; the
-member-loop ambient — classForThis, class TP decls, classTypeParams —
-installs locally over the enclosing frame); the legacy member arm truncates
-via the recorded set. Pin +1 (instance + static, probe-verified firing).
-Gates: corpus 11,327/0; listAll ×8 identical vs m3j. Remaining
-legacy-owned in the giant: the checkFunctionBody body-level walkers
-(checkForInNumericForRedeclare, checkFlatArrayDepthParamAssignments), the
-ctor/getter/setter/method dispatch shells' non-statement bits, and the
-emit-twice map-evolution runs. NEXT: those body-level walkers (small), or
-the INV.4(e) pivot to the other two giants.
-
-**Round 574 (2026-07-18) — (cta-m3j) LANDED: the B417 if-condition TS2367
-joins the anchor — EVERY per-statement emission of the legacy assignability
-dispatchers is now spine-anchored across the reproduced scopes.**
-checkFlowNoOverlapCondition dispatches at the IfStatement's spine enter
-(identical in both legacy arms → one anchor arm ahead of the surface
-split); both legacy sites truncate via the recorded set; else-if and
-narrowing-frame-nested ifs get the correct ambient by construction.
-Exactly-once pinned by the corpus (test3 baseline). Gates: corpus
-11,326/0; listAll ×8 identical vs m3i. Remaining legacy-owned in the
-giant: body-level walkers (checkForInNumericForRedeclare,
-checkFlatArrayDepthParamAssignments), class PropertyDeclaration
-initializers, the map-evolution re-runs (emit-twice, measured noise), and
-the JS-gated objlit-method walker (a different pass). NEXT: those
-body-level/member arms, or pivot back to the INV.4(e) giant-migration
-proper (the spine dispatch of the remaining giants' walks) — the cta
-emission surface is essentially complete.
-
-**Round 573b (2026-07-18) — (cta-m3i) LANDED: narrowed regions anchored via
-NARROWING FRAMES; the discard machinery retires; a SECOND round-570
-order-dependence channel closed.** The legacy narrowing wrapper is a frame:
-verdict at the If's enter (exact under frame maps, nested ifs included),
-then-node pushes localTypes-copy + write + narrowedDeclared entry (new
-CtaFrame field, installed by withCtaFrameLocals); the copy IS the discard
-semantics → recordings + emissions inside narrowed regions correct for
-free; ctaM3DiscardThen/Depth DELETED. The gate caught one drift
-(tsbuildPublic bare-T TS2322), probe-root-caused: the un-annotated VAR-DECL
-recording channel registered a FOREIGN-TP-carrying inferred type under
-cold spine resolution (`packageJsonLookups && forEachKey(...)` →
-`T | undefined` → narrowed to bare T → FP) — fixed at the source with the
-B136 concreteness gate `!typeContainsForeignTypeParam(inferred,
-typeParams)` (own TPs stay recordable). The narrowed-display pin now
-guards the frame write; a nested-if pin verifies verdict exactness.
-Gates: corpus 11,326/0; listAll ×8 identical vs m3h1. The anchored surface
-now includes narrowed regions — remaining legacy-owned in the assignability
-giant: arrows/fn-exprs/objlit-method bodies, checkFlowNoOverlapCondition,
-PropertyDeclaration initializers, and the wrapper's own map evolution.
-NEXT: legacy-arm RETIREMENT for fully-covered scopes (the multiplier
-payoff), or the remaining walkFunctionBodiesInExpr-owned bodies.
-
-**Round 573 (2026-07-18) — (cta-m3h1) LANDED: nested-position emissions join
-the anchor.** Var/Expr/Return statements at nested positions anchor when
-`ctaM3DiscardDepth == 0` and `ctaM3NestedChainOk` (statement Blocks /
-clauses / bare if-loop-try-catch-labeled positions / fn hops). TWO legacy
-arm surfaces reproduced by position kind: LIST positions get the full
-InStatements surface, BARE positions the REDUCED InStmt surface
-(`bareSurface` — no walkFunctionBodiesInExpr / const-literal registration /
-return-expr B127), with currentScopeStatements = the nearest enclosing
-list. The InStmt arms gained marks via the m3h0 recorded set. Narrowed
-then-branches stay legacy-owned — pinned by the SHARP narrowed-display
-test ('string' vs 'string | undefined'). With m3e recordings + m3h1, the
-assignability giant's Var/Expr/Return emissions are now spine-anchored
-across ALL reproduced scopes; remaining legacy-owned: narrowed-region
-statements, arrows/fn-exprs/objlit-method bodies, checkFlowNoOverlapCondition
-at if-conditions, and the non-stmt arms (class member loops etc.). Gates:
-corpus 11,325/0; listAll ×8 identical vs m3h0 — clean on the FIRST full
-run. NEXT: narrowed-region anchoring (reproduce the narrowing WRITE in a
-copied-map frame at then enters) — after which the emit-twice legacy runs
-for these arms can start RETIRING (the multiplier payoff).
-
-**Round 572b (2026-07-18) — (cta-m3h0) LANDED: the legacy truncation marks
-consult the spine's RECORDED anchor set.** The spine records every anchored
-statement's nodeId per file (`ctaM3AnchoredStmts`); the three legacy mark
-gates test membership instead of re-deriving eligibility — gate identity by
-CONSTRUCTION, freeing the spine-side eligibility to use spine-only state
-(discard depth, frame context) in the nested-scope extension without a
-legacy-side mirror. Also corrected-by-vacuity: the marks no longer fire for
-.d.ts statements the spine never anchors (the landed m3a asymmetry). Pure
-refactor: corpus 11,323/0; listAll ×8 identical vs m3g. NEXT: (cta-m3h1)
-extend spine anchoring through NON-narrowing nested chain positions
-(statement Blocks / clauses / bare if-else-loop-try positions, gated
-`ctaM3DiscardDepth == 0` at dispatch) + marks in checkTypeAssignabilityInStmt's
-Var/Expr/Return arms via the recorded set; narrowed-region anchoring (the
-narrowing-write reproduction) comes after.
-
-**Round 572 (2026-07-18) — (cta-m3g) LANDED: ctor + accessor bodies complete
-the CLASS-MEMBER tier.** All four class-member body kinds are
-anchor-eligible (`ctaM3FnHop`); each frame reproduces its legacy arm:
-Constructor (raw InStatements dispatch) seeds frame.localTypes with the
-this.$prop RESOLVED types + annotated params (`ctaFnBodyFrame(seedClass)`);
-SetAccessor adds the B63.5 PARAM bridging (`paramTypeFallback` = paired
-getter's return annotation, in BOTH the string map and the seeds);
-GetAccessor (sandwich path) takes emptyList() params + the B63.5 RETURN
-bridging (effective returnTypeNode = own ?: paired setter's param);
-all three: class-TPs-only typeParams override + classForThis threading.
-Pins +3 (ctor param mismatch / setter param mismatch / bridged
-getter-return), each exactly-once. Gates: corpus 11,323/0; listAll ×8
-identical vs m3f. The cta anchored surface now covers: top-level, namespace
-bodies, FunctionDeclaration-chain fn bodies, and ALL ClassDeclaration
-member bodies — remaining legacy-owned: objlit methods
-(walkObjectLiteralMemberBody), arrows/fn-exprs (owned by the containing
-statement's walkFunctionBodiesInExpr), and nested-scope statement kinds
-(If/Switch/loop/Try arms' own emissions, e.g. checkFlowNoOverlapCondition).
-NEXT: nested stmt-kind arm emissions, or begin RETIRING the legacy arms
-where the anchor now owns everything (flip emit-twice to spine-only for the
-covered scopes — the multiplier payoff).
-
-**Round 571b (2026-07-18) — (cta-m3f) LANDED: CLASS METHOD bodies join the
-anchor-eligible chains; m3e cost A/B'd as NOISE.** `ctaM3FnHop` extends the
-eligibility chain (Block → MethodDeclaration → ClassDeclaration → the
-statement-list chain; objlit methods/ctors/accessors stay legacy-owned).
-The method frame reproduces the ClassDeclaration-arm quirks: typeParams =
-class TPs + own ONLY (the legacy arm DROPS the enclosing scope's set via
-outerTypeParams=classTypeParams — `ctaFnBodyFrame(outerTpNames)`), TP decls
-accumulate normally, `CtaFrame.classForThis` threads per instance/static
-into the anchor ambient (replacing the unconditional B101 null). Pin
-lesson: the B101 void-this check requires a return-ANNOTATION-FREE method
-(`m.type != null` bails) — the first pin shape was wrong, probe-verified on
-both builds before blaming the threading (and a `cmd | grep | head && next`
-chain SWALLOWS the test failure — the pipeline exit is head's). ALSO: the
-m3e recordOnly cost measured by interleaved A/B (3 m3d/m3e pairs, both
-class dirs kept): medians 44,424 vs 44,108 ms = −0.7%, NOISE — the
-single-run bench spread was box drift per the interleave gotcha; no perf
-promotion. Gates: corpus 11,320/0; listAll ×8 identical vs m3e. NEXT:
-GetAccessor bodies (needs the B63.5 paired-setter return bridging in the
-frame), ctor/SetAccessor bodies (the currentLocalTypes this.X/param
-seeding), or the nested stmt-kind arms.
-
-**Round 571 (2026-07-18) — (cta-m3e) LANDED: anchor-SIMPLE lifted — the
-legacy nested-dispatch recordings are reproduced spine-side.** A NON-anchored
-VariableStatement's spine enter runs `ctaM3StmtAnchor(recordOnly = true)`:
-the EXACT nested legacy arm surface (checkVarDeclAssignability + B127 inner
-assignment — deliberately NOT registerConstLiteralUnionNarrowing /
-walkFunctionBodiesInExpr, those are top-level-arm-only), under frame maps +
-full anchor ambient, every diagnostic truncated. The frame sharing structure
-(clause/Block frames share localTypes, copy varTypes) already models the
-legacy leak; narrowing-DISCARD regions (the nested IfStatement arm's
-copy-restore) are classified at the IfStatement's spine enter
-(extractNullNarrowing under frame maps → `ctaM3DiscardThen` + depth
-tracking) and skipped. TWO iteration lessons: (a) the discard rule's local
-observability is genuinely poor (the then-recordings are block-scoped or
-hoisted-but-unread shapes — the corpus narrowing pins are its guardian);
-(b) the TS2563 trip machinery is STATEFUL across the emit-twice split — a
-recordOnly walk that trips must NOT reportFlowControlError
-(`ctaM3RecordOnlySuppress`): the truncation removes the TS2563 but a
-persisted flowDisabledRanges registration makes the legacy walk bail
-SILENTLY (CfaTooLargeBailTest caught it — the diagnostic would be lost and
-TS2454s mis-filtered). With recordings reproduced, the barrel switch shape
-became anchor-eligible and stayed green (BarrelCheckDefinedReturnTest + the
-new single-file switch-recording pin). Gates: corpus 11,318/0; listAll ×8
-error-line identical vs m3d. NEXT: the remaining stmt-kind arms at anchored
-scopes (If/Switch/For/While/Try dispatch arms with their narrowing wrappers)
-— or extend anchor eligibility to method/arrow/fn-expr bodies (needs
-currentClassForThis + the accessor quirks reproduced).
-
-**Round 570 (2026-07-17) — round 569's enabling fix LANDED: inference-aware
-contextual param typing (skip un-inferred callee TPs).** The property-access
-pass's contextual param registration (ArrowFunction + FunctionExpression
-twins) skips a param whose contextual type carries an UN-INFERRED callee TP
-(`typeContainsUnresolvedTypeParam`) — the bare-TP registration was the
-round-568 drift mechanism's substrate: with the TP registered, the TS2339
-verdict on its members flips on WHEN the TP's constraint materialized
-(constraint-based FP vs uncertainty-bail). Un-registered, the param stays
-`any` (suppression-only) and the verdict is order-FREE, per the B136
-concreteness discipline + the round-431 inference-gap class. Pinned by
-`UninferredTpCallbackParamTest` (3 tests: constrained + unconstrained
-un-inferred TP callback params → no TS2339; negative control: a concrete
-contextual param type still fires). Gates: corpus 11,310/0 (+3 local);
-listAll ×8 vs HEAD error-line IDENTICAL (the fix only removes the
-order-dependence — in legacy order the bare-TP verdicts were already
-silent bails on all profiles).
-**Round 570b — (cta-m3c) RE-LANDED: the fn-body sandwich is ALWAYS-ON.**
-The round-568 revert is undone: `ctaFnBodyFrame`'s sandwich (shadowing
-helpers + TP scope/constraint materialization + param typing) runs
-unconditionally. The standing acceptance probe PASSED: harness listAll at
-the 94-error no-FP floor, ZERO fourslashImpl TS2339 lines, all 8 profiles
-error-line IDENTICAL vs the round-570 baseline; corpus 11,310/0. The cta
-fn-body tier is UNBLOCKED — production fn frames carry real context
-(fnTpScope/fnTpDecls + typed varTypes/localTypes), so the m3 statement
-anchor can extend into function bodies. The +~4% frame-construction cost
-stands; the lazy/copy-on-write follow-up stays queued (round 568c).
-**Round 570c — (cta-m3d) LANDED: SIMPLE fn-body statement emissions join
-the spine anchor.** Fn-body-DIRECT VariableStatement/ExpressionStatement/
-ReturnStatement emissions of eligible FunctionDeclaration chains dispatch
-from the anchor; the legacy marks extend via the SHARED predicate
-`ctaM3FnBodyAnchorScope` (gate identity by construction). The corpus gate
-caught THREE drifts on the first attempt, each a lesson: (1) the anchor's
-VariableStatement arm threaded `emptySet()` typeParams (m3a artifact) —
-the fn's own TPs read as FOREIGN and the round-431e gate bailed genuine
-TS2322s (Inv5GenericGateTest); (2) the m3c sandwich ran with an EMPTY
-inferenceNamespaceStack — shadowNestedFunctionNames' round-461 ns-exports
-consult diverged the frame shadow state (m3c didn't notice because
-nothing CONSUMED the frames); (3) the STRUCTURAL one: legacy nested-scope
-dispatches (switch clauses/if branches/loop-try bodies) RECORD into the
-shared currentLocalTypes (the load-bearing leak) and the spine frames
-have NO reproduction — a later anchored statement reads an INCOMPLETE map
-(BarrelCheckDefinedReturnTest: the switch-clause `importLiteral`
-recording feeding `end = importLiteral.end`'s member reduction). Hence
-the anchor-SIMPLE rule: every fn body on the chain restricted to
-{Var/Expr/Return/FunctionDeclaration} statements. Lifting it = the next
-tier's work item: reproduce the nested-dispatch localTypes recording
-order spine-side (or migrate the nested dispatchers themselves). Pinned
-by CtaFnBodyAnchorTest (exactly-once across anchored + legacy-owned
-chains). Gates: corpus 11,316/0; listAll ×8 identical vs m3c. NEXT:
-either the nested-scope recording reproduction (lifts anchor-SIMPLE) or
-the remaining stmt kinds arm-by-arm at eligible scopes.
+**Round 589 (2026-07-18) — (ccet-m2) LANDED: the g3 frame skeleton runs
+always-on and INERT — identity gates green.** CcetFrame implements the
+588c/d spec: fn-decl frames (map copies + own-TP interning/constraint
+materialization + populate + the two shadowing calls), class frames at
+ClassDeclaration enters (class TP scope via getDeclaredTypeOfSymbol,
+classSym, the baseResolution sig/type pair computed under the class
+scope), method/ctor frames (static TP-scope juggling with fresh own-TP
+minting, instance `this` registration, superBase threading), objlit
+member frames (the withObjThis semantics — explicit this-param wins),
+arrow/fn-expr frames at the FN node (own-param anyType OR the B246
+contextual variant for FunctionType-annotated var initializers),
+non-declare ModuleDeclaration ns frames (dotted-aware) + declare-module
+DEAD frames, and the If-narrowing/loop-var-shadow scoped overrides with
+restore records. ONE quirk extracted by the identity gate: the Var-arm
+decl recordings are DEFERRED to the m3 anchors (interleaved walk+record,
+the cta template) — a frame-time recording's resolution side effects
+flipped the 17.21 static-method skip-gate on classTypeParametersInStatics
+(bisected in one probe). Gates: corpus 11,341/0; listAll ×8 byte-identical.
+NEXT: (ccet-m3) the per-Call/New-node anchors at their leaves + legacy
+marks + CcetAnchorTest pins + the interleaved recordings, then
+(ccet-retire).
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
@@ -2242,8 +1967,9 @@ interrupt the arc).
     (e), and consider a param-side foreign-TP bail at the call-arg
     emission as the enabling slice (corpus-gated; the round-431 gate
     family's rationale applies verbatim to un-inferred PARAM types).**
-  - [ ] **INV.5(e) Open `canUseTypeEngine`'s generic gate; delete superseded
-    pin walkers** (suite-gated per deletion). Then RETURN to INV.4(e).
+  - [x] **INV.5(e) Open `canUseTypeEngine`'s generic gate; delete superseded
+    pin walkers** (suite-gated per deletion). DONE round 600: sweep verdict
+    15/16 load-bearing, checkGenericFnTypeBipartition deleted. Then RETURN to INV.4(e).
     **FIRST HALF DONE round 553: the hasUnresolvedTypeParams skip is
     DELETED (corpus + listAll ×8 identical; the Box<T>-vs-Box<string>
     false negative now fires — Inv5GenericGateTest). Remaining: the
@@ -2321,203 +2047,4 @@ with a session note saying why). Item IDs are stable; session notes reference th
 - Node/tsc/tsgo are NOT currently installed — differential testing (M0 optional) and
   real `@types/node` (M1.3) wait for network.
 - The benchmark project cache lives under `build/bench/` (cheap to rebuild); results
-  TSVs under `bench/` (gitignored, machine-specific).**Round 599 (2026-07-18) — (f2) MEASURED DEAD-END too; INV.4 is CLOSED and
-the arc moves to INV.5.** The walk-repeat shadow: 31,016 identical repeats
-/ 50 structural-union / 148 diff / 80k miss, savableNanos=1,412ms — a
-real proportional-cost target (unlike f1). The LIVE fold (the two
-Type-returning entries, epoch-fenced + declaredType-identity +
-confirm-once) was fully gate-green (corpus 11,347/0 + listAll ×8) but the
-interleaved A/B read NOISE (~1%): the confirm-once tax (every 2nd call
-still walks to confirm) + epoch churn (80k of 111k walks at fresh epochs)
-cap the served fraction below measurability. REVERTED (probes kept).
-STRATEGIC CONCLUSION: both INV.4(f) single-lever wins are measured
-dead-ends AT THE CURRENT COST STRUCTURE — the blockers are (a) fresh
-minting (unions/literals/objlits — INV.5(a) interning exists for
-union/intersection CALLS through getUnionType? no: the round-545 interning
-covers getUnionType — yet narrowing results still churn identity via
-rebuilt member LISTS...) and (b) epoch churn from the recording-heavy
-walk. The ≤10s target runs through INV.5's canonical types (which would
-make results identity-stable and REVIVE both memo designs) + INV.6
-parallelism. INV.4 CLOSES: the migration + retirements delivered the real
-win (35.7 → ~31s, −13%) and ONE authoritative walk — its structural goal.
-NEXT: INV.5(b) explicit mapper objects, or INV.5(e)'s second half (the
-superseded-pin-walker deletion sweep), per the queue order.
-
-**Round 598 (2026-07-18) — the FULL checkSpine attribution: the walks are
-the only big single lever.** Depth-0-guarded accumulators on the three
-remaining suspects: relations(depth0)=927ms, typeNode(depth0)=520ms,
-memberResolve(depth0)=61ms — vs narrowWalks=4,986ms and typeOfExpr≤3.9s
-(categories OVERLAP: walk spans include nested resolution). The
-unattributed remainder is BROAD emitter machinery (leaf check* logic,
-dispatch overhead, frame constructions) — no second concentrated lever.
-CONCLUSION: (f2)'s walk fold (~5s target) is the one remaining
-concentrated checkSpine lever; beyond it the ≤10s target runs through
-INV.5 (canonical types) + INV.6 (parallelism), as the arc doc always
-said. Probes committed (inert off --passTiming; sentinel pins green).
-NEXT: the (f2) fold design — per-(reference-path, flow-node) walk-result
-reuse WITHIN the epoch fences (the round-595 infrastructure), evaluated
-shadow-first (the proven instrument).
-
-**Round 597 (2026-07-18) — the (f2) TIME ATTRIBUTION: the walks are 4.8s;
-~10s of checkSpine is NEITHER walks nor typeOfExpr.** Nanotime
-accumulators (--passTiming only, TimeSource-based) at the two hot
-surfaces: depth-0 narrowing walks = 4,806ms (~26% of checkSpine — a real
-(f2) lever); getTypeOfExpression total = 3,844ms (an OVERcount — nested
-spans double-counted — so exclusive is lower, consistent with the f1
-dead-end verdict). The REMAINING ~10s of checkSpine's 18.4s is relation
-checks (checkTypeRelatedTo verdicts), non-expression resolution
-(getTypeFromTypeNode / resolveStructuredTypeMembers), and the anchors'
-emitter machinery — the NEXT attribution target before committing to
-(f2)'s fold (the f1 lesson: attribute before building). Probe committed
-(inert off --passTiming); sentinel anchor pins green. NEXT: attribute the
-~10s (a relation-nanos accumulator + a resolveStructuredTypeMembers
-counter), then pick the lever: (f2) fold vs relation-engine work.
-
-**Round 596 (2026-07-18) — (f1b-ii) MEASURED DEAD-END, reverted: the live
-per-node expression-type memo is 1-3% SLOWER.** The flip served the 150k
-zero-wrong confirmed hits and was fully gate-green (corpus 11,347/0 +
-listAll ×8 byte-identical — the skipped-warming concern never
-materialized), but the interleaved wall A/B (3 B/A pairs, both class
-dirs) read B(no-serve) ≈ 30.7-31.5s vs A(serve) ≈ 31.5-31.8s: the
-SERVABLE calls are the CHEAP ones (instance-stable intrinsic/interface/
-reference lookups — already fast paths), while the EXPENSIVE recompute
-lives exactly in the NON-memoizable kinds (fresh unions/literals/objlits
-+ the narrowing-dependent property accesses), and the bookkeeping (an
-epoch bump per mutation + map/set churn + Pair allocation per stable
-call) exceeds the savings. REVERTED to the round-595 state (the epoch
-infrastructure + the --passTiming shadow instrument STAY — measured
-noise-level, and the shadow remains the policy-evaluation tool).
-CONCLUSION: (f1) as a whole-entry memo is closed at the current cost
-structure; the checkSpine lever is now (f2) — folding the 111k depth-0
-narrowing walks (68% from property access) into per-reference typing,
-which targets exactly the expensive non-memoizable calls. NEXT: (f2)
-design — the narrowing-walk consumers and a per-(reference,flowNode)
-result reuse within the walk.
-
-**Round 595 (2026-07-18) — (f1b-i) LANDED: the epoch infrastructure + a
-VALIDATED live-memo policy — hitWRONG driven to ZERO.** The invalidation
-surface: property SETTERS on the 13 ambient fields getTypeOfExpression
-consults (swap-bumps, zero call-site changes) + `EpochMap`/`EpochSet`
-inner classes (HashMap/HashSet subclasses auto-bumping on
-put/remove/putAll/clear/add/addAll) substituted at 81 construction sites
-of the localTypes family (the frames alias the same instances, so both
-access paths bump). The SHADOW memo (--passTiming only) classified every
-repeat against the live recompute across three policy iterations:
-(1) raw: 212k correct / 375 WRONG — the wrongs were FRESH-MINTING kinds
-(getTypeOfObjectLiteral mints per call; objlit freshness is semantically
-load-bearing per freshObjLitRange), then negative-literal NumberLiterals
-and getUnionType's fresh unions, plus genuine cache-warming transitions
-(an AsExpression Intrinsic→Interface); (2) kind exclusions cut some;
-(3) THE VALIDATED POLICY — result-kind WHITELIST (instance-stable only:
-Intrinsic/Interface/Reference) + CONFIRM-ONCE (serve only after a second
-identical observation at the same epoch; warming transitions can never be
-served): **hitCorrect=149,781, hitWRONG=0, miss=334,847** — ~24% of all
-627k calls provably servable with zero observed divergence. Gates: corpus
-11,347/0; listAll ×8 identical (the epoch machinery is live but inert —
-one Long bump per mutation). NEXT: (f1b-ii) the LIVE memo — serve
-confirmed whitelisted hits in production + the interleaved wall A/B
-(revert if <5% per the INV ground rules); then (f2) the narrowing fold.
-
-**Round 594 (2026-07-18) — the (f1) EPOCH-RATE PROBE: 93% of repeats are
-memoizable.** The repeat-result probe (identity-classified, --passTiming
-only; getTypeOfExpression split into a wrapper + Core for it): 626,680
-calls → 379,157 same-result repeats vs 27,110 diff-result (~60% of ALL
-calls recompute the IDENTICAL instance). The memo design constraint: the
-27k diff-result cases are the state-dependent ones (recordings/narrowing
-overrides/frame swaps between calls). INVALIDATION-SURFACE ANALYSIS: the
-frame machinery centralizes MOST mutation points (~20 sites: the
-withXFrameAmbient installs/restores, frame pushes, scoped overrides,
-per-file resets) — but legacy leaf helpers still mutate currentLocalTypes
-IN PLACE mid-anchor (checkVarDeclAssignability recordings etc.), so a
-sound epoch needs either (a) enumerating those scattered mutation sites
-(risky), (b) a mutation-counting map wrapper around the localTypes family
-(a focused refactor — the mutation API surface is put/remove/putAll/clear;
-frames alias the SAME instances so a per-instance counter + a global sum
-works), or (c) keying the memo by (nodeId, identity of currentLocalTypes
-map + its size) as a cheap proxy — UNSOUND on in-place same-size
-overwrite (rare but real: the anyType overrides). RECOMMENDED: (b), the
-wrapper — one class, the alias structure preserved, every mutation
-auto-bumps; then memo keyed (nodeId, globalEpoch) cleared per file.
-Gates: corpus 11,347/0 (the probe is --passTiming-only; off-mode calls
-Core directly). NEXT: (f1b) the MutationCountedMap wrapper + the memo,
-A/B'd interleaved for the wall win.
-
-**Round 593 (2026-07-18) — the INV.4(f) RE-MEASURE: the consolidation
-succeeded.** Post-retirements `--passTiming` (compiler profile):
-checker-init 25.7s, **checkSpine 18.4s (72%)** with 619,908
-getTypeOfExpression calls + 111,055 depth-0 narrowing walks INSIDE the
-one walk; the remaining 441 passes are ALL sub-200ms (the multiplication
-tail ≈ 6.4s, top stragglers 100-160ms each). Wall ~31.2s at round 591
-(from 35.7 pre-retirements); round 592's row pending. The ≤10s
-single-threaded target now reduces to shrinking checkSpine — the two
-(f) soundness wins are the lever, both now SOUND because the frames give
-one authoritative state: (f1) the per-node expression-type cache — a
-getTypeOfExpression memo keyed (nodeId, state-epoch) where the epoch
-increments on any frame-map mutation (recordings/overrides/frame pushes)
-— the recompute factor is ~×2.8; (f2) flow narrowing folded into
-reference typing once per (reference, flow-node) instead of 111k
-independent depth-0 walks. Both are design tasks with the
-first-touch-order hazard now CONFINED to one walk (order within the walk
-is fixed by the tree). NEXT: (f1) design + a counter probe for the
-epoch-invalidation rate (how often do mutations actually occur between
-repeated calls on the same node — if rare, a simple epoch-tag memo wins
-big).
-
-**Round 592 (2026-07-18) — (ccet-retire) LANDED: THE LAST GIANT IS RETIRED
-— ALL THREE INV.4(e) GIANTS ARE OFF EMIT-TWICE.** The
-checkCallExpressionTypes pass dispatch + driver are deleted; every ccet
-emission runs once from the per-call spine anchors. Zero fallout (the
-pins-first decision meant no scaffolding to unwind). The walker family
-survives as leaf machinery (checkComputedDestructKey consumes
-checkCallTypesInExpr best-effort; those positions are never anchored).
-Gates: corpus 11,347/0; listAll ×8 identical (46 ×7 / 94 harness).
-THE INV.4(e) TIER IS COMPLETE: checkTypeAssignability (rounds 560-576,
-retired 586), checkPropertyAccess (577-583, retired 585), and
-checkCallExpressionTypes (588-591, retired 592) — the three giants that
-were 38% of checker-init at the round-542 measurement now emit once,
-from one authoritative walk. NEXT: INV.4(f) — the two unlocked soundness
-wins (the per-node expression-type cache; flow narrowing folded into
-reference typing once) + the ≤10 s single-threaded compiler-profile
-re-measure — or the remaining small INV.4 passes / INV.5(e)'s
-superseded-pin-walker deletion sweep.
-
-**Round 591 (2026-07-18) — (ccet-m3) LANDED (merged from
-wip/ccet-m3-anchors): THE LAST GIANT'S EMISSIONS RUN FROM THE SPINE.**
-Per-Call/New/TaggedTemplate anchors at their own leaves under the frame
-ambient + the full per-edge reach classifier + legacy truncation marks at
-the three emitter sites + decl-leave recordings (the spine's per-node
-order = the legacy interleave for free) + CcetAnchorTest (8 pins). The
-round-590 blocker resolved by the probe plan exactly as recorded: the
-Diagnostic-init probe identified checkReturnAssignability's engine-path
-TS2322 (fired from the cta RETURN anchor); a member-shape probe showed the
-TP never surfaces as Type.TypeParam — the ctor-value sig returns are RAW
-UNINSTANTIATED generic Type.Interfaces (the `NodeObject<TKind>` display);
-`typeContainsForeignTypeParam` gains the GAP-SIGNATURE rule (a
-nested-position raw generic interface = the un-inferred-generic signature
-→ bail; depth>0 keeps top-level sources checkable) — order-free in both
-cache states. Gates: corpus 11,347/0; listAll ×8 identical. NEXT:
-(ccet-retire) — the round-585 experiment template on the last giant.
-
-**Round 589 (2026-07-18) — (ccet-m2) LANDED: the g3 frame skeleton runs
-always-on and INERT — identity gates green.** CcetFrame implements the
-588c/d spec: fn-decl frames (map copies + own-TP interning/constraint
-materialization + populate + the two shadowing calls), class frames at
-ClassDeclaration enters (class TP scope via getDeclaredTypeOfSymbol,
-classSym, the baseResolution sig/type pair computed under the class
-scope), method/ctor frames (static TP-scope juggling with fresh own-TP
-minting, instance `this` registration, superBase threading), objlit
-member frames (the withObjThis semantics — explicit this-param wins),
-arrow/fn-expr frames at the FN node (own-param anyType OR the B246
-contextual variant for FunctionType-annotated var initializers),
-non-declare ModuleDeclaration ns frames (dotted-aware) + declare-module
-DEAD frames, and the If-narrowing/loop-var-shadow scoped overrides with
-restore records. ONE quirk extracted by the identity gate: the Var-arm
-decl recordings are DEFERRED to the m3 anchors (interleaved walk+record,
-the cta template) — a frame-time recording's resolution side effects
-flipped the 17.21 static-method skip-gate on classTypeParametersInStatics
-(bisected in one probe). Gates: corpus 11,341/0; listAll ×8 byte-identical.
-NEXT: (ccet-m3) the per-Call/New-node anchors at their leaves + legacy
-marks + CcetAnchorTest pins + the interleaved recordings, then
-(ccet-retire).
-
-
+  TSVs under `bench/` (gitignored, machine-specific).
