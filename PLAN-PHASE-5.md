@@ -1936,7 +1936,21 @@ interrupt the arc).
       scaffolding removed).
     **(g3 = ccet DECOMPOSITION, queued round 588 from the in-code scout —
     the LAST giant; mirror the twice-proven cpa sequence, one commit each):**
-    - [ ] **(ccet-m1) State-model scout completion + audit-or-pins decision.**
+    - [x] **(ccet-m1) State-model scout — COMPLETE round 588b.** Additional
+      facts: the expr walker has NO contextualType channel (plain recursion);
+      arrow/fn-expr arms copy 2 maps (localTypes+paramBindings) + register
+      own params anyType + Block-body shadowing; the ObjectLiteral arm does
+      a SCOPED localTypes copy around member walks; EMISSIONS ARE
+      PER-CALL-NODE (checkSingleCallExpressionTypes at CallExpressions,
+      checkSingleNewExpressionTypes at NewExpressions) — so the m3 anchor is
+      per-Call/New-node at ITS OWN LEAVE (the probe discipline), with frames
+      supplying ambient; no emit-via-containing-walk ownership complication
+      (nested-fn-body calls anchor at their own nodes under spine-maintained
+      frames). DECISION: pins-first — NO fingerprint audit (CcetAnchorTest
+      exactly-once pins + corpus/listAll gates; the audit pattern's quirk
+      extraction is replaced by the gates, which caught all three cpa-m3a
+      quirks anyway).
+      ORIGINAL ITEM: **(ccet-m1) State-model scout completion + audit-or-pins decision.**
       Scouted so far (in-code, round 588): the driver resets currentLocalTypes
       per file since round 584 (residue-free); FunctionDeclaration arm copies
       currentLocalTypes + currentParamBindingNames AND pushes the fn's OWN
