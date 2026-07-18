@@ -2317,7 +2317,28 @@ with a session note saying why). Item IDs are stable; session notes reference th
 - Node/tsc/tsgo are NOT currently installed — differential testing (M0 optional) and
   real `@types/node` (M1.3) wait for network.
 - The benchmark project cache lives under `build/bench/` (cheap to rebuild); results
-  TSVs under `bench/` (gitignored, machine-specific).**Round 592 (2026-07-18) — (ccet-retire) LANDED: THE LAST GIANT IS RETIRED
+  TSVs under `bench/` (gitignored, machine-specific).**Round 593 (2026-07-18) — the INV.4(f) RE-MEASURE: the consolidation
+succeeded.** Post-retirements `--passTiming` (compiler profile):
+checker-init 25.7s, **checkSpine 18.4s (72%)** with 619,908
+getTypeOfExpression calls + 111,055 depth-0 narrowing walks INSIDE the
+one walk; the remaining 441 passes are ALL sub-200ms (the multiplication
+tail ≈ 6.4s, top stragglers 100-160ms each). Wall ~31.2s at round 591
+(from 35.7 pre-retirements); round 592's row pending. The ≤10s
+single-threaded target now reduces to shrinking checkSpine — the two
+(f) soundness wins are the lever, both now SOUND because the frames give
+one authoritative state: (f1) the per-node expression-type cache — a
+getTypeOfExpression memo keyed (nodeId, state-epoch) where the epoch
+increments on any frame-map mutation (recordings/overrides/frame pushes)
+— the recompute factor is ~×2.8; (f2) flow narrowing folded into
+reference typing once per (reference, flow-node) instead of 111k
+independent depth-0 walks. Both are design tasks with the
+first-touch-order hazard now CONFINED to one walk (order within the walk
+is fixed by the tree). NEXT: (f1) design + a counter probe for the
+epoch-invalidation rate (how often do mutations actually occur between
+repeated calls on the same node — if rare, a simple epoch-tag memo wins
+big).
+
+**Round 592 (2026-07-18) — (ccet-retire) LANDED: THE LAST GIANT IS RETIRED
 — ALL THREE INV.4(e) GIANTS ARE OFF EMIT-TWICE.** The
 checkCallExpressionTypes pass dispatch + driver are deleted; every ccet
 emission runs once from the per-call spine anchors. Zero fallout (the
