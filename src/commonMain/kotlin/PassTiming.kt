@@ -144,6 +144,7 @@ object PassTiming {
         passCalls.clear()
         getTypeOfExpressionCalls = 0
         typeOfExprLastResult.clear()
+        shadowMemoHitCorrect = 0; shadowMemoHitWrong = 0; shadowMemoMiss = 0
         typeOfExprRepeatSame = 0
         typeOfExprRepeatDiff = 0
         getTypeOfExpressionDistinct.clear()
@@ -179,6 +180,12 @@ object PassTiming {
     // of the recompute returns the IDENTICAL Type instance (memoizable) vs a
     // different one (needs invalidation). pos-keyed (the documented cross-file
     // collision adds minor noise, same as the distinct counter).
+    // (f1b-i) round 595: the SHADOW-memo verdicts — hitWrong > 0 means the
+    // epoch invalidation surface has a gap (an untracked mutation site).
+    var shadowMemoHitCorrect: Long = 0
+    var shadowMemoHitWrong: Long = 0
+    var shadowMemoMiss: Long = 0
+
     val typeOfExprLastResult = HashMap<Long, Any>()
     var typeOfExprRepeatSame: Long = 0
     var typeOfExprRepeatDiff: Long = 0
@@ -259,6 +266,7 @@ object PassTiming {
         val distinct = getTypeOfExpressionDistinct.size.toLong()
         val factor = if (distinct > 0) (getTypeOfExpressionCalls * 10 / distinct) else 0L
         appendLine(
+            "shadowMemo: hitCorrect=$shadowMemoHitCorrect hitWRONG=$shadowMemoHitWrong miss=$shadowMemoMiss\n" +
             "typeOfExpr repeats: same-result=$typeOfExprRepeatSame diff-result=$typeOfExprRepeatDiff " +
                 "(memoizable fraction of repeats: ${if (typeOfExprRepeatSame + typeOfExprRepeatDiff > 0) typeOfExprRepeatSame * 100 / (typeOfExprRepeatSame + typeOfExprRepeatDiff) else 0}%)\n" +
             "getTypeOfExpression: $getTypeOfExpressionCalls calls, ~$distinct distinct nodes " +

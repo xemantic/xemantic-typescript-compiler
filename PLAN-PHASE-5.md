@@ -2317,7 +2317,31 @@ with a session note saying why). Item IDs are stable; session notes reference th
 - Node/tsc/tsgo are NOT currently installed — differential testing (M0 optional) and
   real `@types/node` (M1.3) wait for network.
 - The benchmark project cache lives under `build/bench/` (cheap to rebuild); results
-  TSVs under `bench/` (gitignored, machine-specific).**Round 594 (2026-07-18) — the (f1) EPOCH-RATE PROBE: 93% of repeats are
+  TSVs under `bench/` (gitignored, machine-specific).**Round 595 (2026-07-18) — (f1b-i) LANDED: the epoch infrastructure + a
+VALIDATED live-memo policy — hitWRONG driven to ZERO.** The invalidation
+surface: property SETTERS on the 13 ambient fields getTypeOfExpression
+consults (swap-bumps, zero call-site changes) + `EpochMap`/`EpochSet`
+inner classes (HashMap/HashSet subclasses auto-bumping on
+put/remove/putAll/clear/add/addAll) substituted at 81 construction sites
+of the localTypes family (the frames alias the same instances, so both
+access paths bump). The SHADOW memo (--passTiming only) classified every
+repeat against the live recompute across three policy iterations:
+(1) raw: 212k correct / 375 WRONG — the wrongs were FRESH-MINTING kinds
+(getTypeOfObjectLiteral mints per call; objlit freshness is semantically
+load-bearing per freshObjLitRange), then negative-literal NumberLiterals
+and getUnionType's fresh unions, plus genuine cache-warming transitions
+(an AsExpression Intrinsic→Interface); (2) kind exclusions cut some;
+(3) THE VALIDATED POLICY — result-kind WHITELIST (instance-stable only:
+Intrinsic/Interface/Reference) + CONFIRM-ONCE (serve only after a second
+identical observation at the same epoch; warming transitions can never be
+served): **hitCorrect=149,781, hitWRONG=0, miss=334,847** — ~24% of all
+627k calls provably servable with zero observed divergence. Gates: corpus
+11,347/0; listAll ×8 identical (the epoch machinery is live but inert —
+one Long bump per mutation). NEXT: (f1b-ii) the LIVE memo — serve
+confirmed whitelisted hits in production + the interleaved wall A/B
+(revert if <5% per the INV ground rules); then (f2) the narrowing fold.
+
+**Round 594 (2026-07-18) — the (f1) EPOCH-RATE PROBE: 93% of repeats are
 memoizable.** The repeat-result probe (identity-classified, --passTiming
 only; getTypeOfExpression split into a wrapper + Core for it): 626,680
 calls → 379,157 same-result repeats vs 27,110 diff-result (~60% of ALL
