@@ -1628,6 +1628,34 @@ interrupt the arc).
     enters; (8) reach quirks as classifier edges: for-INIT unreached,
     tagged-template spans unreached, interface bodies unreached,
     shorthand-property initializers unreached.**
+    **(g2 = cpa DECOMPOSITION, queued round 576 — the cta migration (rounds
+    560–576, m1..m3m) is COMPLETE for the emission surface; work these
+    top-to-bottom, one commit each, mirroring the proven cta sequence):**
+    - [ ] **(cpa-m1) Legacy-side audit instrumentation** (the cta-m2a
+      pattern): a test-only `cpaAuditRecord` at the top of
+      checkPropertyAccessInStatement fingerprinting the threaded+ambient
+      context per DIRECT statement — enclosingClassType (threaded param),
+      currentLocalTypes/currentParamBindingNames/currentEnumConstrainedParams/
+      currentShadowedNames (fn-boundary copies), inStaticClassMethod,
+      propertyAccessEnclosingNamespaces depth, contextualType. FINGERPRINT
+      HAZARD (scouted): cpa's currentLocalTypes maps name→Type, not strings
+      like cta's varTypes — Type.id is resolution-order-sensitive between
+      legacy-time and spine-time, so fingerprint by sorted name set +
+      per-name typeToString (test-only cost), never by id.
+    - [ ] **(cpa-m2) Spine-side frame skeleton** audited against (cpa-m1)
+      (the cta-m2b/m2c pattern — expect quirk-extraction cycles; the known
+      quirks from the g1c design: GetAccessor bodies have NO scope copy,
+      enclosingClassType is KEPT through arrows / nulled at fn-decl+fn-expr
+      boundaries, contextualType clears before bodies, the pass is
+      PASS-PRIVATE for currentParamBindingNames per the w2 lesson, and the
+      driver does NOT reset currentLocalTypes per file — cpa consumes cta
+      RESIDUE cross-file (round-542 noImplicitAnyForIn TS7053), which the
+      frames must reproduce or own-record).
+    - [ ] **(cpa-m3…) Emission moves** scope-by-scope with the recorded-set
+      truncation template (the cta-m3a..m3m sequence).
+    - [ ] **(cta-retire) After cpa no longer consumes cta residue: retire
+      the cta legacy emit-twice runs for fully-covered scopes** (the
+      multiplier payoff — blocked until the residue channel is closed).
   - [ ] **INV.4(f) The two unlocked soundness wins.** Once one authoritative
     walk state exists: the per-node expression-type cache (594,779 calls over
     ~221,844 distinct nodes = ×2.6 recompute), and flow narrowing folded into
