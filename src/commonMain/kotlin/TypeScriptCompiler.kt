@@ -1468,15 +1468,49 @@ class TypeScriptCompiler {
             // Phase 2: Bind all files and create shared checker
             val binder = Binder(options)
             val binderResults = parsedSourceFiles.values.map { binder.bind(it) }
-            val checker = Checker(options, binderResults, isMultiFileSource = parsed.hasExplicitFilenames,
-                allInputFileNames = parsed.files.map { it.fileName }.toSet(),
-                jsonModuleContents = parsed.files
-                    .filter { it.fileName.endsWith(".json") && !it.fileName.endsWith("tsconfig.json") }
-                    .associate { it.fileName to it.content })
-            diagnostics.addAll(checker.getDiagnostics())
-            if (PartitionCheck.workers > 1) runPartitionEquivalenceCheck(
-                options, parsedSourceFiles.values.toList(), parsed, checker.getDiagnostics(),
-            )
+            val allInputFileNames = parsed.files.map { it.fileName }.toSet()
+            val jsonModules = parsed.files
+                .filter { it.fileName.endsWith(".json") && !it.fileName.endsWith("tsconfig.json") }
+                .associate { it.fileName to it.content }
+            val checker: Checker
+            if (ParallelCheckMode.workers > 1) {
+                // INV.6(6c1): share-nothing parallel check — N partition checkers on
+                // deep-stack worker threads replace the single full checker. Fresh
+                // bind per worker (checker init mutates shared symbols via
+                // mergeSymbolTable; the Binder never touches the AST, so parse trees
+                // share). Merge is deterministic (worker order); program-level
+                // fileName-null diagnostics are emitted by every worker —
+                // deduplicated by key. Worker 0's checker (a full program over its
+                // own fresh bind) serves the downstream Transformer queries.
+                val workers = ParallelCheckMode.workers
+                val sourceList = parsedSourceFiles.values.toList()
+                val fileNames = sourceList.map { it.fileName }
+                val tasks = (0 until workers).map { w ->
+                    {
+                        val assigned = fileNames.filterIndexed { i, _ -> i % workers == w }.toSet()
+                        val workerBinder = Binder(options)
+                        val workerResults = sourceList.map { workerBinder.bind(it) }
+                        Checker(options, workerResults, isMultiFileSource = parsed.hasExplicitFilenames,
+                            assignedFileNames = assigned,
+                            allInputFileNames = allInputFileNames,
+                            jsonModuleContents = jsonModules)
+                    }
+                }
+                val workerCheckers = runInDeepStackWorkers(tasks)
+                val perWorker = workerCheckers.map { it.getDiagnostics() }
+                diagnostics.addAll(perWorker.flatten().filter { it.fileName != null })
+                diagnostics.addAll(perWorker.flatten().filter { it.fileName == null }
+                    .distinctBy { "${it.start}|${it.length}|${it.code}|${it.message}" })
+                checker = workerCheckers[0]
+            } else {
+                checker = Checker(options, binderResults, isMultiFileSource = parsed.hasExplicitFilenames,
+                    allInputFileNames = allInputFileNames,
+                    jsonModuleContents = jsonModules)
+                diagnostics.addAll(checker.getDiagnostics())
+                if (PartitionCheck.workers > 1) runPartitionEquivalenceCheck(
+                    options, parsedSourceFiles.values.toList(), parsed, checker.getDiagnostics(),
+                )
+            }
             // Parser-cascade PINS: for files whose full baseline is reemitted by a checker
             // walker (es6ImportNamedImportParsingError_1.ts; bigintArbirtraryIdentifier's
             // badImport*/badExport*.ts), remove the parser's own diagnostics by identity so

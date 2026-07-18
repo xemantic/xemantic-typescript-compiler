@@ -31,3 +31,7 @@ internal actual class IntThreadLocal actual constructor(initial: Int) {
     actual fun get(): Int = value
     actual fun set(value: Int) { this.value = value }
 }
+
+/** Native compiles are single-threaded — sequential inline execution, no rebase. */
+internal actual fun <T> runInDeepStackWorkers(tasks: List<() -> T>): List<T> =
+    tasks.map { it() }

@@ -62,3 +62,22 @@ actual fun <T> runWithDeepStack(block: () -> T): T {
     Type.restoreThreadId(typeIdAfter)
     return outcome!!.getOrThrow()
 }
+
+/** INV.6(6c1): worker id-space bases — far above any singleton/static allocation. */
+private const val WORKER_ID_BASE = 1_000_000_000
+private const val WORKER_SCOPE_ID_BASE = -1_000_000_000
+
+internal actual fun <T> runInDeepStackWorkers(tasks: List<() -> T>): List<T> {
+    if (tasks.size <= 1) return tasks.map { it() }
+    val outcomes = MutableList<Result<T>?>(tasks.size) { null }
+    val threads = tasks.mapIndexed { i, task ->
+        Thread(null, {
+            Symbol.rebaseThreadIds(WORKER_ID_BASE, WORKER_SCOPE_ID_BASE)
+            Type.rebaseThreadIds(WORKER_ID_BASE)
+            outcomes[i] = runCatching(task)
+        }, DEEP_STACK_THREAD_NAME, DEEP_STACK_SIZE_BYTES)
+    }
+    threads.forEach { it.start() }
+    threads.forEach { it.join() }
+    return outcomes.map { it!!.getOrThrow() }
+}

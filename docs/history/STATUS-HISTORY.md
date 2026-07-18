@@ -1,3 +1,5 @@
+_Round 603 (2026-07-18) — INV.5(b2d3): the ccet-leaf checkCallTypesInStatement cluster on the bridge (fn-decl arm via withInternedTpScope; class arm + 17.21 static-method juggle via conditional scopeMapper/ambientMapper regions). Raw ambient tpScope writes 10 → 8 — all remaining are the structurally-hard tail (dual-ambient, push/pop helper, spine LIFO frames). Gates: corpus 11,347/0; listAll ×8 byte-identical._
+
 _Round 602 (2026-07-18) — INV.5(b2d2): checkTpListDefaults, checkMixinClassInStatements (TP-scope half), and checkClassPropertyOverrides (conditional install via overrideScope/ambientMapper) flipped to the region form; raw ambient tpScope writes 15 → 10. Gates: corpus 11,347/0; listAll ×8 byte-identical._
 
 _Round 601 (2026-07-18) — INV.5(b2d): the walker-installer idiom flipped to the region form via withInternedTpScope (7 hand-rolled save/set/try/finally sites in the typeParamCasts/typeParamOps/spread2698/checkFunctionBody family route their scope write through the bridge; raw ambient writes 28 → 15). Behavior-identical by construction. Gates: corpus 11,347/0; listAll ×8 byte-identical._

@@ -50,3 +50,27 @@ object PartitionCheck {
         reportLines.clear()
     }
 }
+
+/**
+ * INV.6(6c1): the opt-in PARALLEL check mode (`--workers N`). When [workers]
+ * > 1, the multi-file compilation core replaces the single full checker with
+ * N share-nothing partition checkers running concurrently on deep-stack
+ * worker threads (fresh bind per worker; per-worker id-space rebase — see
+ * [IntThreadLocal]); merged output is deterministic (worker order) with
+ * content proven equal to the sequential run by the (6b) harness. Output
+ * LINE ORDER may differ from sequential — A/B by sorted error lines.
+ */
+object ParallelCheckMode {
+    /** Number of concurrent partition workers; 0/1 = sequential (default). */
+    var workers: Int = 0
+}
+
+/**
+ * INV.6(6c1): run [tasks] to completion and return their results in task
+ * order. JVM: one deep-stack worker thread per task, started concurrently,
+ * each with its Symbol/Type id sequences REBASED far above the shared
+ * singleton-intrinsic range (ids never cross a worker boundary). Other
+ * platforms: sequential inline execution with NO rebase (the single thread's
+ * continuous sequence stays valid).
+ */
+internal expect fun <T> runInDeepStackWorkers(tasks: List<() -> T>): List<T>

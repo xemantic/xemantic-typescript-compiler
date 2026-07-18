@@ -54,6 +54,9 @@ fun main(args: Array<String>) {
             "--partitionCheck", "--partitioncheck" -> {
                 i++; if (i < args.size) PartitionCheck.workers = args[i].toIntOrNull() ?: 0
             }
+            "--workers" -> {
+                i++; if (i < args.size) ParallelCheckMode.workers = args[i].toIntOrNull() ?: 0
+            }
             "--project", "-p" -> { i++; if (i < args.size) project = args[i] }
             "--help", "-h" -> { printUsage(); return }
             else -> if (!a.startsWith("-")) project = a
@@ -120,6 +123,7 @@ private fun printUsage() {
           --listAll          print every error (default: first 30) — for run-to-run FP diffing
           --passTiming       print the INV.0 per-pass wall-time table + recompute counters
           --partitionCheck N run N sequential partition checkers and diff vs the full run (INV.6(6b))
+          --workers N        parallel share-nothing partition check on N threads (INV.6(6c); line order may differ)
                              + the INV.3(a) globals-lookup conflation classification
           --help, -h         show this help
         """.trimIndent()

@@ -20,6 +20,30 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 608 (2026-07-18) — (INV.6(6c1)) LANDED: `--workers N` — the
+share-nothing parallel check driver; MEASURED: w2 −14%, w4 FLAT (the
+per-worker redundancy ceiling).** `runInDeepStackWorkers` (expect/actual;
+JVM = concurrent deep-stack threads, each rebasing its Symbol/Type id
+sequences to ±1e9 at startup; native = sequential inline, no rebase)
+runs N partition checkers replacing the single full checker — fresh bind
+per worker, deterministic worker-order merge, program-level
+fileName-null diagnostics deduped by key; worker 0's checker serves the
+downstream Transformer (the earlier "checker unused after diagnostics"
+read missed the bare `Transformer(options, checker, …)` reference —
+caught at compile). CORRECTNESS: `--workers 4` output is
+sorted-line-IDENTICAL to sequential on the compiler profile. WALL
+(daemons stopped, -Xmx6g, 4-core box): seq 31.4s / w2 27.0s (−14%) / w4
+31.2s; RSS w2 1.35GB, w4 1.88GB — NOT memory-bound. The w4 ceiling is
+the per-worker REDUNDANT FIXED COST: the ~7.3s non-spine pass suite +
+the cross-file lazy-resolution warmup each worker repays (the spine's
+partitionable slice is its per-file emissions, NOT its resolution
+warmup — tsgo's accepted redundancy, which stops paying past w2 on 4
+cores). The levers are exactly (6d) (gate more passes into the
+partition → shrink the fixed cost) and INV.5 canonical types (shrink
+the warmup). Gates: corpus 11,351/0; listAll ×8 byte-identical
+(sequential path unchanged). NEXT: (6d), or record the bench row and
+reassess the INV.6 ROI vs INV.5(d2) first.
+
 **Round 607 (2026-07-18) — (INV.6(6c0)) LANDED: thread-local Symbol/Type id
 sequences + the deep-stack inherit/write-back handoff.** The process-global
 `nextId`/`nextTypeId` companions become `IntThreadLocal` cells (expect/
@@ -2120,10 +2144,11 @@ interrupt the arc).
   - [x] **(6b) Profile-scale equivalence A/B** — DONE round 606:
     `--partitionCheck N` harness; EQUIVALENT on all 8 profiles (w=2) + the
     two stress profiles (w=4). Zero divergences — (6c) unblocked.
-  - [ ] **(6c) The parallel driver.** Coroutine workers (Default dispatcher,
-    JVM), deterministic partition (file order round-robin or size-balanced),
-    merge through the existing stable diagnostic sort; CLI `--workers N`
-    (default 1 until (6b) is clean + bench rows recorded).
+  - [x] **(6c) The parallel driver** — DONE rounds 607-608 (6c0 thread-local
+    id sequences + deep-stack handoff; 6c1 runInDeepStackWorkers +
+    `--workers N`). Measured: w2 −14% wall, w4 flat (per-worker redundant
+    fixed cost — see the round-608 note); output sorted-identical to
+    sequential.
   - [ ] **(6d) Widen the partitioned region.** Gate remaining per-file passes
     into the partition in cost order (each suite + listAll-gated); cross-file
     walkers stay in the sequential region.
