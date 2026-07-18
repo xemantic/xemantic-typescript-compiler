@@ -20,6 +20,30 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 583 (2026-07-18) — (cpa-m3c) LANDED: heritage + property-initializer
+walks join the anchor — the cpa statement-DISPATCH emission surface is
+fully anchored.** A ClassDECLARATION's heritage expressions anchor at the
+heritage EXPRESSION node's leave with the OUTER ect (legacy walks them
+before the classType resolution; member walks don't mutate the shared
+maps, so the class-position frame state is correct); member
+PropertyDeclaration initializers anchor at the member's leave with the
+member-loop ambient (cpaResolveClassType + per-member inStatic) installed
+locally (the cta-m3k pattern). ClassExpression heritage/members stay owned
+by the containing statement's anchor (pinned). Legacy marks: per-EWTA in
+the ClassDeclaration arm; the shared member dispatch's PropertyDeclaration
+arm (safe — ClassExpression members are never marked). GATE-PROCESS NOTE:
+the first gate chain's suite run FAILED silently (gradle daemon crash) and
+the verify script counted 43 STALE XMLs as "passing" — caught by the
+xml-file-count sanity check; the fresh `rm -rf build/test-results/jvmTest`
+rerun is the true gate (the background-task-verification memory hazard,
+now with the file-count guard in the verify snippet). Pins +2
+(CpaAnchorTest → 11). Gates: corpus 11,353/0 (449 XMLs); listAll ×8
+identical. Remaining legacy-owned cpa emissions: NONE at the statement
+dispatch — the emit-twice runs persist only for map evolution. NEXT:
+(cpa-retire) evaluate retiring the legacy emit-twice runs for cpa (the
+frames reproduce all map evolution; the residue channel is closed), or
+pivot to g3 (checkCallExpressionTypes) via the same m1..m3 sequence.
+
 **Round 582 (2026-07-18) — (cpa-m3b) LANDED first-try: the remaining
 statement arms' direct walks join the anchor.** Condition/subject/
 incrementor/case-expr walks anchor at the EXPRESSION node's OWN leave —

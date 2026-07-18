@@ -1467,6 +1467,51 @@ class Checker(
                 }
             }
         }
+        // (cpa-m3c): a ClassDECLARATION's heritage expression walks anchor at
+        // the heritage EXPRESSION node's leave (legacy walks them with the
+        // OUTER ect, before the classType resolution; member walks don't
+        // mutate the shared maps, so the class-position frame state is
+        // correct). ClassExpression heritage stays owned by the containing
+        // statement's anchor.
+        run {
+            val p = (node as NodeBase).parent
+            if (p is ExpressionWithTypeArguments && node === p.expression) {
+                val hc = (p as NodeBase).parent
+                val cls = (hc as? NodeBase)?.parent
+                if (cls is ClassDeclaration &&
+                    cpaM2StmtPosition(cls) && cpaM2ChainOk(cls, forAnchor = true)) {
+                    cpaM3MarkAnchored(node)
+                    val top = cpaFrames.last()
+                    withCpaFrameAmbient(top) {
+                        checkPropertyAccessInExpr(p.expression, spineSource, spineFileName, top.classType)
+                    }
+                }
+            }
+        }
+        // (cpa-m3c): a ClassDECLARATION member PropertyDeclaration's
+        // initializer walk anchors at the member's leave, with the member-
+        // loop ambient (classType + per-member inStatic) installed locally
+        // over the class-position frame (the cta-m3k pattern).
+        if (node is PropertyDeclaration) {
+            val cls = (node as NodeBase).parent
+            val init = node.initializer
+            if (init != null && cls is ClassDeclaration &&
+                cpaM2StmtPosition(cls) && cpaM2ChainOk(cls, forAnchor = true)) {
+                cpaM3MarkAnchored(node)
+                val top = cpaFrames.last()
+                val clsType = cpaResolveClassType(cls)
+                val isStatic = ModifierFlag.Static in node.modifiers
+                withCpaFrameAmbient(top) {
+                    val sStatic2 = inStaticClassMethod
+                    inStaticClassMethod = isStatic
+                    try {
+                        checkPropertyAccessInExpr(init, spineSource, spineFileName, clsType)
+                    } finally {
+                        inStaticClassMethod = sStatic2
+                    }
+                }
+            }
+        }
         val id = (node as NodeBase).nodeId
         // Loop-var override restores.
         while (cpaLoopVarRestores.isNotEmpty() && cpaLoopVarRestores.last().bodyId == id && id >= 0) {
@@ -121150,9 +121195,12 @@ interface DataView {
         when (stmt) {
             is ClassDeclaration -> {
                 // Check heritage clause property access (e.g. extends M.B)
+                // (cpa-m3c): spine-anchored per heritage expression.
                 stmt.heritageClauses?.forEach { clause ->
                     clause.types.forEach { ewta ->
+                        val cpaM3Mk = if (cpaM3IsAnchoredStmt(ewta.expression, fileName)) diagnostics.size else -1
                         checkPropertyAccessInExpr(ewta.expression, source, fileName, enclosingClassType)
+                        if (cpaM3Mk >= 0) while (diagnostics.size > cpaM3Mk) diagnostics.removeAt(diagnostics.size - 1)
                     }
                 }
                 // Resolve the class type for "this" inside class body.
@@ -121586,9 +121634,13 @@ interface DataView {
                 }
             }
             is PropertyDeclaration -> {
+                // (cpa-m3c): spine-anchored for ClassDECLARATION members
+                // (ClassExpression members are never marked).
+                val cpaM3Mk = if (cpaM3IsAnchoredStmt(member, fileName)) diagnostics.size else -1
                 member.initializer?.let {
                     checkPropertyAccessInExpr(it, source, fileName, classType)
                 }
+                if (cpaM3Mk >= 0) while (diagnostics.size > cpaM3Mk) diagnostics.removeAt(diagnostics.size - 1)
             }
             else -> {}
         }

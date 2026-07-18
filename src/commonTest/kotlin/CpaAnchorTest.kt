@@ -191,6 +191,41 @@ class CpaAnchorTest {
     }
 
     @Test
+    fun `class heritage and property-initializer walks emit exactly once`() {
+        // (cpa-m3c): heritage anchors at the heritage expression's leave with
+        // the OUTER ect; property initializers at the member's leave with the
+        // member-loop ambient (classType + per-member inStatic).
+        val nHeritage = count2339("""
+            interface O { a: number }
+            declare const ns: O;
+            class C extends ns.missingBase {}
+        """)
+        assert(nHeritage == 1) { "heritage: expected exactly 1 TS2339, got $nHeritage" }
+        val nProp = count2339("""
+            interface O { a: number }
+            declare const o: O;
+            class C {
+                p = o.missing;
+                static q = o.missing;
+            }
+        """)
+        assert(nProp == 2) { "prop-inits: expected exactly 2 TS2339, got $nProp" }
+    }
+
+    @Test
+    fun `class-expression heritage and members stay owned by the containing anchor`() {
+        val n = count2339("""
+            interface O { a: number }
+            declare const o: O;
+            const ce = class {
+                p = o.missing;
+                m() { return o.missing; }
+            };
+        """)
+        assert(n == 2) { "class-expr members: expected exactly 2 TS2339, got $n" }
+    }
+
+    @Test
     fun `negative control - valid accesses stay silent`() {
         val n = count2339("""
             interface O { a: number }
