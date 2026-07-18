@@ -251,16 +251,35 @@ class CtaFnBodyAnchorTest {
     }
 
     @Test
-    fun `narrowed then-branch statement stays legacy-owned with the NARROWED display`() {
-        // (cta-m3h1) THE sharp discard pin: the legacy dispatch runs the
-        // then-branch under the narrowing wrapper (a = string), so the
-        // emission's SOURCE display is the narrowed 'string'. If the discard
-        // gate broke and the anchor emitted instead, the un-narrowed frame
-        // map would display 'string | undefined'.
+    fun `narrowed then-branch statement emits with the NARROWED display`() {
+        // (cta-m3h1/m3i) THE sharp narrowing pin: the then-branch runs under
+        // the narrowing state (a = string) — legacy via the wrapper's map
+        // copy, the spine via the NARROWING FRAME (localTypes copy + write).
+        // A broken frame write would display 'string | undefined'.
         val d = diagnose("""
             function f(a: string | undefined) {
                 if (a !== undefined) {
                     const n: number = a;
+                }
+            }
+        """).filter { it.code == 2322 }
+        assert(d.size == 1) { "expected exactly 1 TS2322, got ${d.size}" }
+        assert(d[0].message.contains("Type 'string' is not assignable")) {
+            "expected the NARROWED 'string' display, got: ${d[0].message}"
+        }
+    }
+
+    @Test
+    fun `nested if inside a narrowed then keeps the narrowing`() {
+        // (cta-m3i): the inner If's verdict computes against the NARROWED
+        // frame map — the narrowing flows through nested non-narrowing ifs.
+        val d = diagnose("""
+            declare const cond: boolean;
+            function f(a: string | undefined) {
+                if (a !== undefined) {
+                    if (cond) {
+                        const n: number = a;
+                    }
                 }
             }
         """).filter { it.code == 2322 }

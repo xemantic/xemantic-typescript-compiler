@@ -728,6 +728,10 @@ class Checker(
          *  currentClassForThis install (instance members only), reproduced by
          *  the anchor's ambient. */
         val classForThis: ClassDeclaration? = null,
+        /** (cta-m3i): the narrowedDeclaredTypes ambient — SHARED down the
+         *  frame chain except at narrowing frames (the legacy wrapper's
+         *  copy-plus-declared-entry). */
+        val narrowedDeclared: MutableMap<String, Type> = mutableMapOf(),
         var fnTpScope: Map<String, Type.TypeParam>? = null,
         var fnTpDecls: Map<String, TypeParameter>? = null,
         // (cta-m2d) part 2: the currentLocalTypes family — maintained via the
@@ -745,19 +749,20 @@ class Checker(
         ctaFrames.clear()
         ctaFrames.addLast(CtaFrame(sf, mutableMapOf(), null, null, emptySet(),
             inFn = false, inAsync = false, inGen = false, inInstanceMember = false))
-        ctaM3DiscardThen.clear()
-        ctaM3DiscardDepth = 0
+        ctaM3NarrowThen.clear()
     }
 
     private var ctaM3FlowGraph: FlowGraph? = null
 
-    /** (cta-m3e): nodeIds of if-THEN statements whose legacy dispatch runs under
-     *  the narrowing wrapper (extractNullNarrowing non-null — verdict computed
-     *  at the IfStatement's spine enter under the frame maps): recordings
-     *  inside are DISCARDED by the legacy restore, so the spine recording
-     *  reproduction must skip them. Per-file reset. */
-    private val ctaM3DiscardThen = HashSet<Int>()
-    private var ctaM3DiscardDepth = 0
+    /** (cta-m3i): if-THEN statements whose legacy dispatch runs under the
+     *  narrowing wrapper, keyed by then-nodeId → (varName, narrowedType) —
+     *  verdicts computed at the IfStatement's spine enter under the frame
+     *  maps (exact, incl. nested ifs: the maps ARE the legacy ambient). The
+     *  then node gets a NARROWING FRAME (localTypes copy + the write,
+     *  narrowedDeclared copy + declared entry) — the copy IS the legacy
+     *  discard semantics, so recordings AND emissions inside are correct.
+     *  Per-file reset. */
+    private val ctaM3NarrowThen = HashMap<Int, Pair<String, Type>>()
 
     /** (cta-m3e): true while a recordOnly reproduction runs — suppresses the
      *  TS2563 trip REPORT (emission + flowDisabledRanges registration) inside
@@ -824,8 +829,8 @@ class Checker(
      *  cross statement-position Blocks, switch clauses, bare if/loop/try/labeled
      *  positions, ModuleBlock chains, and fn-like boundaries via [ctaM3FnHop];
      *  arrows/fn-exprs/objlit methods and any unknown position disqualify.
-     *  Narrowing-DISCARD regions are excluded by the caller's
-     *  `ctaM3DiscardDepth == 0` gate, not here. */
+     *  Narrowed then-branches are handled by their NARROWING frames
+     *  (cta-m3i), not here. */
     private fun ctaM3NestedChainOk(from: Node): Boolean {
         var cur: Node? = from
         while (cur != null) {
@@ -1020,13 +1025,16 @@ class Checker(
     private inline fun withCtaFrameLocals(frame: CtaFrame, block: () -> Unit) {
         val sLT = currentLocalTypes; val sDN = currentLocalDeclTypeNodes
         val sSh = currentShadowedNames; val sAm = ambiguousBlockLocalNames
+        val sND = narrowedDeclaredTypes
         currentLocalTypes = frame.localTypes
         currentLocalDeclTypeNodes = frame.localDeclNodes
         currentShadowedNames = frame.shadowedNames
         ambiguousBlockLocalNames = frame.ambiguousNames
+        narrowedDeclaredTypes = frame.narrowedDeclared
         try { block() } finally {
             currentLocalTypes = sLT; currentLocalDeclTypeNodes = sDN
             currentShadowedNames = sSh; ambiguousBlockLocalNames = sAm
+            narrowedDeclaredTypes = sND
         }
     }
 
@@ -1065,7 +1073,8 @@ class Checker(
             inAsync = if (viaCheckFunctionBody) isAsync else base.inAsync,
             inGen = if (viaCheckFunctionBody) isGenerator else base.inGen,
             inInstanceMember = inInstanceMember,
-            classForThis = classForThis)
+            classForThis = classForThis,
+            narrowedDeclared = base.narrowedDeclared)
         frame.localTypes.putAll(base.localTypes)
         frame.localDeclNodes.putAll(base.localDeclNodes)
         frame.shadowedNames.addAll(base.shadowedNames)
@@ -1159,25 +1168,49 @@ class Checker(
     }
 
     private fun ctaSpineEnter(node: Node) {
-        // (cta-m3e): classify narrowing-DISCARD regions. The legacy nested
-        // IfStatement arm copies currentLocalTypes around the then-branch when
-        // extractNullNarrowing fires (recordings there are discarded on
-        // restore) — the verdict is computed here under the frame maps, at the
-        // same preorder position the legacy wrapper decides it.
+        // (cta-m3i): compute the legacy IfStatement arms' narrowing verdict at
+        // the If's enter under the frame maps (exact, incl. nested ifs).
         if (node is IfStatement && !spineIsDts) {
             val thenId = (node.thenStatement as NodeBase).nodeId
             if (thenId >= 0) {
-                var narrowed = false
+                var narrowed: Pair<String, Type>? = null
                 withCtaFrameLocals(ctaFrames.last()) {
-                    narrowed = extractNullNarrowing(node.expression) != null
+                    narrowed = extractNullNarrowing(node.expression)
                 }
-                if (narrowed) ctaM3DiscardThen.add(thenId)
+                narrowed?.let { ctaM3NarrowThen[thenId] = it }
             }
         }
-        if ((node as NodeBase).nodeId.let { it >= 0 && it in ctaM3DiscardThen }) ctaM3DiscardDepth++
-        val parent = node.parent
+        // (cta-m3i): a registered then node gets the NARROWING frame — the
+        // legacy wrapper's localTypes copy + write + narrowedDeclared entry.
+        // A then-BLOCK additionally copies varTypes (its legacy dispatch goes
+        // InStmt → Block arm → InStatements(varTypes.toMutableMap())); a BARE
+        // then shares varTypes (InStmt passes it through).
+        var ctaM3NarrowFramePushed = false
+        run {
+            val nid = (node as NodeBase).nodeId
+            val narrowing = if (nid >= 0) ctaM3NarrowThen[nid] else null
+            if (narrowing != null) {
+                ctaM3NarrowFramePushed = true
+                val top = ctaFrames.last()
+                val (varName, narrowedType) = narrowing
+                val nd = top.narrowedDeclared.toMutableMap()
+                top.localTypes[varName]?.let { nd[varName] = it }
+                val lt = HashMap(top.localTypes)
+                lt[varName] = narrowedType
+                ctaFrames.addLast(CtaFrame(node,
+                    if (node is Block) top.varTypes.toMutableMap() else top.varTypes,
+                    top.returnType, top.returnTypeNode, top.typeParams,
+                    top.inFn, top.inAsync, top.inGen, top.inInstanceMember,
+                    localTypes = lt, localDeclNodes = top.localDeclNodes,
+                    shadowedNames = top.shadowedNames, ambiguousNames = top.ambiguousNames,
+                    classForThis = top.classForThis,
+                    narrowedDeclared = nd))
+            }
+        }
+        val parent = (node as NodeBase).parent
         // Frame pushes — decided at the BODY/Block enter by its parent kind.
-        if (node is Block) {
+        // (cta-m3i): a narrowing frame claims the node — skip the standard push.
+        if (node is Block && !ctaM3NarrowFramePushed) {
             when (parent) {
                 is FunctionDeclaration -> ctaFrames.addLast(ctaFnBodyFrame(
                     node, parent.parameters, parent.type, parent.typeParameters,
@@ -1285,6 +1318,7 @@ class Checker(
                         top.returnType, top.returnTypeNode, top.typeParams,
                         top.inFn, top.inAsync, top.inGen, top.inInstanceMember,
                 classForThis = top.classForThis,
+                narrowedDeclared = top.narrowedDeclared,
                         localTypes = top.localTypes, localDeclNodes = top.localDeclNodes,
                         shadowedNames = top.shadowedNames, ambiguousNames = top.ambiguousNames))
                 }
@@ -1308,6 +1342,7 @@ class Checker(
                 null, null, emptySet(),
                 top.inFn, top.inAsync, top.inGen, top.inInstanceMember,
                 classForThis = top.classForThis,
+                narrowedDeclared = top.narrowedDeclared,
                 nsSymbol = pushSym,
                 localTypes = top.localTypes, localDeclNodes = top.localDeclNodes,
                 shadowedNames = top.shadowedNames, ambiguousNames = top.ambiguousNames))
@@ -1320,6 +1355,7 @@ class Checker(
                 top.returnType, top.returnTypeNode, top.typeParams,
                 top.inFn, top.inAsync, top.inGen, top.inInstanceMember,
                 classForThis = top.classForThis,
+                narrowedDeclared = top.narrowedDeclared,
                 localTypes = top.localTypes, localDeclNodes = top.localDeclNodes,
                 shadowedNames = top.shadowedNames, ambiguousNames = top.ambiguousNames))
         }
@@ -1374,7 +1410,6 @@ class Checker(
 
     private fun ctaSpineLeave(node: Node) {
         if (ctaFrames.size > 1 && ctaFrames.last().owner === node) ctaFrames.removeLast()
-        if ((node as NodeBase).nodeId.let { it >= 0 && it in ctaM3DiscardThen }) ctaM3DiscardDepth--
     }
 
     /** B72.1: value-scope tracking for mixin-class TS2545 check —
@@ -18895,23 +18930,23 @@ class Checker(
                 // regions (their legacy dispatch is the marked InStatements
                 // arms — the LIST surface).
                 is Block -> if (ctaM3FnBodyAnchorScope(node) != null ||
-                    (ctaM3DiscardDepth == 0 && ctaM3NestedChainOk(p))
+                    ctaM3NestedChainOk(p)
                 ) {
                     ctaM3MarkAnchored(node); ctaM3StmtAnchor(node as Statement, p.statements); true
                 } else false
                 // (cta-m3h1): switch-clause statements — the LIST surface too
                 // (legacy dispatches clause.statements via InStatements).
-                is CaseClause -> if (ctaM3DiscardDepth == 0 && ctaM3NestedChainOk(p)) {
+                is CaseClause -> if (ctaM3NestedChainOk(p)) {
                     ctaM3MarkAnchored(node); ctaM3StmtAnchor(node as Statement, p.statements); true
                 } else false
-                is DefaultClause -> if (ctaM3DiscardDepth == 0 && ctaM3NestedChainOk(p)) {
+                is DefaultClause -> if (ctaM3NestedChainOk(p)) {
                     ctaM3MarkAnchored(node); ctaM3StmtAnchor(node as Statement, p.statements); true
                 } else false
                 // (cta-m3h1): BARE statement positions — the REDUCED InStmt
                 // surface.
                 is IfStatement, is ForStatement, is ForInStatement, is ForOfStatement,
                 is WhileStatement, is DoStatement, is LabeledStatement -> {
-                    val list = if (ctaM3DiscardDepth == 0 && ctaM3NestedChainOk(p)) ctaM3NearestList(node) else null
+                    val list = if (ctaM3NestedChainOk(p)) ctaM3NearestList(node) else null
                     if (list != null) {
                         ctaM3MarkAnchored(node)
                         ctaM3StmtAnchor(node as Statement, list, bareSurface = true)
@@ -18925,7 +18960,7 @@ class Checker(
             // truncated; emission stays legacy-owned) so anchored statements
             // downstream read a legacy-parity localTypes/varTypes state.
             // Skipped inside narrowing-DISCARD regions.
-            if (!anchored && node is VariableStatement && ctaM3DiscardDepth == 0) {
+            if (!anchored && node is VariableStatement) {
                 val list = when (p) {
                     is Block -> p.statements
                     is CaseClause -> p.statements
@@ -87494,6 +87529,14 @@ interface DataView {
             if (name.text in ambiguousBlockLocalNames) return
             if (inferred !== anyType && inferred !== errorType &&
                 !inferred.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) &&
+                // Round 573 (the round-570 B136 discipline, var-decl channel): an
+                // inferred type carrying a FOREIGN (un-inferred callee) TP is our
+                // inference gap — recording it makes downstream verdicts (narrowing,
+                // return checks) depend on WHEN resolution ran (cold spine vs warm
+                // legacy: tsbuildPublic's `packageJsonLookups && forEachKey(...)`
+                // recorded `T | undefined` cold → narrowed to bare T → FP). The
+                // enclosing fn's OWN TPs stay recordable.
+                !typeContainsForeignTypeParam(inferred, typeParams) &&
                 (isFromCall || !inferred.flags.hasAny(TypeFlags.Void))) {
                 // Widen literal types: 42 → number, "hello" → string.
                 // B185: a NON-WIDENING literal (const-narrowed through a literal-union

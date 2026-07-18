@@ -20,6 +20,28 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 573b (2026-07-18) — (cta-m3i) LANDED: narrowed regions anchored via
+NARROWING FRAMES; the discard machinery retires; a SECOND round-570
+order-dependence channel closed.** The legacy narrowing wrapper is a frame:
+verdict at the If's enter (exact under frame maps, nested ifs included),
+then-node pushes localTypes-copy + write + narrowedDeclared entry (new
+CtaFrame field, installed by withCtaFrameLocals); the copy IS the discard
+semantics → recordings + emissions inside narrowed regions correct for
+free; ctaM3DiscardThen/Depth DELETED. The gate caught one drift
+(tsbuildPublic bare-T TS2322), probe-root-caused: the un-annotated VAR-DECL
+recording channel registered a FOREIGN-TP-carrying inferred type under
+cold spine resolution (`packageJsonLookups && forEachKey(...)` →
+`T | undefined` → narrowed to bare T → FP) — fixed at the source with the
+B136 concreteness gate `!typeContainsForeignTypeParam(inferred,
+typeParams)` (own TPs stay recordable). The narrowed-display pin now
+guards the frame write; a nested-if pin verifies verdict exactness.
+Gates: corpus 11,326/0; listAll ×8 identical vs m3h1. The anchored surface
+now includes narrowed regions — remaining legacy-owned in the assignability
+giant: arrows/fn-exprs/objlit-method bodies, checkFlowNoOverlapCondition,
+PropertyDeclaration initializers, and the wrapper's own map evolution.
+NEXT: legacy-arm RETIREMENT for fully-covered scopes (the multiplier
+payoff), or the remaining walkFunctionBodiesInExpr-owned bodies.
+
 **Round 573 (2026-07-18) — (cta-m3h1) LANDED: nested-position emissions join
 the anchor.** Var/Expr/Return statements at nested positions anchor when
 `ctaM3DiscardDepth == 0` and `ctaM3NestedChainOk` (statement Blocks /
