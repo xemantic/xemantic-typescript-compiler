@@ -2297,4 +2297,26 @@ with a session note saying why). Item IDs are stable; session notes reference th
 - Node/tsc/tsgo are NOT currently installed — differential testing (M0 optional) and
   real `@types/node` (M1.3) wait for network.
 - The benchmark project cache lives under `build/bench/` (cheap to rebuild); results
-  TSVs under `bench/` (gitignored, machine-specific).
+  TSVs under `bench/` (gitignored, machine-specific).**Round 589 (2026-07-18) — (ccet-m2) LANDED: the g3 frame skeleton runs
+always-on and INERT — identity gates green.** CcetFrame implements the
+588c/d spec: fn-decl frames (map copies + own-TP interning/constraint
+materialization + populate + the two shadowing calls), class frames at
+ClassDeclaration enters (class TP scope via getDeclaredTypeOfSymbol,
+classSym, the baseResolution sig/type pair computed under the class
+scope), method/ctor frames (static TP-scope juggling with fresh own-TP
+minting, instance `this` registration, superBase threading), objlit
+member frames (the withObjThis semantics — explicit this-param wins),
+arrow/fn-expr frames at the FN node (own-param anyType OR the B246
+contextual variant for FunctionType-annotated var initializers),
+non-declare ModuleDeclaration ns frames (dotted-aware) + declare-module
+DEAD frames, and the If-narrowing/loop-var-shadow scoped overrides with
+restore records. ONE quirk extracted by the identity gate: the Var-arm
+decl recordings are DEFERRED to the m3 anchors (interleaved walk+record,
+the cta template) — a frame-time recording's resolution side effects
+flipped the 17.21 static-method skip-gate on classTypeParametersInStatics
+(bisected in one probe). Gates: corpus 11,341/0; listAll ×8 byte-identical.
+NEXT: (ccet-m3) the per-Call/New-node anchors at their leaves + legacy
+marks + CcetAnchorTest pins + the interleaved recordings, then
+(ccet-retire).
+
+
