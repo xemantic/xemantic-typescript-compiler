@@ -128118,44 +128118,17 @@ interface DataView {
                     // param/var annotations referencing `T` resolve to a TypeParam-with-constraint
                     // rather than errorType. Needed for e.g. `function f<T extends A|B>(p: T) { ... }`
                     // where `p.a(...)` / a `var a: T["a"]` callee must resolve through T's
-                    // constraint. Save/restore keeps the scope local to this body.
-                    val savedFnScope = currentTypeParamScope
-                    val savedFnAst = currentTypeParamAstForOps
-                    val fnTps = stmt.typeParameters
-                    if (!fnTps.isNullOrEmpty()) {
-                        val newScope = currentTypeParamScope?.toMutableMap() ?: mutableMapOf()
-                        val newAst = currentTypeParamAstForOps?.toMutableMap() ?: mutableMapOf()
-                        val fresh = mutableListOf<Pair<TypeParameter, Type.TypeParam>>()
-                        for (tp in fnTps) {
-                            val typeParam = typeParamInternCache.getOrPut(internKey(tp)) {
-                                val p = Type.TypeParam()
-                                p.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
-                                p
-                            }
-                            newScope[tp.name.text] = typeParam
-                            newAst[tp.name.text] = tp
-                            fresh.add(tp to typeParam)
-                        }
-                        currentTypeParamScope = newScope
-                        currentTypeParamAstForOps = newAst
-                        for ((tp, typeParam) in fresh) {
-                            if (typeParam.constraint == null) {
-                                tp.constraint?.let {
-                                    typeParam.constraint = getTypeFromTypeNode(it)
-                                }
-                            }
-                        }
-                    }
+                    // constraint.
                     try {
-                        populateParameterLocalTypes(stmt.parameters)
-                        applyCallTypesBodyLocalShadowing(body.statements, stmt.parameters)
-                        shadowNestedFunctionNames(body.statements)
-                        checkCallTypesInStatements(body.statements, source, fileName)
+                        withInternedTpScope(stmt.typeParameters, withAst = true) {
+                            populateParameterLocalTypes(stmt.parameters)
+                            applyCallTypesBodyLocalShadowing(body.statements, stmt.parameters)
+                            shadowNestedFunctionNames(body.statements)
+                            checkCallTypesInStatements(body.statements, source, fileName)
+                        }
                     } finally {
                         currentLocalTypes = savedLocalTypes
                         currentParamBindingNames = savedParamBindings
-                        currentTypeParamScope = savedFnScope
-                        currentTypeParamAstForOps = savedFnAst
                     }
                 }
             }
@@ -128178,15 +128151,16 @@ interface DataView {
                     (getDeclaredTypeOfSymbol(classSym) as? Type.Interface)?.typeParameters.orEmpty()
                 } else emptyList()
                 val savedClassScope = currentTypeParamScope
-                if (classTypeParams.isNotEmpty()) {
+                val classScopeInstall: MutableMap<String, Type.TypeParam>? = if (classTypeParams.isNotEmpty()) {
                     val newScope = (currentTypeParamScope?.toMutableMap() ?: mutableMapOf())
                     for (tp in classTypeParams) {
                         tp.symbol?.name?.let { newScope[it] = tp }
                     }
-                    currentTypeParamScope = newScope
-                }
+                    newScope
+                } else null
                 val pushedClass = classSym?.also { callWalkerClassStack.addLast(it) }
                 try {
+                    withInstantiationContext(if (classScopeInstall != null) scopeMapper(classScopeInstall) else ambientMapper()) {
                     // 17.19/17.20: Resolve the base class's symbol + heritage type args
                     // once per class. Used by both `super(...)` arg checking (17.19, via
                     // baseSig) and `super.method(...)` arg checking (17.20, via
@@ -128244,11 +128218,10 @@ interface DataView {
                                     // `new List<T>(...)` resolves cleanly and the 17.21 re-resolution
                                     // gate fires for `null` args.
                                     val isStatic = ModifierFlag.Static in member.modifiers
-                                    val savedMethodScope = currentTypeParamScope
-                                    if (isStatic) {
+                                    val methodMapper = if (isStatic) {
                                         val methodTpNodes = member.typeParameters
                                         if (methodTpNodes.isNullOrEmpty()) {
-                                            currentTypeParamScope = savedClassScope
+                                            scopeMapper(savedClassScope)
                                         } else {
                                             val newScope = (savedClassScope?.toMutableMap() ?: mutableMapOf())
                                             for (tpNode in methodTpNodes) {
@@ -128256,10 +128229,11 @@ interface DataView {
                                                 tp.symbol = Symbol(SymbolFlags.TypeParameter, tpNode.name.text)
                                                 newScope[tpNode.name.text] = tp
                                             }
-                                            currentTypeParamScope = newScope
+                                            scopeMapper(newScope)
                                         }
-                                    }
+                                    } else ambientMapper()
                                     try {
+                                        withInstantiationContext(methodMapper) {
                                         populateParameterLocalTypes(member.parameters)
                                         applyCallTypesBodyLocalShadowing(body.statements, member.parameters)
                                         // trailingCommaInHeterogenousArrayLiteral1: type `this` as
@@ -128274,11 +128248,11 @@ interface DataView {
                                             }
                                         }
                                         checkCallTypesInStatements(body.statements, source, fileName)
+                                        }
                                     } finally {
                                         currentLocalTypes = savedLocalTypes
                                         currentParamBindingNames = savedParamBindings
                                         currentSuperBaseType = savedSuperBaseType
-                                        currentTypeParamScope = savedMethodScope
                                     }
                                 }
                             }
@@ -128313,8 +128287,8 @@ interface DataView {
                             else -> {}
                         }
                     }
+                    }
                 } finally {
-                    currentTypeParamScope = savedClassScope
                     if (pushedClass != null) callWalkerClassStack.removeLast()
                 }
             }

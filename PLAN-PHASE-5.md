@@ -20,6 +20,26 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 603 (2026-07-18) — (b2d3) LANDED: the ccet-leaf installer cluster
+(checkCallTypesInStatement) on the bridge.** Three regions converted: the
+fn-decl arm rides `withInternedTpScope(withAst = true)` (its outer
+localTypes/paramBindings try/finally stays hand-rolled around it); the
+class arm's canonical-TP install becomes a conditional
+`scopeMapper(classScopeInstall) : ambientMapper()` region spanning the
+member loop (savedClassScope kept as a val — the static-method branch
+reads it); the 17.21 static-method scope juggle becomes a per-member
+`methodMapper` (pop-to-class-scope / fresh-mint-own-TPs / ambient)
+installed via a nested region inside the member's try. Restore-order
+differs from legacy (region restores scope before the outer finally
+restores localTypes) — independent fields, same final state. Raw ambient
+tpScope writes 10 → 8; ALL remaining are the structurally-hard tail:
+checkConstraintsInStatements (dual-ambient with currentTypeParamDecls),
+pushFunctionTypeParamsScope (push/pop helper crossing call boundaries),
+and the spine frame LIFO sites (restore-at-leave). Gates: corpus
+11,347/0; listAll ×8 byte-identical. NEXT: the tail needs per-shape
+design (or waits on (bN) field-removal planning); alternatively
+INV.5(d2)/INV.6 per queue order.
+
 **Round 602 (2026-07-18) — (b2d2) LANDED: three more installer families on
 the bridge.** checkTpListDefaults (the empty→null shape — note its
 constraints resolve during the BUILD loop under the ambient scope, a
