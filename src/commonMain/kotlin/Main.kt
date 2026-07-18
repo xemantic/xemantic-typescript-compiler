@@ -51,6 +51,9 @@ fun main(args: Array<String>) {
             "--noEmit", "--noemit" -> noEmit = true
             "--listAll", "--listall" -> listAll = true
             "--passTiming", "--passtiming" -> passTiming = true
+            "--partitionCheck", "--partitioncheck" -> {
+                i++; if (i < args.size) PartitionCheck.workers = args[i].toIntOrNull() ?: 0
+            }
             "--project", "-p" -> { i++; if (i < args.size) project = args[i] }
             "--help", "-h" -> { printUsage(); return }
             else -> if (!a.startsWith("-")) project = a
@@ -79,6 +82,7 @@ fun main(args: Array<String>) {
     if (!noEmit) println("emitted: ${result.written.size} output file(s)")
 
     printDiagnostics(result.diagnostics, listAll)
+    PartitionCheck.reportLines.forEach { println(it) }
     println("time:    ${duration.inWholeMilliseconds} ms")
     if (passTiming) PassTiming.dump(::println)
     println(if (result.errorCount == 0) "OK — 0 errors" else "FAILED — ${result.errorCount} error(s)")
@@ -115,6 +119,7 @@ private fun printUsage() {
           --noEmit           type-check only; do not write outputs
           --listAll          print every error (default: first 30) — for run-to-run FP diffing
           --passTiming       print the INV.0 per-pass wall-time table + recompute counters
+          --partitionCheck N run N sequential partition checkers and diff vs the full run (INV.6(6b))
                              + the INV.3(a) globals-lookup conflation classification
           --help, -h         show this help
         """.trimIndent()

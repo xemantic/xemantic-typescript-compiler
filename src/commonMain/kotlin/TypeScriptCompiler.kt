@@ -1474,6 +1474,9 @@ class TypeScriptCompiler {
                     .filter { it.fileName.endsWith(".json") && !it.fileName.endsWith("tsconfig.json") }
                     .associate { it.fileName to it.content })
             diagnostics.addAll(checker.getDiagnostics())
+            if (PartitionCheck.workers > 1) runPartitionEquivalenceCheck(
+                options, parsedSourceFiles.values.toList(), parsed, checker.getDiagnostics(),
+            )
             // Parser-cascade PINS: for files whose full baseline is reemitted by a checker
             // walker (es6ImportNamedImportParsingError_1.ts; bigintArbirtraryIdentifier's
             // badImport*/badExport*.ts), remove the parser's own diagnostics by identity so
@@ -5517,4 +5520,67 @@ private fun positionToLineCharacter(source: String, position: Int): Pair<Int, In
         }
     }
     return line to (position - lineStart + 1)
+}
+
+/**
+ * INV.6(6b): the sequential partition-equivalence harness (opt-in via
+ * [PartitionCheck.workers]). Runs N partition checkers over FRESHLY-BOUND
+ * copies of the parse trees (checker init mutates shared symbols via
+ * mergeSymbolTable — a worker must never reuse an already-checked bind; the
+ * Binder itself never touches the AST, so parse trees are shared), merges
+ * their filtered output, and diffs it against the full run. fileName-null
+ * (program-level) diagnostics are emitted by every worker — deduplicated by
+ * key before the comparison. The report goes to [PartitionCheck.reportLines].
+ */
+private fun runPartitionEquivalenceCheck(
+    options: CompilerOptions,
+    sourceFiles: List<SourceFile>,
+    parsed: ParsedSource,
+    fullDiagnostics: List<Diagnostic>,
+) {
+    fun key(d: Diagnostic) =
+        "${d.fileName}|${d.start}|${d.length}|TS${d.code}|${d.message}"
+    val workers = PartitionCheck.workers
+    val fileNames = sourceFiles.map { it.fileName }
+    val allInput = parsed.files.map { it.fileName }.toSet()
+    val json = parsed.files
+        .filter { it.fileName.endsWith(".json") && !it.fileName.endsWith("tsconfig.json") }
+        .associate { it.fileName to it.content }
+    val merged = mutableListOf<Diagnostic>()
+    for (w in 0 until workers) {
+        val assigned = fileNames.filterIndexed { i, _ -> i % workers == w }.toSet()
+        val binder = Binder(options)
+        val results = sourceFiles.map { binder.bind(it) }
+        val workerChecker = Checker(
+            options, results, isMultiFileSource = parsed.hasExplicitFilenames,
+            assignedFileNames = assigned,
+            allInputFileNames = allInput, jsonModuleContents = json,
+        )
+        merged.addAll(workerChecker.getDiagnostics())
+    }
+    val mergedAdjusted = merged.filter { it.fileName != null } +
+        merged.filter { it.fileName == null }.distinctBy { key(it) }
+    val fullKeys = fullDiagnostics.map { key(it) }.sorted()
+    val mergedKeys = mergedAdjusted.map { key(it) }.sorted()
+    val out = PartitionCheck.reportLines
+    if (fullKeys == mergedKeys) {
+        out.add("partitionCheck(workers=$workers): EQUIVALENT — ${fullKeys.size} diagnostics")
+        return
+    }
+    val fullCounts = fullKeys.groupingBy { it }.eachCount()
+    val mergedCounts = mergedKeys.groupingBy { it }.eachCount()
+    val missing = fullCounts.entries.mapNotNull { (k, c) ->
+        val d = c - (mergedCounts[k] ?: 0); if (d > 0) k to d else null
+    }
+    val extra = mergedCounts.entries.mapNotNull { (k, c) ->
+        val d = c - (fullCounts[k] ?: 0); if (d > 0) k to d else null
+    }
+    out.add(
+        "partitionCheck(workers=$workers): DIVERGED — full=${fullKeys.size} merged=${mergedKeys.size} " +
+            "missing=${missing.sumOf { it.second }} extra=${extra.sumOf { it.second }}"
+    )
+    missing.take(25).forEach { (k, c) -> out.add("  MISSING x$c: $k") }
+    if (missing.size > 25) out.add("  ... ${missing.size - 25} more missing keys")
+    extra.take(25).forEach { (k, c) -> out.add("  EXTRA   x$c: $k") }
+    if (extra.size > 25) out.add("  ... ${extra.size - 25} more extra keys")
 }

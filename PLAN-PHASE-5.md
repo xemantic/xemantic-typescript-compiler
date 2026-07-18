@@ -20,6 +20,25 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 606 (2026-07-18) — (INV.6(6b)) LANDED + MEASURED CLEAN: partition
+equivalence holds on ALL 8 PROFILES.** The opt-in `--partitionCheck N`
+CLI mode (PartitionCheck global toggle, the PassTiming pattern; harness
+in TypeScriptCompiler.kt) runs N sequential partition checkers over
+FRESHLY-BOUND copies of the shared parse trees — fresh bind per worker
+is LOAD-BEARING: checker init mutates shared symbols via
+mergeSymbolTable (the documented double-merge declaration corruption),
+while the Binder itself never touches the AST (verified: all its
+mutations are on its own fresh Symbols), so parse trees share safely.
+Merged partition output (fileName-null program-level diagnostics
+deduped by key — every worker emits them) is diffed against the full
+run. RESULT: EQUIVALENT on all 8 tsc-source profiles at workers=2, and
+at workers=4 on the two stress profiles (compiler 46, harness 94
+diagnostics — byte-identical merges). The rounds-566..591
+order-dependence fixes evidently closed the cross-file spine-state
+channels: the (6b) divergence worklist is EMPTY and (6c) — the real
+coroutine driver — is unblocked. Gates: corpus 11,351/0 (harness inert
+at default workers=0). NEXT: (6c).
+
 **Round 605 (2026-07-18) — (INV.6(6a)) LANDED: the spine partition seam +
 the sequential-equivalence pin.** The dormant `assignedFileNames` output
 filter (CheckerPool-era) becomes the Phase-0 partition seam: both spine
@@ -2079,10 +2098,9 @@ interrupt the arc).
   - [x] **(6a) The spine partition seam** — DONE round 605: `assignedFileNames`
     gates both spine per-file loops; sequential-equivalence contract pinned by
     SpinePartitionEquivalenceTest.
-  - [ ] **(6b) Profile-scale equivalence A/B.** Run partitioned checkers
-    (2-way split, sequentially) on the 8 tsc-source profiles via a scratch
-    driver; diff merged output vs the sequential run. Each divergence is a
-    cross-file spine-state leak (order-dependence bug) — fix before threading.
+  - [x] **(6b) Profile-scale equivalence A/B** — DONE round 606:
+    `--partitionCheck N` harness; EQUIVALENT on all 8 profiles (w=2) + the
+    two stress profiles (w=4). Zero divergences — (6c) unblocked.
   - [ ] **(6c) The parallel driver.** Coroutine workers (Default dispatcher,
     JVM), deterministic partition (file order round-robin or size-balanced),
     merge through the existing stable diagnostic sort; CLI `--workers N`
