@@ -832,6 +832,152 @@ class Checker(
         return newScope to newAst
     }
 
+    /** (ccet-m3): nodeIds of Call/New/TaggedTemplate nodes the spine
+     *  anchored, per file — the legacy emitters' truncation marks. */
+    private val ccetM3Anchored = HashMap<String, HashSet<Int>>()
+
+    private fun ccetM3MarkAnchored(n: Node) {
+        val id = (n as NodeBase).nodeId
+        if (id >= 0) ccetM3Anchored.getOrPut(spineFileName) { HashSet() }.add(id)
+    }
+
+    private fun ccetM3IsAnchored(n: Node, fileName: String): Boolean {
+        val id = (n as NodeBase).nodeId
+        return id >= 0 && ccetM3Anchored[fileName]?.contains(id) == true
+    }
+
+    /** (ccet-m3): does the legacy ccet walk REACH [node]? Per-edge precision
+     *  over the legacy walkers' recursion. Unreached (fail closed):
+     *  ForIn/ForOf initializers AND iterable expressions, switch CASE
+     *  expressions, EnumDeclaration member initializers, ExportAssignment,
+     *  decorators, computed member names, ClassExpression HERITAGE and
+     *  member param defaults, class ACCESSOR param defaults. Declare-module
+     *  subtrees are handled by the frame `dead` flag, not here. */
+    private fun ccetM3ChainOk(start: Node): Boolean {
+        var cur: Node = start
+        while (true) {
+            val parent = (cur as NodeBase).parent ?: return false
+            when (parent) {
+                is SourceFile -> return true
+                is ModuleBlock -> cur = parent
+                is ModuleDeclaration -> cur = parent
+                is Block -> cur = parent
+                is CaseClause ->
+                    if (parent.statements.any { it === cur }) cur = parent else return false
+                is DefaultClause -> cur = parent
+                is SwitchStatement ->
+                    if (cur === parent.expression || cur is CaseClause || cur is DefaultClause)
+                        cur = parent else return false
+                is TryStatement -> cur = parent
+                is CatchClause -> cur = parent
+                is IfStatement -> cur = parent
+                is WhileStatement -> cur = parent
+                is DoStatement -> cur = parent
+                is LabeledStatement -> cur = parent
+                is WithStatement -> cur = parent
+                is ForStatement -> cur = parent
+                is ForInStatement ->
+                    if (cur === parent.statement) cur = parent else return false
+                is ForOfStatement ->
+                    if (cur === parent.statement) cur = parent else return false
+                is ThrowStatement, is ReturnStatement, is ExpressionStatement -> cur = parent
+                is VariableDeclaration ->
+                    if (cur === parent.initializer) cur = parent else return false
+                is VariableDeclarationList -> cur = parent
+                is VariableStatement -> cur = parent
+                is FunctionDeclaration ->
+                    if (cur === parent.body || parent.parameters.any { it === cur }) cur = parent
+                    else return false
+                is Parameter ->
+                    if (cur === parent.initializer) cur = parent else return false
+                is MethodDeclaration -> {
+                    val owner = (parent as NodeBase).parent
+                    when {
+                        cur === parent.body ->
+                            if (owner is ClassDeclaration || owner is ClassExpression ||
+                                owner is ObjectLiteralExpression) cur = parent else return false
+                        parent.parameters.any { it === cur } ->
+                            if (owner is ClassDeclaration) cur = parent else return false
+                        else -> return false
+                    }
+                }
+                is Constructor -> {
+                    val owner = (parent as NodeBase).parent
+                    when {
+                        cur === parent.body ->
+                            if (owner is ClassDeclaration || owner is ClassExpression) cur = parent
+                            else return false
+                        parent.parameters.any { it === cur } ->
+                            if (owner is ClassDeclaration) cur = parent else return false
+                        else -> return false
+                    }
+                }
+                is GetAccessor -> {
+                    val owner = (parent as NodeBase).parent
+                    if (cur === parent.body &&
+                        (owner is ClassDeclaration || owner is ClassExpression ||
+                            owner is ObjectLiteralExpression)) cur = parent else return false
+                }
+                is SetAccessor -> {
+                    val owner = (parent as NodeBase).parent
+                    if (cur === parent.body &&
+                        (owner is ClassDeclaration || owner is ClassExpression ||
+                            owner is ObjectLiteralExpression)) cur = parent else return false
+                }
+                is PropertyDeclaration -> {
+                    val owner = (parent as NodeBase).parent
+                    if (cur === parent.initializer &&
+                        (owner is ClassDeclaration || owner is ClassExpression)) cur = parent
+                    else return false
+                }
+                is ClassDeclaration -> cur = parent
+                is ClassExpression -> cur = parent
+                is HeritageClause -> {
+                    // Class DECLARATION heritage is walked; ClassExpression's is not.
+                    if ((parent as NodeBase).parent is ClassDeclaration) cur = parent else return false
+                }
+                is ExpressionWithTypeArguments ->
+                    if (cur === parent.expression) cur = parent else return false
+                // Expression edges.
+                is CallExpression ->
+                    if (cur === parent.expression || parent.arguments.any { it === cur })
+                        cur = parent else return false
+                is NewExpression ->
+                    if (cur === parent.expression || parent.arguments?.any { it === cur } == true)
+                        cur = parent else return false
+                is BinaryExpression -> cur = parent
+                is ConditionalExpression -> cur = parent
+                is ParenthesizedExpression, is PrefixUnaryExpression, is PostfixUnaryExpression -> cur = parent
+                is PropertyAccessExpression ->
+                    if (cur === parent.expression) cur = parent else return false
+                is ElementAccessExpression -> cur = parent
+                is ArrayLiteralExpression -> cur = parent
+                is ObjectLiteralExpression -> cur = parent
+                is PropertyAssignment ->
+                    if (cur === parent.initializer) cur = parent else return false
+                is ShorthandPropertyAssignment ->
+                    if (cur === parent.objectAssignmentInitializer) cur = parent else return false
+                is SpreadAssignment ->
+                    if (cur === parent.expression) cur = parent else return false
+                is ArrowFunction ->
+                    if (cur === parent.body || parent.parameters.any { it === cur }) cur = parent
+                    else return false
+                is FunctionExpression ->
+                    if (cur === parent.body || parent.parameters.any { it === cur }) cur = parent
+                    else return false
+                is TemplateSpan ->
+                    if (cur === parent.expression) cur = parent else return false
+                is TemplateExpression -> cur = parent
+                is TaggedTemplateExpression -> cur = parent
+                is AsExpression, is TypeAssertionExpression, is SatisfiesExpression,
+                is NonNullExpression, is SpreadElement, is AwaitExpression,
+                is YieldExpression, is DeleteExpression, is TypeOfExpression,
+                is VoidExpression, is CommaListExpression -> cur = parent
+                else -> return false
+            }
+        }
+    }
+
     private fun ccetSpineEnter(node: Node) {
         if (spineIsDts || spineIsJsLike) return
         val top = ccetFrames.last()
@@ -1116,12 +1262,38 @@ class Checker(
             }
             for (nm in r.addedBindings) r.frame.paramBindings.remove(nm)
         }
-        // NOTE (ccet-m2): the Var-arm ORDERED recordings are DEFERRED to the
-        // m3 anchors (interleaved walk+record, the cta template) — a
-        // frame-time recording's resolution side effects flipped the 17.21
-        // static-method skip-gate on classTypeParametersInStatics (the
-        // recording resolves the annotation earlier than legacy under the
-        // static frame's ambient; measured by the m2 identity gate).
+        // (ccet-m3): the per-call-node anchors — Call/New/TaggedTemplate
+        // emissions run from the spine at the node's OWN leave (probe-safe)
+        // under the frame ambient; the legacy arms truncate via the recorded
+        // set. The round-589 recording-side-effect flip is MOOT now: the
+        // legacy verdict is truncated, and the anchor's own verdict computes
+        // deterministically under the frame (the static-method skip-gate
+        // sees scope-null → errorType → skips, matching the baseline).
+        if (node is CallExpression || node is NewExpression || node is TaggedTemplateExpression) {
+            val topF = ccetFrames.last()
+            if (!topF.dead && ccetM3ChainOk(node)) {
+                ccetM3MarkAnchored(node)
+                withCcetFrameAmbient(topF) {
+                    when (node) {
+                        is CallExpression -> checkSingleCallExpressionTypes(node, spineSource, spineFileName)
+                        is NewExpression -> checkSingleNewExpressionTypes(node, spineSource, spineFileName)
+                        is TaggedTemplateExpression -> checkSingleTaggedTemplateTypes(node, spineSource, spineFileName)
+                    }
+                }
+            }
+        }
+        // (ccet-m3): the Var-arm ORDERED recordings at each decl's leave —
+        // the spine's per-node order reproduces the legacy interleave for
+        // free (a call in decl k+1's initializer leaves BEFORE decl k+1's
+        // own leave, and AFTER decl k's).
+        if (node is VariableDeclaration) {
+            val vdl = (node as NodeBase).parent
+            val vs = (vdl as? NodeBase)?.parent
+            if (vdl is VariableDeclarationList && vs is VariableStatement) {
+                val frame = ccetFrames.last()
+                if (!frame.dead) withCcetFrameAmbient(frame) { ccetApplyDeclRecordings(node) }
+            }
+        }
         // Frame pops.
         if (ccetFrames.size > 1 && ccetFrames.last().owner === node) {
             ccetFrames.removeLast()
@@ -1130,9 +1302,8 @@ class Checker(
 
     /** The legacy VariableStatement arm's per-decl recordings: callable-
      *  annotated locals, unions of callables, literal unions, and the
-     *  callable-shadow anyType bail. Consumed by the m3 anchors (interleaved
-     *  walk+record — deferred there per the m2 identity-gate finding). */
-    @Suppress("unused")
+     *  callable-shadow anyType bail. Applied at decl leaves for the m3
+     *  anchors (the spine's per-node order = the legacy interleave). */
     private fun ccetApplyDeclRecordings(decl: VariableDeclaration) {
         val nm = decl.name as? Identifier
         val ann = decl.type
@@ -90798,6 +90969,21 @@ interface DataView {
                         }
                     }
                 }
+                // Round 590: a CLASS-VALUE (constructor) object carries its TPs
+                // in CONSTRUCT-sig RETURNS (`() => NodeObject` → the ctor object
+                // whose construct sig returns NodeObject<TKind> — the services
+                // objectAllocator shape), NOT Reference args — so the symboled
+                // exclusion above hid them and the ccet per-node interleaving
+                // flipped the verdict on cache warmth. Walk construct-sig
+                // returns regardless of the symbol gate (members stay excluded
+                // for named types — the broad-walk concern); suppression-only.
+                t.constructSignatures?.forEach { cs ->
+                    val sigOwn = cs.typeParameters?.mapNotNull { it.symbol?.name }?.toSet().orEmpty()
+                    val names = if (sigOwn.isEmpty()) ownTpNames else ownTpNames + sigOwn
+                    cs.resolvedReturnType?.let { rt ->
+                        if (typeContainsForeignTypeParam(rt, names, depth + 1)) return true
+                    }
+                }
                 false
             }
             else -> false
@@ -128235,13 +128421,17 @@ interface DataView {
     private fun checkCallTypesInExpr(expr: Expression, source: String, fileName: String) {
         when (expr) {
             is CallExpression -> {
+                val ccetM3Mk = if (ccetM3IsAnchored(expr, fileName)) diagnostics.size else -1
                 checkSingleCallExpressionTypes(expr, source, fileName)
+                if (ccetM3Mk >= 0) while (diagnostics.size > ccetM3Mk) diagnostics.removeAt(diagnostics.size - 1)
                 // Recurse into callee and arguments
                 checkCallTypesInExpr(expr.expression, source, fileName)
                 for (arg in expr.arguments) checkCallTypesInExpr(arg, source, fileName)
             }
             is NewExpression -> {
+                val ccetM3Mk = if (ccetM3IsAnchored(expr, fileName)) diagnostics.size else -1
                 checkSingleNewExpressionTypes(expr, source, fileName)
+                if (ccetM3Mk >= 0) while (diagnostics.size > ccetM3Mk) diagnostics.removeAt(diagnostics.size - 1)
                 checkCallTypesInExpr(expr.expression, source, fileName)
                 expr.arguments?.forEach { checkCallTypesInExpr(it, source, fileName) }
             }
@@ -128379,7 +128569,9 @@ interface DataView {
                 for (span in expr.templateSpans) checkCallTypesInExpr(span.expression, source, fileName)
             }
             is TaggedTemplateExpression -> {
+                val ccetM3Mk = if (ccetM3IsAnchored(expr, fileName)) diagnostics.size else -1
                 checkSingleTaggedTemplateTypes(expr, source, fileName)
+                if (ccetM3Mk >= 0) while (diagnostics.size > ccetM3Mk) diagnostics.removeAt(diagnostics.size - 1)
                 checkCallTypesInExpr(expr.tag, source, fileName)
                 // Also recurse into substitutions so nested calls/errors surface.
                 (expr.template as? TemplateExpression)?.let { tmpl ->
