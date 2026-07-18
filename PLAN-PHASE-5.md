@@ -1723,8 +1723,39 @@ interrupt the arc).
       tier 1 (statements) DONE round 579 ((cpa-m2a): fn-decl/method/ctor/
       accessor frames, ns frames, loop-var overrides, per-decl-leave
       recordings, the immediate-position fingerprint gate); REMAINING
-      (cpa-m2b): tier 2 — arrow/fn-expr body frames + the contextualType
-      downward channel (w3 template) + objlit-method/class-expression bodies.
+      (cpa-m2b): tier 2 — DESIGN COMPLETE (scouted round 579b, in-code):
+      (i) arrow Block-body frames: 3-map copy + populate + shadowing +
+      ambiguous + contextual param registration from ctx-at-arrow;
+      ect/inStatic PRESERVED through arrows; (ii) fn-expr body frames:
+      3-map copy + the fn-expr's OWN param semantics (annotated -> set,
+      UN-annotated -> REMOVE from localTypes — not populate!) +
+      destructured-name collection + contextual registration + shadowing +
+      ambiguous; body walks with ect = NULL; (iii) ClassExpression member
+      bodies: the tier-1 class-member frames extended to ClassExpression
+      owners with a per-visit synthetic anon-class type (display
+      "(Anonymous class)" — fingerprint-equal across fresh synthetics);
+      (iv) ctx PULL-derivation cpaCtxAt(node): STOP-null at any statement
+      edge; DEFINE at call-arg (the argCtxTypes computation: single-sig +
+      B86.1b inference mapper + literal mapper; multi-sig strictSelect /
+      every-overload-callable), objlit PropertyAssignment initializer
+      (propCtx from ctx(O).members, non-any/error else null), SpreadAssignment
+      (null), arrow EXPRESSION body (bodyCtx = single-sig return); INHERIT
+      through paren/conditional/binary/array-literal/template-span/as/
+      nonnull/prefix/postfix/await/spread AND NewExpression args (a legacy
+      quirk: new's args inherit the OUTER ctx — no clearing); ctx is
+      provably NULL at every statement dispatch (arrow Block bodies get
+      bodyCtx=null; fn-exprs null explicitly); (v) the tier-2 chain test
+      needs an expression-edge REACH classifier (the spineUResExprEdge
+      pattern) — legacy expr-walk quirks: TaggedTemplate walks the TAG only
+      (spans unreached), ForStatement INITIALIZER unreached (condition +
+      incrementor reached), ForIn/ForOf initializer AND iterable expression
+      unreached (ForOf's getTypeOfExpression is not a walk), decorators
+      unreached, objlit METHOD bodies unreached (else -> {}),
+      ShorthandPropertyAssignment unreached, CommaList unreached,
+      arrow/fn-expr PARAM DEFAULTS unreached; statement-edge expression
+      roots: Var initializers / ExprStmt / Return / If condition / While-Do
+      condition / Switch subject + case exprs / Throw / With /
+      ExportAssignment / Enum member inits / Class heritage + members.
       (the cta-m2b/m2c pattern — expect quirk-extraction cycles; the known
       quirks from the g1c design: GetAccessor bodies have NO scope copy,
       enclosingClassType is KEPT through arrows / nulled at fn-decl+fn-expr
