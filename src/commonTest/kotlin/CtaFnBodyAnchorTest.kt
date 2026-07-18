@@ -290,6 +290,25 @@ class CtaFnBodyAnchorTest {
     }
 
     @Test
+    fun `class property initializer mismatch emits exactly once`() {
+        // (cta-m3k): the member loop's checkPropertyInitAssignability anchors
+        // at the PropertyDeclaration's spine enter with the member-loop
+        // ambient (classForThis, class TP decls) installed locally.
+        val n = countTs2322("""
+            class C {
+                p: string = 1;
+            }
+        """)
+        assert(n == 1) { "expected exactly 1 TS2322, got $n" }
+        val nStatic = countTs2322("""
+            class D {
+                static q: number = "s";
+            }
+        """)
+        assert(nStatic == 1) { "static: expected exactly 1 TS2322, got $nStatic" }
+    }
+
+    @Test
     fun `narrowing-discarded then-branch recording adds no emissions`() {
         // (cta-m3e) negative control: the then-branch runs under the legacy
         // narrowing wrapper (recordings discarded — the spine reproduction

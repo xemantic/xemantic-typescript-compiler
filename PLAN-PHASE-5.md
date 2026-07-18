@@ -20,6 +20,19 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 574b (2026-07-18) — (cta-m3k) LANDED: class property initializers
+join the anchor.** checkPropertyInitAssignability dispatches at the
+PropertyDeclaration's spine enter (the anchor generalizes to Node; the
+member-loop ambient — classForThis, class TP decls, classTypeParams —
+installs locally over the enclosing frame); the legacy member arm truncates
+via the recorded set. Pin +1 (instance + static, probe-verified firing).
+Gates: corpus 11,327/0; listAll ×8 identical vs m3j. Remaining
+legacy-owned in the giant: the checkFunctionBody body-level walkers
+(checkForInNumericForRedeclare, checkFlatArrayDepthParamAssignments), the
+ctor/getter/setter/method dispatch shells' non-statement bits, and the
+emit-twice map-evolution runs. NEXT: those body-level walkers (small), or
+the INV.4(e) pivot to the other two giants.
+
 **Round 574 (2026-07-18) — (cta-m3j) LANDED: the B417 if-condition TS2367
 joins the anchor — EVERY per-statement emission of the legacy assignability
 dispatchers is now spine-anchored across the reproduced scopes.**

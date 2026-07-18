@@ -888,7 +888,7 @@ class Checker(
     }
 
 
-    private fun ctaM3StmtAnchor(stmt: Statement, scopeStatements: List<Statement>, recordOnly: Boolean = false, bareSurface: Boolean = false) {
+    private fun ctaM3StmtAnchor(stmt: Node, scopeStatements: List<Statement>, recordOnly: Boolean = false, bareSurface: Boolean = false) {
         val frame = ctaFrames.last()
         // (cta-m3e): recordOnly reproduces the legacy NESTED dispatch's map
         // evolution for a non-anchored VariableStatement — the map writes are
@@ -938,6 +938,33 @@ class Checker(
                             val init = decl.initializer
                             if (init is BinaryExpression && init.operator == SyntaxKind.Equals) {
                                 checkAssignmentExpression(init, spineSource, spineFileName, frame.varTypes, frame.typeParams)
+                            }
+                        }
+                    }
+                } else if (stmt is PropertyDeclaration) {
+                    // (cta-m3k): the class member loop's initializer check —
+                    // member-loop ambient (classForThis per static/instance,
+                    // class TP decls merged, classTypeParams threaded) installed
+                    // locally; the enclosing frame supplies the maps.
+                    val cls = (stmt as NodeBase).parent as? ClassDeclaration
+                    if (cls != null) {
+                        val init = stmt.initializer
+                        val ann = stmt.type
+                        val pn = stmt.name
+                        if (init != null && ann != null && pn is Identifier) {
+                            val sThis2 = currentClassForThis
+                            val sDecls2 = currentTypeParamDecls
+                            currentClassForThis = if (ModifierFlag.Static in stmt.modifiers) null else cls
+                            if (!cls.typeParameters.isNullOrEmpty()) {
+                                val merged = sDecls2.toMutableMap()
+                                for (tp in cls.typeParameters) merged[tp.name.text] = tp
+                                currentTypeParamDecls = merged
+                            }
+                            try {
+                                checkPropertyInitAssignability(pn, ann, init, spineSource, spineFileName, collectTypeParamNames(cls.typeParameters))
+                            } finally {
+                                currentClassForThis = sThis2
+                                currentTypeParamDecls = sDecls2
                             }
                         }
                     }
@@ -18925,6 +18952,16 @@ class Checker(
     /** Per-node dispatch, preorder position (before children). */
     private fun spineEnterNode(node: Node) {
         ctaSpineEnter(node)
+        // (cta-m3k): class property initializers — members, not statements.
+        if (node is PropertyDeclaration && !spineIsDts) {
+            val cls = (node as NodeBase).parent
+            if (cls is ClassDeclaration && ctaM3NestedChainOk((cls as NodeBase).parent ?: cls)) {
+                ctaM3NearestList(node)?.let { list ->
+                    ctaM3MarkAnchored(node)
+                    ctaM3StmtAnchor(node, list)
+                }
+            }
+        }
         if ((node is VariableStatement || node is ExpressionStatement || node is ReturnStatement || node is IfStatement) && !spineIsDts) {
             val p = (node as NodeBase).parent
             val anchored = when (p) {
@@ -83719,7 +83756,10 @@ interface DataView {
                                 if (init != null && typeAnnotation != null) {
                                     val propName = member.name
                                     if (propName is Identifier) {
+                                        // (cta-m3k): truncated when spine-anchored.
+                                        val ctaM3PMk = if (ctaM3IsAnchoredStmt(member, fileName)) diagnostics.size else -1
                                         checkPropertyInitAssignability(propName, typeAnnotation, init, source, fileName, classTypeParams)
+                                        if (ctaM3PMk >= 0) while (diagnostics.size > ctaM3PMk) diagnostics.removeAt(diagnostics.size - 1)
                                     }
                                 }
                             }
