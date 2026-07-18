@@ -20,6 +20,20 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 586 (2026-07-18) — (cta-retire) LANDED: the checkTypeAssignability
+LEGACY PASS IS RETIRED — both migrated giants are off emit-twice in one
+day.** Same shape as round 585: the experiment's only failures were the
+cta audit scaffolding's own tests; the pass dispatch + driver +
+ctaAuditLegacy/ctaAuditSpine/ctaAuditEnabled + the fingerprint fns +
+Inv4CtaAuditTest are deleted (−5 tests; CtaFnBodyAnchorTest + the corpus
+remain the guards). The cta/cpa m3 truncation marks in the surviving
+walkers are dead code (only the retired drivers reached marked
+statements) — queued for a cleanup sweep with a listAll gate. Gates:
+corpus 11,341/0 (447 XMLs); listAll ×8 byte-identical. Wall-time deltas
+land via the CI bench rows for rounds 585/586. NEXT: the g3
+(checkCallExpressionTypes) migration (m1..m3 + retire — the last giant),
+or the dead-marks cleanup sweep.
+
 **Round 585 (2026-07-18) — (cpa-retire) LANDED: THE checkPropertyAccess
 LEGACY PASS IS RETIRED — the first giant sheds its emit-twice runs.** The
 `pass("checkPropertyAccess")` dispatch is gone; every cpa emission runs
@@ -1903,9 +1917,9 @@ interrupt the arc).
     - [x] **(cpa-m3…) Emission moves** — COMPLETE rounds 581-583; **(cpa-retire)
       LANDED round 585: the checkPropertyAccess legacy pass is DELETED** (the
       first giant off emit-twice; audit scaffolding removed with it).
-    - [ ] **(cta-retire) After cpa no longer consumes cta residue: retire
-      the cta legacy emit-twice runs for fully-covered scopes** (the
-      multiplier payoff — blocked until the residue channel is closed).
+    - [x] **(cta-retire) LANDED round 586: the checkTypeAssignability legacy
+      pass is DELETED** (both migrated giants off emit-twice; audit
+      scaffolding removed).
   - [ ] **INV.4(f) The two unlocked soundness wins.** Once one authoritative
     walk state exists: the per-node expression-type cache (594,779 calls over
     ~221,844 distinct nodes = ×2.6 recompute), and flow narrowing folded into
