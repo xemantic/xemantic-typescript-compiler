@@ -20,6 +20,33 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 580 (2026-07-18) — (cpa-m2b) LANDED: tier 2 completes the cpa frame
+skeleton — 7/7 audit-green on the FIRST run (the round-579b design scout
+paid off).** The chain test became a unified per-EDGE reach walker
+(statement + expression edges with the legacy walkers' per-arm precision:
+TaggedTemplate tag-only, for-INIT / ForIn-ForOf iterables / decorators /
+objlit methods / shorthand / CommaList / param defaults fail closed);
+arrow Block-body frames (3-map copy, populate → shadowing/ambiguous → ctx
+param registration, ect/inStatic preserved) and fn-expr body frames (the
+OWN param loop: annotated → set, UN-annotated → REMOVE + destructured-name
+collection; ctx registration BEFORE shadowing — the asymmetric legacy
+orders; ect = null) replace the marker frames; class-member frames extend
+to ClassExpression owners via the per-visit synthetic anon-class type;
+`cpaCtxAt` pull-derives contextualType over the ctx edges (DEFINE at
+call-arg via the extracted-and-SHARED `cpaComputeArgCtxTypes` /
+objlit-prop / spread / arrow-expr-body; INHERIT through New's args and a
+Call's callee — the legacy quirks; STOP-null at statements), computed
+UNDER THE TOP AMBIENT BEFORE the frame push (cpaFrames.last() supplies the
+classType at the fn's own position); `cpaEctAt` handles the two
+ect-changing pure-expression edges (class-member PropertyDeclaration
+initializers; ClassExpression heritage → null vs ClassDeclaration heritage
+→ outer). The audit now asserts FULL BIDIRECTIONAL key equality
+(mismatches empty + legacy-only empty). Pins +1 net (Inv4CpaAuditTest → 7,
+two rewritten). Gates: corpus 11,342/0; listAll ×8 identical (flag off in
+production). NEXT: (cpa-m3) emission moves scope-by-scope with the
+recorded-set truncation template — the audit skeleton is the always-on
+frame base once the first emission moves.
+
 **Round 579 (2026-07-18) — (cpa-m2a) LANDED: the SPINE-side statement-TIER
 frame skeleton for the g2 migration, audit-verified.** Dead machinery under
 `cpaAuditEnabled`: `CpaFrame`s reproduce the legacy cpa dispatchers'
@@ -1719,7 +1746,9 @@ interrupt the arc).
     - [x] **(cpa-m2-prep) Close the residue channel legacy-side** — DONE
       round 578: per-file `currentLocalTypes` reset in the cpa driver + the
       element-access own-recording; corpus green + listAll ×8 byte-identical.
-    - [ ] **(cpa-m2) Spine-side frame skeleton** audited against (cpa-m1) —
+    - [x] **(cpa-m2) Spine-side frame skeleton** — COMPLETE round 580 (tier 2:
+      unified edge-reach walker, arrow/fn-expr/ClassExpression frames,
+      cpaCtxAt/cpaEctAt; full bidirectional audit equality).
       tier 1 (statements) DONE round 579 ((cpa-m2a): fn-decl/method/ctor/
       accessor frames, ns frames, loop-var overrides, per-decl-leave
       recordings, the immediate-position fingerprint gate); REMAINING

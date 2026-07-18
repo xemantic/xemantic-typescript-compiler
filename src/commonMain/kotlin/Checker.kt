@@ -752,44 +752,135 @@ class Checker(
             classType = null, inStatic = false))
     }
 
-    /** (cpa-m2a): is [stmt] reached by the legacy cpa dispatchers through
-     *  positions the tier-1 frames reproduce? The cpa InStmt dispatcher is a
-     *  single function (no bare/list split — fn/class at bare positions ARE
-     *  dispatched, unlike cta); disqualified: arrow/fn-expr bodies, objlit
-     *  method bodies (tier 2), and a DOTTED namespace's inner declaration
-     *  (the legacy ModuleDeclaration arm walks only ModuleBlock bodies, so
-     *  `namespace A.B` inner statements are legacy-unreached). */
+    /** (cpa-m2a/m2b): is [stmt] reached by the legacy cpa dispatchers? The
+     *  walk climbs (child, parent) EDGES with per-arm precision mirroring the
+     *  legacy walkers' actual recursion — statement positions (the cpa InStmt
+     *  dispatcher is a single function: fn/class at bare positions ARE
+     *  dispatched, unlike cta) AND expression positions (tier 2: the expr
+     *  walker's per-arm edge quirks — TaggedTemplate walks the TAG only,
+     *  for-INIT / ForIn-ForOf iterables / decorators / objlit methods /
+     *  shorthand / CommaList / param defaults are all UNREACHED). A dotted
+     *  namespace's inner declaration is legacy-unreached (the
+     *  ModuleDeclaration arm walks only ModuleBlock bodies). Fails CLOSED on
+     *  unknown edges. */
     private fun cpaM2ChainOk(stmt: Node): Boolean {
-        var cur: Node? = (stmt as NodeBase).parent
-        while (cur != null) {
-            when (cur) {
+        var cur: Node = stmt
+        while (true) {
+            val parent = (cur as NodeBase).parent ?: return false
+            when (parent) {
                 is SourceFile -> return true
-                is ModuleBlock -> cur = (cur as NodeBase).parent
+                is ModuleBlock -> cur = parent
                 is ModuleDeclaration -> {
-                    val p = (cur as NodeBase).parent
+                    val p = (parent as NodeBase).parent ?: return false
                     if (p is ModuleDeclaration) return false
-                    cur = p
+                    cur = parent
                 }
-                is Block -> {
-                    when (val owner = (cur as NodeBase).parent) {
-                        is FunctionDeclaration -> cur = (owner as NodeBase).parent
-                        is MethodDeclaration, is Constructor, is GetAccessor, is SetAccessor -> {
-                            val cls = (owner as NodeBase).parent
-                            if (cls !is ClassDeclaration) return false
-                            cur = (cls as NodeBase).parent
-                        }
-                        is ArrowFunction, is FunctionExpression -> return false
-                        else -> cur = (cur as NodeBase).parent
-                    }
+                is Block -> cur = parent
+                is CaseClause -> cur = parent
+                is DefaultClause -> cur = parent
+                is SwitchStatement -> cur = parent
+                is TryStatement -> cur = parent
+                is CatchClause -> cur = parent
+                is IfStatement -> cur = parent
+                is WhileStatement -> cur = parent
+                is DoStatement -> cur = parent
+                is LabeledStatement -> cur = parent
+                is WithStatement -> cur = parent
+                is ForStatement ->
+                    if (cur === parent.initializer) return false else cur = parent
+                is ForInStatement ->
+                    if (cur === parent.statement) cur = parent else return false
+                is ForOfStatement ->
+                    if (cur === parent.statement) cur = parent else return false
+                is ThrowStatement, is ReturnStatement, is ExpressionStatement,
+                is ExportAssignment -> cur = parent
+                // Function-like owners of a body Block (cur is the body).
+                is FunctionDeclaration ->
+                    if (cur === parent.body) cur = parent else return false
+                is MethodDeclaration -> {
+                    if (cur !== parent.body) return false
+                    val cls = (parent as NodeBase).parent
+                    if (cls !is ClassDeclaration && cls !is ClassExpression) return false
+                    cur = parent
                 }
-                is IfStatement, is ForStatement, is ForInStatement, is ForOfStatement,
-                is WhileStatement, is DoStatement, is SwitchStatement,
-                is CaseClause, is DefaultClause, is TryStatement, is CatchClause,
-                is LabeledStatement, is WithStatement -> cur = (cur as NodeBase).parent
+                is Constructor -> {
+                    if (cur !== parent.body) return false
+                    val cls = (parent as NodeBase).parent
+                    if (cls !is ClassDeclaration && cls !is ClassExpression) return false
+                    cur = parent
+                }
+                is GetAccessor -> {
+                    if (cur !== parent.body) return false
+                    val cls = (parent as NodeBase).parent
+                    if (cls !is ClassDeclaration && cls !is ClassExpression) return false
+                    cur = parent
+                }
+                is SetAccessor -> {
+                    if (cur !== parent.body) return false
+                    val cls = (parent as NodeBase).parent
+                    if (cls !is ClassDeclaration && cls !is ClassExpression) return false
+                    cur = parent
+                }
+                is ArrowFunction ->
+                    if (cur === parent.body) cur = parent else return false
+                is FunctionExpression ->
+                    if (cur === parent.body) cur = parent else return false
+                // Class containers (members + heritage reached).
+                is ClassDeclaration -> cur = parent
+                is ClassExpression -> cur = parent
+                is HeritageClause -> cur = parent
+                is ExpressionWithTypeArguments ->
+                    if (cur === parent.expression) cur = parent else return false
+                is PropertyDeclaration ->
+                    if (cur === parent.initializer) cur = parent else return false
+                is EnumMember ->
+                    if (cur === parent.initializer) cur = parent else return false
+                is EnumDeclaration -> cur = parent
+                // Variable declarations: initializers only, and only under a
+                // VariableStatement (for-initializer VDLs are unreached).
+                is VariableDeclaration ->
+                    if (cur === parent.initializer) cur = parent else return false
+                is VariableDeclarationList -> {
+                    val vs = (parent as NodeBase).parent
+                    if (vs !is VariableStatement) return false
+                    cur = parent
+                }
+                is VariableStatement -> cur = parent
+                // Expression edges (the legacy expr walker's visited children).
+                is PropertyAccessExpression ->
+                    if (cur === parent.expression) cur = parent else return false
+                is CallExpression ->
+                    if (cur === parent.expression || parent.arguments.any { it === cur })
+                        cur = parent else return false
+                is NewExpression ->
+                    if (cur === parent.expression || parent.arguments?.any { it === cur } == true)
+                        cur = parent else return false
+                is ElementAccessExpression ->
+                    if (cur === parent.expression || cur === parent.argumentExpression)
+                        cur = parent else return false
+                is BinaryExpression -> cur = parent
+                is ConditionalExpression -> cur = parent
+                is ParenthesizedExpression -> cur = parent
+                is ArrayLiteralExpression -> cur = parent
+                is ObjectLiteralExpression -> cur = parent
+                is PropertyAssignment ->
+                    if (cur === parent.initializer) cur = parent else return false
+                is ShorthandPropertyAssignment -> return false
+                is SpreadAssignment ->
+                    if (cur === parent.expression) cur = parent else return false
+                is TemplateSpan ->
+                    if (cur === parent.expression) cur = parent else return false
+                is TemplateExpression -> cur = parent
+                is TaggedTemplateExpression ->
+                    if (cur === parent.tag) cur = parent else return false
+                is AsExpression, is NonNullExpression, is TypeAssertionExpression,
+                is SpreadElement, is AwaitExpression, is DeleteExpression,
+                is VoidExpression, is TypeOfExpression, is SatisfiesExpression,
+                is PrefixUnaryExpression, is PostfixUnaryExpression,
+                is YieldExpression -> cur = parent
                 else -> return false
             }
         }
-        return false
     }
 
     /** (cpa-m2a): is [node] at a position the legacy dispatcher visits AS a
@@ -824,6 +915,122 @@ class Checker(
             currentCheckFileName = sCFN; currentFlowGraph = sFG
             propertyAccessEnclosingNamespaces.clear()
             propertyAccessEnclosingNamespaces.addAll(sNs)
+        }
+    }
+
+    /** (cpa-m2b): the legacy ClassExpression arm's per-visit synthetic
+     *  anonymous-class type (display "(Anonymous class)" — fingerprint-equal
+     *  across fresh synthetics; the symbol is never published). */
+    private fun cpaResolveAnonClassType(cls: ClassExpression): Type? {
+        val anonSym = Symbol(SymbolFlags.Class, "(Anonymous class)")
+        anonSym.declarations.add(cls)
+        return getDeclaredTypeOfSymbol(anonSym)
+    }
+
+    /** (cpa-m2b): the contextualType at an EXPRESSION position, pull-derived
+     *  over the legacy ctx edges — STOP-null at statement edges; DEFINE at
+     *  call-arg (via the shared cpaComputeArgCtxTypes) / objlit
+     *  PropertyAssignment initializer / SpreadAssignment / arrow EXPRESSION
+     *  body; INHERIT through every other expression edge (incl. New's args
+     *  and a Call's CALLEE — legacy quirks: neither clears). MUST be called
+     *  under the covering frame's ambient BEFORE any new frame for [node]'s
+     *  own body is pushed (the classType consult reads cpaFrames.last()). */
+    private fun cpaCtxAt(node: Node): Type? {
+        val parent = (node as NodeBase).parent ?: return null
+        return when (parent) {
+            is CallExpression -> {
+                val idx = parent.arguments.indexOfFirst { it === node }
+                when {
+                    idx >= 0 -> cpaComputeArgCtxTypes(parent, cpaFrames.last().classType)?.getOrNull(idx)
+                    node === parent.expression -> cpaCtxAt(parent)
+                    else -> null
+                }
+            }
+            is PropertyAssignment -> {
+                if (node !== parent.initializer) return null
+                val o = (parent as NodeBase).parent as? ObjectLiteralExpression ?: return null
+                val ctxObj = cpaCtxAt(o) as? Type.Object ?: return null
+                resolveStructuredTypeMembers(ctxObj)
+                val propName = when (val n = parent.name) {
+                    is Identifier -> n.text
+                    is StringLiteralNode -> n.text
+                    else -> null
+                } ?: return null
+                val propCtx = ctxObj.members?.get(propName)?.let { getTypeOfSymbol(it) }
+                if (propCtx != null && propCtx !== anyType && propCtx !== errorType) propCtx else null
+            }
+            is SpreadAssignment -> null
+            is ArrowFunction -> {
+                // The EXPRESSION-body edge: bodyCtx = the outer ctx's single
+                // call-sig RETURN (B83.4d). Block bodies never consult this.
+                if (node !== parent.body) return null
+                val ctxType = cpaCtxAt(parent) as? Type.Object ?: return null
+                resolveStructuredTypeMembers(ctxType)
+                val sigs = ctxType.callSignatures ?: return null
+                if (sigs.size != 1) return null
+                val ret = sigs[0].resolvedReturnType ?: return null
+                if (ret === anyType || ret === errorType) null else ret
+            }
+            is FunctionExpression -> null
+            is ParenthesizedExpression, is ConditionalExpression, is BinaryExpression,
+            is ArrayLiteralExpression, is TemplateSpan, is TemplateExpression,
+            is AsExpression, is NonNullExpression, is TypeAssertionExpression,
+            is SpreadElement, is AwaitExpression, is DeleteExpression,
+            is VoidExpression, is TypeOfExpression, is SatisfiesExpression,
+            is PrefixUnaryExpression, is PostfixUnaryExpression, is YieldExpression,
+            is NewExpression -> cpaCtxAt(parent)
+            else -> null
+        }
+    }
+
+    /** (cpa-m2b): the enclosingClassType at an EXPRESSION position — the
+     *  covering frame's classType unless the pure-expression chain up to the
+     *  first statement crosses an ect-CHANGING edge: a class member
+     *  PropertyDeclaration initializer (→ that class's type) or a
+     *  ClassExpression heritage expression (→ null; a ClassDeclaration's
+     *  heritage keeps the outer ect — the legacy asymmetry). */
+    private fun cpaEctAt(node: Node): Type? {
+        var cur: Node = node
+        while (true) {
+            val p = (cur as NodeBase).parent ?: return cpaFrames.last().classType
+            when (p) {
+                is PropertyDeclaration -> {
+                    if (cur !== p.initializer) return cpaFrames.last().classType
+                    return when (val cls = (p as NodeBase).parent) {
+                        is ClassDeclaration -> cpaResolveClassType(cls)
+                        is ClassExpression -> cpaResolveAnonClassType(cls)
+                        else -> cpaFrames.last().classType
+                    }
+                }
+                is ExpressionWithTypeArguments -> {
+                    val hc = (p as NodeBase).parent
+                    val cls = (hc as? NodeBase)?.parent
+                    return if (cls is ClassExpression) null else cpaFrames.last().classType
+                }
+                is Statement, is SourceFile, is ModuleBlock,
+                is CaseClause, is DefaultClause, is CatchClause ->
+                    return cpaFrames.last().classType
+                else -> cur = p
+            }
+        }
+    }
+
+    /** (cpa-m2b): the arrow/fn-expr contextual param registration (the 16.0 /
+     *  B81.1b twins), run under the new frame's ambient. */
+    private fun cpaApplyCtxParamRegistration(params: List<Parameter>, ctxType: Type?) {
+        if (ctxType !is Type.Object) return
+        resolveStructuredTypeMembers(ctxType)
+        val sigs = ctxType.callSignatures ?: return
+        if (sigs.size != 1) return
+        val sig = sigs[0]
+        for ((i, param) in params.withIndex()) {
+            if (param.type != null) continue
+            if (i >= sig.parameters.size) break
+            val pName = param.name as? Identifier ?: continue
+            val pType = getTypeOfSymbol(sig.parameters[i])
+            if (pType === anyType || pType === errorType) continue
+            if (typeContainsUnresolvedTypeParam(pType)) continue
+            currentLocalTypes[pName.text] = pType
         }
     }
 
@@ -872,7 +1079,8 @@ class Checker(
                     }
                 }
                 is MethodDeclaration, is Constructor -> {
-                    val cls = (parent as NodeBase).parent as? ClassDeclaration
+                    val clsNode = (parent as NodeBase).parent
+                    val cls: Node? = if (clsNode is ClassDeclaration || clsNode is ClassExpression) clsNode else null
                     if (cls != null) {
                         val md = parent as? MethodDeclaration
                         val isStatic = md != null && ModifierFlag.Static in md.modifiers
@@ -881,7 +1089,8 @@ class Checker(
                         // Legacy computes effectiveClassType at the MEMBER level,
                         // BEFORE the body map copies — resolve under the class-
                         // level (top) ambient.
-                        var eff = cpaResolveClassType(cls)
+                        var eff = if (cls is ClassDeclaration) cpaResolveClassType(cls)
+                        else cpaResolveAnonClassType(cls as ClassExpression)
                         if (md != null && hasThisParam) {
                             val ann = md.parameters.firstOrNull()?.type
                             if (ann != null) withCpaFrameAmbient(top) { eff = getTypeFromTypeNode(ann) }
@@ -908,20 +1117,31 @@ class Checker(
                     }
                 }
                 is GetAccessor -> {
-                    val cls = (parent as NodeBase).parent as? ClassDeclaration
+                    val clsNode = (parent as NodeBase).parent
+                    val clsType = when (clsNode) {
+                        is ClassDeclaration -> cpaResolveClassType(clsNode)
+                        is ClassExpression -> cpaResolveAnonClassType(clsNode)
+                        else -> null
+                    }
+                    val inClass = clsNode is ClassDeclaration || clsNode is ClassExpression
                     val isStatic = ModifierFlag.Static in parent.modifiers
                     cpaFrames.addLast(CpaFrame(node, top.localTypes, top.paramBindings,
                         top.enumParams, top.shadowed,
-                        classType = if (cls != null) cpaResolveClassType(cls) else top.classType,
-                        inStatic = if (cls != null) isStatic else top.inStatic))
+                        classType = if (inClass) clsType else top.classType,
+                        inStatic = if (inClass) isStatic else top.inStatic))
                 }
                 is SetAccessor -> {
-                    val cls = (parent as NodeBase).parent as? ClassDeclaration
-                    if (cls != null) {
+                    val clsNode = (parent as NodeBase).parent
+                    val clsType = when (clsNode) {
+                        is ClassDeclaration -> cpaResolveClassType(clsNode)
+                        is ClassExpression -> cpaResolveAnonClassType(clsNode)
+                        else -> null
+                    }
+                    if (clsNode is ClassDeclaration || clsNode is ClassExpression) {
                         val isStatic = ModifierFlag.Static in parent.modifiers
                         val frame = CpaFrame(node, HashMap(top.localTypes), HashSet(top.paramBindings),
                             top.enumParams, top.shadowed,
-                            classType = cpaResolveClassType(cls), inStatic = isStatic)
+                            classType = clsType, inStatic = isStatic)
                         cpaFrames.addLast(frame)
                         withCpaFrameAmbient(frame) {
                             populateParameterLocalTypes(parent.parameters)
@@ -931,10 +1151,62 @@ class Checker(
                             top.enumParams, top.shadowed, top.classType, top.inStatic))
                     }
                 }
-                is ArrowFunction, is FunctionExpression -> {
-                    // Tier 2 — marker frame (shared maps); chain-excluded.
-                    cpaFrames.addLast(CpaFrame(node, top.localTypes, top.paramBindings,
-                        top.enumParams, top.shadowed, top.classType, top.inStatic))
+                is ArrowFunction -> {
+                    // (cpa-m2b): the arrow Block-body frame. ctx/ect are
+                    // pull-derived UNDER THE TOP AMBIENT, BEFORE the push
+                    // (cpaCtxAt consults cpaFrames.last() for the classType at
+                    // the arrow's own position). Legacy order: populate →
+                    // shadowing + ambiguous → ctx param registration.
+                    var ctx: Type? = null
+                    var ect: Type? = null
+                    withCpaFrameAmbient(top) {
+                        ctx = cpaCtxAt(parent)
+                        ect = cpaEctAt(parent)
+                    }
+                    val frame = CpaFrame(node, HashMap(top.localTypes), HashSet(top.paramBindings),
+                        top.enumParams, HashSet(top.shadowed),
+                        classType = ect, inStatic = top.inStatic)
+                    cpaFrames.addLast(frame)
+                    withCpaFrameAmbient(frame) {
+                        populateParameterLocalTypes(parent.parameters)
+                        val pn = parent.parameters.mapNotNull { p -> (p.name as? Identifier)?.text }.toSet()
+                        applyBodyLocalShadowing(node.statements, pn)
+                        applyAmbiguousBlockScopedLocals(node.statements, pn)
+                        cpaApplyCtxParamRegistration(parent.parameters, ctx)
+                    }
+                }
+                is FunctionExpression -> {
+                    // (cpa-m2b): the fn-expr body frame. The fn-expr's OWN
+                    // param semantics (annotated → set, UN-annotated → REMOVE
+                    // — not populate!) + destructured-name collection; legacy
+                    // order: param loop → ctx registration → shadowing +
+                    // ambiguous. The body walks with ect = NULL.
+                    var ctx: Type? = null
+                    withCpaFrameAmbient(top) { ctx = cpaCtxAt(parent) }
+                    val frame = CpaFrame(node, HashMap(top.localTypes), HashSet(top.paramBindings),
+                        top.enumParams, HashSet(top.shadowed),
+                        classType = null, inStatic = top.inStatic)
+                    cpaFrames.addLast(frame)
+                    withCpaFrameAmbient(frame) {
+                        for (param in parent.parameters) {
+                            if (param.name is ArrayBindingPattern || param.name is ObjectBindingPattern) {
+                                collectBindingNames(param.name, currentParamBindingNames)
+                            }
+                            val pName = (param.name as? Identifier)?.text ?: continue
+                            if (param.type != null) {
+                                val pt = getTypeFromTypeNode(param.type)
+                                if (pt !== anyType && pt !== errorType) {
+                                    currentLocalTypes[pName] = pt
+                                    continue
+                                }
+                            }
+                            currentLocalTypes.remove(pName)
+                        }
+                        cpaApplyCtxParamRegistration(parent.parameters, ctx)
+                        val pn = parent.parameters.mapNotNull { p -> (p.name as? Identifier)?.text }.toSet()
+                        applyBodyLocalShadowing(node.statements, pn)
+                        applyAmbiguousBlockScopedLocals(node.statements, pn)
+                    }
                 }
                 else -> { /* statement-position block: shared ambient, no frame */ }
             }
@@ -121121,6 +121393,137 @@ interface DataView {
         inStaticClassMethod = savedStatic
     }
 
+
+    /** (cpa-m2b) round 580: the CallExpression arm's contextual arg-type
+     *  computation, extracted VERBATIM — shared by the legacy arm and the
+     *  spine ctx pull-derivation (one computation, never a fork). */
+    private fun cpaComputeArgCtxTypes(expr: CallExpression, enclosingClassType: Type?): List<Type?>? {
+        return run {
+            if (expr.arguments.isNullOrEmpty()) return@run null
+            val callee = expr.expression
+            val calleeType = when (callee) {
+                is Identifier -> getTypeOfIdentifier(callee)
+                is PropertyAccessExpression -> {
+                    // B81.1d: `this`-receiver gap for contextual-param
+                    // inference. `getTypeOfPropertyAccess(this.x.sort)` →
+                    // `getTypeOfIdentifier("this")` returns anyType, so the
+                    // contextual chain breaks. When the callee chain's head
+                    // is `this` and we have enclosingClassType from the class-
+                    // body walker, manually walk the chain using
+                    // enclosingClassType as the head — mirroring
+                    // resolveUncalledOperandType. Narrow gate: head=`this`,
+                    // enclosingClassType != null, all segments resolve.
+                    resolveCalleeChainWithThis(callee, enclosingClassType)
+                        ?: getTypeOfPropertyAccess(callee)
+                }
+                else -> return@run null
+            }
+            if (calleeType !is Type.Object) return@run null
+            resolveStructuredTypeMembers(calleeType)
+            val sigs = calleeType.callSignatures
+            if (sigs.isNullOrEmpty()) return@run null
+            // Single signature: use its parameter types directly.
+            // Multiple overloads: per-arg-position, only adopt the first
+            // overload's param type if EVERY overload has a callable
+            // function type at that position (matches TS's contextual
+            // signature behavior for callback overloads — used by
+            // `callb((a) => {...})` patterns).
+            if (sigs.size == 1) {
+                val sig = sigs[0]
+                // B86.1b (activation, 2026-05-28): for a single-signature
+                // GENERIC callee with no explicit type args (e.g.
+                // `map<T,U>(arr: T[], cb: (x: T) => U)` called as
+                // `map([1,""], x => x.foo())`), infer the type-arg mapper
+                // from the arguments and substitute it into each arg's
+                // contextual param type. This turns a bare-TP contextual
+                // type `(x: T) => U` into the concrete `(x: number|string)
+                // => U`, so the un-annotated lambda param `x` resolves to
+                // the concrete type during the diagnostic walk (TS2339 etc.)
+                // rather than staying an opaque TypeParam. Closes the
+                // temporal-inversion gap: the inference mapper produced inside
+                // tryInferSingleTypeParamFromArgs (a return-type-only helper,
+                // torn down in finally) was never visible to this diagnostic
+                // pass. We re-run the inference here, in-pass, and apply it
+                // directly to the propagated contextual types. Gate: only when
+                // the sig has type params AND no explicit type args (explicit
+                // args are handled by their own checking path).
+                val inferMapper: TypeMapper? =
+                    if (expr.typeArguments.isNullOrEmpty() && !sig.typeParameters.isNullOrEmpty()) {
+                        val full = tryInferSingleTypeParamFromArgs(sig, expr.arguments, forReturnType = true)
+                        // B86.1b-4 fallback: when the full mapper is null (e.g. a
+                        // callback-return-position TP `U` is uninferable because the
+                        // lambda body errors), use the partial anchor-only mapper so
+                        // the lambda's PARAM `(x:T)` still resolves to its concrete
+                        // anchor type during the diagnostic walk (TS2339 in the body).
+                        full ?: tryInferAnchorTypeParamsForContext(sig, expr.arguments)
+                    } else null
+                // B83.4d: literal-preserving OVERRIDE for fixed-type-parameter
+                // conflict TPs (e.g. `f<T>(x:T, b:()=>(a:T)=>void, y:T)` called
+                // with conflicting `''`/`1`). TypeScript fixes T to the unwidened
+                // first literal `""`, so the callback param `a` is contextually
+                // typed `""` and `a.foo` reports TS2339 on `""` (not `string`).
+                // Composed over inferMapper: literal wins for conflict TPs, the
+                // widened mapper covers the rest. Confined to contextual-param
+                // typing for THIS call (restored after the arg walk) so the literal
+                // never leaks into return-type inference / JS-emit per the gotcha.
+                val litMapper: TypeMapper? =
+                    if (expr.typeArguments.isNullOrEmpty() && !sig.typeParameters.isNullOrEmpty())
+                        computeFixedConflictLiteralMapper(sig, expr.arguments)
+                    else null
+                val ctxMapper: TypeMapper? = when {
+                    litMapper == null -> inferMapper
+                    inferMapper == null -> litMapper
+                    else -> TypeMapper { tp -> litMapper.map(tp) ?: inferMapper.map(tp) }
+                }
+                expr.arguments.mapIndexed { i, _ ->
+                    if (i < sig.parameters.size) {
+                        val ptRaw = getTypeOfSymbol(sig.parameters[i])
+                        val pt = if (ctxMapper != null && ptRaw !== anyType && ptRaw !== errorType) {
+                            instantiateContextualParamType(ptRaw, ctxMapper)
+                        } else ptRaw
+                        if (pt === anyType || pt === errorType) null else pt
+                    } else null
+                }
+            } else {
+                // Round 481: tsc contextually types a callback arg by the overload
+                // that arg-matching SELECTS, not blindly by the first — Array.reduce's
+                // `(cb, initialValue: T)` overload must lose to `<U>(cb, initialValue:
+                // U)` when the initial value is not a T (documentsUtil's
+                // `.reduce((meta, key) => meta.set(…), new Map())` typed `meta` as
+                // string). strictSelect yields only a DEFINITIVE type-based winner;
+                // ambiguity (or a first-overload win) keeps the legacy
+                // every-overload-callable heuristic byte-identical.
+                val chosen = resolveCallOverload(sigs, expr.arguments, strictSelect = true)
+                if (chosen != null && chosen !== sigs[0]) {
+                    val inferMapper: TypeMapper? =
+                        if (expr.typeArguments.isNullOrEmpty() && !chosen.typeParameters.isNullOrEmpty()) {
+                            tryInferSingleTypeParamFromArgs(chosen, expr.arguments, forReturnType = true)
+                                ?: tryInferAnchorTypeParamsForContext(chosen, expr.arguments)
+                        } else null
+                    expr.arguments.mapIndexed { i, _ ->
+                        if (i < chosen.parameters.size) {
+                            val ptRaw = getTypeOfSymbol(chosen.parameters[i])
+                            val pt = if (inferMapper != null && ptRaw !== anyType && ptRaw !== errorType) {
+                                instantiateContextualParamType(ptRaw, inferMapper)
+                            } else ptRaw
+                            if (pt === anyType || pt === errorType) null else pt
+                        } else null
+                    }
+                } else expr.arguments.mapIndexed { i, _ ->
+                    val candidates = sigs.mapNotNull { sig ->
+                        if (i < sig.parameters.size) {
+                            val pt = getTypeOfSymbol(sig.parameters[i])
+                            if (pt === anyType || pt === errorType) null else pt
+                        } else null
+                    }
+                    if (candidates.size != sigs.size) null
+                    else if (candidates.all { it is Type.Object && !it.callSignatures.isNullOrEmpty() }) candidates[0]
+                    else null
+                }
+            }
+        }
+    }
+
     private fun checkPropertyAccessInExpr(
         expr: Expression, source: String, fileName: String,
         enclosingClassType: Type?,
@@ -121137,130 +121540,7 @@ interface DataView {
                 // 16.0: contextual typing for call arguments — propagate param types
                 // into object literals / arrow function params so un-annotated arrow
                 // parameters can be typed from the contextual signature.
-                val argCtxTypes: List<Type?>? = run {
-                    if (expr.arguments.isNullOrEmpty()) return@run null
-                    val callee = expr.expression
-                    val calleeType = when (callee) {
-                        is Identifier -> getTypeOfIdentifier(callee)
-                        is PropertyAccessExpression -> {
-                            // B81.1d: `this`-receiver gap for contextual-param
-                            // inference. `getTypeOfPropertyAccess(this.x.sort)` →
-                            // `getTypeOfIdentifier("this")` returns anyType, so the
-                            // contextual chain breaks. When the callee chain's head
-                            // is `this` and we have enclosingClassType from the class-
-                            // body walker, manually walk the chain using
-                            // enclosingClassType as the head — mirroring
-                            // resolveUncalledOperandType. Narrow gate: head=`this`,
-                            // enclosingClassType != null, all segments resolve.
-                            resolveCalleeChainWithThis(callee, enclosingClassType)
-                                ?: getTypeOfPropertyAccess(callee)
-                        }
-                        else -> return@run null
-                    }
-                    if (calleeType !is Type.Object) return@run null
-                    resolveStructuredTypeMembers(calleeType)
-                    val sigs = calleeType.callSignatures
-                    if (sigs.isNullOrEmpty()) return@run null
-                    // Single signature: use its parameter types directly.
-                    // Multiple overloads: per-arg-position, only adopt the first
-                    // overload's param type if EVERY overload has a callable
-                    // function type at that position (matches TS's contextual
-                    // signature behavior for callback overloads — used by
-                    // `callb((a) => {...})` patterns).
-                    if (sigs.size == 1) {
-                        val sig = sigs[0]
-                        // B86.1b (activation, 2026-05-28): for a single-signature
-                        // GENERIC callee with no explicit type args (e.g.
-                        // `map<T,U>(arr: T[], cb: (x: T) => U)` called as
-                        // `map([1,""], x => x.foo())`), infer the type-arg mapper
-                        // from the arguments and substitute it into each arg's
-                        // contextual param type. This turns a bare-TP contextual
-                        // type `(x: T) => U` into the concrete `(x: number|string)
-                        // => U`, so the un-annotated lambda param `x` resolves to
-                        // the concrete type during the diagnostic walk (TS2339 etc.)
-                        // rather than staying an opaque TypeParam. Closes the
-                        // temporal-inversion gap: the inference mapper produced inside
-                        // tryInferSingleTypeParamFromArgs (a return-type-only helper,
-                        // torn down in finally) was never visible to this diagnostic
-                        // pass. We re-run the inference here, in-pass, and apply it
-                        // directly to the propagated contextual types. Gate: only when
-                        // the sig has type params AND no explicit type args (explicit
-                        // args are handled by their own checking path).
-                        val inferMapper: TypeMapper? =
-                            if (expr.typeArguments.isNullOrEmpty() && !sig.typeParameters.isNullOrEmpty()) {
-                                val full = tryInferSingleTypeParamFromArgs(sig, expr.arguments, forReturnType = true)
-                                // B86.1b-4 fallback: when the full mapper is null (e.g. a
-                                // callback-return-position TP `U` is uninferable because the
-                                // lambda body errors), use the partial anchor-only mapper so
-                                // the lambda's PARAM `(x:T)` still resolves to its concrete
-                                // anchor type during the diagnostic walk (TS2339 in the body).
-                                full ?: tryInferAnchorTypeParamsForContext(sig, expr.arguments)
-                            } else null
-                        // B83.4d: literal-preserving OVERRIDE for fixed-type-parameter
-                        // conflict TPs (e.g. `f<T>(x:T, b:()=>(a:T)=>void, y:T)` called
-                        // with conflicting `''`/`1`). TypeScript fixes T to the unwidened
-                        // first literal `""`, so the callback param `a` is contextually
-                        // typed `""` and `a.foo` reports TS2339 on `""` (not `string`).
-                        // Composed over inferMapper: literal wins for conflict TPs, the
-                        // widened mapper covers the rest. Confined to contextual-param
-                        // typing for THIS call (restored after the arg walk) so the literal
-                        // never leaks into return-type inference / JS-emit per the gotcha.
-                        val litMapper: TypeMapper? =
-                            if (expr.typeArguments.isNullOrEmpty() && !sig.typeParameters.isNullOrEmpty())
-                                computeFixedConflictLiteralMapper(sig, expr.arguments)
-                            else null
-                        val ctxMapper: TypeMapper? = when {
-                            litMapper == null -> inferMapper
-                            inferMapper == null -> litMapper
-                            else -> TypeMapper { tp -> litMapper.map(tp) ?: inferMapper.map(tp) }
-                        }
-                        expr.arguments.mapIndexed { i, _ ->
-                            if (i < sig.parameters.size) {
-                                val ptRaw = getTypeOfSymbol(sig.parameters[i])
-                                val pt = if (ctxMapper != null && ptRaw !== anyType && ptRaw !== errorType) {
-                                    instantiateContextualParamType(ptRaw, ctxMapper)
-                                } else ptRaw
-                                if (pt === anyType || pt === errorType) null else pt
-                            } else null
-                        }
-                    } else {
-                        // Round 481: tsc contextually types a callback arg by the overload
-                        // that arg-matching SELECTS, not blindly by the first — Array.reduce's
-                        // `(cb, initialValue: T)` overload must lose to `<U>(cb, initialValue:
-                        // U)` when the initial value is not a T (documentsUtil's
-                        // `.reduce((meta, key) => meta.set(…), new Map())` typed `meta` as
-                        // string). strictSelect yields only a DEFINITIVE type-based winner;
-                        // ambiguity (or a first-overload win) keeps the legacy
-                        // every-overload-callable heuristic byte-identical.
-                        val chosen = resolveCallOverload(sigs, expr.arguments, strictSelect = true)
-                        if (chosen != null && chosen !== sigs[0]) {
-                            val inferMapper: TypeMapper? =
-                                if (expr.typeArguments.isNullOrEmpty() && !chosen.typeParameters.isNullOrEmpty()) {
-                                    tryInferSingleTypeParamFromArgs(chosen, expr.arguments, forReturnType = true)
-                                        ?: tryInferAnchorTypeParamsForContext(chosen, expr.arguments)
-                                } else null
-                            expr.arguments.mapIndexed { i, _ ->
-                                if (i < chosen.parameters.size) {
-                                    val ptRaw = getTypeOfSymbol(chosen.parameters[i])
-                                    val pt = if (inferMapper != null && ptRaw !== anyType && ptRaw !== errorType) {
-                                        instantiateContextualParamType(ptRaw, inferMapper)
-                                    } else ptRaw
-                                    if (pt === anyType || pt === errorType) null else pt
-                                } else null
-                            }
-                        } else expr.arguments.mapIndexed { i, _ ->
-                            val candidates = sigs.mapNotNull { sig ->
-                                if (i < sig.parameters.size) {
-                                    val pt = getTypeOfSymbol(sig.parameters[i])
-                                    if (pt === anyType || pt === errorType) null else pt
-                                } else null
-                            }
-                            if (candidates.size != sigs.size) null
-                            else if (candidates.all { it is Type.Object && !it.callSignatures.isNullOrEmpty() }) candidates[0]
-                            else null
-                        }
-                    }
-                }
+                val argCtxTypes: List<Type?>? = cpaComputeArgCtxTypes(expr, enclosingClassType)
                 expr.arguments.forEachIndexed { i, arg ->
                     val savedCtx = contextualType
                     val argCtx = argCtxTypes?.getOrNull(i)
