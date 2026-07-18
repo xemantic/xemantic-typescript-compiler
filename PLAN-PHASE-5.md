@@ -20,6 +20,26 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 585 (2026-07-18) — (cpa-retire) LANDED: THE checkPropertyAccess
+LEGACY PASS IS RETIRED — the first giant sheds its emit-twice runs.** The
+`pass("checkPropertyAccess")` dispatch is gone; every cpa emission runs
+once, from the spine anchors, and the walkers live on as anchor-called
+leaf machinery. The retirement experiment's ONLY failures were the audit
+scaffolding's own tests (no legacy side left to diff — by design), so the
+scaffolding is deleted with it: cpaAuditLegacy/cpaAuditSpine/
+cpaAuditEnabled, the fingerprint fns, the nearest-anchored symmetric-skip
+helper, and Inv4CpaAuditTest (−7 tests; its verification job — the m2
+skeleton parity — is complete and historical; CpaAnchorTest + the corpus
+remain the behavior guards). The legacy-side truncation marks (cpaM3Mk
+blocks) are now provably dead (only the retired driver reached marked
+statements; anchor walks reach only never-marked nested positions) — left
+in place, queued for a cleanup sweep. Gates: corpus 11,346/0 (448 XMLs);
+listAll ×8 byte-identical. The wall-time delta lands via the CI bench.
+NEXT: the g3 (checkCallExpressionTypes) migration via the same m1..m3
+sequence — its residue channel is already closed (round 584) — or the
+cta-retire evaluation (cta's consumer was cpa, now spine-fed; the cta
+emit-twice runs' remaining consumers need the same experiment).
+
 **Round 584 (2026-07-18) — (ccet-prep) LANDED: the cpa→ccet residue channel
 is closed — ZERO couplings.** checkCallExpressionTypes' driver resets
 `currentLocalTypes` per file (it previously inherited the cpa pass's
@@ -1880,8 +1900,9 @@ interrupt the arc).
       driver does NOT reset currentLocalTypes per file — cpa consumes cta
       RESIDUE cross-file (round-542 noImplicitAnyForIn TS7053), which the
       frames must reproduce or own-record).
-    - [ ] **(cpa-m3…) Emission moves** scope-by-scope with the recorded-set
-      truncation template (the cta-m3a..m3m sequence).
+    - [x] **(cpa-m3…) Emission moves** — COMPLETE rounds 581-583; **(cpa-retire)
+      LANDED round 585: the checkPropertyAccess legacy pass is DELETED** (the
+      first giant off emit-twice; audit scaffolding removed with it).
     - [ ] **(cta-retire) After cpa no longer consumes cta residue: retire
       the cta legacy emit-twice runs for fully-covered scopes** (the
       multiplier payoff — blocked until the residue channel is closed).

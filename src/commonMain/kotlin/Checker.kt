@@ -709,19 +709,6 @@ class Checker(
      *  the (g1c) emission moves. */
     internal val ctaAuditSpine = HashMap<Int, String>()
 
-    /** (cpa-m1) round 577: legacy-side audit recordings for the g2
-     *  (checkPropertyAccess) spine migration (nodeId → context fingerprint).
-     *  Declared BEFORE init (the init-order trap). The spine twin arrives
-     *  with (cpa-m2). */
-    internal val cpaAuditLegacy = HashMap<Int, String>()
-
-    /** (cpa-m2a) round 579: SPINE-side recordings — dead machinery active only
-     *  under [cpaAuditEnabled]; the statement-TIER frame skeleton replicates
-     *  the legacy cpa dispatchers' context at every covered statement
-     *  (expression-position bodies — arrows/fn-exprs/objlit methods/class
-     *  expressions — are tier 2, (cpa-m2b)). */
-    internal val cpaAuditSpine = HashMap<Int, String>()
-
     /** (cpa-m2a): the cpa spine frame — most legacy state is AMBIENT with
      *  map COPIES only at function-like boundaries (the per-member-kind
      *  asymmetries are load-bearing: fn-decl copies 4 maps + shadowing +
@@ -1141,24 +1128,6 @@ class Checker(
         }
     }
 
-    /** (cpa-m3a): is [node]'s NEAREST statement ancestor an ANCHORED
-     *  Var/Expr/Return? Statements nested in an anchored statement's
-     *  EXPRESSION (arrow/fn-expr/class-expr bodies) are emitted by the
-     *  anchor's legacy-style walk with its own interleaved state — the
-     *  frames no longer own their context, so the AUDIT fingerprints skip
-     *  them symmetrically on both sides. */
-    private fun cpaM2NearestStmtAncestorAnchored(node: Node): Boolean {
-        var cur: Node? = (node as NodeBase).parent
-        while (cur != null) {
-            if (cur is Statement && cpaM2StmtPosition(cur)) {
-                return (cur is VariableStatement || cur is ExpressionStatement || cur is ReturnStatement) &&
-                    cpaM2ChainOk(cur, forAnchor = true)
-            }
-            cur = (cur as NodeBase).parent
-        }
-        return false
-    }
-
     private fun cpaSpineEnter(node: Node) {
         if (spineIsDts || spineIsJsLike) return
         val parent = (node as NodeBase).parent
@@ -1362,23 +1331,6 @@ class Checker(
                         }
                     }
                 }
-            }
-        }
-        // Statement fingerprint (covered chains only; audit-gated). The
-        // POSITION gate mirrors the legacy dispatch sites: statement-list
-        // elements + the single-statement positions — a TryStatement's/
-        // CatchClause's own Blocks are reached via their statement LISTS,
-        // never dispatched AS statements, and a catch VariableDeclaration (a
-        // Statement subtype) is never dispatched at all.
-        if (cpaAuditEnabled && node is Statement && cpaM2StmtPosition(node) && cpaM2ChainOk(node) &&
-            !cpaM2NearestStmtAncestorAnchored(node)) {
-            val id = (node as NodeBase).nodeId
-            if (id >= 0) {
-                val top = cpaFrames.last()
-                cpaAuditSpine[id] = cpaAuditFingerprintCore(
-                    top.localTypes, top.paramBindings, top.enumParams, top.shadowed,
-                    cpaFrames.mapNotNull { it.nsSymbol?.name },
-                    top.classType, null, top.inStatic)
             }
         }
     }
@@ -4184,7 +4136,11 @@ class Checker(
         pass("checkSpine") { checkSpine() }
         pass("checkTypeAssignability") { checkTypeAssignability() }
         pass("ctaPostFilters") { ctaPostFilters() }
-        pass("checkPropertyAccess") { checkPropertyAccess() }
+        // (cpa-retire) round 585: the checkPropertyAccess legacy pass is
+        // RETIRED — every cpa emission is spine-anchored (rounds 581-583),
+        // both residue channels are closed (rounds 578/584), and the walkers
+        // live on as anchor-called leaf machinery. The FIRST giant to shed
+        // its emit-twice runs.
         pass("checkCallExpressionTypes") { checkCallExpressionTypes() }
         // 37. Use-before-declaration (TS2448/2449/2450): the per-file leg rides
         // the spine (INV.4(d) walker 7 — spineUbdSetup/spineUbdEnterNode);
@@ -45801,11 +45757,6 @@ class Checker(
          *  instance flag could never be set beforehand). Always false in
          *  production. */
         internal var ctaAuditEnabled = false
-
-        /** (cpa-m1) round 577: test-only switch for the g2 (checkPropertyAccess)
-         *  migration audit — companion-hosted for the same init-order reason.
-         *  Always false in production. */
-        internal var cpaAuditEnabled = false
 
         /** Access modifiers rejected on object-literal members (TS1042/TS1184,
          *  [spineCheckObjLitModifiers]). Companion-hosted: the spine runs during
@@ -121085,36 +121036,6 @@ interface DataView {
     // TS2339: Property does not exist on type (Phase 4 item 5a)
     // -----------------------------------------------------------------------
 
-    private fun checkPropertyAccess() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            // Skip .js files — property access patterns differ
-            if (fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
-            val source = result.sourceFile.text
-            // (cpa-m2-prep) round 578: per-file reset — the pass previously
-            // consumed the cta pass's cross-file residue (the round-542/559
-            // residue channel), which a spine migration cannot reproduce
-            // (backward pass-after-pass reads). The element-access
-            // own-recording below replaces the one consumed entry; measured:
-            // corpus green + listAll ×8 byte-identical. Do NOT remove this
-            // reset — it is the cta-retire and cpa-frame-skeleton enabler.
-            currentLocalTypes = HashMap()
-            currentFileLocals = result.locals
-            currentCheckFileName = fileName
-            currentFlowGraph = result.flowGraph
-            currentLexicalScopes = result.lexicalScopes
-            checkPropertyAccessInStatements(
-                result.sourceFile.statements, source, fileName,
-                enclosingClassType = null
-            )
-            currentFlowGraph = null
-            currentLexicalScopes = null
-        }
-        currentFileLocals = null
-        currentCheckFileName = null
-    }
-
     /**
      * INV.2(d): resolve [name] from the lexical scope tables by walking [node]'s
      * parent chain to the nearest enclosing scope that binds it. Returns null when
@@ -121145,53 +121066,10 @@ interface DataView {
         for (stmt in stmts) checkPropertyAccessInStatement(stmt, source, fileName, enclosingClassType)
     }
 
-    /** (cpa-m1) round 577: LEGACY-side audit instrumentation for the g2
-     *  (checkPropertyAccess) spine migration — under [cpaAuditEnabled]
-     *  (test-only; off in production) the statement dispatcher records a
-     *  fingerprint of the threaded + ambient context at every DIRECT
-     *  statement, keyed by nodeId. Types are fingerprinted by DISPLAY
-     *  ([typeToString]), never `Type.id` — ids are resolution-order-sensitive
-     *  between legacy-time and spine-time (the queue-item hazard note). The
-     *  (cpa-m2) spine frame skeleton records the same and an audit test
-     *  diffs the maps — the gate before any emission moves. */
-    private fun cpaAuditFingerprintCore(
-        localTypes: Map<String, Type>, paramBindings: Set<String>,
-        enumParams: Map<String, String>, shadowed: Set<String>,
-        nsNames: List<String>, enclosingClassType: Type?, ctxType: Type?,
-        inStatic: Boolean,
-    ): String {
-        val lt = localTypes.entries.sortedBy { it.key }
-            .joinToString(",") { "${it.key}=${typeToString(it.value)}" }
-        val pb = paramBindings.sorted().joinToString(",")
-        val ec = enumParams.entries.sortedBy { it.key }
-            .joinToString(",") { "${it.key}=${it.value}" }
-        val sh = shadowed.sorted().joinToString(",")
-        val ns = nsNames.joinToString(",")
-        val ect = enclosingClassType?.let { typeToString(it) } ?: "-"
-        val ctx = ctxType?.let { typeToString(it) } ?: "-"
-        val flags = if (inStatic) 1 else 0
-        return "lt[$lt]|pb[$pb]|ec[$ec]|sh[$sh]|ns[$ns]|ect=$ect|ctx=$ctx|f=$flags"
-    }
-
-    private fun cpaAuditFingerprint(enclosingClassType: Type?): String =
-        cpaAuditFingerprintCore(
-            currentLocalTypes, currentParamBindingNames, currentEnumConstrainedParams,
-            currentShadowedNames, propertyAccessEnclosingNamespaces.map { it.name },
-            enclosingClassType, contextualType, inStaticClassMethod)
-
-    private fun cpaAuditRecord(stmt: Statement, enclosingClassType: Type?) {
-        if (!cpaAuditEnabled) return
-        val id = (stmt as NodeBase).nodeId
-        if (id < 0) return
-        if (cpaM2NearestStmtAncestorAnchored(stmt)) return
-        cpaAuditLegacy[id] = cpaAuditFingerprint(enclosingClassType)
-    }
-
     private fun checkPropertyAccessInStatement(
         stmt: Statement, source: String, fileName: String,
         enclosingClassType: Type?,
     ) {
-        cpaAuditRecord(stmt, enclosingClassType)
         when (stmt) {
             is ClassDeclaration -> {
                 // Check heritage clause property access (e.g. extends M.B)
