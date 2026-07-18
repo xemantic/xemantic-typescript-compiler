@@ -146,6 +146,7 @@ object PassTiming {
         typeOfExprLastResult.clear()
         shadowMemoHitCorrect = 0; shadowMemoHitWrong = 0; shadowMemoMiss = 0
         narrowWalkNanos = 0; typeOfExprNanos = 0
+        relationNanos = 0; typeNodeNanos = 0; memberResolveNanos = 0
         typeOfExprRepeatSame = 0
         typeOfExprRepeatDiff = 0
         getTypeOfExpressionDistinct.clear()
@@ -186,6 +187,9 @@ object PassTiming {
     // (f2) round 597 probe: TIME attribution inside checkSpine.
     var narrowWalkNanos: Long = 0
     var typeOfExprNanos: Long = 0
+    var relationNanos: Long = 0
+    var typeNodeNanos: Long = 0
+    var memberResolveNanos: Long = 0
     private val probeClock = TimeSource.Monotonic.markNow()
     fun nowNanos(): Long = probeClock.elapsedNow().inWholeNanoseconds
 
@@ -273,7 +277,8 @@ object PassTiming {
         val distinct = getTypeOfExpressionDistinct.size.toLong()
         val factor = if (distinct > 0) (getTypeOfExpressionCalls * 10 / distinct) else 0L
         appendLine(
-            "time split: narrowWalks=${narrowWalkNanos / 1_000_000}ms typeOfExpr(total incl. nested)=${typeOfExprNanos / 1_000_000}ms\n" +
+            "time split: narrowWalks=${narrowWalkNanos / 1_000_000}ms typeOfExpr(total incl. nested)=${typeOfExprNanos / 1_000_000}ms " +
+                "relations(depth0)=${relationNanos / 1_000_000}ms typeNode(depth0)=${typeNodeNanos / 1_000_000}ms memberResolve(depth0)=${memberResolveNanos / 1_000_000}ms\n" +
             "shadowMemo: hitCorrect=$shadowMemoHitCorrect hitWRONG=$shadowMemoHitWrong miss=$shadowMemoMiss\n" +
             "typeOfExpr repeats: same-result=$typeOfExprRepeatSame diff-result=$typeOfExprRepeatDiff " +
                 "(memoizable fraction of repeats: ${if (typeOfExprRepeatSame + typeOfExprRepeatDiff > 0) typeOfExprRepeatSame * 100 / (typeOfExprRepeatSame + typeOfExprRepeatDiff) else 0}%)\n" +

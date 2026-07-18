@@ -273,6 +273,11 @@ class Checker(
      *  Declared BEFORE init (the init-order trap). */
     private var spineExprEpoch: Long = 1
 
+    // (f2) round 598 probes: depth-0 reentrance guards for the time split.
+    private var relProbeDepth = 0
+    private var tnProbeDepth = 0
+    private var mrProbeDepth = 0
+
     /** In-place-mutation-tracked HashMap for the localTypes family. */
     private inner class EpochMap : HashMap<String, Type> {
         constructor() : super()
@@ -95530,6 +95535,18 @@ interface DataView {
         withInstantiationContext(mapper) { getTypeFromTypeNode(node) }
 
     private fun getTypeFromTypeNode(node: TypeNode): Type {
+        if (PassTiming.enabled) {
+            if (tnProbeDepth++ == 0) {
+                val t0 = PassTiming.nowNanos()
+                try { return getTypeFromTypeNodeCore(node) }
+                finally { PassTiming.typeNodeNanos += PassTiming.nowNanos() - t0; tnProbeDepth-- }
+            }
+            try { return getTypeFromTypeNodeCore(node) } finally { tnProbeDepth-- }
+        }
+        return getTypeFromTypeNodeCore(node)
+    }
+
+    private fun getTypeFromTypeNodeCore(node: TypeNode): Type {
         // Rounds 473/513: a reference to a type name declared in ≥2 module files
         // resolves per-FILE to a DIFFERENT symbol — and nodeTypes is keyed by the
         // STRUCTURAL node (data-class equality), so same-shaped annotation nodes in
@@ -97324,6 +97341,19 @@ interface DataView {
      * After this call, type.members/properties/callSignatures are populated.
      */
     private fun resolveStructuredTypeMembers(type: Type.Object) {
+        if (type.properties != null) return // already resolved
+        if (PassTiming.enabled) {
+            if (mrProbeDepth++ == 0) {
+                val t0 = PassTiming.nowNanos()
+                try { return resolveStructuredTypeMembersCore(type) }
+                finally { PassTiming.memberResolveNanos += PassTiming.nowNanos() - t0; mrProbeDepth-- }
+            }
+            try { return resolveStructuredTypeMembersCore(type) } finally { mrProbeDepth-- }
+        }
+        return resolveStructuredTypeMembersCore(type)
+    }
+
+    private fun resolveStructuredTypeMembersCore(type: Type.Object) {
         if (type.properties != null) return // already resolved
         // Cycle guard: mutually-recursive heritage (`interface A extends B`,
         // `interface B extends A`) re-enters here for a type whose member table is
@@ -136270,6 +136300,22 @@ interface DataView {
      * Returns true if source is related to target in the given relation.
      */
     private fun checkTypeRelatedTo(
+        source: Type,
+        target: Type,
+        relation: Relation,
+    ): Boolean {
+        if (PassTiming.enabled) {
+            if (relProbeDepth++ == 0) {
+                val t0 = PassTiming.nowNanos()
+                try { return checkTypeRelatedToCore(source, target, relation) }
+                finally { PassTiming.relationNanos += PassTiming.nowNanos() - t0; relProbeDepth-- }
+            }
+            try { return checkTypeRelatedToCore(source, target, relation) } finally { relProbeDepth-- }
+        }
+        return checkTypeRelatedToCore(source, target, relation)
+    }
+
+    private fun checkTypeRelatedToCore(
         source: Type,
         target: Type,
         relation: Relation,

@@ -2317,7 +2317,22 @@ with a session note saying why). Item IDs are stable; session notes reference th
 - Node/tsc/tsgo are NOT currently installed — differential testing (M0 optional) and
   real `@types/node` (M1.3) wait for network.
 - The benchmark project cache lives under `build/bench/` (cheap to rebuild); results
-  TSVs under `bench/` (gitignored, machine-specific).**Round 597 (2026-07-18) — the (f2) TIME ATTRIBUTION: the walks are 4.8s;
+  TSVs under `bench/` (gitignored, machine-specific).**Round 598 (2026-07-18) — the FULL checkSpine attribution: the walks are
+the only big single lever.** Depth-0-guarded accumulators on the three
+remaining suspects: relations(depth0)=927ms, typeNode(depth0)=520ms,
+memberResolve(depth0)=61ms — vs narrowWalks=4,986ms and typeOfExpr≤3.9s
+(categories OVERLAP: walk spans include nested resolution). The
+unattributed remainder is BROAD emitter machinery (leaf check* logic,
+dispatch overhead, frame constructions) — no second concentrated lever.
+CONCLUSION: (f2)'s walk fold (~5s target) is the one remaining
+concentrated checkSpine lever; beyond it the ≤10s target runs through
+INV.5 (canonical types) + INV.6 (parallelism), as the arc doc always
+said. Probes committed (inert off --passTiming; sentinel pins green).
+NEXT: the (f2) fold design — per-(reference-path, flow-node) walk-result
+reuse WITHIN the epoch fences (the round-595 infrastructure), evaluated
+shadow-first (the proven instrument).
+
+**Round 597 (2026-07-18) — the (f2) TIME ATTRIBUTION: the walks are 4.8s;
 ~10s of checkSpine is NEITHER walks nor typeOfExpr.** Nanotime
 accumulators (--passTiming only, TimeSource-based) at the two hot
 surfaces: depth-0 narrowing walks = 4,806ms (~26% of checkSpine — a real
