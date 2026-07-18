@@ -20,6 +20,21 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 604 (2026-07-18) — (b2d4) LANDED: the (b2) INSTALLER FLIP IS
+COMPLETE.** pushFunctionTypeParamsScope becomes the inline region
+`withFunctionTypeParamsScope` (fresh-minted TPs, constraints/defaults
+under the new scope — the push/pop helper and all 5 caller
+save/try/finally shells deleted); checkConstraintsInStatements' two arms
+flip (the fn arm's build-under-ambient + empty→null install as a region;
+the ImportType alias arm keeps currentTypeParamDecls hand-rolled around
+a scope region). Raw ambient tpScope writes 8 → 4 — ALL remaining are
+the spine frame LIFO sites (ccetSpineFileReset / spineArithTeardown:
+install-at-enter/restore-at-leave crossing call boundaries — not
+region-formable by construction; they are the designed residual writers
+until frames carry mappers, an INV.5-endgame/(bN) item). From the
+round-546 survey: 87 write sites → 4. Gates: corpus 11,347/0; listAll ×8
+byte-identical. NEXT per queue order: INV.5(d2) (optional) or INV.6.
+
 **Round 603 (2026-07-18) — (b2d3) LANDED: the ccet-leaf installer cluster
 (checkCallTypesInStatement) on the bridge.** Three regions converted: the
 fn-decl arm rides `withInternedTpScope(withAst = true)` (its outer
@@ -1922,7 +1937,11 @@ interrupt the arc).
     minted during its constraint-relation checks, which the annotation
     resolution then reuses vs mints bare). Deferred behind (b2+)/other
     INV.5 work — the display-only coupling is cosmetic, not semantic.**
-  - [ ] **INV.5(b) Explicit mapper objects.** Replace the ambient
+  - [x] **INV.5(b) Explicit mapper objects — installer flip COMPLETE round
+    604 (b2a-b2d4): 87 write sites → 4; the survivors are the spine frame
+    LIFO writers (restore-at-leave — not region-formable; the designed
+    residual until frames carry mappers). (bN) ambient-field REMOVAL
+    stays open behind that frame redesign.** Replace the ambient
     `currentTypeAliasArgs`/`currentTypeParamScope` instantiation contexts
     with an explicit mapper threaded through the resolution entry points —
     the enabler for (c). MEASURED SURFACE (round 546): 87 write sites in 34

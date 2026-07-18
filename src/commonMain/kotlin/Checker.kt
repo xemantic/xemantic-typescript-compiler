@@ -50257,12 +50257,9 @@ interface DataView {
         val ctxFn = spineArithCtx
         spineArithInstalled {
             if (withTpScope) {
-                val savedScope = pushFunctionTypeParamsScope(typeParameters)
-                try {
+                withFunctionTypeParamsScope(typeParameters) {
                     populateParameterLocalTypes(parameters)
                     if (isArrowOrFnExpr) applyContextualParamTypesForArrow(parameters, ctxFn)
-                } finally {
-                    currentTypeParamScope = savedScope
                 }
             } else {
                 populateParameterLocalTypes(parameters)
@@ -120852,30 +120849,26 @@ interface DataView {
                     // not a shadowed global. Without this, `function tem<T extends
                     // number>(t: T): I<T>` would see `I<T>` resolve T to the global
                     // `class T` if any (or errorType) and emit FP TS2344.
-                    val savedScope = currentTypeParamScope
-                    try {
-                        val scope = (savedScope?.toMutableMap() ?: mutableMapOf())
-                        stmt.typeParameters?.forEach { tp ->
-                            val name = tp.name.text
-                            val typeParam = typeParamInternCache.getOrPut(internKey(tp)) {
-                                val p = Type.TypeParam()
-                                p.symbol = Symbol(SymbolFlags.TypeParameter, name)
-                                p
-                            }
-                            tp.constraint?.let {
-                                if (typeParam.constraint == null) typeParam.constraint = getTypeFromTypeNode(it)
-                            }
-                            tp.default?.let {
-                                if (typeParam.default == null) typeParam.default = getTypeFromTypeNode(it)
-                            }
-                            scope[name] = typeParam
+                    val scope = (currentTypeParamScope?.toMutableMap() ?: mutableMapOf())
+                    stmt.typeParameters?.forEach { tp ->
+                        val name = tp.name.text
+                        val typeParam = typeParamInternCache.getOrPut(internKey(tp)) {
+                            val p = Type.TypeParam()
+                            p.symbol = Symbol(SymbolFlags.TypeParameter, name)
+                            p
                         }
-                        currentTypeParamScope = if (scope.isEmpty()) null else scope
+                        tp.constraint?.let {
+                            if (typeParam.constraint == null) typeParam.constraint = getTypeFromTypeNode(it)
+                        }
+                        tp.default?.let {
+                            if (typeParam.default == null) typeParam.default = getTypeFromTypeNode(it)
+                        }
+                        scope[name] = typeParam
+                    }
+                    withInstantiationContext(scopeMapper(if (scope.isEmpty()) null else scope)) {
                         stmt.type?.let { checkConstraintsInTypeNode(it, source, fileName) }
                         stmt.parameters.forEach { p -> p.type?.let { checkConstraintsInTypeNode(it, source, fileName) } }
                         stmt.body?.let { checkConstraintsInStatements(it.statements, source, fileName) }
-                    } finally {
-                        currentTypeParamScope = savedScope
                     }
                 }
                 is ClassDeclaration -> {
@@ -120932,10 +120925,9 @@ interface DataView {
                     // (`stmt.type is ImportType`) → no impact on other type-alias constraint checks.
                     val tps = stmt.typeParameters
                     if (stmt.type is ImportType && !tps.isNullOrEmpty()) {
-                        val savedTpScope = currentTypeParamScope
                         val savedTpDecls = currentTypeParamDecls
                         try {
-                            val scope = (savedTpScope?.toMutableMap() ?: mutableMapOf())
+                            val scope = (currentTypeParamScope?.toMutableMap() ?: mutableMapOf())
                             val decls = savedTpDecls.toMutableMap()
                             for (tp in tps) {
                                 val p = typeParamInternCache.getOrPut(internKey(tp)) {
@@ -120945,11 +120937,11 @@ interface DataView {
                                 scope[tp.name.text] = p
                                 decls[tp.name.text] = tp  // for the TS2208 hint position
                             }
-                            currentTypeParamScope = scope
                             currentTypeParamDecls = decls
-                            checkConstraintsInTypeNode(stmt.type, source, fileName)
+                            withInstantiationContext(scopeMapper(scope)) {
+                                checkConstraintsInTypeNode(stmt.type, source, fileName)
+                            }
                         } finally {
-                            currentTypeParamScope = savedTpScope
                             currentTypeParamDecls = savedTpDecls
                         }
                     } else {
@@ -122934,27 +122926,27 @@ interface DataView {
      * Constraints are resolved AFTER all type params are inserted (so `<T, U extends T>`
      * works). When [typeParameters] is null/empty, no scope change is made.
      */
-    private fun pushFunctionTypeParamsScope(typeParameters: List<TypeParameter>?): Map<String, Type.TypeParam>? {
-        val saved = currentTypeParamScope
-        if (typeParameters.isNullOrEmpty()) return saved
-        val scope = (saved?.toMutableMap() ?: mutableMapOf())
+    private inline fun withFunctionTypeParamsScope(typeParameters: List<TypeParameter>?, block: () -> Unit) {
+        if (typeParameters.isNullOrEmpty()) { block(); return }
+        val scope = (currentTypeParamScope?.toMutableMap() ?: mutableMapOf())
         for (tpDecl in typeParameters) {
             val tp = Type.TypeParam()
             tp.symbol = Symbol(SymbolFlags.TypeParameter, tpDecl.name.text)
             scope[tpDecl.name.text] = tp
         }
-        currentTypeParamScope = scope
-        // Resolve constraints AFTER all type params are in scope (so siblings can refer to each other).
-        for (tpDecl in typeParameters) {
-            val tp = scope[tpDecl.name.text] ?: continue
-            tpDecl.constraint?.let {
-                tp.constraint = getTypeFromTypeNode(it)
+        withInstantiationContext(scopeMapper(scope)) {
+            // Resolve constraints AFTER all type params are in scope (so siblings can refer to each other).
+            for (tpDecl in typeParameters) {
+                val tp = scope[tpDecl.name.text] ?: continue
+                tpDecl.constraint?.let {
+                    tp.constraint = getTypeFromTypeNode(it)
+                }
+                tpDecl.default?.let {
+                    tp.default = getTypeFromTypeNode(it)
+                }
             }
-            tpDecl.default?.let {
-                tp.default = getTypeFromTypeNode(it)
-            }
+            block()
         }
-        return saved
     }
 
     /**
@@ -156338,11 +156330,8 @@ interface DataView {
                     // to detect TypeParam-vs-literal no-overlap. Scope is restored
                     // before walking the body — currentLocalTypes carries the
                     // resolved Type.TypeParam forward.
-                    val savedScope = pushFunctionTypeParamsScope(stmt.typeParameters)
-                    try {
+                    withFunctionTypeParamsScope(stmt.typeParameters) {
                         populateParameterLocalTypes(stmt.parameters)
-                    } finally {
-                        currentTypeParamScope = savedScope
                     }
                     checkArithmeticInStatements(body.statements, source, fileName)
                     currentLocalTypes = savedLocalTypes
@@ -156355,11 +156344,8 @@ interface DataView {
                             val savedLocalTypes = currentLocalTypes
                             currentLocalTypes = EpochMap(currentLocalTypes)
                             try {
-                                val savedScope = pushFunctionTypeParamsScope(member.typeParameters)
-                                try {
+                                withFunctionTypeParamsScope(member.typeParameters) {
                                     populateParameterLocalTypes(member.parameters)
-                                } finally {
-                                    currentTypeParamScope = savedScope
                                 }
                                 checkArithmeticInStatements(body.statements, source, fileName)
                             } finally {
@@ -156482,13 +156468,10 @@ interface DataView {
             is ArrowFunction -> {
                 val savedLocalTypes = currentLocalTypes
                 currentLocalTypes = EpochMap(currentLocalTypes)
-                val savedScope = pushFunctionTypeParamsScope(expr.typeParameters)
                 val ctxFn = contextualType
-                try {
+                withFunctionTypeParamsScope(expr.typeParameters) {
                     populateParameterLocalTypes(expr.parameters)
                     applyContextualParamTypesForArrow(expr.parameters, ctxFn)
-                } finally {
-                    currentTypeParamScope = savedScope
                 }
                 // The body is not contextually typed by the param fn type — clear context so
                 // a nested object literal in the body doesn't inherit it (B475).
@@ -156505,13 +156488,10 @@ interface DataView {
             is FunctionExpression -> {
                 val savedLocalTypes = currentLocalTypes
                 currentLocalTypes = EpochMap(currentLocalTypes)
-                val savedScope = pushFunctionTypeParamsScope(expr.typeParameters)
                 val ctxFn = contextualType
-                try {
+                withFunctionTypeParamsScope(expr.typeParameters) {
                     populateParameterLocalTypes(expr.parameters)
                     applyContextualParamTypesForArrow(expr.parameters, ctxFn)
-                } finally {
-                    currentTypeParamScope = savedScope
                 }
                 val savedCtx = contextualType
                 contextualType = null
