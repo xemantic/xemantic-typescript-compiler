@@ -46,10 +46,15 @@ class Checker(
     /** When true, only run targeted checks (TS1210 etc.) — used for emitDeclarationOnly. */
     private val declarationOnly: Boolean = false,
     /**
-     * When non-null, only report diagnostics for files in this set (round-robin
-     * file assignment for parallel checking via [CheckerPool]). The checker still
-     * merges globals and resolves types for ALL files, but diagnostic output is
-     * filtered to the assigned subset.
+     * When non-null, this checker instance is one PARTITION WORKER of a
+     * share-nothing parallel check (INV.6(6a), docs/parallel-caching.md): the
+     * check spine's per-file walk runs ONLY for files in this set (the dominant
+     * cost is partitioned), while program-wide passes/indexes still run over
+     * all files and [getDiagnostics] filters output to the assigned subset.
+     * The partition contract is SEQUENTIAL EQUIVALENCE: the sorted union of
+     * complementary workers' diagnostics must equal the full (null) run —
+     * pinned by SpinePartitionEquivalenceTest; any divergence is a cross-file
+     * spine-state leak (an order-dependence bug, not an acceptable delta).
      */
     private val assignedFileNames: Set<String>? = null,
     /**
@@ -20280,6 +20285,10 @@ class Checker(
         try {
             for (result in binderResults) {
                 val sf = result.sourceFile
+                // INV.6(6a): a partition worker walks only its assigned files —
+                // the spine is per-file self-contained (per-file resets below),
+                // so skipping a foreign file skips exactly that file's emissions.
+                if (assignedFileNames != null && sf.fileName !in assignedFileNames) continue
                 spineFileName = sf.fileName
                 spineSource = sf.text
                 spineIsDts = isDtsFile(spineFileName)
@@ -30131,6 +30140,7 @@ class Checker(
         try {
             for (result in binderResults) {
                 val sf = result.sourceFile
+                if (assignedFileNames != null && sf.fileName !in assignedFileNames) continue
                 spineFileName = sf.fileName
                 spineSource = sf.text
                 spineUResSetup(result)

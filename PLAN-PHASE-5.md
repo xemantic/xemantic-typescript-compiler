@@ -20,6 +20,27 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 605 (2026-07-18) — (INV.6(6a)) LANDED: the spine partition seam +
+the sequential-equivalence pin.** The dormant `assignedFileNames` output
+filter (CheckerPool-era) becomes the Phase-0 partition seam: both spine
+per-file loops (checkSpine + the declarationOnly spineUResOnly driver)
+SKIP files outside the assigned set — the dominant cost (spine = 72% of
+checker-init) is now partitionable; program-wide passes/indexes still run
+per worker (tsgo's accepted redundancy) and getDiagnostics filters their
+out-partition output. THE CONTRACT (docstring + pins): sequential
+equivalence — the sorted union of complementary workers must equal the
+full run byte-identically; any divergence is a cross-file spine-state
+leak to FIX, never an accepted delta. SpinePartitionEquivalenceTest (+4)
+pins 2-partition merge ≡ full, every singleton partition ≡ its slice,
+no foreign-file emissions, + negative control. Null path byte-identical
+(corpus 11,351/0; listAll ×8 identical). DECOMPOSITION queued: (6b) the
+profile-scale equivalence A/B (partitioned CLI runs on the 8 profiles vs
+sequential — divergences = the order-dependence worklist), (6c) the
+coroutine parallel driver (--workers N, deterministic merge via the
+stable sort), (6d) gate remaining per-file passes into the partition
+(cost order; cross-file walkers stay sequential-region), (6e) parallel
+emit on Default + IO sink. NEXT: (6b).
+
 **Round 604 (2026-07-18) — (b2d4) LANDED: the (b2) INSTALLER FLIP IS
 COMPLETE.** pushFunctionTypeParamsScope becomes the inline region
 `withFunctionTypeParamsScope` (fresh-minted TPs, constraints/defaults
@@ -2055,6 +2076,22 @@ interrupt the arc).
   `docs/parallel-caching.md` (trivially partitionable once INV.4 gives a per-file
   check entry); parallel emit on Default + IO write sink; deterministic partition +
   merge via the existing diagnostic sort. Structured concurrency from INV.1.
+  - [x] **(6a) The spine partition seam** — DONE round 605: `assignedFileNames`
+    gates both spine per-file loops; sequential-equivalence contract pinned by
+    SpinePartitionEquivalenceTest.
+  - [ ] **(6b) Profile-scale equivalence A/B.** Run partitioned checkers
+    (2-way split, sequentially) on the 8 tsc-source profiles via a scratch
+    driver; diff merged output vs the sequential run. Each divergence is a
+    cross-file spine-state leak (order-dependence bug) — fix before threading.
+  - [ ] **(6c) The parallel driver.** Coroutine workers (Default dispatcher,
+    JVM), deterministic partition (file order round-robin or size-balanced),
+    merge through the existing stable diagnostic sort; CLI `--workers N`
+    (default 1 until (6b) is clean + bench rows recorded).
+  - [ ] **(6d) Widen the partitioned region.** Gate remaining per-file passes
+    into the partition in cost order (each suite + listAll-gated); cross-file
+    walkers stay in the sequential region.
+  - [ ] **(6e) Parallel emit** on Default + IO write sink (INV.1's Flow
+    foundation; no dashboard delta expected — benches are --noEmit).
 - [ ] **INV.7 Productization** (absorbs M5.5/M5.6). Native re-enable (the big-input
   GC inversion should largely dissolve post INV.4/5); watch mode driven by a
   file-event Flow; `.tsbuildinfo`-style incremental reuse.
