@@ -20,6 +20,27 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 571b (2026-07-18) — (cta-m3f) LANDED: CLASS METHOD bodies join the
+anchor-eligible chains; m3e cost A/B'd as NOISE.** `ctaM3FnHop` extends the
+eligibility chain (Block → MethodDeclaration → ClassDeclaration → the
+statement-list chain; objlit methods/ctors/accessors stay legacy-owned).
+The method frame reproduces the ClassDeclaration-arm quirks: typeParams =
+class TPs + own ONLY (the legacy arm DROPS the enclosing scope's set via
+outerTypeParams=classTypeParams — `ctaFnBodyFrame(outerTpNames)`), TP decls
+accumulate normally, `CtaFrame.classForThis` threads per instance/static
+into the anchor ambient (replacing the unconditional B101 null). Pin
+lesson: the B101 void-this check requires a return-ANNOTATION-FREE method
+(`m.type != null` bails) — the first pin shape was wrong, probe-verified on
+both builds before blaming the threading (and a `cmd | grep | head && next`
+chain SWALLOWS the test failure — the pipeline exit is head's). ALSO: the
+m3e recordOnly cost measured by interleaved A/B (3 m3d/m3e pairs, both
+class dirs kept): medians 44,424 vs 44,108 ms = −0.7%, NOISE — the
+single-run bench spread was box drift per the interleave gotcha; no perf
+promotion. Gates: corpus 11,320/0; listAll ×8 identical vs m3e. NEXT:
+GetAccessor bodies (needs the B63.5 paired-setter return bridging in the
+frame), ctor/SetAccessor bodies (the currentLocalTypes this.X/param
+seeding), or the nested stmt-kind arms.
+
 **Round 571 (2026-07-18) — (cta-m3e) LANDED: anchor-SIMPLE lifted — the
 legacy nested-dispatch recordings are reproduced spine-side.** A NON-anchored
 VariableStatement's spine enter runs `ctaM3StmtAnchor(recordOnly = true)`:

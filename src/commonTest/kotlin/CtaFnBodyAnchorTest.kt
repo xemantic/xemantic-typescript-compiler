@@ -95,7 +95,8 @@ class CtaFnBodyAnchorTest {
     }
 
     @Test
-    fun `class method body stays legacy-owned and emits exactly once`() {
+    fun `class method body mismatch emits exactly once`() {
+        // (cta-m3f): method bodies of ClassDeclarations are now anchored.
         val n = countTs2322("""
             class C {
                 m() {
@@ -104,6 +105,44 @@ class CtaFnBodyAnchorTest {
             }
         """)
         assert(n == 1) { "expected exactly 1 TS2322, got $n" }
+    }
+
+    @Test
+    fun `instance method void-this-call check keeps firing exactly once`() {
+        // (cta-m3f): the B101 tryEmitVoidThisMethodToPrimitiveVar consults
+        // currentClassForThis — the anchor must thread frame.classForThis or
+        // this emission silently dies (reads as 0). The method must be
+        // return-ANNOTATION-FREE (the B101 gate bails on `m.type != null`;
+        // an explicit `: void` disqualifies — probe-verified round 571b).
+        val n = countTs2322("""
+            class C {
+                v() {}
+                m() {
+                    var x: number = this.v();
+                }
+            }
+        """)
+        assert(n == 1) { "expected exactly 1 TS2322 (B101 void-this), got $n" }
+    }
+
+    @Test
+    fun `static and generic-class method bodies emit exactly once`() {
+        val nStatic = countTs2322("""
+            class C {
+                static m() {
+                    const x: string = 1;
+                }
+            }
+        """)
+        assert(nStatic == 1) { "static: expected exactly 1 TS2322, got $nStatic" }
+        val nGeneric = countTs2322("""
+            class C<T> {
+                m() {
+                    const x: string = 1;
+                }
+            }
+        """)
+        assert(nGeneric == 1) { "generic: expected exactly 1 TS2322, got $nGeneric" }
     }
 
     @Test

@@ -724,6 +724,10 @@ class Checker(
         val nsSymbol: Symbol? = null,
         /** the fn's BUILT TypeParam scope + decl map (checkFunctionBody's
          *  installs), captured at the fn-body enter for the anchors. */
+        /** (cta-m3f): the legacy ClassDeclaration arm's per-member
+         *  currentClassForThis install (instance members only), reproduced by
+         *  the anchor's ambient. */
+        val classForThis: ClassDeclaration? = null,
         var fnTpScope: Map<String, Type.TypeParam>? = null,
         var fnTpDecls: Map<String, TypeParameter>? = null,
         // (cta-m2d) part 2: the currentLocalTypes family — maintained via the
@@ -785,20 +789,29 @@ class Checker(
      *  construction. */
     private fun ctaM3FnBodyAnchorScope(stmt: Node): Block? {
         val block = (stmt as NodeBase).parent as? Block ?: return null
-        val fn = (block as NodeBase).parent as? FunctionDeclaration ?: return null
-        var cur: Node? = (fn as NodeBase).parent
+        var cur: Node? = ctaM3FnHop(block) ?: return null
         while (cur != null) {
             when (cur) {
                 is SourceFile -> return block
                 is ModuleBlock, is ModuleDeclaration -> cur = (cur as NodeBase).parent
-                is Block -> {
-                    val p = (cur as NodeBase).parent as? FunctionDeclaration ?: return null
-                    cur = (p as NodeBase).parent
-                }
+                is Block -> cur = ctaM3FnHop(cur) ?: return null
                 else -> return null
             }
         }
         return null
+    }
+
+    /** (cta-m3f): hop a fn-body Block to the node ABOVE its function-like
+     *  owner — FunctionDeclaration bodies, or CLASS method bodies (through
+     *  the ClassDeclaration; objlit methods and ctors/accessors return null:
+     *  their legacy dispatch semantics are not reproduced). */
+    private fun ctaM3FnHop(block: Block): Node? = when (val owner = (block as NodeBase).parent) {
+        is FunctionDeclaration -> (owner as NodeBase).parent
+        is MethodDeclaration -> {
+            val cls = (owner as NodeBase).parent as? ClassDeclaration
+            if (cls == null) null else (cls as NodeBase).parent
+        }
+        else -> null
     }
 
 
@@ -827,7 +840,7 @@ class Checker(
         val sAsync = inAsyncFunctionBody
         val sGen = inGeneratorFunctionBody
         val sTpDecls = currentTypeParamDecls
-        currentClassForThis = null
+        currentClassForThis = frame.classForThis
         inNonArrowFunctionBody = frame.inFn
         inAsyncFunctionBody = frame.inAsync
         inGeneratorFunctionBody = frame.inGen
@@ -934,16 +947,24 @@ class Checker(
         base: CtaFrame, extraVarTypes: Map<String, String>? = null,
         inInstanceMember: Boolean = false,
         viaCheckFunctionBody: Boolean = true,
+        // (cta-m3f): METHOD frames — the legacy ClassDeclaration arm passes
+        // outerTypeParams = classTypeParams ONLY (the enclosing scope's set is
+        // DROPPED), while TP DECLS accumulate ambient + class + own; the
+        // class node threads currentClassForThis for instance members.
+        outerTpNames: Set<String>? = null,
+        classTps: List<TypeParameter>? = null,
+        classForThis: ClassDeclaration? = null,
     ): CtaFrame {
         val inner = base.varTypes.toMutableMap()
         extraVarTypes?.let { inner.putAll(it) }
-        val tpNames = base.typeParams + (tps?.map { it.name.text } ?: emptyList())
+        val tpNames = (outerTpNames ?: base.typeParams) + (tps?.map { it.name.text } ?: emptyList())
         val frame = CtaFrame(body, inner, returnAnn?.let { resolveSimpleTypeName(it) }, returnAnn,
             tpNames,
             inFn = if (viaCheckFunctionBody) true else base.inFn,
             inAsync = if (viaCheckFunctionBody) isAsync else base.inAsync,
             inGen = if (viaCheckFunctionBody) isGenerator else base.inGen,
-            inInstanceMember = inInstanceMember)
+            inInstanceMember = inInstanceMember,
+            classForThis = classForThis)
         frame.localTypes.putAll(base.localTypes)
         frame.localDeclNodes.putAll(base.localDeclNodes)
         frame.shadowedNames.addAll(base.shadowedNames)
@@ -972,9 +993,10 @@ class Checker(
                 applyBodyLocalShadowing(body.statements, paramNames)
                 applyAmbiguousBlockScopedLocals(body.statements, paramNames)
                 shadowNestedFunctionNames(body.statements)
-                if (!tps.isNullOrEmpty()) {
+                if (!tps.isNullOrEmpty() || !classTps.isNullOrEmpty()) {
                     val decls = base.fnTpDecls?.toMutableMap() ?: mutableMapOf()
-                    for (tp in tps) decls[tp.name.text] = tp
+                    classTps?.let { for (tp in it) decls[tp.name.text] = tp }
+                    tps?.let { for (tp in it) decls[tp.name.text] = tp }
                     frame.fnTpDecls = decls
                 } else frame.fnTpDecls = base.fnTpDecls
                 val fnScope = if (!tps.isNullOrEmpty()) {
@@ -1053,12 +1075,25 @@ class Checker(
                     node, parent.parameters, parent.type, parent.typeParameters,
                     isAsync = ModifierFlag.Async in parent.modifiers,
                     isGenerator = false, base = ctaFrames.last()))
-                is MethodDeclaration -> ctaFrames.addLast(ctaFnBodyFrame(
-                    node, parent.parameters, parent.type, parent.typeParameters,
-                    isAsync = ModifierFlag.Async in parent.modifiers,
-                    isGenerator = parent.asteriskToken, base = ctaFrames.last(),
-                    extraVarTypes = ctaClassThisVarTypes(parent),
-                    inInstanceMember = ModifierFlag.Static !in parent.modifiers))
+                is MethodDeclaration -> {
+                    // (cta-m3f): a CLASS method's frame carries the legacy
+                    // ClassDeclaration-arm context — class TPs REPLACE the
+                    // enclosing typeParams set (outerTypeParams=classTypeParams),
+                    // decls accumulate, classForThis per instance/static.
+                    val cls = (parent as NodeBase).parent as? ClassDeclaration
+                    val isStatic = ModifierFlag.Static in parent.modifiers
+                    ctaFrames.addLast(ctaFnBodyFrame(
+                        node, parent.parameters, parent.type, parent.typeParameters,
+                        isAsync = ModifierFlag.Async in parent.modifiers,
+                        isGenerator = parent.asteriskToken, base = ctaFrames.last(),
+                        extraVarTypes = ctaClassThisVarTypes(parent),
+                        inInstanceMember = !isStatic,
+                        outerTpNames = if (cls != null)
+                            cls.typeParameters?.map { it.name.text }?.toSet() ?: emptySet()
+                        else null,
+                        classTps = cls?.typeParameters,
+                        classForThis = if (cls != null && !isStatic) cls else null))
+                }
                 // Constructor/SetAccessor bodies are walked WITHOUT
                 // checkFunctionBody in the legacy arms (inNonArrowFunctionBody
                 // stays as-is); GetAccessor goes through checkFunctionBody but
@@ -1089,6 +1124,7 @@ class Checker(
                     ctaFrames.addLast(CtaFrame(node, top.varTypes.toMutableMap(),
                         top.returnType, top.returnTypeNode, top.typeParams,
                         top.inFn, top.inAsync, top.inGen, top.inInstanceMember,
+                classForThis = top.classForThis,
                         localTypes = top.localTypes, localDeclNodes = top.localDeclNodes,
                         shadowedNames = top.shadowedNames, ambiguousNames = top.ambiguousNames))
                 }
@@ -1111,6 +1147,7 @@ class Checker(
             ctaFrames.addLast(CtaFrame(node, top.varTypes.toMutableMap(),
                 null, null, emptySet(),
                 top.inFn, top.inAsync, top.inGen, top.inInstanceMember,
+                classForThis = top.classForThis,
                 nsSymbol = pushSym,
                 localTypes = top.localTypes, localDeclNodes = top.localDeclNodes,
                 shadowedNames = top.shadowedNames, ambiguousNames = top.ambiguousNames))
@@ -1122,6 +1159,7 @@ class Checker(
             ctaFrames.addLast(CtaFrame(node, top.varTypes.toMutableMap(),
                 top.returnType, top.returnTypeNode, top.typeParams,
                 top.inFn, top.inAsync, top.inGen, top.inInstanceMember,
+                classForThis = top.classForThis,
                 localTypes = top.localTypes, localDeclNodes = top.localDeclNodes,
                 shadowedNames = top.shadowedNames, ambiguousNames = top.ambiguousNames))
         }
