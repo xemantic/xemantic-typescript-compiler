@@ -20,6 +20,26 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 573 (2026-07-18) — (cta-m3h1) LANDED: nested-position emissions join
+the anchor.** Var/Expr/Return statements at nested positions anchor when
+`ctaM3DiscardDepth == 0` and `ctaM3NestedChainOk` (statement Blocks /
+clauses / bare if-loop-try-catch-labeled positions / fn hops). TWO legacy
+arm surfaces reproduced by position kind: LIST positions get the full
+InStatements surface, BARE positions the REDUCED InStmt surface
+(`bareSurface` — no walkFunctionBodiesInExpr / const-literal registration /
+return-expr B127), with currentScopeStatements = the nearest enclosing
+list. The InStmt arms gained marks via the m3h0 recorded set. Narrowed
+then-branches stay legacy-owned — pinned by the SHARP narrowed-display
+test ('string' vs 'string | undefined'). With m3e recordings + m3h1, the
+assignability giant's Var/Expr/Return emissions are now spine-anchored
+across ALL reproduced scopes; remaining legacy-owned: narrowed-region
+statements, arrows/fn-exprs/objlit-method bodies, checkFlowNoOverlapCondition
+at if-conditions, and the non-stmt arms (class member loops etc.). Gates:
+corpus 11,325/0; listAll ×8 identical vs m3h0 — clean on the FIRST full
+run. NEXT: narrowed-region anchoring (reproduce the narrowing WRITE in a
+copied-map frame at then enters) — after which the emit-twice legacy runs
+for these arms can start RETIRING (the multiplier payoff).
+
 **Round 572b (2026-07-18) — (cta-m3h0) LANDED: the legacy truncation marks
 consult the spine's RECORDED anchor set.** The spine records every anchored
 statement's nodeId per file (`ctaM3AnchoredStmts`); the three legacy mark

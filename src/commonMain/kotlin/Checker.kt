@@ -819,6 +819,56 @@ class Checker(
         return null
     }
 
+    /** (cta-m3h1): is every position from [from] up to the SourceFile one the
+     *  MARKED legacy dispatchers walk with frame-reproduced ambient? Chains may
+     *  cross statement-position Blocks, switch clauses, bare if/loop/try/labeled
+     *  positions, ModuleBlock chains, and fn-like boundaries via [ctaM3FnHop];
+     *  arrows/fn-exprs/objlit methods and any unknown position disqualify.
+     *  Narrowing-DISCARD regions are excluded by the caller's
+     *  `ctaM3DiscardDepth == 0` gate, not here. */
+    private fun ctaM3NestedChainOk(from: Node): Boolean {
+        var cur: Node? = from
+        while (cur != null) {
+            when (cur) {
+                is SourceFile -> return true
+                is ModuleBlock, is ModuleDeclaration,
+                is CaseClause, is DefaultClause, is SwitchStatement,
+                is IfStatement, is ForStatement, is ForInStatement, is ForOfStatement,
+                is WhileStatement, is DoStatement, is TryStatement, is CatchClause,
+                is LabeledStatement -> cur = (cur as NodeBase).parent
+                is Block -> {
+                    when ((cur as NodeBase).parent) {
+                        is FunctionDeclaration, is MethodDeclaration, is Constructor,
+                        is GetAccessor, is SetAccessor -> {
+                            cur = ctaM3FnHop(cur) ?: return false
+                        }
+                        is ArrowFunction, is FunctionExpression -> return false
+                        else -> cur = (cur as NodeBase).parent
+                    }
+                }
+                else -> return false
+            }
+        }
+        return false
+    }
+
+    /** The nearest enclosing statement LIST above [stmt] — what the legacy
+     *  InStmt dispatch leaves as the ambient currentScopeStatements. */
+    private fun ctaM3NearestList(stmt: Node): List<Statement>? {
+        var cur: Node? = (stmt as NodeBase).parent
+        while (cur != null) {
+            when (cur) {
+                is SourceFile -> return cur.statements
+                is ModuleBlock -> return cur.statements
+                is Block -> return cur.statements
+                is CaseClause -> return cur.statements
+                is DefaultClause -> return cur.statements
+                else -> cur = (cur as NodeBase).parent
+            }
+        }
+        return null
+    }
+
     /** (cta-m3f): hop a fn-body Block to the node ABOVE its function-like
      *  owner — FunctionDeclaration bodies, or CLASS method bodies (through
      *  the ClassDeclaration; objlit methods and ctors/accessors return null:
@@ -833,7 +883,7 @@ class Checker(
     }
 
 
-    private fun ctaM3StmtAnchor(stmt: Statement, scopeStatements: List<Statement>, recordOnly: Boolean = false) {
+    private fun ctaM3StmtAnchor(stmt: Statement, scopeStatements: List<Statement>, recordOnly: Boolean = false, bareSurface: Boolean = false) {
         val frame = ctaFrames.last()
         // (cta-m3e): recordOnly reproduces the legacy NESTED dispatch's map
         // evolution for a non-anchored VariableStatement — the map writes are
@@ -885,6 +935,33 @@ class Checker(
                                 checkAssignmentExpression(init, spineSource, spineFileName, frame.varTypes, frame.typeParams)
                             }
                         }
+                    }
+                } else if (bareSurface) {
+                    // (cta-m3h1): BARE statement positions (if-then/else, loop
+                    // bodies, labeled) run the checkTypeAssignabilityInStmt arm
+                    // surface — REDUCED vs the list arms: the Var arm has no
+                    // registerConstLiteralUnionNarrowing / walkFunctionBodiesInExpr,
+                    // the Expr arm no walkFunctionBodiesInExpr, the Return arm
+                    // no return-expr inner-assignment check.
+                    when (stmt) {
+                        is VariableStatement -> {
+                            for (decl in stmt.declarationList.declarations) {
+                                checkVarDeclAssignability(decl, spineSource, spineFileName, frame.varTypes, frame.typeParams)
+                                val init = decl.initializer
+                                if (init is BinaryExpression && init.operator == SyntaxKind.Equals) {
+                                    checkAssignmentExpression(init, spineSource, spineFileName, frame.varTypes, frame.typeParams)
+                                }
+                            }
+                        }
+                        is ExpressionStatement -> {
+                            checkAssignmentExpression(stmt.expression, spineSource, spineFileName, frame.varTypes, frame.typeParams)
+                        }
+                        is ReturnStatement -> {
+                            if (frame.returnType != null || frame.returnTypeNode != null) {
+                                checkReturnAssignability(stmt, frame.returnType ?: "", spineSource, spineFileName, frame.varTypes, frame.typeParams, frame.returnTypeNode)
+                            }
+                        }
+                        else -> {}
                     }
                 } else when (stmt) {
                     is VariableStatement -> {
@@ -18813,11 +18890,34 @@ class Checker(
             val anchored = when (p) {
                 is SourceFile -> { ctaM3MarkAnchored(node); ctaM3StmtAnchor(node as Statement, p.statements); true }
                 is ModuleBlock -> { ctaM3MarkAnchored(node); ctaM3StmtAnchor(node as Statement, p.statements); true }
-                // (cta-m3d): fn-body-DIRECT statements of eligible
-                // FunctionDeclaration chains (see ctaM3FnBodyAnchorScope).
-                is Block -> if (ctaM3FnBodyAnchorScope(node) != null) {
+                // (cta-m3d/m3h1): fn-body-DIRECT statements of eligible chains,
+                // and NESTED statement-position Blocks outside narrowing-DISCARD
+                // regions (their legacy dispatch is the marked InStatements
+                // arms — the LIST surface).
+                is Block -> if (ctaM3FnBodyAnchorScope(node) != null ||
+                    (ctaM3DiscardDepth == 0 && ctaM3NestedChainOk(p))
+                ) {
                     ctaM3MarkAnchored(node); ctaM3StmtAnchor(node as Statement, p.statements); true
                 } else false
+                // (cta-m3h1): switch-clause statements — the LIST surface too
+                // (legacy dispatches clause.statements via InStatements).
+                is CaseClause -> if (ctaM3DiscardDepth == 0 && ctaM3NestedChainOk(p)) {
+                    ctaM3MarkAnchored(node); ctaM3StmtAnchor(node as Statement, p.statements); true
+                } else false
+                is DefaultClause -> if (ctaM3DiscardDepth == 0 && ctaM3NestedChainOk(p)) {
+                    ctaM3MarkAnchored(node); ctaM3StmtAnchor(node as Statement, p.statements); true
+                } else false
+                // (cta-m3h1): BARE statement positions — the REDUCED InStmt
+                // surface.
+                is IfStatement, is ForStatement, is ForInStatement, is ForOfStatement,
+                is WhileStatement, is DoStatement, is LabeledStatement -> {
+                    val list = if (ctaM3DiscardDepth == 0 && ctaM3NestedChainOk(p)) ctaM3NearestList(node) else null
+                    if (list != null) {
+                        ctaM3MarkAnchored(node)
+                        ctaM3StmtAnchor(node as Statement, list, bareSurface = true)
+                        true
+                    } else false
+                }
                 else -> false
             }
             // (cta-m3e): a NON-anchored VariableStatement reproduces the legacy
@@ -85288,11 +85388,19 @@ interface DataView {
         ctaAuditRecord(stmt, varTypes, returnType, typeParams, returnTypeNode)
         when (stmt) {
             is Block -> checkTypeAssignabilityInStatements(stmt.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams, returnTypeNode)
-            is ExpressionStatement -> checkAssignmentExpression(stmt.expression, source, fileName, varTypes, typeParams)
+            is ExpressionStatement -> {
+                // (cta-m3h1): spine-anchored BARE positions truncate here too.
+                val ctaM3Mk = if (ctaM3IsAnchoredStmt(stmt, fileName)) diagnostics.size else -1
+                checkAssignmentExpression(stmt.expression, source, fileName, varTypes, typeParams)
+                if (ctaM3Mk >= 0) while (diagnostics.size > ctaM3Mk) diagnostics.removeAt(diagnostics.size - 1)
+            }
             is ReturnStatement -> {
+                val ctaM3Mk = if (ctaM3IsAnchoredStmt(stmt, fileName)) diagnostics.size else -1
                 if (returnType != null || returnTypeNode != null) checkReturnAssignability(stmt, returnType ?: "", source, fileName, varTypes, typeParams, returnTypeNode)
+                if (ctaM3Mk >= 0) while (diagnostics.size > ctaM3Mk) diagnostics.removeAt(diagnostics.size - 1)
             }
             is VariableStatement -> {
+                val ctaM3Mk = if (ctaM3IsAnchoredStmt(stmt, fileName)) diagnostics.size else -1
                 for (decl in stmt.declarationList.declarations) {
                     checkVarDeclAssignability(decl, source, fileName, varTypes, typeParams)
                     // B127: an assignment used as a var-decl initializer (`const x = a = b`)
@@ -85305,6 +85413,7 @@ interface DataView {
                         checkAssignmentExpression(init, source, fileName, varTypes, typeParams)
                     }
                 }
+                if (ctaM3Mk >= 0) while (diagnostics.size > ctaM3Mk) diagnostics.removeAt(diagnostics.size - 1)
             }
             is IfStatement -> {
                 // B417: flow-aware TS2367 on the if/else-if CONDITION.

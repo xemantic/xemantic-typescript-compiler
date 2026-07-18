@@ -217,6 +217,60 @@ class CtaFnBodyAnchorTest {
     }
 
     @Test
+    fun `switch-clause and bare-position statements emit exactly once`() {
+        // (cta-m3h1): nested LIST positions (clauses) and BARE positions
+        // (if-then without braces, loop bodies) anchor outside narrowing
+        // regions.
+        val nClause = countTs2322("""
+            declare const k: number;
+            function f() {
+                switch (k) {
+                    case 1:
+                        const s: string = 1;
+                        break;
+                }
+            }
+        """)
+        assert(nClause == 1) { "clause: expected exactly 1 TS2322, got $nClause" }
+        val nBare = countTs2322("""
+            declare const cond: boolean;
+            function g(): string {
+                if (cond) return 1;
+                return "ok";
+            }
+        """)
+        assert(nBare == 1) { "bare-if-return: expected exactly 1 TS2322, got $nBare" }
+        val nLoop = countTs2322("""
+            function h() {
+                for (let i = 0; i < 3; i++) {
+                    const s: string = 1;
+                }
+            }
+        """)
+        assert(nLoop == 1) { "loop-body: expected exactly 1 TS2322, got $nLoop" }
+    }
+
+    @Test
+    fun `narrowed then-branch statement stays legacy-owned with the NARROWED display`() {
+        // (cta-m3h1) THE sharp discard pin: the legacy dispatch runs the
+        // then-branch under the narrowing wrapper (a = string), so the
+        // emission's SOURCE display is the narrowed 'string'. If the discard
+        // gate broke and the anchor emitted instead, the un-narrowed frame
+        // map would display 'string | undefined'.
+        val d = diagnose("""
+            function f(a: string | undefined) {
+                if (a !== undefined) {
+                    const n: number = a;
+                }
+            }
+        """).filter { it.code == 2322 }
+        assert(d.size == 1) { "expected exactly 1 TS2322, got ${d.size}" }
+        assert(d[0].message.contains("Type 'string' is not assignable")) {
+            "expected the NARROWED 'string' display, got: ${d[0].message}"
+        }
+    }
+
+    @Test
     fun `narrowing-discarded then-branch recording adds no emissions`() {
         // (cta-m3e) negative control: the then-branch runs under the legacy
         // narrowing wrapper (recordings discarded — the spine reproduction
