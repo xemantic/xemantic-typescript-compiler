@@ -25516,7 +25516,6 @@ class Checker(
                 is FunctionDeclaration -> {
                     val tps = stmt.typeParameters
                     if (!tps.isNullOrEmpty()) {
-                        val savedScope = currentTypeParamScope
                         val savedValueScope = mixinValueScope
                         val scope = currentTypeParamScope?.toMutableMap() ?: mutableMapOf()
                         for (tp in tps) {
@@ -25535,12 +25534,12 @@ class Checker(
                             val tpType = scope[typeName] ?: continue
                             valueScope[paramName] = tpType
                         }
-                        currentTypeParamScope = scope
                         mixinValueScope = valueScope
                         try {
-                            stmt.body?.let { checkMixinClassInStatements(it.statements, source, fileName) }
+                            withInstantiationContext(scopeMapper(scope)) {
+                                stmt.body?.let { checkMixinClassInStatements(it.statements, source, fileName) }
+                            }
                         } finally {
-                            currentTypeParamScope = savedScope
                             mixinValueScope = savedValueScope
                         }
                     } else {
@@ -118788,8 +118787,7 @@ interface DataView {
         // T to the class's canonical Type.TypeParam instead of errorType. Without this,
         // `class MyEvent<T> extends BaseEvent { target: T; }` would have `derivedType = errorType`
         // which trivially passes the TS2416 check.
-        val savedScope = currentTypeParamScope
-        if (classTypeParams != null && classTypeParams.isNotEmpty()) {
+        val overrideScope: MutableMap<String, Type.TypeParam>? = if (classTypeParams != null && classTypeParams.isNotEmpty()) {
             val classSymbol = globals[rawClassName]
             val classType = classSymbol?.let {
                 getDeclaredTypeOfSymbol(it) as? Type.Interface
@@ -118800,10 +118798,10 @@ interface DataView {
                 canonicalTypeParams.forEachIndexed { i, tp ->
                     scope[classTypeParams[i].name.text] = tp
                 }
-                currentTypeParamScope = scope
-            }
-        }
-        try {
+                scope
+            } else null
+        } else null
+        withInstantiationContext(if (overrideScope != null) scopeMapper(overrideScope) else ambientMapper()) {
 
         for (clause in heritageClauses) {
             for (typeExpr in clause.types) {
@@ -119313,8 +119311,6 @@ interface DataView {
                 }
             }
         }
-        } finally {
-            currentTypeParamScope = savedScope
         }
     }
 
@@ -120717,8 +120713,7 @@ interface DataView {
             tp.constraint?.let { if (typeParam.constraint == null) typeParam.constraint = getTypeFromTypeNode(it) }
             scope[tp.name.text] = typeParam
         }
-        currentTypeParamScope = if (scope.isEmpty()) null else scope
-        try {
+        withInstantiationContext(scopeMapper(if (scope.isEmpty()) null else scope)) {
             for (tp in tps) {
                 val defNode = tp.default ?: continue
                 // TS2716: circular default. NOTE tsc does NOT flag a DIRECT self-ref
@@ -120826,8 +120821,6 @@ interface DataView {
                     relatedInformation = related,
                 ))
             }
-        } finally {
-            currentTypeParamScope = savedScope
         }
     }
 

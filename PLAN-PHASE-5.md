@@ -20,6 +20,23 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 602 (2026-07-18) — (b2d2) LANDED: three more installer families on
+the bridge.** checkTpListDefaults (the empty→null shape — note its
+constraints resolve during the BUILD loop under the ambient scope, a
+deliberate behavior kept), checkMixinClassInStatements (dual-ambient:
+only the TP-scope half rides `withInstantiationContext`; mixinValueScope
+stays hand-rolled around it), and checkClassPropertyOverrides (the
+500-line heritage region — conditional install expressed as
+`overrideScope != null ? scopeMapper(...) : ambientMapper()`; an
+ambientMapper region is a semantic no-op install). Raw ambient
+tpScope writes 15 → 10; survivors: checkCallTypesInStatement (ccet leaf,
+7 sites), checkConstraintsInStatements (dual with currentTypeParamDecls),
+pushFunctionTypeParamsScope (push/pop helper), the spine frame LIFO
+sites (not region-formable — restore at leave crosses call boundaries).
+Gates: corpus 11,347/0; listAll ×8 byte-identical. NEXT: (b2d3) the
+ccet-leaf sites, then the (bN) blockers list is down to the
+structurally-hard cases.
+
 **Round 601 (2026-07-18) — (b2d) LANDED: the walker-installer idiom flipped
 to the region form via `withInternedTpScope`.** The shared shape (intern
 TPs → layered scope [+ the AST side-map] → constraints [+ defaults]
