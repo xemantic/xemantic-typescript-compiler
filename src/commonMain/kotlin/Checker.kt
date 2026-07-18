@@ -127308,6 +127308,11 @@ interface DataView {
             if (fileName.endsWith(".js") || fileName.endsWith(".jsx") ||
                 fileName.endsWith(".mjs") || fileName.endsWith(".cjs")) continue
             val source = result.sourceFile.text
+            // (ccet-prep) round 584: per-file reset — the pass previously
+            // inherited the cpa pass's LAST-file map as its starting state
+            // (the cpa->ccet residue channel, the round-578 pattern); a
+            // residue-free ccet is the cpa-retire prerequisite.
+            currentLocalTypes = HashMap()
             currentFileLocals = result.locals
             currentCheckFileName = fileName
             // B469: activate flow narrowing during the call-type walk so a reference

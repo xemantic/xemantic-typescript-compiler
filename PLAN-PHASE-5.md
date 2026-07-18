@@ -20,6 +20,19 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 584 (2026-07-18) — (ccet-prep) LANDED: the cpa→ccet residue channel
+is closed — ZERO couplings.** checkCallExpressionTypes' driver resets
+`currentLocalTypes` per file (it previously inherited the cpa pass's
+LAST-file map as its starting state — the round-578 pattern, one giant
+downstream). Measured: corpus 11,353/0 AND listAll ×8 byte-identical with
+NO own-recording needed (unlike the cta→cpa channel's one corpus shape).
+This is the cpa-retire prerequisite: with ccet residue-free, the cpa
+legacy emit-twice runs' only remaining consumer is the cpa pass itself.
+NEXT: the (cpa-retire) EXPERIMENT — no-op the legacy checkPropertyAccess
+dispatch and gate; if identical, delete the legacy runs + the audit
+scaffolding (CpaAnchorTest + the corpus remain the guards) and re-measure
+the wall-time win.
+
 **Round 583 (2026-07-18) — (cpa-m3c) LANDED: heritage + property-initializer
 walks join the anchor — the cpa statement-DISPATCH emission surface is
 fully anchored.** A ClassDECLARATION's heritage expressions anchor at the
