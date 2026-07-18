@@ -20,6 +20,33 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 581 (2026-07-18) — (cpa-m3a) LANDED: THE FIRST cpa EMISSIONS RUN
+FROM THE SPINE — frames always-on.** Var/Expr/Return statements' DIRECT
+expression walks dispatch from the spine anchor under the frame ambient
+(the walk IS the legacy expr walker, so nested arrow/fn-expr/class-expr
+bodies emit as part of it — the ANCHOR chain variant (`forAnchor`) rejects
+those crossings to prevent double-anchoring; the cta
+walkFunctionBodiesInExpr precedent); the legacy arms truncate via the
+recorded set. Var anchors run walk+record INTERLEAVED per decl (the legacy
+order); the decl-leave recording path serves the remaining non-anchored
+chains; audit fingerprints skip statements under anchored statements
+SYMMETRICALLY (the anchor's walk owns their context, not the frames).
+THREE quirks extracted by the gates: (1) `inStaticClassMethod` must be
+INSTALLED in the emission ambient (a FIELD the emitters consult — 8
+class-family corpus failures); (2) the anchor dispatches at the statement's
+LEAVE, never its enter — cpa emitters PROBE the diagnostics list for the
+subtree's own spine emissions (the ures TS2304 suppressing
+checkSingleElementAccess's TS2538 — the round-537 lesson recurs); (3)
+`cpaResolveClassType` installs the lexical tables (a BLOCK-level class's
+class+interface merge resolves via lexicalScopeSymbol — the Inv2 pilot
+pin caught the null-ambient miss). Pins +6 (CpaAnchorTest: exactly-once
+across top-level/ns/if/switch/arrow/fn-expr/method/this scopes + negative
+control). Gates: corpus 11,348/0; listAll ×8 identical. NEXT: (cpa-m3b)
+the remaining statement arms' direct walks (If/While/Do/For conditions,
+Switch subject+case exprs, Throw/With/ExportAssignment, TypeAlias's
+walkTypeNodeForUndefinedTypeQueryChain, Enum member initializers with
+currentEnclosingEnum) — then the class-member / heritage arms.
+
 **Round 580 (2026-07-18) — (cpa-m2b) LANDED: tier 2 completes the cpa frame
 skeleton — 7/7 audit-green on the FIRST run (the round-579b design scout
 paid off).** The chain test became a unified per-EDGE reach walker

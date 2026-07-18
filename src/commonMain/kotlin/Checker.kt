@@ -752,6 +752,26 @@ class Checker(
             classType = null, inStatic = false))
     }
 
+    /** (cpa-m3a) round 581: the per-file lexical-scope tables for the anchor
+     *  emissions (the legacy pass runs with currentLexicalScopes installed;
+     *  the spine does not — installed per dispatch). */
+    private var cpaM3LexicalScopes: Map<Int, LexicalScope>? = null
+
+    /** (cpa-m3a): nodeIds of statements whose cpa emissions the spine
+     *  anchored, per file — consulted by the legacy truncation marks (the
+     *  cta-m3h0 recorded-set pattern; gate identity by construction). */
+    private val cpaM3Anchored = HashMap<String, HashSet<Int>>()
+
+    private fun cpaM3MarkAnchored(stmt: Node) {
+        val id = (stmt as NodeBase).nodeId
+        if (id >= 0) cpaM3Anchored.getOrPut(spineFileName) { HashSet() }.add(id)
+    }
+
+    private fun cpaM3IsAnchoredStmt(stmt: Node, fileName: String): Boolean {
+        val id = (stmt as NodeBase).nodeId
+        return id >= 0 && cpaM3Anchored[fileName]?.contains(id) == true
+    }
+
     /** (cpa-m2a/m2b): is [stmt] reached by the legacy cpa dispatchers? The
      *  walk climbs (child, parent) EDGES with per-arm precision mirroring the
      *  legacy walkers' actual recursion — statement positions (the cpa InStmt
@@ -763,7 +783,7 @@ class Checker(
      *  namespace's inner declaration is legacy-unreached (the
      *  ModuleDeclaration arm walks only ModuleBlock bodies). Fails CLOSED on
      *  unknown edges. */
-    private fun cpaM2ChainOk(stmt: Node): Boolean {
+    private fun cpaM2ChainOk(stmt: Node, forAnchor: Boolean = false): Boolean {
         var cur: Node = stmt
         while (true) {
             val parent = (cur as NodeBase).parent ?: return false
@@ -800,34 +820,39 @@ class Checker(
                 is MethodDeclaration -> {
                     if (cur !== parent.body) return false
                     val cls = (parent as NodeBase).parent
-                    if (cls !is ClassDeclaration && cls !is ClassExpression) return false
+                    if (cls !is ClassDeclaration && !(cls is ClassExpression && !forAnchor)) return false
                     cur = parent
                 }
                 is Constructor -> {
                     if (cur !== parent.body) return false
                     val cls = (parent as NodeBase).parent
-                    if (cls !is ClassDeclaration && cls !is ClassExpression) return false
+                    if (cls !is ClassDeclaration && !(cls is ClassExpression && !forAnchor)) return false
                     cur = parent
                 }
                 is GetAccessor -> {
                     if (cur !== parent.body) return false
                     val cls = (parent as NodeBase).parent
-                    if (cls !is ClassDeclaration && cls !is ClassExpression) return false
+                    if (cls !is ClassDeclaration && !(cls is ClassExpression && !forAnchor)) return false
                     cur = parent
                 }
                 is SetAccessor -> {
                     if (cur !== parent.body) return false
                     val cls = (parent as NodeBase).parent
-                    if (cls !is ClassDeclaration && cls !is ClassExpression) return false
+                    if (cls !is ClassDeclaration && !(cls is ClassExpression && !forAnchor)) return false
                     cur = parent
                 }
+                // (cpa-m3a): the ANCHOR variant rejects expression-position fn
+                // bodies and ClassExpression regions — their statements' cpa
+                // emissions are owned by the CONTAINING statement's anchor
+                // walk (anchoring them separately would double-emit; the cta
+                // walkFunctionBodiesInExpr precedent).
                 is ArrowFunction ->
-                    if (cur === parent.body) cur = parent else return false
+                    if (cur === parent.body && !forAnchor) cur = parent else return false
                 is FunctionExpression ->
-                    if (cur === parent.body) cur = parent else return false
+                    if (cur === parent.body && !forAnchor) cur = parent else return false
                 // Class containers (members + heritage reached).
                 is ClassDeclaration -> cur = parent
-                is ClassExpression -> cur = parent
+                is ClassExpression -> if (forAnchor) return false else cur = parent
                 is HeritageClause -> cur = parent
                 is ExpressionWithTypeArguments ->
                     if (cur === parent.expression) cur = parent else return false
@@ -900,6 +925,8 @@ class Checker(
         val sLT = currentLocalTypes; val sPB = currentParamBindingNames
         val sEC = currentEnumConstrainedParams; val sSh = currentShadowedNames
         val sCFN = currentCheckFileName; val sFG = currentFlowGraph
+        val sLx = currentLexicalScopes
+        val sStatic = inStaticClassMethod
         val sNs = ArrayList(propertyAccessEnclosingNamespaces)
         currentLocalTypes = frame.localTypes
         currentParamBindingNames = frame.paramBindings
@@ -907,12 +934,16 @@ class Checker(
         currentShadowedNames = frame.shadowed
         currentCheckFileName = spineFileName
         currentFlowGraph = ctaM3FlowGraph
+        currentLexicalScopes = cpaM3LexicalScopes
+        inStaticClassMethod = frame.inStatic
         propertyAccessEnclosingNamespaces.clear()
         for (f in cpaFrames) f.nsSymbol?.let { propertyAccessEnclosingNamespaces.addLast(it) }
         try { block() } finally {
             currentLocalTypes = sLT; currentParamBindingNames = sPB
             currentEnumConstrainedParams = sEC; currentShadowedNames = sSh
             currentCheckFileName = sCFN; currentFlowGraph = sFG
+            currentLexicalScopes = sLx
+            inStaticClassMethod = sStatic
             propertyAccessEnclosingNamespaces.clear()
             propertyAccessEnclosingNamespaces.addAll(sNs)
         }
@@ -1035,8 +1066,22 @@ class Checker(
     }
 
     /** (cpa-m2a): the legacy ClassDeclaration arm's classType resolution,
-     *  against the frame-reproduced namespace stack. */
+     *  against the frame-reproduced namespace stack. (cpa-m3a): runs at
+     *  frame-push time OUTSIDE the ambient install, so the lexical tables
+     *  are installed here — a BLOCK-level class's class+interface merge
+     *  resolves through lexicalScopeSymbol, which consults
+     *  currentLexicalScopes (null at spine rest — the Inv2 pilot pin). */
     private fun cpaResolveClassType(cls: ClassDeclaration): Type? {
+        val sLx = currentLexicalScopes
+        currentLexicalScopes = cpaM3LexicalScopes
+        try {
+            return cpaResolveClassTypeCore(cls)
+        } finally {
+            currentLexicalScopes = sLx
+        }
+    }
+
+    private fun cpaResolveClassTypeCore(cls: ClassDeclaration): Type? {
         val name = cls.name ?: return null
         var symbol: Symbol? = null
         for (f in cpaFrames.asReversed()) {
@@ -1055,6 +1100,63 @@ class Checker(
             symbol = syn
         }
         return getDeclaredTypeOfSymbol(symbol)
+    }
+
+    /** The legacy VariableStatement arm's per-decl B136/B186 recordings —
+     *  shared by the decl-leave reproduction and the anchor's interleaved
+     *  run. Must be called under the frame ambient. */
+    private fun cpaApplyDeclRecordings(decl: VariableDeclaration) {
+        val nm = decl.name as? Identifier
+        if (nm != null && decl.type == null &&
+            (decl.initializer is CallExpression || decl.initializer is ElementAccessExpression) &&
+            currentLocalTypes[nm.text] == null) {
+            val t = getTypeOfExpression(decl.initializer)
+            if (t !== anyType && t !== errorType && !typeContainsUnresolvedTypeParam(t)) {
+                currentLocalTypes[nm.text] = t
+            }
+        }
+        val pattern = decl.name as? ArrayBindingPattern
+        if (pattern != null && decl.type == null) {
+            val init = decl.initializer
+            if (init is BinaryExpression &&
+                (init.operator == SyntaxKind.BarBar || init.operator == SyntaxKind.QuestionQuestion)) {
+                val rightArr = init.right as? ArrayLiteralExpression
+                val call = init.left as? CallExpression
+                val callee = call?.expression as? PropertyAccessExpression
+                if (rightArr != null && rightArr.elements.isEmpty() &&
+                    callee != null && callee.name.text == "match") {
+                    val recvType = getTypeOfExpression(callee.expression)
+                    if (recvType === stringType || recvType is Type.StringLiteral) {
+                        for (el in pattern.elements) {
+                            val be = el as? BindingElement ?: continue
+                            if (be.dotDotDotToken) continue
+                            val bn = be.name as? Identifier ?: continue
+                            if (be.initializer == null || be.initializer is StringLiteralNode) {
+                                currentLocalTypes[bn.text] = stringType
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /** (cpa-m3a): is [node]'s NEAREST statement ancestor an ANCHORED
+     *  Var/Expr/Return? Statements nested in an anchored statement's
+     *  EXPRESSION (arrow/fn-expr/class-expr bodies) are emitted by the
+     *  anchor's legacy-style walk with its own interleaved state — the
+     *  frames no longer own their context, so the AUDIT fingerprints skip
+     *  them symmetrically on both sides. */
+    private fun cpaM2NearestStmtAncestorAnchored(node: Node): Boolean {
+        var cur: Node? = (node as NodeBase).parent
+        while (cur != null) {
+            if (cur is Statement && cpaM2StmtPosition(cur)) {
+                return (cur is VariableStatement || cur is ExpressionStatement || cur is ReturnStatement) &&
+                    cpaM2ChainOk(cur, forAnchor = true)
+            }
+            cur = (cur as NodeBase).parent
+        }
+        return false
     }
 
     private fun cpaSpineEnter(node: Node) {
@@ -1262,13 +1364,14 @@ class Checker(
                 }
             }
         }
-        // Statement fingerprint (covered chains only). The POSITION gate
-        // mirrors the legacy dispatch sites: statement-list elements + the
-        // single-statement positions — a TryStatement's/CatchClause's own
-        // Blocks are reached via their statement LISTS, never dispatched AS
-        // statements, and a catch VariableDeclaration (a Statement subtype)
-        // is never dispatched at all.
-        if (node is Statement && cpaM2StmtPosition(node) && cpaM2ChainOk(node)) {
+        // Statement fingerprint (covered chains only; audit-gated). The
+        // POSITION gate mirrors the legacy dispatch sites: statement-list
+        // elements + the single-statement positions — a TryStatement's/
+        // CatchClause's own Blocks are reached via their statement LISTS,
+        // never dispatched AS statements, and a catch VariableDeclaration (a
+        // Statement subtype) is never dispatched at all.
+        if (cpaAuditEnabled && node is Statement && cpaM2StmtPosition(node) && cpaM2ChainOk(node) &&
+            !cpaM2NearestStmtAncestorAnchored(node)) {
             val id = (node as NodeBase).nodeId
             if (id >= 0) {
                 val top = cpaFrames.last()
@@ -1282,6 +1385,38 @@ class Checker(
 
     private fun cpaSpineLeave(node: Node) {
         if (spineIsDts || spineIsJsLike) return
+        // (cpa-m3a): the first EMISSION moves — Var/Expr/Return statements'
+        // DIRECT expression walks run from the spine under the frame ambient
+        // (the walk is the LEGACY expr walker, so nested arrow/fn-expr/
+        // class-expr bodies emit as part of it — the anchor chain variant
+        // excludes their statements from separate anchoring); the legacy arms
+        // truncate via the recorded set (emit-twice). Dispatched at the
+        // statement's LEAVE, never its enter — cpa emitters PROBE the
+        // diagnostics list for the subtree's OWN spine emissions (the ures
+        // TS2304 suppressing checkSingleElementAccess's TS2538 — the
+        // round-537 enter-dispatch lesson), and BEFORE the loop-var restores
+        // (a for-in BODY statement's walk needs the override active).
+        if ((node is VariableStatement || node is ExpressionStatement || node is ReturnStatement) &&
+            cpaM2StmtPosition(node) && cpaM2ChainOk(node, forAnchor = true)
+        ) {
+            cpaM3MarkAnchored(node)
+            val top = cpaFrames.last()
+            withCpaFrameAmbient(top) {
+                when (node) {
+                    is VariableStatement -> for (decl in node.declarationList.declarations) {
+                        decl.initializer?.let {
+                            checkPropertyAccessInExpr(it, spineSource, spineFileName, top.classType)
+                        }
+                        cpaApplyDeclRecordings(decl)
+                    }
+                    is ExpressionStatement ->
+                        checkPropertyAccessInExpr(node.expression, spineSource, spineFileName, top.classType)
+                    is ReturnStatement -> node.expression?.let {
+                        checkPropertyAccessInExpr(it, spineSource, spineFileName, top.classType)
+                    }
+                }
+            }
+        }
         val id = (node as NodeBase).nodeId
         // Loop-var override restores.
         while (cpaLoopVarRestores.isNotEmpty() && cpaLoopVarRestores.last().bodyId == id && id >= 0) {
@@ -1297,42 +1432,14 @@ class Checker(
         if (node is VariableDeclaration) {
             val vdl = (node as NodeBase).parent
             val vs = (vdl as? NodeBase)?.parent
-            if (vdl is VariableDeclarationList && vs is VariableStatement && cpaM2ChainOk(vs)) {
+            // (cpa-m3a): ANCHORED statements record interleaved with the
+            // anchor's initializer walks (the legacy per-decl order) — the
+            // decl-leave path serves the remaining (non-anchored) chains.
+            if (vdl is VariableDeclarationList && vs is VariableStatement && cpaM2ChainOk(vs) &&
+                !cpaM3IsAnchoredStmt(vs, spineFileName)) {
                 val frame = cpaFrames.last()
                 withCpaFrameAmbient(frame) {
-                    val nm = node.name as? Identifier
-                    if (nm != null && node.type == null &&
-                        (node.initializer is CallExpression || node.initializer is ElementAccessExpression) &&
-                        currentLocalTypes[nm.text] == null) {
-                        val t = getTypeOfExpression(node.initializer)
-                        if (t !== anyType && t !== errorType && !typeContainsUnresolvedTypeParam(t)) {
-                            currentLocalTypes[nm.text] = t
-                        }
-                    }
-                    val pattern = node.name as? ArrayBindingPattern
-                    if (pattern != null && node.type == null) {
-                        val init = node.initializer
-                        if (init is BinaryExpression &&
-                            (init.operator == SyntaxKind.BarBar || init.operator == SyntaxKind.QuestionQuestion)) {
-                            val rightArr = init.right as? ArrayLiteralExpression
-                            val call = init.left as? CallExpression
-                            val callee = call?.expression as? PropertyAccessExpression
-                            if (rightArr != null && rightArr.elements.isEmpty() &&
-                                callee != null && callee.name.text == "match") {
-                                val recvType = getTypeOfExpression(callee.expression)
-                                if (recvType === stringType || recvType is Type.StringLiteral) {
-                                    for (el in pattern.elements) {
-                                        val be = el as? BindingElement ?: continue
-                                        if (be.dotDotDotToken) continue
-                                        val bn = be.name as? Identifier ?: continue
-                                        if (be.initializer == null || be.initializer is StringLiteralNode) {
-                                            currentLocalTypes[bn.text] = stringType
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    cpaApplyDeclRecordings(node)
                 }
             }
         }
@@ -19489,8 +19596,9 @@ class Checker(
                 spineFileIsModule = isModuleFile(sf.statements)
                 // (cta-m3a): frames always-on — the anchors consume them.
                 ctaSpineFileReset(sf)
-                // (cpa-m2a): dead machinery, audit-only for now.
-                if (cpaAuditEnabled) cpaSpineFileReset(sf)
+                // (cpa-m3a): frames always-on — the anchors consume them.
+                cpaSpineFileReset(sf)
+                cpaM3LexicalScopes = result.lexicalScopes
                 ctaM3FlowGraph = result.flowGraph
                 // Batch 14 per-file strict-mode flags (the deleted
                 // checkStrictModeReservedWords preamble, verbatim): binding
@@ -19651,8 +19759,9 @@ class Checker(
     /** Per-node dispatch, preorder position (before children). */
     private fun spineEnterNode(node: Node) {
         ctaSpineEnter(node)
-        // (cpa-m2a): the g2 frame skeleton — audit-only dead machinery.
-        if (cpaAuditEnabled) cpaSpineEnter(node)
+        // (cpa-m2a/m3a): the g2 frame skeleton — always-on since the first
+        // emission moves.
+        cpaSpineEnter(node)
         // (cta-m3k): class property initializers — members, not statements.
         if (node is PropertyDeclaration && !spineIsDts) {
             val cls = (node as NodeBase).parent
@@ -19930,7 +20039,7 @@ class Checker(
     private fun spineLeaveNode(node: Node) {
         ctaSpineLeave(node)
         // (cpa-m2a): frame pops / loop-var restores / per-decl recordings.
-        if (cpaAuditEnabled) cpaSpineLeave(node)
+        cpaSpineLeave(node)
         // INV.4(d) walker 2: leave-position emissions (left-spine chain roots,
         // per-declarator recordings) + this node's frame pops.
         if (spineArithActive) spineArithLeaveNode(node)
@@ -120979,6 +121088,7 @@ interface DataView {
         if (!cpaAuditEnabled) return
         val id = (stmt as NodeBase).nodeId
         if (id < 0) return
+        if (cpaM2NearestStmtAncestorAnchored(stmt)) return
         cpaAuditLegacy[id] = cpaAuditFingerprint(enclosingClassType)
     }
 
@@ -121071,6 +121181,9 @@ interface DataView {
                 }
             }
             is VariableStatement -> {
+                // (cpa-m3a): spine-anchored statements truncate their duplicate
+                // emissions; the arm still runs for its maps' evolution.
+                val cpaM3Mk = if (cpaM3IsAnchoredStmt(stmt, fileName)) diagnostics.size else -1
                 for (decl in stmt.declarationList.declarations) {
                     decl.initializer?.let {
                         checkPropertyAccessInExpr(it, source, fileName, enclosingClassType)
@@ -121128,9 +121241,18 @@ interface DataView {
                         }
                     }
                 }
+                if (cpaM3Mk >= 0) while (diagnostics.size > cpaM3Mk) diagnostics.removeAt(diagnostics.size - 1)
             }
-            is ExpressionStatement -> checkPropertyAccessInExpr(stmt.expression, source, fileName, enclosingClassType)
-            is ReturnStatement -> stmt.expression?.let { checkPropertyAccessInExpr(it, source, fileName, enclosingClassType) }
+            is ExpressionStatement -> {
+                val cpaM3Mk = if (cpaM3IsAnchoredStmt(stmt, fileName)) diagnostics.size else -1
+                checkPropertyAccessInExpr(stmt.expression, source, fileName, enclosingClassType)
+                if (cpaM3Mk >= 0) while (diagnostics.size > cpaM3Mk) diagnostics.removeAt(diagnostics.size - 1)
+            }
+            is ReturnStatement -> {
+                val cpaM3Mk = if (cpaM3IsAnchoredStmt(stmt, fileName)) diagnostics.size else -1
+                stmt.expression?.let { checkPropertyAccessInExpr(it, source, fileName, enclosingClassType) }
+                if (cpaM3Mk >= 0) while (diagnostics.size > cpaM3Mk) diagnostics.removeAt(diagnostics.size - 1)
+            }
             is IfStatement -> {
                 checkPropertyAccessInExpr(stmt.expression, source, fileName, enclosingClassType)
                 checkPropertyAccessInStatement(stmt.thenStatement, source, fileName, enclosingClassType)
