@@ -941,6 +941,11 @@ class Checker(
                             }
                         }
                     }
+                } else if (stmt is IfStatement) {
+                    // (cta-m3j): the B417 flow-aware TS2367 at the if-CONDITION —
+                    // the IDENTICAL emission in both legacy dispatchers' arms
+                    // (the then/else dispatches are recursion, owned elsewhere).
+                    checkFlowNoOverlapCondition(stmt.expression, spineSource, spineFileName)
                 } else if (bareSurface) {
                     // (cta-m3h1): BARE statement positions (if-then/else, loop
                     // bodies, labeled) run the checkTypeAssignabilityInStmt arm
@@ -18920,7 +18925,7 @@ class Checker(
     /** Per-node dispatch, preorder position (before children). */
     private fun spineEnterNode(node: Node) {
         ctaSpineEnter(node)
-        if ((node is VariableStatement || node is ExpressionStatement || node is ReturnStatement) && !spineIsDts) {
+        if ((node is VariableStatement || node is ExpressionStatement || node is ReturnStatement || node is IfStatement) && !spineIsDts) {
             val p = (node as NodeBase).parent
             val anchored = when (p) {
                 is SourceFile -> { ctaM3MarkAnchored(node); ctaM3StmtAnchor(node as Statement, p.statements); true }
@@ -83516,7 +83521,10 @@ interface DataView {
                 is Block -> checkTypeAssignabilityInStatements(stmt.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams, returnTypeNode)
                 is IfStatement -> {
                     // B417: flow-aware TS2367 on the if/else-if CONDITION.
+                    // (cta-m3j): truncated when the spine anchored this If.
+                    val ctaM3IfMk = if (ctaM3IsAnchoredStmt(stmt, fileName)) diagnostics.size else -1
                     checkFlowNoOverlapCondition(stmt.expression, source, fileName)
+                    if (ctaM3IfMk >= 0) while (diagnostics.size > ctaM3IfMk) diagnostics.removeAt(diagnostics.size - 1)
                     // B201: apply null-narrowing in the then-branch (mirrors the nested
                     // dispatcher's IfStatement arm) — `if (match !== null) { … }` at file
                     // level narrows currentLocalTypes["match"] for the block walk.
@@ -85452,7 +85460,10 @@ interface DataView {
             }
             is IfStatement -> {
                 // B417: flow-aware TS2367 on the if/else-if CONDITION.
+                // (cta-m3j): truncated when the spine anchored this If.
+                val ctaM3IfMk = if (ctaM3IsAnchoredStmt(stmt, fileName)) diagnostics.size else -1
                 checkFlowNoOverlapCondition(stmt.expression, source, fileName)
+                if (ctaM3IfMk >= 0) while (diagnostics.size > ctaM3IfMk) diagnostics.removeAt(diagnostics.size - 1)
                 // Apply control flow narrowing in then-branch
                 val narrowed = extractNullNarrowing(stmt.expression)
                 if (narrowed != null) {

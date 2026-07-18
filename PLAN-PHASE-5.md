@@ -20,6 +20,23 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 574 (2026-07-18) — (cta-m3j) LANDED: the B417 if-condition TS2367
+joins the anchor — EVERY per-statement emission of the legacy assignability
+dispatchers is now spine-anchored across the reproduced scopes.**
+checkFlowNoOverlapCondition dispatches at the IfStatement's spine enter
+(identical in both legacy arms → one anchor arm ahead of the surface
+split); both legacy sites truncate via the recorded set; else-if and
+narrowing-frame-nested ifs get the correct ambient by construction.
+Exactly-once pinned by the corpus (test3 baseline). Gates: corpus
+11,326/0; listAll ×8 identical vs m3i. Remaining legacy-owned in the
+giant: body-level walkers (checkForInNumericForRedeclare,
+checkFlatArrayDepthParamAssignments), class PropertyDeclaration
+initializers, the map-evolution re-runs (emit-twice, measured noise), and
+the JS-gated objlit-method walker (a different pass). NEXT: those
+body-level/member arms, or pivot back to the INV.4(e) giant-migration
+proper (the spine dispatch of the remaining giants' walks) — the cta
+emission surface is essentially complete.
+
 **Round 573b (2026-07-18) — (cta-m3i) LANDED: narrowed regions anchored via
 NARROWING FRAMES; the discard machinery retires; a SECOND round-570
 order-dependence channel closed.** The legacy narrowing wrapper is a frame:
