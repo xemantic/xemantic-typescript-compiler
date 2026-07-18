@@ -2316,7 +2316,24 @@ with a session note saying why). Item IDs are stable; session notes reference th
 - Node/tsc/tsgo are NOT currently installed — differential testing (M0 optional) and
   real `@types/node` (M1.3) wait for network.
 - The benchmark project cache lives under `build/bench/` (cheap to rebuild); results
-  TSVs under `bench/` (gitignored, machine-specific).**Round 589 (2026-07-18) — (ccet-m2) LANDED: the g3 frame skeleton runs
+  TSVs under `bench/` (gitignored, machine-specific).**Round 591 (2026-07-18) — (ccet-m3) LANDED (merged from
+wip/ccet-m3-anchors): THE LAST GIANT'S EMISSIONS RUN FROM THE SPINE.**
+Per-Call/New/TaggedTemplate anchors at their own leaves under the frame
+ambient + the full per-edge reach classifier + legacy truncation marks at
+the three emitter sites + decl-leave recordings (the spine's per-node
+order = the legacy interleave for free) + CcetAnchorTest (8 pins). The
+round-590 blocker resolved by the probe plan exactly as recorded: the
+Diagnostic-init probe identified checkReturnAssignability's engine-path
+TS2322 (fired from the cta RETURN anchor); a member-shape probe showed the
+TP never surfaces as Type.TypeParam — the ctor-value sig returns are RAW
+UNINSTANTIATED generic Type.Interfaces (the `NodeObject<TKind>` display);
+`typeContainsForeignTypeParam` gains the GAP-SIGNATURE rule (a
+nested-position raw generic interface = the un-inferred-generic signature
+→ bail; depth>0 keeps top-level sources checkable) — order-free in both
+cache states. Gates: corpus 11,347/0; listAll ×8 identical. NEXT:
+(ccet-retire) — the round-585 experiment template on the last giant.
+
+**Round 589 (2026-07-18) — (ccet-m2) LANDED: the g3 frame skeleton runs
 always-on and INERT — identity gates green.** CcetFrame implements the
 588c/d spec: fn-decl frames (map copies + own-TP interning/constraint
 materialization + populate + the two shadowing calls), class frames at
