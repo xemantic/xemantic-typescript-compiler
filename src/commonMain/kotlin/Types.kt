@@ -103,7 +103,7 @@ class Symbol(
      * sequence (symbol-id allocation order is load-bearing — the documented
      * ~350-test boundary reshuffle on id drift).
      */
-    val id: Int = nextId++,
+    val id: Int = allocId(),
 ) {
     /** All declaration AST nodes that contribute to this symbol. */
     val declarations: MutableList<Node> = mutableListOf()
@@ -126,10 +126,13 @@ class Symbol(
     override fun toString(): String = "Symbol($name, flags=${flags.value})"
 
     companion object {
-        private var nextId = 1
+        /** INV.6(6c0): per-thread sequence — see [IntThreadLocal] for the rationale. */
+        private val nextId = IntThreadLocal(1)
 
         /** INV.2(c): ids for lexical-scope symbols — negative, descending from −2 (−1 stays a sentinel). */
-        private var nextScopeSymbolId = -2
+        private val nextScopeSymbolId = IntThreadLocal(-2)
+
+        internal fun allocId(): Int = nextId.get().also { nextId.set(it + 1) }
 
         /**
          * Create a symbol in the lexical-scope id space (INV.2(c)). These ids are
@@ -138,10 +141,30 @@ class Symbol(
          * never perturbs the ids of conventionally-bound symbols.
          */
         fun scopeSymbol(flags: SymbolFlags, name: String): Symbol =
-            Symbol(flags, name, nextScopeSymbolId--)
+            Symbol(flags, name, nextScopeSymbolId.get().also { nextScopeSymbolId.set(it - 1) })
+
+        /**
+         * INV.6(6c): re-base THIS thread's id sequences — called at parallel-worker
+         * thread startup so worker-local ids sit far above the shared
+         * singleton-intrinsic range (they never cross the worker boundary, but
+         * they share id-keyed maps with the singletons inside the worker).
+         */
+        fun rebaseThreadIds(base: Int, scopeBase: Int) {
+            nextId.set(base)
+            nextScopeSymbolId.set(scopeBase)
+        }
+
+        /** INV.6(6c0): snapshot THIS thread's sequences (deep-stack handoff). */
+        fun captureThreadIds(): Pair<Int, Int> = nextId.get() to nextScopeSymbolId.get()
+
+        /** INV.6(6c0): restore THIS thread's sequences (deep-stack handoff). */
+        fun restoreThreadIds(snapshot: Pair<Int, Int>) {
+            nextId.set(snapshot.first)
+            nextScopeSymbolId.set(snapshot.second)
+        }
 
         /** Reset the ID counters (for testing). */
-        fun resetIdCounter() { nextId = 1; nextScopeSymbolId = -2 }
+        fun resetIdCounter() { nextId.set(1); nextScopeSymbolId.set(-2) }
     }
 }
 

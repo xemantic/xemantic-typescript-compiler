@@ -38,8 +38,27 @@ private const val DEEP_STACK_SIZE_BYTES = 256L * 1024 * 1024
 actual fun <T> runWithDeepStack(block: () -> T): T {
     if (Thread.currentThread().name == DEEP_STACK_THREAD_NAME) return block()
     var outcome: Result<T>? = null
-    val thread = Thread(null, { outcome = runCatching(block) }, DEEP_STACK_THREAD_NAME, DEEP_STACK_SIZE_BYTES)
+    // INV.6(6c0): the Symbol/Type id sequences are thread-local — the compile
+    // thread INHERITS the caller's counters and writes the advanced values
+    // BACK, so a chain of sequential compiles on one caller thread allocates
+    // one continuous sequence exactly as the old process-global counters did
+    // (singleton intrinsics allocated on the class-load thread stay below every
+    // later compile's ids). Parallel workers (INV.6(6c)) override this with
+    // explicit per-worker rebases instead.
+    val symbolIds = Symbol.captureThreadIds()
+    val typeId = Type.captureThreadId()
+    var symbolIdsAfter = symbolIds
+    var typeIdAfter = typeId
+    val thread = Thread(null, {
+        Symbol.restoreThreadIds(symbolIds)
+        Type.restoreThreadId(typeId)
+        outcome = runCatching(block)
+        symbolIdsAfter = Symbol.captureThreadIds()
+        typeIdAfter = Type.captureThreadId()
+    }, DEEP_STACK_THREAD_NAME, DEEP_STACK_SIZE_BYTES)
     thread.start()
     thread.join()
+    Symbol.restoreThreadIds(symbolIdsAfter)
+    Type.restoreThreadId(typeIdAfter)
     return outcome!!.getOrThrow()
 }

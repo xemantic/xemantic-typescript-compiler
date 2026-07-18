@@ -20,6 +20,25 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 607 (2026-07-18) — (INV.6(6c0)) LANDED: thread-local Symbol/Type id
+sequences + the deep-stack inherit/write-back handoff.** The process-global
+`nextId`/`nextTypeId` companions become `IntThreadLocal` cells (expect/
+actual: JVM ThreadLocal, native plain var) — the enabler for concurrent
+workers (racing `++` could hand one worker the same id twice and makes id
+ORDER scheduler-dependent → nondeterministic union displays; the
+parallel-caching determinism requirement forbids both). FIRST CUT FAILED
+(51 corpus failures): a fresh per-compile deep-stack thread started ids
+at 1, COLLIDING with the singleton intrinsics allocated on the class-load
+thread — caught by the corpus gate, listAll stayed identical (the
+collision class mostly hides in id-keyed cache confusion). FIX:
+`runWithDeepStack` (JVM) now CAPTURES the caller thread's sequences,
+seeds the compile thread, and WRITES THE ADVANCED VALUES BACK on join —
+a chain of sequential compiles allocates one continuous sequence exactly
+as the old globals did; parallel workers will override with explicit
+`rebaseThreadIds` per worker instead. Wall unchanged (31.8s compiler,
+in-band). Gates: corpus 11,351/0; listAll ×8 byte-identical. NEXT: (6c1)
+the worker driver itself (runInDeepStackWorkers + --workers N + merge).
+
 **Round 606 (2026-07-18) — (INV.6(6b)) LANDED + MEASURED CLEAN: partition
 equivalence holds on ALL 8 PROFILES.** The opt-in `--partitionCheck N`
 CLI mode (PartitionCheck global toggle, the PassTiming pattern; harness

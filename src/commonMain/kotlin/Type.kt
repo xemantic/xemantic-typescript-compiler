@@ -126,7 +126,7 @@ value class TypeFlags(val value: Int) {
 
 sealed class Type {
     abstract val flags: TypeFlags
-    val id: Int = nextTypeId++
+    val id: Int = allocTypeId()
 
     /** Intrinsic (primitive) types: any, unknown, string, number, boolean, void, undefined, null, never, etc. */
     class Intrinsic(
@@ -237,10 +237,22 @@ sealed class Type {
     }
 
     companion object {
-        private var nextTypeId = 1
+        /** INV.6(6c0): per-thread sequence — see [IntThreadLocal] for the rationale. */
+        private val nextTypeId = IntThreadLocal(1)
+
+        internal fun allocTypeId(): Int = nextTypeId.get().also { nextTypeId.set(it + 1) }
+
+        /** INV.6(6c): re-base THIS thread's type-id sequence (parallel-worker startup). */
+        fun rebaseThreadIds(base: Int) {
+            nextTypeId.set(base)
+        }
+
+        /** INV.6(6c0): snapshot/restore THIS thread's sequence (deep-stack handoff). */
+        fun captureThreadId(): Int = nextTypeId.get()
+        fun restoreThreadId(value: Int) { nextTypeId.set(value) }
 
         fun resetIdCounter() {
-            nextTypeId = 1
+            nextTypeId.set(1)
         }
     }
 }
