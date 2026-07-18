@@ -20,6 +20,22 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 577 (2026-07-18) — (cpa-m1) LANDED: the g2 (checkPropertyAccess)
+migration opens with the legacy-side audit instrumentation.** Mirrors
+cta-m2a: under the test-only `cpaAuditEnabled`, `checkPropertyAccessInStatement`
+records a per-DIRECT-statement fingerprint keyed by nodeId into
+`cpaAuditLegacy` — channels: currentLocalTypes (by DISPLAY via typeToString,
+never Type.id — ids are resolution-order-sensitive between legacy-time and
+spine-time), currentParamBindingNames, currentEnumConstrainedParams,
+currentShadowedNames, propertyAccessEnclosingNamespaces (name stack),
+enclosingClassType (threaded param, by display), contextualType,
+inStaticClassMethod. Pins +4 (Inv4CpaAuditTest: coverage + annotated-param
+lt[] content + class ect=/static-flag + namespace ns[] stack +
+off-by-default). Gates: corpus 11,339/0; listAll ×8 identical (flag off in
+production — pure scaffolding). NEXT: (cpa-m2) the spine-side frame
+skeleton audited against this map (expect quirk-extraction cycles; the
+known quirks are listed in the queue item).
+
 **Round 576 (2026-07-18) — (cta-m3m) LANDED: the checkFunctionBody param-loop
 emission joins the anchor — the cta giant's EMISSION surface is complete
 across reproduced scopes.** The 16.4ei destructuring-from-nullable-union
@@ -1631,7 +1647,7 @@ interrupt the arc).
     **(g2 = cpa DECOMPOSITION, queued round 576 — the cta migration (rounds
     560–576, m1..m3m) is COMPLETE for the emission surface; work these
     top-to-bottom, one commit each, mirroring the proven cta sequence):**
-    - [ ] **(cpa-m1) Legacy-side audit instrumentation** (the cta-m2a
+    - [x] **(cpa-m1) Legacy-side audit instrumentation** — DONE round 577. (the cta-m2a
       pattern): a test-only `cpaAuditRecord` at the top of
       checkPropertyAccessInStatement fingerprinting the threaded+ambient
       context per DIRECT statement — enclosingClassType (threaded param),

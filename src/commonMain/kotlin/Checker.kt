@@ -709,6 +709,12 @@ class Checker(
      *  the (g1c) emission moves. */
     internal val ctaAuditSpine = HashMap<Int, String>()
 
+    /** (cpa-m1) round 577: legacy-side audit recordings for the g2
+     *  (checkPropertyAccess) spine migration (nodeId → context fingerprint).
+     *  Declared BEFORE init (the init-order trap). The spine twin arrives
+     *  with (cpa-m2). */
+    internal val cpaAuditLegacy = HashMap<Int, String>()
+
     private class CtaFrame(
         val owner: Node,
         val varTypes: MutableMap<String, String>,
@@ -44958,6 +44964,11 @@ class Checker(
          *  instance flag could never be set beforehand). Always false in
          *  production. */
         internal var ctaAuditEnabled = false
+
+        /** (cpa-m1) round 577: test-only switch for the g2 (checkPropertyAccess)
+         *  migration audit — companion-hosted for the same init-order reason.
+         *  Always false in production. */
+        internal var cpaAuditEnabled = false
 
         /** Access modifiers rejected on object-literal members (TS1042/TS1184,
          *  [spineCheckObjLitModifiers]). Companion-hosted: the spine runs during
@@ -120289,10 +120300,41 @@ interface DataView {
         for (stmt in stmts) checkPropertyAccessInStatement(stmt, source, fileName, enclosingClassType)
     }
 
+    /** (cpa-m1) round 577: LEGACY-side audit instrumentation for the g2
+     *  (checkPropertyAccess) spine migration — under [cpaAuditEnabled]
+     *  (test-only; off in production) the statement dispatcher records a
+     *  fingerprint of the threaded + ambient context at every DIRECT
+     *  statement, keyed by nodeId. Types are fingerprinted by DISPLAY
+     *  ([typeToString]), never `Type.id` — ids are resolution-order-sensitive
+     *  between legacy-time and spine-time (the queue-item hazard note). The
+     *  (cpa-m2) spine frame skeleton records the same and an audit test
+     *  diffs the maps — the gate before any emission moves. */
+    private fun cpaAuditFingerprint(enclosingClassType: Type?): String {
+        val lt = currentLocalTypes.entries.sortedBy { it.key }
+            .joinToString(",") { "${it.key}=${typeToString(it.value)}" }
+        val pb = currentParamBindingNames.sorted().joinToString(",")
+        val ec = currentEnumConstrainedParams.entries.sortedBy { it.key }
+            .joinToString(",") { "${it.key}=${it.value}" }
+        val sh = currentShadowedNames.sorted().joinToString(",")
+        val ns = propertyAccessEnclosingNamespaces.joinToString(",") { it.name }
+        val ect = enclosingClassType?.let { typeToString(it) } ?: "-"
+        val ctx = contextualType?.let { typeToString(it) } ?: "-"
+        val flags = if (inStaticClassMethod) 1 else 0
+        return "lt[$lt]|pb[$pb]|ec[$ec]|sh[$sh]|ns[$ns]|ect=$ect|ctx=$ctx|f=$flags"
+    }
+
+    private fun cpaAuditRecord(stmt: Statement, enclosingClassType: Type?) {
+        if (!cpaAuditEnabled) return
+        val id = (stmt as NodeBase).nodeId
+        if (id < 0) return
+        cpaAuditLegacy[id] = cpaAuditFingerprint(enclosingClassType)
+    }
+
     private fun checkPropertyAccessInStatement(
         stmt: Statement, source: String, fileName: String,
         enclosingClassType: Type?,
     ) {
+        cpaAuditRecord(stmt, enclosingClassType)
         when (stmt) {
             is ClassDeclaration -> {
                 // Check heritage clause property access (e.g. extends M.B)
