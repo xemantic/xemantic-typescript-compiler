@@ -2317,7 +2317,28 @@ with a session note saying why). Item IDs are stable; session notes reference th
 - Node/tsc/tsgo are NOT currently installed — differential testing (M0 optional) and
   real `@types/node` (M1.3) wait for network.
 - The benchmark project cache lives under `build/bench/` (cheap to rebuild); results
-  TSVs under `bench/` (gitignored, machine-specific).**Round 595 (2026-07-18) — (f1b-i) LANDED: the epoch infrastructure + a
+  TSVs under `bench/` (gitignored, machine-specific).**Round 596 (2026-07-18) — (f1b-ii) MEASURED DEAD-END, reverted: the live
+per-node expression-type memo is 1-3% SLOWER.** The flip served the 150k
+zero-wrong confirmed hits and was fully gate-green (corpus 11,347/0 +
+listAll ×8 byte-identical — the skipped-warming concern never
+materialized), but the interleaved wall A/B (3 B/A pairs, both class
+dirs) read B(no-serve) ≈ 30.7-31.5s vs A(serve) ≈ 31.5-31.8s: the
+SERVABLE calls are the CHEAP ones (instance-stable intrinsic/interface/
+reference lookups — already fast paths), while the EXPENSIVE recompute
+lives exactly in the NON-memoizable kinds (fresh unions/literals/objlits
++ the narrowing-dependent property accesses), and the bookkeeping (an
+epoch bump per mutation + map/set churn + Pair allocation per stable
+call) exceeds the savings. REVERTED to the round-595 state (the epoch
+infrastructure + the --passTiming shadow instrument STAY — measured
+noise-level, and the shadow remains the policy-evaluation tool).
+CONCLUSION: (f1) as a whole-entry memo is closed at the current cost
+structure; the checkSpine lever is now (f2) — folding the 111k depth-0
+narrowing walks (68% from property access) into per-reference typing,
+which targets exactly the expensive non-memoizable calls. NEXT: (f2)
+design — the narrowing-walk consumers and a per-(reference,flowNode)
+result reuse within the walk.
+
+**Round 595 (2026-07-18) — (f1b-i) LANDED: the epoch infrastructure + a
 VALIDATED live-memo policy — hitWRONG driven to ZERO.** The invalidation
 surface: property SETTERS on the 13 ambient fields getTypeOfExpression
 consults (swap-bumps, zero call-site changes) + `EpochMap`/`EpochSet`
