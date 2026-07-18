@@ -1,3 +1,317 @@
+**Round 569 (2026-07-17) — the fourslashImpl constraint delta ROOT-CAUSED
+(probe-verified, probe reverted): the sandwich resolves T's constraint
+CORRECTLY (`DocumentSpan` — println-probed) — the drift is DOWNSTREAM:
+constraint PRESENCE is behaviorally significant.** At cpa time in the green
+(legacy-order) state, the method's TP constraint is still NULL, so the
+TP-receiver member check on `span.prefixText` hits an uncertainty-BAIL
+(opaque TP → silent); with the constraint EAGERLY set, the check goes
+constraint-based — and since OUR contextual inference fails to bind
+T=RenameLocation at the getBaselineForDocumentSpansWithFileContents call
+(tsc infers it; RenameLocation extends DocumentSpan WITH prefixText), the
+bare-T receiver resolves through DocumentSpan → missing → FP. The green
+state was IMPLICIT gating by materialization order. THE CANONICALIZATION
+RULE this yields: (1) TP `.constraint` materialization must become
+order-free (eager or canonically lazy — either way DETERMINISTIC), and
+(2) the TP-receiver TS2339 family must be INFERENCE-AWARE (an un-inferred
+TP receiver in a contextually-typed callback position is our round-431
+inference-gap class — bail regardless of constraint presence). (2) is the
+enabling fix: it makes (1) safe, unblocking the fn-body tier AND removing
+a whole class of materialization-order landmines. NEXT: implement (2) —
+find the TP-receiver emission in checkMemberAccessMissing, add the
+callback-param-position inference-gap bail (corpus + fourslashImpl-probe
+gated), then re-attempt the always-on sandwich.
+
+**Round 568c (2026-07-17) — bench observation: post-568 HEAD is 28,697 ms vs
+the round-552 27,499 ms (~+4.4% cumulative over rounds 553-568), but the
+step deltas are inside the box-drift band (m3c-prep WITH the sandwich:
+28,585; now WITHOUT it: 28,697 — an upward step from REMOVING work =
+drift, per the interleave gotcha). Attribution of the production frame-
+maintenance cost (Block/clause varTypes copies at every block) needs an
+interleaved A/B vs a no-frames build. IF real, the optimization is NOT a
+naive fn-depth skip — the round-566/567 green state depends on recordings
+and frames below fn boundaries feeding namespace-in-fn anchors (the
+production fn frames carry the m2b inline varTypes param entries; the
+VariableDeclaration recording writes into them) — a cheap cut must keep
+the ModuleBlock-feeding chain intact (e.g. copy-on-write varTypes for
+Block frames, or defer copies until a write occurs below the frame).
+Queued as a perf follow-up behind the INV.5 canonicalization work.**
+
+**Round 568 (2026-07-17) — (cta-m3c-prep) PARTIALLY REVERTED: the always-on
+fn-body sandwich drifts the harness profile.** Corpus was GREEN (11,307/0)
+but listAll found 4 new FPs on harness (fourslashImpl.ts:1977-78 TS2339
+'prefixText'/'suffixText' on type 'T') — the sandwich's TP-CONSTRAINT
+materialization (the set-once `typeParam.constraint = getTypeFromTypeNode`
+two-pass) now runs at SPINE time under cold caches, and the first-touch
+result differs from the legacy-time one that the property-access pass's
+TP-receiver member resolution depends on. This is the (c2)-family
+lazy-materialization mechanism, now with a MEASURED victim. The sandwich
+is re-gated to the audit flag; the neutral frame fields
+(fnTpScope/fnTpDecls capture) stay. THE FN-BODY TIER IS BLOCKED on making
+TP-constraint resolution order-insensitive — options: (a) canonicalize
+constraint resolution (the INV.5 (c)-gate widening / (d2) family), (b)
+build fn frames LAZILY at the first in-body anchor consult (still earlier
+than legacy — likely same drift), (c) root-cause the specific
+fourslashImpl constraint delta like round 566's qualify chain (probe what
+getTypeFromTypeNode returns for that TP's constraint at each time). Bench
+note: the always-on sandwich also cost +3.9% self-time — lazy construction
+is warranted regardless. The top-level/namespace tier (rounds 566/567)
+stays landed and green.
+**Round 568b: direction (c) partially probed — a currentCheckFileName
+install around the sandwich does NOT fix the harness drift (the delta is
+genuinely cold-cache resolution CONTENT for the TP constraint, not
+per-file keying). The fn-body tier formally DEFERS behind the INV.5
+canonicalization arc (direction (a)); when resumed, the fourslashImpl
+constraint is the standing acceptance probe.**
+
+**Round 567 (2026-07-17) — (cta-m3b) LANDED first-try: the ExpressionStatement
+and ReturnStatement arms join the spine anchor.** The generalized
+`ctaM3StmtAnchor` dispatches all three statement kinds at SourceFile/
+ModuleBlock parents under the same frame install (the ReturnStatement arm
+includes the frame-conditional checkReturnAssignability — inert at these
+scopes where returnType is null, exact by construction); the legacy arms
+gained the same parent-scoped truncation marks. Gates: corpus 11,307/0,
+listAll ×8 error-line identical — clean on the FIRST run, validating the
+round-566 template's generality. THE TOP-LEVEL + NAMESPACE-BODY TIER of
+the cta walk is now fully emission-migrated (VariableStatement /
+ExpressionStatement / ReturnStatement — the only arms with own emissions
+at those scopes; the recursion arms carry no emissions). NEXT: the
+fn-body tier — extend the anchor scope to statements inside function-like
+bodies, which requires the production fn-body frames to carry REAL context
+(the audit-gated sandwich becomes always-on for fn frames: shadowing
+helpers + param typing at fn-body enters) — gate the added spine-time
+resolution cost with the bench; then the remaining stmt kinds arm-by-arm.
+
+**Round 566 (2026-07-17) — (cta-m3a) LANDED: the FIRST cta emissions run
+from the spine.** Top-level AND namespace-body VariableStatement emissions
+(checkVarDeclAssignability + registerConstLiteralUnionNarrowing + the
+B183-contextualized walkFunctionBodiesInExpr descent + the B127 inner-
+assignment check) dispatch from a spine anchor under a per-dispatch install
+of the TOP FRAME's context; the legacy arm keeps running for its maps'
+interleaved state evolution but truncates its duplicate diagnostics
+(emit-twice-suppress-legacy); the TS2322-family post-filter window now
+opens at spine entry. Frames are ALWAYS-ON (the fn-body sandwich + audit
+fingerprints stay flag-gated; production fn-frames are cheap markers).
+The root-cause chain that got here (all probe-driven, one iteration each):
+(1) the first attempt failed 11,307/1 on qualify — twin ambient-dump
+marker diagnostics attributed it to lt=1-vs-9: the legacy leaf's verdict
+depends on NAMESPACE-LEAKED currentLocalTypes recordings (qualify's
+namespace `var x` reaches the shared map first → the first-decl-wins bail
+is LOAD-BEARING); (2) checkSpine's loop sets currentFileLocals but NOT
+currentCheckFileName — the anchor installs it (a trap for EVERY future
+emission move); (3) the fix = extending the anchor scope to ModuleBlock
+statements with the frames' exact structure (shared localTypes, copied
+varTypes, nsSymbol pushes reproduced from the frame chain). Gates: corpus
+11,307/0, listAll ×8 error-line identical vs 548a. NEXT: (cta-m3b) the
+ExpressionStatement + ReturnStatement top-level/namespace arms (same
+pattern), then descend scope-by-scope.
+
+**Round 566 design — (cta-m3a): the VariableStatement emission move, scoped
+to DIRECT SourceFile children first (minimal ambient surface).** At a
+top-level VariableStatement's spine enter (non-dts files): install
+currentFileLocals/currentCheckFileName/currentFlowGraph per-dispatch (w1
+discipline) + currentScopeStatements = the file statement list + the root
+frame's maps via withCtaFrameLocals, then run the legacy arm's four calls
+(registerConstLiteralUnionNarrowing for const lists,
+checkVarDeclAssignability, the B183-contextualized
+walkFunctionBodiesInExpr descent — KEPT at the anchor for now so nested
+bodies get the full legacy context; the spine's own frame-based descent
+replaces it only when deeper arms migrate — and the B127 inner-assignment
+check). The legacy top dispatcher's VariableStatement arm gains a
+same-commit skip for direct SourceFile children (parent check). EMISSION-
+WINDOW HAZARD: ctaPostFilters' ctaDiagnosticsBefore cutoff is set at the
+giant's entry — spine-moved 2322s fall OUTSIDE the window (the null/
+undefined→NamedType suppression would stop covering them); the cutoff
+moves to checkSpine entry, accepting that OTHER spine-emitted 2322s enter
+the filter window (narrow message-regex criteria; corpus arbitrates).
+DOUBLE-DESCENT NOTE: keeping walkFunctionBodiesInExpr at the anchor means
+initializer fn bodies still get their legacy walk (no spine anchors fire
+inside them yet — the deeper arms are still legacy) — no double emission
+by construction. Gates: corpus + listAll ×8.
+**AMENDED (round 566b, the state-channel split): a plain legacy-arm SKIP is
+WRONG — checkVarDeclAssignability's recordings (currentLocalTypes/varTypes)
+feed the legacy walk's LATER statements in interleaved document order;
+skipping the arm starves them, while bridging the frame maps into the
+giant's driver would let use-before-decl reads see LATER vars (an order
+change). The correct intermediate is EMIT-TWICE-SUPPRESS-LEGACY: the spine
+anchor runs the leaf with full effects into the FRAME maps (emissions +
+recordings); the legacy arm KEEPS running the leaf for its own maps'
+interleaved state evolution but TRUNCATES the duplicate diagnostics it
+appends (size-mark + removeAt — the retraction pattern). Transient double
+computation, exact semantics both sides; when ALL arms are anchored the
+legacy walk becomes pure-state-duplicate and deletes in one step (frames
+become the sole state). This also makes the ctaDiagnosticsBefore cutoff
+move unnecessary until the deletion step — the legacy duplicates are
+truncated before the filters run, and the spine-emitted copies sit outside
+the window ONLY until the cutoff moves WITH the deletion. Wait — no: the
+spine copies must be INSIDE the filter window for the null/undefined
+suppression to keep working on them → the cutoff DOES move to checkSpine
+entry in the same commit (2322-emitting spine handlers ≈ none today, so
+the window widening is near-neutral; corpus arbitrates).**
+**(cta-m3a) ATTEMPTED AND REVERTED (round 566c): the full implementation
+(anchor + per-file production maps + legacy truncation + cutoff move) came
+back 11,307/1 — ONE corpus failure, qualify_ts, and it is NOT a truncation
+bug but VERDICT DRIFT: the anchor's early leaf run (during checkSpine)
+resolves the namespace-qualified annotation `T.I` under COLD caches,
+flipping checkVarDeclAssignability's historical load-bearing BAIL at
+qualify.ts:58 into a wrong-display TS2741 ('I' instead of 'T.I') that then
+coexists with the correct emission from the separate named→named walker.
+The emit-twice pattern preserves STATE semantics on both sides but cannot
+stop the EMISSION-owning run's first-touch drift — round 543's "the
+computation is order-sensitive" applies to the leaf's own verdict. The
+drift surface is TINY (1/11,307) — two viable directions, both recorded
+for the next attempt: (i) root-cause qualify's specific resolution
+difference (probe what the leaf sees at spine time vs giant time — likely
+declaredTypes/aliasDisplay for the namespace-local `I`; may be fixable by
+one more producer hoist or an INV.5(c)-gate widening); (ii) sequence the
+remaining INV.5 canonicalization work first so annotation resolution is
+order-insensitive before any emission moves. Attempt reverted; tree
+clean.**
+
+**Round 565 (2026-07-17) — (cta-m2d) part 2 LANDED with a STRATEGY PIVOT.**
+CtaFrame now carries the currentLocalTypes family (localTypes /
+localDeclNodes / shadowedNames / ambiguousNames) with the audit-derived
+sharing structure: fn-body frames COPY (+ run the real setup helpers via the
+`withCtaFrameLocals` sandwich — applyBodyLocalShadowing →
+applyAmbiguousBlockScopedLocals → shadowNestedFunctionNames, then
+ctaTypeParamsIntoLocals under the fn's TP scope), while Block/ModuleBlock/
+clause frames SHARE the parent's maps by reference. THE PIVOT: a
+localTypes CONTENT digest in the audit fingerprints was tried and showed
+the legacy content comes from checkVarDeclAssignability's recording
+INTERLEAVED with its emissions (annotated + widened-inference recordings,
+leaking across blocks/namespaces in document order) — content fidelity
+therefore comes from the REAL LEAF RUNNING ON THE SPINE (the m3 emission
+move installs the frame maps ambient and dispatches the retained
+checkVarDeclAssignability, recordings and emissions together), NOT from
+audit replication; the digest was dropped and the audit stays green on the
+threaded-context dimensions (5 pins, both fixtures). The lt-digest diffs
+are preserved knowledge: legacy currentLocalTypes copies ONLY at fn
+boundaries; blocks/namespaces/clauses leak recordings into the enclosing
+scope. Corpus 11,307/0. NEXT: (cta-m3) — the VariableStatement emission
+move (install frame context ambient per-dispatch, run
+checkVarDeclAssignability + the B127/B183 initializer walks from the spine
+anchor, deactivate the legacy arm same-commit; corpus + listAll gated).
+
+**Round 564 (2026-07-17) — (cta-m2d) part 1: checkFunctionBody's interleaved
+param loop SPLIT into the pure typing helper `ctaTypeParamsIntoLocals`
+(innerTypes/currentLocalTypes writes only; TP scope required at call) + the
+16.4ei destructuring-emission loop kept in checkFunctionBody (emissions
+first — a per-param emission never saw its own typing in the interleaved
+original; measured behavior-identical: corpus 11,307/0, listAll ×8
+error-line identical vs 548a). This is the reuse enabler for the frame
+machinery's sandwich pattern: the spine installs frame-private maps and
+calls the SAME helpers the legacy uses (zero drift risk) — a first surgical
+python attempt broke brace balance and was reverted (exact-string Edit
+worked; lesson: no crude indent-shifting on Checker.kt). NEXT: (cta-m2d)
+part 2 — extend CtaFrame with the currentLocalTypes-family maps, install-
+sandwich the legacy helpers (ctaTypeParamsIntoLocals /
+applyBodyLocalShadowing / applyAmbiguousBlockScopedLocals /
+shadowNestedFunctionNames) at fn-body enters, add the localTypes digest to
+both audit fingerprints, iterate to green.
+
+**Round 563 (2026-07-17) — (cta-m2c): the audit fixtures WIDENED and green.**
+A second full-fixture diff (nested/exported namespaces, generic fn nesting
+with constrained TPs, overload clusters, class expressions, for/for-in/
+for-of headers, do-while, labeled/with statements, if-else-if chains)
+surfaced ONE more legacy quirk, now reproduced: FOR-header declarators
+never record into varTypes (the legacy For/ForIn/ForOf arms walk only the
+loop BODY — the same "for-init unreached" reach quirk g1b pinned; the spine
+recording is now gated to VariableStatement-OWNED declarations). Audit: 5
+pins, all green — the frame skeleton agrees with the legacy context on
+every legacy-visited statement across both fixtures. Suite 11,307/0.
+NEXT: (cta-m2d) FIRST — extend CtaFrame + the audit fingerprint to the
+currentLocalTypes family (currentLocalTypes / currentLocalDeclTypeNodes /
+currentShadowedNames / narrowedDeclaredTypes — checkVarDeclAssignability
+and every leaf utility consume them, and the m2 frames deliberately
+excluded them; fingerprint a sorted name→Type.id digest and iterate to
+green like m2b/m2c). Only then (cta-m3): emissions arm-by-arm —
+VariableStatement first (the checkVarDeclAssignability anchor dispatches
+from the spine under a full frame-context install; legacy arm deactivated
+same-commit), corpus + listAll gated per arm.
+
+**Round 562 (2026-07-17) — (cta-m2b): the SPINE-side cta frame skeleton
+LANDED, AUDIT-VERIFIED.** Under the test-only flag, checkSpine now maintains
+a CtaFrame stack (varTypes / returnType / returnTypeNode / typeParams +
+inFn/inAsync/inGen/inInstanceMember flags) with frames at: fn-like body
+Blocks (the checkFunctionBody transform: varTypes copy + annotated-param
+entries with the TS2370 rest-skip, retType via resolveSimpleTypeName, TP
+accumulation), statement/try/catch/finally Blocks (varTypes copy),
+ModuleBlocks (copy + returnType/typeParams RESET), switch clauses (per-
+clause copies), and the ORDERED per-VariableDeclaration varTypes recording
+(annotated Identifier decls, resolveSimpleTypeName ?:
+intersectionTypeNameForVarTypes). The audit-diff iteration EXTRACTED three
+undocumented legacy quirks in three cycles (40 → 17 → 3 → 0 mismatches):
+(1) the ordered varTypes recording itself; (2) the ModuleBlock reset; (3)
+class-member asymmetries — Constructor/SetAccessor bodies are walked
+WITHOUT checkFunctionBody (inNonArrowFunctionBody stays false!) while
+GetAccessor goes through it but gets NO B85.1b this.X push. The audit test
+(Inv4CtaAuditTest, now 4 pins incl. the full-fixture diff) is the standing
+gate: spine fingerprints agree with legacy on every legacy-visited
+statement. Production behavior-free (flag-gated; corpus 11,306/0). NEXT:
+(cta-m2c) widen fixture coverage (narrowing frames, ambiguous locals,
+nested namespaces, class expressions), then move emissions arm-by-arm
+(VariableStatement first) under the audit + corpus + listAll gates.
+
+**Round 561 (2026-07-17) — (cta-m2a): the legacy-side audit instrumentation
+LANDED.** Under the test-only companion flag `Checker.ctaAuditEnabled` (a
+companion var because the pipeline runs in init — an instance flag could
+never be set beforehand; the recording map `ctaAuditLegacy` is declared
+BEFORE init per the init-order trap, which the first cut hit as an NPE),
+both legacy cta dispatchers record a per-statement fingerprint of the
+threaded context — sorted varTypes entries + returnType + returnTypeNode
+nodeId + sorted typeParams + the inNonArrowFunctionBody/async/generator/
+classForThis flag bits — keyed by nodeId. Inv4CtaAuditTest (3 pins:
+coverage + fn-body rt/flag content + generic tp content + off-by-default).
+Production behavior-free (flag off). Suite 11,302 → 11,305. NEXT:
+(cta-m2b) the spine-side frame skeleton recording the same fingerprints
+(dead machinery, no emissions) + the audit diff test over corpus-shaped
+fixtures; then emissions move arm-by-arm.
+
+**Round 560b (2026-07-17) — (cta-m2) IMPLEMENTATION PLAN (from the
+checkFunctionBody/dispatcher reads; the skeleton+audit build is the next
+session's deliverable — fresh-window work):** the migration template is
+(534)-shaped: CORE FRAMES at list-owner enters + statement anchors running
+the retained leaf utilities (checkVarDeclAssignability /
+checkAssignmentExpression / checkReturnAssignability / walkFunctionBodies-
+InExpr stay INTACT as leaves). Frame-edge inventory:
+(1) SourceFile enter — fresh varTypes + currentLocalTypes, per-file ambient
+(currentFileLocals/currentCheckFileName/currentFlowGraph — the last
+per-DISPATCH once merged, never walk-wide); (2) statement-position Block
+enter — varTypes.toMutableMap() copy (same currentLocalTypes — the legacy
+Block arm copies ONLY varTypes); (3) fn-body enter = checkFunctionBody's
+SETUP split into an enter hook: copies of currentLocalTypes/
+currentLocalDeclTypeNodes/currentShadowedNames + fresh ambiguousBlockLocal-
+Names, applyBodyLocalShadowing → applyAmbiguousBlockScopedLocals →
+shadowNestedFunctionNames (ORDER load-bearing), inNonArrowFunctionBody=true
++ inAsyncFunctionBody/inGeneratorFunctionBody from modifiers,
+currentTypeParamDecls merge, currentTypeParamScope merge with TP interning
++ constraint/default resolution (two-pass), param typing into innerTypes +
+currentLocalTypes (B85.1a optional→|undefined, round-464 sibling-default,
+TS2370 rest-param skip, 16.4ei destructuring check fires AT ENTER);
+returnType/returnTypeNode/typeParams frame values from the fn node; leave =
+restore all; (4) IfStatement narrowing frames (B201 extractNullNarrowing →
+currentLocalTypes copy + narrowedDeclaredTypes record, then-branch only);
+(5) ClassDeclaration member enters — currentClassForThis (null for
+statics), currentTypeParamDecls merge, B85.1b this.X varTypes push;
+(6) currentScopeStatements per statement list. AUDIT GATE before any
+emission moves: legacy-side per-statement fingerprint recording (nodeId →
+hash of varTypes entries + returnType + typeParams + flag bits) under a
+test-only flag, spine-side frames recording the same, a test diffing the
+two maps over corpus-shaped fixtures (the Inv4UnresolvedSpineScopeTest
+audit pattern). Then emissions move arm-by-arm (VariableStatement first),
+each suite+listAll gated.**
+
+**Round 560 (2026-07-17) — (cta-m1): checkTypeAssignability's two tail
+post-filters decoupled into `ctaPostFilters` (own dispatch step right after
+the giant; the diagnosticsBefore cutoff became the `ctaDiagnosticsBefore`
+field, set at the giant's entry).** The prep step the (g1c) migration
+requires: once the walk merges into the spine, the filters stay a
+post-spine step and the cutoff field gets set at spine entry instead.
+Behavior-preserving by construction at the current order. Gates: corpus
+11,302/0; listAll ×8 error-line identical vs 548a. NEXT: (cta-m2) the walk
+migration proper — frame stack for the threaded (varTypes / returnType /
+returnTypeNode / typeParams) context + the ambient save/restore families,
+statement anchors dispatching the retained leaf utilities.
+
 **Round 559b (2026-07-17) — cta pin batch: 10 reach + state pins for
 checkTypeAssignability (Inv4SpineCtaPinsTest), all verified on the CURRENT
 walker.** Coverage: var-decl TS2322 reach across all statement contexts

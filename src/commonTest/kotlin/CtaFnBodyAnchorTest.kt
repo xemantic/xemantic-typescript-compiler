@@ -339,4 +339,102 @@ class CtaFnBodyAnchorTest {
         """)
         assert(n == 1) { "expected exactly 1 TS2322, got $n" }
     }
+
+    private val forInRedeclareBody = """
+        for (var x in o) {}
+        for (var x = 0; x < 3; x++) {}
+    """
+
+    @Test
+    fun `for-in numeric-for redeclare walker emits each code exactly once in a fn body`() {
+        // (cta-m3l): the B442 body-level walker anchors at the body Block's
+        // spine enter; the legacy checkFunctionBody pair skips via the
+        // recorded set — each code must appear EXACTLY once (0 = lost to the
+        // skip without a spine dispatch; 2 = dispatched without the skip —
+        // though B442 also carries its own forInNumForProcessed dedup, so the
+        // sharp double-emit signal is the FlatArray pin below).
+        val d = diagnose("""
+            declare const o: any;
+            function f() {
+                $forInRedeclareBody
+            }
+        """)
+        assert(d.count { it.code == 2403 } == 1) { "TS2403: ${d.count { it.code == 2403 }}" }
+        assert(d.count { it.code == 2365 } == 1) { "TS2365: ${d.count { it.code == 2365 }}" }
+        assert(d.count { it.code == 2356 } == 1) { "TS2356: ${d.count { it.code == 2356 }}" }
+    }
+
+    @Test
+    fun `for-in numeric-for redeclare fires in namespace fn and class method bodies exactly once`() {
+        val dNs = diagnose("""
+            declare const o: any;
+            namespace N {
+                export function f() {
+                    $forInRedeclareBody
+                }
+            }
+        """)
+        assert(dNs.count { it.code == 2403 } == 1) { "ns TS2403: ${dNs.count { it.code == 2403 }}" }
+        val dCls = diagnose("""
+            declare const o: any;
+            class C {
+                m() {
+                    $forInRedeclareBody
+                }
+            }
+        """)
+        assert(dCls.count { it.code == 2403 } == 1) { "method TS2403: ${dCls.count { it.code == 2403 }}" }
+    }
+
+    @Test
+    fun `negative control - annotated numeric-for decl draws no redeclare diagnostics`() {
+        diagnose("""
+            declare const o: any;
+            function f() {
+                for (var x in o) {}
+                for (var x: any = 0; x < 3; x++) {}
+            }
+        """) should {
+            have(none { it.code == 2403 || it.code == 2356 })
+        }
+    }
+
+    @Test
+    fun `FlatArray depth-param assignment emits exactly once in fn and method bodies`() {
+        // (cta-m3l): the B205 walker has NO internal dedup — a spine dispatch
+        // without the legacy skip shows 2 here; a skip without the dispatch
+        // shows 0.
+        val dFn = diagnose("""
+            function f<A, D extends number>(a: FlatArray<A, any>, b: FlatArray<A, D>) {
+                b = a;
+            }
+        """).filter { it.code == 2322 && it.message.contains("FlatArray") }
+        assert(dFn.size == 1) { "fn: expected exactly 1 FlatArray TS2322, got ${dFn.size}" }
+        val dCls = diagnose("""
+            class C {
+                m<A, D extends number>(a: FlatArray<A, any>, b: FlatArray<A, D>) {
+                    b = a;
+                }
+            }
+        """).filter { it.code == 2322 && it.message.contains("FlatArray") }
+        assert(dCls.size == 1) { "method: expected exactly 1 FlatArray TS2322, got ${dCls.size}" }
+    }
+
+    @Test
+    fun `fn at a bare if-then position stays unreached - legacy parity silence`() {
+        // (cta-m3l): the bare InStmt dispatcher has NO FunctionDeclaration arm,
+        // so the legacy giant never reaches this body — the ctaM3FnHop landing
+        // restriction keeps the spine from anchoring inside it (both the
+        // statement anchors and the body-level walkers must stay silent).
+        val d = diagnose("""
+            declare const cond: boolean;
+            declare const o: any;
+            if (cond) function f() {
+                const x: string = 1;
+                $forInRedeclareBody
+            }
+        """)
+        assert(d.none { it.code == 2322 }) { "bare-position fn body must stay unreached (TS2322)" }
+        assert(d.none { it.code == 2403 }) { "bare-position fn body must stay unreached (TS2403)" }
+    }
 }

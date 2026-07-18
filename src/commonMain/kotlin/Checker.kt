@@ -877,14 +877,25 @@ class Checker(
     /** (cta-m3f): hop a fn-body Block to the node ABOVE its function-like
      *  owner — FunctionDeclaration bodies, or CLASS method bodies (through
      *  the ClassDeclaration; objlit methods and ctors/accessors return null:
-     *  their legacy dispatch semantics are not reproduced). */
-    private fun ctaM3FnHop(block: Block): Node? = when (val owner = (block as NodeBase).parent) {
-        is FunctionDeclaration -> (owner as NodeBase).parent
-        is MethodDeclaration, is Constructor, is GetAccessor, is SetAccessor -> {
-            val cls = (owner as NodeBase).parent as? ClassDeclaration
-            if (cls == null) null else (cls as NodeBase).parent
+     *  their legacy dispatch semantics are not reproduced).
+     *  (cta-m3l): the landing must be a statement-LIST position — the bare
+     *  InStmt dispatcher has NO FunctionDeclaration/ClassDeclaration arm
+     *  (`else -> {}`), so a fn/class at a bare if-then/loop-body/labeled
+     *  position is UNREACHED by the legacy giant and its body must not
+     *  anchor (spine emissions there would exceed legacy reach). */
+    private fun ctaM3FnHop(block: Block): Node? {
+        val landing = when (val owner = (block as NodeBase).parent) {
+            is FunctionDeclaration -> (owner as NodeBase).parent
+            is MethodDeclaration, is Constructor, is GetAccessor, is SetAccessor -> {
+                val cls = (owner as NodeBase).parent as? ClassDeclaration
+                if (cls == null) null else (cls as NodeBase).parent
+            }
+            else -> null
         }
-        else -> null
+        return when (landing) {
+            is SourceFile, is ModuleBlock, is Block, is CaseClause, is DefaultClause -> landing
+            else -> null
+        }
     }
 
 
@@ -18959,6 +18970,37 @@ class Checker(
                 ctaM3NearestList(node)?.let { list ->
                     ctaM3MarkAnchored(node)
                     ctaM3StmtAnchor(node, list)
+                }
+            }
+        }
+        // (cta-m3l): the checkFunctionBody BODY-LEVEL walkers (B442 for-in /
+        // numeric-for redeclare + B205 FlatArray depth-param) — ambient-
+        // independent AST scans the legacy runs at checkFunctionBody entry.
+        // Anchored at the body Block's enter for the checkFunctionBody-routed
+        // owners on eligible chains: FunctionDeclaration bodies and class
+        // Method/GetAccessor bodies (ctor/SetAccessor bodies never route
+        // through checkFunctionBody; objlit methods and arrows/fn-exprs stay
+        // legacy-owned — their walkFunctionBodiesInExpr dispatch already
+        // emit-twice-truncates at the containing statement). The legacy call
+        // pair skips via the recorded set keyed on the Block's nodeId.
+        if (node is Block && !spineIsDts) {
+            val owner = (node as NodeBase).parent
+            val eligible = when (owner) {
+                is FunctionDeclaration -> true
+                is MethodDeclaration, is GetAccessor -> (owner as NodeBase).parent is ClassDeclaration
+                else -> false
+            }
+            if (eligible && ctaM3NestedChainOk(node)) {
+                ctaM3MarkAnchored(node)
+                checkForInNumericForRedeclare(node.statements, spineSource, spineFileName)
+                when (owner) {
+                    // GetAccessor: the legacy arm passes emptyList()/null → the
+                    // FlatArray walker is a no-op there; mirror the no-op.
+                    is FunctionDeclaration -> checkFlatArrayDepthParamAssignments(
+                        node.statements, owner.parameters, owner.typeParameters, spineSource, spineFileName)
+                    is MethodDeclaration -> checkFlatArrayDepthParamAssignments(
+                        node.statements, owner.parameters, owner.typeParameters, spineSource, spineFileName)
+                    else -> {}
                 }
             }
         }
@@ -84977,7 +85019,11 @@ interface DataView {
             // scope — TS2403 (first decl wins: string) + TS2365 (string < number) + TS2356
             // (string++). Dedicated walker; corpus-EXHAUSTIVE FP-safety (the only two files
             // with this shape are the targets).
-            checkForInNumericForRedeclare(it.statements, source, fileName)
+            // (cta-m3l): both body-level walkers are spine-anchored for eligible
+            // bodies — the recorded set (keyed on the body Block's nodeId) gates
+            // the legacy pair off exactly where the spine emitted.
+            val ctaM3BodyAnchored = ctaM3IsAnchoredStmt(it, fileName)
+            if (!ctaM3BodyAnchored) checkForInNumericForRedeclare(it.statements, source, fileName)
             val innerTypes = varTypes.toMutableMap()
             // Save outer local types and create inner scope copy
             val savedLocalTypes = currentLocalTypes
@@ -85079,8 +85125,9 @@ interface DataView {
             val allTypeParams = outerTypeParams + collectTypeParamNames(funcTypeParams)
             // B205: lib-FlatArray depth-param assignment (both annotations resolve to
             // any through the unevaluated recursive conditional, so the standard
-            // assignment path below is silent).
-            checkFlatArrayDepthParamAssignments(it.statements, parameters, funcTypeParams, source, fileName)
+            // assignment path below is silent). (cta-m3l): spine-anchored for
+            // eligible bodies, see above.
+            if (!ctaM3BodyAnchored) checkFlatArrayDepthParamAssignments(it.statements, parameters, funcTypeParams, source, fileName)
             try {
                 checkTypeAssignabilityInStatements(it.statements, source, fileName, innerTypes, retType, allTypeParams, returnTypeNode)
             } finally {
