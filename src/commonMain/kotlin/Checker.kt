@@ -768,6 +768,24 @@ class Checker(
      *  order. */
     private var ctaM3RecordOnlySuppress = false
 
+    /** (cta-m3h0): nodeIds of statements the spine ANCHORED (emissions moved),
+     *  recorded per file during checkSpine and consulted by the legacy
+     *  truncation marks — gate identity by CONSTRUCTION (the marks truncate
+     *  exactly what the spine emitted, never a re-derived approximation).
+     *  Program-lifetime retention (the legacy giants run after the spine). */
+    private val ctaM3AnchoredStmts = HashMap<String, HashSet<Int>>()
+
+    private fun ctaM3MarkAnchored(stmt: Node) {
+        val id = (stmt as NodeBase).nodeId
+        if (id >= 0) ctaM3AnchoredStmts.getOrPut(spineFileName) { HashSet() }.add(id)
+    }
+
+    /** The legacy-side mark test: was this statement spine-anchored? */
+    private fun ctaM3IsAnchoredStmt(stmt: Node, fileName: String): Boolean {
+        val id = (stmt as NodeBase).nodeId
+        return id >= 0 && ctaM3AnchoredStmts[fileName]?.contains(id) == true
+    }
+
     /** (cta-m3a): the top-level + namespace-body VariableStatement emission —
      *  the legacy arm's leaf calls run from the spine under a per-dispatch
      *  install of the TOP FRAME's context (the frames reproduce the legacy
@@ -18793,12 +18811,12 @@ class Checker(
         if ((node is VariableStatement || node is ExpressionStatement || node is ReturnStatement) && !spineIsDts) {
             val p = (node as NodeBase).parent
             val anchored = when (p) {
-                is SourceFile -> { ctaM3StmtAnchor(node as Statement, p.statements); true }
-                is ModuleBlock -> { ctaM3StmtAnchor(node as Statement, p.statements); true }
+                is SourceFile -> { ctaM3MarkAnchored(node); ctaM3StmtAnchor(node as Statement, p.statements); true }
+                is ModuleBlock -> { ctaM3MarkAnchored(node); ctaM3StmtAnchor(node as Statement, p.statements); true }
                 // (cta-m3d): fn-body-DIRECT statements of eligible
                 // FunctionDeclaration chains (see ctaM3FnBodyAnchorScope).
                 is Block -> if (ctaM3FnBodyAnchorScope(node) != null) {
-                    ctaM3StmtAnchor(node as Statement, p.statements); true
+                    ctaM3MarkAnchored(node); ctaM3StmtAnchor(node as Statement, p.statements); true
                 } else false
                 else -> false
             }
@@ -83290,7 +83308,7 @@ interface DataView {
                     // moved to the spine anchor — this arm still runs for its maps'
                     // interleaved state evolution but truncates the duplicates.
                     val ctaM3Parent = (stmt as NodeBase).parent
-                    val ctaM3EmitMark = if (ctaM3Parent is SourceFile || ctaM3Parent is ModuleBlock || ctaM3FnBodyAnchorScope(stmt) != null) diagnostics.size else -1
+                    val ctaM3EmitMark = if (ctaM3IsAnchoredStmt(stmt, fileName)) diagnostics.size else -1
                     for (decl in stmt.declarationList.declarations) {
                         if (stmt.declarationList.flags == SyntaxKind.ConstKeyword) {
                             registerConstLiteralUnionNarrowing(decl)
@@ -83319,7 +83337,7 @@ interface DataView {
                 }
                 is ExpressionStatement -> {
                     val ctaM3P = (stmt as NodeBase).parent
-                    val ctaM3Mark = if (ctaM3P is SourceFile || ctaM3P is ModuleBlock || ctaM3FnBodyAnchorScope(stmt) != null) diagnostics.size else -1
+                    val ctaM3Mark = if (ctaM3IsAnchoredStmt(stmt, fileName)) diagnostics.size else -1
                     checkAssignmentExpression(stmt.expression, source, fileName, varTypes, typeParams)
                     walkFunctionBodiesInExpr(stmt.expression, source, fileName, varTypes, typeParams)
                     if (ctaM3Mark >= 0) {
@@ -83328,7 +83346,7 @@ interface DataView {
                 }
                 is ReturnStatement -> {
                     val ctaM3P = (stmt as NodeBase).parent
-                    val ctaM3Mark = if (ctaM3P is SourceFile || ctaM3P is ModuleBlock || ctaM3FnBodyAnchorScope(stmt) != null) diagnostics.size else -1
+                    val ctaM3Mark = if (ctaM3IsAnchoredStmt(stmt, fileName)) diagnostics.size else -1
                     if (returnType != null || returnTypeNode != null) {
                         checkReturnAssignability(stmt, returnType ?: "", source, fileName, varTypes, typeParams, returnTypeNode)
                     }

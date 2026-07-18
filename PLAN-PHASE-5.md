@@ -20,6 +20,21 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 572b (2026-07-18) — (cta-m3h0) LANDED: the legacy truncation marks
+consult the spine's RECORDED anchor set.** The spine records every anchored
+statement's nodeId per file (`ctaM3AnchoredStmts`); the three legacy mark
+gates test membership instead of re-deriving eligibility — gate identity by
+CONSTRUCTION, freeing the spine-side eligibility to use spine-only state
+(discard depth, frame context) in the nested-scope extension without a
+legacy-side mirror. Also corrected-by-vacuity: the marks no longer fire for
+.d.ts statements the spine never anchors (the landed m3a asymmetry). Pure
+refactor: corpus 11,323/0; listAll ×8 identical vs m3g. NEXT: (cta-m3h1)
+extend spine anchoring through NON-narrowing nested chain positions
+(statement Blocks / clauses / bare if-else-loop-try positions, gated
+`ctaM3DiscardDepth == 0` at dispatch) + marks in checkTypeAssignabilityInStmt's
+Var/Expr/Return arms via the recorded set; narrowed-region anchoring (the
+narrowing-write reproduction) comes after.
+
 **Round 572 (2026-07-18) — (cta-m3g) LANDED: ctor + accessor bodies complete
 the CLASS-MEMBER tier.** All four class-member body kinds are
 anchor-eligible (`ctaM3FnHop`); each frame reproduces its legacy arm:
