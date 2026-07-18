@@ -74635,119 +74635,37 @@ interface DataView {
         try {
         for (stmt in stmts) {
             when (stmt) {
-                is FunctionDeclaration -> {
-                    val savedScope = currentTypeParamScope
-                    val tps = stmt.typeParameters
-                    if (!tps.isNullOrEmpty()) {
-                        val scope = (currentTypeParamScope?.toMutableMap() ?: mutableMapOf())
-                        val newOnes = mutableListOf<Pair<TypeParameter, Type.TypeParam>>()
-                        for (tp in tps) {
-                            val typeParam = typeParamInternCache.getOrPut(internKey(tp)) {
-                                val p = Type.TypeParam()
-                                p.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
-                                p
-                            }
-                            scope[tp.name.text] = typeParam
-                            newOnes.add(tp to typeParam)
-                        }
-                        currentTypeParamScope = scope
-                        for ((tp, typeParam) in newOnes) {
-                            if (typeParam.constraint == null) {
-                                tp.constraint?.let { typeParam.constraint = getTypeFromTypeNode(it) }
-                            }
-                        }
-                    }
-                    try {
-                        stmt.body?.statements?.let { walkStmtsForTypeParamCasts(it, source, fileName) }
-                    } finally {
-                        currentTypeParamScope = savedScope
-                    }
+                is FunctionDeclaration -> withInternedTpScope(stmt.typeParameters, withAst = false) {
+                    stmt.body?.statements?.let { walkStmtsForTypeParamCasts(it, source, fileName) }
                 }
-                is ClassDeclaration -> {
-                    // B60.18: push class's TypeParams onto scope so member bodies can see them.
-                    val savedClassScope = currentTypeParamScope
-                    val savedClassAst = currentTypeParamAstForOps
-                    val classTps = stmt.typeParameters
-                    if (!classTps.isNullOrEmpty()) {
-                        val scope = currentTypeParamScope?.toMutableMap() ?: mutableMapOf()
-                        val astScope = currentTypeParamAstForOps?.toMutableMap() ?: mutableMapOf()
-                        val newOnes = mutableListOf<Pair<TypeParameter, Type.TypeParam>>()
-                        for (tp in classTps) {
-                            val typeParam = typeParamInternCache.getOrPut(internKey(tp)) {
-                                val p = Type.TypeParam()
-                                p.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
-                                p
-                            }
-                            scope[tp.name.text] = typeParam
-                            astScope[tp.name.text] = tp
-                            newOnes.add(tp to typeParam)
-                        }
-                        currentTypeParamScope = scope
-                        currentTypeParamAstForOps = astScope
-                        for ((tp, typeParam) in newOnes) {
-                            if (typeParam.constraint == null) {
-                                tp.constraint?.let {
-                                    typeParam.constraint = getTypeFromTypeNode(it)
-                                }
-                            }
-                        }
-                    }
-                    try {
+                // B60.18: push class's TypeParams onto scope so member bodies can see them.
+                is ClassDeclaration -> withInternedTpScope(stmt.typeParameters, withAst = true) {
                     for (m in stmt.members) {
                         when (m) {
                             is MethodDeclaration -> m.body?.let { body ->
-                                val savedScope = currentTypeParamScope
-                                val savedAst = currentTypeParamAstForOps
-                                val savedLocalTypes = currentLocalTypes
-                                val tps = m.typeParameters
-                                if (!tps.isNullOrEmpty()) {
-                                    val scope = (currentTypeParamScope?.toMutableMap() ?: mutableMapOf())
-                                    val astScope = currentTypeParamAstForOps?.toMutableMap() ?: mutableMapOf()
-                                    val newOnes = mutableListOf<Pair<TypeParameter, Type.TypeParam>>()
-                                    for (tp in tps) {
-                                        val typeParam = typeParamInternCache.getOrPut(internKey(tp)) {
-                                            val p = Type.TypeParam()
-                                            p.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
-                                            p
-                                        }
-                                        scope[tp.name.text] = typeParam
-                                        astScope[tp.name.text] = tp
-                                        newOnes.add(tp to typeParam)
-                                    }
-                                    currentTypeParamScope = scope
-                                    currentTypeParamAstForOps = astScope
-                                    for ((tp, typeParam) in newOnes) {
-                                        if (typeParam.constraint == null) {
-                                            tp.constraint?.let { typeParam.constraint = getTypeFromTypeNode(it) }
+                                withInternedTpScope(m.typeParameters, withAst = true) {
+                                    // Populate currentLocalTypes with parameter types so
+                                    // assertion-walker can resolve `<T>param` source.
+                                    val savedLocalTypes = currentLocalTypes
+                                    currentLocalTypes = EpochMap(currentLocalTypes)
+                                    for (param in m.parameters) {
+                                        val paramName = param.name as? Identifier ?: continue
+                                        val paramType = param.type ?: continue
+                                        val resolved = getTypeFromTypeNode(paramType)
+                                        if (resolved !== errorType && resolved !== anyType) {
+                                            currentLocalTypes[paramName.text] = resolved
                                         }
                                     }
-                                }
-                                // Populate currentLocalTypes with parameter types so
-                                // assertion-walker can resolve `<T>param` source.
-                                currentLocalTypes = EpochMap(currentLocalTypes)
-                                for (param in m.parameters) {
-                                    val paramName = param.name as? Identifier ?: continue
-                                    val paramType = param.type ?: continue
-                                    val resolved = getTypeFromTypeNode(paramType)
-                                    if (resolved !== errorType && resolved !== anyType) {
-                                        currentLocalTypes[paramName.text] = resolved
+                                    try {
+                                        walkStmtsForTypeParamCasts(body.statements, source, fileName)
+                                    } finally {
+                                        currentLocalTypes = savedLocalTypes
                                     }
-                                }
-                                try {
-                                    walkStmtsForTypeParamCasts(body.statements, source, fileName)
-                                } finally {
-                                    currentTypeParamScope = savedScope
-                                    currentTypeParamAstForOps = savedAst
-                                    currentLocalTypes = savedLocalTypes
                                 }
                             }
                             is Constructor -> m.body?.statements?.let { walkStmtsForTypeParamCasts(it, source, fileName) }
                             else -> {}
                         }
-                    }
-                    } finally {
-                        currentTypeParamScope = savedClassScope
-                        currentTypeParamAstForOps = savedClassAst
                     }
                 }
                 is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.statements?.let {
@@ -75164,55 +75082,23 @@ interface DataView {
         tpVars: MutableMap<String, TypeParameter>,
     ) {
         when (stmt) {
-            is ClassDeclaration -> {
-                val savedScope = currentTypeParamScope
-                val savedAst = currentTypeParamAstForOps
-                val tps = stmt.typeParameters
-                if (!tps.isNullOrEmpty()) {
-                    val scope = currentTypeParamScope?.toMutableMap() ?: mutableMapOf()
-                    val astScope = currentTypeParamAstForOps?.toMutableMap() ?: mutableMapOf()
-                    val newOnes = mutableListOf<Pair<TypeParameter, Type.TypeParam>>()
-                    for (tp in tps) {
-                        val typeParam = typeParamInternCache.getOrPut(internKey(tp)) {
-                            val p = Type.TypeParam()
-                            p.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
-                            p
-                        }
-                        scope[tp.name.text] = typeParam
-                        astScope[tp.name.text] = tp
-                        newOnes.add(tp to typeParam)
+            is ClassDeclaration -> withInternedTpScope(stmt.typeParameters, withAst = true) {
+                for (m in stmt.members) {
+                    when (m) {
+                        is MethodDeclaration -> walkFnLikeBodyForTypeParamOps(
+                            m.typeParameters, m.parameters, m.body?.statements, source, fileName,
+                        )
+                        is Constructor -> walkFnLikeBodyForTypeParamOps(
+                            null, m.parameters, m.body?.statements, source, fileName,
+                        )
+                        is GetAccessor -> walkFnLikeBodyForTypeParamOps(
+                            null, null, m.body?.statements, source, fileName,
+                        )
+                        is SetAccessor -> walkFnLikeBodyForTypeParamOps(
+                            null, m.parameters, m.body?.statements, source, fileName,
+                        )
+                        else -> {}
                     }
-                    currentTypeParamScope = scope
-                    currentTypeParamAstForOps = astScope
-                    for ((tp, typeParam) in newOnes) {
-                        if (typeParam.constraint == null) {
-                            tp.constraint?.let {
-                                typeParam.constraint = getTypeFromTypeNode(it)
-                            }
-                        }
-                    }
-                }
-                try {
-                    for (m in stmt.members) {
-                        when (m) {
-                            is MethodDeclaration -> walkFnLikeBodyForTypeParamOps(
-                                m.typeParameters, m.parameters, m.body?.statements, source, fileName,
-                            )
-                            is Constructor -> walkFnLikeBodyForTypeParamOps(
-                                null, m.parameters, m.body?.statements, source, fileName,
-                            )
-                            is GetAccessor -> walkFnLikeBodyForTypeParamOps(
-                                null, null, m.body?.statements, source, fileName,
-                            )
-                            is SetAccessor -> walkFnLikeBodyForTypeParamOps(
-                                null, m.parameters, m.body?.statements, source, fileName,
-                            )
-                            else -> {}
-                        }
-                    }
-                } finally {
-                    currentTypeParamScope = savedScope
-                    currentTypeParamAstForOps = savedAst
                 }
             }
             is FunctionDeclaration -> walkFnLikeBodyForTypeParamOps(
@@ -75316,33 +75202,7 @@ interface DataView {
         source: String, fileName: String,
     ) {
         if (bodyStmts == null) return
-        val savedScope = currentTypeParamScope
-        val savedAst = currentTypeParamAstForOps
-        if (!ownTps.isNullOrEmpty()) {
-            val scope = currentTypeParamScope?.toMutableMap() ?: mutableMapOf()
-            val astScope = currentTypeParamAstForOps?.toMutableMap() ?: mutableMapOf()
-            val newOnes = mutableListOf<Pair<TypeParameter, Type.TypeParam>>()
-            for (tp in ownTps) {
-                val typeParam = typeParamInternCache.getOrPut(internKey(tp)) {
-                    val p = Type.TypeParam()
-                    p.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
-                    p
-                }
-                scope[tp.name.text] = typeParam
-                astScope[tp.name.text] = tp
-                newOnes.add(tp to typeParam)
-            }
-            currentTypeParamScope = scope
-            currentTypeParamAstForOps = astScope
-            for ((tp, typeParam) in newOnes) {
-                if (typeParam.constraint == null) {
-                    tp.constraint?.let {
-                        typeParam.constraint = getTypeFromTypeNode(it)
-                    }
-                }
-            }
-        }
-        try {
+        withInternedTpScope(ownTps, withAst = true) {
             val bodyVars = mutableMapOf<String, TypeParameter>()
             // Track parameters typed as effectively-unconstrained (or `extends any`) TypeParams.
             if (parameters != null) {
@@ -75357,9 +75217,6 @@ interface DataView {
                 }
             }
             for (s in bodyStmts) walkStmtForTypeParamOps(s, source, fileName, bodyVars)
-        } finally {
-            currentTypeParamScope = savedScope
-            currentTypeParamAstForOps = savedAst
         }
     }
 
@@ -86496,33 +86353,7 @@ interface DataView {
             // `[number, T1<{ x: any; }>]`. TypeParam instances interned via
             // typeParamInternCache by AST position so they match what getTypeOfFunction
             // produces.
-            val savedTypeParamScope = currentTypeParamScope
-            if (!funcTypeParams.isNullOrEmpty()) {
-                val scope = (currentTypeParamScope?.toMutableMap() ?: mutableMapOf())
-                // Two-pass: (1) intern all TypeParams and put in scope BEFORE resolving
-                // constraints (constraints may reference other TypeParams of the same sig).
-                // (2) resolve constraint/default with scope active.
-                val newTps = mutableListOf<Pair<TypeParameter, Type.TypeParam>>()
-                for (tp in funcTypeParams) {
-                    val typeParam = typeParamInternCache.getOrPut(internKey(tp)) {
-                        val p = Type.TypeParam()
-                        p.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
-                        p
-                    }
-                    scope[tp.name.text] = typeParam
-                    newTps.add(tp to typeParam)
-                }
-                currentTypeParamScope = scope
-                for ((tp, typeParam) in newTps) {
-                    if (typeParam.constraint == null) {
-                        tp.constraint?.let { typeParam.constraint = getTypeFromTypeNode(it) }
-                    }
-                    if (typeParam.default == null) {
-                        tp.default?.let { typeParam.default = getTypeFromTypeNode(it) }
-                    }
-                }
-            }
-            try {
+            withInternedTpScope(funcTypeParams, withAst = false, withDefaults = true) {
                 // (cta-m2d) round 564: the 16.4ei EMISSION is split from the pure
                 // param-TYPING loop (ctaTypeParamsIntoLocals) so the spine frame
                 // machinery can reuse the typing without emitting. Both run under
@@ -86537,8 +86368,6 @@ interface DataView {
                     }
                 }
                 ctaTypeParamsIntoLocals(parameters, innerTypes)
-            } finally {
-                currentTypeParamScope = savedTypeParamScope
             }
             val retType = if (returnTypeNode != null) resolveSimpleTypeName(returnTypeNode) else null
             val allTypeParams = outerTypeParams + collectTypeParamNames(funcTypeParams)
@@ -95525,6 +95354,52 @@ interface DataView {
         } finally {
             currentTypeAliasArgs = savedArgs
             currentTypeParamScope = savedScope
+        }
+    }
+
+    /**
+     * INV.5(b2d): the WALKER-installer idiom as a region — intern [tps] into a
+     * scope LAYERED on the ambient (optionally mirroring the AST side-map
+     * [currentTypeParamAstForOps] too), materialize missing constraints (and,
+     * when [withDefaults], defaults) UNDER the new scope, then run [block] in
+     * the region form. Empty/null [tps] runs [block] directly with NO install
+     * (the legacy no-install path). The AST side-map is not part of the mapper
+     * (it is walker-local state), so its save/restore stays hand-rolled here.
+     */
+    private inline fun withInternedTpScope(
+        tps: List<TypeParameter>?, withAst: Boolean, withDefaults: Boolean = false,
+        block: () -> Unit,
+    ) {
+        if (tps.isNullOrEmpty()) { block(); return }
+        val savedAst = currentTypeParamAstForOps
+        val scope = currentTypeParamScope?.toMutableMap() ?: mutableMapOf()
+        val astScope = if (withAst) currentTypeParamAstForOps?.toMutableMap() ?: mutableMapOf() else null
+        val newOnes = mutableListOf<Pair<TypeParameter, Type.TypeParam>>()
+        for (tp in tps) {
+            val typeParam = typeParamInternCache.getOrPut(internKey(tp)) {
+                val p = Type.TypeParam()
+                p.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
+                p
+            }
+            scope[tp.name.text] = typeParam
+            astScope?.put(tp.name.text, tp)
+            newOnes.add(tp to typeParam)
+        }
+        if (astScope != null) currentTypeParamAstForOps = astScope
+        try {
+            withInstantiationContext(scopeMapper(scope)) {
+                for ((tp, typeParam) in newOnes) {
+                    if (typeParam.constraint == null) {
+                        tp.constraint?.let { typeParam.constraint = getTypeFromTypeNode(it) }
+                    }
+                    if (withDefaults && typeParam.default == null) {
+                        tp.default?.let { typeParam.default = getTypeFromTypeNode(it) }
+                    }
+                }
+                block()
+            }
+        } finally {
+            if (astScope != null) currentTypeParamAstForOps = savedAst
         }
     }
 
@@ -145152,25 +145027,7 @@ interface DataView {
         tps: List<TypeParameter>?, params: List<Parameter>, bodyNode: Node?,
         source: String, fileName: String, parentAnns: Map<String, TypeNode>
     ) {
-        val saved = currentTypeParamScope
-        if (!tps.isNullOrEmpty()) {
-            val scope = currentTypeParamScope?.toMutableMap() ?: mutableMapOf()
-            val newOnes = mutableListOf<Pair<TypeParameter, Type.TypeParam>>()
-            for (tp in tps) {
-                val typeParam = typeParamInternCache.getOrPut(internKey(tp)) {
-                    val p = Type.TypeParam()
-                    p.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
-                    p
-                }
-                scope[tp.name.text] = typeParam
-                newOnes.add(tp to typeParam)
-            }
-            currentTypeParamScope = scope
-            for ((tp, typeParam) in newOnes) {
-                if (typeParam.constraint == null) tp.constraint?.let { typeParam.constraint = getTypeFromTypeNode(it) }
-            }
-        }
-        try {
+        withInternedTpScope(tps, withAst = false) {
             val anns = HashMap(parentAnns)
             for (p in params) (p.name as? Identifier)?.let { id -> p.type?.let { anns[id.text] = it } }
             when (bodyNode) {
@@ -145178,8 +145035,6 @@ interface DataView {
                 is Expression -> spread2698Expr(bodyNode, source, fileName, anns)
                 else -> {}
             }
-        } finally {
-            currentTypeParamScope = saved
         }
     }
 

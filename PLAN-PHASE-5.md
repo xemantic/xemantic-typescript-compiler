@@ -20,6 +20,26 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 601 (2026-07-18) — (b2d) LANDED: the walker-installer idiom flipped
+to the region form via `withInternedTpScope`.** The shared shape (intern
+TPs → layered scope [+ the AST side-map] → constraints [+ defaults]
+materialized UNDER the new scope → walk → restore) is now ONE inline
+helper routing its scope write through `withInstantiationContext(
+scopeMapper(...))`; 7 hand-rolled save/set/try/finally installer sites
+converted (walkStmtsForTypeParamCasts fn/class/method arms,
+walkStmtForTypeParamOps class arm, walkFnLikeBodyForTypeParamOps,
+spread2698FuncLike, checkFunctionBody's sig-TP install with defaults).
+The AST side-map (`currentTypeParamAstForOps`) is deliberately NOT in
+the mapper — walker-local state, hand-rolled inside the helper.
+Behavior-identical by construction (incl. the population-throw
+restore wart). Raw ambient writes 28 → 15; survivors:
+checkCallTypesInStatement (ccet leaf, 7), checkConstraintsInStatements
+(dual-ambient), checkTpListDefaults (empty→null shape),
+checkClassPropertyOverrides, checkMixinClassInStatements,
+pushFunctionTypeParamsScope (push/pop helper), + the spine frame
+LIFO sites (not region-formable). Gates: corpus 11,347/0; listAll ×8
+byte-identical. NEXT: the remaining (b2d2) batch, then (bN).
+
 **Round 600 (2026-07-18) — (INV.5(e) DONE) the Generic-family pin-walker
 deletion sweep: 15/16 are STILL LOAD-BEARING; 1 deleted.** All 16
 `checkGeneric*`-family pass dispatches disabled in one experiment; the
