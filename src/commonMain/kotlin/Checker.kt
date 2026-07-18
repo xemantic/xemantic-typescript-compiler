@@ -98373,7 +98373,9 @@ interface DataView {
         // INV.0 recompute-factor counter — inert unless --passTiming enabled it.
         if (PassTiming.enabled) {
             PassTiming.noteGetTypeOfExpression(expr.pos, expr.end)
+            val t0 = PassTiming.nowNanos()
             val r = getTypeOfExpressionCore(expr)
+            PassTiming.typeOfExprNanos += PassTiming.nowNanos() - t0
             PassTiming.noteTypeOfExprResult(expr.pos, expr.end, r)
             // (f1b-i): the SHADOW memo — classify each repeat vs the live
             // recompute; hitWRONG = an invalidation-surface gap. Object/array
@@ -98708,10 +98710,12 @@ interface DataView {
         if (isFlowAnalysisDisabledAt(reference.pos)) return null
         // INV.0 walks-launched counter — inert unless --passTiming enabled it.
         if (PassTiming.enabled) PassTiming.noteNarrowWalk()
+        val probeStart = if (PassTiming.enabled) PassTiming.nowNanos() else 0L
         val saved = flowDepthTripped
         flowDepthTripped = false
         try {
             val result = walk()
+            if (PassTiming.enabled) PassTiming.narrowWalkNanos += PassTiming.nowNanos() - probeStart
             if (flowDepthTripped && !ctaM3RecordOnlySuppress) reportFlowControlError(reference)
             return result
         } finally {

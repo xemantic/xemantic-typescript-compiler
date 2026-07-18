@@ -2317,7 +2317,22 @@ with a session note saying why). Item IDs are stable; session notes reference th
 - Node/tsc/tsgo are NOT currently installed — differential testing (M0 optional) and
   real `@types/node` (M1.3) wait for network.
 - The benchmark project cache lives under `build/bench/` (cheap to rebuild); results
-  TSVs under `bench/` (gitignored, machine-specific).**Round 596 (2026-07-18) — (f1b-ii) MEASURED DEAD-END, reverted: the live
+  TSVs under `bench/` (gitignored, machine-specific).**Round 597 (2026-07-18) — the (f2) TIME ATTRIBUTION: the walks are 4.8s;
+~10s of checkSpine is NEITHER walks nor typeOfExpr.** Nanotime
+accumulators (--passTiming only, TimeSource-based) at the two hot
+surfaces: depth-0 narrowing walks = 4,806ms (~26% of checkSpine — a real
+(f2) lever); getTypeOfExpression total = 3,844ms (an OVERcount — nested
+spans double-counted — so exclusive is lower, consistent with the f1
+dead-end verdict). The REMAINING ~10s of checkSpine's 18.4s is relation
+checks (checkTypeRelatedTo verdicts), non-expression resolution
+(getTypeFromTypeNode / resolveStructuredTypeMembers), and the anchors'
+emitter machinery — the NEXT attribution target before committing to
+(f2)'s fold (the f1 lesson: attribute before building). Probe committed
+(inert off --passTiming); sentinel anchor pins green. NEXT: attribute the
+~10s (a relation-nanos accumulator + a resolveStructuredTypeMembers
+counter), then pick the lever: (f2) fold vs relation-engine work.
+
+**Round 596 (2026-07-18) — (f1b-ii) MEASURED DEAD-END, reverted: the live
 per-node expression-type memo is 1-3% SLOWER.** The flip served the 150k
 zero-wrong confirmed hits and was fully gate-green (corpus 11,347/0 +
 listAll ×8 byte-identical — the skipped-warming concern never
