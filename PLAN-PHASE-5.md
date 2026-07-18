@@ -2023,7 +2023,26 @@ interrupt the arc).
       Implementation staging: (ccet-m2) frames always-on, gates must stay
       IDENTICAL (no emissions move yet — any diff is a first-touch
       coupling to bisect); then (ccet-m3) per-call anchors + marks + pins.
-    - [ ] **(ccet-m3…) Emission moves** with the leave-dispatch discipline
+    - [ ] **(ccet-m3) BLOCKED-BUT-BUILT (round 590, on branch
+      `wip/ccet-m3-anchors`):** per-Call/New/TaggedTemplate anchors at
+      leaves + the full per-edge reach classifier + legacy marks +
+      CcetAnchorTest (8/8, incl. the static class-TP skip-gate pin) + the
+      re-enabled decl recordings (the round-589 flip is MOOT under anchors:
+      the legacy verdict truncates). Corpus GREEN (11,347/0). BLOCKER: ONE
+      interleave FP — the cta return anchor at services.ts:1327 (the
+      objectAllocator objlit vs ObjectAllocator) sees CCET-WARMED caches
+      (per-node interleaving ≠ pass-after-pass, the round-559 warning) and
+      resolves TP-carrying member types (`() => NodeObject<TKind>`) → a
+      TS2322 the legacy order never produced (services/server/harness +1).
+      A typeContainsForeignTypeParam construct-sig extension did NOT
+      suppress (on the branch; possibly resolvedReturnType null at gate
+      time, or a non-gate emitter). NEXT WINDOW: (1) identify the emitter
+      with the round-472 Diagnostic-init probe keyed (2322, the 1327 start
+      offset) on the services profile; (2) fix the gate's REACH or gate
+      that emitter (order-free-verdict discipline, both cache states
+      silent); (3) structural fallback: defer ccet anchors to a per-file
+      second walk. Then merge the branch + gates + (ccet-retire).
+      ORIGINAL: **(ccet-m3…) Emission moves** with the leave-dispatch discipline
       (cpa's probe lesson: anchor at statement/expression LEAVES) + the
       recorded-set truncation, then **(ccet-retire)** via the round-585
       experiment template (no-op the dispatch → gates → delete).
