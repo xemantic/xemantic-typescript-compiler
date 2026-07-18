@@ -20,6 +20,29 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 582 (2026-07-18) — (cpa-m3b) LANDED first-try: the remaining
+statement arms' direct walks join the anchor.** Condition/subject/
+incrementor/case-expr walks anchor at the EXPRESSION node's OWN leave —
+after its subtree (probe-safe: the diagnostics-list probes see the
+subtree's spine emissions) and BEFORE the owner's body statements
+(state-correct: the legacy walk ran these before the body dispatch, whose
+recordings leak into the shared maps); the If/While/Do/For/Switch/With
+legacy arms truncate per-walk via marks keyed on the EXPRESSION node.
+Throw/ExportAssignment/TypeAliasDeclaration (the strictNullChecks-gated
+walkTypeNodeForUndefinedTypeQueryChain) and EnumDeclaration (member
+initializers under a currentEnclosingEnum install) anchor at the
+statement's leave with whole-arm truncation. Statements inside
+condition-nested arrow bodies stay owned by the condition anchor's walk
+(the forAnchor chain rejects them — the double-emit control pinned by the
+arrow-in-condition test). Pins +3 (CpaAnchorTest → 9). Gates: corpus
+11,351/0; listAll ×8 identical. The cpa statement-DISPATCH emission
+surface is now anchored except: class HERITAGE walks + member
+PropertyDeclaration initializer walks (the ClassDeclaration arm), and the
+B1.3 walkTypeNode inside... (TypeAlias done); NEXT: (cpa-m3c) the
+ClassDeclaration arm's heritage + property-initializer walks, then the
+emit-twice retirement question for cpa (cheaper than cta's: the legacy
+arms' only residual value is map evolution the frames already reproduce).
+
 **Round 581 (2026-07-18) — (cpa-m3a) LANDED: THE FIRST cpa EMISSIONS RUN
 FROM THE SPINE — frames always-on.** Var/Expr/Return statements' DIRECT
 expression walks dispatch from the spine anchor under the frame ambient

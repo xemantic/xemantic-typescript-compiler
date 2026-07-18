@@ -130,6 +130,67 @@ class CpaAnchorTest {
     }
 
     @Test
+    fun `condition and subject walks emit exactly once`() {
+        // (cpa-m3b): conditions/subjects/incrementors anchor at the
+        // EXPRESSION node's leave (probe-safe + state-correct).
+        val nIf = count2339("""
+            interface O { a: number }
+            declare const o: O;
+            if (o.missing) {}
+        """)
+        assert(nIf == 1) { "if-condition: expected exactly 1 TS2339, got $nIf" }
+        val nWhile = count2339("""
+            interface O { a: number }
+            declare const o: O;
+            function f() { while (o.missing) {} }
+        """)
+        assert(nWhile == 1) { "while-condition: expected exactly 1 TS2339, got $nWhile" }
+        val nFor = count2339("""
+            interface O { a: number }
+            declare const o: O;
+            function g() { for (let i = 0; o.missing; i++) {} }
+        """)
+        assert(nFor == 1) { "for-condition: expected exactly 1 TS2339, got $nFor" }
+        val nSwitch = count2339("""
+            interface O { a: number }
+            declare const o: O;
+            declare const k: number;
+            function h() {
+                switch (o.missing) { case o.missing: break; }
+            }
+        """)
+        assert(nSwitch == 2) { "switch subject+case: expected exactly 2 TS2339, got $nSwitch" }
+    }
+
+    @Test
+    fun `throw and enum-initializer walks emit exactly once`() {
+        val nThrow = count2339("""
+            interface O { a: number }
+            declare const o: O;
+            function f() { throw o.missing; }
+        """)
+        assert(nThrow == 1) { "throw: expected exactly 1 TS2339, got $nThrow" }
+        val nEnum = count2339("""
+            interface O { a: number }
+            declare const o: O;
+            enum E { x = 1, y = o.missing }
+        """)
+        assert(nEnum == 1) { "enum-init: expected exactly 1 TS2339, got $nEnum" }
+    }
+
+    @Test
+    fun `arrow body inside an anchored condition emits exactly once`() {
+        // The condition anchor's walk owns the arrow body's emissions — the
+        // nested statement must never be separately anchored (double-emit).
+        val n = count2339("""
+            interface O { a: number }
+            declare const o: O;
+            if ([1].some(x => { return o.missing; })) {}
+        """)
+        assert(n == 1) { "arrow-in-condition: expected exactly 1 TS2339, got $n" }
+    }
+
+    @Test
     fun `negative control - valid accesses stay silent`() {
         val n = count2339("""
             interface O { a: number }

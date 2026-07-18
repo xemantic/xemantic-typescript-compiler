@@ -1396,7 +1396,9 @@ class Checker(
         // TS2304 suppressing checkSingleElementAccess's TS2538 — the
         // round-537 enter-dispatch lesson), and BEFORE the loop-var restores
         // (a for-in BODY statement's walk needs the override active).
-        if ((node is VariableStatement || node is ExpressionStatement || node is ReturnStatement) &&
+        if ((node is VariableStatement || node is ExpressionStatement || node is ReturnStatement ||
+                node is ThrowStatement || node is ExportAssignment || node is TypeAliasDeclaration ||
+                node is EnumDeclaration) &&
             cpaM2StmtPosition(node) && cpaM2ChainOk(node, forAnchor = true)
         ) {
             cpaM3MarkAnchored(node)
@@ -1414,6 +1416,54 @@ class Checker(
                     is ReturnStatement -> node.expression?.let {
                         checkPropertyAccessInExpr(it, spineSource, spineFileName, top.classType)
                     }
+                    // (cpa-m3b): the single-expression / no-body arms.
+                    is ThrowStatement -> node.expression?.let {
+                        checkPropertyAccessInExpr(it, spineSource, spineFileName, top.classType)
+                    }
+                    is ExportAssignment ->
+                        checkPropertyAccessInExpr(node.expression, spineSource, spineFileName, top.classType)
+                    is TypeAliasDeclaration -> if (strictNullChecks) {
+                        walkTypeNodeForUndefinedTypeQueryChain(node.type, spineSource, spineFileName, atNode = node)
+                    }
+                    is EnumDeclaration -> {
+                        val saved = currentEnclosingEnum
+                        currentEnclosingEnum = node
+                        try {
+                            for (m in node.members) {
+                                m.initializer?.let {
+                                    checkPropertyAccessInExpr(it, spineSource, spineFileName, top.classType)
+                                }
+                            }
+                        } finally { currentEnclosingEnum = saved }
+                    }
+                }
+            }
+        }
+        // (cpa-m3b): condition/subject/incrementor/case-expr walks anchor at
+        // the EXPRESSION node's OWN leave — after its subtree (probe-safe:
+        // the diagnostics-list probes see the subtree's spine emissions) and
+        // BEFORE the owner's body statements (state-correct: the legacy walk
+        // ran these before dispatching the body, whose recordings leak into
+        // the shared maps).
+        run {
+            val p = (node as NodeBase).parent
+            val owner: Statement? = when {
+                p is IfStatement && node === p.expression -> p
+                p is WhileStatement && node === p.expression -> p
+                p is DoStatement && node === p.expression -> p
+                p is ForStatement && (node === p.condition || node === p.incrementor) -> p
+                p is SwitchStatement && node === p.expression -> p
+                p is WithStatement && node === p.expression -> p
+                p is CaseClause && node === p.expression ->
+                    (p as NodeBase).parent as? SwitchStatement
+                else -> null
+            }
+            if (owner != null && node is Expression &&
+                cpaM2StmtPosition(owner) && cpaM2ChainOk(owner, forAnchor = true)) {
+                cpaM3MarkAnchored(node)
+                val top = cpaFrames.last()
+                withCpaFrameAmbient(top) {
+                    checkPropertyAccessInExpr(node, spineSource, spineFileName, top.classType)
                 }
             }
         }
@@ -121254,14 +121304,24 @@ interface DataView {
                 if (cpaM3Mk >= 0) while (diagnostics.size > cpaM3Mk) diagnostics.removeAt(diagnostics.size - 1)
             }
             is IfStatement -> {
+                val cpaM3Mk = if (cpaM3IsAnchoredStmt(stmt.expression, fileName)) diagnostics.size else -1
                 checkPropertyAccessInExpr(stmt.expression, source, fileName, enclosingClassType)
+                if (cpaM3Mk >= 0) while (diagnostics.size > cpaM3Mk) diagnostics.removeAt(diagnostics.size - 1)
                 checkPropertyAccessInStatement(stmt.thenStatement, source, fileName, enclosingClassType)
                 stmt.elseStatement?.let { checkPropertyAccessInStatement(it, source, fileName, enclosingClassType) }
             }
             is Block -> checkPropertyAccessInStatements(stmt.statements, source, fileName, enclosingClassType)
             is ForStatement -> {
-                stmt.condition?.let { checkPropertyAccessInExpr(it, source, fileName, enclosingClassType) }
-                stmt.incrementor?.let { checkPropertyAccessInExpr(it, source, fileName, enclosingClassType) }
+                stmt.condition?.let {
+                    val cpaM3Mk = if (cpaM3IsAnchoredStmt(it, fileName)) diagnostics.size else -1
+                    checkPropertyAccessInExpr(it, source, fileName, enclosingClassType)
+                    if (cpaM3Mk >= 0) while (diagnostics.size > cpaM3Mk) diagnostics.removeAt(diagnostics.size - 1)
+                }
+                stmt.incrementor?.let {
+                    val cpaM3Mk = if (cpaM3IsAnchoredStmt(it, fileName)) diagnostics.size else -1
+                    checkPropertyAccessInExpr(it, source, fileName, enclosingClassType)
+                    if (cpaM3Mk >= 0) while (diagnostics.size > cpaM3Mk) diagnostics.removeAt(diagnostics.size - 1)
+                }
                 checkPropertyAccessInStatement(stmt.statement, source, fileName, enclosingClassType)
             }
             is ForInStatement -> {
@@ -121317,19 +121377,27 @@ interface DataView {
                 }
             }
             is WhileStatement -> {
+                val cpaM3Mk = if (cpaM3IsAnchoredStmt(stmt.expression, fileName)) diagnostics.size else -1
                 checkPropertyAccessInExpr(stmt.expression, source, fileName, enclosingClassType)
+                if (cpaM3Mk >= 0) while (diagnostics.size > cpaM3Mk) diagnostics.removeAt(diagnostics.size - 1)
                 checkPropertyAccessInStatement(stmt.statement, source, fileName, enclosingClassType)
             }
             is DoStatement -> {
+                val cpaM3Mk = if (cpaM3IsAnchoredStmt(stmt.expression, fileName)) diagnostics.size else -1
                 checkPropertyAccessInExpr(stmt.expression, source, fileName, enclosingClassType)
+                if (cpaM3Mk >= 0) while (diagnostics.size > cpaM3Mk) diagnostics.removeAt(diagnostics.size - 1)
                 checkPropertyAccessInStatement(stmt.statement, source, fileName, enclosingClassType)
             }
             is SwitchStatement -> {
+                val cpaM3SubjMk = if (cpaM3IsAnchoredStmt(stmt.expression, fileName)) diagnostics.size else -1
                 checkPropertyAccessInExpr(stmt.expression, source, fileName, enclosingClassType)
+                if (cpaM3SubjMk >= 0) while (diagnostics.size > cpaM3SubjMk) diagnostics.removeAt(diagnostics.size - 1)
                 for (clause in stmt.caseBlock) {
                     when (clause) {
                         is CaseClause -> {
+                            val cpaM3Mk = if (cpaM3IsAnchoredStmt(clause.expression, fileName)) diagnostics.size else -1
                             checkPropertyAccessInExpr(clause.expression, source, fileName, enclosingClassType)
+                            if (cpaM3Mk >= 0) while (diagnostics.size > cpaM3Mk) diagnostics.removeAt(diagnostics.size - 1)
                             checkPropertyAccessInStatements(clause.statements, source, fileName, enclosingClassType)
                         }
                         is DefaultClause -> {
@@ -121344,9 +121412,15 @@ interface DataView {
                 stmt.catchClause?.block?.let { checkPropertyAccessInStatements(it.statements, source, fileName, enclosingClassType) }
                 stmt.finallyBlock?.let { checkPropertyAccessInStatements(it.statements, source, fileName, enclosingClassType) }
             }
-            is ThrowStatement -> stmt.expression?.let { checkPropertyAccessInExpr(it, source, fileName, enclosingClassType) }
+            is ThrowStatement -> {
+                val cpaM3Mk = if (cpaM3IsAnchoredStmt(stmt, fileName)) diagnostics.size else -1
+                stmt.expression?.let { checkPropertyAccessInExpr(it, source, fileName, enclosingClassType) }
+                if (cpaM3Mk >= 0) while (diagnostics.size > cpaM3Mk) diagnostics.removeAt(diagnostics.size - 1)
+            }
             is WithStatement -> {
+                val cpaM3Mk = if (cpaM3IsAnchoredStmt(stmt.expression, fileName)) diagnostics.size else -1
                 checkPropertyAccessInExpr(stmt.expression, source, fileName, enclosingClassType)
+                if (cpaM3Mk >= 0) while (diagnostics.size > cpaM3Mk) diagnostics.removeAt(diagnostics.size - 1)
                 checkPropertyAccessInStatement(stmt.statement, source, fileName, enclosingClassType)
             }
             is LabeledStatement -> checkPropertyAccessInStatement(stmt.statement, source, fileName, enclosingClassType)
@@ -121379,7 +121453,9 @@ interface DataView {
                 }
             }
             is ExportAssignment -> {
+                val cpaM3Mk = if (cpaM3IsAnchoredStmt(stmt, fileName)) diagnostics.size else -1
                 checkPropertyAccessInExpr(stmt.expression, source, fileName, enclosingClassType)
+                if (cpaM3Mk >= 0) while (diagnostics.size > cpaM3Mk) diagnostics.removeAt(diagnostics.size - 1)
             }
             is TypeAliasDeclaration -> {
                 // B1.3: TS2532 "Object is possibly 'undefined'." for `typeof X.Y.Z`
@@ -121387,13 +121463,16 @@ interface DataView {
                 // possibly-undefined receiver. The Flow.kt binder records currentFlow
                 // at the TypeAlias position so we can apply path-based narrowing.
                 if (strictNullChecks) {
+                    val cpaM3Mk = if (cpaM3IsAnchoredStmt(stmt, fileName)) diagnostics.size else -1
                     walkTypeNodeForUndefinedTypeQueryChain(stmt.type, source, fileName, atNode = stmt)
+                    if (cpaM3Mk >= 0) while (diagnostics.size > cpaM3Mk) diagnostics.removeAt(diagnostics.size - 1)
                 }
             }
             is EnumDeclaration -> {
                 // enumBasics3: walk member-initializer expressions for property accesses
                 // (`enum E { a = 1, b = a.x }`). Track the enclosing enum so a bare-ident
                 // receiver naming a member of THIS enum resolves to an enum member.
+                val cpaM3Mk = if (cpaM3IsAnchoredStmt(stmt, fileName)) diagnostics.size else -1
                 val saved = currentEnclosingEnum
                 currentEnclosingEnum = stmt
                 try {
@@ -121401,6 +121480,7 @@ interface DataView {
                         m.initializer?.let { checkPropertyAccessInExpr(it, source, fileName, enclosingClassType) }
                     }
                 } finally { currentEnclosingEnum = saved }
+                if (cpaM3Mk >= 0) while (diagnostics.size > cpaM3Mk) diagnostics.removeAt(diagnostics.size - 1)
             }
             else -> { /* no property access in other statement types */ }
         }
