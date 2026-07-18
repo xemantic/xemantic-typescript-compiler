@@ -2023,8 +2023,9 @@ interrupt the arc).
       Implementation staging: (ccet-m2) frames always-on, gates must stay
       IDENTICAL (no emissions move yet — any diff is a first-touch
       coupling to bisect); then (ccet-m3) per-call anchors + marks + pins.
-    - [ ] **(ccet-m3) BLOCKED-BUT-BUILT (round 590, on branch
-      `wip/ccet-m3-anchors`):** per-Call/New/TaggedTemplate anchors at
+    - [x] **(ccet-m3) LANDED round 591** (merged; the gap-signature gate made
+      the interleave FP order-free) + **(ccet-retire) LANDED round 592 — ALL
+      THREE GIANTS OFF EMIT-TWICE.** (history: round 590 blocked state:) per-Call/New/TaggedTemplate anchors at
       leaves + the full per-edge reach classifier + legacy marks +
       CcetAnchorTest (8/8, incl. the static class-TP skip-gate pin) + the
       re-enabled decl recordings (the round-589 flip is MOOT under anchors:
@@ -2316,7 +2317,25 @@ with a session note saying why). Item IDs are stable; session notes reference th
 - Node/tsc/tsgo are NOT currently installed — differential testing (M0 optional) and
   real `@types/node` (M1.3) wait for network.
 - The benchmark project cache lives under `build/bench/` (cheap to rebuild); results
-  TSVs under `bench/` (gitignored, machine-specific).**Round 591 (2026-07-18) — (ccet-m3) LANDED (merged from
+  TSVs under `bench/` (gitignored, machine-specific).**Round 592 (2026-07-18) — (ccet-retire) LANDED: THE LAST GIANT IS RETIRED
+— ALL THREE INV.4(e) GIANTS ARE OFF EMIT-TWICE.** The
+checkCallExpressionTypes pass dispatch + driver are deleted; every ccet
+emission runs once from the per-call spine anchors. Zero fallout (the
+pins-first decision meant no scaffolding to unwind). The walker family
+survives as leaf machinery (checkComputedDestructKey consumes
+checkCallTypesInExpr best-effort; those positions are never anchored).
+Gates: corpus 11,347/0; listAll ×8 identical (46 ×7 / 94 harness).
+THE INV.4(e) TIER IS COMPLETE: checkTypeAssignability (rounds 560-576,
+retired 586), checkPropertyAccess (577-583, retired 585), and
+checkCallExpressionTypes (588-591, retired 592) — the three giants that
+were 38% of checker-init at the round-542 measurement now emit once,
+from one authoritative walk. NEXT: INV.4(f) — the two unlocked soundness
+wins (the per-node expression-type cache; flow narrowing folded into
+reference typing once) + the ≤10 s single-threaded compiler-profile
+re-measure — or the remaining small INV.4 passes / INV.5(e)'s
+superseded-pin-walker deletion sweep.
+
+**Round 591 (2026-07-18) — (ccet-m3) LANDED (merged from
 wip/ccet-m3-anchors): THE LAST GIANT'S EMISSIONS RUN FROM THE SPINE.**
 Per-Call/New/TaggedTemplate anchors at their own leaves under the frame
 ambient + the full per-edge reach classifier + legacy truncation marks at

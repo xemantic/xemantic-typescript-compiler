@@ -4722,7 +4722,12 @@ class Checker(
         // both residue channels are closed (rounds 578/584), and the walkers
         // live on as anchor-called leaf machinery. The FIRST giant to shed
         // its emit-twice runs.
-        pass("checkCallExpressionTypes") { checkCallExpressionTypes() }
+        // (ccet-retire) round 592: the checkCallExpressionTypes legacy pass is
+        // RETIRED — every ccet emission is spine-anchored (round 591). The
+        // walker family survives as leaf machinery (checkComputedDestructKey
+        // consumes checkCallTypesInExpr best-effort; those positions are never
+        // anchored, so the truncation marks there are inert). ALL THREE
+        // INV.4(e) GIANTS ARE NOW OFF EMIT-TWICE.
         // 37. Use-before-declaration (TS2448/2449/2450): the per-file leg rides
         // the spine (INV.4(d) walker 7 — spineUbdSetup/spineUbdEnterNode);
         // deliberately BEFORE checkDefiniteAssignmentViaFlowGraph, whose TS2454
@@ -127680,34 +127685,6 @@ interface DataView {
     // -----------------------------------------------------------------------
     // TS2345: Argument type checking (Phase 4 item 7a)
     // -----------------------------------------------------------------------
-
-    private fun checkCallExpressionTypes() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            // Skip .js files
-            if (fileName.endsWith(".js") || fileName.endsWith(".jsx") ||
-                fileName.endsWith(".mjs") || fileName.endsWith(".cjs")) continue
-            val source = result.sourceFile.text
-            // (ccet-prep) round 584: per-file reset — the pass previously
-            // inherited the cpa pass's LAST-file map as its starting state
-            // (the cpa->ccet residue channel, the round-578 pattern); a
-            // residue-free ccet is the cpa-retire prerequisite.
-            currentLocalTypes = HashMap()
-            currentFileLocals = result.locals
-            currentCheckFileName = fileName
-            // B469: activate flow narrowing during the call-type walk so a reference
-            // argument whose declared type is narrowed by a preceding guard
-            // (`if (obj.val === null) f(obj.val)`) is checked against its NARROWED type,
-            // not the declared union. Without this, a `T | null` property-access arg
-            // FP-fired TS2345 in the `!== null` (narrowed-to-T) branch too.
-            currentFlowGraph = result.flowGraph
-            checkCallTypesInStatements(result.sourceFile.statements, source, fileName)
-            currentFlowGraph = null
-        }
-        currentFileLocals = null
-        currentCheckFileName = null
-    }
 
     /**
      * Resolve the namespace [Symbol] a [ModuleDeclaration]'s name refers to, handling BOTH a
