@@ -2317,7 +2317,31 @@ with a session note saying why). Item IDs are stable; session notes reference th
 - Node/tsc/tsgo are NOT currently installed — differential testing (M0 optional) and
   real `@types/node` (M1.3) wait for network.
 - The benchmark project cache lives under `build/bench/` (cheap to rebuild); results
-  TSVs under `bench/` (gitignored, machine-specific).**Round 593 (2026-07-18) — the INV.4(f) RE-MEASURE: the consolidation
+  TSVs under `bench/` (gitignored, machine-specific).**Round 594 (2026-07-18) — the (f1) EPOCH-RATE PROBE: 93% of repeats are
+memoizable.** The repeat-result probe (identity-classified, --passTiming
+only; getTypeOfExpression split into a wrapper + Core for it): 626,680
+calls → 379,157 same-result repeats vs 27,110 diff-result (~60% of ALL
+calls recompute the IDENTICAL instance). The memo design constraint: the
+27k diff-result cases are the state-dependent ones (recordings/narrowing
+overrides/frame swaps between calls). INVALIDATION-SURFACE ANALYSIS: the
+frame machinery centralizes MOST mutation points (~20 sites: the
+withXFrameAmbient installs/restores, frame pushes, scoped overrides,
+per-file resets) — but legacy leaf helpers still mutate currentLocalTypes
+IN PLACE mid-anchor (checkVarDeclAssignability recordings etc.), so a
+sound epoch needs either (a) enumerating those scattered mutation sites
+(risky), (b) a mutation-counting map wrapper around the localTypes family
+(a focused refactor — the mutation API surface is put/remove/putAll/clear;
+frames alias the SAME instances so a per-instance counter + a global sum
+works), or (c) keying the memo by (nodeId, identity of currentLocalTypes
+map + its size) as a cheap proxy — UNSOUND on in-place same-size
+overwrite (rare but real: the anyType overrides). RECOMMENDED: (b), the
+wrapper — one class, the alias structure preserved, every mutation
+auto-bumps; then memo keyed (nodeId, globalEpoch) cleared per file.
+Gates: corpus 11,347/0 (the probe is --passTiming-only; off-mode calls
+Core directly). NEXT: (f1b) the MutationCountedMap wrapper + the memo,
+A/B'd interleaved for the wall win.
+
+**Round 593 (2026-07-18) — the INV.4(f) RE-MEASURE: the consolidation
 succeeded.** Post-retirements `--passTiming` (compiler profile):
 checker-init 25.7s, **checkSpine 18.4s (72%)** with 619,908
 getTypeOfExpression calls + 111,055 depth-0 narrowing walks INSIDE the

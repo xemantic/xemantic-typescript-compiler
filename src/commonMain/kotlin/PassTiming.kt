@@ -143,6 +143,9 @@ object PassTiming {
         passNanos.clear()
         passCalls.clear()
         getTypeOfExpressionCalls = 0
+        typeOfExprLastResult.clear()
+        typeOfExprRepeatSame = 0
+        typeOfExprRepeatDiff = 0
         getTypeOfExpressionDistinct.clear()
         getTypeOfExpressionByPass.clear()
         typeNodeCacheable = 0
@@ -170,6 +173,20 @@ object PassTiming {
     fun notePass(name: String, nanos: Long) {
         passNanos[name] = (passNanos[name] ?: 0L) + nanos
         passCalls[name] = (passCalls[name] ?: 0) + 1
+    }
+
+    // (f1) round 594 probe: per-node repeat-result classification — how much
+    // of the recompute returns the IDENTICAL Type instance (memoizable) vs a
+    // different one (needs invalidation). pos-keyed (the documented cross-file
+    // collision adds minor noise, same as the distinct counter).
+    val typeOfExprLastResult = HashMap<Long, Any>()
+    var typeOfExprRepeatSame: Long = 0
+    var typeOfExprRepeatDiff: Long = 0
+
+    fun noteTypeOfExprResult(pos: Int, end: Int, r: Any) {
+        val k = (pos.toLong() shl 32) or (end.toLong() and 0xFFFF_FFFFL)
+        val prev = typeOfExprLastResult.put(k, r)
+        if (prev != null) { if (prev === r) typeOfExprRepeatSame++ else typeOfExprRepeatDiff++ }
     }
 
     fun noteGetTypeOfExpression(pos: Int, end: Int) {
@@ -242,6 +259,8 @@ object PassTiming {
         val distinct = getTypeOfExpressionDistinct.size.toLong()
         val factor = if (distinct > 0) (getTypeOfExpressionCalls * 10 / distinct) else 0L
         appendLine(
+            "typeOfExpr repeats: same-result=$typeOfExprRepeatSame diff-result=$typeOfExprRepeatDiff " +
+                "(memoizable fraction of repeats: ${if (typeOfExprRepeatSame + typeOfExprRepeatDiff > 0) typeOfExprRepeatSame * 100 / (typeOfExprRepeatSame + typeOfExprRepeatDiff) else 0}%)\n" +
             "getTypeOfExpression: $getTypeOfExpressionCalls calls, ~$distinct distinct nodes " +
                 "(recompute ~x${factor / 10}.${factor % 10}; distinct is pos-keyed, " +
                 "cross-file collisions undercount it)"

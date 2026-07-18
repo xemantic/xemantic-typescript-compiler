@@ -98324,7 +98324,16 @@ interface DataView {
      */
     private fun getTypeOfExpression(expr: Expression): Type {
         // INV.0 recompute-factor counter — inert unless --passTiming enabled it.
-        if (PassTiming.enabled) PassTiming.noteGetTypeOfExpression(expr.pos, expr.end)
+        if (PassTiming.enabled) {
+            PassTiming.noteGetTypeOfExpression(expr.pos, expr.end)
+            val r = getTypeOfExpressionCore(expr)
+            PassTiming.noteTypeOfExprResult(expr.pos, expr.end, r)
+            return r
+        }
+        return getTypeOfExpressionCore(expr)
+    }
+
+    private fun getTypeOfExpressionCore(expr: Expression): Type {
         return when (expr) {
             // Literals
             is NumericLiteralNode -> numberType
