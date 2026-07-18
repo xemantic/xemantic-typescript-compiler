@@ -2007,7 +2007,22 @@ interrupt the arc).
       objlit arm does a scoped localTypes copy. There is also a
       maxCheckDepth recursion guard (callTypeCheckDepth) at the statement
       dispatcher — reproduce as an int-valued reach cap if fidelity
-      requires (the round-535 spineArgDepth precedent).
+      requires (the round-535 spineArgDepth precedent). LAST FACTS (588d):
+      withForLoopVarShadow copies BOTH maps but ONLY when a loop-header
+      binding name COLLIDES (in globals or currentLocalTypes, not already
+      in paramBindings) — colliding names are REMOVED from localTypes +
+      added to paramBindings; no collision → NO copy (share). Declare-module
+      subtrees need a frame `dead` flag (anchors skip; children inherit).
+      The If-arm narrowing + ForIn/ForOf shadows reproduce as scoped
+      override frames with restore records at the body node's leave (the
+      cpa loop-var-restore mechanism). ARROW/FN-EXPR frames push at the FN
+      node's enter (the copies wrap BOTH body kinds — expression-body calls
+      see the registered params too). Class frames push at ClassDeclaration
+      enters (tpScope + classSym + the baseResolution pair computed under
+      the class scope), maps SHARED; member-body frames derive from them.
+      Implementation staging: (ccet-m2) frames always-on, gates must stay
+      IDENTICAL (no emissions move yet — any diff is a first-touch
+      coupling to bisect); then (ccet-m3) per-call anchors + marks + pins.
     - [ ] **(ccet-m3…) Emission moves** with the leave-dispatch discipline
       (cpa's probe lesson: anchor at statement/expression LEAVES) + the
       recorded-set truncation, then **(ccet-retire)** via the round-585
