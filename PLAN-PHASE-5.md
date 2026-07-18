@@ -20,6 +20,20 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 587 (2026-07-18) — dead-marks sweep + the retirement's measured
+payoff.** The 52 legacy-side truncation-mark lines (the emit-twice-era
+`cpaM3Mk`/`ctaM3EmitMark`/… val+truncate blocks in the surviving walkers)
+are deleted — provably dead since rounds 585/586 (only the retired drivers
+reached marked statements; anchor walks reach only never-marked nested
+positions). The m3l body gates + the marking sets stay (live: the
+decl-leave recording skip and the m3e recordOnly gating). MEASURED (CI
+bench, single-run caveat): the cpa retirement alone moved the compiler
+profile 35.67s → 30.79s wall (−14%); the cta-retire row lands next.
+Gates: corpus 11,341/0; listAll ×8 identical. NEXT: the g3
+(checkCallExpressionTypes) migration — the LAST giant — via the
+twice-proven m1..m3+retire sequence (open with the walker state-model
+scout in a fresh window).
+
 **Round 586 (2026-07-18) — (cta-retire) LANDED: the checkTypeAssignability
 LEGACY PASS IS RETIRED — both migrated giants are off emit-twice in one
 day.** Same shape as round 585: the experiment's only failures were the

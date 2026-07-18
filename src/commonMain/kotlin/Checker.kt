@@ -84296,7 +84296,6 @@ interface DataView {
                     // (cta-m3a): a top-level/namespace-body statement's emissions
                     // moved to the spine anchor — this arm still runs for its maps'
                     // interleaved state evolution but truncates the duplicates.
-                    val ctaM3EmitMark = if (ctaM3IsAnchoredStmt(stmt, fileName)) diagnostics.size else -1
                     for (decl in stmt.declarationList.declarations) {
                         if (stmt.declarationList.flags == SyntaxKind.ConstKeyword) {
                             registerConstLiteralUnionNarrowing(decl)
@@ -84319,20 +84318,12 @@ interface DataView {
                             checkAssignmentExpression(init, source, fileName, varTypes, typeParams)
                         }
                     }
-                    if (ctaM3EmitMark >= 0) {
-                        while (diagnostics.size > ctaM3EmitMark) diagnostics.removeAt(diagnostics.size - 1)
-                    }
                 }
                 is ExpressionStatement -> {
-                    val ctaM3Mark = if (ctaM3IsAnchoredStmt(stmt, fileName)) diagnostics.size else -1
                     checkAssignmentExpression(stmt.expression, source, fileName, varTypes, typeParams)
                     walkFunctionBodiesInExpr(stmt.expression, source, fileName, varTypes, typeParams)
-                    if (ctaM3Mark >= 0) {
-                        while (diagnostics.size > ctaM3Mark) diagnostics.removeAt(diagnostics.size - 1)
-                    }
                 }
                 is ReturnStatement -> {
-                    val ctaM3Mark = if (ctaM3IsAnchoredStmt(stmt, fileName)) diagnostics.size else -1
                     if (returnType != null || returnTypeNode != null) {
                         checkReturnAssignability(stmt, returnType ?: "", source, fileName, varTypes, typeParams, returnTypeNode)
                     }
@@ -84342,9 +84333,6 @@ interface DataView {
                         if (retExpr is BinaryExpression && retExpr.operator == SyntaxKind.Equals) {
                             checkAssignmentExpression(retExpr, source, fileName, varTypes, typeParams)
                         }
-                    }
-                    if (ctaM3Mark >= 0) {
-                        while (diagnostics.size > ctaM3Mark) diagnostics.removeAt(diagnostics.size - 1)
                     }
                 }
                 is FunctionDeclaration -> {
@@ -84368,9 +84356,7 @@ interface DataView {
                 is IfStatement -> {
                     // B417: flow-aware TS2367 on the if/else-if CONDITION.
                     // (cta-m3j): truncated when the spine anchored this If.
-                    val ctaM3IfMk = if (ctaM3IsAnchoredStmt(stmt, fileName)) diagnostics.size else -1
                     checkFlowNoOverlapCondition(stmt.expression, source, fileName)
-                    if (ctaM3IfMk >= 0) while (diagnostics.size > ctaM3IfMk) diagnostics.removeAt(diagnostics.size - 1)
                     // B201: apply null-narrowing in the then-branch (mirrors the nested
                     // dispatcher's IfStatement arm) — `if (match !== null) { … }` at file
                     // level narrows currentLocalTypes["match"] for the block walk.
@@ -84566,9 +84552,7 @@ interface DataView {
                                     val propName = member.name
                                     if (propName is Identifier) {
                                         // (cta-m3k): truncated when spine-anchored.
-                                        val ctaM3PMk = if (ctaM3IsAnchoredStmt(member, fileName)) diagnostics.size else -1
                                         checkPropertyInitAssignability(propName, typeAnnotation, init, source, fileName, classTypeParams)
-                                        if (ctaM3PMk >= 0) while (diagnostics.size > ctaM3PMk) diagnostics.removeAt(diagnostics.size - 1)
                                     }
                                 }
                             }
@@ -86316,9 +86300,7 @@ interface DataView {
             is IfStatement -> {
                 // B417: flow-aware TS2367 on the if/else-if CONDITION.
                 // (cta-m3j): truncated when the spine anchored this If.
-                val ctaM3IfMk = if (ctaM3IsAnchoredStmt(stmt, fileName)) diagnostics.size else -1
                 checkFlowNoOverlapCondition(stmt.expression, source, fileName)
-                if (ctaM3IfMk >= 0) while (diagnostics.size > ctaM3IfMk) diagnostics.removeAt(diagnostics.size - 1)
                 // Apply control flow narrowing in then-branch
                 val narrowed = extractNullNarrowing(stmt.expression)
                 if (narrowed != null) {
@@ -121001,9 +120983,7 @@ interface DataView {
                 // (cpa-m3c): spine-anchored per heritage expression.
                 stmt.heritageClauses?.forEach { clause ->
                     clause.types.forEach { ewta ->
-                        val cpaM3Mk = if (cpaM3IsAnchoredStmt(ewta.expression, fileName)) diagnostics.size else -1
                         checkPropertyAccessInExpr(ewta.expression, source, fileName, enclosingClassType)
-                        if (cpaM3Mk >= 0) while (diagnostics.size > cpaM3Mk) diagnostics.removeAt(diagnostics.size - 1)
                     }
                 }
                 // Resolve the class type for "this" inside class body.
@@ -121084,7 +121064,6 @@ interface DataView {
             is VariableStatement -> {
                 // (cpa-m3a): spine-anchored statements truncate their duplicate
                 // emissions; the arm still runs for its maps' evolution.
-                val cpaM3Mk = if (cpaM3IsAnchoredStmt(stmt, fileName)) diagnostics.size else -1
                 for (decl in stmt.declarationList.declarations) {
                     decl.initializer?.let {
                         checkPropertyAccessInExpr(it, source, fileName, enclosingClassType)
@@ -121142,36 +121121,25 @@ interface DataView {
                         }
                     }
                 }
-                if (cpaM3Mk >= 0) while (diagnostics.size > cpaM3Mk) diagnostics.removeAt(diagnostics.size - 1)
             }
             is ExpressionStatement -> {
-                val cpaM3Mk = if (cpaM3IsAnchoredStmt(stmt, fileName)) diagnostics.size else -1
                 checkPropertyAccessInExpr(stmt.expression, source, fileName, enclosingClassType)
-                if (cpaM3Mk >= 0) while (diagnostics.size > cpaM3Mk) diagnostics.removeAt(diagnostics.size - 1)
             }
             is ReturnStatement -> {
-                val cpaM3Mk = if (cpaM3IsAnchoredStmt(stmt, fileName)) diagnostics.size else -1
                 stmt.expression?.let { checkPropertyAccessInExpr(it, source, fileName, enclosingClassType) }
-                if (cpaM3Mk >= 0) while (diagnostics.size > cpaM3Mk) diagnostics.removeAt(diagnostics.size - 1)
             }
             is IfStatement -> {
-                val cpaM3Mk = if (cpaM3IsAnchoredStmt(stmt.expression, fileName)) diagnostics.size else -1
                 checkPropertyAccessInExpr(stmt.expression, source, fileName, enclosingClassType)
-                if (cpaM3Mk >= 0) while (diagnostics.size > cpaM3Mk) diagnostics.removeAt(diagnostics.size - 1)
                 checkPropertyAccessInStatement(stmt.thenStatement, source, fileName, enclosingClassType)
                 stmt.elseStatement?.let { checkPropertyAccessInStatement(it, source, fileName, enclosingClassType) }
             }
             is Block -> checkPropertyAccessInStatements(stmt.statements, source, fileName, enclosingClassType)
             is ForStatement -> {
                 stmt.condition?.let {
-                    val cpaM3Mk = if (cpaM3IsAnchoredStmt(it, fileName)) diagnostics.size else -1
                     checkPropertyAccessInExpr(it, source, fileName, enclosingClassType)
-                    if (cpaM3Mk >= 0) while (diagnostics.size > cpaM3Mk) diagnostics.removeAt(diagnostics.size - 1)
                 }
                 stmt.incrementor?.let {
-                    val cpaM3Mk = if (cpaM3IsAnchoredStmt(it, fileName)) diagnostics.size else -1
                     checkPropertyAccessInExpr(it, source, fileName, enclosingClassType)
-                    if (cpaM3Mk >= 0) while (diagnostics.size > cpaM3Mk) diagnostics.removeAt(diagnostics.size - 1)
                 }
                 checkPropertyAccessInStatement(stmt.statement, source, fileName, enclosingClassType)
             }
@@ -121228,27 +121196,19 @@ interface DataView {
                 }
             }
             is WhileStatement -> {
-                val cpaM3Mk = if (cpaM3IsAnchoredStmt(stmt.expression, fileName)) diagnostics.size else -1
                 checkPropertyAccessInExpr(stmt.expression, source, fileName, enclosingClassType)
-                if (cpaM3Mk >= 0) while (diagnostics.size > cpaM3Mk) diagnostics.removeAt(diagnostics.size - 1)
                 checkPropertyAccessInStatement(stmt.statement, source, fileName, enclosingClassType)
             }
             is DoStatement -> {
-                val cpaM3Mk = if (cpaM3IsAnchoredStmt(stmt.expression, fileName)) diagnostics.size else -1
                 checkPropertyAccessInExpr(stmt.expression, source, fileName, enclosingClassType)
-                if (cpaM3Mk >= 0) while (diagnostics.size > cpaM3Mk) diagnostics.removeAt(diagnostics.size - 1)
                 checkPropertyAccessInStatement(stmt.statement, source, fileName, enclosingClassType)
             }
             is SwitchStatement -> {
-                val cpaM3SubjMk = if (cpaM3IsAnchoredStmt(stmt.expression, fileName)) diagnostics.size else -1
                 checkPropertyAccessInExpr(stmt.expression, source, fileName, enclosingClassType)
-                if (cpaM3SubjMk >= 0) while (diagnostics.size > cpaM3SubjMk) diagnostics.removeAt(diagnostics.size - 1)
                 for (clause in stmt.caseBlock) {
                     when (clause) {
                         is CaseClause -> {
-                            val cpaM3Mk = if (cpaM3IsAnchoredStmt(clause.expression, fileName)) diagnostics.size else -1
                             checkPropertyAccessInExpr(clause.expression, source, fileName, enclosingClassType)
-                            if (cpaM3Mk >= 0) while (diagnostics.size > cpaM3Mk) diagnostics.removeAt(diagnostics.size - 1)
                             checkPropertyAccessInStatements(clause.statements, source, fileName, enclosingClassType)
                         }
                         is DefaultClause -> {
@@ -121264,14 +121224,10 @@ interface DataView {
                 stmt.finallyBlock?.let { checkPropertyAccessInStatements(it.statements, source, fileName, enclosingClassType) }
             }
             is ThrowStatement -> {
-                val cpaM3Mk = if (cpaM3IsAnchoredStmt(stmt, fileName)) diagnostics.size else -1
                 stmt.expression?.let { checkPropertyAccessInExpr(it, source, fileName, enclosingClassType) }
-                if (cpaM3Mk >= 0) while (diagnostics.size > cpaM3Mk) diagnostics.removeAt(diagnostics.size - 1)
             }
             is WithStatement -> {
-                val cpaM3Mk = if (cpaM3IsAnchoredStmt(stmt.expression, fileName)) diagnostics.size else -1
                 checkPropertyAccessInExpr(stmt.expression, source, fileName, enclosingClassType)
-                if (cpaM3Mk >= 0) while (diagnostics.size > cpaM3Mk) diagnostics.removeAt(diagnostics.size - 1)
                 checkPropertyAccessInStatement(stmt.statement, source, fileName, enclosingClassType)
             }
             is LabeledStatement -> checkPropertyAccessInStatement(stmt.statement, source, fileName, enclosingClassType)
@@ -121304,9 +121260,7 @@ interface DataView {
                 }
             }
             is ExportAssignment -> {
-                val cpaM3Mk = if (cpaM3IsAnchoredStmt(stmt, fileName)) diagnostics.size else -1
                 checkPropertyAccessInExpr(stmt.expression, source, fileName, enclosingClassType)
-                if (cpaM3Mk >= 0) while (diagnostics.size > cpaM3Mk) diagnostics.removeAt(diagnostics.size - 1)
             }
             is TypeAliasDeclaration -> {
                 // B1.3: TS2532 "Object is possibly 'undefined'." for `typeof X.Y.Z`
@@ -121314,16 +121268,13 @@ interface DataView {
                 // possibly-undefined receiver. The Flow.kt binder records currentFlow
                 // at the TypeAlias position so we can apply path-based narrowing.
                 if (strictNullChecks) {
-                    val cpaM3Mk = if (cpaM3IsAnchoredStmt(stmt, fileName)) diagnostics.size else -1
                     walkTypeNodeForUndefinedTypeQueryChain(stmt.type, source, fileName, atNode = stmt)
-                    if (cpaM3Mk >= 0) while (diagnostics.size > cpaM3Mk) diagnostics.removeAt(diagnostics.size - 1)
                 }
             }
             is EnumDeclaration -> {
                 // enumBasics3: walk member-initializer expressions for property accesses
                 // (`enum E { a = 1, b = a.x }`). Track the enclosing enum so a bare-ident
                 // receiver naming a member of THIS enum resolves to an enum member.
-                val cpaM3Mk = if (cpaM3IsAnchoredStmt(stmt, fileName)) diagnostics.size else -1
                 val saved = currentEnclosingEnum
                 currentEnclosingEnum = stmt
                 try {
@@ -121331,7 +121282,6 @@ interface DataView {
                         m.initializer?.let { checkPropertyAccessInExpr(it, source, fileName, enclosingClassType) }
                     }
                 } finally { currentEnclosingEnum = saved }
-                if (cpaM3Mk >= 0) while (diagnostics.size > cpaM3Mk) diagnostics.removeAt(diagnostics.size - 1)
             }
             else -> { /* no property access in other statement types */ }
         }
@@ -121439,11 +121389,9 @@ interface DataView {
             is PropertyDeclaration -> {
                 // (cpa-m3c): spine-anchored for ClassDECLARATION members
                 // (ClassExpression members are never marked).
-                val cpaM3Mk = if (cpaM3IsAnchoredStmt(member, fileName)) diagnostics.size else -1
                 member.initializer?.let {
                     checkPropertyAccessInExpr(it, source, fileName, classType)
                 }
-                if (cpaM3Mk >= 0) while (diagnostics.size > cpaM3Mk) diagnostics.removeAt(diagnostics.size - 1)
             }
             else -> {}
         }
