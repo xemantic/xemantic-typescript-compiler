@@ -1934,6 +1934,40 @@ interrupt the arc).
     - [x] **(cta-retire) LANDED round 586: the checkTypeAssignability legacy
       pass is DELETED** (both migrated giants off emit-twice; audit
       scaffolding removed).
+    **(g3 = ccet DECOMPOSITION, queued round 588 from the in-code scout —
+    the LAST giant; mirror the twice-proven cpa sequence, one commit each):**
+    - [ ] **(ccet-m1) State-model scout completion + audit-or-pins decision.**
+      Scouted so far (in-code, round 588): the driver resets currentLocalTypes
+      per file since round 584 (residue-free); FunctionDeclaration arm copies
+      currentLocalTypes + currentParamBindingNames AND pushes the fn's OWN
+      TPs onto currentTypeParamScope (constraint materialization included),
+      then populateParameterLocalTypes + applyCallTypesBodyLocalShadowing +
+      shadowNestedFunctionNames (the M1.11 ecology — presence-only consults,
+      the first-touch cache-poisoning hazard is documented in the helpers);
+      ClassDeclaration arm pushes class TPs + resolves the class symbol via
+      globals ?: inferenceNamespaceStack.last().exports; ModuleDeclaration
+      pushes inferenceNamespaceStack via resolveModuleDeclNamespaceSymbol
+      (DOTTED namespaces handled — unlike cpa's arm); the IfStatement arm
+      does a SCOPED single-name union-narrowing override (save/write/restore
+      around the then-walk); the VariableStatement arm ORDER-RECORDS
+      annotated-callable + B98.r126 + callable-shadow entries. REMAINING to
+      scout: the expr walker's arms (contextual channels?), the class-member
+      dispatch, funcParams/currentFunctionParams overlay production, and
+      currentEnclosingEnum/classForThis usage. DECISION POINT: rounds
+      585/586 showed the audits end as deleted scaffolding — consider going
+      pins-first (CcetAnchorTest exactly-once) + frame-skeleton-with-
+      corpus-gates instead of the full fingerprint audit; the audit earned
+      its keep on cta/cpa quirk EXTRACTION, so keep it only if the frame
+      skeleton's first corpus gates diff untraceably.
+    - [ ] **(ccet-m2) Spine-side frame skeleton** (CcetFrame: localTypes +
+      paramBindings copies at fn boundaries, fnTpScope with constraint
+      materialization, class TP scopes, ns frames via the dotted-aware
+      resolver, the If-arm narrowing override as a then-frame rule — the
+      cta-m3i NARROWING FRAME precedent).
+    - [ ] **(ccet-m3…) Emission moves** with the leave-dispatch discipline
+      (cpa's probe lesson: anchor at statement/expression LEAVES) + the
+      recorded-set truncation, then **(ccet-retire)** via the round-585
+      experiment template (no-op the dispatch → gates → delete).
   - [ ] **INV.4(f) The two unlocked soundness wins.** Once one authoritative
     walk state exists: the per-node expression-type cache (594,779 calls over
     ~221,844 distinct nodes = ×2.6 recompute), and flow narrowing folded into
