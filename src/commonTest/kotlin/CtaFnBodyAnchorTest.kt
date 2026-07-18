@@ -126,6 +126,50 @@ class CtaFnBodyAnchorTest {
     }
 
     @Test
+    fun `constructor body mismatch emits exactly once`() {
+        // (cta-m3g): ctor bodies anchor with the legacy arm's localTypes
+        // seeding (this.$prop resolved types + annotated params).
+        val n = countTs2322("""
+            class C {
+                x: number;
+                constructor(a: string) {
+                    const s: number = a;
+                    this.x = 1;
+                }
+            }
+        """)
+        assert(n == 1) { "expected exactly 1 TS2322, got $n" }
+    }
+
+    @Test
+    fun `setter body param-typed mismatch emits exactly once`() {
+        val n = countTs2322("""
+            class C {
+                set p(v: number) {
+                    const s: string = v;
+                }
+            }
+        """)
+        assert(n == 1) { "expected exactly 1 TS2322, got $n" }
+    }
+
+    @Test
+    fun `getter return checked against paired setter param type exactly once`() {
+        // (cta-m3g): the B63.5 bridging — an annotation-less getter's returns
+        // check against the paired setter's param annotation.
+        val n = countTs2322("""
+            class C {
+                get p() {
+                    return 1;
+                }
+                set p(v: string) {
+                }
+            }
+        """)
+        assert(n == 1) { "expected exactly 1 TS2322 (B63.5 bridged return), got $n" }
+    }
+
+    @Test
     fun `static and generic-class method bodies emit exactly once`() {
         val nStatic = countTs2322("""
             class C {

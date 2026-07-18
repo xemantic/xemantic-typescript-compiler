@@ -20,6 +20,28 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 572 (2026-07-18) — (cta-m3g) LANDED: ctor + accessor bodies complete
+the CLASS-MEMBER tier.** All four class-member body kinds are
+anchor-eligible (`ctaM3FnHop`); each frame reproduces its legacy arm:
+Constructor (raw InStatements dispatch) seeds frame.localTypes with the
+this.$prop RESOLVED types + annotated params (`ctaFnBodyFrame(seedClass)`);
+SetAccessor adds the B63.5 PARAM bridging (`paramTypeFallback` = paired
+getter's return annotation, in BOTH the string map and the seeds);
+GetAccessor (sandwich path) takes emptyList() params + the B63.5 RETURN
+bridging (effective returnTypeNode = own ?: paired setter's param);
+all three: class-TPs-only typeParams override + classForThis threading.
+Pins +3 (ctor param mismatch / setter param mismatch / bridged
+getter-return), each exactly-once. Gates: corpus 11,323/0; listAll ×8
+identical vs m3f. The cta anchored surface now covers: top-level, namespace
+bodies, FunctionDeclaration-chain fn bodies, and ALL ClassDeclaration
+member bodies — remaining legacy-owned: objlit methods
+(walkObjectLiteralMemberBody), arrows/fn-exprs (owned by the containing
+statement's walkFunctionBodiesInExpr), and nested-scope statement kinds
+(If/Switch/loop/Try arms' own emissions, e.g. checkFlowNoOverlapCondition).
+NEXT: nested stmt-kind arm emissions, or begin RETIRING the legacy arms
+where the anchor now owns everything (flip emit-twice to spine-only for the
+covered scopes — the multiplier payoff).
+
 **Round 571b (2026-07-18) — (cta-m3f) LANDED: CLASS METHOD bodies join the
 anchor-eligible chains; m3e cost A/B'd as NOISE.** `ctaM3FnHop` extends the
 eligibility chain (Block → MethodDeclaration → ClassDeclaration → the

@@ -807,7 +807,7 @@ class Checker(
      *  their legacy dispatch semantics are not reproduced). */
     private fun ctaM3FnHop(block: Block): Node? = when (val owner = (block as NodeBase).parent) {
         is FunctionDeclaration -> (owner as NodeBase).parent
-        is MethodDeclaration -> {
+        is MethodDeclaration, is Constructor, is GetAccessor, is SetAccessor -> {
             val cls = (owner as NodeBase).parent as? ClassDeclaration
             if (cls == null) null else (cls as NodeBase).parent
         }
@@ -954,6 +954,12 @@ class Checker(
         outerTpNames: Set<String>? = null,
         classTps: List<TypeParameter>? = null,
         classForThis: ClassDeclaration? = null,
+        // (cta-m3g): ctor/SetAccessor frames seed frame.localTypes with the
+        // legacy arms' this.$prop RESOLVED types + (effective-)annotated param
+        // types; a SetAccessor's un-annotated param falls back to the paired
+        // getter's return annotation (B63.5 param bridging).
+        seedClass: ClassDeclaration? = null,
+        paramTypeFallback: TypeNode? = null,
     ): CtaFrame {
         val inner = base.varTypes.toMutableMap()
         extraVarTypes?.let { inner.putAll(it) }
@@ -1033,10 +1039,25 @@ class Checker(
             }
         } else {
             for (param in parameters) {
-                val pt = param.type ?: continue
+                val pt = param.type ?: paramTypeFallback ?: continue
                 val pn = param.name as? Identifier ?: continue
                 if (param.dotDotDotToken && nonArrayKeywordText(pt) != null) continue
                 resolveSimpleTypeName(pt)?.let { inner[pn.text] = it }
+            }
+            if (seedClass != null) {
+                for (m in seedClass.members) {
+                    if (m !is PropertyDeclaration) continue
+                    val propName = (m.name as? Identifier)?.text ?: continue
+                    val ann = m.type ?: continue
+                    val rt = getTypeFromTypeNode(ann)
+                    if (rt !== anyType && rt !== errorType) frame.localTypes["this.$propName"] = rt
+                }
+                for (p in parameters) {
+                    val pName = (p.name as? Identifier)?.text ?: continue
+                    val ept = p.type ?: paramTypeFallback ?: continue
+                    val rt = getTypeFromTypeNode(ept)
+                    if (rt !== anyType && rt !== errorType) frame.localTypes[pName] = rt
+                }
             }
         }
         return frame
@@ -1099,21 +1120,65 @@ class Checker(
                 // stays as-is); GetAccessor goes through checkFunctionBody but
                 // gets NO B85.1b this.X push (the push mirrors Method/Ctor/
                 // SetAccessor only) — audit-verified quirks.
-                is Constructor -> ctaFrames.addLast(ctaFnBodyFrame(
-                    node, parent.parameters, null, null,
-                    isAsync = false, isGenerator = false, base = ctaFrames.last(),
-                    extraVarTypes = ctaClassThisVarTypes(parent),
-                    inInstanceMember = true, viaCheckFunctionBody = false))
-                is GetAccessor -> ctaFrames.addLast(ctaFnBodyFrame(
-                    node, parent.parameters, parent.type, null,
-                    isAsync = false, isGenerator = false, base = ctaFrames.last(),
-                    inInstanceMember = ModifierFlag.Static !in parent.modifiers))
-                is SetAccessor -> ctaFrames.addLast(ctaFnBodyFrame(
-                    node, parent.parameters, null, null,
-                    isAsync = false, isGenerator = false, base = ctaFrames.last(),
-                    extraVarTypes = ctaClassThisVarTypes(parent),
-                    inInstanceMember = ModifierFlag.Static !in parent.modifiers,
-                    viaCheckFunctionBody = false))
+                is Constructor -> {
+                    val cls = (parent as NodeBase).parent as? ClassDeclaration
+                    ctaFrames.addLast(ctaFnBodyFrame(
+                        node, parent.parameters, null, null,
+                        isAsync = false, isGenerator = false, base = ctaFrames.last(),
+                        extraVarTypes = ctaClassThisVarTypes(parent),
+                        inInstanceMember = true, viaCheckFunctionBody = false,
+                        outerTpNames = if (cls != null)
+                            cls.typeParameters?.map { it.name.text }?.toSet() ?: emptySet()
+                        else null,
+                        classTps = cls?.typeParameters,
+                        classForThis = cls,
+                        seedClass = cls))
+                }
+                is GetAccessor -> {
+                    // (cta-m3g): the legacy arm passes emptyList() params and
+                    // the B63.5 EFFECTIVE return type (own ?: paired setter's
+                    // param annotation).
+                    val cls = (parent as NodeBase).parent as? ClassDeclaration
+                    val isStatic = ModifierFlag.Static in parent.modifiers
+                    val gName = (parent.name as? Identifier)?.text
+                    val effReturn = parent.type ?: if (cls != null && gName != null) {
+                        (cls.members.firstOrNull { sm ->
+                            sm is SetAccessor && (sm.name as? Identifier)?.text == gName
+                        } as? SetAccessor)?.parameters?.firstOrNull()?.type
+                    } else null
+                    ctaFrames.addLast(ctaFnBodyFrame(
+                        node, emptyList(), effReturn, null,
+                        isAsync = false, isGenerator = false, base = ctaFrames.last(),
+                        inInstanceMember = !isStatic,
+                        outerTpNames = if (cls != null)
+                            cls.typeParameters?.map { it.name.text }?.toSet() ?: emptySet()
+                        else null,
+                        classTps = cls?.typeParameters,
+                        classForThis = if (cls != null && !isStatic) cls else null))
+                }
+                is SetAccessor -> {
+                    val cls = (parent as NodeBase).parent as? ClassDeclaration
+                    val isStatic = ModifierFlag.Static in parent.modifiers
+                    val sName = (parent.name as? Identifier)?.text
+                    val pairedGetterType = if (cls != null && sName != null) {
+                        (cls.members.firstOrNull { sm ->
+                            sm is GetAccessor && (sm.name as? Identifier)?.text == sName
+                        } as? GetAccessor)?.type
+                    } else null
+                    ctaFrames.addLast(ctaFnBodyFrame(
+                        node, parent.parameters, null, null,
+                        isAsync = false, isGenerator = false, base = ctaFrames.last(),
+                        extraVarTypes = ctaClassThisVarTypes(parent),
+                        inInstanceMember = !isStatic,
+                        viaCheckFunctionBody = false,
+                        outerTpNames = if (cls != null)
+                            cls.typeParameters?.map { it.name.text }?.toSet() ?: emptySet()
+                        else null,
+                        classTps = cls?.typeParameters,
+                        classForThis = if (cls != null && !isStatic) cls else null,
+                        seedClass = cls,
+                        paramTypeFallback = pairedGetterType))
+                }
                 else -> {
                     // statement-position / try-catch-finally block: varTypes copy;
                     // the localTypes family is SHARED with the parent (the legacy
