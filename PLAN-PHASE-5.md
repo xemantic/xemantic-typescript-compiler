@@ -20,6 +20,37 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 579 (2026-07-18) — (cpa-m2a) LANDED: the SPINE-side statement-TIER
+frame skeleton for the g2 migration, audit-verified.** Dead machinery under
+`cpaAuditEnabled`: `CpaFrame`s reproduce the legacy cpa dispatchers'
+context — map COPIES only at function-like boundaries with the per-member-kind
+asymmetries (fn-decl: 4 maps + populate/shadowing/ambiguous, enumParams
+REPLACED via collectEnumConstrainedParams; method/ctor: 3 maps, enumParams
+SHARED, + populate/shadowing, method this-param override resolved under the
+CLASS-level ambient; setter: 2 maps (shadowed shared), populate only;
+getter: NO copies), ModuleBlock ns frames with the legacy nested-vs-top
+resolution split (dotted-namespace inners are legacy-UNREACHED — the arm
+walks only ModuleBlock bodies), ForIn/ForOf loop-var overrides applied at
+the BODY node's enter and restored at its leave, and the VariableStatement
+B136/B186 recordings applied at each VariableDeclaration's LEAVE (so a
+nested arrow body in decl k+1 sees only decls 1..k). `withCpaFrameAmbient`
+installs the frame maps + the frame-reproduced `propertyAccessEnclosingNamespaces`
+(the two-stacks bridging in populateParameterLocalTypes consults the REAL
+deque) + checkFileName/flowGraph. QUIRK EXTRACTED by the first audit cycle:
+a TryStatement's/CatchClause's own Blocks are reached via their statement
+LISTS, never dispatched AS statements, and a catch VariableDeclaration (a
+Statement subtype!) is never dispatched — the fingerprint gate needs the
+`cpaM2StmtPosition` immediate-position test alongside the chain test.
+Fingerprints agree on the widened fixtures (fns/classes incl. this-param
+methods + static/getter/setter/ctor, namespaces + nested + classes-in-ns,
+loops incl. for-in/for-of, switch/try/label, element-access + call-chain
+recordings); tier-2 chains (arrow/fn-expr bodies) stay spine-excluded.
+Pins +2 (Inv4CpaAuditTest → 6). Gates: corpus 11,341/0; listAll ×8
+identical (flag off in production). NEXT: (cpa-m2b) tier 2 — arrow/fn-expr
+body frames + the contextualType downward channel (call-arg /
+objlit-property / arrow-body edges, the w3 template) + objlit-method /
+class-expression bodies.
+
 **Round 578 (2026-07-18) — (cpa-m2-prep) LANDED: the cta→cpa RESIDUE CHANNEL
 IS CLOSED — checkPropertyAccess is now per-file self-sufficient.** The cpa
 driver resets `currentLocalTypes` per file (it previously started from the
@@ -1688,7 +1719,12 @@ interrupt the arc).
     - [x] **(cpa-m2-prep) Close the residue channel legacy-side** — DONE
       round 578: per-file `currentLocalTypes` reset in the cpa driver + the
       element-access own-recording; corpus green + listAll ×8 byte-identical.
-    - [ ] **(cpa-m2) Spine-side frame skeleton** audited against (cpa-m1)
+    - [ ] **(cpa-m2) Spine-side frame skeleton** audited against (cpa-m1) —
+      tier 1 (statements) DONE round 579 ((cpa-m2a): fn-decl/method/ctor/
+      accessor frames, ns frames, loop-var overrides, per-decl-leave
+      recordings, the immediate-position fingerprint gate); REMAINING
+      (cpa-m2b): tier 2 — arrow/fn-expr body frames + the contextualType
+      downward channel (w3 template) + objlit-method/class-expression bodies.
       (the cta-m2b/m2c pattern — expect quirk-extraction cycles; the known
       quirks from the g1c design: GetAccessor bodies have NO scope copy,
       enclosingClassType is KEPT through arrows / nulled at fn-decl+fn-expr

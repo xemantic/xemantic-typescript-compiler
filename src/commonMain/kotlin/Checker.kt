@@ -715,6 +715,361 @@ class Checker(
      *  with (cpa-m2). */
     internal val cpaAuditLegacy = HashMap<Int, String>()
 
+    /** (cpa-m2a) round 579: SPINE-side recordings — dead machinery active only
+     *  under [cpaAuditEnabled]; the statement-TIER frame skeleton replicates
+     *  the legacy cpa dispatchers' context at every covered statement
+     *  (expression-position bodies — arrows/fn-exprs/objlit methods/class
+     *  expressions — are tier 2, (cpa-m2b)). */
+    internal val cpaAuditSpine = HashMap<Int, String>()
+
+    /** (cpa-m2a): the cpa spine frame — most legacy state is AMBIENT with
+     *  map COPIES only at function-like boundaries (the per-member-kind
+     *  asymmetries are load-bearing: fn-decl copies 4 maps + shadowing +
+     *  ambiguous; method/ctor copy 3 (enumParams SHARED) + shadowing;
+     *  setter copies 2 (shadowed shared, NO shadowing call); getter copies
+     *  NOTHING). Frames share map REFERENCES wherever legacy shares. */
+    private class CpaFrame(
+        val owner: Node,
+        val localTypes: HashMap<String, Type>,
+        val paramBindings: HashSet<String>,
+        val enumParams: Map<String, String>,
+        val shadowed: HashSet<String>,
+        val classType: Type?,
+        val inStatic: Boolean,
+        val nsSymbol: Symbol? = null,
+    )
+    private val cpaFrames = ArrayDeque<CpaFrame>()
+
+    /** (cpa-m2a): pending ForIn/ForOf loop-var override restores, keyed by the
+     *  BODY statement's nodeId (the override wraps the body walk only). */
+    private class CpaLoopVarRestore(val bodyId: Int, val name: String, val hadPrev: Boolean, val prev: Type?)
+    private val cpaLoopVarRestores = ArrayDeque<CpaLoopVarRestore>()
+
+    private fun cpaSpineFileReset(sf: SourceFile) {
+        cpaFrames.clear()
+        cpaLoopVarRestores.clear()
+        cpaFrames.addLast(CpaFrame(sf, HashMap(), HashSet(), emptyMap(), HashSet(),
+            classType = null, inStatic = false))
+    }
+
+    /** (cpa-m2a): is [stmt] reached by the legacy cpa dispatchers through
+     *  positions the tier-1 frames reproduce? The cpa InStmt dispatcher is a
+     *  single function (no bare/list split — fn/class at bare positions ARE
+     *  dispatched, unlike cta); disqualified: arrow/fn-expr bodies, objlit
+     *  method bodies (tier 2), and a DOTTED namespace's inner declaration
+     *  (the legacy ModuleDeclaration arm walks only ModuleBlock bodies, so
+     *  `namespace A.B` inner statements are legacy-unreached). */
+    private fun cpaM2ChainOk(stmt: Node): Boolean {
+        var cur: Node? = (stmt as NodeBase).parent
+        while (cur != null) {
+            when (cur) {
+                is SourceFile -> return true
+                is ModuleBlock -> cur = (cur as NodeBase).parent
+                is ModuleDeclaration -> {
+                    val p = (cur as NodeBase).parent
+                    if (p is ModuleDeclaration) return false
+                    cur = p
+                }
+                is Block -> {
+                    when (val owner = (cur as NodeBase).parent) {
+                        is FunctionDeclaration -> cur = (owner as NodeBase).parent
+                        is MethodDeclaration, is Constructor, is GetAccessor, is SetAccessor -> {
+                            val cls = (owner as NodeBase).parent
+                            if (cls !is ClassDeclaration) return false
+                            cur = (cls as NodeBase).parent
+                        }
+                        is ArrowFunction, is FunctionExpression -> return false
+                        else -> cur = (cur as NodeBase).parent
+                    }
+                }
+                is IfStatement, is ForStatement, is ForInStatement, is ForOfStatement,
+                is WhileStatement, is DoStatement, is SwitchStatement,
+                is CaseClause, is DefaultClause, is TryStatement, is CatchClause,
+                is LabeledStatement, is WithStatement -> cur = (cur as NodeBase).parent
+                else -> return false
+            }
+        }
+        return false
+    }
+
+    /** (cpa-m2a): is [node] at a position the legacy dispatcher visits AS a
+     *  statement — a statement-LIST element or a single-statement position? */
+    private fun cpaM2StmtPosition(node: Node): Boolean = when ((node as NodeBase).parent) {
+        is SourceFile, is ModuleBlock, is Block, is CaseClause, is DefaultClause,
+        is IfStatement, is ForStatement, is ForInStatement, is ForOfStatement,
+        is WhileStatement, is DoStatement, is LabeledStatement, is WithStatement -> true
+        else -> false
+    }
+
+    /** (cpa-m2a): install [frame]'s maps + the frame-reproduced namespace
+     *  stack into the ambient fields (the legacy helpers — populate/shadowing/
+     *  getTypeOfExpression — consult them, incl. the two-stacks bridging in
+     *  populateParameterLocalTypes), plus the per-dispatch file ambient. */
+    private inline fun withCpaFrameAmbient(frame: CpaFrame, block: () -> Unit) {
+        val sLT = currentLocalTypes; val sPB = currentParamBindingNames
+        val sEC = currentEnumConstrainedParams; val sSh = currentShadowedNames
+        val sCFN = currentCheckFileName; val sFG = currentFlowGraph
+        val sNs = ArrayList(propertyAccessEnclosingNamespaces)
+        currentLocalTypes = frame.localTypes
+        currentParamBindingNames = frame.paramBindings
+        currentEnumConstrainedParams = frame.enumParams
+        currentShadowedNames = frame.shadowed
+        currentCheckFileName = spineFileName
+        currentFlowGraph = ctaM3FlowGraph
+        propertyAccessEnclosingNamespaces.clear()
+        for (f in cpaFrames) f.nsSymbol?.let { propertyAccessEnclosingNamespaces.addLast(it) }
+        try { block() } finally {
+            currentLocalTypes = sLT; currentParamBindingNames = sPB
+            currentEnumConstrainedParams = sEC; currentShadowedNames = sSh
+            currentCheckFileName = sCFN; currentFlowGraph = sFG
+            propertyAccessEnclosingNamespaces.clear()
+            propertyAccessEnclosingNamespaces.addAll(sNs)
+        }
+    }
+
+    /** (cpa-m2a): the legacy ClassDeclaration arm's classType resolution,
+     *  against the frame-reproduced namespace stack. */
+    private fun cpaResolveClassType(cls: ClassDeclaration): Type? {
+        val name = cls.name ?: return null
+        var symbol: Symbol? = null
+        for (f in cpaFrames.asReversed()) {
+            val ns = f.nsSymbol ?: continue
+            symbol = ns.exports?.get(name.text)
+            if (symbol != null) break
+        }
+        if (symbol == null) symbol = globals[name.text]
+        if (symbol == null) {
+            symbol = lexicalScopeSymbol(cls, name.text)
+                ?.takeIf { it.flags.hasAny(SymbolFlags.Class) }
+        }
+        if (symbol == null) {
+            val syn = Symbol(SymbolFlags.Class, name.text)
+            syn.declarations.add(cls)
+            symbol = syn
+        }
+        return getDeclaredTypeOfSymbol(symbol)
+    }
+
+    private fun cpaSpineEnter(node: Node) {
+        if (spineIsDts || spineIsJsLike) return
+        val parent = (node as NodeBase).parent
+        // Frame pushes at fn-like body Block enters (class members through a
+        // ClassDeclaration only — objlit members are tier 2).
+        if (node is Block) {
+            val top = cpaFrames.last()
+            when (parent) {
+                is FunctionDeclaration -> {
+                    val frame = CpaFrame(node, HashMap(top.localTypes), HashSet(top.paramBindings),
+                        collectEnumConstrainedParams(parent.typeParameters, parent.parameters),
+                        HashSet(top.shadowed),
+                        classType = null, inStatic = top.inStatic)
+                    cpaFrames.addLast(frame)
+                    withCpaFrameAmbient(frame) {
+                        populateParameterLocalTypes(parent.parameters)
+                        val pn = parent.parameters.mapNotNull { p -> (p.name as? Identifier)?.text }.toSet()
+                        applyBodyLocalShadowing(node.statements, pn)
+                        applyAmbiguousBlockScopedLocals(node.statements, pn)
+                    }
+                }
+                is MethodDeclaration, is Constructor -> {
+                    val cls = (parent as NodeBase).parent as? ClassDeclaration
+                    if (cls != null) {
+                        val md = parent as? MethodDeclaration
+                        val isStatic = md != null && ModifierFlag.Static in md.modifiers
+                        val hasThisParam = md?.parameters?.firstOrNull()?.name
+                            .let { it is Identifier && it.text == "this" }
+                        // Legacy computes effectiveClassType at the MEMBER level,
+                        // BEFORE the body map copies — resolve under the class-
+                        // level (top) ambient.
+                        var eff = cpaResolveClassType(cls)
+                        if (md != null && hasThisParam) {
+                            val ann = md.parameters.firstOrNull()?.type
+                            if (ann != null) withCpaFrameAmbient(top) { eff = getTypeFromTypeNode(ann) }
+                        }
+                        val frame = CpaFrame(node, HashMap(top.localTypes), HashSet(top.paramBindings),
+                            top.enumParams, HashSet(top.shadowed),
+                            classType = eff, inStatic = isStatic && !hasThisParam)
+                        cpaFrames.addLast(frame)
+                        withCpaFrameAmbient(frame) {
+                            val params = when (parent) {
+                                is MethodDeclaration -> parent.parameters
+                                is Constructor -> parent.parameters
+                            }
+                            populateParameterLocalTypes(params)
+                            val pn = params.mapNotNull { p -> (p.name as? Identifier)?.text }.toSet()
+                            applyBodyLocalShadowing(node.statements, pn)
+                        }
+                    } else {
+                        // objlit method / unowned: tier 2 — push a MARKER frame
+                        // (shared maps) so pops stay balanced; statements under
+                        // it are chain-excluded anyway.
+                        cpaFrames.addLast(CpaFrame(node, top.localTypes, top.paramBindings,
+                            top.enumParams, top.shadowed, top.classType, top.inStatic))
+                    }
+                }
+                is GetAccessor -> {
+                    val cls = (parent as NodeBase).parent as? ClassDeclaration
+                    val isStatic = ModifierFlag.Static in parent.modifiers
+                    cpaFrames.addLast(CpaFrame(node, top.localTypes, top.paramBindings,
+                        top.enumParams, top.shadowed,
+                        classType = if (cls != null) cpaResolveClassType(cls) else top.classType,
+                        inStatic = if (cls != null) isStatic else top.inStatic))
+                }
+                is SetAccessor -> {
+                    val cls = (parent as NodeBase).parent as? ClassDeclaration
+                    if (cls != null) {
+                        val isStatic = ModifierFlag.Static in parent.modifiers
+                        val frame = CpaFrame(node, HashMap(top.localTypes), HashSet(top.paramBindings),
+                            top.enumParams, top.shadowed,
+                            classType = cpaResolveClassType(cls), inStatic = isStatic)
+                        cpaFrames.addLast(frame)
+                        withCpaFrameAmbient(frame) {
+                            populateParameterLocalTypes(parent.parameters)
+                        }
+                    } else {
+                        cpaFrames.addLast(CpaFrame(node, top.localTypes, top.paramBindings,
+                            top.enumParams, top.shadowed, top.classType, top.inStatic))
+                    }
+                }
+                is ArrowFunction, is FunctionExpression -> {
+                    // Tier 2 — marker frame (shared maps); chain-excluded.
+                    cpaFrames.addLast(CpaFrame(node, top.localTypes, top.paramBindings,
+                        top.enumParams, top.shadowed, top.classType, top.inStatic))
+                }
+                else -> { /* statement-position block: shared ambient, no frame */ }
+            }
+        }
+        // ModuleBlock: the legacy ModuleDeclaration arm's namespace push.
+        if (node is ModuleBlock) {
+            val top = cpaFrames.last()
+            val md = parent as? ModuleDeclaration
+            val nsSym = run {
+                if (md == null || ModifierFlag.Declare in md.modifiers) return@run null
+                val nameNode = md.name as? Identifier ?: return@run null
+                val fromNs = cpaFrames.lastOrNull { it.nsSymbol != null }?.nsSymbol
+                val resolved = if (fromNs != null) fromNs.exports?.get(nameNode.text)
+                else currentFileLocals?.get(nameNode.text) ?: globals[nameNode.text]
+                resolved?.takeIf { it.flags.hasAny(SymbolFlags.Module) }
+            }
+            cpaFrames.addLast(CpaFrame(node, top.localTypes, top.paramBindings,
+                top.enumParams, top.shadowed, top.classType, top.inStatic, nsSymbol = nsSym))
+        }
+        // ForIn/ForOf loop-var override — wraps the BODY statement only.
+        run {
+            val p = parent
+            if ((p is ForInStatement && p.statement === node) || (p is ForOfStatement && p.statement === node)) {
+                val init = if (p is ForInStatement) p.initializer else (p as ForOfStatement).initializer
+                val name = when (init) {
+                    is Identifier -> init.text
+                    is VariableDeclarationList -> (init.declarations.firstOrNull()?.name as? Identifier)?.text
+                    else -> null
+                }
+                if (name != null) {
+                    val top = cpaFrames.last()
+                    val overrideType: Type? = if (p is ForInStatement) stringType else {
+                        var t: Type? = null
+                        withCpaFrameAmbient(top) {
+                            val iterableT = getTypeOfExpression((p as ForOfStatement).expression)
+                            t = when {
+                                iterableT === stringType -> stringType
+                                iterableT is Type.Reference && iterableT.target.symbol?.name == "Array" ->
+                                    iterableT.resolvedTypeArguments?.firstOrNull()
+                                else -> null
+                            }
+                        }
+                        t
+                    }
+                    if (overrideType != null) {
+                        val bodyId = (node as NodeBase).nodeId
+                        if (bodyId >= 0) {
+                            cpaLoopVarRestores.addLast(CpaLoopVarRestore(bodyId, name,
+                                top.localTypes.containsKey(name), top.localTypes[name]))
+                            top.localTypes[name] = overrideType
+                        }
+                    }
+                }
+            }
+        }
+        // Statement fingerprint (covered chains only). The POSITION gate
+        // mirrors the legacy dispatch sites: statement-list elements + the
+        // single-statement positions — a TryStatement's/CatchClause's own
+        // Blocks are reached via their statement LISTS, never dispatched AS
+        // statements, and a catch VariableDeclaration (a Statement subtype)
+        // is never dispatched at all.
+        if (node is Statement && cpaM2StmtPosition(node) && cpaM2ChainOk(node)) {
+            val id = (node as NodeBase).nodeId
+            if (id >= 0) {
+                val top = cpaFrames.last()
+                cpaAuditSpine[id] = cpaAuditFingerprintCore(
+                    top.localTypes, top.paramBindings, top.enumParams, top.shadowed,
+                    cpaFrames.mapNotNull { it.nsSymbol?.name },
+                    top.classType, null, top.inStatic)
+            }
+        }
+    }
+
+    private fun cpaSpineLeave(node: Node) {
+        if (spineIsDts || spineIsJsLike) return
+        val id = (node as NodeBase).nodeId
+        // Loop-var override restores.
+        while (cpaLoopVarRestores.isNotEmpty() && cpaLoopVarRestores.last().bodyId == id && id >= 0) {
+            val r = cpaLoopVarRestores.removeLast()
+            val top = cpaFrames.last()
+            if (r.hadPrev) top.localTypes[r.name] = r.prev!! else top.localTypes.remove(r.name)
+        }
+        // (cpa-m2a): the VariableStatement arm's ORDERED recordings (B136 +
+        // B186) apply at each VariableDeclaration's LEAVE — the legacy runs
+        // them AFTER that decl's initializer walk, so a nested arrow body in
+        // decl k+1 sees only decls 1..k (per-statement-enter application
+        // would leak decl k+1's own recording into its initializer subtree).
+        if (node is VariableDeclaration) {
+            val vdl = (node as NodeBase).parent
+            val vs = (vdl as? NodeBase)?.parent
+            if (vdl is VariableDeclarationList && vs is VariableStatement && cpaM2ChainOk(vs)) {
+                val frame = cpaFrames.last()
+                withCpaFrameAmbient(frame) {
+                    val nm = node.name as? Identifier
+                    if (nm != null && node.type == null &&
+                        (node.initializer is CallExpression || node.initializer is ElementAccessExpression) &&
+                        currentLocalTypes[nm.text] == null) {
+                        val t = getTypeOfExpression(node.initializer)
+                        if (t !== anyType && t !== errorType && !typeContainsUnresolvedTypeParam(t)) {
+                            currentLocalTypes[nm.text] = t
+                        }
+                    }
+                    val pattern = node.name as? ArrayBindingPattern
+                    if (pattern != null && node.type == null) {
+                        val init = node.initializer
+                        if (init is BinaryExpression &&
+                            (init.operator == SyntaxKind.BarBar || init.operator == SyntaxKind.QuestionQuestion)) {
+                            val rightArr = init.right as? ArrayLiteralExpression
+                            val call = init.left as? CallExpression
+                            val callee = call?.expression as? PropertyAccessExpression
+                            if (rightArr != null && rightArr.elements.isEmpty() &&
+                                callee != null && callee.name.text == "match") {
+                                val recvType = getTypeOfExpression(callee.expression)
+                                if (recvType === stringType || recvType is Type.StringLiteral) {
+                                    for (el in pattern.elements) {
+                                        val be = el as? BindingElement ?: continue
+                                        if (be.dotDotDotToken) continue
+                                        val bn = be.name as? Identifier ?: continue
+                                        if (be.initializer == null || be.initializer is StringLiteralNode) {
+                                            currentLocalTypes[bn.text] = stringType
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Frame pops — mirror every push site.
+        if (cpaFrames.size > 1 && cpaFrames.last().owner === node) {
+            cpaFrames.removeLast()
+        }
+    }
+
     private class CtaFrame(
         val owner: Node,
         val varTypes: MutableMap<String, String>,
@@ -18862,6 +19217,8 @@ class Checker(
                 spineFileIsModule = isModuleFile(sf.statements)
                 // (cta-m3a): frames always-on — the anchors consume them.
                 ctaSpineFileReset(sf)
+                // (cpa-m2a): dead machinery, audit-only for now.
+                if (cpaAuditEnabled) cpaSpineFileReset(sf)
                 ctaM3FlowGraph = result.flowGraph
                 // Batch 14 per-file strict-mode flags (the deleted
                 // checkStrictModeReservedWords preamble, verbatim): binding
@@ -19022,6 +19379,8 @@ class Checker(
     /** Per-node dispatch, preorder position (before children). */
     private fun spineEnterNode(node: Node) {
         ctaSpineEnter(node)
+        // (cpa-m2a): the g2 frame skeleton — audit-only dead machinery.
+        if (cpaAuditEnabled) cpaSpineEnter(node)
         // (cta-m3k): class property initializers — members, not statements.
         if (node is PropertyDeclaration && !spineIsDts) {
             val cls = (node as NodeBase).parent
@@ -19298,6 +19657,8 @@ class Checker(
     /** Per-node dispatch, postorder position (after all children). */
     private fun spineLeaveNode(node: Node) {
         ctaSpineLeave(node)
+        // (cpa-m2a): frame pops / loop-var restores / per-decl recordings.
+        if (cpaAuditEnabled) cpaSpineLeave(node)
         // INV.4(d) walker 2: leave-position emissions (left-spine chain roots,
         // per-declarator recordings) + this node's frame pops.
         if (spineArithActive) spineArithLeaveNode(node)
@@ -120317,19 +120678,30 @@ interface DataView {
      *  between legacy-time and spine-time (the queue-item hazard note). The
      *  (cpa-m2) spine frame skeleton records the same and an audit test
      *  diffs the maps — the gate before any emission moves. */
-    private fun cpaAuditFingerprint(enclosingClassType: Type?): String {
-        val lt = currentLocalTypes.entries.sortedBy { it.key }
+    private fun cpaAuditFingerprintCore(
+        localTypes: Map<String, Type>, paramBindings: Set<String>,
+        enumParams: Map<String, String>, shadowed: Set<String>,
+        nsNames: List<String>, enclosingClassType: Type?, ctxType: Type?,
+        inStatic: Boolean,
+    ): String {
+        val lt = localTypes.entries.sortedBy { it.key }
             .joinToString(",") { "${it.key}=${typeToString(it.value)}" }
-        val pb = currentParamBindingNames.sorted().joinToString(",")
-        val ec = currentEnumConstrainedParams.entries.sortedBy { it.key }
+        val pb = paramBindings.sorted().joinToString(",")
+        val ec = enumParams.entries.sortedBy { it.key }
             .joinToString(",") { "${it.key}=${it.value}" }
-        val sh = currentShadowedNames.sorted().joinToString(",")
-        val ns = propertyAccessEnclosingNamespaces.joinToString(",") { it.name }
+        val sh = shadowed.sorted().joinToString(",")
+        val ns = nsNames.joinToString(",")
         val ect = enclosingClassType?.let { typeToString(it) } ?: "-"
-        val ctx = contextualType?.let { typeToString(it) } ?: "-"
-        val flags = if (inStaticClassMethod) 1 else 0
+        val ctx = ctxType?.let { typeToString(it) } ?: "-"
+        val flags = if (inStatic) 1 else 0
         return "lt[$lt]|pb[$pb]|ec[$ec]|sh[$sh]|ns[$ns]|ect=$ect|ctx=$ctx|f=$flags"
     }
+
+    private fun cpaAuditFingerprint(enclosingClassType: Type?): String =
+        cpaAuditFingerprintCore(
+            currentLocalTypes, currentParamBindingNames, currentEnumConstrainedParams,
+            currentShadowedNames, propertyAccessEnclosingNamespaces.map { it.name },
+            enclosingClassType, contextualType, inStaticClassMethod)
 
     private fun cpaAuditRecord(stmt: Statement, enclosingClassType: Type?) {
         if (!cpaAuditEnabled) return

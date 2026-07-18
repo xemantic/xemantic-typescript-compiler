@@ -100,6 +100,102 @@ class Inv4CpaAuditTest {
             "expected a print with ns[Outer,Inner], got: ${audit.values}")
     }
 
+    // ------------------------------------------------------------------
+    // (cpa-m2a) round 579: the spine-side statement-TIER frame skeleton —
+    // every SPINE-recorded fingerprint must agree with the legacy one
+    // (spine ⊆ legacy agreement); tier-1 fixtures must be FULLY covered
+    // (spine key set == legacy key set), tier-2 chains (arrow/fn-expr
+    // bodies, dotted-namespace inners) are excluded on BOTH sides or
+    // spine-side only.
+    // ------------------------------------------------------------------
+
+    private fun diffSpine(source: String): Triple<List<String>, Int, Int> {
+        val options = CompilerOptions(strict = true)
+        val sf = Parser(source.trimIndent(), "t.ts").parse()
+        val kinds = HashMap<Int, String>()
+        fun walk(n: Node) {
+            val id = (n as NodeBase).nodeId
+            if (id >= 0) kinds[id] = n::class.simpleName ?: "?"
+            forEachChild(n) { walk(it) }
+        }
+        walk(sf)
+        val result = Binder(options).bind(sf)
+        Checker.cpaAuditEnabled = true
+        try {
+            val checker = Checker(options, listOf(result))
+            val mismatches = mutableListOf<String>()
+            for ((id, spinePrint) in checker.cpaAuditSpine) {
+                val legacyPrint = checker.cpaAuditLegacy[id]
+                if (legacyPrint != spinePrint) {
+                    mismatches.add("node $id (${kinds[id]}):\n  legacy: ${legacyPrint ?: "<not visited>"}\n  spine:  $spinePrint")
+                }
+            }
+            return Triple(mismatches, checker.cpaAuditSpine.size, checker.cpaAuditLegacy.size)
+        } finally {
+            Checker.cpaAuditEnabled = false
+        }
+    }
+
+    @Test
+    fun `spine frames agree with the legacy context and fully cover tier-1 chains`() {
+        val (mismatches, spineCount, legacyCount) = diffSpine("""
+            declare const cond: boolean;
+            const a: number = 1;
+            let b = a;
+            { const c: string = "x"; b = 2; }
+            function f(x: string, q?: number): number {
+                const d = x;
+                if (d) { return 1; }
+                while (b) { b = 3; break; }
+                for (var i in { ia: 1 }) { const s = i; }
+                for (const v of [1, 2]) { const vi = v; }
+                do { const di = 1; } while (cond);
+                function nested(y: number): number { const ny = y; return y; }
+                return 42;
+            }
+            class K {
+                p: number = 1;
+                m(y: string): string { const im = y; return y; }
+                static s() { const st = 1; }
+                constructor(z: number) { const cz = z; }
+                get gg(): number { const gz = 1; return this.p; }
+                set ss(v: number) { const sv = v; }
+                tm(this: K, w: number): number { const tw = w; return w; }
+            }
+            namespace NS {
+                const n: boolean = true;
+                export namespace Inner { const deep = 1; }
+                export class NK { nm(): number { const inK = 1; return 1; } }
+            }
+            try { const t1 = 1; } catch (e) { const t2 = 2; } finally { const t3 = 3; }
+            switch (b) { case 1: { const s1 = 1; break; } default: { const s2 = 2; } }
+            label: { const lb: number = 1; }
+            var arr = [1, 2, 3];
+            var k1 = arr[0];
+            var chained = arr.map(function (n) { return n; });
+        """)
+        assertTrue(mismatches.isEmpty(),
+            "expected spine/legacy agreement, got ${mismatches.size} mismatches:\n" +
+                mismatches.take(6).joinToString("\n"))
+        // Tier-1 full coverage MINUS the fn-expr body statements (the
+        // `chained` initializer's function body — legacy-visited, tier 2).
+        assertTrue(spineCount in (legacyCount - 1)..legacyCount,
+            "expected spine coverage ~= legacy ($legacyCount), got $spineCount")
+    }
+
+    @Test
+    fun `tier-2 chains stay spine-excluded and everything covered agrees`() {
+        val (mismatches, spineCount, legacyCount) = diffSpine("""
+            const ar = (n: number): number => { const inA = n; return n; };
+            const fe = function (s: string) { const inF = s; return s.length; };
+            namespace A.B { const dotted = 1; }
+        """)
+        assertTrue(mismatches.isEmpty(),
+            "expected spine/legacy agreement on covered keys, got:\n" + mismatches.take(6).joinToString("\n"))
+        assertTrue(spineCount < legacyCount,
+            "expected arrow/fn-expr body statements to stay spine-excluded (spine $spineCount, legacy $legacyCount)")
+    }
+
     @Test
     fun `the audit is off by default`() {
         val options = CompilerOptions(strict = true)
