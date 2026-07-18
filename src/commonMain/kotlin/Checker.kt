@@ -90943,6 +90943,15 @@ interface DataView {
             is Type.Intersection -> t.types.any { typeContainsForeignTypeParam(it, ownTpNames, depth + 1) }
             is Type.Reference -> t.resolvedTypeArguments?.any { typeContainsForeignTypeParam(it, ownTpNames, depth + 1) } == true
             is Type.Object -> {
+                // Round 591: an UNINSTANTIATED generic class/interface at a NESTED
+                // position (a raw Type.Interface with its OWN typeParameters
+                // unsubstituted — the services objectAllocator ctor-value sig
+                // returns, displaying `NodeObject<TKind>` with the TP unbound) is
+                // the un-inferred-generic gap signature; the TP never surfaces as
+                // a Type.TypeParam on this shape, so the leaf test can't see it.
+                // depth > 0 keeps a top-level generic-interface source checkable
+                // (the corpus class-value pins).
+                if (depth > 0 && t is Type.Interface && !t.typeParameters.isNullOrEmpty()) return true
                 if (t.tupleElementTypes?.any { typeContainsForeignTypeParam(it, ownTpNames, depth + 1) } == true) return true
                 // round 431d: an ANONYMOUS object (alias-body materialization —
                 // `SearchResult<T> = { value: T | undefined } | undefined`) hides the
