@@ -1973,11 +1973,41 @@ interrupt the arc).
       corpus-gates instead of the full fingerprint audit; the audit earned
       its keep on cta/cpa quirk EXTRACTION, so keep it only if the frame
       skeleton's first corpus gates diff untraceably.
-    - [ ] **(ccet-m2) Spine-side frame skeleton** (CcetFrame: localTypes +
-      paramBindings copies at fn boundaries, fnTpScope with constraint
-      materialization, class TP scopes, ns frames via the dotted-aware
-      resolver, the If-arm narrowing override as a then-frame rule — the
-      cta-m3i NARROWING FRAME precedent).
+    - [ ] **(ccet-m2) Spine-side frame skeleton — FULL SPEC (round 588c
+      in-code read of every arm):** CcetFrame fields: localTypes(HashMap) +
+      paramBindings(HashSet) [copied at fn-decl/method/ctor/contextual-fn
+      boundaries + arrow/fn-expr expr-arms], tpScope+tpAst [fn-decl pushes
+      OWN TPs with interning + constraint materialization; class arm pushes
+      the DECLARED class type's TPs resolved via
+      globals ?: inferenceNamespaceStack.last().exports; STATIC methods POP
+      the class scope but mint FRESH TPs for their own typeParameters],
+      superBaseSig/superBaseType [ctor gets both, method gets Type only —
+      from the per-class baseResolution computed under the class TP scope],
+      nsSymbol [ModuleDeclaration arm, NON-declare only, dotted-aware via
+      resolveModuleDeclNamespaceSymbol], classSym [callWalkerClassStack
+      push], the method-body `this` registration [instance methods:
+      currentLocalTypes["this"] = getDeclaredTypeOfSymbol(classSym)],
+      GetAccessor/SetAccessor bodies walk with NO copies. Var-arm ORDERED
+      recordings (interleaved with initializer walks — the cta interleave
+      lesson): callable-annotated + union-of-callables + literal-union +
+      callable-shadow anyType; the B246 CONTEXTUAL fn-expr channel
+      (FunctionType-annotated var + fn-expr/arrow init → params typed from
+      the annotation with ?-undefined unions — a frame VARIANT, replaces
+      the plain initializer walk); the If-arm SCOPED type-guard narrowing
+      override (resolveUserTypeGuardNarrowing at the If enter, save/write/
+      restore around the then — the cta-m3i narrowing-frame precedent);
+      ForIn/ForOf withForLoopVarShadow around bodies. REACH QUIRKS (differ
+      from BOTH prior giants): For-INITIALIZER expressions ARE walked
+      (decl initializers + expression form); param DEFAULT initializers ARE
+      walked at fn-decl/method/ctor arms (BEFORE the body frame — under the
+      OUTER ambient); DoStatement walks body BEFORE condition;
+      declare-module bodies are SKIPPED entirely (Declare gate — unlike
+      cpa); DOTTED namespace bodies are RECURSED (unlike cpa);
+      heritage expressions walk UNDER the class TP scope + class stack;
+      objlit arm does a scoped localTypes copy. There is also a
+      maxCheckDepth recursion guard (callTypeCheckDepth) at the statement
+      dispatcher — reproduce as an int-valued reach cap if fidelity
+      requires (the round-535 spineArgDepth precedent).
     - [ ] **(ccet-m3…) Emission moves** with the leave-dispatch discipline
       (cpa's probe lesson: anchor at statement/expression LEAVES) + the
       recorded-set truncation, then **(ccet-retire)** via the round-585
