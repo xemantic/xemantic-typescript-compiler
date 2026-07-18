@@ -20,6 +20,33 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 578 (2026-07-18) — (cpa-m2-prep) LANDED: the cta→cpa RESIDUE CHANNEL
+IS CLOSED — checkPropertyAccess is now per-file self-sufficient.** The cpa
+driver resets `currentLocalTypes` per file (it previously started from the
+cta pass's LAST-file residue and accumulated its own map across files —
+backward pass-after-pass reads a spine migration cannot reproduce, the
+round-542/559 finding). The experiment isolated the dependence to EXACTLY
+ONE corpus shape (noImplicitAnyForIn — round 542's prediction confirmed:
+`var k1 = x[i]`'s `{}` receiver type came from cta's un-annotated var
+recording); replaced by the pass's OWN recording — the B136 branch now also
+accepts ElementAccessExpression initializers under the same concreteness
+gates. Measured: corpus 11,339/0 AND listAll ×8 byte-identical — the
+residue fed NOTHING on the real tsc sources. This unblocks BOTH (cpa-m2)
+(frames can reproduce per-file state — no backward reads) and (cta-retire)
+(cpa no longer consumes cta's map evolution). NEXT: (cpa-m2) the spine-side
+frame skeleton — state model scouted in-code this round: fn-decl bodies
+copy 4 maps (+ shadowing + ambiguous, ect=null), method/ctor bodies copy 3
+(no enumParams, + shadowing), setters copy 2 (no shadowed, no shadowing
+call), getters copy NOTHING; ForIn/ForOf override the loop var around the
+body only (ForOf's elemType from getTypeOfExpression, Array/string only);
+the ns stack pushes at non-declare ModuleDeclarations with a nested-vs-top
+resolution split; VariableStatement B136/B186 recordings apply per-decl
+AFTER that decl's initializer walk (spine: at the VariableDeclaration's
+LEAVE, so nested arrow-body fingerprints see only PRIOR decls' recordings);
+arrows/fn-exprs copy 3 maps + contextual param registration gated on the
+downward contextualType channel (call-arg / objlit-property / arrow-body
+edges — the w3 template).**
+
 **Round 577 (2026-07-18) — (cpa-m1) LANDED: the g2 (checkPropertyAccess)
 migration opens with the legacy-side audit instrumentation.** Mirrors
 cta-m2a: under the test-only `cpaAuditEnabled`, `checkPropertyAccessInStatement`
@@ -1658,6 +1685,9 @@ interrupt the arc).
       like cta's varTypes — Type.id is resolution-order-sensitive between
       legacy-time and spine-time, so fingerprint by sorted name set +
       per-name typeToString (test-only cost), never by id.
+    - [x] **(cpa-m2-prep) Close the residue channel legacy-side** — DONE
+      round 578: per-file `currentLocalTypes` reset in the cpa driver + the
+      element-access own-recording; corpus green + listAll ×8 byte-identical.
     - [ ] **(cpa-m2) Spine-side frame skeleton** audited against (cpa-m1)
       (the cta-m2b/m2c pattern — expect quirk-extraction cycles; the known
       quirks from the g1c design: GetAccessor bodies have NO scope copy,

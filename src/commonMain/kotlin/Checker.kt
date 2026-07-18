@@ -120255,6 +120255,14 @@ interface DataView {
             // Skip .js files — property access patterns differ
             if (fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
             val source = result.sourceFile.text
+            // (cpa-m2-prep) round 578: per-file reset — the pass previously
+            // consumed the cta pass's cross-file residue (the round-542/559
+            // residue channel), which a spine migration cannot reproduce
+            // (backward pass-after-pass reads). The element-access
+            // own-recording below replaces the one consumed entry; measured:
+            // corpus green + listAll ×8 byte-identical. Do NOT remove this
+            // reset — it is the cta-retire and cpa-frame-skeleton enabler.
+            currentLocalTypes = HashMap()
             currentFileLocals = result.locals
             currentCheckFileName = fileName
             currentFlowGraph = result.flowGraph
@@ -120431,8 +120439,15 @@ interface DataView {
                     // Gated to a CallExpression initializer whose resolved type is CONCRETE
                     // (no unresolved type param, not any/error) to bound the blast radius
                     // to call-result locals (mirrors the assignability walker at ~56588).
+                    // (cpa-m2-prep) round 578: ALSO record ElementAccessExpression
+                    // initializers — the pass's own-recording replacing the cta
+                    // cross-pass residue it previously consumed (the round-542
+                    // noImplicitAnyForIn `var k1 = x[i]` receiver; the driver now
+                    // resets currentLocalTypes per file, so the pass must record
+                    // what it reads).
                     val nm = decl.name as? Identifier
-                    if (nm != null && decl.type == null && decl.initializer is CallExpression &&
+                    if (nm != null && decl.type == null &&
+                        (decl.initializer is CallExpression || decl.initializer is ElementAccessExpression) &&
                         currentLocalTypes[nm.text] == null) {
                         val t = getTypeOfExpression(decl.initializer)
                         if (t !== anyType && t !== errorType && !typeContainsUnresolvedTypeParam(t)) {
