@@ -275,6 +275,10 @@ class Checker(
 
     // (f2) round 598 probes: depth-0 reentrance guards for the time split.
     private var relProbeDepth = 0
+    /** (f2) round 599: the walk-result shadow — (refNodeId | fileHash) →
+     *  (epoch, result). Probe-only. */
+    private val walkShadow = HashMap<Long, Pair<Long, Any?>>()
+
     private var tnProbeDepth = 0
     private var mrProbeDepth = 0
 
@@ -98745,7 +98749,27 @@ interface DataView {
         flowDepthTripped = false
         try {
             val result = walk()
-            if (PassTiming.enabled) PassTiming.narrowWalkNanos += PassTiming.nowNanos() - probeStart
+            if (PassTiming.enabled) {
+                PassTiming.narrowWalkNanos += PassTiming.nowNanos() - probeStart
+                // (f2): walk-result repeat classification.
+                val fh = (currentFlowGraph?.sourceFile?.fileName?.hashCode() ?: 0).toLong()
+                val key = (((reference as NodeBase).nodeId.toLong()) shl 32) or (fh and 0xFFFF_FFFFL)
+                val prev = walkShadow.put(key, spineExprEpoch to result)
+                if (prev == null || prev.first != spineExprEpoch) PassTiming.walkMiss++
+                else {
+                    val pv = prev.second
+                    when {
+                        pv === result -> {
+                            PassTiming.walkRepeatIdentical++
+                            PassTiming.walkRepeatNanos += PassTiming.nowNanos() - probeStart
+                        }
+                        pv is Type.Union && result is Type.Union &&
+                            pv.types.map { it.id }.sorted() == result.types.map { it.id }.sorted() ->
+                            PassTiming.walkRepeatStructuralUnion++
+                        else -> PassTiming.walkRepeatDiff++
+                    }
+                }
+            }
             if (flowDepthTripped && !ctaM3RecordOnlySuppress) reportFlowControlError(reference)
             return result
         } finally {

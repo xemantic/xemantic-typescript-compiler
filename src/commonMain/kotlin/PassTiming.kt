@@ -147,6 +147,8 @@ object PassTiming {
         shadowMemoHitCorrect = 0; shadowMemoHitWrong = 0; shadowMemoMiss = 0
         narrowWalkNanos = 0; typeOfExprNanos = 0
         relationNanos = 0; typeNodeNanos = 0; memberResolveNanos = 0
+        walkRepeatIdentical = 0; walkRepeatStructuralUnion = 0; walkRepeatDiff = 0; walkMiss = 0
+        walkRepeatNanos = 0
         typeOfExprRepeatSame = 0
         typeOfExprRepeatDiff = 0
         getTypeOfExpressionDistinct.clear()
@@ -187,6 +189,13 @@ object PassTiming {
     // (f2) round 597 probe: TIME attribution inside checkSpine.
     var narrowWalkNanos: Long = 0
     var typeOfExprNanos: Long = 0
+    // (f2) round 599: walk-result repeat classification.
+    var walkRepeatIdentical: Long = 0
+    var walkRepeatStructuralUnion: Long = 0
+    var walkRepeatDiff: Long = 0
+    var walkMiss: Long = 0
+    var walkRepeatNanos: Long = 0
+
     var relationNanos: Long = 0
     var typeNodeNanos: Long = 0
     var memberResolveNanos: Long = 0
@@ -277,6 +286,7 @@ object PassTiming {
         val distinct = getTypeOfExpressionDistinct.size.toLong()
         val factor = if (distinct > 0) (getTypeOfExpressionCalls * 10 / distinct) else 0L
         appendLine(
+            "walkRepeats: identical=$walkRepeatIdentical structuralUnion=$walkRepeatStructuralUnion diff=$walkRepeatDiff miss=$walkMiss savableNanos=${walkRepeatNanos / 1_000_000}ms\n" +
             "time split: narrowWalks=${narrowWalkNanos / 1_000_000}ms typeOfExpr(total incl. nested)=${typeOfExprNanos / 1_000_000}ms " +
                 "relations(depth0)=${relationNanos / 1_000_000}ms typeNode(depth0)=${typeNodeNanos / 1_000_000}ms memberResolve(depth0)=${memberResolveNanos / 1_000_000}ms\n" +
             "shadowMemo: hitCorrect=$shadowMemoHitCorrect hitWRONG=$shadowMemoHitWrong miss=$shadowMemoMiss\n" +

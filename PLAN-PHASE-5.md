@@ -2047,7 +2047,11 @@ interrupt the arc).
       (cpa's probe lesson: anchor at statement/expression LEAVES) + the
       recorded-set truncation, then **(ccet-retire)** via the round-585
       experiment template (no-op the dispatch → gates → delete).
-  - [ ] **INV.4(f) The two unlocked soundness wins.** Once one authoritative
+  - [x] **INV.4(f) CLOSED round 599 — both wins are measured dead-ends at
+    the current cost structure** (f1 memo: the servable calls are cheap;
+    f2 fold: confirm-once tax + epoch churn → noise); the real INV.4 win
+    was the retirements (−13% wall) + ONE authoritative walk. Revive the
+    memo designs after INV.5's canonical types. ORIGINAL: **The two unlocked soundness wins.** Once one authoritative
     walk state exists: the per-node expression-type cache (594,779 calls over
     ~221,844 distinct nodes = ×2.6 recompute), and flow narrowing folded into
     reference typing once (84,469 depth-0 walks, 68% from property access).
@@ -2317,7 +2321,29 @@ with a session note saying why). Item IDs are stable; session notes reference th
 - Node/tsc/tsgo are NOT currently installed — differential testing (M0 optional) and
   real `@types/node` (M1.3) wait for network.
 - The benchmark project cache lives under `build/bench/` (cheap to rebuild); results
-  TSVs under `bench/` (gitignored, machine-specific).**Round 598 (2026-07-18) — the FULL checkSpine attribution: the walks are
+  TSVs under `bench/` (gitignored, machine-specific).**Round 599 (2026-07-18) — (f2) MEASURED DEAD-END too; INV.4 is CLOSED and
+the arc moves to INV.5.** The walk-repeat shadow: 31,016 identical repeats
+/ 50 structural-union / 148 diff / 80k miss, savableNanos=1,412ms — a
+real proportional-cost target (unlike f1). The LIVE fold (the two
+Type-returning entries, epoch-fenced + declaredType-identity +
+confirm-once) was fully gate-green (corpus 11,347/0 + listAll ×8) but the
+interleaved A/B read NOISE (~1%): the confirm-once tax (every 2nd call
+still walks to confirm) + epoch churn (80k of 111k walks at fresh epochs)
+cap the served fraction below measurability. REVERTED (probes kept).
+STRATEGIC CONCLUSION: both INV.4(f) single-lever wins are measured
+dead-ends AT THE CURRENT COST STRUCTURE — the blockers are (a) fresh
+minting (unions/literals/objlits — INV.5(a) interning exists for
+union/intersection CALLS through getUnionType? no: the round-545 interning
+covers getUnionType — yet narrowing results still churn identity via
+rebuilt member LISTS...) and (b) epoch churn from the recording-heavy
+walk. The ≤10s target runs through INV.5's canonical types (which would
+make results identity-stable and REVIVE both memo designs) + INV.6
+parallelism. INV.4 CLOSES: the migration + retirements delivered the real
+win (35.7 → ~31s, −13%) and ONE authoritative walk — its structural goal.
+NEXT: INV.5(b) explicit mapper objects, or INV.5(e)'s second half (the
+superseded-pin-walker deletion sweep), per the queue order.
+
+**Round 598 (2026-07-18) — the FULL checkSpine attribution: the walks are
 the only big single lever.** Depth-0-guarded accumulators on the three
 remaining suspects: relations(depth0)=927ms, typeNode(depth0)=520ms,
 memberResolve(depth0)=61ms — vs narrowWalks=4,986ms and typeOfExpr≤3.9s

@@ -27,6 +27,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 ### Measured dead-ends (full detail archived — do NOT re-attempt without reading the archive entry)
 
+- A LIVE narrowing-walk fold at the two Type-returning entries (epoch-fenced + declaredType-identity + confirm-once): DEAD — gate-green but NOISE in the interleaved A/B (round 599; the confirm-once tax + 80k/111k fresh-epoch misses cap the served fraction); savableNanos measured 1.4s but unrealizable under this policy. Revive with INV.5 canonical types.
 - A LIVE per-node getTypeOfExpression memo (whitelisted instance-stable results + confirm-once + the round-595 epoch): DEAD — gate-green but 1-3% SLOWER measured interleaved (round 596); the servable hits are the cheap calls, the expensive recompute is the non-memoizable fresh-minting/narrowing kinds, and the per-mutation epoch bookkeeping exceeds the savings. The epoch infrastructure + the --passTiming shadow memo REMAIN for future policy evaluation.
 - Global variance analysis wired into the relation engine: DEAD — ~263 regressions (round 336); strictFunctionTypes variance lives in dedicated walkers. Revisit only as part of a full M3.1 relation redesign.
 - A general PropertyAccess-receiver TS2339 fallback via resolved interface members (B153): NOT viable — merged/cross-file interface member resolution is incomplete; only the class-AST-chain path + two tightly-gated exceptions (B527/B330) work.
