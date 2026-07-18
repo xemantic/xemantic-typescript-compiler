@@ -898,6 +898,24 @@ class Checker(
         }
     }
 
+    /** (cta-m3l/m3m): is [body] a checkFunctionBody-routed fn body whose
+     *  body-level walkers + param-loop emission the spine anchors? Owners:
+     *  FunctionDeclaration + class Method/GetAccessor (ctor/SetAccessor never
+     *  route through checkFunctionBody; objlit methods and arrows/fn-exprs
+     *  stay owned by their containing statement's emit-twice), on an eligible
+     *  chain. ONE predicate shared by the spine dispatch, the sandwich
+     *  emission, and (via the recorded set) the legacy gates. */
+    private fun ctaM3BodyWalkersEligible(body: Block): Boolean {
+        if (spineIsDts) return false
+        val owner = (body as NodeBase).parent
+        val ok = when (owner) {
+            is FunctionDeclaration -> true
+            is MethodDeclaration, is GetAccessor -> (owner as NodeBase).parent is ClassDeclaration
+            else -> false
+        }
+        return ok && ctaM3NestedChainOk(body)
+    }
+
 
     private fun ctaM3StmtAnchor(stmt: Node, scopeStatements: List<Statement>, recordOnly: Boolean = false, bareSurface: Boolean = false) {
         val frame = ctaFrames.last()
@@ -1178,6 +1196,41 @@ class Checker(
                 } else currentTypeParamScope
                 frame.fnTpScope = fnScope
                 withInstantiationContext(scopeMapper(fnScope)) {
+                    // (cta-m3m): the checkFunctionBody param-loop EMISSION
+                    // (16.4ei destructuring-from-nullable-union) at its exact
+                    // legacy position — after shadowing, under the TP scope,
+                    // BEFORE param typing (the m2d order: an emission never
+                    // sees its own typing). Anchor ambient installed around
+                    // the loop only (flow graph is MANDATORY — a null
+                    // currentFlowGraph loses the round-425 narrowing
+                    // suppression and would OVER-emit vs legacy). The legacy
+                    // loop skips via the recorded set.
+                    if (ctaM3BodyWalkersEligible(body)) {
+                        val sCFN = currentCheckFileName; val sFG = currentFlowGraph
+                        val sSS = currentScopeStatements
+                        val sThis = currentClassForThis; val sInFn = inNonArrowFunctionBody
+                        val sAsync = inAsyncFunctionBody; val sGen = inGeneratorFunctionBody
+                        val sTpD = currentTypeParamDecls
+                        currentCheckFileName = spineFileName; currentFlowGraph = ctaM3FlowGraph
+                        currentScopeStatements = ctaM3NearestList(body)
+                        currentClassForThis = classForThis; inNonArrowFunctionBody = true
+                        inAsyncFunctionBody = isAsync; inGeneratorFunctionBody = isGenerator
+                        currentTypeParamDecls = frame.fnTpDecls ?: emptyMap()
+                        try {
+                            for (param in parameters) {
+                                val pn = param.name
+                                if (pn is ObjectBindingPattern && param.initializer != null) {
+                                    checkDestructuringFromNullableUnion(pn, param.initializer, spineSource, spineFileName)
+                                }
+                            }
+                        } finally {
+                            currentCheckFileName = sCFN; currentFlowGraph = sFG
+                            currentScopeStatements = sSS
+                            currentClassForThis = sThis; inNonArrowFunctionBody = sInFn
+                            inAsyncFunctionBody = sAsync; inGeneratorFunctionBody = sGen
+                            currentTypeParamDecls = sTpD
+                        }
+                    }
                     ctaTypeParamsIntoLocals(parameters, frame.varTypes)
                 }
             }
@@ -18983,25 +19036,17 @@ class Checker(
         // legacy-owned — their walkFunctionBodiesInExpr dispatch already
         // emit-twice-truncates at the containing statement). The legacy call
         // pair skips via the recorded set keyed on the Block's nodeId.
-        if (node is Block && !spineIsDts) {
-            val owner = (node as NodeBase).parent
-            val eligible = when (owner) {
-                is FunctionDeclaration -> true
-                is MethodDeclaration, is GetAccessor -> (owner as NodeBase).parent is ClassDeclaration
-                else -> false
-            }
-            if (eligible && ctaM3NestedChainOk(node)) {
-                ctaM3MarkAnchored(node)
-                checkForInNumericForRedeclare(node.statements, spineSource, spineFileName)
-                when (owner) {
-                    // GetAccessor: the legacy arm passes emptyList()/null → the
-                    // FlatArray walker is a no-op there; mirror the no-op.
-                    is FunctionDeclaration -> checkFlatArrayDepthParamAssignments(
-                        node.statements, owner.parameters, owner.typeParameters, spineSource, spineFileName)
-                    is MethodDeclaration -> checkFlatArrayDepthParamAssignments(
-                        node.statements, owner.parameters, owner.typeParameters, spineSource, spineFileName)
-                    else -> {}
-                }
+        if (node is Block && ctaM3BodyWalkersEligible(node)) {
+            ctaM3MarkAnchored(node)
+            checkForInNumericForRedeclare(node.statements, spineSource, spineFileName)
+            when (val owner = (node as NodeBase).parent) {
+                // GetAccessor: the legacy arm passes emptyList()/null → the
+                // FlatArray walker is a no-op there; mirror the no-op.
+                is FunctionDeclaration -> checkFlatArrayDepthParamAssignments(
+                    node.statements, owner.parameters, owner.typeParameters, spineSource, spineFileName)
+                is MethodDeclaration -> checkFlatArrayDepthParamAssignments(
+                    node.statements, owner.parameters, owner.typeParameters, spineSource, spineFileName)
+                else -> {}
             }
         }
         if ((node is VariableStatement || node is ExpressionStatement || node is ReturnStatement || node is IfStatement) && !spineIsDts) {
@@ -83526,7 +83571,6 @@ interface DataView {
                     // (cta-m3a): a top-level/namespace-body statement's emissions
                     // moved to the spine anchor — this arm still runs for its maps'
                     // interleaved state evolution but truncates the duplicates.
-                    val ctaM3Parent = (stmt as NodeBase).parent
                     val ctaM3EmitMark = if (ctaM3IsAnchoredStmt(stmt, fileName)) diagnostics.size else -1
                     for (decl in stmt.declarationList.declarations) {
                         if (stmt.declarationList.flags == SyntaxKind.ConstKeyword) {
@@ -83555,7 +83599,6 @@ interface DataView {
                     }
                 }
                 is ExpressionStatement -> {
-                    val ctaM3P = (stmt as NodeBase).parent
                     val ctaM3Mark = if (ctaM3IsAnchoredStmt(stmt, fileName)) diagnostics.size else -1
                     checkAssignmentExpression(stmt.expression, source, fileName, varTypes, typeParams)
                     walkFunctionBodiesInExpr(stmt.expression, source, fileName, varTypes, typeParams)
@@ -83564,7 +83607,6 @@ interface DataView {
                     }
                 }
                 is ReturnStatement -> {
-                    val ctaM3P = (stmt as NodeBase).parent
                     val ctaM3Mark = if (ctaM3IsAnchoredStmt(stmt, fileName)) diagnostics.size else -1
                     if (returnType != null || returnTypeNode != null) {
                         checkReturnAssignability(stmt, returnType ?: "", source, fileName, varTypes, typeParams, returnTypeNode)
@@ -85111,7 +85153,9 @@ interface DataView {
                 // machinery can reuse the typing without emitting. Both run under
                 // the TP scope; emissions first (a per-param emission never saw
                 // its own typing in the interleaved original).
-                for (param in parameters) {
+                // (cta-m3m): spine-anchored in the ctaFnBodyFrame sandwich for
+                // eligible bodies — gated by the same recorded set as m3l.
+                if (!ctaM3BodyAnchored) for (param in parameters) {
                     val paramName = param.name
                     if (paramName is ObjectBindingPattern && param.initializer != null) {
                         checkDestructuringFromNullableUnion(paramName, param.initializer, source, fileName)

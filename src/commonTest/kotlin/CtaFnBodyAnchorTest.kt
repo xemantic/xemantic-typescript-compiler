@@ -421,6 +421,57 @@ class CtaFnBodyAnchorTest {
     }
 
     @Test
+    fun `destructuring-from-nullable-union param default emits exactly once`() {
+        // (cta-m3m): the checkFunctionBody param-loop emission (16.4ei) anchors
+        // in the ctaFnBodyFrame sandwich (before param typing, under the TP
+        // scope + flow graph) for eligible bodies; the legacy loop skips via
+        // the recorded set. No internal dedup — 2 = anchored without the skip,
+        // 0 = skipped without the anchor.
+        val dFn = diagnose("""
+            declare const r: { a: number } | undefined;
+            function f({ a } = r) {
+                return a;
+            }
+        """).filter { it.code == 2339 }
+        assert(dFn.size == 1) { "fn: expected exactly 1 TS2339, got ${dFn.size}: ${dFn.map { it.message }}" }
+        val dCls = diagnose("""
+            declare const r: { a: number } | undefined;
+            class C {
+                m({ a } = r) {
+                    return a;
+                }
+            }
+        """).filter { it.code == 2339 }
+        assert(dCls.size == 1) { "method: expected exactly 1 TS2339, got ${dCls.size}" }
+    }
+
+    @Test
+    fun `negative control - non-nullable param default draws no destructuring TS2339`() {
+        diagnose("""
+            declare const r: { a: number };
+            function f({ a } = r) {
+                return a;
+            }
+        """) should {
+            have(none { it.code == 2339 })
+        }
+    }
+
+    @Test
+    fun `arrow param destructuring default inside an anchored statement emits exactly once`() {
+        // (cta-m3m) reach control: arrow bodies stay owned by the containing
+        // statement's emit-twice — the anchor-time walkFunctionBodiesInExpr run
+        // emits, the legacy run truncates at statement granularity. (Must be a
+        // BLOCK body — an expression-bodied arrow never routes through
+        // checkFunctionBody, so its param defaults draw nothing on any path.)
+        val d = diagnose("""
+            declare const r: { a: number } | undefined;
+            const g = ({ a } = r) => { return a; };
+        """).filter { it.code == 2339 }
+        assert(d.size == 1) { "arrow: expected exactly 1 TS2339, got ${d.size}" }
+    }
+
+    @Test
     fun `fn at a bare if-then position stays unreached - legacy parity silence`() {
         // (cta-m3l): the bare InStmt dispatcher has NO FunctionDeclaration arm,
         // so the legacy giant never reaches this body — the ctaM3FnHop landing

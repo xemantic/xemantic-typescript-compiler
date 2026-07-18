@@ -20,6 +20,29 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 576 (2026-07-18) — (cta-m3m) LANDED: the checkFunctionBody param-loop
+emission joins the anchor — the cta giant's EMISSION surface is complete
+across reproduced scopes.** The 16.4ei destructuring-from-nullable-union
+param emission anchors INSIDE the ctaFnBodyFrame sandwich at its exact
+legacy position (after shadowing, under the TP scope, BEFORE param typing —
+the m2d emissions-first order), with the anchor ambient installed around
+the loop only — currentFlowGraph is MANDATORY there (a null graph loses the
+round-425 narrowing suppression and would OVER-emit vs legacy);
+currentScopeStatements installs the fn's ENCLOSING list (the legacy value
+at that point — the body's own InStatements has not yet run). The legacy
+loop skips via the m3l recorded set; eligibility is ONE predicate
+(`ctaM3BodyWalkersEligible`) shared by the m3l Block dispatch, the sandwich
+emission, and (via the recorded set) all three legacy gates. Also removed
+the three dead ctaM3P/ctaM3Parent vars (m3h0 residue — restores the
+warning-clean build). Pins +3 (fn + method exactly-once, non-nullable
+negative control, block-bodied-arrow reach control — an EXPRESSION-bodied
+arrow never routes through checkFunctionBody, so its param defaults draw
+nothing on any path; the first pin cut used one and read a false 0). Gates:
+corpus 11,335/0; listAll ×8 identical vs 574c. Remaining legacy-owned in
+the giant: the emit-twice map-evolution runs only. NEXT: legacy-arm
+RETIREMENT for fully-covered scopes (the multiplier payoff) or the
+INV.4(e) pivot to g2 (checkPropertyAccess).
+
 **Round 575 (2026-07-18) — (cta-m3l) LANDED: the checkFunctionBody BODY-LEVEL
 walkers join the anchor + a latent reach over-shoot closed.** The B442
 for-in/numeric-for redeclare + B205 FlatArray depth-param walkers
