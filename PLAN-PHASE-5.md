@@ -20,6 +20,19 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 612 (2026-07-19) — queue reconciliation completes: the INV.3 arc
+was ALREADY DONE (round 513) — round 611's "next campaign" claim was a
+stale-checkbox artifact.** Five checkboxes reconciled against their own
+bodies: INV.3(d) (complete round 513, per its body), the INV.3 umbrella
+(arc complete), INV.4(e) (giants retired round 592), INV.5(d)
+((d1) done/(d2) demoted), the INV.5 umbrella (substance complete round
+604; residuals deferred/demoted/blocked). THE GENUINELY-LIVE QUEUE after
+reconciliation: **INV.7's remaining features (watch mode via a
+file-event Flow; .tsbuildinfo-style incremental reuse)** + the blocked
+tail (EP/reference-tsc, INV.7b/RAM, M4.7/network) + the owner-parked
+Post-v1 backlog. The INV.0–INV.6 architecture-inversion arc is DONE
+end-to-end. NEXT: the watch-mode design scout (INV.7c).
+
 **Round 611 (2026-07-19) — queue honesty: the INV.4/INV.6 umbrellas close,
 INV.5(d2) demotes on evidence.** INV.4 was closed narratively at round
 599 but its umbrella checkbox stayed open — checked with the closure
@@ -655,7 +668,7 @@ interrupt the arc).
     ClassExpression is never a scope binding). Mass consumption of the tables
     (the ~59 synthesis sites, `buildNestedFunctionMap`, the per-pass scope
     machinery) is INV.4's migration proper.
-- [ ] **INV.3 Per-file scoping** — decomposed round 500 (facts verified in-code:
+- [x] **INV.3 Per-file scoping — ARC COMPLETE round 513** ((a)-(d) all landed; checkbox reconciled round 612) — decomposed round 500 (facts verified in-code:
   `perFileScope` EXISTS and is already consumed at 4 sites — the 17.32b–e flips
   (TS2663-vs-TS2301, TS2552 candidate pool, resolveExpressionToSymbol, file-root
   TS2304) — so the earlier "never consumed" note was stale; the remaining
@@ -893,7 +906,7 @@ interrupt the arc).
       deliberately-legacy shadow-detection ecology (`diag`/`clone`/`map`/
       `factory` collision questions) + tiny tails, i.e. INV.3(d)'s scope.
       INV.3(d) is UNLOCKED.
-  - [ ] **INV.3(d) Retire the merge + delete the ecology.** Stop merging
+  - [x] **INV.3(d) Retire the merge + delete the ecology — COMPLETE round 513** (checkbox reconciled round 612; the body below records the full campaign). Stop merging
     module-file locals into `globals`; delete `moduleFileLocalVarNames`,
     `conflatedTypeAliasFiles`, `conflatedInterfaceFiles`,
     `conflatedEnumFileSubsets`, the per-file interface views, and the chimera
@@ -1695,7 +1708,7 @@ interrupt the arc).
       walker first run; suite 11,004 → 11,052; listAll error-line identical
       on ALL 8 profiles; ~215 walker lines deleted. See the round-533
       session note.
-  - [ ] **INV.4(e) The top-3 giants.** checkPropertyAccess (3.66 s @ round-542
+  - [x] **INV.4(e) The top-3 giants — COMPLETE round 592** (cta 586 / cpa 585 / ccet 592 all retired; checkbox reconciled round 612). checkPropertyAccess (3.66 s @ round-542
     table) → checkTypeAssignability (2.62 s) → checkCallExpressionTypes
     (2.13 s) — one at a time (together ~38% of checker-init; 458k of 595k
     getTypeOfExpression calls). **g1 SUB-PLAN (scouted round 542, in-code):
@@ -2004,7 +2017,7 @@ interrupt the arc).
     ~221,844 distinct nodes = ×2.6 recompute), and flow narrowing folded into
     reference typing once (84,469 depth-0 walks, 68% from property access).
     Re-measure against the ≤10 s single-threaded compiler-profile target.
-- [ ] **INV.5 Canonical types + explicit instantiation** (absorbs M5.2/M5.3;
+- [x] **INV.5 Canonical types + explicit instantiation — SUBSTANCE COMPLETE round 604** (interning (a), mapper flip (b2), context-keyed nodeTypes (c), budget (d1), generic gate + pin sweep (e) all landed; residuals are deferred/demoted/blocked: (bN) behind the frame redesign, (c2) cosmetic, (d2) hygiene — checkbox reconciled round 612) (absorbs M5.2/M5.3;
   NOW THE ACTIVE ARC ITEM — the round-543 g1a bisect proved the INV.4(e)
   giants are blocked on exactly this: first-touch-order-sensitive shared
   caches). Decomposed round 544, one commit each, every step suite +
@@ -2158,7 +2171,7 @@ interrupt the arc).
     consult, cheap via owningSourceFile with a per-file memo) and skips
     caching otherwise.** Option (iii) is self-validating and incremental —
     preferred.
-  - [ ] **INV.5(d) Instantiated members cached ON the `Type.Reference`.**
+  - [x] **INV.5(d) — (d1) budget DONE round 552; (d2) DEMOTED to hygiene round 611 (checkbox reconciled round 612).**
     **(d2) DEMOTED round 611 (evidence-based): the round-598 depth-0
     attribution puts the ENTIRE relation family at ~927ms — the (d2)
     allocation redesign is no longer a perf lever (the levers are the
