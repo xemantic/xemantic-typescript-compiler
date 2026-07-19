@@ -20,6 +20,25 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 615 (2026-07-19) — (INV.7d2) LANDED: the shared-name full-rebuild
+bail closes the documented incremental residual.** ProjectCompiler
+computes `sharedNameFiles` — module files whose TOP-LEVEL declaration
+names collide with a lib global (the checker's KNOWN_GLOBALS curation,
+widened to internal) or a SCRIPT-file top-level name; both merge classes
+survive the INV.3(d) retire with program-wide reach, so such files force
+a full rebuild in BOTH directions: previously-declaring via
+`incrementalEligible` (prev.sharedNameFiles), NEWLY-declaring via
+`incrementalOutcomeValid` (fresh.sharedNameFiles — eligibility can't see
+the new content's declarations, the outcome check can). Approximation
+honestly recorded: real-lib names outside the ~400-name curation slip
+through — `--watchVerify` remains the field net. Pins (+2): a module
+declaring `interface Symbol` is ineligible while its clean sibling stays
+eligible; an edit ADDING `interface Node` passes eligibility but fails
+outcome validation. Gates: corpus 11,361/0; listAll ×8 byte-identical.
+QUEUE STATE: the genuinely-live tail is now ONLY (7d3) cross-process
+.tsbuildinfo (optional productization); everything else is blocked
+(EP/reference-tsc, INV.7b/RAM, M4.7/network) or owner-parked.
+
 **Round 614 (2026-07-19) — (INV.7d1) LANDED: watch-mode INCREMENTAL
 recheck, built on the INV.6 partition seam.** The model: a MODULE-file
 change affects only its reverse-dependency closure — the rebuild runs
@@ -2298,11 +2317,10 @@ interrupt the arc).
     (reverse-dependency closure over the INV.6 partition seam; full-rebuild
     bails for non-local changes; --watchVerify field gate; equivalence
     pinned by WatchIncrementalTest).
-  - [ ] **(INV.7d2) The lib-shared-interface residual**: a changed module
-    file's top-level interface sharing a LIB global's name merges
-    program-wide — currently NOT a full-rebuild trigger. Add the bail (needs
-    moduleInterfaceNames visibility at the driver) or prove it unreachable;
-    --watchVerify collects field evidence meanwhile.
+  - [x] **(INV.7d2) The shared-name residual bail** — DONE round 615
+    (sharedNameFiles: lib-global KNOWN_GLOBALS ∪ script top-level names;
+    bidirectional bail via eligibility + outcome validation; +2 pins).
+    Real-lib names outside the curation stay on the --watchVerify net.
   - [ ] **(INV.7d3) Cross-process `.tsbuildinfo` persistence** (optional):
     persist file hashes + per-file diagnostics; on cold start, recheck only
     the changed closure. The in-memory protocol from (7d1) is the core.

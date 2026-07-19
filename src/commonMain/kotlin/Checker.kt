@@ -46965,7 +46965,7 @@ class Checker(
             "describe", "suite", "it", "test",
         )
 
-        private val KNOWN_GLOBALS: Set<String> = setOf(
+        internal val KNOWN_GLOBALS: Set<String> = setOf(
             // Special identifiers
             "undefined", "globalThis",
             // lib.dom value globals resolvable by bare name (config-gated via DOM_GLOBAL_NAMES)

@@ -141,6 +141,54 @@ class WatchIncrementalTest {
     }
 
     @Test
+    fun `a module declaring a lib-shared interface name is not incremental-eligible`() {
+        val dir = Files.createTempDirectory("xtsc-incr-shared")
+        try {
+            writeProject(dir, mapOf(
+                "tsconfig.json" to """{ "compilerOptions": { "strict": true }, "include": ["src/**/*"] }""",
+                "src/types.ts" to """
+                    export interface Point { x: number }
+                    interface Symbol { extra(): void }
+                """,
+                "src/use.ts" to """
+                    import { Point } from "./types.js";
+                    export const p: Point = { x: 1 };
+                """,
+            ))
+            val prev = ProjectCompiler(SystemVfs).build(dir.toString(), noEmit = true)
+            val types = dir.resolve("src/types.ts").toString()
+            assertTrue(types in prev.sharedNameFiles, "interface Symbol should mark the file lib-shared")
+            assertFalse(
+                WatchIncremental.incrementalEligible(setOf(types), prev) { SystemVfs.readText(it) },
+                "a lib-shared-declaring file must force a full rebuild",
+            )
+            // The sibling module WITHOUT shared names stays eligible.
+            val use = dir.resolve("src/use.ts").toString()
+            assertTrue(WatchIncremental.incrementalEligible(setOf(use), prev) { SystemVfs.readText(it) })
+        } finally {
+            dir.toFile().deleteRecursively()
+        }
+    }
+
+    @Test
+    fun `a module NEWLY declaring a shared name fails outcome validation`() = withProject { dir ->
+        val prev = ProjectCompiler(SystemVfs).build(dir.toString(), noEmit = true)
+        val c = dir.resolve("src/c.ts").toString()
+        assertTrue(WatchIncremental.incrementalEligible(setOf(c), prev) { SystemVfs.readText(it) })
+        // The edit ADDS a lib-shared interface — eligibility (based on prev) passes,
+        // but the outcome validation on the fresh build must reject the merge.
+        edit(dir, "src/c.ts", """
+            import { shift } from "./b.js";
+            import { origin } from "./a.js";
+            export const moved = shift(origin);
+            interface Node { extra(): void }
+        """)
+        val closure = WatchIncremental.recheckClosure(setOf(c), prev.importEdges)
+        val fresh = ProjectCompiler(SystemVfs).build(dir.toString(), noEmit = true, recheckOnly = closure)
+        assertFalse(WatchIncremental.incrementalOutcomeValid(setOf(c), prev, fresh))
+    }
+
+    @Test
     fun `negative control - script, dts, config, new, deleted, and declare-global changes are not eligible`() = withProject { dir ->
         val prev = ProjectCompiler(SystemVfs).build(dir.toString(), noEmit = true)
         val a = dir.resolve("src/a.ts").toString()

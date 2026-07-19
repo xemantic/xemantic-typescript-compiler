@@ -69,6 +69,13 @@ class ProjectCompiler(private val vfs: Vfs) {
         /** INV.7(d1): program files with module syntax (import/export) — a change in a
          *  NON-module (script) file has global effects and forces a full rebuild. */
         val moduleFiles: Set<String> = emptySet(),
+        /** INV.7(d2): module files declaring a top-level name SHARED with a lib
+         *  global or a script-file global — such declarations MERGE program-wide
+         *  (the INV.3(d) shared-name survivor), so a change can reach
+         *  non-importers and forces a full rebuild. Approximation: lib names =
+         *  the checker's KNOWN_GLOBALS curation (real-lib extras slip through —
+         *  the --watchVerify field net covers the gap). */
+        val sharedNameFiles: Set<String> = emptySet(),
         /** Output files written to disk as (path, byteLength). Empty when noEmit. */
         val written: List<Pair<String, Int>>,
     ) {
@@ -157,6 +164,20 @@ class ProjectCompiler(private val vfs: Vfs) {
         val result = TypeScriptCompiler().compileParsed(
             parsed, emitOptions, rootFiles.firstOrNull() ?: "input.ts", recheckOnly = recheckOnly,
         )
+        // INV.7(d2): top-level declaration names per file (from the crawl parses)
+        // for the shared-name full-rebuild bail.
+        fun topLevelNames(path: String): List<String> =
+            preParsed[path]?.sourceFile?.statements?.mapNotNull { st ->
+                when (st) {
+                    is InterfaceDeclaration -> st.name.text
+                    is ClassDeclaration -> st.name?.text
+                    is EnumDeclaration -> st.name.text
+                    is TypeAliasDeclaration -> st.name.text
+                    is FunctionDeclaration -> st.name?.text
+                    is ModuleDeclaration -> (st.name as? Identifier)?.text
+                    else -> null
+                }
+            } ?: emptyList()
         // INV.7(d1): module-ness per program file from the crawl parses — a
         // conservative SYNTACTIC approximation of the checker's isModuleFile
         // (top-level import/export forms only; wrapped dynamic imports read as
@@ -185,6 +206,14 @@ class ProjectCompiler(private val vfs: Vfs) {
         val written = if (noEmit || config.options.noEmit) emptyList()
         else writeOutputs(result, config, program.keys)
 
+        // INV.7(d2): shared-name files — module files whose top-level names collide
+        // with lib globals or with script-file top-level names (both merge classes
+        // survive the INV.3(d) retire and have program-wide reach).
+        val scriptTopNames = program.keys.filter { it !in moduleFiles }
+            .flatMapTo(HashSet()) { topLevelNames(it) }
+        val sharedNameFiles = moduleFiles.filterTo(HashSet()) { p2 ->
+            topLevelNames(p2).any { it in Checker.KNOWN_GLOBALS || it in scriptTopNames }
+        }
         return Result(
             configPath = configPath,
             rootFiles = rootFiles,
@@ -195,6 +224,7 @@ class ProjectCompiler(private val vfs: Vfs) {
             unresolved = unresolved.distinct(),
             importEdges = importEdges,
             moduleFiles = moduleFiles,
+            sharedNameFiles = sharedNameFiles,
             written = written,
         )
     }

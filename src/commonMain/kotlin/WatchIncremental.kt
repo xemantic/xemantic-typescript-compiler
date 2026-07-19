@@ -38,10 +38,12 @@ package com.xemantic.typescript.compiler
  * config files, new/deleted files, `declare global` / `declare module`
  * content, or a post-build program-shape change.
  *
- * KNOWN RESIDUAL (documented, (7d2)): a module file's top-level interface
- * sharing a LIB global's name merges program-wide (`moduleInterfaceNames`) —
- * an edit to such an interface can in principle affect a non-importer. The
- * `--watchVerify` mode exists to measure exactly this class in the field.
+ * The (7d2) shared-name bail: a module file declaring a top-level name that
+ * collides with a lib global (KNOWN_GLOBALS approximation) or a script-file
+ * global merges program-wide — such files force a full rebuild in BOTH
+ * directions (previously-declaring via eligibility; newly-declaring via
+ * outcome validation). `--watchVerify` remains the field net for the real-lib
+ * names outside the curated set.
  */
 internal object WatchIncremental {
 
@@ -76,6 +78,7 @@ internal object WatchIncremental {
             if (path.endsWith(".d.ts")) return@all false
             if (path !in prev.programFiles) return@all false          // new file → full
             if (path !in prev.moduleFiles) return@all false           // script → global effects
+            if (path in prev.sharedNameFiles) return@all false        // (7d2) shared-name merge reach
             val content = readContent(path) ?: return@all false       // deleted → full
             // Non-local declaration forms make effects reach non-importers.
             "declare global" !in content && "declare module" !in content
@@ -93,7 +96,7 @@ internal object WatchIncremental {
         fresh: ProjectCompiler.Result,
     ): Boolean =
         fresh.programFiles.toSet() == prev.programFiles.toSet() &&
-            changed.all { it in fresh.moduleFiles }
+            changed.all { it in fresh.moduleFiles && it !in fresh.sharedNameFiles }
 
     /**
      * Merge diagnostics: the FRESH (partition) run owns the recheck set plus
