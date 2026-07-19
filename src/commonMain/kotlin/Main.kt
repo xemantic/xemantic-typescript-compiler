@@ -26,6 +26,11 @@
 package com.xemantic.typescript.compiler
 
 import kotlin.time.measureTimedValue
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.ReceiveChannel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * CLI entry point for the xemantic TypeScript compiler — whole-project build.
@@ -44,11 +49,13 @@ fun main(args: Array<String>) {
     var project = "."
     var noEmit = false
     var listAll = false
+    var watch = false
     var passTiming = false
     var i = 0
     while (i < args.size) {
         when (val a = args[i]) {
             "--noEmit", "--noemit" -> noEmit = true
+            "--watch", "-w" -> watch = true
             "--listAll", "--listall" -> listAll = true
             "--passTiming", "--passtiming" -> passTiming = true
             "--partitionCheck", "--partitioncheck" -> {
@@ -89,6 +96,66 @@ fun main(args: Array<String>) {
     println("time:    ${duration.inWholeMilliseconds} ms")
     if (passTiming) PassTiming.dump(::println)
     println(if (result.errorCount == 0) "OK — 0 errors" else "FAILED — ${result.errorCount} error(s)")
+    if (watch) runWatchLoop(project, result.configPath, noEmit, listAll)
+}
+
+/**
+ * INV.7(c1): the minimal watch loop — full rebuild per relevant change batch
+ * (incremental reuse is the separate .tsbuildinfo-style item). Change events
+ * stream from [fileEvents] over the config's directory tree; a batch is
+ * everything that arrives until the tree stays quiet for 200 ms; a batch
+ * triggers a rebuild iff it touches a compilation-relevant file (source /
+ * config extensions) outside the output directory.
+ */
+private fun runWatchLoop(project: String, configPath: String, noEmit: Boolean, listAll: Boolean) {
+    val watchRoot = configPath.substringBeforeLast('/', ".").ifEmpty { project }
+    println("watching: $watchRoot  (Ctrl-C to exit)")
+    runCompilerPipeline {
+        coroutineScope {
+            val changes = Channel<String>(Channel.UNLIMITED)
+            launch {
+                fileEvents(watchRoot).collect { changes.send(it) }
+            }
+            while (true) {
+                val batch = awaitChangeBatch(changes, quietMs = 200)
+                if (batch.none { watchRelevant(it) }) continue
+                println()
+                println("change detected (${batch.count { watchRelevant(it) }} file(s)) — rebuilding…")
+                val (result, duration) = measureTimedValue {
+                    ProjectCompiler(SystemVfs).build(project, noEmit)
+                }
+                printDiagnostics(result.diagnostics, listAll)
+                println("time:    ${duration.inWholeMilliseconds} ms")
+                println(if (result.errorCount == 0) "OK — 0 errors" else "FAILED — ${result.errorCount} error(s)")
+            }
+        }
+    }
+}
+
+/** A change is compilation-relevant iff it is a source/config file outside build outputs. */
+internal fun watchRelevant(path: String): Boolean {
+    if ("/node_modules/" in path) return false
+    val name = path.substringAfterLast('/')
+    return name.endsWith(".ts") || name.endsWith(".tsx") || name.endsWith(".js") ||
+        name.endsWith(".jsx") || name.endsWith(".mts") || name.endsWith(".cts") ||
+        name.endsWith(".mjs") || name.endsWith(".cjs") ||
+        name == "tsconfig.json" || name == "package.json"
+}
+
+/**
+ * Collect one DEBOUNCED batch: block for the first event, then keep draining
+ * until the channel stays quiet for [quietMs]. Extracted for direct testing.
+ */
+internal suspend fun awaitChangeBatch(
+    changes: ReceiveChannel<String>,
+    quietMs: Long,
+): Set<String> {
+    val batch = mutableSetOf(changes.receive())
+    while (true) {
+        val next = withTimeoutOrNull(quietMs) { changes.receive() } ?: break
+        batch.add(next)
+    }
+    return batch
 }
 
 private fun printDiagnostics(diagnostics: List<Diagnostic>, listAll: Boolean = false) {
@@ -122,6 +189,7 @@ private fun printUsage() {
           --noEmit           type-check only; do not write outputs
           --listAll          print every error (default: first 30) — for run-to-run FP diffing
           --passTiming       print the INV.0 per-pass wall-time table + recompute counters
+          --watch, -w        stay running and rebuild on file changes (INV.7(c1); full rebuild)
           --partitionCheck N run N sequential partition checkers and diff vs the full run (INV.6(6b))
           --workers N        parallel share-nothing partition check on N threads (INV.6(6c); line order may differ)
                              + the INV.3(a) globals-lookup conflation classification

@@ -25,19 +25,14 @@
 
 package com.xemantic.typescript.compiler
 
-/** Native compiles are single-threaded (INV.7 re-enable pending) — a plain var. */
-internal actual class IntThreadLocal actual constructor(initial: Int) {
-    private var value: Int = initial
-    actual fun get(): Int = value
-    actual fun set(value: Int) { this.value = value }
-}
+import kotlinx.coroutines.flow.Flow
 
-/** Native compiles are single-threaded — sequential inline execution, no rebase. */
-internal actual fun <T> runInDeepStackWorkers(tasks: List<() -> T>): List<T> =
-    tasks.map { it() }
-
-/** INV.7(c): no native file watcher yet — the flow fails on first collection. */
-internal actual fun fileEvents(root: String): kotlinx.coroutines.flow.Flow<String> =
-    kotlinx.coroutines.flow.flow {
-        throw UnsupportedOperationException("--watch is not supported on the native binary yet")
-    }
+/**
+ * INV.7(c): recursive file-change events under [root], as a cold [Flow] of
+ * changed absolute paths (the ARCHITECTURE-RETHINK "watch mode driven by a
+ * file-event Flow"). The JVM actual wraps `java.nio.file.WatchService`
+ * (registering the tree recursively and newly-created directories as they
+ * appear); platforms without a watcher actual throw
+ * [UnsupportedOperationException] from the flow's first collection.
+ */
+internal expect fun fileEvents(root: String): Flow<String>

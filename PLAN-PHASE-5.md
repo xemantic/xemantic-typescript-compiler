@@ -20,6 +20,25 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 613 (2026-07-19) — (INV.7c1) LANDED: `--watch` — the minimal
+watch mode, full rebuild per change batch.** `fileEvents(root)` (the
+ARCHITECTURE-RETHINK file-event Flow; expect/actual — JVM wraps
+`java.nio.file.WatchService` with recursive registration + new-directory
+re-registration + a poll loop whose `ClosedWatchServiceException` on
+teardown is the DESIGNED wakeup, caught as normal termination — the
+race only surfaces on flow cancellation, so the infinite CLI collect
+never sees it and only the unit test caught it; native stub throws
+unsupported). The Main loop: `awaitChangeBatch` (block for the first
+event, drain until 200ms quiet — extracted for direct testing) +
+`watchRelevant` (source/config extensions, node_modules excluded) →
+full ProjectCompiler rebuild + summary. END-TO-END VERIFIED: initial
+build 649ms, an injected TS2322 detected and reported in a 46ms warm
+rebuild. WatchModeTest (+4: relevance filter, debounce dedup,
+first-event blocking, real WatchService write detection). Incremental
+reuse (.tsbuildinfo-style) stays the separate open item. Gates: corpus
+11,355/0; listAll ×8 byte-identical; native target still compiles.
+NEXT: (INV.7d) incremental reuse, or wrap the session.
+
 **Round 612 (2026-07-19) — queue reconciliation completes: the INV.3 arc
 was ALREADY DONE (round 513) — round 611's "next campaign" claim was a
 stale-checkbox artifact.** Five checkboxes reconciled against their own
@@ -2248,6 +2267,9 @@ interrupt the arc).
 - [ ] **INV.7 Productization** (absorbs M5.5/M5.6). Native re-enable (the big-input
   GC inversion should largely dissolve post INV.4/5); watch mode driven by a
   file-event Flow; `.tsbuildinfo`-style incremental reuse.
+  - [x] **(INV.7c1) `--watch` minimal watch mode** — DONE round 613 (full
+    rebuild per debounced change batch; fileEvents Flow expect/actual;
+    end-to-end verified, 46ms warm rebuild). Incremental reuse is (7d).
   - [x] **(INV.7a) linuxX64 re-enabled** — DONE round 610: compiles/links/runs
     byte-correct (compiler profile = the exact 46-error floor, 196s debug
     binary; smoke 82ms). EpochMap/Set now composition (K/N HashMap is final).
