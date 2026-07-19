@@ -20,6 +20,26 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 609 (2026-07-19) — (INV.6(6d1)) LANDED: 193 emission-pass loops
+join the partition via `checkedResults`; the fixed-cost verdict sharpens.**
+The `checkedResults` partition view (= binderResults when unpartitioned —
+the sequential path is unchanged BY CONSTRUCTION) replaces
+`for (result in binderResults)` in every per-file PASS loop. Method:
+flip ALL 511 non-infrastructure loops → partitionCheck read 1,174 EXTRA
+/ 0 missing on the compiler profile (flipped COLLECTOR loops starved
+workers of program-wide suppression context — TS2339 conflation-
+suppression sets) → mechanically un-flip every loop whose enclosing
+function never calls `diagnostics.add` (318 pure collectors) →
+EQUIVALENT on ALL 8 profiles again. 193 emission loops stay gated.
+WALL: seq 32.0 / w2 26.5 (−17%) / w4 32.3 still flat — the emission
+passes were the SMALL share of the per-worker fixed cost; the 318
+still-redundant collectors + the lazy-resolution warmup dominate.
+Deeper scaling = docs/parallel-caching.md Phase 1 (shared frozen
+state: compute collectors once, share read-only — an immutability
+audit) or INV.5 canonical types. Gates: corpus 11,351/0; listAll ×8
+byte-identical. The INV.6 Phase-0 arc (6a-6d1) is COMPLETE at its
+honest ceiling: w2 −17%, output-identical, opt-in.
+
 **Round 608 (2026-07-18) — (INV.6(6c1)) LANDED: `--workers N` — the
 share-nothing parallel check driver; MEASURED: w2 −14%, w4 FLAT (the
 per-worker redundancy ceiling).** `runInDeepStackWorkers` (expect/actual;
@@ -2149,9 +2169,11 @@ interrupt the arc).
     `--workers N`). Measured: w2 −14% wall, w4 flat (per-worker redundant
     fixed cost — see the round-608 note); output sorted-identical to
     sequential.
-  - [ ] **(6d) Widen the partitioned region.** Gate remaining per-file passes
-    into the partition in cost order (each suite + listAll-gated); cross-file
-    walkers stay in the sequential region.
+  - [x] **(6d1) Widen the partitioned region** — DONE round 609: 193
+    emission-pass loops on `checkedResults` (318 pure collectors stay
+    program-wide); all-8-profile equivalent; w2 −17%, w4 flat. Deeper
+    widening = Phase-1 shared frozen collectors (immutability audit) —
+    queue that only after INV.5 canonical types or on a >4-core box.
   - [ ] **(6e) Parallel emit** on Default + IO write sink (INV.1's Flow
     foundation; no dashboard delta expected — benches are --noEmit).
 - [ ] **INV.7 Productization** (absorbs M5.5/M5.6). Native re-enable (the big-input

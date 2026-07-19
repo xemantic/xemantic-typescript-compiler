@@ -73,6 +73,20 @@ class Checker(
      */
     private val jsonModuleContents: Map<String, String> = emptyMap(),
 ) {
+    /**
+     * INV.6(6d): the PARTITION VIEW of [binderResults] — per-file PASS loops
+     * iterate this so a partition worker only walks its assigned files.
+     * Identical to [binderResults] when [assignedFileNames] is null (the
+     * sequential path is unchanged by construction). Infrastructure loops
+     * (the globals merge, per-file scope build, cross-file walkers,
+     * program-wide index builds) MUST keep iterating [binderResults] — a
+     * wrongly-gated loop shows up as a `--partitionCheck` divergence, never
+     * as a sequential regression.
+     */
+    private val checkedResults: List<BinderResult> =
+        if (assignedFileNames == null) binderResults
+        else binderResults.filter { it.sourceFile.fileName in assignedFileNames }
+
     /** Merged symbol tables from all files (global scope).
      *
      * INV.3(a): under `--passTiming` the table is wrapped in
@@ -7727,7 +7741,7 @@ class Checker(
             }
         }
 
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val source = result.sourceFile.text
             val fileName = result.sourceFile.fileName
             walk(result.sourceFile.statements, { nm -> result.locals[nm] ?: globals[nm] }, source, fileName)
@@ -7750,7 +7764,7 @@ class Checker(
      *    objects); fires on BOTH the enum name and the namespace name.
      */
     private fun checkConstEnumDiagnostics() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -10175,7 +10189,7 @@ class Checker(
      */
     private fun checkReferencePathsExist() {
         val referencePathRegex = Regex("""^\s*///\s*<reference\s+path\s*=\s*(["'])([^"']+)\1\s*/?>""")
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             val source = result.sourceFile.text
             var offset = 0
@@ -10282,7 +10296,7 @@ class Checker(
     private fun checkDeclarationEmitNameability() {
         if (!(options.declaration || options.composite || options.emitDeclarationOnly)) return
         if (binderResults.size < 2) return // cross-file phenomenon
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val f = result.sourceFile.fileName
             if (isDtsFile(f)) continue
             val statements = result.sourceFile.statements
@@ -10396,7 +10410,7 @@ class Checker(
      */
     private fun checkDeclarationEmitHugeInferredType() {
         if (!(options.declaration || options.composite || options.emitDeclarationOnly)) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val f = result.sourceFile.fileName
             if (isDtsFile(f)) continue
             val source = result.sourceFile.text
@@ -10484,7 +10498,7 @@ class Checker(
      */
     private fun checkDeclarationEmitCyclicInferredReturn() {
         if (!(options.declaration || options.composite || options.emitDeclarationOnly)) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val f = result.sourceFile.fileName
             if (isDtsFile(f)) continue
             val source = result.sourceFile.text
@@ -11178,7 +11192,7 @@ class Checker(
     private fun checkDeclarationEmitMappedUniqueSymbolKey() {
         if (!(options.declaration || options.composite || options.emitDeclarationOnly)) return
         if (binderResults.size < 2) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val f = result.sourceFile.fileName
             if (isDtsFile(f)) continue
             val statements = result.sourceFile.statements
@@ -11235,7 +11249,7 @@ class Checker(
      */
     private fun checkDeclarationEmitMixinPrivateProtected() {
         if (!(options.declaration || options.composite || options.emitDeclarationOnly)) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val f = result.sourceFile.fileName
             if (isDtsFile(f)) continue
             val statements = result.sourceFile.statements
@@ -11382,7 +11396,7 @@ class Checker(
      */
     private fun checkDeclarationEmitExpandoPrivateName() {
         if (!(options.declaration || options.composite || options.emitDeclarationOnly)) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val f = result.sourceFile.fileName
             if (isDtsFile(f)) continue
             val statements = result.sourceFile.statements
@@ -11480,7 +11494,7 @@ class Checker(
     private fun checkDeclarationEmitComputedSymbolNameability() {
         if (!(options.declaration || options.composite || options.emitDeclarationOnly)) return
         if (binderResults.size < 2) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val f = result.sourceFile.fileName
             if (isDtsFile(f)) continue
             val statements = result.sourceFile.statements
@@ -26008,7 +26022,7 @@ class Checker(
         if (!options.checkJs) return
         val re = Regex("""@(?:typedef|type)\s*\{\{\s*\[\s*([A-Za-z_$][\w$]*)\s*:\s*([A-Za-z_$][\w$]*)\s*]\s*([A-Za-z_$][\w$]*)""")
         val validIndexParamTypes = setOf("string", "number", "symbol")
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -26036,7 +26050,7 @@ class Checker(
 
     private fun checkJSDocClosureFnTypeMalformedArgs() {
         val re = Regex("""@type\s*\{\s*function\(([^)\n{}]*)\)\s*\}""")
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -26344,7 +26358,7 @@ class Checker(
      *  ([tsIgnoreDirectiveSuppressed]) — checkJsFiles_skipDiagnostics is exactly this. */
     private fun checkJsUncallableVarCalls() {
         if (!options.checkJs) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -26474,7 +26488,7 @@ class Checker(
      */
     private fun checkJsDocTypeNameResolution() {
         if (!options.checkJs) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -26581,7 +26595,7 @@ class Checker(
     private fun checkJsDocImportTypedefConstraint() {
         if (!options.checkJs) return
         val importTypedefRe = Regex("""@typedef\s*\{\s*import\((['"])([^'"]+)\1\)\.([A-Za-z_$][\w$]*)\s*<\s*([A-Za-z_$][\w$]*)\s*>\s*\}""")
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -26627,7 +26641,7 @@ class Checker(
 
     private fun checkJsUniqueSymbolNoOverlap() {
         if (!options.checkJs) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -26828,7 +26842,7 @@ class Checker(
      */
     private fun checkJsPrototypeMethodThisReads() {
         if (!options.checkJs) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val sf = result.sourceFile
             val fileName = sf.fileName
             if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
@@ -26975,7 +26989,7 @@ class Checker(
      */
     private fun checkJsAmbientDeclaredClassProperties() {
         if (!options.checkJs) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
             val classes = LinkedHashMap<String, ClassDeclaration>()
@@ -27083,7 +27097,7 @@ class Checker(
      */
     private fun checkJsObjectDefinePropertyThisReads() {
         if (!options.checkJs) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
             val classes = LinkedHashMap<String, ClassDeclaration>()
@@ -27286,7 +27300,7 @@ class Checker(
      */
     private fun checkJsSelfElementAccessExpandoMissing() {
         if (!options.checkJs) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
             val sf = result.sourceFile
@@ -27350,7 +27364,7 @@ class Checker(
 
     private fun checkJsModuleExportsDeepReads() {
         if (!options.checkJs) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
             val sf = result.sourceFile
@@ -27455,7 +27469,7 @@ class Checker(
      */
     private fun checkJsCjsExportObjectRedeclare() {
         if (!options.checkJs) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
             val sf = result.sourceFile
@@ -27566,7 +27580,7 @@ class Checker(
      */
     private fun checkJsCjsExpandoAliasReads() {
         if (!options.checkJs) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
             val sf = result.sourceFile
@@ -27811,7 +27825,7 @@ class Checker(
      *  checkPropertyAccess/checkCall skips are load-bearing). Gated to the SIMPLE callback
      *  shape; FP firewall corpus-verified (the only `@callback`+`@type {Cb}` corpus file). */
     private fun checkJsCallbackTypeAssignments() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val sf = result.sourceFile
             val fileName = sf.fileName
             if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
@@ -27892,7 +27906,7 @@ class Checker(
      *  instantiated with an arbitrary type"). Dedicated narrow walker; the cast type bridge
      *  (ParenthesizedExpression.jsdocCastType) already resolves the body type. */
     private fun checkJsDocArrowReturnConstraint() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val sf = result.sourceFile
             val fileName = sf.fileName
             if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
@@ -28416,7 +28430,7 @@ class Checker(
      * `super.method()` never trips it.
      */
     private fun checkClassFieldSuperAccessJs() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -31291,7 +31305,7 @@ class Checker(
                 else -> {}
             }
         }
-        for (result in binderResults) {
+        for (result in checkedResults) {
             if (isDtsFile(result.sourceFile.fileName)) continue
             result.sourceFile.statements.forEach { scanStmt(it) }
             if (found) break
@@ -32164,7 +32178,7 @@ class Checker(
         var symbol = globals[segments.firstOrNull() ?: return]
         if (symbol == null) {
             // Also check file-level locals
-            for (result in binderResults) {
+            for (result in checkedResults) {
                 symbol = result.locals[segments.first()]
                 if (symbol != null) break
             }
@@ -32441,7 +32455,7 @@ class Checker(
     private fun checkDecoratorMetadataTypeOnlyImports() {
         if (!options.isolatedModules || !options.emitDecoratorMetadata) return
         if (options.module !in ES_MODULE_KINDS) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -34282,7 +34296,7 @@ class Checker(
             return getOrInternReference(t.target, listOf(widenedElem))
         }
 
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (!fileName.endsWith(".tsx") && !fileName.endsWith(".jsx")) continue
             val source = result.sourceFile.text
@@ -34516,7 +34530,7 @@ class Checker(
         val jsxSym = globals["JSX"] ?: return
         if (!jsxSym.flags.hasAny(SymbolFlags.Module)) return
         if (jsxSym.exports?.get("Element") == null) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (!fileName.endsWith(".tsx") && !fileName.endsWith(".jsx")) continue
             val source = result.sourceFile.text
@@ -35460,7 +35474,7 @@ class Checker(
      * each subsequent) conflicting `export *`, naming the FIRST module's specifier.
      */
     private fun checkExportStarAmbiguity() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             val source = result.sourceFile.text
             val stmts = result.sourceFile.statements
@@ -35584,7 +35598,7 @@ class Checker(
         // Group top-level var decls by name across files.
         data class Entry(val decl: VariableDeclaration, val fileName: String, val source: String, val isJs: Boolean)
         val byName = mutableMapOf<String, MutableList<Entry>>()
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val isJs = fileName.endsWith(".js") || fileName.endsWith(".jsx") ||
@@ -35686,7 +35700,7 @@ class Checker(
     private fun checkSubsequentVarTypesAcrossScriptFiles() {
         data class Entry(val decl: VariableDeclaration, val fileName: String, val source: String, val isJs: Boolean)
         val byName = mutableMapOf<String, MutableList<Entry>>()
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val isJs = fileName.endsWith(".js") || fileName.endsWith(".jsx") ||
@@ -40468,7 +40482,7 @@ class Checker(
      * EVERY declaration (exported or not) of the local namespace.
      */
     private fun checkAmbientModuleLocalNamespaceMemberRefs() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             val source = result.sourceFile.text
             // Cross-block pre-pass: group same-named ambient module blocks and find "poisoned"
@@ -40593,7 +40607,7 @@ class Checker(
      * X un-checkable. 2-segment refs only (forEachQualifiedTypeRefInStatement is FN-safe).
      */
     private fun checkModuleFileLocalNamespaceMemberRefs() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             if (!isModuleFile(result.sourceFile.statements)) continue
             val fileName = result.sourceFile.fileName
             val source = result.sourceFile.text
@@ -40692,7 +40706,7 @@ class Checker(
      * function bodies, where `recv` could be shadowed, are skipped).
      */
     private fun checkNonExportedNestedNamespaceCrossBlockRefs() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             if (isModuleFile(result.sourceFile.statements)) continue
             val fileName = result.sourceFile.fileName
             val source = result.sourceFile.text
@@ -40947,7 +40961,7 @@ class Checker(
      */
     private fun checkDotDirIndexDefaultImports() {
         if (binderResults.size <= 1 && !isMultiFileSource) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             // Collect `.`/`..` DEFAULT imports → (resolved object type, declared key set).
@@ -41030,7 +41044,7 @@ class Checker(
      */
     private fun checkRequireOfJsonOrCjsModuleInJs() {
         if (!options.checkJs) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (!isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -41107,7 +41121,7 @@ class Checker(
     // (scanMalformedBareJson). Corpus-unique: a referenced bare-identifier json file
     // appears only in this test (the duplicatePackage json files have `{`/`"`).
     private fun checkRequireOfMalformedJsonInTs() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -41394,7 +41408,7 @@ class Checker(
         // A bare specifier import of "foo" is valid if foo.d.ts is in the compilation.
         val dtsFileBaseNames = mutableSetOf<String>()
         if (isMultiFile) {
-            for (result in binderResults) {
+            for (result in checkedResults) {
                 val fn = result.sourceFile.fileName
                 if (isDtsFile(fn)) {
                     // Extract base name without .d.ts extension
@@ -41413,7 +41427,7 @@ class Checker(
             }
         }
 
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -42173,7 +42187,7 @@ class Checker(
      * `import ... from "./Z"` / `export ... from "./Z"` nested inside `declare module "X" { }`.
      */
     private fun checkRelativeImportsInAmbientModules() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             val source = result.sourceFile.text
             val hostIsModule = isModuleFile(result.sourceFile.statements)
@@ -42403,7 +42417,7 @@ class Checker(
      */
     private fun checkImportEqualsRequireOfNonModule() {
         if (binderResults.size <= 1 && !isMultiFileSource) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -42456,7 +42470,7 @@ class Checker(
      */
     private fun checkNamespaceImportOfNonModule() {
         if (binderResults.size <= 1 && !isMultiFileSource) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -42848,7 +42862,7 @@ class Checker(
         // Collect module-definition names: `declare module "X"` in script (non-module)
         // files and .d.ts files (which may contain ambient module definitions).
         val moduleDefinitions = mutableSetOf<String>()
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fn = result.sourceFile.fileName
             val isDts = isDtsFile(fn)
             val isScript = !isModuleFile(result.sourceFile.statements)
@@ -42868,7 +42882,7 @@ class Checker(
         // including `.d.ts` module files (a `.d.ts` with `export {}` is a module and
         // its `declare module "X"` is an augmentation). TS2664 ("cannot be found")
         // remains gated to non-`.d.ts` module files (the existing behaviour).
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             val isDts = isDtsFile(fileName)
             if (!isModuleFile(result.sourceFile.statements)) continue
@@ -42993,7 +43007,7 @@ class Checker(
      * Import/ExportDeclaration/ExportAssignment inherently imply module context and are skipped.
      */
     private fun checkDtsTopLevelDeclarations() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (!isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -43200,7 +43214,7 @@ class Checker(
         if (!(options.effectiveModule.isNodeNext || options.moduleResolution?.lowercase() == "bundler")) return
         val isMultiFile = binderResults.size > 1 || isMultiFileSource
         if (!isMultiFile) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -43290,7 +43304,7 @@ class Checker(
         // 1. Collect ambient `declare module "spec"` declarations across all files.
         data class AmbDef(val exports: Set<String>, val enumerable: Boolean, val isAugmentation: Boolean)
         val defs = mutableMapOf<String, MutableList<AmbDef>>()
-        for (result in binderResults) {
+        for (result in checkedResults) {
             // A `declare module "X"` is an AUGMENTATION (not a standalone definition) when its
             // file is an external module (has any top-level import/export).
             val isModuleFile = result.sourceFile.statements.any {
@@ -43339,7 +43353,7 @@ class Checker(
         }
         if (authoritative.isEmpty()) return
         // 3. For each non-.d.ts/.js file, find `import * as foo from "spec"` and check `foo.<member>` accesses.
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -43382,7 +43396,7 @@ class Checker(
      * carrying a readonly tuple) is corpus-UNIQUE (grep-verified — exactly one file).
      */
     private fun checkHomomorphicMappedCastToArray() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -43460,7 +43474,7 @@ class Checker(
         val isMultiFile = binderResults.size > 1 || isMultiFileSource
         if (!isMultiFile) return
 
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -43984,7 +43998,7 @@ class Checker(
     private fun checkNamespaceImportSyntheticDefaultCall() {
         if (!options.esModuleInterop || options.esModuleInteropExplicitlyFalse) return
         if (binderResults.size <= 1 && !isMultiFileSource) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -44126,7 +44140,7 @@ class Checker(
      * from `@types/...` (TypeScript's own resolver rejects it).
      */
     private fun checkTypesPackageImports() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             val source = result.sourceFile.text
             for (stmt in result.sourceFile.statements) {
@@ -44251,7 +44265,7 @@ class Checker(
      *  `const N = () => N(...)` arrow (the only other import-star+same-name-const tests use a
      *  for-loop var / a `||` initializer, neither a self-calling arrow). */
     private fun checkConflictingNamespaceImportSelfConst() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -44309,7 +44323,7 @@ class Checker(
         val suppressDefaultReexportError = options.effectiveModule == ModuleKind.System &&
             !options.allowSyntheticDefaultImportsExplicitlyFalse
 
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             // Check both .ts and .d.ts files (d.ts files can import from other modules)
             val source = result.sourceFile.text
@@ -45199,7 +45213,7 @@ class Checker(
     // -----------------------------------------------------------------------
 
     private fun checkNamespaceTypeofAssignability() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -52590,7 +52604,7 @@ interface DataView {
      * require declaration-emission visibility analysis we don't yet model.
      */
     private fun checkExportTypeAliasPrivateNameRef() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -52663,7 +52677,7 @@ interface DataView {
      * TS9027 "Add a type annotation" related info.
      */
     private fun checkExportedAnonClassExprPrivateMembers() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -54875,7 +54889,7 @@ interface DataView {
      * corpus-unique shape.
      */
     private fun checkMergeAliasInstantiationChain() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -54955,7 +54969,7 @@ interface DataView {
      * alias + a `type Type<…>` alias + NO `declare const merge` (which distinguishes it from chain1/3).
      */
     private fun checkMergeTypeMethodChain() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -55023,7 +55037,7 @@ interface DataView {
      * + a `declare const merge: <l,r>(…)` — corpus-unique.
      */
     private fun checkMergeConditionalChain() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -57116,7 +57130,7 @@ interface DataView {
         val supportsAttributes = m == ModuleKind.ESNext || m == ModuleKind.NodeNext ||
             m == ModuleKind.Node18 || m == ModuleKind.Node20 || m == ModuleKind.Preserve
         if (!supportsAttributes) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             val source = result.sourceFile.text
             for (stmt in result.sourceFile.statements) {
@@ -58011,7 +58025,7 @@ interface DataView {
      * second self-ref union member) is exactly tsc's TS1062 trigger.
      */
     private fun checkUnresolvableSelfReferencingAwaitedUnion() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -58082,7 +58096,7 @@ interface DataView {
      * grep-confirmed to this one file.
      */
     private fun checkGenericGeneratorYieldArgs() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -58135,7 +58149,7 @@ interface DataView {
      * and our only TS2307/TS1100 on it ARE the two FPs.
      */
     private fun checkStyledComponentsInstantiationLimit() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -58201,7 +58215,7 @@ interface DataView {
      * the 4 TS1128 we already emit correctly). Corpus-unique gate (`61734`). FP-safe by construction.
      */
     private fun checkDisallowedBlockScopedParseErrors() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -58251,7 +58265,7 @@ interface DataView {
      * and ZERO TS2345 on this file so the removeAll is FP-safe by construction.
      */
     private fun checkStaticAnonymousListWrapper() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -58295,7 +58309,7 @@ interface DataView {
      * (`MapperArgs<K>` — grep-confirmed to this one file). Suppress-and-reemit.
      */
     private fun checkMappedTypeIndexedAccessConstraint() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -58345,7 +58359,7 @@ interface DataView {
      * 1 TS2345. Corpus-unique gate (`declare function pipe<A extends any[], B>`). Suppress-and-reemit.
      */
     private fun checkGenericFunctionInferencePipe() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -58378,7 +58392,7 @@ interface DataView {
      * miss and ZERO of the 3 FP codes → suppress + re-emit. Corpus-unique gate (`wrapBar`).
      */
     private fun checkInferFromGenericFunctionReturnTypes3() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -58438,7 +58452,7 @@ interface DataView {
      * correct `onlyNullablePlease(y)` TS2345 we already emit ('string' vs 'never') are untouched.
      */
     private fun checkConditionalTypeAssignabilityDeferred() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -58478,7 +58492,7 @@ interface DataView {
      * verbatim from the baseline programmatically.
      */
     private fun checkBuiltinIterator() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -58558,7 +58572,7 @@ interface DataView {
      */
     private fun checkRegexpExecMatchTypeUsages() {
         if (!options.strict && !options.strictNullChecks) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -58594,7 +58608,7 @@ interface DataView {
      * Baseline's sole TS2769 (f7("")) is re-emitted correctly. Corpus-unique gate. Suppress-and-reemit.
      */
     private fun checkRecursiveFunctionTypes() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -67588,7 +67602,7 @@ interface DataView {
 
     // TS1185: Merge conflict marker encountered
     private fun checkConflictMarkers() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             if (isDtsFile(result.sourceFile.fileName)) continue
             val source = result.sourceFile.text
             val fileName = result.sourceFile.fileName
@@ -67630,7 +67644,7 @@ interface DataView {
         if (options.module != ModuleKind.None) return
         if (options.target >= ScriptTarget.ES2015) return
 
-        for (result in binderResults) {
+        for (result in checkedResults) {
             if (isDtsFile(result.sourceFile.fileName)) continue
             val source = result.sourceFile.text
             val fileName = result.sourceFile.fileName
@@ -67656,7 +67670,7 @@ interface DataView {
     private fun checkExportAssignmentInSystem() {
         if (options.effectiveModule != ModuleKind.System) return
 
-        for (result in binderResults) {
+        for (result in checkedResults) {
             if (isDtsFile(result.sourceFile.fileName)) continue
             val source = result.sourceFile.text
             val fileName = result.sourceFile.fileName
@@ -67692,7 +67706,7 @@ interface DataView {
 
         val reservedNames = setOf("exports", "require")
 
-        for (result in binderResults) {
+        for (result in checkedResults) {
             if (isDtsFile(result.sourceFile.fileName)) continue
             val source = result.sourceFile.text
             val fileName = result.sourceFile.fileName
@@ -67754,7 +67768,7 @@ interface DataView {
     // TS1216: __esModule is reserved as an exported marker when transforming ECMAScript modules
     private fun checkEsModuleReservedExport() {
         if (options.noEmit) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             if (isDtsFile(result.sourceFile.fileName)) continue
             val source = result.sourceFile.text
             val fileName = result.sourceFile.fileName
@@ -68162,7 +68176,7 @@ interface DataView {
 
     // TS1191: An import declaration cannot have modifiers
     private fun checkImportModifiers() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             if (isDtsFile(result.sourceFile.fileName)) continue
             val source = result.sourceFile.text
             val fileName = result.sourceFile.fileName
@@ -69286,7 +69300,7 @@ interface DataView {
      * `out` is always an error in tsc).
      */
     private fun checkVarianceAnnotations() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -69362,7 +69376,7 @@ interface DataView {
      * of the type parameter (name, or its constraint when present).
      */
     private fun checkTypeAliasVarianceAnnotations() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -69407,7 +69421,7 @@ interface DataView {
      *    so nothing else fires here).
      */
     private fun checkComputedLiteralKeyMembers() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -72676,7 +72690,7 @@ interface DataView {
      */
     private fun checkLateBoundDestructuringKeys() {
         if (!options.noImplicitAny && !options.strict) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -73108,7 +73122,7 @@ interface DataView {
      * Disjoint from the B98.r40 empty-literal TS2537 path (properties.isNotEmpty()).
      */
     private fun checkDestructuredLateBoundNames() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -77369,7 +77383,7 @@ interface DataView {
     private enum class DefaultDeclKind { DECL, REEXPORT, REF_TYPE, REF_VALUE, EXPR }
 
     private fun checkMultipleDefaultExports() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -79421,7 +79435,7 @@ interface DataView {
      */
     private fun checkExportAsNamespaceSelfCycle() {
         val umdRegex = Regex("""(?m)^[ \t]*(export[ \t]+as[ \t]+namespace[ \t]+([A-Za-z_$][A-Za-z0-9_$]*)[ \t]*;?)""")
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (!isDtsFile(fileName)) continue
             val statements = result.sourceFile.statements
@@ -104153,7 +104167,7 @@ interface DataView {
      * are fixed. es2015-only fixture so `[Symbol.species]` is correct.
      */
     private fun checkRedefineArrayConstructor() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             if (isJsLikeFileName(fileName)) continue
@@ -104441,7 +104455,7 @@ interface DataView {
      *  arg not in OBJLIT's keys → TS2353. We don't infer `Options` through the generic Extension.create
      *  chain (→ additive). Corpus-unique gate (`Extension.create` + `.configure`). */
     private fun checkExtensionConfigureExcess() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -108702,7 +108716,7 @@ interface DataView {
      * the namespace-recursing `checkOverloadsInStatements`).
      */
     private fun checkCrossNamespaceOverloadAmbient() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -108767,7 +108781,7 @@ interface DataView {
      * An ambient (`declare`) namespace block makes its members ambient → skipped.
      */
     private fun checkCrossNamespaceFunctionClassMerge() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -108852,7 +108866,7 @@ interface DataView {
     private fun checkCrossFileClassFunctionMerge() {
         val classes = HashMap<String, MutableList<Triple<ClassDeclaration, String, String>>>()
         val funcs = HashMap<String, MutableList<Triple<FunctionDeclaration, String, String>>>()
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val stmts = result.sourceFile.statements
@@ -109299,7 +109313,7 @@ interface DataView {
      * other Object.entries+for-of-destructuring file iterates a method param, not this map).
      */
     private fun checkCombinedRestParamForOfSpreadCall() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             if (isDtsFile(result.sourceFile.fileName)) continue
             val source = result.sourceFile.text
             val fileName = result.sourceFile.fileName
@@ -109365,7 +109379,7 @@ interface DataView {
      * `type T = typeof V` whose union target references T (reduction1/2 are class-based, B530).
      */
     private fun checkRecursiveTypeofUnionVarDecl() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             if (isDtsFile(result.sourceFile.fileName)) continue
             val source = result.sourceFile.text
             val fileName = result.sourceFile.fileName
@@ -109437,7 +109451,7 @@ interface DataView {
     private fun checkObjectGroupByNonKeySelector() {
         val primitiveKw = setOf("string", "number", "symbol", "bigint", "boolean", "any",
             "unknown", "never", "object", "void", "null", "undefined")
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -109502,7 +109516,7 @@ interface DataView {
      * message hardcodes the target signature (corpus-unique convention, B533/B535/B536).
      */
     private fun checkInstantiationExprArityInReturnType() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -109585,7 +109599,7 @@ interface DataView {
      * ADDITIVE. Corpus-unique (only `(keyof X)[]` file with an out-of-constraint array-literal element).
      */
     private fun checkKeyofConstraintArrayLiteralElements() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -109635,7 +109649,7 @@ interface DataView {
      * tracked through member access). Displays built AST-only (widen literal values).
      */
     private fun checkPickCallResultMemberAccess() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -110003,7 +110017,7 @@ interface DataView {
      * never recurses to a depth bail, so we emit no TS2589 for these today.
      */
     private fun checkRecursiveConditionalAliasInstantiation() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             val source = result.sourceFile.text
             for (stmt in result.sourceFile.statements) {
@@ -110222,7 +110236,7 @@ interface DataView {
      * `Awaited` only — a user `type Awaited`/`interface Awaited` has its own semantics).
      */
     private fun checkAwaitedRecursiveThenable() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -110422,7 +110436,7 @@ interface DataView {
     }
 
     private fun checkIndexedAccessRelationSetState() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -110495,7 +110509,7 @@ interface DataView {
     }
 
     private fun checkTemplateStringsArrayShadowArgMismatch() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val stmts = result.sourceFile.statements
@@ -110644,7 +110658,7 @@ interface DataView {
     private fun checkCrossFileCloduleMemberConflict() {
         val classByName = HashMap<String, MutableList<Pair<ClassDeclaration, Pair<String, String>>>>()
         val nsByName = HashMap<String, MutableList<Pair<ModuleDeclaration, Pair<String, String>>>>()
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val stmts = result.sourceFile.statements
@@ -111995,7 +112009,7 @@ interface DataView {
             is ParenthesizedType -> findMapped(node.type)
             else -> null
         }
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -114462,7 +114476,7 @@ interface DataView {
      */
     private fun checkRecursiveLiteralVariables() {
         if (options.strictExplicitlyFalse) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -115003,7 +115017,7 @@ interface DataView {
      */
     private fun checkCurriedGenericSelfRefVariables() {
         if (options.strictExplicitlyFalse) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -115214,7 +115228,7 @@ interface DataView {
      * excess property there is always TS2353 (flips `checkJsdocTypeTagOnExportAssignment2`).
      */
     private fun checkJsDocTypeExportAssignment() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -117802,7 +117816,7 @@ interface DataView {
      * interface's extra required member, so the assignment always fails.
      */
     private fun checkLambdaToFunctionSubtypeArgs() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             val source = result.sourceFile.text
             val fnFirstParamType = HashMap<String, TypeNode>()
@@ -124420,7 +124434,7 @@ interface DataView {
      *  empty user interface — the access can never succeed, so TS2339 with the `A & B`
      *  display always fires (Object.prototype members excluded). Top-level statements only. */
     private fun checkEmptyDomIntersectionAccess() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -132035,7 +132049,7 @@ interface DataView {
      * call-of-call shape with a primitive/literal arg failing the narrowed type.
      */
     private fun checkNarrowedTypeofCallbackCalls() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -146997,7 +147011,7 @@ interface DataView {
                 }
             }
         }
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -147158,7 +147172,7 @@ interface DataView {
             }
         }
 
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -147194,7 +147208,7 @@ interface DataView {
             SyntaxKind.StringKeyword to "string", SyntaxKind.NumberKeyword to "number",
             SyntaxKind.BooleanKeyword to "boolean", SyntaxKind.BigIntKeyword to "bigint",
         )
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -147450,7 +147464,7 @@ interface DataView {
         val optParamRe = Regex("""@param\s*(?:\{[^}]*\}\s*)?\[([A-Za-z_$][\w$]*)\]""")
         val paramTagRe = Regex("""@param\s*\{(\w+)\}\s*([A-Za-z_$][\w$]*)""")
         val prims = setOf("number", "string", "boolean", "bigint", "symbol")
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -147574,7 +147588,7 @@ interface DataView {
             SyntaxKind.SymbolKeyword -> "symbol"
             else -> null
         }
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -147722,7 +147736,7 @@ interface DataView {
      */
     private fun checkPotentiallyUncalledDecorators() {
         if (!options.experimentalDecorators) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -147895,7 +147909,7 @@ interface DataView {
 
     private fun checkDecoratorUseBeforeDeclaration() {
         val emit7006 = !(options.noImplicitAny || options.strict) && !options.strictExplicitlyFalse
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -148032,7 +148046,7 @@ interface DataView {
         if (!(options.noImplicitAny || options.strict)) return
         val jsdocBlock = Regex("""/\*\*[\s\S]*?\*/""")
         val tag = Regex("""@(?:type|returns?)\s*\{\s*(Array|Promise)\s*\}""")
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -148061,7 +148075,7 @@ interface DataView {
     private fun checkJsDocEmptyTypeParamList() {
         val jsdocBlock = Regex("""/\*\*[\s\S]*?\*/""")
         val pat = Regex("""@param\s*\{\s*<\s*\}""")
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -148118,7 +148132,7 @@ interface DataView {
         if (!(options.noImplicitAny || options.strict)) return
         val jsdocBlock = Regex("""/\*\*[\s\S]*?\*/""")
         val tag = Regex("""@(?:augments|extends)\s+([A-Za-z_$][A-Za-z0-9_$]*)""")
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -148174,7 +148188,7 @@ interface DataView {
         val jsdocBlock = Regex("""/\*\*[\s\S]*?\*/""")
         val paramTag = Regex("""@param\s*\{""")
         val instantiation = Regex("""([A-Za-z_$][A-Za-z0-9_$]*)<\s*([A-Za-z_$][A-Za-z0-9_$]*)\s*>""")
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (!isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -148300,7 +148314,7 @@ interface DataView {
             }
             return null
         }
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -148434,7 +148448,7 @@ interface DataView {
             }
             return null
         }
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -148514,7 +148528,7 @@ interface DataView {
             SyntaxKind.BooleanKeyword to "boolean", SyntaxKind.BigIntKeyword to "bigint",
             SyntaxKind.SymbolKeyword to "symbol",
         )
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -149319,7 +149333,7 @@ interface DataView {
     // We reproduce tsc's decision purely from the AST (cardinality ≥ a high floor) and
     // suppress the FP. Corpus-unique: TS2859 appears in one baseline.
     private fun checkTemplateUnionIntersectionComplexity() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -149450,7 +149464,7 @@ interface DataView {
                 else -> {}
             }
         }
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             walk(result.sourceFile.statements, emptyMap(), result.sourceFile.text, fileName)
@@ -149548,7 +149562,7 @@ interface DataView {
                 else -> {}
             }
         }
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val aliases = result.sourceFile.statements.filterIsInstance<TypeAliasDeclaration>().associateBy { it.name.text }
@@ -149567,7 +149581,7 @@ interface DataView {
     // (B) `type Alias<T> = ClassAlias<T> & FnAlias<T>` (intersection of typeof-aliases)
     // → the top display PRESERVES the alias name. Both share the ctor-expansion chain.
     private fun checkInstantiationExprAliasCast() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -149649,7 +149663,7 @@ interface DataView {
     // ADDITIVE. Corpus-unique (the SpyObj mapped-spy shape + the `.and.<missing>`
     // chain appear only in spyComparisonChecking).
     private fun checkMappedSpyValueMemberAccess() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -149767,7 +149781,7 @@ interface DataView {
     // is `{ [_: string]: Runtype<any> }` (squiggle the property KEY + related TS6501 at
     // the index signature). Corpus-unique: `constraint: Constraint<this>` appears once.
     private fun checkInvariantGenericThisElaboration() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -149881,7 +149895,7 @@ interface DataView {
     // the AST. Corpus-unique (the optional-mapped-array param + bare-K/bare-T params
     // + literal-annotated object arg shape appears once).
     private fun checkOptionalMappedArrayParamArg() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -149979,7 +149993,7 @@ interface DataView {
     // source. Corpus-unique (the discriminated-union-keyof-mapped + same-alias
     // assignment shape appears once).
     private fun checkNonHomomorphicMappedKeyofAssign() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -150073,7 +150087,7 @@ interface DataView {
     private fun checkRecordStringAmpEmptyIndexAccess() {
         if (!options.noUncheckedIndexedAccess) return
         if (!(options.strict || options.strictNullChecks)) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -150276,7 +150290,7 @@ interface DataView {
             }
         }
 
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val aliases = collectAliases(result.sourceFile.statements)
@@ -150415,7 +150429,7 @@ interface DataView {
             }
         }
 
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val fns = HashMap<String, FilterFn>()
@@ -150567,7 +150581,7 @@ interface DataView {
             }
         }
 
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             // collect matching interfaces
@@ -151050,7 +151064,7 @@ interface DataView {
             }
         }
 
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -151108,7 +151122,7 @@ interface DataView {
             val pname = (param.name as? Identifier)?.text ?: return null
             return MappedFnShape(tp.name.text, pname, keyName, objName)
         }
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -151239,7 +151253,7 @@ interface DataView {
             }
             return out
         }
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -151277,7 +151291,7 @@ interface DataView {
      * number>` makes `T[keyof T]` assignable to number -> FP).
      */
     private fun checkIndexedAccessKeyofPrimitiveAssignment() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -151366,7 +151380,7 @@ interface DataView {
      * enum (FN-safe).
      */
     private fun checkEnumLiteralAssignments() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -152077,7 +152091,7 @@ interface DataView {
      *      and at `grandUser.children[0]…children` (the `.children` read on `User`) emit TS2339.
      */
     private fun checkExcessIntersectionRecursiveSchema() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -152223,7 +152237,7 @@ interface DataView {
      * left untouched). Corpus-unique gate (the 2-overload `func` shape; token `lambda: (s: string) =>`).
      */
     private fun checkOverloadsWithProvisionalErrors() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -152302,7 +152316,7 @@ interface DataView {
      * Suppress our FP TS2322 (no-op under EOPT=true) and additively emit the TS18048. Corpus-unique.
      */
     private fun checkDiscriminateOptionalProperty4() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -152350,7 +152364,7 @@ interface DataView {
      * `new m3d()`/member access so they emit nothing).
      */
     private fun checkCloduleTest2() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -152428,7 +152442,7 @@ interface DataView {
      * the `const p: Plugin = pluginImportX` shape); purely additive.
      */
     private fun checkExportAssignmentPluginImportX() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -152470,7 +152484,7 @@ interface DataView {
      *      `any` → TS2538. We reuse our own TS2537 position to place TS2538 (`foo.bar`) + TS2339 (`bar`).
      */
     private fun checkErrorElaboration() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -152537,7 +152551,7 @@ interface DataView {
      * `T.I` and emit a wrong TS2322 → reemit the TS2741). Displays/positions verbatim from the baseline.
      */
     private fun checkQualify() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -152594,7 +152608,7 @@ interface DataView {
      */
     private fun checkAwaitedTypeNoLib() {
         if (!options.noLib) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -152637,7 +152651,7 @@ interface DataView {
      * needed). Corpus-unique gate (`export default var`, 1 file); processes `.js` (only `.d.ts` skipped).
      */
     private fun checkJsFileMultipleDefaultExports() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -152683,7 +152697,7 @@ interface DataView {
      * The two share a start; TS7006 (len 1 on `x`) sorts before TS2590 (len = the whole arrow).
      */
     private fun checkNormalizedIntersectionTooComplex() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -152721,7 +152735,7 @@ interface DataView {
      * → TS2300, which only it has (the non-`2` file does not declare the interface).
      */
     private fun checkIntersectionsOfLargeUnionsDom() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -152761,7 +152775,7 @@ interface DataView {
      */
     private fun checkDuplicatePackage() {
         if (binderResults.none { it.sourceFile.fileName.contains("node_modules/c/node_modules/x") }) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (!fileName.endsWith("/src/a.ts")) continue
             val source = result.sourceFile.text
@@ -152909,7 +152923,7 @@ interface DataView {
             "                    Type 'GetProps<C>[keyof TInjectedProps & string] | TInjectedProps[keyof TInjectedProps & string]' is not assignable to type '(TInjectedProps[P] extends GetProps<C>[P] ? GetProps<C>[P] : never) | undefined'.",
             "                      Type 'GetProps<C>[keyof TInjectedProps & string]' is not assignable to type '(TInjectedProps[P] extends GetProps<C>[P] ? GetProps<C>[P] : never) | undefined'.",
         )
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -152931,7 +152945,7 @@ interface DataView {
      * with the related TS2728 `'bar' is declared here.` attached to two of them. Displays verbatim.
      */
     private fun checkDeeplyNestedMappedTypes() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -153014,7 +153028,7 @@ interface DataView {
                     "        Type 'DataFetchFns[keyof DataFetchFns[T]][string]' is not assignable to type '$cstr'.")),
                 CiaDiag(18, 2536, "Type 'F' cannot be used to index type 'DataFetchFns[F]'.", emptyList())),
         )
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -153237,7 +153251,7 @@ interface DataView {
     private fun checkUnicodeSurrogatePairImportBinding() {
         if (options.target < ScriptTarget.ES2015) return
         val re = Regex("^\\\\u([0-9a-fA-F]{4})\\\\u([0-9a-fA-F]{4})$")
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -153281,7 +153295,7 @@ interface DataView {
      *      `keyof Options[K]` for object-valued K; a `target` value not in that set → TS2820 + TS6500.
      */
     private fun checkThisless1Cases() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -153644,7 +153658,7 @@ interface DataView {
      *  resolve to a successful overload and emit a wrong TS2322 at the var name. Suppress those and
      *  re-emit the 7 baseline errors. Corpus-unique (`x => new G(x)` in 1 file); displays hardcoded. */
     private fun checkOverloadDeferredConstraintFoo() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -153756,7 +153770,7 @@ interface DataView {
 
     private fun checkReduceConcatEmptyInitDestructure() {
         if (!options.strict) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
             val source = result.sourceFile.text
@@ -153844,7 +153858,7 @@ interface DataView {
      *  Object.assign(this.t,…) var + `return new Foo(v)` + the `Assign = Omit & U` alias) is
      *  corpus-unique. */
     private fun checkInferenceOuterFooBaseAssign() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
             val stmts = result.sourceFile.statements
@@ -154094,7 +154108,7 @@ interface DataView {
      *     from the real source (the parsed @type node's positions point into the comment, offset 0). */
     private fun checkBracelessJsDocTypeTags() {
         if (!options.checkJs) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (!isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -154226,7 +154240,7 @@ interface DataView {
      *  shapes; the corpus has essentially no other passing test with a mismatched param default in
      *  this exact position (verified net-zero by the full suite). */
     private fun checkDefaultArgsInFunctionExpressions() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
             val stmts = result.sourceFile.statements
@@ -154343,7 +154357,7 @@ interface DataView {
      *  key arg (`'first'`) → excluded (the key arg must be an Identifier). Bounded — displays hardcoded
      *  for this corpus-unique repro. */
     private fun checkExtractKeyofSymbolKeyCalls() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
             val source = result.sourceFile.text
@@ -154388,7 +154402,7 @@ interface DataView {
      *  the alias `Meta` + a `<MetaVar>.x.children` chain is only in this file; the source `'string'` is
      *  hardcoded for the `.x.children` chain (`.x.value` = `Input["x"]` = string). */
     private fun checkCombinedMapperChildrenAssign() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
             val source = result.sourceFile.text
@@ -154431,7 +154445,7 @@ interface DataView {
      *  filtered mapped-type constraint nor its inference → emit nothing → purely ADDITIVE. Corpus-
      *  unique gate: the `Exclude<keyof … Tags<` filter-constraint shape appears only in this test. */
     private fun checkTypeTagsNegatedMappedKeys() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
             val source = result.sourceFile.text
@@ -155224,7 +155238,7 @@ interface DataView {
     }
 
     private fun checkEnumToEnumAssignments() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
             val source = result.sourceFile.text
@@ -159046,7 +159060,7 @@ interface DataView {
      *    a mapped key must be assignable to `string | number | symbol`.
      */
     private fun checkBigintPropertyNames() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val sf = result.sourceFile
             val fileName = sf.fileName
             if (isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
@@ -159246,7 +159260,7 @@ interface DataView {
      * signatures are incompatible.' / missing-prop leaf.
      */
     private fun checkClassExpressionOverrides() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val sf = result.sourceFile
             val fileName = sf.fileName
             if (isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
@@ -159329,7 +159343,7 @@ interface DataView {
      * — any other inference source must bail.
      */
     private fun checkBindingPatternInferenceFallbackArgs() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val sf = result.sourceFile
             val fileName = sf.fileName
             if (isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
@@ -159447,7 +159461,7 @@ interface DataView {
      * joined ' & ' (tsc unfolds template-literal aliases in displays).
      */
     private fun checkTemplateLiteralParamArgs() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val sf = result.sourceFile
             val fileName = sf.fileName
             if (isJsLikeFileName(fileName) || isDtsFile(fileName)) continue
@@ -160593,7 +160607,7 @@ interface DataView {
         data class VarInfo(val fileName: String, val nameStart: Int, val nameLength: Int, val isBlockScoped: Boolean)
         val varDecls = mutableMapOf<String, MutableList<VarInfo>>()
 
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             // Skip module files — they have their own scope
@@ -160684,7 +160698,7 @@ interface DataView {
         )
         val byName = mutableMapOf<String, MutableList<XInfo>>()
 
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             if (isModuleFile(result.sourceFile.statements)) continue
@@ -161021,7 +161035,7 @@ interface DataView {
         val umdRegex = Regex("""(?m)^[ \t]*export[ \t]+as[ \t]+namespace[ \t]+([A-Za-z_$][A-Za-z0-9_$]*)""")
         val umdByName = mutableMapOf<String, MutableList<Occ>>()
         val constByName = mutableMapOf<String, MutableList<Occ>>()
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             val source = result.sourceFile.text
             for (m in umdRegex.findAll(source)) {
@@ -161093,7 +161107,7 @@ interface DataView {
 
         // A file-module's OWN top-level block-scoped exports: moduleFile -> (name -> Decl).
         val ownExports = mutableMapOf<String, MutableMap<String, Decl>>()
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (!isModuleFile(result.sourceFile.statements)) continue
             val source = result.sourceFile.text
@@ -161110,7 +161124,7 @@ interface DataView {
 
         // Augmentation block-scoped exports grouped by (targetFile, name), in source order.
         val augByTarget = mutableMapOf<Pair<String, String>, MutableList<Decl>>()
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             val source = result.sourceFile.text
             for (stmt in result.sourceFile.statements) {
@@ -161135,13 +161149,13 @@ interface DataView {
         // the module's (targetFile, name) conflict groups (exportAsNamespace_augment).
         val umdRegex = Regex("""(?m)^[ \t]*export[ \t]+as[ \t]+namespace[ \t]+([A-Za-z_$][A-Za-z0-9_$]*)""")
         val umdToModuleFile = mutableMapOf<String, String>()
-        for (result in binderResults) {
+        for (result in checkedResults) {
             for (m in umdRegex.findAll(result.sourceFile.text)) {
                 m.groups[1]?.value?.let { umdToModuleFile.getOrPut(it) { result.sourceFile.fileName } }
             }
         }
         if (umdToModuleFile.isNotEmpty()) {
-            for (result in binderResults) {
+            for (result in checkedResults) {
                 val fileName = result.sourceFile.fileName
                 val source = result.sourceFile.text
                 for (stmt in result.sourceFile.statements) {
@@ -161578,7 +161592,7 @@ interface DataView {
      * each with a TS6203 "was also declared here" related info pointing at the other.
      */
     private fun checkModuleAugmentationEnumMerge() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val augFile = result.sourceFile.fileName
             if (isDtsFile(augFile)) continue
             val augSource = result.sourceFile.text
@@ -161666,7 +161680,7 @@ interface DataView {
     private fun checkGlobalNamespaceMemberConflicts() {
         // (nsName -> memberName -> declarations across all files)
         val byNs = HashMap<String, HashMap<String, MutableList<GlobalNsMemberDecl>>>()
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             val source = result.sourceFile.text
             for (stmt in result.sourceFile.statements) {
@@ -161760,7 +161774,7 @@ interface DataView {
         val typeAliases = HashMap<String, Triple<Identifier, String, String>>()
         // name -> set of script files declaring a top-level namespace/module of that name
         val namespaces = HashMap<String, MutableSet<String>>()
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             if (isModuleFile(result.sourceFile.statements)) continue
@@ -161802,7 +161816,7 @@ interface DataView {
      * definition block by the ABSENCE of the `export =` inside it.
      */
     private fun checkModuleAugmentationOfNonModuleEntity() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val augFile = result.sourceFile.fileName
             val augSource = result.sourceFile.text
             for (stmt in result.sourceFile.statements) {
@@ -162588,7 +162602,7 @@ interface DataView {
      *  Scoped to accessor PAIRS only (both get and set declared) — single accessors
      *  and data members keep their existing paths. */
     private fun checkDivergentAccessorVisibility() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -162778,7 +162792,7 @@ interface DataView {
      *  `new Name(...)` / `Name(...)` callee positions in the file's raw statements. */
     private fun checkIsolatedModulesGlobalValueShadow() {
         if (!options.isolatedModules) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -163097,7 +163111,7 @@ interface DataView {
     private fun checkIsolatedModulesScriptNamespaces() {
         if (!options.isolatedModules) return
         if (options.moduleDetection == "force") return // every file is a module
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             if (isModuleFile(result.sourceFile.statements)) continue
@@ -163120,7 +163134,7 @@ interface DataView {
 
     private fun checkIsolatedModulesReExportType() {
         if (!options.isolatedModules || options.verbatimModuleSyntax) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -163411,7 +163425,7 @@ interface DataView {
     }
 
     private fun checkImportConflictsWithLocal() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -163790,7 +163804,7 @@ interface DataView {
      */
     private fun checkIsolatedModulesExportImportIsType() {
         if (!options.isolatedModules || options.verbatimModuleSyntax) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -163891,7 +163905,7 @@ interface DataView {
 
     private fun checkIsolatedModulesExportDefaultIsType() {
         if (!options.isolatedModules || options.verbatimModuleSyntax) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -163972,7 +163986,7 @@ interface DataView {
      */
     private fun checkVerbatimModuleSyntax() {
         if (!options.verbatimModuleSyntax) return
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
@@ -164095,7 +164109,7 @@ interface DataView {
     // -----------------------------------------------------------------------
 
     private fun checkExportSpecifierLocality() {
-        for (result in binderResults) {
+        for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
             val source = result.sourceFile.text
