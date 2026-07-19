@@ -20,6 +20,23 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 611 (2026-07-19) — queue honesty: the INV.4/INV.6 umbrellas close,
+INV.5(d2) demotes on evidence.** INV.4 was closed narratively at round
+599 but its umbrella checkbox stayed open — checked with the closure
+summary. INV.6 Phase 0 closed at round 609 — checked, with (6e) parallel
+emit explicitly deferred (emit workers would race the shared checker's
+lazy caches; benches are --noEmit so no dashboard value) and Phase 1
+(shared frozen collectors) named as the reopener. INV.5(d2) demoted from
+"optional" to hygiene-only with evidence: the round-598 attribution puts
+the whole relation family at ~927ms — no longer a lever; its residual
+issues (first-touch ambient scope in resolvedPropertyTypes' cache key,
+no null-caching) are recorded for a future correctness trace. THE LIVE
+QUEUE now reads: INV.3(d) (the merge retire — the last big correctness-
+architecture campaign, staged analysis on wip/inv3d-merge-retire),
+INV.7 watch/incremental, and the externally-blocked items (EP needs a
+reference tsc; INV.7b needs a ≥16GB builder; M4.7 needs network).
+NEXT: open the INV.3(d) campaign with fresh context.
+
 **Round 610b (2026-07-19) — (INV.7b) BLOCKED-ON-RESOURCES: the Release
 link OOM-kills the build daemon on this 7.7GB box.** Two attempts (the
 second with daemons stopped + `-Pkotlin.native.jvmArgs=-Xmx5g`): the
@@ -981,7 +998,7 @@ interrupt the arc).
       structural cache's cross-file position collisions are NOT
       conflation-specific — see the session note). **INV.3(d) is COMPLETE; the
       INV.3 arc is COMPLETE. NEXT: INV.4.**
-- [ ] **INV.4 Single-pass check spine.** `checkSourceFileOnce` per-node dispatch;
+- [x] **INV.4 Single-pass check spine — CLOSED round 599** (see the round-599 note: migration + retirements banked −13% wall + ONE authoritative walk; the (f) memo/fold designs are measured dead-ends until INV.5 canonical types). `checkSourceFileOnce` per-node dispatch;
   migrate walker families in INV.0's cost order — every migration deletes a full-tree
   pass and its private scope machinery. Once ONE authoritative walk state exists, land
   the two things that are unsound today: a per-node expression-type cache, and flow
@@ -2142,6 +2159,14 @@ interrupt the arc).
     caching otherwise.** Option (iii) is self-validating and incremental —
     preferred.
   - [ ] **INV.5(d) Instantiated members cached ON the `Type.Reference`.**
+    **(d2) DEMOTED round 611 (evidence-based): the round-598 depth-0
+    attribution puts the ENTIRE relation family at ~927ms — the (d2)
+    allocation redesign is no longer a perf lever (the levers are the
+    walks + typeOfExpr, both blocked on canonical types). Remaining (d2)
+    value is hygiene only: `resolvedPropertyTypes` caches under the
+    first-touch ambient scope (a context-keying hole like the pre-548
+    nodeTypes) and never caches null results. Re-open only if a
+    correctness drift traces here.**
     Delete `resolveGenericPropertyType` fresh-minting + its depth-4 OOM cap
     (the per-recursion-level cache-miss gotcha). **(d1) DONE round 552: the
     depth-4 cap is DELETED — replaced by the per-top-level-relation
@@ -2185,7 +2210,7 @@ interrupt the arc).
     false negative now fires — Inv5GenericGateTest). Remaining: the
     pin-walker deletion sweep.**
 
-- [ ] **INV.6 Parallelism** (absorbs M5.4). Share-nothing checker workers per
+- [x] **INV.6 Parallelism — Phase 0 CLOSED round 609** (6a-6d1: --workers 2 = −17% wall, output sorted-identical, all-8-profile partition equivalence; w4 flat at the per-worker redundancy ceiling — Phase 1 shared frozen collectors is the reopener, gated on an immutability audit; (6e) parallel emit deferred: emit workers would race the shared checker's lazy caches, and benches are --noEmit). Share-nothing checker workers per
   `docs/parallel-caching.md` (trivially partitionable once INV.4 gives a per-file
   check entry); parallel emit on Default + IO write sink; deterministic partition +
   merge via the existing diagnostic sort. Structured concurrency from INV.1.
