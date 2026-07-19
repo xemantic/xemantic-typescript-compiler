@@ -20,6 +20,17 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 610b (2026-07-19) — (INV.7b) BLOCKED-ON-RESOURCES: the Release
+link OOM-kills the build daemon on this 7.7GB box.** Two attempts (the
+second with daemons stopped + `-Pkotlin.native.jvmArgs=-Xmx5g`): the
+K/N OPTIMIZING codegen of the 200k-line Checker.kt kills the daemon
+("Gradle build daemon disappeared unexpectedly") both times; the DEBUG
+link (2m, 53MB .kexe) works fine and is the round-610 verified binary.
+Not a code defect — a builder-resource limit. Re-attempt on a ≥16GB
+box (or after INV.5(d2) shrinks the checker); the debug binary carries
+the correctness story meanwhile. NEXT per queue: the INV.5(d2)/Phase-1
+reassessment, or the remaining EP/backlog items.
+
 **Round 610 (2026-07-19) — (INV.7a) LANDED: THE NATIVE TARGET IS
 RE-ENABLED (pre-approved M5 exception) — linuxX64 compiles, links, and
 produces BYTE-CORRECT output on the full compiler profile.** Enablers:
@@ -2202,9 +2213,10 @@ interrupt the arc).
   - [x] **(INV.7a) linuxX64 re-enabled** — DONE round 610: compiles/links/runs
     byte-correct (compiler profile = the exact 46-error floor, 196s debug
     binary; smoke 82ms). EpochMap/Set now composition (K/N HashMap is final).
-  - [ ] **(INV.7b) Release binary + native bench row.** linkReleaseExecutableLinuxX64
-    (longer link), run the compiler profile, record vs JVM/tsc in the TSV;
-    decide default binary kind for the native CLI.
+  - [ ] **(INV.7b) Release binary + native bench row.** BLOCKED-ON-RESOURCES
+    (round 610b): the optimizing link OOM-kills the daemon on the 7.7GB box
+    (twice, incl. -Xmx5g + daemons stopped). Re-attempt on a ≥16GB builder;
+    the debug binary carries correctness meanwhile.
 
 Numeric targets (proposed, doc § 6): post INV.4/5 single-threaded compiler profile
 ≤ 10 s (≈ JS tsc) + harness RSS ≤ 1 GB; post INV.6 compiler ≤ 5 s on 4 cores;
