@@ -51,12 +51,14 @@ fun main(args: Array<String>) {
     var listAll = false
     var watch = false
     var watchVerify = false
+    var incremental = false
     var passTiming = false
     var i = 0
     while (i < args.size) {
         when (val a = args[i]) {
             "--noEmit", "--noemit" -> noEmit = true
             "--watch", "-w" -> watch = true
+            "--incremental" -> incremental = true
             "--watchVerify", "--watchverify" -> { watch = true; watchVerify = true }
             "--listAll", "--listall" -> listAll = true
             "--passTiming", "--passtiming" -> passTiming = true
@@ -81,7 +83,12 @@ fun main(args: Array<String>) {
         PassTiming.enabled = true
     }
     val (result, duration) = measureTimedValue {
-        ProjectCompiler(SystemVfs).build(project, noEmit)
+        // INV.7(d3): under --incremental, a persisted .xtsbuildinfo (same compiler
+        // build id, hash-validated inputs) steers a partition recheck of only the
+        // changed files' reverse-dependency closure; anything non-local, or any
+        // validation failure, is a plain full build.
+        if (incremental) TsBuildInfo.build(SystemVfs, project, noEmit, XTSC_BUILD_ID, log = ::println)
+        else ProjectCompiler(SystemVfs).build(project, noEmit)
     }
 
     println("config:  ${result.configPath}")
@@ -224,6 +231,7 @@ private fun printUsage() {
           --noEmit           type-check only; do not write outputs
           --listAll          print every error (default: first 30) — for run-to-run FP diffing
           --passTiming       print the INV.0 per-pass wall-time table + recompute counters
+          --incremental      persist/reuse tsconfig.xtsbuildinfo across processes (recheck only changes under --noEmit)
           --watch, -w        stay running and rebuild on file changes (incremental recheck under --noEmit)
           --watchVerify      --watch + diff every incremental result against a full rebuild (INV.7(d1) gate)
           --partitionCheck N run N sequential partition checkers and diff vs the full run (INV.6(6b))
