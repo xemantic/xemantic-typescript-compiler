@@ -20,6 +20,29 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 616 (2026-07-19) — (7d3) marked BLOCKED-PENDING-USER (the version-
+stamp guardrail) + the honest INV-arc scorecard vs the § 6 targets.**
+(7d3)'s only safe design needs a compiler version stamp in the buildinfo
+(stale-compiler reuse of kept diagnostics is otherwise silent);
+generating a BuildInfo.kt is a build-system change → user-gated, proposal
+recorded on the queue item. SCORECARD vs docs/ARCHITECTURE-RETHINK.md
+§ 6: post-INV.4/5 single-threaded compiler-profile target was ≤10 s —
+ACTUAL ~31 s (the target priced in the (f1)/(f2) memo+fold wins, both
+MEASURED DEAD-ENDS at the current cost structure: the servable calls are
+cheap, the expensive recompute is the non-memoizable fresh-minting/
+narrowing kinds); post-INV.6 4-core target ≤5 s — ACTUAL 26.5 s at w2
+(w4 flat at the per-worker redundancy ceiling); INV.7 native stretch —
+debug binary byte-correct at 196 s (Release link RAM-blocked). The
+BANKED wins are real but smaller than the targets: retirements −13%,
+w2 −17%, one authoritative walk, order-free verdicts, the partition
+seam, native correctness, watch+incremental. The ≤10 s path per the
+round-599 conclusion still runs through canonical-type identity-stable
+results (which would revive both memo designs) — that work is the
+natural owner-directed next arc if perf stays the priority. LOOP STATE:
+every remaining queue item is now user-gated, resource-blocked,
+network-blocked, or owner-parked — the autonomous loop's stop condition
+is MET; stopping cleanly per protocol.
+
 **Round 615 (2026-07-19) — (INV.7d2) LANDED: the shared-name full-rebuild
 bail closes the documented incremental residual.** ProjectCompiler
 computes `sharedNameFiles` — module files whose TOP-LEVEL declaration
@@ -2321,9 +2344,19 @@ interrupt the arc).
     (sharedNameFiles: lib-global KNOWN_GLOBALS ∪ script top-level names;
     bidirectional bail via eligibility + outcome validation; +2 pins).
     Real-lib names outside the curation stay on the --watchVerify net.
-  - [ ] **(INV.7d3) Cross-process `.tsbuildinfo` persistence** (optional):
-    persist file hashes + per-file diagnostics; on cold start, recheck only
-    the changed closure. The in-memory protocol from (7d1) is the core.
+  - [ ] **(INV.7d3) Cross-process `.tsbuildinfo` persistence** (optional).
+    BLOCKED-PENDING-USER (round 616): every safe design needs a COMPILER
+    VERSION STAMP in the buildinfo — without one, a compiler upgrade
+    silently reuses stale kept-diagnostics for out-of-closure files
+    (file hashes can't detect it; tsc embeds its version for exactly this).
+    We have no version identity available in commonMain; generating a
+    BuildInfo.kt (version/git-sha) in build.gradle.kts is a BUILD-SYSTEM
+    change → user-gated. PROPOSAL: approve a `generateBuildInfo` task
+    writing `internal const val XTSC_BUILD_ID` (git sha at build time);
+    then (7d3) = persist {buildId, per-file content hashes, diagnostics}
+    next to tsconfig, validate buildId + hashes on cold start, and run the
+    (7d1) closure protocol for the changed set. The in-memory watch-mode
+    protocol already covers the primary use case meanwhile.
   - [x] **(INV.7a) linuxX64 re-enabled** — DONE round 610: compiles/links/runs
     byte-correct (compiler profile = the exact 46-error floor, 196s debug
     binary; smoke 82ms). EpochMap/Set now composition (K/N HashMap is final).
