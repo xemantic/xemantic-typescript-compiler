@@ -130,11 +130,13 @@ kotlin {
 //    }
 
     // tier 2
-//    linuxX64 {
-//        binaries.executable {
-//            entryPoint = "com.xemantic.typescript.compiler.main"
-//        }
-//    }
+    // INV.7 native re-enable (pre-approved M5 exception; round 610): host-buildable
+    // target only — Apple targets stay commented until a macOS builder exists.
+    linuxX64 {
+        binaries.executable {
+            entryPoint = "com.xemantic.typescript.compiler.main"
+        }
+    }
 //    linuxArm64 {
 //        binaries.executable {
 //            entryPoint = "com.xemantic.typescript.compiler.main"

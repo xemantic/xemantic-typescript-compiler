@@ -301,24 +301,30 @@ class Checker(
     private var tnProbeDepth = 0
     private var mrProbeDepth = 0
 
-    /** In-place-mutation-tracked HashMap for the localTypes family. */
-    private inner class EpochMap : HashMap<String, Type> {
-        constructor() : super()
-        constructor(m: Map<String, Type>) : super(m)
-        override fun put(key: String, value: Type): Type? { spineExprEpoch++; return super.put(key, value) }
-        override fun remove(key: String): Type? { spineExprEpoch++; return super.remove(key) }
-        override fun putAll(from: Map<out String, Type>) { spineExprEpoch++; super.putAll(from) }
-        override fun clear() { spineExprEpoch++; super.clear() }
+    /** In-place-mutation-tracked map for the localTypes family. Composition,
+     *  not a HashMap subclass — kotlin.collections.HashMap is FINAL on
+     *  Kotlin/Native (the JVM java.util.HashMap mapping is open; INV.7). */
+    private inner class EpochMap private constructor(
+        private val backing: HashMap<String, Type>,
+    ) : MutableMap<String, Type> by backing {
+        constructor() : this(HashMap())
+        constructor(m: Map<String, Type>) : this(HashMap(m))
+        override fun put(key: String, value: Type): Type? { spineExprEpoch++; return backing.put(key, value) }
+        override fun remove(key: String): Type? { spineExprEpoch++; return backing.remove(key) }
+        override fun putAll(from: Map<out String, Type>) { spineExprEpoch++; backing.putAll(from) }
+        override fun clear() { spineExprEpoch++; backing.clear() }
     }
 
-    /** In-place-mutation-tracked HashSet for the name-set family. */
-    private inner class EpochSet : HashSet<String> {
-        constructor() : super()
-        constructor(c: Collection<String>) : super(c)
-        override fun add(element: String): Boolean { spineExprEpoch++; return super.add(element) }
-        override fun remove(element: String): Boolean { spineExprEpoch++; return super.remove(element) }
-        override fun addAll(elements: Collection<String>): Boolean { spineExprEpoch++; return super.addAll(elements) }
-        override fun clear() { spineExprEpoch++; super.clear() }
+    /** In-place-mutation-tracked set for the name-set family (composition — see [EpochMap]). */
+    private inner class EpochSet private constructor(
+        private val backing: HashSet<String>,
+    ) : MutableSet<String> by backing {
+        constructor() : this(HashSet())
+        constructor(c: Collection<String>) : this(HashSet(c))
+        override fun add(element: String): Boolean { spineExprEpoch++; return backing.add(element) }
+        override fun remove(element: String): Boolean { spineExprEpoch++; return backing.remove(element) }
+        override fun addAll(elements: Collection<String>): Boolean { spineExprEpoch++; return backing.addAll(elements) }
+        override fun clear() { spineExprEpoch++; backing.clear() }
     }
 
     /** (f1b-i): the SHADOW memo — under --passTiming only, getTypeOfExpression
@@ -778,10 +784,10 @@ class Checker(
      *  NOTHING). Frames share map REFERENCES wherever legacy shares. */
     private class CpaFrame(
         val owner: Node,
-        val localTypes: HashMap<String, Type>,
-        val paramBindings: HashSet<String>,
+        val localTypes: MutableMap<String, Type>,
+        val paramBindings: MutableSet<String>,
         val enumParams: Map<String, String>,
-        val shadowed: HashSet<String>,
+        val shadowed: MutableSet<String>,
         val classType: Type?,
         val inStatic: Boolean,
         val nsSymbol: Symbol? = null,
@@ -813,8 +819,8 @@ class Checker(
 
     private class CcetFrame(
         val owner: Node,
-        val localTypes: HashMap<String, Type>,
-        val paramBindings: HashSet<String>,
+        val localTypes: MutableMap<String, Type>,
+        val paramBindings: MutableSet<String>,
         val tpScope: Map<String, Type.TypeParam>?,
         val tpAst: Map<String, TypeParameter>?,
         val superBaseSig: Signature?,
@@ -2186,9 +2192,9 @@ class Checker(
         // SANDWICH pattern (the frame's maps are installed into the ambient
         // fields, the SAME legacy helpers run against them, then the ambient
         // is restored — zero reimplementation drift).
-        val localTypes: HashMap<String, Type> = HashMap(),
+        val localTypes: MutableMap<String, Type> = HashMap(),
         val localDeclNodes: HashMap<String, TypeNode> = HashMap(),
-        val shadowedNames: HashSet<String> = HashSet(),
+        val shadowedNames: MutableSet<String> = HashSet(),
         val ambiguousNames: MutableSet<String> = mutableSetOf(),
     )
     private val ctaFrames = ArrayDeque<CtaFrame>()

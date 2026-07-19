@@ -20,6 +20,26 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 610 (2026-07-19) — (INV.7a) LANDED: THE NATIVE TARGET IS
+RE-ENABLED (pre-approved M5 exception) — linuxX64 compiles, links, and
+produces BYTE-CORRECT output on the full compiler profile.** Enablers:
+the konan 2.4.0 toolchain is cached (offline-workable); PipelineRunner
+gets its native actual (runBlocking + Dispatchers.IO exist on native);
+EpochMap/EpochSet convert from HashMap/HashSet SUBCLASSES to COMPOSITION
+(`MutableMap by backing` delegation) — kotlin.collections.HashMap is
+FINAL on K/N (the JVM java.util mapping is open) — with the three frame
+classes' field annotations widened to MutableMap/MutableSet (the backing
+impls stay HashMap/HashSet per the round-483 perf rule). RESULTS: the
+53MB debug .kexe compiles the smoke project correctly in 82ms total
+(vs ~1s JVM startup alone), and the FULL compiler profile completes
+with EXACTLY the 46-error JVM floor in 196s (debug-unoptimized; no
+crash/OOM — the historical "big-input GC inversion" that motivated the
+disable no longer reproduces, as the INV arc predicted). JVM side
+unchanged: corpus 11,351/0; listAll ×8 byte-identical; wall 30.3s
+in-band (delegation overhead unmeasurable). FOLLOW-UPS queued: (INV.7b)
+Release-binary link + a native bench row; Apple targets stay commented
+(no macOS builder). NEXT: INV.7b, or the INV.5(d2)/Phase-1 reassessment.
+
 **Round 609 (2026-07-19) — (INV.6(6d1)) LANDED: 193 emission-pass loops
 join the partition via `checkedResults`; the fixed-cost verdict sharpens.**
 The `checkedResults` partition view (= binderResults when unpartitioned —
@@ -2179,6 +2199,12 @@ interrupt the arc).
 - [ ] **INV.7 Productization** (absorbs M5.5/M5.6). Native re-enable (the big-input
   GC inversion should largely dissolve post INV.4/5); watch mode driven by a
   file-event Flow; `.tsbuildinfo`-style incremental reuse.
+  - [x] **(INV.7a) linuxX64 re-enabled** — DONE round 610: compiles/links/runs
+    byte-correct (compiler profile = the exact 46-error floor, 196s debug
+    binary; smoke 82ms). EpochMap/Set now composition (K/N HashMap is final).
+  - [ ] **(INV.7b) Release binary + native bench row.** linkReleaseExecutableLinuxX64
+    (longer link), run the compiler profile, record vs JVM/tsc in the TSV;
+    decide default binary kind for the native CLI.
 
 Numeric targets (proposed, doc § 6): post INV.4/5 single-threaded compiler profile
 ≤ 10 s (≈ JS tsc) + harness RSS ≤ 1 GB; post INV.6 compiler ≤ 5 s on 4 cores;
