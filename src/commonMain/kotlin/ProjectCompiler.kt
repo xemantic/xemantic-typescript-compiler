@@ -64,6 +64,11 @@ class ProjectCompiler(private val vfs: Vfs) {
         val diagnostics: List<Diagnostic>,
         /** Specifiers that could not be resolved, as (importer, specifier). */
         val unresolved: List<Pair<String, String>>,
+        /** INV.7(d1): resolved import edges as (importer, imported), crawl order. */
+        val importEdges: List<Pair<String, String>> = emptyList(),
+        /** INV.7(d1): program files with module syntax (import/export) — a change in a
+         *  NON-module (script) file has global effects and forces a full rebuild. */
+        val moduleFiles: Set<String> = emptySet(),
         /** Output files written to disk as (path, byteLength). Empty when noEmit. */
         val written: List<Pair<String, Int>>,
     ) {
@@ -77,7 +82,7 @@ class ProjectCompiler(private val vfs: Vfs) {
      * @param projectPath a directory containing `tsconfig.json`, or a path to a tsconfig file.
      * @param noEmit when true, type-check only — do not write outputs.
      */
-    fun build(projectPath: String, noEmit: Boolean = false): Result {
+    fun build(projectPath: String, noEmit: Boolean = false, recheckOnly: Set<String>? = null): Result {
         // Absolutize first: glob regexes, module resolution, and output mapping all
         // assume absolute paths (a relative `.` would produce `./src/**` patterns that
         // never match the absolute paths the Vfs walk yields).
@@ -136,9 +141,10 @@ class ProjectCompiler(private val vfs: Vfs) {
         val program = LinkedHashMap<String, String>() // path -> content
         val preParsed = HashMap<String, PreParsedFile>() // path -> crawl-time parse (INV.1(e))
         val unresolved = mutableListOf<Pair<String, String>>()
+        val importEdges = mutableListOf<Pair<String, String>>()
         val seeds = rootFiles + typeEntries.filter { it !in rootFiles }
         runCompilerPipeline {
-            crawlImportGraph(seeds, resolver, emitOptions, unresolved).collect { f ->
+            crawlImportGraph(seeds, resolver, emitOptions, unresolved, importEdges).collect { f ->
                 program[f.path] = f.content ?: ""
                 f.preParsed?.let { preParsed[f.path] = it }
             }
@@ -149,8 +155,26 @@ class ProjectCompiler(private val vfs: Vfs) {
         val files = program.map { (name, content) -> SourceFileEntry(name, content) }
         val parsed = ParsedSource(emitOptions, files, hasExplicitFilenames = true, preParsed = preParsed)
         val result = TypeScriptCompiler().compileParsed(
-            parsed, emitOptions, rootFiles.firstOrNull() ?: "input.ts",
+            parsed, emitOptions, rootFiles.firstOrNull() ?: "input.ts", recheckOnly = recheckOnly,
         )
+        // INV.7(d1): module-ness per program file from the crawl parses — a
+        // conservative SYNTACTIC approximation of the checker's isModuleFile
+        // (top-level import/export forms only; wrapped dynamic imports read as
+        // script → the watch loop's full-rebuild bail, safe but slower). A file
+        // without a crawl parse (unreadable) is conservatively non-module.
+        val moduleFiles = preParsed.keys.filterTo(HashSet()) { p ->
+            preParsed[p]?.sourceFile?.statements?.any { st ->
+                st is ImportDeclaration || st is ExportDeclaration || st is ExportAssignment ||
+                    st is ImportEqualsDeclaration ||
+                    (st as? VariableStatement)?.modifiers?.contains(ModifierFlag.Export) == true ||
+                    (st as? FunctionDeclaration)?.modifiers?.contains(ModifierFlag.Export) == true ||
+                    (st as? ClassDeclaration)?.modifiers?.contains(ModifierFlag.Export) == true ||
+                    (st as? InterfaceDeclaration)?.modifiers?.contains(ModifierFlag.Export) == true ||
+                    (st as? TypeAliasDeclaration)?.modifiers?.contains(ModifierFlag.Export) == true ||
+                    (st as? EnumDeclaration)?.modifiers?.contains(ModifierFlag.Export) == true ||
+                    (st as? ModuleDeclaration)?.modifiers?.contains(ModifierFlag.Export) == true
+            } == true
+        }
 
         // With outDir withheld above, the core's same-directory overwrite check (TS5055,
         // gated on `outDir == null`) can fire even though outputs actually go to outDir.
@@ -169,6 +193,8 @@ class ProjectCompiler(private val vfs: Vfs) {
             // then type-acquisition errors (TS2688), then the compiler's own diagnostics.
             diagnostics = config.diagnostics + typeDiagnostics + compilerDiagnostics,
             unresolved = unresolved.distinct(),
+            importEdges = importEdges,
+            moduleFiles = moduleFiles,
             written = written,
         )
     }
@@ -207,6 +233,7 @@ class ProjectCompiler(private val vfs: Vfs) {
         resolver: ModuleResolver,
         options: CompilerOptions,
         unresolved: MutableList<Pair<String, String>>,
+        importEdges: MutableList<Pair<String, String>> = mutableListOf(),
     ): Flow<CrawledFile> = flow {
         val loaded = HashSet<String>() // paths already emitted (the dedup set)
         // Frontier 0: the seeds — read per occurrence (duplicate-seed re-reads
@@ -230,6 +257,7 @@ class ProjectCompiler(private val vfs: Vfs) {
                         if (PathUtil.isBare(spec) || PathUtil.isRelative(spec)) unresolved.add(f.path to spec)
                         continue
                     }
+                    importEdges.add(f.path to resolved)
                     if (resolved !in loaded && pending.add(resolved)) discovered.add(resolved)
                 }
             }

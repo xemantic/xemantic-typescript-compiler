@@ -20,6 +20,30 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 614 (2026-07-19) — (INV.7d1) LANDED: watch-mode INCREMENTAL
+recheck, built on the INV.6 partition seam.** The model: a MODULE-file
+change affects only its reverse-dependency closure — the rebuild runs
+the checker as a PARTITION over that closure (`recheckOnly` →
+`assignedFileNames`; program-wide collectors still see the whole CURRENT
+program, so cross-file suppression context stays fresh) and prior
+diagnostics are kept for out-of-closure files. Non-local changes bail to
+FULL rebuild: scripts, `.d.ts`, config, new/deleted files,
+`declare global|module` content, or a post-build program-shape change
+(`incrementalOutcomeValid`). Pieces: ProjectCompiler records
+`importEdges` + `moduleFiles` (a conservative syntactic module test —
+wrapped-dynamic-import files read as script → full rebuild, safe);
+`WatchIncremental` (closure / eligibility / outcome-validation / merge);
+the watch loop wires it under --noEmit; `--watchVerify` diffs every
+incremental result against a full rebuild in the field. VERIFIED:
+WatchIncrementalTest (+5 — both equivalence contracts incremental ≡
+full, transitive closure, negative controls) and the CLI smoke
+("incremental recheck of 1/2 file(s)… watchVerify: INCREMENTAL ≡ FULL",
+157ms). KNOWN RESIDUAL (documented in-code, (7d2)): the lib-shared
+module-interface merge (`moduleInterfaceNames`) can in principle reach a
+non-importer — --watchVerify measures exactly this class. Gates: corpus
+11,359/0; listAll ×8 byte-identical. REMAINING in (7d): cross-process
+.tsbuildinfo persistence (7d3) — optional productization.
+
 **Round 613 (2026-07-19) — (INV.7c1) LANDED: `--watch` — the minimal
 watch mode, full rebuild per change batch.** `fileEvents(root)` (the
 ARCHITECTURE-RETHINK file-event Flow; expect/actual — JVM wraps
@@ -2270,6 +2294,18 @@ interrupt the arc).
   - [x] **(INV.7c1) `--watch` minimal watch mode** — DONE round 613 (full
     rebuild per debounced change batch; fileEvents Flow expect/actual;
     end-to-end verified, 46ms warm rebuild). Incremental reuse is (7d).
+  - [x] **(INV.7d1) Watch-mode incremental recheck** — DONE round 614
+    (reverse-dependency closure over the INV.6 partition seam; full-rebuild
+    bails for non-local changes; --watchVerify field gate; equivalence
+    pinned by WatchIncrementalTest).
+  - [ ] **(INV.7d2) The lib-shared-interface residual**: a changed module
+    file's top-level interface sharing a LIB global's name merges
+    program-wide — currently NOT a full-rebuild trigger. Add the bail (needs
+    moduleInterfaceNames visibility at the driver) or prove it unreachable;
+    --watchVerify collects field evidence meanwhile.
+  - [ ] **(INV.7d3) Cross-process `.tsbuildinfo` persistence** (optional):
+    persist file hashes + per-file diagnostics; on cold start, recheck only
+    the changed closure. The in-memory protocol from (7d1) is the core.
   - [x] **(INV.7a) linuxX64 re-enabled** — DONE round 610: compiles/links/runs
     byte-correct (compiler profile = the exact 46-error floor, 196s debug
     binary; smoke 82ms). EpochMap/Set now composition (K/N HashMap is final).

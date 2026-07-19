@@ -153,7 +153,11 @@ class TypeScriptCompiler {
         parsed: ParsedSource,
         baseOptions: CompilerOptions,
         fileName: String = "input.ts",
-    ): CompilationResult = runWithDeepStack { compileParsedCore(parsed, baseOptions, fileName) }
+        /** INV.7(d1): when non-null, the checker runs as a PARTITION over this set
+         *  (the INV.6 seam) — the watch loop's incremental recheck; the caller
+         *  merges kept prior diagnostics for out-of-set files. */
+        recheckOnly: Set<String>? = null,
+    ): CompilationResult = runWithDeepStack { compileParsedCore(parsed, baseOptions, fileName, recheckOnly) }
 
     /**
      * The pipeline body of [compileParsed] — always entered through [runWithDeepStack],
@@ -164,6 +168,7 @@ class TypeScriptCompiler {
         parsed: ParsedSource,
         baseOptions: CompilerOptions,
         fileName: String,
+        recheckOnly: Set<String>? = null,
     ): CompilationResult {
         var options = baseOptions
         // Scan multi-file sources for `package.json` files declaring `"type": "module"` or
@@ -1504,6 +1509,7 @@ class TypeScriptCompiler {
                 checker = workerCheckers[0]
             } else {
                 checker = Checker(options, binderResults, isMultiFileSource = parsed.hasExplicitFilenames,
+                    assignedFileNames = recheckOnly,
                     allInputFileNames = allInputFileNames,
                     jsonModuleContents = jsonModules)
                 diagnostics.addAll(checker.getDiagnostics())

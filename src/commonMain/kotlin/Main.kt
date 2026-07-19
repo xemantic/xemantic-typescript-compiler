@@ -50,12 +50,14 @@ fun main(args: Array<String>) {
     var noEmit = false
     var listAll = false
     var watch = false
+    var watchVerify = false
     var passTiming = false
     var i = 0
     while (i < args.size) {
         when (val a = args[i]) {
             "--noEmit", "--noemit" -> noEmit = true
             "--watch", "-w" -> watch = true
+            "--watchVerify", "--watchverify" -> { watch = true; watchVerify = true }
             "--listAll", "--listall" -> listAll = true
             "--passTiming", "--passtiming" -> passTiming = true
             "--partitionCheck", "--partitioncheck" -> {
@@ -96,7 +98,7 @@ fun main(args: Array<String>) {
     println("time:    ${duration.inWholeMilliseconds} ms")
     if (passTiming) PassTiming.dump(::println)
     println(if (result.errorCount == 0) "OK — 0 errors" else "FAILED — ${result.errorCount} error(s)")
-    if (watch) runWatchLoop(project, result.configPath, noEmit, listAll)
+    if (watch) runWatchLoop(project, result.configPath, noEmit, listAll, watchVerify, result)
 }
 
 /**
@@ -107,9 +109,13 @@ fun main(args: Array<String>) {
  * triggers a rebuild iff it touches a compilation-relevant file (source /
  * config extensions) outside the output directory.
  */
-private fun runWatchLoop(project: String, configPath: String, noEmit: Boolean, listAll: Boolean) {
+private fun runWatchLoop(
+    project: String, configPath: String, noEmit: Boolean, listAll: Boolean,
+    verify: Boolean, initial: ProjectCompiler.Result,
+) {
     val watchRoot = configPath.substringBeforeLast('/', ".").ifEmpty { project }
     println("watching: $watchRoot  (Ctrl-C to exit)")
+    var prev = initial
     runCompilerPipeline {
         coroutineScope {
             val changes = Channel<String>(Channel.UNLIMITED)
@@ -118,12 +124,41 @@ private fun runWatchLoop(project: String, configPath: String, noEmit: Boolean, l
             }
             while (true) {
                 val batch = awaitChangeBatch(changes, quietMs = 200)
-                if (batch.none { watchRelevant(it) }) continue
+                val relevant = batch.filterTo(mutableSetOf()) { watchRelevant(it) }
+                if (relevant.isEmpty()) continue
                 println()
-                println("change detected (${batch.count { watchRelevant(it) }} file(s)) — rebuilding…")
+                // INV.7(d1): incremental recheck over the reverse-dependency
+                // closure when eligible; full rebuild otherwise (or when the
+                // incremental outcome is invalid — program shape changed).
+                val incremental = noEmit &&
+                    WatchIncremental.incrementalEligible(relevant, prev) { SystemVfs.readText(it) }
                 val (result, duration) = measureTimedValue {
-                    ProjectCompiler(SystemVfs).build(project, noEmit)
+                    if (incremental) {
+                        val closure = WatchIncremental.recheckClosure(relevant, prev.importEdges)
+                        println("change detected (${relevant.size} file(s)) — incremental recheck of ${closure.size}/${prev.programFiles.size} file(s)…")
+                        val fresh = ProjectCompiler(SystemVfs).build(project, noEmit, recheckOnly = closure)
+                        if (WatchIncremental.incrementalOutcomeValid(relevant, prev, fresh)) {
+                            val merged = fresh.copy(
+                                diagnostics = WatchIncremental.mergeDiagnostics(prev, fresh.diagnostics, closure),
+                            )
+                            if (verify) {
+                                val full = ProjectCompiler(SystemVfs).build(project, noEmit)
+                                val a = merged.diagnostics.map { "${it.fileName}|${it.start}|${it.code}|${it.message}" }.sorted()
+                                val b = full.diagnostics.map { "${it.fileName}|${it.start}|${it.code}|${it.message}" }.sorted()
+                                println(if (a == b) "watchVerify: INCREMENTAL ≡ FULL (${b.size} diagnostics)"
+                                        else "watchVerify: DIVERGED — incremental=${a.size} full=${b.size} (REPORT THIS)")
+                            }
+                            merged
+                        } else {
+                            println("program shape changed — full rebuild…")
+                            ProjectCompiler(SystemVfs).build(project, noEmit)
+                        }
+                    } else {
+                        println("change detected (${relevant.size} file(s)) — rebuilding…")
+                        ProjectCompiler(SystemVfs).build(project, noEmit)
+                    }
                 }
+                prev = result
                 printDiagnostics(result.diagnostics, listAll)
                 println("time:    ${duration.inWholeMilliseconds} ms")
                 println(if (result.errorCount == 0) "OK — 0 errors" else "FAILED — ${result.errorCount} error(s)")
@@ -189,7 +224,8 @@ private fun printUsage() {
           --noEmit           type-check only; do not write outputs
           --listAll          print every error (default: first 30) — for run-to-run FP diffing
           --passTiming       print the INV.0 per-pass wall-time table + recompute counters
-          --watch, -w        stay running and rebuild on file changes (INV.7(c1); full rebuild)
+          --watch, -w        stay running and rebuild on file changes (incremental recheck under --noEmit)
+          --watchVerify      --watch + diff every incremental result against a full rebuild (INV.7(d1) gate)
           --partitionCheck N run N sequential partition checkers and diff vs the full run (INV.6(6b))
           --workers N        parallel share-nothing partition check on N threads (INV.6(6c); line order may differ)
                              + the INV.3(a) globals-lookup conflation classification
