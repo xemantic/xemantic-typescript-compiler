@@ -20,6 +20,39 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 617 (2026-07-19) — (INV.7d3) UNBLOCKED BY OWNER + LANDED: cross-process
+`.xtsbuildinfo` persistence on the approved build-id stamp; (INV.7b) PARKED-BY-OWNER.**
+The owner approved the build change and parked the Release binary ("switch it
+off for now"); the perf-targets conversation (the canonical-types arc) is
+explicitly deferred to the owner. (1) `generateBuildInfo` (build.gradle.kts)
+generates commonMain `BuildInfo.kt` with `XTSC_BUILD_ID` = the git sha at build
+time, `.dirty`-suffixed on a locally-modified tree, `unknown` without git;
+every Kotlin compile task depends on it (the generateRealLibSources pattern).
+(2) `TsBuildInfo` (commonMain) persists `{buildId, FNV-1a-64 content hashes of
+program files + every `.json` config read (RecordingVfs — tsconfig/extends
+chain/package.json), programFiles/moduleFiles/sharedNameFiles/importEdges,
+diagnostics}` as `tsconfig.xtsbuildinfo` next to the config
+(kotlinx-serialization, the TsConfigFile precedent). Cold start under
+`--incremental --noEmit`: buildId must match EXACTLY and be clean —
+`unknown`/`.dirty` ids never persist NOR reuse (two dirty states silently
+differ under one id; the exact guardrail (7d3) was blocked on) — then the
+hash diff yields the changed set and the (7d1) protocol runs VERBATIM:
+eligibility ((7d2) bails included; a changed/deleted config file lands in the
+changed set via its hash and bails) → reverse-dependency closure → partition
+build → outcome validation → mergeDiagnostics; any bail = full build; the
+outcome is always re-persisted. A NEW file invisible to stored hashes is
+caught by the program-shape outcome check (the changed=∅ fast path still runs
+an empty-partition build that re-crawls the globs). Pins (+11,
+TsBuildInfoTest): zero-recheck fast path ≡ full; leaf-edit 1-file closure ≡
+full; round-tripped kept diagnostics keep positions; id-mismatch /
+dirty / unknown / tsconfig-change / new-file / deleted-file / corrupt-file
+all fall back to full (corrupt is re-written valid). Gates: corpus 11,372/0 (+11). CLI smoke (clean-id binary, 3 runs): cold full build persists; unchanged run reuses — 'incremental recheck of 0/2 file(s)' with the kept TS2322 reprinted from the store; a leaf edit rechecks 1/2 with the old error gone and the new one caught; ~630 ms each;
+native compiles (TsBuildInfo is commonMain, no expect/actual needed). The
+checker is untouched — the default (non-incremental) CLI path is byte-identical
+by construction. QUEUE STATE: every remaining item is owner-parked ((7b),
+Post-v1 backlog), externally blocked (EP reference-tsc, M4.7 network), or
+deferred ((6e) parallel emit — benches are --noEmit).
+
 **Round 616 (2026-07-19) — (7d3) marked BLOCKED-PENDING-USER (the version-
 stamp guardrail) + the honest INV-arc scorecard vs the § 6 targets.**
 (7d3)'s only safe design needs a compiler version stamp in the buildinfo
@@ -185,379 +218,6 @@ state: compute collectors once, share read-only — an immutability
 audit) or INV.5 canonical types. Gates: corpus 11,351/0; listAll ×8
 byte-identical. The INV.6 Phase-0 arc (6a-6d1) is COMPLETE at its
 honest ceiling: w2 −17%, output-identical, opt-in.
-
-**Round 608 (2026-07-18) — (INV.6(6c1)) LANDED: `--workers N` — the
-share-nothing parallel check driver; MEASURED: w2 −14%, w4 FLAT (the
-per-worker redundancy ceiling).** `runInDeepStackWorkers` (expect/actual;
-JVM = concurrent deep-stack threads, each rebasing its Symbol/Type id
-sequences to ±1e9 at startup; native = sequential inline, no rebase)
-runs N partition checkers replacing the single full checker — fresh bind
-per worker, deterministic worker-order merge, program-level
-fileName-null diagnostics deduped by key; worker 0's checker serves the
-downstream Transformer (the earlier "checker unused after diagnostics"
-read missed the bare `Transformer(options, checker, …)` reference —
-caught at compile). CORRECTNESS: `--workers 4` output is
-sorted-line-IDENTICAL to sequential on the compiler profile. WALL
-(daemons stopped, -Xmx6g, 4-core box): seq 31.4s / w2 27.0s (−14%) / w4
-31.2s; RSS w2 1.35GB, w4 1.88GB — NOT memory-bound. The w4 ceiling is
-the per-worker REDUNDANT FIXED COST: the ~7.3s non-spine pass suite +
-the cross-file lazy-resolution warmup each worker repays (the spine's
-partitionable slice is its per-file emissions, NOT its resolution
-warmup — tsgo's accepted redundancy, which stops paying past w2 on 4
-cores). The levers are exactly (6d) (gate more passes into the
-partition → shrink the fixed cost) and INV.5 canonical types (shrink
-the warmup). Gates: corpus 11,351/0; listAll ×8 byte-identical
-(sequential path unchanged). NEXT: (6d), or record the bench row and
-reassess the INV.6 ROI vs INV.5(d2) first.
-
-**Round 607 (2026-07-18) — (INV.6(6c0)) LANDED: thread-local Symbol/Type id
-sequences + the deep-stack inherit/write-back handoff.** The process-global
-`nextId`/`nextTypeId` companions become `IntThreadLocal` cells (expect/
-actual: JVM ThreadLocal, native plain var) — the enabler for concurrent
-workers (racing `++` could hand one worker the same id twice and makes id
-ORDER scheduler-dependent → nondeterministic union displays; the
-parallel-caching determinism requirement forbids both). FIRST CUT FAILED
-(51 corpus failures): a fresh per-compile deep-stack thread started ids
-at 1, COLLIDING with the singleton intrinsics allocated on the class-load
-thread — caught by the corpus gate, listAll stayed identical (the
-collision class mostly hides in id-keyed cache confusion). FIX:
-`runWithDeepStack` (JVM) now CAPTURES the caller thread's sequences,
-seeds the compile thread, and WRITES THE ADVANCED VALUES BACK on join —
-a chain of sequential compiles allocates one continuous sequence exactly
-as the old globals did; parallel workers will override with explicit
-`rebaseThreadIds` per worker instead. Wall unchanged (31.8s compiler,
-in-band). Gates: corpus 11,351/0; listAll ×8 byte-identical. NEXT: (6c1)
-the worker driver itself (runInDeepStackWorkers + --workers N + merge).
-
-**Round 606 (2026-07-18) — (INV.6(6b)) LANDED + MEASURED CLEAN: partition
-equivalence holds on ALL 8 PROFILES.** The opt-in `--partitionCheck N`
-CLI mode (PartitionCheck global toggle, the PassTiming pattern; harness
-in TypeScriptCompiler.kt) runs N sequential partition checkers over
-FRESHLY-BOUND copies of the shared parse trees — fresh bind per worker
-is LOAD-BEARING: checker init mutates shared symbols via
-mergeSymbolTable (the documented double-merge declaration corruption),
-while the Binder itself never touches the AST (verified: all its
-mutations are on its own fresh Symbols), so parse trees share safely.
-Merged partition output (fileName-null program-level diagnostics
-deduped by key — every worker emits them) is diffed against the full
-run. RESULT: EQUIVALENT on all 8 tsc-source profiles at workers=2, and
-at workers=4 on the two stress profiles (compiler 46, harness 94
-diagnostics — byte-identical merges). The rounds-566..591
-order-dependence fixes evidently closed the cross-file spine-state
-channels: the (6b) divergence worklist is EMPTY and (6c) — the real
-coroutine driver — is unblocked. Gates: corpus 11,351/0 (harness inert
-at default workers=0). NEXT: (6c).
-
-**Round 605 (2026-07-18) — (INV.6(6a)) LANDED: the spine partition seam +
-the sequential-equivalence pin.** The dormant `assignedFileNames` output
-filter (CheckerPool-era) becomes the Phase-0 partition seam: both spine
-per-file loops (checkSpine + the declarationOnly spineUResOnly driver)
-SKIP files outside the assigned set — the dominant cost (spine = 72% of
-checker-init) is now partitionable; program-wide passes/indexes still run
-per worker (tsgo's accepted redundancy) and getDiagnostics filters their
-out-partition output. THE CONTRACT (docstring + pins): sequential
-equivalence — the sorted union of complementary workers must equal the
-full run byte-identically; any divergence is a cross-file spine-state
-leak to FIX, never an accepted delta. SpinePartitionEquivalenceTest (+4)
-pins 2-partition merge ≡ full, every singleton partition ≡ its slice,
-no foreign-file emissions, + negative control. Null path byte-identical
-(corpus 11,351/0; listAll ×8 identical). DECOMPOSITION queued: (6b) the
-profile-scale equivalence A/B (partitioned CLI runs on the 8 profiles vs
-sequential — divergences = the order-dependence worklist), (6c) the
-coroutine parallel driver (--workers N, deterministic merge via the
-stable sort), (6d) gate remaining per-file passes into the partition
-(cost order; cross-file walkers stay sequential-region), (6e) parallel
-emit on Default + IO sink. NEXT: (6b).
-
-**Round 604 (2026-07-18) — (b2d4) LANDED: the (b2) INSTALLER FLIP IS
-COMPLETE.** pushFunctionTypeParamsScope becomes the inline region
-`withFunctionTypeParamsScope` (fresh-minted TPs, constraints/defaults
-under the new scope — the push/pop helper and all 5 caller
-save/try/finally shells deleted); checkConstraintsInStatements' two arms
-flip (the fn arm's build-under-ambient + empty→null install as a region;
-the ImportType alias arm keeps currentTypeParamDecls hand-rolled around
-a scope region). Raw ambient tpScope writes 8 → 4 — ALL remaining are
-the spine frame LIFO sites (ccetSpineFileReset / spineArithTeardown:
-install-at-enter/restore-at-leave crossing call boundaries — not
-region-formable by construction; they are the designed residual writers
-until frames carry mappers, an INV.5-endgame/(bN) item). From the
-round-546 survey: 87 write sites → 4. Gates: corpus 11,347/0; listAll ×8
-byte-identical. NEXT per queue order: INV.5(d2) (optional) or INV.6.
-
-**Round 603 (2026-07-18) — (b2d3) LANDED: the ccet-leaf installer cluster
-(checkCallTypesInStatement) on the bridge.** Three regions converted: the
-fn-decl arm rides `withInternedTpScope(withAst = true)` (its outer
-localTypes/paramBindings try/finally stays hand-rolled around it); the
-class arm's canonical-TP install becomes a conditional
-`scopeMapper(classScopeInstall) : ambientMapper()` region spanning the
-member loop (savedClassScope kept as a val — the static-method branch
-reads it); the 17.21 static-method scope juggle becomes a per-member
-`methodMapper` (pop-to-class-scope / fresh-mint-own-TPs / ambient)
-installed via a nested region inside the member's try. Restore-order
-differs from legacy (region restores scope before the outer finally
-restores localTypes) — independent fields, same final state. Raw ambient
-tpScope writes 10 → 8; ALL remaining are the structurally-hard tail:
-checkConstraintsInStatements (dual-ambient with currentTypeParamDecls),
-pushFunctionTypeParamsScope (push/pop helper crossing call boundaries),
-and the spine frame LIFO sites (restore-at-leave). Gates: corpus
-11,347/0; listAll ×8 byte-identical. NEXT: the tail needs per-shape
-design (or waits on (bN) field-removal planning); alternatively
-INV.5(d2)/INV.6 per queue order.
-
-**Round 602 (2026-07-18) — (b2d2) LANDED: three more installer families on
-the bridge.** checkTpListDefaults (the empty→null shape — note its
-constraints resolve during the BUILD loop under the ambient scope, a
-deliberate behavior kept), checkMixinClassInStatements (dual-ambient:
-only the TP-scope half rides `withInstantiationContext`; mixinValueScope
-stays hand-rolled around it), and checkClassPropertyOverrides (the
-500-line heritage region — conditional install expressed as
-`overrideScope != null ? scopeMapper(...) : ambientMapper()`; an
-ambientMapper region is a semantic no-op install). Raw ambient
-tpScope writes 15 → 10; survivors: checkCallTypesInStatement (ccet leaf,
-7 sites), checkConstraintsInStatements (dual with currentTypeParamDecls),
-pushFunctionTypeParamsScope (push/pop helper), the spine frame LIFO
-sites (not region-formable — restore at leave crosses call boundaries).
-Gates: corpus 11,347/0; listAll ×8 byte-identical. NEXT: (b2d3) the
-ccet-leaf sites, then the (bN) blockers list is down to the
-structurally-hard cases.
-
-**Round 601 (2026-07-18) — (b2d) LANDED: the walker-installer idiom flipped
-to the region form via `withInternedTpScope`.** The shared shape (intern
-TPs → layered scope [+ the AST side-map] → constraints [+ defaults]
-materialized UNDER the new scope → walk → restore) is now ONE inline
-helper routing its scope write through `withInstantiationContext(
-scopeMapper(...))`; 7 hand-rolled save/set/try/finally installer sites
-converted (walkStmtsForTypeParamCasts fn/class/method arms,
-walkStmtForTypeParamOps class arm, walkFnLikeBodyForTypeParamOps,
-spread2698FuncLike, checkFunctionBody's sig-TP install with defaults).
-The AST side-map (`currentTypeParamAstForOps`) is deliberately NOT in
-the mapper — walker-local state, hand-rolled inside the helper.
-Behavior-identical by construction (incl. the population-throw
-restore wart). Raw ambient writes 28 → 15; survivors:
-checkCallTypesInStatement (ccet leaf, 7), checkConstraintsInStatements
-(dual-ambient), checkTpListDefaults (empty→null shape),
-checkClassPropertyOverrides, checkMixinClassInStatements,
-pushFunctionTypeParamsScope (push/pop helper), + the spine frame
-LIFO sites (not region-formable). Gates: corpus 11,347/0; listAll ×8
-byte-identical. NEXT: the remaining (b2d2) batch, then (bN).
-
-**Round 600 (2026-07-18) — (INV.5(e) DONE) the Generic-family pin-walker
-deletion sweep: 15/16 are STILL LOAD-BEARING; 1 deleted.** All 16
-`checkGeneric*`-family pass dispatches disabled in one experiment; the
-corpus answered with 21 failures across 15 walkers' pins (defaults
-validation, TP-fixing/contextual-arrow inference, conditional-return
-constraints, TS2862 index writes, curried/circular self-ref, generator
-yield args, pipe inference, mapped filtering-handler calls, JSDoc
-bare-generic tags, invariant-this elaboration, stricter-constraints
-assignment, then-chain constraints, Record cast access, mapped-fn-alias
-assignments) — the round-553 generic-gate opening does NOT supersede this
-family: their shapes are inference/constraint semantics the structural
-relation cannot decide. The ONE pin-less walker —
-checkGenericFnTypeBipartition (B484; its pin family noStrictGenericChecks
-is whole-file tsgo-skipped since 2026-07-02, so the pin left the suite) —
-is DELETED (~165 lines: walker + gfb* helpers + GfbConflict + dispatch).
-Gates: corpus 11,347/0; listAll ×8 byte-identical. INV.5(e) is DONE (both
-halves: round-553 hasUnresolvedTypeParams skip deletion + this sweep).
-NEXT: INV.5(b) explicit mapper objects, per queue order.
-
-**Round 599 (2026-07-18) — (f2) MEASURED DEAD-END too; INV.4 is CLOSED and
-the arc moves to INV.5.** The walk-repeat shadow: 31,016 identical repeats
-/ 50 structural-union / 148 diff / 80k miss, savableNanos=1,412ms — a
-real proportional-cost target (unlike f1). The LIVE fold (the two
-Type-returning entries, epoch-fenced + declaredType-identity +
-confirm-once) was fully gate-green (corpus 11,347/0 + listAll ×8) but the
-interleaved A/B read NOISE (~1%): the confirm-once tax (every 2nd call
-still walks to confirm) + epoch churn (80k of 111k walks at fresh epochs)
-cap the served fraction below measurability. REVERTED (probes kept).
-STRATEGIC CONCLUSION: both INV.4(f) single-lever wins are measured
-dead-ends AT THE CURRENT COST STRUCTURE — the blockers are (a) fresh
-minting (unions/literals/objlits — INV.5(a) interning exists for
-union/intersection CALLS through getUnionType? no: the round-545 interning
-covers getUnionType — yet narrowing results still churn identity via
-rebuilt member LISTS...) and (b) epoch churn from the recording-heavy
-walk. The ≤10s target runs through INV.5's canonical types (which would
-make results identity-stable and REVIVE both memo designs) + INV.6
-parallelism. INV.4 CLOSES: the migration + retirements delivered the real
-win (35.7 → ~31s, −13%) and ONE authoritative walk — its structural goal.
-NEXT: INV.5(b) explicit mapper objects, or INV.5(e)'s second half (the
-superseded-pin-walker deletion sweep), per the queue order.
-
-**Round 598 (2026-07-18) — the FULL checkSpine attribution: the walks are
-the only big single lever.** Depth-0-guarded accumulators on the three
-remaining suspects: relations(depth0)=927ms, typeNode(depth0)=520ms,
-memberResolve(depth0)=61ms — vs narrowWalks=4,986ms and typeOfExpr≤3.9s
-(categories OVERLAP: walk spans include nested resolution). The
-unattributed remainder is BROAD emitter machinery (leaf check* logic,
-dispatch overhead, frame constructions) — no second concentrated lever.
-CONCLUSION: (f2)'s walk fold (~5s target) is the one remaining
-concentrated checkSpine lever; beyond it the ≤10s target runs through
-INV.5 (canonical types) + INV.6 (parallelism), as the arc doc always
-said. Probes committed (inert off --passTiming; sentinel pins green).
-NEXT: the (f2) fold design — per-(reference-path, flow-node) walk-result
-reuse WITHIN the epoch fences (the round-595 infrastructure), evaluated
-shadow-first (the proven instrument).
-
-**Round 597 (2026-07-18) — the (f2) TIME ATTRIBUTION: the walks are 4.8s;
-~10s of checkSpine is NEITHER walks nor typeOfExpr.** Nanotime
-accumulators (--passTiming only, TimeSource-based) at the two hot
-surfaces: depth-0 narrowing walks = 4,806ms (~26% of checkSpine — a real
-(f2) lever); getTypeOfExpression total = 3,844ms (an OVERcount — nested
-spans double-counted — so exclusive is lower, consistent with the f1
-dead-end verdict). The REMAINING ~10s of checkSpine's 18.4s is relation
-checks (checkTypeRelatedTo verdicts), non-expression resolution
-(getTypeFromTypeNode / resolveStructuredTypeMembers), and the anchors'
-emitter machinery — the NEXT attribution target before committing to
-(f2)'s fold (the f1 lesson: attribute before building). Probe committed
-(inert off --passTiming); sentinel anchor pins green. NEXT: attribute the
-~10s (a relation-nanos accumulator + a resolveStructuredTypeMembers
-counter), then pick the lever: (f2) fold vs relation-engine work.
-
-**Round 596 (2026-07-18) — (f1b-ii) MEASURED DEAD-END, reverted: the live
-per-node expression-type memo is 1-3% SLOWER.** The flip served the 150k
-zero-wrong confirmed hits and was fully gate-green (corpus 11,347/0 +
-listAll ×8 byte-identical — the skipped-warming concern never
-materialized), but the interleaved wall A/B (3 B/A pairs, both class
-dirs) read B(no-serve) ≈ 30.7-31.5s vs A(serve) ≈ 31.5-31.8s: the
-SERVABLE calls are the CHEAP ones (instance-stable intrinsic/interface/
-reference lookups — already fast paths), while the EXPENSIVE recompute
-lives exactly in the NON-memoizable kinds (fresh unions/literals/objlits
-+ the narrowing-dependent property accesses), and the bookkeeping (an
-epoch bump per mutation + map/set churn + Pair allocation per stable
-call) exceeds the savings. REVERTED to the round-595 state (the epoch
-infrastructure + the --passTiming shadow instrument STAY — measured
-noise-level, and the shadow remains the policy-evaluation tool).
-CONCLUSION: (f1) as a whole-entry memo is closed at the current cost
-structure; the checkSpine lever is now (f2) — folding the 111k depth-0
-narrowing walks (68% from property access) into per-reference typing,
-which targets exactly the expensive non-memoizable calls. NEXT: (f2)
-design — the narrowing-walk consumers and a per-(reference,flowNode)
-result reuse within the walk.
-
-**Round 595 (2026-07-18) — (f1b-i) LANDED: the epoch infrastructure + a
-VALIDATED live-memo policy — hitWRONG driven to ZERO.** The invalidation
-surface: property SETTERS on the 13 ambient fields getTypeOfExpression
-consults (swap-bumps, zero call-site changes) + `EpochMap`/`EpochSet`
-inner classes (HashMap/HashSet subclasses auto-bumping on
-put/remove/putAll/clear/add/addAll) substituted at 81 construction sites
-of the localTypes family (the frames alias the same instances, so both
-access paths bump). The SHADOW memo (--passTiming only) classified every
-repeat against the live recompute across three policy iterations:
-(1) raw: 212k correct / 375 WRONG — the wrongs were FRESH-MINTING kinds
-(getTypeOfObjectLiteral mints per call; objlit freshness is semantically
-load-bearing per freshObjLitRange), then negative-literal NumberLiterals
-and getUnionType's fresh unions, plus genuine cache-warming transitions
-(an AsExpression Intrinsic→Interface); (2) kind exclusions cut some;
-(3) THE VALIDATED POLICY — result-kind WHITELIST (instance-stable only:
-Intrinsic/Interface/Reference) + CONFIRM-ONCE (serve only after a second
-identical observation at the same epoch; warming transitions can never be
-served): **hitCorrect=149,781, hitWRONG=0, miss=334,847** — ~24% of all
-627k calls provably servable with zero observed divergence. Gates: corpus
-11,347/0; listAll ×8 identical (the epoch machinery is live but inert —
-one Long bump per mutation). NEXT: (f1b-ii) the LIVE memo — serve
-confirmed whitelisted hits in production + the interleaved wall A/B
-(revert if <5% per the INV ground rules); then (f2) the narrowing fold.
-
-**Round 594 (2026-07-18) — the (f1) EPOCH-RATE PROBE: 93% of repeats are
-memoizable.** The repeat-result probe (identity-classified, --passTiming
-only; getTypeOfExpression split into a wrapper + Core for it): 626,680
-calls → 379,157 same-result repeats vs 27,110 diff-result (~60% of ALL
-calls recompute the IDENTICAL instance). The memo design constraint: the
-27k diff-result cases are the state-dependent ones (recordings/narrowing
-overrides/frame swaps between calls). INVALIDATION-SURFACE ANALYSIS: the
-frame machinery centralizes MOST mutation points (~20 sites: the
-withXFrameAmbient installs/restores, frame pushes, scoped overrides,
-per-file resets) — but legacy leaf helpers still mutate currentLocalTypes
-IN PLACE mid-anchor (checkVarDeclAssignability recordings etc.), so a
-sound epoch needs either (a) enumerating those scattered mutation sites
-(risky), (b) a mutation-counting map wrapper around the localTypes family
-(a focused refactor — the mutation API surface is put/remove/putAll/clear;
-frames alias the SAME instances so a per-instance counter + a global sum
-works), or (c) keying the memo by (nodeId, identity of currentLocalTypes
-map + its size) as a cheap proxy — UNSOUND on in-place same-size
-overwrite (rare but real: the anyType overrides). RECOMMENDED: (b), the
-wrapper — one class, the alias structure preserved, every mutation
-auto-bumps; then memo keyed (nodeId, globalEpoch) cleared per file.
-Gates: corpus 11,347/0 (the probe is --passTiming-only; off-mode calls
-Core directly). NEXT: (f1b) the MutationCountedMap wrapper + the memo,
-A/B'd interleaved for the wall win.
-
-**Round 593 (2026-07-18) — the INV.4(f) RE-MEASURE: the consolidation
-succeeded.** Post-retirements `--passTiming` (compiler profile):
-checker-init 25.7s, **checkSpine 18.4s (72%)** with 619,908
-getTypeOfExpression calls + 111,055 depth-0 narrowing walks INSIDE the
-one walk; the remaining 441 passes are ALL sub-200ms (the multiplication
-tail ≈ 6.4s, top stragglers 100-160ms each). Wall ~31.2s at round 591
-(from 35.7 pre-retirements); round 592's row pending. The ≤10s
-single-threaded target now reduces to shrinking checkSpine — the two
-(f) soundness wins are the lever, both now SOUND because the frames give
-one authoritative state: (f1) the per-node expression-type cache — a
-getTypeOfExpression memo keyed (nodeId, state-epoch) where the epoch
-increments on any frame-map mutation (recordings/overrides/frame pushes)
-— the recompute factor is ~×2.8; (f2) flow narrowing folded into
-reference typing once per (reference, flow-node) instead of 111k
-independent depth-0 walks. Both are design tasks with the
-first-touch-order hazard now CONFINED to one walk (order within the walk
-is fixed by the tree). NEXT: (f1) design + a counter probe for the
-epoch-invalidation rate (how often do mutations actually occur between
-repeated calls on the same node — if rare, a simple epoch-tag memo wins
-big).
-
-**Round 592 (2026-07-18) — (ccet-retire) LANDED: THE LAST GIANT IS RETIRED
-— ALL THREE INV.4(e) GIANTS ARE OFF EMIT-TWICE.** The
-checkCallExpressionTypes pass dispatch + driver are deleted; every ccet
-emission runs once from the per-call spine anchors. Zero fallout (the
-pins-first decision meant no scaffolding to unwind). The walker family
-survives as leaf machinery (checkComputedDestructKey consumes
-checkCallTypesInExpr best-effort; those positions are never anchored).
-Gates: corpus 11,347/0; listAll ×8 identical (46 ×7 / 94 harness).
-THE INV.4(e) TIER IS COMPLETE: checkTypeAssignability (rounds 560-576,
-retired 586), checkPropertyAccess (577-583, retired 585), and
-checkCallExpressionTypes (588-591, retired 592) — the three giants that
-were 38% of checker-init at the round-542 measurement now emit once,
-from one authoritative walk. NEXT: INV.4(f) — the two unlocked soundness
-wins (the per-node expression-type cache; flow narrowing folded into
-reference typing once) + the ≤10 s single-threaded compiler-profile
-re-measure — or the remaining small INV.4 passes / INV.5(e)'s
-superseded-pin-walker deletion sweep.
-
-**Round 591 (2026-07-18) — (ccet-m3) LANDED (merged from
-wip/ccet-m3-anchors): THE LAST GIANT'S EMISSIONS RUN FROM THE SPINE.**
-Per-Call/New/TaggedTemplate anchors at their own leaves under the frame
-ambient + the full per-edge reach classifier + legacy truncation marks at
-the three emitter sites + decl-leave recordings (the spine's per-node
-order = the legacy interleave for free) + CcetAnchorTest (8 pins). The
-round-590 blocker resolved by the probe plan exactly as recorded: the
-Diagnostic-init probe identified checkReturnAssignability's engine-path
-TS2322 (fired from the cta RETURN anchor); a member-shape probe showed the
-TP never surfaces as Type.TypeParam — the ctor-value sig returns are RAW
-UNINSTANTIATED generic Type.Interfaces (the `NodeObject<TKind>` display);
-`typeContainsForeignTypeParam` gains the GAP-SIGNATURE rule (a
-nested-position raw generic interface = the un-inferred-generic signature
-→ bail; depth>0 keeps top-level sources checkable) — order-free in both
-cache states. Gates: corpus 11,347/0; listAll ×8 identical. NEXT:
-(ccet-retire) — the round-585 experiment template on the last giant.
-
-**Round 589 (2026-07-18) — (ccet-m2) LANDED: the g3 frame skeleton runs
-always-on and INERT — identity gates green.** CcetFrame implements the
-588c/d spec: fn-decl frames (map copies + own-TP interning/constraint
-materialization + populate + the two shadowing calls), class frames at
-ClassDeclaration enters (class TP scope via getDeclaredTypeOfSymbol,
-classSym, the baseResolution sig/type pair computed under the class
-scope), method/ctor frames (static TP-scope juggling with fresh own-TP
-minting, instance `this` registration, superBase threading), objlit
-member frames (the withObjThis semantics — explicit this-param wins),
-arrow/fn-expr frames at the FN node (own-param anyType OR the B246
-contextual variant for FunctionType-annotated var initializers),
-non-declare ModuleDeclaration ns frames (dotted-aware) + declare-module
-DEAD frames, and the If-narrowing/loop-var-shadow scoped overrides with
-restore records. ONE quirk extracted by the identity gate: the Var-arm
-decl recordings are DEFERRED to the m3 anchors (interleaved walk+record,
-the cta template) — a frame-time recording's resolution side effects
-flipped the 17.21 static-method skip-gate on classTypeParametersInStatics
-(bisected in one probe). Gates: corpus 11,341/0; listAll ×8 byte-identical.
-NEXT: (ccet-m3) the per-Call/New-node anchors at their leaves + legacy
-marks + CcetAnchorTest pins + the interleaved recordings, then
-(ccet-retire).
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
@@ -2344,26 +2004,22 @@ interrupt the arc).
     (sharedNameFiles: lib-global KNOWN_GLOBALS ∪ script top-level names;
     bidirectional bail via eligibility + outcome validation; +2 pins).
     Real-lib names outside the curation stay on the --watchVerify net.
-  - [ ] **(INV.7d3) Cross-process `.tsbuildinfo` persistence** (optional).
-    BLOCKED-PENDING-USER (round 616): every safe design needs a COMPILER
-    VERSION STAMP in the buildinfo — without one, a compiler upgrade
-    silently reuses stale kept-diagnostics for out-of-closure files
-    (file hashes can't detect it; tsc embeds its version for exactly this).
-    We have no version identity available in commonMain; generating a
-    BuildInfo.kt (version/git-sha) in build.gradle.kts is a BUILD-SYSTEM
-    change → user-gated. PROPOSAL: approve a `generateBuildInfo` task
-    writing `internal const val XTSC_BUILD_ID` (git sha at build time);
-    then (7d3) = persist {buildId, per-file content hashes, diagnostics}
-    next to tsconfig, validate buildId + hashes on cold start, and run the
-    (7d1) closure protocol for the changed set. The in-memory watch-mode
-    protocol already covers the primary use case meanwhile.
+  - [x] **(INV.7d3) Cross-process `.tsbuildinfo` persistence** — DONE round
+    617 (owner approved the generateBuildInfo build change 2026-07-19):
+    `XTSC_BUILD_ID` (git sha, `.dirty`/`unknown` never persist nor reuse)
+    stamps `tsconfig.xtsbuildinfo`; cold start hash-validates inputs (incl.
+    every `.json` config read via RecordingVfs) and runs the (7d1) closure
+    protocol for the changed set under `--incremental --noEmit`; new files
+    caught by the outcome shape check. TsBuildInfoTest (+11).
   - [x] **(INV.7a) linuxX64 re-enabled** — DONE round 610: compiles/links/runs
     byte-correct (compiler profile = the exact 46-error floor, 196s debug
     binary; smoke 82ms). EpochMap/Set now composition (K/N HashMap is final).
-  - [ ] **(INV.7b) Release binary + native bench row.** BLOCKED-ON-RESOURCES
-    (round 610b): the optimizing link OOM-kills the daemon on the 7.7GB box
-    (twice, incl. -Xmx5g + daemons stopped). Re-attempt on a ≥16GB builder;
-    the debug binary carries correctness meanwhile.
+  - [ ] **(INV.7b) Release binary + native bench row.** PARKED-BY-OWNER
+    (round 617, 2026-07-19: "we can switch it off for now"). History:
+    BLOCKED-ON-RESOURCES at round 610b — the optimizing link OOM-kills the
+    daemon on the 7.7GB box (twice, incl. -Xmx5g + daemons stopped). If ever
+    revived: re-attempt on a ≥16GB builder; the debug binary carries
+    correctness meanwhile.
 
 Numeric targets (proposed, doc § 6): post INV.4/5 single-threaded compiler profile
 ≤ 10 s (≈ JS tsc) + harness RSS ≤ 1 GB; post INV.6 compiler ≤ 5 s on 4 cores;
