@@ -132,8 +132,9 @@ class Checker(
         // Type resolution caches (checker-local — NOT on AST nodes)
         /** Cache of TypeNode → resolved Type. */
         val nodeTypes = HashMap<TypeNode, Type>()
-        /** Cache of symbol ID → resolved type of that symbol. */
-        val symbolTypes = HashMap<Int, Type>()
+        /** Cache of symbol ID → resolved type of that symbol.
+         *  M0.3(vi): [IntKeyMap] — a `HashMap<Int, ·>` boxed every probe's key. */
+        val symbolTypes = IntKeyMap<Type>()
         /** B202.1: symbol ids whose [getTypeOfSymbol] resolution is currently in
          *  progress. A re-entrant request for the SAME symbol (a resolution cycle,
          *  e.g. mutually-recursive initializers or a self-referential annotation)
@@ -159,8 +160,9 @@ class Checker(
          *  member-less, which is correct for the circular-base error inputs that
          *  trigger it. */
         val memberResolutionInProgress = HashSet<Int>()
-        /** Cache of symbol ID → declared type (for classes/interfaces). */
-        val declaredTypes = HashMap<Int, Type>()
+        /** Cache of symbol ID → declared type (for classes/interfaces).
+         *  M0.3(vi): [IntKeyMap] — see [symbolTypes]. */
+        val declaredTypes = IntKeyMap<Type>()
         // Type relation instances
         val subtypeRelation = Relation()
         val assignableRelation = Relation()
@@ -186,7 +188,7 @@ class Checker(
         // LinkStore: checker-local side map for import alias targets.
         // In TypeScript/tsgo, symbol.target is set by the checker — storing it
         // here instead keeps binder output immutable for parallel checking.
-        val symbolTargets = HashMap<Int, Symbol>()
+        val symbolTargets = IntKeyMap<Symbol>()
         /** Interning cache for Type.Reference, keyed on `target.id|arg1.id,arg2.id,...`.
          *  Identical instantiations share an instance (and `Type.id`), enabling the
          *  id-based cycle detection in `relationComparisonStack` to catch logically
@@ -99240,7 +99242,7 @@ interface DataView {
     private fun narrowTypeFromFlow(
         declaredType: Type, flowNodeIn: FlowNode, name: String,
         seen: NarrowSeen, depth: Int,
-        memo: MutableMap<Int, Pair<Int, Type>> = mutableMapOf(),
+        memo: NarrowFlowMemo = NarrowFlowMemo(),
     ): Type {
         // P0 (services hang): reset the per-request budget + callee-decl cache at an
         // OUTERMOST entry (narrowLiveDepth == 0 ⇔ not inside any walk, including
@@ -99279,7 +99281,7 @@ interface DataView {
             // Per-invocation flow-node memo (tsc's sharedFlowNodes): serve only entries
             // computed at a same-or-deeper entry depth — a clean completion there proves a
             // shallower(-or-equal)-entry revisit would recompute the identical value.
-            memo[flowNode.id]?.let { (cachedDepth, cached) -> if (depth <= cachedDepth) return cached }
+            memo.served(flowNode.id, depth)?.let { return it }
             if (!seen.add(flowNode.id)) {
                 narrowWalkTruncated = true
                 return declaredType
@@ -99360,8 +99362,7 @@ interface DataView {
             narrowLiveDepth--
         }
         if (!narrowWalkTruncated) {
-            val prev = memo[node.id]
-            if (prev == null || prev.first < depth) memo[node.id] = depth to result
+            memo.putIfDeeper(node.id, depth, result)
         }
         narrowWalkTruncated = narrowWalkTruncated || savedTruncated
         return result
@@ -124160,7 +124161,7 @@ interface DataView {
     private fun narrowTypeFromFlowFollowLoopEntry(
         declaredType: Type, flowNodeIn: FlowNode, name: String,
         seen: NarrowSeen, depth: Int,
-        memo: MutableMap<Int, Pair<Int, Type>> = mutableMapOf(),
+        memo: NarrowFlowMemo = NarrowFlowMemo(),
     ): Type {
         // P0 (services hang): budgets + memo mirror [narrowTypeFromFlow] — see the
         // commentary there (kept in sync per the CLAUDE.md walker-mirror invariant),
@@ -124184,7 +124185,7 @@ interface DataView {
                 narrowWalkTruncated = true
                 return declaredType
             }
-            memo[flowNode.id]?.let { (cachedDepth, cached) -> if (depth <= cachedDepth) return cached }
+            memo.served(flowNode.id, depth)?.let { return it }
             if (!seen.add(flowNode.id)) {
                 narrowWalkTruncated = true
                 return declaredType
@@ -124274,8 +124275,7 @@ interface DataView {
             narrowLiveDepth--
         }
         if (!narrowWalkTruncated) {
-            val prev = memo[node.id]
-            if (prev == null || prev.first < depth) memo[node.id] = depth to result
+            memo.putIfDeeper(node.id, depth, result)
         }
         narrowWalkTruncated = narrowWalkTruncated || savedTruncated
         return result
