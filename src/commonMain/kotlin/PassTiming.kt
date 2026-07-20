@@ -59,6 +59,28 @@ object PassTiming {
     /** Master switch — off by default. Every hook below is inert when false. */
     var enabled: Boolean = false
 
+    /** M0.1 tail-triage lab: LIGHT census mode — [pass] records ONLY the
+     *  per-pass emitted-diagnostic deltas ([diagsByPass], via [diagnosticsSize])
+     *  without the full instrumentation's counters/sets, so a whole corpus-suite
+     *  run can accumulate the union cheaply. Off by default; behavior-free by
+     *  construction (size reads only). Set by the JVM-only PassLab file hook or
+     *  by tests. NOT thread-safe — never combine with `--workers`. */
+    var censusMode: Boolean = false
+
+    /** M0.1 tail-triage lab: init-dispatch pass names whose [pass] BODY is
+     *  SKIPPED — the batch-disable instrument for the census protocol
+     *  (PLAN-PHASE-5.md (M0.1)). Empty by default (one `isNotEmpty()` field
+     *  read per pass call); a non-empty set deliberately CHANGES compiler
+     *  behavior — any run using it is an experiment, never a gate. */
+    var disabledPasses: Set<String> = emptySet()
+
+    /** [censusMode]'s accumulator: per-pass emitted-diagnostic counts summed
+     *  across EVERY compile in the process. Deliberately NOT cleared by
+     *  [reset] — process-lifetime, so mid-suite tests that reset the regular
+     *  counters cannot wipe the corpus census (the PassLab shutdown hook dumps
+     *  it at JVM exit). */
+    val censusByPass = LinkedHashMap<String, Int>()
+
     /** Name of the init-dispatch pass currently executing, for counter
      *  attribution; null outside any wrapped pass (setup region, lazy work
      *  triggered before/after the dispatch). Maintained by [pass]. */
@@ -397,8 +419,24 @@ object PassTiming {
  * constructor toward the JVM's 64 KB method limit.
  */
 internal fun pass(name: String, body: () -> Unit) {
+    // M0.1 tail-triage lab: batch-disable (experiment-only; empty by default).
+    if (PassTiming.disabledPasses.isNotEmpty() && name in PassTiming.disabledPasses) return
     if (!PassTiming.enabled) {
-        body()
+        if (PassTiming.censusMode) {
+            // Light census: emitted-diagnostic delta only (no nanos/sets),
+            // into the reset-immune process-lifetime accumulator.
+            val c0 = PassTiming.diagnosticsSize?.invoke() ?: 0
+            try {
+                body()
+            } finally {
+                val c1 = PassTiming.diagnosticsSize?.invoke() ?: 0
+                if (c1 > c0) {
+                    PassTiming.censusByPass[name] = (PassTiming.censusByPass[name] ?: 0) + (c1 - c0)
+                }
+            }
+        } else {
+            body()
+        }
         return
     }
     val saved = PassTiming.currentPass

@@ -20,6 +20,39 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 619 (2026-07-20) — the PERF arc opens (owner: "proceed according to
+your recommendations") and (M0.1) tail triage runs to its verdict: the
+deletion hypothesis is DEAD — the tail is ~all corpus-pinned; migration
+(M0.4) carries the lever.** Landed in order: (1) the queue restructure — PERF
+(M0.1–M2) top-of-queue + docs/ARCHITECTURE-RETHINK.md § 6 rewritten to the
+honest ledger (25 s pre-arc → 35.7 s peak → 31 s today; revised targets
+M0 ≤24 s / M1 ≤15–20 s / M2 ≤10–12 s @ 4 workers; native de-scoped as a perf
+lever; the below-noise-floor landing rule). (2) The PassLab facility
+(JVM-only): `build/pass-lab.txt` (`census` / `disable <pass>`), loaded once
+per JVM at the runWithDeepStack funnel — the one seam every JVM compile
+crosses (generated corpus tests call TypeScriptCompiler directly, so no
+test-support hook exists; the funnel hook covers CLI + suite identically);
+`PassTiming.censusMode` (light per-pass emitted-diagnostic census into the
+reset-immune `censusByPass` — the first probe dumped EMPTY because
+Inv0PassTimingTest's cleanup reset() wiped the shared accumulator mid-fork,
+hence the dedicated process-lifetime map) + `PassTiming.disabledPasses`
+(pass() body skip). Pins +7 (5 Inv0PassTimingTest incl. reset-immunity and
+censusMode byte-parity; 2 PassLabParseTest — ensureLoaded's global toggle is
+deliberately NOT exercised in-suite, it would poison the fork). (3) Phase A:
+corpus-only census run (`--tests '…TypeScriptCompilerTests_*'`, lab active)
+GREEN — doubling as an 11k-test ON-mode byte-identity gate — plus a separate
+full-suite off-mode gate (11,379/0). VERDICT: 417/440 tail passes emit on
+the corpus (6,185 ms of 6,244 ms); the census-silent pool is 23 passes /
+59 ms. Artifact: docs/perf/pass-census-round619.txt. (4) Phase B collapsed
+to one batch: all 23 disabled → full suite GREEN (11,379/0) → compiler
+`--listAll` A/B BYTE-IDENTICAL. The 23 are deletion-ready pending the ×8
+listAll gate + a consumer trace for the four producers/rewriters among them
+(ctaPostFilters, populateAmbientCyclicBaseClasses,
+applyDomLibSuggestionRewrite, checkBaseClassImprovedMismatch) — suite-green
+is weak evidence for suppression producers. NEXT (top-of-queue): the (M0.1d)
+deletion commit, then (M0.2) kindId table / (M0.3) layout / (M0.4) the
+migration grind, which now carries the whole 6.2 s tail lever.**
+
 **Round 618 (2026-07-20) — the owner-directed perf-target discussion opens:
 fresh profile + JFR at HEAD, and three M0 measurement rungs run to ground —
 two estimates KILLED by measurement, one sharpened into a design number.**
@@ -209,37 +242,6 @@ INV.7 watch/incremental, and the externally-blocked items (EP needs a
 reference tsc; INV.7b needs a ≥16GB builder; M4.7 needs network).
 NEXT: open the INV.3(d) campaign with fresh context.
 
-**Round 610b (2026-07-19) — (INV.7b) BLOCKED-ON-RESOURCES: the Release
-link OOM-kills the build daemon on this 7.7GB box.** Two attempts (the
-second with daemons stopped + `-Pkotlin.native.jvmArgs=-Xmx5g`): the
-K/N OPTIMIZING codegen of the 200k-line Checker.kt kills the daemon
-("Gradle build daemon disappeared unexpectedly") both times; the DEBUG
-link (2m, 53MB .kexe) works fine and is the round-610 verified binary.
-Not a code defect — a builder-resource limit. Re-attempt on a ≥16GB
-box (or after INV.5(d2) shrinks the checker); the debug binary carries
-the correctness story meanwhile. NEXT per queue: the INV.5(d2)/Phase-1
-reassessment, or the remaining EP/backlog items.
-
-**Round 610 (2026-07-19) — (INV.7a) LANDED: THE NATIVE TARGET IS
-RE-ENABLED (pre-approved M5 exception) — linuxX64 compiles, links, and
-produces BYTE-CORRECT output on the full compiler profile.** Enablers:
-the konan 2.4.0 toolchain is cached (offline-workable); PipelineRunner
-gets its native actual (runBlocking + Dispatchers.IO exist on native);
-EpochMap/EpochSet convert from HashMap/HashSet SUBCLASSES to COMPOSITION
-(`MutableMap by backing` delegation) — kotlin.collections.HashMap is
-FINAL on K/N (the JVM java.util mapping is open) — with the three frame
-classes' field annotations widened to MutableMap/MutableSet (the backing
-impls stay HashMap/HashSet per the round-483 perf rule). RESULTS: the
-53MB debug .kexe compiles the smoke project correctly in 82ms total
-(vs ~1s JVM startup alone), and the FULL compiler profile completes
-with EXACTLY the 46-error JVM floor in 196s (debug-unoptimized; no
-crash/OOM — the historical "big-input GC inversion" that motivated the
-disable no longer reproduces, as the INV arc predicted). JVM side
-unchanged: corpus 11,351/0; listAll ×8 byte-identical; wall 30.3s
-in-band (delegation overhead unmeasurable). FOLLOW-UPS queued: (INV.7b)
-Release-binary link + a native bench row; Apple targets stay commented
-(no macOS builder). NEXT: INV.7b, or the INV.5(d2)/Phase-1 reassessment.
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 (Restored 2026-07-12, round 481 — the queue/backlog/inventory sections had been
@@ -259,25 +261,45 @@ rules: the INV rules unchanged, PLUS wall-clock claims are decided ONLY by
 interleaved A/B medians — anything priced below the ±2% drift band folds into a
 structural item instead of landing alone.**
 
-- [ ] **(M0.1) Tail triage — the census batch-disable protocol.** The 440 legacy
-  tail passes (6.24 s) emit NOTHING on the compiler profile (round-618 census) —
-  the corpus is their only pin, so profile censuses cannot decide KEEP.
-  (a) the PassLab facility: `build/pass-lab.txt` (`census` / `disable <pass>`
-  lines) loaded once per JVM at the runWithDeepStack funnel (JVM-only triage
-  instrument; file absent = byte-identical, one volatile read per compile);
-  `PassTiming.censusMode` (light per-pass emission census without full
-  instrumentation) + `PassTiming.disabledPasses` (pass() skips the body);
-  parsing + skip/census semantics pinned. (b) Phase A: ONE census suite run →
-  the corpus-EMITTING set E (definite keeps); the same run doubles as an
-  11k-test ON-mode byte-identity gate for censusMode. (c) Phase B:
-  batch-disable tail∖E cost-descending (~50/batch), full suite per batch,
-  bisect red batches → the confirmed-dead set D; a green batch ALSO gets a
-  compiler+services `--listAll` A/B with the batch disabled (belt-and-braces
-  against producer/retractor effects the corpus might not pin). (d) Phase C:
-  DELETE D batch-wise — suite + listAll ×8 per deletion commit — and bank the
-  wall win; the surviving pinned set is (M0.4)'s migration worklist. LAB
-  DISCIPLINE: any run with pass-lab.txt present is an EXPERIMENT, never a
-  gate — the runner must create AND remove the file around each run.
+- [ ] **(M0.1) Tail triage — the census batch-disable protocol. Phases (a)–(c)
+  DONE round 619; the VERDICT KILLS the deletion hypothesis: 417/440 tail
+  passes (6,185 ms of 6,244 ms) EMIT on the corpus — only 23 passes worth
+  59 ms are census-silent, so the tail's wall recovery is (M0.4) MIGRATION,
+  not deletion.** Results: (a) the PassLab facility landed —
+  `build/pass-lab.txt` (`census` / `disable <pass>` lines) loaded once per JVM
+  at the runWithDeepStack funnel (JVM-only; file absent = byte-identical, one
+  volatile read per compile); `PassTiming.censusMode` (light emission census
+  into the reset-immune `censusByPass`; a shutdown hook dumps
+  `build/pass-census-out-<pid>.txt`) + `PassTiming.disabledPasses` (pass()
+  skips); parsing/skip/census semantics pinned (+5 Inv0PassTimingTest, +2
+  PassLabParseTest). (b) Phase A: the corpus census ran green
+  (`--tests '…TypeScriptCompilerTests_*'` with censusMode ON = an 11k-test
+  on-mode byte-identity gate); artifact committed:
+  `docs/perf/pass-census-round619.txt` (top tail emitters:
+  checkPropertyInitialization 1,127 / checkUnusedDeclarations 690 /
+  checkUnresolvedModules 293; 18 passes ≥100). (c) Phase B collapsed to ONE
+  batch (the 23 silent passes): full suite GREEN with all 23 disabled
+  (11,379/0) AND compiler-profile `--listAll` byte-identical.
+  REMAINING (d): the deletion commit for the 23 — checkModulePreserve4Pin,
+  checkBaseClassImprovedMismatch, checkPreserveSymlinksPin, ctaPostFilters,
+  checkCrossFileUseBeforeDeclaration, checkUnicodeSurrogatePairImportBinding,
+  checkMapUpsert, checkGenericFunctionInferencePipe,
+  checkGenericGeneratorYieldArgs, checkDisallowedBlockScopedParseErrors,
+  checkMappedTypeIndexedAccessConstraint,
+  checkInferFromGenericFunctionReturnTypes3,
+  checkOverloadsWithProvisionalErrors, populateAmbientCyclicBaseClasses,
+  checkReverseMappedInferableArrows, applyDomLibSuggestionRewrite,
+  checkTemporalPin, checkBigintWithLib, checkReadonlyTupleElaboration,
+  checkInferTypePredicates, checkInKeywordTypeguard, checkModuleNoneConflict,
+  checkExportAssignmentInSystem — with TWO cautions: (i) PRODUCERS/REWRITERS
+  among them (ctaPostFilters, populateAmbientCyclicBaseClasses — a documented
+  TS2449-suppression-set producer — applyDomLibSuggestionRewrite,
+  checkBaseClassImprovedMismatch) need a consumer trace before deletion
+  (suite-green is weak evidence for suppression producers: their absence
+  manufactures FPs only on inputs exercising the suppressed shape); (ii) the
+  deletion commit's gate is suite + `--listAll` ×8 (only compiler was checked
+  in-session). Wall value ≈ 59 ms — hygiene, not a lever. LAB DISCIPLINE
+  stands: any run with pass-lab.txt present is an EXPERIMENT, never a gate.
 - [ ] **(M0.2) kindId table dispatch.** NodeBase gains a stable Int kindId
   (generated/verified against the sealed hierarchy — extend the
   ForEachChildOracleTest reflection-oracle pattern so exhaustiveness stays
@@ -305,7 +327,14 @@ structural item instead of landing alone.**
 - [ ] **(M0.4) Migrate the surviving pinned tail** into the spine (the documented
   migration-pattern zoo), cost-descending; retire dead migration scaffolding as
   it goes (emit-twice arms whose legacy side is gone, the dead m3
-  truncation-mark blocks).
+  truncation-mark blocks). Post-round-619 this carries the WHOLE tail lever
+  (~6.2 s, all corpus-pinned — the deletion pool measured 59 ms): the worklist
+  is the `--passTiming` cost table intersected with
+  `docs/perf/pass-census-round619.txt` (top by cost:
+  checkObjectSpreadInvalidTypes ~181 ms, checkDefiniteAssignmentViaFlowGraph
+  ~153 ms, checkSymbolToStringConversions ~139 ms, checkConstEnumDiagnostics
+  ~135 ms, checkAbstractClassInstantiation ~114 ms; 98 passes >20 ms carry
+  5.3 s of the 6.2 s).
 - [ ] **(M1) Identity stability → revive the two memo designs** (the ≤15–20 s
   path; tsc's flow cache — per-(refKey, flowNode) over interned types — is the
   existence proof that the (f2) fold works once types are canonical).

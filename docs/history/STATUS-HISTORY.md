@@ -1,3 +1,5 @@
+_Round 614 (2026-07-19) — INV.7d1: watch-mode INCREMENTAL recheck lands on the INV.6 partition seam (reverse-dependency closure → recheckOnly/assignedFileNames; prior diagnostics kept out-of-closure; full-rebuild bails for scripts/.d.ts/config/new/deleted/declare-global; --watchVerify field gate). Equivalence pinned (WatchIncrementalTest +5) + CLI smoke: 'incremental recheck of 1/2 file(s)… INCREMENTAL ≡ FULL', 157ms. Gates: corpus 11,359/0; listAll ×8 identical._
+
 _Round 613 (2026-07-19) — INV.7c1: --watch lands (fileEvents Flow expect/actual over WatchService; awaitChangeBatch debounce; watchRelevant filter; full rebuild per batch). End-to-end verified: injected TS2322 caught in a 46ms warm rebuild. WatchModeTest +4. Gates: corpus 11,355/0; listAll ×8 identical; native still compiles._
 
 _Round 612 (2026-07-19) — queue reconciliation: INV.3(d) was already complete (round 513) — five stale checkboxes reconciled against their bodies (INV.3 umbrella, INV.3(d), INV.4(e), INV.5(d), INV.5 umbrella). The INV.0-6 inversion arc is DONE end-to-end; the live queue is INV.7 watch/incremental + the blocked tail._

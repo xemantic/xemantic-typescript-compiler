@@ -202,6 +202,73 @@ class Inv0PassTimingTest {
     }
 
     @Test
+    fun `pass skips a disabled pass body and runs the others`() {
+        PassTiming.reset()
+        PassTiming.disabledPasses = setOf("ghostDisabled")
+        try {
+            var disabledRan = false
+            var otherRan = false
+            pass("ghostDisabled") { disabledRan = true }
+            pass("other") { otherRan = true }
+            assertTrue(!disabledRan, "a disabled pass body must be skipped")
+            assertTrue(otherRan, "a non-disabled pass must run")
+        } finally {
+            PassTiming.disabledPasses = emptySet()
+        }
+        // With the set empty (the default), the same pass runs again.
+        var ran = false
+        pass("ghostDisabled") { ran = true }
+        assertTrue(ran)
+        PassTiming.reset()
+    }
+
+    @Test
+    fun `censusMode records emission deltas without the full instrumentation`() {
+        PassTiming.reset()
+        PassTiming.censusByPass.clear() // lab-owned, reset-immune — tests clear it directly
+        PassTiming.enabled = false
+        PassTiming.censusMode = true
+        try {
+            var size = 0
+            PassTiming.diagnosticsSize = { size }
+            pass("lightEmitter") { size += 2 }
+            pass("lightSilent") { }
+        } finally {
+            PassTiming.censusMode = false
+        }
+        assertEquals(2, PassTiming.censusByPass["lightEmitter"])
+        assertEquals(null, PassTiming.censusByPass["lightSilent"])
+        assertTrue(PassTiming.passNanos.isEmpty(), "censusMode must not record pass times")
+        assertEquals(0L, PassTiming.getTypeOfExpressionCalls)
+        // reset() must NOT clear the census accumulator (the mid-suite wipe hazard).
+        PassTiming.reset()
+        assertEquals(2, PassTiming.censusByPass["lightEmitter"])
+        PassTiming.censusByPass.clear()
+    }
+
+    @Test
+    fun `censusMode end-to-end - a compile attributes emissions to passes and stays byte-identical`() {
+        PassTiming.enabled = false
+        PassTiming.reset()
+        PassTiming.censusByPass.clear()
+        val off = diagnose(probeSource)
+        PassTiming.censusMode = true
+        val on = try {
+            diagnose(probeSource)
+        } finally {
+            PassTiming.censusMode = false
+        }
+        assertEquals(off, on, "diagnostics must be byte-identical with censusMode on")
+        assertTrue(
+            PassTiming.censusByPass.isNotEmpty(),
+            "the probe TS2322 must be attributed to some pass",
+        )
+        assertTrue(PassTiming.passNanos.isEmpty(), "censusMode must not record pass times")
+        PassTiming.censusByPass.clear()
+        PassTiming.reset()
+    }
+
+    @Test
     fun `pass restores attribution when the body throws`() {
         PassTiming.reset()
         PassTiming.enabled = true

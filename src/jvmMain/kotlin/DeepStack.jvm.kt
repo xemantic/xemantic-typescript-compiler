@@ -36,6 +36,9 @@ private const val DEEP_STACK_THREAD_NAME = "xtsc-deep-stack"
 private const val DEEP_STACK_SIZE_BYTES = 256L * 1024 * 1024
 
 actual fun <T> runWithDeepStack(block: () -> T): T {
+    // M0.1 tail-triage lab hook — a no-op volatile read unless build/pass-lab.txt
+    // exists (see PassLab). Placed at the one funnel every JVM compile crosses.
+    PassLab.ensureLoaded()
     if (Thread.currentThread().name == DEEP_STACK_THREAD_NAME) return block()
     var outcome: Result<T>? = null
     // INV.6(6c0): the Symbol/Type id sequences are thread-local — the compile
