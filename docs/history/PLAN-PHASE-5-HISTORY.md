@@ -1,3 +1,27 @@
+**Round 614 (2026-07-19) — (INV.7d1) LANDED: watch-mode INCREMENTAL
+recheck, built on the INV.6 partition seam.** The model: a MODULE-file
+change affects only its reverse-dependency closure — the rebuild runs
+the checker as a PARTITION over that closure (`recheckOnly` →
+`assignedFileNames`; program-wide collectors still see the whole CURRENT
+program, so cross-file suppression context stays fresh) and prior
+diagnostics are kept for out-of-closure files. Non-local changes bail to
+FULL rebuild: scripts, `.d.ts`, config, new/deleted files,
+`declare global|module` content, or a post-build program-shape change
+(`incrementalOutcomeValid`). Pieces: ProjectCompiler records
+`importEdges` + `moduleFiles` (a conservative syntactic module test —
+wrapped-dynamic-import files read as script → full rebuild, safe);
+`WatchIncremental` (closure / eligibility / outcome-validation / merge);
+the watch loop wires it under --noEmit; `--watchVerify` diffs every
+incremental result against a full rebuild in the field. VERIFIED:
+WatchIncrementalTest (+5 — both equivalence contracts incremental ≡
+full, transitive closure, negative controls) and the CLI smoke
+("incremental recheck of 1/2 file(s)… watchVerify: INCREMENTAL ≡ FULL",
+157ms). KNOWN RESIDUAL (documented in-code, (7d2)): the lib-shared
+module-interface merge (`moduleInterfaceNames`) can in principle reach a
+non-importer — --watchVerify measures exactly this class. Gates: corpus
+11,359/0; listAll ×8 byte-identical. REMAINING in (7d): cross-process
+.tsbuildinfo persistence (7d3) — optional productization.
+
 **Round 613 (2026-07-19) — (INV.7c1) LANDED: `--watch` — the minimal
 watch mode, full rebuild per change batch.** `fileEvents(root)` (the
 ARCHITECTURE-RETHINK file-event Flow; expect/actual — JVM wraps
