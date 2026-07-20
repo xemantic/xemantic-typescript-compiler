@@ -1353,10 +1353,10 @@ class Checker(
             if (!topF.dead && ccetM3ChainOk(node)) {
                 ccetM3MarkAnchored(node)
                 withCcetFrameAmbient(topF) {
-                    when (node) {
-                        is CallExpression -> checkSingleCallExpressionTypes(node, spineSource, spineFileName)
-                        is NewExpression -> checkSingleNewExpressionTypes(node, spineSource, spineFileName)
-                        is TaggedTemplateExpression -> checkSingleTaggedTemplateTypes(node, spineSource, spineFileName)
+                    when ((node as NodeBase).kindId) {
+                        NodeKind.CALL_EXPRESSION -> { node as CallExpression; checkSingleCallExpressionTypes(node, spineSource, spineFileName) }
+                        NodeKind.NEW_EXPRESSION -> { node as NewExpression; checkSingleNewExpressionTypes(node, spineSource, spineFileName) }
+                        NodeKind.TAGGED_TEMPLATE_EXPRESSION -> { node as TaggedTemplateExpression; checkSingleTaggedTemplateTypes(node, spineSource, spineFileName) }
                     }
                 }
             }
@@ -1366,7 +1366,7 @@ class Checker(
         // free (a call in decl k+1's initializer leaves BEFORE decl k+1's
         // own leave, and AFTER decl k's).
         if (node is VariableDeclaration) {
-            val vdl = (node as NodeBase).parent
+            val vdl = node.parent
             val vs = (vdl as? NodeBase)?.parent
             if (vdl is VariableDeclarationList && vs is VariableStatement) {
                 val frame = ccetFrames.last()
@@ -2023,28 +2023,45 @@ class Checker(
             cpaM3MarkAnchored(node)
             val top = cpaFrames.last()
             withCpaFrameAmbient(top) {
-                when (node) {
-                    is VariableStatement -> for (decl in node.declarationList.declarations) {
-                        decl.initializer?.let {
+                when ((node as NodeBase).kindId) {
+                    NodeKind.VARIABLE_STATEMENT -> {
+                        node as VariableStatement
+                        for (decl in node.declarationList.declarations) {
+                            decl.initializer?.let {
+                                checkPropertyAccessInExpr(it, spineSource, spineFileName, top.classType)
+                            }
+                            cpaApplyDeclRecordings(decl)
+                        }
+                    }
+                    NodeKind.EXPRESSION_STATEMENT -> {
+                        node as ExpressionStatement
+                        checkPropertyAccessInExpr(node.expression, spineSource, spineFileName, top.classType)
+                    }
+                    NodeKind.RETURN_STATEMENT -> {
+                        node as ReturnStatement
+                        node.expression?.let {
                             checkPropertyAccessInExpr(it, spineSource, spineFileName, top.classType)
                         }
-                        cpaApplyDeclRecordings(decl)
-                    }
-                    is ExpressionStatement ->
-                        checkPropertyAccessInExpr(node.expression, spineSource, spineFileName, top.classType)
-                    is ReturnStatement -> node.expression?.let {
-                        checkPropertyAccessInExpr(it, spineSource, spineFileName, top.classType)
                     }
                     // (cpa-m3b): the single-expression / no-body arms.
-                    is ThrowStatement -> node.expression?.let {
-                        checkPropertyAccessInExpr(it, spineSource, spineFileName, top.classType)
+                    NodeKind.THROW_STATEMENT -> {
+                        node as ThrowStatement
+                        node.expression?.let {
+                            checkPropertyAccessInExpr(it, spineSource, spineFileName, top.classType)
+                        }
                     }
-                    is ExportAssignment ->
+                    NodeKind.EXPORT_ASSIGNMENT -> {
+                        node as ExportAssignment
                         checkPropertyAccessInExpr(node.expression, spineSource, spineFileName, top.classType)
-                    is TypeAliasDeclaration -> if (strictNullChecks) {
-                        walkTypeNodeForUndefinedTypeQueryChain(node.type, spineSource, spineFileName, atNode = node)
                     }
-                    is EnumDeclaration -> {
+                    NodeKind.TYPE_ALIAS_DECLARATION -> {
+                        node as TypeAliasDeclaration
+                        if (strictNullChecks) {
+                            walkTypeNodeForUndefinedTypeQueryChain(node.type, spineSource, spineFileName, atNode = node)
+                        }
+                    }
+                    NodeKind.ENUM_DECLARATION -> {
+                        node as EnumDeclaration
                         val saved = currentEnclosingEnum
                         currentEnclosingEnum = node
                         try {
@@ -2112,7 +2129,7 @@ class Checker(
         // loop ambient (classType + per-member inStatic) installed locally
         // over the class-position frame (the cta-m3k pattern).
         if (node is PropertyDeclaration) {
-            val cls = (node as NodeBase).parent
+            val cls = node.parent
             val init = node.initializer
             if (init != null && cls is ClassDeclaration &&
                 cpaM2StmtPosition(cls) && cpaM2ChainOk(cls, forAnchor = true)) {
@@ -2144,7 +2161,7 @@ class Checker(
         // decl k+1 sees only decls 1..k (per-statement-enter application
         // would leak decl k+1's own recording into its initializer subtree).
         if (node is VariableDeclaration) {
-            val vdl = (node as NodeBase).parent
+            val vdl = node.parent
             val vs = (vdl as? NodeBase)?.parent
             // (cpa-m3a): ANCHORED statements record interleaved with the
             // anchor's initializer walks (the legacy per-decl order) — the
@@ -15204,13 +15221,16 @@ class Checker(
         // 2. Core spawns (AFTER the step — a Block statement first runs the
         //    outer frame's step, then opens its own fresh core, matching the
         //    legacy checkUses-then-recurse order).
-        when (node) {
-            is SourceFile -> frames.add(spineDaNewFrame(
-                node, node.statements, emptySet(), spineDaFileLocals,
-                enableLeak = false, outerLeak = emptySet(),
-            ))
-            is Block -> if (spineDaStatus(node) == DA_CORE) spineDaSpawnCore(node, node.statements)
-            is ModuleBlock -> if (spineDaStatus(node) == DA_CORE) spineDaSpawnCore(node, node.statements)
+        when ((node as NodeBase).kindId) {
+            NodeKind.SOURCE_FILE -> {
+                node as SourceFile
+                frames.add(spineDaNewFrame(
+                    node, node.statements, emptySet(), spineDaFileLocals,
+                    enableLeak = false, outerLeak = emptySet(),
+                ))
+            }
+            NodeKind.BLOCK -> { node as Block; if (spineDaStatus(node) == DA_CORE) spineDaSpawnCore(node, node.statements) }
+            NodeKind.MODULE_BLOCK -> { node as ModuleBlock; if (spineDaStatus(node) == DA_CORE) spineDaSpawnCore(node, node.statements) }
             else -> {}
         }
     }
@@ -49045,31 +49065,44 @@ interface DataView {
 
     /** Per-node ENTER hook: the condition/operand anchors. */
     private fun spineAtEnterNode(node: Node) {
-        when (node) {
-            is IfStatement -> spineAtIfEnter(node)
-            is WhileStatement -> if (spineAtStatus(node) == AT_STMT) {
-                scanForNotFalsy(node.expression, spineSource, spineFileName)
-                checkVoidConditionTruthiness(node.expression, spineSource, spineFileName)
-            }
-            is DoStatement -> if (spineAtStatus(node) == AT_STMT) {
-                scanForNotFalsy(node.expression, spineSource, spineFileName)
-                checkVoidConditionTruthiness(node.expression, spineSource, spineFileName)
-            }
-            is ForStatement -> if (spineAtStatus(node) == AT_STMT) {
-                node.condition?.let { checkVoidConditionTruthiness(it, spineSource, spineFileName) }
-            }
-            is BinaryExpression -> spineAtBinaryEnter(node)
-            is ConditionalExpression -> if (spineAtStatus(node) == AT_EXPR) {
-                if (isAlwaysFalsyExpr(node.condition)) {
-                    emitTS2873(node.condition, spineSource, spineFileName)
-                } else if (isAlwaysTruthyForOrExpr(node.condition)) {
-                    // tsc checkTruthinessOfType covers `?:` conditions too — an
-                    // always-truthy syntactic shape fires TS2872.
-                    emitTS2872(node.condition, spineSource, spineFileName)
+        when ((node as NodeBase).kindId) {
+            NodeKind.IF_STATEMENT -> { node as IfStatement; spineAtIfEnter(node) }
+            NodeKind.WHILE_STATEMENT -> {
+                node as WhileStatement
+                if (spineAtStatus(node) == AT_STMT) {
+                    scanForNotFalsy(node.expression, spineSource, spineFileName)
+                    checkVoidConditionTruthiness(node.expression, spineSource, spineFileName)
                 }
-                checkEnumReferenceFalsyCondition(node.condition, spineSource, spineFileName)
             }
-            is PrefixUnaryExpression ->
+            NodeKind.DO_STATEMENT -> {
+                node as DoStatement
+                if (spineAtStatus(node) == AT_STMT) {
+                    scanForNotFalsy(node.expression, spineSource, spineFileName)
+                    checkVoidConditionTruthiness(node.expression, spineSource, spineFileName)
+                }
+            }
+            NodeKind.FOR_STATEMENT -> {
+                node as ForStatement
+                if (spineAtStatus(node) == AT_STMT) {
+                    node.condition?.let { checkVoidConditionTruthiness(it, spineSource, spineFileName) }
+                }
+            }
+            NodeKind.BINARY_EXPRESSION -> { node as BinaryExpression; spineAtBinaryEnter(node) }
+            NodeKind.CONDITIONAL_EXPRESSION -> {
+                node as ConditionalExpression
+                if (spineAtStatus(node) == AT_EXPR) {
+                    if (isAlwaysFalsyExpr(node.condition)) {
+                        emitTS2873(node.condition, spineSource, spineFileName)
+                    } else if (isAlwaysTruthyForOrExpr(node.condition)) {
+                        // tsc checkTruthinessOfType covers `?:` conditions too — an
+                        // always-truthy syntactic shape fires TS2872.
+                        emitTS2872(node.condition, spineSource, spineFileName)
+                    }
+                    checkEnumReferenceFalsyCondition(node.condition, spineSource, spineFileName)
+                }
+            }
+            NodeKind.PREFIX_UNARY_EXPRESSION -> {
+                node as PrefixUnaryExpression
                 if (node.operator == SyntaxKind.Exclamation && spineAtStatus(node) == AT_EXPR &&
                     isAlwaysFalsyExpr(node.operand)
                 ) {
@@ -49077,6 +49110,7 @@ interface DataView {
                     // position, so an always-falsy operand fires TS2873.
                     emitTS2873(node.operand, spineSource, spineFileName)
                 }
+            }
             else -> {}
         }
     }
@@ -50300,35 +50334,56 @@ interface DataView {
             else -> {}
         }
         // ── node-kind frames / recordings / emissions ──
-        when (node) {
-            is FunctionDeclaration -> if (node.body != null && spineArithReached(node)) {
-                spineArithFnFrame(node, node.typeParameters, node.parameters,
-                    withTpScope = true, isArrowOrFnExpr = false)
+        when ((node as NodeBase).kindId) {
+            NodeKind.FUNCTION_DECLARATION -> {
+                node as FunctionDeclaration
+                if (node.body != null && spineArithReached(node)) {
+                    spineArithFnFrame(node, node.typeParameters, node.parameters,
+                        withTpScope = true, isArrowOrFnExpr = false)
+                }
             }
-            is MethodDeclaration -> if (node.parent is ClassDeclaration && node.body != null &&
-                spineArithReached(node)) {
-                spineArithFnFrame(node, node.typeParameters, node.parameters,
-                    withTpScope = true, isArrowOrFnExpr = false)
+            NodeKind.METHOD_DECLARATION -> {
+                node as MethodDeclaration
+                if (node.parent is ClassDeclaration && node.body != null &&
+                    spineArithReached(node)
+                ) {
+                    spineArithFnFrame(node, node.typeParameters, node.parameters,
+                        withTpScope = true, isArrowOrFnExpr = false)
+                }
             }
-            is Constructor -> if (node.parent is ClassDeclaration && node.body != null &&
-                spineArithReached(node)) {
-                // The legacy Constructor arm populated params WITHOUT a TP-scope push.
-                spineArithFnFrame(node, null, node.parameters,
-                    withTpScope = false, isArrowOrFnExpr = false)
+            NodeKind.CONSTRUCTOR -> {
+                node as Constructor
+                if (node.parent is ClassDeclaration && node.body != null &&
+                    spineArithReached(node)
+                ) {
+                    // The legacy Constructor arm populated params WITHOUT a TP-scope push.
+                    spineArithFnFrame(node, null, node.parameters,
+                        withTpScope = false, isArrowOrFnExpr = false)
+                }
             }
-            is ArrowFunction -> if (spineArithReached(node)) {
-                spineArithFnFrame(node, node.typeParameters, node.parameters,
-                    withTpScope = true, isArrowOrFnExpr = true)
+            NodeKind.ARROW_FUNCTION -> {
+                node as ArrowFunction
+                if (spineArithReached(node)) {
+                    spineArithFnFrame(node, node.typeParameters, node.parameters,
+                        withTpScope = true, isArrowOrFnExpr = true)
+                }
             }
-            is FunctionExpression -> if (spineArithReached(node)) {
-                spineArithFnFrame(node, node.typeParameters, node.parameters,
-                    withTpScope = true, isArrowOrFnExpr = true)
+            NodeKind.FUNCTION_EXPRESSION -> {
+                node as FunctionExpression
+                if (spineArithReached(node)) {
+                    spineArithFnFrame(node, node.typeParameters, node.parameters,
+                        withTpScope = true, isArrowOrFnExpr = true)
+                }
             }
-            is PrefixUnaryExpression -> if (node.operator == SyntaxKind.Plus &&
-                spineArithReached(node)) {
-                // Legacy order: the TS2736 emission ran BEFORE the operand walk.
-                spineArithInstalled {
-                    checkUnaryPlusBigIntOperand(node, spineSource, spineFileName)
+            NodeKind.PREFIX_UNARY_EXPRESSION -> {
+                node as PrefixUnaryExpression
+                if (node.operator == SyntaxKind.Plus &&
+                    spineArithReached(node)
+                ) {
+                    // Legacy order: the TS2736 emission ran BEFORE the operand walk.
+                    spineArithInstalled {
+                        checkUnaryPlusBigIntOperand(node, spineSource, spineFileName)
+                    }
                 }
             }
             else -> {}
@@ -50369,26 +50424,30 @@ interface DataView {
     /** Per-node LEAVE hook — the node's own emissions/recordings first (they run
      *  inside any frames keyed on this node), then pop this node's frames. */
     private fun spineArithLeaveNode(node: Node) {
-        when (node) {
-            is BinaryExpression -> if (spineArithChainRoot(node) && spineArithReached(node)) {
-                // The legacy flatten emitted per-spine-node diagnostics AFTER
-                // walking the leaf + all rights, innermost (deepest-left) first.
-                val members = spineArithChainBuf
-                members.clear()
-                var cur: Expression = node
-                while (cur is BinaryExpression) {
-                    members.add(cur)
-                    cur = cur.left
-                }
-                spineArithInstalled {
-                    for (i in members.indices.reversed()) {
-                        checkBinaryOperatorTypes(members[i], spineSource, spineFileName)
+        when ((node as NodeBase).kindId) {
+            NodeKind.BINARY_EXPRESSION -> {
+                node as BinaryExpression
+                if (spineArithChainRoot(node) && spineArithReached(node)) {
+                    // The legacy flatten emitted per-spine-node diagnostics AFTER
+                    // walking the leaf + all rights, innermost (deepest-left) first.
+                    val members = spineArithChainBuf
+                    members.clear()
+                    var cur: Expression = node
+                    while (cur is BinaryExpression) {
+                        members.add(cur)
+                        cur = cur.left
                     }
+                    spineArithInstalled {
+                        for (i in members.indices.reversed()) {
+                            checkBinaryOperatorTypes(members[i], spineSource, spineFileName)
+                        }
+                    }
+                    members.clear()
                 }
-                members.clear()
             }
-            is VariableDeclaration -> {
-                val list = (node as NodeBase).parent as? VariableDeclarationList
+            NodeKind.VARIABLE_DECLARATION -> {
+                node as VariableDeclaration
+                val list = node.parent as? VariableDeclarationList
                 if (list != null && list.parent is VariableStatement && spineArithReached(node)) {
                     // The legacy recording ran AFTER the declarator's own
                     // initializer walk, per declarator — the leave position.
@@ -50767,70 +50826,113 @@ interface DataView {
     private fun spineIanyEnterNode(node: Node) {
         val p = (node as NodeBase).parent
         if (p != null) spineIanyEdgeEnter(p, node)
-        when (node) {
-            is FunctionDeclaration -> if (spineIanyReached(node)) {
-                // Params checked for ALL function declarations (declare included).
-                checkParamsForImplicitAny(node.parameters, spineSource, spineFileName)
-            }
-            is ClassDeclaration -> if (spineIanyClassIsAmbient(node) && spineIanyReached(node)) {
-                spineIanyAmbientClassMembers(node)
-            }
-            is InterfaceDeclaration -> if (spineIanyReached(node)) {
-                spineIanyInterfaceMembers(node)
-            }
-            is VariableDeclaration -> if ((node as NodeBase).parent.let {
-                    it is VariableDeclarationList && (it as NodeBase).parent is VariableStatement
-                } && spineIanyReached(node)) {
-                spineIanyVarDeclEnter(node)
-            }
-            is MethodDeclaration -> if (spineIanyReached(node)) {
-                when ((node as NodeBase).parent) {
-                    is ClassDeclaration, is ClassExpression -> spineIanyClassElementEnter(node)
-                    is ObjectLiteralExpression -> spineIanyObjLitMethodEnter(node)
-                    else -> {}
+        when ((node as NodeBase).kindId) {
+            NodeKind.FUNCTION_DECLARATION -> {
+                node as FunctionDeclaration
+                if (spineIanyReached(node)) {
+                    // Params checked for ALL function declarations (declare included).
+                    checkParamsForImplicitAny(node.parameters, spineSource, spineFileName)
                 }
             }
-            is Constructor -> if (spineIanyIsClassElement(node) && spineIanyReached(node)) {
-                spineIanyClassElementEnter(node)
-            }
-            is GetAccessor -> if (spineIanyIsClassElement(node) && spineIanyReached(node)) {
-                spineIanyClassElementEnter(node)
-            }
-            is SetAccessor -> if (spineIanyIsClassElement(node) && spineIanyReached(node)) {
-                spineIanyClassElementEnter(node)
-            }
-            is PropertyDeclaration -> if (spineIanyIsClassElement(node) && spineIanyReached(node)) {
-                spineIanyClassElementEnter(node)
-            }
-            is ArrowFunction -> if (spineIanyReached(node)) {
-                spineIanyFnExprEnter(node.parameters)
-            }
-            is FunctionExpression -> if (spineIanyReached(node)) {
-                spineIanyFnExprEnter(node.parameters)
-            }
-            is ObjectLiteralExpression -> if (spineIanyReached(node) &&
-                !spineIanyObjLitIsDestructureDefault(node)) {
-                // The legacy object-literal arm's per-literal state: the
-                // union-with-primitive verdict from the literal's OWN contextual
-                // type + the lazily-shared computed-key mapped-value arity.
-                val cur = spineIanyCtx?.takeIf { it.kind == 0 }
-                val ctxType = cur?.type
-                val viaUnion = ctxType is Type.Union && ctxType.types.any {
-                    it !is Type.Object && !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)
+            NodeKind.CLASS_DECLARATION -> {
+                node as ClassDeclaration
+                if (spineIanyClassIsAmbient(node) && spineIanyReached(node)) {
+                    spineIanyAmbientClassMembers(node)
                 }
-                spineIanyDefineCtx(node, SpineIanyCtx(kind = 3,
-                    typed = cur?.typed == true, type = ctxType, viaUnion = viaUnion,
-                    ann = cur?.ann))
             }
-            is CallExpression -> if (spineIanyReached(node)) {
-                // The legacy CallExpression arm computed ctxProp once per call
-                // (before any argument walk, args or not).
-                spineIanyDefineCtx(node,
-                    SpineIanyCtx(kind = 1, typed = isCalleeResolvable(node.expression)))
+            NodeKind.INTERFACE_DECLARATION -> {
+                node as InterfaceDeclaration
+                if (spineIanyReached(node)) {
+                    spineIanyInterfaceMembers(node)
+                }
             }
-            is NewExpression -> if (spineIanyReached(node)) {
-                spineIanyDefineCtx(node,
-                    SpineIanyCtx(kind = 1, typed = isCalleeResolvable(node.expression)))
+            NodeKind.VARIABLE_DECLARATION -> {
+                node as VariableDeclaration
+                if (node.parent.let {
+                        it is VariableDeclarationList && (it as NodeBase).parent is VariableStatement
+                    } && spineIanyReached(node)) {
+                    spineIanyVarDeclEnter(node)
+                }
+            }
+            NodeKind.METHOD_DECLARATION -> {
+                node as MethodDeclaration
+                if (spineIanyReached(node)) {
+                    when (node.parent) {
+                        is ClassDeclaration, is ClassExpression -> spineIanyClassElementEnter(node)
+                        is ObjectLiteralExpression -> spineIanyObjLitMethodEnter(node)
+                        else -> {}
+                    }
+                }
+            }
+            NodeKind.CONSTRUCTOR -> {
+                node as Constructor
+                if (spineIanyIsClassElement(node) && spineIanyReached(node)) {
+                    spineIanyClassElementEnter(node)
+                }
+            }
+            NodeKind.GET_ACCESSOR -> {
+                node as GetAccessor
+                if (spineIanyIsClassElement(node) && spineIanyReached(node)) {
+                    spineIanyClassElementEnter(node)
+                }
+            }
+            NodeKind.SET_ACCESSOR -> {
+                node as SetAccessor
+                if (spineIanyIsClassElement(node) && spineIanyReached(node)) {
+                    spineIanyClassElementEnter(node)
+                }
+            }
+            NodeKind.PROPERTY_DECLARATION -> {
+                node as PropertyDeclaration
+                if (spineIanyIsClassElement(node) && spineIanyReached(node)) {
+                    spineIanyClassElementEnter(node)
+                }
+            }
+            NodeKind.ARROW_FUNCTION -> {
+                node as ArrowFunction
+                if (spineIanyReached(node)) {
+                    spineIanyFnExprEnter(node.parameters)
+                }
+            }
+            NodeKind.FUNCTION_EXPRESSION -> {
+                node as FunctionExpression
+                if (spineIanyReached(node)) {
+                    spineIanyFnExprEnter(node.parameters)
+                }
+            }
+            NodeKind.OBJECT_LITERAL_EXPRESSION -> {
+                node as ObjectLiteralExpression
+                if (spineIanyReached(node) &&
+                    !spineIanyObjLitIsDestructureDefault(node)
+                ) {
+                    // The legacy object-literal arm's per-literal state: the
+                    // union-with-primitive verdict from the literal's OWN contextual
+                    // type + the lazily-shared computed-key mapped-value arity.
+                    val cur = spineIanyCtx?.takeIf { it.kind == 0 }
+                    val ctxType = cur?.type
+                    val viaUnion = ctxType is Type.Union && ctxType.types.any {
+                        it !is Type.Object && !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)
+                    }
+                    spineIanyDefineCtx(node, SpineIanyCtx(kind = 3,
+                        typed = cur?.typed == true, type = ctxType, viaUnion = viaUnion,
+                        ann = cur?.ann))
+                }
+            }
+            NodeKind.CALL_EXPRESSION -> {
+                node as CallExpression
+                if (spineIanyReached(node)) {
+                    // The legacy CallExpression arm computed ctxProp once per call
+                    // (before any argument walk, args or not).
+                    spineIanyDefineCtx(node,
+                        SpineIanyCtx(kind = 1, typed = isCalleeResolvable(node.expression)))
+                }
+            }
+            NodeKind.NEW_EXPRESSION -> {
+                node as NewExpression
+                if (spineIanyReached(node)) {
+                    spineIanyDefineCtx(node,
+                        SpineIanyCtx(kind = 1, typed = isCalleeResolvable(node.expression)))
+                }
             }
             else -> {}
         }
@@ -52368,32 +52470,39 @@ interface DataView {
     /** Per-node ENTER hook: the TS18050-family anchors (all pure — the
      *  deleted walkers installed no ambient state). */
     private fun spineNuEnterNode(node: Node) {
-        when (node) {
-            is BinaryExpression -> spineNuBinaryEnter(node)
-            is PropertyAccessExpression ->
+        when ((node as NodeBase).kindId) {
+            NodeKind.BINARY_EXPRESSION -> { node as BinaryExpression; spineNuBinaryEnter(node) }
+            NodeKind.PROPERTY_ACCESS_EXPRESSION -> {
+                node as PropertyAccessExpression
                 if (spineNuKind(node) == NU_EXPR) {
                     // null.foo or undefined.foo
                     checkNullUndefinedLiteral(node.expression, spineSource, spineFileName)
                 }
-            is ElementAccessExpression ->
+            }
+            NodeKind.ELEMENT_ACCESS_EXPRESSION -> {
+                node as ElementAccessExpression
                 if (spineNuKind(node) == NU_EXPR) {
                     // null[x] or undefined[x]
                     checkNullUndefinedLiteral(node.expression, spineSource, spineFileName)
                 }
-            is ForOfStatement -> if (spineNuKind(node) == NU_STMT) {
-                // A bare `null`/`undefined` as the for-of iterable cannot be
-                // iterated → TS18050. Gated on strictNullChecks (mirrors the
-                // arithmetic-operand path).
-                if (strictNullChecks) checkNullUndefinedLiteral(node.expression, spineSource, spineFileName)
-                // For-of array-destructuring an EMPTY array literal `[]` (element
-                // type `never` under noImplicitAny) with an array binding pattern
-                // → TS2488 at the pattern. FP-safe by exact shape.
-                if (options.noImplicitAny || options.strict) {
-                    val iter = node.expression
-                    if (iter is ArrayLiteralExpression && iter.elements.isEmpty()) {
-                        val abp = (node.initializer as? VariableDeclarationList)
-                            ?.declarations?.singleOrNull()?.name as? ArrayBindingPattern
-                        if (abp != null) emitNeverIteratorAt(abp.pos, spineSource, spineFileName)
+            }
+            NodeKind.FOR_OF_STATEMENT -> {
+                node as ForOfStatement
+                if (spineNuKind(node) == NU_STMT) {
+                    // A bare `null`/`undefined` as the for-of iterable cannot be
+                    // iterated → TS18050. Gated on strictNullChecks (mirrors the
+                    // arithmetic-operand path).
+                    if (strictNullChecks) checkNullUndefinedLiteral(node.expression, spineSource, spineFileName)
+                    // For-of array-destructuring an EMPTY array literal `[]` (element
+                    // type `never` under noImplicitAny) with an array binding pattern
+                    // → TS2488 at the pattern. FP-safe by exact shape.
+                    if (options.noImplicitAny || options.strict) {
+                        val iter = node.expression
+                        if (iter is ArrayLiteralExpression && iter.elements.isEmpty()) {
+                            val abp = (node.initializer as? VariableDeclarationList)
+                                ?.declarations?.singleOrNull()?.name as? ArrayBindingPattern
+                            if (abp != null) emitNeverIteratorAt(abp.pos, spineSource, spineFileName)
+                        }
                     }
                 }
             }
@@ -62997,23 +63106,38 @@ interface DataView {
             }
         }
         // 2. Frame spawns.
-        when (node) {
-            is SourceFile -> frames.add(SpineCaFrame(
-                node,
-                if (spineFileIsModule) mutableMapOf() else HashMap(spineCaSharedConstsMap()),
-                isList = true,
-            ))
-            is Block -> if (spineCaStatus(node) == CA_LIST) {
-                frames.add(SpineCaFrame(node, spineCaSpawnMap(node), isList = true))
+        when ((node as NodeBase).kindId) {
+            NodeKind.SOURCE_FILE -> {
+                node as SourceFile
+                frames.add(SpineCaFrame(
+                    node,
+                    if (spineFileIsModule) mutableMapOf() else HashMap(spineCaSharedConstsMap()),
+                    isList = true,
+                ))
             }
-            is ModuleBlock -> if (spineCaStatus(node) == CA_LIST) {
-                frames.add(SpineCaFrame(node, spineCaCopyTop(), isList = true))
+            NodeKind.BLOCK -> {
+                node as Block
+                if (spineCaStatus(node) == CA_LIST) {
+                    frames.add(SpineCaFrame(node, spineCaSpawnMap(node), isList = true))
+                }
             }
-            is CaseClause -> if (spineCaStatus(node) == CA_LIST) {
-                frames.add(SpineCaFrame(node, spineCaCopyTop(), isList = true))
+            NodeKind.MODULE_BLOCK -> {
+                node as ModuleBlock
+                if (spineCaStatus(node) == CA_LIST) {
+                    frames.add(SpineCaFrame(node, spineCaCopyTop(), isList = true))
+                }
             }
-            is DefaultClause -> if (spineCaStatus(node) == CA_LIST) {
-                frames.add(SpineCaFrame(node, spineCaCopyTop(), isList = true))
+            NodeKind.CASE_CLAUSE -> {
+                node as CaseClause
+                if (spineCaStatus(node) == CA_LIST) {
+                    frames.add(SpineCaFrame(node, spineCaCopyTop(), isList = true))
+                }
+            }
+            NodeKind.DEFAULT_CLAUSE -> {
+                node as DefaultClause
+                if (spineCaStatus(node) == CA_LIST) {
+                    frames.add(SpineCaFrame(node, spineCaCopyTop(), isList = true))
+                }
             }
             // The legacy For arm's forConsts overlay: a copy of the outer map
             // plus the header's const declarator names, in effect for the
@@ -63021,32 +63145,42 @@ interface DataView {
             // the outer map in legacy — indistinguishable here because header
             // const additions exist only when the initializer is a
             // declaration list (whose declarator initializers are unreached).
-            is ForStatement -> if (spineCaStatus(node) == CA_STMT) {
-                val overlay = spineCaCopyTop()
-                val init = node.initializer
-                if (init is VariableDeclarationList && init.flags == SyntaxKind.ConstKeyword) {
-                    for (decl in init.declarations) {
-                        val name = decl.name
-                        if (name is Identifier) overlay[name.text] = 2588
+            NodeKind.FOR_STATEMENT -> {
+                node as ForStatement
+                if (spineCaStatus(node) == CA_STMT) {
+                    val overlay = spineCaCopyTop()
+                    val init = node.initializer
+                    if (init is VariableDeclarationList && init.flags == SyntaxKind.ConstKeyword) {
+                        for (decl in init.declarations) {
+                            val name = decl.name
+                            if (name is Identifier) overlay[name.text] = 2588
+                        }
                     }
+                    frames.add(SpineCaFrame(node, overlay, isList = false))
                 }
-                frames.add(SpineCaFrame(node, overlay, isList = false))
             }
             else -> {}
         }
         // 3. Anchor emissions.
-        when (node) {
-            is BinaryExpression -> spineCaBinaryEnter(node)
-            is PrefixUnaryExpression ->
+        when ((node as NodeBase).kindId) {
+            NodeKind.BINARY_EXPRESSION -> { node as BinaryExpression; spineCaBinaryEnter(node) }
+            NodeKind.PREFIX_UNARY_EXPRESSION -> {
+                node as PrefixUnaryExpression
                 if (node.operator == SyntaxKind.PlusPlus || node.operator == SyntaxKind.MinusMinus) {
                     spineCaIncDecEnter(node, unwrapParens(node.operand), node.operand)
                 }
-            is PostfixUnaryExpression ->
+            }
+            NodeKind.POSTFIX_UNARY_EXPRESSION -> {
+                node as PostfixUnaryExpression
                 if (node.operator == SyntaxKind.PlusPlus || node.operator == SyntaxKind.MinusMinus) {
                     spineCaIncDecEnter(node, unwrapNonNull(node.operand), node.operand)
                 }
-            is RegularExpressionLiteralNode -> if (spineCaStatus(node) == CA_EXPR) {
-                scanRegExpFull(node, spineSource, spineFileName)
+            }
+            NodeKind.REGULAR_EXPRESSION_LITERAL_NODE -> {
+                node as RegularExpressionLiteralNode
+                if (spineCaStatus(node) == CA_EXPR) {
+                    scanRegExpFull(node, spineSource, spineFileName)
+                }
             }
             else -> {}
         }
@@ -68252,15 +68386,24 @@ interface DataView {
         }
         // 2. The deleted checkUBDInStatement For/ForIn/ForOf arms' loop-header
         //    SELF-ref checks, at any reached loop statement.
-        when (node) {
-            is ForStatement -> if (spineUbdStatus(node) == UBD_STMT) {
-                spineUbdForHeaderSelfCheck(node.initializer, null)
+        when ((node as NodeBase).kindId) {
+            NodeKind.FOR_STATEMENT -> {
+                node as ForStatement
+                if (spineUbdStatus(node) == UBD_STMT) {
+                    spineUbdForHeaderSelfCheck(node.initializer, null)
+                }
             }
-            is ForInStatement -> if (spineUbdStatus(node) == UBD_STMT) {
-                spineUbdForHeaderSelfCheck(node.initializer, node.expression)
+            NodeKind.FOR_IN_STATEMENT -> {
+                node as ForInStatement
+                if (spineUbdStatus(node) == UBD_STMT) {
+                    spineUbdForHeaderSelfCheck(node.initializer, node.expression)
+                }
             }
-            is ForOfStatement -> if (spineUbdStatus(node) == UBD_STMT) {
-                spineUbdForHeaderSelfCheck(node.initializer, node.expression)
+            NodeKind.FOR_OF_STATEMENT -> {
+                node as ForOfStatement
+                if (spineUbdStatus(node) == UBD_STMT) {
+                    spineUbdForHeaderSelfCheck(node.initializer, node.expression)
+                }
             }
             else -> {}
         }
@@ -81462,24 +81605,37 @@ interface DataView {
      *  (leave-position so the 17.135 diagnostics probes see the subtree's
      *  own spine emissions — see the spineLeaveNode call site). */
     private fun spineIrLeaveNode(node: Node) {
-        when (node) {
-            is FunctionDeclaration -> if (spineIrStatus(node) == IR_STMT) {
-                spineIrDispatch { checkFunctionForImplicitReturn(node, spineSource, spineFileName) }
+        when ((node as NodeBase).kindId) {
+            NodeKind.FUNCTION_DECLARATION -> {
+                node as FunctionDeclaration
+                if (spineIrStatus(node) == IR_STMT) {
+                    spineIrDispatch { checkFunctionForImplicitReturn(node, spineSource, spineFileName) }
+                }
             }
-            is MethodDeclaration -> if (spineIrStatus(node) == IR_MEMBER) {
-                spineIrDispatch { checkMethodForImplicitReturn(node, spineSource, spineFileName) }
+            NodeKind.METHOD_DECLARATION -> {
+                node as MethodDeclaration
+                if (spineIrStatus(node) == IR_MEMBER) {
+                    spineIrDispatch { checkMethodForImplicitReturn(node, spineSource, spineFileName) }
+                }
             }
-            is GetAccessor -> if (spineIrStatus(node) == IR_MEMBER) {
-                spineIrDispatch { checkGetAccessorForImplicitReturn(node, spineSource, spineFileName) }
+            NodeKind.GET_ACCESSOR -> {
+                node as GetAccessor
+                if (spineIrStatus(node) == IR_MEMBER) {
+                    spineIrDispatch { checkGetAccessorForImplicitReturn(node, spineSource, spineFileName) }
+                }
             }
-            is FunctionExpression -> {
+            NodeKind.FUNCTION_EXPRESSION -> {
+                node as FunctionExpression
                 val st = spineIrStatus(node)
                 if (st == IR_EXPR || st == IR_MEMBER) {
                     spineIrDispatch { checkFuncExprForImplicitReturn(node, spineSource, spineFileName) }
                 }
             }
-            is ArrowFunction -> if (spineIrStatus(node) == IR_EXPR) {
-                spineIrDispatch { checkArrowForImplicitReturn(node, spineSource, spineFileName) }
+            NodeKind.ARROW_FUNCTION -> {
+                node as ArrowFunction
+                if (spineIrStatus(node) == IR_EXPR) {
+                    spineIrDispatch { checkArrowForImplicitReturn(node, spineSource, spineFileName) }
+                }
             }
             else -> {}
         }
@@ -148896,8 +149052,9 @@ interface DataView {
     /** Per-node LEAVE hook: the `??` nullish checks and the while/do
      *  condition truthiness checks. */
     private fun spineNpLeaveNode(node: Node) {
-        when (node) {
-            is BinaryExpression ->
+        when ((node as NodeBase).kindId) {
+            NodeKind.BINARY_EXPRESSION -> {
+                node as BinaryExpression
                 if (node.operator == SyntaxKind.QuestionQuestion && spineNpStatus(node) == NP_EXPR) {
                     val leftTarget = npSkipOuter(node.left)
                     when (nullishSemanticsOf(leftTarget)) {
@@ -148905,9 +149062,10 @@ interface DataView {
                         2 -> npEmitNullish(leftTarget, always = false, spineSource, spineFileName)
                     }
                 }
+            }
             else -> {
                 if (node !is Expression) return
-                val parent = (node as NodeBase).parent
+                val parent = node.parent
                 val isWhileDoCond = (parent is WhileStatement && node === parent.expression) ||
                     (parent is DoStatement && node === parent.expression)
                 if (isWhileDoCond && spineNpStatus(node) == NP_EXPR) {
