@@ -134,8 +134,14 @@ class Parser(
     private val isJsLikeFile = fileName.endsWith(".js") || fileName.endsWith(".jsx") ||
         fileName.endsWith(".cjs") || fileName.endsWith(".mjs")
 
-    /** Pre-computed line start positions for fast line/character lookup. */
-    private val lineStarts: IntArray = computeLineStarts(source)
+    /** Line start positions for line/character lookup — computed LAZILY on the
+     *  first diagnostic that needs a line/col (M0.3(viii)): the eager per-parse
+     *  computation was 5% of the self-compile's JFR samples, all wasted on clean
+     *  parses (nothing else consumes it). Nullable-field pattern, not `by lazy`
+     *  (the CLAUDE.md init-order gotcha + per-access sync cost). */
+    private var lineStartsCache: IntArray? = null
+    private val lineStarts: IntArray
+        get() = lineStartsCache ?: computeLineStarts(source).also { lineStartsCache = it }
 
     fun parse(): SourceFile {
         // 16.0: Check triple-slash reference path directives for self-reference (TS1006).
@@ -10076,19 +10082,25 @@ private val INDEX_SIG_ALLOWED_PARAM_KEYWORDS = setOf(
  * The first entry is always 0 (start of the first line).
  */
 private fun computeLineStarts(text: String): IntArray {
-    val starts = mutableListOf(0)
+    // M0.3(viii): growable IntArray, no per-line Integer boxing (the old
+    // mutableListOf(0) boxed every line start).
+    var starts = IntArray(maxOf(16, text.length / 32))
+    var count = 1 // starts[0] = 0 (start of the first line)
     var i = 0
-    while (i < text.length) {
+    val n = text.length
+    while (i < n) {
         val ch = text[i]
         if (ch == '\r') {
-            if (i + 1 < text.length && text[i + 1] == '\n') {
+            if (i + 1 < n && text[i + 1] == '\n') {
                 i++ // skip \r in \r\n
             }
-            starts.add(i + 1)
-        } else if (ch == '\n') {
-            starts.add(i + 1)
+        } else if (ch != '\n') {
+            i++
+            continue
         }
+        if (count == starts.size) starts = starts.copyOf(starts.size * 2)
+        starts[count++] = i + 1
         i++
     }
-    return starts.toIntArray()
+    return if (count == starts.size) starts else starts.copyOf(count)
 }

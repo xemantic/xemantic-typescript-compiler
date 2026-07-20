@@ -1073,9 +1073,12 @@ class Checker(
         if (spineIsDts || spineIsJsLike) return
         val top = ccetFrames.last()
         val parent = (node as NodeBase).parent
-        when (node) {
-            is Block -> when (parent) {
-                is FunctionDeclaration -> if (node === parent.body) {
+        // M0.2/M0.3(viii): kindId dispatch (was the deliberately-skipped 5-arm
+        // instanceof chain — hand-converted; the ArrowFunction/FunctionExpression
+        // arm's union-smart-cast shapes are restructured to explicit if/casts).
+        when (node.kindId) {
+            NodeKind.BLOCK -> { node as Block; when ((parent as? NodeBase)?.kindId ?: -1) {
+                NodeKind.FUNCTION_DECLARATION -> { parent as FunctionDeclaration; if (node === parent.body) {
                     val (scope, ast) = ccetFnTpScope(parent.typeParameters, top)
                     val frame = CcetFrame(node, EpochMap(top.localTypes), EpochSet(top.paramBindings),
                         scope, ast, top.superBaseSig, top.superBaseType, dead = top.dead)
@@ -1085,9 +1088,10 @@ class Checker(
                         applyCallTypesBodyLocalShadowing(node.statements, parent.parameters)
                         shadowNestedFunctionNames(node.statements)
                     }
-                }
-                is MethodDeclaration -> {
-                    val cls = (parent as NodeBase).parent
+                } }
+                NodeKind.METHOD_DECLARATION -> {
+                    parent as MethodDeclaration
+                    val cls = parent.parent
                     if (node === parent.body && cls is ClassDeclaration) {
                         // The class frame (pushed at the ClassDeclaration enter)
                         // is the base; static methods drop the class TP scope
@@ -1129,8 +1133,9 @@ class Checker(
                         ccetObjlitMemberFrame(node, parent.parameters, parent)
                     }
                 }
-                is Constructor -> {
-                    val cls = (parent as NodeBase).parent
+                NodeKind.CONSTRUCTOR -> {
+                    parent as Constructor
+                    val cls = parent.parent
                     if (node === parent.body && cls is ClassDeclaration) {
                         val classFrame = ccetFrames.lastOrNull { it.owner === cls } ?: top
                         val frame = CcetFrame(node, EpochMap(top.localTypes), EpochSet(top.paramBindings),
@@ -1143,7 +1148,7 @@ class Checker(
                         }
                     }
                 }
-                is GetAccessor, is SetAccessor -> {
+                NodeKind.GET_ACCESSOR, NodeKind.SET_ACCESSOR -> {
                     // Class accessors: NO copies in legacy (bodies share). Objlit
                     // accessors: the withObjThis this-typed copy.
                     val owner2 = parent as ClassElement
@@ -1157,9 +1162,9 @@ class Checker(
                         ccetObjlitMemberFrame(node, params, owner2)
                     }
                 }
-                else -> {}
-            }
-            is ClassDeclaration -> {
+            } }
+            NodeKind.CLASS_DECLARATION -> {
+                node as ClassDeclaration
                 // The class-level frame: class TP scope + classSym + the
                 // baseResolution pair, maps SHARED with the enclosing frame.
                 val classSym = node.name?.let { name ->
@@ -1200,7 +1205,8 @@ class Checker(
                     scope, top.tpAst, baseSig, baseType,
                     classSym = classSym, dead = top.dead))
             }
-            is ModuleDeclaration -> {
+            NodeKind.MODULE_DECLARATION -> {
+                node as ModuleDeclaration
                 if (ModifierFlag.Declare in node.modifiers) {
                     ccetFrames.addLast(CcetFrame(node, top.localTypes, top.paramBindings,
                         top.tpScope, top.tpAst, top.superBaseSig, top.superBaseType,
@@ -1216,11 +1222,9 @@ class Checker(
                         nsSymbol = nsSym, dead = top.dead))
                 }
             }
-            is ArrowFunction, is FunctionExpression -> {
-                val params = when (node) {
-                    is ArrowFunction -> node.parameters
-                    is FunctionExpression -> node.parameters
-                }
+            NodeKind.ARROW_FUNCTION, NodeKind.FUNCTION_EXPRESSION -> {
+                val params = if (node is ArrowFunction) node.parameters
+                    else (node as FunctionExpression).parameters
                 // B246: a FunctionType-annotated var's fn-expr/arrow initializer
                 // takes the CONTEXTUAL param typing instead of own-param anyType.
                 val declParent = parent as? VariableDeclaration
@@ -1259,7 +1263,6 @@ class Checker(
                     }
                 }
             }
-            else -> {}
         }
         // ForIn/ForOf loop-var shadow around the BODY (colliding names only).
         run {
@@ -4090,6 +4093,11 @@ class Checker(
      *  a pure function of the frozen binder tables). Declared before `init` — it is
      *  consulted during init via isUnresolvedGenericType / checkTypeArgCount. */
     private val typeParamInfoCache = HashMap<String, TypeParamInfo?>()
+
+    /** M0.3(viii): memo for [fileDeclaresNonGenericType] (`file|name` → verdict, a
+     *  pure function of the frozen ASTs — the un-memoized statement scan showed in
+     *  the round-623 JFR). Declared before `init` per the init-order trap. */
+    private val fileNonGenericTypeCache = HashMap<String, Boolean>()
 
     /** M3.4 (round 413): per-file memo of [getModuleNamedExports] (fileName →
      *  exported-name set) so [computeExportedSymbolThroughStars]'s leaf gate is
@@ -48389,8 +48397,16 @@ interface DataView {
      *  TS2314. AST-based so it is immune to the `mergeSymbolTable` declaration pollution
      *  (the merged `globals`/first-file `result.locals` symbol carries BOTH declarations).
      *  A same-file GENERIC declaration returns false (its real arity applies). */
-    private fun fileDeclaresNonGenericType(fileName: String, name: String): Boolean {
-        val result = binderResults.firstOrNull { it.sourceFile.fileName == fileName } ?: return false
+    private fun fileDeclaresNonGenericType(fileName: String, name: String): Boolean =
+        fileNonGenericTypeCache.getOrPut("$fileName|$name") {
+            computeFileDeclaresNonGenericType(fileName, name)
+        }
+
+    private fun computeFileDeclaresNonGenericType(fileName: String, name: String): Boolean {
+        // M0.3(viii): the [fileResults] index replaces the old linear
+        // `binderResults.firstOrNull { fileName == }` scan (same first-match answer —
+        // associateBy keeps the LAST duplicate, but program file names are unique keys).
+        val result = fileResults[fileName] ?: return false
         var found = false
         for (stmt in result.sourceFile.statements) {
             val tps: List<TypeParameter>? = when (stmt) {
