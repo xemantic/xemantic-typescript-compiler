@@ -194,6 +194,16 @@ class Checker(
         val referenceCache = HashMap<String, Type.Reference>()
         val unionInternCache = HashMap<String, Type.Union>()
         val intersectionInternCache = HashMap<String, Type.Intersection>()
+        /** M0.3(iii): packed-Long fast paths for the three intern caches above —
+         *  the DOMINANT shapes (0/empty/1-arg references; 2-member unions/
+         *  intersections) intern via an exact two-int-packed key instead of
+         *  building a string key per consult (the round-618 JFR hotspot).
+         *  Larger shapes stay on the string maps. Same confinement (per-worker
+         *  CheckerState) and same identity semantics — a packed key is a
+         *  BIJECTION of the id tuple, never a hash. */
+        val referenceCacheLong = LongKeyMap<Type.Reference>()
+        val unionInternCacheLong = LongKeyMap<Type.Union>()
+        val intersectionInternCacheLong = LongKeyMap<Type.Intersection>()
         /** INV.5(c) round 548 (option iii): context-KEYED cache for
          *  context-bearing type-node resolutions — keyed by NODE IDENTITY
          *  (=== equality, nodeId hash) + the instantiation-context
@@ -4262,6 +4272,12 @@ class Checker(
     // instead of containsKey + get. Never a real filename (no ` ` in resolutions).
     private val UNRESOLVED_MODULE_SPEC = " <unresolved-module-specifier>"
     private val moduleSpecifierCache = HashMap<String, String>()
+
+    /** M0.3(iv): memo for [normalizePath] — a pure function on the module-specifier
+     *  resolution hot path (round-618 JFR: 17/24 joinTo samples were its
+     *  joinToString). Worker-local (Checker field, Tier 2 per
+     *  docs/parallel-caching.md); declared before `init` (Kotlin init-order rule). */
+    private val normalizePathMemo = HashMap<String, String>()
 
     /** Round 473 (M3.4, the tsc server profile's const-string discriminant family):
      *  program-wide UNAMBIGUOUS top-level `const X = "literal"` values, name → string.
@@ -10293,8 +10309,9 @@ class Checker(
         return prevLine.contains("@ts-expect-error") || prevLine.contains("@ts-ignore")
     }
 
-    /** Normalize a path by resolving `..` and `.` segments. */
-    private fun normalizePath(path: String): String {
+    /** Normalize a path by resolving `..` and `.` segments. Memoized (M0.3(iv)) —
+     *  pure function, called per relative-specifier resolution on hot flow paths. */
+    private fun normalizePath(path: String): String = normalizePathMemo.getOrPut(path) {
         val parts = path.split('/')
         val result = mutableListOf<String>()
         for (part in parts) {
@@ -10304,7 +10321,7 @@ class Checker(
                 else -> result.add(part)
             }
         }
-        return result.joinToString("/")
+        result.joinToString("/")
     }
 
     // -----------------------------------------------------------------------
@@ -141988,10 +142005,22 @@ interface DataView {
      * generic with no instantiation). This is rare; most call sites pass an actual list.
      */
     private fun getOrInternReference(target: Type.Interface, args: List<Type>?): Type.Reference {
+        // M0.3(iii): the dominant shapes (null / empty / exactly-one arg) intern via an
+        // exact packed-Long key — target.id (>= 1) in the high 32 bits, the single
+        // arg's id (positive, < 2^31) in the low 32 bits. null args and an EMPTY list
+        // both pack low=0, deliberately REPRODUCING the old string key's conflation
+        // (both built "id|" — first-toucher's instance wins for the other shape).
+        if (args == null || args.size <= 1) {
+            val low = if (args.isNullOrEmpty()) 0L else args[0].id.toLong() and 0xFFFFFFFFL
+            val key = (target.id.toLong() shl 32) or low
+            return state.referenceCacheLong.get(key)
+                ?: Type.Reference(target, resolvedTypeArguments = args)
+                    .also { state.referenceCacheLong.put(key, it) }
+        }
         val key = buildString {
             append(target.id)
             append('|')
-            if (args != null) args.joinTo(this, ",") { it.id.toString() }
+            args.joinTo(this, ",") { it.id.toString() }
         }
         return state.referenceCache.getOrPut(key) {
             Type.Reference(target, resolvedTypeArguments = args)
@@ -143223,6 +143252,13 @@ interface DataView {
     }
 
     private fun internUnion(members: List<Type>): Type.Union {
+        // M0.3(iii): the dominant 2-member union (`T | undefined`) interns via an
+        // exact packed-Long key (both ids positive < 2^31; high half >= 1 != 0).
+        if (members.size == 2) {
+            val key = (members[0].id.toLong() shl 32) or (members[1].id.toLong() and 0xFFFFFFFFL)
+            return state.unionInternCacheLong.get(key)
+                ?: Type.Union(members).also { state.unionInternCacheLong.put(key, it) }
+        }
         val key = members.joinToString(",") { it.id.toString() }
         return state.unionInternCache.getOrPut(key) { Type.Union(members) }
     }
@@ -143279,6 +143315,12 @@ interface DataView {
         // so TS2322 / TS2339 emitters can append the
         // "The intersection 'A & B' was reduced to 'never' ..." chain line.
         if (findConflictingPrivateInIntersection(filtered) != null) return neverType
+        // M0.3(iii): 2-member intersections intern via the exact packed-Long key.
+        if (filtered.size == 2) {
+            val key = (filtered[0].id.toLong() shl 32) or (filtered[1].id.toLong() and 0xFFFFFFFFL)
+            return state.intersectionInternCacheLong.get(key)
+                ?: Type.Intersection(filtered).also { state.intersectionInternCacheLong.put(key, it) }
+        }
         val key = filtered.joinToString(",") { it.id.toString() }
         return state.intersectionInternCache.getOrPut(key) { Type.Intersection(filtered) }
     }
