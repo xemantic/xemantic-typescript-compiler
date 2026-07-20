@@ -1,3 +1,33 @@
+**Round 612 (2026-07-19) — queue reconciliation completes: the INV.3 arc
+was ALREADY DONE (round 513) — round 611's "next campaign" claim was a
+stale-checkbox artifact.** Five checkboxes reconciled against their own
+bodies: INV.3(d) (complete round 513, per its body), the INV.3 umbrella
+(arc complete), INV.4(e) (giants retired round 592), INV.5(d)
+((d1) done/(d2) demoted), the INV.5 umbrella (substance complete round
+604; residuals deferred/demoted/blocked). THE GENUINELY-LIVE QUEUE after
+reconciliation: **INV.7's remaining features (watch mode via a
+file-event Flow; .tsbuildinfo-style incremental reuse)** + the blocked
+tail (EP/reference-tsc, INV.7b/RAM, M4.7/network) + the owner-parked
+Post-v1 backlog. The INV.0–INV.6 architecture-inversion arc is DONE
+end-to-end. NEXT: the watch-mode design scout (INV.7c).
+
+**Round 611 (2026-07-19) — queue honesty: the INV.4/INV.6 umbrellas close,
+INV.5(d2) demotes on evidence.** INV.4 was closed narratively at round
+599 but its umbrella checkbox stayed open — checked with the closure
+summary. INV.6 Phase 0 closed at round 609 — checked, with (6e) parallel
+emit explicitly deferred (emit workers would race the shared checker's
+lazy caches; benches are --noEmit so no dashboard value) and Phase 1
+(shared frozen collectors) named as the reopener. INV.5(d2) demoted from
+"optional" to hygiene-only with evidence: the round-598 attribution puts
+the whole relation family at ~927ms — no longer a lever; its residual
+issues (first-touch ambient scope in resolvedPropertyTypes' cache key,
+no null-caching) are recorded for a future correctness trace. THE LIVE
+QUEUE now reads: INV.3(d) (the merge retire — the last big correctness-
+architecture campaign, staged analysis on wip/inv3d-merge-retire),
+INV.7 watch/incremental, and the externally-blocked items (EP needs a
+reference tsc; INV.7b needs a ≥16GB builder; M4.7 needs network).
+NEXT: open the INV.3(d) campaign with fresh context.
+
 **Round 610b (2026-07-19) — (INV.7b) BLOCKED-ON-RESOURCES: the Release
 link OOM-kills the build daemon on this 7.7GB box.** Two attempts (the
 second with daemons stopped + `-Pkotlin.native.jvmArgs=-Xmx5g`): the

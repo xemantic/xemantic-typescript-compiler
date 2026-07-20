@@ -244,11 +244,22 @@ class Inv0PassTimingTest {
             PassTiming.diagnosticsSize = { size }
             pass("lightEmitter") { size += 2 }
             pass("lightSilent") { }
+            // The census BLINDNESS pin (round 620): only net-POSITIVE deltas are
+            // recorded, so a wipe-and-pin pass (remove N, re-add N — net 0) and a
+            // pure retractor (net < 0) are census-silent while fully load-bearing.
+            // Census silence is therefore deletion evidence ONLY for pure
+            // diagnostics.add passes — see the round-619 census artifact correction.
+            pass("wipeAndPin") { size -= 2; size += 2 }
+            pass("retractor") { size -= 1 }
         } finally {
             PassTiming.censusMode = savedCensus
         }
         assertEquals(2, PassTiming.censusByPass["lightEmitter"])
         assertEquals(null, PassTiming.censusByPass["lightSilent"])
+        assertEquals(null, PassTiming.censusByPass["wipeAndPin"],
+            "a wipe-and-pin pass (net 0) must be census-silent — the blindness this pin documents")
+        assertEquals(null, PassTiming.censusByPass["retractor"],
+            "a retractor (net < 0) must be census-silent")
         assertTrue(PassTiming.passNanos.isEmpty(), "censusMode must not record pass times")
         assertEquals(0L, PassTiming.getTypeOfExpressionCalls)
         // reset() must NOT clear the census accumulator (the mid-suite wipe hazard).

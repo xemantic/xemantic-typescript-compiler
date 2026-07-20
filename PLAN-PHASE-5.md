@@ -20,6 +20,40 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 620 (2026-07-20) — (M0.1d) runs the mandated consumer trace and
+OVERTURNS round 619's deletion verdict: "23 census-silent, deletion-ready"
+was a FALSE GREEN — 20 of the 23 are corpus-pinned; only 3 pure adders were
+deletable.** Two compounding flaws found. (1) METHODOLOGY: `censusByPass`
+records only net-POSITIVE per-pass deltas (`c1 > c0` in pass()), so four
+whole pass classes are census-silent while load-bearing — wipe-and-pin
+walkers (`removeAll` + `pinDiag`, net 0: checkTemporalPin, checkMapUpsert,
+~14 of the 23), rewriters (net 0: applyDomLibSuggestionRewrite — the ONLY
+producer of TS2812's dom-lib suffix, required by missingDomElements;
+checkBaseClassImprovedMismatch), retractors (net < 0: ctaPostFilters — five
+generics-family errors baselines depend on its TS2322-vs-TS2304/TS2314
+retraction), and collectors (net 0: populateAmbientCyclicBaseClasses —
+recursiveBaseCheck/2's TS2449 suppression). (2) EXECUTION: Phase B's "full
+suite GREEN with all 23 disabled" was manufactured by Inv0PassTimingTest's
+cleanup assigning `PassTiming.disabledPasses = emptySet()` — the wipe
+re-enabled the lab's disables for every test class after 'I' in the
+alphabet, i.e. the whole generated corpus (a CLI probe on missingDomElements
+proved the disable works outside the fork: TS2812×4 → TS2339×6). LANDED:
+(a) save-and-restore in Inv0PassTimingTest (disabledPasses + censusMode) +
+a census-blindness pin (wipe-and-pin and retractor passes must be
+census-silent — the blindness documented in-test) + the census artifact
+correction header; (b) the honest disable experiment (fixed cleanup,
+`--rerun`): 26 failures → per-pass verdicts — LIVE: the wipe-and-pin
+walkers, both rewriters, the retractor, the collector, and
+checkCrossFileUseBeforeDeclaration (pinned by Inv4SpineBatch27Test, a LOCAL
+pin a corpus-only census can never see); (c) the 3 dead pure adders DELETED
+(checkModuleNoneConflict, checkExportAssignmentInSystem,
+checkUnicodeSurrogatePairImportBinding + orphaned helpers
+findFirstModuleStatement/getModuleStatementSpan/getStatementTextSpan/
+UescDiag). Gates: full suite 11,379/0; `--listAll` ×8 byte-identical
+pre-vs-post on all 8 profiles; build warning-clean. (M0.1) CLOSES on the
+honest ledger: the tail's ~6.2 s is ALL pinned — (M0.4) migration carries
+the whole lever. NEXT (top-of-queue): (M0.2) kindId table dispatch.**
+
 **Round 619 (2026-07-20) — the PERF arc opens (owner: "proceed according to
 your recommendations") and (M0.1) tail triage runs to its verdict: the
 deletion hypothesis is DEAD — the tail is ~all corpus-pinned; migration
@@ -212,36 +246,6 @@ reuse (.tsbuildinfo-style) stays the separate open item. Gates: corpus
 11,355/0; listAll ×8 byte-identical; native target still compiles.
 NEXT: (INV.7d) incremental reuse, or wrap the session.
 
-**Round 612 (2026-07-19) — queue reconciliation completes: the INV.3 arc
-was ALREADY DONE (round 513) — round 611's "next campaign" claim was a
-stale-checkbox artifact.** Five checkboxes reconciled against their own
-bodies: INV.3(d) (complete round 513, per its body), the INV.3 umbrella
-(arc complete), INV.4(e) (giants retired round 592), INV.5(d)
-((d1) done/(d2) demoted), the INV.5 umbrella (substance complete round
-604; residuals deferred/demoted/blocked). THE GENUINELY-LIVE QUEUE after
-reconciliation: **INV.7's remaining features (watch mode via a
-file-event Flow; .tsbuildinfo-style incremental reuse)** + the blocked
-tail (EP/reference-tsc, INV.7b/RAM, M4.7/network) + the owner-parked
-Post-v1 backlog. The INV.0–INV.6 architecture-inversion arc is DONE
-end-to-end. NEXT: the watch-mode design scout (INV.7c).
-
-**Round 611 (2026-07-19) — queue honesty: the INV.4/INV.6 umbrellas close,
-INV.5(d2) demotes on evidence.** INV.4 was closed narratively at round
-599 but its umbrella checkbox stayed open — checked with the closure
-summary. INV.6 Phase 0 closed at round 609 — checked, with (6e) parallel
-emit explicitly deferred (emit workers would race the shared checker's
-lazy caches; benches are --noEmit so no dashboard value) and Phase 1
-(shared frozen collectors) named as the reopener. INV.5(d2) demoted from
-"optional" to hygiene-only with evidence: the round-598 attribution puts
-the whole relation family at ~927ms — no longer a lever; its residual
-issues (first-touch ambient scope in resolvedPropertyTypes' cache key,
-no null-caching) are recorded for a future correctness trace. THE LIVE
-QUEUE now reads: INV.3(d) (the merge retire — the last big correctness-
-architecture campaign, staged analysis on wip/inv3d-merge-retire),
-INV.7 watch/incremental, and the externally-blocked items (EP needs a
-reference tsc; INV.7b needs a ≥16GB builder; M4.7 needs network).
-NEXT: open the INV.3(d) campaign with fresh context.
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 (Restored 2026-07-12, round 481 — the queue/backlog/inventory sections had been
@@ -261,45 +265,31 @@ rules: the INV rules unchanged, PLUS wall-clock claims are decided ONLY by
 interleaved A/B medians — anything priced below the ±2% drift band folds into a
 structural item instead of landing alone.**
 
-- [ ] **(M0.1) Tail triage — the census batch-disable protocol. Phases (a)–(c)
-  DONE round 619; the VERDICT KILLS the deletion hypothesis: 417/440 tail
-  passes (6,185 ms of 6,244 ms) EMIT on the corpus — only 23 passes worth
-  59 ms are census-silent, so the tail's wall recovery is (M0.4) MIGRATION,
-  not deletion.** Results: (a) the PassLab facility landed —
-  `build/pass-lab.txt` (`census` / `disable <pass>` lines) loaded once per JVM
-  at the runWithDeepStack funnel (JVM-only; file absent = byte-identical, one
-  volatile read per compile); `PassTiming.censusMode` (light emission census
-  into the reset-immune `censusByPass`; a shutdown hook dumps
-  `build/pass-census-out-<pid>.txt`) + `PassTiming.disabledPasses` (pass()
-  skips); parsing/skip/census semantics pinned (+5 Inv0PassTimingTest, +2
-  PassLabParseTest). (b) Phase A: the corpus census ran green
-  (`--tests '…TypeScriptCompilerTests_*'` with censusMode ON = an 11k-test
-  on-mode byte-identity gate); artifact committed:
-  `docs/perf/pass-census-round619.txt` (top tail emitters:
-  checkPropertyInitialization 1,127 / checkUnusedDeclarations 690 /
-  checkUnresolvedModules 293; 18 passes ≥100). (c) Phase B collapsed to ONE
-  batch (the 23 silent passes): full suite GREEN with all 23 disabled
-  (11,379/0) AND compiler-profile `--listAll` byte-identical.
-  REMAINING (d): the deletion commit for the 23 — checkModulePreserve4Pin,
-  checkBaseClassImprovedMismatch, checkPreserveSymlinksPin, ctaPostFilters,
-  checkCrossFileUseBeforeDeclaration, checkUnicodeSurrogatePairImportBinding,
-  checkMapUpsert, checkGenericFunctionInferencePipe,
-  checkGenericGeneratorYieldArgs, checkDisallowedBlockScopedParseErrors,
-  checkMappedTypeIndexedAccessConstraint,
-  checkInferFromGenericFunctionReturnTypes3,
-  checkOverloadsWithProvisionalErrors, populateAmbientCyclicBaseClasses,
-  checkReverseMappedInferableArrows, applyDomLibSuggestionRewrite,
-  checkTemporalPin, checkBigintWithLib, checkReadonlyTupleElaboration,
-  checkInferTypePredicates, checkInKeywordTypeguard, checkModuleNoneConflict,
-  checkExportAssignmentInSystem — with TWO cautions: (i) PRODUCERS/REWRITERS
-  among them (ctaPostFilters, populateAmbientCyclicBaseClasses — a documented
-  TS2449-suppression-set producer — applyDomLibSuggestionRewrite,
-  checkBaseClassImprovedMismatch) need a consumer trace before deletion
-  (suite-green is weak evidence for suppression producers: their absence
-  manufactures FPs only on inputs exercising the suppressed shape); (ii) the
-  deletion commit's gate is suite + `--listAll` ×8 (only compiler was checked
-  in-session). Wall value ≈ 59 ms — hygiene, not a lever. LAB DISCIPLINE
-  stands: any run with pass-lab.txt present is an EXPERIMENT, never a gate.
+- [x] **(M0.1) Tail triage — CLOSED round 620 with the deletion hypothesis doubly
+  dead.** Phases (a)–(c) ran round 619 (PassLab facility, corpus census —
+  artifact `docs/perf/pass-census-round619.txt`, now carrying a correction
+  header); the (d) consumer trace (round 620) OVERTURNED the "23 census-silent
+  → deletion-ready" verdict, which rested on two flaws: (i) the census records
+  only net-POSITIVE deltas — wipe-and-pin walkers (removeAll+pinDiag, net 0),
+  rewriters, retractors, and collectors are census-silent while load-bearing —
+  and (ii) Phase B's suite green was a FALSE GREEN: Inv0PassTimingTest's
+  cleanup assigned `PassTiming.disabledPasses = emptySet()`, re-enabling the
+  lab's disables for every test class after 'I' (the whole generated corpus);
+  fixed to save-and-restore. The honest disable experiment (fixed cleanup,
+  `--rerun`) fails 26 tests: 20 of the 23 are corpus-pinned (incl. one LOCAL
+  pin — Inv4SpineBatch27Test for checkCrossFileUseBeforeDeclaration —
+  invisible to a corpus-only census). DELETED (the real pool, 3 pure adders):
+  checkModuleNoneConflict (TS1148) + checkExportAssignmentInSystem (TS1218) —
+  module `none`/`system` are tsgo-removed kinds, their corpus tests
+  generator-skipped — and checkUnicodeSurrogatePairImportBinding
+  (unicodeEscapesInNames02's TS1127/TS2305 now flow from the general
+  scanner/module-member paths; its errors subtest stays green without it),
+  plus orphaned helpers. Gates: full suite 11,379/0; `--listAll` ×8
+  byte-identical pre-vs-post on all 8 profiles; build warning-clean. Net wall
+  value ≈ nil — the whole ~6.2 s tail is pinned; (M0.4) migration carries the
+  lever. LAB DISCIPLINE addenda: `build/pass-lab.txt` is NOT a Gradle input
+  (always `--rerun` a lab experiment), and a lab-run verdict is unverified
+  until the disable is proven active in the SAME JVM that ran the tests.
 - [ ] **(M0.2) kindId table dispatch.** NodeBase gains a stable Int kindId
   (generated/verified against the sealed hierarchy — extend the
   ForEachChildOracleTest reflection-oracle pattern so exhaustiveness stays

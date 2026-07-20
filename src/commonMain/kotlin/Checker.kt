@@ -5281,10 +5281,10 @@ class Checker(
         // spineCheckReservedEnumName.
         // 31. Check for merge conflict markers (TS1185)
         pass("checkConflictMarkers") { checkConflictMarkers() }
-        // 32. Check module=none with imports/exports (TS1148)
-        pass("checkModuleNoneConflict") { checkModuleNoneConflict() }
-        // 33. Check export= in system modules (TS1218)
-        pass("checkExportAssignmentInSystem") { checkExportAssignmentInSystem() }
+        // 32/33: checkModuleNoneConflict (TS1148) + checkExportAssignmentInSystem
+        // (TS1218) DELETED round 620 (M0.1d) — module `none`/`system` are
+        // tsgo-removed kinds, their corpus tests are generator-skipped, and the
+        // honest 23-pass disable experiment measured both inert suite-wide.
         // 34. Check reserved name collisions in modules (TS2441)
         pass("checkReservedModuleNames") { checkReservedModuleNames() }
         // 34b. Check __esModule reserved export (TS1216)
@@ -5756,9 +5756,9 @@ class Checker(
         // + TS6500. Engine resolves the recursive constraints to errorType/any → emit nothing →
         // additive. Corpus-unique gates (grep-verified).
         pass("checkInfiniteConstraints") { checkInfiniteConstraints() }
-        // unicodeEscapesInNames02 (es2015+): import binding written as two lone-surrogate `\uHHHH`
-        // escapes → 2× TS1127 + 2× TS2305. Our scanner combines them; this is additive.
-        pass("checkUnicodeSurrogatePairImportBinding") { checkUnicodeSurrogatePairImportBinding() }
+        // checkUnicodeSurrogatePairImportBinding DELETED round 620 (M0.1d) —
+        // unicodeEscapesInNames02's TS1127/TS2305 now flow from the general
+        // scanner/module-member paths (disable experiment: test stays green).
         // 64f. Check type argument constraints (TS2344)
         pass("checkTypeArgumentConstraints") { checkTypeArgumentConstraints() }
         // B498. Generic type-parameter defaults validation (TS2344/TS2706/TS2716)
@@ -67520,97 +67520,6 @@ interface DataView {
         ))
     }
 
-    private fun findFirstModuleStatement(statements: List<Statement>): Statement? {
-        for (stmt in statements) {
-            when (stmt) {
-                is ImportDeclaration -> return stmt
-                is ImportEqualsDeclaration -> return stmt
-                is ExportDeclaration -> return stmt
-                is ExportAssignment -> return stmt
-                else -> {
-                    val modifiers = when (stmt) {
-                        is FunctionDeclaration -> stmt.modifiers
-                        is ClassDeclaration -> stmt.modifiers
-                        is VariableStatement -> stmt.modifiers
-                        is EnumDeclaration -> stmt.modifiers
-                        is InterfaceDeclaration -> stmt.modifiers
-                        is TypeAliasDeclaration -> stmt.modifiers
-                        is ModuleDeclaration -> stmt.modifiers
-                        else -> emptySet()
-                    }
-                    if (ModifierFlag.Export in modifiers) return stmt
-                }
-            }
-        }
-        return null
-    }
-
-    /**
-     * Get the diagnostic span for a module statement.
-     * For class/function/enum/interface: span covers the name identifier.
-     * For variable statements and imports: span covers the entire statement including export keyword.
-     */
-    /** Get text span for a statement, stopping at semicolon or end of text content (before comments). */
-    private fun getStatementTextSpan(stmt: Statement, source: String): Pair<Int, Int> {
-        var start = stmt.pos
-        // Skip leading whitespace
-        while (start < source.length && source[start] in " \t\r\n") start++
-        // Find end: stop at semicolon or comment start
-        val lineEnd = source.indexOf('\n', start).let { if (it < 0) source.length else it }
-        var end = start
-        var i = start
-        while (i < lineEnd) {
-            val ch = source[i]
-            if (ch == ';') {
-                end = i + 1
-                break
-            }
-            if (ch == '/' && i + 1 < lineEnd && (source[i + 1] == '/' || source[i + 1] == '*')) {
-                // Comment starts — end before it, trim trailing whitespace
-                while (end > start && source[end - 1] in " \t") end--
-                break
-            }
-            end = i + 1
-            i++
-        }
-        return Pair(start, (end - start).coerceAtLeast(1))
-    }
-
-    private fun getModuleStatementSpan(stmt: Statement, source: String): Pair<Int, Int> {
-        // For class/function declarations, use the name identifier position
-        when (stmt) {
-            is ClassDeclaration -> stmt.name?.let {
-                return Pair(it.pos, it.text.length)
-            }
-            is FunctionDeclaration -> stmt.name?.let {
-                return Pair(it.pos, it.text.length)
-            }
-            is EnumDeclaration -> {
-                return Pair(stmt.name.pos, stmt.name.text.length)
-            }
-            is InterfaceDeclaration -> {
-                return Pair(stmt.name.pos, stmt.name.text.length)
-            }
-            else -> {}
-        }
-        // For everything else (export var, import, export =, etc.), use the full statement span.
-        // The statement pos may start after the 'export' keyword, so search backwards for it.
-        var start = stmt.pos
-        if (stmt is VariableStatement && ModifierFlag.Export in stmt.modifiers) {
-            // Find the 'export' keyword before the var/let/const keyword
-            var p = start - 1
-            while (p >= 0 && source[p] in " \t\r\n") p--
-            // p should now be at the 't' of 'export'
-            if (p >= 5 && source.substring(p - 5, p + 1) == "export") {
-                start = p - 5
-            }
-        }
-        // Find the end of actual content (before trailing whitespace/newline)
-        var end = stmt.end
-        while (end > start && end - 1 < source.length && source[end - 1] in " \t\r\n") end--
-        return Pair(start, (end - start).coerceAtLeast(1))
-    }
-
     // TS1185: Merge conflict marker encountered
     private fun checkConflictMarkers() {
         for (result in checkedResults) {
@@ -67645,62 +67554,6 @@ interface DataView {
                     }
                 }
                 i++
-            }
-        }
-    }
-
-    // TS1148: Cannot use imports, exports, or module augmentations when '--module' is 'none'
-    // Only fires for pre-ES2015 targets — ES2015+ supports module syntax natively
-    private fun checkModuleNoneConflict() {
-        if (options.module != ModuleKind.None) return
-        if (options.target >= ScriptTarget.ES2015) return
-
-        for (result in checkedResults) {
-            if (isDtsFile(result.sourceFile.fileName)) continue
-            val source = result.sourceFile.text
-            val fileName = result.sourceFile.fileName
-            val firstModuleStmt = findFirstModuleStatement(result.sourceFile.statements)
-                ?: continue
-
-            val (spanStart, spanLength) = getModuleStatementSpan(firstModuleStmt, source)
-            val (line, character) = getLineAndCharacterOfPosition(source, spanStart)
-            diagnostics.add(Diagnostic(
-                message = "Cannot use imports, exports, or module augmentations when '--module' is 'none'.",
-                category = DiagnosticCategory.Error,
-                code = 1148,
-                fileName = fileName,
-                line = line,
-                character = character,
-                start = spanStart,
-                length = spanLength,
-            ))
-        }
-    }
-
-    // TS1218: Export assignment is not supported when '--module' flag is 'system'
-    private fun checkExportAssignmentInSystem() {
-        if (options.effectiveModule != ModuleKind.System) return
-
-        for (result in checkedResults) {
-            if (isDtsFile(result.sourceFile.fileName)) continue
-            val source = result.sourceFile.text
-            val fileName = result.sourceFile.fileName
-            for (stmt in result.sourceFile.statements) {
-                if (stmt is ExportAssignment && stmt.isExportEquals) {
-                    // Span covers just `export = expr;` (skip comments/trailing whitespace)
-                    val (spanStart, spanLength) = getStatementTextSpan(stmt, source)
-                    val (line, character) = getLineAndCharacterOfPosition(source, spanStart)
-                    diagnostics.add(Diagnostic(
-                        message = "Export assignment is not supported when '--module' flag is 'system'.",
-                        category = DiagnosticCategory.Error,
-                        code = 1218,
-                        fileName = fileName,
-                        line = line,
-                        character = character,
-                        start = spanStart,
-                        length = spanLength,
-                    ))
-                }
             }
         }
     }
@@ -152907,7 +152760,6 @@ interface DataView {
     }
 
     private data class CiaDiag(val len: Int, val code: Int, val msg: String, val chain: List<String>)
-    private data class UescDiag(val off: Int, val len: Int, val code: Int, val msg: String)
 
     /**
      * reactReduxLikeDeferredInferenceAllowsAssignment + circularlyConstrainedMappedType… — both
@@ -153247,46 +153099,6 @@ interface DataView {
                     line = line, character = character, start = keyId.pos, length = keyId.text.length,
                     relatedInformation = related,
                 ))
-            }
-        }
-    }
-
-    /**
-     * unicodeEscapesInNames02 (target ≥ ES2015) — an import binding `𐊧` written as two
-     * lone-surrogate `\uHHHH` escapes. tsc decodes each independently (each a lone surrogate,
-     * invalid in an identifier) → TS1127 at each `\` (zero-width) + the recovered `uD800`/`uDEA7`
-     * fragments are unresolved module members → TS2305. Our scanner combines the two escapes into a
-     * valid astral identifier, so we emit nothing → additive. The binding survives as an
-     * ImportSpecifier whose `name.rawText` is the raw `\uHHHH\uHHHH` source — corpus-unique shape.
-     */
-    private fun checkUnicodeSurrogatePairImportBinding() {
-        if (options.target < ScriptTarget.ES2015) return
-        val re = Regex("^\\\\u([0-9a-fA-F]{4})\\\\u([0-9a-fA-F]{4})$")
-        for (result in checkedResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            for (st in result.sourceFile.statements) {
-                val imp = st as? ImportDeclaration ?: continue
-                val named = imp.importClause?.namedBindings as? NamedImports ?: continue
-                val spec = (imp.moduleSpecifier as? StringLiteralNode)?.text ?: continue
-                for (el in named.elements) {
-                    val raw = el.name.rawText ?: continue
-                    val m = re.matchEntire(raw) ?: continue
-                    val hi = m.groupValues[1].toInt(16); val lo = m.groupValues[2].toInt(16)
-                    if (hi !in 0xD800..0xDBFF || lo !in 0xDC00..0xDFFF) continue
-                    val base = el.name.pos
-                    val m1 = raw.substring(1, 6); val m2 = raw.substring(7, 12)
-                    for ((off, len, code, msg) in listOf(
-                        UescDiag(0, 0, 1127, "Invalid character."),
-                        UescDiag(1, 5, 2305, "Module '\"$spec\"' has no exported member '$m1'."),
-                        UescDiag(6, 0, 1127, "Invalid character."),
-                        UescDiag(7, 5, 2305, "Module '\"$spec\"' has no exported member '$m2'."))) {
-                        val (l, c) = getLineAndCharacterOfPosition(source, base + off)
-                        diagnostics.add(Diagnostic(message = msg, category = DiagnosticCategory.Error, code = code,
-                            fileName = fileName, line = l, character = c, start = base + off, length = len))
-                    }
-                }
             }
         }
     }
