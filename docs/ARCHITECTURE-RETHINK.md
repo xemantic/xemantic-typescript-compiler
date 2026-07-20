@@ -233,21 +233,42 @@ this safe. Every phase = many small suite-gated commits.
 
 ## 6. Targets and measurement protocol
 
-Proposed numeric targets (absorbing old M5.7; compiler profile = 78 files/195k LOC,
-cold CLI unless stated):
+*(Rewritten 2026-07-20, round 618, owner-approved. The original targets priced in
+the (f1)/(f2) memo+fold wins, which measured as dead-ends at the pre-canonical-types
+cost structure (rounds 596/599). The honest wall ledger for the inversion: ~25 s
+pre-arc (round 489) → 35.7 s mid-arc peak → ~31 s today — wall-NEGATIVE until the
+M0 debt burn-down completes, in exchange for the warm loop (watch incremental
+46–157 ms, `.xtsbuildinfo` ~630 ms), the partition seam, one authoritative walk,
+and the cache soundness M1 builds on. Round-618 measurements framing the arc: the
+JVM flag matrix is a measured dead-end (not GC-bound at 4 g); relations are 0.79 s —
+the engine is NOT the bottleneck; HashMap+String-equality ≈ 15% of wall with NO
+single hot map; the 440-pass legacy tail (6.2 s) emits NOTHING on the compiler
+profile — the corpus is its only pin; Identifier = 44.2% of 858k nodes and a kindId
+table kills 88% of dispatch-chain cost.)*
+
+Revised targets (compiler profile = 78 files/195k LOC, cold CLI, single-threaded
+unless stated; queue items in PLAN-PHASE-5.md § QUEUE "PERF"):
 
 | checkpoint | target |
 |---|---|
-| post INV.4/5 (single-threaded) | compiler ≤ 10 s (≈ JS tsc); harness RSS ≤ 1 GB |
-| post INV.6 (4 cores) | compiler ≤ 5 s; harness ≤ 20 s |
-| INV.7 stretch (native) | compiler cold ≤ 2× tsgo (~4 s) |
+| M0 — debt burn-down (tail triage/deletion, kindId dispatch, layout: atoms/links records/open-addressing, scaffolding retirement) | ≤ 24 s (recover, then beat, the round-489 baseline) |
+| M1 — identity stability (epoch churn, canonical narrowing outputs, member caching on the Reference) reviving the f1/f2 memo+fold | ≤ 15–20 s |
+| M2 — parallel scaling Phase 1 (shared frozen collectors) | ≤ 10–12 s at 4 workers (≈ JS-tsc parity) |
+
+Native is explicitly NOT a perf lever (measured round 610: 196 s debug .kexe;
+K/N ≤ JVM for this allocation-heavy workload) — it stays a product/portability
+asset. tsgo-class times (2–4 s) are out of scope for this arc. For the edit loop
+the perf problem is already largely solved by watch/incremental — these targets
+are about the cold full build.
 
 Invariants at EVERY step: corpus suite 100% green; the 8-profile FP floors
 unchanged (env-legit only); a bench TSV row per landed item;
 diagnostics/emit byte-diffs (`--listAll`, `emit-diff-tsc.sh`) empty vs the
-pre-change binary for behavior-preserving steps. A fresh JFR (or the INV.0 pass
-table) before and after each structural phase — the profile shifts after every
-fix.
+pre-change binary for behavior-preserving steps; wall-clock claims decided by
+interleaved A/B medians ONLY — anything priced below the ±2% drift band folds
+into a structural item instead of landing alone (the round-618 discipline).
+A fresh JFR (or the INV.0 pass table) before and after each structural phase —
+the profile shifts after every fix.
 
 ## 7. Anti-goals
 

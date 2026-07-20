@@ -252,6 +252,78 @@ hit their re-scoped v1 acceptance bar — "the shapes tsc's source uses" — whe
 burn-down reached zero real FPs; reviving their full-completeness form is a
 backlog-horizon decision, not queue debt.)
 
+**PERF — the post-inversion performance arc (owner-approved 2026-07-20, round 618:
+"proceed according to your recommendations"; measurements + rationale in the
+round-618 session note and the rewritten docs/ARCHITECTURE-RETHINK.md § 6). Ground
+rules: the INV rules unchanged, PLUS wall-clock claims are decided ONLY by
+interleaved A/B medians — anything priced below the ±2% drift band folds into a
+structural item instead of landing alone.**
+
+- [ ] **(M0.1) Tail triage — the census batch-disable protocol.** The 440 legacy
+  tail passes (6.24 s) emit NOTHING on the compiler profile (round-618 census) —
+  the corpus is their only pin, so profile censuses cannot decide KEEP.
+  (a) the PassLab facility: `build/pass-lab.txt` (`census` / `disable <pass>`
+  lines) loaded once per JVM at the runWithDeepStack funnel (JVM-only triage
+  instrument; file absent = byte-identical, one volatile read per compile);
+  `PassTiming.censusMode` (light per-pass emission census without full
+  instrumentation) + `PassTiming.disabledPasses` (pass() skips the body);
+  parsing + skip/census semantics pinned. (b) Phase A: ONE census suite run →
+  the corpus-EMITTING set E (definite keeps); the same run doubles as an
+  11k-test ON-mode byte-identity gate for censusMode. (c) Phase B:
+  batch-disable tail∖E cost-descending (~50/batch), full suite per batch,
+  bisect red batches → the confirmed-dead set D; a green batch ALSO gets a
+  compiler+services `--listAll` A/B with the batch disabled (belt-and-braces
+  against producer/retractor effects the corpus might not pin). (d) Phase C:
+  DELETE D batch-wise — suite + listAll ×8 per deletion commit — and bank the
+  wall win; the surviving pinned set is (M0.4)'s migration worklist. LAB
+  DISCIPLINE: any run with pass-lab.txt present is an EXPERIMENT, never a
+  gate — the runner must create AND remove the file around each run.
+- [ ] **(M0.2) kindId table dispatch.** NodeBase gains a stable Int kindId
+  (generated/verified against the sealed hierarchy — extend the
+  ForEachChildOracleTest reflection-oracle pattern so exhaustiveness stays
+  compiler-adjacent); forEachChild + the hot `when(node)` dispatchers
+  (spineEnterNode's sequential sub-dispatcher is-tests, spineLeaveNode,
+  spineUResEnter, ccetSpineEnter) dispatch on it. Priced by the round-618
+  histogram: average instanceof chain 8.3 → 1.0 (−88% of chain cost; expected
+  ~2–4% wall). A pure frequency reorder alone is ~0.5% = below the noise floor —
+  fold it in here, never land it alone. Gates: suite + listAll ×8 + interleaved
+  A/B.
+- [ ] **(M0.3) Layout campaign** (JFR-evidenced ~15% of wall in HashMap+String
+  equality with NO single hot map — structure-class work, one interleaved-A/B'd
+  slice per commit): (i) name atomization (Identifier → Int atom at scan time;
+  int-keyed scope/member maps; a globals-miss bitset — the 1.48M probes are 99%
+  miss); (ii) NodeLinks/SymbolLinks record consolidation over per-file dense
+  nodeId arrays (tsc's exact structure; symbol ids need per-worker dense spaces
+  under INV.6 — node ids are per-file dense already); (iii) open-addressing
+  primitive-key maps (packed-Long) for the id-pair intern/relation caches
+  (kills the string-key building internUnion/getOrInternReference show in
+  JFR); (iv) `normalizePath` memo (17/24 joinTo samples); (v) undo-log
+  (the proven NarrowSeen mark/pop pattern) replacing HashMap(other) scope
+  copies (putMapEntries 1.1%) — also reduces M1's epoch churn. Do NOT reach
+  for a JVM-only map library (build-change guardrail + multiplatform); a
+  ~100-line hand-rolled open-addressing map in commonMain suffices.
+- [ ] **(M0.4) Migrate the surviving pinned tail** into the spine (the documented
+  migration-pattern zoo), cost-descending; retire dead migration scaffolding as
+  it goes (emit-twice arms whose legacy side is gone, the dead m3
+  truncation-mark blocks).
+- [ ] **(M1) Identity stability → revive the two memo designs** (the ≤15–20 s
+  path; tsc's flow cache — per-(refKey, flowNode) over interned types — is the
+  existence proof that the (f2) fold works once types are canonical).
+  (a) attribute the epoch churn: 80k of 111k walks run at fresh epochs because
+  the walk's own recordings bump the fences — split read-relevant vs
+  record-only state, or fence per-map; (b) canonicalize narrowing outputs
+  (filters over interned unions must yield interned results; literal interning;
+  instantiated-member caching ON the Type.Reference, deleting
+  resolveGenericPropertyType's fresh-minting); (c) re-attempt the (f2)
+  per-(reference, flowNode) fold SHADOW-FIRST (the round-595 epoch
+  infrastructure + shadow memo are the instruments), then (f1). Revert rules
+  per the INV ground rules.
+- [ ] **(M2) Parallel scaling Phase 1** — shared frozen collectors: compute the
+  318 program-wide collectors once, freeze, share read-only (the immutability
+  audit in docs/parallel-caching.md). Sequenced AFTER M1 (canonical types
+  shrink the per-worker warmup that capped w4 flat). Honest cap: the
+  4-core/7.7 GB box limits what scaling we can demonstrate locally.
+
 **EP — Emit parity (owner-authorized 2026-07-12: "output parity, including reported errors").**
 The offline v1 DoD checked emit COMPLETENESS (all files emitted, exit 0) but not
 emit-BYTE parity with tsc. The round-483 emit diff (`scripts/emit-diff-tsc.sh`, xtsc
