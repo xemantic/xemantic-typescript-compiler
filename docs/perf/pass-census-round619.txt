@@ -1,6 +1,19 @@
 # Corpus emission census — round 619 (2026-07-20)
 # count<TAB>pass — diagnostics attributed per init-dispatch pass across the full corpus suite
 # (PassLab censusMode, one instrumented run; reproduce: echo census > build/pass-lab.txt && ./gradlew jvmTest --tests '...TypeScriptCompilerTests_*' --rerun)
+#
+# CORRECTION (round 620): the census counts only POSITIVE per-pass diagnostic
+# deltas (`if (c1 > c0)` in pass()), so a count of 0 does NOT mean a pass is
+# dead — four whole pass classes are census-silent while load-bearing:
+# wipe-and-pin walkers (diagnostics.removeAll + pinDiag, net 0), rewriters
+# (diagnostics[i] = copy, net 0), retractors (net < 0), and collectors (side-set
+# producers, net 0). Round 619's "23 census-silent passes are deletion-ready"
+# verdict was additionally propped up by a FALSE-GREEN Phase B suite run:
+# Inv0PassTimingTest's cleanup assigned disabledPasses = emptySet(), silently
+# re-enabling the lab-disabled passes for every alphabetically-later test class
+# (the whole generated corpus). Fixed round 620 (save-and-restore in the test);
+# the honest disable experiment shows most of the 23 ARE corpus-pinned — see
+# the round-620 session note for the per-pass verdicts.
 14257	checkSpine
 1127	checkPropertyInitialization
 690	checkUnusedDeclarations

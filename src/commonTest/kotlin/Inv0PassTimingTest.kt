@@ -204,7 +204,14 @@ class Inv0PassTimingTest {
     @Test
     fun `pass skips a disabled pass body and runs the others`() {
         PassTiming.reset()
-        PassTiming.disabledPasses = setOf("ghostDisabled")
+        // SAVE-AND-RESTORE, never clear: under a PassLab experiment run the fork-global
+        // disable set is live suite-wide — a cleanup that assigns emptySet() silently
+        // re-enables the lab-disabled passes for every test class that runs after this
+        // one (alphabetically: the whole generated corpus), turning a batch-disable
+        // experiment into a false green (this is exactly how round 619's Phase B
+        // "suite green with 23 passes disabled" verdict was manufactured).
+        val saved = PassTiming.disabledPasses
+        PassTiming.disabledPasses = saved + "ghostDisabled"
         try {
             var disabledRan = false
             var otherRan = false
@@ -213,9 +220,9 @@ class Inv0PassTimingTest {
             assertTrue(!disabledRan, "a disabled pass body must be skipped")
             assertTrue(otherRan, "a non-disabled pass must run")
         } finally {
-            PassTiming.disabledPasses = emptySet()
+            PassTiming.disabledPasses = saved
         }
-        // With the set empty (the default), the same pass runs again.
+        // With ghostDisabled no longer in the set, the same pass runs again.
         var ran = false
         pass("ghostDisabled") { ran = true }
         assertTrue(ran)
@@ -227,6 +234,10 @@ class Inv0PassTimingTest {
         PassTiming.reset()
         PassTiming.censusByPass.clear() // lab-owned, reset-immune — tests clear it directly
         PassTiming.enabled = false
+        // Save-and-restore (not clear) — the same fork-global lab-state rule as
+        // disabledPasses: under a census lab run, a cleanup that assigns false would
+        // silently stop the census for every later test class.
+        val savedCensus = PassTiming.censusMode
         PassTiming.censusMode = true
         try {
             var size = 0
@@ -234,7 +245,7 @@ class Inv0PassTimingTest {
             pass("lightEmitter") { size += 2 }
             pass("lightSilent") { }
         } finally {
-            PassTiming.censusMode = false
+            PassTiming.censusMode = savedCensus
         }
         assertEquals(2, PassTiming.censusByPass["lightEmitter"])
         assertEquals(null, PassTiming.censusByPass["lightSilent"])
@@ -252,11 +263,12 @@ class Inv0PassTimingTest {
         PassTiming.reset()
         PassTiming.censusByPass.clear()
         val off = diagnose(probeSource)
+        val savedCensus = PassTiming.censusMode
         PassTiming.censusMode = true
         val on = try {
             diagnose(probeSource)
         } finally {
-            PassTiming.censusMode = false
+            PassTiming.censusMode = savedCensus
         }
         assertEquals(off, on, "diagnostics must be byte-identical with censusMode on")
         assertTrue(
