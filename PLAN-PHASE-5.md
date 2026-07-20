@@ -20,9 +20,22 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
-**Round 621 (2026-07-20) — (M0.2) kindId table dispatch LANDED (3 commits):
-interleaved A/B −3.3% wall on the compiler profile (A 31,747 → D 30,713 ms
-median, D wins 4/5 pairs) — inside the round-618 priced 2–4%.** (1) The
+**Round 621 (2026-07-20) — (M0.2) kindId table dispatch LANDED (3 commits,
+−3.3% A/B) + the first (M0.3) layout slice (iii)+(iv) LANDED (−3.9% A/B) —
+session cumulative 31,747 → 29,955 ms ≈ −5.6% on the compiler profile.**
+The M0.3 slice: `LongKeyMap` (commonMain, ~100-line open-addressing Long→V
+over EXACT two-int-packed keys — a bijection, never a hash, so id-keyed
+cycle detection stays sound; 0L = empty-slot sentinel, sound because ids
+start at 1) fast-paths the three intern caches' dominant shapes — null/
+empty/1-arg `Type.Reference` (null and EMPTY args deliberately pack ALIKE,
+reproducing the old string key's `"id|"` conflation byte-exactly — a
+"cleaner" distinction would mint fresh ids where the old cache aliased),
+2-member unions (`T | undefined`) and intersections; ≥2-arg/≥3-member
+shapes keep the string maps. Plus the `normalizePath` memo (pure, the
+module-resolution hot path). A/B 31,180 → 29,955 ms median, wins 5/5
+pairs; suite 11,390/0 (+5 LongKeyMapTest); listAll ×8 byte-identical;
+warning-clean. Remaining M0.3 slices: (i) name atomization, (ii)
+links records, (v) undo-log scope copies.** (1) The
 infrastructure: `NodeBase.kindId` — a dense per-CLASS Int stamped by each of
 the 138 node classes' `init { kindId = NodeKind.X }` (runs on every
 construction incl. `copy()`, so Transformer-synthesized nodes stay stamped —
@@ -348,14 +361,17 @@ structural item instead of landing alone.**
   int-keyed scope/member maps; a globals-miss bitset — the 1.48M probes are 99%
   miss); (ii) NodeLinks/SymbolLinks record consolidation over per-file dense
   nodeId arrays (tsc's exact structure; symbol ids need per-worker dense spaces
-  under INV.6 — node ids are per-file dense already); (iii) open-addressing
-  primitive-key maps (packed-Long) for the id-pair intern/relation caches
-  (kills the string-key building internUnion/getOrInternReference show in
-  JFR); (iv) `normalizePath` memo (17/24 joinTo samples); (v) undo-log
+  under INV.6 — node ids are per-file dense already); (iii)+(iv) **DONE round
+  621: −3.9% wall (31,180 → 29,955 ms median, 5/5 pairs)** — `LongKeyMap`
+  (open-addressing Long→V, EXACT packed-id keys, 0L sentinel) fast-paths the
+  three intern caches' dominant shapes (null/empty/1-arg refs — null/empty
+  pack alike, reproducing the old string key's `"id|"` conflation
+  byte-exactly; 2-member unions/intersections; bigger shapes keep the string
+  maps) + the `normalizePath` memo; (v) undo-log
   (the proven NarrowSeen mark/pop pattern) replacing HashMap(other) scope
   copies (putMapEntries 1.1%) — also reduces M1's epoch churn. Do NOT reach
-  for a JVM-only map library (build-change guardrail + multiplatform); a
-  ~100-line hand-rolled open-addressing map in commonMain suffices.
+  for a JVM-only map library (build-change guardrail + multiplatform);
+  `LongKeyMap` is the in-repo reusable piece for later slices.
 - [ ] **(M0.4) Migrate the surviving pinned tail** into the spine (the documented
   migration-pattern zoo), cost-descending; retire dead migration scaffolding as
   it goes (emit-twice arms whose legacy side is gone, the dead m3
