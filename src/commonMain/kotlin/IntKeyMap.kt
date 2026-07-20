@@ -220,3 +220,95 @@ internal class NarrowFlowMemo(initialCapacity: Int = 32) {
         }
     }
 }
+
+/**
+ * Perf (round 433): the flow walkers' cycle-detection set with an ADD-LOG, so a
+ * FlowBranchLabel can walk each antecedent against the path-so-far membership and
+ * restore it afterwards ([mark]/[popToMark]) instead of COPYING the whole set per
+ * antecedent (the copies were ~11% of the tsc-source self-compile: `seen` holds
+ * thousands of ids on a deep walk × one full copy per branch antecedent). Only
+ * genuinely ADDED ids are logged, so a pop never removes a pre-existing id —
+ * after popToMark the membership is exactly the pre-branch state, which is what
+ * the per-antecedent fresh copy provided. Linear recursion shares the instance
+ * unmarked (additions persist upward), matching the old shared-set behavior.
+ * Each top-level walk constructs its own instance (re-entrant walks via callee
+ * resolution get independent logs).
+ */
+internal class NarrowSeen {
+    // M0.3(vii): int-specialized (was HashSet<Int> + ArrayList<Int> — every
+    // add() boxed the id TWICE, once per structure, on every flow-node visit).
+    // Open addressing with tombstone removal: popToMark removes in reverse
+    // insertion order, which linear probing cannot honor by slot-shifting, so
+    // a removed slot becomes DELETED (probes walk past it; inserts reuse it).
+    // EMPTY slots are only ever created by [rehash] (which rebuilds all live
+    // chains), so a probe for a PRESENT id never meets EMPTY early.
+    private var capacity = 64
+    private var slots = IntArray(capacity) { EMPTY }
+    private var used = 0 // occupied incl. tombstones — the probe-length driver
+    private var live = 0
+    private var log = IntArray(64)
+    private var logSize = 0
+
+    private companion object {
+        const val EMPTY = Int.MIN_VALUE
+        const val DELETED = Int.MIN_VALUE + 1
+        fun bucket(id: Int, mask: Int): Int {
+            var h = id * -0x61c88647 // 0x9E3779B9 (golden-ratio mix)
+            h = h xor (h ushr 16)
+            return h and mask
+        }
+    }
+
+    fun add(id: Int): Boolean {
+        val mask = capacity - 1
+        var i = bucket(id, mask)
+        var free = -1
+        while (true) {
+            val s = slots[i]
+            if (s == id) return false
+            if (s == EMPTY) break
+            if (s == DELETED && free < 0) free = i
+            i = (i + 1) and mask
+        }
+        if (free >= 0) {
+            slots[free] = id // reuse a tombstone: `used` already counts it
+        } else {
+            slots[i] = id
+            used++
+        }
+        live++
+        if (logSize == log.size) log = log.copyOf(log.size shl 1)
+        log[logSize++] = id
+        if (used * 2 >= capacity) rehash()
+        return true
+    }
+
+    fun mark(): Int = logSize
+
+    fun popToMark(mark: Int) {
+        while (logSize > mark) {
+            val id = log[--logSize]
+            val mask = capacity - 1
+            var i = bucket(id, mask)
+            while (slots[i] != id) i = (i + 1) and mask // logged ⇒ present
+            slots[i] = DELETED
+            live--
+        }
+    }
+
+    private fun rehash() {
+        val old = slots
+        // Grow only when genuinely loaded with LIVE entries; a tombstone-heavy
+        // table purges at the same size instead.
+        if (live * 4 >= capacity) capacity = capacity shl 1
+        slots = IntArray(capacity) { EMPTY }
+        val mask = capacity - 1
+        for (s in old) {
+            if (s == EMPTY || s == DELETED) continue
+            var i = bucket(s, mask)
+            while (slots[i] != EMPTY) i = (i + 1) and mask
+            slots[i] = s
+        }
+        used = live
+    }
+}

@@ -149,4 +149,61 @@ class IntKeyMapTest {
         }
         have(memo.served(4000, 0) == null)
     }
+
+    @Test
+    fun `NarrowSeen add dedups and popToMark restores exact membership`() {
+        val seen = NarrowSeen()
+        have(seen.add(1))
+        have(seen.add(2))
+        have(!seen.add(1))
+        val m = seen.mark()
+        have(seen.add(3))
+        have(seen.add(4))
+        have(!seen.add(2))
+        seen.popToMark(m)
+        // 3 and 4 removed; 1 and 2 kept
+        have(seen.add(3))
+        seen.popToMark(m)
+        have(!seen.add(1))
+        have(!seen.add(2))
+        have(seen.add(4))
+    }
+
+    @Test
+    fun `NarrowSeen randomized oracle across growth, tombstone churn and nested marks`() {
+        // Reference implementation = the pre-M0.3(vii) HashSet + ArrayList form.
+        val seen = NarrowSeen()
+        val ids = HashSet<Int>()
+        val log = ArrayList<Int>()
+        var state = 12345
+        fun rnd(bound: Int): Int {
+            state = state * 1103515245 + 12345
+            return (state ushr 16) % bound
+        }
+        val marks = ArrayDeque<Int>()
+        repeat(60_000) {
+            when (rnd(10)) {
+                in 0..6 -> {
+                    val id = rnd(3000)
+                    val expected = ids.add(id)
+                    if (expected) log.add(id)
+                    val actual = seen.add(id)
+                    have(actual == expected)
+                }
+                7 -> marks.addLast(seen.mark().also { have(it == log.size) })
+                else -> if (marks.isNotEmpty()) {
+                    val m = marks.removeLast()
+                    seen.popToMark(m)
+                    while (log.size > m) ids.remove(log.removeAt(log.size - 1))
+                }
+            }
+        }
+        // Final membership must agree exactly: an oracle-member id must dedup,
+        // a non-member must insert.
+        for (id in 0 until 3000) {
+            val member = id in ids
+            val actual = seen.add(id)
+            have(actual != member)
+        }
+    }
 }

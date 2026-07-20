@@ -99212,33 +99212,6 @@ interface DataView {
         }
     }
 
-    /**
-     * Perf (round 433): the flow walkers' cycle-detection set with an ADD-LOG, so a
-     * FlowBranchLabel can walk each antecedent against the path-so-far membership and
-     * restore it afterwards ([mark]/[popToMark]) instead of COPYING the whole set per
-     * antecedent (the copies were ~11% of the tsc-source self-compile: `seen` holds
-     * thousands of ids on a deep walk × one full copy per branch antecedent). Only
-     * genuinely ADDED ids are logged, so a pop never removes a pre-existing id —
-     * after popToMark the membership is exactly the pre-branch state, which is what
-     * the per-antecedent fresh copy provided. Linear recursion shares the instance
-     * unmarked (additions persist upward), matching the old shared-set behavior.
-     * Each top-level walk constructs its own instance (re-entrant walks via callee
-     * resolution get independent logs).
-     */
-    private class NarrowSeen {
-        private val ids = HashSet<Int>()
-        private val log = ArrayList<Int>()
-        fun add(id: Int): Boolean {
-            if (!ids.add(id)) return false
-            log.add(id)
-            return true
-        }
-        fun mark(): Int = log.size
-        fun popToMark(mark: Int) {
-            while (log.size > mark) ids.remove(log.removeAt(log.size - 1))
-        }
-    }
-
     private fun narrowTypeFromFlow(
         declaredType: Type, flowNodeIn: FlowNode, name: String,
         seen: NarrowSeen, depth: Int,
