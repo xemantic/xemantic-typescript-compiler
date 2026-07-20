@@ -20,6 +20,42 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 621 (2026-07-20) — (M0.2) kindId table dispatch LANDED (3 commits):
+interleaved A/B −3.3% wall on the compiler profile (A 31,747 → D 30,713 ms
+median, D wins 4/5 pairs) — inside the round-618 priced 2–4%.** (1) The
+infrastructure: `NodeBase.kindId` — a dense per-CLASS Int stamped by each of
+the 138 node classes' `init { kindId = NodeKind.X }` (runs on every
+construction incl. `copy()`, so Transformer-synthesized nodes stay stamped —
+unlike nodeId/parent, which deliberately do not); `NodeKind.kt` holds the
+dense consts + `nodeKindIdOf`, the sealed-exhaustive `when` that is the
+COMPILE gate for a new node class (its arm forces a const; the stamp itself
+is runtime-pinned by NodeKindIdTest ×6 — id density, stamp == mapper across
+fixtures/synthetics/real tsc sources, copy() re-stamping — plus
+forEachChild's loud `else -> error`). `forEachChild` dispatches via a
+javap-verified tableswitch 0..137 (was the avg-8.3-deep instanceof chain).
+(2) The three hot checkSpine dispatchers (spineEnterNode's terminal when,
+spineUResEnter, spineUResDispatch) → kindId lookupswitch (sparse 30–42-key
+subsets ≈ 5 int compares). (3) The 13 remaining per-node walker whens
+(ccetSpineLeave, cpaSpineLeave, Da/At/Arith×2/Iany/Nu/Ca×2/Ubd enter,
+Ir/Np leave). ccetSpineEnter SKIPPED deliberately (5 arms; an
+`is Block -> when (parent) {` expression-arm + a multi-class arm whose
+nested exhaustive when needs the union smart-cast). THE MANGLE LESSON: the
+scripted converter's paren-balance branch mis-cut FOUR arms whose
+`if`-header spanned two lines (`... &&` continuation) — the inserted arm
+close made the gate an EMPTY if and the body ran UNCONDITIONALLY
+(spineIanyEnterNode's ObjLit destructure-default gate → TS7006 FPs;
+spineArithEnterNode's Method/Constructor frames + PrefixUnary TS2736 →
+numberVsBigIntOperations). The corpus caught 3 of 4; the 4th (Constructor —
+maskable) fell to a whole-file structural scan: **a line ending `{` followed
+by a DEDENTED bare `}` is the mangle signature — run that scan after ANY
+scripted when-conversion.** Gates per commit: suite 11,385/0 (re-run after
+the fixes), `--listAll` ×8 byte-identical (time-line-filtered), build
+warning-clean. Suite 11,379 → 11,385 (+6). NOTE the bench TSV row's
+"vs previous +6.2%" compares against a July-17 row (different code state,
+three rounds earlier, cross-session box drift) — the interleaved A/B above
+is the authoritative M0.2 measurement (the round-493 rule). NEXT
+(top-of-queue): (M0.3) layout campaign, then (M0.4) tail migration.**
+
 **Round 620 (2026-07-20) — (M0.1d) runs the mandated consumer trace and
 OVERTURNS round 619's deletion verdict: "23 census-silent, deletion-ready"
 was a FALSE GREEN — 20 of the 23 are corpus-pinned; only 3 pure adders were
@@ -290,16 +326,22 @@ structural item instead of landing alone.**
   lever. LAB DISCIPLINE addenda: `build/pass-lab.txt` is NOT a Gradle input
   (always `--rerun` a lab experiment), and a lab-run verdict is unverified
   until the disable is proven active in the SAME JVM that ran the tests.
-- [ ] **(M0.2) kindId table dispatch.** NodeBase gains a stable Int kindId
-  (generated/verified against the sealed hierarchy — extend the
-  ForEachChildOracleTest reflection-oracle pattern so exhaustiveness stays
-  compiler-adjacent); forEachChild + the hot `when(node)` dispatchers
-  (spineEnterNode's sequential sub-dispatcher is-tests, spineLeaveNode,
-  spineUResEnter, ccetSpineEnter) dispatch on it. Priced by the round-618
-  histogram: average instanceof chain 8.3 → 1.0 (−88% of chain cost; expected
-  ~2–4% wall). A pure frequency reorder alone is ~0.5% = below the noise floor —
-  fold it in here, never land it alone. Gates: suite + listAll ×8 + interleaved
-  A/B.
+- [x] **(M0.2) kindId table dispatch — DONE round 621 (2026-07-20), three
+  commits.** NodeBase.kindId (dense per-CLASS Int, stamped by each class's
+  `init` block — survives `copy()`, unlike nodeId/parent) + NodeKind.kt (138
+  dense consts + the sealed-exhaustive `nodeKindIdOf` compile gate);
+  forEachChild → javap-verified tableswitch 0..137; the 3 hot checkSpine
+  dispatchers (spineEnterNode terminal when / spineUResEnter /
+  spineUResDispatch) + the 13 remaining per-node walker whens → kindId
+  lookupswitch (~5 int compares over sparse arm subsets). ccetSpineEnter
+  deliberately SKIPPED (5-arm when with `is Block -> when (parent) {` +
+  a union-smart-cast-dependent multi-class arm; cost/benefit). MEASURED:
+  interleaved A/B (5 pairs, compiler profile) A 31,747 → D 30,713 ms median =
+  **−3.3%, D wins 4/5 pairs** — inside the priced 2–4%. Gates: suite 11,385/0
+  (+6 NodeKindIdTest pins), listAll ×8 byte-identical at each commit,
+  warning-clean. Lesson: the scripted conversion mis-cut FOUR two-line
+  `if`-header arms into empty-if mangles — corpus caught 3, a structural scan
+  (line ending `{` + dedented bare `}`) the 4th; see the session note.
 - [ ] **(M0.3) Layout campaign** (JFR-evidenced ~15% of wall in HashMap+String
   equality with NO single hot map — structure-class work, one interleaved-A/B'd
   slice per commit): (i) name atomization (Identifier → Int atom at scan time;
