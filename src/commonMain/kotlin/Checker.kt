@@ -20599,41 +20599,48 @@ class Checker(
         // (ENTER = the legacy pre-order; also keeps same-position pairs
         // comma-before-np, since the np anchors fire at LEAVES).
         if (spineCmActive) spineCmEnterNode(node)
-        when (node) {
-            is Identifier -> spineTavIdentifier(node)
-            is PropertyDeclaration -> {
+        when ((node as NodeBase).kindId) {
+            NodeKind.IDENTIFIER -> { node as Identifier; spineTavIdentifier(node) }
+            NodeKind.PROPERTY_DECLARATION -> {
+                node as PropertyDeclaration
                 spineCheckAccessorModifier(node)
                 spineCheckComputedPropName(node)
             }
-            is ModuleDeclaration -> {
+            NodeKind.MODULE_DECLARATION -> {
+                node as ModuleDeclaration
                 spineCheckGlobalAugmentation(node)
                 spineCheckDupModifiers(node)
                 spineCheckAmbientRelativeModuleName(node)
                 spineCheckStrictModuleName(node)
                 spineDupIdEnter(node)
             }
-            is MethodDeclaration -> {
+            NodeKind.METHOD_DECLARATION -> {
+                node as MethodDeclaration
                 spineCheckReservedWordInterfaceParams(node)
                 spineCheckParamForwardRefs(node.parameters, node.body)
                 spineCheckAsyncAwaitParams(node.modifiers, node.parameters)
                 spineDupIdEnter(node)
             }
-            is Constructor -> {
+            NodeKind.CONSTRUCTOR -> {
+                node as Constructor
                 spineCheckParamForwardRefs(node.parameters, node.body)
                 spineDupIdEnter(node)
             }
-            is ArrowFunction -> {
+            NodeKind.ARROW_FUNCTION -> {
+                node as ArrowFunction
                 spineCheckParamForwardRefs(node.parameters, node.body)
                 spineCheckAsyncAwaitParams(node.modifiers, node.parameters)
                 spineUncalledDispatch(node)
                 spineDupIdEnter(node)
             }
-            is FunctionExpression -> {
+            NodeKind.FUNCTION_EXPRESSION -> {
+                node as FunctionExpression
                 spineCheckParamForwardRefs(node.parameters, node.body)
                 spineCheckAsyncAwaitParams(node.modifiers, node.parameters)
                 spineDupIdEnter(node)
             }
-            is Parameter -> {
+            NodeKind.PARAMETER -> {
+                node as Parameter
                 spineCheckRestParam(node)
                 spineCheckRestParamLast(node)
                 if (!spineIsDts) checkRestBindingParam(node, spineSource, spineFileName)
@@ -20642,64 +20649,74 @@ class Checker(
                 spineCheckParamInitForbidden(node)
                 spineCheckParamInitNonImpl(node)
             }
-            is ObjectBindingPattern -> spineCheckRestElemPropName(node)
-            is ObjectLiteralExpression -> {
+            NodeKind.OBJECT_BINDING_PATTERN -> { node as ObjectBindingPattern; spineCheckRestElemPropName(node) }
+            NodeKind.OBJECT_LITERAL_EXPRESSION -> {
+                node as ObjectLiteralExpression
                 spineCheckObjLitModifiers(node)
                 spineCheckObjLitDuplicates(node)
             }
-            is VariableDeclaration -> {
+            NodeKind.VARIABLE_DECLARATION -> {
+                node as VariableDeclaration
                 spineCollectObjLitVar(node)
                 spineCheckConstInitializer(node)
                 spineCheckDestructuringInitializer(node)
             }
-            is ClassExpression -> {
+            NodeKind.CLASS_EXPRESSION -> {
+                node as ClassExpression
                 spineCheckClassExprComputedProps(node)
                 spineDupIdEnter(node)
             }
-            is ForOfStatement -> {
+            NodeKind.FOR_OF_STATEMENT -> {
+                node as ForOfStatement
                 spineNoteIterationPosition(node.expression)
                 spineCheckForOfNonIterable(node)
                 spineCheckStrictForInOfDecls(node.initializer)
                 spineCheckForAwait(node)
             }
-            is IfStatement -> spineUncalledDispatch(node)
-            is WhileStatement -> spineUncalledDispatch(node)
-            is DoStatement -> spineUncalledDispatch(node)
-            is ForStatement -> spineUncalledDispatch(node)
-            is ConditionalExpression -> spineUncalledDispatch(node)
-            is ForInStatement -> {
+            NodeKind.IF_STATEMENT -> { node as IfStatement; spineUncalledDispatch(node) }
+            NodeKind.WHILE_STATEMENT -> { node as WhileStatement; spineUncalledDispatch(node) }
+            NodeKind.DO_STATEMENT -> { node as DoStatement; spineUncalledDispatch(node) }
+            NodeKind.FOR_STATEMENT -> { node as ForStatement; spineUncalledDispatch(node) }
+            NodeKind.CONDITIONAL_EXPRESSION -> { node as ConditionalExpression; spineUncalledDispatch(node) }
+            NodeKind.FOR_IN_STATEMENT -> {
+                node as ForInStatement
                 spineCheckForInLhsType(node)
                 spineCheckStrictForInOfDecls(node.initializer)
             }
-            is SpreadElement -> spineNoteIterationPosition(node.expression)
-            is YieldExpression -> spineNoteYieldStar(node)
-            is CallExpression -> {
+            NodeKind.SPREAD_ELEMENT -> { node as SpreadElement; spineNoteIterationPosition(node.expression) }
+            NodeKind.YIELD_EXPRESSION -> { node as YieldExpression; spineNoteYieldStar(node) }
+            NodeKind.CALL_EXPRESSION -> {
+                node as CallExpression
                 spineCheckEmptyTypeArgs(node.typeArguments, node.expression)
                 spineCheckAwaitCall(node)
                 if (spineArgActive) spineArgCallEnter(node)
             }
-            is NewExpression -> {
+            NodeKind.NEW_EXPRESSION -> {
+                node as NewExpression
                 spineCheckEmptyTypeArgs(node.typeArguments, node.expression)
                 if (spineArgActive) spineArgNewEnter(node)
             }
-            is TaggedTemplateExpression -> if (spineArgActive) spineArgTaggedEnter(node)
-            is AwaitExpression -> spineCheckAwaitExpr(node)
-            is WithStatement -> spineCheckWithStatement(node)
-            is BreakStatement -> spineCheckJumpTarget(node, node.label?.text, isBreak = true)
-            is ContinueStatement -> spineCheckJumpTarget(node, node.label?.text, isBreak = false)
-            is LabeledStatement -> spineCheckLabelOnDeclaration(node)
-            is GetAccessor -> {
+            NodeKind.TAGGED_TEMPLATE_EXPRESSION -> { node as TaggedTemplateExpression; if (spineArgActive) spineArgTaggedEnter(node) }
+            NodeKind.AWAIT_EXPRESSION -> { node as AwaitExpression; spineCheckAwaitExpr(node) }
+            NodeKind.WITH_STATEMENT -> { node as WithStatement; spineCheckWithStatement(node) }
+            NodeKind.BREAK_STATEMENT -> { node as BreakStatement; spineCheckJumpTarget(node, node.label?.text, isBreak = true) }
+            NodeKind.CONTINUE_STATEMENT -> { node as ContinueStatement; spineCheckJumpTarget(node, node.label?.text, isBreak = false) }
+            NodeKind.LABELED_STATEMENT -> { node as LabeledStatement; spineCheckLabelOnDeclaration(node) }
+            NodeKind.GET_ACCESSOR -> {
+                node as GetAccessor
                 spineCheckAbstractAccessorReturnType(node)
                 spineCheckGetAccessorGrammar(node)
             }
-            is SetAccessor -> {
+            NodeKind.SET_ACCESSOR -> {
+                node as SetAccessor
                 spineCheckSetAccessorGrammar(node)
                 spineCheckSetAccessorParamGrammar(node)
                 spineCheckSetterReturns(node)
                 spineCheckParamForwardRefs(node.parameters, node.body)
                 spineDupIdEnter(node)
             }
-            is ClassDeclaration -> {
+            NodeKind.CLASS_DECLARATION -> {
+                node as ClassDeclaration
                 spineCheckAccessorPairVisibility(node)
                 spineCheckDupModifiers(node)
                 spineCheckAmbientClassMembers(node)
@@ -20708,18 +20725,21 @@ class Checker(
                 spineTavClassHeritage(node)
                 spineDupIdEnter(node)
             }
-            is SwitchStatement -> {
+            NodeKind.SWITCH_STATEMENT -> {
+                node as SwitchStatement
                 spineCheckMultipleDefaults(node)
                 spineCheckSwitchCaseComparable(node)
             }
-            is InterfaceDeclaration -> {
+            NodeKind.INTERFACE_DECLARATION -> {
+                node as InterfaceDeclaration
                 spineCheckInterfacePropertyInitializers(node)
                 spineCheckDupModifiers(node)
                 spineCheckAmbientImplInterface(node)
                 spineCheckStrictInterfaceDecl(node)
                 spineDupIdEnter(node)
             }
-            is FunctionDeclaration -> {
+            NodeKind.FUNCTION_DECLARATION -> {
+                node as FunctionDeclaration
                 spineCheckDupModifiers(node)
                 spineCheckAmbientImplFn(node)
                 spineCheckParamForwardRefs(node.parameters, node.body)
@@ -20727,37 +20747,44 @@ class Checker(
                 spineCheckStrictFunctionDecl(node)
                 spineDupIdEnter(node)
             }
-            is VariableStatement -> {
+            NodeKind.VARIABLE_STATEMENT -> {
+                node as VariableStatement
                 spineCheckDupModifiers(node)
                 spineCheckAmbientVarInitializers(node)
                 spineCheckStrictVarStatement(node)
                 spineDupIdEnter(node)
             }
-            is EnumDeclaration -> {
+            NodeKind.ENUM_DECLARATION -> {
+                node as EnumDeclaration
                 spineCheckDupModifiers(node)
                 spineCheckAmbientEnumInitializers(node)
                 spineCheckReservedEnumName(node)
                 spineCheckStrictEnumName(node)
                 spineDupIdEnter(node)
             }
-            is TypeAliasDeclaration -> {
+            NodeKind.TYPE_ALIAS_DECLARATION -> {
+                node as TypeAliasDeclaration
                 spineCheckDupModifiers(node)
                 spineCheckAmbientImplAlias(node)
                 spineDupIdEnter(node)
             }
-            is ExportDeclaration -> {
+            NodeKind.EXPORT_DECLARATION -> {
+                node as ExportDeclaration
                 spineCheckDupModifiers(node)
                 spineDupIdEnter(node)
             }
-            is ImportDeclaration -> {
+            NodeKind.IMPORT_DECLARATION -> {
+                node as ImportDeclaration
                 spineCheckDupModifiers(node)
                 spineCheckStrictImportDecl(node)
             }
-            is ImportEqualsDeclaration -> {
+            NodeKind.IMPORT_EQUALS_DECLARATION -> {
+                node as ImportEqualsDeclaration
                 spineCheckDupModifiers(node)
                 spineCheckStrictImportEqualsName(node)
             }
-            is ExpressionStatement -> {
+            NodeKind.EXPRESSION_STATEMENT -> {
+                node as ExpressionStatement
                 spineCheckStrictExpressionStatement(node)
                 spineUncalledDispatch(node)
             }
@@ -21064,8 +21091,9 @@ class Checker(
             val top = stack[stack.size - 1]
             if ((node as NodeBase).parent === top.owner) spineUResOnDirectChild(top, node)
         }
-        when (node) {
-            is SourceFile -> {
+        when ((node as NodeBase).kindId) {
+            NodeKind.SOURCE_FILE -> {
+                node as SourceFile
                 val root = spineUResRoot ?: return
                 stack.add(UnresolvedSpineLevel(node, root))
                 val lexHit = unresolvedLexOf(node)
@@ -21074,9 +21102,10 @@ class Checker(
                 else collectDeclaredTypeNames(node.statements, s)
                 stack.add(UnresolvedSpineLevel(node, s))
             }
-            is Block -> {
+            NodeKind.BLOCK -> {
+                node as Block
                 val cur = spineUResScope() ?: return
-                val parent = (node as NodeBase).parent
+                val parent = node.parent
                 // A function-like's immediate body shares ONE level owned by the
                 // function (the binder registers no entry for body Blocks — the
                 // (c)(ii) owner convention); any other Block is its own owner.
@@ -21087,7 +21116,8 @@ class Checker(
                 else collectDeclaredTypeNames(node.statements, s)
                 stack.add(UnresolvedSpineLevel(node, s))
             }
-            is ModuleBlock -> {
+            NodeKind.MODULE_BLOCK -> {
+                node as ModuleBlock
                 // The legacy walk passes owner = null for namespace bodies (the
                 // binder module table is unfiltered merged exports) → threaded.
                 val cur = spineUResScope() ?: return
@@ -21095,7 +21125,8 @@ class Checker(
                 collectDeclaredNames(node.statements, s)
                 stack.add(UnresolvedSpineLevel(node, s))
             }
-            is SwitchStatement -> {
+            NodeKind.SWITCH_STATEMENT -> {
+                node as SwitchStatement
                 val cur = spineUResScope() ?: return
                 val lexHit = unresolvedLexOf(node)
                 val s = cur.child(lex = lexHit)
@@ -21112,10 +21143,11 @@ class Checker(
                 // checked in the outer scope (the binder's routing).
                 stack.add(UnresolvedSpineLevel(node, s, active = false))
             }
-            is ForStatement -> spineUResPushForHeader(node, node.initializer)
-            is ForInStatement -> spineUResPushForHeader(node, node.initializer)
-            is ForOfStatement -> spineUResPushForHeader(node, node.initializer)
-            is CatchClause -> {
+            NodeKind.FOR_STATEMENT -> { node as ForStatement; spineUResPushForHeader(node, node.initializer) }
+            NodeKind.FOR_IN_STATEMENT -> { node as ForInStatement; spineUResPushForHeader(node, node.initializer) }
+            NodeKind.FOR_OF_STATEMENT -> { node as ForOfStatement; spineUResPushForHeader(node, node.initializer) }
+            NodeKind.CATCH_CLAUSE -> {
+                node as CatchClause
                 val cur = spineUResScope() ?: return
                 val lexHit = unresolvedLexOf(node)
                 val s = cur.child(lex = lexHit)
@@ -21124,24 +21156,28 @@ class Checker(
                 }
                 stack.add(UnresolvedSpineLevel(node, s))
             }
-            is FunctionDeclaration -> {
+            NodeKind.FUNCTION_DECLARATION -> {
+                node as FunctionDeclaration
                 val cur = spineUResScope() ?: return
                 stack.add(UnresolvedSpineLevel(node, cur.child(hasArguments = true, classContext = null)))
             }
-            is FunctionExpression -> {
+            NodeKind.FUNCTION_EXPRESSION -> {
+                node as FunctionExpression
                 val cur = spineUResScope() ?: return
                 val s = cur.child(hasArguments = true, classContext = null)
                 node.name?.let { s.names.add(it.text) }
                 stack.add(UnresolvedSpineLevel(node, s, exprOwned = spineUResExprChecked(node)))
             }
-            is ArrowFunction -> {
+            NodeKind.ARROW_FUNCTION -> {
+                node as ArrowFunction
                 val cur = spineUResScope() ?: return
                 stack.add(UnresolvedSpineLevel(
                     node, cur.child(hasArguments = false, inFunction = true),
                     exprOwned = spineUResExprChecked(node),
                 ))
             }
-            is ClassDeclaration -> {
+            NodeKind.CLASS_DECLARATION -> {
+                node as ClassDeclaration
                 val cur = spineUResScope() ?: return
                 val classCtx = buildClassContext(node, cur, spineFileName)
                 val classLex = unresolvedLexOf(node)
@@ -21151,7 +21187,8 @@ class Checker(
                 }
                 stack.add(UnresolvedSpineLevel(node, s, ctorParamNames = extractCtorParamNames(node.members)))
             }
-            is ClassExpression -> {
+            NodeKind.CLASS_EXPRESSION -> {
+                node as ClassExpression
                 val cur = spineUResScope() ?: return
                 val classCtx = buildClassContext(node, cur, spineFileName)
                 val classLex = unresolvedLexOf(node)
@@ -21162,7 +21199,8 @@ class Checker(
                 }
                 stack.add(UnresolvedSpineLevel(node, s, ctorParamNames = extractCtorParamNames(node.members)))
             }
-            is InterfaceDeclaration -> {
+            NodeKind.INTERFACE_DECLARATION -> {
+                node as InterfaceDeclaration
                 val cur = spineUResScope() ?: return
                 val ifaceLex = unresolvedLexOf(node)
                 val s = cur.child(lex = ifaceLex)
@@ -21171,7 +21209,8 @@ class Checker(
                 }
                 stack.add(UnresolvedSpineLevel(node, s))
             }
-            is TypeAliasDeclaration -> {
+            NodeKind.TYPE_ALIAS_DECLARATION -> {
+                node as TypeAliasDeclaration
                 val cur = spineUResScope() ?: return
                 val aliasLex = unresolvedLexOf(node)
                 val s = cur.child(lex = aliasLex)
@@ -21180,7 +21219,8 @@ class Checker(
                 }
                 stack.add(UnresolvedSpineLevel(node, s))
             }
-            is EnumDeclaration -> {
+            NodeKind.ENUM_DECLARATION -> {
+                node as EnumDeclaration
                 val cur = spineUResScope() ?: return
                 val s = cur.child()
                 val enumResult = fileResults[spineFileName]
@@ -21202,13 +21242,15 @@ class Checker(
                 }
                 stack.add(UnresolvedSpineLevel(node, s))
             }
-            is ModuleDeclaration -> {
+            NodeKind.MODULE_DECLARATION -> {
+                node as ModuleDeclaration
                 val cur = spineUResScope() ?: return
                 stack.add(UnresolvedSpineLevel(node, buildNamespaceScope(node, cur, spineFileName)))
             }
-            is MethodDeclaration -> {
+            NodeKind.METHOD_DECLARATION -> {
+                node as MethodDeclaration
                 val cur = spineUResScope() ?: return
-                when ((node as NodeBase).parent) {
+                when (node.parent) {
                     is ClassDeclaration, is ClassExpression -> {
                         val ctx = spineUResMemberCtx(cur, ModifierFlag.Static in node.modifiers)
                         stack.add(UnresolvedSpineLevel(
@@ -21226,9 +21268,10 @@ class Checker(
                     else -> {}
                 }
             }
-            is Constructor -> {
+            NodeKind.CONSTRUCTOR -> {
+                node as Constructor
                 val cur = spineUResScope() ?: return
-                when ((node as NodeBase).parent) {
+                when (node.parent) {
                     is ClassDeclaration, is ClassExpression -> {
                         val ctx = spineUResMemberCtx(cur, isStatic = false)
                         stack.add(UnresolvedSpineLevel(node, cur.child(hasArguments = true, classContext = ctx)))
@@ -21237,9 +21280,10 @@ class Checker(
                     else -> {}
                 }
             }
-            is GetAccessor -> {
+            NodeKind.GET_ACCESSOR -> {
+                node as GetAccessor
                 val cur = spineUResScope() ?: return
-                when ((node as NodeBase).parent) {
+                when (node.parent) {
                     is ClassDeclaration, is ClassExpression -> {
                         val ctx = spineUResMemberCtx(cur, ModifierFlag.Static in node.modifiers)
                         stack.add(UnresolvedSpineLevel(node, cur.child(hasArguments = true, classContext = ctx)))
@@ -21249,9 +21293,10 @@ class Checker(
                     else -> {}
                 }
             }
-            is SetAccessor -> {
+            NodeKind.SET_ACCESSOR -> {
+                node as SetAccessor
                 val cur = spineUResScope() ?: return
-                when ((node as NodeBase).parent) {
+                when (node.parent) {
                     is ClassDeclaration, is ClassExpression -> {
                         val ctx = spineUResMemberCtx(cur, ModifierFlag.Static in node.modifiers)
                         stack.add(UnresolvedSpineLevel(node, cur.child(hasArguments = true, classContext = ctx)))
@@ -21263,8 +21308,9 @@ class Checker(
                     else -> {}
                 }
             }
-            is PropertyDeclaration -> {
-                val parent = (node as NodeBase).parent
+            NodeKind.PROPERTY_DECLARATION -> {
+                node as PropertyDeclaration
+                val parent = node.parent
                 if (parent is ClassDeclaration || parent is ClassExpression) {
                     val cur = spineUResScope() ?: return
                     val isStatic = ModifierFlag.Static in node.modifiers
@@ -21279,19 +21325,23 @@ class Checker(
                     stack.add(UnresolvedSpineLevel(node, s))
                 }
             }
-            is ClassStaticBlockDeclaration -> {
+            NodeKind.CLASS_STATIC_BLOCK_DECLARATION -> {
+                node as ClassStaticBlockDeclaration
                 val cur = spineUResScope() ?: return
                 stack.add(UnresolvedSpineLevel(node, cur.child(classContext = spineUResMemberCtx(cur, isStatic = true))))
             }
-            is FunctionType -> {
+            NodeKind.FUNCTION_TYPE -> {
+                node as FunctionType
                 val cur = spineUResScope() ?: return
                 stack.add(UnresolvedSpineLevel(node, cur.child()))
             }
-            is ConstructorType -> {
+            NodeKind.CONSTRUCTOR_TYPE -> {
+                node as ConstructorType
                 val cur = spineUResScope() ?: return
                 stack.add(UnresolvedSpineLevel(node, cur.child()))
             }
-            is MappedType -> {
+            NodeKind.MAPPED_TYPE -> {
+                node as MappedType
                 val cur = spineUResScope() ?: return
                 val s = cur.child()
                 s.addTypeParam(node.typeParameter.name.text, node.typeParameter.constraint)
@@ -21299,21 +21349,24 @@ class Checker(
                 // constraint is checked in the OUTER scope (CLAUDE.md gotcha).
                 stack.add(UnresolvedSpineLevel(node, s, active = false))
             }
-            is ConditionalType -> {
+            NodeKind.CONDITIONAL_TYPE -> {
+                node as ConditionalType
                 val cur = spineUResScope() ?: return
                 val s = cur.child()
                 collectInferTypeNames(node.extendsType, s)
                 // Active ONLY within the trueType child (infer names scope there).
                 stack.add(UnresolvedSpineLevel(node, s, active = false))
             }
-            is WithStatement -> {
+            NodeKind.WITH_STATEMENT -> {
+                node as WithStatement
                 // Batch 2: the legacy walk checked the with EXPRESSION but never
                 // its BODY (dynamic resolution). Pass-through level; the direct-
                 // child trigger flips it suppressed at the statement child.
                 val cur = spineUResScope() ?: return
                 stack.add(UnresolvedSpineLevel(node, cur))
             }
-            is ReturnStatement -> {
+            NodeKind.RETURN_STATEMENT -> {
+                node as ReturnStatement
                 // Batch 2: tsc checkReturnStatement — an outside-function return's
                 // EXPRESSION is never checked (see the legacy ReturnStatement arm's
                 // rationale, reachabilityChecksNoCrash1); reproduce the un-visit as
@@ -21331,7 +21384,7 @@ class Checker(
             else -> {}
         }
         if (spineUResAuditActive && node is Identifier) {
-            val nid = (node as NodeBase).nodeId
+            val nid = node.nodeId
             if (nid >= 0) {
                 spineUResScope()?.let { scope ->
                     unresolvedAuditSpine["$spineFileName#$nid"] =
@@ -21786,29 +21839,30 @@ class Checker(
      *  recursive walker's exact reach); the statement arms keep only their
      *  TYPE-position and special-emission legs. */
     private fun spineUResDispatch(node: Node) {
-        when (node) {
+        when ((node as NodeBase).kindId) {
             // ── batch 4: expression territory (hot kinds first) ──
-            is Identifier -> spineUResIdentifierExpr(node)
-            is BinaryExpression -> spineUResBinaryExpr(node)
-            is CallExpression -> spineUResTypeArgsInExpr(node, node.typeArguments)
-            is NewExpression -> spineUResTypeArgsInExpr(node, node.typeArguments)
-            is ShorthandPropertyAssignment -> spineUResShorthandProp(node)
-            is TypeAssertionExpression -> spineUResTypeInExpr(node, node.type)
-            is AsExpression -> spineUResTypeInExpr(node, node.type)
-            is SatisfiesExpression -> spineUResTypeInExpr(node, node.type)
-            is ClassExpression -> spineUResClassExpressionEnter(node)
-            is JsxElement -> spineUResJsxEnter(node, node.openingElement.tagName)
-            is JsxSelfClosingElement -> spineUResJsxEnter(node, node.tagName)
-            is JsxFragment -> spineUResJsxEnter(node, null)
+            NodeKind.IDENTIFIER -> { node as Identifier; spineUResIdentifierExpr(node) }
+            NodeKind.BINARY_EXPRESSION -> { node as BinaryExpression; spineUResBinaryExpr(node) }
+            NodeKind.CALL_EXPRESSION -> { node as CallExpression; spineUResTypeArgsInExpr(node, node.typeArguments) }
+            NodeKind.NEW_EXPRESSION -> { node as NewExpression; spineUResTypeArgsInExpr(node, node.typeArguments) }
+            NodeKind.SHORTHAND_PROPERTY_ASSIGNMENT -> { node as ShorthandPropertyAssignment; spineUResShorthandProp(node) }
+            NodeKind.TYPE_ASSERTION_EXPRESSION -> { node as TypeAssertionExpression; spineUResTypeInExpr(node, node.type) }
+            NodeKind.AS_EXPRESSION -> { node as AsExpression; spineUResTypeInExpr(node, node.type) }
+            NodeKind.SATISFIES_EXPRESSION -> { node as SatisfiesExpression; spineUResTypeInExpr(node, node.type) }
+            NodeKind.CLASS_EXPRESSION -> { node as ClassExpression; spineUResClassExpressionEnter(node) }
+            NodeKind.JSX_ELEMENT -> { node as JsxElement; spineUResJsxEnter(node, node.openingElement.tagName) }
+            NodeKind.JSX_SELF_CLOSING_ELEMENT -> { node as JsxSelfClosingElement; spineUResJsxEnter(node, node.tagName) }
+            NodeKind.JSX_FRAGMENT -> { node as JsxFragment; spineUResJsxEnter(node, null) }
             // ── batch 5: type territory (self-emitting type-node kinds) ──
-            is TypeReference -> spineUResTypeReferenceEnter(node)
-            is IndexedAccessType -> spineUResIndexedAccessEnter(node)
-            is TypeQuery -> spineUResTypeQueryEnter(node)
-            is FunctionType -> spineUResFnTypeEnter(node, node.parameters, node.type)
-            is ConstructorType -> spineUResFnTypeEnter(node, node.parameters, node.type)
-            is TypeLiteral -> spineUResTypeLiteralEnter(node)
+            NodeKind.TYPE_REFERENCE -> { node as TypeReference; spineUResTypeReferenceEnter(node) }
+            NodeKind.INDEXED_ACCESS_TYPE -> { node as IndexedAccessType; spineUResIndexedAccessEnter(node) }
+            NodeKind.TYPE_QUERY -> { node as TypeQuery; spineUResTypeQueryEnter(node) }
+            NodeKind.FUNCTION_TYPE -> { node as FunctionType; spineUResFnTypeEnter(node, node.parameters, node.type) }
+            NodeKind.CONSTRUCTOR_TYPE -> { node as ConstructorType; spineUResFnTypeEnter(node, node.parameters, node.type) }
+            NodeKind.TYPE_LITERAL -> { node as TypeLiteral; spineUResTypeLiteralEnter(node) }
             // ── batch 2: statement-level positions (TYPE legs only since 4) ──
-            is VariableStatement -> {
+            NodeKind.VARIABLE_STATEMENT -> {
+                node as VariableStatement
                 if (spineUResScope() == null) return
                 for (decl in node.declarationList.declarations) {
                     // 17.65: JSDoc-derived type nodes carry sub-parser positions —
@@ -21816,7 +21870,8 @@ class Checker(
                     if (!decl.typeFromJSDoc) spineUResMarkTypeRoot(decl.type)
                 }
             }
-            is ForStatement -> {
+            NodeKind.FOR_STATEMENT -> {
+                node as ForStatement
                 // The for-header level is pushed (active) at enter — the marked
                 // annotations self-emit under it (the legacy forScope).
                 if (spineUResScope() == null) return
@@ -21824,7 +21879,8 @@ class Checker(
                     spineUResMarkTypeRoot(decl.type)
                 }
             }
-            is FunctionDeclaration -> {
+            NodeKind.FUNCTION_DECLARATION -> {
+                node as FunctionDeclaration
                 // B98.r11: TS2842 for unused destructured-renames in a BODYLESS
                 // declaration (ambient or overload signature).
                 if (node.body == null) {
@@ -21838,9 +21894,10 @@ class Checker(
                     spineUResOwnLevel(node)?.let { spineUResMarkSuppressed(it) }
                 }
             }
-            is ClassDeclaration -> spineUResClassDeclaration(node)
-            is InterfaceDeclaration -> spineUResInterfaceDeclaration(node)
-            is TypeAliasDeclaration -> {
+            NodeKind.CLASS_DECLARATION -> { node as ClassDeclaration; spineUResClassDeclaration(node) }
+            NodeKind.INTERFACE_DECLARATION -> { node as InterfaceDeclaration; spineUResInterfaceDeclaration(node) }
+            NodeKind.TYPE_ALIAS_DECLARATION -> {
+                node as TypeAliasDeclaration
                 if (spineUResOwnLevel(node) == null) return
                 node.typeParameters?.forEach { tp ->
                     spineUResMarkTypeRoot(tp.constraint)
@@ -21850,7 +21907,8 @@ class Checker(
             }
             // Enum member INITIALIZERS self-emit via the batch-4 edges (the
             // enum level is the active scope during the member subtrees).
-            is ModuleDeclaration -> {
+            NodeKind.MODULE_DECLARATION -> {
+                node as ModuleDeclaration
                 if (ModifierFlag.Declare in node.modifiers) {
                     val level = spineUResOwnLevel(node) ?: return
                     // Heritage TS2314 in declare namespaces is checked BEFORE the
@@ -21866,7 +21924,8 @@ class Checker(
                     spineUResMarkFilter(level)
                 }
             }
-            is ExportDeclaration -> {
+            NodeKind.EXPORT_DECLARATION -> {
+                node as ExportDeclaration
                 if (node.moduleSpecifier == null) {
                     val scope = spineUResScope() ?: return
                     when (val clause = node.exportClause) {
@@ -21881,7 +21940,8 @@ class Checker(
                     }
                 }
             }
-            is ImportEqualsDeclaration -> {
+            NodeKind.IMPORT_EQUALS_DECLARATION -> {
+                node as ImportEqualsDeclaration
                 val scope = spineUResScope() ?: return
                 spineUResEmit { checkUnresolvedInImportEquals(node, scope, spineSource, spineFileName) }
             }
@@ -21889,9 +21949,9 @@ class Checker(
             // interface members are dispatched by spineUResInterfaceDeclaration,
             // objlit/type-literal members by their still-legacy walkers; member
             // decorators / computed names / initializers self-emit — batch 4).
-            is PropertyDeclaration -> spineUResClassPropertyMember(node)
-            is GetAccessor -> spineUResClassGetAccessorEnter(node)
-            is IndexSignature -> spineUResClassIndexSignature(node)
+            NodeKind.PROPERTY_DECLARATION -> { node as PropertyDeclaration; spineUResClassPropertyMember(node) }
+            NodeKind.GET_ACCESSOR -> { node as GetAccessor; spineUResClassGetAccessorEnter(node) }
+            NodeKind.INDEX_SIGNATURE -> { node as IndexSignature; spineUResClassIndexSignature(node) }
             else -> {}
         }
     }
