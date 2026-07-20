@@ -58,6 +58,15 @@ sealed interface Node {
 abstract class NodeBase {
     var nodeId: Int = -1
     var parent: Node? = null
+
+    /**
+     * M0.2: the dense per-CLASS dispatch id (see [NodeKind]), assigned by each
+     * concrete class's `init` block — so it IS present on `copy()`d and
+     * Transformer-synthesized instances (their constructors run the init
+     * block), unlike [nodeId]/[parent]. −1 only on a class missing its stamp,
+     * which [forEachChild]'s `else -> error(...)` surfaces loudly.
+     */
+    var kindId: Int = -1
 }
 
 data class Comment(
@@ -111,6 +120,7 @@ data class SourceFile(
     val moduleSpecifiers: List<String> = emptyList(),
 ) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.SourceFile
+    init { kindId = NodeKind.SOURCE_FILE }
 
     /** INV.2(a): number of nodes stamped by [indexSourceFile] (= max nodeId + 1);
      *  sizes array-indexed per-file side tables. Body property — excluded from
@@ -135,6 +145,7 @@ data class Block(
     val closeBracePos: Int = -1,
 ) : NodeBase(), Statement {
     override val kind: SyntaxKind = SyntaxKind.Block
+    init { kindId = NodeKind.BLOCK }
 }
 
 data class EmptyStatement(
@@ -144,6 +155,7 @@ data class EmptyStatement(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Statement {
     override val kind: SyntaxKind = SyntaxKind.EmptyStatement
+    init { kindId = NodeKind.EMPTY_STATEMENT }
 }
 
 data class VariableStatement(
@@ -157,6 +169,7 @@ data class VariableStatement(
     val preSemicolonComments: List<Comment>? = null,
 ) : NodeBase(), Statement {
     override val kind: SyntaxKind = SyntaxKind.VariableStatement
+    init { kindId = NodeKind.VARIABLE_STATEMENT }
 }
 
 data class ExpressionStatement(
@@ -169,6 +182,7 @@ data class ExpressionStatement(
     val preSemicolonComments: List<Comment>? = null,
 ) : NodeBase(), Statement {
     override val kind: SyntaxKind = SyntaxKind.ExpressionStatement
+    init { kindId = NodeKind.EXPRESSION_STATEMENT }
 }
 
 data class IfStatement(
@@ -187,6 +201,7 @@ data class IfStatement(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Statement {
     override val kind: SyntaxKind = SyntaxKind.IfStatement
+    init { kindId = NodeKind.IF_STATEMENT }
 }
 
 data class DoStatement(
@@ -204,6 +219,7 @@ data class DoStatement(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Statement {
     override val kind: SyntaxKind = SyntaxKind.DoStatement
+    init { kindId = NodeKind.DO_STATEMENT }
 }
 
 data class WhileStatement(
@@ -219,6 +235,7 @@ data class WhileStatement(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Statement {
     override val kind: SyntaxKind = SyntaxKind.WhileStatement
+    init { kindId = NodeKind.WHILE_STATEMENT }
 }
 
 data class ForStatement(
@@ -242,6 +259,7 @@ data class ForStatement(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Statement {
     override val kind: SyntaxKind = SyntaxKind.ForStatement
+    init { kindId = NodeKind.FOR_STATEMENT }
 }
 
 data class ForInStatement(
@@ -260,6 +278,7 @@ data class ForInStatement(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Statement {
     override val kind: SyntaxKind = SyntaxKind.ForInStatement
+    init { kindId = NodeKind.FOR_IN_STATEMENT }
 }
 
 data class ForOfStatement(
@@ -279,6 +298,7 @@ data class ForOfStatement(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Statement {
     override val kind: SyntaxKind = SyntaxKind.ForOfStatement
+    init { kindId = NodeKind.FOR_OF_STATEMENT }
 }
 
 data class ContinueStatement(
@@ -291,6 +311,7 @@ data class ContinueStatement(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Statement {
     override val kind: SyntaxKind = SyntaxKind.ContinueStatement
+    init { kindId = NodeKind.CONTINUE_STATEMENT }
 }
 
 data class BreakStatement(
@@ -303,6 +324,7 @@ data class BreakStatement(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Statement {
     override val kind: SyntaxKind = SyntaxKind.BreakStatement
+    init { kindId = NodeKind.BREAK_STATEMENT }
 }
 
 data class ReturnStatement(
@@ -313,6 +335,7 @@ data class ReturnStatement(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Statement {
     override val kind: SyntaxKind = SyntaxKind.ReturnStatement
+    init { kindId = NodeKind.RETURN_STATEMENT }
 }
 
 data class WithStatement(
@@ -328,6 +351,7 @@ data class WithStatement(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Statement {
     override val kind: SyntaxKind = SyntaxKind.WithStatement
+    init { kindId = NodeKind.WITH_STATEMENT }
 }
 
 data class SwitchStatement(
@@ -344,6 +368,7 @@ data class SwitchStatement(
     val closingComments: List<Comment>? = null,
 ) : NodeBase(), Statement {
     override val kind: SyntaxKind = SyntaxKind.SwitchStatement
+    init { kindId = NodeKind.SWITCH_STATEMENT }
 }
 
 data class LabeledStatement(
@@ -359,6 +384,7 @@ data class LabeledStatement(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Statement {
     override val kind: SyntaxKind = SyntaxKind.LabeledStatement
+    init { kindId = NodeKind.LABELED_STATEMENT }
 }
 
 data class ThrowStatement(
@@ -371,6 +397,7 @@ data class ThrowStatement(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Statement {
     override val kind: SyntaxKind = SyntaxKind.ThrowStatement
+    init { kindId = NodeKind.THROW_STATEMENT }
 }
 
 data class TryStatement(
@@ -388,6 +415,7 @@ data class TryStatement(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Statement {
     override val kind: SyntaxKind = SyntaxKind.TryStatement
+    init { kindId = NodeKind.TRY_STATEMENT }
 }
 
 data class DebuggerStatement(
@@ -397,6 +425,7 @@ data class DebuggerStatement(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Statement {
     override val kind: SyntaxKind = SyntaxKind.DebuggerStatement
+    init { kindId = NodeKind.DEBUGGER_STATEMENT }
 }
 
 data class NotEmittedStatement(
@@ -406,6 +435,7 @@ data class NotEmittedStatement(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Statement {
     override val kind: SyntaxKind = SyntaxKind.NotEmittedStatement
+    init { kindId = NodeKind.NOT_EMITTED_STATEMENT }
 }
 
 /**
@@ -420,6 +450,7 @@ data class RawStatement(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Statement {
     override val kind: SyntaxKind = SyntaxKind.NotEmittedStatement // reuse kind for simplicity
+    init { kindId = NodeKind.RAW_STATEMENT }
 }
 
 // ===========================================================================
@@ -442,6 +473,7 @@ data class FunctionDeclaration(
     val signatureAborted: Boolean = false,
 ) : NodeBase(), Declaration {
     override val kind: SyntaxKind = SyntaxKind.FunctionDeclaration
+    init { kindId = NodeKind.FUNCTION_DECLARATION }
 }
 
 data class ClassDeclaration(
@@ -458,6 +490,7 @@ data class ClassDeclaration(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Declaration {
     override val kind: SyntaxKind = SyntaxKind.ClassDeclaration
+    init { kindId = NodeKind.CLASS_DECLARATION }
 }
 
 data class InterfaceDeclaration(
@@ -472,6 +505,7 @@ data class InterfaceDeclaration(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Declaration {
     override val kind: SyntaxKind = SyntaxKind.InterfaceDeclaration
+    init { kindId = NodeKind.INTERFACE_DECLARATION }
 }
 
 data class TypeAliasDeclaration(
@@ -485,6 +519,7 @@ data class TypeAliasDeclaration(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Declaration {
     override val kind: SyntaxKind = SyntaxKind.TypeAliasDeclaration
+    init { kindId = NodeKind.TYPE_ALIAS_DECLARATION }
 }
 
 data class EnumDeclaration(
@@ -497,6 +532,7 @@ data class EnumDeclaration(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Declaration {
     override val kind: SyntaxKind = SyntaxKind.EnumDeclaration
+    init { kindId = NodeKind.ENUM_DECLARATION }
 }
 
 data class ModuleDeclaration(
@@ -509,6 +545,7 @@ data class ModuleDeclaration(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Declaration {
     override val kind: SyntaxKind = SyntaxKind.ModuleDeclaration
+    init { kindId = NodeKind.MODULE_DECLARATION }
 }
 
 data class ImportDeclaration(
@@ -529,6 +566,7 @@ data class ImportDeclaration(
     val internalComments: List<List<Comment>?>? = null,
 ) : NodeBase(), Declaration {
     override val kind: SyntaxKind = SyntaxKind.ImportDeclaration
+    init { kindId = NodeKind.IMPORT_DECLARATION }
 }
 
 data class ImportEqualsDeclaration(
@@ -542,6 +580,7 @@ data class ImportEqualsDeclaration(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Declaration {
     override val kind: SyntaxKind = SyntaxKind.ImportEqualsDeclaration
+    init { kindId = NodeKind.IMPORT_EQUALS_DECLARATION }
 }
 
 data class ExportDeclaration(
@@ -562,6 +601,7 @@ data class ExportDeclaration(
     val internalComments: List<List<Comment>?>? = null,
 ) : NodeBase(), Declaration {
     override val kind: SyntaxKind = SyntaxKind.ExportDeclaration
+    init { kindId = NodeKind.EXPORT_DECLARATION }
 }
 
 data class ExportAssignment(
@@ -582,6 +622,7 @@ data class ExportAssignment(
     val internalComments: List<List<Comment>?>? = null,
 ) : NodeBase(), Declaration {
     override val kind: SyntaxKind = SyntaxKind.ExportAssignment
+    init { kindId = NodeKind.EXPORT_ASSIGNMENT }
 }
 
 data class VariableDeclaration(
@@ -603,6 +644,7 @@ data class VariableDeclaration(
     val typeFromJSDoc: Boolean = false,
 ) : NodeBase(), Declaration {
     override val kind: SyntaxKind = SyntaxKind.VariableDeclaration
+    init { kindId = NodeKind.VARIABLE_DECLARATION }
 }
 
 data class VariableDeclarationList(
@@ -614,6 +656,7 @@ data class VariableDeclarationList(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.VariableDeclarationList
+    init { kindId = NodeKind.VARIABLE_DECLARATION_LIST }
 }
 
 // ===========================================================================
@@ -630,6 +673,7 @@ data class Identifier(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.Identifier
+    init { kindId = NodeKind.IDENTIFIER }
     /** The text to emit: [rawText] if set (preserves \uXXXX escapes), otherwise [text]. */
     val emitText: String get() = rawText ?: text
 }
@@ -647,6 +691,7 @@ data class StringLiteralNode(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.StringLiteral
+    init { kindId = NodeKind.STRING_LITERAL_NODE }
 }
 
 data class NumericLiteralNode(
@@ -657,6 +702,7 @@ data class NumericLiteralNode(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.NumericLiteral
+    init { kindId = NodeKind.NUMERIC_LITERAL_NODE }
 }
 
 data class BigIntLiteralNode(
@@ -667,6 +713,7 @@ data class BigIntLiteralNode(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.BigIntLiteral
+    init { kindId = NodeKind.BIG_INT_LITERAL_NODE }
 }
 
 data class RegularExpressionLiteralNode(
@@ -677,6 +724,7 @@ data class RegularExpressionLiteralNode(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.RegularExpressionLiteral
+    init { kindId = NodeKind.REGULAR_EXPRESSION_LITERAL_NODE }
 }
 
 data class NoSubstitutionTemplateLiteralNode(
@@ -688,6 +736,7 @@ data class NoSubstitutionTemplateLiteralNode(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.NoSubstitutionTemplateLiteral
+    init { kindId = NodeKind.NO_SUBSTITUTION_TEMPLATE_LITERAL_NODE }
 }
 
 data class TemplateExpression(
@@ -700,6 +749,7 @@ data class TemplateExpression(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.TemplateExpression
+    init { kindId = NodeKind.TEMPLATE_EXPRESSION }
 }
 
 data class TemplateSpan(
@@ -711,6 +761,7 @@ data class TemplateSpan(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.TemplateSpan
+    init { kindId = NodeKind.TEMPLATE_SPAN }
 }
 
 data class ArrayLiteralExpression(
@@ -733,6 +784,7 @@ data class ArrayLiteralExpression(
     val postCommaComments: List<List<Comment>?>? = null,
 ) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.ArrayLiteralExpression
+    init { kindId = NodeKind.ARRAY_LITERAL_EXPRESSION }
 }
 
 data class ObjectLiteralExpression(
@@ -747,6 +799,7 @@ data class ObjectLiteralExpression(
     val closeBracePos: Int = -1,
 ) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.ObjectLiteralExpression
+    init { kindId = NodeKind.OBJECT_LITERAL_EXPRESSION }
 }
 
 data class PropertyAccessExpression(
@@ -776,6 +829,7 @@ data class PropertyAccessExpression(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.PropertyAccessExpression
+    init { kindId = NodeKind.PROPERTY_ACCESS_EXPRESSION }
 }
 
 data class ElementAccessExpression(
@@ -794,6 +848,7 @@ data class ElementAccessExpression(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.ElementAccessExpression
+    init { kindId = NodeKind.ELEMENT_ACCESS_EXPRESSION }
 }
 
 data class CallExpression(
@@ -811,6 +866,7 @@ data class CallExpression(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.CallExpression
+    init { kindId = NodeKind.CALL_EXPRESSION }
 }
 
 data class NewExpression(
@@ -827,6 +883,7 @@ data class NewExpression(
     val leadingTypeArguments: List<TypeNode>? = null,
 ) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.NewExpression
+    init { kindId = NodeKind.NEW_EXPRESSION }
 }
 
 data class TaggedTemplateExpression(
@@ -839,6 +896,7 @@ data class TaggedTemplateExpression(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.TaggedTemplateExpression
+    init { kindId = NodeKind.TAGGED_TEMPLATE_EXPRESSION }
 }
 
 data class TypeAssertionExpression(
@@ -852,6 +910,7 @@ data class TypeAssertionExpression(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.TypeAssertionExpression
+    init { kindId = NodeKind.TYPE_ASSERTION_EXPRESSION }
 }
 
 data class ParenthesizedExpression(
@@ -884,6 +943,7 @@ data class ParenthesizedExpression(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.ParenthesizedExpression
+    init { kindId = NodeKind.PARENTHESIZED_EXPRESSION }
 }
 
 data class FunctionExpression(
@@ -900,6 +960,7 @@ data class FunctionExpression(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.FunctionExpression
+    init { kindId = NodeKind.FUNCTION_EXPRESSION }
 }
 
 data class ArrowFunction(
@@ -916,6 +977,7 @@ data class ArrowFunction(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.ArrowFunction
+    init { kindId = NodeKind.ARROW_FUNCTION }
 }
 
 data class DeleteExpression(
@@ -926,6 +988,7 @@ data class DeleteExpression(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.DeleteExpression
+    init { kindId = NodeKind.DELETE_EXPRESSION }
 }
 
 data class TypeOfExpression(
@@ -936,6 +999,7 @@ data class TypeOfExpression(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.TypeOfExpression
+    init { kindId = NodeKind.TYPE_OF_EXPRESSION }
 }
 
 data class VoidExpression(
@@ -946,6 +1010,7 @@ data class VoidExpression(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.VoidExpression
+    init { kindId = NodeKind.VOID_EXPRESSION }
 }
 
 data class AwaitExpression(
@@ -957,6 +1022,7 @@ data class AwaitExpression(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.AwaitExpression
+    init { kindId = NodeKind.AWAIT_EXPRESSION }
 }
 
 data class PrefixUnaryExpression(
@@ -968,6 +1034,7 @@ data class PrefixUnaryExpression(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.PrefixUnaryExpression
+    init { kindId = NodeKind.PREFIX_UNARY_EXPRESSION }
 }
 
 data class PostfixUnaryExpression(
@@ -979,6 +1046,7 @@ data class PostfixUnaryExpression(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.PostfixUnaryExpression
+    init { kindId = NodeKind.POSTFIX_UNARY_EXPRESSION }
 }
 
 data class BinaryExpression(
@@ -1001,6 +1069,7 @@ data class BinaryExpression(
     val multiLineComma: Boolean = false,
 ) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.BinaryExpression
+    init { kindId = NodeKind.BINARY_EXPRESSION }
 }
 
 data class ConditionalExpression(
@@ -1013,6 +1082,7 @@ data class ConditionalExpression(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.ConditionalExpression
+    init { kindId = NodeKind.CONDITIONAL_EXPRESSION }
 }
 
 data class YieldExpression(
@@ -1026,6 +1096,7 @@ data class YieldExpression(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.YieldExpression
+    init { kindId = NodeKind.YIELD_EXPRESSION }
 }
 
 data class SpreadElement(
@@ -1036,6 +1107,7 @@ data class SpreadElement(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.SpreadElement
+    init { kindId = NodeKind.SPREAD_ELEMENT }
 }
 
 data class ClassExpression(
@@ -1051,6 +1123,7 @@ data class ClassExpression(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.ClassExpression
+    init { kindId = NodeKind.CLASS_EXPRESSION }
 }
 
 data class AsExpression(
@@ -1065,6 +1138,7 @@ data class AsExpression(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.AsExpression
+    init { kindId = NodeKind.AS_EXPRESSION }
 }
 
 data class NonNullExpression(
@@ -1075,6 +1149,7 @@ data class NonNullExpression(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.NonNullExpression
+    init { kindId = NodeKind.NON_NULL_EXPRESSION }
 }
 
 data class SatisfiesExpression(
@@ -1086,6 +1161,7 @@ data class SatisfiesExpression(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.SatisfiesExpression
+    init { kindId = NodeKind.SATISFIES_EXPRESSION }
 }
 
 data class MetaProperty(
@@ -1097,6 +1173,7 @@ data class MetaProperty(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.MetaProperty
+    init { kindId = NodeKind.META_PROPERTY }
 }
 
 data class OmittedExpression(
@@ -1106,6 +1183,7 @@ data class OmittedExpression(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.OmittedExpression
+    init { kindId = NodeKind.OMITTED_EXPRESSION }
 }
 
 /**
@@ -1123,6 +1201,7 @@ data class CommaListExpression(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.Unknown
+    init { kindId = NodeKind.COMMA_LIST_EXPRESSION }
 }
 
 /**
@@ -1244,6 +1323,7 @@ data class PropertyDeclaration(
     val typeFromJSDoc: Boolean = false,
 ) : NodeBase(), ClassElement {
     override val kind: SyntaxKind = SyntaxKind.PropertyDeclaration
+    init { kindId = NodeKind.PROPERTY_DECLARATION }
 }
 
 data class MethodDeclaration(
@@ -1262,6 +1342,7 @@ data class MethodDeclaration(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), ClassElement {
     override val kind: SyntaxKind = SyntaxKind.MethodDeclaration
+    init { kindId = NodeKind.METHOD_DECLARATION }
 }
 
 data class Constructor(
@@ -1275,6 +1356,7 @@ data class Constructor(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), ClassElement {
     override val kind: SyntaxKind = SyntaxKind.ConstructorDeclaration
+    init { kindId = NodeKind.CONSTRUCTOR }
 }
 
 data class GetAccessor(
@@ -1292,6 +1374,7 @@ data class GetAccessor(
     val bodylessEnd: Int = -1,
 ) : NodeBase(), ClassElement {
     override val kind: SyntaxKind = SyntaxKind.GetAccessor
+    init { kindId = NodeKind.GET_ACCESSOR }
 }
 
 data class SetAccessor(
@@ -1309,6 +1392,7 @@ data class SetAccessor(
     val bodylessEnd: Int = -1,
 ) : NodeBase(), ClassElement {
     override val kind: SyntaxKind = SyntaxKind.SetAccessor
+    init { kindId = NodeKind.SET_ACCESSOR }
 }
 
 data class IndexSignature(
@@ -1321,6 +1405,7 @@ data class IndexSignature(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), ClassElement {
     override val kind: SyntaxKind = SyntaxKind.IndexSignature
+    init { kindId = NodeKind.INDEX_SIGNATURE }
 }
 
 data class SemicolonClassElement(
@@ -1330,6 +1415,7 @@ data class SemicolonClassElement(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), ClassElement {
     override val kind: SyntaxKind = SyntaxKind.SemicolonClassElement
+    init { kindId = NodeKind.SEMICOLON_CLASS_ELEMENT }
 }
 
 data class ClassStaticBlockDeclaration(
@@ -1340,6 +1426,7 @@ data class ClassStaticBlockDeclaration(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), ClassElement {
     override val kind: SyntaxKind = SyntaxKind.ClassStaticBlockDeclaration
+    init { kindId = NodeKind.CLASS_STATIC_BLOCK_DECLARATION }
 }
 
 // ===========================================================================
@@ -1355,6 +1442,7 @@ data class TypeReference(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.TypeReference
+    init { kindId = NodeKind.TYPE_REFERENCE }
 }
 
 data class FunctionType(
@@ -1367,6 +1455,7 @@ data class FunctionType(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.FunctionType
+    init { kindId = NodeKind.FUNCTION_TYPE }
 }
 
 data class ConstructorType(
@@ -1380,6 +1469,7 @@ data class ConstructorType(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.ConstructorType
+    init { kindId = NodeKind.CONSTRUCTOR_TYPE }
 }
 
 data class TypeQuery(
@@ -1391,6 +1481,7 @@ data class TypeQuery(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.TypeQuery
+    init { kindId = NodeKind.TYPE_QUERY }
 }
 
 data class TypeLiteral(
@@ -1401,6 +1492,7 @@ data class TypeLiteral(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.TypeLiteral
+    init { kindId = NodeKind.TYPE_LITERAL }
 }
 
 data class ArrayType(
@@ -1411,6 +1503,7 @@ data class ArrayType(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.ArrayType
+    init { kindId = NodeKind.ARRAY_TYPE }
 }
 
 data class TupleType(
@@ -1426,6 +1519,7 @@ data class TupleType(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.TupleType
+    init { kindId = NodeKind.TUPLE_TYPE }
 }
 
 data class UnionType(
@@ -1436,6 +1530,7 @@ data class UnionType(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.UnionType
+    init { kindId = NodeKind.UNION_TYPE }
 }
 
 data class IntersectionType(
@@ -1446,6 +1541,7 @@ data class IntersectionType(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.IntersectionType
+    init { kindId = NodeKind.INTERSECTION_TYPE }
 }
 
 data class ConditionalType(
@@ -1459,6 +1555,7 @@ data class ConditionalType(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.ConditionalType
+    init { kindId = NodeKind.CONDITIONAL_TYPE }
 }
 
 data class IndexedAccessType(
@@ -1470,6 +1567,7 @@ data class IndexedAccessType(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.IndexedAccessType
+    init { kindId = NodeKind.INDEXED_ACCESS_TYPE }
 }
 
 data class MappedType(
@@ -1488,6 +1586,7 @@ data class MappedType(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.MappedType
+    init { kindId = NodeKind.MAPPED_TYPE }
 }
 
 data class LiteralType(
@@ -1498,6 +1597,7 @@ data class LiteralType(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.LiteralType
+    init { kindId = NodeKind.LITERAL_TYPE }
 }
 
 data class TemplateLiteralType(
@@ -1509,6 +1609,7 @@ data class TemplateLiteralType(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.TemplateLiteralType
+    init { kindId = NodeKind.TEMPLATE_LITERAL_TYPE }
 }
 
 data class TemplateLiteralTypeSpan(
@@ -1520,6 +1621,7 @@ data class TemplateLiteralTypeSpan(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.TemplateLiteralTypeSpan
+    init { kindId = NodeKind.TEMPLATE_LITERAL_TYPE_SPAN }
 }
 
 data class ParenthesizedType(
@@ -1530,6 +1632,7 @@ data class ParenthesizedType(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.ParenthesizedType
+    init { kindId = NodeKind.PARENTHESIZED_TYPE }
 }
 
 data class TypePredicate(
@@ -1542,6 +1645,7 @@ data class TypePredicate(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.TypePredicate
+    init { kindId = NodeKind.TYPE_PREDICATE }
 }
 
 data class TypeOperator(
@@ -1553,6 +1657,7 @@ data class TypeOperator(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.TypeOperator
+    init { kindId = NodeKind.TYPE_OPERATOR }
 }
 
 data class RestType(
@@ -1563,6 +1668,7 @@ data class RestType(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.RestType
+    init { kindId = NodeKind.REST_TYPE }
 }
 
 data class NamedTupleMember(
@@ -1576,6 +1682,7 @@ data class NamedTupleMember(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.NamedTupleMember
+    init { kindId = NodeKind.NAMED_TUPLE_MEMBER }
 }
 
 data class OptionalType(
@@ -1586,6 +1693,7 @@ data class OptionalType(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.OptionalType
+    init { kindId = NodeKind.OPTIONAL_TYPE }
 }
 
 data class ImportType(
@@ -1599,6 +1707,7 @@ data class ImportType(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.ImportType
+    init { kindId = NodeKind.IMPORT_TYPE }
 }
 
 data class ThisType(
@@ -1608,6 +1717,7 @@ data class ThisType(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.ThisType
+    init { kindId = NodeKind.THIS_TYPE }
 }
 
 data class InferType(
@@ -1618,6 +1728,7 @@ data class InferType(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), TypeNode {
     override val kind: SyntaxKind = SyntaxKind.InferType
+    init { kindId = NodeKind.INFER_TYPE }
 }
 
 data class KeywordTypeNode(
@@ -1626,7 +1737,9 @@ data class KeywordTypeNode(
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,
     override val trailingComments: List<Comment>? = null,
-) : NodeBase(), TypeNode
+) : NodeBase(), TypeNode {
+    init { kindId = NodeKind.KEYWORD_TYPE_NODE }
+}
 
 // ===========================================================================
 // Supporting types
@@ -1660,6 +1773,7 @@ data class Parameter(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.Parameter
+    init { kindId = NodeKind.PARAMETER }
 }
 
 data class Decorator(
@@ -1670,6 +1784,7 @@ data class Decorator(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.Decorator
+    init { kindId = NodeKind.DECORATOR }
 }
 
 data class HeritageClause(
@@ -1681,6 +1796,7 @@ data class HeritageClause(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.HeritageClause
+    init { kindId = NodeKind.HERITAGE_CLAUSE }
 }
 
 data class ExpressionWithTypeArguments(
@@ -1692,6 +1808,7 @@ data class ExpressionWithTypeArguments(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.ExpressionWithTypeArguments
+    init { kindId = NodeKind.EXPRESSION_WITH_TYPE_ARGUMENTS }
 }
 
 data class EnumMember(
@@ -1703,6 +1820,7 @@ data class EnumMember(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.EnumMember
+    init { kindId = NodeKind.ENUM_MEMBER }
 }
 
 data class TypeParameter(
@@ -1723,6 +1841,7 @@ data class TypeParameter(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.TypeParameter
+    init { kindId = NodeKind.TYPE_PARAMETER }
 
     /**
      * M1.13: a per-FILE discriminator (the parse's `fileName.hashCode()`, stamped by the
@@ -1748,6 +1867,7 @@ data class QualifiedName(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.QualifiedName
+    init { kindId = NodeKind.QUALIFIED_NAME }
 }
 
 data class PropertyAssignment(
@@ -1763,6 +1883,7 @@ data class PropertyAssignment(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.PropertyAssignment
+    init { kindId = NodeKind.PROPERTY_ASSIGNMENT }
 }
 
 data class ShorthandPropertyAssignment(
@@ -1774,6 +1895,7 @@ data class ShorthandPropertyAssignment(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.ShorthandPropertyAssignment
+    init { kindId = NodeKind.SHORTHAND_PROPERTY_ASSIGNMENT }
 }
 
 data class SpreadAssignment(
@@ -1784,6 +1906,7 @@ data class SpreadAssignment(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.SpreadAssignment
+    init { kindId = NodeKind.SPREAD_ASSIGNMENT }
 }
 
 data class ComputedPropertyName(
@@ -1794,6 +1917,7 @@ data class ComputedPropertyName(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.ComputedPropertyName
+    init { kindId = NodeKind.COMPUTED_PROPERTY_NAME }
 }
 
 data class ObjectBindingPattern(
@@ -1805,6 +1929,7 @@ data class ObjectBindingPattern(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.ObjectBindingPattern
+    init { kindId = NodeKind.OBJECT_BINDING_PATTERN }
 }
 
 data class ArrayBindingPattern(
@@ -1816,6 +1941,7 @@ data class ArrayBindingPattern(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.ArrayBindingPattern
+    init { kindId = NodeKind.ARRAY_BINDING_PATTERN }
 }
 
 data class BindingElement(
@@ -1829,6 +1955,7 @@ data class BindingElement(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.BindingElement
+    init { kindId = NodeKind.BINDING_ELEMENT }
 }
 
 data class CaseClause(
@@ -1844,6 +1971,7 @@ data class CaseClause(
     val labelTrailingComments: List<Comment>? = null,
 ) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.CaseClause
+    init { kindId = NodeKind.CASE_CLAUSE }
 }
 
 data class DefaultClause(
@@ -1857,6 +1985,7 @@ data class DefaultClause(
     val labelTrailingComments: List<Comment>? = null,
 ) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.DefaultClause
+    init { kindId = NodeKind.DEFAULT_CLAUSE }
 }
 
 data class CatchClause(
@@ -1872,6 +2001,7 @@ data class CatchClause(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.CatchClause
+    init { kindId = NodeKind.CATCH_CLAUSE }
 }
 
 data class ModuleBlock(
@@ -1882,6 +2012,7 @@ data class ModuleBlock(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.ModuleBlock
+    init { kindId = NodeKind.MODULE_BLOCK }
 }
 
 data class NamespaceImport(
@@ -1892,6 +2023,7 @@ data class NamespaceImport(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.NamespaceImport
+    init { kindId = NodeKind.NAMESPACE_IMPORT }
 }
 
 data class NamedImports(
@@ -1902,6 +2034,7 @@ data class NamedImports(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.NamedImports
+    init { kindId = NodeKind.NAMED_IMPORTS }
 }
 
 data class ImportSpecifier(
@@ -1914,6 +2047,7 @@ data class ImportSpecifier(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.ImportSpecifier
+    init { kindId = NodeKind.IMPORT_SPECIFIER }
 }
 
 data class NamespaceExport(
@@ -1924,6 +2058,7 @@ data class NamespaceExport(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.NamespaceExport
+    init { kindId = NodeKind.NAMESPACE_EXPORT }
 }
 
 data class NamedExports(
@@ -1934,6 +2069,7 @@ data class NamedExports(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.NamedExports
+    init { kindId = NodeKind.NAMED_EXPORTS }
 }
 
 data class ExportSpecifier(
@@ -1946,6 +2082,7 @@ data class ExportSpecifier(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.ExportSpecifier
+    init { kindId = NodeKind.EXPORT_SPECIFIER }
 }
 
 data class ImportClause(
@@ -1958,6 +2095,7 @@ data class ImportClause(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.ImportClause
+    init { kindId = NodeKind.IMPORT_CLAUSE }
 }
 
 data class ExternalModuleReference(
@@ -1968,6 +2106,7 @@ data class ExternalModuleReference(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.ExternalModuleReference
+    init { kindId = NodeKind.EXTERNAL_MODULE_REFERENCE }
 }
 
 // ===========================================================================
@@ -1983,6 +2122,7 @@ data class JsxAttribute(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.JsxAttribute
+    init { kindId = NodeKind.JSX_ATTRIBUTE }
 }
 
 data class JsxSpreadAttribute(
@@ -1993,6 +2133,7 @@ data class JsxSpreadAttribute(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.JsxSpreadAttribute
+    init { kindId = NodeKind.JSX_SPREAD_ATTRIBUTE }
 }
 
 data class JsxOpeningElement(
@@ -2004,6 +2145,7 @@ data class JsxOpeningElement(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.JsxOpeningElement
+    init { kindId = NodeKind.JSX_OPENING_ELEMENT }
 }
 
 data class JsxClosingElement(
@@ -2014,6 +2156,7 @@ data class JsxClosingElement(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.JsxClosingElement
+    init { kindId = NodeKind.JSX_CLOSING_ELEMENT }
 }
 
 data class JsxElement(
@@ -2026,6 +2169,7 @@ data class JsxElement(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.JsxElement
+    init { kindId = NodeKind.JSX_ELEMENT }
 }
 
 data class JsxSelfClosingElement(
@@ -2037,6 +2181,7 @@ data class JsxSelfClosingElement(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.JsxSelfClosingElement
+    init { kindId = NodeKind.JSX_SELF_CLOSING_ELEMENT }
 }
 
 data class JsxText(
@@ -2047,6 +2192,7 @@ data class JsxText(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.JsxText
+    init { kindId = NodeKind.JSX_TEXT }
 }
 
 data class JsxExpressionContainer(
@@ -2057,6 +2203,7 @@ data class JsxExpressionContainer(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.JsxExpression
+    init { kindId = NodeKind.JSX_EXPRESSION_CONTAINER }
 }
 
 data class JsxFragment(
@@ -2067,4 +2214,5 @@ data class JsxFragment(
     override val trailingComments: List<Comment>? = null,
 ) : NodeBase(), Expression {
     override val kind: SyntaxKind = SyntaxKind.JsxFragment
+    init { kindId = NodeKind.JSX_FRAGMENT }
 }
