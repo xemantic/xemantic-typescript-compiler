@@ -102,6 +102,27 @@ object PassTiming {
     /** Narrowing walks attributed to the launching pass. */
     val narrowWalksByPass = HashMap<String, Long>()
 
+    /** M0 census: a size view of the current checker's diagnostics list,
+     *  registered at init start (enabled-only) so [pass] can attribute emitted
+     *  diagnostics to the emitting pass. */
+    var diagnosticsSize: (() -> Int)? = null
+
+    /** M0 census: diagnostics emitted per pass — positive size deltas only
+     *  (emit-twice truncations inside a pass clamp to 0; a nested wrapped pass
+     *  double-attributes into its enclosing pass — both safe in the KEEP
+     *  direction for the tail triage). */
+    val diagsByPass = LinkedHashMap<String, Int>()
+
+    /** M0 census: node instances per node-class simple name, counted once per
+     *  indexed node by `indexSourceFile` — the dispatch-order / kind-table
+     *  design input. */
+    val nodeKindHistogram = HashMap<String, Long>()
+
+    fun noteNodeKind(node: Any) {
+        val k = node::class.simpleName ?: "?"
+        nodeKindHistogram[k] = (nodeKindHistogram[k] ?: 0L) + 1
+    }
+
     /** INV.1(e): files whose crawl-time pre-parse the multi-file core REUSED
      *  (content + flags matched) vs parsed FRESH (no pre-parse, or mismatch). */
     var preParseReused: Long = 0
@@ -158,6 +179,9 @@ object PassTiming {
         typeNodeBypassed = 0
         narrowWalks = 0
         narrowWalksByPass.clear()
+        diagnosticsSize = null
+        diagsByPass.clear()
+        nodeKindHistogram.clear()
         preParseReused = 0
         preParseFresh = 0
         globalsLookups = 0
@@ -282,6 +306,27 @@ object PassTiming {
                     "${(narrowWalksByPass[name] ?: 0L).toString().padStart(12)}  $name"
             )
         }
+        if (diagsByPass.isNotEmpty()) {
+            appendLine("== emissions by pass (M0 census; positive deltas, nested double-attributed) ==")
+            for ((name, n) in diagsByPass.entries.sortedByDescending { it.value }) {
+                appendLine("  ${n.toString().padStart(7)}  $name")
+            }
+        }
+        if (nodeKindHistogram.isNotEmpty()) {
+            appendLine("== node kinds (indexSourceFile census) ==")
+            val totalNodes = nodeKindHistogram.values.sum()
+            var cum = 0L
+            for ((k, v) in nodeKindHistogram.entries.sortedByDescending { it.value }) {
+                cum += v
+                val perMille = v * 1000 / totalNodes
+                appendLine(
+                    "  ${v.toString().padStart(9)} " +
+                        "${"${perMille / 10}.${perMille % 10}%".padStart(6)} " +
+                        "${(cum * 100 / totalNodes).toString().padStart(3)}%  $k"
+                )
+            }
+            appendLine("  total $totalNodes nodes")
+        }
         appendLine("== counters ==")
         val distinct = getTypeOfExpressionDistinct.size.toLong()
         val factor = if (distinct > 0) (getTypeOfExpressionCalls * 10 / distinct) else 0L
@@ -358,11 +403,16 @@ internal fun pass(name: String, body: () -> Unit) {
     }
     val saved = PassTiming.currentPass
     PassTiming.currentPass = name
+    val d0 = PassTiming.diagnosticsSize?.invoke() ?: 0
     val mark = TimeSource.Monotonic.markNow()
     try {
         body()
     } finally {
         PassTiming.notePass(name, mark.elapsedNow().inWholeNanoseconds)
+        val d1 = PassTiming.diagnosticsSize?.invoke() ?: 0
+        if (d1 > d0) {
+            PassTiming.diagsByPass[name] = (PassTiming.diagsByPass[name] ?: 0) + (d1 - d0)
+        }
         PassTiming.currentPass = saved
     }
 }

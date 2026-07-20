@@ -4462,6 +4462,8 @@ class Checker(
         // INV.0: opt-in pass-time instrumentation (see PassTiming.kt) — inert when
         // PassTiming.enabled is false (the default; only the --passTiming CLI turns it on).
         PassTiming.noteInitStart()
+        // M0 census: let pass() attribute emitted diagnostics to the emitting pass.
+        if (PassTiming.enabled) PassTiming.diagnosticsSize = { diagnostics.size }
         // 0. Merge built-in type declarations into globals (before user files)
         mergeSymbolTable(globals, libGlobals)
         // 0b. Wire globalArrayType from built-in lib (if Array was parsed)

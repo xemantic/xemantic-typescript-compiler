@@ -154,6 +154,54 @@ class Inv0PassTimingTest {
     }
 
     @Test
+    fun `pass attributes emitted diagnostics via the diagnosticsSize view`() {
+        PassTiming.reset()
+        PassTiming.enabled = true
+        try {
+            var size = 0
+            PassTiming.diagnosticsSize = { size }
+            pass("emitter") { size += 3 }
+            pass("silent") { }
+            pass("retractor") { size -= 2 } // truncation-style shrink clamps to no entry
+            pass("outerEmit") {
+                size += 1
+                pass("innerEmit") { size += 4 }
+            }
+        } finally {
+            PassTiming.enabled = false
+        }
+        assertEquals(3, PassTiming.diagsByPass["emitter"])
+        assertEquals(null, PassTiming.diagsByPass["silent"])
+        assertEquals(null, PassTiming.diagsByPass["retractor"])
+        assertEquals(4, PassTiming.diagsByPass["innerEmit"])
+        // Documented census semantics: a nested pass's emissions ALSO count into
+        // the enclosing pass (safe in the KEEP direction for the tail triage).
+        assertEquals(5, PassTiming.diagsByPass["outerEmit"])
+        PassTiming.reset()
+        assertTrue(PassTiming.diagsByPass.isEmpty())
+        assertEquals(null, PassTiming.diagnosticsSize)
+    }
+
+    @Test
+    fun `node-kind histogram counts indexed nodes when enabled and stays empty when disabled`() {
+        PassTiming.enabled = false
+        PassTiming.reset()
+        diagnose(probeSource)
+        assertTrue(PassTiming.nodeKindHistogram.isEmpty(), "disabled run must record no node kinds")
+        PassTiming.reset()
+        PassTiming.enabled = true
+        try {
+            diagnose(probeSource)
+        } finally {
+            PassTiming.enabled = false
+        }
+        val identifiers = PassTiming.nodeKindHistogram["Identifier"] ?: 0L
+        assertTrue(identifiers > 0, "the probe source must index Identifier nodes")
+        assertTrue((PassTiming.nodeKindHistogram["IfStatement"] ?: 0L) >= 1L)
+        PassTiming.reset()
+    }
+
+    @Test
     fun `pass restores attribution when the body throws`() {
         PassTiming.reset()
         PassTiming.enabled = true
@@ -189,12 +237,17 @@ class Inv0PassTimingTest {
         PassTiming.notePass("checkSomething", 2_500_000) // 2.5 ms
         PassTiming.noteGetTypeOfExpression(10, 20)
         PassTiming.noteNarrowWalk()
+        PassTiming.diagsByPass["checkSomething"] = 2
+        PassTiming.noteNodeKind("x") // any instance — keyed by simpleName ("String")
         val out = StringBuilder()
         PassTiming.dump { out.appendLine(it) }
         val text = out.toString()
         assertTrue("== xtsc pass timing (INV.0) ==" in text)
         assertTrue("checkSomething" in text)
         assertTrue("2.5" in text, "millisecond rendering with one decimal")
+        assertTrue("== emissions by pass" in text)
+        assertTrue("== node kinds" in text)
+        assertTrue("total 1 nodes" in text)
         assertTrue("== counters ==" in text)
         assertTrue("getTypeOfExpression: 1 calls" in text)
         assertTrue("getTypeFromTypeNode:" in text)

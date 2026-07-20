@@ -27,6 +27,7 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 ### Measured dead-ends (full detail archived — do NOT re-attempt without reading the archive entry)
 
+- JVM GC/heap flag hunting on the self-compile: DEAD (round 618) — G1 vs ParallelGC vs +Xms4g vs +UseCompactObjectHeaders (JDK 25, 3 interleaved rotations) all land within the drift band (medians 30.2–30.8 s); the workload is not GC-bound at -Xmx4g. Perf levers are structural (docs/ARCHITECTURE-RETHINK.md), not flags.
 - Deleting the `checkGeneric*` pin-walker family as "superseded by the open generic gate": DEAD — 15/16 are still load-bearing (round 600 sweep: 21 corpus failures; their shapes are inference/constraint semantics the structural relation cannot decide). Only checkGenericFnTypeBipartition was deletable (its noStrictGenericChecks pin family is tsgo-skipped). Re-attempt a per-walker deletion only after generic INFERENCE (M3.1) lands, one walker at a time, suite-gated.
 
 - A LIVE narrowing-walk fold at the two Type-returning entries (epoch-fenced + declaredType-identity + confirm-once): DEAD — gate-green but NOISE in the interleaved A/B (round 599; the confirm-once tax + 80k/111k fresh-epoch misses cap the served fraction); savableNanos measured 1.4s but unrealizable under this policy. Revive with INV.5 canonical types.

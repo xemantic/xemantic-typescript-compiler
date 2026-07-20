@@ -1,3 +1,5 @@
+_Round 613 (2026-07-19) — INV.7c1: --watch lands (fileEvents Flow expect/actual over WatchService; awaitChangeBatch debounce; watchRelevant filter; full rebuild per batch). End-to-end verified: injected TS2322 caught in a 46ms warm rebuild. WatchModeTest +4. Gates: corpus 11,355/0; listAll ×8 identical; native still compiles._
+
 _Round 612 (2026-07-19) — queue reconciliation: INV.3(d) was already complete (round 513) — five stale checkboxes reconciled against their bodies (INV.3 umbrella, INV.3(d), INV.4(e), INV.5(d), INV.5 umbrella). The INV.0-6 inversion arc is DONE end-to-end; the live queue is INV.7 watch/incremental + the blocked tail._
 
 _Round 611 (2026-07-19) — queue honesty: INV.4 + INV.6 umbrella checkboxes closed (their arcs completed rounds 599/609); INV.5(d2) demoted to hygiene-only on the round-598 evidence (relations ≈ 927ms — not a lever). Live queue: INV.3(d) merge retire (next campaign), INV.7 watch/incremental, + externally-blocked items._

@@ -20,6 +20,47 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 618 (2026-07-20) — the owner-directed perf-target discussion opens:
+fresh profile + JFR at HEAD, and three M0 measurement rungs run to ground —
+two estimates KILLED by measurement, one sharpened into a design number.**
+Fresh `--passTiming` profile (compiler profile, single-threaded): checker-init
+26.7 s = checkSpine 19.5 s (narrowWalks 5.0 s, typeOfExpr 3.6 s overlapping,
+relations(depth0) 0.79 s, typeNode 0.49 s, ~10 s diffuse machinery) + a
+440-pass legacy tail summing 6.24 s + outside-pass 0.9 s. Fresh JFR decomposes
+the diffuse share: forEachChild 5.8% self, HashMap family ~11.6%,
+String-equality ~3.9%, checkMemberAccessMissing 2.5%; `getNode` callers are
+DIFFUSE (flow-callee resolution / FlowGraph init / per-file lookup /
+getTypeOfSymbol / module-specifier caches / relation cache) — no single hot
+map, so the layout work is a structure-class campaign (atoms, links records,
+open-addressing), not site-chasing. `joinTo`: 17/24 samples are
+`normalizePath` (memoize candidate); 4 are internUnion's string keys.
+MEASURED: (1) the JVM flag matrix (G1 vs ParallelGC vs +Xms4g vs
++UseCompactObjectHeaders, JDK 25, 3 interleaved rotations) is a DEAD-END —
+medians 30.2–30.8 s, spreads overlap the drift band; the workload is not
+GC-bound at -Xmx4g (gotcha added). (2) the emission census (per-pass
+diagnostics delta in `pass()`, new `--passTiming` section): ZERO of the 440
+tail passes emit on the compiler profile — even the 46-error floor is the
+spine's own unresolved-name family; the tail is 6.2 s of walking with no
+output on the primary dashboard profile, pinned only by the corpus → the
+tail triage protocol is batch-disable + corpus bisect (profile censuses
+cannot decide KEEP). (3) the node-kind histogram (indexSourceFile census,
+new section): 858,312 nodes, Identifier 44.2%, top-16 kinds = 88%;
+forEachChild's existing hot-first order is already ~90% optimal — average
+instanceof chain 8.3 current vs 6.5 frequency-optimal (−22% of chain cost
+≈ ~0.5% wall, BELOW the ±2% drift band → deliberately NOT landed, the
+f1/f2 don't-land-unmeasurable lesson) vs 1.0 under a kindId TABLE (−88%
+— the real dispatch item; spineEnterNode is sequential is-tests across
+sub-dispatchers that only a kind switch consolidates). LANDED: the census
++ histogram instrumentation (diagsByPass via a `diagnosticsSize` view
+registered at init; nodeKindHistogram in indexSourceFile; two dump
+sections; all behind PassTiming.enabled) + 3 pins in Inv0PassTimingTest.
+Gates: corpus 11,372/0 green; off-mode diagnostics md5-identical to the
+pre-change binary on the compiler profile. The M0 (debt burn-down: census
+batch-disable, scaffolding retirement, atoms/links/kind-table, tail
+migration) → M1 (identity stability → revive f1/f2) → M2 (Phase-1 shared
+collectors) arc proposal + revised § 6 targets are IN THIS CONVERSATION,
+awaiting the owner's read of these numbers.**
+
 **Round 617 (2026-07-19) — (INV.7d3) UNBLOCKED BY OWNER + LANDED: cross-process
 `.xtsbuildinfo` persistence on the approved build-id stamp; (INV.7b) PARKED-BY-OWNER.**
 The owner approved the build change and parked the Release binary ("switch it
@@ -198,26 +239,6 @@ unchanged: corpus 11,351/0; listAll ×8 byte-identical; wall 30.3s
 in-band (delegation overhead unmeasurable). FOLLOW-UPS queued: (INV.7b)
 Release-binary link + a native bench row; Apple targets stay commented
 (no macOS builder). NEXT: INV.7b, or the INV.5(d2)/Phase-1 reassessment.
-
-**Round 609 (2026-07-19) — (INV.6(6d1)) LANDED: 193 emission-pass loops
-join the partition via `checkedResults`; the fixed-cost verdict sharpens.**
-The `checkedResults` partition view (= binderResults when unpartitioned —
-the sequential path is unchanged BY CONSTRUCTION) replaces
-`for (result in binderResults)` in every per-file PASS loop. Method:
-flip ALL 511 non-infrastructure loops → partitionCheck read 1,174 EXTRA
-/ 0 missing on the compiler profile (flipped COLLECTOR loops starved
-workers of program-wide suppression context — TS2339 conflation-
-suppression sets) → mechanically un-flip every loop whose enclosing
-function never calls `diagnostics.add` (318 pure collectors) →
-EQUIVALENT on ALL 8 profiles again. 193 emission loops stay gated.
-WALL: seq 32.0 / w2 26.5 (−17%) / w4 32.3 still flat — the emission
-passes were the SMALL share of the per-worker fixed cost; the 318
-still-redundant collectors + the lazy-resolution warmup dominate.
-Deeper scaling = docs/parallel-caching.md Phase 1 (shared frozen
-state: compute collectors once, share read-only — an immutability
-audit) or INV.5 canonical types. Gates: corpus 11,351/0; listAll ×8
-byte-identical. The INV.6 Phase-0 arc (6a-6d1) is COMPLETE at its
-honest ceiling: w2 −17%, output-identical, opt-in.
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 

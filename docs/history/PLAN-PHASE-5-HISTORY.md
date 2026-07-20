@@ -1,3 +1,23 @@
+**Round 609 (2026-07-19) — (INV.6(6d1)) LANDED: 193 emission-pass loops
+join the partition via `checkedResults`; the fixed-cost verdict sharpens.**
+The `checkedResults` partition view (= binderResults when unpartitioned —
+the sequential path is unchanged BY CONSTRUCTION) replaces
+`for (result in binderResults)` in every per-file PASS loop. Method:
+flip ALL 511 non-infrastructure loops → partitionCheck read 1,174 EXTRA
+/ 0 missing on the compiler profile (flipped COLLECTOR loops starved
+workers of program-wide suppression context — TS2339 conflation-
+suppression sets) → mechanically un-flip every loop whose enclosing
+function never calls `diagnostics.add` (318 pure collectors) →
+EQUIVALENT on ALL 8 profiles again. 193 emission loops stay gated.
+WALL: seq 32.0 / w2 26.5 (−17%) / w4 32.3 still flat — the emission
+passes were the SMALL share of the per-worker fixed cost; the 318
+still-redundant collectors + the lazy-resolution warmup dominate.
+Deeper scaling = docs/parallel-caching.md Phase 1 (shared frozen
+state: compute collectors once, share read-only — an immutability
+audit) or INV.5 canonical types. Gates: corpus 11,351/0; listAll ×8
+byte-identical. The INV.6 Phase-0 arc (6a-6d1) is COMPLETE at its
+honest ceiling: w2 −17%, output-identical, opt-in.
+
 **Round 608 (2026-07-18) — (INV.6(6c1)) LANDED: `--workers N` — the
 share-nothing parallel check driver; MEASURED: w2 −14%, w4 FLAT (the
 per-worker redundancy ceiling).** `runInDeepStackWorkers` (expect/actual;

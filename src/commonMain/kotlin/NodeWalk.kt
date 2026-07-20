@@ -443,6 +443,9 @@ fun indexSourceFile(sourceFile: SourceFile) {
     while (stack.isNotEmpty()) {
         val node = stack.removeAt(stack.size - 1)
         (node as NodeBase).nodeId = nextId++
+        // M0 census (inert off --passTiming): node-kind histogram for the
+        // dispatch-order / kind-table design.
+        if (PassTiming.enabled) PassTiming.noteNodeKind(node)
         buf.clear()
         forEachChild(node, collect)
         for (i in buf.indices.reversed()) {
