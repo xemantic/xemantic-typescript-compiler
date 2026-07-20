@@ -20,6 +20,47 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 622 (2026-07-20) — (M0.3) slices (vi)+(vii) LANDED: boxed-Int keys
+killed on the hottest id-keyed structures — (vi) −2.2% (5/5 pairs), then
+(vii) −2.6% (4/5 pairs) on top; arc cumulative ≈ −8.9% from round 618's
+31,747 ms.** `IntKeyMap` (commonMain, open-addressing Int→V, sibling of round
+621's LongKeyMap; sentinel `Int.MIN_VALUE` because symbol ids span BOTH the
+positive main space and the ≤−2 INV.2(c) scope space — 0 and negatives are
+legal keys) replaces `HashMap<Int, ·>` for `symbolTypes` / `declaredTypes` /
+`symbolTargets` (every probe boxed its key — ids run far past the Integer
+cache), and `NarrowFlowMemo` (parallel int-keys/int-depths/Type-values
+arrays) replaces the narrowing walks' per-invocation
+`MutableMap<Int, Pair<Int, Type>>` — one fresh map per depth-0 walk
+(~111k/compile) whose every store allocated a boxed key + a `Pair` + a
+LinkedHashMap node on the hottest checker path (narrowWalks ≈ 5 s of the
+round-618 profile). The serve/overwrite depth rules are preserved
+byte-exactly (`served` iff `depth <= storedDepth`; overwrite iff
+`storedDepth < depth` — the round-385/413 over-narrowing guard) and pinned
+in BOTH directions by IntKeyMapTest (+8: negative-key first-classness,
+sentinel guard, 10k mixed-sign HashMap oracle across growth, memo depth
+rules, memo growth). Slice (vii), separate commit: `NarrowSeen` (the flow
+walkers' cycle set — HashSet<Int> + ArrayList<Int>, every add() boxing the
+id TWICE per flow-node visit, the same traffic class as the memo) is now
+open-addressing IntArray slots with TOMBSTONE removal (popToMark removes in
+reverse insertion order, which linear probing cannot honor by slot-shifting;
+EMPTY slots are only created by rehash, so a present-id probe never meets
+EMPTY early; rehash purges tombstones at the same size unless genuinely
+loaded with live entries) + an IntArray add-log — moved to IntKeyMap.kt as
+internal for testability, mark/popToMark semantics pinned by a 60k-op
+randomized oracle against the old HashSet+ArrayList form (nested marks,
+tombstone churn, growth; +2 tests). MEASURED, each slice interleaved-A/B'd
+against its own predecessor (5 pairs, compiler profile): (vi) 30,364 →
+29,697 ms median = **−2.2%, wins 5/5**; (vii) 30,124 → 29,351 ms median =
+**−2.6%, wins 4/5**. Gates per commit: suite 11,398/0 then 11,400/0 (+10
+total), `--listAll` ×8 byte-identical at each step, warning-clean. LESSON
+RE-LEARNED (the documented clobber gotcha, violated once this round): a
+`compileKotlinJvm` launched while the bench script's JVM was still running
+killed it with ClassNotFoundException mid-run — never overlap a gradle
+compile with ANY live compiler JVM, including the bench script's own run.
+Remaining M0.3 slices: (i) name atomization, (ii) links records, (v)
+undo-log scope copies (1.1% — folds into a bigger slice per the drift-band
+rule).**
+
 **Round 621 (2026-07-20) — (M0.2) kindId table dispatch LANDED (3 commits,
 −3.3% A/B) + the first (M0.3) layout slice (iii)+(iv) LANDED (−3.9% A/B) —
 session cumulative 31,747 → 29,955 ms ≈ −5.6% on the compiler profile.**
@@ -276,25 +317,6 @@ non-importer — --watchVerify measures exactly this class. Gates: corpus
 11,359/0; listAll ×8 byte-identical. REMAINING in (7d): cross-process
 .tsbuildinfo persistence (7d3) — optional productization.
 
-**Round 613 (2026-07-19) — (INV.7c1) LANDED: `--watch` — the minimal
-watch mode, full rebuild per change batch.** `fileEvents(root)` (the
-ARCHITECTURE-RETHINK file-event Flow; expect/actual — JVM wraps
-`java.nio.file.WatchService` with recursive registration + new-directory
-re-registration + a poll loop whose `ClosedWatchServiceException` on
-teardown is the DESIGNED wakeup, caught as normal termination — the
-race only surfaces on flow cancellation, so the infinite CLI collect
-never sees it and only the unit test caught it; native stub throws
-unsupported). The Main loop: `awaitChangeBatch` (block for the first
-event, drain until 200ms quiet — extracted for direct testing) +
-`watchRelevant` (source/config extensions, node_modules excluded) →
-full ProjectCompiler rebuild + summary. END-TO-END VERIFIED: initial
-build 649ms, an injected TS2322 detected and reported in a 46ms warm
-rebuild. WatchModeTest (+4: relevance filter, debounce dedup,
-first-event blocking, real WatchService write detection). Incremental
-reuse (.tsbuildinfo-style) stays the separate open item. Gates: corpus
-11,355/0; listAll ×8 byte-identical; native target still compiles.
-NEXT: (INV.7d) incremental reuse, or wrap the session.
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 (Restored 2026-07-12, round 481 — the queue/backlog/inventory sections had been
@@ -367,11 +389,30 @@ structural item instead of landing alone.**
   three intern caches' dominant shapes (null/empty/1-arg refs — null/empty
   pack alike, reproducing the old string key's `"id|"` conflation
   byte-exactly; 2-member unions/intersections; bigger shapes keep the string
-  maps) + the `normalizePath` memo; (v) undo-log
+  maps) + the `normalizePath` memo; (vi) **DONE round 622: −2.2% wall
+  (30,364 → 29,697 ms median, post wins 5/5 pairs)** — `IntKeyMap`
+  (open-addressing Int→V, `Int.MIN_VALUE` sentinel: symbol ids span the
+  positive main space AND the ≤−2 INV.2(c) scope space, so 0/negative are
+  legal keys) replaces `HashMap<Int, ·>` for symbolTypes/declaredTypes/
+  symbolTargets, and `NarrowFlowMemo` (parallel int-key/int-depth/Type
+  arrays, serve/overwrite depth rules byte-exact, pinned both directions in
+  IntKeyMapTest) replaces the narrowing walks' per-invocation
+  `MutableMap<Int, Pair<Int, Type>>` — a fresh map per depth-0 walk
+  (~111k/compile) allocating a boxed key + `Pair` + map node per store on
+  the hottest checker path; (vii) **DONE round 622: −2.6% wall (30,124 →
+  29,351 ms median, wins 4/5 pairs)** — int-specialized `NarrowSeen`
+  (open-addressing IntArray slots + tombstone removal — popToMark removes
+  in reverse insertion order, which linear probing cannot slot-shift;
+  EMPTY slots only from rehash, so present-id probes never meet EMPTY
+  early — + IntArray add-log; was a double-boxing HashSet+ArrayList on
+  every flow-node visit), pinned by a 60k-op randomized oracle vs the old
+  form; (v) undo-log
   (the proven NarrowSeen mark/pop pattern) replacing HashMap(other) scope
   copies (putMapEntries 1.1%) — also reduces M1's epoch churn. Do NOT reach
   for a JVM-only map library (build-change guardrail + multiplatform);
-  `LongKeyMap` is the in-repo reusable piece for later slices.
+  `LongKeyMap`/`IntKeyMap` are the in-repo reusable pieces for later slices
+  (IntKeyMap values are non-null and never iterated — the compiler flags
+  both constraints at any unsuitable conversion site).
 - [ ] **(M0.4) Migrate the surviving pinned tail** into the spine (the documented
   migration-pattern zoo), cost-descending; retire dead migration scaffolding as
   it goes (emit-twice arms whose legacy side is gone, the dead m3
