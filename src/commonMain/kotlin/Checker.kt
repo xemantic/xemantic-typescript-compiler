@@ -4954,9 +4954,10 @@ class Checker(
         // 4-tuple ties (per-migration corpus + listAll gates decide those).
         // The SET-based definite-assignment pass (TS2454) rides the spine
         // (INV.4(d) walker 5, round 534 — see spineDaSetup/spineDaEnterNode);
-        // its two flow-graph siblings follow the spine, preserving the legacy
-        // set-pass-first order (checkDefiniteAssignmentViaFlowGraph DEDUPS
-        // against the set pass's emitted positions).
+        // the flow-graph sibling is a FILE-END dispatch in the same loop
+        // (round 629 — spineDaFlowFileEnd, whose positional dedup scan runs
+        // after the file's walk so it sees the set pass's emissions), and the
+        // B223 try/catch sibling follows the spine as its own pass.
         val shouldCheckDefiniteAssignment = !options.strictExplicitlyFalse && !options.strictNullChecksExplicitlyFalse
         // 15c (moved before the spine, INV.4(d) walker 6 slot-move): a spread
         // `f(...x)` of a NON-ITERABLE operand into a fixed-arity (no-rest)
@@ -5034,11 +5035,12 @@ class Checker(
         // anchored, so the truncation marks there are inert). ALL THREE
         // INV.4(e) GIANTS ARE NOW OFF EMIT-TWICE.
         // 37. Use-before-declaration (TS2448/2449/2450): the per-file leg rides
-        // the spine (INV.4(d) walker 7 — spineUbdSetup/spineUbdEnterNode);
-        // deliberately BEFORE checkDefiniteAssignmentViaFlowGraph, whose TS2454
-        // position-dedup scan now sees the pass's TS2454 co-emissions (slot-move
-        // pre-gated: corpus + listAll ×8 identical). The cross-file leg stays a
-        // separate pass here, preserving the legacy per-file-first order.
+        // the spine (INV.4(d) walker 7 — spineUbdSetup/spineUbdEnterNode), so
+        // its TS2454 co-emissions land BEFORE spineDaFlowFileEnd's per-file
+        // dedup scan (both fire during the file's own spine walk). The
+        // cross-file leg stays a separate pass here (emits TS2448 + related
+        // TS2728 only — no TS2454, verified round 628), preserving the legacy
+        // per-file-first order.
         pass("checkCrossFileUseBeforeDeclaration") {
             if (binderResults.size > 1) checkCrossFileUseBeforeDeclaration()
         }
@@ -5061,8 +5063,14 @@ class Checker(
         // statements. Emissions stay BEFORE checkTypeAssignability, whose
         // end-of-pass filter suppresses TS7030 at its own TS2322 positions
         // and so EXPECTS this pass's TS7030s to already exist.
+        // (M0.4) round 629: checkDefiniteAssignmentViaFlowGraph (flow-graph
+        // TS2454 + the B187 loop-arg TS2345) is a FILE-END dispatch in
+        // checkSpine's per-file loop — see spineDaFlowFileEnd (its positional
+        // TS2454 dedup scan must see the file's spine-emitted TS2454s; no pass
+        // between the spine and this slot emitted TS2454, so the move is
+        // dedup-neutral). The B223 sibling stays here, preserving the legacy
+        // flow-pass-first relative order.
         if (shouldCheckDefiniteAssignment) {
-            pass("checkDefiniteAssignmentViaFlowGraph") { checkDefiniteAssignmentViaFlowGraph() }
             // B223: TS2454 for vars whose ONLY assignment sits inside a try block
             // with a normally-completing catch (the catch-entry path leaves them
             // unassigned at the post-try merge).
@@ -17425,30 +17433,49 @@ class Checker(
         }
     }
 
-    private fun checkDefiniteAssignmentViaFlowGraph() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            currentFlowGraph = result.flowGraph
-            try {
-                val emittedTs2454Positions = mutableSetOf<Int>()
-                for (d in diagnostics) {
-                    if (d.code == 2454 && d.fileName == fileName) {
-                        d.start?.let { emittedTs2454Positions.add(it) }
-                    }
+    /**
+     * (M0.4, round 629): the flow-graph definite-assignment pass (TS2454 +
+     * the B187 nullable-union loop-arg TS2345) runs as a FILE-END dispatch in
+     * [checkSpine]'s per-file loop — after [spineWalkFile] returns, so its
+     * positional TS2454 dedup scan sees every spine-emitted TS2454 for the
+     * file (the set-based walker 5 + the spineUbd co-emissions, which both
+     * fire during the file's own walk; no pass between the spine and the old
+     * slot emitted TS2454 — verified round 628/629). The walkers
+     * ([walkTopForFlowTS2454] / [runFlowTS2454OnTopLevel] and their leaves)
+     * are unchanged; the family's only checker ambient is [currentFlowGraph],
+     * installed save/restore here (everything else travels as explicit
+     * parameters — fileLocals, source, the emitted-positions set). The B223
+     * sibling [checkTryCatchOnlyAssignedVarReads] stays at its own pass slot:
+     * it scans no prior diagnostics, so there is no dedup coupling in either
+     * direction, and the legacy flow-pass-first relative order is preserved
+     * (the file-end dispatch runs strictly earlier). A trip during the walks
+     * registers [flowDisabledRanges] per-file as before; the end-of-init
+     * TS2454 range filter runs after either slot.
+     */
+    private fun spineDaFlowFileEnd(result: BinderResult) {
+        if (options.strictExplicitlyFalse || options.strictNullChecksExplicitlyFalse) return
+        val fileName = result.sourceFile.fileName
+        if (isDtsFile(fileName)) return
+        val source = result.sourceFile.text
+        val savedFlowGraph = currentFlowGraph
+        currentFlowGraph = result.flowGraph
+        try {
+            val emittedTs2454Positions = mutableSetOf<Int>()
+            for (d in diagnostics) {
+                if (d.code == 2454 && d.fileName == fileName) {
+                    d.start?.let { emittedTs2454Positions.add(it) }
                 }
-                for (stmt in result.sourceFile.statements) {
-                    walkTopForFlowTS2454(stmt, source, fileName, emittedTs2454Positions, result.locals)
-                }
-                // 17.46d: also walk top-level statements as a unit so file-level
-                // uninitialized vars (`var x: T;` outside any function) are
-                // checked for unsafe reads inside if/while/for/switch/try
-                // bodies. Mirrors `runFlowTS2454OnFunction` without parameters.
-                runFlowTS2454OnTopLevel(result.sourceFile.statements, source, fileName, emittedTs2454Positions, result.locals)
-            } finally {
-                currentFlowGraph = null
             }
+            for (stmt in result.sourceFile.statements) {
+                walkTopForFlowTS2454(stmt, source, fileName, emittedTs2454Positions, result.locals)
+            }
+            // 17.46d: also walk top-level statements as a unit so file-level
+            // uninitialized vars (`var x: T;` outside any function) are
+            // checked for unsafe reads inside if/while/for/switch/try
+            // bodies. Mirrors `runFlowTS2454OnFunction` without parameters.
+            runFlowTS2454OnTopLevel(result.sourceFile.statements, source, fileName, emittedTs2454Positions, result.locals)
+        } finally {
+            currentFlowGraph = savedFlowGraph
         }
     }
 
@@ -21199,6 +21226,11 @@ class Checker(
                     spineSyTeardown()
                 }
                 spineResolveDeferredIterationChecks()
+                // (M0.4) round 629: the flow-graph definite-assignment pass
+                // runs as a FILE-END dispatch — after the file's walk, so its
+                // positional TS2454 dedup scan sees every spine-emitted
+                // TS2454 for this file (walker 5 + the spineUbd co-emissions).
+                spineDaFlowFileEnd(result)
             }
         } finally {
             currentFileLocals = savedLocals

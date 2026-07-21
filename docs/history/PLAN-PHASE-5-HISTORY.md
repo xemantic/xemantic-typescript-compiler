@@ -1,3 +1,36 @@
+**Round 619 (2026-07-20) — the PERF arc opens (owner: "proceed according to
+your recommendations") and (M0.1) tail triage runs to its verdict: the
+deletion hypothesis is DEAD — the tail is ~all corpus-pinned; migration
+(M0.4) carries the lever.** Landed in order: (1) the queue restructure — PERF
+(M0.1–M2) top-of-queue + docs/ARCHITECTURE-RETHINK.md § 6 rewritten to the
+honest ledger (25 s pre-arc → 35.7 s peak → 31 s today; revised targets
+M0 ≤24 s / M1 ≤15–20 s / M2 ≤10–12 s @ 4 workers; native de-scoped as a perf
+lever; the below-noise-floor landing rule). (2) The PassLab facility
+(JVM-only): `build/pass-lab.txt` (`census` / `disable <pass>`), loaded once
+per JVM at the runWithDeepStack funnel — the one seam every JVM compile
+crosses (generated corpus tests call TypeScriptCompiler directly, so no
+test-support hook exists; the funnel hook covers CLI + suite identically);
+`PassTiming.censusMode` (light per-pass emitted-diagnostic census into the
+reset-immune `censusByPass` — the first probe dumped EMPTY because
+Inv0PassTimingTest's cleanup reset() wiped the shared accumulator mid-fork,
+hence the dedicated process-lifetime map) + `PassTiming.disabledPasses`
+(pass() body skip). Pins +7 (5 Inv0PassTimingTest incl. reset-immunity and
+censusMode byte-parity; 2 PassLabParseTest — ensureLoaded's global toggle is
+deliberately NOT exercised in-suite, it would poison the fork). (3) Phase A:
+corpus-only census run (`--tests '…TypeScriptCompilerTests_*'`, lab active)
+GREEN — doubling as an 11k-test ON-mode byte-identity gate — plus a separate
+full-suite off-mode gate (11,379/0). VERDICT: 417/440 tail passes emit on
+the corpus (6,185 ms of 6,244 ms); the census-silent pool is 23 passes /
+59 ms. Artifact: docs/perf/pass-census-round619.txt. (4) Phase B collapsed
+to one batch: all 23 disabled → full suite GREEN (11,379/0) → compiler
+`--listAll` A/B BYTE-IDENTICAL. The 23 are deletion-ready pending the ×8
+listAll gate + a consumer trace for the four producers/rewriters among them
+(ctaPostFilters, populateAmbientCyclicBaseClasses,
+applyDomLibSuggestionRewrite, checkBaseClassImprovedMismatch) — suite-green
+is weak evidence for suppression producers. NEXT (top-of-queue): the (M0.1d)
+deletion commit, then (M0.2) kindId table / (M0.3) layout / (M0.4) the
+migration grind, which now carries the whole 6.2 s tail lever.**
+
 **Round 618 (2026-07-20) — the owner-directed perf-target discussion opens:
 fresh profile + JFR at HEAD, and three M0 measurement rungs run to ground —
 two estimates KILLED by measurement, one sharpened into a design number.**

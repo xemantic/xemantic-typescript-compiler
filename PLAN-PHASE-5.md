@@ -20,6 +20,52 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 629 (2026-07-21) — (M0.4) seventh tail-pass migration:
+checkDefiniteAssignmentViaFlowGraph (flow-graph TS2454 + the B187
+nullable-union loop-arg TS2345, ~105 ms — the #7 tail pass) is ON THE
+SPINE as a FILE-END dispatch; the pass dispatch is deleted.** The FILE-END
+variant of the template (the round-628 analysis held exactly): a pass
+whose per-file body is (positional dedup scan over prior diagnostics +
+whole-file flow walks) migrates as ONE dispatch in checkSpine's per-file
+loop AFTER spineWalkFile returns (the spineResolveDeferredIterationChecks
+pattern), NOT per-anchor enters — the TS2454 dedup scan must see every
+spine-emitted TS2454 for the file (the set-based walker 5 + the spineUbd
+co-emissions, both firing during the file's own walk; no pass between the
+spine and the old slot emitted TS2454 — ctaPostFilters touches TS2322/
+TS7030 only, the cross-file UBD leg TS2448+TS2728 only). The walker
+family (walkTopForFlowTS2454 / runFlowTS2454OnTopLevel /
+walkStmtForFlowTS2454 / walkExprForFlowTS2454 / isAssignedAtFlow /
+checkNullableUnionLoopArgs) is UNCHANGED — its only checker ambient is
+currentFlowGraph (installed save/restore in the dispatch; everything else
+travels as explicit parameters), so no frames, no reach classifier, no
+ambient sandwich beyond the graph. The B223 sibling
+checkTryCatchOnlyAssignedVarReads STAYS at its own pass slot: it scans no
+prior diagnostics (verified — no dedup coupling in either direction) and
+the legacy flow-pass-first relative order is preserved (the file-end
+dispatch runs strictly earlier). flowDisabledRanges trips register
+per-file as before; the end-of-init TS2454 range filter is unmoved.
+Legacy quirk pinned: an arrow-initializer body is reached ONLY when the
+ENCLOSING function has ≥1 uninit candidate (the statement walk that finds
+the arrow is gated on a non-empty set). Process trap (recovered): the
+first pre-listAll capture's gradle compile step was still running when
+the migration edits landed — it compiled the half-edited source and
+failed; recaptured from a stashed tree. Lesson: a "pre" capture's compile
+must COMPLETE before any source edit (or stash first). Gates: 17 local
+pins (M04DaFlowSpineMigrationTest — if/try/finally-body reads, top-level
+statements, namespace/class/arrow recursion, the exactly-one-TS2454 dedup
+pin at a set-pass overlap (try-block read), the suppression battery
+(pre-read assignment, closure assignment, for-of loop-var shadow,
+catch-body skip, non-null assert, `| undefined` annotation, explicit
+non-strict), B187 both directions, the B223 sibling) verified green
+against the LEGACY pass FIRST; suite 11,515 → 11,532/0; `--listAll` ×8
+byte-identical (46×7 + 94 env-legit artifacts); pass table 432 → 431 (the
+checkDefiniteAssignmentViaFlowGraph row GONE; checkSpine 18,451.8 ms
+single-run — inside the round-625..628 18.0–19.1 s band);
+warning-clean. M0.4 running total: top SEVEN tail passes migrated. NEXT
+by the fresh table: checkSameTargetReferenceCastOverlap (~123 ms) and
+checkBindingPatternComputedIndexSig (~120 ms) — slot positions vs the
+spine unverified; check for a needed slot-move pre-gate first.**
+
 **Round 628 (2026-07-21) — (M0.4) sixth tail-pass migration:
 checkSymbolToStringConversions (TS2469/TS2731, 96–108 ms — the #6 tail
 pass) is ON THE SPINE; the legacy recursion (checkSymbolToStringConversions
@@ -459,40 +505,6 @@ pre-vs-post on all 8 profiles; build warning-clean. (M0.1) CLOSES on the
 honest ledger: the tail's ~6.2 s is ALL pinned — (M0.4) migration carries
 the whole lever. NEXT (top-of-queue): (M0.2) kindId table dispatch.**
 
-**Round 619 (2026-07-20) — the PERF arc opens (owner: "proceed according to
-your recommendations") and (M0.1) tail triage runs to its verdict: the
-deletion hypothesis is DEAD — the tail is ~all corpus-pinned; migration
-(M0.4) carries the lever.** Landed in order: (1) the queue restructure — PERF
-(M0.1–M2) top-of-queue + docs/ARCHITECTURE-RETHINK.md § 6 rewritten to the
-honest ledger (25 s pre-arc → 35.7 s peak → 31 s today; revised targets
-M0 ≤24 s / M1 ≤15–20 s / M2 ≤10–12 s @ 4 workers; native de-scoped as a perf
-lever; the below-noise-floor landing rule). (2) The PassLab facility
-(JVM-only): `build/pass-lab.txt` (`census` / `disable <pass>`), loaded once
-per JVM at the runWithDeepStack funnel — the one seam every JVM compile
-crosses (generated corpus tests call TypeScriptCompiler directly, so no
-test-support hook exists; the funnel hook covers CLI + suite identically);
-`PassTiming.censusMode` (light per-pass emitted-diagnostic census into the
-reset-immune `censusByPass` — the first probe dumped EMPTY because
-Inv0PassTimingTest's cleanup reset() wiped the shared accumulator mid-fork,
-hence the dedicated process-lifetime map) + `PassTiming.disabledPasses`
-(pass() body skip). Pins +7 (5 Inv0PassTimingTest incl. reset-immunity and
-censusMode byte-parity; 2 PassLabParseTest — ensureLoaded's global toggle is
-deliberately NOT exercised in-suite, it would poison the fork). (3) Phase A:
-corpus-only census run (`--tests '…TypeScriptCompilerTests_*'`, lab active)
-GREEN — doubling as an 11k-test ON-mode byte-identity gate — plus a separate
-full-suite off-mode gate (11,379/0). VERDICT: 417/440 tail passes emit on
-the corpus (6,185 ms of 6,244 ms); the census-silent pool is 23 passes /
-59 ms. Artifact: docs/perf/pass-census-round619.txt. (4) Phase B collapsed
-to one batch: all 23 disabled → full suite GREEN (11,379/0) → compiler
-`--listAll` A/B BYTE-IDENTICAL. The 23 are deletion-ready pending the ×8
-listAll gate + a consumer trace for the four producers/rewriters among them
-(ctaPostFilters, populateAmbientCyclicBaseClasses,
-applyDomLibSuggestionRewrite, checkBaseClassImprovedMismatch) — suite-green
-is weak evidence for suppression producers. NEXT (top-of-queue): the (M0.1d)
-deletion commit, then (M0.2) kindId table / (M0.3) layout / (M0.4) the
-migration grind, which now carries the whole 6.2 s tail lever.**
-
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 (Restored 2026-07-12, round 481 — the queue/backlog/inventory sections had been
@@ -639,11 +651,18 @@ structural item instead of landing alone.**
   as collection boundaries — inner Block/clause re-collects were always
   subsets; two reach edges differ from the fp/ai classifiers: case-clause
   and bare for-initializer EXPRESSIONS are reached),
-  checkDefiniteAssignmentViaFlowGraph
-  105 ms — next; NO slot-move needed (already post-spine; the intervening
-  cross-file UBD pass emits no TS2454 — verified round 628); natural
-  shape is a FILE-END dispatch in checkSpine's per-file loop (see the
-  round-628 session note); 98 passes >20 ms carry 5.3 s of the
+  checkDefiniteAssignmentViaFlowGraph 105 ms — **MIGRATED round 629** (the
+  FILE-END variant: a pass whose per-file body is a positional dedup scan
+  over prior diagnostics + whole-file flow walks migrates as a dispatch in
+  checkSpine's per-file loop AFTER spineWalkFile returns — never
+  per-anchor — so the dedup scan sees the file's spine-emitted TS2454s;
+  the walker family stays verbatim, the only ambient install is
+  currentFlowGraph save/restore, and the B223 sibling stays at its own
+  pass slot since it scans no prior diagnostics),
+  checkSameTargetReferenceCastOverlap ~123 ms and
+  checkBindingPatternComputedIndexSig ~120 ms — next (slot positions vs
+  the spine unverified — check for a needed slot-move pre-gate first);
+  98 passes >20 ms carry 5.3 s of the
   6.2 s). Migration protocol per
   pass (the round-624 template): slot-move pre-gate commit (intact pass to the
   post-spine slot, corpus + listAll ×8), then the migration commit (frames at
