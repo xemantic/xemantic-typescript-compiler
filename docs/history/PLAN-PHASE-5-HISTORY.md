@@ -1,3 +1,60 @@
+**Round 617 (2026-07-19) — (INV.7d3) UNBLOCKED BY OWNER + LANDED: cross-process
+`.xtsbuildinfo` persistence on the approved build-id stamp; (INV.7b) PARKED-BY-OWNER.**
+The owner approved the build change and parked the Release binary ("switch it
+off for now"); the perf-targets conversation (the canonical-types arc) is
+explicitly deferred to the owner. (1) `generateBuildInfo` (build.gradle.kts)
+generates commonMain `BuildInfo.kt` with `XTSC_BUILD_ID` = the git sha at build
+time, `.dirty`-suffixed on a locally-modified tree, `unknown` without git;
+every Kotlin compile task depends on it (the generateRealLibSources pattern).
+(2) `TsBuildInfo` (commonMain) persists `{buildId, FNV-1a-64 content hashes of
+program files + every `.json` config read (RecordingVfs — tsconfig/extends
+chain/package.json), programFiles/moduleFiles/sharedNameFiles/importEdges,
+diagnostics}` as `tsconfig.xtsbuildinfo` next to the config
+(kotlinx-serialization, the TsConfigFile precedent). Cold start under
+`--incremental --noEmit`: buildId must match EXACTLY and be clean —
+`unknown`/`.dirty` ids never persist NOR reuse (two dirty states silently
+differ under one id; the exact guardrail (7d3) was blocked on) — then the
+hash diff yields the changed set and the (7d1) protocol runs VERBATIM:
+eligibility ((7d2) bails included; a changed/deleted config file lands in the
+changed set via its hash and bails) → reverse-dependency closure → partition
+build → outcome validation → mergeDiagnostics; any bail = full build; the
+outcome is always re-persisted. A NEW file invisible to stored hashes is
+caught by the program-shape outcome check (the changed=∅ fast path still runs
+an empty-partition build that re-crawls the globs). Pins (+11,
+TsBuildInfoTest): zero-recheck fast path ≡ full; leaf-edit 1-file closure ≡
+full; round-tripped kept diagnostics keep positions; id-mismatch /
+dirty / unknown / tsconfig-change / new-file / deleted-file / corrupt-file
+all fall back to full (corrupt is re-written valid). Gates: corpus 11,372/0 (+11). CLI smoke (clean-id binary, 3 runs): cold full build persists; unchanged run reuses — 'incremental recheck of 0/2 file(s)' with the kept TS2322 reprinted from the store; a leaf edit rechecks 1/2 with the old error gone and the new one caught; ~630 ms each;
+native compiles (TsBuildInfo is commonMain, no expect/actual needed). The
+checker is untouched — the default (non-incremental) CLI path is byte-identical
+by construction. QUEUE STATE: every remaining item is owner-parked ((7b),
+Post-v1 backlog), externally blocked (EP reference-tsc, M4.7 network), or
+deferred ((6e) parallel emit — benches are --noEmit).
+
+**Round 616 (2026-07-19) — (7d3) marked BLOCKED-PENDING-USER (the version-
+stamp guardrail) + the honest INV-arc scorecard vs the § 6 targets.**
+(7d3)'s only safe design needs a compiler version stamp in the buildinfo
+(stale-compiler reuse of kept diagnostics is otherwise silent);
+generating a BuildInfo.kt is a build-system change → user-gated, proposal
+recorded on the queue item. SCORECARD vs docs/ARCHITECTURE-RETHINK.md
+§ 6: post-INV.4/5 single-threaded compiler-profile target was ≤10 s —
+ACTUAL ~31 s (the target priced in the (f1)/(f2) memo+fold wins, both
+MEASURED DEAD-ENDS at the current cost structure: the servable calls are
+cheap, the expensive recompute is the non-memoizable fresh-minting/
+narrowing kinds); post-INV.6 4-core target ≤5 s — ACTUAL 26.5 s at w2
+(w4 flat at the per-worker redundancy ceiling); INV.7 native stretch —
+debug binary byte-correct at 196 s (Release link RAM-blocked). The
+BANKED wins are real but smaller than the targets: retirements −13%,
+w2 −17%, one authoritative walk, order-free verdicts, the partition
+seam, native correctness, watch+incremental. The ≤10 s path per the
+round-599 conclusion still runs through canonical-type identity-stable
+results (which would revive both memo designs) — that work is the
+natural owner-directed next arc if perf stays the priority. LOOP STATE:
+every remaining queue item is now user-gated, resource-blocked,
+network-blocked, or owner-parked — the autonomous loop's stop condition
+is MET; stopping cleanly per protocol.
+
+
 **Round 615 (2026-07-19) — (INV.7d2) LANDED: the shared-name full-rebuild
 bail closes the documented incremental residual.** ProjectCompiler
 computes `sharedNameFiles` — module files whose TOP-LEVEL declaration

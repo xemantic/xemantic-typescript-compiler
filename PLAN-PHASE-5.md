@@ -20,6 +20,53 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 627 (2026-07-21) — (M0.4) fifth tail-pass migration:
+checkAbstractClassInstantiation (TS2511, 113 ms — the #5 tail pass) is ON THE
+SPINE; the legacy recursion (checkAbstractClassInstantiation /
+checkAbstractInStmts / checkAbstractInStmt / checkAbstractInExpr, ~260 lines)
+DELETED.** The COLLECTOR-PREPASS variant of the template: the pass's four
+FILE-scoped collectors (collectAbstractClassNames + the merged-globals
+isAbstractClass scan + collectImportedAbstractClassAliases +
+collectTypeAliases → collectTypeofAbstractVars) are retained unchanged and
+run at per-file spine setup (spineAiSetup — file-scoped, not
+statement-ordered, so NO frames; the globals scan is additionally memoized
+per RUN since globals are frozen during the spine — the legacy per-file
+rescan always agreed). The statement-LIST overlay checkAbstractInStmts
+applied (add abstract class names, THEN remove non-abstract-shadowed —
+remove wins for a duplicate; save/restore per list) is a pure function of
+the ancestor list-owner chain (SourceFile / Block / ModuleBlock / CaseClause
+/ DefaultClause — every legacy route applied exactly ONE overlay per such
+list), so it rebuilds PULL-based per anchor with a per-owner memo
+(spineAiClassesFor). The `[A].map(cls => new cls())` callback-param typeof
+extension recovers on the anchor climb folded OUTERMOST-first (an outer
+extension can make an inner receiver's elementsContainAbstract true —
+pinned by the nested-map test); node COVERAGE is identical between the
+legacy handled/unhandled `.map` branches, so the reach classifier
+(spineAiStatus/spineAiEdge — binary, memoized, the spineFp skeleton) needs
+NO special case. Reach quirks pinned verbatim: a NEW expression's CALLEE
+subtree is never walked (arguments are), case-clause EXPRESSIONS and bare
+for-initializer EXPRESSIONS unreached (a for decl-LIST is reached), objlit
+METHOD bodies unreached (PropertyAssignment values reached). NO ambient
+sandwich — the emission reads no checker ambient state (pure AST + string
+sets); anchors are NewExpressions with an Identifier callee (rare → the
+climbs are cheap; the overlay memo bounds re-derivation). Gates: 24 local
+pins (M04AbstractClassSpineMigrationTest — overlay shadowing both
+directions, typeof alias/union/param, map-callback + nested fold + concrete
+negative, reach both directions ×4 shapes, cross-file globals + named +
+default import + type-only-negative) verified green against the LEGACY
+walker FIRST; suite 11,466 → 11,490/0; `--listAll` ×8 byte-identical
+(sorted error lines, 46×7 + 94 harness env-legit artifacts); pass table
+434 → 433 (the checkAbstractClassInstantiation row GONE; checkSpine
+18,510 ms single-run — inside the round-625/626 18.0–19.0 s band);
+warning-clean. Process note: the FIRST pre capture ran concurrently with a
+gradle test build — the recompile clobbered 5 of 8 profile JVMs
+(ClassNotFoundException mid-run, the documented trap); recaptured serially.
+M0.4 running total: top FIVE tail passes migrated; next by cost:
+checkSymbolToStringConversions (108 ms — TS2469/TS2731, self-contained: no
+ambient reads, no 2469/2731 retract/dedup consumers; downward-context
+threading tpNames/symVars/aliasNames + a file-scoped alias collector),
+checkDefiniteAssignmentViaFlowGraph (105 ms).**
+
 **Round 626 (2026-07-21) — (M0.4) fourth tail-pass migration: checkFnTypedParamCalls
 (B128/B215 — TS2558/TS2345 fn-typed-param calls, generic-method calls,
 `.apply`; 119 ms, the #4 tail pass) is ON THE SPINE; the legacy recursion
@@ -418,63 +465,6 @@ migration) → M1 (identity stability → revive f1/f2) → M2 (Phase-1 shared
 collectors) arc proposal + revised § 6 targets are IN THIS CONVERSATION,
 awaiting the owner's read of these numbers.**
 
-**Round 617 (2026-07-19) — (INV.7d3) UNBLOCKED BY OWNER + LANDED: cross-process
-`.xtsbuildinfo` persistence on the approved build-id stamp; (INV.7b) PARKED-BY-OWNER.**
-The owner approved the build change and parked the Release binary ("switch it
-off for now"); the perf-targets conversation (the canonical-types arc) is
-explicitly deferred to the owner. (1) `generateBuildInfo` (build.gradle.kts)
-generates commonMain `BuildInfo.kt` with `XTSC_BUILD_ID` = the git sha at build
-time, `.dirty`-suffixed on a locally-modified tree, `unknown` without git;
-every Kotlin compile task depends on it (the generateRealLibSources pattern).
-(2) `TsBuildInfo` (commonMain) persists `{buildId, FNV-1a-64 content hashes of
-program files + every `.json` config read (RecordingVfs — tsconfig/extends
-chain/package.json), programFiles/moduleFiles/sharedNameFiles/importEdges,
-diagnostics}` as `tsconfig.xtsbuildinfo` next to the config
-(kotlinx-serialization, the TsConfigFile precedent). Cold start under
-`--incremental --noEmit`: buildId must match EXACTLY and be clean —
-`unknown`/`.dirty` ids never persist NOR reuse (two dirty states silently
-differ under one id; the exact guardrail (7d3) was blocked on) — then the
-hash diff yields the changed set and the (7d1) protocol runs VERBATIM:
-eligibility ((7d2) bails included; a changed/deleted config file lands in the
-changed set via its hash and bails) → reverse-dependency closure → partition
-build → outcome validation → mergeDiagnostics; any bail = full build; the
-outcome is always re-persisted. A NEW file invisible to stored hashes is
-caught by the program-shape outcome check (the changed=∅ fast path still runs
-an empty-partition build that re-crawls the globs). Pins (+11,
-TsBuildInfoTest): zero-recheck fast path ≡ full; leaf-edit 1-file closure ≡
-full; round-tripped kept diagnostics keep positions; id-mismatch /
-dirty / unknown / tsconfig-change / new-file / deleted-file / corrupt-file
-all fall back to full (corrupt is re-written valid). Gates: corpus 11,372/0 (+11). CLI smoke (clean-id binary, 3 runs): cold full build persists; unchanged run reuses — 'incremental recheck of 0/2 file(s)' with the kept TS2322 reprinted from the store; a leaf edit rechecks 1/2 with the old error gone and the new one caught; ~630 ms each;
-native compiles (TsBuildInfo is commonMain, no expect/actual needed). The
-checker is untouched — the default (non-incremental) CLI path is byte-identical
-by construction. QUEUE STATE: every remaining item is owner-parked ((7b),
-Post-v1 backlog), externally blocked (EP reference-tsc, M4.7 network), or
-deferred ((6e) parallel emit — benches are --noEmit).
-
-**Round 616 (2026-07-19) — (7d3) marked BLOCKED-PENDING-USER (the version-
-stamp guardrail) + the honest INV-arc scorecard vs the § 6 targets.**
-(7d3)'s only safe design needs a compiler version stamp in the buildinfo
-(stale-compiler reuse of kept diagnostics is otherwise silent);
-generating a BuildInfo.kt is a build-system change → user-gated, proposal
-recorded on the queue item. SCORECARD vs docs/ARCHITECTURE-RETHINK.md
-§ 6: post-INV.4/5 single-threaded compiler-profile target was ≤10 s —
-ACTUAL ~31 s (the target priced in the (f1)/(f2) memo+fold wins, both
-MEASURED DEAD-ENDS at the current cost structure: the servable calls are
-cheap, the expensive recompute is the non-memoizable fresh-minting/
-narrowing kinds); post-INV.6 4-core target ≤5 s — ACTUAL 26.5 s at w2
-(w4 flat at the per-worker redundancy ceiling); INV.7 native stretch —
-debug binary byte-correct at 196 s (Release link RAM-blocked). The
-BANKED wins are real but smaller than the targets: retirements −13%,
-w2 −17%, one authoritative walk, order-free verdicts, the partition
-seam, native correctness, watch+incremental. The ≤10 s path per the
-round-599 conclusion still runs through canonical-type identity-stable
-results (which would revive both memo designs) — that work is the
-natural owner-directed next arc if perf stays the priority. LOOP STATE:
-every remaining queue item is now user-gated, resource-blocked,
-network-blocked, or owner-parked — the autonomous loop's stop condition
-is MET; stopping cleanly per protocol.
-
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 (Restored 2026-07-12, round 481 — the queue/backlog/inventory sections had been
@@ -603,8 +593,17 @@ structural item instead of landing alone.**
   memo-free form — plus a memoized BINARY reach classifier: no multi-state
   statuses needed when every (parent kind, child slot) pair decides descent
   unambiguously),
-  checkAbstractClassInstantiation 113 ms — slot-move pre-gate LANDED round
-  626, the migration is the next session's first item,
+  checkAbstractClassInstantiation 113 ms — **MIGRATED round 627** (the
+  collector-prepass variant: four FILE-scoped collectors reproduce as
+  per-file spine-setup state, not frames; the statement-LIST overlay
+  (add-abstract-then-remove-shadowed, a pure function of the ancestor
+  list-owner chain SourceFile/Block/ModuleBlock/CaseClause/DefaultClause)
+  rebuilds pull-based per anchor with a per-owner memo; the
+  `[A].map(cls => …)` callback-param typeof extension recovers on the
+  anchor climb folded OUTERMOST-first — node coverage is identical
+  between the legacy handled/unhandled branches, so the reach classifier
+  needs no special case; no ambient sandwich — the emission reads no
+  checker ambient),
   checkSymbolToStringConversions 108 ms, checkDefiniteAssignmentViaFlowGraph
   105 ms; 98 passes >20 ms carry 5.3 s of the 6.2 s). Migration protocol per
   pass (the round-624 template): slot-move pre-gate commit (intact pass to the

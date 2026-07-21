@@ -3455,6 +3455,37 @@ class Checker(
     /** The legacy per-file entry context (immutable — shared across files). */
     private val spineFpEmptyCtx = FnParamCtx(emptySet(), emptyMap(), emptyMap(), emptyMap(), emptyMap())
 
+    // ── (M0.4) round 627: checkAbstractClassInstantiation on the spine ─────
+    // TS2511 anchors at NewExpressions with an Identifier callee; reach is the
+    // memoized binary classifier [spineAiStatus] over [spineAiEdge] (the
+    // deleted checkAbstractInStmt/checkAbstractInExpr arms verbatim — a NEW
+    // expression's CALLEE subtree, case-clause EXPRESSIONS, bare
+    // for-initializer EXPRESSIONS, for-in/of LEFT sides, objlit
+    // methods/accessors/shorthand, param defaults, heritage, and enum members
+    // all stay UNREACHED). The abstractClasses set is a per-statement-LIST
+    // overlay (add abstract names, then remove non-abstract-shadowed — a pure
+    // function of the ancestor list-owner chain) rebuilt PULL-based per
+    // anchor with a per-owner memo ([spineAiClassesFor]); typeofAbstractVars
+    // is file-scoped plus the `[A].map(cls => …)` callback-param extensions
+    // recovered outermost-first on the anchor climb ([spineAiTypeofAt]). No
+    // ambient sandwich — the emission reads no checker ambient state (pure
+    // AST + string sets). Fields PRE-init (the pipeline runs inside `init`).
+    private var spineAiActive = false
+    /** Per-file nodeId memo for [spineAiStatus] — 0 unknown, 1 reached, 2 not. */
+    private var spineAiReachMemo = ByteArray(0)
+    /** Reusable ascent buffer for [spineAiStatus]. */
+    private val spineAiChain = ArrayList<Node>()
+    /** Per-file overlay memo keyed by the statement-list OWNER nodeId. */
+    private val spineAiClassesMemo = HashMap<Int, Set<String>>()
+    /** File base: own top-level abstract classes + merged-globals abstract +
+     *  imported abstract aliases (the legacy per-file collector output). */
+    private var spineAiFileBase: Set<String> = emptySet()
+    /** File-scoped typeof-abstract var/param names (collected vs the file base). */
+    private var spineAiTypeofVars: Set<String> = emptySet()
+    /** Run-level cache of merged-globals abstract class names (globals are
+     *  frozen during the spine — the legacy per-file rescan always agreed). */
+    private var spineAiGlobalsAbstract: Set<String>? = null
+
     // ── INV.4(d) walker 6 (round 535): checkArgumentCounts on the spine ────
     // The function-call arity pass (TS2554/TS2555/TS2575) — the recursion
     // walkers (checkArgCountInStatements/-InStatement/-InExpr(Core)) are
@@ -4941,11 +4972,10 @@ class Checker(
         // walkers are deleted (the emission leaves emitFnTypedParamCallDiag /
         // emitGenericMethodCallDiag / emitFnTypedParamApplyDiag are
         // anchor-called).
-        // 64g (M0.4 slot-move pre-gate, round 626): checkAbstractClassInstantiation
-        // (TS2511) moved intact from its legacy 64g slot ahead of its spine
-        // migration. Self-contained (reads binderResults/globals/fileResults
-        // only; no side-set consults, no TS2511 retract/dedup consumers).
-        pass("checkAbstractClassInstantiation") { checkAbstractClassInstantiation() }
+        // 64g (M0.4, round 627): checkAbstractClassInstantiation (TS2511) is
+        // ON THE SPINE — see spineAiEnterNode/spineAiStatus/spineAiClassesAt;
+        // the legacy recursion walkers are deleted (the file-scoped collectors
+        // run at spineAiSetup; the TS2511 emission is anchor-called).
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -5934,8 +5964,8 @@ class Checker(
         pass("checkFullIndexConstraints") { checkFullIndexConstraints() }
         // B496. Cross-typed-array assignment (TS2322 via [Symbol.toStringTag] mismatch)
         pass("checkTypedArrayCrossAssignment") { checkTypedArrayCrossAssignment() }
-        // 64g. checkAbstractClassInstantiation moved to the post-spine slot —
-        // see the pass("checkSpine") site (M0.4 slot-move pre-gate, round 626).
+        // 64g. checkAbstractClassInstantiation is ON THE SPINE (M0.4, round
+        // 627) — see spineAiEnterNode at the pass("checkSpine") site.
         // 64h. Check overload signature compatibility (TS2394)
         pass("checkOverloadSignatureCompatibility") { checkOverloadSignatureCompatibility() }
         // 64h1b. B98.r38: TS2384 across merged namespace blocks (ambient/non-ambient overloads).
@@ -21099,6 +21129,7 @@ class Checker(
                 spinePdSetup(result)
                 spineItSetup()
                 spineFpSetup(result)
+                spineAiSetup(result)
                 spineUResAuditActive = unresolvedAuditEnabled && spineUResActive
                 try {
                     spineWalkFile(sf)
@@ -21124,6 +21155,7 @@ class Checker(
                     spinePdTeardown()
                     spineItTeardown()
                     spineFpTeardown()
+                    spineAiTeardown()
                 }
                 spineResolveDeferredIterationChecks()
             }
@@ -21301,6 +21333,10 @@ class Checker(
         // (M0.4) round 626: the fn-typed-param-call anchors (CallExpressions)
         // — pull-based FnParamCtx, no frames/leave hook.
         if (spineFpActive) spineFpEnterNode(node)
+        // (M0.4) round 627: the abstract-class-instantiation anchors
+        // (NewExpressions with an Identifier callee) — pull-based overlay
+        // sets, no frames/leave hook, no ambient sandwich.
+        if (spineAiActive) spineAiEnterNode(node)
         // INV.4(d) walker 7: the use-before-declaration pass — the per-list
         // ForwardRefs anchor + loop-header self-ref checks.
         if (spineUbdActive) spineUbdEnterNode(node)
@@ -47307,6 +47343,12 @@ class Checker(
         private const val FP_NONE = 2
         private const val FP_ROOT = 3
 
+        // (M0.4) round 627: spineAiStatus states (checkAbstractClassInstantiation
+        // reach — binary + the transient SourceFile root).
+        private const val AI_REACHED = 1
+        private const val AI_NONE = 2
+        private const val AI_ROOT = 3
+
         private const val OS_NONE = 1
         private const val OS_ROOT = 2
         private const val OS_STMT = 3
@@ -61639,6 +61681,320 @@ interface DataView {
         is PropertyAssignment -> child === parent.initializer
         is ArrowFunction -> child === parent.body
         is FunctionExpression -> child === parent.body
+        else -> false
+    }
+
+    // -----------------------------------------------------------------------
+    // (M0.4) round 627: checkAbstractClassInstantiation (TS2511) ON THE
+    // SPINE. The legacy per-file recursion (checkAbstractClassInstantiation /
+    // checkAbstractInStmts / checkAbstractInStmt / checkAbstractInExpr) is
+    // deleted; the four file-scoped collectors (collectAbstractClassNames /
+    // the merged-globals scan / collectImportedAbstractClassAliases /
+    // collectTypeAliases → collectTypeofAbstractVars) are RETAINED and run at
+    // per-file spine setup (they are file-scoped, not statement-ordered — no
+    // frames). The statement-LIST overlay checkAbstractInStmts applied
+    // (add abstract names, THEN remove non-abstract-shadowed; save/restore
+    // per list) is a pure function of the ancestor list-owner chain
+    // (SourceFile / Block / ModuleBlock / CaseClause / DefaultClause — every
+    // legacy route applied exactly one overlay per such list), so it rebuilds
+    // PULL-based per anchor with a per-owner memo. The `[A].map(cls => …)`
+    // callback-param typeof extension reproduces on the anchor climb,
+    // folded OUTERMOST-first (an outer extension can make an inner
+    // receiver's elementsContainAbstract true, exactly as the legacy
+    // top-down walk saw it); node COVERAGE is identical between the legacy
+    // handled/unhandled branches, so the reach classifier needs no special
+    // case. No ambient sandwich — the emission reads no checker ambient.
+    // -----------------------------------------------------------------------
+
+    /** Per-file setup: the legacy dts skip + the four file-scoped collectors. */
+    private fun spineAiSetup(result: BinderResult) {
+        spineAiActive = !spineIsDts
+        spineAiClassesMemo.clear()
+        if (!spineAiActive) {
+            spineAiReachMemo = ByteArray(0)
+            spineAiFileBase = emptySet()
+            spineAiTypeofVars = emptySet()
+            return
+        }
+        val sf = result.sourceFile
+        spineAiReachMemo = if (sf.nodeCount > 0) ByteArray(sf.nodeCount) else ByteArray(0)
+        val abstractClasses = HashSet<String>()
+        collectAbstractClassNames(sf.statements, abstractClasses)
+        val globalsAbstract = spineAiGlobalsAbstract ?: HashSet<String>().also { g ->
+            for ((name, sym) in globals) if (isAbstractClass(sym)) g.add(name)
+            spineAiGlobalsAbstract = g
+        }
+        abstractClasses.addAll(globalsAbstract)
+        collectImportedAbstractClassAliases(sf.statements, spineFileName, abstractClasses)
+        val typeAliases = mutableMapOf<String, TypeNode>()
+        collectTypeAliases(sf.statements, typeAliases)
+        val typeofVars = HashSet<String>()
+        collectTypeofAbstractVars(sf.statements, abstractClasses, typeAliases, typeofVars)
+        spineAiFileBase = abstractClasses
+        spineAiTypeofVars = typeofVars
+    }
+
+    private fun spineAiTeardown() {
+        spineAiActive = false
+        spineAiReachMemo = ByteArray(0)
+        spineAiClassesMemo.clear()
+        spineAiFileBase = emptySet()
+        spineAiTypeofVars = emptySet()
+    }
+
+    /** ENTER dispatch: the legacy NewExpression arm's TS2511 emission,
+     *  verbatim (Identifier callee in the effective abstractClasses or
+     *  typeofAbstractVars set). */
+    private fun spineAiEnterNode(node: Node) {
+        if ((node as NodeBase).kindId != NodeKind.NEW_EXPRESSION) return
+        node as NewExpression
+        val callee = node.expression as? Identifier ?: return
+        if (spineAiStatus(node) != AI_REACHED) return
+        val name = callee.text
+        if (name !in spineAiClassesAt(node) && name !in spineAiTypeofAt(node)) return
+        val start = node.pos
+        val length = expressionTrueEnd(node) - start
+        val (line, character) = getLineAndCharacterOfPosition(spineSource, start)
+        diagnostics.add(Diagnostic(
+            message = "Cannot create an instance of an abstract class.",
+            category = DiagnosticCategory.Error,
+            code = 2511,
+            fileName = spineFileName,
+            line = line,
+            character = character,
+            start = start,
+            length = length,
+        ))
+    }
+
+    /** The effective abstractClasses set at [node]: the innermost enclosing
+     *  statement-list owner's overlay (every reached position sits under such
+     *  a list — the legacy walk applied exactly one overlay per list). */
+    private fun spineAiClassesAt(node: Node): Set<String> {
+        var p: Node? = (node as NodeBase).parent
+        while (p != null) {
+            if (p is SourceFile || p is Block || p is ModuleBlock ||
+                p is CaseClause || p is DefaultClause
+            ) return spineAiClassesFor(p)
+            p = (p as NodeBase).parent
+        }
+        return spineAiFileBase
+    }
+
+    /** Memoized per-list overlay: the legacy checkAbstractInStmts scope step —
+     *  add abstract class names declared in the list, THEN remove names
+     *  shadowed by non-abstract classes (remove wins for a duplicate name). */
+    private fun spineAiClassesFor(owner: Node): Set<String> {
+        val id = (owner as NodeBase).nodeId
+        if (id >= 0) spineAiClassesMemo[id]?.let { return it }
+        val stmts: List<Statement> = when (owner) {
+            is SourceFile -> owner.statements
+            is Block -> owner.statements
+            is ModuleBlock -> owner.statements
+            is CaseClause -> owner.statements
+            is DefaultClause -> owner.statements
+            else -> emptyList()
+        }
+        val parentSet = if (owner is SourceFile) spineAiFileBase else spineAiClassesAt(owner)
+        var hasClassDecl = false
+        for (stmt in stmts) {
+            if (stmt is ClassDeclaration && stmt.name != null) { hasClassDecl = true; break }
+        }
+        val out = if (!hasClassDecl) parentSet else {
+            val s = HashSet(parentSet)
+            for (stmt in stmts) {
+                if (stmt is ClassDeclaration && stmt.name != null &&
+                    ModifierFlag.Abstract in stmt.modifiers
+                ) s.add(stmt.name.text)
+            }
+            for (stmt in stmts) {
+                if (stmt is ClassDeclaration && stmt.name != null &&
+                    ModifierFlag.Abstract !in stmt.modifiers
+                ) s.remove(stmt.name.text)
+            }
+            s
+        }
+        if (id >= 0) spineAiClassesMemo[id] = out
+        return out
+    }
+
+    /** The effective typeofAbstractVars at [anchor]: the file set plus the
+     *  `[A].map(cls => …)` callback-param extensions crossed on the climb,
+     *  folded OUTERMOST-first. A candidate is an arrow/fn-expr that is the
+     *  SINGLE argument of a call whose callee is `<ArrayLiteral>.map`; its
+     *  elementsContainAbstract gate evaluates against the abstractClasses
+     *  overlay AT THE CALL plus the typeof set extended so far (the legacy
+     *  top-down order); a candidate without an Identifier first param took
+     *  the legacy unhandled branch (body walked un-extended) — skipped. */
+    private fun spineAiTypeofAt(anchor: Node): Set<String> {
+        var candidates: ArrayList<CallExpression>? = null
+        var cur: Node = anchor
+        var p: Node? = (anchor as NodeBase).parent
+        while (p != null && p !is SourceFile) {
+            if ((cur is ArrowFunction || cur is FunctionExpression) && p is CallExpression &&
+                p.arguments.size == 1 && p.arguments[0] === cur
+            ) {
+                val callee = p.expression
+                if (callee is PropertyAccessExpression && callee.name.text == "map" &&
+                    callee.expression is ArrayLiteralExpression
+                ) {
+                    (candidates ?: ArrayList<CallExpression>().also { candidates = it }).add(p)
+                }
+            }
+            cur = p
+            p = (p as NodeBase).parent
+        }
+        val cands = candidates ?: return spineAiTypeofVars
+        var tv: Set<String> = spineAiTypeofVars
+        for (i in cands.indices.reversed()) { // climb is innermost-first — fold outermost-first
+            val call = cands[i]
+            val cb = call.arguments[0]
+            val paramName = when (cb) {
+                is ArrowFunction -> (cb.parameters.firstOrNull()?.name as? Identifier)?.text
+                is FunctionExpression -> (cb.parameters.firstOrNull()?.name as? Identifier)?.text
+                else -> null
+            } ?: continue
+            val recv = (call.expression as PropertyAccessExpression).expression as ArrayLiteralExpression
+            val classesAtCall = spineAiClassesAt(call)
+            val hit = recv.elements.any { el ->
+                el is Identifier && (el.text in classesAtCall || el.text in tv)
+            }
+            if (hit) tv = tv + paramName
+        }
+        return tv
+    }
+
+    /** Memoized reach classifier — ascends to the first memoized/terminal
+     *  ancestor, then folds [spineAiEdge] back down (spineFpStatus pattern).
+     *  The SourceFile anchor carries the transient AI_ROOT status (never
+     *  memoized) whose sole edge is `child is Statement`. */
+    private fun spineAiStatus(node: Node): Int {
+        if (node is SourceFile) return AI_ROOT
+        val memo = spineAiReachMemo
+        run {
+            val id = (node as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) {
+                val m = memo[id].toInt()
+                if (m != 0) return m
+            }
+        }
+        val chain = spineAiChain
+        chain.clear()
+        var cur: Node = node
+        val anchor: Node?
+        var anchorStatus = AI_NONE
+        while (true) {
+            chain.add(cur)
+            val parent = (cur as NodeBase).parent
+            if (parent == null) { anchor = null; break } // detached/unindexed
+            if (parent is SourceFile) { anchor = parent; anchorStatus = AI_ROOT; break }
+            val pid = (parent as NodeBase).nodeId
+            val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
+            if (pm != 0) { anchor = parent; anchorStatus = pm; break }
+            cur = parent
+        }
+        var pNode: Node? = anchor
+        var pStatus = anchorStatus
+        var result = AI_NONE
+        for (i in chain.indices.reversed()) {
+            val c = chain[i]
+            result = when {
+                pNode == null -> AI_NONE
+                pStatus == AI_ROOT -> if (c is Statement) AI_REACHED else AI_NONE
+                pStatus == AI_REACHED -> if (spineAiEdge(pNode, c)) AI_REACHED else AI_NONE
+                else -> AI_NONE
+            }
+            val cid = (c as NodeBase).nodeId
+            if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
+            pNode = c
+            pStatus = result
+        }
+        chain.clear()
+        return result
+    }
+
+    /** The deleted recursion's descent edges, verbatim. Unlisted parents are
+     *  the legacy `else -> {}`s (unreached children). */
+    private fun spineAiEdge(parent: Node, child: Node): Boolean = when (parent) {
+        // ---- statements (the deleted checkAbstractInStmt arms) ----
+        is ExpressionStatement -> child === parent.expression
+        is VariableStatement -> child === parent.declarationList
+        is VariableDeclarationList -> child is VariableDeclaration
+        is VariableDeclaration -> child === parent.initializer
+        is ReturnStatement -> child === parent.expression
+        is IfStatement ->
+            child === parent.expression || child === parent.thenStatement ||
+                child === parent.elseStatement
+        is Block -> child is Statement
+        is FunctionDeclaration -> child === parent.body
+        is ClassDeclaration -> when (child) {
+            is MethodDeclaration, is Constructor, is PropertyDeclaration,
+            is GetAccessor, is SetAccessor -> true
+            else -> false
+        }
+        is MethodDeclaration -> child === parent.body
+        is Constructor -> child === parent.body
+        is GetAccessor -> child === parent.body
+        is SetAccessor -> child === parent.body
+        is PropertyDeclaration -> child === parent.initializer
+        is ForStatement -> // an initializer EXPRESSION is NOT walked — only a decl list
+            (child === parent.initializer && child is VariableDeclarationList) ||
+                child === parent.condition || child === parent.incrementor ||
+                child === parent.statement
+        is WhileStatement -> child === parent.expression || child === parent.statement
+        is DoStatement -> child === parent.statement || child === parent.expression
+        is SwitchStatement ->
+            child === parent.expression || child is CaseClause || child is DefaultClause
+        is CaseClause -> child is Statement // NOT the case expression
+        is DefaultClause -> child is Statement
+        is TryStatement ->
+            child === parent.tryBlock || child === parent.finallyBlock || child is CatchClause
+        is CatchClause -> child === parent.block
+        is ThrowStatement -> child === parent.expression
+        is ForInStatement -> child === parent.expression || child === parent.statement
+        is ForOfStatement -> child === parent.expression || child === parent.statement
+        is LabeledStatement -> child === parent.statement
+        is ExportAssignment -> child === parent.expression
+        is ModuleDeclaration -> child === parent.body && child is ModuleBlock
+        is ModuleBlock -> child is Statement
+        // ---- expressions (the deleted checkAbstractInExpr arms) ----
+        is NewExpression -> parent.arguments?.any { it === child } == true // callee NOT descended
+        is BinaryExpression -> child === parent.left || child === parent.right
+        is CallExpression -> child === parent.expression || parent.arguments.any { it === child }
+        is ParenthesizedExpression -> child === parent.expression
+        is ConditionalExpression ->
+            child === parent.condition || child === parent.whenTrue || child === parent.whenFalse
+        is ArrowFunction -> child === parent.body
+        is FunctionExpression -> child === parent.body
+        is ArrayLiteralExpression -> parent.elements.any { it === child }
+        is ObjectLiteralExpression -> child is PropertyAssignment || child is SpreadAssignment
+        is PropertyAssignment -> child === parent.initializer
+        is SpreadAssignment -> child === parent.expression
+        is TemplateExpression -> child is TemplateSpan
+        is TemplateSpan -> child === parent.expression
+        is TaggedTemplateExpression ->
+            child === parent.tag || (child === parent.template && child is TemplateExpression)
+        is AsExpression -> child === parent.expression
+        is TypeAssertionExpression -> child === parent.expression
+        is SatisfiesExpression -> child === parent.expression
+        is PrefixUnaryExpression -> child === parent.operand
+        is PostfixUnaryExpression -> child === parent.operand
+        is PropertyAccessExpression -> child === parent.expression
+        is ElementAccessExpression ->
+            child === parent.expression || child === parent.argumentExpression
+        is SpreadElement -> child === parent.expression
+        is AwaitExpression -> child === parent.expression
+        is YieldExpression -> child === parent.expression
+        is VoidExpression -> child === parent.expression
+        is DeleteExpression -> child === parent.expression
+        is NonNullExpression -> child === parent.expression
+        is TypeOfExpression -> child === parent.expression
+        is CommaListExpression -> parent.elements.any { it === child }
+        is ClassExpression -> when (child) {
+            is MethodDeclaration, is Constructor, is GetAccessor,
+            is SetAccessor, is PropertyDeclaration -> true
+            else -> false
+        }
         else -> false
     }
 
@@ -117056,34 +117412,10 @@ interface DataView {
     }
 
     // -----------------------------------------------------------------------
-    // TS2511: Cannot create an instance of an abstract class
+    // TS2511: Cannot create an instance of an abstract class — ON THE SPINE
+    // since round 627 (M0.4): see spineAiSetup/spineAiEnterNode. The
+    // file-scoped collectors below are its retained per-file setup leaves.
     // -----------------------------------------------------------------------
-
-    private fun checkAbstractClassInstantiation() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            // Collect abstract class names visible at file level
-            val abstractClasses = mutableSetOf<String>()
-            collectAbstractClassNames(result.sourceFile.statements, abstractClasses)
-            // Also check globals for abstract classes from other files
-            for ((name, sym) in globals) {
-                if (isAbstractClass(sym)) abstractClasses.add(name)
-            }
-            // Cross-file: a default/named import bound to an abstract class adds its local
-            // alias name (e.g. `import A from "./a"` where a.ts `export default abstract class`).
-            collectImportedAbstractClassAliases(result.sourceFile.statements, fileName, abstractClasses)
-            // Build type alias map for `typeof X` resolution through aliases.
-            val typeAliases = mutableMapOf<String, TypeNode>()
-            collectTypeAliases(result.sourceFile.statements, typeAliases)
-            // Identify variable/parameter names whose type annotation resolves to "abstract-constructible"
-            // (i.e. typeof X for some abstract X, or a union containing one).
-            val typeofAbstractVars = mutableSetOf<String>()
-            collectTypeofAbstractVars(result.sourceFile.statements, abstractClasses, typeAliases, typeofAbstractVars)
-            checkAbstractInStmts(result.sourceFile.statements, source, fileName, abstractClasses, typeofAbstractVars)
-        }
-    }
 
     /**
      * Adds the local alias name of any default/named import bound to an abstract class to
@@ -117208,237 +117540,6 @@ interface DataView {
             if (stmt is ClassDeclaration && stmt.name != null && ModifierFlag.Abstract in stmt.modifiers) {
                 names.add(stmt.name.text)
             }
-        }
-    }
-
-    private fun checkAbstractInStmts(stmts: List<Statement>, source: String, fileName: String, abstractClasses: MutableSet<String>, typeofAbstractVars: Set<String>) {
-        // Collect abstract class names declared in this block
-        val saved = abstractClasses.toSet()
-        collectAbstractClassNames(stmts, abstractClasses)
-        // Also remove names shadowed by non-abstract classes in this scope
-        for (stmt in stmts) {
-            if (stmt is ClassDeclaration && stmt.name != null && ModifierFlag.Abstract !in stmt.modifiers) {
-                abstractClasses.remove(stmt.name.text)
-            }
-        }
-        for (stmt in stmts) {
-            checkAbstractInStmt(stmt, source, fileName, abstractClasses, typeofAbstractVars)
-        }
-        // Restore scope
-        abstractClasses.clear()
-        abstractClasses.addAll(saved)
-    }
-
-    private fun checkAbstractInStmt(stmt: Statement, source: String, fileName: String, abstractClasses: MutableSet<String>, typeofAbstractVars: Set<String>) {
-        when (stmt) {
-            is ExpressionStatement -> checkAbstractInExpr(stmt.expression, source, fileName, abstractClasses, typeofAbstractVars)
-            is VariableStatement -> {
-                for (d in stmt.declarationList.declarations) {
-                    d.initializer?.let { checkAbstractInExpr(it, source, fileName, abstractClasses, typeofAbstractVars) }
-                }
-            }
-            is ReturnStatement -> stmt.expression?.let { checkAbstractInExpr(it, source, fileName, abstractClasses, typeofAbstractVars) }
-            is IfStatement -> {
-                checkAbstractInExpr(stmt.expression, source, fileName, abstractClasses, typeofAbstractVars)
-                checkAbstractInStmt(stmt.thenStatement, source, fileName, abstractClasses, typeofAbstractVars)
-                stmt.elseStatement?.let { checkAbstractInStmt(it, source, fileName, abstractClasses, typeofAbstractVars) }
-            }
-            is Block -> checkAbstractInStmts(stmt.statements, source, fileName, abstractClasses, typeofAbstractVars)
-            is FunctionDeclaration -> stmt.body?.let { checkAbstractInStmts(it.statements, source, fileName, abstractClasses, typeofAbstractVars) }
-            is ClassDeclaration -> for (m in stmt.members) {
-                when (m) {
-                    is MethodDeclaration -> m.body?.let { checkAbstractInStmts(it.statements, source, fileName, abstractClasses, typeofAbstractVars) }
-                    is Constructor -> m.body?.let { checkAbstractInStmts(it.statements, source, fileName, abstractClasses, typeofAbstractVars) }
-                    is PropertyDeclaration -> m.initializer?.let { checkAbstractInExpr(it, source, fileName, abstractClasses, typeofAbstractVars) }
-                    is GetAccessor -> m.body?.let { checkAbstractInStmts(it.statements, source, fileName, abstractClasses, typeofAbstractVars) }
-                    is SetAccessor -> m.body?.let { checkAbstractInStmts(it.statements, source, fileName, abstractClasses, typeofAbstractVars) }
-                    else -> {}
-                }
-            }
-            is ForStatement -> {
-                (stmt.initializer as? VariableDeclarationList)?.declarations?.forEach { d ->
-                    d.initializer?.let { checkAbstractInExpr(it, source, fileName, abstractClasses, typeofAbstractVars) }
-                }
-                stmt.condition?.let { checkAbstractInExpr(it, source, fileName, abstractClasses, typeofAbstractVars) }
-                stmt.incrementor?.let { checkAbstractInExpr(it, source, fileName, abstractClasses, typeofAbstractVars) }
-                checkAbstractInStmt(stmt.statement, source, fileName, abstractClasses, typeofAbstractVars)
-            }
-            is WhileStatement -> {
-                checkAbstractInExpr(stmt.expression, source, fileName, abstractClasses, typeofAbstractVars)
-                checkAbstractInStmt(stmt.statement, source, fileName, abstractClasses, typeofAbstractVars)
-            }
-            is DoStatement -> {
-                checkAbstractInStmt(stmt.statement, source, fileName, abstractClasses, typeofAbstractVars)
-                checkAbstractInExpr(stmt.expression, source, fileName, abstractClasses, typeofAbstractVars)
-            }
-            is SwitchStatement -> {
-                checkAbstractInExpr(stmt.expression, source, fileName, abstractClasses, typeofAbstractVars)
-                for (c in stmt.caseBlock) {
-                    val clauseStmts = when (c) { is CaseClause -> c.statements; is DefaultClause -> c.statements; else -> emptyList() }
-                    checkAbstractInStmts(clauseStmts, source, fileName, abstractClasses, typeofAbstractVars)
-                }
-            }
-            is TryStatement -> {
-                checkAbstractInStmts(stmt.tryBlock.statements, source, fileName, abstractClasses, typeofAbstractVars)
-                stmt.catchClause?.let { checkAbstractInStmts(it.block.statements, source, fileName, abstractClasses, typeofAbstractVars) }
-                stmt.finallyBlock?.let { checkAbstractInStmts(it.statements, source, fileName, abstractClasses, typeofAbstractVars) }
-            }
-            is ThrowStatement -> stmt.expression?.let { checkAbstractInExpr(it, source, fileName, abstractClasses, typeofAbstractVars) }
-            is ForInStatement -> {
-                checkAbstractInExpr(stmt.expression, source, fileName, abstractClasses, typeofAbstractVars)
-                checkAbstractInStmt(stmt.statement, source, fileName, abstractClasses, typeofAbstractVars)
-            }
-            is ForOfStatement -> {
-                checkAbstractInExpr(stmt.expression, source, fileName, abstractClasses, typeofAbstractVars)
-                checkAbstractInStmt(stmt.statement, source, fileName, abstractClasses, typeofAbstractVars)
-            }
-            is LabeledStatement -> checkAbstractInStmt(stmt.statement, source, fileName, abstractClasses, typeofAbstractVars)
-            is ExportAssignment -> checkAbstractInExpr(stmt.expression, source, fileName, abstractClasses, typeofAbstractVars)
-            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { checkAbstractInStmts(it.statements, source, fileName, abstractClasses, typeofAbstractVars) }
-            else -> {}
-        }
-    }
-
-    private fun checkAbstractInExpr(expr: Expression, source: String, fileName: String, abstractClasses: MutableSet<String>, typeofAbstractVars: Set<String>) {
-        when (expr) {
-            is NewExpression -> {
-                val callee = expr.expression
-                if (callee is Identifier && (callee.text in abstractClasses || callee.text in typeofAbstractVars)) {
-                    val start = expr.pos
-                    val exprEnd = expressionTrueEnd(expr)
-                    val length = exprEnd - start
-                    val (line, character) = getLineAndCharacterOfPosition(source, start)
-                    diagnostics.add(Diagnostic(
-                        message = "Cannot create an instance of an abstract class.",
-                        category = DiagnosticCategory.Error,
-                        code = 2511,
-                        fileName = fileName,
-                        line = line,
-                        character = character,
-                        start = start,
-                        length = length,
-                    ))
-                }
-                for (arg in expr.arguments ?: emptyList()) {
-                    checkAbstractInExpr(arg, source, fileName, abstractClasses, typeofAbstractVars)
-                }
-            }
-            is BinaryExpression -> {
-                // Worklist (not recursion on .left): a deeply-nested binary chain
-                // (binderBinaryExpressionStress's `a+b+c+...`) would StackOverflow a
-                // recursive left/right walk. Flatten iteratively, pushing right-then-left
-                // for left-to-right pre-order, recursing only into non-binary operands.
-                val work = ArrayDeque<Expression>()
-                work.addLast(expr)
-                while (work.isNotEmpty()) {
-                    when (val n = work.removeLast()) {
-                        is BinaryExpression -> { work.addLast(n.right); work.addLast(n.left) }
-                        else -> checkAbstractInExpr(n, source, fileName, abstractClasses, typeofAbstractVars)
-                    }
-                }
-            }
-            is CallExpression -> {
-                // Detect `[A, B, ...].map((cls) => new cls())` pattern: when the receiver is an
-                // ArrayLiteralExpression containing abstract-class identifiers, the callback
-                // parameter inherits "abstract-constructible" state so `new param()` fires TS2511.
-                val callee = expr.expression
-                val handledArrayMap = if (callee is PropertyAccessExpression && callee.name.text == "map") {
-                    val recv = callee.expression
-                    if (recv is ArrayLiteralExpression && expr.arguments.size == 1) {
-                        val elementsContainAbstract = recv.elements.any { el ->
-                            el is Identifier && (el.text in abstractClasses || el.text in typeofAbstractVars)
-                        }
-                        if (elementsContainAbstract) {
-                            val arg = expr.arguments[0]
-                            val paramName = when (arg) {
-                                is ArrowFunction -> (arg.parameters.firstOrNull()?.name as? Identifier)?.text
-                                is FunctionExpression -> (arg.parameters.firstOrNull()?.name as? Identifier)?.text
-                                else -> null
-                            }
-                            val argBody: Node? = when (arg) {
-                                is ArrowFunction -> arg.body
-                                is FunctionExpression -> arg.body
-                                else -> null
-                            }
-                            if (paramName != null && argBody != null) {
-                                val extendedSet = typeofAbstractVars + paramName
-                                when (argBody) {
-                                    is Block -> checkAbstractInStmts(argBody.statements, source, fileName, abstractClasses, extendedSet)
-                                    is Expression -> checkAbstractInExpr(argBody, source, fileName, abstractClasses, extendedSet)
-                                    else -> {}
-                                }
-                                // Recurse into the array literal's elements for any other diagnostics.
-                                for (el in recv.elements) checkAbstractInExpr(el, source, fileName, abstractClasses, typeofAbstractVars)
-                                true
-                            } else false
-                        } else false
-                    } else false
-                } else false
-                if (!handledArrayMap) {
-                    checkAbstractInExpr(expr.expression, source, fileName, abstractClasses, typeofAbstractVars)
-                    for (arg in expr.arguments) checkAbstractInExpr(arg, source, fileName, abstractClasses, typeofAbstractVars)
-                }
-            }
-            is ParenthesizedExpression -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses, typeofAbstractVars)
-            is ConditionalExpression -> {
-                checkAbstractInExpr(expr.condition, source, fileName, abstractClasses, typeofAbstractVars)
-                checkAbstractInExpr(expr.whenTrue, source, fileName, abstractClasses, typeofAbstractVars)
-                checkAbstractInExpr(expr.whenFalse, source, fileName, abstractClasses, typeofAbstractVars)
-            }
-            is ArrowFunction -> expr.body.let {
-                when (it) {
-                    is Block -> checkAbstractInStmts(it.statements, source, fileName, abstractClasses, typeofAbstractVars)
-                    is Expression -> checkAbstractInExpr(it, source, fileName, abstractClasses, typeofAbstractVars)
-                    else -> {}
-                }
-            }
-            is FunctionExpression -> expr.body.let { checkAbstractInStmts(it.statements, source, fileName, abstractClasses, typeofAbstractVars) }
-            is ArrayLiteralExpression -> for (el in expr.elements) checkAbstractInExpr(el, source, fileName, abstractClasses, typeofAbstractVars)
-            is ObjectLiteralExpression -> for (prop in expr.properties) {
-                when (prop) {
-                    is PropertyAssignment -> checkAbstractInExpr(prop.initializer, source, fileName, abstractClasses, typeofAbstractVars)
-                    is SpreadAssignment -> checkAbstractInExpr(prop.expression, source, fileName, abstractClasses, typeofAbstractVars)
-                    else -> {}
-                }
-            }
-            is TemplateExpression -> for (span in expr.templateSpans) {
-                checkAbstractInExpr(span.expression, source, fileName, abstractClasses, typeofAbstractVars)
-            }
-            is TaggedTemplateExpression -> {
-                checkAbstractInExpr(expr.tag, source, fileName, abstractClasses, typeofAbstractVars)
-                if (expr.template is TemplateExpression) {
-                    for (span in (expr.template).templateSpans) {
-                        checkAbstractInExpr(span.expression, source, fileName, abstractClasses, typeofAbstractVars)
-                    }
-                }
-            }
-            is AsExpression -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses, typeofAbstractVars)
-            is TypeAssertionExpression -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses, typeofAbstractVars)
-            is SatisfiesExpression -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses, typeofAbstractVars)
-            is PrefixUnaryExpression -> checkAbstractInExpr(expr.operand, source, fileName, abstractClasses, typeofAbstractVars)
-            is PostfixUnaryExpression -> checkAbstractInExpr(expr.operand, source, fileName, abstractClasses, typeofAbstractVars)
-            is PropertyAccessExpression -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses, typeofAbstractVars)
-            is ElementAccessExpression -> {
-                checkAbstractInExpr(expr.expression, source, fileName, abstractClasses, typeofAbstractVars)
-                checkAbstractInExpr(expr.argumentExpression, source, fileName, abstractClasses, typeofAbstractVars)
-            }
-            is SpreadElement -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses, typeofAbstractVars)
-            is AwaitExpression -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses, typeofAbstractVars)
-            is YieldExpression -> expr.expression?.let { checkAbstractInExpr(it, source, fileName, abstractClasses, typeofAbstractVars) }
-            is VoidExpression -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses, typeofAbstractVars)
-            is DeleteExpression -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses, typeofAbstractVars)
-            is NonNullExpression -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses, typeofAbstractVars)
-            is TypeOfExpression -> checkAbstractInExpr(expr.expression, source, fileName, abstractClasses, typeofAbstractVars)
-            is CommaListExpression -> for (e in expr.elements) checkAbstractInExpr(e, source, fileName, abstractClasses, typeofAbstractVars)
-            is ClassExpression -> for (m in expr.members) when (m) {
-                is MethodDeclaration -> m.body?.let { checkAbstractInStmts(it.statements, source, fileName, abstractClasses, typeofAbstractVars) }
-                is Constructor -> m.body?.let { checkAbstractInStmts(it.statements, source, fileName, abstractClasses, typeofAbstractVars) }
-                is GetAccessor -> m.body?.let { checkAbstractInStmts(it.statements, source, fileName, abstractClasses, typeofAbstractVars) }
-                is SetAccessor -> m.body?.let { checkAbstractInStmts(it.statements, source, fileName, abstractClasses, typeofAbstractVars) }
-                is PropertyDeclaration -> m.initializer?.let { checkAbstractInExpr(it, source, fileName, abstractClasses, typeofAbstractVars) }
-                else -> {}
-            }
-            else -> {}
         }
     }
 
