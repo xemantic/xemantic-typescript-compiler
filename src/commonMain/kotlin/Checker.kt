@@ -3598,6 +3598,46 @@ class Checker(
     /** Reusable ascent buffer for [spineCeStatus]. */
     private val spineCeChain = ArrayList<Node>()
 
+    // (M0.4) round 635: checkProtectedMemberReadAccess (B446 — TS2445/TS2446
+    // protected READ access + the class-method WRITE check) on the spine.
+    // Reach is the memoized MULTI-STATE classifier [spinePmrStatus] over
+    // [spinePmrEdge] (the deleted pmrScanContainer/pmrWalkStmt/pmrWalkExpr
+    // arms verbatim, FROZEN — CONTAINER_FILE/CONTAINER_NS carry the container
+    // scan, STMT/EXPR the walker); the ORDER-DEPENDENT downward state (the
+    // statement-mutated local→class vars map + this/lexical class + the
+    // in-class-method write gate) is PUSH-maintained: frames at
+    // processed-fn-like / nested-fn boundaries and top-level
+    // ExpressionStatements (popped at owner leaves), per-declaration
+    // recordings at VariableDeclaration LEAVES (after the initializer
+    // subtree — the legacy walk-then-record order). No ambient sandwich —
+    // the pmr helpers resolve via the passed locals + the node-keyed
+    // [lookupPerFileForNode] only (no type caches touched). Fields PRE-init.
+    private var spinePmrActive = false
+    private var spinePmrResult: BinderResult? = null
+    /** Per-file nodeId memo for [spinePmrStatus] — 0 unknown, else PMR_*. */
+    private var spinePmrReachMemo = ByteArray(0)
+    /** Reusable ascent buffer for [spinePmrStatus]. */
+    private val spinePmrChain = ArrayList<Node>()
+    /** The file-level topVars map (top-level class-typed vars) — installed at
+     *  top-level ExpressionStatement enters; the SAME instance across them (a
+     *  recording inside a top-level IIFE body mutates it for later top-level
+     *  statements — the legacy by-reference behavior). */
+    private var spinePmrTopVars: HashMap<String, ClassDeclaration> = HashMap()
+    /** The active local→class receiver map (the legacy walkers' `vars`). */
+    private var spinePmrVars: HashMap<String, ClassDeclaration> = HashMap()
+    /** What `this` resolves to in the current walk region (the legacy
+     *  thisClass/enclosing pair — always threaded equal). */
+    private var spinePmrThis: ClassDeclaration? = null
+    /** Boundary frame — saved state restored at the owner node's leave. */
+    private class PmrFrame(
+        val owner: Node,
+        val savedVars: HashMap<String, ClassDeclaration>,
+        val savedThis: ClassDeclaration?,
+        val savedIcm: Boolean,
+        val savedLex: ClassDeclaration?,
+    )
+    private val spinePmrFrames = ArrayList<PmrFrame>()
+
     // ── INV.4(d) walker 6 (round 535): checkArgumentCounts on the spine ────
     // The function-call arity pass (TS2554/TS2555/TS2575) — the recursion
     // walkers (checkArgCountInStatements/-InStatement/-InExpr(Core)) are
@@ -5127,17 +5167,17 @@ class Checker(
         // (the TypeAssertion callback runs after the round-630 co leaves;
         // the AsExpression emitters at their own anchors); the legacy
         // driver + the inNullCastOverlapPass flag are deleted.
-        // 21b''''' (M0.4 slot-move pre-gate, round 634):
-        // checkProtectedMemberReadAccess (B446 — TS2445/TS2446 protected
-        // READ access, container-scan + downward local-var maps) moved
-        // intact from its 21b'''' slot ahead of its spine migration. No
+        // 21b''''' (M0.4, round 635): checkProtectedMemberReadAccess (B446 —
+        // TS2445/TS2446 protected READ access + the class-method WRITE
+        // check) is ON THE SPINE — see spinePmrEnterNode/spinePmrStatus/
+        // spinePmrEdge; the legacy driver + pmrScanContainer/
+        // pmrProcessFunctionLike/pmrProcessNestedFn/pmrWalkStmt/pmrWalkExpr
+        // are deleted (pmrResolveClass/pmrFindProtected*DeclaringClass/
+        // pmrLocalClass/pmrCheckAccess survive as anchor-called leaves). No
         // TS2445/TS2446 dedup scans exist (checkDivergentAccessorVisibility
-        // and B377 emit the codes but are GATE-disjoint — accessor pairs /
-        // free-function writes — and never scan the list); pmrInClassMethod/
-        // pmrLexicalClass are pass-local save/restore state; the hoist
-        // crosses ~116 passes — resolution first-touch order is the risk
-        // class the corpus + listAll ×8 gates decide.
-        pass("checkProtectedMemberReadAccess") { checkProtectedMemberReadAccess() }
+        // and B377 are gate-disjoint and never scan the list); the legacy
+        // driver iterated binderResults → the spine's partition view, gated
+        // `--partitionCheck 2` EQUIVALENT ×8 (the round-633 rule).
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -5546,8 +5586,9 @@ class Checker(
         // param types `this` as a class T, when the member's declaring class is not in T's
         // hierarchy (the protected-write companion to B374's private check).
         pass("checkProtectedWriteViaThisParam") { checkProtectedWriteViaThisParam() }
-        // 21b''''. checkProtectedMemberReadAccess moved to the post-spine slot —
-        // see the pass("checkSpine") site (M0.4 slot-move pre-gate, round 634).
+        // 21b''''. checkProtectedMemberReadAccess migrated to the spine (M0.4
+        // round 635, after the round-634 slot-move pre-gate) — see the
+        // pass("checkSpine") site.
         // 21b''''a. mixin private-conflict intersection reduced to `never` (TS2339, #13830)
         pass("checkMixinPrivateConflictReducedToNever") { checkMixinPrivateConflictReducedToNever() }
         // 21b''''b. Protected-member MISMATCH in class-var assignment (TS2322)
@@ -21140,6 +21181,7 @@ class Checker(
                 spineCoSetup(result)
                 spineB94Setup(result)
                 spineCeSetup(result)
+                spinePmrSetup(result)
                 spineUResAuditActive = unresolvedAuditEnabled && spineUResActive
                 try {
                     spineWalkFile(sf)
@@ -21170,6 +21212,7 @@ class Checker(
                     spineCoTeardown()
                     spineB94Teardown()
                     spineCeTeardown()
+                    spinePmrTeardown()
                 }
                 spineResolveDeferredIterationChecks()
                 // (M0.4) round 629: the flow-graph definite-assignment pass
@@ -21375,6 +21418,11 @@ class Checker(
         // active only in files DECLARING a namespace-reachable const enum;
         // no frames/leave hook, no ambient sandwich.
         if (spineCeActive) spineCeEnterNode(node)
+        // (M0.4) round 635: the protected-member-read anchors
+        // (PropertyAccessExpression reads + `=`-LHS write checks) and the
+        // push-based boundary frames — active in every non-dts/non-js file;
+        // no ambient sandwich.
+        if (spinePmrActive) spinePmrEnterNode(node)
         // INV.4(d) walker 7: the use-before-declaration pass — the per-list
         // ForwardRefs anchor + loop-header self-ref checks.
         if (spineUbdActive) spineUbdEnterNode(node)
@@ -21611,6 +21659,9 @@ class Checker(
         // OWN spine emissions (the ures family fires at the annotation
         // node's enter, i.e. after the fn's enter but before its leave).
         if (spineIrActive) spineIrLeaveNode(node)
+        // (M0.4) round 635: the protected-member-read pass's frame pops +
+        // per-declaration vars recordings (VariableDeclaration leaves).
+        if (spinePmrActive) spinePmrLeaveNode(node)
     }
 
     // ── INV.4(c)(i) spine-maintained lexical scope state ───────────────────
@@ -47411,6 +47462,19 @@ class Checker(
         private const val CE_NONE = 2
         private const val CE_ROOT = 3
 
+        // (M0.4) round 635: spinePmrStatus states (the
+        // checkProtectedMemberReadAccess migration). CONTAINER_FILE/
+        // CONTAINER_NS = the pmrScanContainer positions (split because only
+        // FILE-level ExpressionStatements are walked with topVars); STMT/EXPR
+        // = pmrWalkStmt/pmrWalkExpr positions; ROOT = the transient
+        // SourceFile anchor.
+        private const val PMR_NONE = 1
+        private const val PMR_CONTAINER_FILE = 2
+        private const val PMR_CONTAINER_NS = 3
+        private const val PMR_STMT = 4
+        private const val PMR_EXPR = 5
+        private const val PMR_ROOT = 6
+
         private const val OS_NONE = 1
         private const val OS_ROOT = 2
         private const val OS_STMT = 3
@@ -58498,12 +58562,15 @@ interface DataView {
      *     class '<enclosing>'. This is an instance of class '<recv>'."
      * Receiver class is resolved AST-only: `this` → enclosing, a param/local typed as a
      * concrete non-generic class, `new C()`, or `this.prop` of a class-typed member.
-     * This is a dedicated pass (NOT an un-gating of the heavily-gated property-access
-     * walker). FP firewall: fires ONLY when the receiver resolves to a concrete class
+     * FP firewall: fires ONLY when the receiver resolves to a concrete class
      * AND the member is found protected on its hierarchy (a public override stops the
      * search → no error); static members, generic-instantiated receivers, accessor-only
      * shapes with no protected decl, and writes (owned by B377) are excluded. Reads of a
      * genuinely-protected member from outside the hierarchy are ALWAYS errors.
+     * (M0.4) round 635: ON THE SPINE — the container scan / walkers are the
+     * spinePmrStatus/spinePmrEdge reach classifier, the downward state is the
+     * spinePmr frame stack, and the emissions fire from spinePmrEnterNode;
+     * the two fields below are the frame-maintained state registers.
      */
     // True while walking a CLASS METHOD body (not a free function / nested function expr):
     // gates the protected-WRITE check (`obj.m = …`) so it fires for class-method writes
@@ -58514,66 +58581,6 @@ interface DataView {
     // the lexical enclosing class FIRST, then falls back to the `this:`-parameter class — so
     // a method `foo(this: A)` declared in class B can still access B's protected members.
     private var pmrLexicalClass: ClassDeclaration? = null
-
-    private fun checkProtectedMemberReadAccess() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
-            val statements = result.sourceFile.statements
-            // Top-level reads of a protected member from OUTSIDE any class (`c1.x;`,
-            // `C1.sx;`) — pmrScanContainer doesn't walk top-level ExpressionStatements.
-            // Resolve top-level class-typed vars (`declare var c1: C1`) so `c1.x` finds C1.
-            val topVars = HashMap<String, ClassDeclaration>()
-            for (s in statements) if (s is VariableStatement) for (d in s.declarationList.declarations) {
-                val nm = (d.name as? Identifier)?.text ?: continue
-                val annotated = pmrResolveClass(d.type, null, result.locals)
-                if (annotated != null) { topVars[nm] = annotated; continue }
-                // An INFERRED `const a = new A()` types `a` as A's instance — resolve the
-                // constructor identifier to its ClassDeclaration so `a.protectedMember` is
-                // checked (the annotated path above misses this; a mixin-result `new AB()`
-                // whose callee is a const, not a class, resolves to null → left to its own walker).
-                if (d.type == null) {
-                    val ne = d.initializer as? NewExpression
-                    val ctorIdent = ne?.expression as? Identifier
-                    if (ctorIdent != null) {
-                        // INV.3(c)(iii): node-keyed merged fallback (see pwResolveClass).
-                        ((result.locals.get(ctorIdent.text) ?: lookupPerFileForNode(ctorIdent, ctorIdent.text))
-                            ?.declarations?.firstOrNull { it is ClassDeclaration } as? ClassDeclaration)
-                            ?.let { topVars[nm] = it }
-                    }
-                }
-            }
-            for (s in statements) {
-                pmrScanContainer(s, null, result.sourceFile.text, fileName, result.locals)
-                if (s is ExpressionStatement) {
-                    pmrInClassMethod = false
-                    pmrLexicalClass = null
-                    pmrWalkExpr(s.expression, null, null, topVars, result.sourceFile.text, fileName, result.locals)
-                }
-            }
-        }
-    }
-
-    private fun pmrScanContainer(s: Statement, lexicalClass: ClassDeclaration?, source: String, fileName: String, locals: SymbolTable?) {
-        when (s) {
-            is FunctionDeclaration -> pmrProcessFunctionLike(s.parameters, s.typeParameters, s.body?.statements, null, source, fileName, locals)
-            is VariableStatement -> for (d in s.declarationList.declarations) {
-                (d.initializer as? FunctionExpression)?.let { pmrProcessFunctionLike(it.parameters, it.typeParameters, it.body.statements, null, source, fileName, locals) }
-                (d.initializer as? ArrowFunction)?.let { af -> (af.body as? Block)?.let { pmrProcessFunctionLike(af.parameters, af.typeParameters, it.statements, null, source, fileName, locals) } }
-            }
-            is ClassDeclaration -> for (m in s.members) {
-                when (m) {
-                    is MethodDeclaration -> pmrProcessFunctionLike(m.parameters, m.typeParameters, m.body?.statements, s, source, fileName, locals, lexical = true)
-                    is GetAccessor -> pmrProcessFunctionLike(m.parameters, null, m.body?.statements, s, source, fileName, locals, lexical = true)
-                    is SetAccessor -> pmrProcessFunctionLike(m.parameters, null, m.body?.statements, s, source, fileName, locals, lexical = true)
-                    is Constructor -> pmrProcessFunctionLike(m.parameters, null, m.body?.statements, s, source, fileName, locals, lexical = true)
-                    else -> {}
-                }
-            }
-            is ModuleDeclaration -> (s.body as? ModuleBlock)?.let { for (st in it.statements) pmrScanContainer(st, lexicalClass, source, fileName, locals) }
-            else -> {}
-        }
-    }
 
     /** Resolve a `this:` type node (or a heritage base) to a concrete non-generic class;
      *  a `this: T` where T is a type param resolves through its constraint. */
@@ -58653,81 +58660,6 @@ interface DataView {
         return null
     }
 
-    private fun pmrProcessFunctionLike(
-        params: List<Parameter>, fnTps: List<TypeParameter>?, body: List<Statement>?,
-        lexicalClass: ClassDeclaration?, source: String, fileName: String, locals: SymbolTable?,
-        lexical: Boolean = false,
-    ) {
-        if (body == null) return
-        // The class governing `this` for protected access: a `this:` param overrides the
-        // lexical class; a free function with no usable `this:` has none.
-        val thisType = ptpOwnThisType(params)
-        val thisClass = if (thisType != null) pmrResolveClass(thisType, fnTps, locals, 0) else lexicalClass
-        val varClasses = HashMap<String, ClassDeclaration>()
-        for (p in params) {
-            val pn = (p.name as? Identifier)?.text ?: continue
-            if (pn == "this") continue
-            pmrResolveClass(p.type, fnTps, locals)?.let { varClasses[pn] = it }
-        }
-        val saved = pmrInClassMethod
-        val savedLex = pmrLexicalClass
-        pmrInClassMethod = lexical
-        pmrLexicalClass = lexicalClass
-        try {
-            for (st in body) pmrWalkStmt(st, thisClass, thisClass, varClasses, source, fileName, locals)
-        } finally {
-            pmrInClassMethod = saved
-            pmrLexicalClass = savedLex
-        }
-    }
-
-    /** thisClass = what `this` resolves to; enclosing = same (the protected-access governor). */
-    private fun pmrWalkStmt(s: Statement, thisClass: ClassDeclaration?, enclosing: ClassDeclaration?, vars: HashMap<String, ClassDeclaration>, source: String, fileName: String, locals: SymbolTable?) {
-        when (s) {
-            is VariableStatement -> for (d in s.declarationList.declarations) {
-                d.initializer?.let { pmrWalkExpr(it, thisClass, enclosing, vars, source, fileName, locals) }
-                val nm = (d.name as? Identifier)?.text
-                if (nm != null) pmrLocalClass(d.initializer, thisClass, vars, locals)?.let { vars[nm] = it }
-            }
-            is ExpressionStatement -> pmrWalkExpr(s.expression, thisClass, enclosing, vars, source, fileName, locals)
-            is ReturnStatement -> s.expression?.let { pmrWalkExpr(it, thisClass, enclosing, vars, source, fileName, locals) }
-            is ThrowStatement -> s.expression?.let { pmrWalkExpr(it, thisClass, enclosing, vars, source, fileName, locals) }
-            is Block -> for (st in s.statements) pmrWalkStmt(st, thisClass, enclosing, vars, source, fileName, locals)
-            is IfStatement -> { pmrWalkExpr(s.expression, thisClass, enclosing, vars, source, fileName, locals); pmrWalkStmt(s.thenStatement, thisClass, enclosing, vars, source, fileName, locals); s.elseStatement?.let { pmrWalkStmt(it, thisClass, enclosing, vars, source, fileName, locals) } }
-            is ForStatement -> { (s.initializer as? Expression)?.let { pmrWalkExpr(it, thisClass, enclosing, vars, source, fileName, locals) }; s.condition?.let { pmrWalkExpr(it, thisClass, enclosing, vars, source, fileName, locals) }; pmrWalkStmt(s.statement, thisClass, enclosing, vars, source, fileName, locals) }
-            is ForInStatement -> pmrWalkStmt(s.statement, thisClass, enclosing, vars, source, fileName, locals)
-            is ForOfStatement -> pmrWalkStmt(s.statement, thisClass, enclosing, vars, source, fileName, locals)
-            is WhileStatement -> { pmrWalkExpr(s.expression, thisClass, enclosing, vars, source, fileName, locals); pmrWalkStmt(s.statement, thisClass, enclosing, vars, source, fileName, locals) }
-            is FunctionDeclaration -> pmrProcessNestedFn(s.parameters, s.typeParameters, s.body?.statements, vars, source, fileName, locals)
-            else -> {}
-        }
-    }
-
-    /** A nested `function(this: T){}` resets `this`; carries the captured local→class map. */
-    private fun pmrProcessNestedFn(params: List<Parameter>, fnTps: List<TypeParameter>?, body: List<Statement>?, outerVars: Map<String, ClassDeclaration>, source: String, fileName: String, locals: SymbolTable?) {
-        if (body == null) return
-        val thisType = ptpOwnThisType(params)
-        val thisClass = if (thisType != null) pmrResolveClass(thisType, fnTps, locals, 0) else null
-        val vars = HashMap(outerVars)
-        for (p in params) {
-            val pn = (p.name as? Identifier)?.text ?: continue
-            if (pn == "this") continue
-            pmrResolveClass(p.type, fnTps, locals)?.let { vars[pn] = it }
-        }
-        // A nested function expression rebinds `this` and is not a lexical class method —
-        // suppress the protected-write check inside it (conservative; avoids B377 overlap).
-        val saved = pmrInClassMethod
-        val savedLex = pmrLexicalClass
-        pmrInClassMethod = false
-        pmrLexicalClass = null
-        try {
-            for (st in body) pmrWalkStmt(st, thisClass, thisClass, vars, source, fileName, locals)
-        } finally {
-            pmrInClassMethod = saved
-            pmrLexicalClass = savedLex
-        }
-    }
-
     private fun pmrLocalClass(init: Expression?, thisClass: ClassDeclaration?, vars: Map<String, ClassDeclaration>, locals: SymbolTable?): ClassDeclaration? {
         return when (init) {
             is NewExpression -> ((init.expression as? Identifier)?.text)?.let { pmrResolveClass(TypeReference(typeName = Identifier(it)), null, locals) }
@@ -58740,40 +58672,6 @@ interface DataView {
                 } else null
             }
             else -> null
-        }
-    }
-
-    private fun pmrWalkExpr(e: Expression, thisClass: ClassDeclaration?, enclosing: ClassDeclaration?, vars: HashMap<String, ClassDeclaration>, source: String, fileName: String, locals: SymbolTable?) {
-        when (e) {
-            is PropertyAccessExpression -> {
-                // Skip the LHS of a write (`obj.member = …`) — owned by B377 / write paths.
-                pmrCheckAccess(e, thisClass, enclosing, vars, source, fileName, locals)
-                pmrWalkExpr(e.expression, thisClass, enclosing, vars, source, fileName, locals)
-            }
-            is CallExpression -> { pmrWalkExpr(e.expression, thisClass, enclosing, vars, source, fileName, locals); for (a in e.arguments) pmrWalkExpr(a, thisClass, enclosing, vars, source, fileName, locals) }
-            is BinaryExpression -> {
-                if (e.operator == SyntaxKind.Equals && e.left is PropertyAccessExpression) {
-                    // Write LHS `obj.m = …`: inside a CLASS METHOD, check protected accessibility
-                    // here (B377 owns free-function writes, the standard read path skips writes).
-                    if (pmrInClassMethod) pmrCheckAccess(e.left, thisClass, enclosing, vars, source, fileName, locals)
-                } else {
-                    pmrWalkExpr(e.left, thisClass, enclosing, vars, source, fileName, locals)
-                }
-                pmrWalkExpr(e.right, thisClass, enclosing, vars, source, fileName, locals)
-            }
-            is ElementAccessExpression -> { pmrWalkExpr(e.expression, thisClass, enclosing, vars, source, fileName, locals); pmrWalkExpr(e.argumentExpression, thisClass, enclosing, vars, source, fileName, locals) }
-            is ParenthesizedExpression -> pmrWalkExpr(e.expression, thisClass, enclosing, vars, source, fileName, locals)
-            is PrefixUnaryExpression -> pmrWalkExpr(e.operand, thisClass, enclosing, vars, source, fileName, locals)
-            is PostfixUnaryExpression -> pmrWalkExpr(e.operand, thisClass, enclosing, vars, source, fileName, locals)
-            is ConditionalExpression -> { pmrWalkExpr(e.condition, thisClass, enclosing, vars, source, fileName, locals); pmrWalkExpr(e.whenTrue, thisClass, enclosing, vars, source, fileName, locals); pmrWalkExpr(e.whenFalse, thisClass, enclosing, vars, source, fileName, locals) }
-            is AwaitExpression -> pmrWalkExpr(e.expression, thisClass, enclosing, vars, source, fileName, locals)
-            is NonNullExpression -> pmrWalkExpr(e.expression, thisClass, enclosing, vars, source, fileName, locals)
-            is AsExpression -> pmrWalkExpr(e.expression, thisClass, enclosing, vars, source, fileName, locals)
-            is TemplateExpression -> for (sp in e.templateSpans) pmrWalkExpr(sp.expression, thisClass, enclosing, vars, source, fileName, locals)
-            // Arrow inherits `this`; nested function expression resets it.
-            is ArrowFunction -> (e.body as? Expression)?.let { pmrWalkExpr(it, thisClass, enclosing, vars, source, fileName, locals) } ?: (e.body as? Block)?.statements?.forEach { pmrWalkStmt(it, thisClass, enclosing, vars, source, fileName, locals) }
-            is FunctionExpression -> pmrProcessNestedFn(e.parameters, e.typeParameters, e.body.statements, vars, source, fileName, locals)
-            else -> {}
         }
     }
 
@@ -63162,6 +63060,383 @@ interface DataView {
         is ShorthandPropertyAssignment -> child === parent.objectAssignmentInitializer
         is SpreadAssignment -> child === parent.expression
         else -> false
+    }
+
+    // ── (M0.4) round 635: checkProtectedMemberReadAccess on the spine ──────
+
+    private fun spinePmrSetup(result: BinderResult) {
+        spinePmrActive = false
+        spinePmrResult = null
+        spinePmrReachMemo = ByteArray(0)
+        spinePmrFrames.clear()
+        spinePmrVars = HashMap()
+        spinePmrThis = null
+        pmrInClassMethod = false
+        pmrLexicalClass = null
+        if (spineIsDts || spineIsJsLike) return
+        spinePmrActive = true
+        spinePmrResult = result
+        val sf = result.sourceFile
+        spinePmrReachMemo = if (sf.nodeCount > 0) ByteArray(sf.nodeCount) else ByteArray(0)
+        // The topVars prepass (verbatim legacy): top-level class-typed vars
+        // (`declare var c1: C1`) — annotation-resolved, or `new C()`-inferred
+        // for an unannotated decl (a mixin-result `new AB()` whose callee is
+        // a const, not a class, resolves to null → left to its own walker).
+        val topVars = HashMap<String, ClassDeclaration>()
+        for (s in sf.statements) if (s is VariableStatement) for (d in s.declarationList.declarations) {
+            val nm = (d.name as? Identifier)?.text ?: continue
+            val annotated = pmrResolveClass(d.type, null, result.locals)
+            if (annotated != null) { topVars[nm] = annotated; continue }
+            if (d.type == null) {
+                val ne = d.initializer as? NewExpression
+                val ctorIdent = ne?.expression as? Identifier
+                if (ctorIdent != null) {
+                    // INV.3(c)(iii): node-keyed merged fallback (see pwResolveClass).
+                    ((result.locals.get(ctorIdent.text) ?: lookupPerFileForNode(ctorIdent, ctorIdent.text))
+                        ?.declarations?.firstOrNull { it is ClassDeclaration } as? ClassDeclaration)
+                        ?.let { topVars[nm] = it }
+                }
+            }
+        }
+        spinePmrTopVars = topVars
+    }
+
+    private fun spinePmrTeardown() {
+        spinePmrActive = false
+        spinePmrResult = null
+        spinePmrReachMemo = ByteArray(0)
+        spinePmrFrames.clear()
+        spinePmrTopVars = HashMap()
+        spinePmrVars = HashMap()
+        spinePmrThis = null
+    }
+
+    /**
+     * ENTER dispatch: boundary frames at processed fn-likes (fresh vars from
+     * params — the legacy pmrProcessFunctionLike), nested fn boundaries
+     * (COPIED vars — pmrProcessNestedFn), and top-level ExpressionStatements
+     * (the topVars install); the TS2445/TS2446 read check at reached
+     * PropertyAccessExpression enters; the class-method WRITE check at
+     * BinaryExpression `=` enters with a PropertyAccess LHS (whose subtree is
+     * never read-walked — the legacy write-skip). A bodyless fn-like gets no
+     * frame and no resolution calls (the legacy `body == null` early return);
+     * an EXPR-position arrow inherits everything (no frame).
+     */
+    private fun spinePmrEnterNode(node: Node) {
+        when ((node as NodeBase).kindId) {
+            NodeKind.FUNCTION_DECLARATION -> {
+                node as FunctionDeclaration
+                if (node.body == null) return
+                when (spinePmrStatus(node)) {
+                    PMR_CONTAINER_FILE, PMR_CONTAINER_NS ->
+                        spinePmrPushProcessed(node, node.parameters, node.typeParameters, lexicalClass = null)
+                    PMR_STMT -> spinePmrPushNested(node, node.parameters, node.typeParameters)
+                }
+            }
+            NodeKind.FUNCTION_EXPRESSION -> {
+                node as FunctionExpression
+                when (spinePmrStatus(node)) {
+                    PMR_CONTAINER_FILE, PMR_CONTAINER_NS ->
+                        spinePmrPushProcessed(node, node.parameters, node.typeParameters, lexicalClass = null)
+                    PMR_EXPR -> spinePmrPushNested(node, node.parameters, node.typeParameters)
+                }
+            }
+            NodeKind.ARROW_FUNCTION -> {
+                node as ArrowFunction
+                // Container var-init arrows: Block-bodied only (the legacy
+                // `(af.body as? Block)` gate). EXPR-position arrows inherit.
+                if (node.body !is Block) return
+                when (spinePmrStatus(node)) {
+                    PMR_CONTAINER_FILE, PMR_CONTAINER_NS ->
+                        spinePmrPushProcessed(node, node.parameters, node.typeParameters, lexicalClass = null)
+                }
+            }
+            NodeKind.METHOD_DECLARATION -> {
+                node as MethodDeclaration
+                if (node.body == null) return
+                val st = spinePmrStatus(node)
+                if (st == PMR_CONTAINER_FILE || st == PMR_CONTAINER_NS) {
+                    spinePmrPushProcessed(node, node.parameters, node.typeParameters,
+                        lexicalClass = node.parent as? ClassDeclaration)
+                }
+            }
+            NodeKind.GET_ACCESSOR -> {
+                node as GetAccessor
+                if (node.body == null) return
+                val st = spinePmrStatus(node)
+                if (st == PMR_CONTAINER_FILE || st == PMR_CONTAINER_NS) {
+                    spinePmrPushProcessed(node, node.parameters, null,
+                        lexicalClass = node.parent as? ClassDeclaration)
+                }
+            }
+            NodeKind.SET_ACCESSOR -> {
+                node as SetAccessor
+                if (node.body == null) return
+                val st = spinePmrStatus(node)
+                if (st == PMR_CONTAINER_FILE || st == PMR_CONTAINER_NS) {
+                    spinePmrPushProcessed(node, node.parameters, null,
+                        lexicalClass = node.parent as? ClassDeclaration)
+                }
+            }
+            NodeKind.CONSTRUCTOR -> {
+                node as Constructor
+                if (node.body == null) return
+                val st = spinePmrStatus(node)
+                if (st == PMR_CONTAINER_FILE || st == PMR_CONTAINER_NS) {
+                    spinePmrPushProcessed(node, node.parameters, null,
+                        lexicalClass = node.parent as? ClassDeclaration)
+                }
+            }
+            NodeKind.EXPRESSION_STATEMENT -> {
+                node as ExpressionStatement
+                if (spinePmrStatus(node) == PMR_CONTAINER_FILE) {
+                    // The legacy driver's top-level walk: topVars installed
+                    // (the SAME instance across statements), this/lexical/
+                    // write-gate cleared.
+                    spinePmrFrames.add(PmrFrame(node, spinePmrVars, spinePmrThis, pmrInClassMethod, pmrLexicalClass))
+                    spinePmrVars = spinePmrTopVars
+                    spinePmrThis = null
+                    pmrInClassMethod = false
+                    pmrLexicalClass = null
+                }
+            }
+            NodeKind.PROPERTY_ACCESS_EXPRESSION -> {
+                node as PropertyAccessExpression
+                if (spinePmrStatus(node) == PMR_EXPR) {
+                    pmrCheckAccess(node, spinePmrThis, spinePmrThis, spinePmrVars,
+                        spineSource, spineFileName, spinePmrResult?.locals)
+                }
+            }
+            NodeKind.BINARY_EXPRESSION -> {
+                node as BinaryExpression
+                val lhs = node.left
+                if (node.operator == SyntaxKind.Equals && lhs is PropertyAccessExpression &&
+                    pmrInClassMethod && spinePmrStatus(node) == PMR_EXPR
+                ) {
+                    pmrCheckAccess(lhs, spinePmrThis, spinePmrThis, spinePmrVars,
+                        spineSource, spineFileName, spinePmrResult?.locals)
+                }
+            }
+            else -> {}
+        }
+    }
+
+    /**
+     * LEAVE dispatch: frame pops at boundary owners; the legacy
+     * walk-then-record per-declaration recording at VariableDeclaration
+     * leaves (STMT positions only — container-level declarations never
+     * record; the initializer subtree has already been walked).
+     */
+    private fun spinePmrLeaveNode(node: Node) {
+        val frames = spinePmrFrames
+        if (frames.isNotEmpty() && frames[frames.size - 1].owner === node) {
+            val f = frames.removeAt(frames.size - 1)
+            spinePmrVars = f.savedVars
+            spinePmrThis = f.savedThis
+            pmrInClassMethod = f.savedIcm
+            pmrLexicalClass = f.savedLex
+            return
+        }
+        if ((node as NodeBase).kindId == NodeKind.VARIABLE_DECLARATION) {
+            node as VariableDeclaration
+            if (spinePmrStatus(node) != PMR_STMT) return
+            val nm = (node.name as? Identifier)?.text ?: return
+            pmrLocalClass(node.initializer, spinePmrThis, spinePmrVars, spinePmrResult?.locals)
+                ?.let { spinePmrVars[nm] = it }
+        }
+    }
+
+    /** The legacy pmrProcessFunctionLike, framed: fresh vars from the params,
+     *  `this` from a `this:` param (constraint-resolved) else the lexical
+     *  class; the write gate = "is a class member". */
+    private fun spinePmrPushProcessed(
+        owner: Node, params: List<Parameter>, fnTps: List<TypeParameter>?,
+        lexicalClass: ClassDeclaration?,
+    ) {
+        val locals = spinePmrResult?.locals
+        val thisType = ptpOwnThisType(params)
+        val thisClass = if (thisType != null) pmrResolveClass(thisType, fnTps, locals, 0) else lexicalClass
+        val varClasses = HashMap<String, ClassDeclaration>()
+        for (p in params) {
+            val pn = (p.name as? Identifier)?.text ?: continue
+            if (pn == "this") continue
+            pmrResolveClass(p.type, fnTps, locals)?.let { varClasses[pn] = it }
+        }
+        spinePmrFrames.add(PmrFrame(owner, spinePmrVars, spinePmrThis, pmrInClassMethod, pmrLexicalClass))
+        spinePmrVars = varClasses
+        spinePmrThis = thisClass
+        pmrInClassMethod = lexicalClass != null
+        pmrLexicalClass = lexicalClass
+    }
+
+    /** The legacy pmrProcessNestedFn, framed: vars COPIED from the enclosing
+     *  region + own params; `this` from an own `this:` param else null; the
+     *  write gate and lexical class RESET (a nested function expression
+     *  rebinds `this` and is not a lexical class method — conservative,
+     *  avoids B377 overlap). */
+    private fun spinePmrPushNested(owner: Node, params: List<Parameter>, fnTps: List<TypeParameter>?) {
+        val locals = spinePmrResult?.locals
+        val thisType = ptpOwnThisType(params)
+        val thisClass = if (thisType != null) pmrResolveClass(thisType, fnTps, locals, 0) else null
+        val vars = HashMap(spinePmrVars)
+        for (p in params) {
+            val pn = (p.name as? Identifier)?.text ?: continue
+            if (pn == "this") continue
+            pmrResolveClass(p.type, fnTps, locals)?.let { vars[pn] = it }
+        }
+        spinePmrFrames.add(PmrFrame(owner, spinePmrVars, spinePmrThis, pmrInClassMethod, pmrLexicalClass))
+        spinePmrVars = vars
+        spinePmrThis = thisClass
+        pmrInClassMethod = false
+        pmrLexicalClass = null
+    }
+
+    /** Memoized reach classifier — ascends to the first memoized/terminal
+     *  ancestor, then folds [spinePmrEdge] back down (the spineCeStatus
+     *  pattern, multi-state). The SourceFile anchor carries the transient
+     *  PMR_ROOT status whose sole edge is `child is Statement` →
+     *  PMR_CONTAINER_FILE. */
+    private fun spinePmrStatus(node: Node): Int {
+        if (node is SourceFile) return PMR_ROOT
+        val memo = spinePmrReachMemo
+        run {
+            val id = (node as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) {
+                val m = memo[id].toInt()
+                if (m != 0) return m
+            }
+        }
+        val chain = spinePmrChain
+        chain.clear()
+        var cur: Node = node
+        val anchor: Node?
+        var anchorStatus = PMR_NONE
+        while (true) {
+            chain.add(cur)
+            val parent = (cur as NodeBase).parent
+            if (parent == null) { anchor = null; break } // detached/unindexed
+            if (parent is SourceFile) { anchor = parent; anchorStatus = PMR_ROOT; break }
+            val pid = (parent as NodeBase).nodeId
+            val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
+            if (pm != 0) { anchor = parent; anchorStatus = pm; break }
+            cur = parent
+        }
+        var pNode: Node? = anchor
+        var pStatus = anchorStatus
+        var result = PMR_NONE
+        for (i in chain.indices.reversed()) {
+            val c = chain[i]
+            result = when {
+                pNode == null || pStatus == PMR_NONE -> PMR_NONE
+                pStatus == PMR_ROOT -> if (c is Statement) PMR_CONTAINER_FILE else PMR_NONE
+                else -> spinePmrEdge(pNode, pStatus, c)
+            }
+            val cid = (c as NodeBase).nodeId
+            if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
+            pNode = c
+            pStatus = result
+        }
+        chain.clear()
+        return result
+    }
+
+    /**
+     * The DELETED pmrScanContainer/pmrWalkStmt/pmrWalkExpr descent arms,
+     * verbatim and FROZEN. Container statuses reproduce the scan (fn-decl
+     * bodies, var-init fn-expr/Block-arrow bodies, class-member bodies,
+     * ModuleBlock recursion — FILE-level ExpressionStatements only); STMT
+     * reproduces pmrWalkStmt (no Do/Switch/Try/Labeled/Class arms; a
+     * for-statement walks only a bare-EXPRESSION initializer + the condition,
+     * never the incrementor or a decl-list head; for-in/for-of walk the body
+     * only); EXPR reproduces pmrWalkExpr (no NewExpression/ObjectLiteral/
+     * ArrayLiteral arms; an `=`-assignment's PropertyAccess LHS is never
+     * descended — the write check fires at the BinaryExpression anchor).
+     */
+    private fun spinePmrEdge(parent: Node, pStatus: Int, child: Node): Int = when (pStatus) {
+        PMR_CONTAINER_FILE, PMR_CONTAINER_NS -> when (parent) {
+            is ModuleDeclaration -> if (child === parent.body && child is ModuleBlock) PMR_CONTAINER_NS else PMR_NONE
+            is ModuleBlock -> if (child is Statement) PMR_CONTAINER_NS else PMR_NONE
+            is FunctionDeclaration -> if (child === parent.body) PMR_STMT else PMR_NONE
+            is VariableStatement -> if (child === parent.declarationList) pStatus else PMR_NONE
+            is VariableDeclarationList -> if (child is VariableDeclaration) pStatus else PMR_NONE
+            is VariableDeclaration -> if (child === parent.initializer &&
+                (child is FunctionExpression || child is ArrowFunction)) pStatus else PMR_NONE
+            is FunctionExpression -> if (child === parent.body) PMR_STMT else PMR_NONE
+            is ArrowFunction -> if (child === parent.body && child is Block) PMR_STMT else PMR_NONE
+            is ClassDeclaration -> if (child is MethodDeclaration || child is GetAccessor ||
+                child is SetAccessor || child is Constructor) pStatus else PMR_NONE
+            is MethodDeclaration -> if (child === parent.body) PMR_STMT else PMR_NONE
+            is GetAccessor -> if (child === parent.body) PMR_STMT else PMR_NONE
+            is SetAccessor -> if (child === parent.body) PMR_STMT else PMR_NONE
+            is Constructor -> if (child === parent.body) PMR_STMT else PMR_NONE
+            is ExpressionStatement -> if (pStatus == PMR_CONTAINER_FILE && child === parent.expression) PMR_EXPR else PMR_NONE
+            else -> PMR_NONE
+        }
+        PMR_STMT -> when (parent) {
+            is VariableStatement -> if (child === parent.declarationList) PMR_STMT else PMR_NONE
+            is VariableDeclarationList -> if (child is VariableDeclaration) PMR_STMT else PMR_NONE
+            is VariableDeclaration -> if (child === parent.initializer) PMR_EXPR else PMR_NONE
+            is ExpressionStatement -> if (child === parent.expression) PMR_EXPR else PMR_NONE
+            is ReturnStatement -> if (child === parent.expression) PMR_EXPR else PMR_NONE
+            is ThrowStatement -> if (child === parent.expression) PMR_EXPR else PMR_NONE
+            is Block -> if (child is Statement) PMR_STMT else PMR_NONE
+            is IfStatement -> when {
+                child === parent.expression -> PMR_EXPR
+                child === parent.thenStatement || child === parent.elseStatement -> PMR_STMT
+                else -> PMR_NONE
+            }
+            is ForStatement -> when {
+                child === parent.initializer && child is Expression -> PMR_EXPR
+                child === parent.condition -> PMR_EXPR
+                child === parent.statement -> PMR_STMT
+                else -> PMR_NONE
+            }
+            is ForInStatement -> if (child === parent.statement) PMR_STMT else PMR_NONE
+            is ForOfStatement -> if (child === parent.statement) PMR_STMT else PMR_NONE
+            is WhileStatement -> when {
+                child === parent.expression -> PMR_EXPR
+                child === parent.statement -> PMR_STMT
+                else -> PMR_NONE
+            }
+            // Nested fn-decl boundary (the STMT-position FunctionDeclaration
+            // arm → pmrProcessNestedFn).
+            is FunctionDeclaration -> if (child === parent.body) PMR_STMT else PMR_NONE
+            else -> PMR_NONE
+        }
+        PMR_EXPR -> when (parent) {
+            is PropertyAccessExpression -> if (child === parent.expression) PMR_EXPR else PMR_NONE
+            is CallExpression -> if (child === parent.expression ||
+                parent.arguments.any { it === child }) PMR_EXPR else PMR_NONE
+            is BinaryExpression -> when {
+                child === parent.left ->
+                    if (parent.operator == SyntaxKind.Equals && parent.left is PropertyAccessExpression) PMR_NONE
+                    else PMR_EXPR
+                child === parent.right -> PMR_EXPR
+                else -> PMR_NONE
+            }
+            is ElementAccessExpression -> if (child === parent.expression ||
+                child === parent.argumentExpression) PMR_EXPR else PMR_NONE
+            is ParenthesizedExpression -> if (child === parent.expression) PMR_EXPR else PMR_NONE
+            is PrefixUnaryExpression -> if (child === parent.operand) PMR_EXPR else PMR_NONE
+            is PostfixUnaryExpression -> if (child === parent.operand) PMR_EXPR else PMR_NONE
+            is ConditionalExpression -> if (child === parent.condition ||
+                child === parent.whenTrue || child === parent.whenFalse) PMR_EXPR else PMR_NONE
+            is AwaitExpression -> if (child === parent.expression) PMR_EXPR else PMR_NONE
+            is NonNullExpression -> if (child === parent.expression) PMR_EXPR else PMR_NONE
+            is AsExpression -> if (child === parent.expression) PMR_EXPR else PMR_NONE
+            is TemplateExpression -> if (child is TemplateSpan) PMR_EXPR else PMR_NONE
+            is TemplateSpan -> if (child === parent.expression) PMR_EXPR else PMR_NONE
+            is ArrowFunction -> when {
+                child === parent.body && child is Block -> PMR_STMT
+                child === parent.body -> PMR_EXPR // expression body, state inherited
+                else -> PMR_NONE
+            }
+            // Nested fn-expr boundary (the EXPR-position FunctionExpression
+            // arm → pmrProcessNestedFn).
+            is FunctionExpression -> if (child === parent.body) PMR_STMT else PMR_NONE
+            else -> PMR_NONE
+        }
+        else -> PMR_NONE
     }
 
     /** Extract the parameter list from any signature-bearing AST declaration node. */

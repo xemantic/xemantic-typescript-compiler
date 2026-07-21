@@ -20,6 +20,57 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 635 (2026-07-21) — (M0.4) twelfth tail-pass migration:
+checkProtectedMemberReadAccess (B446 — TS2445/TS2446 protected READ
+access + the class-method WRITE check, ~103 ms — the #12 per-file tail
+pass) is ON THE SPINE; the legacy driver + pmrScanContainer/
+pmrProcessFunctionLike/pmrProcessNestedFn/pmrWalkStmt/pmrWalkExpr
+(~120 lines) are DELETED.** The PUSH-BASED ORDER-DEPENDENT variant (the
+round-531 arith pattern's first M0.4 application): the round-634 open
+question resolved to "statement-order MUTATED" — pmrWalkStmt's
+VariableStatement arm records `vars[nm] = pmrLocalClass(init)` AFTER
+walking each initializer, the map is SHARED through Block/If/loop/ARROW
+descents (recordings deliberately LEAK out of blocks) and COPIED at
+nested fn-expr/fn-decl boundaries — so the downward state (vars +
+this/lexical class + the in-class-method write gate) is push-maintained:
+LIFO frames at processed-fn-like boundaries (fresh vars from params),
+nested-fn boundaries (copied vars; this/lex/write-gate RESET), and
+top-level ExpressionStatements (the per-file-setup topVars map installed
+by INSTANCE — a recording inside a top-level IIFE body mutates it for
+later top-level statements, the legacy by-reference behavior), popped at
+owner LEAVES; per-declaration recordings fire at VariableDeclaration
+LEAVES (the legacy walk-then-record order). Reach is the memoized
+5-STATE classifier spinePmrStatus/spinePmrEdge (frozen verbatim):
+CONTAINER_FILE/CONTAINER_NS carry the container scan — split because
+only FILE-level ExpressionStatements are walked with topVars (a
+namespace-level `c1.x;` is unreached, pinned) — and STMT/EXPR the walker
+arms, with the write-LHS rule as an EDGE (`=` with a PropertyAccess LHS:
+the LHS subtree is never read-walked; the accessibility check fires at
+the BinaryExpression anchor under the frame-maintained pmrInClassMethod
+gate). Emissions at PropertyAccessExpression enters (reads) +
+BinaryExpression enters (class-method writes); pmrResolveClass/
+pmrFindProtected*DeclaringClass/pmrLocalClass/pmrCheckAccess survive as
+anchor-called leaves, pmrInClassMethod/pmrLexicalClass as the
+frame-maintained state registers (verified pmr-exclusive by grep). No
+ambient sandwich — the helpers resolve via the passed locals + the
+node-keyed lookupPerFileForNode only (no type caches touched, so no
+first-touch risk). The binderResults-iterating driver → the spine's
+partition view, gated `--partitionCheck 2` EQUIVALENT ×8 (the round-633
+rule); the pass emits ZERO diagnostics on all 8 tsc profiles (verified —
+no TS2445/TS2446 in any capture), so the listAll gate pins pure
+non-perturbation. Gates: 39 local pins (M04ProtectedReadSpineMigrationTest
+— the TS2445/TS2446 emitters' gates, the this-param fallback incl. its
+static exclusion, the write-gate arrow-inherit/nested-fn-reset pair, the
+recording leak/copy/identity-chain semantics, and the reach battery both
+directions: NewExpression args, switch bodies, for-of heads, objlit
+values, class property initializers, nested classes, expression-bodied
+container arrows, method reads of top-level vars all unreached) green
+against the LEGACY pass first; suite 11,629 → 11,668/0; `--listAll` ×8
+byte-identical; partitionCheck ×8 EQUIVALENT; pass table 427 → 426 (the
+row gone; checkSpine in-band); warning-clean. M0.4 running total: top
+TWELVE tail passes migrated. NEXT: checkPropertyInitialization (~99 ms)
+— scope shape + consumers before the slot-move.**
+
 **Round 634 (2026-07-21) — (M0.4) slot-move pre-gate for #12:
 checkProtectedMemberReadAccess (B446 — TS2445/TS2446 protected READ
 access, ~103 ms) moved intact to the post-spine slot; suite 11,629/0,
@@ -492,55 +543,6 @@ collectTypeofAbstractVars) feeding a statement walk — the collectors are
 file-scoped, not statement-ordered, so they reproduce as per-file
 spine-setup state, not frames.**
 
-**Round 625 (2026-07-21) — (M0.4) third tail-pass migration: checkImplicitThis
-(TS2683/TS7041/TS7017, 127 ms — the #3 tail pass) is ON THE SPINE; the legacy
-recursion (checkThisInStatements / checkThisInStatement /
-checkThisInClassElement / checkThisInExpr, ~506 lines) is DELETED.** Two
-commits per the round-624 template. The instructive shape: the pass threaded a
-purely DOWNWARD 4-field context (thisIsTyped / insideFunction /
-shadowFunctionPos / insideArrowFunction) with NO statement-ordered state, so
-it reproduces as a pure PULL-based per-anchor ancestor fold
-(spineItContextAt/spineItEdge) with NO frames, NO leave hook, and NO memo —
-`this` anchors are rare enough that one O(depth) climb per anchor beats a
-per-node ByteArray. Legacy quirks reproduced verbatim: the CallExpression-
-CALLEE edge alone DROPS the arrow context (the sole legacy call omitting the
-insideArrowFunction parameter — `(() => this())` never draws TS7041) while
-the PropertyAccess RECEIVER keeps it (`(() => this.x)` fires TS7041 at the
-receiver AND TS7017 at the name — the first cut dropped BOTH edges from a
-misread of the legacy call arity; the CORPUS caught it as 3 regressions
-(topLevelLambda3 / noImplicitThisFunctions / emitCapturingThisInTuple-
-Destructuring1) that all 8 listAll profiles missed — tsc's own sources have
-no top-level-arrow `this.x`, so the corpus is the only pin for this family);
-param defaults / object-literal ACCESSOR bodies / enum members / heritage
-clauses / class static blocks stay unreached (class EXPRESSIONS' members ARE
-reached, unlike the os/pd passes; a DOTTED `namespace A.B` is ONE
-ModuleDeclaration with a ModuleBlock body, so it IS walked); the B123 shadow
-rule (only a typed→untyped fn boundary carries the TS2738 pos — an
-untyped→untyped nesting resets to −1); the object-literal fn-expr-property
-fixed typed ctx; and the two contextual-`this` carrier edges (the round-79h
-call-arg probe, the B374 var-annotation probe) now fire ONLY when a `this`
-anchor actually sits beneath the fn-expr — a probe-schedule delta vs the
-legacy eager walk, confirmed inert by the byte-identity gates. Ambient
-sandwich = currentFileLocals only (the round-533 resting-locals rule — the
-probes resolve types through getTypeOfIdentifier). TRAP HIT, gate CAUGHT: the
-first cut declared the spineIt fields at the new-code site (post-init) — the
-documented Kotlin init-order gotcha struck exactly as written (spineItChain
-null during the init-block pipeline → NPE on the compiler profile, caught by
-the listAll ×8 gate as a one-profile crash diff); fields moved PRE-init next
-to the spinePd fields. 18 local pins (M04ImplicitThisSpineMigrationTest:
-TS2683 fire/suppress both directions, the TS2738 shadow + B123 no-related
-pins, TS7041 + the callee-drop quirk + the receiver-keeps-arrow pin, TS7017
-+ known-global negative, both contextual-`this` suppressions + the
-no-this-param negative control, plain + dotted namespace both firing,
-param-default and objlit-accessor negative reach). Gates: suite 11,431 →
-11,449/0 (+18), `--listAll` ×8 byte-identical at both commits, pass table
-436 → 435 (the checkImplicitThis row — 127 ms at the round-624 table, 82 ms
-on today's box — gone; checkSpine 19.0 → 18.0 s single-run, NOT inflated),
-warning-clean. M0.4 running total: top THREE tail passes migrated. SESSION
-TAIL: the checkFnTypedParamCalls (119 ms, #4 — the B128 FnParamCtx
-downward-threading walker) SLOT-MOVE pre-gate landed (corpus + listAll ×8
-identical) — the next session starts directly at its migration commit.**
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 (Restored 2026-07-12, round 481 — the queue/backlog/inventory sections had been
@@ -730,8 +732,21 @@ structural item instead of landing alone.**
   driver → the spine's partition view, gated `--partitionCheck 2`
   EQUIVALENT ×8), then
   SKIP checkCrossFileModuleAugmentationDuplicates (114 ms — CROSS-FILE
-  aggregation, not per-file spine material); next per-file candidates:
-  checkProtectedMemberReadAccess ~103 ms / checkPropertyInitialization
+  aggregation, not per-file spine material), then
+  checkProtectedMemberReadAccess ~103 ms — **MIGRATED round 635** (the
+  PUSH-BASED ORDER-DEPENDENT variant, the round-531 arith pattern's first
+  M0.4 application: a pass whose downward map is statement-order MUTATED
+  (per-declaration `vars[nm] = …` recordings that LEAK through
+  block/if/loop/arrow descents and COPY at nested-fn boundaries)
+  reproduces as LIFO frames at fn-like boundaries + per-declaration
+  recordings at VariableDeclaration LEAVES (the legacy walk-then-record
+  order), with a 5-STATE reach classifier — CONTAINER_FILE/CONTAINER_NS
+  split because only FILE-level ExpressionStatements are walked with the
+  per-file topVars map, installed by INSTANCE so IIFE-body recordings
+  persist across top-level statements; the `=`-LHS write skip is an edge
+  (LHS subtree never read-walked, the write check fires at the
+  BinaryExpression anchor under the frame-maintained pmrInClassMethod
+  gate)); next per-file candidate: checkPropertyInitialization
   ~99 ms (scope shape + consumers first — round-633 session note);
   98 passes >20 ms carry 5.3 s of the
   6.2 s). Migration protocol per
