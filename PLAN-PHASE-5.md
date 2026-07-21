@@ -61,7 +61,17 @@ artifact lines); pass table 435 → 434 (the checkFnTypedParamCalls row gone;
 checkSpine 18.5 s single-run, within the round-625 18.0–19.0 band — not
 inflated); warning-clean. M0.4 running total: top FOUR tail passes
 migrated; next by cost: checkAbstractClassInstantiation (113 ms),
-checkSymbolToStringConversions (108 ms).**
+checkSymbolToStringConversions (108 ms). SESSION TAIL: the
+checkAbstractClassInstantiation (#5) SLOT-MOVE pre-gate landed (corpus +
+listAll ×8 identical; the pass is self-contained — reads
+binderResults/globals/fileResults only, no side-set consults, no TS2511
+retract/dedup consumers) — the next session starts directly at its
+migration commit. Its legacy shape for the migrator: a per-FILE
+four-collector prepass (collectAbstractClassNames + the merged-globals
+scan + collectImportedAbstractClassAliases + collectTypeAliases →
+collectTypeofAbstractVars) feeding a statement walk — the collectors are
+file-scoped, not statement-ordered, so they reproduce as per-file
+spine-setup state, not frames.**
 
 **Round 625 (2026-07-21) — (M0.4) third tail-pass migration: checkImplicitThis
 (TS2683/TS7041/TS7017, 127 ms — the #3 tail pass) is ON THE SPINE; the legacy
@@ -593,7 +603,8 @@ structural item instead of landing alone.**
   memo-free form — plus a memoized BINARY reach classifier: no multi-state
   statuses needed when every (parent kind, child slot) pair decides descent
   unambiguously),
-  checkAbstractClassInstantiation 113 ms,
+  checkAbstractClassInstantiation 113 ms — slot-move pre-gate LANDED round
+  626, the migration is the next session's first item,
   checkSymbolToStringConversions 108 ms, checkDefiniteAssignmentViaFlowGraph
   105 ms; 98 passes >20 ms carry 5.3 s of the 6.2 s). Migration protocol per
   pass (the round-624 template): slot-move pre-gate commit (intact pass to the

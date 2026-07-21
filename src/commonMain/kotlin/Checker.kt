@@ -4941,6 +4941,11 @@ class Checker(
         // walkers are deleted (the emission leaves emitFnTypedParamCallDiag /
         // emitGenericMethodCallDiag / emitFnTypedParamApplyDiag are
         // anchor-called).
+        // 64g (M0.4 slot-move pre-gate, round 626): checkAbstractClassInstantiation
+        // (TS2511) moved intact from its legacy 64g slot ahead of its spine
+        // migration. Self-contained (reads binderResults/globals/fileResults
+        // only; no side-set consults, no TS2511 retract/dedup consumers).
+        pass("checkAbstractClassInstantiation") { checkAbstractClassInstantiation() }
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -5929,8 +5934,8 @@ class Checker(
         pass("checkFullIndexConstraints") { checkFullIndexConstraints() }
         // B496. Cross-typed-array assignment (TS2322 via [Symbol.toStringTag] mismatch)
         pass("checkTypedArrayCrossAssignment") { checkTypedArrayCrossAssignment() }
-        // 64g. Check abstract class instantiation (TS2511)
-        pass("checkAbstractClassInstantiation") { checkAbstractClassInstantiation() }
+        // 64g. checkAbstractClassInstantiation moved to the post-spine slot —
+        // see the pass("checkSpine") site (M0.4 slot-move pre-gate, round 626).
         // 64h. Check overload signature compatibility (TS2394)
         pass("checkOverloadSignatureCompatibility") { checkOverloadSignatureCompatibility() }
         // 64h1b. B98.r38: TS2384 across merged namespace blocks (ambient/non-ambient overloads).
