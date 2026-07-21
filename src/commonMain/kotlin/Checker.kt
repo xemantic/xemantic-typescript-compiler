@@ -4840,6 +4840,12 @@ class Checker(
         // occupy.
         pass("checkTypeParameterDefaults") { checkTypeParameterDefaults() }
         pass("checkSpine") { checkSpine() }
+        // 64d2a (M0.4 slot-move pre-gate, round 624). Object-SPREAD source types
+        // (TS2698) + object-REST source types (TS2700) — moved here from its
+        // legacy 64d2a slot ahead of its spine migration; sits between the spine
+        // and ctaPostFilters so its emissions land inside the cta post-filter
+        // window exactly as they will once spine-anchored.
+        pass("checkObjectSpreadInvalidTypes") { checkObjectSpreadInvalidTypes() }
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -5540,8 +5546,9 @@ class Checker(
         // a numeric-literal vs string/boolean relational comparison ALWAYS errors in tsc
         // even in checkJs, so this narrow walker safely emits TS2365 for that one shape.
         pass("checkJsCrossCategoryRelational") { checkJsCrossCategoryRelational() }
-        // 64d2a. Check object-SPREAD source types (TS2698) + object-REST source types (TS2700, folded in)
-        pass("checkObjectSpreadInvalidTypes") { checkObjectSpreadInvalidTypes() }
+        // 64d2a. Object-spread/rest source types (TS2698/TS2700) MOVED to the
+        // post-spine slot (M0.4 slot-move pre-gate, round 624) — see the
+        // pass("checkSpine") site.
         // 64d2a1 (B484). Generic-function-type bipartition TS2322 (noStrictGenericChecks)
         // 64d2a2 (B245). Namespace-import member writes (TS2540/TS2339)
         pass("checkNamespaceImportMemberWrites") { checkNamespaceImportMemberWrites() }
