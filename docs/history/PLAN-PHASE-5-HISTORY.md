@@ -1,3 +1,42 @@
+**Round 623 (2026-07-20) — (M0.3) slice (viii) LANDED as a MEASURED-NEUTRAL
+structure bundle (−0.30% median, post wins 6/10 pairs — below the ±2%
+drift band, so NO wall claim is made), plus the JFR-bias negative
+knowledge that forced the honest verdict.** A fresh JFR at HEAD ranked
+`computeLineStarts` the TOP self entry (5.3% of samples, 121/2303, all
+from `Parser.<init>` in the crawl): every Parser construction eagerly
+computed the full line-start table (boxed `mutableListOf<Int>`) whose
+ONLY consumer is diagnostic line/col formatting — now a nullable-field
+lazy compute + growable-IntArray builder (no boxing), pinned by
+line/character identity across `\n`/`\r\n`/lone-`\r` endings (CRLF must
+count as ONE break — the bench sources are CRLF per the documented
+gotcha). Second, `fileDeclaresNonGenericType` (the round-442 TS2314
+own-file-shadow bail, on the per-type-reference path) ran an un-memoized
+linear binderResults scan by fileName string PLUS a full top-level
+statement scan per call — now served from the existing `fileResults`
+index + a `file|name` memo (pure over frozen ASTs; declared before
+`init` per the init-order trap); quadratic-blowup insurance for bigger
+projects even at neutral wall here. Third, `ccetSpineEnter` — the ONE
+dispatcher M0.2 deliberately skipped — hand-converted to kindId dispatch
+(outer 5-arm chain + the Block arm's parent-kind inner when; the
+ArrowFunction/FunctionExpression union-smart-cast arm restructured to
+explicit if/casts; the M0.2 mangle scan run clean over the region).
+MEASURED: 10 interleaved pairs (two 5-pair rounds — the first 5 read
++1.9% with a 3.6% pre-spread, the extension flipped it), 28,936 →
+28,849 ms median = **−0.30%, post wins 6/10 — NEUTRAL**. THE LESSON
+(negative knowledge worth keeping): a JFR leaf-frame self-percentage on
+a tight counted loop is NOT a wall-clock price — computeLineStarts' 5.3%
+of samples bought ~0% wall, from safepoint-bias inflation (counted loops
+accumulate samples at their back-edges) compounded by the crawl's
+parallel overlap (worker-thread savings don't move the serial-dominated
+wall). Price any future JFR self entry by interleaved A/B before acting
+on it — the round-618 JFR shares this bias class. Gates: suite 11,408/0
+(+8 M03StructureBundleTest — line-ending position identity incl. a
+deliberate direct-compile bypass of `diagnose` because trimIndent would
+normalize the CRLF under test; the TS2314 shadow verdict both
+directions; per-arm ccet frame smoke pins), `--listAll` ×8
+byte-identical, warning-clean. Remaining M0.3: (i) name atomization,
+(ii) links records, (v) undo-log scope copies.**
+
 **Round 622 (2026-07-20) — (M0.3) slices (vi)+(vii) LANDED: boxed-Int keys
 killed on the hottest id-keyed structures — (vi) −2.2% (5/5 pairs), then
 (vii) −2.6% (4/5 pairs) on top; arc cumulative ≈ −8.9% from round 618's

@@ -5121,17 +5121,12 @@ class Checker(
         // constEnumInitRefsNonMember/scriptFileConstEnumNames survive as
         // anchor-called leaves). Self-contained: no ambient installs, no
         // side sets, no dedup scans on its codes anywhere.
-        // 14''' (M0.4 slot-move pre-gate, round 632):
-        // checkNullTypeAssertionOverlap (TS2352 null/objlit/class-instance
-        // cast overlap + the flag-gated AsExpression arm's
-        // TS2352/TS1355 emitters) moved intact from its 14'' slot ahead of
-        // its spine migration. No TS2352/TS1355 dedup scans exist anywhere;
-        // the hoist crosses the cta post-filter window close and the
-        // JS/JSDoc pass family — none consume its codes; the emitters
-        // type-resolve, so resolution first-touch order is the risk class
-        // the corpus + listAll ×8 gates decide. The pass self-installs
-        // currentFileLocals per file (unchanged at this slot).
-        pass("checkNullTypeAssertionOverlap") { checkNullTypeAssertionOverlap() }
+        // 14''' (M0.4, round 632): checkNullTypeAssertionOverlap (TS2352
+        // null/objlit/class-instance cast overlap + the four AsExpression
+        // TS2352/TS1355 emitters) is ON THE SPINE — see spineCoEnterNode
+        // (the TypeAssertion callback runs after the round-630 co leaves;
+        // the AsExpression emitters at their own anchors); the legacy
+        // driver + the inNullCastOverlapPass flag are deleted.
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -5388,8 +5383,8 @@ class Checker(
         // 14'b. Check `import * as X from 'pkg'` where bare specifier resolves via
         // node_modules to a script-shaped .d.ts (no imports/exports) — TS2306
         pass("checkNamespaceImportOfNonModule") { checkNamespaceImportOfNonModule() }
-        // 14''. checkNullTypeAssertionOverlap moved to the post-spine slot —
-        // see the pass("checkSpine") site (M0.4 slot-move pre-gate, round 632).
+        // 14''. checkNullTypeAssertionOverlap is ON THE SPINE (M0.4, round
+        // 632) — see spineCoEnterNode at the pass("checkSpine") site.
         // 14''b. checkSameTargetReferenceCastOverlap is ON THE SPINE since
         // round 630 (M0.4): see spineCoSetup/spineCoEnterNode. The two
         // emission leaves are anchor-called at TypeAssertionExpression
@@ -62384,25 +62379,54 @@ interface DataView {
         spineCoReachMemo = ByteArray(0)
     }
 
-    /** ENTER dispatch: TypeAssertionExpression anchors — the two TS2352
-     *  cast-overlap emission leaves in legacy order, under the
-     *  currentCheckFileName install (checkSpine sets currentFileLocals but
-     *  NOT the check-file name) with currentFlowGraph nulled (the legacy
-     *  post-spine slot ran with a null graph). */
+    /** ENTER dispatch: TypeAssertionExpression anchors run the two round-630
+     *  TS2352 cast-overlap leaves followed by the round-632
+     *  checkNullTypeAssertionOverlap callback (emitTS2352IfNullCast — the
+     *  nullish-cast core, the B448 object-literal overlap, and the
+     *  class-instance-to-sig-interface cast, matching the legacy pass order:
+     *  the co pass ran before the null-cast pass); AsExpression anchors run
+     *  the four emitters the legacy `inNullCastOverlapPass` flag gated into
+     *  the shared walker's AsExpression arm (now deleted there), in the
+     *  arm's order. All under the currentCheckFileName install (checkSpine
+     *  sets currentFileLocals but NOT the check-file name) with
+     *  currentFlowGraph nulled (the legacy post-spine slots ran with a null
+     *  graph). */
     private fun spineCoEnterNode(node: Node) {
-        if ((node as NodeBase).kindId != NodeKind.TYPE_ASSERTION_EXPRESSION) return
-        node as TypeAssertionExpression
-        if (spineCoStatus(node) != CO_REACHED) return
-        val savedCheckFileName = currentCheckFileName
-        val savedFlow = currentFlowGraph
-        currentCheckFileName = spineFileName
-        currentFlowGraph = null
-        try {
-            emitTS2352IfSameTargetMismatch(node, spineSource, spineFileName)
-            emitTS2352IfFunctionReturnMismatch(node, spineSource, spineFileName)
-        } finally {
-            currentCheckFileName = savedCheckFileName
-            currentFlowGraph = savedFlow
+        when ((node as NodeBase).kindId) {
+            NodeKind.TYPE_ASSERTION_EXPRESSION -> {
+                node as TypeAssertionExpression
+                if (spineCoStatus(node) != CO_REACHED) return
+                val savedCheckFileName = currentCheckFileName
+                val savedFlow = currentFlowGraph
+                currentCheckFileName = spineFileName
+                currentFlowGraph = null
+                try {
+                    emitTS2352IfSameTargetMismatch(node, spineSource, spineFileName)
+                    emitTS2352IfFunctionReturnMismatch(node, spineSource, spineFileName)
+                    emitTS2352IfNullCast(node, spineSource, spineFileName)
+                } finally {
+                    currentCheckFileName = savedCheckFileName
+                    currentFlowGraph = savedFlow
+                }
+            }
+            NodeKind.AS_EXPRESSION -> {
+                node as AsExpression
+                if (spineCoStatus(node) != CO_REACHED) return
+                val savedCheckFileName = currentCheckFileName
+                val savedFlow = currentFlowGraph
+                currentCheckFileName = spineFileName
+                currentFlowGraph = null
+                try {
+                    emitTS2352IfNullAsReadonlyTuple(node, spineSource, spineFileName)
+                    emitTS2352IfNullAsCast(node, spineSource, spineFileName)
+                    emitTS1355IfInvalidConstAssertion(node, spineSource, spineFileName)
+                    emitTS2352IfClassInstanceToRecordCast(node, spineSource, spineFileName)
+                } finally {
+                    currentCheckFileName = savedCheckFileName
+                    currentFlowGraph = savedFlow
+                }
+            }
+            else -> {}
         }
     }
 
@@ -76197,12 +76221,10 @@ interface DataView {
             is DeleteExpression -> walkTypeAssertionsInExpr(expr.expression, source, fileName, onAssertion)
             is NonNullExpression -> walkTypeAssertionsInExpr(expr.expression, source, fileName, onAssertion)
             is AsExpression -> {
-                if (inNullCastOverlapPass) {
-                    emitTS2352IfNullAsReadonlyTuple(expr, source, fileName)
-                    emitTS2352IfNullAsCast(expr, source, fileName)
-                    emitTS1355IfInvalidConstAssertion(expr, source, fileName)
-                    emitTS2352IfClassInstanceToRecordCast(expr, source, fileName)
-                }
+                // (M0.4, round 632): the null-cast-overlap pass's four
+                // flag-gated emitters moved to the spine's AsExpression
+                // anchors (spineCoEnterNode); only the type-param sibling
+                // pass still emits inline here.
                 if (inTypeParamCastPass) {
                     emitTS2352IfEmptyObjectCastToTypeParam(expr, source, fileName)
                 }
@@ -76263,31 +76285,13 @@ interface DataView {
      * T is a named Interface/Class (not a TypeAlias, and not any/unknown). `null!`
      * is skipped — the NonNullExpression wraps the null literal and shouldn't match.
      */
-    /** B87.2 (round 73): when true, the [walkTypeAssertionsInExpr] AsExpression
-     *  branch also runs the narrow `undefined/null as readonly [tuple]` TS2352
-     *  check. Only the null-cast-overlap pass sets it — the unrelated erasable-
-     *  syntax pass leaves it false, so no double emission. */
-    private var inNullCastOverlapPass = false
-
-    private fun checkNullTypeAssertionOverlap() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            val savedLocals = currentFileLocals
-            currentFileLocals = result.locals
-            val savedPass = inNullCastOverlapPass
-            inNullCastOverlapPass = true
-            try {
-                for (stmt in result.sourceFile.statements) {
-                    walkTypeAssertionsInStmt(stmt, source, fileName, ::emitTS2352IfNullCast)
-                }
-            } finally {
-                inNullCastOverlapPass = savedPass
-                currentFileLocals = savedLocals
-            }
-        }
-    }
+    // (M0.4, round 632): checkNullTypeAssertionOverlap is ON THE SPINE — the
+    // TypeAssertion callback (emitTS2352IfNullCast) and the four AsExpression
+    // emitters its `inNullCastOverlapPass` flag gated into the shared walker
+    // are anchor-called from spineCoEnterNode; the driver and flag are
+    // deleted. NOTE the legacy driver iterated binderResults (not
+    // checkedResults) — the spine form walks the partition view, gated by
+    // `--partitionCheck 2` on top of the standard gates.
 
     /**
      * B87.2 (round 73): TS2352 for `undefined as readonly [...]` / `null as readonly [...]`

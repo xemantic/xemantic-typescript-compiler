@@ -20,6 +20,49 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 633 (2026-07-21) — (M0.4) eleventh tail-pass migration:
+checkNullTypeAssertionOverlap (TS2352 null/objlit/class-instance cast
+overlap + the four AsExpression TS2352/TS1355 emitters, ~104 ms — the
+#11 tail pass) is ON THE SPINE; the legacy driver + the
+`inNullCastOverlapPass` flag + the flag-gated arm in the SHARED walker
+are deleted.** The FLAG-ARM-LIFT variant of the round-630 shared-walker
+template: the pass's emissions lived in two places — the
+TypeAssertion-callback (`emitTS2352IfNullCast`, bundling the
+nullish-cast core, the B448 object-literal overlap, and the
+class-instance-to-sig-interface cast) and four emitters INLINE in the
+shared walkTypeAssertionsInExpr AsExpression arm behind the
+`inNullCastOverlapPass` flag (the AsExpression gotcha's double-fire
+guard). Both lift onto the EXISTING round-630 anchors: spineCoEnterNode
+now runs the null-cast callback after the two co leaves at
+TypeAssertionExpression enters (matching the post-slot-move legacy pass
+order) and gained an AsExpression anchor arm running the four flag
+emitters in the arm's order — the reach classifier (spineCoStatus/
+spineCoEdge) is REUSED verbatim (same shared walker, so identical
+reach), and deleting the flag from the walker leaves only the
+type-param sibling's `inTypeParamCastPass` inline arm there. Per-anchor
+interleave vs the legacy whole-file walk is order-IDENTICAL within a
+file (one walk, enters = pre-order). Same ambient sandwich
+(currentCheckFileName + nulled currentFlowGraph). The
+binderResults-vs-checkedResults caveat from the round-632 scoping was
+gated explicitly: `--partitionCheck 2` EQUIVALENT on ALL 8 profiles
+(the spine form walks the partition view where the legacy driver walked
+binderResults — equivalent because a partition worker's diagnostics are
+merged from exactly its assigned files either way). Gates: 15 local
+pins (M04NullCastSpineMigrationTest — the seven emitters' gates +
+shared-walker reach both directions: objlit-method/arrow/class-expr
+bodies fire, parameter DEFAULTS don't) green against the LEGACY pass
+first; suite 11,614 → 11,629/0; `--listAll` ×8 byte-identical;
+partitionCheck ×8 EQUIVALENT; pass table 428 → 427 (the row gone;
+checkSpine 19,511.6 ms — in-band); warning-clean. M0.4 running total:
+top ELEVEN tail passes migrated. NEXT: the #12-by-cost row
+(checkCrossFileModuleAugmentationDuplicates, 114 ms) is a CROSS-FILE
+aggregation pass (program-wide ownExports map over checkedResults +
+hub/related-info accumulation across files) — NOT per-file spine
+material; SKIP it in the M0.4 worklist. The next per-file candidates by
+cost: checkProtectedMemberReadAccess (~103 ms) and
+checkPropertyInitialization (~99 ms) — scope shape + consumers before
+the slot-move.**
+
 **Round 632 (2026-07-21) — (M0.4) tenth tail-pass migration:
 checkConstEnumDiagnostics (the const-enum cluster TS2474/2475/2476/2477/
 2478/2567, ~123 ms — the #10 tail pass) is ON THE SPINE; the legacy driver
@@ -530,45 +573,6 @@ TS2559 weak-push via a body-local annotation + its block-boundary
 negative). Round-624 total: the top TWO tail passes (303.7 ms of the 6.1 s
 tail) migrated; suite 11,408 → 11,431 (+23 pins).**
 
-**Round 623 (2026-07-20) — (M0.3) slice (viii) LANDED as a MEASURED-NEUTRAL
-structure bundle (−0.30% median, post wins 6/10 pairs — below the ±2%
-drift band, so NO wall claim is made), plus the JFR-bias negative
-knowledge that forced the honest verdict.** A fresh JFR at HEAD ranked
-`computeLineStarts` the TOP self entry (5.3% of samples, 121/2303, all
-from `Parser.<init>` in the crawl): every Parser construction eagerly
-computed the full line-start table (boxed `mutableListOf<Int>`) whose
-ONLY consumer is diagnostic line/col formatting — now a nullable-field
-lazy compute + growable-IntArray builder (no boxing), pinned by
-line/character identity across `\n`/`\r\n`/lone-`\r` endings (CRLF must
-count as ONE break — the bench sources are CRLF per the documented
-gotcha). Second, `fileDeclaresNonGenericType` (the round-442 TS2314
-own-file-shadow bail, on the per-type-reference path) ran an un-memoized
-linear binderResults scan by fileName string PLUS a full top-level
-statement scan per call — now served from the existing `fileResults`
-index + a `file|name` memo (pure over frozen ASTs; declared before
-`init` per the init-order trap); quadratic-blowup insurance for bigger
-projects even at neutral wall here. Third, `ccetSpineEnter` — the ONE
-dispatcher M0.2 deliberately skipped — hand-converted to kindId dispatch
-(outer 5-arm chain + the Block arm's parent-kind inner when; the
-ArrowFunction/FunctionExpression union-smart-cast arm restructured to
-explicit if/casts; the M0.2 mangle scan run clean over the region).
-MEASURED: 10 interleaved pairs (two 5-pair rounds — the first 5 read
-+1.9% with a 3.6% pre-spread, the extension flipped it), 28,936 →
-28,849 ms median = **−0.30%, post wins 6/10 — NEUTRAL**. THE LESSON
-(negative knowledge worth keeping): a JFR leaf-frame self-percentage on
-a tight counted loop is NOT a wall-clock price — computeLineStarts' 5.3%
-of samples bought ~0% wall, from safepoint-bias inflation (counted loops
-accumulate samples at their back-edges) compounded by the crawl's
-parallel overlap (worker-thread savings don't move the serial-dominated
-wall). Price any future JFR self entry by interleaved A/B before acting
-on it — the round-618 JFR shares this bias class. Gates: suite 11,408/0
-(+8 M03StructureBundleTest — line-ending position identity incl. a
-deliberate direct-compile bypass of `diagnose` because trimIndent would
-normalize the CRLF under test; the TS2314 shadow verdict both
-directions; per-arm ccet frame smoke pins), `--listAll` ×8
-byte-identical, warning-clean. Remaining M0.3: (i) name atomization,
-(ii) links records, (v) undo-log scope copies.**
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 (Restored 2026-07-12, round 481 — the queue/backlog/inventory sections had been
@@ -751,11 +755,16 @@ structural item instead of landing alone.**
   edge + an anchor-side parent pre-filter, exactly equivalent because
   neither branch can emit at a base — keeping the classifier purely
   structural), then
-  checkNullTypeAssertionOverlap ~104 ms (the round-630 sibling — reuse
-  spineCoStatus/spineCoEdge, lift the `inNullCastOverlapPass` flag-gated
-  AsExpression arm out of the shared walker; its driver iterates
-  binderResults, so add the `--partitionCheck 2` gate — details in the
-  round-632 session note);
+  checkNullTypeAssertionOverlap ~104 ms — **MIGRATED round 633** (the
+  FLAG-ARM-LIFT variant: the `inNullCastOverlapPass`-gated emitters
+  lift out of the SHARED walker onto the round-630 anchors —
+  spineCoStatus/spineCoEdge reused verbatim; binderResults-iterating
+  driver → the spine's partition view, gated `--partitionCheck 2`
+  EQUIVALENT ×8), then
+  SKIP checkCrossFileModuleAugmentationDuplicates (114 ms — CROSS-FILE
+  aggregation, not per-file spine material); next per-file candidates:
+  checkProtectedMemberReadAccess ~103 ms / checkPropertyInitialization
+  ~99 ms (scope shape + consumers first — round-633 session note);
   98 passes >20 ms carry 5.3 s of the
   6.2 s). Migration protocol per
   pass (the round-624 template): slot-move pre-gate commit (intact pass to the
