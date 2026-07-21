@@ -3399,6 +3399,26 @@ class Checker(
     private class SpineOsFrame(val owner: Node, val anns: HashMap<String, TypeNode>)
     private val spineOsFrames = ArrayList<SpineOsFrame>()
 
+    // ── (M0.4) round 624: checkArrayPushDiscriminatedUnionElements
+    // (B473/B482/B487*) on the spine ──
+    // All MUST be declared before init {} (consumed by checkSpine during init).
+    // The deleted pdduScanStmts/pdduScanStmt walkers' reach is [spinePdStatus]
+    // over [spinePdEdge]; the legacy `localAnns` (LIST-level recording of a
+    // VariableStatement's declarator annotations BEFORE its initializers are
+    // checked; a HashMap copy at Block/ModuleBlock/fn-body boundaries; if/loop
+    // descents SHARE the map but never record) is PUSH frames. The legacy
+    // per-statement checks (pdduCheckExpr at expression-statement /
+    // var-initializer / return / if-condition CALL positions — no expression
+    // recursion) run at the statement's enter under a currentFileLocals
+    // resting install (the legacy pass never set it; mid-spine it is per-file).
+    private var spinePdActive = false
+    private var spinePdReachMemo = ByteArray(0)
+    private val spinePdChain = ArrayList<Node>()
+    private class SpinePdFrame(val owner: Node, val anns: HashMap<String, TypeNode>)
+    private val spinePdFrames = ArrayList<SpinePdFrame>()
+    /** currentFileLocals at spine ENTRY — what the slot-moved legacy pass saw. */
+    private var spinePdRestingLocals: SymbolTable? = null
+
     // ── INV.4(d) walker 6 (round 535): checkArgumentCounts on the spine ────
     // The function-call arity pass (TS2554/TS2555/TS2575) — the recursion
     // walkers (checkArgCountInStatements/-InStatement/-InExpr(Core)) are
@@ -4868,10 +4888,10 @@ class Checker(
         // is ON THE SPINE — see spineOsEnterNode/spineOsStatus; the legacy
         // recursion walkers are deleted (the emission leaves
         // spread2698CheckOperand/rest2700Check are anchor-called).
-        // B473 (M0.4 slot-move pre-gate, round 624): arr.push discriminated-union
-        // elements (TS2741/2739/2740 + the B482/B487* siblings) — moved here from
-        // its legacy slot ahead of its spine migration.
-        pass("checkArrayPushDiscriminatedUnionElements") { checkArrayPushDiscriminatedUnionElements() }
+        // B473 (M0.4, round 624): the array-push discriminated-union pass
+        // (TS2741/2739/2740 + the B482/B487* siblings) is ON THE SPINE — see
+        // spinePdEnterNode/spinePdStatus; the legacy scan walkers are deleted
+        // (the emission leaves pdduCheckExpr/pdduCheckElement are anchor-called).
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -15894,6 +15914,218 @@ class Checker(
         else -> OS_NONE
     }
 
+    // ── (M0.4) round 624: checkArrayPushDiscriminatedUnionElements on the
+    // spine ──────────────────────────────────────────────────────────────
+
+    /** Per-file setup for the spine-hosted array-push/splice/concat pass. */
+    private fun spinePdSetup(result: BinderResult) {
+        spinePdActive = !spineIsDts
+        spinePdFrames.clear()
+        spinePdReachMemo = if (!spinePdActive) ByteArray(0) else {
+            val n = result.sourceFile.nodeCount
+            if (n > 0) ByteArray(n) else ByteArray(0)
+        }
+    }
+
+    private fun spinePdTeardown() {
+        spinePdActive = false
+        spinePdFrames.clear()
+        spinePdReachMemo = ByteArray(0)
+    }
+
+    /** Per-node ENTER hook: frame spawns at the legacy copy boundaries, the
+     *  per-statement record/check work at the four reached statement kinds. */
+    private fun spinePdEnterNode(node: Node) {
+        when ((node as NodeBase).kindId) {
+            NodeKind.SOURCE_FILE -> spinePdFrames.add(SpinePdFrame(node, HashMap()))
+            NodeKind.BLOCK -> when (spinePdStatus(node)) {
+                PD_LIST, PD_NESTED, PD_FNBODY_PLAIN -> spinePdPushCopy(node, null)
+                PD_FNBODY -> spinePdPushCopy(node, spinePdParamsOf(node))
+            }
+            NodeKind.MODULE_BLOCK -> { if (spinePdStatus(node) == PD_MODBLOCK) spinePdPushCopy(node, null) }
+            NodeKind.VARIABLE_STATEMENT, NodeKind.EXPRESSION_STATEMENT,
+            NodeKind.RETURN_STATEMENT, NodeKind.IF_STATEMENT,
+            -> {
+                val st = spinePdStatus(node)
+                if (st == PD_LIST || st == PD_NESTED) spinePdStatement(node, st)
+            }
+            else -> {}
+        }
+    }
+
+    /** Per-node LEAVE hook: pop the frame this node owns. */
+    private fun spinePdLeaveNode(node: Node) {
+        val frames = spinePdFrames
+        while (frames.isNotEmpty() && frames[frames.size - 1].owner === node) {
+            frames.removeAt(frames.size - 1)
+        }
+    }
+
+    private fun spinePdTopAnns(): HashMap<String, TypeNode> =
+        spinePdFrames.lastOrNull()?.anns ?: HashMap()
+
+    private fun spinePdPushCopy(owner: Node, params: List<Parameter>?) {
+        val anns = HashMap(spinePdTopAnns())
+        if (params != null) {
+            for (p in params) {
+                val n = (p.name as? Identifier)?.text
+                val t = p.type
+                if (n != null && t != null) anns[n] = t
+            }
+        }
+        spinePdFrames.add(SpinePdFrame(owner, anns))
+    }
+
+    /** The params seeded into a PD_FNBODY Block's copy (the legacy
+     *  pdduChildScope call sites — get-accessors deliberately excluded). */
+    private fun spinePdParamsOf(body: Node): List<Parameter>? = when (val fn = (body as NodeBase).parent) {
+        is FunctionDeclaration -> fn.parameters
+        is MethodDeclaration -> fn.parameters
+        is Constructor -> fn.parameters
+        is SetAccessor -> fn.parameters
+        else -> null
+    }
+
+    /**
+     * The legacy per-statement work: LIST statements record ALL their
+     * declarator annotations BEFORE any initializer is checked (the
+     * pdduScanStmts loop order); NESTED statements only check. pdduCheckExpr
+     * is a no-op for non-call expressions, so the ambient install is gated to
+     * genuine CallExpression positions.
+     */
+    private fun spinePdStatement(node: Node, status: Int) {
+        when ((node as NodeBase).kindId) {
+            NodeKind.VARIABLE_STATEMENT -> {
+                node as VariableStatement
+                val anns = spinePdTopAnns()
+                if (status == PD_LIST) {
+                    for (d in node.declarationList.declarations) {
+                        val n = (d.name as? Identifier)?.text
+                        val t = d.type
+                        if (n != null && t != null) anns[n] = t
+                    }
+                }
+                for (d in node.declarationList.declarations) {
+                    val init = d.initializer ?: continue
+                    if (init is CallExpression) spinePdWithAmbient {
+                        pdduCheckExpr(init, spineSource, spineFileName, anns)
+                    }
+                }
+            }
+            NodeKind.EXPRESSION_STATEMENT -> {
+                node as ExpressionStatement
+                val e = node.expression
+                if (e is CallExpression) spinePdWithAmbient {
+                    pdduCheckExpr(e, spineSource, spineFileName, spinePdTopAnns())
+                }
+            }
+            NodeKind.RETURN_STATEMENT -> {
+                node as ReturnStatement
+                val e = node.expression
+                if (e is CallExpression) spinePdWithAmbient {
+                    pdduCheckExpr(e, spineSource, spineFileName, spinePdTopAnns())
+                }
+            }
+            NodeKind.IF_STATEMENT -> {
+                node as IfStatement
+                val e = node.expression
+                if (e is CallExpression) spinePdWithAmbient {
+                    pdduCheckExpr(e, spineSource, spineFileName, spinePdTopAnns())
+                }
+            }
+            else -> {}
+        }
+    }
+
+    /** The legacy pass never installed currentFileLocals (its slot's resting
+     *  value applied); mid-spine it is per-file, so install the spine-entry
+     *  resting value around each dispatch. */
+    private inline fun spinePdWithAmbient(block: () -> Unit) {
+        val saved = currentFileLocals
+        currentFileLocals = spinePdRestingLocals
+        try {
+            block()
+        } finally {
+            currentFileLocals = saved
+        }
+    }
+
+    /** Memoized reach classifier — the deleted pdduScanStmts/pdduScanStmt
+     *  dispatch arms verbatim (see the PD_* constants). */
+    private fun spinePdStatus(node: Node): Int {
+        if (node is SourceFile) return PD_ROOT
+        val memo = spinePdReachMemo
+        run {
+            val id = (node as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) {
+                val m = memo[id].toInt()
+                if (m != 0) return m
+            }
+        }
+        val chain = spinePdChain
+        chain.clear()
+        var cur: Node = node
+        val anchor: Node?
+        var anchorStatus = PD_NONE
+        while (true) {
+            chain.add(cur)
+            val parent = (cur as NodeBase).parent
+            if (parent == null) { anchor = null; break } // detached/unindexed → NONE
+            if (parent is SourceFile) { anchor = parent; anchorStatus = PD_ROOT; break }
+            val pid = (parent as NodeBase).nodeId
+            val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
+            if (pm != 0) { anchor = parent; anchorStatus = pm; break }
+            cur = parent
+        }
+        var pNode: Node? = anchor
+        var pStatus = anchorStatus
+        var result = PD_NONE
+        for (i in chain.indices.reversed()) {
+            val c = chain[i]
+            result = if (pNode == null || pStatus == PD_NONE) PD_NONE
+                else spinePdEdge(pNode, pStatus, c)
+            val cid = (c as NodeBase).nodeId
+            if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
+            pNode = c
+            pStatus = result
+        }
+        chain.clear()
+        return result
+    }
+
+    /** The edge rules — the deleted recursion arms verbatim. Unlisted edges
+     *  are NONE. */
+    private fun spinePdEdge(parent: Node, pStatus: Int, child: Node): Int = when (pStatus) {
+        PD_ROOT -> if (child is Statement) PD_LIST else PD_NONE
+        PD_LIST, PD_NESTED -> when (parent) {
+            is Block -> if (child is Statement) PD_LIST else PD_NONE
+            is IfStatement ->
+                if (child === parent.thenStatement || child === parent.elseStatement) PD_NESTED else PD_NONE
+            is ForStatement -> if (child === parent.statement) PD_NESTED else PD_NONE
+            is ForInStatement -> if (child === parent.statement) PD_NESTED else PD_NONE
+            is ForOfStatement -> if (child === parent.statement) PD_NESTED else PD_NONE
+            is WhileStatement -> if (child === parent.statement) PD_NESTED else PD_NONE
+            is DoStatement -> if (child === parent.statement) PD_NESTED else PD_NONE
+            is FunctionDeclaration -> if (child === parent.body) PD_FNBODY else PD_NONE
+            is ModuleDeclaration -> if (child === parent.body && child is ModuleBlock) PD_MODBLOCK else PD_NONE
+            is ClassDeclaration -> when (child) {
+                is MethodDeclaration, is Constructor, is SetAccessor -> PD_MEMBER_PARAMS
+                is GetAccessor -> PD_MEMBER_PLAIN
+                else -> PD_NONE
+            }
+            else -> PD_NONE
+        }
+        PD_MEMBER_PARAMS -> when (parent) {
+            is MethodDeclaration -> if (child === parent.body) PD_FNBODY else PD_NONE
+            is Constructor -> if (child === parent.body) PD_FNBODY else PD_NONE
+            is SetAccessor -> if (child === parent.body) PD_FNBODY else PD_NONE
+            else -> PD_NONE
+        }
+        PD_MEMBER_PLAIN -> if (parent is GetAccessor && child === parent.body) PD_FNBODY_PLAIN else PD_NONE
+        PD_FNBODY, PD_FNBODY_PLAIN, PD_MODBLOCK -> if (child is Statement) PD_LIST else PD_NONE
+        else -> PD_NONE
+    }
+
     /**
      * B78.2: filter `uninitialized` (which may include `var` and `const` decls
      * from prior collection passes) to keep only names declared as `let` in the
@@ -20712,6 +20944,9 @@ class Checker(
         // per-file currentFileLocals install) — capture it here.
         spineIrRestingLocals = currentFileLocals
         spineIrRestingParams = currentFunctionParams
+        // (M0.4) round 624: the array-push pass's dispatches run under the
+        // spine-entry resting currentFileLocals (its legacy slot's ambient).
+        spinePdRestingLocals = currentFileLocals
         // INV.4(d) walker 9: the const-assignment anchors' B116 param-typing
         // rebuild starts from the PRE-SPINE resting bases.
         spineCaRestingLocalTypes = currentLocalTypes
@@ -20808,6 +21043,7 @@ class Checker(
                 spineCmSetup(result)
                 spineNpSetup(result)
                 spineOsSetup(result)
+                spinePdSetup(result)
                 spineUResAuditActive = unresolvedAuditEnabled && spineUResActive
                 try {
                     spineWalkFile(sf)
@@ -20830,6 +21066,7 @@ class Checker(
                     spineCmTeardown()
                     spineNpTeardown()
                     spineOsTeardown()
+                    spinePdTeardown()
                 }
                 spineResolveDeferredIterationChecks()
             }
@@ -21000,6 +21237,7 @@ class Checker(
         // per-statement frame step + core-frame spawns.
         if (spineDaActive) spineDaEnterNode(node)
         if (spineOsActive) spineOsEnterNode(node)
+        if (spinePdActive) spinePdEnterNode(node)
         // INV.4(d) walker 7: the use-before-declaration pass — the per-list
         // ForwardRefs anchor + loop-header self-ref checks.
         if (spineUbdActive) spineUbdEnterNode(node)
@@ -21223,6 +21461,7 @@ class Checker(
         // INV.4(d) walker 5: the definite-assignment pass's core-frame pops.
         if (spineDaActive) spineDaLeaveNode(node)
         if (spineOsActive) spineOsLeaveNode(node)
+        if (spinePdActive) spinePdLeaveNode(node)
         // INV.4(d) walker 9: the const-assignment pass's frame pops.
         if (spineCaActive) spineCaLeaveNode(node)
         // INV.4(d) walker 13: the nullish-predicates pass — `??` checks at
@@ -47015,6 +47254,26 @@ class Checker(
         private const val OS_SPREADP = 14
         private const val OS_PROPASSIGN = 15
         private const val OS_SHORTHAND = 16
+
+        // (M0.4) round 624 — [spinePdStatus] states (Byte memo; 0 = unknown).
+        // LIST = a direct statement of an active list (records annotations +
+        // checks); NESTED = an if/loop-descended statement (checks, never
+        // records — the legacy pdduScanStmt-without-pdduScanStmts path);
+        // FNBODY/FNBODY_PLAIN = a fn-like's body Block (params-seeded copy /
+        // plain copy for get-accessors); MODBLOCK = a namespace body copy;
+        // MEMBER_* = class-member carriers. Unlisted edges are NONE (the
+        // legacy `else -> {}`s: try/switch/labeled/throw statements, class
+        // property initializers, EVERY function/arrow expression, and all
+        // nested expression positions — pdduCheckExpr never recursed).
+        private const val PD_NONE = 1
+        private const val PD_ROOT = 2
+        private const val PD_LIST = 3
+        private const val PD_NESTED = 4
+        private const val PD_FNBODY = 5
+        private const val PD_FNBODY_PLAIN = 6
+        private const val PD_MODBLOCK = 7
+        private const val PD_MEMBER_PARAMS = 8
+        private const val PD_MEMBER_PLAIN = 9
 
         // INV.4(d) walker 7 (round 536) — [spineUbdStatus] states. STMT = a
         // statement position descended by the deleted checkUBDInStatement;
@@ -155134,57 +155393,10 @@ interface DataView {
         }
     }
 
-    private fun checkArrayPushDiscriminatedUnionElements() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            pdduScanStmts(result.sourceFile.statements, source, fileName, mutableMapOf())
-        }
-    }
-
-    private fun pdduScanStmts(stmts: List<Statement>, source: String, fileName: String, localAnns: MutableMap<String, TypeNode>) {
-        for (st in stmts) {
-            // Accumulate local var annotations so a later `recv.push(arg)` in the
-            // same scope can resolve `recv`/`arg` (function-body locals aren't bound).
-            if (st is VariableStatement) for (d in st.declarationList.declarations) {
-                val n = (d.name as? Identifier)?.text; val t = d.type
-                if (n != null && t != null) localAnns[n] = t
-            }
-            pdduScanStmt(st, source, fileName, localAnns)
-        }
-    }
-
-    private fun pdduChildScope(params: List<Parameter>, localAnns: Map<String, TypeNode>): MutableMap<String, TypeNode> {
-        val child = HashMap(localAnns)
-        for (p in params) { val n = (p.name as? Identifier)?.text; val t = p.type; if (n != null && t != null) child[n] = t }
-        return child
-    }
-
-    private fun pdduScanStmt(stmt: Statement, source: String, fileName: String, localAnns: MutableMap<String, TypeNode>) {
-        when (stmt) {
-            is ExpressionStatement -> pdduCheckExpr(stmt.expression, source, fileName, localAnns)
-            is VariableStatement -> for (d in stmt.declarationList.declarations) d.initializer?.let { pdduCheckExpr(it, source, fileName, localAnns) }
-            is ReturnStatement -> stmt.expression?.let { pdduCheckExpr(it, source, fileName, localAnns) }
-            is Block -> pdduScanStmts(stmt.statements, source, fileName, HashMap(localAnns))
-            is IfStatement -> { pdduCheckExpr(stmt.expression, source, fileName, localAnns); pdduScanStmt(stmt.thenStatement, source, fileName, localAnns); stmt.elseStatement?.let { pdduScanStmt(it, source, fileName, localAnns) } }
-            is ForStatement -> pdduScanStmt(stmt.statement, source, fileName, localAnns)
-            is ForInStatement -> pdduScanStmt(stmt.statement, source, fileName, localAnns)
-            is ForOfStatement -> pdduScanStmt(stmt.statement, source, fileName, localAnns)
-            is WhileStatement -> pdduScanStmt(stmt.statement, source, fileName, localAnns)
-            is DoStatement -> pdduScanStmt(stmt.statement, source, fileName, localAnns)
-            is FunctionDeclaration -> stmt.body?.let { pdduScanStmts(it.statements, source, fileName, pdduChildScope(stmt.parameters, localAnns)) }
-            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { pdduScanStmts(it.statements, source, fileName, HashMap(localAnns)) }
-            is ClassDeclaration -> for (m in stmt.members) when (m) {
-                is MethodDeclaration -> m.body?.let { pdduScanStmts(it.statements, source, fileName, pdduChildScope(m.parameters, localAnns)) }
-                is Constructor -> m.body?.let { pdduScanStmts(it.statements, source, fileName, pdduChildScope(m.parameters, localAnns)) }
-                is GetAccessor -> m.body?.let { pdduScanStmts(it.statements, source, fileName, HashMap(localAnns)) }
-                is SetAccessor -> m.body?.let { pdduScanStmts(it.statements, source, fileName, pdduChildScope(m.parameters, localAnns)) }
-                else -> {}
-            }
-            else -> {}
-        }
-    }
+    // (M0.4, round 624): the per-file driver (checkArrayPushDiscriminatedUnionElements)
+    // and the scan walkers (pdduScanStmts/pdduScanStmt/pdduChildScope) are DELETED —
+    // the walk is spine-hosted (spinePdEnterNode/spinePdStatus); the emission
+    // leaves below are anchor-called with the frame's localAnns map.
 
     /** Resolve an expression's type, falling back to a local annotation map for
      *  function-body locals/params that the standalone walker can't bind. */

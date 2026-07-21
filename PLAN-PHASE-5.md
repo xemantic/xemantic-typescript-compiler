@@ -57,7 +57,27 @@ pin). Gates: suite green at both commits, `--listAll` ×8 byte-identical at
 both commits. Per-item evidence is the pass table (438 → 437 passes; the
 165.6 ms row gone; checkSpine not inflated) — a single-pass ~0.5% wall delta
 is below the ±2% drift band, so no A/B claim; the ARC gets A/B'd after
-several passes land.**
+several passes land. SAME-ROUND SECOND MIGRATION:
+checkArrayPushDiscriminatedUnionElements (B473/B482/B487*, 138.1 ms — the
+#2 tail pass) landed by the same two-commit template. Its legacy shape is
+SIMPLER than spread's in an instructive way: pdduCheckExpr never recursed
+into subexpressions, so ALL emissions are computable at the enters of just
+FOUR statement kinds (expression-statement / var-initializers / return /
+if-condition, gated to genuine CallExpression positions) — no descendant
+anchors at all; its scoping differs deliberately (LIST-level recording of a
+VariableStatement's declarator annotations BEFORE its initializers are
+checked; if/loop descents SHARE the map and never record — only
+Block/ModuleBlock/fn-body boundaries copy; get-accessor bodies copy WITHOUT
+params; try/switch/labeled/throw statements and EVERY function/arrow
+expression are unreached). Its ambient trap is the round-533 one: the
+legacy pass never installed currentFileLocals (its slot's resting null
+applied) while checkSpine sets it per file — the dispatch sandwich installs
+the spine-entry resting value (spinePdRestingLocals). 9 pins
+(M04ArrayPushSpineMigrationTest: the [].splice TS2345 probe at each reached
+position, try/switch/arrow-body/nested-expression negative reach, the
+TS2559 weak-push via a body-local annotation + its block-boundary
+negative). Round-624 total: the top TWO tail passes (303.7 ms of the 6.1 s
+tail) migrated; suite 11,408 → 11,431 (+23 pins).**
 
 **Round 623 (2026-07-20) — (M0.3) slice (viii) LANDED as a MEASURED-NEUTRAL
 structure bundle (−0.30% median, post wins 6/10 pairs — below the ±2%
@@ -469,7 +489,8 @@ structural item instead of landing alone.**
   is the `--passTiming` cost table intersected with
   `docs/perf/pass-census-round619.txt` (top by cost at the round-624 HEAD
   table: checkObjectSpreadInvalidTypes 165.6 ms — **MIGRATED round 624**,
-  checkArrayPushDiscriminatedUnionElements 138 ms, checkImplicitThis 127 ms,
+  checkArrayPushDiscriminatedUnionElements 138 ms — **MIGRATED round 624**,
+  checkImplicitThis 127 ms,
   checkFnTypedParamCalls 119 ms, checkAbstractClassInstantiation 113 ms,
   checkSymbolToStringConversions 108 ms, checkDefiniteAssignmentViaFlowGraph
   105 ms; 98 passes >20 ms carry 5.3 s of the 6.2 s). Migration protocol per
