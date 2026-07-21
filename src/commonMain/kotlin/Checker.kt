@@ -5091,6 +5091,16 @@ class Checker(
         // are anchor-called). Its one TS2537 consumer
         // (checkErrorElaboration's corpus-unique Container-Ref swap) runs
         // after the spine, and no TS2448/TS2538 dedup consumers exist.
+        // 72b2' (M0.4 slot-move pre-gate, round 631): checkConstEnumDiagnostics
+        // (const-enum cluster TS2474/2475/2476/2477/2478/2567, AST +
+        // const-eval) moved intact from its enum-cluster slot ahead of its
+        // spine migration. Self-contained: no ambient installs, no side
+        // sets, no dedup scans on its codes anywhere; enumValues is a
+        // memoized pure cache (fill-order-free) and scriptFileConstEnumNames
+        // is a lazy pure collector. The hoist crosses the enum/cross-file-
+        // conflict/module passes — resolveAlias/enum-value first-touch order
+        // is the risk class the corpus + listAll ×8 gates decide.
+        pass("checkConstEnumDiagnostics") { checkConstEnumDiagnostics() }
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -6254,8 +6264,8 @@ class Checker(
         pass("checkReverseMappedExcessProps") { checkReverseMappedExcessProps() }
         // 72b. Enum member initializers may not forward-reference later members (TS2651)
         pass("checkEnumForwardReferences") { checkEnumForwardReferences() }
-        // 72b2. Const-enum cluster: TS2474/2475/2476/2477/2478/2567 (AST + const-eval).
-        pass("checkConstEnumDiagnostics") { checkConstEnumDiagnostics() }
+        // 72b2. checkConstEnumDiagnostics moved to the post-spine slot — see
+        // the pass("checkSpine") site (M0.4 slot-move pre-gate, round 631).
         // 72c. TS2408 (setter value-returns) migrated to the check spine
         // (INV.4(b) batch 9) — see spineCheckSetterReturns.
         // 72d. A class's own name used in a direct member's computed property name is a

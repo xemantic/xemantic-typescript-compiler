@@ -58,8 +58,22 @@ artifacts, modulo the `time:` line); pass table 430 → 429 (the row gone;
 checkSpine 19,309.9 ms single-run — nominally above the 18.0–19.1 s band,
 but the same capture's WALL was 28.6 s post vs 30.1 s pre, so box drift,
 not inflation); warning-clean. M0.4 running total: top NINE tail passes
-migrated. NEXT: checkConstEnumDiagnostics (122.6 ms at this round's
-table) — slot-move pre-gate first per the template.**
+migrated. SESSION TAIL: the checkConstEnumDiagnostics (#10, 122.6 ms at
+this round's table — the const-enum cluster TS2474/2475/2476/2477/2478/
+2567, AST + const-eval) slot-move pre-gate landed (suite 11,589/0;
+listAll ×8 identical). Its map for the migrator: fully self-contained —
+no ambient installs, no side sets, no dedup scans on its codes anywhere;
+`enumValues` is a memoized pure cache and `scriptFileConstEnumNames` a
+lazy pure collector; THREE per-file sub-parts over `checkedResults`
+(non-.d.ts, gated on the file HAVING const enums via
+collectConstEnumDecls): (1) declaration-level TS2474/2477/2478 per
+const-enum decl (anchor candidate: EnumDeclaration enters), (2) the
+TS2567 const-enum + instantiated-namespace merge scan over TOP-LEVEL
+statements only (a per-file file-END or first-anchor dispatch, not
+per-node), (3) the TS2475/2476 usage walk (walkConstEnumUsageStmt — its
+own recursion with quirks to pin: typeof operands NOT flagged,
+ShorthandPropertyAssignment only its objectAssignmentInitializer,
+fn-like bodies reached via the statement walker's fn arms).**
 
 **Round 630 (2026-07-21) — (M0.4) eighth tail-pass migration:
 checkSameTargetReferenceCastOverlap (TS2352 same-target-Reference cast +
