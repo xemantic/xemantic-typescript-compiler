@@ -4868,6 +4868,10 @@ class Checker(
         // is ON THE SPINE — see spineOsEnterNode/spineOsStatus; the legacy
         // recursion walkers are deleted (the emission leaves
         // spread2698CheckOperand/rest2700Check are anchor-called).
+        // B473 (M0.4 slot-move pre-gate, round 624): arr.push discriminated-union
+        // elements (TS2741/2739/2740 + the B482/B487* siblings) — moved here from
+        // its legacy slot ahead of its spine migration.
+        pass("checkArrayPushDiscriminatedUnionElements") { checkArrayPushDiscriminatedUnionElements() }
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -5671,9 +5675,8 @@ class Checker(
         pass("checkEnumNominalClassMismatches") { checkEnumNominalClassMismatches() }
         // B426: TS2783 — object-literal property overwritten by a later spread that guarantees it
         pass("checkSpreadPropertyOverrides") { checkSpreadPropertyOverrides() }
-        // B473: TS2741/2739/2740 — `arr.push({ p: [<objLit>] })` where the element type of `p`
-        // is a discriminated union and an element selects one member but misses its required props
-        pass("checkArrayPushDiscriminatedUnionElements") { checkArrayPushDiscriminatedUnionElements() }
+        // B473: array-push discriminated-union elements MOVED to the post-spine
+        // slot (M0.4 slot-move pre-gate, round 624) — see the pass("checkSpine") site.
         // destructuringTuple (#32140): `const [x] = <numArrayLit>.reduce((p,e)=>p.concat(e), [])`
         pass("checkReduceConcatEmptyInitDestructure") { checkReduceConcatEmptyInitDestructure() }
         // overloadresolutionWithConstraintCheckingDeferred: suppress our wrong TS2322 + reemit the
