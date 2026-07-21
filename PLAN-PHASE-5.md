@@ -20,6 +20,52 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 625 (2026-07-21) — (M0.4) third tail-pass migration: checkImplicitThis
+(TS2683/TS7041/TS7017, 127 ms — the #3 tail pass) is ON THE SPINE; the legacy
+recursion (checkThisInStatements / checkThisInStatement /
+checkThisInClassElement / checkThisInExpr, ~506 lines) is DELETED.** Two
+commits per the round-624 template. The instructive shape: the pass threaded a
+purely DOWNWARD 4-field context (thisIsTyped / insideFunction /
+shadowFunctionPos / insideArrowFunction) with NO statement-ordered state, so
+it reproduces as a pure PULL-based per-anchor ancestor fold
+(spineItContextAt/spineItEdge) with NO frames, NO leave hook, and NO memo —
+`this` anchors are rare enough that one O(depth) climb per anchor beats a
+per-node ByteArray. Legacy quirks reproduced verbatim: the CallExpression-
+CALLEE edge alone DROPS the arrow context (the sole legacy call omitting the
+insideArrowFunction parameter — `(() => this())` never draws TS7041) while
+the PropertyAccess RECEIVER keeps it (`(() => this.x)` fires TS7041 at the
+receiver AND TS7017 at the name — the first cut dropped BOTH edges from a
+misread of the legacy call arity; the CORPUS caught it as 3 regressions
+(topLevelLambda3 / noImplicitThisFunctions / emitCapturingThisInTuple-
+Destructuring1) that all 8 listAll profiles missed — tsc's own sources have
+no top-level-arrow `this.x`, so the corpus is the only pin for this family);
+param defaults / object-literal ACCESSOR bodies / enum members / heritage
+clauses / class static blocks stay unreached (class EXPRESSIONS' members ARE
+reached, unlike the os/pd passes; a DOTTED `namespace A.B` is ONE
+ModuleDeclaration with a ModuleBlock body, so it IS walked); the B123 shadow
+rule (only a typed→untyped fn boundary carries the TS2738 pos — an
+untyped→untyped nesting resets to −1); the object-literal fn-expr-property
+fixed typed ctx; and the two contextual-`this` carrier edges (the round-79h
+call-arg probe, the B374 var-annotation probe) now fire ONLY when a `this`
+anchor actually sits beneath the fn-expr — a probe-schedule delta vs the
+legacy eager walk, confirmed inert by the byte-identity gates. Ambient
+sandwich = currentFileLocals only (the round-533 resting-locals rule — the
+probes resolve types through getTypeOfIdentifier). TRAP HIT, gate CAUGHT: the
+first cut declared the spineIt fields at the new-code site (post-init) — the
+documented Kotlin init-order gotcha struck exactly as written (spineItChain
+null during the init-block pipeline → NPE on the compiler profile, caught by
+the listAll ×8 gate as a one-profile crash diff); fields moved PRE-init next
+to the spinePd fields. 18 local pins (M04ImplicitThisSpineMigrationTest:
+TS2683 fire/suppress both directions, the TS2738 shadow + B123 no-related
+pins, TS7041 + the callee-drop quirk + the receiver-keeps-arrow pin, TS7017
++ known-global negative, both contextual-`this` suppressions + the
+no-this-param negative control, plain + dotted namespace both firing,
+param-default and objlit-accessor negative reach). Gates: suite 11,431 →
+11,449/0 (+18), `--listAll` ×8 byte-identical at both commits, pass table
+436 → 435 (the checkImplicitThis row — 127 ms at the round-624 table, 82 ms
+on today's box — gone; checkSpine 19.0 → 18.0 s single-run, NOT inflated),
+warning-clean. M0.4 running total: top THREE tail passes migrated.**
+
 **Round 624 (2026-07-21) — (M0.4) OPENS: the first tail-pass migration —
 checkObjectSpreadInvalidTypes (TS2698/TS2700, the TOP tail pass at 165.6 ms
 on the fresh HEAD `--passTiming` table) is ON THE SPINE; its per-file driver
@@ -490,7 +536,10 @@ structural item instead of landing alone.**
   `docs/perf/pass-census-round619.txt` (top by cost at the round-624 HEAD
   table: checkObjectSpreadInvalidTypes 165.6 ms — **MIGRATED round 624**,
   checkArrayPushDiscriminatedUnionElements 138 ms — **MIGRATED round 624**,
-  checkImplicitThis 127 ms,
+  checkImplicitThis 127 ms — **MIGRATED round 625** (the frameless variant:
+  a pass threading ONLY downward context — no statement-ordered state —
+  migrates as a pure pull-based per-anchor ancestor fold, no frames, no
+  leave hook, no memo when anchors are rare),
   checkFnTypedParamCalls 119 ms, checkAbstractClassInstantiation 113 ms,
   checkSymbolToStringConversions 108 ms, checkDefiniteAssignmentViaFlowGraph
   105 ms; 98 passes >20 ms carry 5.3 s of the 6.2 s). Migration protocol per

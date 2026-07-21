@@ -3419,6 +3419,18 @@ class Checker(
     /** currentFileLocals at spine ENTRY — what the slot-moved legacy pass saw. */
     private var spinePdRestingLocals: SymbolTable? = null
 
+    // ── (M0.4) round 625: checkImplicitThis on the spine ───────────────────
+    // TS2683/TS7041/TS7017 anchors at `this` Identifiers / `this.<name>`
+    // accesses; pull-based per-anchor context fold (no memo — anchors are
+    // rare). Fields PRE-init (the pipeline runs inside `init`; a post-init
+    // `val` initializer would leave the field null during checking).
+    private var spineItRunActive = false
+    private var spineItFileActive = false
+    /** currentFileLocals at spine ENTRY — what the slot-moved legacy pass saw. */
+    private var spineItRestingLocals: SymbolTable? = null
+    /** Reusable ancestor-chain buffer for the per-anchor climbs. */
+    private val spineItChain = ArrayList<Node>(32)
+
     // ── INV.4(d) walker 6 (round 535): checkArgumentCounts on the spine ────
     // The function-call arity pass (TS2554/TS2555/TS2575) — the recursion
     // walkers (checkArgCountInStatements/-InStatement/-InExpr(Core)) are
@@ -4892,15 +4904,12 @@ class Checker(
         // (TS2741/2739/2740 + the B482/B487* siblings) is ON THE SPINE — see
         // spinePdEnterNode/spinePdStatus; the legacy scan walkers are deleted
         // (the emission leaves pdduCheckExpr/pdduCheckElement are anchor-called).
-        // 22 (M0.4 slot-move pre-gate): checkImplicitThis (TS2683/TS7041/TS7017)
-        // moved intact from its legacy 21b slot to the post-spine slot ahead of
-        // its spine migration. Round 79h: mirror the TS2454/TS2564 convention —
-        // TS2683 fires by default in the test harness unless `@strict: false`
-        // was set explicitly. JS files and contextually-typed `this` are
-        // suppressed inside `checkImplicitThis`.
-        if (options.noImplicitThis || options.strict || !options.strictExplicitlyFalse) {
-            pass("checkImplicitThis") { checkImplicitThis() }
-        }
+        // 22 (M0.4, round 625): checkImplicitThis (TS2683/TS7041/TS7017) is ON
+        // THE SPINE — see spineItEnterNode/spineItContextAt/spineItEdge; the
+        // legacy recursion walkers are deleted (emitTS2683 + the
+        // contextual-`this` probes are anchor-called). The legacy dispatch gate
+        // (round 79h: TS2683 fires unless `@strict: false` explicit) lives on
+        // as spineItRunActive.
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -20949,6 +20958,11 @@ class Checker(
         // (M0.4) round 624: the array-push pass's dispatches run under the
         // spine-entry resting currentFileLocals (its legacy slot's ambient).
         spinePdRestingLocals = currentFileLocals
+        // (M0.4) round 625: the implicit-this anchors likewise — plus the
+        // legacy dispatch gate (round 79h TS2454/TS2564 convention).
+        spineItRestingLocals = currentFileLocals
+        spineItRunActive = options.noImplicitThis || options.strict ||
+            !options.strictExplicitlyFalse
         // INV.4(d) walker 9: the const-assignment anchors' B116 param-typing
         // rebuild starts from the PRE-SPINE resting bases.
         spineCaRestingLocalTypes = currentLocalTypes
@@ -21046,6 +21060,7 @@ class Checker(
                 spineNpSetup(result)
                 spineOsSetup(result)
                 spinePdSetup(result)
+                spineItSetup()
                 spineUResAuditActive = unresolvedAuditEnabled && spineUResActive
                 try {
                     spineWalkFile(sf)
@@ -21069,6 +21084,7 @@ class Checker(
                     spineNpTeardown()
                     spineOsTeardown()
                     spinePdTeardown()
+                    spineItTeardown()
                 }
                 spineResolveDeferredIterationChecks()
             }
@@ -21240,6 +21256,9 @@ class Checker(
         if (spineDaActive) spineDaEnterNode(node)
         if (spineOsActive) spineOsEnterNode(node)
         if (spinePdActive) spinePdEnterNode(node)
+        // (M0.4) round 625: the implicit-this anchors (`this` Identifiers,
+        // `this.<name>` accesses) — pull-based context, no frames/leave hook.
+        if (spineItFileActive) spineItEnterNode(node)
         // INV.4(d) walker 7: the use-before-declaration pass — the per-list
         // ForwardRefs anchor + loop-header self-ref checks.
         if (spineUbdActive) spineUbdEnterNode(node)
@@ -57508,21 +57527,6 @@ interface DataView {
     }
 
     // -----------------------------------------------------------------------
-    // Implicit this checking (TS2683)
-    // -----------------------------------------------------------------------
-
-    /**
-     * Check for `this` expressions in functions without a `this:` parameter annotation
-     * when noImplicitThis is enabled. Emits TS2683.
-     *
-     * The "this context" tracks whether `this` is typed (in a class member) or untyped
-     * (in a regular function without `this:` param). Arrow functions are transparent —
-     * they inherit the outer `this` context.
-     *
-     * @param shadowFunctionPos when non-null, the position of the function that shadows
-     *   an outer typed `this` (for the related TS2738 diagnostic)
-     */
-    // -----------------------------------------------------------------------
     // TS2526: `this` type outside a class/interface member (B98b, round 82)
     // -----------------------------------------------------------------------
     /** A `this` TYPE (ThisType node) is only valid inside a non-static class/interface member.
@@ -61021,514 +61025,289 @@ interface DataView {
         }
     }
 
-    private fun checkImplicitThis() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            // Round 79h: skip JS-like files under the harness-DEFAULT gate. Under
-            // allowJs/checkJs TypeScript infers `this` from JSDoc `@this`,
-            // prototype-assignment and IIFE context, so a bare `this` in a JS file is
-            // NOT implicit-any the way it is in a `.ts` file. The blanket skip is FP-safe
-            // for the default case and prevents regressions on
-            // `signaturesUseJSDocForOptionalParameters` / `noParameterReassignmentJSIIFE`
-            // (neither sets `@noImplicitThis: true`). B438b: but an EXPLICIT
-            // `@noImplicitThis: true` JS file DOES expect TS2683 (thisInFunctionCallJs) —
-            // the downstream walker already suppresses via `@this`/contextual-this/
-            // object-literal-method-this, so let those files through.
-            if (isJsLikeFileName(fileName) && !options.noImplicitThis) continue
-            val source = result.sourceFile.text
-            checkThisInStatements(
-                result.sourceFile.statements, source, fileName,
-                thisIsTyped = false, // file level — this is 'any' but we don't error at file level
-                insideFunction = false, // not inside any function yet
-                shadowFunctionPos = -1
-            )
-        }
-    }
-
     private fun isJsLikeFileName(fileName: String): Boolean =
         fileName.endsWith(".js") || fileName.endsWith(".jsx") ||
             fileName.endsWith(".cjs") || fileName.endsWith(".mjs")
 
-    private fun checkThisInStatements(
-        statements: List<Statement>,
-        source: String,
-        fileName: String,
-        thisIsTyped: Boolean,
-        insideFunction: Boolean,
-        shadowFunctionPos: Int,
-        insideArrowFunction: Boolean = false,
-    ) {
-        for (stmt in statements) {
-            checkThisInStatement(stmt, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-        }
+    // -----------------------------------------------------------------------
+    // (M0.4) round 625: checkImplicitThis (TS2683/TS7041/TS7017) ON THE SPINE.
+    // The legacy per-file recursion (checkThisInStatements / checkThisInStatement
+    // / checkThisInClassElement / checkThisInExpr) is deleted. The pass threaded
+    // a purely DOWNWARD context — thisIsTyped / insideFunction /
+    // shadowFunctionPos / insideArrowFunction — so it reproduces PULL-based: at
+    // each anchor (a `this` Identifier, a `this.<name>` property access) one
+    // O(depth) ancestor climb folds the deleted edge rules top-down
+    // ([spineItEdge]); anchors are rare enough that no memo is needed. Unlisted
+    // edges are unreached — param defaults, computed names, heritage clauses,
+    // enum members, class static blocks, dotted-namespace bodies, and
+    // object-literal ACCESSOR bodies reproduce the legacy silences verbatim,
+    // while class EXPRESSIONS' members ARE reached (unlike the os/pd passes).
+    // One deliberate context DROP rides the edges: the CallExpression-CALLEE
+    // edge clears insideArrowFunction (the sole legacy call omitting the
+    // parameter), so `(() => this())`'s callee never draws TS7041 — while the
+    // PropertyAccess RECEIVER keeps it (`(() => this.x)` fires TS7041 at the
+    // receiver AND TS7017 at the name, emitCapturingThisInTupleDestructuring1).
+    // -----------------------------------------------------------------------
+
+    // (The spineItRunActive / spineItFileActive / spineItRestingLocals /
+    // spineItChain fields live PRE-init next to the spinePd fields — the
+    // Kotlin init-order rule.)
+
+    /** Per-file gate: the legacy dts skip + the round-79h/B438b JS-like skip
+     *  (a JS file is checked only under an EXPLICIT `@noImplicitThis: true`). */
+    private fun spineItSetup() {
+        spineItFileActive = spineItRunActive && !spineIsDts &&
+            (!spineIsJsLike || options.noImplicitThis)
     }
 
-    private fun checkThisInStatement(
-        stmt: Statement,
-        source: String,
-        fileName: String,
-        thisIsTyped: Boolean,
-        insideFunction: Boolean,
-        shadowFunctionPos: Int,
-        insideArrowFunction: Boolean = false,
-    ) {
-        when (stmt) {
-            is FunctionDeclaration -> {
-                if (ModifierFlag.Declare in stmt.modifiers) return
-                val hasThisParam = hasThisParameter(stmt.parameters)
-                // 17.64: extend 17.63's @this JSDoc detection from FunctionExpression
-                // to FunctionDeclaration. JS-like files only.
-                val hasJSDocThis = hasJSDocThisTag(stmt.leadingComments, fileName)
-                val newThisIsTyped = hasThisParam || hasJSDocThis
-                // B123: reset to -1 for a function nested inside an already-untyped
-                // function — the outer `this` is implicit-any, so no concrete value is
-                // shadowed and no TS2738 related-info should attach (see the matching
-                // FunctionExpression branch). `function inner(){ this }` inside a regular
-                // `prop = function(){…}` initializer gets NO related (TS attaches it only
-                // to the first concrete-`this`-shadowing function).
-                val newShadowPos = if (!newThisIsTyped && thisIsTyped) {
-                    // This function shadows a typed this context
-                    stmt.name?.pos ?: stmt.pos
-                } else -1
-                stmt.body?.let {
-                    checkThisInStatements(
-                        it.statements, source, fileName,
-                        thisIsTyped = newThisIsTyped,
-                        insideFunction = true,
-                        shadowFunctionPos = newShadowPos,
-                        insideArrowFunction = false, // function resets arrow context
-                    )
-                }
-            }
-            is ClassDeclaration -> {
-                if (ModifierFlag.Declare in stmt.modifiers) return
-                for (member in stmt.members) {
-                    checkThisInClassElement(member, source, fileName)
-                }
-            }
-            is VariableStatement -> {
-                for (decl in stmt.declarationList.declarations) {
-                    decl.initializer?.let {
-                        // B374: a function-expression initializer of a variable annotated with
-                        // a function type carrying a `this:` parameter (direct or via a type
-                        // alias) has a contextually-typed `this` → suppress TS2683 inside its
-                        // body (`const f: (this: Foo) => void = function() { this.x }`).
-                        val ctxThis = it is FunctionExpression &&
-                            ptpContextualThisType(decl.type, null) != null
-                        checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction, contextualThisTyped = ctxThis)
-                    }
-                }
-            }
-            is ExpressionStatement -> {
-                checkThisInExpr(stmt.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-            }
-            is ReturnStatement -> {
-                stmt.expression?.let {
-                    checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-                }
-            }
-            is IfStatement -> {
-                checkThisInExpr(stmt.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-                checkThisInStatement(stmt.thenStatement, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-                stmt.elseStatement?.let {
-                    checkThisInStatement(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-                }
-            }
-            is Block -> {
-                checkThisInStatements(stmt.statements, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-            }
-            is ForStatement -> {
-                stmt.initializer?.let {
-                    when (it) {
-                        is Expression -> checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-                        is VariableDeclarationList -> {
-                            for (decl in it.declarations) {
-                                decl.initializer?.let { init ->
-                                    checkThisInExpr(init, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-                                }
-                            }
-                        }
-                        else -> {}
-                    }
-                }
-                stmt.condition?.let { checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction) }
-                stmt.incrementor?.let { checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction) }
-                checkThisInStatement(stmt.statement, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-            }
-            is ForInStatement -> {
-                checkThisInExpr(stmt.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-                checkThisInStatement(stmt.statement, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-            }
-            is ForOfStatement -> {
-                checkThisInExpr(stmt.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-                checkThisInStatement(stmt.statement, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-            }
-            is WhileStatement -> {
-                checkThisInExpr(stmt.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-                checkThisInStatement(stmt.statement, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-            }
-            is DoStatement -> {
-                checkThisInStatement(stmt.statement, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-                checkThisInExpr(stmt.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-            }
-            is SwitchStatement -> {
-                checkThisInExpr(stmt.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-                for (clause in stmt.caseBlock) {
-                    when (clause) {
-                        is CaseClause -> {
-                            checkThisInExpr(clause.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-                            checkThisInStatements(clause.statements, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-                        }
-                        is DefaultClause -> {
-                            checkThisInStatements(clause.statements, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-                        }
-                        else -> {}
-                    }
-                }
-            }
-            is ThrowStatement -> {
-                stmt.expression?.let {
-                    checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-                }
-            }
-            is TryStatement -> {
-                checkThisInStatements(stmt.tryBlock.statements, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-                stmt.catchClause?.let {
-                    checkThisInStatements(it.block.statements, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-                }
-                stmt.finallyBlock?.let {
-                    checkThisInStatements(it.statements, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-                }
-            }
-            is LabeledStatement -> {
-                checkThisInStatement(stmt.statement, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-            }
-            is ModuleDeclaration -> {
-                when (val body = stmt.body) {
-                    is ModuleBlock -> checkThisInStatements(
-                        body.statements, source, fileName,
-                        thisIsTyped = false, insideFunction = false, shadowFunctionPos = -1
-                    )
-                    else -> {}
-                }
-            }
-            else -> {}
-        }
+    private fun spineItTeardown() {
+        spineItFileActive = false
     }
 
-    private fun checkThisInClassElement(
-        element: ClassElement,
-        source: String,
-        fileName: String,
-    ) {
-        // Inside class members, `this` is typed — no error
-        when (element) {
-            is MethodDeclaration -> {
-                element.body?.let {
-                    checkThisInStatements(
-                        it.statements, source, fileName,
-                        thisIsTyped = true, insideFunction = true, shadowFunctionPos = -1
-                    )
-                }
-            }
-            is Constructor -> {
-                element.body?.let {
-                    checkThisInStatements(
-                        it.statements, source, fileName,
-                        thisIsTyped = true, insideFunction = true, shadowFunctionPos = -1
-                    )
-                }
-            }
-            is GetAccessor -> {
-                element.body?.let {
-                    checkThisInStatements(
-                        it.statements, source, fileName,
-                        thisIsTyped = true, insideFunction = true, shadowFunctionPos = -1
-                    )
-                }
-            }
-            is SetAccessor -> {
-                element.body?.let {
-                    checkThisInStatements(
-                        it.statements, source, fileName,
-                        thisIsTyped = true, insideFunction = true, shadowFunctionPos = -1
-                    )
-                }
-            }
-            is PropertyDeclaration -> {
-                // Property initializers: `this` is typed (class context)
-                // but function expressions in property initializers create new `this` scope
-                element.initializer?.let {
-                    checkThisInExpr(
-                        it, source, fileName,
-                        thisIsTyped = true, insideFunction = false, shadowFunctionPos = -1
-                    )
-                }
-            }
-            else -> {}
-        }
-    }
+    /** Packed context: bit0 thisIsTyped, bit1 insideFunction, bit2
+     *  insideArrowFunction, bits 3.. (shadowFunctionPos + 1). -1L = unreached. */
+    private fun itCtx(typed: Boolean, insideFn: Boolean, shadow: Int, arrow: Boolean): Long =
+        (if (typed) 1L else 0L) or (if (insideFn) 2L else 0L) or (if (arrow) 4L else 0L) or
+            ((shadow + 1).toLong() shl 3)
 
-    private fun checkThisInExpr(
-        expr: Expression,
-        source: String,
-        fileName: String,
-        thisIsTyped: Boolean,
-        insideFunction: Boolean,
-        shadowFunctionPos: Int,
-        insideArrowFunction: Boolean = false,
-        // Round 79h: set by the CallExpression branch when this expression is a
-        // function-expression argument whose contextual callback type declares a
-        // `this:` parameter (e.g. `each(xs, function(d){...this...})` against
-        // `(this: T, d: T) => T`). Such a `this` is contextually typed, not
-        // implicit-any, so TS2683 is suppressed inside the body.
-        contextualThisTyped: Boolean = false,
-    ) {
-        when (expr) {
-            is Identifier -> {
-                if (expr.text == "this" && !thisIsTyped) {
-                    if (insideFunction) {
-                        emitTS2683(expr, source, fileName, shadowFunctionPos)
-                    } else if (insideArrowFunction) {
-                        // TS7041: arrow function at top level captures global 'this'
-                        val start = expr.pos
-                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+    private fun itTyped(ctx: Long) = ctx and 1L != 0L
+    private fun itInsideFn(ctx: Long) = ctx and 2L != 0L
+    private fun itArrow(ctx: Long) = ctx and 4L != 0L
+    private fun itShadow(ctx: Long) = (ctx shr 3).toInt() - 1
+
+    /** ENTER dispatch for the two anchor shapes. The ambient sandwich wraps
+     *  classifier AND emission — the fn-expr edges' contextual-`this` probes
+     *  ([callArgHasContextualThis]/[ptpContextualThisType]) read type state. */
+    private fun spineItEnterNode(node: Node) {
+        when ((node as NodeBase).kindId) {
+            NodeKind.IDENTIFIER -> {
+                node as Identifier
+                if (node.text != "this") return
+                val saved = currentFileLocals
+                currentFileLocals = spineItRestingLocals
+                try {
+                    val ctx = spineItContextAt(node)
+                    if (ctx == -1L || itTyped(ctx)) return
+                    if (itInsideFn(ctx)) {
+                        emitTS2683(node, spineSource, spineFileName, itShadow(ctx))
+                    } else if (itArrow(ctx)) {
+                        // TS7041: arrow function at top level captures global 'this'.
+                        val start = node.pos
+                        val (line, character) = getLineAndCharacterOfPosition(spineSource, start)
                         diagnostics.add(Diagnostic(
                             message = "The containing arrow function captures the global value of 'this'.",
-                            category = DiagnosticCategory.Error,
-                            code = 7041,
-                            fileName = fileName,
-                            line = line,
-                            character = character,
-                            start = start,
-                            length = 4,
+                            category = DiagnosticCategory.Error, code = 7041,
+                            fileName = spineFileName, line = line, character = character,
+                            start = start, length = 4,
                         ))
                     }
+                } finally {
+                    currentFileLocals = saved
                 }
             }
-            is FunctionExpression -> {
-                val hasThisParam = hasThisParameter(expr.parameters)
-                // 17.63: in JS-like files, a leading JSDoc `@this {Type}` annotation
-                // on a function expression types `this` and suppresses TS2683 inside
-                // the body — same effect as a `this:` parameter. The exact type
-                // doesn't matter for the diagnostic; we only check tag presence.
-                val hasJSDocThis = hasJSDocThisTag(expr.leadingComments, fileName)
-                val newThisIsTyped = hasThisParam || hasJSDocThis || contextualThisTyped
-                val newShadowPos = if (!newThisIsTyped && thisIsTyped) {
-                    // This function expression shadows a typed this context
-                    expr.name?.pos ?: expr.pos
-                } else -1
-                // B123: a function nested inside an ALREADY-untyped function does NOT
-                // carry a TS2738 "outer value of 'this' is shadowed" related-info — the
-                // outer `this` is already implicit-any, so there is no concrete outer
-                // value to shadow. TypeScript attaches TS2738 only to the FIRST function
-                // that shadows a concrete (class/arrow-inherited) `this`. Previously the
-                // `!newThisIsTyped && !thisIsTyped` case KEPT `shadowFunctionPos`, wrongly
-                // attaching TS2738 to a nested `function inner(){ this }` inside a regular
-                // function property initializer (thisInPropertyBoundDeclarations).
-                expr.body.let {
-                    checkThisInStatements(
-                        it.statements, source, fileName,
-                        thisIsTyped = newThisIsTyped,
-                        insideFunction = true,
-                        shadowFunctionPos = newShadowPos,
-                        insideArrowFunction = false, // function resets arrow context
-                    )
-                }
-            }
-            is ArrowFunction -> {
-                // Arrow functions are transparent — inherit outer this context.
-                // insideFunction stays as-is: arrows don't create their own this.
-                // insideArrowFunction becomes true so TS7041 can fire on `this` inside
-                // an arrow at top-level (not enclosed by any regular function).
-                when (val body = expr.body) {
-                    is Block -> checkThisInStatements(
-                        body.statements, source, fileName,
-                        thisIsTyped, insideFunction,
-                        shadowFunctionPos,
-                        insideArrowFunction = true,
-                    )
-                    is Expression -> checkThisInExpr(
-                        body, source, fileName,
-                        thisIsTyped, insideFunction,
-                        shadowFunctionPos,
-                        insideArrowFunction = true,
-                    )
-                    else -> {}
-                }
-            }
-            is ClassExpression -> {
-                for (member in expr.members) {
-                    checkThisInClassElement(member, source, fileName)
-                }
-            }
-            is CallExpression -> {
-                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos)
-                expr.arguments.forEachIndexed { i, arg ->
-                    // Round 79h: a function-expression argument whose contextual
-                    // callback type declares a `this:` parameter has a contextually
-                    // typed `this` — suppress TS2683 inside it.
-                    val ctxThis = arg is FunctionExpression && callArgHasContextualThis(expr.expression, i)
-                    checkThisInExpr(arg, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction, contextualThisTyped = ctxThis)
-                }
-            }
-            is NewExpression -> {
-                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-                expr.arguments?.forEach {
-                    checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-                }
-            }
-            is BinaryExpression -> {
-                var current: Expression = expr
-                while (current is BinaryExpression) {
-                    checkThisInExpr(current.right, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-                    current = current.left
-                }
-                checkThisInExpr(current, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-            }
-            is ParenthesizedExpression -> {
-                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-            }
-            is PropertyAccessExpression -> {
-                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-                // B358: `this.<unknown>` where the containing arrow captures GLOBAL
-                // `this` (the TS7041 condition) — the access is an implicit-any
-                // element on `typeof globalThis` → TS7017 at the property name.
-                // noImplicitAny-family gate: explicit @strict:false (without
-                // noImplicitAny) suppresses (noImplicitThisFunctions).
-                val recv = expr.expression
-                if (recv is Identifier && recv.text == "this" && !thisIsTyped &&
-                    !insideFunction && insideArrowFunction &&
-                    (options.noImplicitAny || options.strict ||
+            NodeKind.PROPERTY_ACCESS_EXPRESSION -> {
+                node as PropertyAccessExpression
+                // B358: `this.<unknown>` where the containing arrow captures
+                // GLOBAL `this` (the TS7041 condition) → TS7017 at the property
+                // name. noImplicitAny-family gate: explicit @strict:false
+                // (without noImplicitAny) suppresses (noImplicitThisFunctions).
+                val recv = node.expression
+                if (recv !is Identifier || recv.text != "this") return
+                if (!(options.noImplicitAny || options.strict ||
                         (!options.strictExplicitlyFalse && !options.noImplicitAnyExplicitlyFalse))
-                ) {
-                    val nm = expr.name
-                    if (nm.text !in KNOWN_GLOBALS && globals[nm.text] == null) {
-                        val (l, c) = getLineAndCharacterOfPosition(source, nm.pos)
-                        diagnostics.add(Diagnostic(
-                            message = "Element implicitly has an 'any' type because type 'typeof globalThis' has no index signature.",
-                            category = DiagnosticCategory.Error, code = 7017,
-                            fileName = fileName, line = l, character = c,
-                            start = nm.pos, length = nm.text.length,
-                        ))
-                    }
-                }
-            }
-            is ElementAccessExpression -> {
-                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-                checkThisInExpr(expr.argumentExpression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-            }
-            is ConditionalExpression -> {
-                checkThisInExpr(expr.condition, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-                checkThisInExpr(expr.whenTrue, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-                checkThisInExpr(expr.whenFalse, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-            }
-            is ArrayLiteralExpression -> {
-                expr.elements.forEach {
-                    checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-                }
-            }
-            is ObjectLiteralExpression -> {
-                for (prop in expr.properties) {
-                    when (prop) {
-                        is PropertyAssignment -> {
-                            val init = prop.initializer
-                            if (init is FunctionExpression) {
-                                // Function expressions as object literal property values have
-                                // typed this (TypeScript infers the object type)
-                                init.body.let {
-                                    checkThisInStatements(
-                                        it.statements, source, fileName,
-                                        thisIsTyped = true, insideFunction = true, shadowFunctionPos = -1
-                                    )
-                                }
-                            } else {
-                                checkThisInExpr(init, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-                            }
-                        }
-                        is MethodDeclaration -> {
-                            // Object literal methods have typed this (the object type)
-                            prop.body?.let {
-                                checkThisInStatements(
-                                    it.statements, source, fileName,
-                                    thisIsTyped = true, insideFunction = true, shadowFunctionPos = -1
-                                )
-                            }
-                        }
-                        is SpreadAssignment -> {
-                            checkThisInExpr(prop.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-                        }
-                        is ShorthandPropertyAssignment -> {
-                            prop.objectAssignmentInitializer?.let {
-                                checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-                            }
-                        }
-                        else -> {}
-                    }
-                }
-            }
-            is TemplateExpression -> {
-                for (span in expr.templateSpans) {
-                    checkThisInExpr(span.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-                }
-            }
-            is TaggedTemplateExpression -> {
-                checkThisInExpr(expr.tag, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-                when (val template = expr.template) {
-                    is TemplateExpression -> {
-                        for (span in template.templateSpans) {
-                            checkThisInExpr(span.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-                        }
-                    }
-                    else -> {}
-                }
-            }
-            is PrefixUnaryExpression -> {
-                checkThisInExpr(expr.operand, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-            }
-            is PostfixUnaryExpression -> {
-                checkThisInExpr(expr.operand, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-            }
-            is TypeOfExpression -> {
-                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-            }
-            is VoidExpression -> {
-                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-            }
-            is DeleteExpression -> {
-                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-            }
-            is AwaitExpression -> {
-                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-            }
-            is SpreadElement -> {
-                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-            }
-            is YieldExpression -> {
-                expr.expression?.let {
-                    checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-                }
-            }
-            is AsExpression -> {
-                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-            }
-            is TypeAssertionExpression -> {
-                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-            }
-            is SatisfiesExpression -> {
-                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-            }
-            is NonNullExpression -> {
-                checkThisInExpr(expr.expression, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
-            }
-            is CommaListExpression -> {
-                expr.elements.forEach {
-                    checkThisInExpr(it, source, fileName, thisIsTyped, insideFunction, shadowFunctionPos, insideArrowFunction)
+                ) return
+                val nm = node.name
+                if (nm.text in KNOWN_GLOBALS || globals[nm.text] != null) return
+                val saved = currentFileLocals
+                currentFileLocals = spineItRestingLocals
+                try {
+                    val ctx = spineItContextAt(node)
+                    if (ctx == -1L || itTyped(ctx) || itInsideFn(ctx) || !itArrow(ctx)) return
+                    val (l, c) = getLineAndCharacterOfPosition(spineSource, nm.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Element implicitly has an 'any' type because type 'typeof globalThis' has no index signature.",
+                        category = DiagnosticCategory.Error, code = 7017,
+                        fileName = spineFileName, line = l, character = c,
+                        start = nm.pos, length = nm.text.length,
+                    ))
+                } finally {
+                    currentFileLocals = saved
                 }
             }
             else -> {}
         }
+    }
+
+    /** The legacy downward context at [anchor], or -1L when the deleted walk
+     *  never reached that position: one climb to the SourceFile, then a
+     *  top-down fold of [spineItEdge] over the ancestor chain. */
+    private fun spineItContextAt(anchor: Node): Long {
+        val chain = spineItChain
+        chain.clear()
+        var cur: Node = anchor
+        while (true) {
+            val p = (cur as NodeBase).parent
+            if (p == null) { chain.clear(); return -1L } // detached/unindexed
+            if (p is SourceFile) break // cur is the top-level statement
+            chain.add(cur)
+            cur = p
+        }
+        if (cur !is Statement) { chain.clear(); return -1L }
+        // File level: `this` is any but not reported (the legacy entry ctx).
+        var ctx = itCtx(typed = false, insideFn = false, shadow = -1, arrow = false)
+        var parent: Node = cur
+        for (i in chain.indices.reversed()) {
+            val child = chain[i]
+            ctx = spineItEdge(parent, child, ctx)
+            if (ctx == -1L) break
+            parent = child
+        }
+        chain.clear()
+        return ctx
+    }
+
+    /** The deleted recursion's edge rules, verbatim: given [parent]'s incoming
+     *  [ctx], the ctx entering [child] — or -1L when the walk never descended
+     *  this edge. Class members' fixed contexts are decided at the MEMBER's own
+     *  edge (the class edge just passes, matching checkThisInClassElement). */
+    private fun spineItEdge(parent: Node, child: Node, ctx: Long): Long = when (parent) {
+        // ---- statements (the deleted checkThisInStatement arms) ----
+        is FunctionDeclaration -> {
+            if (ModifierFlag.Declare in parent.modifiers || child !== parent.body) -1L
+            else {
+                val newTyped = hasThisParameter(parent.parameters) ||
+                    hasJSDocThisTag(parent.leadingComments, spineFileName)
+                // B123: only a typed→untyped transition carries the TS2738 pos.
+                val shadow = if (!newTyped && itTyped(ctx)) (parent.name?.pos ?: parent.pos) else -1
+                itCtx(newTyped, insideFn = true, shadow = shadow, arrow = false)
+            }
+        }
+        is ClassDeclaration ->
+            if (ModifierFlag.Declare !in parent.modifiers && child is ClassElement) ctx else -1L
+        is ClassExpression -> if (child is ClassElement) ctx else -1L
+        is MethodDeclaration -> if (child === parent.body) itCtx(true, true, -1, false) else -1L
+        is Constructor -> if (child === parent.body) itCtx(true, true, -1, false) else -1L
+        is GetAccessor -> if (child === parent.body) itCtx(true, true, -1, false) else -1L
+        is SetAccessor -> if (child === parent.body) itCtx(true, true, -1, false) else -1L
+        is PropertyDeclaration ->
+            if (child === parent.initializer) itCtx(true, false, -1, false) else -1L
+        is VariableStatement -> if (child === parent.declarationList) ctx else -1L
+        is VariableDeclarationList -> if (child is VariableDeclaration) ctx else -1L
+        is VariableDeclaration -> if (child === parent.initializer) ctx else -1L
+        is ExpressionStatement -> if (child === parent.expression) ctx else -1L
+        is ReturnStatement -> if (child === parent.expression) ctx else -1L
+        is IfStatement ->
+            if (child === parent.expression || child === parent.thenStatement ||
+                child === parent.elseStatement) ctx else -1L
+        is Block -> if (child is Statement) ctx else -1L
+        is ForStatement ->
+            if (child === parent.initializer || child === parent.condition ||
+                child === parent.incrementor || child === parent.statement) ctx else -1L
+        is ForInStatement ->
+            if (child === parent.expression || child === parent.statement) ctx else -1L
+        is ForOfStatement ->
+            if (child === parent.expression || child === parent.statement) ctx else -1L
+        is WhileStatement ->
+            if (child === parent.expression || child === parent.statement) ctx else -1L
+        is DoStatement ->
+            if (child === parent.statement || child === parent.expression) ctx else -1L
+        is SwitchStatement ->
+            if (child === parent.expression || child is CaseClause || child is DefaultClause) ctx else -1L
+        is CaseClause -> if (child === parent.expression || child is Statement) ctx else -1L
+        is DefaultClause -> if (child is Statement) ctx else -1L
+        is ThrowStatement -> if (child === parent.expression) ctx else -1L
+        is TryStatement ->
+            if (child === parent.tryBlock || child === parent.finallyBlock || child is CatchClause) ctx else -1L
+        is CatchClause -> if (child === parent.block) ctx else -1L
+        is LabeledStatement -> if (child === parent.statement) ctx else -1L
+        is ModuleDeclaration ->
+            // A ModuleBlock body RESETS the ctx; a dotted namespace's nested
+            // ModuleDeclaration body was the legacy `else -> {}` (unreached).
+            if (child === parent.body && child is ModuleBlock) itCtx(false, false, -1, false) else -1L
+        is ModuleBlock -> if (child is Statement) ctx else -1L
+        // ---- expressions (the deleted checkThisInExpr arms) ----
+        is FunctionExpression -> {
+            if (child !== parent.body) -1L
+            else {
+                val pp = (parent as NodeBase).parent
+                if (pp is PropertyAssignment && pp.initializer === parent) {
+                    // Object-literal property-value fn-expr: typed `this` (the
+                    // legacy ObjectLiteral branch's fixed ctx).
+                    itCtx(true, true, -1, false)
+                } else {
+                    // The two contextual-`this` carrier edges (round 79h/B374).
+                    val ctxThis = when {
+                        pp is VariableDeclaration && pp.initializer === parent &&
+                            ((pp as NodeBase).parent as? NodeBase)?.parent is VariableStatement ->
+                            ptpContextualThisType(pp.type, null) != null
+                        pp is CallExpression -> {
+                            val idx = pp.arguments.indexOfFirst { it === parent }
+                            idx >= 0 && callArgHasContextualThis(pp.expression, idx)
+                        }
+                        else -> false
+                    }
+                    val newTyped = hasThisParameter(parent.parameters) ||
+                        hasJSDocThisTag(parent.leadingComments, spineFileName) || ctxThis
+                    val shadow = if (!newTyped && itTyped(ctx)) (parent.name?.pos ?: parent.pos) else -1
+                    itCtx(newTyped, insideFn = true, shadow = shadow, arrow = false)
+                }
+            }
+        }
+        is ArrowFunction ->
+            // Arrows are `this`-transparent; the body walks with arrow=true.
+            if (child === parent.body) itCtx(itTyped(ctx), itInsideFn(ctx), itShadow(ctx), arrow = true)
+            else -1L
+        is CallExpression -> when {
+            // The callee edge DROPS the arrow context (legacy omitted the param).
+            child === parent.expression -> itCtx(itTyped(ctx), itInsideFn(ctx), itShadow(ctx), arrow = false)
+            parent.arguments.any { it === child } -> ctx
+            else -> -1L
+        }
+        is NewExpression -> when {
+            child === parent.expression -> ctx
+            parent.arguments?.any { it === child } == true -> ctx
+            else -> -1L
+        }
+        is BinaryExpression -> if (child === parent.left || child === parent.right) ctx else -1L
+        is ParenthesizedExpression -> if (child === parent.expression) ctx else -1L
+        is PropertyAccessExpression ->
+            // The receiver edge KEEPS the full ctx (arrow included) — only the
+            // CallExpression CALLEE edge drops it. `(() => this.x)` draws
+            // TS7041 at the receiver (topLevelLambda3); `(() => this())` not.
+            if (child === parent.expression) ctx else -1L
+        is ElementAccessExpression ->
+            if (child === parent.expression || child === parent.argumentExpression) ctx else -1L
+        is ConditionalExpression ->
+            if (child === parent.condition || child === parent.whenTrue || child === parent.whenFalse) ctx else -1L
+        is ArrayLiteralExpression -> if (parent.elements.any { it === child }) ctx else -1L
+        is ObjectLiteralExpression -> when (child) {
+            // Get/set accessors were the legacy `else -> {}` (unreached).
+            is PropertyAssignment, is MethodDeclaration, is SpreadAssignment,
+            is ShorthandPropertyAssignment -> ctx
+            else -> -1L
+        }
+        is PropertyAssignment -> if (child === parent.initializer) ctx else -1L
+        is SpreadAssignment -> if (child === parent.expression) ctx else -1L
+        is ShorthandPropertyAssignment ->
+            if (child === parent.objectAssignmentInitializer) ctx else -1L
+        is TemplateExpression -> if (child is TemplateSpan) ctx else -1L
+        is TemplateSpan -> if (child === parent.expression) ctx else -1L
+        is TaggedTemplateExpression ->
+            if (child === parent.tag || (child === parent.template && child is TemplateExpression)) ctx else -1L
+        is PrefixUnaryExpression -> if (child === parent.operand) ctx else -1L
+        is PostfixUnaryExpression -> if (child === parent.operand) ctx else -1L
+        is TypeOfExpression -> if (child === parent.expression) ctx else -1L
+        is VoidExpression -> if (child === parent.expression) ctx else -1L
+        is DeleteExpression -> if (child === parent.expression) ctx else -1L
+        is AwaitExpression -> if (child === parent.expression) ctx else -1L
+        is SpreadElement -> if (child === parent.expression) ctx else -1L
+        is YieldExpression -> if (child === parent.expression) ctx else -1L
+        is AsExpression -> if (child === parent.expression) ctx else -1L
+        is TypeAssertionExpression -> if (child === parent.expression) ctx else -1L
+        is SatisfiesExpression -> if (child === parent.expression) ctx else -1L
+        is NonNullExpression -> if (child === parent.expression) ctx else -1L
+        is CommaListExpression -> if (parent.elements.any { it === child }) ctx else -1L
+        else -> -1L
     }
 
     private fun hasThisParameter(parameters: List<Parameter>): Boolean {
