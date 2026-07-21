@@ -4910,6 +4910,11 @@ class Checker(
         // contextual-`this` probes are anchor-called). The legacy dispatch gate
         // (round 79h: TS2683 fires unless `@strict: false` explicit) lives on
         // as spineItRunActive.
+        // 72a2 (M0.4 slot-move pre-gate): checkFnTypedParamCalls (B128 —
+        // TS2558 type-args on a 0-type-param fn-typed param; TS2345 concrete
+        // arg vs bare unconstrained TP param) moved intact from its legacy
+        // 72a2 slot ahead of its spine migration.
+        pass("checkFnTypedParamCalls") { checkFnTypedParamCalls() }
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -6060,9 +6065,8 @@ class Checker(
         pass("checkClassExpressionOverrides") { checkClassExpressionOverrides() }
         // 72. Check call/new expression type argument count (TS2558)
         pass("checkCallTypeArgCount") { checkCallTypeArgCount() }
-        // 72a2. B128 — calls to function-typed parameters (TS2558 type-args on a
-        // 0-type-param fn type; TS2345 concrete arg vs bare unconstrained TP param).
-        pass("checkFnTypedParamCalls") { checkFnTypedParamCalls() }
+        // 72a2. checkFnTypedParamCalls moved to the post-spine slot — see the
+        // pass("checkSpine") site (M0.4 slot-move pre-gate).
         // 72a3. B218: TS2353 excess props for reverse-mapped single-object-literal
         // args (`{[K in keyof T & keyof C]: T[K]}` params — keys ⊆ keyof C).
         pass("checkReverseMappedExcessProps") { checkReverseMappedExcessProps() }

@@ -64,7 +64,10 @@ param-default and objlit-accessor negative reach). Gates: suite 11,431 →
 11,449/0 (+18), `--listAll` ×8 byte-identical at both commits, pass table
 436 → 435 (the checkImplicitThis row — 127 ms at the round-624 table, 82 ms
 on today's box — gone; checkSpine 19.0 → 18.0 s single-run, NOT inflated),
-warning-clean. M0.4 running total: top THREE tail passes migrated.**
+warning-clean. M0.4 running total: top THREE tail passes migrated. SESSION
+TAIL: the checkFnTypedParamCalls (119 ms, #4 — the B128 FnParamCtx
+downward-threading walker) SLOT-MOVE pre-gate landed (corpus + listAll ×8
+identical) — the next session starts directly at its migration commit.**
 
 **Round 624 (2026-07-21) — (M0.4) OPENS: the first tail-pass migration —
 checkObjectSpreadInvalidTypes (TS2698/TS2700, the TOP tail pass at 165.6 ms
@@ -540,7 +543,9 @@ structural item instead of landing alone.**
   a pass threading ONLY downward context — no statement-ordered state —
   migrates as a pure pull-based per-anchor ancestor fold, no frames, no
   leave hook, no memo when anchors are rare),
-  checkFnTypedParamCalls 119 ms, checkAbstractClassInstantiation 113 ms,
+  checkFnTypedParamCalls 119 ms — slot-move pre-gate LANDED round 625, the
+  migration is the next session's first item,
+  checkAbstractClassInstantiation 113 ms,
   checkSymbolToStringConversions 108 ms, checkDefiniteAssignmentViaFlowGraph
   105 ms; 98 passes >20 ms carry 5.3 s of the 6.2 s). Migration protocol per
   pass (the round-624 template): slot-move pre-gate commit (intact pass to the
