@@ -20,6 +20,53 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 628 (2026-07-21) — (M0.4) sixth tail-pass migration:
+checkSymbolToStringConversions (TS2469/TS2731, 96–108 ms — the #6 tail
+pass) is ON THE SPINE; the legacy recursion (checkSymbolToStringConversions
+/ sym2strHandleFnBody / sym2strHandleBody / sym2strScanStatement /
+sym2strCheckExpr, ~160 lines) DELETED.** The downward-SETS variant of the
+template: the pass threads (symbolNames, tpNames) sets that only
+ACCUMULATE (copies + adds, no removals), so the ctx is a pure function of
+the boundary ancestor chain and rebuilds pull-based per anchor, memoized
+per boundary-CHILD node (spineSyCtxFor). The whole-list locals PREPASS per
+body (collectSymbolLocals — statement-order-independent, descends nested
+control-flow statements but not fn/class/module bodies) reproduces as
+per-boundary LEVELS exactly as the round-627 note predicted; the key
+simplification: ONLY fn-like bodies and ModuleBlocks are collection
+boundaries — the legacy re-collects at inner Blocks / switch clauses / try
+blocks were always SUBSETS of the enclosing body's prepass (set-equal, so
+no boundary needed), and a class PROPERTY initializer needs no boundary
+either (the legacy passed outer names + OUTER tpNames verbatim — the
+climb-through yields exactly that; the initializer being BLIND to the
+class TP is a pinned legacy quirk, as is the accumulate-only no-shadowing
+rule: an inner string-typed param does NOT hide an outer symbol name).
+aliasNames is file-scoped (the collectSymbolAliases fixpoint at
+spineSySetup, with the top-level locals prepass). Anchors are binary `+`
+(left-ELSE-right — one emission per node) / `+=` (RIGHT-only — a symbol
+LEFT of `+=` never fired, pinned) / unary `+` / template spans, each
+pre-filtered on a bare-Identifier operand before any reach/ctx work. Reach
+is the memoized binary classifier (spineSyStatus/spineSyEdge) with two
+edges DIFFERING from the fp/ai classifiers — case-clause EXPRESSIONS and
+bare for-initializer EXPRESSIONS ARE reached (both pinned; the
+anti-copy-paste hazard when cloning a sibling classifier) — while typeof
+operands, tagged templates, and objlit METHOD bodies stay unreached
+(pinned). No ambient sandwich — the emissions read no checker ambient.
+Gates: 25 local pins (M04Sym2StrSpineMigrationTest) verified green against
+the LEGACY walker FIRST; suite 11,490 → 11,515/0; `--listAll` ×8
+byte-identical (46×7 + 94 env-legit artifacts); pass table 433 → 432 (the
+checkSymbolToStringConversions row GONE; checkSpine 18.4–19.1 s across two
+single runs — the 18.0–19.0 round-625..627 band, first reading was box
+drift); warning-clean. M0.4 running total: top SIX tail passes migrated.
+NEXT: checkDefiniteAssignmentViaFlowGraph (89–114 ms by run) — NO
+slot-move pre-gate needed (it already sits in the post-spine region, ~10
+dispatches after checkSpine), but the migrator MUST handle the ordering
+trap: its TS2454 position-dedup scan runs after
+checkCrossFileUseBeforeDeclaration (a post-spine pass whose TS2448/TS2454
+co-emissions the scan must SEE — the round-536 gotcha); anchor-dispatching
+it on the spine would run it BEFORE that pass and double-emit TS2454 in
+multi-file programs, so the migration needs the cross-file pass hoisted
+pre-spine (its own slot-move gate) or the dedup restructured.**
+
 **Round 627 (2026-07-21) — (M0.4) fifth tail-pass migration:
 checkAbstractClassInstantiation (TS2511, 113 ms — the #5 tail pass) is ON THE
 SPINE; the legacy recursion (checkAbstractClassInstantiation /
@@ -436,46 +483,6 @@ is weak evidence for suppression producers. NEXT (top-of-queue): the (M0.1d)
 deletion commit, then (M0.2) kindId table / (M0.3) layout / (M0.4) the
 migration grind, which now carries the whole 6.2 s tail lever.**
 
-**Round 618 (2026-07-20) — the owner-directed perf-target discussion opens:
-fresh profile + JFR at HEAD, and three M0 measurement rungs run to ground —
-two estimates KILLED by measurement, one sharpened into a design number.**
-Fresh `--passTiming` profile (compiler profile, single-threaded): checker-init
-26.7 s = checkSpine 19.5 s (narrowWalks 5.0 s, typeOfExpr 3.6 s overlapping,
-relations(depth0) 0.79 s, typeNode 0.49 s, ~10 s diffuse machinery) + a
-440-pass legacy tail summing 6.24 s + outside-pass 0.9 s. Fresh JFR decomposes
-the diffuse share: forEachChild 5.8% self, HashMap family ~11.6%,
-String-equality ~3.9%, checkMemberAccessMissing 2.5%; `getNode` callers are
-DIFFUSE (flow-callee resolution / FlowGraph init / per-file lookup /
-getTypeOfSymbol / module-specifier caches / relation cache) — no single hot
-map, so the layout work is a structure-class campaign (atoms, links records,
-open-addressing), not site-chasing. `joinTo`: 17/24 samples are
-`normalizePath` (memoize candidate); 4 are internUnion's string keys.
-MEASURED: (1) the JVM flag matrix (G1 vs ParallelGC vs +Xms4g vs
-+UseCompactObjectHeaders, JDK 25, 3 interleaved rotations) is a DEAD-END —
-medians 30.2–30.8 s, spreads overlap the drift band; the workload is not
-GC-bound at -Xmx4g (gotcha added). (2) the emission census (per-pass
-diagnostics delta in `pass()`, new `--passTiming` section): ZERO of the 440
-tail passes emit on the compiler profile — even the 46-error floor is the
-spine's own unresolved-name family; the tail is 6.2 s of walking with no
-output on the primary dashboard profile, pinned only by the corpus → the
-tail triage protocol is batch-disable + corpus bisect (profile censuses
-cannot decide KEEP). (3) the node-kind histogram (indexSourceFile census,
-new section): 858,312 nodes, Identifier 44.2%, top-16 kinds = 88%;
-forEachChild's existing hot-first order is already ~90% optimal — average
-instanceof chain 8.3 current vs 6.5 frequency-optimal (−22% of chain cost
-≈ ~0.5% wall, BELOW the ±2% drift band → deliberately NOT landed, the
-f1/f2 don't-land-unmeasurable lesson) vs 1.0 under a kindId TABLE (−88%
-— the real dispatch item; spineEnterNode is sequential is-tests across
-sub-dispatchers that only a kind switch consolidates). LANDED: the census
-+ histogram instrumentation (diagsByPass via a `diagnosticsSize` view
-registered at init; nodeKindHistogram in indexSourceFile; two dump
-sections; all behind PassTiming.enabled) + 3 pins in Inv0PassTimingTest.
-Gates: corpus 11,372/0 green; off-mode diagnostics md5-identical to the
-pre-change binary on the compiler profile. The M0 (debt burn-down: census
-batch-disable, scaffolding retirement, atoms/links/kind-table, tail
-migration) → M1 (identity stability → revive f1/f2) → M2 (Phase-1 shared
-collectors) arc proposal + revised § 6 targets are IN THIS CONVERSATION,
-awaiting the owner's read of these numbers.**
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
@@ -616,8 +623,18 @@ structural item instead of landing alone.**
   between the legacy handled/unhandled branches, so the reach classifier
   needs no special case; no ambient sandwich — the emission reads no
   checker ambient),
-  checkSymbolToStringConversions 108 ms, checkDefiniteAssignmentViaFlowGraph
-  105 ms; 98 passes >20 ms carry 5.3 s of the 6.2 s). Migration protocol per
+  checkSymbolToStringConversions 108 ms — **MIGRATED round 628** (the
+  downward-SETS variant: accumulate-only (symbolNames, tpNames) sets
+  rebuild pull-based per anchor; the per-body whole-list locals PREPASS
+  reproduces as per-boundary LEVELS with only fn bodies and ModuleBlocks
+  as collection boundaries — inner Block/clause re-collects were always
+  subsets; two reach edges differ from the fp/ai classifiers: case-clause
+  and bare for-initializer EXPRESSIONS are reached),
+  checkDefiniteAssignmentViaFlowGraph
+  105 ms — next; NO slot-move needed (already post-spine) but the TS2454
+  dedup-scan ordering vs checkCrossFileUseBeforeDeclaration is the trap
+  (see the round-628 session note); 98 passes >20 ms carry 5.3 s of the
+  6.2 s). Migration protocol per
   pass (the round-624 template): slot-move pre-gate commit (intact pass to the
   post-spine slot, corpus + listAll ×8), then the migration commit (frames at
   the legacy copy edges, memoized reach classifier, per-dispatch ambient

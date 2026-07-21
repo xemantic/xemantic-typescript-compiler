@@ -3486,6 +3486,40 @@ class Checker(
      *  frozen during the spine — the legacy per-file rescan always agreed). */
     private var spineAiGlobalsAbstract: Set<String>? = null
 
+    // ── (M0.4) round 628: checkSymbolToStringConversions on the spine ──────
+    // TS2469/TS2731 anchors at binary `+`/`+=`, unary `+`, and template-span
+    // operands that are bare Identifiers; reach is the memoized binary
+    // classifier [spineSyStatus] over [spineSyEdge] (the deleted
+    // sym2strScanStatement/sym2strCheckExpr arms verbatim — typeof/void/
+    // delete operands, tagged templates, objlit methods/accessors/shorthand,
+    // param defaults, and class EXPRESSIONS stay UNREACHED; case-clause and
+    // bare for-initializer EXPRESSIONS ARE reached, unlike the fp/ai
+    // classifiers). The downward (symbolNames, tpNames) context ONLY
+    // ACCUMULATES (copies + adds — the whole-list locals PREPASS per body,
+    // params per fn boundary, class TPs for method-like members, module
+    // locals per ModuleBlock), so it is a pure function of the boundary
+    // ancestor chain and rebuilds PULL-based per anchor, memoized per
+    // boundary-child node ([spineSyCtxFor]); aliasNames is file-scoped
+    // (collectSymbolAliases at setup). A class PROPERTY initializer defines
+    // NO boundary — the legacy passed the outer names + OUTER tpNames
+    // verbatim, which the climb-through yields naturally. No ambient
+    // sandwich — the emissions read no checker ambient state. Fields
+    // PRE-init (the pipeline runs inside `init`).
+    private var spineSyActive = false
+    /** Per-file nodeId memo for [spineSyStatus] — 0 unknown, 1 reached, 2 not. */
+    private var spineSyReachMemo = ByteArray(0)
+    /** Reusable ascent buffer for [spineSyStatus]. */
+    private val spineSyChain = ArrayList<Node>()
+    /** Per-file ctx memo keyed by the boundary-CHILD nodeId (a fn-like's
+     *  body / a ModuleBlock). */
+    private val spineSyCtxMemo = HashMap<Int, SyCtx>()
+    /** File-scoped symbol-resolving type-alias names (collectSymbolAliases). */
+    private var spineSyAliases: Set<String> = emptySet()
+    /** The shared empty context (no symbol names in scope). */
+    private val spineSyEmptyCtx = SyCtx(emptySet(), emptySet())
+    /** The per-file root context (top-level symbol locals, no TPs). */
+    private var spineSyRootCtx = spineSyEmptyCtx
+
     // ── INV.4(d) walker 6 (round 535): checkArgumentCounts on the spine ────
     // The function-call arity pass (TS2554/TS2555/TS2575) — the recursion
     // walkers (checkArgCountInStatements/-InStatement/-InExpr(Core)) are
@@ -4976,12 +5010,12 @@ class Checker(
         // ON THE SPINE — see spineAiEnterNode/spineAiStatus/spineAiClassesAt;
         // the legacy recursion walkers are deleted (the file-scoped collectors
         // run at spineAiSetup; the TS2511 emission is anchor-called).
-        // 64d5 (M0.4 slot-move pre-gate, round 627): checkSymbolToStringConversions
-        // (TS2469/TS2731) moved intact from its legacy 64d5 slot ahead of its
-        // spine migration. Self-contained (reads binderResults only — pure AST
-        // + string sets, no ambient reads, no TS2469/TS2731 retract/dedup
-        // consumers; collectSymbolAliases is file-scoped).
-        pass("checkSymbolToStringConversions") { checkSymbolToStringConversions() }
+        // 64d5 (M0.4, round 628): checkSymbolToStringConversions (TS2469/
+        // TS2731) is ON THE SPINE — see spineSyEnterNode/spineSyStatus/
+        // spineSyCtxAt; the legacy recursion walkers are deleted (the
+        // set-building leaves collectSymbolAliases/collectSymbolLocals/
+        // symbolLikeTpNames run at spineSySetup/spineSyCtxFor; the emission
+        // leaves emitSym2469/emitSym2731 are anchor-called).
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -5852,8 +5886,8 @@ class Checker(
         // params — param-annotation-vs-default TS2322, contextual-fn-type param default TS2322,
         // default-arg-arrow cast-overlap TS2352, and fn-return-inference-vs-var TS2322. All additive.
         pass("checkDefaultArgsInFunctionExpressions") { checkDefaultArgsInFunctionExpressions() }
-        // 64d5. checkSymbolToStringConversions moved to the post-spine slot —
-        // see the pass("checkSpine") site (M0.4 slot-move pre-gate, round 627).
+        // 64d5. checkSymbolToStringConversions is ON THE SPINE (M0.4, round
+        // 628) — see spineSyEnterNode at the pass("checkSpine") site.
         // 64e. Check class implements interface (TS2420)
         pass("checkClassImplementsInterface") { checkClassImplementsInterface() }
         // 64e2. Check property type incompatible with base type (TS2416)
@@ -21135,6 +21169,7 @@ class Checker(
                 spineItSetup()
                 spineFpSetup(result)
                 spineAiSetup(result)
+                spineSySetup(result)
                 spineUResAuditActive = unresolvedAuditEnabled && spineUResActive
                 try {
                     spineWalkFile(sf)
@@ -21161,6 +21196,7 @@ class Checker(
                     spineItTeardown()
                     spineFpTeardown()
                     spineAiTeardown()
+                    spineSyTeardown()
                 }
                 spineResolveDeferredIterationChecks()
             }
@@ -21342,6 +21378,11 @@ class Checker(
         // (NewExpressions with an Identifier callee) — pull-based overlay
         // sets, no frames/leave hook, no ambient sandwich.
         if (spineAiActive) spineAiEnterNode(node)
+        // (M0.4) round 628: the symbol-to-string anchors (binary `+`/`+=`,
+        // unary `+`, template spans with bare-Identifier operands) —
+        // pull-based (symbolNames, tpNames) context, no frames/leave hook,
+        // no ambient sandwich.
+        if (spineSyActive) spineSyEnterNode(node)
         // INV.4(d) walker 7: the use-before-declaration pass — the per-list
         // ForwardRefs anchor + loop-header self-ref checks.
         if (spineUbdActive) spineUbdEnterNode(node)
@@ -47354,6 +47395,12 @@ class Checker(
         private const val AI_NONE = 2
         private const val AI_ROOT = 3
 
+        // (M0.4) round 628: spineSyStatus states (checkSymbolToStringConversions
+        // reach — binary + the transient SourceFile root).
+        private const val SY_REACHED = 1
+        private const val SY_NONE = 2
+        private const val SY_ROOT = 3
+
         private const val OS_NONE = 1
         private const val OS_ROOT = 2
         private const val OS_STMT = 3
@@ -62000,6 +62047,319 @@ interface DataView {
             is SetAccessor, is PropertyDeclaration -> true
             else -> false
         }
+        else -> false
+    }
+
+    // -----------------------------------------------------------------------
+    // (M0.4) round 628: checkSymbolToStringConversions (TS2469/TS2731) ON
+    // THE SPINE. The legacy per-file recursion (checkSymbolToStringConversions
+    // / sym2strHandleFnBody / sym2strHandleBody / sym2strScanStatement /
+    // sym2strCheckExpr) is deleted; the bounded set-building leaves
+    // (sym2strContainsSymbol / collectSymbolAliases / symbolLikeTpNames /
+    // collectSymbolLocals) and the emission leaves (emitSym2469/emitSym2731)
+    // are RETAINED and called from the pull-based rebuild. See the field
+    // block for the design.
+    // -----------------------------------------------------------------------
+
+    /** The legacy downward context: in-scope symbol-typed names + symbol-
+     *  constrained TP names (aliasNames is the file-scoped [spineSyAliases]). */
+    private class SyCtx(val names: Set<String>, val tp: Set<String>)
+
+    /** Per-file setup: the legacy dts + `.js`/`.jsx` skip, the file-scoped
+     *  alias fixpoint, and the top-level locals prepass (the legacy
+     *  sym2strHandleBody entry over the file's statements). */
+    private fun spineSySetup(result: BinderResult) {
+        spineSyActive = !spineIsDts &&
+            !spineFileName.endsWith(".js") && !spineFileName.endsWith(".jsx")
+        spineSyCtxMemo.clear()
+        if (!spineSyActive) {
+            spineSyReachMemo = ByteArray(0)
+            spineSyAliases = emptySet()
+            spineSyRootCtx = spineSyEmptyCtx
+            return
+        }
+        val sf = result.sourceFile
+        spineSyReachMemo = if (sf.nodeCount > 0) ByteArray(sf.nodeCount) else ByteArray(0)
+        val aliases = mutableSetOf<String>()
+        collectSymbolAliases(sf.statements, aliases)
+        spineSyAliases = aliases
+        val rootNames = HashSet<String>()
+        collectSymbolLocals(sf.statements, emptySet(), aliases, rootNames)
+        spineSyRootCtx =
+            if (rootNames.isEmpty()) spineSyEmptyCtx else SyCtx(rootNames, emptySet())
+    }
+
+    private fun spineSyTeardown() {
+        spineSyActive = false
+        spineSyReachMemo = ByteArray(0)
+        spineSyCtxMemo.clear()
+        spineSyAliases = emptySet()
+        spineSyRootCtx = spineSyEmptyCtx
+    }
+
+    /** ENTER dispatch: the legacy operator anchors — binary `+` (left, ELSE
+     *  right — one emission per node), `+=` (right only), unary `+`, and
+     *  template-span operands, all for bare Identifiers in the in-scope
+     *  symbol-name set. */
+    private fun spineSyEnterNode(node: Node) {
+        when ((node as NodeBase).kindId) {
+            NodeKind.BINARY_EXPRESSION -> {
+                node as BinaryExpression
+                when (node.operator) {
+                    SyntaxKind.Plus -> {
+                        val l = node.left
+                        val r = node.right
+                        if (l !is Identifier && r !is Identifier) return
+                        if (spineSyStatus(node) != SY_REACHED) return
+                        val names = spineSyCtxAt(node).names
+                        if (l is Identifier && l.text in names) {
+                            emitSym2469(l, "+", spineSource, spineFileName)
+                        } else if (r is Identifier && r.text in names) {
+                            emitSym2469(r, "+", spineSource, spineFileName)
+                        }
+                    }
+                    SyntaxKind.PlusEquals -> {
+                        val r = node.right as? Identifier ?: return
+                        if (spineSyStatus(node) != SY_REACHED) return
+                        if (r.text in spineSyCtxAt(node).names) {
+                            emitSym2469(r, "+=", spineSource, spineFileName)
+                        }
+                    }
+                    else -> {}
+                }
+            }
+            NodeKind.PREFIX_UNARY_EXPRESSION -> {
+                node as PrefixUnaryExpression
+                if (node.operator != SyntaxKind.Plus) return
+                val op = node.operand as? Identifier ?: return
+                if (spineSyStatus(node) != SY_REACHED) return
+                if (op.text in spineSyCtxAt(node).names) {
+                    emitSym2469(op, "+", spineSource, spineFileName)
+                }
+            }
+            NodeKind.TEMPLATE_EXPRESSION -> {
+                node as TemplateExpression
+                var anyId = false
+                for (span in node.templateSpans) {
+                    if (span.expression is Identifier) { anyId = true; break }
+                }
+                if (!anyId) return
+                if (spineSyStatus(node) != SY_REACHED) return
+                val names = spineSyCtxAt(node).names
+                for (span in node.templateSpans) {
+                    val e = span.expression
+                    if (e is Identifier && e.text in names) {
+                        emitSym2731(e, spineSource, spineFileName)
+                    }
+                }
+            }
+            else -> {}
+        }
+    }
+
+    /** The legacy (symbolNames, tpNames) at [anchor]: climb to the nearest
+     *  ctx-defining boundary child (a fn-like's body / a ModuleBlock); no
+     *  boundary up to the SourceFile → the per-file root ctx. A class
+     *  PROPERTY initializer defines NO boundary (the legacy passed the outer
+     *  names + OUTER tpNames verbatim — climbing through yields exactly
+     *  that). */
+    private fun spineSyCtxAt(anchor: Node): SyCtx {
+        var child: Node = anchor
+        var p: Node? = (anchor as NodeBase).parent
+        while (p != null && p !is SourceFile) {
+            if (spineSyIsBoundaryChild(p, child)) return spineSyCtxFor(p, child)
+            child = p
+            p = (p as NodeBase).parent
+        }
+        return spineSyRootCtx
+    }
+
+    private fun spineSyIsBoundaryChild(p: Node, child: Node): Boolean = when (p) {
+        is FunctionDeclaration -> child === p.body
+        is MethodDeclaration -> child === p.body
+        is Constructor -> child === p.body
+        is GetAccessor -> child === p.body
+        is SetAccessor -> child === p.body
+        is ArrowFunction -> child === p.body
+        is FunctionExpression -> child === p.body
+        is ModuleDeclaration -> child === p.body && child is ModuleBlock
+        else -> false
+    }
+
+    /** Memoized boundary-child ctx — the deleted sym2strHandleFnBody /
+     *  sym2strHandleBody(ModuleBlock) ctx-building verbatim: TP names extend
+     *  through the CLASS's TPs (for method-like members) then own TPs
+     *  ([symbolLikeTpNames] fixpoints), symbol-typed params add, and a Block
+     *  body runs the whole-list locals PREPASS ([collectSymbolLocals] —
+     *  which descends nested control-flow statements but not
+     *  fn/class/module bodies, reproducing the legacy nested-block hoist;
+     *  an inner Block/clause re-collect was always a subset of the body's,
+     *  so ONLY fn bodies and ModuleBlocks are collection boundaries). */
+    private fun spineSyCtxFor(p: Node, child: Node): SyCtx {
+        val id = (child as NodeBase).nodeId
+        if (id >= 0) spineSyCtxMemo[id]?.let { return it }
+        val outer = spineSyCtxAt(p)
+        val aliases = spineSyAliases
+        val ctx: SyCtx
+        if (p is ModuleDeclaration) {
+            val names = HashSet(outer.names)
+            collectSymbolLocals((child as ModuleBlock).statements, outer.tp, aliases, names)
+            ctx = SyCtx(names, outer.tp)
+        } else {
+            val params: List<Parameter>
+            val tps: List<TypeParameter>?
+            when (p) {
+                is FunctionDeclaration -> { params = p.parameters; tps = p.typeParameters }
+                is MethodDeclaration -> { params = p.parameters; tps = p.typeParameters }
+                is Constructor -> { params = p.parameters; tps = null }
+                is GetAccessor -> { params = p.parameters; tps = null }
+                is SetAccessor -> { params = p.parameters; tps = null }
+                is ArrowFunction -> { params = p.parameters; tps = p.typeParameters }
+                is FunctionExpression -> { params = p.parameters; tps = p.typeParameters }
+                else -> { params = emptyList(); tps = null }
+            }
+            val classTps = when (p) {
+                is MethodDeclaration, is Constructor, is GetAccessor, is SetAccessor ->
+                    ((p as NodeBase).parent as? ClassDeclaration)?.typeParameters
+                else -> null
+            }
+            val tpOuter =
+                if (classTps != null) symbolLikeTpNames(classTps, outer.tp, aliases) else outer.tp
+            val bodyTp = symbolLikeTpNames(tps, tpOuter, aliases)
+            val names = HashSet(outer.names)
+            for (param in params) {
+                val pn = (param.name as? Identifier)?.text
+                if (pn != null && sym2strContainsSymbol(param.type, bodyTp, aliases)) {
+                    names.add(pn)
+                }
+            }
+            if (child is Block) collectSymbolLocals(child.statements, bodyTp, aliases, names)
+            ctx = SyCtx(names, bodyTp)
+        }
+        if (id >= 0) spineSyCtxMemo[id] = ctx
+        return ctx
+    }
+
+    /** Memoized reach classifier — ascends to the first memoized/terminal
+     *  ancestor, then folds [spineSyEdge] back down (spineFpStatus pattern).
+     *  The SourceFile anchor carries the transient SY_ROOT status (never
+     *  memoized) whose sole edge is `child is Statement`. */
+    private fun spineSyStatus(node: Node): Int {
+        if (node is SourceFile) return SY_ROOT
+        val memo = spineSyReachMemo
+        run {
+            val id = (node as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) {
+                val m = memo[id].toInt()
+                if (m != 0) return m
+            }
+        }
+        val chain = spineSyChain
+        chain.clear()
+        var cur: Node = node
+        val anchor: Node?
+        var anchorStatus = SY_NONE
+        while (true) {
+            chain.add(cur)
+            val parent = (cur as NodeBase).parent
+            if (parent == null) { anchor = null; break } // detached/unindexed
+            if (parent is SourceFile) { anchor = parent; anchorStatus = SY_ROOT; break }
+            val pid = (parent as NodeBase).nodeId
+            val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
+            if (pm != 0) { anchor = parent; anchorStatus = pm; break }
+            cur = parent
+        }
+        var pNode: Node? = anchor
+        var pStatus = anchorStatus
+        var result = SY_NONE
+        for (i in chain.indices.reversed()) {
+            val c = chain[i]
+            result = when {
+                pNode == null -> SY_NONE
+                pStatus == SY_ROOT -> if (c is Statement) SY_REACHED else SY_NONE
+                pStatus == SY_REACHED -> if (spineSyEdge(pNode, c)) SY_REACHED else SY_NONE
+                else -> SY_NONE
+            }
+            val cid = (c as NodeBase).nodeId
+            if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
+            pNode = c
+            pStatus = result
+        }
+        chain.clear()
+        return result
+    }
+
+    /** The deleted recursion's descent edges, verbatim. Unlisted parents are
+     *  the legacy `else -> {}`s (unreached children). */
+    private fun spineSyEdge(parent: Node, child: Node): Boolean = when (parent) {
+        // ---- statements (the deleted sym2strScanStatement arms) ----
+        is ClassDeclaration -> when (child) {
+            is MethodDeclaration, is Constructor, is GetAccessor,
+            is SetAccessor, is PropertyDeclaration -> true
+            else -> false
+        }
+        is MethodDeclaration -> child === parent.body
+        is Constructor -> child === parent.body
+        is GetAccessor -> child === parent.body
+        is SetAccessor -> child === parent.body
+        is PropertyDeclaration -> child === parent.initializer
+        is FunctionDeclaration -> child === parent.body
+        is ExpressionStatement -> child === parent.expression
+        is VariableStatement -> child === parent.declarationList
+        is VariableDeclarationList -> child is VariableDeclaration
+        is VariableDeclaration -> child === parent.initializer
+        is ReturnStatement -> child === parent.expression
+        is ThrowStatement -> child === parent.expression
+        is Block -> child is Statement
+        is IfStatement ->
+            child === parent.expression || child === parent.thenStatement ||
+                child === parent.elseStatement
+        is ForStatement -> // BOTH initializer forms (decl-list inits AND a bare expr)
+            child === parent.initializer || child === parent.condition ||
+                child === parent.incrementor || child === parent.statement
+        is ForInStatement -> child === parent.expression || child === parent.statement
+        is ForOfStatement -> child === parent.expression || child === parent.statement
+        is WhileStatement -> child === parent.expression || child === parent.statement
+        is DoStatement -> child === parent.statement || child === parent.expression
+        is SwitchStatement ->
+            child === parent.expression || child is CaseClause || child is DefaultClause
+        // the case EXPRESSION is reached here (unlike the fp/ai classifiers)
+        is CaseClause -> child === parent.expression || child is Statement
+        is DefaultClause -> child is Statement
+        is TryStatement ->
+            child === parent.tryBlock || child === parent.finallyBlock || child is CatchClause
+        is CatchClause -> child === parent.block
+        is LabeledStatement -> child === parent.statement
+        is ModuleDeclaration -> child === parent.body && child is ModuleBlock
+        is ModuleBlock -> child is Statement
+        // ---- expressions (the deleted sym2strCheckExpr arms) ----
+        is TemplateExpression -> child is TemplateSpan
+        is TemplateSpan -> child === parent.expression
+        is BinaryExpression -> child === parent.left || child === parent.right
+        is PrefixUnaryExpression -> child === parent.operand
+        is PostfixUnaryExpression -> child === parent.operand
+        is ParenthesizedExpression -> child === parent.expression
+        is ConditionalExpression ->
+            child === parent.condition || child === parent.whenTrue || child === parent.whenFalse
+        is CallExpression -> child === parent.expression || parent.arguments.any { it === child }
+        is NewExpression -> // the callee IS descended here (unlike the ai classifier)
+            child === parent.expression || parent.arguments?.any { it === child } == true
+        is PropertyAccessExpression -> child === parent.expression
+        is ElementAccessExpression ->
+            child === parent.expression || child === parent.argumentExpression
+        is ArrayLiteralExpression -> parent.elements.any { it === child }
+        is SpreadElement -> child === parent.expression
+        is AsExpression -> child === parent.expression
+        is TypeAssertionExpression -> child === parent.expression
+        is NonNullExpression -> child === parent.expression
+        is SatisfiesExpression -> child === parent.expression
+        is AwaitExpression -> child === parent.expression
+        is YieldExpression -> child === parent.expression
+        is ObjectLiteralExpression -> child is PropertyAssignment || child is SpreadAssignment
+        is PropertyAssignment -> child === parent.initializer
+        is SpreadAssignment -> child === parent.expression
+        is ArrowFunction -> child === parent.body
+        is FunctionExpression -> child === parent.body
         else -> false
     }
 
@@ -156519,17 +156879,13 @@ interface DataView {
     // annotation-based. FP-safe: TypeScript emits TS2469/TS2731 UNCONDITIONALLY
     // for a symbol operand in these positions, so a passing test with such an
     // operand already carries the diagnostic — this can only help or be neutral.
+    // (M0.4, round 628): the per-file pass driver + recursion walkers
+    // (checkSymbolToStringConversions / sym2strHandleFnBody /
+    // sym2strHandleBody / sym2strScanStatement / sym2strCheckExpr) are
+    // DELETED — the spine dispatches the emissions (spineSyEnterNode) with a
+    // pull-based per-anchor context rebuild. The set-building helpers below
+    // are retained as the rebuild's leaves.
     // -----------------------------------------------------------------------
-    private fun checkSymbolToStringConversions() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName) || fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
-            val source = result.sourceFile.text
-            val aliasNames = mutableSetOf<String>()
-            collectSymbolAliases(result.sourceFile.statements, aliasNames)
-            sym2strHandleBody(result.sourceFile.statements, source, fileName, emptySet(), emptySet(), aliasNames)
-        }
-    }
 
     /** A type node that contains `symbol` (directly / union / symbol-constrained
      *  type-param ref / symbol-resolving type-alias ref). Unwraps parentheses. */
@@ -156620,84 +156976,6 @@ interface DataView {
         }
     }
 
-    /** Set up a function/method/arrow scope: extend tp names + symbol params/locals, then scan the body. */
-    private fun sym2strHandleFnBody(params: List<Parameter>, tps: List<TypeParameter>?, body: Node?, source: String, fileName: String, symbolNames: Set<String>, tpNames: Set<String>, aliasNames: Set<String>) {
-        val bodyTp = symbolLikeTpNames(tps, tpNames, aliasNames)
-        val names = symbolNames.toMutableSet()
-        for (p in params) {
-            val pn = (p.name as? Identifier)?.text
-            if (pn != null && sym2strContainsSymbol(p.type, bodyTp, aliasNames)) names.add(pn)
-        }
-        when (body) {
-            is Block -> sym2strHandleBody(body.statements, source, fileName, names, bodyTp, aliasNames)
-            is Expression -> { val n2 = names.toMutableSet(); sym2strCheckExpr(body, source, fileName, n2, bodyTp, aliasNames) }
-            else -> {}
-        }
-    }
-
-    /** Collect this body's symbol-typed locals, then scan each statement. */
-    private fun sym2strHandleBody(stmts: List<Statement>, source: String, fileName: String, symbolNames: Set<String>, tpNames: Set<String>, aliasNames: Set<String>) {
-        val names = symbolNames.toMutableSet()
-        collectSymbolLocals(stmts, tpNames, aliasNames, names)
-        for (stmt in stmts) sym2strScanStatement(stmt, source, fileName, names, tpNames, aliasNames)
-    }
-
-    private fun sym2strScanStatement(stmt: Statement, source: String, fileName: String, symbolNames: Set<String>, tpNames: Set<String>, aliasNames: Set<String>) {
-        when (stmt) {
-            is ClassDeclaration -> {
-                val newTp = symbolLikeTpNames(stmt.typeParameters, tpNames, aliasNames)
-                for (m in stmt.members) when (m) {
-                    is MethodDeclaration -> m.body?.let { sym2strHandleFnBody(m.parameters, m.typeParameters, it, source, fileName, symbolNames, newTp, aliasNames) }
-                    is Constructor -> m.body?.let { sym2strHandleFnBody(m.parameters, null, it, source, fileName, symbolNames, newTp, aliasNames) }
-                    is GetAccessor -> m.body?.let { sym2strHandleFnBody(m.parameters, null, it, source, fileName, symbolNames, newTp, aliasNames) }
-                    is SetAccessor -> m.body?.let { sym2strHandleFnBody(m.parameters, null, it, source, fileName, symbolNames, newTp, aliasNames) }
-                    is PropertyDeclaration -> m.initializer?.let { sym2strCheckExpr(it, source, fileName, symbolNames, tpNames, aliasNames) }
-                    else -> {}
-                }
-            }
-            is FunctionDeclaration -> stmt.body?.let { sym2strHandleFnBody(stmt.parameters, stmt.typeParameters, it, source, fileName, symbolNames, tpNames, aliasNames) }
-            is ExpressionStatement -> sym2strCheckExpr(stmt.expression, source, fileName, symbolNames, tpNames, aliasNames)
-            is VariableStatement -> for (d in stmt.declarationList.declarations) d.initializer?.let { sym2strCheckExpr(it, source, fileName, symbolNames, tpNames, aliasNames) }
-            is ReturnStatement -> stmt.expression?.let { sym2strCheckExpr(it, source, fileName, symbolNames, tpNames, aliasNames) }
-            is ThrowStatement -> stmt.expression?.let { sym2strCheckExpr(it, source, fileName, symbolNames, tpNames, aliasNames) }
-            is Block -> sym2strHandleBody(stmt.statements, source, fileName, symbolNames, tpNames, aliasNames)
-            is IfStatement -> {
-                sym2strCheckExpr(stmt.expression, source, fileName, symbolNames, tpNames, aliasNames)
-                sym2strScanStatement(stmt.thenStatement, source, fileName, symbolNames, tpNames, aliasNames)
-                stmt.elseStatement?.let { sym2strScanStatement(it, source, fileName, symbolNames, tpNames, aliasNames) }
-            }
-            is ForStatement -> {
-                (stmt.initializer as? VariableDeclarationList)?.declarations?.forEach { d -> d.initializer?.let { sym2strCheckExpr(it, source, fileName, symbolNames, tpNames, aliasNames) } }
-                (stmt.initializer as? Expression)?.let { sym2strCheckExpr(it, source, fileName, symbolNames, tpNames, aliasNames) }
-                stmt.condition?.let { sym2strCheckExpr(it, source, fileName, symbolNames, tpNames, aliasNames) }
-                stmt.incrementor?.let { sym2strCheckExpr(it, source, fileName, symbolNames, tpNames, aliasNames) }
-                sym2strScanStatement(stmt.statement, source, fileName, symbolNames, tpNames, aliasNames)
-            }
-            is ForInStatement -> { sym2strCheckExpr(stmt.expression, source, fileName, symbolNames, tpNames, aliasNames); sym2strScanStatement(stmt.statement, source, fileName, symbolNames, tpNames, aliasNames) }
-            is ForOfStatement -> { sym2strCheckExpr(stmt.expression, source, fileName, symbolNames, tpNames, aliasNames); sym2strScanStatement(stmt.statement, source, fileName, symbolNames, tpNames, aliasNames) }
-            is WhileStatement -> { sym2strCheckExpr(stmt.expression, source, fileName, symbolNames, tpNames, aliasNames); sym2strScanStatement(stmt.statement, source, fileName, symbolNames, tpNames, aliasNames) }
-            is DoStatement -> { sym2strScanStatement(stmt.statement, source, fileName, symbolNames, tpNames, aliasNames); sym2strCheckExpr(stmt.expression, source, fileName, symbolNames, tpNames, aliasNames) }
-            is SwitchStatement -> {
-                sym2strCheckExpr(stmt.expression, source, fileName, symbolNames, tpNames, aliasNames)
-                for (c in stmt.caseBlock) {
-                    val cs = when (c) { is CaseClause -> { sym2strCheckExpr(c.expression, source, fileName, symbolNames, tpNames, aliasNames); c.statements }; is DefaultClause -> c.statements; else -> emptyList() }
-                    sym2strHandleBody(cs, source, fileName, symbolNames, tpNames, aliasNames)
-                }
-            }
-            is TryStatement -> {
-                sym2strHandleBody(stmt.tryBlock.statements, source, fileName, symbolNames, tpNames, aliasNames)
-                stmt.catchClause?.let { sym2strHandleBody(it.block.statements, source, fileName, symbolNames, tpNames, aliasNames) }
-                stmt.finallyBlock?.let { sym2strHandleBody(it.statements, source, fileName, symbolNames, tpNames, aliasNames) }
-            }
-            is LabeledStatement -> sym2strScanStatement(stmt.statement, source, fileName, symbolNames, tpNames, aliasNames)
-            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { sym2strHandleBody(it.statements, source, fileName, symbolNames, tpNames, aliasNames) }
-            else -> {}
-        }
-    }
-
-    private fun sym2strIsSymbolOperand(e: Expression, symbolNames: Set<String>): Boolean =
-        e is Identifier && e.text in symbolNames
-
     private fun emitSym2469(operand: Expression, opText: String, source: String, fileName: String) {
         val (line, character) = getLineAndCharacterOfPosition(source, operand.pos)
         diagnostics.add(Diagnostic(
@@ -156714,70 +156992,6 @@ interface DataView {
             category = DiagnosticCategory.Error, code = 2731, fileName = fileName,
             line = line, character = character, start = operand.pos, length = expressionTrueEnd(operand) - operand.pos,
         ))
-    }
-
-    private fun sym2strCheckExpr(expr: Expression, source: String, fileName: String, symbolNames: Set<String>, tpNames: Set<String>, aliasNames: Set<String>) {
-        when (expr) {
-            is TemplateExpression -> for (span in expr.templateSpans) {
-                if (sym2strIsSymbolOperand(span.expression, symbolNames)) emitSym2731(span.expression, source, fileName)
-                sym2strCheckExpr(span.expression, source, fileName, symbolNames, tpNames, aliasNames)
-            }
-            is BinaryExpression -> {
-                // Worklist (not recursion on .left): a deeply-nested binary chain
-                // (binderBinaryExpressionStress's `a+b+c+...`) would StackOverflow a
-                // recursive left/right walk. Pop each binary node — running the same
-                // per-node TS2469 operator check — and push right-then-left so the
-                // traversal order (per-node check then left, then right) matches the
-                // recursive form exactly; recurse only into non-binary operands.
-                val work = ArrayDeque<Expression>()
-                work.addLast(expr)
-                while (work.isNotEmpty()) {
-                    when (val n = work.removeLast()) {
-                        is BinaryExpression -> {
-                            when (n.operator) {
-                                SyntaxKind.Plus -> {
-                                    if (sym2strIsSymbolOperand(n.left, symbolNames)) emitSym2469(n.left, "+", source, fileName)
-                                    else if (sym2strIsSymbolOperand(n.right, symbolNames)) emitSym2469(n.right, "+", source, fileName)
-                                }
-                                SyntaxKind.PlusEquals -> {
-                                    if (sym2strIsSymbolOperand(n.right, symbolNames)) emitSym2469(n.right, "+=", source, fileName)
-                                }
-                                else -> {}
-                            }
-                            work.addLast(n.right); work.addLast(n.left)
-                        }
-                        else -> sym2strCheckExpr(n, source, fileName, symbolNames, tpNames, aliasNames)
-                    }
-                }
-            }
-            is PrefixUnaryExpression -> {
-                if (expr.operator == SyntaxKind.Plus && sym2strIsSymbolOperand(expr.operand, symbolNames)) emitSym2469(expr.operand, "+", source, fileName)
-                sym2strCheckExpr(expr.operand, source, fileName, symbolNames, tpNames, aliasNames)
-            }
-            is PostfixUnaryExpression -> sym2strCheckExpr(expr.operand, source, fileName, symbolNames, tpNames, aliasNames)
-            is ParenthesizedExpression -> sym2strCheckExpr(expr.expression, source, fileName, symbolNames, tpNames, aliasNames)
-            is ConditionalExpression -> { sym2strCheckExpr(expr.condition, source, fileName, symbolNames, tpNames, aliasNames); sym2strCheckExpr(expr.whenTrue, source, fileName, symbolNames, tpNames, aliasNames); sym2strCheckExpr(expr.whenFalse, source, fileName, symbolNames, tpNames, aliasNames) }
-            is CallExpression -> { sym2strCheckExpr(expr.expression, source, fileName, symbolNames, tpNames, aliasNames); expr.arguments.forEach { sym2strCheckExpr(it, source, fileName, symbolNames, tpNames, aliasNames) } }
-            is NewExpression -> { sym2strCheckExpr(expr.expression, source, fileName, symbolNames, tpNames, aliasNames); expr.arguments?.forEach { sym2strCheckExpr(it, source, fileName, symbolNames, tpNames, aliasNames) } }
-            is PropertyAccessExpression -> sym2strCheckExpr(expr.expression, source, fileName, symbolNames, tpNames, aliasNames)
-            is ElementAccessExpression -> { sym2strCheckExpr(expr.expression, source, fileName, symbolNames, tpNames, aliasNames); sym2strCheckExpr(expr.argumentExpression, source, fileName, symbolNames, tpNames, aliasNames) }
-            is ArrayLiteralExpression -> expr.elements.forEach { sym2strCheckExpr(it, source, fileName, symbolNames, tpNames, aliasNames) }
-            is SpreadElement -> sym2strCheckExpr(expr.expression, source, fileName, symbolNames, tpNames, aliasNames)
-            is AsExpression -> sym2strCheckExpr(expr.expression, source, fileName, symbolNames, tpNames, aliasNames)
-            is TypeAssertionExpression -> sym2strCheckExpr(expr.expression, source, fileName, symbolNames, tpNames, aliasNames)
-            is NonNullExpression -> sym2strCheckExpr(expr.expression, source, fileName, symbolNames, tpNames, aliasNames)
-            is SatisfiesExpression -> sym2strCheckExpr(expr.expression, source, fileName, symbolNames, tpNames, aliasNames)
-            is AwaitExpression -> sym2strCheckExpr(expr.expression, source, fileName, symbolNames, tpNames, aliasNames)
-            is YieldExpression -> expr.expression?.let { sym2strCheckExpr(it, source, fileName, symbolNames, tpNames, aliasNames) }
-            is ObjectLiteralExpression -> for (p in expr.properties) when (p) {
-                is PropertyAssignment -> sym2strCheckExpr(p.initializer, source, fileName, symbolNames, tpNames, aliasNames)
-                is SpreadAssignment -> sym2strCheckExpr(p.expression, source, fileName, symbolNames, tpNames, aliasNames)
-                else -> {}
-            }
-            is ArrowFunction -> sym2strHandleFnBody(expr.parameters, expr.typeParameters, expr.body, source, fileName, symbolNames, tpNames, aliasNames)
-            is FunctionExpression -> sym2strHandleFnBody(expr.parameters, expr.typeParameters, expr.body, source, fileName, symbolNames, tpNames, aliasNames)
-            else -> {}
-        }
     }
 
     // TS2362/TS2363 arithmetic operator type checking — deferred.
