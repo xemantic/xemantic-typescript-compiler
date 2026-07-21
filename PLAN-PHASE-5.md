@@ -20,6 +20,49 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 626 (2026-07-21) — (M0.4) fourth tail-pass migration: checkFnTypedParamCalls
+(B128/B215 — TS2558/TS2345 fn-typed-param calls, generic-method calls,
+`.apply`; 119 ms, the #4 tail pass) is ON THE SPINE; the legacy recursion
+(checkFnTypedParamCalls / fnParamScanStmts / fnParamScanStmt /
+fnParamScanExpr, ~106 lines) DELETED.** The session ALSO landed the
+owner-requested dependency refresh FIRST, as its own commit: Kotlin 2.4.0 →
+2.4.10, kotlinx-io 0.9.1, kotlinx-serialization 1.11.0, jreleaser 1.25.0,
+asm 9.10.1, maven-publish 0.37.0 (coroutines/dokka/versions-plugin/xemantic
+libs already latest; checked against Maven Central; no version-catalog-update
+plugin added — the existing ben-manes `dependencyUpdates` target plus a
+manual toml edit covered it), gated on warning-clean (--rerun-tasks, zero
+`w:`) + the full corpus suite 11,449/0 BEFORE the migration started, so any
+later diff attributes cleanly. The migration is the DOWNWARD-MAP variant of
+the template: a pass threading a pure ancestor-chain-derived context OBJECT
+(FnParamCtx — fnParams/tpVarRefs/classInstVarRefs REBUILT from params at
+every fn-like boundary, tparams/tpAst/fnParamsAccum ACCUMULATED through
+boundaries with param-name shadowing on the accum, the class-prop-INITIALIZER
+edge KEEPING the parent maps while adding class TPs via fnParamAddTps)
+reproduces as the pull-based per-anchor fold WITH a per-boundary-child ctx
+memo (spineFpCtxFor, keyed by the body/initializer nodeId) — anchors are
+every Identifier-callee / Identifier-receiver-PropertyAccess call, too
+frequent for the round-625 memo-free form. Reach is a memoized BINARY
+classifier (spineFpStatus/spineFpEdge + the transient FP_ROOT for the
+SourceFile edge) — no multi-state statuses needed because every (parent
+kind, child slot) pair decides descent unambiguously. Legacy quirks pinned
+verbatim: a nested arrow does NOT see the outer fn's fn-typed params (the
+rebuild), the B215 accum shadowing, the reach silences (void/template
+operands, case-clause EXPRESSIONS, for-in/of LEFT sides, class EXPRESSIONS,
+objlit non-PropertyAssignment members), the class-prop-init map keep, and
+TP accumulation across nested fns/arrows. Ambient sandwich =
+currentFileLocals only (the spine-entry resting value = the post-spine
+slot's ambient; everything else the emitters read is save-restored per
+dispatch by the other handlers). 17 local pins
+(M04FnTypedParamSpineMigrationTest) verified green against the LEGACY
+walker first, then the migrated code. Gates: suite 11,449 → 11,466/0;
+`--listAll` ×8 byte-identical (pre captured from the stashed dep-update
+HEAD, post from the migration — all 8 profiles at the 46/94 env-legit
+artifact lines); pass table 435 → 434 (the checkFnTypedParamCalls row gone;
+checkSpine 18.5 s single-run, within the round-625 18.0–19.0 band — not
+inflated); warning-clean. M0.4 running total: top FOUR tail passes
+migrated; next by cost: checkAbstractClassInstantiation (113 ms),
+checkSymbolToStringConversions (108 ms).**
+
 **Round 625 (2026-07-21) — (M0.4) third tail-pass migration: checkImplicitThis
 (TS2683/TS7041/TS7017, 127 ms — the #3 tail pass) is ON THE SPINE; the legacy
 recursion (checkThisInStatements / checkThisInStatement /
@@ -543,8 +586,13 @@ structural item instead of landing alone.**
   a pass threading ONLY downward context — no statement-ordered state —
   migrates as a pure pull-based per-anchor ancestor fold, no frames, no
   leave hook, no memo when anchors are rare),
-  checkFnTypedParamCalls 119 ms — slot-move pre-gate LANDED round 625, the
-  migration is the next session's first item,
+  checkFnTypedParamCalls 119 ms — **MIGRATED round 626** (the downward-MAP
+  variant: FnParamCtx rebuilt-at-boundaries/accumulated-through-boundaries
+  reproduces as the pull-based fold WITH a per-boundary-child ctx memo —
+  anchors are every Identifier-callee call, too frequent for the round-625
+  memo-free form — plus a memoized BINARY reach classifier: no multi-state
+  statuses needed when every (parent kind, child slot) pair decides descent
+  unambiguously),
   checkAbstractClassInstantiation 113 ms,
   checkSymbolToStringConversions 108 ms, checkDefiniteAssignmentViaFlowGraph
   105 ms; 98 passes >20 ms carry 5.3 s of the 6.2 s). Migration protocol per

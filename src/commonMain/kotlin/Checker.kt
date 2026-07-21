@@ -3431,6 +3431,30 @@ class Checker(
     /** Reusable ancestor-chain buffer for the per-anchor climbs. */
     private val spineItChain = ArrayList<Node>(32)
 
+    // ── (M0.4) round 626: checkFnTypedParamCalls (B128/B215) on the spine ──
+    // TS2558/TS2345 anchors at CallExpressions whose callee is an Identifier
+    // (fn-typed-param call) or an Identifier-receiver PropertyAccess (generic
+    // method call / `.apply`); reach is the memoized binary classifier
+    // [spineFpStatus] over [spineFpEdge] (the deleted fnParamScanStmt/
+    // fnParamScanExpr arms verbatim); the purely-downward [FnParamCtx] is
+    // rebuilt PULL-based per anchor with a per-boundary-child memo
+    // ([spineFpCtxFor]) — sound because the ctx is a pure function of the
+    // fn-like ancestor chain (rebuilt at every fn boundary, accumulated only
+    // for tparams/fnParamsAccum). Fields PRE-init (the pipeline runs inside
+    // `init`).
+    private var spineFpActive = false
+    /** Per-file nodeId memo for [spineFpStatus] — 0 unknown, 1 reached, 2 not. */
+    private var spineFpReachMemo = ByteArray(0)
+    /** Reusable ascent buffer for [spineFpStatus]. */
+    private val spineFpChain = ArrayList<Node>()
+    /** Per-file ctx memo keyed by the boundary-CHILD nodeId (fn body /
+     *  class-prop initializer node). */
+    private val spineFpCtxMemo = HashMap<Int, FnParamCtx>()
+    /** currentFileLocals at spine ENTRY — what the slot-moved legacy pass saw. */
+    private var spineFpRestingLocals: SymbolTable? = null
+    /** The legacy per-file entry context (immutable — shared across files). */
+    private val spineFpEmptyCtx = FnParamCtx(emptySet(), emptyMap(), emptyMap(), emptyMap(), emptyMap())
+
     // ── INV.4(d) walker 6 (round 535): checkArgumentCounts on the spine ────
     // The function-call arity pass (TS2554/TS2555/TS2575) — the recursion
     // walkers (checkArgCountInStatements/-InStatement/-InExpr(Core)) are
@@ -4910,11 +4934,13 @@ class Checker(
         // contextual-`this` probes are anchor-called). The legacy dispatch gate
         // (round 79h: TS2683 fires unless `@strict: false` explicit) lives on
         // as spineItRunActive.
-        // 72a2 (M0.4 slot-move pre-gate): checkFnTypedParamCalls (B128 —
-        // TS2558 type-args on a 0-type-param fn-typed param; TS2345 concrete
-        // arg vs bare unconstrained TP param) moved intact from its legacy
-        // 72a2 slot ahead of its spine migration.
-        pass("checkFnTypedParamCalls") { checkFnTypedParamCalls() }
+        // 72a2 (M0.4, round 626): checkFnTypedParamCalls (B128 — TS2558
+        // type-args on a 0-type-param fn-typed param; TS2345 concrete arg vs
+        // bare unconstrained TP param; B215 `.apply`) is ON THE SPINE — see
+        // spineFpEnterNode/spineFpStatus/spineFpCtxAt; the legacy recursion
+        // walkers are deleted (the emission leaves emitFnTypedParamCallDiag /
+        // emitGenericMethodCallDiag / emitFnTypedParamApplyDiag are
+        // anchor-called).
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -6065,8 +6091,8 @@ class Checker(
         pass("checkClassExpressionOverrides") { checkClassExpressionOverrides() }
         // 72. Check call/new expression type argument count (TS2558)
         pass("checkCallTypeArgCount") { checkCallTypeArgCount() }
-        // 72a2. checkFnTypedParamCalls moved to the post-spine slot — see the
-        // pass("checkSpine") site (M0.4 slot-move pre-gate).
+        // 72a2. checkFnTypedParamCalls is ON THE SPINE (M0.4, round 626) —
+        // see spineFpEnterNode at the pass("checkSpine") site.
         // 72a3. B218: TS2353 excess props for reverse-mapped single-object-literal
         // args (`{[K in keyof T & keyof C]: T[K]}` params — keys ⊆ keyof C).
         pass("checkReverseMappedExcessProps") { checkReverseMappedExcessProps() }
@@ -20965,6 +20991,8 @@ class Checker(
         // (M0.4) round 625: the implicit-this anchors likewise — plus the
         // legacy dispatch gate (round 79h TS2454/TS2564 convention).
         spineItRestingLocals = currentFileLocals
+        // (M0.4) round 626: the fn-typed-param-call anchors likewise.
+        spineFpRestingLocals = currentFileLocals
         spineItRunActive = options.noImplicitThis || options.strict ||
             !options.strictExplicitlyFalse
         // INV.4(d) walker 9: the const-assignment anchors' B116 param-typing
@@ -21065,6 +21093,7 @@ class Checker(
                 spineOsSetup(result)
                 spinePdSetup(result)
                 spineItSetup()
+                spineFpSetup(result)
                 spineUResAuditActive = unresolvedAuditEnabled && spineUResActive
                 try {
                     spineWalkFile(sf)
@@ -21089,6 +21118,7 @@ class Checker(
                     spineOsTeardown()
                     spinePdTeardown()
                     spineItTeardown()
+                    spineFpTeardown()
                 }
                 spineResolveDeferredIterationChecks()
             }
@@ -21263,6 +21293,9 @@ class Checker(
         // (M0.4) round 625: the implicit-this anchors (`this` Identifiers,
         // `this.<name>` accesses) — pull-based context, no frames/leave hook.
         if (spineItFileActive) spineItEnterNode(node)
+        // (M0.4) round 626: the fn-typed-param-call anchors (CallExpressions)
+        // — pull-based FnParamCtx, no frames/leave hook.
+        if (spineFpActive) spineFpEnterNode(node)
         // INV.4(d) walker 7: the use-before-declaration pass — the per-list
         // ForwardRefs anchor + loop-header self-ref checks.
         if (spineUbdActive) spineUbdEnterNode(node)
@@ -47263,6 +47296,12 @@ class Checker(
         // heads, for headers, param defaults, computed names, class
         // EXPRESSIONS, template/tagged/yield/void/delete/typeof/satisfies
         // operands, decorators, type positions, enum members).
+        // (M0.4) round 626: spineFpStatus states (checkFnTypedParamCalls
+        // reach — binary + the transient SourceFile root).
+        private const val FP_REACHED = 1
+        private const val FP_NONE = 2
+        private const val FP_ROOT = 3
+
         private const val OS_NONE = 1
         private const val OS_ROOT = 2
         private const val OS_STMT = 3
@@ -61352,6 +61391,250 @@ interface DataView {
         return cbSigs.any { cb ->
             signatureDeclarationParameters(cb.declaration)?.let { hasThisParameter(it) } == true
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // (M0.4) round 626: checkFnTypedParamCalls (B128/B215) ON THE SPINE.
+    // The legacy per-file recursion (checkFnTypedParamCalls / fnParamScanStmts
+    // / fnParamScanStmt / fnParamScanExpr) is deleted. The pass threaded a
+    // purely DOWNWARD [FnParamCtx] — fnParams/tpVarRefs/classInstVarRefs
+    // REBUILT from params at every fn-like boundary, tparams/tpAst and
+    // fnParamsAccum ACCUMULATED through boundaries, the class
+    // property-initializer edge KEEPING the maps while adding class TPs
+    // (fnParamAddTps) — so the ctx is a pure function of the fn-like ancestor
+    // chain and reproduces PULL-based per anchor, memoized per boundary-child
+    // node ([spineFpCtxFor]). Reach is the memoized binary classifier
+    // [spineFpStatus] over [spineFpEdge] (the deleted arms verbatim —
+    // typeof/void/delete/await/yield/template operands, case-clause
+    // EXPRESSIONS, for-in/of LEFT sides, class EXPRESSIONS, objlit
+    // methods/accessors/shorthand/spread, param defaults, and heritage all
+    // stay UNREACHED). The bounded emission leaves (emitFnTypedParamCallDiag /
+    // emitGenericMethodCallDiag / emitFnTypedParamApplyDiag) are retained
+    // unchanged. Ambient sandwich = currentFileLocals only (the legacy pass
+    // ran at the post-spine slot under the spine-entry resting value;
+    // everything else the emitters read is save-restored per dispatch by the
+    // other spine handlers, so the mid-spine resting ambient already matches).
+    // -----------------------------------------------------------------------
+
+    /** Per-file setup: the legacy dts + `.js`/`.jsx` skip (NOT `.mjs`/`.cjs` —
+     *  the legacy gate tested exactly those two suffixes). */
+    private fun spineFpSetup(result: BinderResult) {
+        spineFpActive = !spineIsDts &&
+            !spineFileName.endsWith(".js") && !spineFileName.endsWith(".jsx")
+        spineFpCtxMemo.clear()
+        spineFpReachMemo = if (!spineFpActive) ByteArray(0) else {
+            val n = result.sourceFile.nodeCount
+            if (n > 0) ByteArray(n) else ByteArray(0)
+        }
+    }
+
+    private fun spineFpTeardown() {
+        spineFpActive = false
+        spineFpCtxMemo.clear()
+        spineFpReachMemo = ByteArray(0)
+    }
+
+    /** ENTER dispatch: the legacy CallExpression arm's three emission gates
+     *  (Identifier callee → fnParams; Identifier-receiver PropertyAccess →
+     *  classInstVarRefs, then the B215 `.apply` accum check). */
+    private fun spineFpEnterNode(node: Node) {
+        if ((node as NodeBase).kindId != NodeKind.CALL_EXPRESSION) return
+        node as CallExpression
+        val callee = node.expression
+        val calleeId = callee as? Identifier
+        val pae = callee as? PropertyAccessExpression
+        val recvId = pae?.expression as? Identifier
+        if (calleeId == null && recvId == null) return
+        if (spineFpStatus(node) != FP_REACHED) return
+        val saved = currentFileLocals
+        currentFileLocals = spineFpRestingLocals
+        try {
+            val ctx = spineFpCtxAt(node)
+            if (calleeId != null) {
+                ctx.fnParams[calleeId.text]?.let {
+                    emitFnTypedParamCallDiag(node, it, spineSource, spineFileName, ctx)
+                }
+            } else if (pae != null && recvId != null) {
+                ctx.classInstVarRefs[recvId.text]?.let {
+                    emitGenericMethodCallDiag(node, pae, it, spineSource, spineFileName, ctx)
+                }
+                if (pae.name.text == "apply") {
+                    ctx.fnParamsAccum[recvId.text]?.let {
+                        emitFnTypedParamApplyDiag(node, pae, it, spineSource, spineFileName)
+                    }
+                }
+            }
+        } finally {
+            currentFileLocals = saved
+        }
+    }
+
+    /** The legacy [FnParamCtx] at [anchor]: climb to the nearest ctx-defining
+     *  boundary child (a fn-like's body / a class-prop initializer); no
+     *  boundary up to the SourceFile → the per-file entry ctx. */
+    private fun spineFpCtxAt(anchor: Node): FnParamCtx {
+        var child: Node = anchor
+        var p: Node? = (anchor as NodeBase).parent
+        while (p != null && p !is SourceFile) {
+            if (spineFpIsBoundaryChild(p, child)) return spineFpCtxFor(p, child)
+            child = p
+            p = (p as NodeBase).parent
+        }
+        return spineFpEmptyCtx
+    }
+
+    private fun spineFpIsBoundaryChild(p: Node, child: Node): Boolean = when (p) {
+        is FunctionDeclaration -> child === p.body
+        is MethodDeclaration -> child === p.body
+        is Constructor -> child === p.body
+        is GetAccessor -> child === p.body
+        is SetAccessor -> child === p.body
+        is PropertyDeclaration -> child === p.initializer
+        is ArrowFunction -> child === p.body
+        is FunctionExpression -> child === p.body
+        else -> false
+    }
+
+    /** Memoized child ctx for a boundary [child] of fn-like/class-member [p]
+     *  — the deleted fnParamScanStmt/fnParamScanExpr ctx-building calls
+     *  verbatim (class members thread the CLASS's type parameters; a
+     *  GetAccessor body rebuilds from NO params; a class-prop initializer
+     *  keeps the parent maps via [fnParamAddTps]). */
+    private fun spineFpCtxFor(p: Node, child: Node): FnParamCtx {
+        val id = (child as NodeBase).nodeId
+        if (id >= 0) spineFpCtxMemo[id]?.let { return it }
+        val parentCtx = spineFpCtxAt(p)
+        val cls = ((p as NodeBase).parent) as? ClassDeclaration
+        val ctx = when (p) {
+            is FunctionDeclaration -> fnParamChildCtx(parentCtx, p.parameters, p.typeParameters)
+            is MethodDeclaration -> fnParamChildCtx(parentCtx, p.parameters, cls?.typeParameters, p.typeParameters)
+            is Constructor -> fnParamChildCtx(parentCtx, p.parameters, cls?.typeParameters)
+            is GetAccessor -> fnParamChildCtx(parentCtx, null, cls?.typeParameters)
+            is SetAccessor -> fnParamChildCtx(parentCtx, p.parameters, cls?.typeParameters)
+            is PropertyDeclaration -> fnParamAddTps(parentCtx, cls?.typeParameters)
+            is ArrowFunction -> fnParamChildCtx(parentCtx, p.parameters, p.typeParameters)
+            is FunctionExpression -> fnParamChildCtx(parentCtx, p.parameters, p.typeParameters)
+            else -> parentCtx
+        }
+        if (id >= 0) spineFpCtxMemo[id] = ctx
+        return ctx
+    }
+
+    /** Memoized reach classifier — ascends to the first memoized/terminal
+     *  ancestor, then folds [spineFpEdge] back down (spineOsStatus pattern).
+     *  The SourceFile anchor carries the transient FP_ROOT status (never
+     *  memoized) whose sole edge is `child is Statement`. */
+    private fun spineFpStatus(node: Node): Int {
+        if (node is SourceFile) return FP_ROOT
+        val memo = spineFpReachMemo
+        run {
+            val id = (node as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) {
+                val m = memo[id].toInt()
+                if (m != 0) return m
+            }
+        }
+        val chain = spineFpChain
+        chain.clear()
+        var cur: Node = node
+        val anchor: Node?
+        var anchorStatus = FP_NONE
+        while (true) {
+            chain.add(cur)
+            val parent = (cur as NodeBase).parent
+            if (parent == null) { anchor = null; break } // detached/unindexed
+            if (parent is SourceFile) { anchor = parent; anchorStatus = FP_ROOT; break }
+            val pid = (parent as NodeBase).nodeId
+            val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
+            if (pm != 0) { anchor = parent; anchorStatus = pm; break }
+            cur = parent
+        }
+        var pNode: Node? = anchor
+        var pStatus = anchorStatus
+        var result = FP_NONE
+        for (i in chain.indices.reversed()) {
+            val c = chain[i]
+            result = when {
+                pNode == null -> FP_NONE
+                pStatus == FP_ROOT -> if (c is Statement) FP_REACHED else FP_NONE
+                pStatus == FP_REACHED -> if (spineFpEdge(pNode, c)) FP_REACHED else FP_NONE
+                else -> FP_NONE
+            }
+            val cid = (c as NodeBase).nodeId
+            if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
+            pNode = c
+            pStatus = result
+        }
+        chain.clear()
+        return result
+    }
+
+    /** The deleted recursion's descent edges, verbatim. Unlisted parents are
+     *  the legacy `else -> {}`s (unreached children). */
+    private fun spineFpEdge(parent: Node, child: Node): Boolean = when (parent) {
+        // ---- statements (the deleted fnParamScanStmt arms) ----
+        is FunctionDeclaration -> child === parent.body
+        is ClassDeclaration -> when (child) {
+            is MethodDeclaration, is Constructor, is GetAccessor,
+            is SetAccessor, is PropertyDeclaration -> true
+            else -> false
+        }
+        is MethodDeclaration -> child === parent.body
+        is Constructor -> child === parent.body
+        is GetAccessor -> child === parent.body
+        is SetAccessor -> child === parent.body
+        is PropertyDeclaration -> child === parent.initializer
+        is ExpressionStatement -> child === parent.expression
+        is VariableStatement -> child === parent.declarationList
+        is VariableDeclarationList -> child is VariableDeclaration
+        is VariableDeclaration -> child === parent.initializer
+        is ReturnStatement -> child === parent.expression
+        is ThrowStatement -> child === parent.expression
+        is Block -> child is Statement
+        is IfStatement ->
+            child === parent.expression || child === parent.thenStatement ||
+                child === parent.elseStatement
+        is ForStatement ->
+            child === parent.initializer || child === parent.condition ||
+                child === parent.incrementor || child === parent.statement
+        is ForInStatement -> child === parent.expression || child === parent.statement
+        is ForOfStatement -> child === parent.expression || child === parent.statement
+        is WhileStatement -> child === parent.expression || child === parent.statement
+        is DoStatement -> child === parent.statement || child === parent.expression
+        is SwitchStatement ->
+            child === parent.expression || child is CaseClause || child is DefaultClause
+        is CaseClause -> child is Statement // NOT the case expression
+        is DefaultClause -> child is Statement
+        is TryStatement ->
+            child === parent.tryBlock || child === parent.finallyBlock || child is CatchClause
+        is CatchClause -> child === parent.block
+        is LabeledStatement -> child === parent.statement
+        is ModuleDeclaration -> child === parent.body && child is ModuleBlock
+        is ModuleBlock -> child is Statement
+        // ---- expressions (the deleted fnParamScanExpr arms) ----
+        is CallExpression -> child === parent.expression || parent.arguments.any { it === child }
+        is BinaryExpression -> child === parent.left || child === parent.right
+        is ParenthesizedExpression -> child === parent.expression
+        is PrefixUnaryExpression -> child === parent.operand
+        is PostfixUnaryExpression -> child === parent.operand
+        is NewExpression ->
+            child === parent.expression || parent.arguments?.any { it === child } == true
+        is PropertyAccessExpression -> child === parent.expression
+        is ElementAccessExpression ->
+            child === parent.expression || child === parent.argumentExpression
+        is ConditionalExpression ->
+            child === parent.condition || child === parent.whenTrue || child === parent.whenFalse
+        is ArrayLiteralExpression -> parent.elements.any { it === child }
+        is SpreadElement -> child === parent.expression
+        is AsExpression -> child === parent.expression
+        is NonNullExpression -> child === parent.expression
+        is TypeAssertionExpression -> child === parent.expression
+        is SatisfiesExpression -> child === parent.expression
+        is ObjectLiteralExpression -> child is PropertyAssignment // only prop-assignment values
+        is PropertyAssignment -> child === parent.initializer
+        is ArrowFunction -> child === parent.body
+        is FunctionExpression -> child === parent.body
+        else -> false
     }
 
     /** Extract the parameter list from any signature-bearing AST declaration node. */
@@ -146701,14 +146984,10 @@ interface DataView {
         ))
     }
 
-    private fun checkFnTypedParamCalls() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName) || fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
-            val source = result.sourceFile.text
-            fnParamScanStmts(result.sourceFile.statements, source, fileName, FnParamCtx(emptySet(), emptyMap(), emptyMap(), emptyMap(), emptyMap()))
-        }
-    }
+    // checkFnTypedParamCalls / fnParamScanStmts / fnParamScanStmt /
+    // fnParamScanExpr DELETED (M0.4, round 626) — the walk is spine-hosted
+    // (spineFpEnterNode/spineFpStatus/spineFpCtxAt); the emission leaves below
+    // are anchor-called.
 
     /** Params whose declared type is a `FunctionType` with NO own type
      *  parameters — calling these with type arguments is TS2558. */
@@ -146722,112 +147001,6 @@ interface DataView {
             m[n] = ft
         }
         return m
-    }
-
-    private fun fnParamScanStmts(stmts: List<Statement>, source: String, fileName: String, ctx: FnParamCtx) {
-        for (s in stmts) fnParamScanStmt(s, source, fileName, ctx)
-    }
-
-    private fun fnParamScanStmt(stmt: Statement, source: String, fileName: String, ctx: FnParamCtx) {
-        when (stmt) {
-            is FunctionDeclaration -> stmt.body?.let {
-                fnParamScanStmts(it.statements, source, fileName, fnParamChildCtx(ctx, stmt.parameters, stmt.typeParameters))
-            }
-            is ClassDeclaration -> {
-                for (m in stmt.members) when (m) {
-                    is MethodDeclaration -> m.body?.let { fnParamScanStmts(it.statements, source, fileName, fnParamChildCtx(ctx, m.parameters, stmt.typeParameters, m.typeParameters)) }
-                    is Constructor -> m.body?.let { fnParamScanStmts(it.statements, source, fileName, fnParamChildCtx(ctx, m.parameters, stmt.typeParameters)) }
-                    is GetAccessor -> m.body?.let { fnParamScanStmts(it.statements, source, fileName, fnParamChildCtx(ctx, null, stmt.typeParameters)) }
-                    is SetAccessor -> m.body?.let { fnParamScanStmts(it.statements, source, fileName, fnParamChildCtx(ctx, m.parameters, stmt.typeParameters)) }
-                    is PropertyDeclaration -> m.initializer?.let { fnParamScanExpr(it, source, fileName, fnParamAddTps(ctx, stmt.typeParameters)) }
-                    else -> {}
-                }
-            }
-            is ExpressionStatement -> fnParamScanExpr(stmt.expression, source, fileName, ctx)
-            is VariableStatement -> for (d in stmt.declarationList.declarations) d.initializer?.let { fnParamScanExpr(it, source, fileName, ctx) }
-            is ReturnStatement -> stmt.expression?.let { fnParamScanExpr(it, source, fileName, ctx) }
-            is ThrowStatement -> stmt.expression?.let { fnParamScanExpr(it, source, fileName, ctx) }
-            is Block -> fnParamScanStmts(stmt.statements, source, fileName, ctx)
-            is IfStatement -> {
-                fnParamScanExpr(stmt.expression, source, fileName, ctx)
-                fnParamScanStmt(stmt.thenStatement, source, fileName, ctx)
-                stmt.elseStatement?.let { fnParamScanStmt(it, source, fileName, ctx) }
-            }
-            is ForStatement -> {
-                (stmt.initializer as? VariableDeclarationList)?.declarations?.forEach { it.initializer?.let { i -> fnParamScanExpr(i, source, fileName, ctx) } }
-                (stmt.initializer as? Expression)?.let { fnParamScanExpr(it, source, fileName, ctx) }
-                stmt.condition?.let { fnParamScanExpr(it, source, fileName, ctx) }
-                stmt.incrementor?.let { fnParamScanExpr(it, source, fileName, ctx) }
-                fnParamScanStmt(stmt.statement, source, fileName, ctx)
-            }
-            is ForInStatement -> { fnParamScanExpr(stmt.expression, source, fileName, ctx); fnParamScanStmt(stmt.statement, source, fileName, ctx) }
-            is ForOfStatement -> { fnParamScanExpr(stmt.expression, source, fileName, ctx); fnParamScanStmt(stmt.statement, source, fileName, ctx) }
-            is WhileStatement -> { fnParamScanExpr(stmt.expression, source, fileName, ctx); fnParamScanStmt(stmt.statement, source, fileName, ctx) }
-            is DoStatement -> { fnParamScanExpr(stmt.expression, source, fileName, ctx); fnParamScanStmt(stmt.statement, source, fileName, ctx) }
-            is SwitchStatement -> {
-                fnParamScanExpr(stmt.expression, source, fileName, ctx)
-                for (c in stmt.caseBlock) { val cs = when (c) { is CaseClause -> c.statements; is DefaultClause -> c.statements; else -> emptyList() }; fnParamScanStmts(cs, source, fileName, ctx) }
-            }
-            is TryStatement -> {
-                fnParamScanStmts(stmt.tryBlock.statements, source, fileName, ctx)
-                stmt.catchClause?.let { fnParamScanStmts(it.block.statements, source, fileName, ctx) }
-                stmt.finallyBlock?.let { fnParamScanStmts(it.statements, source, fileName, ctx) }
-            }
-            is LabeledStatement -> fnParamScanStmt(stmt.statement, source, fileName, ctx)
-            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { fnParamScanStmts(it.statements, source, fileName, ctx) }
-            else -> {}
-        }
-    }
-
-    private fun fnParamScanExpr(expr: Expression, source: String, fileName: String, ctx: FnParamCtx) {
-        when (expr) {
-            is CallExpression -> {
-                when (val callee = expr.expression) {
-                    is Identifier -> ctx.fnParams[callee.text]?.let { emitFnTypedParamCallDiag(expr, it, source, fileName, ctx) }
-                    is PropertyAccessExpression -> {
-                        val recv = callee.expression
-                        if (recv is Identifier) ctx.classInstVarRefs[recv.text]?.let { emitGenericMethodCallDiag(expr, callee, it, source, fileName, ctx) }
-                        // B215: `fn.apply(thisArg, arr)` against a fn-typed param's
-                        // named-tuple under strictBindCallApply.
-                        if (recv is Identifier && callee.name.text == "apply") {
-                            ctx.fnParamsAccum[recv.text]?.let { emitFnTypedParamApplyDiag(expr, callee, it, source, fileName) }
-                        }
-                    }
-                    else -> {}
-                }
-                fnParamScanExpr(expr.expression, source, fileName, ctx)
-                expr.arguments.forEach { fnParamScanExpr(it, source, fileName, ctx) }
-            }
-            is BinaryExpression -> {
-                var cur: Expression = expr
-                while (cur is BinaryExpression) { fnParamScanExpr(cur.right, source, fileName, ctx); cur = cur.left }
-                fnParamScanExpr(cur, source, fileName, ctx)
-            }
-            is ParenthesizedExpression -> fnParamScanExpr(expr.expression, source, fileName, ctx)
-            is PrefixUnaryExpression -> fnParamScanExpr(expr.operand, source, fileName, ctx)
-            is PostfixUnaryExpression -> fnParamScanExpr(expr.operand, source, fileName, ctx)
-            is NewExpression -> { fnParamScanExpr(expr.expression, source, fileName, ctx); expr.arguments?.forEach { fnParamScanExpr(it, source, fileName, ctx) } }
-            is PropertyAccessExpression -> fnParamScanExpr(expr.expression, source, fileName, ctx)
-            is ElementAccessExpression -> { fnParamScanExpr(expr.expression, source, fileName, ctx); fnParamScanExpr(expr.argumentExpression, source, fileName, ctx) }
-            is ConditionalExpression -> { fnParamScanExpr(expr.condition, source, fileName, ctx); fnParamScanExpr(expr.whenTrue, source, fileName, ctx); fnParamScanExpr(expr.whenFalse, source, fileName, ctx) }
-            is ArrayLiteralExpression -> expr.elements.forEach { fnParamScanExpr(it, source, fileName, ctx) }
-            is SpreadElement -> fnParamScanExpr(expr.expression, source, fileName, ctx)
-            is AsExpression -> fnParamScanExpr(expr.expression, source, fileName, ctx)
-            is NonNullExpression -> fnParamScanExpr(expr.expression, source, fileName, ctx)
-            is TypeAssertionExpression -> fnParamScanExpr(expr.expression, source, fileName, ctx)
-            is SatisfiesExpression -> fnParamScanExpr(expr.expression, source, fileName, ctx)
-            is ObjectLiteralExpression -> expr.properties.forEach { p -> (p as? PropertyAssignment)?.initializer?.let { fnParamScanExpr(it, source, fileName, ctx) } }
-            is ArrowFunction -> {
-                val childCtx = fnParamChildCtx(ctx, expr.parameters, expr.typeParameters)
-                when (val b = expr.body) {
-                    is Block -> fnParamScanStmts(b.statements, source, fileName, childCtx)
-                    is Expression -> fnParamScanExpr(b, source, fileName, childCtx)
-                    else -> {}
-                }
-            }
-            is FunctionExpression -> fnParamScanStmts(expr.body.statements, source, fileName, fnParamChildCtx(ctx, expr.parameters, expr.typeParameters))
-            else -> {}
-        }
     }
 
     /** B217: does the identifier arg's type come from a COMPLETE (spread-free,
