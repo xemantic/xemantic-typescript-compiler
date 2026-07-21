@@ -1,3 +1,62 @@
+**Round 624 (2026-07-21) — (M0.4) OPENS: the first tail-pass migration —
+checkObjectSpreadInvalidTypes (TS2698/TS2700, the TOP tail pass at 165.6 ms
+on the fresh HEAD `--passTiming` table) is ON THE SPINE; its per-file driver
+and all four recursion walkers are DELETED.** Two commits, the protocol now
+recorded on the queue item as the per-pass template. (1) Slot-move pre-gate:
+the intact pass dispatch moved from its legacy 64d2a slot to right after
+`pass("checkSpine")` (between the spine and ctaPostFilters, so its emissions
+sit inside the cta post-filter window exactly as they will spine-anchored) —
+corpus suite green, `--listAll` ×8 byte-identical. (2) The migration, per the
+INV.4(d) zoo patterns: the legacy `anns` map (name → annotation TypeNode,
+statement-ordered, a fresh `HashMap(anns)` copy at every block/branch/loop/
+clause boundary, a params-seeded copy at fn-body entry, LabeledStatement
+transparent) reproduces as PUSH frames (SpineOsFrame) spawned at EXACTLY the
+legacy copy edges — including the easy-to-miss NON-Block copy-edge children
+(a bare `if (c) var x: number` then-statement got its own discarded copy, so
+its recording must NOT leak to the outer frame; pinned); reach is a memoized
+ancestor classifier (spineOsStatus/spineOsEdge, ByteArray memo) reproducing
+the deleted arms verbatim (class EXPRESSIONS, template/yield/void/delete/
+typeof/satisfies operands, param defaults, for/while heads, switch subjects,
+case expressions, dotted-namespace bodies all stay UNREACHED — the
+class-expression silence is pinned); the legacy per-fn-like
+withInternedTpScope layering rebuilds PULL-based at each emission from the
+anchor's ancestor chain (outermost-first, so inner shadows outer and
+constraints materialize in legacy order); the ambient sandwich installs ONLY
+currentCheckFileName (analysis: every spine handler save-restores per
+dispatch, so the mid-spine resting ambient — currentLocalTypes, flow graph,
+TP scope — already equals what the slot-moved pass saw; the schedule delta
+that bodyless/non-emitting fn-likes no longer eagerly materialize TP
+constraints via this pass is confirmed inert by the byte-identity gates).
+14 local pins (M04SpreadSpineMigrationTest: statement-order visibility both
+directions, block/if-branch/switch-clause copy-boundary non-leaks, param +
+arrow-expression-body + namespace + nested-fn-expr visibility, the enum
+branch, rest TS2700 both directions, the class-expression negative reach
+pin). Gates: suite green at both commits, `--listAll` ×8 byte-identical at
+both commits. Per-item evidence is the pass table (438 → 437 passes; the
+165.6 ms row gone; checkSpine not inflated) — a single-pass ~0.5% wall delta
+is below the ±2% drift band, so no A/B claim; the ARC gets A/B'd after
+several passes land. SAME-ROUND SECOND MIGRATION:
+checkArrayPushDiscriminatedUnionElements (B473/B482/B487*, 138.1 ms — the
+#2 tail pass) landed by the same two-commit template. Its legacy shape is
+SIMPLER than spread's in an instructive way: pdduCheckExpr never recursed
+into subexpressions, so ALL emissions are computable at the enters of just
+FOUR statement kinds (expression-statement / var-initializers / return /
+if-condition, gated to genuine CallExpression positions) — no descendant
+anchors at all; its scoping differs deliberately (LIST-level recording of a
+VariableStatement's declarator annotations BEFORE its initializers are
+checked; if/loop descents SHARE the map and never record — only
+Block/ModuleBlock/fn-body boundaries copy; get-accessor bodies copy WITHOUT
+params; try/switch/labeled/throw statements and EVERY function/arrow
+expression are unreached). Its ambient trap is the round-533 one: the
+legacy pass never installed currentFileLocals (its slot's resting null
+applied) while checkSpine sets it per file — the dispatch sandwich installs
+the spine-entry resting value (spinePdRestingLocals). 9 pins
+(M04ArrayPushSpineMigrationTest: the [].splice TS2345 probe at each reached
+position, try/switch/arrow-body/nested-expression negative reach, the
+TS2559 weak-push via a body-local annotation + its block-boundary
+negative). Round-624 total: the top TWO tail passes (303.7 ms of the 6.1 s
+tail) migrated; suite 11,408 → 11,431 (+23 pins).**
+
 **Round 623 (2026-07-20) — (M0.3) slice (viii) LANDED as a MEASURED-NEUTRAL
 structure bundle (−0.30% median, post wins 6/10 pairs — below the ±2%
 drift band, so NO wall claim is made), plus the JFR-bias negative

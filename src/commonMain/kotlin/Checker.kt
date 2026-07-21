@@ -5127,6 +5127,17 @@ class Checker(
         // (the TypeAssertion callback runs after the round-630 co leaves;
         // the AsExpression emitters at their own anchors); the legacy
         // driver + the inNullCastOverlapPass flag are deleted.
+        // 21b''''' (M0.4 slot-move pre-gate, round 634):
+        // checkProtectedMemberReadAccess (B446 — TS2445/TS2446 protected
+        // READ access, container-scan + downward local-var maps) moved
+        // intact from its 21b'''' slot ahead of its spine migration. No
+        // TS2445/TS2446 dedup scans exist (checkDivergentAccessorVisibility
+        // and B377 emit the codes but are GATE-disjoint — accessor pairs /
+        // free-function writes — and never scan the list); pmrInClassMethod/
+        // pmrLexicalClass are pass-local save/restore state; the hoist
+        // crosses ~116 passes — resolution first-touch order is the risk
+        // class the corpus + listAll ×8 gates decide.
+        pass("checkProtectedMemberReadAccess") { checkProtectedMemberReadAccess() }
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -5535,8 +5546,8 @@ class Checker(
         // param types `this` as a class T, when the member's declaring class is not in T's
         // hierarchy (the protected-write companion to B374's private check).
         pass("checkProtectedWriteViaThisParam") { checkProtectedWriteViaThisParam() }
-        // 21b''''. B446: general protected-member READ access (TS2445/TS2446)
-        pass("checkProtectedMemberReadAccess") { checkProtectedMemberReadAccess() }
+        // 21b''''. checkProtectedMemberReadAccess moved to the post-spine slot —
+        // see the pass("checkSpine") site (M0.4 slot-move pre-gate, round 634).
         // 21b''''a. mixin private-conflict intersection reduced to `never` (TS2339, #13830)
         pass("checkMixinPrivateConflictReducedToNever") { checkMixinPrivateConflictReducedToNever() }
         // 21b''''b. Protected-member MISMATCH in class-var assignment (TS2322)
