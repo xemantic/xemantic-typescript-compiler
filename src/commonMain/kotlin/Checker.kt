@@ -4892,6 +4892,15 @@ class Checker(
         // (TS2741/2739/2740 + the B482/B487* siblings) is ON THE SPINE — see
         // spinePdEnterNode/spinePdStatus; the legacy scan walkers are deleted
         // (the emission leaves pdduCheckExpr/pdduCheckElement are anchor-called).
+        // 22 (M0.4 slot-move pre-gate): checkImplicitThis (TS2683/TS7041/TS7017)
+        // moved intact from its legacy 21b slot to the post-spine slot ahead of
+        // its spine migration. Round 79h: mirror the TS2454/TS2564 convention —
+        // TS2683 fires by default in the test harness unless `@strict: false`
+        // was set explicitly. JS files and contextually-typed `this` are
+        // suppressed inside `checkImplicitThis`.
+        if (options.noImplicitThis || options.strict || !options.strictExplicitlyFalse) {
+            pass("checkImplicitThis") { checkImplicitThis() }
+        }
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -5282,15 +5291,8 @@ class Checker(
         // pass("checkSpine") site (INV.4(d) walkers 12+13 slot-move pre-gate).
         // 21b. checkNullUndefinedUsage moved to the spine slot — see the
         // pass("checkSpine") site (INV.4(d) walker 11 slot-move pre-gate).
-        // 22. Check for implicit this (TS2683)
-        // Round 79h: mirror the TS2454/TS2564 convention — TS2683 fires by
-        // default in the test harness unless `@strict: false` was set explicitly.
-        // (TypeScript's compiler test baselines for `thisInModuleFunction1` etc.
-        // set neither `noImplicitThis` nor `strict` yet expect TS2683.) JS files
-        // and contextually-typed `this` are suppressed inside `checkImplicitThis`.
-        if (options.noImplicitThis || options.strict || !options.strictExplicitlyFalse) {
-            pass("checkImplicitThis") { checkImplicitThis() }
-        }
+        // 22. checkImplicitThis (TS2683/TS7041/TS7017) moved to the post-spine
+        // slot — see the pass("checkSpine") site (M0.4 slot-move pre-gate).
         // 21b''. B374: TS2341 for `this.<privateMember>` in a FREE function whose `this`
         // is typed (own `this:` param OR a contextual function-type annotation) as a class.
         pass("checkPrivateThisAccessInThisParamFunctions") { checkPrivateThisAccessInThisParamFunctions() }
