@@ -4986,11 +4986,8 @@ class Checker(
         // (which DEDUPS against the set pass's emitted positions) and the B223
         // try/catch walker follow it, preserving the legacy relative order.
         // See the pass("checkSpine") site.
-        // 6. Check for class properties without initializer (TS2564)
-        // Suppressed when strict=false, or when strictPropertyInitialization=false explicitly set
-        if (!options.strictExplicitlyFalse && !options.strictPropertyInitializationExplicitlyFalse) {
-            pass("checkPropertyInitialization") { checkPropertyInitialization() }
-        }
+        // 6. checkPropertyInitialization (TS2564) moved to the post-spine slot —
+        // see the pass("checkSpine") site (M0.4 slot-move pre-gate, round 635).
         // 6a. TS2540 for `const x = cond ? a : b; x.p = v` where p is readonly in a
         // union constituent (readonlyPropertySubtypeRelationDirected). Not strict-gated
         // (readonly is structural).
@@ -5178,6 +5175,22 @@ class Checker(
         // and B377 are gate-disjoint and never scan the list); the legacy
         // driver iterated binderResults → the spine's partition view, gated
         // `--partitionCheck 2` EQUIVALENT ×8 (the round-633 rule).
+        // 6' (M0.4 slot-move pre-gate, round 635): checkPropertyInitialization
+        // (TS2564 strict-property-initialization) moved intact from its
+        // pre-spine slot 6 ahead of its spine migration. Self-contained:
+        // stateless declare-gated statement recursion + per-class emission
+        // (walker-local sets only, no ambient reads at the driver level); the
+        // only TS2564 list op elsewhere is checkInKeywordTypeguard's
+        // whole-file wipe-and-pin, which runs AFTER both slots (emitters-
+        // before-wipe preserved). TYPE-RESOLVING (property annotations +
+        // typeIncludesUndefined + lib-availability suppression) — the hoist
+        // crosses the spine, so first-touch order is the risk class the
+        // corpus + listAll ×8 gates decide. The SECOND, declarationOnly
+        // dispatch (B439) is untouched — the eventual migration must keep the
+        // recursion walkers alive for it (the round-630 shared-walker rule).
+        if (!options.strictExplicitlyFalse && !options.strictPropertyInitializationExplicitlyFalse) {
+            pass("checkPropertyInitialization") { checkPropertyInitialization() }
+        }
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel

@@ -67,9 +67,29 @@ values, class property initializers, nested classes, expression-bodied
 container arrows, method reads of top-level vars all unreached) green
 against the LEGACY pass first; suite 11,629 → 11,668/0; `--listAll` ×8
 byte-identical; partitionCheck ×8 EQUIVALENT; pass table 427 → 426 (the
-row gone; checkSpine in-band); warning-clean. M0.4 running total: top
-TWELVE tail passes migrated. NEXT: checkPropertyInitialization (~99 ms)
-— scope shape + consumers before the slot-move.**
+row gone; checkSpine 19.4–19.8 s repeat runs, in-band); warning-clean.
+M0.4 running total: top TWELVE tail passes migrated. SESSION TAIL: the
+checkPropertyInitialization (#13, ~99 ms — TS2564
+strict-property-initialization) slot-move pre-gate LANDED (the pass
+hoisted from its pre-spine slot 6 across the spine to the post-spine
+slot; suite 11,668/0, listAll ×8 byte-identical). Scope map for the
+migrator: STATELESS declare-gated statement recursion
+(checkPropertyInitInStatements — skips `declare` classes/namespaces/fns,
+recurses class member bodies + PROPERTY INITIALIZERS, blocks/ifs/loops/
+switch/try, and expressions via checkPropertyInitInExpr for
+ClassExpressions) + the per-class emission checkClassPropertyInit
+(walker-local sets only, no ambient reads at the driver level) — the
+round-533 stateless-classifier shape, but TYPE-RESOLVING (property
+annotations + typeIncludesUndefined + lib-availability suppression).
+TWO dispatches: the normal-mode pass (now post-spine, option-gated
+!strictExplicitlyFalse && !strictPropertyInitializationExplicitlyFalse)
+AND the B439 declarationOnly direct call — the declarationOnly walk
+skips spineEnterNode, so the migration MUST keep the recursion walkers
+alive for that path (the round-630 shared-walker rule: spine classifier
+mirrors the surviving walker, stays in sync). Consumers: the only
+TS2564 list op elsewhere is checkInKeywordTypeguard's whole-file
+wipe-and-pin, which runs after both slots — no ordering hazard. NEXT
+session starts at its migration.**
 
 **Round 634 (2026-07-21) — (M0.4) slot-move pre-gate for #12:
 checkProtectedMemberReadAccess (B446 — TS2445/TS2446 protected READ
@@ -747,7 +767,11 @@ structural item instead of landing alone.**
   (LHS subtree never read-walked, the write check fires at the
   BinaryExpression anchor under the frame-maintained pmrInClassMethod
   gate)); next per-file candidate: checkPropertyInitialization
-  ~99 ms (scope shape + consumers first — round-633 session note);
+  ~99 ms — slot-move pre-gate LANDED round 635 (hoisted from its
+  PRE-spine slot 6; scope map in the round-635 session note: stateless
+  declare-gated recursion, type-resolving, and the B439 declarationOnly
+  second dispatch means the recursion walkers must SURVIVE — the
+  round-630 shared-walker rule);
   98 passes >20 ms carry 5.3 s of the
   6.2 s). Migration protocol per
   pass (the round-624 template): slot-move pre-gate commit (intact pass to the
