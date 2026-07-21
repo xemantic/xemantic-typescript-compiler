@@ -61,10 +61,26 @@ against the LEGACY pass FIRST; suite 11,515 → 11,532/0; `--listAll` ×8
 byte-identical (46×7 + 94 env-legit artifacts); pass table 432 → 431 (the
 checkDefiniteAssignmentViaFlowGraph row GONE; checkSpine 18,451.8 ms
 single-run — inside the round-625..628 18.0–19.1 s band);
-warning-clean. M0.4 running total: top SEVEN tail passes migrated. NEXT
-by the fresh table: checkSameTargetReferenceCastOverlap (~123 ms) and
-checkBindingPatternComputedIndexSig (~120 ms) — slot positions vs the
-spine unverified; check for a needed slot-move pre-gate first.**
+warning-clean. M0.4 running total: top SEVEN tail passes migrated.
+SESSION TAIL: the checkSameTargetReferenceCastOverlap (#8 by the fresh
+table, ~123 ms) slot-move pre-gate landed — the pass moved intact from
+its cast-overlap-cluster slot (14''b) to the post-spine slot (corpus
+11,532/0 + listAll ×8 byte-identical). Self-contained: installs its own
+currentFileLocals/currentCheckFileName per file, writes only diagnostics
+(no side sets); no TS2352 retract/dedup consumers exist and the
+cast-overlap siblings (checkNullTypeAssertionOverlap /
+checkArrayToClassCastOverlap / checkJSDocVoidCastNonOverlap) are
+shape-disjoint. NOTE for the migrator: this pass RESOLVES types
+(getTypeOfExpression / getTypeFromTypeNode / bidirectional
+checkTypeRelatedTo per type-arg pair) — the first type-resolving tail
+migration; the per-anchor dispatch will interleave those resolutions
+into the spine walk (first-touch order), so the corpus gate matters more
+than usual. Anchors are TypeAssertionExpression nodes reached by
+walkTypeAssertionsInStmt (the shared walker — its AsExpression branch
+deliberately does NOT hit the callback, per the B87.2 gotcha); two
+emission leaves (emitTS2352IfSameTargetMismatch /
+emitTS2352IfFunctionReturnMismatch) run per anchor in that order. Next
+after it: checkBindingPatternComputedIndexSig (~120 ms).**
 
 **Round 628 (2026-07-21) — (M0.4) sixth tail-pass migration:
 checkSymbolToStringConversions (TS2469/TS2731, 96–108 ms — the #6 tail
@@ -659,9 +675,10 @@ structural item instead of landing alone.**
   the walker family stays verbatim, the only ambient install is
   currentFlowGraph save/restore, and the B223 sibling stays at its own
   pass slot since it scans no prior diagnostics),
-  checkSameTargetReferenceCastOverlap ~123 ms and
-  checkBindingPatternComputedIndexSig ~120 ms — next (slot positions vs
-  the spine unverified — check for a needed slot-move pre-gate first);
+  checkSameTargetReferenceCastOverlap ~123 ms — next (slot-move pre-gate
+  LANDED round 629; the first TYPE-RESOLVING tail migration — see the
+  round-629 session-tail note for the migrator's map), then
+  checkBindingPatternComputedIndexSig ~120 ms;
   98 passes >20 ms carry 5.3 s of the
   6.2 s). Migration protocol per
   pass (the round-624 template): slot-move pre-gate commit (intact pass to the

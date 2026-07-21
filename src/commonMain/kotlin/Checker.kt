@@ -5017,6 +5017,16 @@ class Checker(
         // set-building leaves collectSymbolAliases/collectSymbolLocals/
         // symbolLikeTpNames run at spineSySetup/spineSyCtxFor; the emission
         // leaves emitSym2469/emitSym2731 are anchor-called).
+        // 17.82 (M0.4 slot-move pre-gate, round 629): checkSameTargetReferenceCastOverlap
+        // (TS2352 same-target-Reference cast + function-return-mismatch cast)
+        // moved intact from its cast-overlap-cluster slot ahead of its spine
+        // migration. Self-contained: installs its own currentFileLocals/
+        // currentCheckFileName per file, writes only diagnostics (no side
+        // sets); no TS2352 retract/dedup consumers exist and the cast-overlap
+        // siblings are shape-disjoint. The hoist crosses the JS-family/module/
+        // decl-emit passes — first-touch type-resolution order is the risk
+        // class the corpus + listAll ×8 gates decide.
+        pass("checkSameTargetReferenceCastOverlap") { checkSameTargetReferenceCastOverlap() }
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -5275,8 +5285,9 @@ class Checker(
         pass("checkNamespaceImportOfNonModule") { checkNamespaceImportOfNonModule() }
         // 14''. Check `<Interface>null` / `<Class>null` casts for TS2352
         pass("checkNullTypeAssertionOverlap") { checkNullTypeAssertionOverlap() }
-        // 14''b. Check same-target Reference cast bidirectional non-overlap for TS2352
-        pass("checkSameTargetReferenceCastOverlap") { checkSameTargetReferenceCastOverlap() }
+        // 14''b. checkSameTargetReferenceCastOverlap moved to the post-spine
+        // slot — see the pass("checkSpine") site (M0.4 slot-move pre-gate,
+        // round 629).
         // 14''c. Check array-source -> class-target cast non-overlap for TS2352
         pass("checkArrayToClassCastOverlap") { checkArrayToClassCastOverlap() }
         // 14''d. Check JSDoc `/** @type {T} */(void 0)` cast in JS files for TS2352
