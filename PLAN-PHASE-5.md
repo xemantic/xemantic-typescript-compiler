@@ -20,6 +20,45 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 624 (2026-07-21) — (M0.4) OPENS: the first tail-pass migration —
+checkObjectSpreadInvalidTypes (TS2698/TS2700, the TOP tail pass at 165.6 ms
+on the fresh HEAD `--passTiming` table) is ON THE SPINE; its per-file driver
+and all four recursion walkers are DELETED.** Two commits, the protocol now
+recorded on the queue item as the per-pass template. (1) Slot-move pre-gate:
+the intact pass dispatch moved from its legacy 64d2a slot to right after
+`pass("checkSpine")` (between the spine and ctaPostFilters, so its emissions
+sit inside the cta post-filter window exactly as they will spine-anchored) —
+corpus suite green, `--listAll` ×8 byte-identical. (2) The migration, per the
+INV.4(d) zoo patterns: the legacy `anns` map (name → annotation TypeNode,
+statement-ordered, a fresh `HashMap(anns)` copy at every block/branch/loop/
+clause boundary, a params-seeded copy at fn-body entry, LabeledStatement
+transparent) reproduces as PUSH frames (SpineOsFrame) spawned at EXACTLY the
+legacy copy edges — including the easy-to-miss NON-Block copy-edge children
+(a bare `if (c) var x: number` then-statement got its own discarded copy, so
+its recording must NOT leak to the outer frame; pinned); reach is a memoized
+ancestor classifier (spineOsStatus/spineOsEdge, ByteArray memo) reproducing
+the deleted arms verbatim (class EXPRESSIONS, template/yield/void/delete/
+typeof/satisfies operands, param defaults, for/while heads, switch subjects,
+case expressions, dotted-namespace bodies all stay UNREACHED — the
+class-expression silence is pinned); the legacy per-fn-like
+withInternedTpScope layering rebuilds PULL-based at each emission from the
+anchor's ancestor chain (outermost-first, so inner shadows outer and
+constraints materialize in legacy order); the ambient sandwich installs ONLY
+currentCheckFileName (analysis: every spine handler save-restores per
+dispatch, so the mid-spine resting ambient — currentLocalTypes, flow graph,
+TP scope — already equals what the slot-moved pass saw; the schedule delta
+that bodyless/non-emitting fn-likes no longer eagerly materialize TP
+constraints via this pass is confirmed inert by the byte-identity gates).
+14 local pins (M04SpreadSpineMigrationTest: statement-order visibility both
+directions, block/if-branch/switch-clause copy-boundary non-leaks, param +
+arrow-expression-body + namespace + nested-fn-expr visibility, the enum
+branch, rest TS2700 both directions, the class-expression negative reach
+pin). Gates: suite green at both commits, `--listAll` ×8 byte-identical at
+both commits. Per-item evidence is the pass table (438 → 437 passes; the
+165.6 ms row gone; checkSpine not inflated) — a single-pass ~0.5% wall delta
+is below the ±2% drift band, so no A/B claim; the ARC gets A/B'd after
+several passes land.**
+
 **Round 623 (2026-07-20) — (M0.3) slice (viii) LANDED as a MEASURED-NEUTRAL
 structure bundle (−0.30% median, post wins 6/10 pairs — below the ±2%
 drift band, so NO wall claim is made), plus the JFR-bias negative
@@ -313,24 +352,6 @@ every remaining queue item is now user-gated, resource-blocked,
 network-blocked, or owner-parked — the autonomous loop's stop condition
 is MET; stopping cleanly per protocol.
 
-**Round 615 (2026-07-19) — (INV.7d2) LANDED: the shared-name full-rebuild
-bail closes the documented incremental residual.** ProjectCompiler
-computes `sharedNameFiles` — module files whose TOP-LEVEL declaration
-names collide with a lib global (the checker's KNOWN_GLOBALS curation,
-widened to internal) or a SCRIPT-file top-level name; both merge classes
-survive the INV.3(d) retire with program-wide reach, so such files force
-a full rebuild in BOTH directions: previously-declaring via
-`incrementalEligible` (prev.sharedNameFiles), NEWLY-declaring via
-`incrementalOutcomeValid` (fresh.sharedNameFiles — eligibility can't see
-the new content's declarations, the outcome check can). Approximation
-honestly recorded: real-lib names outside the ~400-name curation slip
-through — `--watchVerify` remains the field net. Pins (+2): a module
-declaring `interface Symbol` is ineligible while its clean sibling stays
-eligible; an edit ADDING `interface Node` passes eligibility but fails
-outcome validation. Gates: corpus 11,361/0; listAll ×8 byte-identical.
-QUEUE STATE: the genuinely-live tail is now ONLY (7d3) cross-process
-.tsbuildinfo (optional productization); everything else is blocked
-(EP/reference-tsc, INV.7b/RAM, M4.7/network) or owner-parked.
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
@@ -446,11 +467,19 @@ structural item instead of landing alone.**
   truncation-mark blocks). Post-round-619 this carries the WHOLE tail lever
   (~6.2 s, all corpus-pinned — the deletion pool measured 59 ms): the worklist
   is the `--passTiming` cost table intersected with
-  `docs/perf/pass-census-round619.txt` (top by cost:
-  checkObjectSpreadInvalidTypes ~181 ms, checkDefiniteAssignmentViaFlowGraph
-  ~153 ms, checkSymbolToStringConversions ~139 ms, checkConstEnumDiagnostics
-  ~135 ms, checkAbstractClassInstantiation ~114 ms; 98 passes >20 ms carry
-  5.3 s of the 6.2 s).
+  `docs/perf/pass-census-round619.txt` (top by cost at the round-624 HEAD
+  table: checkObjectSpreadInvalidTypes 165.6 ms — **MIGRATED round 624**,
+  checkArrayPushDiscriminatedUnionElements 138 ms, checkImplicitThis 127 ms,
+  checkFnTypedParamCalls 119 ms, checkAbstractClassInstantiation 113 ms,
+  checkSymbolToStringConversions 108 ms, checkDefiniteAssignmentViaFlowGraph
+  105 ms; 98 passes >20 ms carry 5.3 s of the 6.2 s). Migration protocol per
+  pass (the round-624 template): slot-move pre-gate commit (intact pass to the
+  post-spine slot, corpus + listAll ×8), then the migration commit (frames at
+  the legacy copy edges, memoized reach classifier, per-dispatch ambient
+  sandwich + pull-based TP rebuild, local pins, corpus + listAll ×8). A
+  single-pass wall delta (~0.5%) is BELOW the drift band — the per-item
+  evidence is the `--passTiming` table (the pass's row gone, checkSpine's row
+  not inflated), not an interleaved A/B; A/B the ARC once several passes land.
 - [ ] **(M1) Identity stability → revive the two memo designs** (the ≤15–20 s
   path; tsc's flow cache — per-(refKey, flowNode) over interned types — is the
   existence proof that the (f2) fold works once types are canonical).

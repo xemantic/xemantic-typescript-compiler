@@ -3375,6 +3375,30 @@ class Checker(
     }
     private val spineDaFrames = ArrayList<SpineDaFrame>()
 
+    // ── (M0.4) round 624: checkObjectSpreadInvalidTypes (TS2698/TS2700) on
+    // the spine ──
+    // All MUST be declared before init {} (consumed by checkSpine during init).
+    // The deleted spread2698Stmt/spread2698Expr recursion walkers' reach is the
+    // memoized ancestor classifier [spineOsStatus] over [spineOsEdge]; the
+    // legacy `anns` map (name → annotation TypeNode, statement-ordered with a
+    // fresh HashMap copy at every block/branch/loop/clause boundary and a
+    // params-seeded copy at fn-body entry) is reproduced by PUSH frames
+    // ([SpineOsFrame]) spawned at exactly the legacy copy edges; the TP scope
+    // (legacy withInternedTpScope at every walked fn-like) is rebuilt
+    // PULL-based at each emission from the anchor's ancestor chain. The
+    // bounded emission leaves (spread2698CheckOperand / rest2700Check and
+    // their emitters) are retained unchanged.
+    /** Per-file activation: the legacy non-.d.ts gate. */
+    private var spineOsActive = false
+    /** Per-file nodeId memo for [spineOsStatus] — 0 unknown, else an OS_* state. */
+    private var spineOsReachMemo = ByteArray(0)
+    /** Reusable ascent buffer for [spineOsStatus]. */
+    private val spineOsChain = ArrayList<Node>()
+    /** One legacy `anns` scope: owner popped at its leave; the map is the copy
+     *  taken at the owner's enter (fn bodies add their param annotations). */
+    private class SpineOsFrame(val owner: Node, val anns: HashMap<String, TypeNode>)
+    private val spineOsFrames = ArrayList<SpineOsFrame>()
+
     // ── INV.4(d) walker 6 (round 535): checkArgumentCounts on the spine ────
     // The function-call arity pass (TS2554/TS2555/TS2575) — the recursion
     // walkers (checkArgCountInStatements/-InStatement/-InExpr(Core)) are
@@ -4840,12 +4864,10 @@ class Checker(
         // occupy.
         pass("checkTypeParameterDefaults") { checkTypeParameterDefaults() }
         pass("checkSpine") { checkSpine() }
-        // 64d2a (M0.4 slot-move pre-gate, round 624). Object-SPREAD source types
-        // (TS2698) + object-REST source types (TS2700) — moved here from its
-        // legacy 64d2a slot ahead of its spine migration; sits between the spine
-        // and ctaPostFilters so its emissions land inside the cta post-filter
-        // window exactly as they will once spine-anchored.
-        pass("checkObjectSpreadInvalidTypes") { checkObjectSpreadInvalidTypes() }
+        // 64d2a (M0.4, round 624): the object-spread/rest pass (TS2698/TS2700)
+        // is ON THE SPINE — see spineOsEnterNode/spineOsStatus; the legacy
+        // recursion walkers are deleted (the emission leaves
+        // spread2698CheckOperand/rest2700Check are anchor-called).
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -15535,6 +15557,340 @@ class Checker(
         else -> DA_NONE
     }
 
+    // ── (M0.4) round 624: checkObjectSpreadInvalidTypes on the spine ──────
+
+    /** Per-file setup for the spine-hosted object-spread/rest pass. */
+    private fun spineOsSetup(result: BinderResult) {
+        spineOsActive = !spineIsDts
+        spineOsFrames.clear()
+        spineOsReachMemo = if (!spineOsActive) ByteArray(0) else {
+            val n = result.sourceFile.nodeCount
+            if (n > 0) ByteArray(n) else ByteArray(0)
+        }
+    }
+
+    private fun spineOsTeardown() {
+        spineOsActive = false
+        spineOsFrames.clear()
+        spineOsReachMemo = ByteArray(0)
+    }
+
+    /** Per-node ENTER hook: frame spawns at the legacy copy edges, the
+     *  recording/rest step at declarators, the TS2698 anchor at spreads. */
+    private fun spineOsEnterNode(node: Node) {
+        when ((node as NodeBase).kindId) {
+            NodeKind.SOURCE_FILE -> { spineOsFrames.add(SpineOsFrame(node, HashMap())); return }
+            NodeKind.BLOCK -> {
+                when (spineOsStatus(node)) {
+                    OS_STMT -> spineOsPushCopy(node)
+                    OS_FNBLOCK -> spineOsPushFnBody(node)
+                }
+                return
+            }
+            NodeKind.MODULE_BLOCK -> { if (spineOsStatus(node) == OS_MODBLOCK) spineOsPushCopy(node); return }
+            NodeKind.CASE_CLAUSE, NodeKind.DEFAULT_CLAUSE -> {
+                if (spineOsStatus(node) == OS_CLAUSE) spineOsPushCopy(node)
+                return
+            }
+            NodeKind.VARIABLE_DECLARATION -> { spineOsVarDecl(node as VariableDeclaration); return }
+            NodeKind.SPREAD_ASSIGNMENT -> { spineOsSpreadAnchor(node as SpreadAssignment); return }
+            else -> {}
+        }
+        // The legacy copy edges whose child is a NON-Block statement (a bare
+        // if-branch / loop-body statement got its own HashMap copy), plus the
+        // arrow EXPRESSION body's params-seeded frame.
+        val parent = node.parent ?: return
+        when ((parent as NodeBase).kindId) {
+            NodeKind.IF_STATEMENT -> {
+                parent as IfStatement
+                if ((node === parent.thenStatement || node === parent.elseStatement) &&
+                    spineOsStatus(node) == OS_STMT
+                ) spineOsPushCopy(node)
+            }
+            NodeKind.FOR_STATEMENT -> {
+                parent as ForStatement
+                if (node === parent.statement && spineOsStatus(node) == OS_STMT) spineOsPushCopy(node)
+            }
+            NodeKind.FOR_IN_STATEMENT -> {
+                parent as ForInStatement
+                if (node === parent.statement && spineOsStatus(node) == OS_STMT) spineOsPushCopy(node)
+            }
+            NodeKind.FOR_OF_STATEMENT -> {
+                parent as ForOfStatement
+                if (node === parent.statement && spineOsStatus(node) == OS_STMT) spineOsPushCopy(node)
+            }
+            NodeKind.WHILE_STATEMENT -> {
+                parent as WhileStatement
+                if (node === parent.statement && spineOsStatus(node) == OS_STMT) spineOsPushCopy(node)
+            }
+            NodeKind.DO_STATEMENT -> {
+                parent as DoStatement
+                if (node === parent.statement && spineOsStatus(node) == OS_STMT) spineOsPushCopy(node)
+            }
+            NodeKind.ARROW_FUNCTION -> {
+                parent as ArrowFunction
+                if (node === parent.body && spineOsStatus(node) == OS_FNEXPRBODY) {
+                    spineOsPushFnFrame(node, parent.parameters)
+                }
+            }
+            else -> {}
+        }
+    }
+
+    /** Per-node LEAVE hook: pop the frame(s) this node owns. */
+    private fun spineOsLeaveNode(node: Node) {
+        val frames = spineOsFrames
+        while (frames.isNotEmpty() && frames[frames.size - 1].owner === node) {
+            frames.removeAt(frames.size - 1)
+        }
+    }
+
+    private fun spineOsTopAnns(): HashMap<String, TypeNode> =
+        spineOsFrames.lastOrNull()?.anns ?: HashMap()
+
+    private fun spineOsPushCopy(owner: Node) {
+        spineOsFrames.add(SpineOsFrame(owner, HashMap(spineOsTopAnns())))
+    }
+
+    /** A fn-like's Block body: copy of the fn-position map + its Identifier-named
+     *  annotated params (the legacy spread2698FuncLike seeding). */
+    private fun spineOsPushFnBody(body: Node) {
+        val params: List<Parameter> = when (val fn = (body as NodeBase).parent) {
+            is FunctionDeclaration -> fn.parameters
+            is MethodDeclaration -> fn.parameters
+            is Constructor -> fn.parameters
+            is GetAccessor -> fn.parameters
+            is SetAccessor -> fn.parameters
+            is FunctionExpression -> fn.parameters
+            is ArrowFunction -> fn.parameters
+            else -> return
+        }
+        spineOsPushFnFrame(body, params)
+    }
+
+    private fun spineOsPushFnFrame(owner: Node, params: List<Parameter>) {
+        val anns = HashMap(spineOsTopAnns())
+        for (p in params) {
+            val id = p.name as? Identifier ?: continue
+            val t = p.type ?: continue
+            anns[id.text] = t
+        }
+        spineOsFrames.add(SpineOsFrame(owner, anns))
+    }
+
+    /** The legacy VariableStatement per-declarator step: record the annotation,
+     *  then the object-REST TS2700 check — both BEFORE the initializer subtree
+     *  is walked (the spine visits children after this enter). */
+    private fun spineOsVarDecl(d: VariableDeclaration) {
+        if (spineOsStatus(d) != OS_VD) return
+        val anns = spineOsTopAnns()
+        (d.name as? Identifier)?.let { id -> d.type?.let { anns[id.text] = it } }
+        val restEl = (d.name as? ObjectBindingPattern)?.elements?.firstOrNull { it.dotDotDotToken }
+        val initE = d.initializer
+        if (restEl != null && initE != null) {
+            spineOsWithAmbient(d) { rest2700Check(restEl, initE, anns, spineSource, spineFileName) }
+        }
+    }
+
+    /** The TS2698 anchor — a SpreadAssignment of a reached object literal. */
+    private fun spineOsSpreadAnchor(el: SpreadAssignment) {
+        if (spineOsStatus(el) != OS_SPREADP) return
+        spineOsWithAmbient(el) { spread2698CheckOperand(el, spineOsTopAnns(), spineSource, spineFileName) }
+    }
+
+    /**
+     * Per-dispatch ambient sandwich: the legacy pass installed
+     * currentCheckFileName per file (checkSpine only installs
+     * currentFileLocals — the documented gotcha), and layered
+     * [withInternedTpScope] at every walked fn-like; rebuild the layering
+     * pull-based from the anchor's ancestor chain, outermost-first (inner
+     * shadows outer, and constraints materialize outer-first — the legacy
+     * order at this anchor).
+     */
+    private fun spineOsWithAmbient(anchor: Node, block: () -> Unit) {
+        val savedFile = currentCheckFileName
+        currentCheckFileName = spineFileName
+        try {
+            val tpLists = spineOsTpChain(anchor)
+            if (tpLists == null) block() else spineOsApplyTps(tpLists, 0, block)
+        } finally {
+            currentCheckFileName = savedFile
+        }
+    }
+
+    /** Enclosing fn-likes' non-empty type-parameter lists, outermost first —
+     *  only fn-likes whose BODY contains the anchor (params/defaults are
+     *  unreached, so every reached anchor sits inside each ancestor's body). */
+    private fun spineOsTpChain(anchor: Node): List<List<TypeParameter>>? {
+        var lists: ArrayList<List<TypeParameter>>? = null
+        var child: Node = anchor
+        var cur: Node? = (anchor as NodeBase).parent
+        while (cur != null && cur !is SourceFile) {
+            val tps: List<TypeParameter>? = when (cur) {
+                is FunctionDeclaration -> if (cur.body === child) cur.typeParameters else null
+                is MethodDeclaration -> if (cur.body === child) cur.typeParameters else null
+                is FunctionExpression -> if (cur.body === child) cur.typeParameters else null
+                is ArrowFunction -> if (cur.body === child) cur.typeParameters else null
+                else -> null
+            }
+            if (!tps.isNullOrEmpty()) {
+                (lists ?: ArrayList<List<TypeParameter>>().also { lists = it }).add(tps)
+            }
+            child = cur
+            cur = (cur as NodeBase).parent
+        }
+        return lists?.also { it.reverse() }
+    }
+
+    private fun spineOsApplyTps(lists: List<List<TypeParameter>>, i: Int, block: () -> Unit) {
+        if (i >= lists.size) { block(); return }
+        withInternedTpScope(lists[i], withAst = false) { spineOsApplyTps(lists, i + 1, block) }
+    }
+
+    /**
+     * Memoized reach classifier — the deleted spread2698Stmt/spread2698Expr
+     * dispatch arms verbatim (see the OS_* constants). Ascends to the first
+     * memoized/terminal ancestor, then walks back down over [spineOsEdge].
+     */
+    private fun spineOsStatus(node: Node): Int {
+        if (node is SourceFile) return OS_ROOT
+        val memo = spineOsReachMemo
+        run {
+            val id = (node as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) {
+                val m = memo[id].toInt()
+                if (m != 0) return m
+            }
+        }
+        val chain = spineOsChain
+        chain.clear()
+        var cur: Node = node
+        val anchor: Node?
+        var anchorStatus = OS_NONE
+        while (true) {
+            chain.add(cur)
+            val parent = (cur as NodeBase).parent
+            if (parent == null) { anchor = null; break } // detached/unindexed → NONE
+            if (parent is SourceFile) { anchor = parent; anchorStatus = OS_ROOT; break }
+            val pid = (parent as NodeBase).nodeId
+            val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
+            if (pm != 0) { anchor = parent; anchorStatus = pm; break }
+            cur = parent
+        }
+        var pNode: Node? = anchor
+        var pStatus = anchorStatus
+        var result = OS_NONE
+        for (i in chain.indices.reversed()) {
+            val c = chain[i]
+            result = if (pNode == null || pStatus == OS_NONE) OS_NONE
+                else spineOsEdge(pNode, pStatus, c)
+            val cid = (c as NodeBase).nodeId
+            if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
+            pNode = c
+            pStatus = result
+        }
+        chain.clear()
+        return result
+    }
+
+    /** The edge rules — the deleted recursion arms verbatim. Unlisted edges
+     *  are NONE (the legacy `else -> {}`s). */
+    private fun spineOsEdge(parent: Node, pStatus: Int, child: Node): Int = when (pStatus) {
+        OS_ROOT -> if (child is Statement) OS_STMT else OS_NONE
+        OS_STMT -> when (parent) {
+            is VariableStatement -> if (child is VariableDeclarationList) OS_VDL else OS_NONE
+            is ExpressionStatement -> if (child === parent.expression) OS_EXPR else OS_NONE
+            is ReturnStatement -> if (child === parent.expression) OS_EXPR else OS_NONE
+            is ThrowStatement -> if (child === parent.expression) OS_EXPR else OS_NONE
+            is FunctionDeclaration -> if (child === parent.body) OS_FNBLOCK else OS_NONE
+            is Block -> if (child is Statement) OS_STMT else OS_NONE
+            is IfStatement -> when {
+                child === parent.expression -> OS_EXPR
+                child === parent.thenStatement || child === parent.elseStatement -> OS_STMT
+                else -> OS_NONE
+            }
+            is ForStatement -> if (child === parent.statement) OS_STMT else OS_NONE
+            is ForInStatement -> if (child === parent.statement) OS_STMT else OS_NONE
+            is ForOfStatement -> if (child === parent.statement) OS_STMT else OS_NONE
+            is WhileStatement -> if (child === parent.statement) OS_STMT else OS_NONE
+            is DoStatement -> if (child === parent.statement) OS_STMT else OS_NONE
+            is TryStatement -> when {
+                child === parent.tryBlock || child === parent.finallyBlock -> OS_STMT
+                child === parent.catchClause -> OS_CATCH
+                else -> OS_NONE
+            }
+            is SwitchStatement -> if (child is CaseClause || child is DefaultClause) OS_CLAUSE else OS_NONE
+            is LabeledStatement -> if (child === parent.statement) OS_STMT else OS_NONE
+            // Legacy: only a direct ModuleBlock body is walked (a dotted
+            // `namespace A.B` body is a ModuleDeclaration → unreached).
+            is ModuleDeclaration -> if (child === parent.body && child is ModuleBlock) OS_MODBLOCK else OS_NONE
+            is ClassDeclaration -> when (child) {
+                is MethodDeclaration, is Constructor, is GetAccessor, is SetAccessor -> OS_FNMEMBER
+                is PropertyDeclaration -> OS_CLSPROP
+                else -> OS_NONE
+            }
+            else -> OS_NONE
+        }
+        OS_VDL -> if (child is VariableDeclaration) OS_VD else OS_NONE
+        OS_VD -> if (parent is VariableDeclaration && child === parent.initializer) OS_EXPR else OS_NONE
+        OS_CATCH -> if (parent is CatchClause && child === parent.block) OS_STMT else OS_NONE
+        OS_CLAUSE -> if (child is Statement) OS_STMT else OS_NONE
+        OS_MODBLOCK -> if (child is Statement) OS_STMT else OS_NONE
+        OS_FNBLOCK -> if (child is Statement) OS_STMT else OS_NONE
+        OS_CLSPROP -> if (parent is PropertyDeclaration && child === parent.initializer) OS_EXPR else OS_NONE
+        OS_FNMEMBER -> when (parent) {
+            is MethodDeclaration -> if (child === parent.body) OS_FNBLOCK else OS_NONE
+            is Constructor -> if (child === parent.body) OS_FNBLOCK else OS_NONE
+            is GetAccessor -> if (child === parent.body) OS_FNBLOCK else OS_NONE
+            is SetAccessor -> if (child === parent.body) OS_FNBLOCK else OS_NONE
+            else -> OS_NONE
+        }
+        OS_SPREADP -> if (parent is SpreadAssignment && child === parent.expression) OS_EXPR else OS_NONE
+        OS_PROPASSIGN -> if (parent is PropertyAssignment && child === parent.initializer) OS_EXPR else OS_NONE
+        OS_SHORTHAND ->
+            if (parent is ShorthandPropertyAssignment && child === parent.objectAssignmentInitializer) OS_EXPR
+            else OS_NONE
+        OS_EXPR, OS_FNEXPRBODY -> when (parent) {
+            is ObjectLiteralExpression -> when (child) {
+                is SpreadAssignment -> OS_SPREADP
+                is PropertyAssignment -> OS_PROPASSIGN
+                is MethodDeclaration, is GetAccessor, is SetAccessor -> OS_FNMEMBER
+                is ShorthandPropertyAssignment -> OS_SHORTHAND
+                else -> OS_NONE
+            }
+            is ArrayLiteralExpression -> if (child is Expression) OS_EXPR else OS_NONE
+            is ParenthesizedExpression -> if (child === parent.expression) OS_EXPR else OS_NONE
+            is CallExpression ->
+                if (child === parent.expression || parent.arguments.any { it === child }) OS_EXPR
+                else OS_NONE
+            is NewExpression ->
+                if (child === parent.expression || parent.arguments?.any { it === child } == true) OS_EXPR
+                else OS_NONE
+            is BinaryExpression -> if (child === parent.left || child === parent.right) OS_EXPR else OS_NONE
+            is ConditionalExpression ->
+                if (child === parent.condition || child === parent.whenTrue || child === parent.whenFalse) OS_EXPR
+                else OS_NONE
+            is PropertyAccessExpression -> if (child === parent.expression) OS_EXPR else OS_NONE
+            is ElementAccessExpression ->
+                if (child === parent.expression || child === parent.argumentExpression) OS_EXPR else OS_NONE
+            is SpreadElement -> if (child === parent.expression) OS_EXPR else OS_NONE
+            is AsExpression -> if (child === parent.expression) OS_EXPR else OS_NONE
+            is TypeAssertionExpression -> if (child === parent.expression) OS_EXPR else OS_NONE
+            is NonNullExpression -> if (child === parent.expression) OS_EXPR else OS_NONE
+            is PrefixUnaryExpression -> if (child === parent.operand) OS_EXPR else OS_NONE
+            is PostfixUnaryExpression -> if (child === parent.operand) OS_EXPR else OS_NONE
+            is AwaitExpression -> if (child === parent.expression) OS_EXPR else OS_NONE
+            is FunctionExpression -> if (child === parent.body) OS_FNBLOCK else OS_NONE
+            is ArrowFunction -> when {
+                child !== parent.body -> OS_NONE
+                child is Block -> OS_FNBLOCK
+                else -> OS_FNEXPRBODY
+            }
+            else -> OS_NONE
+        }
+        else -> OS_NONE
+    }
+
     /**
      * B78.2: filter `uninitialized` (which may include `var` and `const` decls
      * from prior collection passes) to keep only names declared as `let` in the
@@ -20448,6 +20804,7 @@ class Checker(
                 spineNuSetup(result)
                 spineCmSetup(result)
                 spineNpSetup(result)
+                spineOsSetup(result)
                 spineUResAuditActive = unresolvedAuditEnabled && spineUResActive
                 try {
                     spineWalkFile(sf)
@@ -20469,6 +20826,7 @@ class Checker(
                     spineNuTeardown()
                     spineCmTeardown()
                     spineNpTeardown()
+                    spineOsTeardown()
                 }
                 spineResolveDeferredIterationChecks()
             }
@@ -20638,6 +20996,7 @@ class Checker(
         // INV.4(d) walker 5: the set-based definite-assignment pass — the
         // per-statement frame step + core-frame spawns.
         if (spineDaActive) spineDaEnterNode(node)
+        if (spineOsActive) spineOsEnterNode(node)
         // INV.4(d) walker 7: the use-before-declaration pass — the per-list
         // ForwardRefs anchor + loop-header self-ref checks.
         if (spineUbdActive) spineUbdEnterNode(node)
@@ -20860,6 +21219,7 @@ class Checker(
         if (spineIanyActive) spineIanyLeaveNode(node)
         // INV.4(d) walker 5: the definite-assignment pass's core-frame pops.
         if (spineDaActive) spineDaLeaveNode(node)
+        if (spineOsActive) spineOsLeaveNode(node)
         // INV.4(d) walker 9: the const-assignment pass's frame pops.
         if (spineCaActive) spineCaLeaveNode(node)
         // INV.4(d) walker 13: the nullish-predicates pass — `??` checks at
@@ -46622,6 +46982,36 @@ class Checker(
         private const val DA_MEMBER_LEAK = 8
         private const val DA_MEMBER_NOLEAK = 9
         private const val DA_ROOT = 10
+
+        // (M0.4) round 624 — [spineOsStatus] states (Byte memo; 0 = unknown).
+        // STMT = a statement visited by the deleted spread2698Stmt; EXPR = an
+        // expression visited by the deleted spread2698Expr; FNBLOCK = a
+        // fn-like's Block body (statements → STMT, params seeded into the
+        // frame); FNEXPRBODY = an arrow's expression body (edges behave as
+        // EXPR, spawns the params-seeded frame); VDL/VD = the
+        // VariableStatement declarator chain (recording + rest-TS2700
+        // positions); CATCH/CLAUSE/MODBLOCK/CLSPROP/FNMEMBER/SPREADP/
+        // PROPASSIGN/SHORTHAND = reached carriers between the two walks.
+        // Unlisted edges are NONE (the legacy `else -> {}`s: loop/switch
+        // heads, for headers, param defaults, computed names, class
+        // EXPRESSIONS, template/tagged/yield/void/delete/typeof/satisfies
+        // operands, decorators, type positions, enum members).
+        private const val OS_NONE = 1
+        private const val OS_ROOT = 2
+        private const val OS_STMT = 3
+        private const val OS_EXPR = 4
+        private const val OS_VDL = 5
+        private const val OS_VD = 6
+        private const val OS_CATCH = 7
+        private const val OS_CLAUSE = 8
+        private const val OS_MODBLOCK = 9
+        private const val OS_FNBLOCK = 10
+        private const val OS_FNEXPRBODY = 11
+        private const val OS_CLSPROP = 12
+        private const val OS_FNMEMBER = 13
+        private const val OS_SPREADP = 14
+        private const val OS_PROPASSIGN = 15
+        private const val OS_SHORTHAND = 16
 
         // INV.4(d) walker 7 (round 536) — [spineUbdStatus] states. STMT = a
         // statement position descended by the deleted checkUBDInStatement;
@@ -145054,152 +145444,10 @@ interface DataView {
     // members are filtered before the check (`{a} | undefined` IS a valid spread).
     // -----------------------------------------------------------------------
 
-    private fun checkObjectSpreadInvalidTypes() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            currentFileLocals = result.locals
-            currentCheckFileName = fileName
-            val source = result.sourceFile.text
-            spread2698Stmts(result.sourceFile.statements, source, fileName, mutableMapOf())
-        }
-        currentFileLocals = null
-        currentCheckFileName = null
-    }
-
-    private fun spread2698Stmts(stmts: List<Statement>, source: String, fileName: String, anns: MutableMap<String, TypeNode>) {
-        for (s in stmts) spread2698Stmt(s, source, fileName, anns)
-    }
-
-    private fun spread2698Stmt(stmt: Statement, source: String, fileName: String, anns: MutableMap<String, TypeNode>) {
-        when (stmt) {
-            is VariableStatement -> for (d in stmt.declarationList.declarations) {
-                (d.name as? Identifier)?.let { id -> d.type?.let { anns[id.text] = it } }
-                // Object-REST TS2700: `var {...r} = init` where `init` resolves to a
-                // non-object source (primitive/literal/enum/indexed-access/keyof/union
-                // with an invalid non-nullish member/intersection with an invalid
-                // member). Shares this traversal's annotation map + type-param scope so
-                // function-local typed sources (`T["b"]`, `keyof T`) resolve correctly.
-                val restEl = (d.name as? ObjectBindingPattern)?.elements?.firstOrNull { it.dotDotDotToken }
-                val initE = d.initializer
-                if (restEl != null && initE != null) rest2700Check(restEl, initE, anns, source, fileName)
-                initE?.let { spread2698Expr(it, source, fileName, anns) }
-            }
-            is ExpressionStatement -> spread2698Expr(stmt.expression, source, fileName, anns)
-            is ReturnStatement -> stmt.expression?.let { spread2698Expr(it, source, fileName, anns) }
-            is ThrowStatement -> stmt.expression?.let { spread2698Expr(it, source, fileName, anns) }
-            is FunctionDeclaration -> spread2698FuncLike(stmt.typeParameters, stmt.parameters, stmt.body, source, fileName, anns)
-            is Block -> spread2698Stmts(stmt.statements, source, fileName, HashMap(anns))
-            is IfStatement -> {
-                spread2698Expr(stmt.expression, source, fileName, anns)
-                spread2698Stmt(stmt.thenStatement, source, fileName, HashMap(anns))
-                stmt.elseStatement?.let { spread2698Stmt(it, source, fileName, HashMap(anns)) }
-            }
-            is ForStatement -> spread2698Stmt(stmt.statement, source, fileName, HashMap(anns))
-            is ForInStatement -> spread2698Stmt(stmt.statement, source, fileName, HashMap(anns))
-            is ForOfStatement -> spread2698Stmt(stmt.statement, source, fileName, HashMap(anns))
-            is WhileStatement -> spread2698Stmt(stmt.statement, source, fileName, HashMap(anns))
-            is DoStatement -> spread2698Stmt(stmt.statement, source, fileName, HashMap(anns))
-            is TryStatement -> {
-                spread2698Stmt(stmt.tryBlock, source, fileName, HashMap(anns))
-                stmt.catchClause?.block?.let { spread2698Stmt(it, source, fileName, HashMap(anns)) }
-                stmt.finallyBlock?.let { spread2698Stmt(it, source, fileName, HashMap(anns)) }
-            }
-            is SwitchStatement -> for (clause in stmt.caseBlock) when (clause) {
-                is CaseClause -> spread2698Stmts(clause.statements, source, fileName, HashMap(anns))
-                is DefaultClause -> spread2698Stmts(clause.statements, source, fileName, HashMap(anns))
-                else -> {}
-            }
-            is LabeledStatement -> spread2698Stmt(stmt.statement, source, fileName, anns)
-            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { spread2698Stmts(it.statements, source, fileName, HashMap(anns)) }
-            is ClassDeclaration -> for (m in stmt.members) when (m) {
-                is MethodDeclaration -> spread2698FuncLike(m.typeParameters, m.parameters, m.body, source, fileName, anns)
-                is Constructor -> spread2698FuncLike(null, m.parameters, m.body, source, fileName, anns)
-                is GetAccessor -> spread2698FuncLike(null, m.parameters, m.body, source, fileName, anns)
-                is SetAccessor -> spread2698FuncLike(null, m.parameters, m.body, source, fileName, anns)
-                is PropertyDeclaration -> m.initializer?.let { spread2698Expr(it, source, fileName, anns) }
-                else -> {}
-            }
-            else -> {}
-        }
-    }
-
-    private fun spread2698FuncLike(
-        tps: List<TypeParameter>?, params: List<Parameter>, bodyNode: Node?,
-        source: String, fileName: String, parentAnns: Map<String, TypeNode>
-    ) {
-        withInternedTpScope(tps, withAst = false) {
-            val anns = HashMap(parentAnns)
-            for (p in params) (p.name as? Identifier)?.let { id -> p.type?.let { anns[id.text] = it } }
-            when (bodyNode) {
-                is Block -> spread2698Stmts(bodyNode.statements, source, fileName, anns)
-                is Expression -> spread2698Expr(bodyNode, source, fileName, anns)
-                else -> {}
-            }
-        }
-    }
-
-    private fun spread2698Expr(expr: Expression, source: String, fileName: String, anns: MutableMap<String, TypeNode>) {
-        when (expr) {
-            is ObjectLiteralExpression -> for (el in expr.properties) when (el) {
-                is SpreadAssignment -> {
-                    spread2698CheckOperand(el, anns, source, fileName)
-                    spread2698Expr(el.expression, source, fileName, anns)
-                }
-                is PropertyAssignment -> spread2698Expr(el.initializer, source, fileName, anns)
-                is MethodDeclaration -> spread2698FuncLike(el.typeParameters, el.parameters, el.body, source, fileName, anns)
-                is GetAccessor -> spread2698FuncLike(null, el.parameters, el.body, source, fileName, anns)
-                is SetAccessor -> spread2698FuncLike(null, el.parameters, el.body, source, fileName, anns)
-                is ShorthandPropertyAssignment -> el.objectAssignmentInitializer?.let { spread2698Expr(it, source, fileName, anns) }
-                else -> {}
-            }
-            is ArrayLiteralExpression -> for (e in expr.elements) spread2698Expr(e, source, fileName, anns)
-            is ParenthesizedExpression -> spread2698Expr(expr.expression, source, fileName, anns)
-            is CallExpression -> {
-                spread2698Expr(expr.expression, source, fileName, anns)
-                for (a in expr.arguments) spread2698Expr(a, source, fileName, anns)
-            }
-            is NewExpression -> {
-                spread2698Expr(expr.expression, source, fileName, anns)
-                expr.arguments?.forEach { spread2698Expr(it, source, fileName, anns) }
-            }
-            is BinaryExpression -> {
-                // Worklist (not recursion on .left): a deeply-nested binary chain
-                // (binderBinaryExpressionStress's `a+b+c+...`) would StackOverflow a
-                // recursive left/right walk. Flatten the binary tree iteratively —
-                // push right-then-left so leaves are visited left-to-right (pre-order,
-                // matching the recursive form) — recursing only into non-binary operands.
-                val work = ArrayDeque<Expression>()
-                work.addLast(expr)
-                while (work.isNotEmpty()) {
-                    when (val n = work.removeLast()) {
-                        is BinaryExpression -> { work.addLast(n.right); work.addLast(n.left) }
-                        else -> spread2698Expr(n, source, fileName, anns)
-                    }
-                }
-            }
-            is ConditionalExpression -> {
-                spread2698Expr(expr.condition, source, fileName, anns)
-                spread2698Expr(expr.whenTrue, source, fileName, anns)
-                spread2698Expr(expr.whenFalse, source, fileName, anns)
-            }
-            is PropertyAccessExpression -> spread2698Expr(expr.expression, source, fileName, anns)
-            is ElementAccessExpression -> {
-                spread2698Expr(expr.expression, source, fileName, anns)
-                spread2698Expr(expr.argumentExpression, source, fileName, anns)
-            }
-            is SpreadElement -> spread2698Expr(expr.expression, source, fileName, anns)
-            is AsExpression -> spread2698Expr(expr.expression, source, fileName, anns)
-            is TypeAssertionExpression -> spread2698Expr(expr.expression, source, fileName, anns)
-            is NonNullExpression -> spread2698Expr(expr.expression, source, fileName, anns)
-            is PrefixUnaryExpression -> spread2698Expr(expr.operand, source, fileName, anns)
-            is PostfixUnaryExpression -> spread2698Expr(expr.operand, source, fileName, anns)
-            is AwaitExpression -> spread2698Expr(expr.expression, source, fileName, anns)
-            is FunctionExpression -> spread2698FuncLike(expr.typeParameters, expr.parameters, expr.body, source, fileName, anns)
-            is ArrowFunction -> spread2698FuncLike(expr.typeParameters, expr.parameters, expr.body, source, fileName, anns)
-            else -> {}
-        }
-    }
+    // (M0.4, round 624): the per-file driver (checkObjectSpreadInvalidTypes)
+    // and the four recursion walkers (spread2698Stmts/Stmt/FuncLike/Expr) are
+    // DELETED — the walk is spine-hosted (spineOsEnterNode/spineOsStatus); the
+    // emission leaves below are anchor-called with the frame's `anns` map.
 
     private fun spread2698CheckOperand(el: SpreadAssignment, anns: Map<String, TypeNode>, source: String, fileName: String) {
         val operand = el.expression
