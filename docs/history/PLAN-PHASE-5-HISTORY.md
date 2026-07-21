@@ -1,3 +1,37 @@
+**Round 620 (2026-07-20) — (M0.1d) runs the mandated consumer trace and
+OVERTURNS round 619's deletion verdict: "23 census-silent, deletion-ready"
+was a FALSE GREEN — 20 of the 23 are corpus-pinned; only 3 pure adders were
+deletable.** Two compounding flaws found. (1) METHODOLOGY: `censusByPass`
+records only net-POSITIVE per-pass deltas (`c1 > c0` in pass()), so four
+whole pass classes are census-silent while load-bearing — wipe-and-pin
+walkers (`removeAll` + `pinDiag`, net 0: checkTemporalPin, checkMapUpsert,
+~14 of the 23), rewriters (net 0: applyDomLibSuggestionRewrite — the ONLY
+producer of TS2812's dom-lib suffix, required by missingDomElements;
+checkBaseClassImprovedMismatch), retractors (net < 0: ctaPostFilters — five
+generics-family errors baselines depend on its TS2322-vs-TS2304/TS2314
+retraction), and collectors (net 0: populateAmbientCyclicBaseClasses —
+recursiveBaseCheck/2's TS2449 suppression). (2) EXECUTION: Phase B's "full
+suite GREEN with all 23 disabled" was manufactured by Inv0PassTimingTest's
+cleanup assigning `PassTiming.disabledPasses = emptySet()` — the wipe
+re-enabled the lab's disables for every test class after 'I' in the
+alphabet, i.e. the whole generated corpus (a CLI probe on missingDomElements
+proved the disable works outside the fork: TS2812×4 → TS2339×6). LANDED:
+(a) save-and-restore in Inv0PassTimingTest (disabledPasses + censusMode) +
+a census-blindness pin (wipe-and-pin and retractor passes must be
+census-silent — the blindness documented in-test) + the census artifact
+correction header; (b) the honest disable experiment (fixed cleanup,
+`--rerun`): 26 failures → per-pass verdicts — LIVE: the wipe-and-pin
+walkers, both rewriters, the retractor, the collector, and
+checkCrossFileUseBeforeDeclaration (pinned by Inv4SpineBatch27Test, a LOCAL
+pin a corpus-only census can never see); (c) the 3 dead pure adders DELETED
+(checkModuleNoneConflict, checkExportAssignmentInSystem,
+checkUnicodeSurrogatePairImportBinding + orphaned helpers
+findFirstModuleStatement/getModuleStatementSpan/getStatementTextSpan/
+UescDiag). Gates: full suite 11,379/0; `--listAll` ×8 byte-identical
+pre-vs-post on all 8 profiles; build warning-clean. (M0.1) CLOSES on the
+honest ledger: the tail's ~6.2 s is ALL pinned — (M0.4) migration carries
+the whole lever. NEXT (top-of-queue): (M0.2) kindId table dispatch.**
+
 **Round 619 (2026-07-20) — the PERF arc opens (owner: "proceed according to
 your recommendations") and (M0.1) tail triage runs to its verdict: the
 deletion hypothesis is DEAD — the tail is ~all corpus-pinned; migration

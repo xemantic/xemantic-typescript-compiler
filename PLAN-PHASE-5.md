@@ -20,6 +20,64 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 630 (2026-07-21) — (M0.4) eighth tail-pass migration:
+checkSameTargetReferenceCastOverlap (TS2352 same-target-Reference cast +
+function-return-mismatch cast, ~123 ms — the #8 tail pass) is ON THE SPINE;
+the whole-file driver is deleted.** The SHARED-WALKER variant of the
+template: the pass's recursion (walkTypeAssertionsInStmt/-InExpr) is SHARED
+with the cast-overlap sibling passes (null-cast / array-to-class /
+type-param-subtype / erasable-syntax), so only the DRIVER
+(checkSameTargetReferenceCastOverlap's binderResults loop + its two
+whole-file walks) is deleted — the walker survives, and the reach
+classifier (spineCoStatus/spineCoEdge, the spineFp/spineSy skeleton)
+mirrors the walker's descent arms VERBATIM and must stay IN SYNC with any
+future walker-arm change (a sibling-pass walker extension without a
+classifier update silently diverges this pass's reach — noted in the
+classifier's kdoc). Reach quirks pinned both directions: objlit and
+class-EXPRESSION method bodies, typeof/void/delete/non-null operands,
+template spans, case-clause EXPRESSIONS, BOTH for-initializer forms, NEW
+callees, and tagged-template tags/spans ARE reached; parameter DEFAULTS,
+enum member initializers, heritage expressions, and computed property
+NAMES are NOT. Anchors are TypeAssertionExpression enters; the two
+emission leaves run per anchor in legacy order (emitTS2352IfSameTarget-
+Mismatch then emitTS2352IfFunctionReturnMismatch — mutually exclusive by
+source-type shape, so the per-anchor interleave vs the legacy's two
+whole-file walks only reorders diagnostics across positions, absorbed by
+the stable output sort). This is the FIRST TYPE-RESOLVING tail migration:
+the emitters run getTypeOfExpression/getTypeFromTypeNode/bidirectional
+checkTypeRelatedTo per anchor, now interleaved into the spine walk
+(first-touch order — the flagged risk class); the corpus + listAll ×8
+gates came back clean, so the interleave is behavior-neutral here. Ambient
+sandwich: currentCheckFileName install + currentFlowGraph nulled around
+the emission pair (the legacy post-spine slot ran with a null graph;
+checkSpine's per-file loop already installs currentFileLocals to the same
+result.locals the legacy pass set — no install needed). Gates: 26 local
+pins (M04CastOverlapSpineMigrationTest — both emitters' gates incl. the
+any/TypeParam/one-way-assignable bails, the array-literal excess-property
+chain branch, the parenthesized function form, and the reach battery
+above) verified green against the LEGACY pass FIRST (stash-run-pop);
+suite 11,532 → 11,558/0; `--listAll` ×8 byte-identical (46×7 + 94
+env-legit artifacts); pass table 431 → 430 (the
+checkSameTargetReferenceCastOverlap row GONE; checkSpine in the
+18.0–19.1 s band); warning-clean. M0.4 running total: top EIGHT tail
+passes migrated. SESSION TAIL: the checkBindingPatternComputedIndexSig
+(#9, ~120 ms — TS2537/TS2538/TS2448+TS2728) slot-move pre-gate landed
+(corpus + listAll ×8 identical). Its map for the migrator: a
+self-contained recursion (walkB94InStmts/-InStmt/-InExpr) with THREE
+anchor families — fn-like PARAMETER lists (emitB94ForFnLikeParams at
+FunctionDeclaration/arrow/fn-expr/objlit-method/set-accessor/class-
+expression members), VariableStatement decl patterns (the empty-objlit
+destructure emitB94ForComputedKeyPattern), and VariableDeclarationList
+heads (checkSelfRefComputedBindingKeyList — also fired at for/for-in/
+for-of heads) — so the migration is a multi-anchor-kind dispatch, not a
+single node kind; it type-resolves (getTypeOfExpression on computed keys)
+= the same first-touch risk class as this round; its one TS2537 consumer
+(checkErrorElaboration's corpus-unique Container-Ref swap, slot 5969)
+runs AFTER both slots and no TS2448/TS2538 dedup consumers exist; the
+walker's reach quirks to pin: param defaults ARE walked at
+FunctionDeclaration (unlike the cast walker), catch-variable/heritage/
+enum-member positions are not.**
+
 **Round 629 (2026-07-21) — (M0.4) seventh tail-pass migration:
 checkDefiniteAssignmentViaFlowGraph (flow-graph TS2454 + the B187
 nullable-union loop-arg TS2345, ~105 ms — the #7 tail pass) is ON THE
@@ -487,40 +545,6 @@ three rounds earlier, cross-session box drift) — the interleaved A/B above
 is the authoritative M0.2 measurement (the round-493 rule). NEXT
 (top-of-queue): (M0.3) layout campaign, then (M0.4) tail migration.**
 
-**Round 620 (2026-07-20) — (M0.1d) runs the mandated consumer trace and
-OVERTURNS round 619's deletion verdict: "23 census-silent, deletion-ready"
-was a FALSE GREEN — 20 of the 23 are corpus-pinned; only 3 pure adders were
-deletable.** Two compounding flaws found. (1) METHODOLOGY: `censusByPass`
-records only net-POSITIVE per-pass deltas (`c1 > c0` in pass()), so four
-whole pass classes are census-silent while load-bearing — wipe-and-pin
-walkers (`removeAll` + `pinDiag`, net 0: checkTemporalPin, checkMapUpsert,
-~14 of the 23), rewriters (net 0: applyDomLibSuggestionRewrite — the ONLY
-producer of TS2812's dom-lib suffix, required by missingDomElements;
-checkBaseClassImprovedMismatch), retractors (net < 0: ctaPostFilters — five
-generics-family errors baselines depend on its TS2322-vs-TS2304/TS2314
-retraction), and collectors (net 0: populateAmbientCyclicBaseClasses —
-recursiveBaseCheck/2's TS2449 suppression). (2) EXECUTION: Phase B's "full
-suite GREEN with all 23 disabled" was manufactured by Inv0PassTimingTest's
-cleanup assigning `PassTiming.disabledPasses = emptySet()` — the wipe
-re-enabled the lab's disables for every test class after 'I' in the
-alphabet, i.e. the whole generated corpus (a CLI probe on missingDomElements
-proved the disable works outside the fork: TS2812×4 → TS2339×6). LANDED:
-(a) save-and-restore in Inv0PassTimingTest (disabledPasses + censusMode) +
-a census-blindness pin (wipe-and-pin and retractor passes must be
-census-silent — the blindness documented in-test) + the census artifact
-correction header; (b) the honest disable experiment (fixed cleanup,
-`--rerun`): 26 failures → per-pass verdicts — LIVE: the wipe-and-pin
-walkers, both rewriters, the retractor, the collector, and
-checkCrossFileUseBeforeDeclaration (pinned by Inv4SpineBatch27Test, a LOCAL
-pin a corpus-only census can never see); (c) the 3 dead pure adders DELETED
-(checkModuleNoneConflict, checkExportAssignmentInSystem,
-checkUnicodeSurrogatePairImportBinding + orphaned helpers
-findFirstModuleStatement/getModuleStatementSpan/getStatementTextSpan/
-UescDiag). Gates: full suite 11,379/0; `--listAll` ×8 byte-identical
-pre-vs-post on all 8 profiles; build warning-clean. (M0.1) CLOSES on the
-honest ledger: the tail's ~6.2 s is ALL pinned — (M0.4) migration carries
-the whole lever. NEXT (top-of-queue): (M0.2) kindId table dispatch.**
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 (Restored 2026-07-12, round 481 — the queue/backlog/inventory sections had been
@@ -675,9 +699,15 @@ structural item instead of landing alone.**
   the walker family stays verbatim, the only ambient install is
   currentFlowGraph save/restore, and the B223 sibling stays at its own
   pass slot since it scans no prior diagnostics),
-  checkSameTargetReferenceCastOverlap ~123 ms — next (slot-move pre-gate
-  LANDED round 629; the first TYPE-RESOLVING tail migration — see the
-  round-629 session-tail note for the migrator's map), then
+  checkSameTargetReferenceCastOverlap ~123 ms — **MIGRATED round 630** (the
+  SHARED-WALKER variant: only the pass's whole-file driver is deleted — the
+  walkTypeAssertionsInStmt/-InExpr recursion SURVIVES for the cast-overlap
+  sibling passes, so the reach classifier mirrors the shared walker's arms
+  and must stay IN SYNC with any future walker-arm change; the first
+  TYPE-RESOLVING tail migration — per-anchor getTypeOfExpression/
+  getTypeFromTypeNode/relation calls interleave into the spine walk, gated
+  clean by corpus + listAll ×8; ambient sandwich = currentCheckFileName +
+  a nulled currentFlowGraph around the emission pair), then
   checkBindingPatternComputedIndexSig ~120 ms;
   98 passes >20 ms carry 5.3 s of the
   6.2 s). Migration protocol per

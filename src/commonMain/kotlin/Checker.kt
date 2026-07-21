@@ -3520,6 +3520,36 @@ class Checker(
     /** The per-file root context (top-level symbol locals, no TPs). */
     private var spineSyRootCtx = spineSyEmptyCtx
 
+    // ── (M0.4) round 630: checkSameTargetReferenceCastOverlap on the spine ─
+    // TS2352 anchors at TypeAssertionExpression nodes reached by the SHARED
+    // walkTypeAssertionsInStmt/-InExpr recursion (which SURVIVES for the
+    // cast-overlap sibling passes — only THIS pass's whole-file driver is
+    // deleted); reach is the memoized binary classifier [spineCoStatus] over
+    // [spineCoEdge] (the shared walker's descent arms verbatim — parameter
+    // defaults, enum member initializers, heritage expressions, computed
+    // property NAMES, decorators, and shorthand properties stay UNREACHED;
+    // objlit/class-expression METHOD bodies, typeof/void/delete/nonnull
+    // operands, template spans, case-clause EXPRESSIONS, BOTH
+    // for-initializer forms, NEW callees, and tagged-template tags/spans
+    // ARE reached). The two emission leaves run per anchor in legacy order
+    // (SameTargetMismatch, then FunctionReturnMismatch — mutually exclusive
+    // by source-type shape, so the per-anchor interleave vs the legacy's two
+    // whole-file walks only reorders diagnostics across positions, which the
+    // stable output sort absorbs). This is the first TYPE-RESOLVING tail
+    // migration: the emitters run getTypeOfExpression/getTypeFromTypeNode/
+    // checkTypeRelatedTo per anchor, now interleaved into the spine walk
+    // (first-touch order — the corpus + listAll gates decide). Ambient
+    // sandwich: currentCheckFileName install + currentFlowGraph nulled
+    // around the emission pair (the legacy post-spine slot ran with a null
+    // graph; checkSpine's per-file loop already installs currentFileLocals
+    // to the same result.locals the legacy pass set). Fields PRE-init (the
+    // pipeline runs inside `init`).
+    private var spineCoActive = false
+    /** Per-file nodeId memo for [spineCoStatus] — 0 unknown, 1 reached, 2 not. */
+    private var spineCoReachMemo = ByteArray(0)
+    /** Reusable ascent buffer for [spineCoStatus]. */
+    private val spineCoChain = ArrayList<Node>()
+
     // ── INV.4(d) walker 6 (round 535): checkArgumentCounts on the spine ────
     // The function-call arity pass (TS2554/TS2555/TS2575) — the recursion
     // walkers (checkArgCountInStatements/-InStatement/-InExpr(Core)) are
@@ -5017,16 +5047,14 @@ class Checker(
         // set-building leaves collectSymbolAliases/collectSymbolLocals/
         // symbolLikeTpNames run at spineSySetup/spineSyCtxFor; the emission
         // leaves emitSym2469/emitSym2731 are anchor-called).
-        // 17.82 (M0.4 slot-move pre-gate, round 629): checkSameTargetReferenceCastOverlap
-        // (TS2352 same-target-Reference cast + function-return-mismatch cast)
-        // moved intact from its cast-overlap-cluster slot ahead of its spine
-        // migration. Self-contained: installs its own currentFileLocals/
-        // currentCheckFileName per file, writes only diagnostics (no side
-        // sets); no TS2352 retract/dedup consumers exist and the cast-overlap
-        // siblings are shape-disjoint. The hoist crosses the JS-family/module/
-        // decl-emit passes — first-touch type-resolution order is the risk
-        // class the corpus + listAll ×8 gates decide.
-        pass("checkSameTargetReferenceCastOverlap") { checkSameTargetReferenceCastOverlap() }
+        // 17.82 (M0.4, round 630): checkSameTargetReferenceCastOverlap
+        // (TS2352 same-target-Reference cast + function-return-mismatch
+        // cast) is ON THE SPINE — see spineCoEnterNode/spineCoStatus/
+        // spineCoEdge; the whole-file driver is deleted (the emission
+        // leaves emitTS2352IfSameTargetMismatch /
+        // emitTS2352IfFunctionReturnMismatch are anchor-called; the SHARED
+        // walkTypeAssertionsInStmt/-InExpr walker survives for the
+        // cast-overlap sibling passes).
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -5285,9 +5313,10 @@ class Checker(
         pass("checkNamespaceImportOfNonModule") { checkNamespaceImportOfNonModule() }
         // 14''. Check `<Interface>null` / `<Class>null` casts for TS2352
         pass("checkNullTypeAssertionOverlap") { checkNullTypeAssertionOverlap() }
-        // 14''b. checkSameTargetReferenceCastOverlap moved to the post-spine
-        // slot — see the pass("checkSpine") site (M0.4 slot-move pre-gate,
-        // round 629).
+        // 14''b. checkSameTargetReferenceCastOverlap is ON THE SPINE since
+        // round 630 (M0.4): see spineCoSetup/spineCoEnterNode. The two
+        // emission leaves are anchor-called at TypeAssertionExpression
+        // enters.
         // 14''c. Check array-source -> class-target cast non-overlap for TS2352
         pass("checkArrayToClassCastOverlap") { checkArrayToClassCastOverlap() }
         // 14''d. Check JSDoc `/** @type {T} */(void 0)` cast in JS files for TS2352
@@ -21208,6 +21237,7 @@ class Checker(
                 spineFpSetup(result)
                 spineAiSetup(result)
                 spineSySetup(result)
+                spineCoSetup(result)
                 spineUResAuditActive = unresolvedAuditEnabled && spineUResActive
                 try {
                     spineWalkFile(sf)
@@ -21235,6 +21265,7 @@ class Checker(
                     spineFpTeardown()
                     spineAiTeardown()
                     spineSyTeardown()
+                    spineCoTeardown()
                 }
                 spineResolveDeferredIterationChecks()
                 // (M0.4) round 629: the flow-graph definite-assignment pass
@@ -21426,6 +21457,10 @@ class Checker(
         // pull-based (symbolNames, tpNames) context, no frames/leave hook,
         // no ambient sandwich.
         if (spineSyActive) spineSyEnterNode(node)
+        // (M0.4) round 630: the cast-overlap anchors (TypeAssertionExpression
+        // nodes) — the two TS2352 emission leaves under the
+        // currentCheckFileName/null-flow sandwich; no frames/leave hook.
+        if (spineCoActive) spineCoEnterNode(node)
         // INV.4(d) walker 7: the use-before-declaration pass — the per-list
         // ForwardRefs anchor + loop-header self-ref checks.
         if (spineUbdActive) spineUbdEnterNode(node)
@@ -47444,6 +47479,12 @@ class Checker(
         private const val SY_NONE = 2
         private const val SY_ROOT = 3
 
+        // (M0.4) round 630: spineCoStatus states (checkSameTargetReferenceCastOverlap
+        // reach — binary + the transient SourceFile root).
+        private const val CO_REACHED = 1
+        private const val CO_NONE = 2
+        private const val CO_ROOT = 3
+
         private const val OS_NONE = 1
         private const val OS_ROOT = 2
         private const val OS_STMT = 3
@@ -62406,6 +62447,192 @@ interface DataView {
         else -> false
     }
 
+    // ── (M0.4) round 630: checkSameTargetReferenceCastOverlap spine pieces ─
+
+    private fun spineCoSetup(result: BinderResult) {
+        spineCoActive = !spineIsDts
+        if (!spineCoActive) {
+            spineCoReachMemo = ByteArray(0)
+            return
+        }
+        val sf = result.sourceFile
+        spineCoReachMemo = if (sf.nodeCount > 0) ByteArray(sf.nodeCount) else ByteArray(0)
+    }
+
+    private fun spineCoTeardown() {
+        spineCoActive = false
+        spineCoReachMemo = ByteArray(0)
+    }
+
+    /** ENTER dispatch: TypeAssertionExpression anchors — the two TS2352
+     *  cast-overlap emission leaves in legacy order, under the
+     *  currentCheckFileName install (checkSpine sets currentFileLocals but
+     *  NOT the check-file name) with currentFlowGraph nulled (the legacy
+     *  post-spine slot ran with a null graph). */
+    private fun spineCoEnterNode(node: Node) {
+        if ((node as NodeBase).kindId != NodeKind.TYPE_ASSERTION_EXPRESSION) return
+        node as TypeAssertionExpression
+        if (spineCoStatus(node) != CO_REACHED) return
+        val savedCheckFileName = currentCheckFileName
+        val savedFlow = currentFlowGraph
+        currentCheckFileName = spineFileName
+        currentFlowGraph = null
+        try {
+            emitTS2352IfSameTargetMismatch(node, spineSource, spineFileName)
+            emitTS2352IfFunctionReturnMismatch(node, spineSource, spineFileName)
+        } finally {
+            currentCheckFileName = savedCheckFileName
+            currentFlowGraph = savedFlow
+        }
+    }
+
+    /** Memoized reach classifier — ascends to the first memoized/terminal
+     *  ancestor, then folds [spineCoEdge] back down (spineFpStatus pattern).
+     *  The SourceFile anchor carries the transient CO_ROOT status (never
+     *  memoized) whose sole edge is `child is Statement`. */
+    private fun spineCoStatus(node: Node): Int {
+        if (node is SourceFile) return CO_ROOT
+        val memo = spineCoReachMemo
+        run {
+            val id = (node as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) {
+                val m = memo[id].toInt()
+                if (m != 0) return m
+            }
+        }
+        val chain = spineCoChain
+        chain.clear()
+        var cur: Node = node
+        val anchor: Node?
+        var anchorStatus = CO_NONE
+        while (true) {
+            chain.add(cur)
+            val parent = (cur as NodeBase).parent
+            if (parent == null) { anchor = null; break } // detached/unindexed
+            if (parent is SourceFile) { anchor = parent; anchorStatus = CO_ROOT; break }
+            val pid = (parent as NodeBase).nodeId
+            val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
+            if (pm != 0) { anchor = parent; anchorStatus = pm; break }
+            cur = parent
+        }
+        var pNode: Node? = anchor
+        var pStatus = anchorStatus
+        var result = CO_NONE
+        for (i in chain.indices.reversed()) {
+            val c = chain[i]
+            result = when {
+                pNode == null -> CO_NONE
+                pStatus == CO_ROOT -> if (c is Statement) CO_REACHED else CO_NONE
+                pStatus == CO_REACHED -> if (spineCoEdge(pNode, c)) CO_REACHED else CO_NONE
+                else -> CO_NONE
+            }
+            val cid = (c as NodeBase).nodeId
+            if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
+            pNode = c
+            pStatus = result
+        }
+        chain.clear()
+        return result
+    }
+
+    /** The SHARED walkTypeAssertionsInStmt/-InExpr descent edges, verbatim
+     *  (the walker itself survives for the cast-overlap sibling passes —
+     *  keep this classifier in sync with any walker-arm change). Unlisted
+     *  parents are the walker's `else -> {}`s (unreached children). */
+    private fun spineCoEdge(parent: Node, child: Node): Boolean = when (parent) {
+        // ---- statements (the walkTypeAssertionsInStmt arms) ----
+        is VariableStatement -> child === parent.declarationList
+        is VariableDeclarationList -> child is VariableDeclaration
+        is VariableDeclaration -> child === parent.initializer
+        is ExpressionStatement -> child === parent.expression
+        is Block -> child is Statement
+        is IfStatement ->
+            child === parent.expression || child === parent.thenStatement ||
+                child === parent.elseStatement
+        is ForStatement -> // BOTH initializer forms (a bare expr AND decl-list inits)
+            child === parent.initializer || child === parent.condition ||
+                child === parent.incrementor || child === parent.statement
+        is ForInStatement -> child === parent.expression || child === parent.statement
+        is ForOfStatement -> child === parent.expression || child === parent.statement
+        is WhileStatement -> child === parent.expression || child === parent.statement
+        is DoStatement -> child === parent.statement || child === parent.expression
+        is LabeledStatement -> child === parent.statement
+        is ExportAssignment -> child === parent.expression
+        is ReturnStatement -> child === parent.expression
+        is ThrowStatement -> child === parent.expression
+        is TryStatement ->
+            child === parent.tryBlock || child === parent.finallyBlock || child is CatchClause
+        is CatchClause -> child === parent.block
+        is SwitchStatement ->
+            child === parent.expression || child is CaseClause || child is DefaultClause
+        // the case EXPRESSION is reached here (like the sy classifier)
+        is CaseClause -> child === parent.expression || child is Statement
+        is DefaultClause -> child is Statement
+        is FunctionDeclaration -> child === parent.body
+        is ClassDeclaration -> when (child) {
+            is MethodDeclaration, is Constructor, is GetAccessor,
+            is SetAccessor, is PropertyDeclaration -> true
+            else -> false
+        }
+        // a dotted namespace's body is a ModuleDeclaration, not a ModuleBlock
+        // — the legacy `as? ModuleBlock` does NOT descend it (verbatim).
+        is ModuleDeclaration -> child === parent.body && child is ModuleBlock
+        is ModuleBlock -> child is Statement
+        // ---- class-like/objlit members (bodies + initializers only) ----
+        is MethodDeclaration -> child === parent.body
+        is Constructor -> child === parent.body
+        is GetAccessor -> child === parent.body
+        is SetAccessor -> child === parent.body
+        is PropertyDeclaration -> child === parent.initializer
+        // ---- expressions (the walkTypeAssertionsInExpr arms) ----
+        is TypeAssertionExpression -> child === parent.expression
+        is ParenthesizedExpression -> child === parent.expression
+        is BinaryExpression -> child === parent.left || child === parent.right
+        is CallExpression -> child === parent.expression || parent.arguments.any { it === child }
+        is NewExpression -> // the callee IS descended here (unlike the ai classifier)
+            child === parent.expression || parent.arguments?.any { it === child } == true
+        is PropertyAccessExpression -> child === parent.expression
+        is ElementAccessExpression ->
+            child === parent.expression || child === parent.argumentExpression
+        is ConditionalExpression ->
+            child === parent.condition || child === parent.whenTrue || child === parent.whenFalse
+        is PrefixUnaryExpression -> child === parent.operand
+        is PostfixUnaryExpression -> child === parent.operand
+        is ArrayLiteralExpression -> parent.elements.any { it === child }
+        // objlit METHOD/accessor bodies are reached here (unlike the sy
+        // classifier); shorthand properties and computed NAMES are not.
+        is ObjectLiteralExpression -> when (child) {
+            is PropertyAssignment, is SpreadAssignment, is MethodDeclaration,
+            is GetAccessor, is SetAccessor -> true
+            else -> false
+        }
+        is PropertyAssignment -> child === parent.initializer
+        is SpreadAssignment -> child === parent.expression
+        is SpreadElement -> child === parent.expression
+        is YieldExpression -> child === parent.expression
+        is AwaitExpression -> child === parent.expression
+        // B65.3: typeof / void / delete / non-null operands are descended.
+        is VoidExpression -> child === parent.expression
+        is TypeOfExpression -> child === parent.expression
+        is DeleteExpression -> child === parent.expression
+        is NonNullExpression -> child === parent.expression
+        is AsExpression -> child === parent.expression
+        is SatisfiesExpression -> child === parent.expression
+        is TemplateExpression -> child is TemplateSpan
+        is TemplateSpan -> child === parent.expression
+        is TaggedTemplateExpression ->
+            child === parent.tag || (child === parent.template && child is TemplateExpression)
+        is CommaListExpression -> parent.elements.any { it === child }
+        is ArrowFunction -> child === parent.body
+        is FunctionExpression -> child === parent.body
+        is ClassExpression -> when (child) {
+            is MethodDeclaration, is Constructor, is GetAccessor,
+            is SetAccessor, is PropertyDeclaration -> true
+            else -> false
+        }
+        else -> false
+    }
+
     /** Extract the parameter list from any signature-bearing AST declaration node. */
     /**
      * B195: TS2322 for an object-literal property's function RETURN against an
@@ -77060,29 +77287,10 @@ interface DataView {
      * Emits TS2352 for `<Foo<X>>foo` casts where `foo` already has type `Foo<Y>`
      * (same generic target) and the type-arg pair X/Y is non-comparable in both
      * directions. Narrow gate: skips Any/Unknown/Never/Void/error/TypeParam args
-     * to avoid FPs in partially-resolved generic contexts.
+     * to avoid FPs in partially-resolved generic contexts. Spine-anchored since
+     * round 630 (M0.4) — dispatched per TypeAssertionExpression enter by
+     * [spineCoEnterNode] (the whole-file driver is deleted).
      */
-    private fun checkSameTargetReferenceCastOverlap() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            val savedLocals = currentFileLocals
-            val savedCheckFileName = currentCheckFileName
-            currentFileLocals = result.locals
-            currentCheckFileName = fileName
-            try {
-                for (stmt in result.sourceFile.statements) {
-                    walkTypeAssertionsInStmt(stmt, source, fileName, ::emitTS2352IfSameTargetMismatch)
-                    walkTypeAssertionsInStmt(stmt, source, fileName, ::emitTS2352IfFunctionReturnMismatch)
-                }
-            } finally {
-                currentFileLocals = savedLocals
-                currentCheckFileName = savedCheckFileName
-            }
-        }
-    }
-
     private fun emitTS2352IfSameTargetMismatch(
         expr: TypeAssertionExpression, source: String, fileName: String,
     ) {
