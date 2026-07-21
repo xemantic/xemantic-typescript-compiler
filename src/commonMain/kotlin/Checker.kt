@@ -5055,6 +5055,19 @@ class Checker(
         // emitTS2352IfFunctionReturnMismatch are anchor-called; the SHARED
         // walkTypeAssertionsInStmt/-InExpr walker survives for the
         // cast-overlap sibling passes).
+        // 45b' (M0.4 slot-move pre-gate, round 630): checkBindingPatternComputedIndexSig
+        // (B9.4 — TS2537 computed-key destructuring vs the `{}` default +
+        // TS2448/TS2728/TS2538 self-referential computed binding keys) moved
+        // intact from its destructuring-cluster slot ahead of its spine
+        // migration. Self-contained recursion (walkB94InStmts family), no
+        // ambient installs, no side sets; its one TS2537 consumer
+        // (checkErrorElaboration's corpus-unique Container-Ref swap) runs
+        // AFTER both slots, and no TS2448/TS2538 dedup consumers exist. The
+        // pass type-resolves (getTypeOfExpression on computed keys) — the
+        // hoist crosses the destructuring/cast/module passes, so first-touch
+        // resolution order is the risk class the corpus + listAll ×8 gates
+        // decide.
+        pass("checkBindingPatternComputedIndexSig") { checkBindingPatternComputedIndexSig() }
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -5649,11 +5662,9 @@ class Checker(
         pass("checkExhaustiveSwitchDefaultDestructure") { checkExhaustiveSwitchDefaultDestructure() }
         // 45b7'. B522: array-destructure of an intersection-reduces-to-never type → TS2488
         pass("checkIntersectionNeverArrayDestructure") { checkIntersectionNeverArrayDestructure() }
-        // 45b'. B9.4: TS2537 for computed-property destructuring inside an
-        // ObjectBindingPattern parameter that defaulted to `{}` via B9.2
-        // (no annotation, no initializer). Walks every ArrowFunction /
-        // FunctionExpression in the AST.
-        pass("checkBindingPatternComputedIndexSig") { checkBindingPatternComputedIndexSig() }
+        // 45b'. checkBindingPatternComputedIndexSig moved to the post-spine
+        // slot — see the pass("checkSpine") site (M0.4 slot-move pre-gate,
+        // round 630).
         pass("checkDestructuredLateBoundNames") { checkDestructuredLateBoundNames() }
         pass("checkLateBoundDestructuringKeys") { checkLateBoundDestructuringKeys() }
         // 45b''. B513: computed-property destructuring key type-checking
