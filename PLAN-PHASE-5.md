@@ -59,13 +59,22 @@ single runs — the 18.0–19.0 round-625..627 band, first reading was box
 drift); warning-clean. M0.4 running total: top SIX tail passes migrated.
 NEXT: checkDefiniteAssignmentViaFlowGraph (89–114 ms by run) — NO
 slot-move pre-gate needed (it already sits in the post-spine region, ~10
-dispatches after checkSpine), but the migrator MUST handle the ordering
-trap: its TS2454 position-dedup scan runs after
-checkCrossFileUseBeforeDeclaration (a post-spine pass whose TS2448/TS2454
-co-emissions the scan must SEE — the round-536 gotcha); anchor-dispatching
-it on the spine would run it BEFORE that pass and double-emit TS2454 in
-multi-file programs, so the migration needs the cross-file pass hoisted
-pre-spine (its own slot-move gate) or the dedup restructured.**
+dispatches after checkSpine), and the intervening
+checkCrossFileUseBeforeDeclaration is NOT a dedup hazard (VERIFIED this
+round: its emitCrossFileTS2448 emits TS2448 + related-2728 ONLY — the
+round-536 emitTS2448-co-emits-TS2454 gotcha is about the PER-FILE UBD
+leg, already on the spine as walker 7). The real migration constraints:
+(a) its per-file TS2454 position-dedup scan must see ALL spine-emitted
+TS2454s for that file (the set-based walker 5 + the spineUbd
+co-emissions — both fire during the spine walk), so the natural shape is
+a FILE-END dispatch in checkSpine's per-file loop (the
+spineResolveDeferredIterationChecks pattern: dedup-scan + the two
+whole-file flow walks after spineWalkFile returns), NOT per-anchor
+enters; (b) it installs currentFlowGraph save/restore around its walks;
+(c) the end-of-init flowDisabledRanges TS2454 filter still runs after it
+either way; (d) checkTryCatchOnlyAssignedVarReads (its
+shouldCheckDefiniteAssignment sibling) stays put or moves with it —
+check for one-directional dedup between the two before choosing.**
 
 **Round 627 (2026-07-21) — (M0.4) fifth tail-pass migration:
 checkAbstractClassInstantiation (TS2511, 113 ms — the #5 tail pass) is ON THE
@@ -631,9 +640,10 @@ structural item instead of landing alone.**
   subsets; two reach edges differ from the fp/ai classifiers: case-clause
   and bare for-initializer EXPRESSIONS are reached),
   checkDefiniteAssignmentViaFlowGraph
-  105 ms — next; NO slot-move needed (already post-spine) but the TS2454
-  dedup-scan ordering vs checkCrossFileUseBeforeDeclaration is the trap
-  (see the round-628 session note); 98 passes >20 ms carry 5.3 s of the
+  105 ms — next; NO slot-move needed (already post-spine; the intervening
+  cross-file UBD pass emits no TS2454 — verified round 628); natural
+  shape is a FILE-END dispatch in checkSpine's per-file loop (see the
+  round-628 session note); 98 passes >20 ms carry 5.3 s of the
   6.2 s). Migration protocol per
   pass (the round-624 template): slot-move pre-gate commit (intact pass to the
   post-spine slot, corpus + listAll ×8), then the migration commit (frames at
