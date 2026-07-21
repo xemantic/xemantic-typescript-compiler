@@ -3550,6 +3550,32 @@ class Checker(
     /** Reusable ascent buffer for [spineCoStatus]. */
     private val spineCoChain = ArrayList<Node>()
 
+    // ── (M0.4) round 631: checkBindingPatternComputedIndexSig on the spine ─
+    // B9.4/B98.r40 anchors: fn-EXPRESSION-like parameter lists (arrow /
+    // fn-expr / objlit method+setter / class-EXPRESSION method+ctor+setter
+    // — FunctionDeclaration and class-DECLARATION members deliberately do
+    // NOT emit, matching the deleted walker), VariableStatement decl
+    // patterns (the empty-objlit destructure — NOT fired at for-heads), and
+    // VariableStatement/for/for-in/for-of decl-list heads (the self-ref
+    // computed-key TS2448+TS2728/TS2538, pure AST). Reach is the memoized
+    // binary classifier [spineB94Status] over [spineB94Edge] (the DELETED
+    // walkB94InStmts/-InStmt/-InExpr descent arms verbatim, FROZEN — the
+    // cast walker's arm set PLUS FunctionDeclaration parameter DEFAULTS;
+    // arrow/fn-expr/method parameter defaults stay unreached). The TS2537
+    // emitters type-resolve (getTypeOfExpression on the computed key) — the
+    // legacy pass never installed currentFileLocals (its post-spine slot's
+    // RESTING value applied), so each type-resolving emission installs the
+    // spine-entry resting value ([spineB94WithAmbient], the
+    // spinePdWithAmbient pattern). Fields PRE-init (the pipeline runs
+    // inside `init`).
+    private var spineB94Active = false
+    /** The spine-entry resting currentFileLocals (the legacy slot's ambient). */
+    private var spineB94RestingLocals: SymbolTable? = null
+    /** Per-file nodeId memo for [spineB94Status] — 0 unknown, 1 reached, 2 not. */
+    private var spineB94ReachMemo = ByteArray(0)
+    /** Reusable ascent buffer for [spineB94Status]. */
+    private val spineB94Chain = ArrayList<Node>()
+
     // ── INV.4(d) walker 6 (round 535): checkArgumentCounts on the spine ────
     // The function-call arity pass (TS2554/TS2555/TS2575) — the recursion
     // walkers (checkArgCountInStatements/-InStatement/-InExpr(Core)) are
@@ -5055,19 +5081,16 @@ class Checker(
         // emitTS2352IfFunctionReturnMismatch are anchor-called; the SHARED
         // walkTypeAssertionsInStmt/-InExpr walker survives for the
         // cast-overlap sibling passes).
-        // 45b' (M0.4 slot-move pre-gate, round 630): checkBindingPatternComputedIndexSig
+        // 45b' (M0.4, round 631): checkBindingPatternComputedIndexSig
         // (B9.4 — TS2537 computed-key destructuring vs the `{}` default +
-        // TS2448/TS2728/TS2538 self-referential computed binding keys) moved
-        // intact from its destructuring-cluster slot ahead of its spine
-        // migration. Self-contained recursion (walkB94InStmts family), no
-        // ambient installs, no side sets; its one TS2537 consumer
+        // TS2448/TS2728/TS2538 self-referential computed binding keys) is
+        // ON THE SPINE — see spineB94EnterNode/spineB94Status/spineB94Edge;
+        // the legacy recursion walkers (walkB94InStmts/-InStmt/-InExpr) are
+        // deleted (the emission leaves emitB94ForFnLikeParams /
+        // emitB94ForComputedKeyPattern / checkSelfRefComputedBindingKeyList
+        // are anchor-called). Its one TS2537 consumer
         // (checkErrorElaboration's corpus-unique Container-Ref swap) runs
-        // AFTER both slots, and no TS2448/TS2538 dedup consumers exist. The
-        // pass type-resolves (getTypeOfExpression on computed keys) — the
-        // hoist crosses the destructuring/cast/module passes, so first-touch
-        // resolution order is the risk class the corpus + listAll ×8 gates
-        // decide.
-        pass("checkBindingPatternComputedIndexSig") { checkBindingPatternComputedIndexSig() }
+        // after the spine, and no TS2448/TS2538 dedup consumers exist.
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -5662,9 +5685,9 @@ class Checker(
         pass("checkExhaustiveSwitchDefaultDestructure") { checkExhaustiveSwitchDefaultDestructure() }
         // 45b7'. B522: array-destructure of an intersection-reduces-to-never type → TS2488
         pass("checkIntersectionNeverArrayDestructure") { checkIntersectionNeverArrayDestructure() }
-        // 45b'. checkBindingPatternComputedIndexSig moved to the post-spine
-        // slot — see the pass("checkSpine") site (M0.4 slot-move pre-gate,
-        // round 630).
+        // 45b'. checkBindingPatternComputedIndexSig is ON THE SPINE since
+        // round 631 (M0.4) — see spineB94EnterNode and the note at the
+        // pass("checkSpine") site.
         pass("checkDestructuredLateBoundNames") { checkDestructuredLateBoundNames() }
         pass("checkLateBoundDestructuringKeys") { checkLateBoundDestructuringKeys() }
         // 45b''. B513: computed-property destructuring key type-checking
@@ -21145,6 +21168,9 @@ class Checker(
         spineItRestingLocals = currentFileLocals
         // (M0.4) round 626: the fn-typed-param-call anchors likewise.
         spineFpRestingLocals = currentFileLocals
+        // (M0.4) round 631: the binding-pattern computed-key TS2537 emitters
+        // likewise (the legacy pass never installed currentFileLocals).
+        spineB94RestingLocals = currentFileLocals
         spineItRunActive = options.noImplicitThis || options.strict ||
             !options.strictExplicitlyFalse
         // INV.4(d) walker 9: the const-assignment anchors' B116 param-typing
@@ -21249,6 +21275,7 @@ class Checker(
                 spineAiSetup(result)
                 spineSySetup(result)
                 spineCoSetup(result)
+                spineB94Setup(result)
                 spineUResAuditActive = unresolvedAuditEnabled && spineUResActive
                 try {
                     spineWalkFile(sf)
@@ -21277,6 +21304,7 @@ class Checker(
                     spineAiTeardown()
                     spineSyTeardown()
                     spineCoTeardown()
+                    spineB94Teardown()
                 }
                 spineResolveDeferredIterationChecks()
                 // (M0.4) round 629: the flow-graph definite-assignment pass
@@ -21472,6 +21500,11 @@ class Checker(
         // nodes) — the two TS2352 emission leaves under the
         // currentCheckFileName/null-flow sandwich; no frames/leave hook.
         if (spineCoActive) spineCoEnterNode(node)
+        // (M0.4) round 631: the binding-pattern computed-key anchors
+        // (VariableStatement / for-head decl lists / fn-EXPRESSION-like
+        // parameter lists) — TS2537 under the resting-locals sandwich,
+        // TS2448/TS2538 pure-AST; no frames/leave hook.
+        if (spineB94Active) spineB94EnterNode(node)
         // INV.4(d) walker 7: the use-before-declaration pass — the per-list
         // ForwardRefs anchor + loop-header self-ref checks.
         if (spineUbdActive) spineUbdEnterNode(node)
@@ -47496,6 +47529,12 @@ class Checker(
         private const val CO_NONE = 2
         private const val CO_ROOT = 3
 
+        // (M0.4) round 631: spineB94Status states (checkBindingPatternComputedIndexSig
+        // reach — binary + the transient SourceFile root).
+        private const val B94_REACHED = 1
+        private const val B94_NONE = 2
+        private const val B94_ROOT = 3
+
         private const val OS_NONE = 1
         private const val OS_ROOT = 2
         private const val OS_STMT = 3
@@ -62585,8 +62624,10 @@ interface DataView {
             is SetAccessor, is PropertyDeclaration -> true
             else -> false
         }
-        // a dotted namespace's body is a ModuleDeclaration, not a ModuleBlock
-        // — the legacy `as? ModuleBlock` does NOT descend it (verbatim).
+        // the walker's `as? ModuleBlock` guard, verbatim (NOTE round 631: a
+        // DOTTED `namespace A.B` is ONE ModuleDeclaration with a ModuleBlock
+        // body in this AST, so dotted namespaces ARE descended — the guard
+        // only skips null/non-block bodies).
         is ModuleDeclaration -> child === parent.body && child is ModuleBlock
         is ModuleBlock -> child is Statement
         // ---- class-like/objlit members (bodies + initializers only) ----
@@ -62623,6 +62664,276 @@ interface DataView {
         is YieldExpression -> child === parent.expression
         is AwaitExpression -> child === parent.expression
         // B65.3: typeof / void / delete / non-null operands are descended.
+        is VoidExpression -> child === parent.expression
+        is TypeOfExpression -> child === parent.expression
+        is DeleteExpression -> child === parent.expression
+        is NonNullExpression -> child === parent.expression
+        is AsExpression -> child === parent.expression
+        is SatisfiesExpression -> child === parent.expression
+        is TemplateExpression -> child is TemplateSpan
+        is TemplateSpan -> child === parent.expression
+        is TaggedTemplateExpression ->
+            child === parent.tag || (child === parent.template && child is TemplateExpression)
+        is CommaListExpression -> parent.elements.any { it === child }
+        is ArrowFunction -> child === parent.body
+        is FunctionExpression -> child === parent.body
+        is ClassExpression -> when (child) {
+            is MethodDeclaration, is Constructor, is GetAccessor,
+            is SetAccessor, is PropertyDeclaration -> true
+            else -> false
+        }
+        else -> false
+    }
+
+    // ── (M0.4) round 631: checkBindingPatternComputedIndexSig spine pieces ─
+
+    private fun spineB94Setup(result: BinderResult) {
+        spineB94Active = !spineIsDts
+        if (!spineB94Active) {
+            spineB94ReachMemo = ByteArray(0)
+            return
+        }
+        val sf = result.sourceFile
+        spineB94ReachMemo = if (sf.nodeCount > 0) ByteArray(sf.nodeCount) else ByteArray(0)
+    }
+
+    private fun spineB94Teardown() {
+        spineB94Active = false
+        spineB94ReachMemo = ByteArray(0)
+    }
+
+    /** The legacy pass never installed currentFileLocals (its post-spine
+     *  slot's RESTING value applied to the TS2537 emitters'
+     *  getTypeOfExpression); mid-spine it is per-file, so install the
+     *  spine-entry resting value around each type-resolving emission (the
+     *  spinePdWithAmbient pattern). The pure-AST self-ref emitter needs no
+     *  sandwich. */
+    private inline fun spineB94WithAmbient(block: () -> Unit) {
+        val saved = currentFileLocals
+        currentFileLocals = spineB94RestingLocals
+        try {
+            block()
+        } finally {
+            currentFileLocals = saved
+        }
+    }
+
+    /** ENTER dispatch: the three B9.4 emission families at their anchor
+     *  kinds — the self-ref decl-list check at VariableStatement/for/
+     *  for-in/for-of enters (legacy order: before the pattern emission),
+     *  the empty-objlit destructure at VariableStatement enters, and the
+     *  fn-EXPRESSION-like parameter emission at arrow/fn-expr/
+     *  objlit-member/class-EXPRESSION-member enters (parent-kind gated:
+     *  FunctionDeclaration and class-DECLARATION members never emit). */
+    private fun spineB94EnterNode(node: Node) {
+        when ((node as NodeBase).kindId) {
+            NodeKind.VARIABLE_STATEMENT -> {
+                node as VariableStatement
+                if (spineB94Status(node) != B94_REACHED) return
+                checkSelfRefComputedBindingKeyList(node.declarationList, spineSource, spineFileName)
+                for (decl in node.declarationList.declarations) {
+                    val pat = decl.name as? ObjectBindingPattern ?: continue
+                    val init = decl.initializer
+                    if (decl.type == null && init is ObjectLiteralExpression && init.properties.isEmpty()) {
+                        spineB94WithAmbient {
+                            emitB94ForComputedKeyPattern(pat, spineSource, spineFileName)
+                        }
+                    }
+                }
+            }
+            NodeKind.FOR_STATEMENT -> {
+                node as ForStatement
+                val declList = node.initializer as? VariableDeclarationList ?: return
+                if (spineB94Status(node) != B94_REACHED) return
+                checkSelfRefComputedBindingKeyList(declList, spineSource, spineFileName)
+            }
+            NodeKind.FOR_IN_STATEMENT -> {
+                node as ForInStatement
+                val declList = node.initializer as? VariableDeclarationList ?: return
+                if (spineB94Status(node) != B94_REACHED) return
+                checkSelfRefComputedBindingKeyList(declList, spineSource, spineFileName)
+            }
+            NodeKind.FOR_OF_STATEMENT -> {
+                node as ForOfStatement
+                val declList = node.initializer as? VariableDeclarationList ?: return
+                if (spineB94Status(node) != B94_REACHED) return
+                checkSelfRefComputedBindingKeyList(declList, spineSource, spineFileName)
+            }
+            NodeKind.ARROW_FUNCTION -> {
+                node as ArrowFunction
+                if (spineB94Status(node) != B94_REACHED) return
+                spineB94WithAmbient {
+                    emitB94ForFnLikeParams(node.parameters, spineSource, spineFileName)
+                }
+            }
+            NodeKind.FUNCTION_EXPRESSION -> {
+                node as FunctionExpression
+                if (spineB94Status(node) != B94_REACHED) return
+                spineB94WithAmbient {
+                    emitB94ForFnLikeParams(node.parameters, spineSource, spineFileName)
+                }
+            }
+            NodeKind.METHOD_DECLARATION -> {
+                node as MethodDeclaration
+                val p = node.parent
+                if (p !is ObjectLiteralExpression && p !is ClassExpression) return
+                if (spineB94Status(node) != B94_REACHED) return
+                spineB94WithAmbient {
+                    emitB94ForFnLikeParams(node.parameters, spineSource, spineFileName)
+                }
+            }
+            NodeKind.CONSTRUCTOR -> {
+                node as Constructor
+                if (node.parent !is ClassExpression) return
+                if (spineB94Status(node) != B94_REACHED) return
+                spineB94WithAmbient {
+                    emitB94ForFnLikeParams(node.parameters, spineSource, spineFileName)
+                }
+            }
+            NodeKind.SET_ACCESSOR -> {
+                node as SetAccessor
+                val p = node.parent
+                if (p !is ObjectLiteralExpression && p !is ClassExpression) return
+                if (spineB94Status(node) != B94_REACHED) return
+                spineB94WithAmbient {
+                    emitB94ForFnLikeParams(node.parameters, spineSource, spineFileName)
+                }
+            }
+            else -> {}
+        }
+    }
+
+    /** Memoized reach classifier — ascends to the first memoized/terminal
+     *  ancestor, then folds [spineB94Edge] back down (spineCoStatus
+     *  pattern). The SourceFile anchor carries the transient B94_ROOT
+     *  status (never memoized) whose sole edge is `child is Statement`. */
+    private fun spineB94Status(node: Node): Int {
+        if (node is SourceFile) return B94_ROOT
+        val memo = spineB94ReachMemo
+        run {
+            val id = (node as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) {
+                val m = memo[id].toInt()
+                if (m != 0) return m
+            }
+        }
+        val chain = spineB94Chain
+        chain.clear()
+        var cur: Node = node
+        val anchor: Node?
+        var anchorStatus = B94_NONE
+        while (true) {
+            chain.add(cur)
+            val parent = (cur as NodeBase).parent
+            if (parent == null) { anchor = null; break } // detached/unindexed
+            if (parent is SourceFile) { anchor = parent; anchorStatus = B94_ROOT; break }
+            val pid = (parent as NodeBase).nodeId
+            val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
+            if (pm != 0) { anchor = parent; anchorStatus = pm; break }
+            cur = parent
+        }
+        var pNode: Node? = anchor
+        var pStatus = anchorStatus
+        var result = B94_NONE
+        for (i in chain.indices.reversed()) {
+            val c = chain[i]
+            result = when {
+                pNode == null -> B94_NONE
+                pStatus == B94_ROOT -> if (c is Statement) B94_REACHED else B94_NONE
+                pStatus == B94_REACHED -> if (spineB94Edge(pNode, c)) B94_REACHED else B94_NONE
+                else -> B94_NONE
+            }
+            val cid = (c as NodeBase).nodeId
+            if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
+            pNode = c
+            pStatus = result
+        }
+        chain.clear()
+        return result
+    }
+
+    /** The DELETED walkB94InStmts/-InStmt/-InExpr descent edges, verbatim
+     *  and FROZEN (the legacy walker is gone — do NOT redirect this to the
+     *  surviving cast-overlap walker's [spineCoEdge], which this set
+     *  matches except for FunctionDeclaration parameter DEFAULTS being
+     *  reached here). Unlisted parents are the walker's `else -> {}`s
+     *  (unreached children). */
+    private fun spineB94Edge(parent: Node, child: Node): Boolean = when (parent) {
+        // ---- statements (the walkB94InStmt arms) ----
+        is VariableStatement -> child === parent.declarationList
+        is VariableDeclarationList -> child is VariableDeclaration
+        is VariableDeclaration -> child === parent.initializer
+        is ExpressionStatement -> child === parent.expression
+        is Block -> child is Statement
+        is IfStatement ->
+            child === parent.expression || child === parent.thenStatement ||
+                child === parent.elseStatement
+        is ForStatement -> // BOTH initializer forms (a bare expr AND decl-list inits)
+            child === parent.initializer || child === parent.condition ||
+                child === parent.incrementor || child === parent.statement
+        is ForInStatement -> child === parent.expression || child === parent.statement
+        is ForOfStatement -> child === parent.expression || child === parent.statement
+        is WhileStatement -> child === parent.expression || child === parent.statement
+        is DoStatement -> child === parent.statement || child === parent.expression
+        is LabeledStatement -> child === parent.statement
+        is ExportAssignment -> child === parent.expression
+        is ReturnStatement -> child === parent.expression
+        is ThrowStatement -> child === parent.expression
+        is TryStatement ->
+            child === parent.tryBlock || child === parent.finallyBlock || child is CatchClause
+        is CatchClause -> child === parent.block
+        is SwitchStatement ->
+            child === parent.expression || child is CaseClause || child is DefaultClause
+        // the case EXPRESSION is reached (like the co classifier)
+        is CaseClause -> child === parent.expression || child is Statement
+        is DefaultClause -> child is Statement
+        // parameter DEFAULTS are walked at FunctionDeclaration ONLY (the
+        // arrow/fn-expr/method arms never descend their parameters).
+        is FunctionDeclaration -> child === parent.body || child is Parameter
+        is Parameter -> child === parent.initializer
+        is ClassDeclaration -> when (child) {
+            is MethodDeclaration, is Constructor, is GetAccessor,
+            is SetAccessor, is PropertyDeclaration -> true
+            else -> false
+        }
+        // a null/ModuleDeclaration body is not descended — but note the
+        // parser keeps a DOTTED `namespace A.B` as ONE ModuleDeclaration
+        // with a ModuleBlock body, so dotted namespaces ARE reached.
+        is ModuleDeclaration -> child === parent.body && child is ModuleBlock
+        is ModuleBlock -> child is Statement
+        // ---- class-like/objlit members (bodies + initializers only) ----
+        is MethodDeclaration -> child === parent.body
+        is Constructor -> child === parent.body
+        is GetAccessor -> child === parent.body
+        is SetAccessor -> child === parent.body
+        is PropertyDeclaration -> child === parent.initializer
+        // ---- expressions (the walkB94InExpr arms) ----
+        is TypeAssertionExpression -> child === parent.expression
+        is ParenthesizedExpression -> child === parent.expression
+        is BinaryExpression -> child === parent.left || child === parent.right
+        is CallExpression -> child === parent.expression || parent.arguments.any { it === child }
+        is NewExpression ->
+            child === parent.expression || parent.arguments?.any { it === child } == true
+        is PropertyAccessExpression -> child === parent.expression
+        is ElementAccessExpression ->
+            child === parent.expression || child === parent.argumentExpression
+        is ConditionalExpression ->
+            child === parent.condition || child === parent.whenTrue || child === parent.whenFalse
+        is PrefixUnaryExpression -> child === parent.operand
+        is PostfixUnaryExpression -> child === parent.operand
+        is ArrayLiteralExpression -> parent.elements.any { it === child }
+        // objlit METHOD/accessor bodies are reached; shorthand properties
+        // and computed NAMES are not.
+        is ObjectLiteralExpression -> when (child) {
+            is PropertyAssignment, is SpreadAssignment, is MethodDeclaration,
+            is GetAccessor, is SetAccessor -> true
+            else -> false
+        }
+        is PropertyAssignment -> child === parent.initializer
+        is SpreadAssignment -> child === parent.expression
+        is SpreadElement -> child === parent.expression
+        is YieldExpression -> child === parent.expression
+        is AwaitExpression -> child === parent.expression
         is VoidExpression -> child === parent.expression
         is TypeOfExpression -> child === parent.expression
         is DeleteExpression -> child === parent.expression
@@ -74502,16 +74813,10 @@ interface DataView {
     //
     // Fires for computed-property destructuring inside an ObjectBindingPattern
     // parameter that defaulted to `{}` via B9.2 (no annotation, no initializer).
+    // ON THE SPINE since round 631 (M0.4): the emission leaves below are
+    // anchor-called from spineB94EnterNode; the recursion walkers are deleted
+    // (their descent arms live on verbatim in spineB94Edge).
     // -----------------------------------------------------------------------
-
-    private fun checkBindingPatternComputedIndexSig() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            walkB94InStmts(result.sourceFile.statements, source, fileName)
-        }
-    }
 
     /**
      * B233: object-destructuring with a WIDENED computed key under noImplicitAny —
@@ -75030,203 +75335,6 @@ interface DataView {
                     ))
                 }
             }
-        }
-    }
-
-    private fun walkB94InStmts(stmts: List<Statement>, source: String, fileName: String) {
-        for (stmt in stmts) walkB94InStmt(stmt, source, fileName)
-    }
-
-    private fun walkB94InStmt(stmt: Statement, source: String, fileName: String) {
-        when (stmt) {
-            is VariableStatement -> {
-                checkSelfRefComputedBindingKeyList(stmt.declarationList, source, fileName)
-                for (decl in stmt.declarationList.declarations) {
-                    decl.initializer?.let { walkB94InExpr(it, source, fileName) }
-                    // B98.r40: `let {[k]: x} = {}` — destructuring an empty object literal
-                    // with a non-literal computed key fires TS2537 (the `{}` source type has
-                    // no index signature). Mirrors the param-default `{}` case below.
-                    val b94pat = decl.name as? ObjectBindingPattern
-                    val b94init = decl.initializer
-                    if (b94pat != null && decl.type == null && b94init is ObjectLiteralExpression && b94init.properties.isEmpty()) {
-                        emitB94ForComputedKeyPattern(b94pat, source, fileName)
-                    }
-                }
-            }
-            is ExpressionStatement -> walkB94InExpr(stmt.expression, source, fileName)
-            is ReturnStatement -> stmt.expression?.let { walkB94InExpr(it, source, fileName) }
-            is FunctionDeclaration -> {
-                stmt.body?.let { walkB94InStmts(it.statements, source, fileName) }
-                for (param in stmt.parameters) {
-                    param.initializer?.let { walkB94InExpr(it, source, fileName) }
-                }
-            }
-            is ClassDeclaration -> for (member in stmt.members) when (member) {
-                is MethodDeclaration -> member.body?.let { walkB94InStmts(it.statements, source, fileName) }
-                is Constructor -> member.body?.let { walkB94InStmts(it.statements, source, fileName) }
-                is PropertyDeclaration -> member.initializer?.let { walkB94InExpr(it, source, fileName) }
-                is GetAccessor -> member.body?.let { walkB94InStmts(it.statements, source, fileName) }
-                is SetAccessor -> member.body?.let { walkB94InStmts(it.statements, source, fileName) }
-                else -> {}
-            }
-            is Block -> walkB94InStmts(stmt.statements, source, fileName)
-            is IfStatement -> {
-                walkB94InExpr(stmt.expression, source, fileName)
-                walkB94InStmt(stmt.thenStatement, source, fileName)
-                stmt.elseStatement?.let { walkB94InStmt(it, source, fileName) }
-            }
-            is ForStatement -> {
-                when (val init = stmt.initializer) {
-                    is VariableDeclarationList -> {
-                        checkSelfRefComputedBindingKeyList(init, source, fileName)
-                        init.declarations.forEach { d ->
-                            d.initializer?.let { walkB94InExpr(it, source, fileName) }
-                        }
-                    }
-                    is Expression -> walkB94InExpr(init, source, fileName)
-                    else -> {}
-                }
-                stmt.condition?.let { walkB94InExpr(it, source, fileName) }
-                stmt.incrementor?.let { walkB94InExpr(it, source, fileName) }
-                walkB94InStmt(stmt.statement, source, fileName)
-            }
-            is ForInStatement -> {
-                (stmt.initializer as? VariableDeclarationList)?.let { checkSelfRefComputedBindingKeyList(it, source, fileName) }
-                walkB94InExpr(stmt.expression, source, fileName)
-                walkB94InStmt(stmt.statement, source, fileName)
-            }
-            is ForOfStatement -> {
-                (stmt.initializer as? VariableDeclarationList)?.let { checkSelfRefComputedBindingKeyList(it, source, fileName) }
-                walkB94InExpr(stmt.expression, source, fileName)
-                walkB94InStmt(stmt.statement, source, fileName)
-            }
-            is WhileStatement -> {
-                walkB94InExpr(stmt.expression, source, fileName)
-                walkB94InStmt(stmt.statement, source, fileName)
-            }
-            is DoStatement -> {
-                walkB94InStmt(stmt.statement, source, fileName)
-                walkB94InExpr(stmt.expression, source, fileName)
-            }
-            is SwitchStatement -> {
-                walkB94InExpr(stmt.expression, source, fileName)
-                for (clause in stmt.caseBlock) when (clause) {
-                    is CaseClause -> {
-                        walkB94InExpr(clause.expression, source, fileName)
-                        walkB94InStmts(clause.statements, source, fileName)
-                    }
-                    is DefaultClause -> walkB94InStmts(clause.statements, source, fileName)
-                    else -> {}
-                }
-            }
-            is TryStatement -> {
-                walkB94InStmts(stmt.tryBlock.statements, source, fileName)
-                stmt.catchClause?.let { walkB94InStmts(it.block.statements, source, fileName) }
-                stmt.finallyBlock?.let { walkB94InStmts(it.statements, source, fileName) }
-            }
-            is LabeledStatement -> walkB94InStmt(stmt.statement, source, fileName)
-            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let {
-                walkB94InStmts(it.statements, source, fileName)
-            }
-            is ThrowStatement -> stmt.expression?.let { walkB94InExpr(it, source, fileName) }
-            is ExportAssignment -> walkB94InExpr(stmt.expression, source, fileName)
-            else -> {}
-        }
-    }
-
-    private fun walkB94InExpr(expr: Expression, source: String, fileName: String) {
-        when (expr) {
-            is ArrowFunction -> {
-                emitB94ForFnLikeParams(expr.parameters, source, fileName)
-                when (val body = expr.body) {
-                    is Block -> walkB94InStmts(body.statements, source, fileName)
-                    is Expression -> walkB94InExpr(body, source, fileName)
-                    else -> {}
-                }
-            }
-            is FunctionExpression -> {
-                emitB94ForFnLikeParams(expr.parameters, source, fileName)
-                walkB94InStmts(expr.body.statements, source, fileName)
-            }
-            is ParenthesizedExpression -> walkB94InExpr(expr.expression, source, fileName)
-            is ConditionalExpression -> {
-                walkB94InExpr(expr.condition, source, fileName)
-                walkB94InExpr(expr.whenTrue, source, fileName)
-                walkB94InExpr(expr.whenFalse, source, fileName)
-            }
-            is BinaryExpression -> {
-                var cur: Expression = expr
-                val rightStack = ArrayDeque<Expression>()
-                while (cur is BinaryExpression) { rightStack.addLast(cur.right); cur = cur.left }
-                walkB94InExpr(cur, source, fileName)
-                while (rightStack.isNotEmpty()) walkB94InExpr(rightStack.removeLast(), source, fileName)
-            }
-            is CallExpression -> {
-                walkB94InExpr(expr.expression, source, fileName)
-                expr.arguments.forEach { walkB94InExpr(it, source, fileName) }
-            }
-            is NewExpression -> {
-                walkB94InExpr(expr.expression, source, fileName)
-                expr.arguments?.forEach { walkB94InExpr(it, source, fileName) }
-            }
-            is ArrayLiteralExpression -> expr.elements.forEach { walkB94InExpr(it, source, fileName) }
-            is ObjectLiteralExpression -> for (prop in expr.properties) when (prop) {
-                is PropertyAssignment -> walkB94InExpr(prop.initializer, source, fileName)
-                is SpreadAssignment -> walkB94InExpr(prop.expression, source, fileName)
-                is MethodDeclaration -> {
-                    emitB94ForFnLikeParams(prop.parameters, source, fileName)
-                    prop.body?.let { walkB94InStmts(it.statements, source, fileName) }
-                }
-                is GetAccessor -> prop.body?.let { walkB94InStmts(it.statements, source, fileName) }
-                is SetAccessor -> {
-                    emitB94ForFnLikeParams(prop.parameters, source, fileName)
-                    prop.body?.let { walkB94InStmts(it.statements, source, fileName) }
-                }
-                else -> {}
-            }
-            is ClassExpression -> for (member in expr.members) when (member) {
-                is MethodDeclaration -> {
-                    emitB94ForFnLikeParams(member.parameters, source, fileName)
-                    member.body?.let { walkB94InStmts(it.statements, source, fileName) }
-                }
-                is Constructor -> {
-                    emitB94ForFnLikeParams(member.parameters, source, fileName)
-                    member.body?.let { walkB94InStmts(it.statements, source, fileName) }
-                }
-                is PropertyDeclaration -> member.initializer?.let { walkB94InExpr(it, source, fileName) }
-                is GetAccessor -> member.body?.let { walkB94InStmts(it.statements, source, fileName) }
-                is SetAccessor -> {
-                    emitB94ForFnLikeParams(member.parameters, source, fileName)
-                    member.body?.let { walkB94InStmts(it.statements, source, fileName) }
-                }
-                else -> {}
-            }
-            is AsExpression -> walkB94InExpr(expr.expression, source, fileName)
-            is NonNullExpression -> walkB94InExpr(expr.expression, source, fileName)
-            is SatisfiesExpression -> walkB94InExpr(expr.expression, source, fileName)
-            is CommaListExpression -> expr.elements.forEach { walkB94InExpr(it, source, fileName) }
-            is TemplateExpression -> for (span in expr.templateSpans) walkB94InExpr(span.expression, source, fileName)
-            is TaggedTemplateExpression -> {
-                walkB94InExpr(expr.tag, source, fileName)
-                if (expr.template is TemplateExpression) {
-                    for (span in (expr.template).templateSpans) walkB94InExpr(span.expression, source, fileName)
-                }
-            }
-            is SpreadElement -> walkB94InExpr(expr.expression, source, fileName)
-            is AwaitExpression -> walkB94InExpr(expr.expression, source, fileName)
-            is YieldExpression -> expr.expression?.let { walkB94InExpr(it, source, fileName) }
-            is VoidExpression -> walkB94InExpr(expr.expression, source, fileName)
-            is DeleteExpression -> walkB94InExpr(expr.expression, source, fileName)
-            is TypeOfExpression -> walkB94InExpr(expr.expression, source, fileName)
-            is PrefixUnaryExpression -> walkB94InExpr(expr.operand, source, fileName)
-            is PostfixUnaryExpression -> walkB94InExpr(expr.operand, source, fileName)
-            is PropertyAccessExpression -> walkB94InExpr(expr.expression, source, fileName)
-            is ElementAccessExpression -> {
-                walkB94InExpr(expr.expression, source, fileName)
-                walkB94InExpr(expr.argumentExpression, source, fileName)
-            }
-            is TypeAssertionExpression -> walkB94InExpr(expr.expression, source, fileName)
-            else -> {}
         }
     }
 

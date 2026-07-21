@@ -20,6 +20,47 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 631 (2026-07-21) — (M0.4) ninth tail-pass migration:
+checkBindingPatternComputedIndexSig (B9.4 — TS2537 computed-key
+destructuring vs the `{}` default + TS2448/TS2728/TS2538 self-referential
+computed binding keys, ~120 ms — the #9 tail pass) is ON THE SPINE; the
+legacy recursion walkers (walkB94InStmts/-InStmt/-InExpr, ~200 lines) are
+DELETED.** The MULTI-ANCHOR-KIND variant of the template: three emission
+families dispatch from ONE enter hook over seven anchor kinds — the
+self-ref decl-list check at VariableStatement/for/for-in/for-of enters
+(pure AST, no sandwich; legacy order preserved: before the pattern
+emission), the empty-objlit destructure at VariableStatement enters (NOT
+at for-heads — a pinned legacy quirk), and the fn-EXPRESSION-like
+parameter emission at arrow/fn-expr enters plus PARENT-KIND-gated member
+enters (objlit method+setter, class-EXPRESSION method+ctor+setter —
+FunctionDeclaration and class-DECLARATION member parameter lists
+deliberately never emit, both pinned). Reach = spineB94Status/spineB94Edge,
+a FROZEN verbatim copy of the deleted walker's arms — deliberately NOT
+redirected to the surviving cast walker's spineCoEdge (which it matches
+except FunctionDeclaration parameter DEFAULTS being reached here): sharing
+would silently couple B94's frozen reach to future cast-walker/classifier
+changes. Ambient: the TS2537 emitters type-resolve and the legacy pass
+never installed currentFileLocals, so each type-resolving emission
+installs the spine-entry RESTING value (spineB94WithAmbient, the
+spinePdWithAmbient pattern); no flow/check-file-name install needed (both
+already resting mid-walk). SURPRISE (caught by the green-against-legacy-
+FIRST discipline, 30/31 on the first run): a DOTTED `namespace A.B { }`
+IS walked — this parser keeps it as ONE ModuleDeclaration with a dotted
+PropertyAccessExpression name and a ModuleBlock body (Parser.kt
+parseModuleDeclaration's dot loop), so the round-630 spineCoEdge comment's
+"dotted namespace body is a ModuleDeclaration" premise was false for the
+common case (comment corrected this round; both classifiers' edges were
+verbatim-correct regardless — only the prose misled). Gates: 31 local pins
+(M04BindingPatternSpineMigrationTest — all three emitters' gates + the
+reach battery both directions) green against the LEGACY pass first; suite
+11,558 → 11,589/0; `--listAll` ×8 byte-identical (46×7 + 94 env-legit
+artifacts, modulo the `time:` line); pass table 430 → 429 (the row gone;
+checkSpine 19,309.9 ms single-run — nominally above the 18.0–19.1 s band,
+but the same capture's WALL was 28.6 s post vs 30.1 s pre, so box drift,
+not inflation); warning-clean. M0.4 running total: top NINE tail passes
+migrated. NEXT: checkConstEnumDiagnostics (122.6 ms at this round's
+table) — slot-move pre-gate first per the template.**
+
 **Round 630 (2026-07-21) — (M0.4) eighth tail-pass migration:
 checkSameTargetReferenceCastOverlap (TS2352 same-target-Reference cast +
 function-return-mismatch cast, ~123 ms — the #8 tail pass) is ON THE SPINE;
@@ -496,55 +537,6 @@ Remaining M0.3 slices: (i) name atomization, (ii) links records, (v)
 undo-log scope copies (1.1% — folds into a bigger slice per the drift-band
 rule).**
 
-**Round 621 (2026-07-20) — (M0.2) kindId table dispatch LANDED (3 commits,
-−3.3% A/B) + the first (M0.3) layout slice (iii)+(iv) LANDED (−3.9% A/B) —
-session cumulative 31,747 → 29,955 ms ≈ −5.6% on the compiler profile.**
-The M0.3 slice: `LongKeyMap` (commonMain, ~100-line open-addressing Long→V
-over EXACT two-int-packed keys — a bijection, never a hash, so id-keyed
-cycle detection stays sound; 0L = empty-slot sentinel, sound because ids
-start at 1) fast-paths the three intern caches' dominant shapes — null/
-empty/1-arg `Type.Reference` (null and EMPTY args deliberately pack ALIKE,
-reproducing the old string key's `"id|"` conflation byte-exactly — a
-"cleaner" distinction would mint fresh ids where the old cache aliased),
-2-member unions (`T | undefined`) and intersections; ≥2-arg/≥3-member
-shapes keep the string maps. Plus the `normalizePath` memo (pure, the
-module-resolution hot path). A/B 31,180 → 29,955 ms median, wins 5/5
-pairs; suite 11,390/0 (+5 LongKeyMapTest); listAll ×8 byte-identical;
-warning-clean. Remaining M0.3 slices: (i) name atomization, (ii)
-links records, (v) undo-log scope copies.** (1) The
-infrastructure: `NodeBase.kindId` — a dense per-CLASS Int stamped by each of
-the 138 node classes' `init { kindId = NodeKind.X }` (runs on every
-construction incl. `copy()`, so Transformer-synthesized nodes stay stamped —
-unlike nodeId/parent, which deliberately do not); `NodeKind.kt` holds the
-dense consts + `nodeKindIdOf`, the sealed-exhaustive `when` that is the
-COMPILE gate for a new node class (its arm forces a const; the stamp itself
-is runtime-pinned by NodeKindIdTest ×6 — id density, stamp == mapper across
-fixtures/synthetics/real tsc sources, copy() re-stamping — plus
-forEachChild's loud `else -> error`). `forEachChild` dispatches via a
-javap-verified tableswitch 0..137 (was the avg-8.3-deep instanceof chain).
-(2) The three hot checkSpine dispatchers (spineEnterNode's terminal when,
-spineUResEnter, spineUResDispatch) → kindId lookupswitch (sparse 30–42-key
-subsets ≈ 5 int compares). (3) The 13 remaining per-node walker whens
-(ccetSpineLeave, cpaSpineLeave, Da/At/Arith×2/Iany/Nu/Ca×2/Ubd enter,
-Ir/Np leave). ccetSpineEnter SKIPPED deliberately (5 arms; an
-`is Block -> when (parent) {` expression-arm + a multi-class arm whose
-nested exhaustive when needs the union smart-cast). THE MANGLE LESSON: the
-scripted converter's paren-balance branch mis-cut FOUR arms whose
-`if`-header spanned two lines (`... &&` continuation) — the inserted arm
-close made the gate an EMPTY if and the body ran UNCONDITIONALLY
-(spineIanyEnterNode's ObjLit destructure-default gate → TS7006 FPs;
-spineArithEnterNode's Method/Constructor frames + PrefixUnary TS2736 →
-numberVsBigIntOperations). The corpus caught 3 of 4; the 4th (Constructor —
-maskable) fell to a whole-file structural scan: **a line ending `{` followed
-by a DEDENTED bare `}` is the mangle signature — run that scan after ANY
-scripted when-conversion.** Gates per commit: suite 11,385/0 (re-run after
-the fixes), `--listAll` ×8 byte-identical (time-line-filtered), build
-warning-clean. Suite 11,379 → 11,385 (+6). NOTE the bench TSV row's
-"vs previous +6.2%" compares against a July-17 row (different code state,
-three rounds earlier, cross-session box drift) — the interleaved A/B above
-is the authoritative M0.2 measurement (the round-493 rule). NEXT
-(top-of-queue): (M0.3) layout campaign, then (M0.4) tail migration.**
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 (Restored 2026-07-12, round 481 — the queue/backlog/inventory sections had been
@@ -707,8 +699,18 @@ structural item instead of landing alone.**
   TYPE-RESOLVING tail migration — per-anchor getTypeOfExpression/
   getTypeFromTypeNode/relation calls interleave into the spine walk, gated
   clean by corpus + listAll ×8; ambient sandwich = currentCheckFileName +
-  a nulled currentFlowGraph around the emission pair), then
-  checkBindingPatternComputedIndexSig ~120 ms;
+  a nulled currentFlowGraph around the emission pair),
+  checkBindingPatternComputedIndexSig ~120 ms — **MIGRATED round 631** (the
+  MULTI-ANCHOR-KIND variant: three emission families dispatch from one
+  enter hook over seven anchor kinds, member-parameter emissions gated on
+  the member's PARENT kind — objlit/class-EXPRESSION members emit,
+  FunctionDeclaration/class-DECLARATION members never do; the reach
+  classifier is a FROZEN copy of the deleted walker's arms, deliberately
+  NOT shared with the surviving cast walker's spineCoEdge, which it
+  matches except FunctionDeclaration parameter defaults; the TS2537
+  emitters install the spine-entry RESTING currentFileLocals per emission
+  — the legacy pass never installed it), then
+  checkConstEnumDiagnostics ~123 ms;
   98 passes >20 ms carry 5.3 s of the
   6.2 s). Migration protocol per
   pass (the round-624 template): slot-move pre-gate commit (intact pass to the

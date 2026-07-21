@@ -1,3 +1,53 @@
+**Round 621 (2026-07-20) — (M0.2) kindId table dispatch LANDED (3 commits,
+−3.3% A/B) + the first (M0.3) layout slice (iii)+(iv) LANDED (−3.9% A/B) —
+session cumulative 31,747 → 29,955 ms ≈ −5.6% on the compiler profile.**
+The M0.3 slice: `LongKeyMap` (commonMain, ~100-line open-addressing Long→V
+over EXACT two-int-packed keys — a bijection, never a hash, so id-keyed
+cycle detection stays sound; 0L = empty-slot sentinel, sound because ids
+start at 1) fast-paths the three intern caches' dominant shapes — null/
+empty/1-arg `Type.Reference` (null and EMPTY args deliberately pack ALIKE,
+reproducing the old string key's `"id|"` conflation byte-exactly — a
+"cleaner" distinction would mint fresh ids where the old cache aliased),
+2-member unions (`T | undefined`) and intersections; ≥2-arg/≥3-member
+shapes keep the string maps. Plus the `normalizePath` memo (pure, the
+module-resolution hot path). A/B 31,180 → 29,955 ms median, wins 5/5
+pairs; suite 11,390/0 (+5 LongKeyMapTest); listAll ×8 byte-identical;
+warning-clean. Remaining M0.3 slices: (i) name atomization, (ii)
+links records, (v) undo-log scope copies.** (1) The
+infrastructure: `NodeBase.kindId` — a dense per-CLASS Int stamped by each of
+the 138 node classes' `init { kindId = NodeKind.X }` (runs on every
+construction incl. `copy()`, so Transformer-synthesized nodes stay stamped —
+unlike nodeId/parent, which deliberately do not); `NodeKind.kt` holds the
+dense consts + `nodeKindIdOf`, the sealed-exhaustive `when` that is the
+COMPILE gate for a new node class (its arm forces a const; the stamp itself
+is runtime-pinned by NodeKindIdTest ×6 — id density, stamp == mapper across
+fixtures/synthetics/real tsc sources, copy() re-stamping — plus
+forEachChild's loud `else -> error`). `forEachChild` dispatches via a
+javap-verified tableswitch 0..137 (was the avg-8.3-deep instanceof chain).
+(2) The three hot checkSpine dispatchers (spineEnterNode's terminal when,
+spineUResEnter, spineUResDispatch) → kindId lookupswitch (sparse 30–42-key
+subsets ≈ 5 int compares). (3) The 13 remaining per-node walker whens
+(ccetSpineLeave, cpaSpineLeave, Da/At/Arith×2/Iany/Nu/Ca×2/Ubd enter,
+Ir/Np leave). ccetSpineEnter SKIPPED deliberately (5 arms; an
+`is Block -> when (parent) {` expression-arm + a multi-class arm whose
+nested exhaustive when needs the union smart-cast). THE MANGLE LESSON: the
+scripted converter's paren-balance branch mis-cut FOUR arms whose
+`if`-header spanned two lines (`... &&` continuation) — the inserted arm
+close made the gate an EMPTY if and the body ran UNCONDITIONALLY
+(spineIanyEnterNode's ObjLit destructure-default gate → TS7006 FPs;
+spineArithEnterNode's Method/Constructor frames + PrefixUnary TS2736 →
+numberVsBigIntOperations). The corpus caught 3 of 4; the 4th (Constructor —
+maskable) fell to a whole-file structural scan: **a line ending `{` followed
+by a DEDENTED bare `}` is the mangle signature — run that scan after ANY
+scripted when-conversion.** Gates per commit: suite 11,385/0 (re-run after
+the fixes), `--listAll` ×8 byte-identical (time-line-filtered), build
+warning-clean. Suite 11,379 → 11,385 (+6). NOTE the bench TSV row's
+"vs previous +6.2%" compares against a July-17 row (different code state,
+three rounds earlier, cross-session box drift) — the interleaved A/B above
+is the authoritative M0.2 measurement (the round-493 rule). NEXT
+(top-of-queue): (M0.3) layout campaign, then (M0.4) tail migration.**
+
+
 **Round 620 (2026-07-20) — (M0.1d) runs the mandated consumer trace and
 OVERTURNS round 619's deletion verdict: "23 census-silent, deletion-ready"
 was a FALSE GREEN — 20 of the 23 are corpus-pinned; only 3 pure adders were
