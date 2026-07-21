@@ -3576,6 +3576,28 @@ class Checker(
     /** Reusable ascent buffer for [spineB94Status]. */
     private val spineB94Chain = ArrayList<Node>()
 
+    // ── (M0.4) round 632: checkConstEnumDiagnostics ON THE SPINE ──────────
+    // The const-enum cluster: declaration-level TS2474/2477/2478 at
+    // namespace-reachable const EnumDeclaration enters, the TS2567
+    // const-enum + instantiated-namespace TOP-LEVEL merge scan once per
+    // active file (at setup), and the TS2475/2476 usage emissions at
+    // Identifier / ElementAccessExpression enters. The WHOLE cluster is
+    // gated per file on the file DECLARING at least one namespace-reachable
+    // const enum (the legacy whole-file `collectConstEnumDecls.isEmpty()`
+    // gate — a file merely REFERENCING a const enum is skipped, pinned).
+    // Usage reach is the memoized binary classifier [spineCeStatus] over
+    // [spineCeEdge] (the DELETED walkConstEnumUsageStmt/walkExpr descent
+    // arms verbatim, FROZEN). No ambient sandwich — the emissions read no
+    // checker ambient (resolveAlias/enumValues are order-free memoized
+    // caches). Fields PRE-init (the pipeline runs inside `init`).
+    private var spineCeActive = false
+    /** The active file's BinderResult (locals for [spineCeIsConstEnumName]). */
+    private var spineCeResult: BinderResult? = null
+    /** Per-file nodeId memo for [spineCeStatus] — 0 unknown, 1 reached, 2 not. */
+    private var spineCeReachMemo = ByteArray(0)
+    /** Reusable ascent buffer for [spineCeStatus]. */
+    private val spineCeChain = ArrayList<Node>()
+
     // ── INV.4(d) walker 6 (round 535): checkArgumentCounts on the spine ────
     // The function-call arity pass (TS2554/TS2555/TS2575) — the recursion
     // walkers (checkArgCountInStatements/-InStatement/-InExpr(Core)) are
@@ -5091,16 +5113,14 @@ class Checker(
         // are anchor-called). Its one TS2537 consumer
         // (checkErrorElaboration's corpus-unique Container-Ref swap) runs
         // after the spine, and no TS2448/TS2538 dedup consumers exist.
-        // 72b2' (M0.4 slot-move pre-gate, round 631): checkConstEnumDiagnostics
-        // (const-enum cluster TS2474/2475/2476/2477/2478/2567, AST +
-        // const-eval) moved intact from its enum-cluster slot ahead of its
-        // spine migration. Self-contained: no ambient installs, no side
-        // sets, no dedup scans on its codes anywhere; enumValues is a
-        // memoized pure cache (fill-order-free) and scriptFileConstEnumNames
-        // is a lazy pure collector. The hoist crosses the enum/cross-file-
-        // conflict/module passes — resolveAlias/enum-value first-touch order
-        // is the risk class the corpus + listAll ×8 gates decide.
-        pass("checkConstEnumDiagnostics") { checkConstEnumDiagnostics() }
+        // 72b2' (M0.4, round 632): checkConstEnumDiagnostics (const-enum
+        // cluster TS2474/2475/2476/2477/2478/2567) is ON THE SPINE — see
+        // spineCeEnterNode/spineCeStatus/spineCeEdge; the legacy driver and
+        // walkConstEnumUsageStmt/walkExpr recursion are deleted
+        // (collectConstEnumDecls/emitConstEnumInitDiag/
+        // constEnumInitRefsNonMember/scriptFileConstEnumNames survive as
+        // anchor-called leaves). Self-contained: no ambient installs, no
+        // side sets, no dedup scans on its codes anywhere.
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -6264,8 +6284,8 @@ class Checker(
         pass("checkReverseMappedExcessProps") { checkReverseMappedExcessProps() }
         // 72b. Enum member initializers may not forward-reference later members (TS2651)
         pass("checkEnumForwardReferences") { checkEnumForwardReferences() }
-        // 72b2. checkConstEnumDiagnostics moved to the post-spine slot — see
-        // the pass("checkSpine") site (M0.4 slot-move pre-gate, round 631).
+        // 72b2. checkConstEnumDiagnostics is ON THE SPINE (M0.4, round 632)
+        // — see spineCeEnterNode at the pass("checkSpine") site.
         // 72c. TS2408 (setter value-returns) migrated to the check spine
         // (INV.4(b) batch 9) — see spineCheckSetterReturns.
         // 72d. A class's own name used in a direct member's computed property name is a
@@ -8076,85 +8096,6 @@ class Checker(
      *  - TS2567: a const enum merging with an INSTANTIATED same-name namespace (two runtime
      *    objects); fires on BOTH the enum name and the namespace name.
      */
-    private fun checkConstEnumDiagnostics() {
-        for (result in checkedResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            val stmts = result.sourceFile.statements
-            val constEnumDecls = mutableListOf<EnumDeclaration>()
-            collectConstEnumDecls(stmts, constEnumDecls)
-            if (constEnumDecls.isEmpty()) continue
-
-            // --- declaration-level: TS2474 / TS2477 / TS2478 ---
-            for (enumDecl in constEnumDecls) {
-                val sym = result.locals[enumDecl.name.text] ?: globals[enumDecl.name.text] ?: continue
-                if (!sym.flags.hasAny(SymbolFlags.ConstEnum)) continue
-                computeEnumSymbolValues(sym)
-                val values = enumValues[sym.id] ?: emptyMap()
-                val memberNames = mutableSetOf<String>()
-                for (d in sym.declarations) if (d is EnumDeclaration) for (m in d.members)
-                    constEnumMemberName(m.name)?.let { memberNames.add(it) }
-                for (member in enumDecl.members) {
-                    val mName = constEnumMemberName(member.name) ?: continue
-                    val init = member.initializer
-                    val v = values[mName]
-                    if (v is ConstantValue.NumberValue && init != null) {
-                        if (v.value.isNaN()) {
-                            emitConstEnumInitDiag(init, source, fileName, 2478,
-                                "'const' enum member initializer was evaluated to disallowed value 'NaN'.")
-                            continue
-                        } else if (v.value.isInfinite()) {
-                            emitConstEnumInitDiag(init, source, fileName, 2477,
-                                "'const' enum member initializer was evaluated to a non-finite value.")
-                            continue
-                        }
-                    }
-                    // TS2474: init references a non-existent member of this enum.
-                    if (init != null && constEnumInitRefsNonMember(init, enumDecl.name.text, memberNames)) {
-                        emitConstEnumInitDiag(init, source, fileName, 2474,
-                            "const enum member initializers must be constant expressions.")
-                    }
-                }
-            }
-
-            // --- merge: TS2567 const enum + instantiated same-name namespace ---
-            run {
-                val byName = mutableMapOf<String, MutableList<Node>>()
-                for (stmt in stmts) when (stmt) {
-                    is EnumDeclaration -> if (ModifierFlag.Const in stmt.modifiers)
-                        byName.getOrPut(stmt.name.text) { mutableListOf() }.add(stmt)
-                    is ModuleDeclaration -> (stmt.name as? Identifier)?.let {
-                        if (isNamespaceInstantiated(stmt)) byName.getOrPut(it.text) { mutableListOf() }.add(stmt)
-                    }
-                    else -> {}
-                }
-                for ((_, group) in byName) {
-                    val hasConstEnum = group.any { it is EnumDeclaration }
-                    val hasInstNs = group.any { it is ModuleDeclaration }
-                    if (!hasConstEnum || !hasInstNs) continue
-                    for (decl in group) {
-                        val nameNode = when (decl) {
-                            is EnumDeclaration -> decl.name
-                            is ModuleDeclaration -> decl.name as? Identifier
-                            else -> null
-                        } ?: continue
-                        val (line, ch) = getLineAndCharacterOfPosition(source, nameNode.pos)
-                        diagnostics.add(Diagnostic(
-                            message = "Enum declarations can only merge with namespace or other enum declarations.",
-                            category = DiagnosticCategory.Error, code = 2567,
-                            fileName = fileName, line = line, character = ch,
-                            start = nameNode.pos, length = nameNode.text.length,
-                        ))
-                    }
-                }
-            }
-
-            // --- usage: TS2475 (value position) / TS2476 (non-string-literal index) ---
-            for (stmt in stmts) walkConstEnumUsageStmt(stmt, result, source, fileName)
-        }
-    }
-
     /** Round 479: names of const enums declared TOP-LEVEL in SCRIPT (non-module)
      *  files — the only cross-file const enums a module file may reference bare
      *  (ambient globals). Lazily built once. */
@@ -8244,111 +8185,6 @@ class Checker(
         }
         walk(init)
         return found
-    }
-
-    private fun walkConstEnumUsageStmt(stmt: Statement, result: BinderResult, source: String, fileName: String) {
-        // Round 479: a MODULE file can only reference a const enum it declares or
-        // imports (both land in result.locals) or a SCRIPT-declared ambient global —
-        // NEVER another module file's const enum leaked through mergeSymbolTable
-        // (fourslashImpl's module-scoped `const enum State` made findAllReferences'
-        // namespace-nested `class State` — B83.5-unbound, so the locals lookup
-        // misses — FP TS2475 at `new State(...)`).
-        val checkFileIsModule = isModuleFile(result.sourceFile.statements)
-        val isConstEnumName = { id: Identifier ->
-            val s = result.locals[id.text]
-                ?: globals[id.text]?.takeIf { !checkFileIsModule || id.text in scriptFileConstEnumNames() }
-            s != null && resolveAlias(s).flags.hasAny(SymbolFlags.ConstEnum)
-        }
-        // Walk a value expression. `asValue` = true when the expression occupies a value
-        // position where a bare const-enum reference is illegal (TS2475).
-        fun walkExpr(e: Expression?) {
-            if (e == null) return
-            when (e) {
-                is Identifier -> if (isConstEnumName(e)) {
-                    val (line, ch) = getLineAndCharacterOfPosition(source, e.pos)
-                    diagnostics.add(Diagnostic(
-                        message = "'const' enums can only be used in property or index access expressions or the right hand side of an import declaration or export assignment or type query.",
-                        category = DiagnosticCategory.Error, code = 2475,
-                        fileName = fileName, line = line, character = ch, start = e.pos, length = e.text.length,
-                    ))
-                }
-                is PropertyAccessExpression -> {
-                    // `E.A` — E is a valid base; don't flag E, but recurse if base isn't a const enum.
-                    if (!(e.expression is Identifier && isConstEnumName(e.expression))) walkExpr(e.expression)
-                }
-                is ElementAccessExpression -> {
-                    val baseIsConstEnum = e.expression is Identifier && isConstEnumName(e.expression)
-                    if (!baseIsConstEnum) walkExpr(e.expression)
-                    else {
-                        // TS2476: const-enum member access must use a string literal.
-                        val arg = e.argumentExpression
-                        val isStringLit = arg is StringLiteralNode || arg is NoSubstitutionTemplateLiteralNode
-                        if (!isStringLit) {
-                            val start = arg.pos
-                            // `expressionTrueEnd` overshoots a TemplateExpression (no dedicated
-                            // branch) — scan for the closing backtick (skipping `${...}` spans).
-                            val trueEnd = if (arg is TemplateExpression) constEnumTemplateEnd(source, start) else expressionTrueEnd(arg)
-                            val length = (trueEnd - start).coerceAtLeast(1)
-                            val (line, ch) = getLineAndCharacterOfPosition(source, start)
-                            diagnostics.add(Diagnostic(
-                                message = "A const enum member can only be accessed using a string literal.",
-                                category = DiagnosticCategory.Error, code = 2476,
-                                fileName = fileName, line = line, character = ch, start = start, length = length,
-                            ))
-                        }
-                    }
-                    walkExpr(e.argumentExpression)
-                }
-                is CallExpression -> { walkExpr(e.expression); e.arguments.forEach { walkExpr(it) } }
-                is NewExpression -> { walkExpr(e.expression); e.arguments?.forEach { walkExpr(it) } }
-                is BinaryExpression -> { walkExpr(e.left); walkExpr(e.right) }
-                is ConditionalExpression -> { walkExpr(e.condition); walkExpr(e.whenTrue); walkExpr(e.whenFalse) }
-                is ParenthesizedExpression -> walkExpr(e.expression)
-                is PrefixUnaryExpression -> walkExpr(e.operand)
-                is PostfixUnaryExpression -> walkExpr(e.operand)
-                is NonNullExpression -> walkExpr(e.expression)
-                is AsExpression -> walkExpr(e.expression)
-                is SatisfiesExpression -> walkExpr(e.expression)
-                is TypeAssertionExpression -> walkExpr(e.expression)
-                is SpreadElement -> walkExpr(e.expression)
-                is AwaitExpression -> walkExpr(e.expression)
-                is VoidExpression -> walkExpr(e.expression)
-                is DeleteExpression -> walkExpr(e.expression)
-                is YieldExpression -> walkExpr(e.expression)
-                is ArrayLiteralExpression -> e.elements.forEach { walkExpr(it) }
-                is CommaListExpression -> e.elements.forEach { walkExpr(it) }
-                is TemplateExpression -> e.templateSpans.forEach { walkExpr(it.expression) }
-                is TaggedTemplateExpression -> { walkExpr(e.tag); (e.template as? Expression)?.let { walkExpr(it) } }
-                is ObjectLiteralExpression -> for (p in e.properties) when (p) {
-                    is PropertyAssignment -> walkExpr(p.initializer)
-                    is ShorthandPropertyAssignment -> p.objectAssignmentInitializer?.let { walkExpr(it) }
-                    is SpreadAssignment -> walkExpr(p.expression)
-                    else -> {}
-                }
-                // TypeOfExpression operand is a type-query value (valid for const enums) — don't flag.
-                // Nested function-likes: walk via the statement walker below.
-                else -> {}
-            }
-        }
-        when (stmt) {
-            is VariableStatement -> stmt.declarationList.declarations.forEach { walkExpr(it.initializer) }
-            is ExpressionStatement -> walkExpr(stmt.expression)
-            is ReturnStatement -> walkExpr(stmt.expression)
-            is ThrowStatement -> walkExpr(stmt.expression)
-            is IfStatement -> { walkExpr(stmt.expression); walkConstEnumUsageStmt(stmt.thenStatement, result, source, fileName); stmt.elseStatement?.let { walkConstEnumUsageStmt(it, result, source, fileName) } }
-            is Block -> stmt.statements.forEach { walkConstEnumUsageStmt(it, result, source, fileName) }
-            is ForStatement -> { (stmt.initializer as? Expression)?.let { walkExpr(it) }; (stmt.initializer as? VariableDeclarationList)?.declarations?.forEach { walkExpr(it.initializer) }; stmt.condition?.let { walkExpr(it) }; stmt.incrementor?.let { walkExpr(it) }; walkConstEnumUsageStmt(stmt.statement, result, source, fileName) }
-            is ForInStatement -> { walkExpr(stmt.expression); walkConstEnumUsageStmt(stmt.statement, result, source, fileName) }
-            is ForOfStatement -> { walkExpr(stmt.expression); walkConstEnumUsageStmt(stmt.statement, result, source, fileName) }
-            is WhileStatement -> { walkExpr(stmt.expression); walkConstEnumUsageStmt(stmt.statement, result, source, fileName) }
-            is DoStatement -> { walkConstEnumUsageStmt(stmt.statement, result, source, fileName); walkExpr(stmt.expression) }
-            is SwitchStatement -> { walkExpr(stmt.expression); for (c in stmt.caseBlock) when (c) { is CaseClause -> { walkExpr(c.expression); c.statements.forEach { walkConstEnumUsageStmt(it, result, source, fileName) } }; is DefaultClause -> c.statements.forEach { walkConstEnumUsageStmt(it, result, source, fileName) }; else -> {} } }
-            is TryStatement -> { stmt.tryBlock.statements.forEach { walkConstEnumUsageStmt(it, result, source, fileName) }; stmt.catchClause?.block?.statements?.forEach { walkConstEnumUsageStmt(it, result, source, fileName) }; stmt.finallyBlock?.statements?.forEach { walkConstEnumUsageStmt(it, result, source, fileName) } }
-            is LabeledStatement -> walkConstEnumUsageStmt(stmt.statement, result, source, fileName)
-            is FunctionDeclaration -> stmt.body?.statements?.forEach { walkConstEnumUsageStmt(it, result, source, fileName) }
-            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.statements?.forEach { walkConstEnumUsageStmt(it, result, source, fileName) }
-            else -> {}
-        }
     }
 
     /** Walk a setter body for value-`return` statements, NOT crossing function/class
@@ -21286,6 +21122,7 @@ class Checker(
                 spineSySetup(result)
                 spineCoSetup(result)
                 spineB94Setup(result)
+                spineCeSetup(result)
                 spineUResAuditActive = unresolvedAuditEnabled && spineUResActive
                 try {
                     spineWalkFile(sf)
@@ -21315,6 +21152,7 @@ class Checker(
                     spineSyTeardown()
                     spineCoTeardown()
                     spineB94Teardown()
+                    spineCeTeardown()
                 }
                 spineResolveDeferredIterationChecks()
                 // (M0.4) round 629: the flow-graph definite-assignment pass
@@ -21515,6 +21353,11 @@ class Checker(
         // parameter lists) — TS2537 under the resting-locals sandwich,
         // TS2448/TS2538 pure-AST; no frames/leave hook.
         if (spineB94Active) spineB94EnterNode(node)
+        // (M0.4) round 632: the const-enum cluster anchors (const
+        // EnumDeclarations, bare Identifiers, ElementAccessExpressions) —
+        // active only in files DECLARING a namespace-reachable const enum;
+        // no frames/leave hook, no ambient sandwich.
+        if (spineCeActive) spineCeEnterNode(node)
         // INV.4(d) walker 7: the use-before-declaration pass — the per-list
         // ForwardRefs anchor + loop-header self-ref checks.
         if (spineUbdActive) spineUbdEnterNode(node)
@@ -47545,6 +47388,12 @@ class Checker(
         private const val B94_NONE = 2
         private const val B94_ROOT = 3
 
+        // (M0.4) round 632: spineCeStatus states (checkConstEnumDiagnostics
+        // usage reach — binary + the transient SourceFile root).
+        private const val CE_REACHED = 1
+        private const val CE_NONE = 2
+        private const val CE_ROOT = 3
+
         private const val OS_NONE = 1
         private const val OS_ROOT = 2
         private const val OS_STMT = 3
@@ -62962,6 +62811,310 @@ interface DataView {
             is SetAccessor, is PropertyDeclaration -> true
             else -> false
         }
+        else -> false
+    }
+
+    // ── (M0.4) round 632: checkConstEnumDiagnostics spine machinery ────────
+
+    private fun spineCeSetup(result: BinderResult) {
+        spineCeActive = false
+        spineCeResult = null
+        spineCeReachMemo = ByteArray(0)
+        if (spineIsDts) return
+        val sf = result.sourceFile
+        val decls = mutableListOf<EnumDeclaration>()
+        collectConstEnumDecls(sf.statements, decls)
+        if (decls.isEmpty()) return
+        spineCeActive = true
+        spineCeResult = result
+        spineCeReachMemo = if (sf.nodeCount > 0) ByteArray(sf.nodeCount) else ByteArray(0)
+        // Sub-part 2: the TS2567 const-enum + instantiated-namespace merge
+        // scan — TOP-LEVEL statements only, once per active file (verbatim
+        // legacy; a namespace-nested pair never fires, pinned).
+        spineCeMergeScan(sf)
+    }
+
+    private fun spineCeTeardown() {
+        spineCeActive = false
+        spineCeResult = null
+        spineCeReachMemo = ByteArray(0)
+    }
+
+    private fun spineCeMergeScan(sf: SourceFile) {
+        val byName = mutableMapOf<String, MutableList<Node>>()
+        for (stmt in sf.statements) when (stmt) {
+            is EnumDeclaration -> if (ModifierFlag.Const in stmt.modifiers)
+                byName.getOrPut(stmt.name.text) { mutableListOf() }.add(stmt)
+            is ModuleDeclaration -> (stmt.name as? Identifier)?.let {
+                if (isNamespaceInstantiated(stmt)) byName.getOrPut(it.text) { mutableListOf() }.add(stmt)
+            }
+            else -> {}
+        }
+        for ((_, group) in byName) {
+            val hasConstEnum = group.any { it is EnumDeclaration }
+            val hasInstNs = group.any { it is ModuleDeclaration }
+            if (!hasConstEnum || !hasInstNs) continue
+            for (decl in group) {
+                val nameNode = when (decl) {
+                    is EnumDeclaration -> decl.name
+                    is ModuleDeclaration -> decl.name as? Identifier
+                    else -> null
+                } ?: continue
+                val (line, ch) = getLineAndCharacterOfPosition(spineSource, nameNode.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Enum declarations can only merge with namespace or other enum declarations.",
+                    category = DiagnosticCategory.Error, code = 2567,
+                    fileName = spineFileName, line = line, character = ch,
+                    start = nameNode.pos, length = nameNode.text.length,
+                ))
+            }
+        }
+    }
+
+    /** ENTER dispatch: the const-enum cluster's anchors — declaration-level
+     *  TS2474/2477/2478 at namespace-reachable const EnumDeclaration enters
+     *  (sub-part 1), TS2475 at reached bare Identifiers, and TS2476 at
+     *  reached ElementAccessExpressions with a const-enum base and a
+     *  non-string-literal key (sub-part 3). A property/element-access BASE
+     *  Identifier is pre-filtered: a const-enum base is the legal access
+     *  shape (the legacy walker skipped it) and a non-const-enum base was
+     *  descended but its Identifier arm could not fire — neither emits. */
+    private fun spineCeEnterNode(node: Node) {
+        when ((node as NodeBase).kindId) {
+            NodeKind.ENUM_DECLARATION -> {
+                node as EnumDeclaration
+                if (ModifierFlag.Const !in node.modifiers) return
+                if (!spineCeDeclReachable(node)) return
+                spineCeCheckConstEnumDecl(node)
+            }
+            NodeKind.IDENTIFIER -> {
+                node as Identifier
+                val p = node.parent
+                if (p is PropertyAccessExpression) return
+                if (p is ElementAccessExpression && p.expression === node) return
+                if (spineCeStatus(node) != CE_REACHED) return
+                if (!spineCeIsConstEnumName(node)) return
+                val (line, ch) = getLineAndCharacterOfPosition(spineSource, node.pos)
+                diagnostics.add(Diagnostic(
+                    message = "'const' enums can only be used in property or index access expressions or the right hand side of an import declaration or export assignment or type query.",
+                    category = DiagnosticCategory.Error, code = 2475,
+                    fileName = spineFileName, line = line, character = ch,
+                    start = node.pos, length = node.text.length,
+                ))
+            }
+            NodeKind.ELEMENT_ACCESS_EXPRESSION -> {
+                node as ElementAccessExpression
+                val base = node.expression
+                if (base !is Identifier) return
+                if (spineCeStatus(node) != CE_REACHED) return
+                if (!spineCeIsConstEnumName(base)) return
+                val arg = node.argumentExpression
+                if (arg is StringLiteralNode || arg is NoSubstitutionTemplateLiteralNode) return
+                val start = arg.pos
+                // `expressionTrueEnd` overshoots a TemplateExpression (no
+                // dedicated branch) — scan for the closing backtick
+                // (skipping `${...}` spans).
+                val trueEnd = if (arg is TemplateExpression) constEnumTemplateEnd(spineSource, start)
+                    else expressionTrueEnd(arg)
+                val length = (trueEnd - start).coerceAtLeast(1)
+                val (line, ch) = getLineAndCharacterOfPosition(spineSource, start)
+                diagnostics.add(Diagnostic(
+                    message = "A const enum member can only be accessed using a string literal.",
+                    category = DiagnosticCategory.Error, code = 2476,
+                    fileName = spineFileName, line = line, character = ch,
+                    start = start, length = length,
+                ))
+            }
+            else -> {}
+        }
+    }
+
+    /** [collectConstEnumDecls] reachability: only ModuleBlock/
+     *  ModuleDeclaration ancestors up to the SourceFile — a Block/
+     *  function-body const enum is never collected (pinned). */
+    private fun spineCeDeclReachable(node: Node): Boolean {
+        var cur: Node? = (node as NodeBase).parent
+        while (true) {
+            val c = cur ?: return false
+            when (c) {
+                is SourceFile -> return true
+                is ModuleBlock, is ModuleDeclaration -> cur = (c as NodeBase).parent
+                else -> return false
+            }
+        }
+    }
+
+    /** Sub-part 1 (verbatim legacy): declaration-level TS2474/2477/2478 for
+     *  one namespace-reachable const enum declaration. */
+    private fun spineCeCheckConstEnumDecl(enumDecl: EnumDeclaration) {
+        val result = spineCeResult ?: return
+        val sym = result.locals[enumDecl.name.text] ?: globals[enumDecl.name.text] ?: return
+        if (!sym.flags.hasAny(SymbolFlags.ConstEnum)) return
+        computeEnumSymbolValues(sym)
+        val values = enumValues[sym.id] ?: emptyMap()
+        val memberNames = mutableSetOf<String>()
+        for (d in sym.declarations) if (d is EnumDeclaration) for (m in d.members)
+            constEnumMemberName(m.name)?.let { memberNames.add(it) }
+        for (member in enumDecl.members) {
+            val mName = constEnumMemberName(member.name) ?: continue
+            val init = member.initializer
+            val v = values[mName]
+            if (v is ConstantValue.NumberValue && init != null) {
+                if (v.value.isNaN()) {
+                    emitConstEnumInitDiag(init, spineSource, spineFileName, 2478,
+                        "'const' enum member initializer was evaluated to disallowed value 'NaN'.")
+                    continue
+                } else if (v.value.isInfinite()) {
+                    emitConstEnumInitDiag(init, spineSource, spineFileName, 2477,
+                        "'const' enum member initializer was evaluated to a non-finite value.")
+                    continue
+                }
+            }
+            // TS2474: init references a non-existent member of this enum.
+            if (init != null && constEnumInitRefsNonMember(init, enumDecl.name.text, memberNames)) {
+                emitConstEnumInitDiag(init, spineSource, spineFileName, 2474,
+                    "const enum member initializers must be constant expressions.")
+            }
+        }
+    }
+
+    /** Verbatim legacy gate (round 479): a MODULE file can only reference a
+     *  const enum it declares or imports (both land in result.locals) or a
+     *  SCRIPT-declared ambient global — NEVER another module file's const
+     *  enum leaked through mergeSymbolTable. */
+    private fun spineCeIsConstEnumName(id: Identifier): Boolean {
+        val result = spineCeResult ?: return false
+        val s = result.locals[id.text]
+            ?: globals[id.text]?.takeIf { !spineFileIsModule || id.text in scriptFileConstEnumNames() }
+        return s != null && resolveAlias(s).flags.hasAny(SymbolFlags.ConstEnum)
+    }
+
+    /** Memoized reach classifier — ascends to the first memoized/terminal
+     *  ancestor, then folds [spineCeEdge] back down (spineB94Status
+     *  pattern). The SourceFile anchor carries the transient CE_ROOT
+     *  status (never memoized) whose sole edge is `child is Statement`. */
+    private fun spineCeStatus(node: Node): Int {
+        if (node is SourceFile) return CE_ROOT
+        val memo = spineCeReachMemo
+        run {
+            val id = (node as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) {
+                val m = memo[id].toInt()
+                if (m != 0) return m
+            }
+        }
+        val chain = spineCeChain
+        chain.clear()
+        var cur: Node = node
+        val anchor: Node?
+        var anchorStatus = CE_NONE
+        while (true) {
+            chain.add(cur)
+            val parent = (cur as NodeBase).parent
+            if (parent == null) { anchor = null; break } // detached/unindexed
+            if (parent is SourceFile) { anchor = parent; anchorStatus = CE_ROOT; break }
+            val pid = (parent as NodeBase).nodeId
+            val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
+            if (pm != 0) { anchor = parent; anchorStatus = pm; break }
+            cur = parent
+        }
+        var pNode: Node? = anchor
+        var pStatus = anchorStatus
+        var result = CE_NONE
+        for (i in chain.indices.reversed()) {
+            val c = chain[i]
+            result = when {
+                pNode == null -> CE_NONE
+                pStatus == CE_ROOT -> if (c is Statement) CE_REACHED else CE_NONE
+                pStatus == CE_REACHED -> if (spineCeEdge(pNode, c)) CE_REACHED else CE_NONE
+                else -> CE_NONE
+            }
+            val cid = (c as NodeBase).nodeId
+            if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
+            pNode = c
+            pStatus = result
+        }
+        chain.clear()
+        return result
+    }
+
+    /** The DELETED walkConstEnumUsageStmt/walkExpr descent edges, verbatim
+     *  and FROZEN. Unlisted parents are the walker's `else -> {}`s
+     *  (unreached children) — notably: typeof operands, arrow/fn-expression
+     *  bodies, class declarations/expressions, objlit method/accessor
+     *  bodies, shorthand property NAMES, export-assignment RHS, and
+     *  for-in/for-of HEAD declaration lists. Property/element-access BASES
+     *  descend unconditionally here — the legacy conditional skip of a
+     *  const-enum base is reproduced by the Identifier anchor's parent
+     *  pre-filter (neither branch can emit at the base). */
+    private fun spineCeEdge(parent: Node, child: Node): Boolean = when (parent) {
+        // ---- statements (the walkConstEnumUsageStmt arms) ----
+        is VariableStatement -> child === parent.declarationList
+        is VariableDeclarationList -> child is VariableDeclaration
+        is VariableDeclaration -> child === parent.initializer
+        is ExpressionStatement -> child === parent.expression
+        is ReturnStatement -> child === parent.expression
+        is ThrowStatement -> child === parent.expression
+        is IfStatement ->
+            child === parent.expression || child === parent.thenStatement ||
+                child === parent.elseStatement
+        is Block -> child is Statement
+        is ForStatement -> // BOTH initializer forms (bare expr AND decl-list inits)
+            child === parent.initializer || child === parent.condition ||
+                child === parent.incrementor || child === parent.statement
+        is ForInStatement -> child === parent.expression || child === parent.statement
+        is ForOfStatement -> child === parent.expression || child === parent.statement
+        is WhileStatement -> child === parent.expression || child === parent.statement
+        is DoStatement -> child === parent.statement || child === parent.expression
+        is SwitchStatement ->
+            child === parent.expression || child is CaseClause || child is DefaultClause
+        is CaseClause -> child === parent.expression || child is Statement
+        is DefaultClause -> child is Statement
+        is TryStatement ->
+            child === parent.tryBlock || child === parent.finallyBlock || child is CatchClause
+        is CatchClause -> child === parent.block
+        is LabeledStatement -> child === parent.statement
+        // FunctionDeclaration BODIES only — parameter defaults NOT walked.
+        is FunctionDeclaration -> child === parent.body
+        is ModuleDeclaration -> child === parent.body && child is ModuleBlock
+        is ModuleBlock -> child is Statement
+        // ---- expressions (the walkExpr arms) ----
+        is PropertyAccessExpression -> child === parent.expression
+        is ElementAccessExpression ->
+            child === parent.expression || child === parent.argumentExpression
+        is CallExpression -> child === parent.expression || parent.arguments.any { it === child }
+        is NewExpression ->
+            child === parent.expression || parent.arguments?.any { it === child } == true
+        is BinaryExpression -> child === parent.left || child === parent.right
+        is ConditionalExpression ->
+            child === parent.condition || child === parent.whenTrue || child === parent.whenFalse
+        is ParenthesizedExpression -> child === parent.expression
+        is PrefixUnaryExpression -> child === parent.operand
+        is PostfixUnaryExpression -> child === parent.operand
+        is NonNullExpression -> child === parent.expression
+        is AsExpression -> child === parent.expression
+        is SatisfiesExpression -> child === parent.expression
+        is TypeAssertionExpression -> child === parent.expression
+        is SpreadElement -> child === parent.expression
+        is AwaitExpression -> child === parent.expression
+        is VoidExpression -> child === parent.expression
+        is DeleteExpression -> child === parent.expression
+        is YieldExpression -> child === parent.expression
+        is ArrayLiteralExpression -> parent.elements.any { it === child }
+        is CommaListExpression -> parent.elements.any { it === child }
+        is TemplateExpression -> child is TemplateSpan
+        is TemplateSpan -> child === parent.expression
+        is TaggedTemplateExpression -> child === parent.tag || child === parent.template
+        // objlit: PropertyAssignment inits, spread exprs, and a shorthand's
+        // objectAssignmentInitializer ONLY (names/methods/accessors
+        // unreached).
+        is ObjectLiteralExpression -> when (child) {
+            is PropertyAssignment, is ShorthandPropertyAssignment, is SpreadAssignment -> true
+            else -> false
+        }
+        is PropertyAssignment -> child === parent.initializer
+        is ShorthandPropertyAssignment -> child === parent.objectAssignmentInitializer
+        is SpreadAssignment -> child === parent.expression
         else -> false
     }
 

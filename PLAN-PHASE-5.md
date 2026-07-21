@@ -20,6 +20,60 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 632 (2026-07-21) — (M0.4) tenth tail-pass migration:
+checkConstEnumDiagnostics (the const-enum cluster TS2474/2475/2476/2477/
+2478/2567, ~123 ms — the #10 tail pass) is ON THE SPINE; the legacy driver
++ walkConstEnumUsageStmt/walkExpr recursion (~185 lines) DELETED.** The
+FILE-GATED variant of the template: the legacy whole-file gate
+(`collectConstEnumDecls(stmts).isEmpty() → skip the file`) reproduces as
+per-file SETUP state — the cluster's anchors are INERT in every file that
+does not itself DECLARE a namespace-reachable const enum (a file merely
+REFERENCING one is skipped, pinned — this also confines the per-Identifier
+anchor cost to the rare active files). Three sub-parts from one enter hook
+(spineCeEnterNode): (1) declaration-level TS2474/2477/2478 at const
+EnumDeclaration enters, gated by a ModuleBlock/ModuleDeclaration-only
+ancestor climb (a function-body/block const enum is never collected,
+pinned); (2) the TS2567 const-enum + instantiated-namespace merge scan
+rides SETUP once per active file (TOP-LEVEL statements only — a
+namespace-nested pair never fires, pinned); (3) TS2475/2476 at
+Identifier/ElementAccessExpression enters over the frozen reach
+classifier (spineCeStatus/spineCeEdge — the deleted walker's arms
+verbatim). NEW TEMPLATE MOVE: the legacy walker's resolution-CONDITIONAL
+descent (a PropertyAccess/ElementAccess BASE descended only when NOT a
+const-enum Identifier) reproduces as an UNCONDITIONAL edge + an
+anchor-side parent pre-filter — sound because NEITHER branch can emit at
+a base (a const-enum base is the legal access shape and was skipped; a
+non-const-enum base was descended but its Identifier arm then can't
+fire) — keeping the classifier purely structural (no resolution inside
+edges). The anchor gates run reach-BEFORE-isConstEnumName so
+resolveAlias's call surface stays a SUBSET of the legacy's (no
+first-touch widening onto type-position identifiers). Quirks pinned both
+directions: typeof operands, arrow/fn-expr bodies, class/objlit method
+bodies, shorthand property names, and export-assignment RHS unreached;
+FunctionDeclaration bodies, namespace bodies, and switch-case
+expressions reached; element-access KEYS walked even under a const-enum
+base (`E[F]` → TS2476 + TS2475 on F). No ambient sandwich (the emissions
+read no checker ambient; resolveAlias/enumValues are order-free memoized
+caches). Gates: 25 local pins (M04ConstEnumSpineMigrationTest) green
+against the LEGACY pass first; suite 11,589 → 11,614/0; `--listAll` ×8
+byte-identical; pass table 429 → 428 (the row gone; checkSpine
+19,359.7 ms — in-band); warning-clean. M0.4 running total: top TEN tail
+passes migrated. NEXT (#11 by cost at this round's table):
+checkNullTypeAssertionOverlap (103.8 ms) — the cast-overlap SIBLING of
+round 630's pass, sharing walkTypeAssertionsInStmt/-InExpr; its
+emissions are the `::emitTS2352IfNullCast` TypeAssertion callback PLUS
+four flag-gated inline AsExpression arms (`inNullCastOverlapPass` —
+emitTS2352IfNullAsReadonlyTuple / emitTS2352IfNullAsCast /
+emitTS1355IfInvalidConstAssertion / emitTS2352IfClassInstanceToRecordCast,
+the AsExpression gotcha), so the migration lifts the flag-gated arm out
+of the shared walker into anchor leaves and can REUSE
+spineCoStatus/spineCoEdge (identical reach — same walker); ambient =
+per-file currentFileLocals install (the spine already installs the same
+value). CAVEAT for the migrator: the legacy driver iterates
+binderResults, NOT checkedResults — under an INV.6 partition the
+spine-anchored form walks only assigned files, so gate the migration
+with the `--partitionCheck 2` harness on top of the standard gates.**
+
 **Round 631 (2026-07-21) — (M0.4) ninth tail-pass migration:
 checkBindingPatternComputedIndexSig (B9.4 — TS2537 computed-key
 destructuring vs the `{}` default + TS2448/TS2728/TS2538 self-referential
@@ -510,47 +564,6 @@ directions; per-arm ccet frame smoke pins), `--listAll` ×8
 byte-identical, warning-clean. Remaining M0.3: (i) name atomization,
 (ii) links records, (v) undo-log scope copies.**
 
-**Round 622 (2026-07-20) — (M0.3) slices (vi)+(vii) LANDED: boxed-Int keys
-killed on the hottest id-keyed structures — (vi) −2.2% (5/5 pairs), then
-(vii) −2.6% (4/5 pairs) on top; arc cumulative ≈ −8.9% from round 618's
-31,747 ms.** `IntKeyMap` (commonMain, open-addressing Int→V, sibling of round
-621's LongKeyMap; sentinel `Int.MIN_VALUE` because symbol ids span BOTH the
-positive main space and the ≤−2 INV.2(c) scope space — 0 and negatives are
-legal keys) replaces `HashMap<Int, ·>` for `symbolTypes` / `declaredTypes` /
-`symbolTargets` (every probe boxed its key — ids run far past the Integer
-cache), and `NarrowFlowMemo` (parallel int-keys/int-depths/Type-values
-arrays) replaces the narrowing walks' per-invocation
-`MutableMap<Int, Pair<Int, Type>>` — one fresh map per depth-0 walk
-(~111k/compile) whose every store allocated a boxed key + a `Pair` + a
-LinkedHashMap node on the hottest checker path (narrowWalks ≈ 5 s of the
-round-618 profile). The serve/overwrite depth rules are preserved
-byte-exactly (`served` iff `depth <= storedDepth`; overwrite iff
-`storedDepth < depth` — the round-385/413 over-narrowing guard) and pinned
-in BOTH directions by IntKeyMapTest (+8: negative-key first-classness,
-sentinel guard, 10k mixed-sign HashMap oracle across growth, memo depth
-rules, memo growth). Slice (vii), separate commit: `NarrowSeen` (the flow
-walkers' cycle set — HashSet<Int> + ArrayList<Int>, every add() boxing the
-id TWICE per flow-node visit, the same traffic class as the memo) is now
-open-addressing IntArray slots with TOMBSTONE removal (popToMark removes in
-reverse insertion order, which linear probing cannot honor by slot-shifting;
-EMPTY slots are only created by rehash, so a present-id probe never meets
-EMPTY early; rehash purges tombstones at the same size unless genuinely
-loaded with live entries) + an IntArray add-log — moved to IntKeyMap.kt as
-internal for testability, mark/popToMark semantics pinned by a 60k-op
-randomized oracle against the old HashSet+ArrayList form (nested marks,
-tombstone churn, growth; +2 tests). MEASURED, each slice interleaved-A/B'd
-against its own predecessor (5 pairs, compiler profile): (vi) 30,364 →
-29,697 ms median = **−2.2%, wins 5/5**; (vii) 30,124 → 29,351 ms median =
-**−2.6%, wins 4/5**. Gates per commit: suite 11,398/0 then 11,400/0 (+10
-total), `--listAll` ×8 byte-identical at each step, warning-clean. LESSON
-RE-LEARNED (the documented clobber gotcha, violated once this round): a
-`compileKotlinJvm` launched while the bench script's JVM was still running
-killed it with ClassNotFoundException mid-run — never overlap a gradle
-compile with ANY live compiler JVM, including the bench script's own run.
-Remaining M0.3 slices: (i) name atomization, (ii) links records, (v)
-undo-log scope copies (1.1% — folds into a bigger slice per the drift-band
-rule).**
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 (Restored 2026-07-12, round 481 — the queue/backlog/inventory sections had been
@@ -723,8 +736,21 @@ structural item instead of landing alone.**
   NOT shared with the surviving cast walker's spineCoEdge, which it
   matches except FunctionDeclaration parameter defaults; the TS2537
   emitters install the spine-entry RESTING currentFileLocals per emission
-  — the legacy pass never installed it), then
-  checkConstEnumDiagnostics ~123 ms;
+  — the legacy pass never installed it),
+  checkConstEnumDiagnostics ~123 ms — **MIGRATED round 632** (the
+  FILE-GATED variant: the legacy whole-file collectConstEnumDecls gate
+  reproduces as per-file setup state — anchors inert in files without
+  their own const enum; the TS2567 top-level merge scan rides setup; a
+  resolution-CONDITIONAL walker descent (property/element-access bases
+  skipped when the base IS a const enum) reproduces as an unconditional
+  edge + an anchor-side parent pre-filter, exactly equivalent because
+  neither branch can emit at a base — keeping the classifier purely
+  structural), then
+  checkNullTypeAssertionOverlap ~104 ms (the round-630 sibling — reuse
+  spineCoStatus/spineCoEdge, lift the `inNullCastOverlapPass` flag-gated
+  AsExpression arm out of the shared walker; its driver iterates
+  binderResults, so add the `--partitionCheck 2` gate — details in the
+  round-632 session note);
   98 passes >20 ms carry 5.3 s of the
   6.2 s). Migration protocol per
   pass (the round-624 template): slot-move pre-gate commit (intact pass to the

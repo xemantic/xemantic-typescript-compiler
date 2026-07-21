@@ -1,3 +1,44 @@
+**Round 622 (2026-07-20) — (M0.3) slices (vi)+(vii) LANDED: boxed-Int keys
+killed on the hottest id-keyed structures — (vi) −2.2% (5/5 pairs), then
+(vii) −2.6% (4/5 pairs) on top; arc cumulative ≈ −8.9% from round 618's
+31,747 ms.** `IntKeyMap` (commonMain, open-addressing Int→V, sibling of round
+621's LongKeyMap; sentinel `Int.MIN_VALUE` because symbol ids span BOTH the
+positive main space and the ≤−2 INV.2(c) scope space — 0 and negatives are
+legal keys) replaces `HashMap<Int, ·>` for `symbolTypes` / `declaredTypes` /
+`symbolTargets` (every probe boxed its key — ids run far past the Integer
+cache), and `NarrowFlowMemo` (parallel int-keys/int-depths/Type-values
+arrays) replaces the narrowing walks' per-invocation
+`MutableMap<Int, Pair<Int, Type>>` — one fresh map per depth-0 walk
+(~111k/compile) whose every store allocated a boxed key + a `Pair` + a
+LinkedHashMap node on the hottest checker path (narrowWalks ≈ 5 s of the
+round-618 profile). The serve/overwrite depth rules are preserved
+byte-exactly (`served` iff `depth <= storedDepth`; overwrite iff
+`storedDepth < depth` — the round-385/413 over-narrowing guard) and pinned
+in BOTH directions by IntKeyMapTest (+8: negative-key first-classness,
+sentinel guard, 10k mixed-sign HashMap oracle across growth, memo depth
+rules, memo growth). Slice (vii), separate commit: `NarrowSeen` (the flow
+walkers' cycle set — HashSet<Int> + ArrayList<Int>, every add() boxing the
+id TWICE per flow-node visit, the same traffic class as the memo) is now
+open-addressing IntArray slots with TOMBSTONE removal (popToMark removes in
+reverse insertion order, which linear probing cannot honor by slot-shifting;
+EMPTY slots are only created by rehash, so a present-id probe never meets
+EMPTY early; rehash purges tombstones at the same size unless genuinely
+loaded with live entries) + an IntArray add-log — moved to IntKeyMap.kt as
+internal for testability, mark/popToMark semantics pinned by a 60k-op
+randomized oracle against the old HashSet+ArrayList form (nested marks,
+tombstone churn, growth; +2 tests). MEASURED, each slice interleaved-A/B'd
+against its own predecessor (5 pairs, compiler profile): (vi) 30,364 →
+29,697 ms median = **−2.2%, wins 5/5**; (vii) 30,124 → 29,351 ms median =
+**−2.6%, wins 4/5**. Gates per commit: suite 11,398/0 then 11,400/0 (+10
+total), `--listAll` ×8 byte-identical at each step, warning-clean. LESSON
+RE-LEARNED (the documented clobber gotcha, violated once this round): a
+`compileKotlinJvm` launched while the bench script's JVM was still running
+killed it with ClassNotFoundException mid-run — never overlap a gradle
+compile with ANY live compiler JVM, including the bench script's own run.
+Remaining M0.3 slices: (i) name atomization, (ii) links records, (v)
+undo-log scope copies (1.1% — folds into a bigger slice per the drift-band
+rule).**
+
 **Round 621 (2026-07-20) — (M0.2) kindId table dispatch LANDED (3 commits,
 −3.3% A/B) + the first (M0.3) layout slice (iii)+(iv) LANDED (−3.9% A/B) —
 session cumulative 31,747 → 29,955 ms ≈ −5.6% on the compiler profile.**
