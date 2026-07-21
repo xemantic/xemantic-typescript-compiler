@@ -61,10 +61,22 @@ walker FIRST; suite 11,466 → 11,490/0; `--listAll` ×8 byte-identical
 warning-clean. Process note: the FIRST pre capture ran concurrently with a
 gradle test build — the recompile clobbered 5 of 8 profile JVMs
 (ClassNotFoundException mid-run, the documented trap); recaptured serially.
-M0.4 running total: top FIVE tail passes migrated; next by cost:
-checkSymbolToStringConversions (108 ms — TS2469/TS2731, self-contained: no
-ambient reads, no 2469/2731 retract/dedup consumers; downward-context
-threading tpNames/symVars/aliasNames + a file-scoped alias collector),
+M0.4 running total: top FIVE tail passes migrated. SESSION TAIL: the
+checkSymbolToStringConversions (#6, 108 ms — TS2469/TS2731) SLOT-MOVE
+pre-gate landed (corpus + listAll ×8 identical; self-contained — reads
+binderResults only, pure AST + string sets, no ambient reads, no
+2469/2731 retract/dedup consumers; collectSymbolAliases is file-scoped) —
+the next session starts directly at its migration. Its legacy shape for
+the migrator: a file-scoped alias collector (collectSymbolAliases,
+fixpoint over alias→alias refs) + a downward-context walk threading
+(symbolNames, tpNames, aliasNames) — symbolNames accumulates var/param
+names per body (collectSymbolLocals — a whole-list PREPASS at each
+sym2strHandleBody entry, so statement-ORDER-INDEPENDENT → per-body
+LEVELS, not push frames; params added per fn boundary via
+sym2strHandleFnBody), tpNames accumulates through fn/class boundaries
+(symbolLikeTpNames) — the downward-MAP variant again (spineFp-style
+pull fold with per-boundary memo); anchors are the TS2469 binary/unary
+`+` operands and TS2731 template-span expressions. Next after:
 checkDefiniteAssignmentViaFlowGraph (105 ms).**
 
 **Round 626 (2026-07-21) — (M0.4) fourth tail-pass migration: checkFnTypedParamCalls

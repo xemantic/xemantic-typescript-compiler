@@ -4976,6 +4976,12 @@ class Checker(
         // ON THE SPINE — see spineAiEnterNode/spineAiStatus/spineAiClassesAt;
         // the legacy recursion walkers are deleted (the file-scoped collectors
         // run at spineAiSetup; the TS2511 emission is anchor-called).
+        // 64d5 (M0.4 slot-move pre-gate, round 627): checkSymbolToStringConversions
+        // (TS2469/TS2731) moved intact from its legacy 64d5 slot ahead of its
+        // spine migration. Self-contained (reads binderResults only — pure AST
+        // + string sets, no ambient reads, no TS2469/TS2731 retract/dedup
+        // consumers; collectSymbolAliases is file-scoped).
+        pass("checkSymbolToStringConversions") { checkSymbolToStringConversions() }
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -5846,9 +5852,8 @@ class Checker(
         // params — param-annotation-vs-default TS2322, contextual-fn-type param default TS2322,
         // default-arg-arrow cast-overlap TS2352, and fn-return-inference-vs-var TS2322. All additive.
         pass("checkDefaultArgsInFunctionExpressions") { checkDefaultArgsInFunctionExpressions() }
-        // 64d5. Check `symbol` operand of `+`/`+=`/unary-`+` (TS2469) and template
-        // interpolation (TS2731) — annotation-based, FP-safe.
-        pass("checkSymbolToStringConversions") { checkSymbolToStringConversions() }
+        // 64d5. checkSymbolToStringConversions moved to the post-spine slot —
+        // see the pass("checkSpine") site (M0.4 slot-move pre-gate, round 627).
         // 64e. Check class implements interface (TS2420)
         pass("checkClassImplementsInterface") { checkClassImplementsInterface() }
         // 64e2. Check property type incompatible with base type (TS2416)
