@@ -5121,6 +5121,17 @@ class Checker(
         // constEnumInitRefsNonMember/scriptFileConstEnumNames survive as
         // anchor-called leaves). Self-contained: no ambient installs, no
         // side sets, no dedup scans on its codes anywhere.
+        // 14''' (M0.4 slot-move pre-gate, round 632):
+        // checkNullTypeAssertionOverlap (TS2352 null/objlit/class-instance
+        // cast overlap + the flag-gated AsExpression arm's
+        // TS2352/TS1355 emitters) moved intact from its 14'' slot ahead of
+        // its spine migration. No TS2352/TS1355 dedup scans exist anywhere;
+        // the hoist crosses the cta post-filter window close and the
+        // JS/JSDoc pass family — none consume its codes; the emitters
+        // type-resolve, so resolution first-touch order is the risk class
+        // the corpus + listAll ×8 gates decide. The pass self-installs
+        // currentFileLocals per file (unchanged at this slot).
+        pass("checkNullTypeAssertionOverlap") { checkNullTypeAssertionOverlap() }
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -5377,8 +5388,8 @@ class Checker(
         // 14'b. Check `import * as X from 'pkg'` where bare specifier resolves via
         // node_modules to a script-shaped .d.ts (no imports/exports) — TS2306
         pass("checkNamespaceImportOfNonModule") { checkNamespaceImportOfNonModule() }
-        // 14''. Check `<Interface>null` / `<Class>null` casts for TS2352
-        pass("checkNullTypeAssertionOverlap") { checkNullTypeAssertionOverlap() }
+        // 14''. checkNullTypeAssertionOverlap moved to the post-spine slot —
+        // see the pass("checkSpine") site (M0.4 slot-move pre-gate, round 632).
         // 14''b. checkSameTargetReferenceCastOverlap is ON THE SPINE since
         // round 630 (M0.4): see spineCoSetup/spineCoEnterNode. The two
         // emission leaves are anchor-called at TypeAssertionExpression

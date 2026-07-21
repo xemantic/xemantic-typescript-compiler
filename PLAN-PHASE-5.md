@@ -72,7 +72,12 @@ per-file currentFileLocals install (the spine already installs the same
 value). CAVEAT for the migrator: the legacy driver iterates
 binderResults, NOT checkedResults — under an INV.6 partition the
 spine-anchored form walks only assigned files, so gate the migration
-with the `--partitionCheck 2` harness on top of the standard gates.**
+with the `--partitionCheck 2` harness on top of the standard gates.
+SESSION TAIL: the #11 slot-move pre-gate LANDED (the pass hoisted from
+its 14'' slot to the post-spine slot; suite 11,614/0, listAll ×8
+byte-identical — the hoist crosses the cta post-filter window close and
+the JS/JSDoc pass family, none consuming TS2352/TS1355) — next session
+starts at the migration itself.**
 
 **Round 631 (2026-07-21) — (M0.4) ninth tail-pass migration:
 checkBindingPatternComputedIndexSig (B9.4 — TS2537 computed-key
