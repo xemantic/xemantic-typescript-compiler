@@ -126,6 +126,16 @@ data class SourceFile(
      *  sizes array-indexed per-file side tables. Body property — excluded from
      *  data-class `equals`/`hashCode`/`copy` like [TypeParameter.internSalt]. */
     var nodeCount: Int = 0
+
+    /** (M0.4 round 643) Every TypeAliasDeclaration the parser produced for this
+     *  file whose TP list carries a default — the pre-spine circular-TP-defaults
+     *  producer's candidate set (populateCircularTpDefaults), recorded at the
+     *  parse site so the producer needs no tree walk. Lexically exact but
+     *  OVER-approximate: a speculative (lookAhead) parse's discarded node may be
+     *  recorded — the producer filters through the reach classifier, whose
+     *  parent-chain climb classifies a detached node unreached. Body property —
+     *  excluded from equals/copy like [nodeCount]. */
+    var typeAliasesWithTpDefaults: List<TypeAliasDeclaration> = emptyList()
 }
 
 // ===========================================================================

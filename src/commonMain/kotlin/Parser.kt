@@ -162,7 +162,10 @@ class Parser(
             text = source,
             end = source.length,
             moduleSpecifiers = moduleSpecifiers.toList(),
-        ).also { indexSourceFile(it) }
+        ).also {
+            it.typeAliasesWithTpDefaults = tpDefaultAliases.toList()
+            indexSourceFile(it)
+        }
     }
 
     fun getDiagnostics(): List<Diagnostic> = diagnostics.toList()
@@ -178,6 +181,12 @@ class Parser(
      * the same text re-parses on the real path, so the specifier is real either way.
      */
     private val moduleSpecifiers = LinkedHashSet<String>()
+
+    /** (M0.4 round 643) TypeAliasDeclarations with a TP default, recorded as they
+     *  parse — see [SourceFile.typeAliasesWithTpDefaults]. Distinct node objects
+     *  per parse call, so a speculative parse over-collects (filtered downstream
+     *  by the detached-parent reach climb), never duplicates. */
+    private val tpDefaultAliases = ArrayList<TypeAliasDeclaration>()
 
     private fun recordModuleSpecifier(node: Node?) {
         val text = (node as? StringLiteralNode)?.text ?: return
@@ -3972,7 +3981,9 @@ class Parser(
             pos = pos,
             end = getEnd(),
             leadingComments = comments
-        )
+        ).also { decl ->
+            if (typeParams?.any { it.default != null } == true) tpDefaultAliases.add(decl)
+        }
     }
 
     /** tsc isNumericLiteralName: a string is a numeric name iff `String(Number(s)) === s`

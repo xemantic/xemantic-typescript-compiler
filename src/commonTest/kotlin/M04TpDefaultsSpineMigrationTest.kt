@@ -580,6 +580,17 @@ class M04TpDefaultsSpineMigrationTest {
     }
 
     @Test
+    fun `TS2744 - function-body-nested type alias still emits`() {
+        diagnose(
+            """
+            function f() { type A<T = T> = number; }
+            """
+        ) should {
+            have(any { it.code == 2744 })
+        }
+    }
+
+    @Test
     fun `TS2744 - namespace body type alias`() {
         diagnose(
             """

@@ -3810,6 +3810,38 @@ class Checker(
     /** Reusable ascent buffer for [spineIaDepth]. */
     private val spineIaChain = ArrayList<Node>()
 
+    // ── (M0.4) round 643: checkTypeParameterDefaults on the spine ──────────
+    // The TS2368 (reserved TP name) + TS2744 (forward/self TP default
+    // reference) pass — the legacy driver + walkTParamDefaultsInStmts/
+    // -InStmt/-InClassMember/-InExpr/-InType recursion are deleted;
+    // [validateTParamDefaultsEmit] (+ findForwardTParamRef) survives as the
+    // anchor-called leaf. The pass SPLITS: the circularDefaultTypeParamCount
+    // side-set write (consumed by the `Name` → `Name<any, ...>` no-args
+    // display, cross-file + earlier-in-file) stays in the pre-spine producer
+    // [populateCircularTpDefaults], which filters the PARSE-RECORDED
+    // candidate set (SourceFile.typeAliasesWithTpDefaults — no tree walk)
+    // through the SAME frozen reach classifier the spine emissions use —
+    // one edge set, no walker clone to drift. Reach is the
+    // memoized binary classifier [spineTdStatus] over [spineTdEdge] (the
+    // deleted arms verbatim, frozen: if CONDITIONS, switch SUBJECT + case
+    // EXPRESSIONS, for-in/of heads, expression-bodied arrow BODIES, objlit
+    // ACCESSORS, enum member initializers, heritage clauses, call/new TYPE
+    // ARGUMENTS, TP constraint/default interiors, computed names, static
+    // blocks, decorators, and mapped/conditional/keyof/indexed-access type
+    // interiors all stay UNREACHED; for-head initializer/condition/
+    // incrementor, declare-namespace bodies, catch blocks, template spans,
+    // ternary CONDITIONS, and As/Satisfies/TypeAssertion type positions ARE
+    // reached). Anchors: the ten TP-list-bearing construct kinds, with a
+    // cheap non-empty-typeParameters pre-gate before the climb. Fully
+    // syntactic — no ambient sandwich (the legacy currentFileLocals install
+    // fed only the side-set write, which stays in the producer). Fields
+    // PRE-init.
+    private var spineTdActive = false
+    /** Per-file nodeId memo for [spineTdStatus] — 0 unknown, 1 reached, 2 not. */
+    private var spineTdReachMemo = ByteArray(0)
+    /** Reusable ascent buffer for [spineTdStatus]. */
+    private val spineTdChain = ArrayList<Node>()
+
     // ── INV.4(d) walker 6 (round 535): checkArgumentCounts on the spine ────
     // The function-call arity pass (TS2554/TS2555/TS2575) — the recursion
     // walkers (checkArgCountInStatements/-InStatement/-InExpr(Core)) are
@@ -5264,16 +5296,17 @@ class Checker(
         // occupy (it is a pure AST walker over binderResults: no dependence on
         // prior passes, so hoisting is behavior-preserving at the current order too).
         pass("checkTemplateUnionIntersectionComplexity") { checkTemplateUnionIntersectionComplexity() }
-        // 59b producer (moved before the spine, INV.5(c3) round 555): TP default
-        // self/forward-reference checks (TS2744/TS2716/TS2706) — checkTpListDefaults
-        // MATERIALIZES TypeParam .constraint/.default fields as a side effect, and
-        // the no-args generic annotation display (`Test` → `Test<any>`,
-        // typeArgumentDefaultUsesConstraintOnCircularDefault) depends on that
-        // materialization having happened BEFORE the excess-property emitter
-        // resolves the annotation. Found by the round-555 pass-order bisection;
-        // the producer must precede ANY slot the checkTypeAssignability giant may
-        // occupy.
-        pass("checkTypeParameterDefaults") { checkTypeParameterDefaults() }
+        // 59b producer ((M0.4) round 643 — was the whole checkTypeParameterDefaults
+        // pass, now SPLIT): populates circularDefaultTypeParamCount — a TypeAlias
+        // with circular/forward TP defaults displays as `Name<any, ...>` on a
+        // no-args reference (typeArgumentDefaultUsesConstraintOnCircularDefault);
+        // the display consumer is spine-anchored + cross-file, so the write must
+        // precede the spine. The TS2368/TS2744 EMISSIONS ride the spine
+        // (spineTdEnterNode). NOTE (round 642): the round-555 "materializes
+        // TypeParam .constraint/.default" hoist rationale was a MISNOMER for this
+        // pass — that channel belongs to checkGenericDefaultsValidation's
+        // checkTpListDefaults; this family is resolution-free.
+        pass("populateCircularTpDefaults") { populateCircularTpDefaults() }
         pass("checkSpine") { checkSpine() }
         // 64d2a (M0.4, round 624): the object-spread/rest pass (TS2698/TS2700)
         // is ON THE SPINE — see spineOsEnterNode/spineOsStatus; the legacy
@@ -21495,6 +21528,7 @@ class Checker(
                 spineUySetup(result)
                 spineSrSetup(result)
                 spineIaSetup(result)
+                spineTdSetup(result)
                 // (M0.4) round 636: property-init anchors — active in every
                 // non-dts file (the legacy driver's only file gate).
                 spinePiActive = spinePiRunActive && !spineIsDts
@@ -21535,6 +21569,7 @@ class Checker(
                     spineUyTeardown()
                     spineSrTeardown()
                     spineIaTeardown()
+                    spineTdTeardown()
                     spinePiActive = false
                 }
                 spineResolveDeferredIterationChecks()
@@ -21776,6 +21811,13 @@ class Checker(
         // shared-checkDepth INT-depth classifier (spineIaDepth); no
         // frames/leave hook, no ambient sandwich.
         if (spineIaActive) spineIaEnterNode(node)
+        // (M0.4) round 643: the type-parameter-defaults anchors (the ten
+        // TP-list-bearing construct kinds, non-empty-typeParameters
+        // pre-gate) — TS2368/TS2744; the circularDefaultTypeParamCount
+        // side-set write stays in the pre-spine producer
+        // populateCircularTpDefaults; no frames/leave hook, no ambient
+        // sandwich.
+        if (spineTdActive) spineTdEnterNode(node)
         // INV.4(d) walker 7: the use-before-declaration pass — the per-list
         // ForwardRefs anchor + loop-header self-ref checks.
         if (spineUbdActive) spineUbdEnterNode(node)
@@ -47867,6 +47909,12 @@ class Checker(
         private const val SR_REBOUND = 3
         private const val SR_CLEAR = 4
         private const val SR_MEMBER = 5
+
+        // (M0.4) round 643: spineTdStatus states (checkTypeParameterDefaults
+        // reach — binary + the transient SourceFile root).
+        private const val TD_REACHED = 1
+        private const val TD_NONE = 2
+        private const val TD_ROOT = 3
 
         // (M0.4) round 631: spineB94Status states (checkBindingPatternComputedIndexSig
         // reach — binary + the transient SourceFile root).
@@ -78900,270 +78948,294 @@ interface DataView {
     }
 
     // -----------------------------------------------------------------------
-    // TS2744: Type parameter defaults can only reference previously declared
-    // type parameters.
+    // TS2368/TS2744: type parameter names + defaults — (M0.4) round 643: ON
+    // THE SPINE (see the spineTd* field block for the migration shape). The
+    // legacy whole-file driver (checkTypeParameterDefaults) + the
+    // walkTParamDefaultsInStmts/-InStmt/-InClassMember/-InExpr/-InType
+    // recursion are deleted; the emissions dispatch from [spineTdEnterNode]
+    // and the circularDefaultTypeParamCount side-set write lives in the
+    // pre-spine producer [populateCircularTpDefaults].
     // -----------------------------------------------------------------------
 
     /**
-     * Emits TS2744 for any TypeParameter whose default TypeNode references a
-     * type parameter in the same list at an index >= its own (self-reference
-     * or forward reference). Squiggle is at the first offending Identifier,
-     * length = identifier.text.length.
-     *
-     * Only references to same-list type parameter NAMES trigger this; outer
-     * scopes (enclosing class/interface name, other type params in enclosing
-     * scopes) are fine.
+     * 59b producer ((M0.4) round 643, the side-set half of the split pass):
+     * populates [circularDefaultTypeParamCount] — a TypeAlias whose TP
+     * defaults are circular/forward-referencing displays as `Name<any, ...>`
+     * on a no-args reference. The display consumer is spine-anchored and
+     * cross-file, so the write must fully precede the spine walk. Byte-exact
+     * with the legacy pass: the PARSE-RECORDED candidates
+     * ([SourceFile.typeAliasesWithTpDefaults]) are FILTERED through the SAME
+     * frozen reach classifier the spine emissions use ([spineTdStatus]), so
+     * an alias at a position the legacy walk never visited (an if CONDITION,
+     * an expression-bodied arrow body, an enum initializer, a discarded
+     * speculative parse, ...) still writes nothing. Exact per-file gate: the write
+     * requires the alias NAME to resolve in the FILE-level locals to a
+     * TypeAlias-flagged symbol (nested aliases are B83.5-unbound — only the
+     * name-shadow quirk reaches them), so a file with no top-level TypeAlias
+     * local is skipped without a scan. COLLECTOR discipline: iterates
+     * binderResults (no diagnostics.add here).
      */
-    private fun checkTypeParameterDefaults() {
+    private fun populateCircularTpDefaults() {
         for (result in binderResults) {
+            // Candidate set recorded by the PARSER (SourceFile.
+            // typeAliasesWithTpDefaults — no tree walk here): every alias
+            // with a TP default, over-approximate (speculative-parse
+            // discards included; the reach climb below classifies a
+            // detached node unreached). The pos-sort restores document
+            // order, which the legacy walk's last-wins same-name overwrite
+            // semantics keyed on.
+            val candidates = result.sourceFile.typeAliasesWithTpDefaults
+            if (candidates.isEmpty()) continue
             val fileName = result.sourceFile.fileName
             if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
+            if (result.locals.values.none { it.flags.hasAny(SymbolFlags.TypeAlias) }) continue
+            val ordered = if (candidates.size > 1) candidates.sortedBy { it.pos } else candidates
             val savedLocals = currentFileLocals
             currentFileLocals = result.locals
+            spineTdReachMemo = ByteArray(result.sourceFile.nodeCount.coerceAtLeast(0))
             try {
-                walkTParamDefaultsInStmts(result.sourceFile.statements, source, fileName)
+                for (alias in ordered) {
+                    if (spineTdStatus(alias) != TD_REACHED) continue
+                    val tparams = alias.typeParameters ?: continue
+                    if (!tpdListHasCircularDefault(tparams)) continue
+                    val sym = currentFileLocals?.get(alias.name.text)
+                    if (sym != null && sym.flags.hasAny(SymbolFlags.TypeAlias)) {
+                        circularDefaultTypeParamCount[sym.id] = tparams.size
+                    }
+                }
             } finally {
                 currentFileLocals = savedLocals
+                spineTdReachMemo = ByteArray(0)
             }
         }
     }
 
-    private fun walkTParamDefaultsInStmts(stmts: List<Statement>, source: String, fileName: String) {
-        for (stmt in stmts) walkTParamDefaultsInStmt(stmt, source, fileName)
+    /** The producer's circularity verdict — the legacy validateTParamDefaults
+     *  anyCircular computation, emission-free. */
+    private fun tpdListHasCircularDefault(tparams: List<TypeParameter>): Boolean {
+        val names = tparams.map { it.name.text }
+        for (i in tparams.indices) {
+            val default = tparams[i].default ?: continue
+            if (findForwardTParamRef(default, names, i) != null) return true
+        }
+        return false
     }
 
-    private fun walkTParamDefaultsInStmt(stmt: Statement, source: String, fileName: String) {
-        when (stmt) {
-            is FunctionDeclaration -> {
-                stmt.typeParameters?.let { validateTParamDefaults(it, source, fileName) }
-                stmt.type?.let { walkTParamDefaultsInType(it, source, fileName) }
-                for (p in stmt.parameters) p.type?.let { walkTParamDefaultsInType(it, source, fileName) }
-                stmt.body?.let { walkTParamDefaultsInStmts(it.statements, source, fileName) }
-            }
-            is ClassDeclaration -> {
-                stmt.typeParameters?.let { validateTParamDefaults(it, source, fileName) }
-                for (member in stmt.members) walkTParamDefaultsInClassMember(member, source, fileName)
-            }
-            is InterfaceDeclaration -> {
-                stmt.typeParameters?.let { validateTParamDefaults(it, source, fileName) }
-                for (member in stmt.members) walkTParamDefaultsInClassMember(member, source, fileName)
-            }
-            is TypeAliasDeclaration -> {
-                stmt.typeParameters?.let { validateTParamDefaults(it, source, fileName, stmt.name.text) }
-                walkTParamDefaultsInType(stmt.type, source, fileName)
-            }
-            is VariableStatement -> for (d in stmt.declarationList.declarations) {
-                d.type?.let { walkTParamDefaultsInType(it, source, fileName) }
-                d.initializer?.let { walkTParamDefaultsInExpr(it, source, fileName) }
-            }
-            is ExpressionStatement -> walkTParamDefaultsInExpr(stmt.expression, source, fileName)
-            is Block -> walkTParamDefaultsInStmts(stmt.statements, source, fileName)
-            is IfStatement -> {
-                walkTParamDefaultsInStmt(stmt.thenStatement, source, fileName)
-                stmt.elseStatement?.let { walkTParamDefaultsInStmt(it, source, fileName) }
-            }
-            is ForStatement -> {
-                when (val init = stmt.initializer) {
-                    is VariableDeclarationList -> init.declarations.forEach { d ->
-                        d.type?.let { walkTParamDefaultsInType(it, source, fileName) }
-                        d.initializer?.let { walkTParamDefaultsInExpr(it, source, fileName) }
-                    }
-                    is Expression -> walkTParamDefaultsInExpr(init, source, fileName)
-                    else -> {}
-                }
-                stmt.condition?.let { walkTParamDefaultsInExpr(it, source, fileName) }
-                stmt.incrementor?.let { walkTParamDefaultsInExpr(it, source, fileName) }
-                walkTParamDefaultsInStmt(stmt.statement, source, fileName)
-            }
-            is ForInStatement -> {
-                walkTParamDefaultsInExpr(stmt.expression, source, fileName)
-                walkTParamDefaultsInStmt(stmt.statement, source, fileName)
-            }
-            is ForOfStatement -> {
-                walkTParamDefaultsInExpr(stmt.expression, source, fileName)
-                walkTParamDefaultsInStmt(stmt.statement, source, fileName)
-            }
-            is WhileStatement -> {
-                walkTParamDefaultsInExpr(stmt.expression, source, fileName)
-                walkTParamDefaultsInStmt(stmt.statement, source, fileName)
-            }
-            is DoStatement -> {
-                walkTParamDefaultsInStmt(stmt.statement, source, fileName)
-                walkTParamDefaultsInExpr(stmt.expression, source, fileName)
-            }
-            is TryStatement -> {
-                walkTParamDefaultsInStmts(stmt.tryBlock.statements, source, fileName)
-                stmt.catchClause?.block?.statements?.let { walkTParamDefaultsInStmts(it, source, fileName) }
-                stmt.finallyBlock?.statements?.let { walkTParamDefaultsInStmts(it, source, fileName) }
-            }
-            is SwitchStatement -> for (clause in stmt.caseBlock) {
-                val stmts = (clause as? CaseClause)?.statements ?: (clause as? DefaultClause)?.statements
-                stmts?.let { walkTParamDefaultsInStmts(it, source, fileName) }
-            }
-            is LabeledStatement -> walkTParamDefaultsInStmt(stmt.statement, source, fileName)
-            is ReturnStatement -> stmt.expression?.let { walkTParamDefaultsInExpr(it, source, fileName) }
-            is ThrowStatement -> stmt.expression?.let { walkTParamDefaultsInExpr(it, source, fileName) }
-            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.statements?.let {
-                walkTParamDefaultsInStmts(it, source, fileName)
-            }
-            is ExportAssignment -> walkTParamDefaultsInExpr(stmt.expression, source, fileName)
-            else -> {}
+    /** Per-file setup: the legacy dts skip. */
+    private fun spineTdSetup(result: BinderResult) {
+        spineTdActive = !spineIsDts
+        spineTdReachMemo = if (!spineTdActive) ByteArray(0) else {
+            val n = result.sourceFile.nodeCount
+            if (n > 0) ByteArray(n) else ByteArray(0)
         }
     }
 
-    private fun walkTParamDefaultsInClassMember(member: ClassElement, source: String, fileName: String) {
-        when (member) {
-            is MethodDeclaration -> {
-                member.typeParameters?.let { validateTParamDefaults(it, source, fileName) }
-                member.type?.let { walkTParamDefaultsInType(it, source, fileName) }
-                for (p in member.parameters) p.type?.let { walkTParamDefaultsInType(it, source, fileName) }
-                member.body?.let { walkTParamDefaultsInStmts(it.statements, source, fileName) }
-            }
-            is Constructor -> {
-                for (p in member.parameters) p.type?.let { walkTParamDefaultsInType(it, source, fileName) }
-                member.body?.let { walkTParamDefaultsInStmts(it.statements, source, fileName) }
-            }
-            is GetAccessor -> {
-                member.type?.let { walkTParamDefaultsInType(it, source, fileName) }
-                member.body?.let { walkTParamDefaultsInStmts(it.statements, source, fileName) }
-            }
-            is SetAccessor -> {
-                for (p in member.parameters) p.type?.let { walkTParamDefaultsInType(it, source, fileName) }
-                member.body?.let { walkTParamDefaultsInStmts(it.statements, source, fileName) }
-            }
-            is PropertyDeclaration -> {
-                member.type?.let { walkTParamDefaultsInType(it, source, fileName) }
-                member.initializer?.let { walkTParamDefaultsInExpr(it, source, fileName) }
-            }
-            else -> {}
-        }
+    private fun spineTdTeardown() {
+        spineTdActive = false
+        spineTdReachMemo = ByteArray(0)
     }
 
-    private fun walkTParamDefaultsInExpr(expr: Expression, source: String, fileName: String) {
-        when (expr) {
-            is ArrowFunction -> {
-                expr.typeParameters?.let { validateTParamDefaults(it, source, fileName) }
-                expr.type?.let { walkTParamDefaultsInType(it, source, fileName) }
-                for (p in expr.parameters) p.type?.let { walkTParamDefaultsInType(it, source, fileName) }
-                (expr.body as? Block)?.statements?.let { walkTParamDefaultsInStmts(it, source, fileName) }
-            }
-            is FunctionExpression -> {
-                expr.typeParameters?.let { validateTParamDefaults(it, source, fileName) }
-                expr.type?.let { walkTParamDefaultsInType(it, source, fileName) }
-                for (p in expr.parameters) p.type?.let { walkTParamDefaultsInType(it, source, fileName) }
-                expr.body.statements.let { walkTParamDefaultsInStmts(it, source, fileName) }
-            }
-            is ClassExpression -> {
-                expr.typeParameters?.let { validateTParamDefaults(it, source, fileName) }
-                for (member in expr.members) walkTParamDefaultsInClassMember(member, source, fileName)
-            }
-            is ParenthesizedExpression -> walkTParamDefaultsInExpr(expr.expression, source, fileName)
-            is BinaryExpression -> {
-                val rightStack = ArrayDeque<Expression>()
-                var cur: Expression = expr
-                while (cur is BinaryExpression) { rightStack.addLast(cur.right); cur = cur.left }
-                walkTParamDefaultsInExpr(cur, source, fileName)
-                while (rightStack.isNotEmpty()) walkTParamDefaultsInExpr(rightStack.removeLast(), source, fileName)
-            }
-            is CallExpression -> {
-                walkTParamDefaultsInExpr(expr.expression, source, fileName)
-                for (a in expr.arguments) walkTParamDefaultsInExpr(a, source, fileName)
-            }
-            is NewExpression -> {
-                walkTParamDefaultsInExpr(expr.expression, source, fileName)
-                expr.arguments?.forEach { walkTParamDefaultsInExpr(it, source, fileName) }
-            }
-            is PropertyAccessExpression -> walkTParamDefaultsInExpr(expr.expression, source, fileName)
-            is ElementAccessExpression -> {
-                walkTParamDefaultsInExpr(expr.expression, source, fileName)
-                walkTParamDefaultsInExpr(expr.argumentExpression, source, fileName)
-            }
-            is ConditionalExpression -> {
-                walkTParamDefaultsInExpr(expr.condition, source, fileName)
-                walkTParamDefaultsInExpr(expr.whenTrue, source, fileName)
-                walkTParamDefaultsInExpr(expr.whenFalse, source, fileName)
-            }
-            is ArrayLiteralExpression -> for (e in expr.elements) walkTParamDefaultsInExpr(e, source, fileName)
-            is ObjectLiteralExpression -> for (p in expr.properties) {
-                when (p) {
-                    is PropertyAssignment -> walkTParamDefaultsInExpr(p.initializer, source, fileName)
-                    is SpreadAssignment -> walkTParamDefaultsInExpr(p.expression, source, fileName)
-                    is MethodDeclaration -> {
-                        p.typeParameters?.let { validateTParamDefaults(it, source, fileName) }
-                        p.type?.let { walkTParamDefaultsInType(it, source, fileName) }
-                        for (param in p.parameters) param.type?.let { walkTParamDefaultsInType(it, source, fileName) }
-                        p.body?.let { walkTParamDefaultsInStmts(it.statements, source, fileName) }
-                    }
-                    else -> {}
-                }
-            }
-            is TypeAssertionExpression -> {
-                walkTParamDefaultsInType(expr.type, source, fileName)
-                walkTParamDefaultsInExpr(expr.expression, source, fileName)
-            }
-            is AsExpression -> {
-                walkTParamDefaultsInType(expr.type, source, fileName)
-                walkTParamDefaultsInExpr(expr.expression, source, fileName)
-            }
-            is SatisfiesExpression -> {
-                walkTParamDefaultsInType(expr.type, source, fileName)
-                walkTParamDefaultsInExpr(expr.expression, source, fileName)
-            }
-            is NonNullExpression -> walkTParamDefaultsInExpr(expr.expression, source, fileName)
-            is SpreadElement -> walkTParamDefaultsInExpr(expr.expression, source, fileName)
-            is AwaitExpression -> walkTParamDefaultsInExpr(expr.expression, source, fileName)
-            is YieldExpression -> expr.expression?.let { walkTParamDefaultsInExpr(it, source, fileName) }
-            is VoidExpression -> walkTParamDefaultsInExpr(expr.expression, source, fileName)
-            is DeleteExpression -> walkTParamDefaultsInExpr(expr.expression, source, fileName)
-            is TypeOfExpression -> walkTParamDefaultsInExpr(expr.expression, source, fileName)
-            is PrefixUnaryExpression -> walkTParamDefaultsInExpr(expr.operand, source, fileName)
-            is PostfixUnaryExpression -> walkTParamDefaultsInExpr(expr.operand, source, fileName)
-            is TemplateExpression -> for (span in expr.templateSpans) walkTParamDefaultsInExpr(span.expression, source, fileName)
-            is TaggedTemplateExpression -> {
-                walkTParamDefaultsInExpr(expr.tag, source, fileName)
-                if (expr.template is TemplateExpression) {
-                    for (span in (expr.template).templateSpans) walkTParamDefaultsInExpr(span.expression, source, fileName)
-                }
-            }
-            is CommaListExpression -> for (e in expr.elements) walkTParamDefaultsInExpr(e, source, fileName)
-            else -> {}
+    /** ENTER dispatch: the ten TP-list-bearing construct kinds — the cheap
+     *  non-empty-typeParameters pre-gate runs BEFORE the reach climb (TP
+     *  lists are rare); the emission leaf is [validateTParamDefaultsEmit]
+     *  (the side-set write stays in the producer). A MethodDeclaration
+     *  anchor is validated exactly when reached: every member owner the
+     *  legacy walk descended (class declaration/expression, interface,
+     *  object literal, type literal) validated its method members. */
+    private fun spineTdEnterNode(node: Node) {
+        val tparams: List<TypeParameter>? = when ((node as NodeBase).kindId) {
+            NodeKind.FUNCTION_DECLARATION -> (node as FunctionDeclaration).typeParameters
+            NodeKind.CLASS_DECLARATION -> (node as ClassDeclaration).typeParameters
+            NodeKind.INTERFACE_DECLARATION -> (node as InterfaceDeclaration).typeParameters
+            NodeKind.TYPE_ALIAS_DECLARATION -> (node as TypeAliasDeclaration).typeParameters
+            NodeKind.ARROW_FUNCTION -> (node as ArrowFunction).typeParameters
+            NodeKind.FUNCTION_EXPRESSION -> (node as FunctionExpression).typeParameters
+            NodeKind.CLASS_EXPRESSION -> (node as ClassExpression).typeParameters
+            NodeKind.METHOD_DECLARATION -> (node as MethodDeclaration).typeParameters
+            NodeKind.FUNCTION_TYPE -> (node as FunctionType).typeParameters
+            NodeKind.CONSTRUCTOR_TYPE -> (node as ConstructorType).typeParameters
+            else -> return
         }
+        if (tparams.isNullOrEmpty()) return
+        if (spineTdStatus(node) != TD_REACHED) return
+        validateTParamDefaultsEmit(tparams, spineSource, spineFileName)
     }
 
-    private fun walkTParamDefaultsInType(type: TypeNode, source: String, fileName: String) {
-        when (type) {
-            is FunctionType -> {
-                type.typeParameters?.let { validateTParamDefaults(it, source, fileName) }
-                walkTParamDefaultsInType(type.type, source, fileName)
-                for (p in type.parameters) p.type?.let { walkTParamDefaultsInType(it, source, fileName) }
+    /** Memoized reach classifier — ascends to the first memoized/terminal
+     *  ancestor, then folds [spineTdEdge] back down (spineAcStatus pattern).
+     *  The SourceFile anchor carries the transient TD_ROOT status (never
+     *  memoized) whose sole edge is `child is Statement`. Also consulted by
+     *  the pre-spine producer (which allocates the memo per file itself). */
+    private fun spineTdStatus(node: Node): Int {
+        if (node is SourceFile) return TD_ROOT
+        val memo = spineTdReachMemo
+        run {
+            val id = (node as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) {
+                val m = memo[id].toInt()
+                if (m != 0) return m
             }
-            is ConstructorType -> {
-                type.typeParameters?.let { validateTParamDefaults(it, source, fileName) }
-                walkTParamDefaultsInType(type.type, source, fileName)
-                for (p in type.parameters) p.type?.let { walkTParamDefaultsInType(it, source, fileName) }
-            }
-            is UnionType -> for (t in type.types) walkTParamDefaultsInType(t, source, fileName)
-            is IntersectionType -> for (t in type.types) walkTParamDefaultsInType(t, source, fileName)
-            is ArrayType -> walkTParamDefaultsInType(type.elementType, source, fileName)
-            is TupleType -> for (e in type.elements) walkTParamDefaultsInType(e, source, fileName)
-            is ParenthesizedType -> walkTParamDefaultsInType(type.type, source, fileName)
-            is TypeReference -> type.typeArguments?.forEach { walkTParamDefaultsInType(it, source, fileName) }
-            is TypeLiteral -> for (m in type.members) walkTParamDefaultsInClassMember(m, source, fileName)
-            else -> {}
         }
+        val chain = spineTdChain
+        chain.clear()
+        var cur: Node = node
+        val anchor: Node?
+        var anchorStatus = TD_NONE
+        while (true) {
+            chain.add(cur)
+            val parent = (cur as NodeBase).parent
+            if (parent == null) { anchor = null; break } // detached/unindexed
+            if (parent is SourceFile) { anchor = parent; anchorStatus = TD_ROOT; break }
+            val pid = (parent as NodeBase).nodeId
+            val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
+            if (pm != 0) { anchor = parent; anchorStatus = pm; break }
+            cur = parent
+        }
+        var pNode: Node? = anchor
+        var pStatus = anchorStatus
+        var result = TD_NONE
+        for (i in chain.indices.reversed()) {
+            val c = chain[i]
+            result = when {
+                pNode == null -> TD_NONE
+                pStatus == TD_ROOT -> if (c is Statement) TD_REACHED else TD_NONE
+                pStatus == TD_REACHED -> if (spineTdEdge(pNode, c)) TD_REACHED else TD_NONE
+                else -> TD_NONE
+            }
+            val cid = (c as NodeBase).nodeId
+            if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
+            pNode = c
+            pStatus = result
+        }
+        chain.clear()
+        return result
     }
 
-    private fun validateTParamDefaults(
+    /** The deleted recursion's descent edges, verbatim. Unlisted parents
+     *  are the legacy `else -> {}`s (unreached children — if CONDITIONS,
+     *  switch SUBJECT + case EXPRESSIONS, for-in/of heads, expression-arrow
+     *  bodies, objlit accessors + shorthand properties, enum member
+     *  initializers, heritage clauses, call/new TYPE ARGUMENTS, TP
+     *  constraint/default interiors, computed names, static blocks,
+     *  decorators, with bodies, and every type kind outside the walked set
+     *  — mapped/conditional/indexed-access/keyof/typeof interiors stay
+     *  dark). TypeParameter subtrees are never descended: the anchor
+     *  validates the LIST, and findForwardTParamRef scans defaults itself. */
+    private fun spineTdEdge(parent: Node, child: Node): Boolean = when (parent) {
+        // ---- statements (the deleted walkTParamDefaultsInStmt arms) ----
+        is FunctionDeclaration ->
+            child === parent.type || child === parent.body || child is Parameter
+        is ClassDeclaration -> child is MethodDeclaration || child is Constructor ||
+            child is GetAccessor || child is SetAccessor || child is PropertyDeclaration
+        is InterfaceDeclaration -> child is MethodDeclaration || child is Constructor ||
+            child is GetAccessor || child is SetAccessor || child is PropertyDeclaration
+        is TypeAliasDeclaration -> child === parent.type
+        is VariableStatement -> child === parent.declarationList
+        is VariableDeclarationList -> child is VariableDeclaration
+        is VariableDeclaration -> child === parent.type || child === parent.initializer
+        is ExpressionStatement -> child === parent.expression
+        is Block -> child is Statement
+        is IfStatement -> child === parent.thenStatement || child === parent.elseStatement
+        // For-heads: BOTH a declaration-list and an expression initializer
+        // were walked (unlike the ia/ac siblings), plus condition and
+        // incrementor; for-in/of walk expression + body only.
+        is ForStatement -> child === parent.initializer || child === parent.condition ||
+            child === parent.incrementor || child === parent.statement
+        is ForInStatement -> child === parent.expression || child === parent.statement
+        is ForOfStatement -> child === parent.expression || child === parent.statement
+        is WhileStatement -> child === parent.expression || child === parent.statement
+        is DoStatement -> child === parent.statement || child === parent.expression
+        is TryStatement ->
+            child === parent.tryBlock || child === parent.finallyBlock || child is CatchClause
+        is CatchClause -> child === parent.block
+        is SwitchStatement -> child is CaseClause || child is DefaultClause
+        is CaseClause -> child is Statement // NOT the case expression
+        is DefaultClause -> child is Statement
+        is LabeledStatement -> child === parent.statement
+        is ReturnStatement -> child === parent.expression
+        is ThrowStatement -> child === parent.expression
+        // No declare gate — the legacy walk descended `declare namespace`
+        // bodies too (unlike the ac sibling).
+        is ModuleDeclaration -> child === parent.body && child is ModuleBlock
+        is ModuleBlock -> child is Statement
+        is ExportAssignment -> child === parent.expression
+        // ---- members (the deleted walkTParamDefaultsInClassMember arms;
+        //      shared by class decl/expr, interface, objlit, type literal) ----
+        is MethodDeclaration ->
+            child === parent.type || child === parent.body || child is Parameter
+        is Constructor -> child === parent.body || child is Parameter
+        is GetAccessor -> child === parent.type || child === parent.body // params never walked
+        is SetAccessor -> child === parent.body || child is Parameter
+        is PropertyDeclaration -> child === parent.type || child === parent.initializer
+        is Parameter -> child === parent.type // NOT the initializer/binding name
+        // ---- expressions (the deleted walkTParamDefaultsInExpr arms) ----
+        is ArrowFunction -> child === parent.type || child is Parameter ||
+            (child === parent.body && child is Block) // expression bodies NOT walked
+        is FunctionExpression ->
+            child === parent.type || child === parent.body || child is Parameter
+        is ClassExpression -> child is MethodDeclaration || child is Constructor ||
+            child is GetAccessor || child is SetAccessor || child is PropertyDeclaration
+        is ParenthesizedExpression -> child === parent.expression
+        is BinaryExpression -> child === parent.left || child === parent.right
+        is CallExpression -> child === parent.expression || parent.arguments.any { it === child }
+        is NewExpression ->
+            child === parent.expression || parent.arguments?.any { it === child } == true
+        is PropertyAccessExpression -> child === parent.expression
+        is ElementAccessExpression ->
+            child === parent.expression || child === parent.argumentExpression
+        is ConditionalExpression -> child === parent.condition ||
+            child === parent.whenTrue || child === parent.whenFalse
+        is ArrayLiteralExpression -> parent.elements.any { it === child }
+        is ObjectLiteralExpression -> child is PropertyAssignment ||
+            child is SpreadAssignment || child is MethodDeclaration // NOT accessors/shorthand
+        is PropertyAssignment -> child === parent.initializer // NOT the computed name
+        is SpreadAssignment -> child === parent.expression
+        is TypeAssertionExpression -> child === parent.type || child === parent.expression
+        is AsExpression -> child === parent.type || child === parent.expression
+        is SatisfiesExpression -> child === parent.type || child === parent.expression
+        is NonNullExpression -> child === parent.expression
+        is SpreadElement -> child === parent.expression
+        is AwaitExpression -> child === parent.expression
+        is YieldExpression -> child === parent.expression
+        is VoidExpression -> child === parent.expression
+        is DeleteExpression -> child === parent.expression
+        is TypeOfExpression -> child === parent.expression
+        is PrefixUnaryExpression -> child === parent.operand
+        is PostfixUnaryExpression -> child === parent.operand
+        is TemplateExpression -> child is TemplateSpan
+        is TemplateSpan -> child === parent.expression
+        is TaggedTemplateExpression -> child === parent.tag ||
+            (child === parent.template && child is TemplateExpression)
+        is CommaListExpression -> parent.elements.any { it === child }
+        // ---- types (the deleted walkTParamDefaultsInType arms) ----
+        is FunctionType -> child === parent.type || child is Parameter
+        is ConstructorType -> child === parent.type || child is Parameter
+        is UnionType -> parent.types.any { it === child }
+        is IntersectionType -> parent.types.any { it === child }
+        is ArrayType -> child === parent.elementType
+        is TupleType -> parent.elements.any { it === child }
+        is ParenthesizedType -> child === parent.type
+        is TypeReference -> parent.typeArguments?.any { it === child } == true
+        is TypeLiteral -> child is MethodDeclaration || child is Constructor ||
+            child is GetAccessor || child is SetAccessor || child is PropertyDeclaration
+        else -> false
+    }
+
+    /**
+     * The anchor-called emission leaf — the legacy validateTParamDefaults
+     * minus the side-set write (which stays in the producer): TS2368 for a
+     * reserved primitive/intrinsic name used as a TP name, and TS2744 for a
+     * TypeParameter whose default references a same-list type parameter at
+     * an index >= its own (self or forward reference; squiggle at the first
+     * offending Identifier). Only same-list TP NAMES trigger — outer scopes
+     * are fine.
+     */
+    private fun validateTParamDefaultsEmit(
         tparams: List<TypeParameter>,
         source: String,
         fileName: String,
-        parentAliasName: String? = null,
     ) {
         if (tparams.isEmpty()) return
-        // TS2368: reserved primitive/intrinsic type names cannot be used as type
-        // parameter names (e.g. `foo<string>(x: string)`). The set mirrors what
-        // TypeScript flags as "reserved type names" via Identifier.originalKeywordKind.
         for (tp in tparams) {
             val tpName = tp.name.text
             if (tpName in RESERVED_TYPE_PARAM_NAMES) {
@@ -79182,12 +79254,11 @@ interface DataView {
             }
         }
         val names = tparams.map { it.name.text }
-        var anyCircular = false
         for (i in tparams.indices) {
             val tp = tparams[i]
             val default = tp.default ?: continue
-            // Find the first Identifier reference in the default whose name matches
-            // a type parameter at index >= i.
+            // Find the first Identifier reference in the default whose name
+            // matches a type parameter at index >= i.
             val offender = findForwardTParamRef(default, names, i) ?: continue
             val start = offender.pos
             val length = offender.text.length.coerceAtLeast(1)
@@ -79202,16 +79273,6 @@ interface DataView {
                 start = start,
                 length = length,
             ))
-            anyCircular = true
-        }
-        // For TypeAliases with circular defaults, track the symbol so that later
-        // display of `Name` (without type args) renders as `Name<any, ..., any>`
-        // to match TypeScript's substitution-on-invalid-default behavior.
-        if (anyCircular && parentAliasName != null) {
-            val sym = currentFileLocals?.get(parentAliasName)
-            if (sym != null && sym.flags.hasAny(SymbolFlags.TypeAlias)) {
-                circularDefaultTypeParamCount[sym.id] = tparams.size
-            }
         }
     }
 
