@@ -3879,6 +3879,41 @@ class Checker(
     /** Reusable ascent buffer for [spineExStatus]. */
     private val spineExChain = ArrayList<Node>()
 
+    // ── (M0.4) round 645: checkStrictModeIdentifiers on the spine ──────────
+    // The TS1100 restricted-name binding + TS2630 eval inc/dec + TS1215
+    // module-file restricted-name + top-level `var eval` TS2300/TS6203
+    // lib-collision pass — the legacy driver + the three routing walks
+    // (checkModuleStrictModeInStatements / checkStrictModeInStatements/
+    // -InStatement/-InExpr/-InClassElement / checkFunctionLocalStrictMode
+    // family) are deleted; the bounded leaves (checkStrictModeName/
+    // -BindingName/-InTypeNode, checkModuleStrictModeName,
+    // checkStrictModeInterfaceMemberParams, emitTs2630EvalAssign,
+    // emitStrictVarEvalDuplicate, hasPrologueUseStrict) survive as
+    // anchor-called leaves. The per-file routing mode is decided at setup
+    // ([spineSmSetup]: dts → off; isModuleFile → MODULE; strict/
+    // alwaysStrict option or a "use strict" FIRST statement → STRICT; else
+    // FNLOCAL) and the reach classifier [spineSmStatus] over [spineSmFold]
+    // carries the walk IDENTITY as the status (see the SM_* const docs).
+    // Frozen quirks: class subtrees never emit (the legacy class-element
+    // walk ran with an EMPTY restricted set — no fold arm); strict
+    // statement arms walk neither loop heads (for-in/of heads, while/do/
+    // for conditions, for-head decl INITIALIZERS — decl NAMES check at the
+    // For anchor) nor switch subjects/case expressions nor throw
+    // expressions; the strict expression walk covers only fn-expr/arrow
+    // bodies, binary operands, parens, call/new callee+args, and unary
+    // operands (object/array literals, conditionals, property accesses,
+    // templates, arrow EXPRESSION bodies stay unreached); module top-level
+    // fn PARAMS and var TYPE annotations are never checked; the fn-local
+    // search descends only fn-decl bodies, expression statements, var
+    // initializers, blocks, if branches, and ModuleBlocks, and a prologue
+    // fn's OWN name/params are never checked. Fully syntactic — no ambient
+    // sandwich. Fields PRE-init.
+    private var spineSmMode = SM_MODE_OFF
+    /** Per-file nodeId memo for [spineSmStatus] — 0 unknown, else SM_*. */
+    private var spineSmReachMemo = ByteArray(0)
+    /** Reusable ascent buffer for [spineSmStatus]. */
+    private val spineSmChain = ArrayList<Node>()
+
     // ── INV.4(d) walker 6 (round 535): checkArgumentCounts on the spine ────
     // The function-call arity pass (TS2554/TS2555/TS2575) — the recursion
     // walkers (checkArgCountInStatements/-InStatement/-InExpr(Core)) are
@@ -5457,9 +5492,9 @@ class Checker(
         // syntactic — no ambient sandwich; the legacy binderResults driver →
         // the spine's partition view, gated `--partitionCheck 2` EQUIVALENT
         // ×8. No TS2396/TS1215 dedup/scan consumers exist (the sibling
-        // TS1215 emitter checkModuleStrictModeInStatements covers NAME
-        // bindings — its FunctionDeclaration arm deliberately skips params,
-        // deferring to this pass — and never scans the list).
+        // TS1215 emitter — the strict-mode pass's module arms, now the
+        // spineSm anchors — covers NAME bindings, deliberately skips fn
+        // params deferring to this pass, and never scans the list).
         // 37a3' (M0.4, round 639): checkEvolvingEmptyArrayImplicitAny (TS7034
         // at the decl + TS7005 at each read of an un-annotated `let/var
         // x = []` evolving array, round-316 family incl. the
@@ -5541,23 +5576,25 @@ class Checker(
         // non-Identifier-receiver writes never collected. Fully syntactic —
         // no ambient sandwich; the legacy binderResults driver → the
         // spine's partition view, gated `--partitionCheck 2` EQUIVALENT ×8.
-        // 12' (M0.4 slot-move pre-gate, round 644): checkStrictModeIdentifiers
-        // (TS1100 restricted-name bindings + TS2630 eval-assign + TS1215
+        // 12'' (M0.4, round 645): checkStrictModeIdentifiers (TS1100
+        // restricted-name bindings + TS2630 eval inc/dec + TS1215
         // module-file restricted names + the top-level `var eval` TS2300/
-        // TS6203 lib-collision pair) moved intact from slot 12 ahead of its
-        // spine migration. Fully syntactic + self-contained (grep-verified:
-        // the family reads no checker ambient — options + AST only); the
-        // ONLY diagnostics-list consumer of its codes anywhere is
-        // checkStyledComponentsInstantiationLimit's corpus-unique TS1100
-        // wipe, which dispatches long AFTER both slots; the 12→12b relative
-        // order (TS1210-owns-class-bodies) is preserved (12b stays put).
-        // Scope map for the migrator: per file — module files route ALL
-        // statements through checkModuleStrictModeInStatements (TS1215);
-        // globally-strict or "use strict"-prologue files through
-        // checkStrictModeInStatements (TS1100/TS2630) + the top-level
-        // `var eval` TS2300 pair; other files through
-        // checkFunctionLocalStrictMode (fn bodies with their OWN prologue).
-        pass("checkStrictModeIdentifiers") { checkStrictModeIdentifiers() }
+        // TS6203 lib-collision pair) is ON THE SPINE — anchors at
+        // VariableStatement / FunctionDeclaration / InterfaceDeclaration /
+        // FunctionExpression / ArrowFunction / assignment BinaryExpression /
+        // ++,-- unary / ForStatement / TryStatement enters
+        // (spineSmEnterNode, restricted-name pre-gates before the climb),
+        // gated by the multi-state classifier spineSmStatus carrying the
+        // walk IDENTITY as the status; the per-file routing mode (module →
+        // TS1215 top-level arms; strict → the TS1100 walk + the `var eval`
+        // TS2300 pair; else the fn-local prologue search) is decided at
+        // spineSmSetup. Fully syntactic — no ambient sandwich; the legacy
+        // binderResults driver → the spine's partition view, gated
+        // `--partitionCheck 2` EQUIVALENT ×8. The only diagnostics-list
+        // consumer of its codes — checkStyledComponentsInstantiationLimit's
+        // corpus-unique TS1100 wipe — dispatches long after the spine; the
+        // 12→12b relative order (TS1210-owns-class-bodies) is preserved
+        // (the spine slot precedes 12b).
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -5758,8 +5795,8 @@ class Checker(
         // 11. Check export assignment conflicts (TS2309)
         pass("checkExportAssignmentConflicts") { checkExportAssignmentConflicts() }
         // 12. checkStrictModeIdentifiers (TS1100/TS2630/TS1215 + the var-eval
-        // TS2300/TS6203 pair) moved to the post-spine slot — see the
-        // pass("checkSpine") site (M0.4 slot-move pre-gate, round 644).
+        // TS2300/TS6203 pair) is ON THE SPINE (M0.4, round 645) — see the
+        // pass("checkSpine") site and spineSmEnterNode.
         // 12b. Check class body strict mode (TS1210) — class bodies are always strict
         pass("checkClassStrictModeIdentifiers") { checkClassStrictModeIdentifiers() }
         // 12c. TS1042/TS1184 (modifiers on object-literal members) migrated to
@@ -21601,6 +21638,7 @@ class Checker(
                 spineIaSetup(result)
                 spineTdSetup(result)
                 spineExSetup(result)
+                spineSmSetup(result)
                 // (M0.4) round 636: property-init anchors — active in every
                 // non-dts file (the legacy driver's only file gate).
                 spinePiActive = spinePiRunActive && !spineIsDts
@@ -21643,6 +21681,7 @@ class Checker(
                     spineIaTeardown()
                     spineTdTeardown()
                     spineExTeardown()
+                    spineSmTeardown()
                     spinePiActive = false
                 }
                 spineResolveDeferredIterationChecks()
@@ -21897,6 +21936,13 @@ class Checker(
         // write collector ran at file setup, so anchors emit inline; no
         // frames/leave hook, no ambient sandwich.
         if (spineExActive) spineExEnterNode(node)
+        // (M0.4) round 645: the strict-mode-identifier anchors
+        // (VariableStatement / fn-decl / interface / fn-expr / arrow /
+        // assignment binary / ++,-- unary / for-head / try-catch enters,
+        // restricted-name pre-gates) — the per-file routing mode decided at
+        // setup, the walk identity carried by the classifier; no
+        // frames/leave hook, no ambient sandwich.
+        if (spineSmMode != SM_MODE_OFF) spineSmEnterNode(node)
         // INV.4(d) walker 7: the use-before-declaration pass — the per-list
         // ForwardRefs anchor + loop-header self-ref checks.
         if (spineUbdActive) spineUbdEnterNode(node)
@@ -46931,40 +46977,401 @@ class Checker(
     // Strict mode identifier checking (TS1100)
     // -----------------------------------------------------------------------
 
+    // (M0.4, round 645) checkStrictModeIdentifiers is ON THE SPINE — the
+    // legacy driver + the three routing walks (module/strict/fn-local) are
+    // deleted; reach is spineSmStatus / spineSmFold with the per-file mode
+    // decided at spineSmSetup. Only the bounded emission leaves survive
+    // below (checkModuleStrictModeName, hasPrologueUseStrict,
+    // checkStrictModeName/-BindingName/-InTypeNode,
+    // checkStrictModeInterfaceMemberParams, emitTs2630EvalAssign,
+    // emitStrictVarEvalDuplicate).
+
     /**
-     * Check for TS1100: "Invalid use of 'arguments'/'eval' in strict mode."
-     * In strict mode, `arguments` and `eval` cannot be used as variable/parameter/function names.
+     * (M0.4, round 645) Per-file setup for the spine-anchored
+     * checkStrictModeIdentifiers: decide the routing mode (the legacy
+     * driver's per-file branch — dts skip; module files route the TS1215
+     * top-level arms; strict/alwaysStrict option or a "use strict" FIRST
+     * statement routes the TS1100 walk + the top-level `var eval` TS2300
+     * pair; everything else the fn-local prologue search) and reset the
+     * reach memo.
      */
-    private fun checkStrictModeIdentifiers() {
-        val restricted = setOf("arguments", "eval")
-        // Global strict mode from compiler options
-        val globalStrict = options.alwaysStrict == true || options.strict
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            // Per-file strict mode: options + "use strict" prologue + module file
-            val hasUseStrict = result.sourceFile.statements.firstOrNull()?.let { stmt ->
-                stmt is ExpressionStatement && stmt.expression is StringLiteralNode &&
-                    (stmt.expression).text == "use strict"
-            } == true
-            val isModule = isModuleFile(result.sourceFile.statements)
-            // Module files get TS1215 instead of TS1100
-            if (isModule) {
-                checkModuleStrictModeInStatements(result.sourceFile.statements, source, fileName, restricted)
-            } else if (globalStrict || hasUseStrict) {
-                checkStrictModeInStatements(result.sourceFile.statements, source, fileName, restricted)
-            } else {
-                // Even when the file isn't globally strict, function bodies with their own
-                // "use strict" prologue directives are locally strict and must be checked.
-                checkFunctionLocalStrictMode(result.sourceFile.statements, source, fileName, restricted)
+    private fun spineSmSetup(result: BinderResult) {
+        spineSmMode = if (spineIsDts) SM_MODE_OFF else {
+            val stmts = result.sourceFile.statements
+            when {
+                isModuleFile(stmts) -> SM_MODE_MODULE
+                options.alwaysStrict == true || options.strict ||
+                    hasPrologueUseStrict(stmts) -> SM_MODE_STRICT
+                else -> SM_MODE_FNLOCAL
             }
-            // `var eval` at top level in non-module strict mode also triggers TS2300
-            // "Duplicate identifier" because lib.es5.d.ts predeclares `var eval`. Module
-            // files (auto-strict) only emit TS1215 per TypeScript's baseline. `arguments`
-            // is NOT lib-declared as a var so doesn't fire TS2300 either.
-            if (!isModule && (globalStrict || hasUseStrict)) {
-                checkStrictModeReservedRedeclaration(result.sourceFile.statements, source, fileName)
+        }
+        spineSmReachMemo = if (spineSmMode == SM_MODE_OFF) ByteArray(0) else {
+            val n = result.sourceFile.nodeCount
+            if (n > 0) ByteArray(n) else ByteArray(0)
+        }
+    }
+
+    private fun spineSmTeardown() {
+        spineSmMode = SM_MODE_OFF
+        spineSmReachMemo = ByteArray(0)
+    }
+
+    /** True when [name] is an Identifier bearing a restricted name. */
+    private fun smRestrictedName(name: Node?): Boolean =
+        name is Identifier && name.text in SM_RESTRICTED
+
+    /** The legacy 16.4dp assignment-operator set (deliberately WIDER than
+     *  isAssignmentOperator — includes the shift/exponent compound
+     *  assigns). */
+    private fun smIsAssignmentOp(op: SyntaxKind): Boolean = when (op) {
+        SyntaxKind.Equals, SyntaxKind.PlusEquals, SyntaxKind.MinusEquals,
+        SyntaxKind.AsteriskEquals, SyntaxKind.SlashEquals, SyntaxKind.PercentEquals,
+        SyntaxKind.LessThanLessThanEquals, SyntaxKind.GreaterThanGreaterThanEquals,
+        SyntaxKind.GreaterThanGreaterThanGreaterThanEquals, SyntaxKind.AmpersandEquals,
+        SyntaxKind.BarEquals, SyntaxKind.CaretEquals, SyntaxKind.AsteriskAsteriskEquals,
+        SyntaxKind.AmpersandAmpersandEquals, SyntaxKind.BarBarEquals,
+        SyntaxKind.QuestionQuestionEquals -> true
+        else -> false
+    }
+
+    /** ENTER dispatch: the strict-mode-identifier anchors. Every arm
+     *  pre-gates on restricted-name presence (or an annotated decl for the
+     *  type-node leaf) BEFORE the reach climb. */
+    private fun spineSmEnterNode(node: Node) {
+        when ((node as NodeBase).kindId) {
+            NodeKind.VARIABLE_STATEMENT -> spineSmVarStatement(node as VariableStatement)
+            NodeKind.FUNCTION_DECLARATION -> {
+                node as FunctionDeclaration
+                if (!smRestrictedName(node.name) &&
+                    node.parameters.none { smRestrictedName(it.name) }) return
+                when (spineSmStatus(node)) {
+                    SM_SSTMT -> if (ModifierFlag.Declare !in node.modifiers) {
+                        node.name?.let { checkStrictModeName(it, spineSource, spineFileName, SM_RESTRICTED) }
+                        for (param in node.parameters) {
+                            checkStrictModeBindingName(param.name, spineSource, spineFileName, SM_RESTRICTED)
+                        }
+                    }
+                    // Module top-level fn: TS1215 on the NAME only — params
+                    // deliberately unchecked (frozen; checkArgumentsCollision
+                    // territory).
+                    SM_MFN -> if (ModifierFlag.Declare !in node.modifiers) {
+                        node.name?.let { checkModuleStrictModeName(it, spineSource, spineFileName, SM_RESTRICTED) }
+                    }
+                }
+            }
+            NodeKind.INTERFACE_DECLARATION -> {
+                node as InterfaceDeclaration
+                if (!smInterfaceHasRestrictedParam(node)) return
+                if (spineSmStatus(node) == SM_SSTMT) {
+                    checkStrictModeInterfaceMemberParams(node, spineSource, spineFileName, SM_RESTRICTED)
+                }
+            }
+            NodeKind.FUNCTION_EXPRESSION -> {
+                node as FunctionExpression
+                if (!smRestrictedName(node.name) &&
+                    node.parameters.none { smRestrictedName(it.name) }) return
+                if (spineSmStatus(node) == SM_SEXPR) {
+                    node.name?.let { checkStrictModeName(it, spineSource, spineFileName, SM_RESTRICTED) }
+                    for (param in node.parameters) {
+                        checkStrictModeBindingName(param.name, spineSource, spineFileName, SM_RESTRICTED)
+                    }
+                }
+            }
+            NodeKind.ARROW_FUNCTION -> {
+                node as ArrowFunction
+                if (node.parameters.none { smRestrictedName(it.name) }) return
+                if (spineSmStatus(node) == SM_SEXPR) {
+                    for (param in node.parameters) {
+                        checkStrictModeBindingName(param.name, spineSource, spineFileName, SM_RESTRICTED)
+                    }
+                }
+            }
+            NodeKind.BINARY_EXPRESSION -> {
+                node as BinaryExpression
+                val left = node.left
+                if (left !is Identifier || left.text !in SM_RESTRICTED) return
+                if (!smIsAssignmentOp(node.operator)) return
+                if (spineSmStatus(node) == SM_SEXPR) {
+                    checkStrictModeName(left, spineSource, spineFileName, SM_RESTRICTED)
+                }
+            }
+            NodeKind.PREFIX_UNARY_EXPRESSION -> {
+                node as PrefixUnaryExpression
+                if (node.operator != SyntaxKind.PlusPlus && node.operator != SyntaxKind.MinusMinus) return
+                val operand = node.operand
+                if (operand !is Identifier || operand.text !in SM_RESTRICTED) return
+                if (spineSmStatus(node) == SM_SEXPR) {
+                    checkStrictModeName(operand, spineSource, spineFileName, SM_RESTRICTED)
+                    if (operand.text == "eval") emitTs2630EvalAssign(operand, spineSource, spineFileName)
+                }
+            }
+            NodeKind.POSTFIX_UNARY_EXPRESSION -> {
+                node as PostfixUnaryExpression
+                if (node.operator != SyntaxKind.PlusPlus && node.operator != SyntaxKind.MinusMinus) return
+                val operand = node.operand
+                if (operand !is Identifier || operand.text !in SM_RESTRICTED) return
+                if (spineSmStatus(node) == SM_SEXPR) {
+                    checkStrictModeName(operand, spineSource, spineFileName, SM_RESTRICTED)
+                    if (operand.text == "eval") emitTs2630EvalAssign(operand, spineSource, spineFileName)
+                }
+            }
+            NodeKind.FOR_STATEMENT -> {
+                node as ForStatement
+                val init = node.initializer as? VariableDeclarationList ?: return
+                if (init.declarations.none { smRestrictedName(it.name) }) return
+                if (spineSmStatus(node) == SM_SSTMT) {
+                    // The legacy For arm checked head decl NAMES only — the
+                    // head decl INITIALIZERS/condition/incrementor were never
+                    // walked (frozen).
+                    for (decl in init.declarations) {
+                        checkStrictModeBindingName(decl.name, spineSource, spineFileName, SM_RESTRICTED)
+                    }
+                }
+            }
+            NodeKind.TRY_STATEMENT -> {
+                node as TryStatement
+                val v = node.catchClause?.variableDeclaration ?: return
+                if (!smRestrictedName(v.name)) return
+                if (spineSmStatus(node) == SM_SSTMT) {
+                    checkStrictModeBindingName(v.name, spineSource, spineFileName, SM_RESTRICTED)
+                }
+            }
+        }
+    }
+
+    /** The VariableStatement anchor: strict decl-name TS1100 checks + the
+     *  annotation type-node leaf + the top-level `var eval` TS2300 pair
+     *  (strict non-module files), or the module-mode TS1215 name checks
+     *  (which walk NO type annotation — frozen asymmetry). */
+    private fun spineSmVarStatement(node: VariableStatement) {
+        val decls = node.declarationList.declarations
+        if (decls.none { smRestrictedName(it.name) || it.type != null }) return
+        when (spineSmStatus(node)) {
+            SM_SSTMT -> {
+                for (decl in decls) {
+                    checkStrictModeBindingName(decl.name, spineSource, spineFileName, SM_RESTRICTED)
+                    decl.type?.let { checkStrictModeInTypeNode(it, spineSource, spineFileName, SM_RESTRICTED) }
+                }
+                // `var eval` at top level in non-module strict mode also
+                // triggers TS2300: lib.es5.d.ts predeclares `eval`, and only
+                // the `var` kind merges with the lib declaration (`let`/
+                // `const` are block-scoped). `arguments` is not lib-declared
+                // as a var so it never fires.
+                if (spineSmMode == SM_MODE_STRICT && node.parent is SourceFile &&
+                    node.declarationList.flags == SyntaxKind.VarKeyword
+                ) {
+                    for (decl in decls) {
+                        val name = decl.name as? Identifier ?: continue
+                        if (name.text == "eval") emitStrictVarEvalDuplicate(name, spineSource, spineFileName)
+                    }
+                }
+            }
+            SM_MVAR -> {
+                for (decl in decls) {
+                    checkModuleStrictModeName(decl.name, spineSource, spineFileName, SM_RESTRICTED)
+                }
+            }
+        }
+    }
+
+    /** Memoized reach classifier — ascends to the first memoized/terminal
+     *  ancestor, then folds [spineSmFold] back down (the spineSrStatus
+     *  pattern). The SourceFile anchor carries the transient SM_ROOT
+     *  status (never memoized) whose edges route by the per-file MODE via
+     *  [spineSmRootEdge]. */
+    private fun spineSmStatus(node: Node): Int {
+        if (node is SourceFile) return SM_ROOT
+        val memo = spineSmReachMemo
+        run {
+            val id = (node as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) {
+                val m = memo[id].toInt()
+                if (m != 0) return m
+            }
+        }
+        val chain = spineSmChain
+        chain.clear()
+        var cur: Node = node
+        val anchor: Node?
+        var anchorStatus = SM_NONE
+        while (true) {
+            chain.add(cur)
+            val parent = (cur as NodeBase).parent
+            if (parent == null) { anchor = null; break } // detached/unindexed
+            if (parent is SourceFile) { anchor = parent; anchorStatus = SM_ROOT; break }
+            val pid = (parent as NodeBase).nodeId
+            val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
+            if (pm != 0) { anchor = parent; anchorStatus = pm; break }
+            cur = parent
+        }
+        var pNode: Node? = anchor
+        var pStatus = anchorStatus
+        var result = SM_NONE
+        for (i in chain.indices.reversed()) {
+            val c = chain[i]
+            result = when {
+                pNode == null -> SM_NONE
+                pStatus == SM_ROOT -> spineSmRootEdge(c)
+                else -> spineSmFold(pNode, pStatus, c)
+            }
+            val cid = (c as NodeBase).nodeId
+            if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
+            pNode = c
+            pStatus = result
+        }
+        chain.clear()
+        return result
+    }
+
+    /** SourceFile → top-level statement edges, routed by the per-file
+     *  mode: module → the TS1215 specials for VariableStatement/
+     *  FunctionDeclaration and the strict walk for every OTHER statement
+     *  (the legacy else-arm); strict → the strict walk; fn-local → the
+     *  searching walk. */
+    private fun spineSmRootEdge(child: Node): Int = when (spineSmMode) {
+        SM_MODE_MODULE -> when (child) {
+            is VariableStatement -> SM_MVAR
+            is FunctionDeclaration -> SM_MFN
+            is Statement -> SM_SSTMT
+            else -> SM_NONE
+        }
+        SM_MODE_STRICT -> if (child is Statement) SM_SSTMT else SM_NONE
+        SM_MODE_FNLOCAL -> if (child is Statement) SM_FSTMT else SM_NONE
+        else -> SM_NONE
+    }
+
+    /** The deleted routing walks' arms, verbatim, as (parent,
+     *  parent-status) → child-status transitions. Unlisted (parent,
+     *  status) pairs are the legacy `else -> {}`s — notably CLASS subtrees
+     *  (the legacy class-element walk ran with an EMPTY restricted set —
+     *  restricted minus arguments/eval — so it could never emit: frozen as
+     *  unreached), loop heads/conditions, for-in/of heads, switch subjects
+     *  + case expressions, throw expressions, object/array literals,
+     *  conditional expressions, property/element accesses, templates,
+     *  arrow EXPRESSION bodies, param defaults, and every type position (a
+     *  strict var-decl's annotation is leaf-walked at its anchor). */
+    private fun spineSmFold(pNode: Node, pStatus: Int, child: Node): Int = when (pStatus) {
+        // ---- checkStrictModeInStatement arms ----
+        SM_SSTMT -> when (pNode) {
+            is VariableStatement -> if (child === pNode.declarationList) SM_SDECL else SM_NONE
+            is FunctionDeclaration -> if (child === pNode.body &&
+                ModifierFlag.Declare !in pNode.modifiers) SM_SSTMT else SM_NONE
+            is ExpressionStatement -> if (child === pNode.expression) SM_SEXPR else SM_NONE
+            is ReturnStatement -> if (child === pNode.expression) SM_SEXPR else SM_NONE
+            is Block -> if (child is Statement) SM_SSTMT else SM_NONE
+            is IfStatement -> if (child === pNode.thenStatement ||
+                child === pNode.elseStatement) SM_SSTMT else SM_NONE
+            is ForStatement -> if (child === pNode.statement) SM_SSTMT else SM_NONE
+            is ForInStatement -> if (child === pNode.statement) SM_SSTMT else SM_NONE
+            is ForOfStatement -> if (child === pNode.statement) SM_SSTMT else SM_NONE
+            is WhileStatement -> if (child === pNode.statement) SM_SSTMT else SM_NONE
+            is DoStatement -> if (child === pNode.statement) SM_SSTMT else SM_NONE
+            is SwitchStatement -> if (child is CaseClause || child is DefaultClause) SM_SSTMT else SM_NONE
+            is CaseClause -> if (child is Statement) SM_SSTMT else SM_NONE
+            is DefaultClause -> if (child is Statement) SM_SSTMT else SM_NONE
+            is TryStatement -> if (child === pNode.tryBlock || child === pNode.finallyBlock ||
+                child is CatchClause) SM_SSTMT else SM_NONE
+            is CatchClause -> if (child === pNode.block) SM_SSTMT else SM_NONE
+            is LabeledStatement -> if (child === pNode.statement) SM_SSTMT else SM_NONE
+            is ModuleDeclaration -> if (child === pNode.body && child is ModuleBlock) SM_SSTMT else SM_NONE
+            is ModuleBlock -> if (child is Statement) SM_SSTMT else SM_NONE
+            else -> SM_NONE
+        }
+        // ---- checkStrictModeInExpr arms ----
+        SM_SEXPR -> when (pNode) {
+            is FunctionExpression -> if (child === pNode.body) SM_SSTMT else SM_NONE
+            is ArrowFunction -> if (child === pNode.body && child is Block) SM_SSTMT else SM_NONE
+            is BinaryExpression -> if (child === pNode.left || child === pNode.right) SM_SEXPR else SM_NONE
+            is ParenthesizedExpression -> if (child === pNode.expression) SM_SEXPR else SM_NONE
+            is CallExpression -> if (child === pNode.expression ||
+                pNode.arguments.any { it === child }) SM_SEXPR else SM_NONE
+            is NewExpression -> if (child === pNode.expression ||
+                pNode.arguments?.any { it === child } == true) SM_SEXPR else SM_NONE
+            is PrefixUnaryExpression -> if (child === pNode.operand) SM_SEXPR else SM_NONE
+            is PostfixUnaryExpression -> if (child === pNode.operand) SM_SEXPR else SM_NONE
+            else -> SM_NONE
+        }
+        // ---- the strict/module var-decl carrier (initializer only) ----
+        SM_SDECL -> when (pNode) {
+            is VariableDeclarationList -> if (child is VariableDeclaration) SM_SDECL else SM_NONE
+            is VariableDeclaration -> if (child === pNode.initializer) SM_SEXPR else SM_NONE
+            else -> SM_NONE
+        }
+        SM_FDECL -> when (pNode) {
+            is VariableDeclarationList -> if (child is VariableDeclaration) SM_FDECL else SM_NONE
+            is VariableDeclaration -> if (child === pNode.initializer) SM_FEXPR else SM_NONE
+            else -> SM_NONE
+        }
+        // ---- checkFunctionLocalStrictMode arms (the SEARCHING walk) ----
+        SM_FSTMT -> when (pNode) {
+            is FunctionDeclaration -> if (child === pNode.body &&
+                ModifierFlag.Declare !in pNode.modifiers) {
+                if (hasPrologueUseStrict(pNode.body.statements)) SM_SSTMT else SM_FSTMT
+            } else SM_NONE
+            is ExpressionStatement -> if (child === pNode.expression) SM_FEXPR else SM_NONE
+            is VariableStatement -> if (child === pNode.declarationList) SM_FDECL else SM_NONE
+            is Block -> if (child is Statement) SM_FSTMT else SM_NONE
+            is IfStatement -> if (child === pNode.thenStatement ||
+                child === pNode.elseStatement) SM_FSTMT else SM_NONE
+            is ModuleDeclaration -> if (child === pNode.body && child is ModuleBlock) SM_FSTMT else SM_NONE
+            is ModuleBlock -> if (child is Statement) SM_FSTMT else SM_NONE
+            else -> SM_NONE
+        }
+        SM_FEXPR -> when (pNode) {
+            is FunctionExpression -> if (child === pNode.body) {
+                // A prologue fn-expression's OWN name/params are never
+                // checked (frozen) — only the body flips to the strict walk.
+                if (hasPrologueUseStrict(pNode.body.statements)) SM_SSTMT else SM_FSTMT
+            } else SM_NONE
+            is ArrowFunction -> if (child === pNode.body && child is Block) {
+                if (hasPrologueUseStrict(child.statements)) SM_SSTMT else SM_FSTMT
+            } else SM_NONE
+            else -> SM_NONE
+        }
+        // ---- module top-level specials ----
+        SM_MVAR -> if (pNode is VariableStatement && child === pNode.declarationList) SM_SDECL else SM_NONE
+        SM_MFN -> if (pNode is FunctionDeclaration && child === pNode.body &&
+            ModifierFlag.Declare !in pNode.modifiers) SM_SSTMT else SM_NONE
+        else -> SM_NONE
+    }
+
+    /** True when any interface method/ctor/index-sig param bears a
+     *  restricted name (the InterfaceDeclaration anchor pre-gate). */
+    private fun smInterfaceHasRestrictedParam(stmt: InterfaceDeclaration): Boolean =
+        stmt.members.any { member ->
+            when (member) {
+                is MethodDeclaration -> member.parameters.any { smRestrictedName(it.name) }
+                is Constructor -> member.parameters.any { smRestrictedName(it.name) }
+                is IndexSignature -> member.parameters.any { smRestrictedName(it.name) }
+                else -> false
+            }
+        }
+
+    /**
+     * Interface method/ctor/index parameter names for TS1100. A
+     * property/method NAME is never restricted (tsc's
+     * checkStrictModeEvalOrArguments only fires for binding names —
+     * variables, parameters, function names, assignment LHS — never a
+     * property/method name), so `interface I { arguments: T }` is legal.
+     */
+    private fun checkStrictModeInterfaceMemberParams(
+        stmt: InterfaceDeclaration,
+        source: String,
+        fileName: String,
+        restricted: Set<String>,
+    ) {
+        for (member in stmt.members) {
+            when (member) {
+                is MethodDeclaration -> for (param in member.parameters) {
+                    checkStrictModeBindingName(param.name, source, fileName, restricted)
+                }
+                is Constructor -> for (param in member.parameters) {
+                    checkStrictModeBindingName(param.name, source, fileName, restricted)
+                }
+                is IndexSignature -> for (param in member.parameters) {
+                    checkStrictModeBindingName(param.name, source, fileName, restricted)
+                }
+                else -> {}
             }
         }
     }
@@ -46975,82 +47382,36 @@ class Checker(
      * collides. `let eval` / `const eval` are block-scoped and don't merge — only `var`
      * matches the lib's declaration kind.
      */
-    private fun checkStrictModeReservedRedeclaration(
-        statements: List<Statement>,
-        source: String,
-        fileName: String,
-    ) {
-        for (stmt in statements) {
-            if (stmt !is VariableStatement) continue
-            if (stmt.declarationList.flags != SyntaxKind.VarKeyword) continue
-            for (decl in stmt.declarationList.declarations) {
-                val name = decl.name as? Identifier ?: continue
-                if (name.text != "eval") continue
-                val start = name.pos
-                val (line, character) = getLineAndCharacterOfPosition(source, start)
-                val libRelated = Diagnostic(
-                    message = "'${name.text}' was also declared here.",
-                    category = DiagnosticCategory.Message,
-                    code = 6203,
-                    fileName = "lib.es5.d.ts",
-                    line = null,
-                    character = null,
-                )
-                diagnostics.add(Diagnostic(
-                    message = "Duplicate identifier '${name.text}'.",
-                    category = DiagnosticCategory.Error,
-                    code = 2300,
-                    fileName = fileName,
-                    line = line,
-                    character = character,
-                    start = start,
-                    length = name.text.length,
-                    relatedInformation = listOf(libRelated),
-                ))
-                diagnostics.add(Diagnostic(
-                    message = "Duplicate identifier '${name.text}'.",
-                    category = DiagnosticCategory.Error,
-                    code = 2300,
-                    fileName = "lib.es5.d.ts",
-                    line = null,
-                    character = null,
-                ))
-            }
-        }
-    }
-
-    /**
-     * Like checkStrictModeInStatements but uses TS1215 (module-specific) instead of TS1100
-     * for top-level statements. This covers variable declarations and function/class parameters.
-     */
-    private fun checkModuleStrictModeInStatements(
-        statements: List<Statement>,
-        source: String,
-        fileName: String,
-        restricted: Set<String>,
-    ) {
-        for (stmt in statements) {
-            when (stmt) {
-                is VariableStatement -> {
-                    for (decl in stmt.declarationList.declarations) {
-                        checkModuleStrictModeName(decl.name, source, fileName, restricted)
-                        decl.initializer?.let { checkStrictModeInExpr(it, source, fileName, restricted) }
-                    }
-                }
-                is FunctionDeclaration -> {
-                    if (ModifierFlag.Declare !in stmt.modifiers) {
-                        stmt.name?.let { checkModuleStrictModeName(it, source, fileName, restricted) }
-                        // Don't check function parameters here — checkArgumentsCollision already handles those
-                        // Nested function bodies are just strict (TS1100), not module-specific
-                        stmt.body?.let { checkStrictModeInStatements(it.statements, source, fileName, restricted) }
-                    }
-                }
-                else -> {
-                    // For other statements (class declarations, etc.), use regular strict mode checking (TS1100)
-                    checkStrictModeInStatement(stmt, source, fileName, restricted)
-                }
-            }
-        }
+    private fun emitStrictVarEvalDuplicate(name: Identifier, source: String, fileName: String) {
+        val start = name.pos
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        val libRelated = Diagnostic(
+            message = "'${name.text}' was also declared here.",
+            category = DiagnosticCategory.Message,
+            code = 6203,
+            fileName = "lib.es5.d.ts",
+            line = null,
+            character = null,
+        )
+        diagnostics.add(Diagnostic(
+            message = "Duplicate identifier '${name.text}'.",
+            category = DiagnosticCategory.Error,
+            code = 2300,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = start,
+            length = name.text.length,
+            relatedInformation = listOf(libRelated),
+        ))
+        diagnostics.add(Diagnostic(
+            message = "Duplicate identifier '${name.text}'.",
+            category = DiagnosticCategory.Error,
+            code = 2300,
+            fileName = "lib.es5.d.ts",
+            line = null,
+            character = null,
+        ))
     }
 
     private fun checkModuleStrictModeName(name: Node, source: String, fileName: String, restricted: Set<String>) {
@@ -47071,102 +47432,6 @@ class Checker(
                         start = start,
                         length = word.length,
                     ))
-                }
-            }
-            else -> {}
-        }
-    }
-
-    /**
-     * Traverses statements looking for function declarations/expressions whose bodies
-     * start with a "use strict" prologue directive, then checks those bodies for TS1100.
-     * Called when the enclosing scope is NOT globally strict.
-     */
-    private fun checkFunctionLocalStrictMode(
-        statements: List<Statement>,
-        source: String,
-        fileName: String,
-        restricted: Set<String>,
-    ) {
-        for (stmt in statements) {
-            when (stmt) {
-                is FunctionDeclaration -> {
-                    if (ModifierFlag.Declare !in stmt.modifiers) {
-                        val body = stmt.body
-                        if (body != null) {
-                            if (hasPrologueUseStrict(body.statements)) {
-                                // This function is locally strict — check its body
-                                checkStrictModeInStatements(body.statements, source, fileName, restricted)
-                            } else {
-                                // Not strict, but recurse to find nested strictly-strict functions
-                                checkFunctionLocalStrictMode(body.statements, source, fileName, restricted)
-                            }
-                        }
-                    }
-                }
-                is ExpressionStatement -> {
-                    checkFunctionLocalStrictModeInExpr(stmt.expression, source, fileName, restricted)
-                }
-                is VariableStatement -> {
-                    for (decl in stmt.declarationList.declarations) {
-                        decl.initializer?.let {
-                            checkFunctionLocalStrictModeInExpr(it, source, fileName, restricted)
-                        }
-                    }
-                }
-                is Block -> checkFunctionLocalStrictMode(stmt.statements, source, fileName, restricted)
-                is IfStatement -> {
-                    checkFunctionLocalStrictModeStmt(stmt.thenStatement, source, fileName, restricted)
-                    stmt.elseStatement?.let {
-                        checkFunctionLocalStrictModeStmt(it, source, fileName, restricted)
-                    }
-                }
-                is ModuleDeclaration -> {
-                    val body = stmt.body
-                    if (body is ModuleBlock) {
-                        checkFunctionLocalStrictMode(body.statements, source, fileName, restricted)
-                    }
-                }
-                else -> {}
-            }
-        }
-    }
-
-    private fun checkFunctionLocalStrictModeStmt(
-        stmt: Statement,
-        source: String,
-        fileName: String,
-        restricted: Set<String>,
-    ) {
-        when (stmt) {
-            is Block -> checkFunctionLocalStrictMode(stmt.statements, source, fileName, restricted)
-            else -> checkFunctionLocalStrictMode(listOf(stmt), source, fileName, restricted)
-        }
-    }
-
-    private fun checkFunctionLocalStrictModeInExpr(
-        expr: Expression,
-        source: String,
-        fileName: String,
-        restricted: Set<String>,
-    ) {
-        when (expr) {
-            is FunctionExpression -> {
-                val body = expr.body
-                if (hasPrologueUseStrict(body.statements)) {
-                    checkStrictModeInStatements(body.statements, source, fileName, restricted)
-                } else {
-                    checkFunctionLocalStrictMode(body.statements, source, fileName, restricted)
-                }
-            }
-            is ArrowFunction -> {
-                val body = expr.body
-                if (body is Block) {
-                    if (hasPrologueUseStrict(body.statements)) {
-                        checkStrictModeInStatements(body.statements, source, fileName, restricted)
-                    } else {
-                        checkFunctionLocalStrictMode(body.statements, source, fileName, restricted)
-                    }
                 }
             }
             else -> {}
@@ -47443,240 +47708,6 @@ class Checker(
                 start = start,
                 length = name.text.length,
             ))
-        }
-    }
-
-    private fun checkStrictModeInStatements(
-        statements: List<Statement>,
-        source: String,
-        fileName: String,
-        restricted: Set<String>,
-    ) {
-        for (stmt in statements) {
-            checkStrictModeInStatement(stmt, source, fileName, restricted)
-        }
-    }
-
-    private fun checkStrictModeInStatement(
-        stmt: Statement,
-        source: String,
-        fileName: String,
-        restricted: Set<String>,
-    ) {
-        when (stmt) {
-            is VariableStatement -> {
-                for (decl in stmt.declarationList.declarations) {
-                    checkStrictModeBindingName(decl.name, source, fileName, restricted)
-                    // Recurse into function/arrow initializers to check nested declarations
-                    decl.initializer?.let { checkStrictModeInExpr(it, source, fileName, restricted) }
-                    // Check type annotations for function type parameter names
-                    decl.type?.let { checkStrictModeInTypeNode(it, source, fileName, restricted) }
-                }
-            }
-            is FunctionDeclaration -> {
-                // Skip declare functions — no code gen, so no TS1100
-                if (ModifierFlag.Declare !in stmt.modifiers) {
-                    stmt.name?.let { checkStrictModeName(it, source, fileName, restricted) }
-                    for (param in stmt.parameters) {
-                        checkStrictModeBindingName(param.name, source, fileName, restricted)
-                    }
-                    stmt.body?.let { checkStrictModeInStatements(it.statements, source, fileName, restricted) }
-                }
-            }
-            is ClassDeclaration -> {
-                // Skip declare classes — no code gen, so no TS1100
-                if (ModifierFlag.Declare !in stmt.modifiers) {
-                    for (member in stmt.members) {
-                        checkStrictModeInClassElement(member, source, fileName, restricted)
-                    }
-                }
-            }
-            is InterfaceDeclaration -> {
-                // Check interface method/index parameter names for restricted identifiers.
-                // A property/method NAME is never restricted (tsc's checkStrictModeEvalOrArguments
-                // only fires for binding names — variables, parameters, function names, assignment
-                // LHS — never a property/method name), so `interface I { arguments: T }` is legal.
-                for (member in stmt.members) {
-                    when (member) {
-                        is MethodDeclaration -> {
-                            for (param in member.parameters) {
-                                checkStrictModeBindingName(param.name, source, fileName, restricted)
-                            }
-                        }
-                        is Constructor -> {
-                            for (param in member.parameters) {
-                                checkStrictModeBindingName(param.name, source, fileName, restricted)
-                            }
-                        }
-                        is IndexSignature -> {
-                            for (param in member.parameters) {
-                                checkStrictModeBindingName(param.name, source, fileName, restricted)
-                            }
-                        }
-                        else -> {}
-                    }
-                }
-            }
-            is ExpressionStatement -> checkStrictModeInExpr(stmt.expression, source, fileName, restricted)
-            is ReturnStatement -> stmt.expression?.let { checkStrictModeInExpr(it, source, fileName, restricted) }
-            is Block -> checkStrictModeInStatements(stmt.statements, source, fileName, restricted)
-            is IfStatement -> {
-                checkStrictModeInStatement(stmt.thenStatement, source, fileName, restricted)
-                stmt.elseStatement?.let { checkStrictModeInStatement(it, source, fileName, restricted) }
-            }
-            is ForStatement -> {
-                when (val init = stmt.initializer) {
-                    is VariableDeclarationList -> {
-                        for (decl in init.declarations) {
-                            checkStrictModeBindingName(decl.name, source, fileName, restricted)
-                        }
-                    }
-                    else -> {}
-                }
-                checkStrictModeInStatement(stmt.statement, source, fileName, restricted)
-            }
-            is ForInStatement -> checkStrictModeInStatement(stmt.statement, source, fileName, restricted)
-            is ForOfStatement -> checkStrictModeInStatement(stmt.statement, source, fileName, restricted)
-            is WhileStatement -> checkStrictModeInStatement(stmt.statement, source, fileName, restricted)
-            is DoStatement -> checkStrictModeInStatement(stmt.statement, source, fileName, restricted)
-            is SwitchStatement -> {
-                for (clause in stmt.caseBlock) {
-                    when (clause) {
-                        is CaseClause -> checkStrictModeInStatements(clause.statements, source, fileName, restricted)
-                        is DefaultClause -> checkStrictModeInStatements(clause.statements, source, fileName, restricted)
-                        else -> {}
-                    }
-                }
-            }
-            is TryStatement -> {
-                checkStrictModeInStatements(stmt.tryBlock.statements, source, fileName, restricted)
-                stmt.catchClause?.let {
-                    it.variableDeclaration?.let { v ->
-                        checkStrictModeBindingName(v.name, source, fileName, restricted)
-                    }
-                    checkStrictModeInStatements(it.block.statements, source, fileName, restricted)
-                }
-                stmt.finallyBlock?.let { checkStrictModeInStatements(it.statements, source, fileName, restricted) }
-            }
-            is LabeledStatement -> checkStrictModeInStatement(stmt.statement, source, fileName, restricted)
-            is ModuleDeclaration -> {
-                when (val body = stmt.body) {
-                    is ModuleBlock -> checkStrictModeInStatements(body.statements, source, fileName, restricted)
-                    else -> {}
-                }
-            }
-            else -> {}
-        }
-    }
-
-    private fun checkStrictModeInClassElement(
-        member: ClassElement,
-        source: String,
-        fileName: String,
-        restricted: Set<String>,
-    ) {
-        // TS1210 handles arguments/eval in class bodies — only check non-arguments/eval
-        // names for TS1100 here to avoid duplicate diagnostics.
-        val nonClassRestricted = restricted - setOf("arguments", "eval")
-        when (member) {
-            is MethodDeclaration -> {
-                for (param in member.parameters) {
-                    checkStrictModeBindingName(param.name, source, fileName, nonClassRestricted)
-                }
-                member.body?.let { checkStrictModeInStatements(it.statements, source, fileName, nonClassRestricted) }
-            }
-            is Constructor -> {
-                for (param in member.parameters) {
-                    checkStrictModeBindingName(param.name, source, fileName, nonClassRestricted)
-                }
-                member.body?.let { checkStrictModeInStatements(it.statements, source, fileName, nonClassRestricted) }
-            }
-            is GetAccessor -> {
-                member.body?.let { checkStrictModeInStatements(it.statements, source, fileName, nonClassRestricted) }
-            }
-            is SetAccessor -> {
-                for (param in member.parameters) {
-                    checkStrictModeBindingName(param.name, source, fileName, nonClassRestricted)
-                }
-                member.body?.let { checkStrictModeInStatements(it.statements, source, fileName, nonClassRestricted) }
-            }
-            else -> {}
-        }
-    }
-
-    private fun checkStrictModeInExpr(
-        expr: Expression,
-        source: String,
-        fileName: String,
-        restricted: Set<String>,
-    ) {
-        when (expr) {
-            is FunctionExpression -> {
-                expr.name?.let { checkStrictModeName(it, source, fileName, restricted) }
-                for (param in expr.parameters) {
-                    checkStrictModeBindingName(param.name, source, fileName, restricted)
-                }
-                checkStrictModeInStatements(expr.body.statements, source, fileName, restricted)
-            }
-            is ArrowFunction -> {
-                for (param in expr.parameters) {
-                    checkStrictModeBindingName(param.name, source, fileName, restricted)
-                }
-                when (val body = expr.body) {
-                    is Block -> checkStrictModeInStatements(body.statements, source, fileName, restricted)
-                    else -> {}
-                }
-            }
-            is BinaryExpression -> {
-                // 16.4dp: TS1100 for `arguments = X` / `eval = X` / compound-assign
-                // inside strict-mode code. Matches TypeScript's grammar-level
-                // AssignmentTargetType restriction — `arguments` and `eval` cannot
-                // be used as the target of an assignment in strict mode.
-                val op = expr.operator
-                val isAssign = op == SyntaxKind.Equals ||
-                    op == SyntaxKind.PlusEquals || op == SyntaxKind.MinusEquals ||
-                    op == SyntaxKind.AsteriskEquals || op == SyntaxKind.SlashEquals ||
-                    op == SyntaxKind.PercentEquals || op == SyntaxKind.LessThanLessThanEquals ||
-                    op == SyntaxKind.GreaterThanGreaterThanEquals || op == SyntaxKind.GreaterThanGreaterThanGreaterThanEquals ||
-                    op == SyntaxKind.AmpersandEquals || op == SyntaxKind.BarEquals || op == SyntaxKind.CaretEquals ||
-                    op == SyntaxKind.AsteriskAsteriskEquals ||
-                    op == SyntaxKind.AmpersandAmpersandEquals || op == SyntaxKind.BarBarEquals || op == SyntaxKind.QuestionQuestionEquals
-                if (isAssign && expr.left is Identifier) {
-                    checkStrictModeName(expr.left, source, fileName, restricted)
-                }
-                checkStrictModeInExpr(expr.left, source, fileName, restricted)
-                checkStrictModeInExpr(expr.right, source, fileName, restricted)
-            }
-            is ParenthesizedExpression -> checkStrictModeInExpr(expr.expression, source, fileName, restricted)
-            is CallExpression -> {
-                checkStrictModeInExpr(expr.expression, source, fileName, restricted)
-                expr.arguments.forEach { checkStrictModeInExpr(it, source, fileName, restricted) }
-            }
-            is NewExpression -> {
-                checkStrictModeInExpr(expr.expression, source, fileName, restricted)
-                expr.arguments?.forEach { checkStrictModeInExpr(it, source, fileName, restricted) }
-            }
-            is PrefixUnaryExpression -> {
-                if (expr.operator == SyntaxKind.PlusPlus || expr.operator == SyntaxKind.MinusMinus) {
-                    val operand = expr.operand
-                    if (operand is Identifier && operand.text in restricted) {
-                        checkStrictModeName(operand, source, fileName, restricted)
-                        if (operand.text == "eval") emitTs2630EvalAssign(operand, source, fileName)
-                    }
-                }
-                checkStrictModeInExpr(expr.operand, source, fileName, restricted)
-            }
-            is PostfixUnaryExpression -> {
-                if (expr.operator == SyntaxKind.PlusPlus || expr.operator == SyntaxKind.MinusMinus) {
-                    val operand = expr.operand
-                    if (operand is Identifier && operand.text in restricted) {
-                        checkStrictModeName(operand, source, fileName, restricted)
-                        if (operand.text == "eval") emitTs2630EvalAssign(operand, source, fileName)
-                    }
-                }
-                checkStrictModeInExpr(expr.operand, source, fileName, restricted)
-            }
-            else -> {}
         }
     }
 
@@ -48076,6 +48107,38 @@ class Checker(
         private const val EX_ROOT = 2
         private const val EX_TOP = 3
         private const val EX_NESTED = 4
+
+        // (M0.4) round 645: spineSmStatus states (checkStrictModeIdentifiers
+        // reach — the walk IDENTITY carried as the status + the transient
+        // SourceFile root whose edges are per-file-MODE routed).
+        // SM_SSTMT/SM_SEXPR = strict statement/expression positions
+        // (emissions active); SM_FSTMT/SM_FEXPR = the fn-local SEARCHING
+        // walk (no emissions — only prologue-bearing fn bodies flip to
+        // SM_SSTMT); SM_SDECL/SM_FDECL = the var-decl-list carrier whose
+        // initializer continues the strict/fn-local EXPRESSION walk;
+        // SM_MVAR/SM_MFN = module top-level VariableStatement/
+        // FunctionDeclaration specials (TS1215 names at the anchor, the
+        // initializer/body continuing INTO the strict walk).
+        private const val SM_NONE = 1
+        private const val SM_ROOT = 2
+        private const val SM_SSTMT = 3
+        private const val SM_SEXPR = 4
+        private const val SM_FSTMT = 5
+        private const val SM_FEXPR = 6
+        private const val SM_SDECL = 7
+        private const val SM_FDECL = 8
+        private const val SM_MVAR = 9
+        private const val SM_MFN = 10
+
+        // (M0.4) round 645: spineSmMode per-file routing modes.
+        private const val SM_MODE_OFF = 0
+        private const val SM_MODE_MODULE = 1
+        private const val SM_MODE_STRICT = 2
+        private const val SM_MODE_FNLOCAL = 3
+
+        /** The strict-mode restricted binding names (tsc
+         *  checkStrictModeEvalOrArguments). */
+        private val SM_RESTRICTED = setOf("arguments", "eval")
 
         // (M0.4) round 631: spineB94Status states (checkBindingPatternComputedIndexSig
         // reach — binary + the transient SourceFile root).
