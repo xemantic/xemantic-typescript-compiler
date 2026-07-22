@@ -1,3 +1,65 @@
+**Round 629 (2026-07-21) — (M0.4) seventh tail-pass migration:
+checkDefiniteAssignmentViaFlowGraph (flow-graph TS2454 + the B187
+nullable-union loop-arg TS2345, ~105 ms — the #7 tail pass) is ON THE
+SPINE as a FILE-END dispatch; the pass dispatch is deleted.** The FILE-END
+variant of the template (the round-628 analysis held exactly): a pass
+whose per-file body is (positional dedup scan over prior diagnostics +
+whole-file flow walks) migrates as ONE dispatch in checkSpine's per-file
+loop AFTER spineWalkFile returns (the spineResolveDeferredIterationChecks
+pattern), NOT per-anchor enters — the TS2454 dedup scan must see every
+spine-emitted TS2454 for the file (the set-based walker 5 + the spineUbd
+co-emissions, both firing during the file's own walk; no pass between the
+spine and the old slot emitted TS2454 — ctaPostFilters touches TS2322/
+TS7030 only, the cross-file UBD leg TS2448+TS2728 only). The walker
+family (walkTopForFlowTS2454 / runFlowTS2454OnTopLevel /
+walkStmtForFlowTS2454 / walkExprForFlowTS2454 / isAssignedAtFlow /
+checkNullableUnionLoopArgs) is UNCHANGED — its only checker ambient is
+currentFlowGraph (installed save/restore in the dispatch; everything else
+travels as explicit parameters), so no frames, no reach classifier, no
+ambient sandwich beyond the graph. The B223 sibling
+checkTryCatchOnlyAssignedVarReads STAYS at its own pass slot: it scans no
+prior diagnostics (verified — no dedup coupling in either direction) and
+the legacy flow-pass-first relative order is preserved (the file-end
+dispatch runs strictly earlier). flowDisabledRanges trips register
+per-file as before; the end-of-init TS2454 range filter is unmoved.
+Legacy quirk pinned: an arrow-initializer body is reached ONLY when the
+ENCLOSING function has ≥1 uninit candidate (the statement walk that finds
+the arrow is gated on a non-empty set). Process trap (recovered): the
+first pre-listAll capture's gradle compile step was still running when
+the migration edits landed — it compiled the half-edited source and
+failed; recaptured from a stashed tree. Lesson: a "pre" capture's compile
+must COMPLETE before any source edit (or stash first). Gates: 17 local
+pins (M04DaFlowSpineMigrationTest — if/try/finally-body reads, top-level
+statements, namespace/class/arrow recursion, the exactly-one-TS2454 dedup
+pin at a set-pass overlap (try-block read), the suppression battery
+(pre-read assignment, closure assignment, for-of loop-var shadow,
+catch-body skip, non-null assert, `| undefined` annotation, explicit
+non-strict), B187 both directions, the B223 sibling) verified green
+against the LEGACY pass FIRST; suite 11,515 → 11,532/0; `--listAll` ×8
+byte-identical (46×7 + 94 env-legit artifacts); pass table 432 → 431 (the
+checkDefiniteAssignmentViaFlowGraph row GONE; checkSpine 18,451.8 ms
+single-run — inside the round-625..628 18.0–19.1 s band);
+warning-clean. M0.4 running total: top SEVEN tail passes migrated.
+SESSION TAIL: the checkSameTargetReferenceCastOverlap (#8 by the fresh
+table, ~123 ms) slot-move pre-gate landed — the pass moved intact from
+its cast-overlap-cluster slot (14''b) to the post-spine slot (corpus
+11,532/0 + listAll ×8 byte-identical). Self-contained: installs its own
+currentFileLocals/currentCheckFileName per file, writes only diagnostics
+(no side sets); no TS2352 retract/dedup consumers exist and the
+cast-overlap siblings (checkNullTypeAssertionOverlap /
+checkArrayToClassCastOverlap / checkJSDocVoidCastNonOverlap) are
+shape-disjoint. NOTE for the migrator: this pass RESOLVES types
+(getTypeOfExpression / getTypeFromTypeNode / bidirectional
+checkTypeRelatedTo per type-arg pair) — the first type-resolving tail
+migration; the per-anchor dispatch will interleave those resolutions
+into the spine walk (first-touch order), so the corpus gate matters more
+than usual. Anchors are TypeAssertionExpression nodes reached by
+walkTypeAssertionsInStmt (the shared walker — its AsExpression branch
+deliberately does NOT hit the callback, per the B87.2 gotcha); two
+emission leaves (emitTS2352IfSameTargetMismatch /
+emitTS2352IfFunctionReturnMismatch) run per anchor in that order. Next
+after it: checkBindingPatternComputedIndexSig (~120 ms).**
+
 **Round 628 (2026-07-21) — (M0.4) sixth tail-pass migration:
 checkSymbolToStringConversions (TS2469/TS2731, 96–108 ms — the #6 tail
 pass) is ON THE SPINE; the legacy recursion (checkSymbolToStringConversions

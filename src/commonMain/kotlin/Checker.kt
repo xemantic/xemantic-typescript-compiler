@@ -3710,6 +3710,36 @@ class Checker(
     /** Reusable ascent buffer for [spineAcStatus]. */
     private val spineAcChain = ArrayList<Node>()
 
+    // ── (M0.4) round 639: checkEvolvingEmptyArrayImplicitAny on the spine ──
+    // (TS7034/TS7005 evolving empty-array implicit-any + the round-316
+    // single-array/branch-merge/snapshot push TS2345s.) The PER-LIST-OWNER
+    // variant: the legacy evProcessScope ran per statement LIST (the file,
+    // fn-declaration bodies, class-DECLARATION member bodies, ModuleBlocks,
+    // and bare/control-flow-position Blocks, via the deleted
+    // evRecurseScopes); on the spine each list dispatches ONCE at its owning
+    // SourceFile/Block/ModuleBlock enter ([spineEvEnterNode]), gated by the
+    // memoized multi-state reach classifier [spineEvStatus] (the deleted
+    // recursion's arms, frozen: try/catch/finally clause statements and
+    // case-clause statements are recursed WITHOUT their list becoming a
+    // scope — a candidate declared directly there never fires — while a
+    // Block statement inside them IS a scope; arrow/fn-EXPRESSION bodies and
+    // class-EXPRESSION member bodies are never scopes — no expression
+    // descent; a dotted `namespace A.B` IS a scope, the parser keeping one
+    // ModuleDeclaration with a direct ModuleBlock body). Part 2
+    // (evCheckSingleArrayPush) is TYPE-RESOLVING → each dispatch runs under
+    // the [spineEvDispatch] ambient sandwich (resting currentFileLocals +
+    // per-file currentCheckFileName + a nulled currentFlowGraph — the
+    // legacy slot ran first after checkSpine, whose finally restores the
+    // pre-spine locals and whose walk leaves a null graph). Fields PRE-init.
+    private var spineEvActive = false
+    private var spineEvRunActive = false
+    /** The legacy slot's resting currentFileLocals (captured at spine entry). */
+    private var spineEvRestingLocals: SymbolTable? = null
+    /** Per-file nodeId memo for [spineEvStatus] — 0 unknown, else EV_*. */
+    private var spineEvReachMemo = ByteArray(0)
+    /** Reusable ascent buffer for [spineEvStatus]. */
+    private val spineEvChain = ArrayList<Node>()
+
     // ── INV.4(d) walker 6 (round 535): checkArgumentCounts on the spine ────
     // The function-call arity pass (TS2554/TS2555/TS2575) — the recursion
     // walkers (checkArgCountInStatements/-InStatement/-InExpr(Core)) are
@@ -5290,27 +5320,25 @@ class Checker(
         // TS1215 emitter checkModuleStrictModeInStatements covers NAME
         // bindings — its FunctionDeclaration arm deliberately skips params,
         // deferring to this pass — and never scans the list).
-        // 37a3' (M0.4 slot-move pre-gate, round 638):
-        // checkEvolvingEmptyArrayImplicitAny (TS7034 at the decl + TS7005 at
-        // each read of an un-annotated `let/var x = []` evolving array,
-        // round-316 family incl. the single-array/branch-merge/snapshot push
-        // checks) moved intact from its pre-spine slot 37a3 ahead of its
-        // spine migration. Fully SYNTACTIC + self-contained (pure AST scope
-        // simulation — no type caches, no ambient); no TS7034/TS7005
-        // dedup/scan consumers exist (checkUninitializedLetCapturedReads
-        // emits the same codes but is gate-disjoint BY CONSTRUCTION — the
-        // trigger-B split gives it captured reads of uninitialized lets,
-        // this pass same-scope reads — and never scans the list; their
-        // relative order flip across this move is therefore immaterial).
-        // Scope for the migrator: a per-STATEMENT-LIST scope pass — each
-        // scope (file / fn / method / accessor body, via evRecurseScopes)
-        // processes its DIRECT VariableStatement candidates with a
-        // whole-LIST simulation (evUseStmt over all statements of the list —
-        // order-independent collection, per-candidate state), then runs the
-        // three push checks per scope; likely migrates as per-LIST-owner
-        // dispatch at scope-owner enters (the round-627/634 shape), not
-        // per-anchor.
-        pass("checkEvolvingEmptyArrayImplicitAny") { checkEvolvingEmptyArrayImplicitAny() }
+        // 37a3' (M0.4, round 639): checkEvolvingEmptyArrayImplicitAny (TS7034
+        // at the decl + TS7005 at each read of an un-annotated `let/var
+        // x = []` evolving array, round-316 family incl. the
+        // single-array/branch-merge/snapshot push checks) is ON THE SPINE —
+        // the PER-LIST-OWNER variant: each scope's statement list dispatches
+        // ONCE at its owning SourceFile/Block/ModuleBlock enter
+        // (spineEvEnterNode), gated by the memoized multi-state reach
+        // classifier spineEvStatus over the deleted evRecurseScopes arms
+        // (frozen: try/catch/finally clause statements and case-clause
+        // statements recurse WITHOUT forming a scope list; arrow/fn-expr
+        // bodies and class EXPRESSIONS are never scopes). Part 2
+        // (evCheckSingleArrayPush) is TYPE-RESOLVING → each dispatch runs
+        // under the spineEvDispatch ambient sandwich (resting
+        // currentFileLocals + per-file currentCheckFileName + a nulled
+        // currentFlowGraph). The legacy binderResults driver → the spine's
+        // partition view, gated `--partitionCheck 2` EQUIVALENT ×8 (the
+        // round-633 rule). No TS7034/TS7005 dedup/scan consumers exist
+        // (checkUninitializedLetCapturedReads emits the same codes but is
+        // gate-disjoint BY CONSTRUCTION and never scans the list).
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -5825,9 +5853,9 @@ class Checker(
         // 37a2. Cross-namespace class-heritage TDZ: a class in top-level namespace A
         //       extending `B.X` where namespace B is declared AFTER A (TS2449).
         pass("checkCrossNamespaceClassHeritageUBD") { checkCrossNamespaceClassHeritageUBD() }
-        // 37a3. checkEvolvingEmptyArrayImplicitAny (TS7034/TS7005) moved to
-        // the post-spine slot — see the pass("checkSpine") site (M0.4
-        // slot-move pre-gate, round 638).
+        // 37a3. checkEvolvingEmptyArrayImplicitAny (TS7034/TS7005) is ON THE
+        // SPINE (M0.4 round 639, via the round-638 slot-move) — see
+        // spineEvEnterNode and the pass("checkSpine") site.
         // 37a4. B337: uninitialized `let x;` captured reads (TS7034/TS7005).
         pass("checkUninitializedLetCapturedReads") { checkUninitializedLetCapturedReads() }
         // 37a5. B353: object-rest destructuring from a class instance — methods,
@@ -21237,6 +21265,14 @@ class Checker(
         // only with module files).
         spineAcRunActive = options.target < ScriptTarget.ES2015 ||
             binderResults.any { isModuleFile(it.sourceFile.statements) && !isDtsFile(it.sourceFile.fileName) }
+        // (M0.4) round 639: the evolving-empty-array scope dispatches' run
+        // gate (the legacy driver gate, verbatim) + the legacy slot's
+        // resting currentFileLocals (the pass ran first after checkSpine,
+        // whose finally restores the pre-spine value) for the
+        // type-resolving Part-2 push check.
+        spineEvRunActive = (options.noImplicitAny || options.strict) &&
+            !options.noImplicitAnyExplicitlyFalse
+        spineEvRestingLocals = currentFileLocals
         // INV.4(d) walker 9: the const-assignment anchors' B116 param-typing
         // rebuild starts from the PRE-SPINE resting bases.
         spineCaRestingLocalTypes = currentLocalTypes
@@ -21344,6 +21380,7 @@ class Checker(
                 spinePmrSetup(result)
                 spineGxSetup(result)
                 spineAcSetup(result)
+                spineEvSetup(result)
                 // (M0.4) round 636: property-init anchors — active in every
                 // non-dts file (the legacy driver's only file gate).
                 spinePiActive = spinePiRunActive && !spineIsDts
@@ -21380,6 +21417,7 @@ class Checker(
                     spinePmrTeardown()
                     spineGxTeardown()
                     spineAcTeardown()
+                    spineEvTeardown()
                     spinePiActive = false
                 }
                 spineResolveDeferredIterationChecks()
@@ -21604,6 +21642,8 @@ class Checker(
         // an `arguments`-named param) — one constant-per-file isModule
         // boolean, no frames/leave hook, no ambient sandwich.
         if (spineAcActive) spineAcEnterNode(node)
+        // (M0.4) round 639 — see spineEvEnterNode.
+        if (spineEvActive) spineEvEnterNode(node)
         // INV.4(d) walker 7: the use-before-declaration pass — the per-list
         // ForwardRefs anchor + loop-header self-ref checks.
         if (spineUbdActive) spineUbdEnterNode(node)
@@ -47643,6 +47683,25 @@ class Checker(
         private const val AC_NONE = 2
         private const val AC_ROOT = 3
 
+        // (M0.4) round 639: spineEvStatus states
+        // (checkEvolvingEmptyArrayImplicitAny reach — multi-state + the
+        // transient SourceFile root). EV_REACHED = a statement the deleted
+        // evRecurseScopes visited (a REACHED Block is itself a scope — its
+        // list dispatches); EV_SCOPE = a fn/member-body Block or ModuleBlock
+        // whose list is a scope; EV_TRYCLAUSE = a try/catch/finally clause
+        // Block (statements recursed, the list NOT a scope); EV_CLAUSE = a
+        // case/default clause (likewise); EV_MEMBER = a class-DECLARATION
+        // method/ctor/accessor on the path to its body; EV_CATCH = a
+        // CatchClause on the path to its block.
+        private const val EV_REACHED = 1
+        private const val EV_NONE = 2
+        private const val EV_ROOT = 3
+        private const val EV_SCOPE = 4
+        private const val EV_TRYCLAUSE = 5
+        private const val EV_CLAUSE = 6
+        private const val EV_MEMBER = 7
+        private const val EV_CATCH = 8
+
         // (M0.4) round 631: spineB94Status states (checkBindingPatternComputedIndexSig
         // reach — binary + the transient SourceFile root).
         private const val B94_REACHED = 1
@@ -72925,19 +72984,162 @@ interface DataView {
         }
     }
 
-    private fun checkEvolvingEmptyArrayImplicitAny() {
-        if (!(options.noImplicitAny || options.strict) || options.noImplicitAnyExplicitlyFalse) return
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
-            val source = result.sourceFile.text
-            evSource = source
-            evProcessScope(result.sourceFile.statements, source, fileName)
+    // ── (M0.4) round 639: the checkEvolvingEmptyArrayImplicitAny spine
+    // pieces (the legacy binderResults driver + evRecurseScopes are deleted;
+    // evProcessScope below survives as the per-LIST-owner dispatch leaf). ──
+
+    /** Per-file setup: the legacy driver's dts/js skip + the per-file
+     *  [evSource] install (consumed by evExprReferencesName's source scan). */
+    private fun spineEvSetup(result: BinderResult) {
+        spineEvActive = spineEvRunActive && !spineIsDts && !spineIsJsLike
+        spineEvReachMemo = if (!spineEvActive) ByteArray(0) else {
+            val n = result.sourceFile.nodeCount
+            if (n > 0) ByteArray(n) else ByteArray(0)
+        }
+        if (spineEvActive) evSource = spineSource
+    }
+
+    private fun spineEvTeardown() {
+        spineEvActive = false
+        spineEvReachMemo = ByteArray(0)
+    }
+
+    /** ENTER dispatch: a scope-owning statement LIST dispatches once at its
+     *  owner's enter — the SourceFile (the file scope, before any child),
+     *  a REACHED Block (bare/control-flow position — the deleted
+     *  evRecurseScopes' Block arm) or SCOPE Block (a fn/member body), and a
+     *  SCOPE ModuleBlock. */
+    private fun spineEvEnterNode(node: Node) {
+        when ((node as NodeBase).kindId) {
+            NodeKind.SOURCE_FILE -> spineEvDispatch((node as SourceFile).statements)
+            NodeKind.BLOCK -> {
+                val st = spineEvStatus(node)
+                if (st == EV_REACHED || st == EV_SCOPE) spineEvDispatch((node as Block).statements)
+            }
+            NodeKind.MODULE_BLOCK -> {
+                if (spineEvStatus(node) == EV_SCOPE) spineEvDispatch((node as ModuleBlock).statements)
+            }
+            else -> {}
         }
     }
 
-    /** Process one scope: emit for its direct `let/var x = []` candidates, then
-     *  recurse into nested function/method/accessor bodies as their own scopes. */
+    /** One scope-list dispatch under the legacy-slot ambient: the Part-2
+     *  push check resolves types (getTypeOfArrayLiteral / getTypeOfExpression
+     *  / the relation), so install the resting currentFileLocals, the
+     *  per-file check-file name, and a null flow graph around the leaf. */
+    private fun spineEvDispatch(stmts: List<Statement>) {
+        val savedLocals = currentFileLocals
+        val savedCheckFileName = currentCheckFileName
+        val savedFlow = currentFlowGraph
+        currentFileLocals = spineEvRestingLocals
+        currentCheckFileName = spineFileName
+        currentFlowGraph = null
+        try {
+            evProcessScope(stmts, spineSource, spineFileName)
+        } finally {
+            currentFileLocals = savedLocals
+            currentCheckFileName = savedCheckFileName
+            currentFlowGraph = savedFlow
+        }
+    }
+
+    /** Memoized reach classifier — ascends to the first memoized/terminal
+     *  ancestor, then folds [spineEvFold] back down (spineAcStatus pattern).
+     *  The SourceFile anchor carries the transient EV_ROOT status (never
+     *  memoized) whose sole edge is `child is Statement` → EV_REACHED. */
+    private fun spineEvStatus(node: Node): Int {
+        if (node is SourceFile) return EV_ROOT
+        val memo = spineEvReachMemo
+        run {
+            val id = (node as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) {
+                val m = memo[id].toInt()
+                if (m != 0) return m
+            }
+        }
+        val chain = spineEvChain
+        chain.clear()
+        var cur: Node = node
+        val anchor: Node?
+        var anchorStatus = EV_NONE
+        while (true) {
+            chain.add(cur)
+            val parent = (cur as NodeBase).parent
+            if (parent == null) { anchor = null; break } // detached/unindexed
+            if (parent is SourceFile) { anchor = parent; anchorStatus = EV_ROOT; break }
+            val pid = (parent as NodeBase).nodeId
+            val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
+            if (pm != 0) { anchor = parent; anchorStatus = pm; break }
+            cur = parent
+        }
+        var pNode: Node? = anchor
+        var pStatus = anchorStatus
+        var result = EV_NONE
+        for (i in chain.indices.reversed()) {
+            val c = chain[i]
+            result = when {
+                pNode == null -> EV_NONE
+                pStatus == EV_ROOT -> if (c is Statement) EV_REACHED else EV_NONE
+                else -> spineEvFold(pNode, pStatus, c)
+            }
+            val cid = (c as NodeBase).nodeId
+            if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
+            pNode = c
+            pStatus = result
+        }
+        chain.clear()
+        return result
+    }
+
+    /** The deleted evRecurseScopes arms, verbatim, as parent-status → child
+     *  transitions. A REACHED Block is a scope (its statements re-enter the
+     *  recursion); try/catch/finally clause Blocks carry EV_TRYCLAUSE
+     *  (statements recursed, the list NOT a scope); case/default clauses
+     *  likewise via EV_CLAUSE. Unlisted parents are the legacy `else -> {}`
+     *  (no expression descent — arrow/fn-expr bodies and class EXPRESSIONS
+     *  are never scopes). */
+    private fun spineEvFold(pNode: Node, pStatus: Int, child: Node): Int = when (pStatus) {
+        EV_REACHED -> when (pNode) {
+            is FunctionDeclaration -> if (child === pNode.body) EV_SCOPE else EV_NONE
+            is ClassDeclaration -> if (child is MethodDeclaration || child is Constructor ||
+                child is GetAccessor || child is SetAccessor) EV_MEMBER else EV_NONE
+            is ModuleDeclaration -> if (child === pNode.body && child is ModuleBlock) EV_SCOPE else EV_NONE
+            is Block -> if (child is Statement) EV_REACHED else EV_NONE
+            is IfStatement -> if (child === pNode.thenStatement || child === pNode.elseStatement) EV_REACHED else EV_NONE
+            is ForStatement -> if (child === pNode.statement) EV_REACHED else EV_NONE
+            is ForInStatement -> if (child === pNode.statement) EV_REACHED else EV_NONE
+            is ForOfStatement -> if (child === pNode.statement) EV_REACHED else EV_NONE
+            is WhileStatement -> if (child === pNode.statement) EV_REACHED else EV_NONE
+            is DoStatement -> if (child === pNode.statement) EV_REACHED else EV_NONE
+            is LabeledStatement -> if (child === pNode.statement) EV_REACHED else EV_NONE
+            is SwitchStatement -> if (child is CaseClause || child is DefaultClause) EV_CLAUSE else EV_NONE
+            is TryStatement -> when {
+                child === pNode.tryBlock || child === pNode.finallyBlock -> EV_TRYCLAUSE
+                child is CatchClause -> EV_CATCH
+                else -> EV_NONE
+            }
+            else -> EV_NONE
+        }
+        EV_SCOPE, EV_TRYCLAUSE, EV_CLAUSE ->
+            if (child is Statement) EV_REACHED else EV_NONE
+        EV_MEMBER -> {
+            val body = when (pNode) {
+                is MethodDeclaration -> pNode.body
+                is Constructor -> pNode.body
+                is GetAccessor -> pNode.body
+                is SetAccessor -> pNode.body
+                else -> null
+            }
+            if (body != null && child === body) EV_SCOPE else EV_NONE
+        }
+        EV_CATCH -> if (pNode is CatchClause && child === pNode.block) EV_TRYCLAUSE else EV_NONE
+        else -> EV_NONE
+    }
+
+    /** Process one scope's statement list: emit for its direct `let/var
+     *  x = []` candidates (the whole-list simulation), then run the
+     *  round-316 push checks. Anchor-called from [spineEvDispatch] — nested
+     *  function/method/accessor bodies dispatch at their OWN Block enters. */
     private fun evProcessScope(stmts: List<Statement>, source: String, fileName: String) {
         for (stmt in stmts) {
             if (stmt is VariableStatement) {
@@ -72999,8 +73201,8 @@ interface DataView {
         evCheckSingleArrayPush(stmts, source, fileName)
         evCheckBranchMergePush(stmts, source, fileName)
         evCheckSnapshotPush(stmts, source, fileName)
-        // Recurse into nested function-like bodies as their own scopes.
-        for (stmt in stmts) evRecurseScopes(stmt, source, fileName)
+        // (Nested function/method/accessor bodies are their own scopes —
+        // since round 639 they dispatch at their own spine enters.)
     }
 
     /** Widened element type-name of a literal element / push-arg, or null (bail on any
@@ -73162,31 +73364,6 @@ interface DataView {
             if (rhs.elements.isEmpty()) return be.left.pos
         }
         return null
-    }
-
-    private fun evRecurseScopes(stmt: Statement, source: String, fileName: String) {
-        when (stmt) {
-            is FunctionDeclaration -> stmt.body?.let { evProcessScope(it.statements, source, fileName) }
-            is ClassDeclaration -> for (m in stmt.members) when (m) {
-                is MethodDeclaration -> m.body?.let { evProcessScope(it.statements, source, fileName) }
-                is Constructor -> m.body?.let { evProcessScope(it.statements, source, fileName) }
-                is GetAccessor -> m.body?.let { evProcessScope(it.statements, source, fileName) }
-                is SetAccessor -> m.body?.let { evProcessScope(it.statements, source, fileName) }
-                else -> {}
-            }
-            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { evProcessScope(it.statements, source, fileName) }
-            is Block -> evProcessScope(stmt.statements, source, fileName)
-            is IfStatement -> { evRecurseScopes(stmt.thenStatement, source, fileName); stmt.elseStatement?.let { evRecurseScopes(it, source, fileName) } }
-            is ForStatement -> evRecurseScopes(stmt.statement, source, fileName)
-            is ForInStatement -> evRecurseScopes(stmt.statement, source, fileName)
-            is ForOfStatement -> evRecurseScopes(stmt.statement, source, fileName)
-            is WhileStatement -> evRecurseScopes(stmt.statement, source, fileName)
-            is DoStatement -> evRecurseScopes(stmt.statement, source, fileName)
-            is LabeledStatement -> evRecurseScopes(stmt.statement, source, fileName)
-            is SwitchStatement -> for (c in stmt.caseBlock) { val cs = when (c) { is CaseClause -> c.statements; is DefaultClause -> c.statements; else -> emptyList() }; for (s in cs) evRecurseScopes(s, source, fileName) }
-            is TryStatement -> { for (s in stmt.tryBlock.statements) evRecurseScopes(s, source, fileName); stmt.catchClause?.let { for (s in it.block.statements) evRecurseScopes(s, source, fileName) }; stmt.finallyBlock?.let { for (s in it.statements) evRecurseScopes(s, source, fileName) } }
-            else -> {}
-        }
     }
 
     /** Collect uses of [name] in a statement subtree for the evolving-array check.

@@ -20,6 +20,50 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 639 (2026-07-22) — (M0.4) sixteenth tail-pass migration:
+checkEvolvingEmptyArrayImplicitAny (TS7034 at the decl + TS7005 at each
+read of an un-annotated `let/var x = []` evolving array, round-316 family
+incl. the single-array/branch-merge/snapshot push TS2345s; 103.2 ms — the
+#16 per-file tail pass) is ON THE SPINE; the legacy binderResults driver +
+evRecurseScopes (~35 lines) DELETED; evProcessScope + the whole
+evUseStmt/evUseExpr simulation + the three push checks survive as the
+anchor-called leaf.** The PER-LIST-OWNER variant (the round-627/634 shape,
+first full application): each scope's statement LIST dispatches ONCE at
+its owning SourceFile / Block / ModuleBlock ENTER (spineEvEnterNode) —
+never per anchor — gated by the memoized MULTI-STATE reach classifier
+spineEvStatus/spineEvFold reproducing the deleted evRecurseScopes arms
+verbatim, including its LEVEL-SKIPPING quirks (the sharp pins): a REACHED
+Block is itself a scope (bare/control-flow position), while try/catch/
+finally clause Blocks and case/default clauses carry pass-through statuses
+(EV_TRYCLAUSE/EV_CLAUSE — their statements are recursed for NESTED scopes
+but the list never forms a scope, so a candidate declared DIRECTLY in a
+try block or case clause never fires while a Block statement inside them
+DOES); fn-declaration and class-DECLARATION member bodies reach via
+EV_MEMBER→EV_SCOPE; arrow/fn-EXPRESSION bodies and class-EXPRESSION
+member bodies are never scopes (the recursion had no expression descent).
+Scope-map correction the pins caught: a dotted `namespace A.B` IS a scope
+— the parser keeps ONE ModuleDeclaration with a direct ModuleBlock body,
+so the `body as? ModuleBlock` arm matched it (the round-638 tail note
+implied otherwise). Second correction: the round-638 "fully syntactic —
+no ambient" guess was WRONG — Part 2 (evCheckSingleArrayPush) resolves
+types (getTypeOfArrayLiteral / getTypeOfExpression / checkTypeRelatedTo),
+so every dispatch runs under an ambient sandwich (spineEvDispatch):
+resting currentFileLocals (the legacy slot ran FIRST after checkSpine,
+whose finally restores the pre-spine value) + per-file
+currentCheckFileName + a nulled currentFlowGraph (the round-630 co
+precedent). The legacy driver → the spine's partition view, gated
+`--partitionCheck 2` EQUIVALENT ×8 (the round-633 rule); the pass emits
+ZERO TS7034/TS7005 on all 8 tsc profiles → the listAll gate pins pure
+non-perturbation. Gates: 33 local pins (M04EvolvingArraySpineMigrationTest
+— trigger A/B, concretizer gating, captured reads surviving an outer
+concretizer, the five suppression shapes, the self-spread read, the reach
+battery both directions, the three push checks, run gates) green against
+the LEGACY pass FIRST; suite 11,757 → 11,790/0; `--listAll` ×8
+byte-identical (time header only); partitionCheck ×8 EQUIVALENT; pass
+table 423 → 422 (the row gone; checkSpine in-band); warning-clean
+(--rerun-tasks, zero `w:`). M0.4 running total: top SIXTEEN tail passes
+migrated (one skip: the cross-file checkCrossFileModuleAugmentationDuplicates).**
+
 **Round 638 (2026-07-22) — (M0.4) fifteenth tail-pass migration:
 checkArgumentsCollision (TS2396 "Duplicate identifier 'arguments'…" for
 an `arguments`-named param alongside a rest param at target < ES2015 +
@@ -533,68 +577,6 @@ walker's reach quirks to pin: param defaults ARE walked at
 FunctionDeclaration (unlike the cast walker), catch-variable/heritage/
 enum-member positions are not.**
 
-**Round 629 (2026-07-21) — (M0.4) seventh tail-pass migration:
-checkDefiniteAssignmentViaFlowGraph (flow-graph TS2454 + the B187
-nullable-union loop-arg TS2345, ~105 ms — the #7 tail pass) is ON THE
-SPINE as a FILE-END dispatch; the pass dispatch is deleted.** The FILE-END
-variant of the template (the round-628 analysis held exactly): a pass
-whose per-file body is (positional dedup scan over prior diagnostics +
-whole-file flow walks) migrates as ONE dispatch in checkSpine's per-file
-loop AFTER spineWalkFile returns (the spineResolveDeferredIterationChecks
-pattern), NOT per-anchor enters — the TS2454 dedup scan must see every
-spine-emitted TS2454 for the file (the set-based walker 5 + the spineUbd
-co-emissions, both firing during the file's own walk; no pass between the
-spine and the old slot emitted TS2454 — ctaPostFilters touches TS2322/
-TS7030 only, the cross-file UBD leg TS2448+TS2728 only). The walker
-family (walkTopForFlowTS2454 / runFlowTS2454OnTopLevel /
-walkStmtForFlowTS2454 / walkExprForFlowTS2454 / isAssignedAtFlow /
-checkNullableUnionLoopArgs) is UNCHANGED — its only checker ambient is
-currentFlowGraph (installed save/restore in the dispatch; everything else
-travels as explicit parameters), so no frames, no reach classifier, no
-ambient sandwich beyond the graph. The B223 sibling
-checkTryCatchOnlyAssignedVarReads STAYS at its own pass slot: it scans no
-prior diagnostics (verified — no dedup coupling in either direction) and
-the legacy flow-pass-first relative order is preserved (the file-end
-dispatch runs strictly earlier). flowDisabledRanges trips register
-per-file as before; the end-of-init TS2454 range filter is unmoved.
-Legacy quirk pinned: an arrow-initializer body is reached ONLY when the
-ENCLOSING function has ≥1 uninit candidate (the statement walk that finds
-the arrow is gated on a non-empty set). Process trap (recovered): the
-first pre-listAll capture's gradle compile step was still running when
-the migration edits landed — it compiled the half-edited source and
-failed; recaptured from a stashed tree. Lesson: a "pre" capture's compile
-must COMPLETE before any source edit (or stash first). Gates: 17 local
-pins (M04DaFlowSpineMigrationTest — if/try/finally-body reads, top-level
-statements, namespace/class/arrow recursion, the exactly-one-TS2454 dedup
-pin at a set-pass overlap (try-block read), the suppression battery
-(pre-read assignment, closure assignment, for-of loop-var shadow,
-catch-body skip, non-null assert, `| undefined` annotation, explicit
-non-strict), B187 both directions, the B223 sibling) verified green
-against the LEGACY pass FIRST; suite 11,515 → 11,532/0; `--listAll` ×8
-byte-identical (46×7 + 94 env-legit artifacts); pass table 432 → 431 (the
-checkDefiniteAssignmentViaFlowGraph row GONE; checkSpine 18,451.8 ms
-single-run — inside the round-625..628 18.0–19.1 s band);
-warning-clean. M0.4 running total: top SEVEN tail passes migrated.
-SESSION TAIL: the checkSameTargetReferenceCastOverlap (#8 by the fresh
-table, ~123 ms) slot-move pre-gate landed — the pass moved intact from
-its cast-overlap-cluster slot (14''b) to the post-spine slot (corpus
-11,532/0 + listAll ×8 byte-identical). Self-contained: installs its own
-currentFileLocals/currentCheckFileName per file, writes only diagnostics
-(no side sets); no TS2352 retract/dedup consumers exist and the
-cast-overlap siblings (checkNullTypeAssertionOverlap /
-checkArrayToClassCastOverlap / checkJSDocVoidCastNonOverlap) are
-shape-disjoint. NOTE for the migrator: this pass RESOLVES types
-(getTypeOfExpression / getTypeFromTypeNode / bidirectional
-checkTypeRelatedTo per type-arg pair) — the first type-resolving tail
-migration; the per-anchor dispatch will interleave those resolutions
-into the spine walk (first-touch order), so the corpus gate matters more
-than usual. Anchors are TypeAssertionExpression nodes reached by
-walkTypeAssertionsInStmt (the shared walker — its AsExpression branch
-deliberately does NOT hit the callback, per the B87.2 gotcha); two
-emission leaves (emitTS2352IfSameTargetMismatch /
-emitTS2352IfFunctionReturnMismatch) run per anchor in that order. Next
-after it: checkBindingPatternComputedIndexSig (~120 ms).**
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 (Restored 2026-07-12, round 481 — the queue/backlog/inventory sections had been
@@ -835,9 +817,21 @@ structural item instead of landing alone.**
   initializers, declare-namespace bodies stay silent) = a fresh edge
   set; the run-level dispatch gate (target < ES2015 || any non-dts
   module file) becomes the run-active flag);
-  next per-file candidates by cost: checkEvolvingEmptyArrayImplicitAny
-  103.2 ms — scope shape + consumers before the slot-move;
-  98 passes >20 ms carry 5.3 s of the
+  checkEvolvingEmptyArrayImplicitAny 103.2 ms — **MIGRATED round 639** (the
+  PER-LIST-OWNER variant: a per-STATEMENT-LIST scope pass dispatches each
+  scope's list ONCE at its owning SourceFile/Block/ModuleBlock enter, gated
+  by a multi-state reach classifier carrying the deleted evRecurseScopes'
+  level-skipping quirks — try/catch/finally clause statements and
+  case-clause statements recurse WITHOUT forming a scope list (a candidate
+  declared directly there never fires) while a Block statement inside them
+  IS a scope; arrow/fn-expr bodies and class EXPRESSIONS are never scopes;
+  a dotted `namespace A.B` IS one (the parser keeps a direct ModuleBlock
+  body — the scope map's "never" guess was wrong, caught by the pins);
+  Part 2 is TYPE-RESOLVING → per-dispatch ambient sandwich of resting
+  currentFileLocals + per-file currentCheckFileName + a nulled
+  currentFlowGraph);
+  next per-file candidates by cost: re-read the `--passTiming` table
+  (98 passes >20 ms carry 5.3 s of the
   6.2 s). Migration protocol per
   pass (the round-624 template): slot-move pre-gate commit (intact pass to the
   post-spine slot, corpus + listAll ×8), then the migration commit (frames at
