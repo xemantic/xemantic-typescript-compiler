@@ -350,6 +350,17 @@ class M04SuperRebindSpineMigrationTest {
     }
 
     @Test
+    fun `negative control - a for-head declaration-list initializer is not walked`() {
+        diagnose(
+            """
+            function f() { for (let a = super.x; ;) {} }
+            """
+        ) should {
+            have(none { it.code == 2660 })
+        }
+    }
+
+    @Test
     fun `negative control - a for condition is not walked`() {
         diagnose(
             """

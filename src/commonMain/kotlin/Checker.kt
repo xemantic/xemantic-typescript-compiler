@@ -3762,6 +3762,29 @@ class Checker(
     /** Reusable ascent buffer for [spineUyStatus]. */
     private val spineUyChain = ArrayList<Node>()
 
+    // ── (M0.4) round 641: checkSuperRefInRebindingScope on the spine ──
+    // (TS2660 `super` references inside regular-function rebinding scopes.)
+    // The walk threads ONE downward boolean — `rebound` — carried AS the
+    // status by the classifier [spineSrStatus] over [spineSrFold]:
+    // top-level statements start SR_REBOUND, fn-decl/fn-expr bodies RESET
+    // to SR_REBOUND, arrows PRESERVE, class-member bodies/prop
+    // initializers reset to SR_CLEAR at the direct level (only a nested fn
+    // inside re-rebinds), ModuleBlocks preserve. Frozen quirks: a
+    // `super(...)` CALLEE is skipped (TS2337 territory — the anchor's
+    // direct-parent gate; a PARENTHESIZED super callee still fires) while
+    // the call ARGUMENTS are walked; object literals are skipped entirely
+    // (the sibling checkSuperInObjectLiterals owns them — no fold arm);
+    // the for-INITIALIZER expression is walked but for-condition/
+    // incrementor are NOT; class EXPRESSIONS are never walked. Anchors:
+    // `super` Identifiers (the text pre-gate runs before the climb — the
+    // name is rare). Fully syntactic — no ambient sandwich. Fields
+    // PRE-init.
+    private var spineSrActive = false
+    /** Per-file nodeId memo for [spineSrStatus] — 0 unknown, else SR_*. */
+    private var spineSrReachMemo = ByteArray(0)
+    /** Reusable ascent buffer for [spineSrStatus]. */
+    private val spineSrChain = ArrayList<Node>()
+
     // ── INV.4(d) walker 6 (round 535): checkArgumentCounts on the spine ────
     // The function-call arity pass (TS2554/TS2555/TS2575) — the recursion
     // walkers (checkArgCountInStatements/-InStatement/-InExpr(Core)) are
@@ -5375,26 +5398,24 @@ class Checker(
         // driver → the spine's partition view, gated `--partitionCheck 2`
         // EQUIVALENT ×8. This pass is the SOLE emitter of all four codes
         // and no pass scans them.
-        // 27d' (M0.4 slot-move pre-gate, round 640):
-        // checkSuperRefInRebindingScope (TS2660 for `super` references
-        // inside regular-function rebinding scopes) moved intact from slot
-        // 27d ahead of its spine migration. Fully syntactic +
-        // self-contained (isSuperIdentifier + a pure AST walk — no type
-        // caches, no ambient, no side-set consults); the SIBLING TS2660
-        // emitter (checkSuperInObjectLiterals) is position-DISJOINT by
-        // construction (this walker skips ObjectLiteralExpression
-        // entirely) and neither pass scans the diagnostics list, so the
-        // order flip across the move is immaterial. Scope quirks for the
-        // migrator: the `rebound` flag is the ONE downward boolean —
-        // top-level statements start rebound=true, a FunctionDeclaration/
-        // FunctionExpression body RESETS it to true, an arrow PRESERVES
-        // it, a class-member body/prop-initializer direct level resets to
-        // FALSE (TS2335/derived-super territory — only a nested fn inside
-        // re-rebinds), a ModuleBlock PRESERVES it; `super(...)` callees
-        // and object literals are skipped (TS2337 / the objlit sibling own
-        // them); the for-INITIALIZER is walked here (unlike the yield
-        // walk) but for-condition/incrementor are NOT — a fresh edge set.
-        pass("checkSuperRefInRebindingScope") { checkSuperRefInRebindingScope() }
+        // 27d'' (M0.4, round 641): checkSuperRefInRebindingScope (TS2660
+        // `super` references inside regular-function rebinding scopes) is
+        // ON THE SPINE — anchors at `super` Identifiers (spineSrEnterNode,
+        // text pre-gate before the reach climb), gated by the multi-state
+        // classifier spineSrStatus carrying the walk's ONE downward
+        // `rebound` boolean AS the status (SR_REBOUND/SR_CLEAR; fn-decl/
+        // fn-expr bodies reset to SR_REBOUND, arrows/ModuleBlocks
+        // preserve, class-member bodies/prop initializers reset to
+        // SR_CLEAR via the SR_MEMBER carrier). Frozen: `super(...)`
+        // DIRECT callees skipped (the anchor's parent gate — a
+        // parenthesized super callee still fires); object literals
+        // skipped entirely (the sibling checkSuperInObjectLiterals is
+        // position-DISJOINT by construction); the for-INITIALIZER
+        // expression walked, for-condition/incrementor NOT; class
+        // EXPRESSIONS never walked. Fully syntactic — no ambient
+        // sandwich; the legacy binderResults driver → the spine's
+        // partition view, gated `--partitionCheck 2` EQUIVALENT ×8.
+        // Neither TS2660 emitter scans the diagnostics list.
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -5863,9 +5884,8 @@ class Checker(
         pass("checkSuperInObjectLiterals") { checkSuperInObjectLiterals() }
         // 27c. Check super(...) calls in nested functions inside constructors (TS2337)
         pass("checkIllegalSuperCallsInNestedFunctions") { checkIllegalSuperCallsInNestedFunctions() }
-        // 27d. checkSuperRefInRebindingScope (TS2660) moved to the
-        // post-spine slot — see the pass("checkSpine") site (M0.4
-        // slot-move pre-gate, round 640).
+        // 27d. checkSuperRefInRebindingScope (TS2660) is ON THE SPINE
+        // (M0.4, round 641) — see spineSrEnterNode.
         // 27e. Check this.X access in constructors / field initializers where X is abstract (TS2715)
         pass("checkAbstractMemberAccessInConstructor") { checkAbstractMemberAccessInConstructor() }
         // 27f. Check abstract members in non-abstract class (TS1253) + abstract property without annotation (TS7008)
@@ -21435,6 +21455,7 @@ class Checker(
                 spineAcSetup(result)
                 spineEvSetup(result)
                 spineUySetup(result)
+                spineSrSetup(result)
                 // (M0.4) round 636: property-init anchors — active in every
                 // non-dts file (the legacy driver's only file gate).
                 spinePiActive = spinePiRunActive && !spineIsDts
@@ -21473,6 +21494,7 @@ class Checker(
                     spineAcTeardown()
                     spineEvTeardown()
                     spineUyTeardown()
+                    spineSrTeardown()
                     spinePiActive = false
                 }
                 spineResolveDeferredIterationChecks()
@@ -21704,6 +21726,11 @@ class Checker(
         // YieldExpression enters) — two interleaved reach shapes in one
         // classifier; no frames/leave hook, no ambient sandwich.
         if (spineUyActive) spineUyEnterNode(node)
+        // (M0.4) round 641: the super-in-rebinding-scope anchors (`super`
+        // Identifiers with a text pre-gate) — the one downward `rebound`
+        // boolean carried as the classifier status; no frames/leave hook,
+        // no ambient sandwich.
+        if (spineSrActive) spineSrEnterNode(node)
         // INV.4(d) walker 7: the use-before-declaration pass — the per-list
         // ForwardRefs anchor + loop-header self-ref checks.
         if (spineUbdActive) spineUbdEnterNode(node)
@@ -47781,6 +47808,21 @@ class Checker(
         private const val UY_YNON = 5
         private const val UY_MEMBER = 6
 
+        // (M0.4) round 641: spineSrStatus states
+        // (checkSuperRefInRebindingScope reach — the one downward `rebound`
+        // boolean carried AS the status + the transient SourceFile root).
+        // SR_REBOUND = a walked position inside a regular-function rebinding
+        // scope (a super anchor here fires TS2660); SR_CLEAR = a walked
+        // position whose scope keeps the class member's super binding
+        // (TS2335/derived-super territory — silent here); SR_MEMBER = a
+        // class-DECLARATION member on the path to its body/initializer
+        // (always resets to SR_CLEAR below it).
+        private const val SR_NONE = 1
+        private const val SR_ROOT = 2
+        private const val SR_REBOUND = 3
+        private const val SR_CLEAR = 4
+        private const val SR_MEMBER = 5
+
         // (M0.4) round 631: spineB94Status states (checkBindingPatternComputedIndexSig
         // reach — binary + the transient SourceFile root).
         private const val B94_REACHED = 1
@@ -69728,182 +69770,8 @@ interface DataView {
     // -----------------------------------------------------------------------
     // TS2660: super references in regular-function rebinding scopes
     // -----------------------------------------------------------------------
-
-    /** Walks every file looking for `super` references inside regular-function bodies
-     * (which rebind super) or arrow bodies whose enclosing scope rebinds super. Class
-     * member bodies are entered but the direct level is skipped — TS2335 covers
-     * non-derived class methods, and derived class methods have valid super. We only
-     * emit when descending past a function/expression boundary that rebinds super. */
-    private fun checkSuperRefInRebindingScope() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            // Top-level statements: super rebound (none available).
-            walkSuperRebindStmts(result.sourceFile.statements, source, fileName, rebound = true)
-        }
-    }
-
-    private fun walkSuperRebindStmts(statements: List<Statement>, source: String, fileName: String, rebound: Boolean) {
-        for (stmt in statements) walkSuperRebindStmt(stmt, source, fileName, rebound)
-    }
-
-    private fun walkSuperRebindStmt(stmt: Statement, source: String, fileName: String, rebound: Boolean) {
-        when (stmt) {
-            is ExpressionStatement -> walkSuperRebindExpr(stmt.expression, source, fileName, rebound)
-            is VariableStatement -> stmt.declarationList.declarations.forEach {
-                it.initializer?.let { i -> walkSuperRebindExpr(i, source, fileName, rebound) }
-            }
-            is ReturnStatement -> stmt.expression?.let { walkSuperRebindExpr(it, source, fileName, rebound) }
-            is IfStatement -> {
-                walkSuperRebindExpr(stmt.expression, source, fileName, rebound)
-                walkSuperRebindStmt(stmt.thenStatement, source, fileName, rebound)
-                stmt.elseStatement?.let { walkSuperRebindStmt(it, source, fileName, rebound) }
-            }
-            is Block -> walkSuperRebindStmts(stmt.statements, source, fileName, rebound)
-            is ForStatement -> {
-                (stmt.initializer as? Expression)?.let { walkSuperRebindExpr(it, source, fileName, rebound) }
-                walkSuperRebindStmt(stmt.statement, source, fileName, rebound)
-            }
-            is WhileStatement -> {
-                walkSuperRebindExpr(stmt.expression, source, fileName, rebound)
-                walkSuperRebindStmt(stmt.statement, source, fileName, rebound)
-            }
-            is DoStatement -> {
-                walkSuperRebindStmt(stmt.statement, source, fileName, rebound)
-                walkSuperRebindExpr(stmt.expression, source, fileName, rebound)
-            }
-            is ThrowStatement -> stmt.expression?.let { walkSuperRebindExpr(it, source, fileName, rebound) }
-            // Regular function body: super rebound to undefined.
-            is FunctionDeclaration -> stmt.body?.let { walkSuperRebindStmts(it.statements, source, fileName, rebound = true) }
-            is ClassDeclaration -> {
-                for (member in stmt.members) {
-                    val body = when (member) {
-                        is MethodDeclaration -> member.body
-                        is GetAccessor -> member.body
-                        is SetAccessor -> member.body
-                        is Constructor -> member.body
-                        is ClassStaticBlockDeclaration -> member.body
-                        else -> null
-                    }
-                    // Direct level of class member body is NOT a rebinding scope —
-                    // super is valid for derived classes (TS2335 fires for non-derived,
-                    // separately). Walk into nested constructs which MAY rebind.
-                    body?.let { walkSuperRebindStmts(it.statements, source, fileName, rebound = false) }
-                    if (member is PropertyDeclaration) {
-                        // Property initializers run in constructor scope — not rebinding.
-                        member.initializer?.let { walkSuperRebindExpr(it, source, fileName, rebound = false) }
-                    }
-                }
-            }
-            is ModuleDeclaration -> {
-                val body = stmt.body
-                if (body is ModuleBlock) walkSuperRebindStmts(body.statements, source, fileName, rebound)
-            }
-            is ForInStatement -> {
-                walkSuperRebindExpr(stmt.expression, source, fileName, rebound)
-                walkSuperRebindStmt(stmt.statement, source, fileName, rebound)
-            }
-            is ForOfStatement -> {
-                walkSuperRebindExpr(stmt.expression, source, fileName, rebound)
-                walkSuperRebindStmt(stmt.statement, source, fileName, rebound)
-            }
-            is SwitchStatement -> {
-                walkSuperRebindExpr(stmt.expression, source, fileName, rebound)
-                for (clause in stmt.caseBlock) when (clause) {
-                    is CaseClause -> {
-                        walkSuperRebindExpr(clause.expression, source, fileName, rebound)
-                        clause.statements.forEach { walkSuperRebindStmt(it, source, fileName, rebound) }
-                    }
-                    is DefaultClause -> clause.statements.forEach { walkSuperRebindStmt(it, source, fileName, rebound) }
-                    else -> {}
-                }
-            }
-            is TryStatement -> {
-                walkSuperRebindStmts(stmt.tryBlock.statements, source, fileName, rebound)
-                stmt.catchClause?.block?.statements?.let { walkSuperRebindStmts(it, source, fileName, rebound) }
-                stmt.finallyBlock?.statements?.let { walkSuperRebindStmts(it, source, fileName, rebound) }
-            }
-            is LabeledStatement -> walkSuperRebindStmt(stmt.statement, source, fileName, rebound)
-            is ExportAssignment -> walkSuperRebindExpr(stmt.expression, source, fileName, rebound)
-            else -> {}
-        }
-    }
-
-    private fun walkSuperRebindExpr(expr: Expression, source: String, fileName: String, rebound: Boolean) {
-        // Direct super reference at this position — emit if we're in a rebinding scope.
-        if (isSuperIdentifier(expr) && rebound) {
-            emitTS2660InRebindingScope(expr as Identifier, source, fileName)
-            return
-        }
-        when (expr) {
-            // Regular function expression body: super rebinds.
-            is FunctionExpression -> walkSuperRebindStmts(expr.body.statements, source, fileName, rebound = true)
-            // Arrow body: preserve outer rebinding state.
-            is ArrowFunction -> when (val body = expr.body) {
-                is Block -> walkSuperRebindStmts(body.statements, source, fileName, rebound)
-                is Expression -> walkSuperRebindExpr(body, source, fileName, rebound)
-                else -> {}
-            }
-            // Object literals are owned by checkSuperInObjectLiterals (17.99/17.101) for
-            // direct super refs in their members. Skip entirely to avoid double emission.
-            is ObjectLiteralExpression -> {}
-            is BinaryExpression -> {
-                val rightStack = ArrayDeque<Expression>()
-                var cur: Expression = expr
-                while (cur is BinaryExpression) { rightStack.addLast(cur.right); cur = cur.left }
-                walkSuperRebindExpr(cur, source, fileName, rebound)
-                while (rightStack.isNotEmpty()) walkSuperRebindExpr(rightStack.removeLast(), source, fileName, rebound)
-            }
-            is CallExpression -> {
-                // `super(...)` call is TS2337 territory (handled by checkIllegalSuperCallsInNestedFunctions
-                // and similar). Don't emit TS2660 for super-as-callee here.
-                if (!isSuperIdentifier(expr.expression)) walkSuperRebindExpr(expr.expression, source, fileName, rebound)
-                expr.arguments.forEach { walkSuperRebindExpr(it, source, fileName, rebound) }
-            }
-            is NewExpression -> {
-                walkSuperRebindExpr(expr.expression, source, fileName, rebound)
-                expr.arguments?.forEach { walkSuperRebindExpr(it, source, fileName, rebound) }
-            }
-            is PropertyAccessExpression -> {
-                if (!isSuperIdentifier(expr.expression)) walkSuperRebindExpr(expr.expression, source, fileName, rebound)
-                else if (rebound) emitTS2660InRebindingScope(expr.expression as Identifier, source, fileName)
-            }
-            is ElementAccessExpression -> {
-                if (!isSuperIdentifier(expr.expression)) walkSuperRebindExpr(expr.expression, source, fileName, rebound)
-                else if (rebound) emitTS2660InRebindingScope(expr.expression as Identifier, source, fileName)
-                walkSuperRebindExpr(expr.argumentExpression, source, fileName, rebound)
-            }
-            is ParenthesizedExpression -> walkSuperRebindExpr(expr.expression, source, fileName, rebound)
-            is ConditionalExpression -> {
-                walkSuperRebindExpr(expr.condition, source, fileName, rebound)
-                walkSuperRebindExpr(expr.whenTrue, source, fileName, rebound)
-                walkSuperRebindExpr(expr.whenFalse, source, fileName, rebound)
-            }
-            is ArrayLiteralExpression -> expr.elements.forEach { walkSuperRebindExpr(it, source, fileName, rebound) }
-            is PrefixUnaryExpression -> walkSuperRebindExpr(expr.operand, source, fileName, rebound)
-            is PostfixUnaryExpression -> walkSuperRebindExpr(expr.operand, source, fileName, rebound)
-            is AsExpression -> walkSuperRebindExpr(expr.expression, source, fileName, rebound)
-            is TypeAssertionExpression -> walkSuperRebindExpr(expr.expression, source, fileName, rebound)
-            is SatisfiesExpression -> walkSuperRebindExpr(expr.expression, source, fileName, rebound)
-            is NonNullExpression -> walkSuperRebindExpr(expr.expression, source, fileName, rebound)
-            is SpreadElement -> walkSuperRebindExpr(expr.expression, source, fileName, rebound)
-            is AwaitExpression -> walkSuperRebindExpr(expr.expression, source, fileName, rebound)
-            is YieldExpression -> expr.expression?.let { walkSuperRebindExpr(it, source, fileName, rebound) }
-            is VoidExpression -> walkSuperRebindExpr(expr.expression, source, fileName, rebound)
-            is DeleteExpression -> walkSuperRebindExpr(expr.expression, source, fileName, rebound)
-            is TypeOfExpression -> walkSuperRebindExpr(expr.expression, source, fileName, rebound)
-            is TemplateExpression -> for (span in expr.templateSpans) walkSuperRebindExpr(span.expression, source, fileName, rebound)
-            is TaggedTemplateExpression -> {
-                walkSuperRebindExpr(expr.tag, source, fileName, rebound)
-                if (expr.template is TemplateExpression) {
-                    for (span in (expr.template).templateSpans) walkSuperRebindExpr(span.expression, source, fileName, rebound)
-                }
-            }
-            is CommaListExpression -> for (e in expr.elements) walkSuperRebindExpr(e, source, fileName, rebound)
-            else -> {}
-        }
-    }
+    // (M0.4, round 641): the walk is ON THE SPINE — see spineSrEnterNode /
+    // spineSrStatus / spineSrFold. Only the emission leaf survives here.
 
     private fun emitTS2660InRebindingScope(superRef: Identifier, source: String, fileName: String) {
         val start = superRef.pos
@@ -80399,6 +80267,186 @@ interface DataView {
             else -> UY_NONE
         }
         else -> UY_NONE
+    }
+
+    // -----------------------------------------------------------------------
+    // (M0.4) round 641: checkSuperRefInRebindingScope on the spine — `super`
+    // Identifier anchors gated by [spineSrStatus].
+    // -----------------------------------------------------------------------
+
+    /** Per-file setup: the legacy driver's dts skip (its ONLY gate — the
+     *  pass ran unconditionally otherwise, any options). */
+    private fun spineSrSetup(result: BinderResult) {
+        spineSrActive = !spineIsDts
+        spineSrReachMemo = if (!spineSrActive) ByteArray(0) else {
+            val n = result.sourceFile.nodeCount
+            if (n > 0) ByteArray(n) else ByteArray(0)
+        }
+    }
+
+    private fun spineSrTeardown() {
+        spineSrActive = false
+        spineSrReachMemo = ByteArray(0)
+    }
+
+    /** ENTER dispatch: the `super` Identifier anchors (the text pre-gate
+     *  runs BEFORE the reach climb — the name is rare). A DIRECT super
+     *  CALLEE (`super(...)`) is the frozen skip (TS2337 territory); a
+     *  parenthesized super callee still fires — the legacy walked through
+     *  the parens. */
+    private fun spineSrEnterNode(node: Node) {
+        if ((node as NodeBase).kindId != NodeKind.IDENTIFIER) return
+        node as Identifier
+        if (node.text != "super") return
+        val parent = node.parent
+        if (parent is CallExpression && parent.expression === node) return
+        if (spineSrStatus(node) == SR_REBOUND) {
+            emitTS2660InRebindingScope(node, spineSource, spineFileName)
+        }
+    }
+
+    /** Memoized reach classifier — ascends to the first memoized/terminal
+     *  ancestor, then folds [spineSrFold] back down (spineUyStatus
+     *  pattern). The SourceFile anchor carries the transient SR_ROOT
+     *  status (never memoized) whose sole edge is `child is Statement` →
+     *  SR_REBOUND (top-level statements start in a rebinding scope — no
+     *  super available). */
+    private fun spineSrStatus(node: Node): Int {
+        if (node is SourceFile) return SR_ROOT
+        val memo = spineSrReachMemo
+        run {
+            val id = (node as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) {
+                val m = memo[id].toInt()
+                if (m != 0) return m
+            }
+        }
+        val chain = spineSrChain
+        chain.clear()
+        var cur: Node = node
+        val anchor: Node?
+        var anchorStatus = SR_NONE
+        while (true) {
+            chain.add(cur)
+            val parent = (cur as NodeBase).parent
+            if (parent == null) { anchor = null; break } // detached/unindexed
+            if (parent is SourceFile) { anchor = parent; anchorStatus = SR_ROOT; break }
+            val pid = (parent as NodeBase).nodeId
+            val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
+            if (pm != 0) { anchor = parent; anchorStatus = pm; break }
+            cur = parent
+        }
+        var pNode: Node? = anchor
+        var pStatus = anchorStatus
+        var result = SR_NONE
+        for (i in chain.indices.reversed()) {
+            val c = chain[i]
+            result = when {
+                pNode == null -> SR_NONE
+                pStatus == SR_ROOT -> if (c is Statement) SR_REBOUND else SR_NONE
+                else -> spineSrFold(pNode, pStatus, c)
+            }
+            val cid = (c as NodeBase).nodeId
+            if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
+            pNode = c
+            pStatus = result
+        }
+        chain.clear()
+        return result
+    }
+
+    /** The deleted recursion's arms, verbatim, as (parent, parent-status)
+     *  → child-status transitions — SR_REBOUND/SR_CLEAR are the SAME walk
+     *  carrying the `rebound` boolean as the status. Resets: fn-decl/
+     *  fn-expr bodies → SR_REBOUND; class-member bodies/prop initializers
+     *  → SR_CLEAR (via the SR_MEMBER carrier); arrows/ModuleBlocks/every
+     *  other walked edge preserve. Unlisted (parent, status) pairs are the
+     *  legacy `else -> {}`s: object literals (the sibling
+     *  checkSuperInObjectLiterals owns them), class EXPRESSIONS,
+     *  for-condition/incrementor, a for-head DECLARATION-LIST initializer,
+     *  property-access NAMES, catch variable declarations, decorators,
+     *  computed names, param defaults, and every type position. */
+    private fun spineSrFold(pNode: Node, pStatus: Int, child: Node): Int = when (pStatus) {
+        SR_REBOUND, SR_CLEAR -> when (pNode) {
+            // ---- walkSuperRebindStmt arms ----
+            is ExpressionStatement -> if (child === pNode.expression) pStatus else SR_NONE
+            is VariableStatement -> if (child === pNode.declarationList) pStatus else SR_NONE
+            is VariableDeclarationList -> if (child is VariableDeclaration) pStatus else SR_NONE
+            is VariableDeclaration -> if (child === pNode.initializer) pStatus else SR_NONE
+            is ReturnStatement -> if (child === pNode.expression) pStatus else SR_NONE
+            is ThrowStatement -> if (child === pNode.expression) pStatus else SR_NONE
+            is IfStatement -> if (child === pNode.expression || child === pNode.thenStatement ||
+                child === pNode.elseStatement) pStatus else SR_NONE
+            is Block -> if (child is Statement) pStatus else SR_NONE
+            // The for-INITIALIZER is walked ONLY as a bare expression (a
+            // declaration-list initializer was never walked, frozen); the
+            // condition and incrementor are NOT walked (frozen).
+            is ForStatement -> if ((child === pNode.initializer && child is Expression) ||
+                child === pNode.statement) pStatus else SR_NONE
+            is WhileStatement -> if (child === pNode.expression || child === pNode.statement) pStatus else SR_NONE
+            is DoStatement -> if (child === pNode.expression || child === pNode.statement) pStatus else SR_NONE
+            is FunctionDeclaration -> if (child === pNode.body) SR_REBOUND else SR_NONE
+            is ClassDeclaration -> if (child is MethodDeclaration || child is GetAccessor ||
+                child is SetAccessor || child is Constructor || child is ClassStaticBlockDeclaration ||
+                child is PropertyDeclaration) SR_MEMBER else SR_NONE
+            is ModuleDeclaration -> if (child === pNode.body && child is ModuleBlock) pStatus else SR_NONE
+            is ModuleBlock -> if (child is Statement) pStatus else SR_NONE
+            is ForInStatement -> if (child === pNode.expression || child === pNode.statement) pStatus else SR_NONE
+            is ForOfStatement -> if (child === pNode.expression || child === pNode.statement) pStatus else SR_NONE
+            is SwitchStatement -> if (child === pNode.expression || child is CaseClause ||
+                child is DefaultClause) pStatus else SR_NONE
+            is CaseClause -> if (child === pNode.expression || child is Statement) pStatus else SR_NONE
+            is DefaultClause -> if (child is Statement) pStatus else SR_NONE
+            is TryStatement -> if (child === pNode.tryBlock || child === pNode.finallyBlock ||
+                child is CatchClause) pStatus else SR_NONE
+            is CatchClause -> if (child === pNode.block) pStatus else SR_NONE
+            is LabeledStatement -> if (child === pNode.statement) pStatus else SR_NONE
+            is ExportAssignment -> if (child === pNode.expression) pStatus else SR_NONE
+            // ---- walkSuperRebindExpr arms ----
+            is FunctionExpression -> if (child === pNode.body) SR_REBOUND else SR_NONE
+            is ArrowFunction -> if (child === pNode.body) pStatus else SR_NONE
+            // ObjectLiteralExpression: deliberately NO arm — skipped entirely.
+            is BinaryExpression -> if (child === pNode.left || child === pNode.right) pStatus else SR_NONE
+            is CallExpression -> if (child === pNode.expression ||
+                pNode.arguments.any { it === child }) pStatus else SR_NONE
+            is NewExpression -> if (child === pNode.expression ||
+                pNode.arguments?.any { it === child } == true) pStatus else SR_NONE
+            is PropertyAccessExpression -> if (child === pNode.expression) pStatus else SR_NONE
+            is ElementAccessExpression -> if (child === pNode.expression ||
+                child === pNode.argumentExpression) pStatus else SR_NONE
+            is ParenthesizedExpression -> if (child === pNode.expression) pStatus else SR_NONE
+            is ConditionalExpression -> if (child === pNode.condition || child === pNode.whenTrue ||
+                child === pNode.whenFalse) pStatus else SR_NONE
+            is ArrayLiteralExpression -> if (pNode.elements.any { it === child }) pStatus else SR_NONE
+            is PrefixUnaryExpression -> if (child === pNode.operand) pStatus else SR_NONE
+            is PostfixUnaryExpression -> if (child === pNode.operand) pStatus else SR_NONE
+            is AsExpression -> if (child === pNode.expression) pStatus else SR_NONE
+            is TypeAssertionExpression -> if (child === pNode.expression) pStatus else SR_NONE
+            is SatisfiesExpression -> if (child === pNode.expression) pStatus else SR_NONE
+            is NonNullExpression -> if (child === pNode.expression) pStatus else SR_NONE
+            is SpreadElement -> if (child === pNode.expression) pStatus else SR_NONE
+            is AwaitExpression -> if (child === pNode.expression) pStatus else SR_NONE
+            is YieldExpression -> if (child === pNode.expression) pStatus else SR_NONE
+            is VoidExpression -> if (child === pNode.expression) pStatus else SR_NONE
+            is DeleteExpression -> if (child === pNode.expression) pStatus else SR_NONE
+            is TypeOfExpression -> if (child === pNode.expression) pStatus else SR_NONE
+            is TemplateExpression -> if (child is TemplateSpan) pStatus else SR_NONE
+            is TemplateSpan -> if (child === pNode.expression) pStatus else SR_NONE
+            is TaggedTemplateExpression -> if (child === pNode.tag ||
+                (child === pNode.template && child is TemplateExpression)) pStatus else SR_NONE
+            is CommaListExpression -> if (pNode.elements.any { it === child }) pStatus else SR_NONE
+            else -> SR_NONE
+        }
+        SR_MEMBER -> when (pNode) {
+            is MethodDeclaration -> if (child === pNode.body) SR_CLEAR else SR_NONE
+            is GetAccessor -> if (child === pNode.body) SR_CLEAR else SR_NONE
+            is SetAccessor -> if (child === pNode.body) SR_CLEAR else SR_NONE
+            is Constructor -> if (child === pNode.body) SR_CLEAR else SR_NONE
+            is ClassStaticBlockDeclaration -> if (child === pNode.body) SR_CLEAR else SR_NONE
+            is PropertyDeclaration -> if (child === pNode.initializer) SR_CLEAR else SR_NONE
+            else -> SR_NONE
+        }
+        else -> SR_NONE
     }
 
     // -----------------------------------------------------------------------
