@@ -65,10 +65,27 @@ byte-identical (sorted, non-time lines) vs the pre-migration stash
 baseline; partitionCheck ×8 EQUIVALENT (46×7/94); pass table 419 → 418
 (the 99 ms row gone; checkSpine 20.9 s single-run — in-band);
 warning-clean (--rerun-tasks, zero `w:`). M0.4 running total: top
-TWENTY-ONE tail passes migrated. NEXT by cost: checkStrictModeIdentifiers
-96 ms (already post-spine at slot 12 — the slot-move pre-gate must
-audit the TS2300/TS6203 co-emissions against dedup scans between the
-slots), checkConstLiteralComparisons 95 ms, checkSuperInObjectLiterals
+TWENTY-ONE tail passes migrated. SESSION TAIL: the
+checkStrictModeIdentifiers (#22, 96 ms — TS1100 restricted-name
+bindings + TS2630 eval-assign + TS1215 module-file restricted names +
+the top-level `var eval` TS2300/TS6203 lib-collision pair) slot-move
+pre-gate LANDED (moved intact from slot 12 to the post-spine slot;
+suite 11,981/0; listAll ×8 byte-identical vs the migration baseline;
+the family is grep-verified ambient-free, the only consumer of its
+codes — checkStyledComponentsInstantiationLimit's corpus-unique TS1100
+wipe — dispatches long after both slots, and the 12→12b relative order
+is preserved). Scope map for the migrator: THREE per-file routing modes
+decided by (isModuleFile, globalStrict || "use strict" prologue) —
+module files route ALL statements through
+checkModuleStrictModeInStatements (TS1215); strict files through
+checkStrictModeInStatements (TS1100/TS2630, restricted names at
+BINDING positions only — never property names, the round-406 gotcha) +
+the top-level `var eval` TS2300 pair; non-strict files through
+checkFunctionLocalStrictMode (only fn bodies carrying their OWN
+prologue — a downward strict flag flipping at fn boundaries, likely
+the SR status-carried shape with the prologue test at body edges).
+NEXT session starts at that migration; after it:
+checkConstLiteralComparisons 95 ms, checkSuperInObjectLiterals
 91 ms.**
 
 **Round 643 (2026-07-22) — (M0.4) twentieth tail-pass migration:
