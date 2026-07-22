@@ -3652,6 +3652,38 @@ class Checker(
     private var spinePiActive = false
     private var spinePiRunActive = false
 
+    // (M0.4) round 637: checkGenericIndexWrite (TS2862 index-WRITE on a
+    // generic type-parameter receiver, the gIdx walker) on the spine.
+    // Anchors at `=` BinaryExpressions whose paren-unwrapped LHS is an
+    // ElementAccessExpression; reach is the memoized binary classifier
+    // [spineGxStatus] over [spineGxEdge] (the deleted gIdxScanStatement/
+    // gIdxCheckExpr arms verbatim — arrow/fn-expression bodies, class
+    // EXPRESSIONS, object literals, template/typeof/await operands all stay
+    // UNREACHED). The purely DOWNWARD (tparams, tpProps, refs) triple is
+    // rebuilt PULL-based per anchor with a per-boundary-child memo
+    // ([spineGxCtxFor]) — sound because tparams ACCUMULATE through class/fn
+    // boundaries, refs REBUILD at every fn-like boundary from params + the
+    // body-WIDE locals prepass (collectTpLocalsMap — not statement-ordered),
+    // and tpProps are a pure function of the nearest enclosing class member.
+    // No ambient sandwich — the emission is purely syntactic (source +
+    // string maps). Fields PRE-init (the pipeline runs inside `init`).
+    private var spineGxActive = false
+    /** Per-file nodeId memo for [spineGxStatus] — 0 unknown, 1 reached, 2 not. */
+    private var spineGxReachMemo = ByteArray(0)
+    /** Reusable ascent buffer for [spineGxStatus]. */
+    private val spineGxChain = ArrayList<Node>()
+    /** The legacy downward triple — tparams only feed nested rebuilds. */
+    private class GxCtx(
+        val tparams: Set<String>,
+        val tpProps: Map<String, String>,
+        val refs: Map<String, String>,
+    )
+    /** Per-file ctx memo keyed by the boundary-CHILD nodeId (fn body /
+     *  class-prop initializer node). */
+    private val spineGxCtxMemo = HashMap<Int, GxCtx>()
+    /** The legacy per-file entry context (immutable — shared across files). */
+    private val spineGxEmptyCtx = GxCtx(emptySet(), emptyMap(), emptyMap())
+
     // ── INV.4(d) walker 6 (round 535): checkArgumentCounts on the spine ────
     // The function-call arity pass (TS2554/TS2555/TS2575) — the recursion
     // walkers (checkArgCountInStatements/-InStatement/-InExpr(Core)) are
@@ -5211,23 +5243,16 @@ class Checker(
         // rule). The only TS2564 list op elsewhere is
         // checkInKeywordTypeguard's whole-file wipe-and-pin, still after
         // this slot (emitters-before-wipe preserved).
-        // 64d4' (M0.4 slot-move pre-gate, round 636): checkGenericIndexWrite
-        // (TS2862 index-WRITE on a generic type-parameter receiver, the gIdx
-        // walker) moved intact from its pre-spine slot 64d4 ahead of its
-        // spine migration. Fully SYNTACTIC + self-contained (constrainedTpNames/
-        // bareTypeParamRefName/collectParamTpRefs/collectTpLocalsMap are pure
-        // AST reads — no type caches, no ambient); no TS2862 dedup/scan
-        // consumers exist (checkGenericRecordCastAccess emits the code but is
-        // gate-disjoint — Record-cast local receivers — and never scans the
-        // list). Scope for the migrator: a DOWNWARD-context recursion — the
-        // (tparams, tpProps, refs) triple REBUILDS at class/fn boundaries
-        // (constrainedTpNames + param refs) with a body-WIDE locals PREPASS
-        // (collectTpLocalsMap over the whole body before the scan — NOT
-        // statement-ordered, so pull-based levels reproduce it); anchors are
-        // `=` BinaryExpressions whose LHS is an ElementAccess (the round-626
-        // downward-map variant, likely with the round-628 per-boundary
-        // levels).
-        pass("checkGenericIndexWrite") { checkGenericIndexWrite() }
+        // 64d4' (M0.4, round 637): checkGenericIndexWrite (TS2862 index-WRITE
+        // on a generic type-parameter receiver, the gIdx walker) is ON THE
+        // SPINE — anchors at `=` BinaryExpressions with an ElementAccess LHS
+        // (spineGxEnterNode); the downward (tparams, tpProps, refs) triple
+        // rebuilds pull-based per anchor (spineGxCtxAt/spineGxCtxFor). Fully
+        // syntactic — no ambient sandwich; the legacy binderResults driver →
+        // the spine's partition view, gated `--partitionCheck 2` EQUIVALENT
+        // ×8 (the round-633 rule). No TS2862 dedup/scan consumers exist
+        // (checkGenericRecordCastAccess emits the code but is gate-disjoint
+        // and never scans the list).
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -5941,8 +5966,8 @@ class Checker(
         pass("checkIncDecTypeParamOperands") { checkIncDecTypeParamOperands() }
         // 64d3b (B265). Mixin class-expression extending a type-param-typed value (TS2507/TS2545/TS2322)
         pass("checkMixinClassExtendsTypeParam") { checkMixinClassExtendsTypeParam() }
-        // 64d4. checkGenericIndexWrite (TS2862) moved to the post-spine slot —
-        // see the pass("checkSpine") site (M0.4 slot-move pre-gate, round 636).
+        // 64d4. checkGenericIndexWrite (TS2862) is ON THE SPINE since round
+        // 637 (M0.4) — see spineGxEnterNode.
         // 72a4 (B167): TS2322 for `obj[x] = undefined` on a generic mapped-INTERSECTION alias
         pass("checkMappedIntersectionIndexWrite") { checkMappedIntersectionIndexWrite() }
         // 72a4b (B251): TS2551/TS2339 + TS2862 for writes on a `Record<keyof TP | "lit", V>`-cast local
@@ -21260,6 +21285,7 @@ class Checker(
                 spineB94Setup(result)
                 spineCeSetup(result)
                 spinePmrSetup(result)
+                spineGxSetup(result)
                 // (M0.4) round 636: property-init anchors — active in every
                 // non-dts file (the legacy driver's only file gate).
                 spinePiActive = spinePiRunActive && !spineIsDts
@@ -21294,6 +21320,7 @@ class Checker(
                     spineB94Teardown()
                     spineCeTeardown()
                     spinePmrTeardown()
+                    spineGxTeardown()
                     spinePiActive = false
                 }
                 spineResolveDeferredIterationChecks()
@@ -21510,6 +21537,10 @@ class Checker(
         // per the legacy walk's multiplicity; no frames/leave hook, no
         // ambient sandwich.
         if (spinePiActive) spinePiEnterNode(node)
+        // (M0.4) round 637: the generic-index-write anchors (`=` binaries
+        // with an ElementAccess LHS) — pull-based (tparams, tpProps, refs)
+        // triple, no frames/leave hook, no ambient sandwich.
+        if (spineGxActive) spineGxEnterNode(node)
         // INV.4(d) walker 7: the use-before-declaration pass — the per-list
         // ForwardRefs anchor + loop-header self-ref checks.
         if (spineUbdActive) spineUbdEnterNode(node)
@@ -47536,6 +47567,12 @@ class Checker(
         private const val CO_REACHED = 1
         private const val CO_NONE = 2
         private const val CO_ROOT = 3
+
+        // (M0.4) round 637: spineGxStatus states (checkGenericIndexWrite
+        // reach — binary + the transient SourceFile root).
+        private const val GX_REACHED = 1
+        private const val GX_NONE = 2
+        private const val GX_ROOT = 3
 
         // (M0.4) round 631: spineB94Status states (checkBindingPatternComputedIndexSig
         // reach — binary + the transient SourceFile root).
@@ -149023,6 +149060,11 @@ interface DataView {
     // message carries the type-parameter NAME (not the variable name). TypeScript
     // emits TS2862 for exactly this shape, so a passing test matching the gate
     // would already carry it (can only help / be neutral).
+    // (M0.4, round 637): the per-file pass driver + recursion walkers
+    // (checkGenericIndexWrite / gIdxHandleBody / gIdxScanStatement(s) /
+    // gIdxCheckExpr) are DELETED — the spine dispatches the emission
+    // (spineGxEnterNode) with a pull-based per-anchor context rebuild. The
+    // helpers below are retained as the rebuild's leaves.
     // -----------------------------------------------------------------------
 
     private fun bareTypeParamRefName(typeNode: TypeNode?, tparams: Set<String>): String? {
@@ -157840,91 +157882,269 @@ interface DataView {
         eafsScanBody(body.statements, source, fileName, childEnums, childVarEnum)
     }
 
-    private fun checkGenericIndexWrite() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName) || fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
-            val source = result.sourceFile.text
-            gIdxScanStatements(result.sourceFile.statements, source, fileName, emptySet(), emptyMap(), emptyMap())
+    // (M0.4) round 637: checkGenericIndexWrite (TS2862) ON THE SPINE.
+    // The legacy per-file recursion (checkGenericIndexWrite / gIdxHandleBody
+    // / gIdxScanStatements / gIdxScanStatement / gIdxCheckExpr) is deleted.
+    // The pass threaded a purely DOWNWARD (tparams, tpProps, refs) triple —
+    // tparams ACCUMULATED through class/fn boundaries (constrainedTpNames),
+    // tpProps built from the nearest enclosing class's bare-TP property
+    // annotations (RESET by a nested FunctionDeclaration; cleared for
+    // property initializers), refs REBUILT at every fn-like boundary from
+    // collectParamTpRefs + the body-WIDE collectTpLocalsMap prepass (NOT
+    // statement-ordered — locals in switch/try bodies stay uncollected, the
+    // frozen prepass-vs-scan descent asymmetry) — so the ctx is a pure
+    // function of the ancestor chain and reproduces PULL-based per anchor,
+    // memoized per boundary-child node ([spineGxCtxFor]). Reach is the
+    // memoized binary classifier [spineGxStatus] over [spineGxEdge] (the
+    // deleted arms verbatim — arrow/fn-expression bodies, class EXPRESSIONS,
+    // object literals, compound assignments, template/typeof/await operands
+    // all stay UNREACHED). The bounded emission leaf
+    // (emitTS2862IfGenericIndexWrite) is retained unchanged. No ambient
+    // sandwich — the emission is purely syntactic (source + string maps).
+    // -----------------------------------------------------------------------
+
+    /** Per-file setup: the legacy dts + `.js`/`.jsx` skip. */
+    private fun spineGxSetup(result: BinderResult) {
+        spineGxActive = !spineIsDts &&
+            !spineFileName.endsWith(".js") && !spineFileName.endsWith(".jsx")
+        spineGxCtxMemo.clear()
+        spineGxReachMemo = if (!spineGxActive) ByteArray(0) else {
+            val n = result.sourceFile.nodeCount
+            if (n > 0) ByteArray(n) else ByteArray(0)
         }
     }
 
-    private fun gIdxHandleBody(body: Block, source: String, fileName: String, tparams: Set<String>, tpProps: Map<String, String>, paramRefs: Map<String, String>) {
+    private fun spineGxTeardown() {
+        spineGxActive = false
+        spineGxCtxMemo.clear()
+        spineGxReachMemo = ByteArray(0)
+    }
+
+    /** ENTER dispatch: the legacy gIdxCheckExpr `=`-spine emission — an `=`
+     *  BinaryExpression whose paren-unwrapped LHS is an
+     *  ElementAccessExpression (the cheap shape gate runs BEFORE the reach
+     *  climb; the numeric-literal-index and receiver-shape gates stay inside
+     *  the retained emission leaf). */
+    private fun spineGxEnterNode(node: Node) {
+        if ((node as NodeBase).kindId != NodeKind.BINARY_EXPRESSION) return
+        node as BinaryExpression
+        if (node.operator != SyntaxKind.Equals) return
+        var target: Expression = node.left
+        while (target is ParenthesizedExpression) target = target.expression
+        if (target !is ElementAccessExpression) return
+        if (spineGxStatus(node) != GX_REACHED) return
+        val ctx = spineGxCtxAt(node)
+        emitTS2862IfGenericIndexWrite(node.left, spineSource, spineFileName, ctx.tpProps, ctx.refs)
+    }
+
+    /** The legacy downward triple at [anchor]: climb to the nearest
+     *  ctx-defining boundary child (a fn-like's body / a class-prop
+     *  initializer); no boundary up to the SourceFile → the per-file entry
+     *  ctx (the legacy top-level scan's empty triple — ModuleBlocks pass
+     *  context through unchanged, exactly as the legacy ModuleDeclaration
+     *  arm did). */
+    private fun spineGxCtxAt(anchor: Node): GxCtx {
+        var child: Node = anchor
+        var p: Node? = (anchor as NodeBase).parent
+        while (p != null && p !is SourceFile) {
+            if (spineGxIsBoundaryChild(p, child)) return spineGxCtxFor(p, child)
+            child = p
+            p = (p as NodeBase).parent
+        }
+        return spineGxEmptyCtx
+    }
+
+    private fun spineGxIsBoundaryChild(p: Node, child: Node): Boolean = when (p) {
+        is FunctionDeclaration -> child === p.body
+        is MethodDeclaration -> child === p.body
+        is Constructor -> child === p.body
+        is GetAccessor -> child === p.body
+        is SetAccessor -> child === p.body
+        is PropertyDeclaration -> child === p.initializer
+        else -> false
+    }
+
+    /** Memoized child ctx for a boundary [child] of fn-like/class-member [p]
+     *  — the deleted gIdxScanStatement ClassDeclaration/FunctionDeclaration
+     *  arms + gIdxHandleBody verbatim (a FunctionDeclaration RESETS tpProps;
+     *  a GetAccessor body rebuilds refs from NO params; a class-prop
+     *  initializer runs with the cleared (∅, ∅) pair — nothing below an
+     *  initializer can define a nested boundary, so its tparams are never
+     *  consulted). */
+    private fun spineGxCtxFor(p: Node, child: Node): GxCtx {
+        val id = (child as NodeBase).nodeId
+        if (id >= 0) spineGxCtxMemo[id]?.let { return it }
+        val ctx: GxCtx = when (p) {
+            is FunctionDeclaration -> {
+                val ftp = spineGxCtxAt(p).tparams + constrainedTpNames(p.typeParameters)
+                GxCtx(ftp, emptyMap(), spineGxBodyRefs(child as Block, ftp, collectParamTpRefs(p.parameters, ftp)))
+            }
+            is MethodDeclaration -> {
+                val cls = (p as NodeBase).parent as? ClassDeclaration
+                val newTp = spineGxClassTp(cls)
+                val mtp = newTp + constrainedTpNames(p.typeParameters)
+                GxCtx(mtp, spineGxClassProps(cls, newTp), spineGxBodyRefs(child as Block, mtp, collectParamTpRefs(p.parameters, mtp)))
+            }
+            is Constructor -> {
+                val cls = (p as NodeBase).parent as? ClassDeclaration
+                val newTp = spineGxClassTp(cls)
+                GxCtx(newTp, spineGxClassProps(cls, newTp), spineGxBodyRefs(child as Block, newTp, collectParamTpRefs(p.parameters, newTp)))
+            }
+            is GetAccessor -> {
+                val cls = (p as NodeBase).parent as? ClassDeclaration
+                val newTp = spineGxClassTp(cls)
+                GxCtx(newTp, spineGxClassProps(cls, newTp), spineGxBodyRefs(child as Block, newTp, emptyMap()))
+            }
+            is SetAccessor -> {
+                val cls = (p as NodeBase).parent as? ClassDeclaration
+                val newTp = spineGxClassTp(cls)
+                GxCtx(newTp, spineGxClassProps(cls, newTp), spineGxBodyRefs(child as Block, newTp, collectParamTpRefs(p.parameters, newTp)))
+            }
+            else -> spineGxEmptyCtx // PropertyDeclaration initializer: (∅, ∅)
+        }
+        if (id >= 0) spineGxCtxMemo[id] = ctx
+        return ctx
+    }
+
+    /** gIdxHandleBody's refs build: params first, then the body-WIDE locals
+     *  prepass (locals override same-named params — the legacy map order). */
+    private fun spineGxBodyRefs(body: Block, tparams: Set<String>, paramRefs: Map<String, String>): Map<String, String> {
         val refs = paramRefs.toMutableMap()
         collectTpLocalsMap(body.statements, tparams, refs)
-        gIdxScanStatements(body.statements, source, fileName, tparams, tpProps, refs)
+        return refs
     }
 
-    private fun gIdxScanStatements(stmts: List<Statement>, source: String, fileName: String, tparams: Set<String>, tpProps: Map<String, String>, refs: Map<String, String>) {
-        for (stmt in stmts) gIdxScanStatement(stmt, source, fileName, tparams, tpProps, refs)
+    /** The ClassDeclaration arm's newTp — the class's own statement-position
+     *  tparams (accumulated through enclosing fn bodies) + its constrained
+     *  TPs. */
+    private fun spineGxClassTp(cls: ClassDeclaration?): Set<String> {
+        if (cls == null) return emptySet()
+        return spineGxCtxAt(cls).tparams + constrainedTpNames(cls.typeParameters)
     }
 
-    private fun gIdxScanStatement(stmt: Statement, source: String, fileName: String, tparams: Set<String>, tpProps: Map<String, String>, refs: Map<String, String>) {
-        when (stmt) {
-            is ClassDeclaration -> {
-                val newTp = tparams + constrainedTpNames(stmt.typeParameters)
-                val props = mutableMapOf<String, String>()
-                for (m in stmt.members) if (m is PropertyDeclaration) { val n = (m.name as? Identifier)?.text; if (n != null) bareTypeParamRefName(m.type, newTp)?.let { props[n] = it } }
-                for (m in stmt.members) when (m) {
-                    is MethodDeclaration -> m.body?.let { val mtp = newTp + constrainedTpNames(m.typeParameters); gIdxHandleBody(it, source, fileName, mtp, props, collectParamTpRefs(m.parameters, mtp)) }
-                    is Constructor -> m.body?.let { gIdxHandleBody(it, source, fileName, newTp, props, collectParamTpRefs(m.parameters, newTp)) }
-                    is GetAccessor -> m.body?.let { gIdxHandleBody(it, source, fileName, newTp, props, emptyMap()) }
-                    is SetAccessor -> m.body?.let { gIdxHandleBody(it, source, fileName, newTp, props, collectParamTpRefs(m.parameters, newTp)) }
-                    is PropertyDeclaration -> m.initializer?.let { gIdxCheckExpr(it, source, fileName, emptyMap(), emptyMap()) }
-                    else -> {}
-                }
-            }
-            is FunctionDeclaration -> stmt.body?.let { val ftp = tparams + constrainedTpNames(stmt.typeParameters); gIdxHandleBody(it, source, fileName, ftp, emptyMap(), collectParamTpRefs(stmt.parameters, ftp)) }
-            is ExpressionStatement -> gIdxCheckExpr(stmt.expression, source, fileName, tpProps, refs)
-            is VariableStatement -> for (d in stmt.declarationList.declarations) d.initializer?.let { gIdxCheckExpr(it, source, fileName, tpProps, refs) }
-            is ReturnStatement -> stmt.expression?.let { gIdxCheckExpr(it, source, fileName, tpProps, refs) }
-            is ThrowStatement -> stmt.expression?.let { gIdxCheckExpr(it, source, fileName, tpProps, refs) }
-            is Block -> gIdxScanStatements(stmt.statements, source, fileName, tparams, tpProps, refs)
-            is IfStatement -> { gIdxCheckExpr(stmt.expression, source, fileName, tpProps, refs); gIdxScanStatement(stmt.thenStatement, source, fileName, tparams, tpProps, refs); stmt.elseStatement?.let { gIdxScanStatement(it, source, fileName, tparams, tpProps, refs) } }
-            is ForStatement -> {
-                (stmt.initializer as? VariableDeclarationList)?.declarations?.forEach { d -> d.initializer?.let { gIdxCheckExpr(it, source, fileName, tpProps, refs) } }
-                (stmt.initializer as? Expression)?.let { gIdxCheckExpr(it, source, fileName, tpProps, refs) }
-                stmt.condition?.let { gIdxCheckExpr(it, source, fileName, tpProps, refs) }
-                stmt.incrementor?.let { gIdxCheckExpr(it, source, fileName, tpProps, refs) }
-                gIdxScanStatement(stmt.statement, source, fileName, tparams, tpProps, refs)
-            }
-            is ForInStatement -> { gIdxCheckExpr(stmt.expression, source, fileName, tpProps, refs); gIdxScanStatement(stmt.statement, source, fileName, tparams, tpProps, refs) }
-            is ForOfStatement -> { gIdxCheckExpr(stmt.expression, source, fileName, tpProps, refs); gIdxScanStatement(stmt.statement, source, fileName, tparams, tpProps, refs) }
-            is WhileStatement -> { gIdxCheckExpr(stmt.expression, source, fileName, tpProps, refs); gIdxScanStatement(stmt.statement, source, fileName, tparams, tpProps, refs) }
-            is DoStatement -> { gIdxCheckExpr(stmt.expression, source, fileName, tpProps, refs); gIdxScanStatement(stmt.statement, source, fileName, tparams, tpProps, refs) }
-            is SwitchStatement -> { gIdxCheckExpr(stmt.expression, source, fileName, tpProps, refs); for (c in stmt.caseBlock) { val cs = when (c) { is CaseClause -> c.statements; is DefaultClause -> c.statements; else -> emptyList() }; gIdxScanStatements(cs, source, fileName, tparams, tpProps, refs) } }
-            is TryStatement -> { gIdxScanStatements(stmt.tryBlock.statements, source, fileName, tparams, tpProps, refs); stmt.catchClause?.let { gIdxScanStatements(it.block.statements, source, fileName, tparams, tpProps, refs) }; stmt.finallyBlock?.let { gIdxScanStatements(it.statements, source, fileName, tparams, tpProps, refs) } }
-            is LabeledStatement -> gIdxScanStatement(stmt.statement, source, fileName, tparams, tpProps, refs)
-            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { gIdxScanStatements(it.statements, source, fileName, tparams, tpProps, refs) }
-            else -> {}
+    /** The ClassDeclaration arm's props map — bare-TP-annotated property
+     *  members keyed by name (for `this.<prop>[k] = v` receivers). */
+    private fun spineGxClassProps(cls: ClassDeclaration?, newTp: Set<String>): Map<String, String> {
+        if (cls == null) return emptyMap()
+        val props = HashMap<String, String>()
+        for (m in cls.members) if (m is PropertyDeclaration) {
+            val n = (m.name as? Identifier)?.text
+            if (n != null) bareTypeParamRefName(m.type, newTp)?.let { props[n] = it }
         }
+        return props
     }
 
-    private fun gIdxCheckExpr(expr: Expression, source: String, fileName: String, tpProps: Map<String, String>, refs: Map<String, String>) {
-        when (expr) {
-            is BinaryExpression -> {
-                var cur: Expression = expr
-                while (cur is BinaryExpression) {
-                    if (cur.operator == SyntaxKind.Equals) emitTS2862IfGenericIndexWrite(cur.left, source, fileName, tpProps, refs)
-                    gIdxCheckExpr(cur.right, source, fileName, tpProps, refs)
-                    cur = cur.left
-                }
-                gIdxCheckExpr(cur, source, fileName, tpProps, refs)
+    /** Memoized reach classifier — ascends to the first memoized/terminal
+     *  ancestor, then folds [spineGxEdge] back down (spineFpStatus pattern).
+     *  The SourceFile anchor carries the transient GX_ROOT status (never
+     *  memoized) whose sole edge is `child is Statement`. */
+    private fun spineGxStatus(node: Node): Int {
+        if (node is SourceFile) return GX_ROOT
+        val memo = spineGxReachMemo
+        run {
+            val id = (node as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) {
+                val m = memo[id].toInt()
+                if (m != 0) return m
             }
-            is ParenthesizedExpression -> gIdxCheckExpr(expr.expression, source, fileName, tpProps, refs)
-            is CallExpression -> { gIdxCheckExpr(expr.expression, source, fileName, tpProps, refs); expr.arguments.forEach { gIdxCheckExpr(it, source, fileName, tpProps, refs) } }
-            is NewExpression -> { gIdxCheckExpr(expr.expression, source, fileName, tpProps, refs); expr.arguments?.forEach { gIdxCheckExpr(it, source, fileName, tpProps, refs) } }
-            is PropertyAccessExpression -> gIdxCheckExpr(expr.expression, source, fileName, tpProps, refs)
-            is ElementAccessExpression -> { gIdxCheckExpr(expr.expression, source, fileName, tpProps, refs); gIdxCheckExpr(expr.argumentExpression, source, fileName, tpProps, refs) }
-            is ConditionalExpression -> { gIdxCheckExpr(expr.condition, source, fileName, tpProps, refs); gIdxCheckExpr(expr.whenTrue, source, fileName, tpProps, refs); gIdxCheckExpr(expr.whenFalse, source, fileName, tpProps, refs) }
-            is ArrayLiteralExpression -> expr.elements.forEach { gIdxCheckExpr(it, source, fileName, tpProps, refs) }
-            is SpreadElement -> gIdxCheckExpr(expr.expression, source, fileName, tpProps, refs)
-            is PrefixUnaryExpression -> gIdxCheckExpr(expr.operand, source, fileName, tpProps, refs)
-            is PostfixUnaryExpression -> gIdxCheckExpr(expr.operand, source, fileName, tpProps, refs)
-            is AsExpression -> gIdxCheckExpr(expr.expression, source, fileName, tpProps, refs)
-            is NonNullExpression -> gIdxCheckExpr(expr.expression, source, fileName, tpProps, refs)
-            else -> {}
         }
+        val chain = spineGxChain
+        chain.clear()
+        var cur: Node = node
+        val anchor: Node?
+        var anchorStatus = GX_NONE
+        while (true) {
+            chain.add(cur)
+            val parent = (cur as NodeBase).parent
+            if (parent == null) { anchor = null; break } // detached/unindexed
+            if (parent is SourceFile) { anchor = parent; anchorStatus = GX_ROOT; break }
+            val pid = (parent as NodeBase).nodeId
+            val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
+            if (pm != 0) { anchor = parent; anchorStatus = pm; break }
+            cur = parent
+        }
+        var pNode: Node? = anchor
+        var pStatus = anchorStatus
+        var result = GX_NONE
+        for (i in chain.indices.reversed()) {
+            val c = chain[i]
+            result = when {
+                pNode == null -> GX_NONE
+                pStatus == GX_ROOT -> if (c is Statement) GX_REACHED else GX_NONE
+                pStatus == GX_REACHED -> if (spineGxEdge(pNode, c)) GX_REACHED else GX_NONE
+                else -> GX_NONE
+            }
+            val cid = (c as NodeBase).nodeId
+            if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
+            pNode = c
+            pStatus = result
+        }
+        chain.clear()
+        return result
+    }
+
+    /** The deleted recursion's descent edges, verbatim. Unlisted parents are
+     *  the legacy `else -> {}`s (unreached children — arrows, fn/class
+     *  expressions, object literals, templates, typeof/await operands,
+     *  for-in/of LEFT sides, case expressions, param defaults, heritage). */
+    private fun spineGxEdge(parent: Node, child: Node): Boolean = when (parent) {
+        // ---- statements (the deleted gIdxScanStatement arms) ----
+        is ClassDeclaration -> when (child) {
+            is MethodDeclaration, is Constructor, is GetAccessor,
+            is SetAccessor, is PropertyDeclaration -> true
+            else -> false
+        }
+        is MethodDeclaration -> child === parent.body
+        is Constructor -> child === parent.body
+        is GetAccessor -> child === parent.body
+        is SetAccessor -> child === parent.body
+        is PropertyDeclaration -> child === parent.initializer
+        is FunctionDeclaration -> child === parent.body
+        is ExpressionStatement -> child === parent.expression
+        is VariableStatement -> child === parent.declarationList
+        is VariableDeclarationList -> child is VariableDeclaration
+        is VariableDeclaration -> child === parent.initializer
+        is ReturnStatement -> child === parent.expression
+        is ThrowStatement -> child === parent.expression
+        is Block -> child is Statement
+        is IfStatement ->
+            child === parent.expression || child === parent.thenStatement ||
+                child === parent.elseStatement
+        is ForStatement ->
+            child === parent.initializer || child === parent.condition ||
+                child === parent.incrementor || child === parent.statement
+        is ForInStatement -> child === parent.expression || child === parent.statement
+        is ForOfStatement -> child === parent.expression || child === parent.statement
+        is WhileStatement -> child === parent.expression || child === parent.statement
+        is DoStatement -> child === parent.statement || child === parent.expression
+        is SwitchStatement ->
+            child === parent.expression || child is CaseClause || child is DefaultClause
+        is CaseClause -> child is Statement // NOT the case expression
+        is DefaultClause -> child is Statement
+        is TryStatement ->
+            child === parent.tryBlock || child === parent.finallyBlock || child is CatchClause
+        is CatchClause -> child === parent.block
+        is LabeledStatement -> child === parent.statement
+        is ModuleDeclaration -> child === parent.body && child is ModuleBlock
+        is ModuleBlock -> child is Statement
+        // ---- expressions (the deleted gIdxCheckExpr arms) ----
+        is BinaryExpression -> child === parent.left || child === parent.right
+        is ParenthesizedExpression -> child === parent.expression
+        is CallExpression -> child === parent.expression || parent.arguments.any { it === child }
+        is NewExpression ->
+            child === parent.expression || parent.arguments?.any { it === child } == true
+        is PropertyAccessExpression -> child === parent.expression
+        is ElementAccessExpression ->
+            child === parent.expression || child === parent.argumentExpression
+        is ConditionalExpression ->
+            child === parent.condition || child === parent.whenTrue || child === parent.whenFalse
+        is ArrayLiteralExpression -> parent.elements.any { it === child }
+        is SpreadElement -> child === parent.expression
+        is PrefixUnaryExpression -> child === parent.operand
+        is PostfixUnaryExpression -> child === parent.operand
+        is AsExpression -> child === parent.expression
+        is NonNullExpression -> child === parent.expression
+        else -> false
     }
 
     private fun emitTS2862IfGenericIndexWrite(lhs: Expression, source: String, fileName: String, tpProps: Map<String, String>, refs: Map<String, String>) {

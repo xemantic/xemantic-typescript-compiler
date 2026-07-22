@@ -1,3 +1,62 @@
+**Round 627 (2026-07-21) — (M0.4) fifth tail-pass migration:
+checkAbstractClassInstantiation (TS2511, 113 ms — the #5 tail pass) is ON THE
+SPINE; the legacy recursion (checkAbstractClassInstantiation /
+checkAbstractInStmts / checkAbstractInStmt / checkAbstractInExpr, ~260 lines)
+DELETED.** The COLLECTOR-PREPASS variant of the template: the pass's four
+FILE-scoped collectors (collectAbstractClassNames + the merged-globals
+isAbstractClass scan + collectImportedAbstractClassAliases +
+collectTypeAliases → collectTypeofAbstractVars) are retained unchanged and
+run at per-file spine setup (spineAiSetup — file-scoped, not
+statement-ordered, so NO frames; the globals scan is additionally memoized
+per RUN since globals are frozen during the spine — the legacy per-file
+rescan always agreed). The statement-LIST overlay checkAbstractInStmts
+applied (add abstract class names, THEN remove non-abstract-shadowed —
+remove wins for a duplicate; save/restore per list) is a pure function of
+the ancestor list-owner chain (SourceFile / Block / ModuleBlock / CaseClause
+/ DefaultClause — every legacy route applied exactly ONE overlay per such
+list), so it rebuilds PULL-based per anchor with a per-owner memo
+(spineAiClassesFor). The `[A].map(cls => new cls())` callback-param typeof
+extension recovers on the anchor climb folded OUTERMOST-first (an outer
+extension can make an inner receiver's elementsContainAbstract true —
+pinned by the nested-map test); node COVERAGE is identical between the
+legacy handled/unhandled `.map` branches, so the reach classifier
+(spineAiStatus/spineAiEdge — binary, memoized, the spineFp skeleton) needs
+NO special case. Reach quirks pinned verbatim: a NEW expression's CALLEE
+subtree is never walked (arguments are), case-clause EXPRESSIONS and bare
+for-initializer EXPRESSIONS unreached (a for decl-LIST is reached), objlit
+METHOD bodies unreached (PropertyAssignment values reached). NO ambient
+sandwich — the emission reads no checker ambient state (pure AST + string
+sets); anchors are NewExpressions with an Identifier callee (rare → the
+climbs are cheap; the overlay memo bounds re-derivation). Gates: 24 local
+pins (M04AbstractClassSpineMigrationTest — overlay shadowing both
+directions, typeof alias/union/param, map-callback + nested fold + concrete
+negative, reach both directions ×4 shapes, cross-file globals + named +
+default import + type-only-negative) verified green against the LEGACY
+walker FIRST; suite 11,466 → 11,490/0; `--listAll` ×8 byte-identical
+(sorted error lines, 46×7 + 94 harness env-legit artifacts); pass table
+434 → 433 (the checkAbstractClassInstantiation row GONE; checkSpine
+18,510 ms single-run — inside the round-625/626 18.0–19.0 s band);
+warning-clean. Process note: the FIRST pre capture ran concurrently with a
+gradle test build — the recompile clobbered 5 of 8 profile JVMs
+(ClassNotFoundException mid-run, the documented trap); recaptured serially.
+M0.4 running total: top FIVE tail passes migrated. SESSION TAIL: the
+checkSymbolToStringConversions (#6, 108 ms — TS2469/TS2731) SLOT-MOVE
+pre-gate landed (corpus + listAll ×8 identical; self-contained — reads
+binderResults only, pure AST + string sets, no ambient reads, no
+2469/2731 retract/dedup consumers; collectSymbolAliases is file-scoped) —
+the next session starts directly at its migration. Its legacy shape for
+the migrator: a file-scoped alias collector (collectSymbolAliases,
+fixpoint over alias→alias refs) + a downward-context walk threading
+(symbolNames, tpNames, aliasNames) — symbolNames accumulates var/param
+names per body (collectSymbolLocals — a whole-list PREPASS at each
+sym2strHandleBody entry, so statement-ORDER-INDEPENDENT → per-body
+LEVELS, not push frames; params added per fn boundary via
+sym2strHandleFnBody), tpNames accumulates through fn/class boundaries
+(symbolLikeTpNames) — the downward-MAP variant again (spineFp-style
+pull fold with per-boundary memo); anchors are the TS2469 binary/unary
+`+` operands and TS2731 template-span expressions. Next after:
+checkDefiniteAssignmentViaFlowGraph (105 ms).**
+
 **Round 626 (2026-07-21) — (M0.4) fourth tail-pass migration: checkFnTypedParamCalls
 (B128/B215 — TS2558/TS2345 fn-typed-param calls, generic-method calls,
 `.apply`; 119 ms, the #4 tail pass) is ON THE SPINE; the legacy recursion

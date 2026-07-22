@@ -20,6 +20,54 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 637 (2026-07-22) — (M0.4) fourteenth tail-pass migration:
+checkGenericIndexWrite (TS2862 "Type 'T' is generic and can only be
+indexed for reading." — index WRITES through a receiver typed as a
+string/symbol-index-constrained type parameter, the gIdx walker;
+117.3 ms — the #14 per-file tail pass) is ON THE SPINE; the legacy
+driver + recursion (checkGenericIndexWrite / gIdxHandleBody /
+gIdxScanStatements / gIdxScanStatement / gIdxCheckExpr, ~85 lines)
+DELETED; emitTS2862IfGenericIndexWrite + the pure-AST helpers
+(constrainedTpNames / bareTypeParamRefName / collectParamTpRefs /
+collectTpLocalsMap) survive as anchor-called leaves.** The round-626
+DOWNWARD-MAP variant, third application: the purely downward (tparams,
+tpProps, refs) triple is a pure function of the ancestor chain — tparams
+ACCUMULATE through class/fn boundaries (constrainedTpNames), refs
+REBUILD at every fn-like boundary from collectParamTpRefs + the
+body-WIDE collectTpLocalsMap prepass (NOT statement-ordered →
+pull-based per-boundary rebuilds reproduce it; use-before-decl locals
+still match, pinned), tpProps from the nearest enclosing class's
+bare-TP property annotations (RESET by a nested FunctionDeclaration;
+cleared for property initializers — both pinned) — so it rebuilds per
+anchor with a per-boundary-child memo (spineGxCtxFor). Anchors are `=`
+BinaryExpressions whose paren-unwrapped LHS is an
+ElementAccessExpression (the cheap shape gate runs BEFORE the reach
+climb); reach is the memoized binary classifier spineGxStatus/
+spineGxEdge (the deleted arms verbatim, frozen — arrow/fn-EXPRESSION
+bodies, class EXPRESSIONS, object literals, compound assignments, and
+nested-fn refs inheritance all stay silent, pinned both directions).
+Frozen quirk worth naming: the locals PREPASS's descent set is NARROWER
+than the scan's — collectTpLocalsMap has no Switch/Try arms, so a
+`let t: T` declared inside a switch case or try block never registers
+(pinned) while an if-block local does. No ambient sandwich (the
+emission is purely syntactic — source + string maps; no type caches
+touched). The legacy binderResults driver → the spine's partition view,
+gated `--partitionCheck 2` EQUIVALENT ×8 (the round-633 rule); the pass
+emits ZERO TS2862 on all 8 tsc profiles, so the listAll gate pins pure
+non-perturbation. Gates: 31 local pins
+(M04GenericIndexWriteSpineMigrationTest — the emitter's
+constraint/index/receiver gates, the ctx battery (tparams accumulation,
+nested-fn refs reset, tpProps method/initializer/nested-fn split,
+get-accessor locals-only refs, a nested class built through a
+method-body chain), and the reach battery both directions) green
+against the LEGACY pass FIRST; suite 11,701 → 11,732/0; `--listAll` ×8
+byte-identical (time header only); partitionCheck ×8 EQUIVALENT; pass
+table 425 → 424 (the row gone; checkSpine 19,714.4 ms single-run —
+in the recent 19.3–20.5 s band); warning-clean (--rerun-tasks, zero
+`w:`). M0.4 running total: top FOURTEEN tail passes migrated. Next
+per-file candidates by cost: checkArgumentsCollision 116.8 ms,
+checkEvolvingEmptyArrayImplicitAny 103.2 ms.**
+
 **Round 636 (2026-07-22) — (M0.4) thirteenth tail-pass migration:
 checkPropertyInitialization (TS2564 strict-property-initialization,
 ~99 ms — the #13 per-file tail pass) is ON THE SPINE; the normal-mode
@@ -516,65 +564,6 @@ either way; (d) checkTryCatchOnlyAssignedVarReads (its
 shouldCheckDefiniteAssignment sibling) stays put or moves with it —
 check for one-directional dedup between the two before choosing.**
 
-**Round 627 (2026-07-21) — (M0.4) fifth tail-pass migration:
-checkAbstractClassInstantiation (TS2511, 113 ms — the #5 tail pass) is ON THE
-SPINE; the legacy recursion (checkAbstractClassInstantiation /
-checkAbstractInStmts / checkAbstractInStmt / checkAbstractInExpr, ~260 lines)
-DELETED.** The COLLECTOR-PREPASS variant of the template: the pass's four
-FILE-scoped collectors (collectAbstractClassNames + the merged-globals
-isAbstractClass scan + collectImportedAbstractClassAliases +
-collectTypeAliases → collectTypeofAbstractVars) are retained unchanged and
-run at per-file spine setup (spineAiSetup — file-scoped, not
-statement-ordered, so NO frames; the globals scan is additionally memoized
-per RUN since globals are frozen during the spine — the legacy per-file
-rescan always agreed). The statement-LIST overlay checkAbstractInStmts
-applied (add abstract class names, THEN remove non-abstract-shadowed —
-remove wins for a duplicate; save/restore per list) is a pure function of
-the ancestor list-owner chain (SourceFile / Block / ModuleBlock / CaseClause
-/ DefaultClause — every legacy route applied exactly ONE overlay per such
-list), so it rebuilds PULL-based per anchor with a per-owner memo
-(spineAiClassesFor). The `[A].map(cls => new cls())` callback-param typeof
-extension recovers on the anchor climb folded OUTERMOST-first (an outer
-extension can make an inner receiver's elementsContainAbstract true —
-pinned by the nested-map test); node COVERAGE is identical between the
-legacy handled/unhandled `.map` branches, so the reach classifier
-(spineAiStatus/spineAiEdge — binary, memoized, the spineFp skeleton) needs
-NO special case. Reach quirks pinned verbatim: a NEW expression's CALLEE
-subtree is never walked (arguments are), case-clause EXPRESSIONS and bare
-for-initializer EXPRESSIONS unreached (a for decl-LIST is reached), objlit
-METHOD bodies unreached (PropertyAssignment values reached). NO ambient
-sandwich — the emission reads no checker ambient state (pure AST + string
-sets); anchors are NewExpressions with an Identifier callee (rare → the
-climbs are cheap; the overlay memo bounds re-derivation). Gates: 24 local
-pins (M04AbstractClassSpineMigrationTest — overlay shadowing both
-directions, typeof alias/union/param, map-callback + nested fold + concrete
-negative, reach both directions ×4 shapes, cross-file globals + named +
-default import + type-only-negative) verified green against the LEGACY
-walker FIRST; suite 11,466 → 11,490/0; `--listAll` ×8 byte-identical
-(sorted error lines, 46×7 + 94 harness env-legit artifacts); pass table
-434 → 433 (the checkAbstractClassInstantiation row GONE; checkSpine
-18,510 ms single-run — inside the round-625/626 18.0–19.0 s band);
-warning-clean. Process note: the FIRST pre capture ran concurrently with a
-gradle test build — the recompile clobbered 5 of 8 profile JVMs
-(ClassNotFoundException mid-run, the documented trap); recaptured serially.
-M0.4 running total: top FIVE tail passes migrated. SESSION TAIL: the
-checkSymbolToStringConversions (#6, 108 ms — TS2469/TS2731) SLOT-MOVE
-pre-gate landed (corpus + listAll ×8 identical; self-contained — reads
-binderResults only, pure AST + string sets, no ambient reads, no
-2469/2731 retract/dedup consumers; collectSymbolAliases is file-scoped) —
-the next session starts directly at its migration. Its legacy shape for
-the migrator: a file-scoped alias collector (collectSymbolAliases,
-fixpoint over alias→alias refs) + a downward-context walk threading
-(symbolNames, tpNames, aliasNames) — symbolNames accumulates var/param
-names per body (collectSymbolLocals — a whole-list PREPASS at each
-sym2strHandleBody entry, so statement-ORDER-INDEPENDENT → per-body
-LEVELS, not push frames; params added per fn boundary via
-sym2strHandleFnBody), tpNames accumulates through fn/class boundaries
-(symbolLikeTpNames) — the downward-MAP variant again (spineFp-style
-pull fold with per-boundary memo); anchors are the TS2469 binary/unary
-`+` operands and TS2731 template-span expressions. Next after:
-checkDefiniteAssignmentViaFlowGraph (105 ms).**
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 (Restored 2026-07-12, round 481 — the queue/backlog/inventory sections had been
@@ -791,9 +780,21 @@ structural item instead of landing alone.**
   checkClassPropertyInitEmit that many times; the recursion walkers
   SURVIVE for the B439 declarationOnly dispatch — the round-630
   shared-walker rule, spinePiEdge mirrors them);
-  next per-file candidates by cost: checkGenericIndexWrite 117.3 ms,
-  checkArgumentsCollision 116.8 ms, checkEvolvingEmptyArrayImplicitAny
-  103.2 ms — scope shape + consumers before the slot-move;
+  checkGenericIndexWrite 117.3 ms — **MIGRATED round 637** (the
+  DOWNWARD-MAP variant's third application: the (tparams, tpProps,
+  refs) triple rebuilds pull-based per anchor with a per-boundary-child
+  memo — tparams ACCUMULATE through class/fn boundaries, refs REBUILD
+  per fn-like boundary from params + the body-WIDE collectTpLocalsMap
+  prepass (whose descent is NARROWER than the scan's — switch/try
+  locals uncollected, frozen + pinned), tpProps from the nearest
+  enclosing class member (RESET by a nested FunctionDeclaration,
+  cleared for property initializers); anchors are `=` binaries with a
+  paren-unwrapped ElementAccess LHS; zero TS2862 on all 8 profiles →
+  the listAll gate pins pure non-perturbation);
+  next per-file candidates by cost: checkArgumentsCollision 116.8 ms
+  (slot-move pre-gate landed round 637 — see the session note's scope
+  map), checkEvolvingEmptyArrayImplicitAny 103.2 ms — scope shape +
+  consumers before the slot-move;
   98 passes >20 ms carry 5.3 s of the
   6.2 s). Migration protocol per
   pass (the round-624 template): slot-move pre-gate commit (intact pass to the
