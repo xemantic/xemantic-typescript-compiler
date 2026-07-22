@@ -20,6 +20,57 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 644 (2026-07-22) — (M0.4) twenty-first tail-pass migration:
+checkExpandoFunctionNestedReads (B431 — TS2339 for an expando-function
+property read inside a NESTED function where the property was never
+declared by a file-scope `Foo.prop =` write; 99 ms at the round-642
+table — the #21 per-file tail pass) is ON THE SPINE; the legacy driver +
+visitExpandoStmt/-Expr read walk + ChainedNameSet + collectExpandoFnLocals
+(~140 lines) DELETED; the TOP-LEVEL candidate scan + the
+collectExpandoDecls write collector survive as per-file SETUP leaves.**
+The FILE-GATED + PULL-BASED-SHADOW combination: (1) the write collector
+runs at spineExSetup (the round-632 shape) — it never descends
+function-likes, so its whole-file setup leg is bounded by top-level
+expression code and the anchors consult the COMPLETE `declared` map and
+emit INLINE (a write BELOW the read still declares — order-independence
+pinned; no buffering needed, unlike a true collect-then-scan). (2) Reach
+is the memoized 3-state classifier spineExStatus/spineExFold —
+EX_TOP/EX_NESTED carry the legacy inNestedFn boolean AS the status
+(fn-decl/fn-expr/arrow param INITIALIZERS + bodies reset to EX_NESTED,
+everything else preserves — the round-641 SR shape with a fires-only-
+nested emission gate). (3) The ChainedNameSet shadow chain rebuilds
+PULL-BASED per anchor (spineExShadowed): every fn-like ancestor of a
+REACHED anchor was entered through its walked interior (param default or
+body — the only walked edges out of a fn-like), so each contributes its
+layer (params + TOP-LEVEL body var/fn/class names + a fn-expression's
+own name), memo-free per the round-625 rare-anchor rule — the anchor
+pre-gates on the candidate-receiver TEXT before any climb. Frozen quirks
+pinned both directions: class/namespace/enum bodies, objlit METHODS
+(property-VALUE fn-exprs ARE reached), template spans, tagged templates,
+typeof/delete/void operands, for-in/of loop-head INITIALIZERS, catch
+variables, and class expressions never walked; the collector additionally
+never reaches yield/await operands; element-access/compound-assignment/
+non-Identifier-receiver writes never collected (their nested READS still
+fire — a nested write's own LHS fires too); a nested-BLOCK body local
+does NOT shadow. Fully syntactic — no ambient sandwich; the legacy
+binderResults driver → the spine's partition view, gated
+`--partitionCheck 2` EQUIVALENT ×8. Pin-calibration note: negative pins
+in .ts must key on the pass's exact `'typeof Foo'` message shape — a
+bare `Foo.name` read draws an unrelated general-checker TS2339
+displaying `'() => void'` (found by the CLI probe round; 32/33 pins
+green on the first legacy run, the 33rd was that predicate sharpening).
+Gates: 33 local pins (M04ExpandoSpineMigrationTest) green against the
+LEGACY pass FIRST; suite 11,948 → 11,981/0; `--listAll` ×8
+byte-identical (sorted, non-time lines) vs the pre-migration stash
+baseline; partitionCheck ×8 EQUIVALENT (46×7/94); pass table 419 → 418
+(the 99 ms row gone; checkSpine 20.9 s single-run — in-band);
+warning-clean (--rerun-tasks, zero `w:`). M0.4 running total: top
+TWENTY-ONE tail passes migrated. NEXT by cost: checkStrictModeIdentifiers
+96 ms (already post-spine at slot 12 — the slot-move pre-gate must
+audit the TS2300/TS6203 co-emissions against dedup scans between the
+slots), checkConstLiteralComparisons 95 ms, checkSuperInObjectLiterals
+91 ms.**
+
 **Round 643 (2026-07-22) — (M0.4) twentieth tail-pass migration:
 checkTypeParameterDefaults (TS2368 reserved TP names + TS2744
 forward/self TP default references + the circularDefaultTypeParamCount
@@ -565,77 +616,6 @@ cost: checkArgumentsCollision 116.8 ms, checkEvolvingEmptyArrayImplicitAny
 103.2 ms (checkCrossFileModuleAugmentationDuplicates 114.1 ms stays
 SKIPPED — cross-file aggregation).**
 
-**Round 635 (2026-07-21) — (M0.4) twelfth tail-pass migration:
-checkProtectedMemberReadAccess (B446 — TS2445/TS2446 protected READ
-access + the class-method WRITE check, ~103 ms — the #12 per-file tail
-pass) is ON THE SPINE; the legacy driver + pmrScanContainer/
-pmrProcessFunctionLike/pmrProcessNestedFn/pmrWalkStmt/pmrWalkExpr
-(~120 lines) are DELETED.** The PUSH-BASED ORDER-DEPENDENT variant (the
-round-531 arith pattern's first M0.4 application): the round-634 open
-question resolved to "statement-order MUTATED" — pmrWalkStmt's
-VariableStatement arm records `vars[nm] = pmrLocalClass(init)` AFTER
-walking each initializer, the map is SHARED through Block/If/loop/ARROW
-descents (recordings deliberately LEAK out of blocks) and COPIED at
-nested fn-expr/fn-decl boundaries — so the downward state (vars +
-this/lexical class + the in-class-method write gate) is push-maintained:
-LIFO frames at processed-fn-like boundaries (fresh vars from params),
-nested-fn boundaries (copied vars; this/lex/write-gate RESET), and
-top-level ExpressionStatements (the per-file-setup topVars map installed
-by INSTANCE — a recording inside a top-level IIFE body mutates it for
-later top-level statements, the legacy by-reference behavior), popped at
-owner LEAVES; per-declaration recordings fire at VariableDeclaration
-LEAVES (the legacy walk-then-record order). Reach is the memoized
-5-STATE classifier spinePmrStatus/spinePmrEdge (frozen verbatim):
-CONTAINER_FILE/CONTAINER_NS carry the container scan — split because
-only FILE-level ExpressionStatements are walked with topVars (a
-namespace-level `c1.x;` is unreached, pinned) — and STMT/EXPR the walker
-arms, with the write-LHS rule as an EDGE (`=` with a PropertyAccess LHS:
-the LHS subtree is never read-walked; the accessibility check fires at
-the BinaryExpression anchor under the frame-maintained pmrInClassMethod
-gate). Emissions at PropertyAccessExpression enters (reads) +
-BinaryExpression enters (class-method writes); pmrResolveClass/
-pmrFindProtected*DeclaringClass/pmrLocalClass/pmrCheckAccess survive as
-anchor-called leaves, pmrInClassMethod/pmrLexicalClass as the
-frame-maintained state registers (verified pmr-exclusive by grep). No
-ambient sandwich — the helpers resolve via the passed locals + the
-node-keyed lookupPerFileForNode only (no type caches touched, so no
-first-touch risk). The binderResults-iterating driver → the spine's
-partition view, gated `--partitionCheck 2` EQUIVALENT ×8 (the round-633
-rule); the pass emits ZERO diagnostics on all 8 tsc profiles (verified —
-no TS2445/TS2446 in any capture), so the listAll gate pins pure
-non-perturbation. Gates: 39 local pins (M04ProtectedReadSpineMigrationTest
-— the TS2445/TS2446 emitters' gates, the this-param fallback incl. its
-static exclusion, the write-gate arrow-inherit/nested-fn-reset pair, the
-recording leak/copy/identity-chain semantics, and the reach battery both
-directions: NewExpression args, switch bodies, for-of heads, objlit
-values, class property initializers, nested classes, expression-bodied
-container arrows, method reads of top-level vars all unreached) green
-against the LEGACY pass first; suite 11,629 → 11,668/0; `--listAll` ×8
-byte-identical; partitionCheck ×8 EQUIVALENT; pass table 427 → 426 (the
-row gone; checkSpine 19.4–19.8 s repeat runs, in-band); warning-clean.
-M0.4 running total: top TWELVE tail passes migrated. SESSION TAIL: the
-checkPropertyInitialization (#13, ~99 ms — TS2564
-strict-property-initialization) slot-move pre-gate LANDED (the pass
-hoisted from its pre-spine slot 6 across the spine to the post-spine
-slot; suite 11,668/0, listAll ×8 byte-identical). Scope map for the
-migrator: STATELESS declare-gated statement recursion
-(checkPropertyInitInStatements — skips `declare` classes/namespaces/fns,
-recurses class member bodies + PROPERTY INITIALIZERS, blocks/ifs/loops/
-switch/try, and expressions via checkPropertyInitInExpr for
-ClassExpressions) + the per-class emission checkClassPropertyInit
-(walker-local sets only, no ambient reads at the driver level) — the
-round-533 stateless-classifier shape, but TYPE-RESOLVING (property
-annotations + typeIncludesUndefined + lib-availability suppression).
-TWO dispatches: the normal-mode pass (now post-spine, option-gated
-!strictExplicitlyFalse && !strictPropertyInitializationExplicitlyFalse)
-AND the B439 declarationOnly direct call — the declarationOnly walk
-skips spineEnterNode, so the migration MUST keep the recursion walkers
-alive for that path (the round-630 shared-walker rule: spine classifier
-mirrors the surviving walker, stays in sync). Consumers: the only
-TS2564 list op elsewhere is checkInKeywordTypeguard's whole-file
-wipe-and-pin, which runs after both slots — no ordering hazard. NEXT
-session starts at its migration.**
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 (Restored 2026-07-12, round 481 — the queue/backlog/inventory sections had been
@@ -932,10 +912,17 @@ structural item instead of landing alone.**
   forEachChild worklist re-scan of the tree costs MORE than the legacy
   walk it replaces (264 ms raw, 218 ms TypeNode-pruned) — parse-time
   recording is the shape for future split producers);
+  checkExpandoFunctionNestedReads 99 ms — **MIGRATED round 644** (the
+  file-gated + pull-based-shadow combination: the write collector runs
+  at per-file SETUP — it never descends function-likes, so the
+  double-walk of top-level expression code is bounded and the anchors
+  emit inline against the COMPLETE declared map, no buffering; the
+  ChainedNameSet shadow chain rebuilds pull-based per anchor — every
+  fn-like ancestor of a reached anchor was entered through its walked
+  interior, so each contributes its layer; anchors pre-gate on the
+  candidate-receiver TEXT, so the memo-free rare-anchor rule applies);
   next per-file candidates by cost (round-642 table):
-  checkExpandoFunctionNestedReads 99 ms — slot-move pre-gate LANDED
-  round 643 (scope map in the round-643 session note; next session
-  starts at its migration), then checkStrictModeIdentifiers
+  checkStrictModeIdentifiers
   96 ms, checkConstLiteralComparisons 95 ms, checkSuperInObjectLiterals
   91 ms (98 passes >20 ms carry 5.3 s of the 6.2 s). Migration protocol per
   pass (the round-624 template): slot-move pre-gate commit (intact pass to the

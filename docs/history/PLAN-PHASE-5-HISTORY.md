@@ -1,3 +1,74 @@
+**Round 635 (2026-07-21) — (M0.4) twelfth tail-pass migration:
+checkProtectedMemberReadAccess (B446 — TS2445/TS2446 protected READ
+access + the class-method WRITE check, ~103 ms — the #12 per-file tail
+pass) is ON THE SPINE; the legacy driver + pmrScanContainer/
+pmrProcessFunctionLike/pmrProcessNestedFn/pmrWalkStmt/pmrWalkExpr
+(~120 lines) are DELETED.** The PUSH-BASED ORDER-DEPENDENT variant (the
+round-531 arith pattern's first M0.4 application): the round-634 open
+question resolved to "statement-order MUTATED" — pmrWalkStmt's
+VariableStatement arm records `vars[nm] = pmrLocalClass(init)` AFTER
+walking each initializer, the map is SHARED through Block/If/loop/ARROW
+descents (recordings deliberately LEAK out of blocks) and COPIED at
+nested fn-expr/fn-decl boundaries — so the downward state (vars +
+this/lexical class + the in-class-method write gate) is push-maintained:
+LIFO frames at processed-fn-like boundaries (fresh vars from params),
+nested-fn boundaries (copied vars; this/lex/write-gate RESET), and
+top-level ExpressionStatements (the per-file-setup topVars map installed
+by INSTANCE — a recording inside a top-level IIFE body mutates it for
+later top-level statements, the legacy by-reference behavior), popped at
+owner LEAVES; per-declaration recordings fire at VariableDeclaration
+LEAVES (the legacy walk-then-record order). Reach is the memoized
+5-STATE classifier spinePmrStatus/spinePmrEdge (frozen verbatim):
+CONTAINER_FILE/CONTAINER_NS carry the container scan — split because
+only FILE-level ExpressionStatements are walked with topVars (a
+namespace-level `c1.x;` is unreached, pinned) — and STMT/EXPR the walker
+arms, with the write-LHS rule as an EDGE (`=` with a PropertyAccess LHS:
+the LHS subtree is never read-walked; the accessibility check fires at
+the BinaryExpression anchor under the frame-maintained pmrInClassMethod
+gate). Emissions at PropertyAccessExpression enters (reads) +
+BinaryExpression enters (class-method writes); pmrResolveClass/
+pmrFindProtected*DeclaringClass/pmrLocalClass/pmrCheckAccess survive as
+anchor-called leaves, pmrInClassMethod/pmrLexicalClass as the
+frame-maintained state registers (verified pmr-exclusive by grep). No
+ambient sandwich — the helpers resolve via the passed locals + the
+node-keyed lookupPerFileForNode only (no type caches touched, so no
+first-touch risk). The binderResults-iterating driver → the spine's
+partition view, gated `--partitionCheck 2` EQUIVALENT ×8 (the round-633
+rule); the pass emits ZERO diagnostics on all 8 tsc profiles (verified —
+no TS2445/TS2446 in any capture), so the listAll gate pins pure
+non-perturbation. Gates: 39 local pins (M04ProtectedReadSpineMigrationTest
+— the TS2445/TS2446 emitters' gates, the this-param fallback incl. its
+static exclusion, the write-gate arrow-inherit/nested-fn-reset pair, the
+recording leak/copy/identity-chain semantics, and the reach battery both
+directions: NewExpression args, switch bodies, for-of heads, objlit
+values, class property initializers, nested classes, expression-bodied
+container arrows, method reads of top-level vars all unreached) green
+against the LEGACY pass first; suite 11,629 → 11,668/0; `--listAll` ×8
+byte-identical; partitionCheck ×8 EQUIVALENT; pass table 427 → 426 (the
+row gone; checkSpine 19.4–19.8 s repeat runs, in-band); warning-clean.
+M0.4 running total: top TWELVE tail passes migrated. SESSION TAIL: the
+checkPropertyInitialization (#13, ~99 ms — TS2564
+strict-property-initialization) slot-move pre-gate LANDED (the pass
+hoisted from its pre-spine slot 6 across the spine to the post-spine
+slot; suite 11,668/0, listAll ×8 byte-identical). Scope map for the
+migrator: STATELESS declare-gated statement recursion
+(checkPropertyInitInStatements — skips `declare` classes/namespaces/fns,
+recurses class member bodies + PROPERTY INITIALIZERS, blocks/ifs/loops/
+switch/try, and expressions via checkPropertyInitInExpr for
+ClassExpressions) + the per-class emission checkClassPropertyInit
+(walker-local sets only, no ambient reads at the driver level) — the
+round-533 stateless-classifier shape, but TYPE-RESOLVING (property
+annotations + typeIncludesUndefined + lib-availability suppression).
+TWO dispatches: the normal-mode pass (now post-spine, option-gated
+!strictExplicitlyFalse && !strictPropertyInitializationExplicitlyFalse)
+AND the B439 declarationOnly direct call — the declarationOnly walk
+skips spineEnterNode, so the migration MUST keep the recursion walkers
+alive for that path (the round-630 shared-walker rule: spine classifier
+mirrors the surviving walker, stays in sync). Consumers: the only
+TS2564 list op elsewhere is checkInKeywordTypeguard's whole-file
+wipe-and-pin, which runs after both slots — no ordering hazard. NEXT
+session starts at its migration.**
+
 **Round 634 (2026-07-21) — (M0.4) slot-move pre-gate for #12:
 checkProtectedMemberReadAccess (B446 — TS2445/TS2446 protected READ
 access, ~103 ms) moved intact to the post-spine slot; suite 11,629/0,
