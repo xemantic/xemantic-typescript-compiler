@@ -5486,6 +5486,27 @@ class Checker(
         // binderResults driver → the spine's partition view, gated
         // `--partitionCheck 2` EQUIVALENT ×8. No pass scans or retracts
         // TS2364.
+        // B431' (M0.4 slot-move pre-gate, round 643):
+        // checkExpandoFunctionNestedReads (TS2339 for an expando-function
+        // property read inside a NESTED function where it was never
+        // declared at file scope) moved intact from the B431 slot ahead of
+        // its spine migration. Fully syntactic + self-contained (pure AST
+        // name sets — no type caches, no ambient, no side-set consults; the
+        // only diagnostics-list consumer between the slots, ctaPostFilters,
+        // touches TS2322/TS7030 and reads TS2304/TS2314 only — TS2339 is
+        // invisible to it). Scope map for the migrator: THREE per-file
+        // walks — (a) a TOP-LEVEL-only statement scan building
+        // funcNames/nameCount/merged (candidates = uniquely-named top-level
+        // fns not merged with any other decl kind); (b) collectExpandoDecls,
+        // the file-scope `Foo.prop =` write collector that walks statements
+        // + expression positions (if/for/while/switch HEADS and case
+        // EXPRESSIONS included) but NEVER descends into function-likes;
+        // (c) visitExpandoStmt/-Expr, the read walk carrying TWO downward
+        // values — the inNestedFn flag (flips true inside fn-like bodies
+        // AND param defaults) and the ChainedNameSet shadow chain (param
+        // names + fn-body var/fn declarations shadow candidates) — the
+        // emission fires only at inNestedFn PropertyAccess reads.
+        pass("checkExpandoFunctionNestedReads") { checkExpandoFunctionNestedReads() }
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -5605,9 +5626,9 @@ class Checker(
         // TS8010 already fire) STILL declares the property type T — so `this.prop = …`
         // (TS2322) and `this.prop.<member>` (TS2339) are type-checked against T.
         pass("checkJsAmbientDeclaredClassProperties") { checkJsAmbientDeclaredClassProperties() }
-        // B431: TS2339 for an expando-function property accessed inside a NESTED function
-        // where it was never declared at file scope (`Foo.X` inside `function bar(p=(Foo.X=1))`).
-        pass("checkExpandoFunctionNestedReads") { checkExpandoFunctionNestedReads() }
+        // B431: checkExpandoFunctionNestedReads (TS2339 expando nested reads)
+        // moved to the post-spine slot — see the pass("checkSpine") site
+        // (M0.4 slot-move pre-gate, round 643).
         // B437: TS2345 for args passed to a JS function with a JSDoc primitive rest param
         // (`@param {...number} a`) — dedicated walker (the `.js` checkCallExpressionTypes
         // skip is load-bearing). JS-like files only.
