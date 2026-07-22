@@ -5253,6 +5253,28 @@ class Checker(
         // ×8 (the round-633 rule). No TS2862 dedup/scan consumers exist
         // (checkGenericRecordCastAccess emits the code but is gate-disjoint
         // and never scans the list).
+        // 42' (M0.4 slot-move pre-gate, round 637): checkArgumentsCollision
+        // (TS2396 arguments-vs-rest-param collision at target < ES2015 +
+        // TS1215 `arguments` bindings in module files) moved intact from its
+        // pre-spine slot 42 ahead of its spine migration. Fully SYNTACTIC +
+        // self-contained (isModuleFile + pure AST param scans — no type
+        // caches, no ambient); no TS2396/TS1215 dedup/scan consumers exist
+        // (the sibling TS1215 emitter checkModuleStrictModeInStatements
+        // covers NAME bindings — its FunctionDeclaration arm deliberately
+        // skips params, deferring to this pass — and never scans the list).
+        // Scope for the migrator:
+        // the SIMPLEST downward context yet — one CONSTANT-per-file boolean
+        // (isModule) + per-construct declare gates; the walker descends
+        // arrows/fn-exprs/class-exprs/objlit members/template spans (a WIDER
+        // reach than gIdx — needs a fresh edge set); param-list emissions
+        // anchor at fn-like enters gated body-present + !declare (class
+        // members inherit the CLASS's declare flag); the run-level dispatch
+        // gate (target < ES2015 || any non-dts module file) becomes the
+        // run-active flag.
+        val argsCollisionHasModuleFiles = binderResults.any { isModuleFile(it.sourceFile.statements) && !isDtsFile(it.sourceFile.fileName) }
+        if (options.target < ScriptTarget.ES2015 || argsCollisionHasModuleFiles) {
+            pass("checkArgumentsCollision") { checkArgumentsCollision() }
+        }
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -5815,14 +5837,9 @@ class Checker(
         // spineCheckAmbientImplAlias.
         // 41b. TS2436 (ambient relative module names) migrated to the check
         // spine (INV.4(b) batch 7) — see spineCheckAmbientRelativeModuleName.
-        // 42. Check arguments collision with rest params (TS2396)
-        // TS2396 only fires at target < ES2015 (no arguments object concern with arrow functions)
-        // But TS1215 fires for module files regardless of target
-        // Run checkArgumentsCollision if either: target < ES2015 (for TS2396) OR there are module files (for TS1215)
-        val hasModuleFiles = binderResults.any { isModuleFile(it.sourceFile.statements) && !isDtsFile(it.sourceFile.fileName) }
-        if (options.target < ScriptTarget.ES2015 || hasModuleFiles) {
-            pass("checkArgumentsCollision") { checkArgumentsCollision() }
-        }
+        // 42. checkArgumentsCollision (TS2396/TS1215) moved to the post-spine
+        // slot — see the pass("checkSpine") site (M0.4 slot-move pre-gate,
+        // round 637).
         // 43. TS1039/TS1254/TS1066/TS1031 (ambient initializers) migrated to
         // the check spine (INV.4(b) batch 6) — see spineCheckAmbientVarInitializers /
         // spineCheckAmbientEnumInitializers / spineCheckAmbientClassMembers.

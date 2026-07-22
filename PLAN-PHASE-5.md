@@ -64,8 +64,25 @@ against the LEGACY pass FIRST; suite 11,701 → 11,732/0; `--listAll` ×8
 byte-identical (time header only); partitionCheck ×8 EQUIVALENT; pass
 table 425 → 424 (the row gone; checkSpine 19,714.4 ms single-run —
 in the recent 19.3–20.5 s band); warning-clean (--rerun-tasks, zero
-`w:`). M0.4 running total: top FOURTEEN tail passes migrated. Next
-per-file candidates by cost: checkArgumentsCollision 116.8 ms,
+`w:`). M0.4 running total: top FOURTEEN tail passes migrated. SESSION
+TAIL: the checkArgumentsCollision (#15, 116.8 ms — TS2396
+arguments-vs-rest-param collision at target < ES2015 + TS1215
+`arguments` bindings in module files) slot-move pre-gate LANDED (moved
+intact with its run-level dispatch gate from pre-spine slot 42 to the
+post-spine slot; suite 11,732/0; listAll ×8 byte-identical). Scope map
+for the migrator: the SIMPLEST downward context yet — one
+CONSTANT-per-file boolean (isModule) + per-construct declare gates; no
+maps, no accumulation, no prepass; the walker descends
+arrows/fn-exprs/class-exprs/objlit members/template spans and
+typeof/await/yield/void/delete operands (a WIDER reach than gIdx — a
+fresh edge set, not a reuse); param-list emissions anchor at fn-like
+enters gated body-present + !declare (class members inherit the CLASS's
+declare flag; get-accessors never param-check); the run-level dispatch
+gate (target < ES2015 || any non-dts module file) becomes the
+run-active flag; the sibling TS1215 emitter
+checkModuleStrictModeInStatements covers NAME bindings only (its
+FunctionDeclaration arm deliberately defers params to this pass) and
+scans no lists. NEXT session starts at its migration; after it by cost:
 checkEvolvingEmptyArrayImplicitAny 103.2 ms.**
 
 **Round 636 (2026-07-22) — (M0.4) thirteenth tail-pass migration:
