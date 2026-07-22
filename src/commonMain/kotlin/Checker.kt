@@ -5339,6 +5339,23 @@ class Checker(
         // round-633 rule). No TS7034/TS7005 dedup/scan consumers exist
         // (checkUninitializedLetCapturedReads emits the same codes but is
         // gate-disjoint BY CONSTRUCTION and never scans the list).
+        // 53' (M0.4 slot-move pre-gate, round 639):
+        // checkUndefinedClassInterfaceName (TS2414 class / TS2427 interface
+        // / TS2457 type-alias names in PREDEFINED_TYPE_NAMES + the
+        // piggy-backed TS1163 yield-outside-generator walk dispatched from
+        // its FunctionDeclaration arm) moved intact from pre-spine slot 53
+        // ahead of its spine migration. Fully syntactic + self-contained
+        // (PREDEFINED_TYPE_NAMES membership + the walkYield recursion — no
+        // type caches, no ambient); this pass is the SOLE emitter of all
+        // four codes and no pass scans them, so the order flip across the
+        // move is immaterial. Scope quirks for the migrator: the NAME-check
+        // recursion never descends into fn/class-member bodies (a `class
+        // undefined {}` inside a function body is unchecked, frozen), while
+        // the yield walk starts ONLY at FunctionDeclaration statements
+        // (top-level class METHOD bodies are never yield-walked) and tracks
+        // generator state through fn-expr/arrow/objlit-method boundaries —
+        // two interleaved reach shapes in one pass.
+        pass("checkUndefinedClassInterfaceName") { checkUndefinedClassInterfaceName() }
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -5966,8 +5983,9 @@ class Checker(
         // 52. TS1212/TS1213/TS1214/TS2480/TS18006 (strict mode reserved words)
         // migrated to the check spine (INV.4(b) batch 14) — see the
         // spineCheckStrict* handlers + spineStrictReservedCtx.
-        // 53. Check class/interface named 'undefined' (TS2414/TS2427)
-        pass("checkUndefinedClassInterfaceName") { checkUndefinedClassInterfaceName() }
+        // 53. checkUndefinedClassInterfaceName (TS2414/TS2427/TS2457 +
+        // TS1163) moved to the post-spine slot — see the pass("checkSpine")
+        // site (M0.4 slot-move pre-gate, round 639).
         // 54. Check multiple default exports (TS2528)
         pass("checkMultipleDefaultExports") { checkMultipleDefaultExports() }
         // 55. Check derived class constructor must contain super call (TS2377)

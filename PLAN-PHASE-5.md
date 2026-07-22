@@ -62,7 +62,29 @@ the LEGACY pass FIRST; suite 11,757 → 11,790/0; `--listAll` ×8
 byte-identical (time header only); partitionCheck ×8 EQUIVALENT; pass
 table 423 → 422 (the row gone; checkSpine in-band); warning-clean
 (--rerun-tasks, zero `w:`). M0.4 running total: top SIXTEEN tail passes
-migrated (one skip: the cross-file checkCrossFileModuleAugmentationDuplicates).**
+migrated (one skip: the cross-file checkCrossFileModuleAugmentationDuplicates).
+SESSION TAIL: the checkUndefinedClassInterfaceName (#17, 123.9 ms at the
+round-639 table — TS2414 class / TS2427 interface / TS2457 type-alias
+names in PREDEFINED_TYPE_NAMES + the piggy-backed TS1163
+yield-outside-generator walk) slot-move pre-gate LANDED (moved intact
+from pre-spine slot 53 to the post-spine slot; suite 11,790/0; listAll
+×8 byte-identical; it is the SOLE emitter of all four codes and nothing
+scans them — order flip immaterial). Scope map for the migrator: TWO
+interleaved reach shapes in one pass — the NAME-check recursion
+(class/interface/type-alias names; descends Block/ModuleBlock/
+if/loops/switch-clauses/try/labeled but NEVER fn or class-member bodies
+— a `class undefined {}` inside a function body is unchecked, frozen)
+and the yield walk (starts ONLY at the name-recursion's
+FunctionDeclaration statements — top-level class METHOD bodies are
+never yield-walked, frozen — then tracks generator state through
+fn-decl/fn-expr/objlit-method asteriskToken boundaries with arrows
+always non-generator, incl. a full expression descent + a left-spine
+iterative BinaryExpression fold). Likely migrates as two coupled
+classifiers: a binary name-check reach + a 3-state yield status
+(GEN/NONGEN/unreached) carrying the generator flag as the status.
+NEXT session starts at that migration; after it by cost:
+checkSuperRefInRebindingScope 113.1 ms, checkInvalidAssignmentTargets
+105.8 ms.**
 
 **Round 638 (2026-07-22) — (M0.4) fifteenth tail-pass migration:
 checkArgumentsCollision (TS2396 "Duplicate identifier 'arguments'…" for
@@ -830,9 +852,13 @@ structural item instead of landing alone.**
   Part 2 is TYPE-RESOLVING → per-dispatch ambient sandwich of resting
   currentFileLocals + per-file currentCheckFileName + a nulled
   currentFlowGraph);
-  next per-file candidates by cost: re-read the `--passTiming` table
-  (98 passes >20 ms carry 5.3 s of the
-  6.2 s). Migration protocol per
+  next per-file candidates by cost (round-639 table):
+  checkUndefinedClassInterfaceName 123.9 ms — slot-move pre-gate LANDED
+  round 639 (scope map in the round-639 session note: two interleaved
+  reach shapes, the name-check recursion + the piggy-backed TS1163 yield
+  walk), migration next; then checkSuperRefInRebindingScope 113.1 ms,
+  checkInvalidAssignmentTargets 105.8 ms (98 passes >20 ms carry 5.3 s of
+  the 6.2 s). Migration protocol per
   pass (the round-624 template): slot-move pre-gate commit (intact pass to the
   post-spine slot, corpus + listAll ×8), then the migration commit (frames at
   the legacy copy edges, memoized reach classifier, per-dispatch ambient
