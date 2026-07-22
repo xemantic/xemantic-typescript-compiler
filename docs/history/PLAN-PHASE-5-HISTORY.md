@@ -1,3 +1,62 @@
+**Round 630 (2026-07-21) — (M0.4) eighth tail-pass migration:
+checkSameTargetReferenceCastOverlap (TS2352 same-target-Reference cast +
+function-return-mismatch cast, ~123 ms — the #8 tail pass) is ON THE SPINE;
+the whole-file driver is deleted.** The SHARED-WALKER variant of the
+template: the pass's recursion (walkTypeAssertionsInStmt/-InExpr) is SHARED
+with the cast-overlap sibling passes (null-cast / array-to-class /
+type-param-subtype / erasable-syntax), so only the DRIVER
+(checkSameTargetReferenceCastOverlap's binderResults loop + its two
+whole-file walks) is deleted — the walker survives, and the reach
+classifier (spineCoStatus/spineCoEdge, the spineFp/spineSy skeleton)
+mirrors the walker's descent arms VERBATIM and must stay IN SYNC with any
+future walker-arm change (a sibling-pass walker extension without a
+classifier update silently diverges this pass's reach — noted in the
+classifier's kdoc). Reach quirks pinned both directions: objlit and
+class-EXPRESSION method bodies, typeof/void/delete/non-null operands,
+template spans, case-clause EXPRESSIONS, BOTH for-initializer forms, NEW
+callees, and tagged-template tags/spans ARE reached; parameter DEFAULTS,
+enum member initializers, heritage expressions, and computed property
+NAMES are NOT. Anchors are TypeAssertionExpression enters; the two
+emission leaves run per anchor in legacy order (emitTS2352IfSameTarget-
+Mismatch then emitTS2352IfFunctionReturnMismatch — mutually exclusive by
+source-type shape, so the per-anchor interleave vs the legacy's two
+whole-file walks only reorders diagnostics across positions, absorbed by
+the stable output sort). This is the FIRST TYPE-RESOLVING tail migration:
+the emitters run getTypeOfExpression/getTypeFromTypeNode/bidirectional
+checkTypeRelatedTo per anchor, now interleaved into the spine walk
+(first-touch order — the flagged risk class); the corpus + listAll ×8
+gates came back clean, so the interleave is behavior-neutral here. Ambient
+sandwich: currentCheckFileName install + currentFlowGraph nulled around
+the emission pair (the legacy post-spine slot ran with a null graph;
+checkSpine's per-file loop already installs currentFileLocals to the same
+result.locals the legacy pass set — no install needed). Gates: 26 local
+pins (M04CastOverlapSpineMigrationTest — both emitters' gates incl. the
+any/TypeParam/one-way-assignable bails, the array-literal excess-property
+chain branch, the parenthesized function form, and the reach battery
+above) verified green against the LEGACY pass FIRST (stash-run-pop);
+suite 11,532 → 11,558/0; `--listAll` ×8 byte-identical (46×7 + 94
+env-legit artifacts); pass table 431 → 430 (the
+checkSameTargetReferenceCastOverlap row GONE; checkSpine in the
+18.0–19.1 s band); warning-clean. M0.4 running total: top EIGHT tail
+passes migrated. SESSION TAIL: the checkBindingPatternComputedIndexSig
+(#9, ~120 ms — TS2537/TS2538/TS2448+TS2728) slot-move pre-gate landed
+(corpus + listAll ×8 identical). Its map for the migrator: a
+self-contained recursion (walkB94InStmts/-InStmt/-InExpr) with THREE
+anchor families — fn-like PARAMETER lists (emitB94ForFnLikeParams at
+FunctionDeclaration/arrow/fn-expr/objlit-method/set-accessor/class-
+expression members), VariableStatement decl patterns (the empty-objlit
+destructure emitB94ForComputedKeyPattern), and VariableDeclarationList
+heads (checkSelfRefComputedBindingKeyList — also fired at for/for-in/
+for-of heads) — so the migration is a multi-anchor-kind dispatch, not a
+single node kind; it type-resolves (getTypeOfExpression on computed keys)
+= the same first-touch risk class as this round; its one TS2537 consumer
+(checkErrorElaboration's corpus-unique Container-Ref swap, slot 5969)
+runs AFTER both slots and no TS2448/TS2538 dedup consumers exist; the
+walker's reach quirks to pin: param defaults ARE walked at
+FunctionDeclaration (unlike the cast walker), catch-variable/heritage/
+enum-member positions are not.**
+
+
 **Round 629 (2026-07-21) — (M0.4) seventh tail-pass migration:
 checkDefiniteAssignmentViaFlowGraph (flow-graph TS2454 + the B187
 nullable-union loop-arg TS2345, ~105 ms — the #7 tail pass) is ON THE

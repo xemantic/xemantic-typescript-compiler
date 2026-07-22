@@ -3740,6 +3740,28 @@ class Checker(
     /** Reusable ascent buffer for [spineEvStatus]. */
     private val spineEvChain = ArrayList<Node>()
 
+    // ── (M0.4) round 640: checkUndefinedClassInterfaceName on the spine ──
+    // (TS2414 class / TS2427 interface / TS2457 type-alias names in
+    // PREDEFINED_TYPE_NAMES + the piggy-backed TS1163
+    // yield-outside-generator walk.) TWO interleaved reach shapes in ONE
+    // multi-state classifier [spineUyStatus] over [spineUyFold]: the
+    // NAME-check recursion (UY_NAME statement positions — descends
+    // Block/ModuleBlock/if/loops/switch-clauses/try/labeled but NEVER fn
+    // or class-member bodies, no expression descent) and the yield walk
+    // (UY_YGEN/UY_YNON carrying the generator flag AS the status — started
+    // ONLY at name-reached FunctionDeclaration statements, generator state
+    // reset at fn-decl/fn-expr/objlit-method asteriskToken boundaries;
+    // arrows always non-generator; class-EXPRESSION members restricted to
+    // method/ctor and objlit members to methods — frozen quirks). Anchors:
+    // class/interface/type-alias enters (a PREDEFINED_TYPE_NAMES pre-gate
+    // before the climb) + YieldExpression enters. Fully syntactic — no
+    // ambient sandwich. Fields PRE-init.
+    private var spineUyActive = false
+    /** Per-file nodeId memo for [spineUyStatus] — 0 unknown, else UY_*. */
+    private var spineUyReachMemo = ByteArray(0)
+    /** Reusable ascent buffer for [spineUyStatus]. */
+    private val spineUyChain = ArrayList<Node>()
+
     // ── INV.4(d) walker 6 (round 535): checkArgumentCounts on the spine ────
     // The function-call arity pass (TS2554/TS2555/TS2575) — the recursion
     // walkers (checkArgCountInStatements/-InStatement/-InExpr(Core)) are
@@ -5339,23 +5361,20 @@ class Checker(
         // round-633 rule). No TS7034/TS7005 dedup/scan consumers exist
         // (checkUninitializedLetCapturedReads emits the same codes but is
         // gate-disjoint BY CONSTRUCTION and never scans the list).
-        // 53' (M0.4 slot-move pre-gate, round 639):
-        // checkUndefinedClassInterfaceName (TS2414 class / TS2427 interface
-        // / TS2457 type-alias names in PREDEFINED_TYPE_NAMES + the
-        // piggy-backed TS1163 yield-outside-generator walk dispatched from
-        // its FunctionDeclaration arm) moved intact from pre-spine slot 53
-        // ahead of its spine migration. Fully syntactic + self-contained
-        // (PREDEFINED_TYPE_NAMES membership + the walkYield recursion — no
-        // type caches, no ambient); this pass is the SOLE emitter of all
-        // four codes and no pass scans them, so the order flip across the
-        // move is immaterial. Scope quirks for the migrator: the NAME-check
-        // recursion never descends into fn/class-member bodies (a `class
-        // undefined {}` inside a function body is unchecked, frozen), while
-        // the yield walk starts ONLY at FunctionDeclaration statements
-        // (top-level class METHOD bodies are never yield-walked) and tracks
-        // generator state through fn-expr/arrow/objlit-method boundaries —
-        // two interleaved reach shapes in one pass.
-        pass("checkUndefinedClassInterfaceName") { checkUndefinedClassInterfaceName() }
+        // 53'' (M0.4, round 640): checkUndefinedClassInterfaceName (TS2414
+        // class / TS2427 interface / TS2457 type-alias names in
+        // PREDEFINED_TYPE_NAMES + the piggy-backed TS1163
+        // yield-outside-generator walk) is ON THE SPINE — anchors at
+        // class/interface/type-alias/YieldExpression enters
+        // (spineUyEnterNode), gated by the multi-state reach classifier
+        // spineUyStatus carrying the pass's TWO interleaved walks (UY_NAME
+        // for the name recursion — never descends fn/class-member bodies;
+        // UY_YGEN/UY_YNON for the yield walk with the generator flag as
+        // the status, started only at name-reached FunctionDeclarations).
+        // Fully syntactic — no ambient sandwich; the legacy binderResults
+        // driver → the spine's partition view, gated `--partitionCheck 2`
+        // EQUIVALENT ×8. This pass is the SOLE emitter of all four codes
+        // and no pass scans them.
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -5984,8 +6003,7 @@ class Checker(
         // migrated to the check spine (INV.4(b) batch 14) — see the
         // spineCheckStrict* handlers + spineStrictReservedCtx.
         // 53. checkUndefinedClassInterfaceName (TS2414/TS2427/TS2457 +
-        // TS1163) moved to the post-spine slot — see the pass("checkSpine")
-        // site (M0.4 slot-move pre-gate, round 639).
+        // TS1163) is ON THE SPINE (M0.4, round 640) — see spineUyEnterNode.
         // 54. Check multiple default exports (TS2528)
         pass("checkMultipleDefaultExports") { checkMultipleDefaultExports() }
         // 55. Check derived class constructor must contain super call (TS2377)
@@ -21399,6 +21417,7 @@ class Checker(
                 spineGxSetup(result)
                 spineAcSetup(result)
                 spineEvSetup(result)
+                spineUySetup(result)
                 // (M0.4) round 636: property-init anchors — active in every
                 // non-dts file (the legacy driver's only file gate).
                 spinePiActive = spinePiRunActive && !spineIsDts
@@ -21436,6 +21455,7 @@ class Checker(
                     spineGxTeardown()
                     spineAcTeardown()
                     spineEvTeardown()
+                    spineUyTeardown()
                     spinePiActive = false
                 }
                 spineResolveDeferredIterationChecks()
@@ -21662,6 +21682,11 @@ class Checker(
         if (spineAcActive) spineAcEnterNode(node)
         // (M0.4) round 639 — see spineEvEnterNode.
         if (spineEvActive) spineEvEnterNode(node)
+        // (M0.4) round 640: the predefined-type-name + yield anchors
+        // (class/interface/type-alias enters with a name pre-gate,
+        // YieldExpression enters) — two interleaved reach shapes in one
+        // classifier; no frames/leave hook, no ambient sandwich.
+        if (spineUyActive) spineUyEnterNode(node)
         // INV.4(d) walker 7: the use-before-declaration pass — the per-list
         // ForwardRefs anchor + loop-header self-ref checks.
         if (spineUbdActive) spineUbdEnterNode(node)
@@ -47719,6 +47744,25 @@ class Checker(
         private const val EV_CLAUSE = 6
         private const val EV_MEMBER = 7
         private const val EV_CATCH = 8
+
+        // (M0.4) round 640: spineUyStatus states
+        // (checkUndefinedClassInterfaceName reach — multi-state + the
+        // transient SourceFile root). UY_NAME = a statement position the
+        // deleted checkUndefinedNamesInStmts visited (the name anchors
+        // emit there; switch/catch clauses ride the same status — their
+        // Statement children only); UY_YGEN/UY_YNON = a yield-walk
+        // position with the generator flag carried as the status (TS1163
+        // fires at UY_YNON YieldExpressions); UY_MEMBER = a class/objlit
+        // member on the path from a yield-walked container to its
+        // body/initializer (the container edge encodes the frozen member
+        // filters — class EXPRESSIONS walk method/ctor only, object
+        // literals methods only).
+        private const val UY_NAME = 1
+        private const val UY_NONE = 2
+        private const val UY_ROOT = 3
+        private const val UY_YGEN = 4
+        private const val UY_YNON = 5
+        private const val UY_MEMBER = 6
 
         // (M0.4) round 631: spineB94Status states (checkBindingPatternComputedIndexSig
         // reach — binary + the transient SourceFile root).
@@ -80071,283 +80115,273 @@ interface DataView {
     }
 
     // -----------------------------------------------------------------------
-    // TS2414/TS2427: Class/Interface name cannot be 'undefined'
+    // TS2414/TS2427/TS2457 + TS1163: predefined-type-name checks + the
+    // piggy-backed yield-outside-generator walk — ON THE SPINE (M0.4,
+    // round 640). The legacy driver (checkUndefinedClassInterfaceName /
+    // checkUndefinedNamesInStmts) and the walkYieldInStmts/-InStmt/-InExpr
+    // recursion are deleted; the emissions fire at class/interface/
+    // type-alias/YieldExpression enters gated by [spineUyStatus].
     // -----------------------------------------------------------------------
 
-    private fun checkUndefinedClassInterfaceName() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            checkUndefinedNamesInStmts(result.sourceFile.statements, source, fileName)
+    /** Per-file setup: the legacy driver's dts skip (its ONLY gate — the
+     *  pass ran unconditionally otherwise, any options). */
+    private fun spineUySetup(result: BinderResult) {
+        spineUyActive = !spineIsDts
+        spineUyReachMemo = if (!spineUyActive) ByteArray(0) else {
+            val n = result.sourceFile.nodeCount
+            if (n > 0) ByteArray(n) else ByteArray(0)
         }
     }
 
-    /**
-     * 17.196: TS1163 — `yield` outside a generator function body. Walks
-     * function bodies tracking generator (asterisk) state. ArrowFunction is
-     * always non-generator. Function/Method declarations + expressions track
-     * via `asteriskToken`.
-     */
-    private fun walkYieldInStmts(stmts: List<Statement>, source: String, fileName: String, isGenerator: Boolean) {
-        for (stmt in stmts) walkYieldInStmt(stmt, source, fileName, isGenerator)
+    private fun spineUyTeardown() {
+        spineUyActive = false
+        spineUyReachMemo = ByteArray(0)
     }
 
-    private fun walkYieldInStmt(stmt: Statement, source: String, fileName: String, isGenerator: Boolean) {
-        when (stmt) {
-            is ExpressionStatement -> walkYieldInExpr(stmt.expression, source, fileName, isGenerator)
-            is VariableStatement -> for (d in stmt.declarationList.declarations) {
-                d.initializer?.let { walkYieldInExpr(it, source, fileName, isGenerator) }
+    /** ENTER dispatch: the name anchors (a PREDEFINED_TYPE_NAMES pre-gate
+     *  runs BEFORE the reach climb — the names are rare) + the
+     *  YieldExpression anchors (the node kind itself is rare). */
+    private fun spineUyEnterNode(node: Node) {
+        when ((node as NodeBase).kindId) {
+            NodeKind.CLASS_DECLARATION -> {
+                val name = (node as ClassDeclaration).name ?: return
+                if (name.text !in PREDEFINED_TYPE_NAMES) return
+                if (spineUyStatus(node) != UY_NAME) return
+                spineUyEmitName(name, "Class name cannot be '${name.text}'.", 2414)
             }
-            is ReturnStatement -> stmt.expression?.let { walkYieldInExpr(it, source, fileName, isGenerator) }
-            is FunctionDeclaration -> {
-                stmt.body?.let { walkYieldInStmts(it.statements, source, fileName, stmt.asteriskToken) }
+            NodeKind.INTERFACE_DECLARATION -> {
+                val name = (node as InterfaceDeclaration).name
+                if (name.text !in PREDEFINED_TYPE_NAMES) return
+                if (spineUyStatus(node) != UY_NAME) return
+                spineUyEmitName(name, "Interface name cannot be '${name.text}'.", 2427)
             }
-            is ClassDeclaration -> for (m in stmt.members) when (m) {
-                is MethodDeclaration -> m.body?.let {
-                    walkYieldInStmts(it.statements, source, fileName, m.asteriskToken)
-                }
-                is Constructor -> m.body?.let { walkYieldInStmts(it.statements, source, fileName, false) }
-                is GetAccessor -> m.body?.let { walkYieldInStmts(it.statements, source, fileName, false) }
-                is SetAccessor -> m.body?.let { walkYieldInStmts(it.statements, source, fileName, false) }
-                is PropertyDeclaration -> m.initializer?.let { walkYieldInExpr(it, source, fileName, false) }
-                else -> {}
+            NodeKind.TYPE_ALIAS_DECLARATION -> {
+                // 17.195: TS2457 — a type alias named after a reserved type
+                // keyword (e.g. `type undefined = string`).
+                val name = (node as TypeAliasDeclaration).name
+                if (name.text !in PREDEFINED_TYPE_NAMES) return
+                if (spineUyStatus(node) != UY_NAME) return
+                spineUyEmitName(name, "Type alias name cannot be '${name.text}'.", 2457)
             }
-            is Block -> walkYieldInStmts(stmt.statements, source, fileName, isGenerator)
-            is IfStatement -> {
-                walkYieldInExpr(stmt.expression, source, fileName, isGenerator)
-                walkYieldInStmt(stmt.thenStatement, source, fileName, isGenerator)
-                stmt.elseStatement?.let { walkYieldInStmt(it, source, fileName, isGenerator) }
-            }
-            is ForStatement -> {
-                stmt.condition?.let { walkYieldInExpr(it, source, fileName, isGenerator) }
-                stmt.incrementor?.let { walkYieldInExpr(it, source, fileName, isGenerator) }
-                walkYieldInStmt(stmt.statement, source, fileName, isGenerator)
-            }
-            is ForInStatement -> {
-                walkYieldInExpr(stmt.expression, source, fileName, isGenerator)
-                walkYieldInStmt(stmt.statement, source, fileName, isGenerator)
-            }
-            is ForOfStatement -> {
-                walkYieldInExpr(stmt.expression, source, fileName, isGenerator)
-                walkYieldInStmt(stmt.statement, source, fileName, isGenerator)
-            }
-            is WhileStatement -> {
-                walkYieldInExpr(stmt.expression, source, fileName, isGenerator)
-                walkYieldInStmt(stmt.statement, source, fileName, isGenerator)
-            }
-            is DoStatement -> {
-                walkYieldInExpr(stmt.expression, source, fileName, isGenerator)
-                walkYieldInStmt(stmt.statement, source, fileName, isGenerator)
-            }
-            is SwitchStatement -> {
-                walkYieldInExpr(stmt.expression, source, fileName, isGenerator)
-                for (clause in stmt.caseBlock) when (clause) {
-                    is CaseClause -> {
-                        walkYieldInExpr(clause.expression, source, fileName, isGenerator)
-                        walkYieldInStmts(clause.statements, source, fileName, isGenerator)
-                    }
-                    is DefaultClause -> walkYieldInStmts(clause.statements, source, fileName, isGenerator)
-                    else -> {}
-                }
-            }
-            is TryStatement -> {
-                walkYieldInStmts(stmt.tryBlock.statements, source, fileName, isGenerator)
-                stmt.catchClause?.block?.let { walkYieldInStmts(it.statements, source, fileName, isGenerator) }
-                stmt.finallyBlock?.let { walkYieldInStmts(it.statements, source, fileName, isGenerator) }
-            }
-            is ThrowStatement -> stmt.expression?.let { walkYieldInExpr(it, source, fileName, isGenerator) }
-            is LabeledStatement -> walkYieldInStmt(stmt.statement, source, fileName, isGenerator)
-            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let {
-                walkYieldInStmts(it.statements, source, fileName, false)
+            NodeKind.YIELD_EXPRESSION -> {
+                // 17.196: TS1163 — `yield` at a walked position whose
+                // nearest tracked boundary is a non-generator.
+                if (spineUyStatus(node) == UY_YNON) spineUyEmitYield(node as YieldExpression)
             }
             else -> {}
         }
     }
 
-    private fun walkYieldInExpr(expr: Expression, source: String, fileName: String, isGenerator: Boolean) {
-        when (expr) {
-            is YieldExpression -> {
-                if (!isGenerator) {
-                    val (line, character) = getLineAndCharacterOfPosition(source, expr.pos)
-                    diagnostics.add(Diagnostic(
-                        message = "A 'yield' expression is only allowed in a generator body.",
-                        category = DiagnosticCategory.Error,
-                        code = 1163,
-                        fileName = fileName,
-                        line = line,
-                        character = character,
-                        start = expr.pos,
-                        length = 5,
-                    ))
-                }
-                expr.expression?.let { walkYieldInExpr(it, source, fileName, isGenerator) }
-            }
-            is ArrowFunction -> when (val body = expr.body) {
-                // Arrow functions cannot be generators
-                is Block -> walkYieldInStmts(body.statements, source, fileName, false)
-                is Expression -> walkYieldInExpr(body, source, fileName, false)
-                else -> {}
-            }
-            is FunctionExpression -> {
-                expr.body.let { walkYieldInStmts(it.statements, source, fileName, expr.asteriskToken) }
-            }
-            is ClassExpression -> for (m in expr.members) when (m) {
-                is MethodDeclaration -> m.body?.let {
-                    walkYieldInStmts(it.statements, source, fileName, m.asteriskToken)
-                }
-                is Constructor -> m.body?.let { walkYieldInStmts(it.statements, source, fileName, false) }
-                else -> {}
-            }
-            is BinaryExpression -> {
-                val rightStack = ArrayDeque<Expression>()
-                var cur: Expression = expr
-                while (cur is BinaryExpression) { rightStack.addLast(cur.right); cur = cur.left }
-                walkYieldInExpr(cur, source, fileName, isGenerator)
-                while (rightStack.isNotEmpty()) walkYieldInExpr(rightStack.removeLast(), source, fileName, isGenerator)
-            }
-            is CallExpression -> {
-                walkYieldInExpr(expr.expression, source, fileName, isGenerator)
-                for (arg in expr.arguments) walkYieldInExpr(arg, source, fileName, isGenerator)
-            }
-            is NewExpression -> {
-                walkYieldInExpr(expr.expression, source, fileName, isGenerator)
-                expr.arguments?.forEach { walkYieldInExpr(it, source, fileName, isGenerator) }
-            }
-            is ParenthesizedExpression -> walkYieldInExpr(expr.expression, source, fileName, isGenerator)
-            is ConditionalExpression -> {
-                walkYieldInExpr(expr.condition, source, fileName, isGenerator)
-                walkYieldInExpr(expr.whenTrue, source, fileName, isGenerator)
-                walkYieldInExpr(expr.whenFalse, source, fileName, isGenerator)
-            }
-            is PropertyAccessExpression -> walkYieldInExpr(expr.expression, source, fileName, isGenerator)
-            is ElementAccessExpression -> {
-                walkYieldInExpr(expr.expression, source, fileName, isGenerator)
-                walkYieldInExpr(expr.argumentExpression, source, fileName, isGenerator)
-            }
-            is ArrayLiteralExpression -> for (el in expr.elements) walkYieldInExpr(el, source, fileName, isGenerator)
-            is ObjectLiteralExpression -> for (prop in expr.properties) when (prop) {
-                is PropertyAssignment -> walkYieldInExpr(prop.initializer, source, fileName, isGenerator)
-                is ShorthandPropertyAssignment -> prop.objectAssignmentInitializer?.let {
-                    walkYieldInExpr(it, source, fileName, isGenerator)
-                }
-                is SpreadAssignment -> walkYieldInExpr(prop.expression, source, fileName, isGenerator)
-                is MethodDeclaration -> prop.body?.let {
-                    walkYieldInStmts(it.statements, source, fileName, prop.asteriskToken)
-                }
-                else -> {}
-            }
-            is PrefixUnaryExpression -> walkYieldInExpr(expr.operand, source, fileName, isGenerator)
-            is PostfixUnaryExpression -> walkYieldInExpr(expr.operand, source, fileName, isGenerator)
-            is SpreadElement -> walkYieldInExpr(expr.expression, source, fileName, isGenerator)
-            is NonNullExpression -> walkYieldInExpr(expr.expression, source, fileName, isGenerator)
-            is AsExpression -> walkYieldInExpr(expr.expression, source, fileName, isGenerator)
-            is TypeAssertionExpression -> walkYieldInExpr(expr.expression, source, fileName, isGenerator)
-            is SatisfiesExpression -> walkYieldInExpr(expr.expression, source, fileName, isGenerator)
-            is AwaitExpression -> walkYieldInExpr(expr.expression, source, fileName, isGenerator)
-            is VoidExpression -> walkYieldInExpr(expr.expression, source, fileName, isGenerator)
-            is DeleteExpression -> walkYieldInExpr(expr.expression, source, fileName, isGenerator)
-            is TypeOfExpression -> walkYieldInExpr(expr.expression, source, fileName, isGenerator)
-            is TemplateExpression -> for (span in expr.templateSpans) walkYieldInExpr(span.expression, source, fileName, isGenerator)
-            is TaggedTemplateExpression -> {
-                walkYieldInExpr(expr.tag, source, fileName, isGenerator)
-                if (expr.template is TemplateExpression) {
-                    for (span in (expr.template).templateSpans) walkYieldInExpr(span.expression, source, fileName, isGenerator)
-                }
-            }
-            is CommaListExpression -> for (e in expr.elements) walkYieldInExpr(e, source, fileName, isGenerator)
-            else -> {}
-        }
+    private fun spineUyEmitName(name: Identifier, message: String, code: Int) {
+        val (line, character) = getLineAndCharacterOfPosition(spineSource, name.pos)
+        diagnostics.add(Diagnostic(
+            message = message,
+            category = DiagnosticCategory.Error,
+            code = code,
+            fileName = spineFileName,
+            line = line,
+            character = character,
+            start = name.pos,
+            length = name.text.length,
+        ))
     }
 
-    private fun checkUndefinedNamesInStmts(stmts: List<Statement>, source: String, fileName: String) {
-        for (stmt in stmts) {
-            when (stmt) {
-                is ClassDeclaration -> {
-                    val name = stmt.name
-                    if (name != null && name.text in PREDEFINED_TYPE_NAMES) {
-                        val start = name.pos
-                        val (line, character) = getLineAndCharacterOfPosition(source, start)
-                        diagnostics.add(Diagnostic(
-                            message = "Class name cannot be '${name.text}'.",
-                            category = DiagnosticCategory.Error,
-                            code = 2414,
-                            fileName = fileName,
-                            line = line,
-                            character = character,
-                            start = start,
-                            length = name.text.length,
-                        ))
-                    }
-                }
-                is InterfaceDeclaration -> {
-                    if (stmt.name.text in PREDEFINED_TYPE_NAMES) {
-                        val start = stmt.name.pos
-                        val (line, character) = getLineAndCharacterOfPosition(source, start)
-                        diagnostics.add(Diagnostic(
-                            message = "Interface name cannot be '${stmt.name.text}'.",
-                            category = DiagnosticCategory.Error,
-                            code = 2427,
-                            fileName = fileName,
-                            line = line,
-                            character = character,
-                            start = start,
-                            length = stmt.name.text.length,
-                        ))
-                    }
-                }
-                is TypeAliasDeclaration -> {
-                    // 17.195: TS2457 — type alias name cannot be a reserved
-                    // type keyword (e.g. `type undefined = string`).
-                    if (stmt.name.text in PREDEFINED_TYPE_NAMES) {
-                        val start = stmt.name.pos
-                        val (line, character) = getLineAndCharacterOfPosition(source, start)
-                        diagnostics.add(Diagnostic(
-                            message = "Type alias name cannot be '${stmt.name.text}'.",
-                            category = DiagnosticCategory.Error,
-                            code = 2457,
-                            fileName = fileName,
-                            line = line,
-                            character = character,
-                            start = start,
-                            length = stmt.name.text.length,
-                        ))
-                    }
-                }
-                is FunctionDeclaration -> {
-                    // 17.196: walk for yield-in-non-generator (TS1163).
-                    val isGenerator = stmt.asteriskToken
-                    stmt.body?.let { walkYieldInStmts(it.statements, source, fileName, isGenerator) }
-                }
-                is ModuleDeclaration -> {
-                    (stmt.body as? ModuleBlock)?.let { checkUndefinedNamesInStmts(it.statements, source, fileName) }
-                }
-                is Block -> checkUndefinedNamesInStmts(stmt.statements, source, fileName)
-                is IfStatement -> {
-                    checkUndefinedNamesInStmts(listOf(stmt.thenStatement), source, fileName)
-                    stmt.elseStatement?.let { checkUndefinedNamesInStmts(listOf(it), source, fileName) }
-                }
-                is ForStatement -> checkUndefinedNamesInStmts(listOf(stmt.statement), source, fileName)
-                is ForInStatement -> checkUndefinedNamesInStmts(listOf(stmt.statement), source, fileName)
-                is ForOfStatement -> checkUndefinedNamesInStmts(listOf(stmt.statement), source, fileName)
-                is WhileStatement -> checkUndefinedNamesInStmts(listOf(stmt.statement), source, fileName)
-                is DoStatement -> checkUndefinedNamesInStmts(listOf(stmt.statement), source, fileName)
-                is SwitchStatement -> for (clause in stmt.caseBlock) {
-                    when (clause) {
-                        is CaseClause -> checkUndefinedNamesInStmts(clause.statements, source, fileName)
-                        is DefaultClause -> checkUndefinedNamesInStmts(clause.statements, source, fileName)
-                        else -> {}
-                    }
-                }
-                is TryStatement -> {
-                    checkUndefinedNamesInStmts(stmt.tryBlock.statements, source, fileName)
-                    stmt.catchClause?.let { checkUndefinedNamesInStmts(it.block.statements, source, fileName) }
-                    stmt.finallyBlock?.let { checkUndefinedNamesInStmts(it.statements, source, fileName) }
-                }
-                is LabeledStatement -> checkUndefinedNamesInStmts(listOf(stmt.statement), source, fileName)
-                else -> {}
+    private fun spineUyEmitYield(expr: YieldExpression) {
+        val (line, character) = getLineAndCharacterOfPosition(spineSource, expr.pos)
+        diagnostics.add(Diagnostic(
+            message = "A 'yield' expression is only allowed in a generator body.",
+            category = DiagnosticCategory.Error,
+            code = 1163,
+            fileName = spineFileName,
+            line = line,
+            character = character,
+            start = expr.pos,
+            length = 5,
+        ))
+    }
+
+    /** Memoized reach classifier — ascends to the first memoized/terminal
+     *  ancestor, then folds [spineUyFold] back down (spineEvStatus
+     *  pattern). The SourceFile anchor carries the transient UY_ROOT
+     *  status (never memoized) whose sole edge is `child is Statement` →
+     *  UY_NAME. */
+    private fun spineUyStatus(node: Node): Int {
+        if (node is SourceFile) return UY_ROOT
+        val memo = spineUyReachMemo
+        run {
+            val id = (node as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) {
+                val m = memo[id].toInt()
+                if (m != 0) return m
             }
         }
+        val chain = spineUyChain
+        chain.clear()
+        var cur: Node = node
+        val anchor: Node?
+        var anchorStatus = UY_NONE
+        while (true) {
+            chain.add(cur)
+            val parent = (cur as NodeBase).parent
+            if (parent == null) { anchor = null; break } // detached/unindexed
+            if (parent is SourceFile) { anchor = parent; anchorStatus = UY_ROOT; break }
+            val pid = (parent as NodeBase).nodeId
+            val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
+            if (pm != 0) { anchor = parent; anchorStatus = pm; break }
+            cur = parent
+        }
+        var pNode: Node? = anchor
+        var pStatus = anchorStatus
+        var result = UY_NONE
+        for (i in chain.indices.reversed()) {
+            val c = chain[i]
+            result = when {
+                pNode == null -> UY_NONE
+                pStatus == UY_ROOT -> if (c is Statement) UY_NAME else UY_NONE
+                else -> spineUyFold(pNode, pStatus, c)
+            }
+            val cid = (c as NodeBase).nodeId
+            if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
+            pNode = c
+            pStatus = result
+        }
+        chain.clear()
+        return result
+    }
+
+    /** The deleted recursion's arms, verbatim, as (parent, parent-status)
+     *  → child-status transitions. UY_NAME reproduces
+     *  checkUndefinedNamesInStmts (statement positions only — fn and
+     *  class-member bodies plus every expression stay unreached, EXCEPT a
+     *  FunctionDeclaration's body, which STARTS the yield walk with the
+     *  fn's own asteriskToken); UY_YGEN/UY_YNON reproduce
+     *  walkYieldInStmt/walkYieldInExpr with the generator flag carried as
+     *  the status (the legacy left-spine BinaryExpression fold reduces to
+     *  the plain left/right edges — reach-equivalent); UY_MEMBER bridges a
+     *  yield-walked container's member to its body/initializer. Unlisted
+     *  (parent, status) pairs are the legacy `else -> {}`s (for-heads'
+     *  INITIALIZERS, objlit/class-expr accessors, decorators, type
+     *  positions, computed names …). */
+    private fun spineUyFold(pNode: Node, pStatus: Int, child: Node): Int = when (pStatus) {
+        UY_NAME -> when (pNode) {
+            // checkUndefinedNamesInStmts arms — the yield walk starts here:
+            is FunctionDeclaration -> if (child === pNode.body) {
+                if (pNode.asteriskToken) UY_YGEN else UY_YNON
+            } else UY_NONE
+            is ModuleDeclaration -> if (child === pNode.body && child is ModuleBlock) UY_NAME else UY_NONE
+            is ModuleBlock -> if (child is Statement) UY_NAME else UY_NONE
+            is Block -> if (child is Statement) UY_NAME else UY_NONE
+            is IfStatement -> if (child === pNode.thenStatement || child === pNode.elseStatement) UY_NAME else UY_NONE
+            is ForStatement -> if (child === pNode.statement) UY_NAME else UY_NONE
+            is ForInStatement -> if (child === pNode.statement) UY_NAME else UY_NONE
+            is ForOfStatement -> if (child === pNode.statement) UY_NAME else UY_NONE
+            is WhileStatement -> if (child === pNode.statement) UY_NAME else UY_NONE
+            is DoStatement -> if (child === pNode.statement) UY_NAME else UY_NONE
+            is SwitchStatement -> if (child is CaseClause || child is DefaultClause) UY_NAME else UY_NONE
+            is CaseClause -> if (child is Statement) UY_NAME else UY_NONE // NOT the case expression
+            is DefaultClause -> if (child is Statement) UY_NAME else UY_NONE
+            is TryStatement -> if (child === pNode.tryBlock || child === pNode.finallyBlock ||
+                child is CatchClause) UY_NAME else UY_NONE
+            is CatchClause -> if (child === pNode.block) UY_NAME else UY_NONE
+            is LabeledStatement -> if (child === pNode.statement) UY_NAME else UY_NONE
+            else -> UY_NONE
+        }
+        UY_YGEN, UY_YNON -> when (pNode) {
+            // ---- walkYieldInStmt arms (pStatus = the generator flag) ----
+            is ExpressionStatement -> if (child === pNode.expression) pStatus else UY_NONE
+            is VariableStatement -> if (child === pNode.declarationList) pStatus else UY_NONE
+            is VariableDeclarationList -> if (child is VariableDeclaration) pStatus else UY_NONE
+            is VariableDeclaration -> if (child === pNode.initializer) pStatus else UY_NONE
+            is ReturnStatement -> if (child === pNode.expression) pStatus else UY_NONE
+            is ThrowStatement -> if (child === pNode.expression) pStatus else UY_NONE
+            is FunctionDeclaration -> if (child === pNode.body) {
+                if (pNode.asteriskToken) UY_YGEN else UY_YNON
+            } else UY_NONE
+            is ClassDeclaration -> if (child is MethodDeclaration || child is Constructor ||
+                child is GetAccessor || child is SetAccessor || child is PropertyDeclaration)
+                UY_MEMBER else UY_NONE
+            is Block -> if (child is Statement) pStatus else UY_NONE
+            is IfStatement -> if (child === pNode.expression || child === pNode.thenStatement ||
+                child === pNode.elseStatement) pStatus else UY_NONE
+            is ForStatement -> if (child === pNode.condition || child === pNode.incrementor ||
+                child === pNode.statement) pStatus else UY_NONE // NOT the initializer (frozen)
+            is ForInStatement -> if (child === pNode.expression || child === pNode.statement) pStatus else UY_NONE
+            is ForOfStatement -> if (child === pNode.expression || child === pNode.statement) pStatus else UY_NONE
+            is WhileStatement -> if (child === pNode.expression || child === pNode.statement) pStatus else UY_NONE
+            is DoStatement -> if (child === pNode.expression || child === pNode.statement) pStatus else UY_NONE
+            is SwitchStatement -> if (child === pNode.expression || child is CaseClause ||
+                child is DefaultClause) pStatus else UY_NONE
+            is CaseClause -> if (child === pNode.expression || child is Statement) pStatus else UY_NONE
+            is DefaultClause -> if (child is Statement) pStatus else UY_NONE
+            is TryStatement -> if (child === pNode.tryBlock || child === pNode.finallyBlock ||
+                child is CatchClause) pStatus else UY_NONE
+            is CatchClause -> if (child === pNode.block) pStatus else UY_NONE
+            is LabeledStatement -> if (child === pNode.statement) pStatus else UY_NONE
+            // A namespace nested in a walked body resets to non-generator
+            // (the legacy arm passed isGenerator = false, no declare gate).
+            is ModuleDeclaration -> if (child === pNode.body && child is ModuleBlock) UY_YNON else UY_NONE
+            is ModuleBlock -> if (child is Statement) pStatus else UY_NONE
+            // ---- walkYieldInExpr arms ----
+            is YieldExpression -> if (child === pNode.expression) pStatus else UY_NONE
+            is ArrowFunction -> if (child === pNode.body) UY_YNON else UY_NONE // arrows are never generators
+            is FunctionExpression -> if (child === pNode.body) {
+                if (pNode.asteriskToken) UY_YGEN else UY_YNON
+            } else UY_NONE
+            // A class EXPRESSION walks method/ctor members ONLY (frozen —
+            // no accessor bodies, no property initializers, unlike the
+            // ClassDeclaration arm above).
+            is ClassExpression -> if (child is MethodDeclaration || child is Constructor) UY_MEMBER else UY_NONE
+            // Object-literal members: methods via UY_MEMBER; get/set
+            // accessor bodies were never walked (frozen).
+            is ObjectLiteralExpression -> when (child) {
+                is MethodDeclaration -> UY_MEMBER
+                is PropertyAssignment, is ShorthandPropertyAssignment, is SpreadAssignment -> pStatus
+                else -> UY_NONE
+            }
+            is PropertyAssignment -> if (child === pNode.initializer) pStatus else UY_NONE
+            is ShorthandPropertyAssignment -> if (child === pNode.objectAssignmentInitializer) pStatus else UY_NONE
+            is SpreadAssignment -> if (child === pNode.expression) pStatus else UY_NONE
+            is BinaryExpression -> if (child === pNode.left || child === pNode.right) pStatus else UY_NONE
+            is CallExpression -> if (child === pNode.expression ||
+                pNode.arguments.any { it === child }) pStatus else UY_NONE
+            is NewExpression -> if (child === pNode.expression ||
+                pNode.arguments?.any { it === child } == true) pStatus else UY_NONE
+            is ParenthesizedExpression -> if (child === pNode.expression) pStatus else UY_NONE
+            is ConditionalExpression -> if (child === pNode.condition || child === pNode.whenTrue ||
+                child === pNode.whenFalse) pStatus else UY_NONE
+            is PropertyAccessExpression -> if (child === pNode.expression) pStatus else UY_NONE
+            is ElementAccessExpression -> if (child === pNode.expression ||
+                child === pNode.argumentExpression) pStatus else UY_NONE
+            is ArrayLiteralExpression -> if (pNode.elements.any { it === child }) pStatus else UY_NONE
+            is PrefixUnaryExpression -> if (child === pNode.operand) pStatus else UY_NONE
+            is PostfixUnaryExpression -> if (child === pNode.operand) pStatus else UY_NONE
+            is SpreadElement -> if (child === pNode.expression) pStatus else UY_NONE
+            is NonNullExpression -> if (child === pNode.expression) pStatus else UY_NONE
+            is AsExpression -> if (child === pNode.expression) pStatus else UY_NONE
+            is TypeAssertionExpression -> if (child === pNode.expression) pStatus else UY_NONE
+            is SatisfiesExpression -> if (child === pNode.expression) pStatus else UY_NONE
+            is AwaitExpression -> if (child === pNode.expression) pStatus else UY_NONE
+            is VoidExpression -> if (child === pNode.expression) pStatus else UY_NONE
+            is DeleteExpression -> if (child === pNode.expression) pStatus else UY_NONE
+            is TypeOfExpression -> if (child === pNode.expression) pStatus else UY_NONE
+            is TemplateExpression -> if (child is TemplateSpan) pStatus else UY_NONE
+            is TemplateSpan -> if (child === pNode.expression) pStatus else UY_NONE
+            is TaggedTemplateExpression -> if (child === pNode.tag ||
+                (child === pNode.template && child is TemplateExpression)) pStatus else UY_NONE
+            is CommaListExpression -> if (pNode.elements.any { it === child }) pStatus else UY_NONE
+            else -> UY_NONE
+        }
+        UY_MEMBER -> when (pNode) {
+            is MethodDeclaration -> if (child === pNode.body) {
+                if (pNode.asteriskToken) UY_YGEN else UY_YNON
+            } else UY_NONE
+            is Constructor -> if (child === pNode.body) UY_YNON else UY_NONE
+            is GetAccessor -> if (child === pNode.body) UY_YNON else UY_NONE
+            is SetAccessor -> if (child === pNode.body) UY_YNON else UY_NONE
+            is PropertyDeclaration -> if (child === pNode.initializer) UY_YNON else UY_NONE
+            else -> UY_NONE
+        }
+        else -> UY_NONE
     }
 
     // -----------------------------------------------------------------------

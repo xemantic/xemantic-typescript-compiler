@@ -20,6 +20,54 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 640 (2026-07-22) — (M0.4) seventeenth tail-pass migration:
+checkUndefinedClassInterfaceName (TS2414 class / TS2427 interface /
+TS2457 type-alias names in PREDEFINED_TYPE_NAMES + the piggy-backed
+TS1163 yield-outside-generator walk; 123.9 ms — the #17 per-file tail
+pass) is ON THE SPINE; the legacy driver + checkUndefinedNamesInStmts +
+the walkYieldInStmts/-InStmt/-InExpr recursion (~280 lines) DELETED; the
+emissions inlined as the spineUyEmitName/spineUyEmitYield leaves.** The
+TWO-INTERLEAVED-WALKS variant (a new template move): the pass ran two
+recursions with DISJOINT node sets — the NAME-check walk (statement
+positions only; descends Block/ModuleBlock/if/loops/switch-clauses/
+try/labeled but NEVER fn or class-member bodies, no expression descent)
+and the yield walk (started ONLY at name-reached FunctionDeclaration
+statements, tracking generator state through fn-decl/fn-expr/
+objlit-method asteriskToken boundaries; arrows always non-generator) —
+reproduced by ONE multi-state classifier (spineUyStatus/spineUyFold)
+whose statuses carry the walk identity AND the downward state: UY_NAME
+for name positions, UY_YGEN/UY_YNON with the generator flag AS the
+status (the round-639 tail note's "3-state yield status" guess held),
+UY_MEMBER bridging a yield-walked container's member to its
+body/initializer with the frozen member filters encoded on the CONTAINER
+edge (class DECLARATIONS walk method/ctor/accessor bodies + property
+initializers; class EXPRESSIONS method/ctor ONLY; object literals
+methods only — accessors never). The walks are disjoint by construction
+(yield positions live inside some fn body, which the name walk never
+crosses), so each node has a unique status and one ByteArray memo serves
+both. Frozen quirks pinned both directions: a `class undefined {}`
+inside a fn/method/arrow body is unchecked; top-level class METHOD
+bodies and top-level fn-EXPRESSIONS are never yield-walked; a
+for-INITIALIZER is never yield-walked while condition + incrementor are;
+the legacy left-spine BinaryExpression fold reduces to plain left/right
+edges (reach-equivalent). Anchors: class/interface/type-alias enters
+with a PREDEFINED_TYPE_NAMES pre-gate BEFORE the reach climb (the names
+are rare — anchors nearly free) + YieldExpression enters. Fully
+syntactic — no ambient sandwich. The legacy binderResults driver → the
+spine's partition view, gated `--partitionCheck 2` EQUIVALENT ×8; zero
+TS2414/TS2427/TS2457/TS1163 on all 8 tsc profiles → the listAll gate
+pins pure non-perturbation. Gates: 32 local pins
+(M04UndefinedNameSpineMigrationTest) green against the LEGACY pass
+FIRST; suite 11,790 → 11,822/0; `--listAll` ×8 byte-identical (time
+header only; compiler-profile wall parity legacy 30.1 s vs migrated
+29.9 s); partitionCheck ×8 EQUIVALENT; pass table 422 → 421 (the row
+gone; checkSpine 21.3/21.6 s repeat runs — in-band for this session's
+box state, wall parity per the listAll pair); warning-clean
+(--rerun-tasks, zero `w:`). M0.4 running total: top SEVENTEEN tail
+passes migrated. NEXT by cost (round-639 table):
+checkSuperRefInRebindingScope 113.1 ms, checkInvalidAssignmentTargets
+105.8 ms.**
+
 **Round 639 (2026-07-22) — (M0.4) sixteenth tail-pass migration:
 checkEvolvingEmptyArrayImplicitAny (TS7034 at the decl + TS7005 at each
 read of an un-annotated `let/var x = []` evolving array, round-316 family
@@ -541,64 +589,6 @@ own recursion with quirks to pin: typeof operands NOT flagged,
 ShorthandPropertyAssignment only its objectAssignmentInitializer,
 fn-like bodies reached via the statement walker's fn arms).**
 
-**Round 630 (2026-07-21) — (M0.4) eighth tail-pass migration:
-checkSameTargetReferenceCastOverlap (TS2352 same-target-Reference cast +
-function-return-mismatch cast, ~123 ms — the #8 tail pass) is ON THE SPINE;
-the whole-file driver is deleted.** The SHARED-WALKER variant of the
-template: the pass's recursion (walkTypeAssertionsInStmt/-InExpr) is SHARED
-with the cast-overlap sibling passes (null-cast / array-to-class /
-type-param-subtype / erasable-syntax), so only the DRIVER
-(checkSameTargetReferenceCastOverlap's binderResults loop + its two
-whole-file walks) is deleted — the walker survives, and the reach
-classifier (spineCoStatus/spineCoEdge, the spineFp/spineSy skeleton)
-mirrors the walker's descent arms VERBATIM and must stay IN SYNC with any
-future walker-arm change (a sibling-pass walker extension without a
-classifier update silently diverges this pass's reach — noted in the
-classifier's kdoc). Reach quirks pinned both directions: objlit and
-class-EXPRESSION method bodies, typeof/void/delete/non-null operands,
-template spans, case-clause EXPRESSIONS, BOTH for-initializer forms, NEW
-callees, and tagged-template tags/spans ARE reached; parameter DEFAULTS,
-enum member initializers, heritage expressions, and computed property
-NAMES are NOT. Anchors are TypeAssertionExpression enters; the two
-emission leaves run per anchor in legacy order (emitTS2352IfSameTarget-
-Mismatch then emitTS2352IfFunctionReturnMismatch — mutually exclusive by
-source-type shape, so the per-anchor interleave vs the legacy's two
-whole-file walks only reorders diagnostics across positions, absorbed by
-the stable output sort). This is the FIRST TYPE-RESOLVING tail migration:
-the emitters run getTypeOfExpression/getTypeFromTypeNode/bidirectional
-checkTypeRelatedTo per anchor, now interleaved into the spine walk
-(first-touch order — the flagged risk class); the corpus + listAll ×8
-gates came back clean, so the interleave is behavior-neutral here. Ambient
-sandwich: currentCheckFileName install + currentFlowGraph nulled around
-the emission pair (the legacy post-spine slot ran with a null graph;
-checkSpine's per-file loop already installs currentFileLocals to the same
-result.locals the legacy pass set — no install needed). Gates: 26 local
-pins (M04CastOverlapSpineMigrationTest — both emitters' gates incl. the
-any/TypeParam/one-way-assignable bails, the array-literal excess-property
-chain branch, the parenthesized function form, and the reach battery
-above) verified green against the LEGACY pass FIRST (stash-run-pop);
-suite 11,532 → 11,558/0; `--listAll` ×8 byte-identical (46×7 + 94
-env-legit artifacts); pass table 431 → 430 (the
-checkSameTargetReferenceCastOverlap row GONE; checkSpine in the
-18.0–19.1 s band); warning-clean. M0.4 running total: top EIGHT tail
-passes migrated. SESSION TAIL: the checkBindingPatternComputedIndexSig
-(#9, ~120 ms — TS2537/TS2538/TS2448+TS2728) slot-move pre-gate landed
-(corpus + listAll ×8 identical). Its map for the migrator: a
-self-contained recursion (walkB94InStmts/-InStmt/-InExpr) with THREE
-anchor families — fn-like PARAMETER lists (emitB94ForFnLikeParams at
-FunctionDeclaration/arrow/fn-expr/objlit-method/set-accessor/class-
-expression members), VariableStatement decl patterns (the empty-objlit
-destructure emitB94ForComputedKeyPattern), and VariableDeclarationList
-heads (checkSelfRefComputedBindingKeyList — also fired at for/for-in/
-for-of heads) — so the migration is a multi-anchor-kind dispatch, not a
-single node kind; it type-resolves (getTypeOfExpression on computed keys)
-= the same first-touch risk class as this round; its one TS2537 consumer
-(checkErrorElaboration's corpus-unique Container-Ref swap, slot 5969)
-runs AFTER both slots and no TS2448/TS2538 dedup consumers exist; the
-walker's reach quirks to pin: param defaults ARE walked at
-FunctionDeclaration (unlike the cast walker), catch-variable/heritage/
-enum-member positions are not.**
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 (Restored 2026-07-12, round 481 — the queue/backlog/inventory sections had been
@@ -852,11 +842,22 @@ structural item instead of landing alone.**
   Part 2 is TYPE-RESOLVING → per-dispatch ambient sandwich of resting
   currentFileLocals + per-file currentCheckFileName + a nulled
   currentFlowGraph);
+  checkUndefinedClassInterfaceName 123.9 ms — **MIGRATED round 640** (the
+  TWO-INTERLEAVED-WALKS variant: a pass running two recursions with
+  disjoint node sets — the statement-only name-check walk (never descends
+  fn/class-member bodies) + the yield walk started at name-reached
+  FunctionDeclarations — reproduces as ONE multi-state classifier whose
+  statuses carry the walk identity AND the downward generator flag
+  (UY_NAME / UY_YGEN / UY_YNON, plus UY_MEMBER bridging a yield-walked
+  container's member to its body/initializer); the frozen member filters
+  ride the container edges — class DECLARATIONS walk accessor bodies +
+  prop initializers, class EXPRESSIONS method/ctor only, objlit members
+  methods only, accessors never; the legacy left-spine BinaryExpression
+  fold reduces to plain left/right edges, reach-equivalent; zero
+  emissions on all 8 profiles → the listAll gate pins pure
+  non-perturbation);
   next per-file candidates by cost (round-639 table):
-  checkUndefinedClassInterfaceName 123.9 ms — slot-move pre-gate LANDED
-  round 639 (scope map in the round-639 session note: two interleaved
-  reach shapes, the name-check recursion + the piggy-backed TS1163 yield
-  walk), migration next; then checkSuperRefInRebindingScope 113.1 ms,
+  checkSuperRefInRebindingScope 113.1 ms,
   checkInvalidAssignmentTargets 105.8 ms (98 passes >20 ms carry 5.3 s of
   the 6.2 s). Migration protocol per
   pass (the round-624 template): slot-move pre-gate commit (intact pass to the
