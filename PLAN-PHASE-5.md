@@ -62,27 +62,37 @@ baseline; partitionCheck ×8 EQUIVALENT; pass table 420 → 419 (the row
 gone; checkSpine 20.7 s single-run — in-band); warning-clean
 (--rerun-tasks, zero `w:`). M0.4 running total: top NINETEEN tail passes
 migrated. SESSION TAIL — the #20 row checkTypeParameterDefaults (150 ms,
-slot 59b) PRODUCER scope map for the next session (no slot-move landed —
-a plain move is UNSAFE per the round-555 caution): the pass is ALREADY a
-pre-spine producer (hoisted round 555 — its comment records that
-checkTpListDefaults-family materialization of TypeParam
-.constraint/.default must precede any slot the excess-property emitter
-may occupy, found by pass-order bisection), and it carries TWO producer
-channels: (a) that TypeParam field materialization, and (b) the
-`circularDefaultTypeParamCount[sym.id]` side-set written by
-validateTParamDefaults (consumed by the no-args generic display
-`Test` → `Test<any>`); it also installs currentFileLocals per file (its
-consult feeds the side-set write). Treatment sketch: SPLIT — keep a
-cheap pre-spine producer running the materialization + side-set walk,
-and migrate only the TS2368/TS2744(+TS2716/TS2706 family) emissions onto
-the spine — but note the side-set write and its display consumer may be
-SAME-FILE order-coupled once the consumer rides the spine, so the split
-must keep the side-set write pre-spine too (it is cheap; the wall cost
-is the tree walk, which the emission migration removes). Alternatively
-cost-skip #20 (leave it a documented producer, like the round-633
-cross-file SKIP) and proceed to checkExpandoFunctionNestedReads 99 ms,
-checkStrictModeIdentifiers 96 ms, checkConstLiteralComparisons 95 ms,
-checkSuperInObjectLiterals 91 ms.**
+slot 59b) PRODUCER scope map, VERIFIED against the source (no slot-move
+landed — the pass is ALREADY a round-555 pre-spine hoist, so there is no
+move to make; the migration itself is what needs the producer split):
+the round-555/641 "materializes TypeParam .constraint/.default"
+attribution is a MISNOMER for this pass — checkTpListDefaults (which
+does materialize, via typeParamInternCache + getTypeFromTypeNode)
+belongs to the SEPARATE checkGenericDefaultsValidation pass (B498,
+its own later slot), while the 59b family
+(checkTypeParameterDefaults → walkTParamDefaultsInStmt(s)/-InType/
+-InExpr/-InClassMember → validateTParamDefaults, Checker.kt
+78917–79157) contains ZERO type-resolution calls: it emits TS2368
+(reserved TP name) + TS2744 (forward default ref) and writes exactly ONE
+side-set — `circularDefaultTypeParamCount[sym.id]` (a TypeAliasDeclaration
+whose TP defaults are circular; consumed by the no-args generic display
+`Test` → `Test<any>`; the write consults currentFileLocals, which the
+driver installs per file). The 59b comment's hoist rationale is the
+side-set-before-display ordering, and the display consumer is
+spine-anchored (cross-file + earlier-in-file consumption), so the
+side-set write CANNOT ride the spine walk. Treatment (now precise):
+SPLIT — a tiny pre-spine producer walking only to TypeAliasDeclarations
+(any walked statement position) re-running the findForwardTParamRef
+verdict to populate the side-set, and the TS2368/TS2744 emissions
+migrate onto the spine (anchors = TP-list-bearing constructs incl.
+FunctionType/ConstructorType TYPE positions and TypeLiteral members —
+note walkTParamDefaultsInType descends union/intersection/array/tuple/
+paren/type-args, a TYPE-side reach classifier like batch 5's; fully
+syntactic, no ambient sandwich needed for the emissions since
+validateTParamDefaults' currentFileLocals consult feeds only the
+side-set write, which stays in the producer). After #20 by cost:
+checkExpandoFunctionNestedReads 99 ms, checkStrictModeIdentifiers 96 ms,
+checkConstLiteralComparisons 95 ms, checkSuperInObjectLiterals 91 ms.**
 
 **Round 641 (2026-07-22) — (M0.4) eighteenth tail-pass migration:
 checkSuperRefInRebindingScope (TS2660 `super` references inside
@@ -902,9 +912,13 @@ structural item instead of landing alone.**
   at the 200 cap, pinned at the exact boundary; the orphaned checkDepth
   counter deleted from Checker + CheckerState);
   next per-file candidates by cost (round-642 table):
-  checkTypeParameterDefaults 150 ms — PRODUCER, plain slot-move UNSAFE
-  (round-555 hoist rationale; producer scope map + split-treatment
-  sketch in the round-642 session note); then
+  checkTypeParameterDefaults 150 ms — already a round-555 pre-spine
+  hoist (no slot-move to make); the VERIFIED producer scope map + split
+  treatment (keep the tiny circularDefaultTypeParamCount side-set
+  producer pre-spine, migrate the resolution-FREE TS2368/TS2744
+  emissions) is in the round-642 session note — the pass does NOT
+  materialize TypeParam fields (that is checkGenericDefaultsValidation's
+  checkTpListDefaults, a different pass); then
   checkExpandoFunctionNestedReads 99 ms, checkStrictModeIdentifiers
   96 ms, checkConstLiteralComparisons 95 ms, checkSuperInObjectLiterals
   91 ms (98 passes >20 ms carry 5.3 s of the 6.2 s). Migration protocol per
