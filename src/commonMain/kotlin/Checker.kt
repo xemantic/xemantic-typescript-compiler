@@ -5416,6 +5416,23 @@ class Checker(
         // sandwich; the legacy binderResults driver → the spine's
         // partition view, gated `--partitionCheck 2` EQUIVALENT ×8.
         // Neither TS2660 emitter scans the diagnostics list.
+        // 65' (M0.4 slot-move pre-gate, round 641):
+        // checkInvalidAssignmentTargets (TS2364 invalid assignment/
+        // compound-assignment targets + the destructuring
+        // private-identifier check) moved intact from slot 65 ahead of
+        // its spine migration. Fully syntactic + self-contained
+        // (isValidAssignmentTarget + checkDestructuringPrivateIds +
+        // expressionTrueEnd — no type caches, no ambient, no side-set
+        // consults); no pass scans or retracts TS2364. Scope quirks for
+        // the migrator: the recursion is guarded by the SHARED
+        // `checkDepth` counter (checkInvalidAssignInExpr prunes past
+        // maxCheckDepth — the round-535 INT-depth classifier shape);
+        // for-heads walk initializer-as-Expression AND condition AND
+        // incrementor; switch-case EXPRESSIONS are NOT walked (clause
+        // statements only); objlit methods/accessors + class-EXPRESSION
+        // members ARE walked; class-DECLARATION members walk
+        // method/ctor/accessor bodies + prop initializers.
+        pass("checkInvalidAssignmentTargets") { checkInvalidAssignmentTargets() }
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -6416,8 +6433,9 @@ class Checker(
         pass("checkNamespaceTopLevelOnly") { checkNamespaceTopLevelOnly() }
         // 64i. Check static members referencing class type parameters (TS2302)
         pass("checkStaticMembersReferenceTypeParams") { checkStaticMembersReferenceTypeParams() }
-        // 65. Check invalid assignment targets (TS2364)
-        pass("checkInvalidAssignmentTargets") { checkInvalidAssignmentTargets() }
+        // 65. checkInvalidAssignmentTargets (TS2364) moved to the
+        // post-spine slot — see the pass("checkSpine") site (M0.4
+        // slot-move pre-gate, round 641).
         // 65a. Check for-in LHS type (TS2405: must be 'string' or 'any')
         pass("checkForInLhsTypes") { checkForInLhsTypes() }
         // 65b. Check subsequent var declaration type mismatch (TS2403)
