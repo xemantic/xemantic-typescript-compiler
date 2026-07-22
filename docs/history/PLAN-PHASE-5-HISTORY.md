@@ -1,3 +1,62 @@
+**Round 632 (2026-07-21) — (M0.4) tenth tail-pass migration:
+checkConstEnumDiagnostics (the const-enum cluster TS2474/2475/2476/2477/
+2478/2567, ~123 ms — the #10 tail pass) is ON THE SPINE; the legacy driver
++ walkConstEnumUsageStmt/walkExpr recursion (~185 lines) DELETED.** The
+FILE-GATED variant of the template: the legacy whole-file gate
+(`collectConstEnumDecls(stmts).isEmpty() → skip the file`) reproduces as
+per-file SETUP state — the cluster's anchors are INERT in every file that
+does not itself DECLARE a namespace-reachable const enum (a file merely
+REFERENCING one is skipped, pinned — this also confines the per-Identifier
+anchor cost to the rare active files). Three sub-parts from one enter hook
+(spineCeEnterNode): (1) declaration-level TS2474/2477/2478 at const
+EnumDeclaration enters, gated by a ModuleBlock/ModuleDeclaration-only
+ancestor climb (a function-body/block const enum is never collected,
+pinned); (2) the TS2567 const-enum + instantiated-namespace merge scan
+rides SETUP once per active file (TOP-LEVEL statements only — a
+namespace-nested pair never fires, pinned); (3) TS2475/2476 at
+Identifier/ElementAccessExpression enters over the frozen reach
+classifier (spineCeStatus/spineCeEdge — the deleted walker's arms
+verbatim). NEW TEMPLATE MOVE: the legacy walker's resolution-CONDITIONAL
+descent (a PropertyAccess/ElementAccess BASE descended only when NOT a
+const-enum Identifier) reproduces as an UNCONDITIONAL edge + an
+anchor-side parent pre-filter — sound because NEITHER branch can emit at
+a base (a const-enum base is the legal access shape and was skipped; a
+non-const-enum base was descended but its Identifier arm then can't
+fire) — keeping the classifier purely structural (no resolution inside
+edges). The anchor gates run reach-BEFORE-isConstEnumName so
+resolveAlias's call surface stays a SUBSET of the legacy's (no
+first-touch widening onto type-position identifiers). Quirks pinned both
+directions: typeof operands, arrow/fn-expr bodies, class/objlit method
+bodies, shorthand property names, and export-assignment RHS unreached;
+FunctionDeclaration bodies, namespace bodies, and switch-case
+expressions reached; element-access KEYS walked even under a const-enum
+base (`E[F]` → TS2476 + TS2475 on F). No ambient sandwich (the emissions
+read no checker ambient; resolveAlias/enumValues are order-free memoized
+caches). Gates: 25 local pins (M04ConstEnumSpineMigrationTest) green
+against the LEGACY pass first; suite 11,589 → 11,614/0; `--listAll` ×8
+byte-identical; pass table 429 → 428 (the row gone; checkSpine
+19,359.7 ms — in-band); warning-clean. M0.4 running total: top TEN tail
+passes migrated. NEXT (#11 by cost at this round's table):
+checkNullTypeAssertionOverlap (103.8 ms) — the cast-overlap SIBLING of
+round 630's pass, sharing walkTypeAssertionsInStmt/-InExpr; its
+emissions are the `::emitTS2352IfNullCast` TypeAssertion callback PLUS
+four flag-gated inline AsExpression arms (`inNullCastOverlapPass` —
+emitTS2352IfNullAsReadonlyTuple / emitTS2352IfNullAsCast /
+emitTS1355IfInvalidConstAssertion / emitTS2352IfClassInstanceToRecordCast,
+the AsExpression gotcha), so the migration lifts the flag-gated arm out
+of the shared walker into anchor leaves and can REUSE
+spineCoStatus/spineCoEdge (identical reach — same walker); ambient =
+per-file currentFileLocals install (the spine already installs the same
+value). CAVEAT for the migrator: the legacy driver iterates
+binderResults, NOT checkedResults — under an INV.6 partition the
+spine-anchored form walks only assigned files, so gate the migration
+with the `--partitionCheck 2` harness on top of the standard gates.
+SESSION TAIL: the #11 slot-move pre-gate LANDED (the pass hoisted from
+its 14'' slot to the post-spine slot; suite 11,614/0, listAll ×8
+byte-identical — the hoist crosses the cta post-filter window close and
+the JS/JSDoc pass family, none consuming TS2352/TS1355) — next session
+starts at the migration itself.**
+
 **Round 631 (2026-07-21) — (M0.4) ninth tail-pass migration:
 checkBindingPatternComputedIndexSig (B9.4 — TS2537 computed-key
 destructuring vs the `{}` default + TS2448/TS2728/TS2538 self-referential

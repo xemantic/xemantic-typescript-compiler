@@ -20,6 +20,70 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 642 (2026-07-22) — (M0.4) nineteenth tail-pass migration:
+checkInvalidAssignmentTargets (TS2364 invalid assignment/
+compound-assignment targets + the destructuring private-identifier
+check; 105.8 ms at the round-641 table — the #19 per-file tail pass) is
+ON THE SPINE; the legacy driver +
+checkInvalidAssignInStatement(s)/-InExpr(Core) recursion (~220 lines)
+DELETED; emitInvalidAssignAtBinary (+ isValidAssignmentTarget /
+checkDestructuringPrivateIds) survives as the anchor-called leaf.** The
+INT-depth classifier's SECOND application (the round-535 spineArgDepth
+shape, as the round-641 tail note predicted): spineIaDepth reproduces
+the legacy SHARED `checkDepth` counter per node — every
+checkInvalidAssignInExpr call consumed one frame and bailed past
+maxCheckDepth (200); statements and carrier positions inherit the
+ambient counter unchanged, INCLUDING a statement list nested inside an
+expression (arrow/fn-expr/objlit-method/class-EXPRESSION bodies inherit
+the expression's elevated ambient — encoded uniformly as +1 on every
+expression parent's outgoing edge, with the bail check applied at
+expression-CALL edges only). Unlike spineArgEdge there is NO right-spine
+absorption — both binary operands cost a frame, so deep chains prune at
+200 (pinned at the exact boundary: fires under 200 nested parens, silent
+under 201). Frozen quirks pinned both directions: for-heads walk
+initializer-as-Expression AND condition AND incrementor while a for-head
+DECLARATION-LIST initializer is never walked; the switch SUBJECT and
+case EXPRESSIONS are not walked (clause statements only); objlit
+methods/accessors + class-EXPRESSION members ARE walked; enum member
+initializers, class heritage, computed property names, decorators
+unreached; `<<=`/`>>=`/`>>>=`/`**=` sit OUTSIDE isAssignmentOperator
+(frozen gap → silent). Anchors: assignment-operator BinaryExpressions
+(operator pre-gate before the climb). Fully syntactic — no ambient
+sandwich. The now-orphaned shared `checkDepth` counter (this pass was
+its only mutator) is deleted from Checker + CheckerState. The legacy
+binderResults driver → the spine's partition view, gated
+`--partitionCheck 2` EQUIVALENT ×8. Gates: 35 local pins
+(M04InvalidAssignSpineMigrationTest) green against the LEGACY pass FIRST
+(all 35 on the first run); suite 11,857 → 11,892/0 — NOTE this pass
+emits 16 diagnostics on the corpus census, so unlike rounds 637–641 the
+corpus is a REAL behavior gate here, not just non-perturbation;
+`--listAll` ×8 byte-identical (sorted) vs the round-641 slot-move
+baseline; partitionCheck ×8 EQUIVALENT; pass table 420 → 419 (the row
+gone; checkSpine 20.7 s single-run — in-band); warning-clean
+(--rerun-tasks, zero `w:`). M0.4 running total: top NINETEEN tail passes
+migrated. SESSION TAIL — the #20 row checkTypeParameterDefaults (150 ms,
+slot 59b) PRODUCER scope map for the next session (no slot-move landed —
+a plain move is UNSAFE per the round-555 caution): the pass is ALREADY a
+pre-spine producer (hoisted round 555 — its comment records that
+checkTpListDefaults-family materialization of TypeParam
+.constraint/.default must precede any slot the excess-property emitter
+may occupy, found by pass-order bisection), and it carries TWO producer
+channels: (a) that TypeParam field materialization, and (b) the
+`circularDefaultTypeParamCount[sym.id]` side-set written by
+validateTParamDefaults (consumed by the no-args generic display
+`Test` → `Test<any>`); it also installs currentFileLocals per file (its
+consult feeds the side-set write). Treatment sketch: SPLIT — keep a
+cheap pre-spine producer running the materialization + side-set walk,
+and migrate only the TS2368/TS2744(+TS2716/TS2706 family) emissions onto
+the spine — but note the side-set write and its display consumer may be
+SAME-FILE order-coupled once the consumer rides the spine, so the split
+must keep the side-set write pre-spine too (it is cheap; the wall cost
+is the tree walk, which the emission migration removes). Alternatively
+cost-skip #20 (leave it a documented producer, like the round-633
+cross-file SKIP) and proceed to checkExpandoFunctionNestedReads 99 ms,
+checkStrictModeIdentifiers 96 ms, checkConstLiteralComparisons 95 ms,
+checkSuperInObjectLiterals 91 ms.**
+
 **Round 641 (2026-07-22) — (M0.4) eighteenth tail-pass migration:
 checkSuperRefInRebindingScope (TS2660 `super` references inside
 regular-function rebinding scopes; 113.1 ms at the round-639 table — the
@@ -555,65 +619,6 @@ cost: checkProtectedMemberReadAccess (~103 ms) and
 checkPropertyInitialization (~99 ms) — scope shape + consumers before
 the slot-move.**
 
-**Round 632 (2026-07-21) — (M0.4) tenth tail-pass migration:
-checkConstEnumDiagnostics (the const-enum cluster TS2474/2475/2476/2477/
-2478/2567, ~123 ms — the #10 tail pass) is ON THE SPINE; the legacy driver
-+ walkConstEnumUsageStmt/walkExpr recursion (~185 lines) DELETED.** The
-FILE-GATED variant of the template: the legacy whole-file gate
-(`collectConstEnumDecls(stmts).isEmpty() → skip the file`) reproduces as
-per-file SETUP state — the cluster's anchors are INERT in every file that
-does not itself DECLARE a namespace-reachable const enum (a file merely
-REFERENCING one is skipped, pinned — this also confines the per-Identifier
-anchor cost to the rare active files). Three sub-parts from one enter hook
-(spineCeEnterNode): (1) declaration-level TS2474/2477/2478 at const
-EnumDeclaration enters, gated by a ModuleBlock/ModuleDeclaration-only
-ancestor climb (a function-body/block const enum is never collected,
-pinned); (2) the TS2567 const-enum + instantiated-namespace merge scan
-rides SETUP once per active file (TOP-LEVEL statements only — a
-namespace-nested pair never fires, pinned); (3) TS2475/2476 at
-Identifier/ElementAccessExpression enters over the frozen reach
-classifier (spineCeStatus/spineCeEdge — the deleted walker's arms
-verbatim). NEW TEMPLATE MOVE: the legacy walker's resolution-CONDITIONAL
-descent (a PropertyAccess/ElementAccess BASE descended only when NOT a
-const-enum Identifier) reproduces as an UNCONDITIONAL edge + an
-anchor-side parent pre-filter — sound because NEITHER branch can emit at
-a base (a const-enum base is the legal access shape and was skipped; a
-non-const-enum base was descended but its Identifier arm then can't
-fire) — keeping the classifier purely structural (no resolution inside
-edges). The anchor gates run reach-BEFORE-isConstEnumName so
-resolveAlias's call surface stays a SUBSET of the legacy's (no
-first-touch widening onto type-position identifiers). Quirks pinned both
-directions: typeof operands, arrow/fn-expr bodies, class/objlit method
-bodies, shorthand property names, and export-assignment RHS unreached;
-FunctionDeclaration bodies, namespace bodies, and switch-case
-expressions reached; element-access KEYS walked even under a const-enum
-base (`E[F]` → TS2476 + TS2475 on F). No ambient sandwich (the emissions
-read no checker ambient; resolveAlias/enumValues are order-free memoized
-caches). Gates: 25 local pins (M04ConstEnumSpineMigrationTest) green
-against the LEGACY pass first; suite 11,589 → 11,614/0; `--listAll` ×8
-byte-identical; pass table 429 → 428 (the row gone; checkSpine
-19,359.7 ms — in-band); warning-clean. M0.4 running total: top TEN tail
-passes migrated. NEXT (#11 by cost at this round's table):
-checkNullTypeAssertionOverlap (103.8 ms) — the cast-overlap SIBLING of
-round 630's pass, sharing walkTypeAssertionsInStmt/-InExpr; its
-emissions are the `::emitTS2352IfNullCast` TypeAssertion callback PLUS
-four flag-gated inline AsExpression arms (`inNullCastOverlapPass` —
-emitTS2352IfNullAsReadonlyTuple / emitTS2352IfNullAsCast /
-emitTS1355IfInvalidConstAssertion / emitTS2352IfClassInstanceToRecordCast,
-the AsExpression gotcha), so the migration lifts the flag-gated arm out
-of the shared walker into anchor leaves and can REUSE
-spineCoStatus/spineCoEdge (identical reach — same walker); ambient =
-per-file currentFileLocals install (the spine already installs the same
-value). CAVEAT for the migrator: the legacy driver iterates
-binderResults, NOT checkedResults — under an INV.6 partition the
-spine-anchored form walks only assigned files, so gate the migration
-with the `--partitionCheck 2` harness on top of the standard gates.
-SESSION TAIL: the #11 slot-move pre-gate LANDED (the pass hoisted from
-its 14'' slot to the post-spine slot; suite 11,614/0, listAll ×8
-byte-identical — the hoist crosses the cta post-filter window close and
-the JS/JSDoc pass family, none consuming TS2352/TS1355) — next session
-starts at the migration itself.**
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 (Restored 2026-07-12, round 481 — the queue/backlog/inventory sections had been
@@ -881,12 +886,28 @@ structural item instead of landing alone.**
   fold reduces to plain left/right edges, reach-equivalent; zero
   emissions on all 8 profiles → the listAll gate pins pure
   non-perturbation);
-  next per-file candidates by cost (round-639 table):
-  checkSuperRefInRebindingScope 113.1 ms — slot-move pre-gate LANDED
-  round 640 (scope map in the round-640 session note: one downward
-  `rebound` boolean, likely the round-625 frameless shape), migration
-  next; then checkInvalidAssignmentTargets 105.8 ms (98 passes >20 ms
-  carry 5.3 s of the 6.2 s). Migration protocol per
+  checkSuperRefInRebindingScope 113.1 ms — **MIGRATED round 641** (the
+  rebound-boolean-as-status variant: the walk's one downward boolean
+  rides the classifier status — fn-decl/fn-expr bodies reset to rebound,
+  arrows/ModuleBlocks preserve, class-member bodies/prop initializers
+  reset to clear via a member-carrier status; the frozen `super(...)`
+  CALLEE skip is the anchor's direct-parent gate so a parenthesized
+  super callee still fires; object literals skipped entirely — the
+  sibling checkSuperInObjectLiterals is position-disjoint);
+  checkInvalidAssignmentTargets 105.8 ms — **MIGRATED round 642** (the
+  INT-depth classifier's second application: the shared `checkDepth`
+  frame counter reproduced per node with +1 on every expression parent's
+  outgoing edge — statement lists nested inside expressions inherit the
+  elevated ambient — and NO right-spine absorption, so deep chains prune
+  at the 200 cap, pinned at the exact boundary; the orphaned checkDepth
+  counter deleted from Checker + CheckerState);
+  next per-file candidates by cost (round-642 table):
+  checkTypeParameterDefaults 150 ms — PRODUCER, plain slot-move UNSAFE
+  (round-555 hoist rationale; producer scope map + split-treatment
+  sketch in the round-642 session note); then
+  checkExpandoFunctionNestedReads 99 ms, checkStrictModeIdentifiers
+  96 ms, checkConstLiteralComparisons 95 ms, checkSuperInObjectLiterals
+  91 ms (98 passes >20 ms carry 5.3 s of the 6.2 s). Migration protocol per
   pass (the round-624 template): slot-move pre-gate commit (intact pass to the
   post-spine slot, corpus + listAll ×8), then the migration commit (frames at
   the legacy copy edges, memoized reach classifier, per-dispatch ambient
