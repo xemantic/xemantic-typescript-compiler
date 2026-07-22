@@ -1,3 +1,58 @@
+**Round 631 (2026-07-21) — (M0.4) ninth tail-pass migration:
+checkBindingPatternComputedIndexSig (B9.4 — TS2537 computed-key
+destructuring vs the `{}` default + TS2448/TS2728/TS2538 self-referential
+computed binding keys, ~120 ms — the #9 tail pass) is ON THE SPINE; the
+legacy recursion walkers (walkB94InStmts/-InStmt/-InExpr, ~200 lines) are
+DELETED.** The MULTI-ANCHOR-KIND variant of the template: three emission
+families dispatch from ONE enter hook over seven anchor kinds — the
+self-ref decl-list check at VariableStatement/for/for-in/for-of enters
+(pure AST, no sandwich; legacy order preserved: before the pattern
+emission), the empty-objlit destructure at VariableStatement enters (NOT
+at for-heads — a pinned legacy quirk), and the fn-EXPRESSION-like
+parameter emission at arrow/fn-expr enters plus PARENT-KIND-gated member
+enters (objlit method+setter, class-EXPRESSION method+ctor+setter —
+FunctionDeclaration and class-DECLARATION member parameter lists
+deliberately never emit, both pinned). Reach = spineB94Status/spineB94Edge,
+a FROZEN verbatim copy of the deleted walker's arms — deliberately NOT
+redirected to the surviving cast walker's spineCoEdge (which it matches
+except FunctionDeclaration parameter DEFAULTS being reached here): sharing
+would silently couple B94's frozen reach to future cast-walker/classifier
+changes. Ambient: the TS2537 emitters type-resolve and the legacy pass
+never installed currentFileLocals, so each type-resolving emission
+installs the spine-entry RESTING value (spineB94WithAmbient, the
+spinePdWithAmbient pattern); no flow/check-file-name install needed (both
+already resting mid-walk). SURPRISE (caught by the green-against-legacy-
+FIRST discipline, 30/31 on the first run): a DOTTED `namespace A.B { }`
+IS walked — this parser keeps it as ONE ModuleDeclaration with a dotted
+PropertyAccessExpression name and a ModuleBlock body (Parser.kt
+parseModuleDeclaration's dot loop), so the round-630 spineCoEdge comment's
+"dotted namespace body is a ModuleDeclaration" premise was false for the
+common case (comment corrected this round; both classifiers' edges were
+verbatim-correct regardless — only the prose misled). Gates: 31 local pins
+(M04BindingPatternSpineMigrationTest — all three emitters' gates + the
+reach battery both directions) green against the LEGACY pass first; suite
+11,558 → 11,589/0; `--listAll` ×8 byte-identical (46×7 + 94 env-legit
+artifacts, modulo the `time:` line); pass table 430 → 429 (the row gone;
+checkSpine 19,309.9 ms single-run — nominally above the 18.0–19.1 s band,
+but the same capture's WALL was 28.6 s post vs 30.1 s pre, so box drift,
+not inflation); warning-clean. M0.4 running total: top NINE tail passes
+migrated. SESSION TAIL: the checkConstEnumDiagnostics (#10, 122.6 ms at
+this round's table — the const-enum cluster TS2474/2475/2476/2477/2478/
+2567, AST + const-eval) slot-move pre-gate landed (suite 11,589/0;
+listAll ×8 identical). Its map for the migrator: fully self-contained —
+no ambient installs, no side sets, no dedup scans on its codes anywhere;
+`enumValues` is a memoized pure cache and `scriptFileConstEnumNames` a
+lazy pure collector; THREE per-file sub-parts over `checkedResults`
+(non-.d.ts, gated on the file HAVING const enums via
+collectConstEnumDecls): (1) declaration-level TS2474/2477/2478 per
+const-enum decl (anchor candidate: EnumDeclaration enters), (2) the
+TS2567 const-enum + instantiated-namespace merge scan over TOP-LEVEL
+statements only (a per-file file-END or first-anchor dispatch, not
+per-node), (3) the TS2475/2476 usage walk (walkConstEnumUsageStmt — its
+own recursion with quirks to pin: typeof operands NOT flagged,
+ShorthandPropertyAssignment only its objectAssignmentInitializer,
+fn-like bodies reached via the statement walker's fn arms).**
+
 **Round 630 (2026-07-21) — (M0.4) eighth tail-pass migration:
 checkSameTargetReferenceCastOverlap (TS2352 same-target-Reference cast +
 function-return-mismatch cast, ~123 ms — the #8 tail pass) is ON THE SPINE;

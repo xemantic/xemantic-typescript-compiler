@@ -20,6 +20,72 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 641 (2026-07-22) — (M0.4) eighteenth tail-pass migration:
+checkSuperRefInRebindingScope (TS2660 `super` references inside
+regular-function rebinding scopes; 113.1 ms at the round-639 table — the
+#18 per-file tail pass) is ON THE SPINE; the legacy driver +
+walkSuperRebindStmts/-Stmt/-Expr (~190 lines) DELETED;
+emitTS2660InRebindingScope survives as the anchor-called leaf.** The
+REBOUND-BOOLEAN-AS-STATUS variant (the round-640 tail note's
+"frameless pull-based" guess held, as the UY generator-flag shape): the
+walk's ONE downward boolean rides the classifier status —
+SR_REBOUND/SR_CLEAR are the SAME walk carrying `rebound`, fn-decl/
+fn-expr bodies RESET to SR_REBOUND, arrows/ModuleBlocks PRESERVE,
+class-member bodies/prop initializers reset to SR_CLEAR via the
+SR_MEMBER carrier (method/ctor/get/set/static-block bodies +
+PropertyDeclaration initializers; only a nested fn inside re-rebinds).
+Anchors: `super` Identifiers (the text pre-gate runs before the reach
+climb — the name is rare); the frozen `super(...)` CALLEE skip (TS2337
+territory) is the anchor's DIRECT-parent gate, so a PARENTHESIZED super
+callee `(super)()` still fires exactly as legacy (which walked through
+the parens). The legacy PropertyAccess/ElementAccess special-cased
+emission AT the receiver reproduces as plain descent edges — the anchor
+at the receiver super emits identically. Frozen quirks pinned both
+directions: object literals skipped entirely (the sibling
+checkSuperInObjectLiterals is position-DISJOINT — objlit member/value
+supers draw nothing from EITHER pass in a plain fn, pinned); the
+for-INITIALIZER is walked as a bare EXPRESSION only (a for-head
+declaration-LIST initializer never walked) while for-condition/
+incrementor are NOT; class EXPRESSIONS never walked; property-access
+NAMES and catch variables unreached. Fully syntactic — no ambient
+sandwich. The legacy binderResults driver → the spine's partition view,
+gated `--partitionCheck 2` EQUIVALENT ×8; zero TS2660 on all 8 tsc
+profiles → the listAll gate pins pure non-perturbation. Gates: 35 local
+pins (M04SuperRebindSpineMigrationTest) green against the LEGACY pass
+FIRST (34 on the first run; the for-head decl-list negative added from
+the code reading); suite 11,822 → 11,857/0; `--listAll` ×8
+byte-identical; partitionCheck ×8 EQUIVALENT; pass table 421 → 420 (the
+row gone; checkSpine 20.9 s single-run — in-band for this box state);
+warning-clean (--rerun-tasks, zero `w:`). M0.4 running total: top
+EIGHTEEN tail passes migrated. SESSION TAIL: the
+checkInvalidAssignmentTargets (#19, 105.8 ms — TS2364 invalid
+assignment/compound-assignment targets + the destructuring
+private-identifier check) slot-move pre-gate LANDED (moved intact from
+slot 65 to the post-spine slot; suite 11,857/0; listAll ×8
+byte-identical; no TS2364 dedup/scan consumers anywhere — the sole
+other 2364 mention is a comment in the TS2454 walker). Scope map for
+the migrator: fully syntactic (isValidAssignmentTarget +
+checkDestructuringPrivateIds + expressionTrueEnd — no type caches, no
+ambient); anchors = BinaryExpressions whose operator is an assignment
+kind (the TS2364 emitters) — but note the pass descends into BOTH sides
+of every binary VIA RECURSION GUARDED by the shared `checkDepth`
+counter (checkInvalidAssignInExpr trips at maxCheckDepth), so deep
+chains PRUNE — the round-535 INT-depth classifier (spineArgDepth shape)
+is the likely reach form, with per-edge depth increments reproducing
+checkDepth's consumption; edge quirks to pin: for-heads walk
+initializer-as-Expression AND condition AND incrementor (unlike sr);
+switch-case EXPRESSIONS are NOT walked (clauses' statements only);
+objlit methods/accessors + class-EXPRESSION members ARE walked;
+TaggedTemplate walks tag + spans; class-DECLARATION members walk
+method/ctor/accessor bodies + prop initializers. NEXT session starts at
+that migration; after it by cost (this round's table, single-run):
+checkTypeParameterDefaults 150 ms (CAUTION — a PRODUCER: it
+materializes TypeParam .constraint/.default fields consumed downstream,
+per the round-555 hoist note; needs producer-aware treatment, not a
+plain slot-move), checkExpandoFunctionNestedReads 99 ms,
+checkStrictModeIdentifiers 96 ms, checkConstLiteralComparisons 95 ms,
+checkSuperInObjectLiterals 91 ms.**
+
 **Round 640 (2026-07-22) — (M0.4) seventeenth tail-pass migration:
 checkUndefinedClassInterfaceName (TS2414 class / TS2427 interface /
 TS2457 type-alias names in PREDEFINED_TYPE_NAMES + the piggy-backed
@@ -547,61 +613,6 @@ its 14'' slot to the post-spine slot; suite 11,614/0, listAll ×8
 byte-identical — the hoist crosses the cta post-filter window close and
 the JS/JSDoc pass family, none consuming TS2352/TS1355) — next session
 starts at the migration itself.**
-
-**Round 631 (2026-07-21) — (M0.4) ninth tail-pass migration:
-checkBindingPatternComputedIndexSig (B9.4 — TS2537 computed-key
-destructuring vs the `{}` default + TS2448/TS2728/TS2538 self-referential
-computed binding keys, ~120 ms — the #9 tail pass) is ON THE SPINE; the
-legacy recursion walkers (walkB94InStmts/-InStmt/-InExpr, ~200 lines) are
-DELETED.** The MULTI-ANCHOR-KIND variant of the template: three emission
-families dispatch from ONE enter hook over seven anchor kinds — the
-self-ref decl-list check at VariableStatement/for/for-in/for-of enters
-(pure AST, no sandwich; legacy order preserved: before the pattern
-emission), the empty-objlit destructure at VariableStatement enters (NOT
-at for-heads — a pinned legacy quirk), and the fn-EXPRESSION-like
-parameter emission at arrow/fn-expr enters plus PARENT-KIND-gated member
-enters (objlit method+setter, class-EXPRESSION method+ctor+setter —
-FunctionDeclaration and class-DECLARATION member parameter lists
-deliberately never emit, both pinned). Reach = spineB94Status/spineB94Edge,
-a FROZEN verbatim copy of the deleted walker's arms — deliberately NOT
-redirected to the surviving cast walker's spineCoEdge (which it matches
-except FunctionDeclaration parameter DEFAULTS being reached here): sharing
-would silently couple B94's frozen reach to future cast-walker/classifier
-changes. Ambient: the TS2537 emitters type-resolve and the legacy pass
-never installed currentFileLocals, so each type-resolving emission
-installs the spine-entry RESTING value (spineB94WithAmbient, the
-spinePdWithAmbient pattern); no flow/check-file-name install needed (both
-already resting mid-walk). SURPRISE (caught by the green-against-legacy-
-FIRST discipline, 30/31 on the first run): a DOTTED `namespace A.B { }`
-IS walked — this parser keeps it as ONE ModuleDeclaration with a dotted
-PropertyAccessExpression name and a ModuleBlock body (Parser.kt
-parseModuleDeclaration's dot loop), so the round-630 spineCoEdge comment's
-"dotted namespace body is a ModuleDeclaration" premise was false for the
-common case (comment corrected this round; both classifiers' edges were
-verbatim-correct regardless — only the prose misled). Gates: 31 local pins
-(M04BindingPatternSpineMigrationTest — all three emitters' gates + the
-reach battery both directions) green against the LEGACY pass first; suite
-11,558 → 11,589/0; `--listAll` ×8 byte-identical (46×7 + 94 env-legit
-artifacts, modulo the `time:` line); pass table 430 → 429 (the row gone;
-checkSpine 19,309.9 ms single-run — nominally above the 18.0–19.1 s band,
-but the same capture's WALL was 28.6 s post vs 30.1 s pre, so box drift,
-not inflation); warning-clean. M0.4 running total: top NINE tail passes
-migrated. SESSION TAIL: the checkConstEnumDiagnostics (#10, 122.6 ms at
-this round's table — the const-enum cluster TS2474/2475/2476/2477/2478/
-2567, AST + const-eval) slot-move pre-gate landed (suite 11,589/0;
-listAll ×8 identical). Its map for the migrator: fully self-contained —
-no ambient installs, no side sets, no dedup scans on its codes anywhere;
-`enumValues` is a memoized pure cache and `scriptFileConstEnumNames` a
-lazy pure collector; THREE per-file sub-parts over `checkedResults`
-(non-.d.ts, gated on the file HAVING const enums via
-collectConstEnumDecls): (1) declaration-level TS2474/2477/2478 per
-const-enum decl (anchor candidate: EnumDeclaration enters), (2) the
-TS2567 const-enum + instantiated-namespace merge scan over TOP-LEVEL
-statements only (a per-file file-END or first-anchor dispatch, not
-per-node), (3) the TS2475/2476 usage walk (walkConstEnumUsageStmt — its
-own recursion with quirks to pin: typeof operands NOT flagged,
-ShorthandPropertyAssignment only its objectAssignmentInitializer,
-fn-like bodies reached via the statement walker's fn arms).**
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
