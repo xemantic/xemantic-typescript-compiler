@@ -169,7 +169,6 @@ class Checker(
         val comparableRelation = Relation()
         val identityRelation = Relation()
         // Recursion depth counters
-        var checkDepth = 0
         var relationDepth = 0
         /** Tracks (source.id, target.id) pairs currently being compared to detect recursive types.
          *  When a pair is already on the stack, we assume compatibility (TypeScript's approach). */
@@ -272,9 +271,6 @@ class Checker(
     private val assignableRelation get() = state.assignableRelation
     private val comparableRelation get() = state.comparableRelation
     private val identityRelation get() = state.identityRelation
-    private var checkDepth: Int
-        get() = state.checkDepth
-        set(value) { state.checkDepth = value }
     private var relationDepth: Int
         get() = state.relationDepth
         set(value) { state.relationDepth = value }
@@ -3785,6 +3781,35 @@ class Checker(
     /** Reusable ascent buffer for [spineSrStatus]. */
     private val spineSrChain = ArrayList<Node>()
 
+    // ── (M0.4) round 642: checkInvalidAssignmentTargets on the spine ───────
+    // The TS2364 invalid-assignment-target pass (plain `=` + compound
+    // targets, the destructuring private-identifier check) — the legacy
+    // driver + checkInvalidAssignInStatement(s)/-InExpr(Core) recursion are
+    // deleted; [emitInvalidAssignAtBinary] (+ isValidAssignmentTarget /
+    // checkDestructuringPrivateIds) survives as the anchor-called leaf.
+    // Reach is the memoized DEPTH classifier [spineIaDepth] over
+    // [spineIaEdge] — the legacy SHARED `checkDepth` counter reproduced per
+    // node (the round-535 spineArgDepth shape): every checkInvalidAssignInExpr
+    // call consumed one frame and bailed past maxCheckDepth (200), statements
+    // and carrier positions inherited the ambient counter unchanged, and a
+    // statement list nested inside an expression (arrow/fn-expr/objlit-method
+    // bodies) inherited the EXPRESSION's elevated ambient. Unlike the arg
+    // walker there is NO right-spine absorption — both binary operands cost a
+    // frame, so deep chains prune at 200. Frozen quirks: for-heads walk
+    // initializer-as-Expression AND condition AND incrementor (a for-head
+    // DECLARATION-LIST initializer is never walked); switch SUBJECT and case
+    // EXPRESSIONS are not walked (clause statements only); objlit
+    // methods/accessors and class-EXPRESSION members ARE walked; enum member
+    // initializers, class heritage, computed names, decorators unreached;
+    // `<<=`/`>>=`/`>>>=`/`**=` are outside isAssignmentOperator (silent).
+    // Anchors: BinaryExpressions with an assignment operator. Fully
+    // syntactic — no ambient sandwich. Fields PRE-init.
+    private var spineIaActive = false
+    /** Per-file nodeId memo for [spineIaDepth] — 0 unknown, 1 unreached, else depth+2. */
+    private var spineIaDepthMemo = ShortArray(0)
+    /** Reusable ascent buffer for [spineIaDepth]. */
+    private val spineIaChain = ArrayList<Node>()
+
     // ── INV.4(d) walker 6 (round 535): checkArgumentCounts on the spine ────
     // The function-call arity pass (TS2554/TS2555/TS2575) — the recursion
     // walkers (checkArgCountInStatements/-InStatement/-InExpr(Core)) are
@@ -5416,23 +5441,18 @@ class Checker(
         // sandwich; the legacy binderResults driver → the spine's
         // partition view, gated `--partitionCheck 2` EQUIVALENT ×8.
         // Neither TS2660 emitter scans the diagnostics list.
-        // 65' (M0.4 slot-move pre-gate, round 641):
-        // checkInvalidAssignmentTargets (TS2364 invalid assignment/
-        // compound-assignment targets + the destructuring
-        // private-identifier check) moved intact from slot 65 ahead of
-        // its spine migration. Fully syntactic + self-contained
-        // (isValidAssignmentTarget + checkDestructuringPrivateIds +
-        // expressionTrueEnd — no type caches, no ambient, no side-set
-        // consults); no pass scans or retracts TS2364. Scope quirks for
-        // the migrator: the recursion is guarded by the SHARED
-        // `checkDepth` counter (checkInvalidAssignInExpr prunes past
-        // maxCheckDepth — the round-535 INT-depth classifier shape);
-        // for-heads walk initializer-as-Expression AND condition AND
-        // incrementor; switch-case EXPRESSIONS are NOT walked (clause
-        // statements only); objlit methods/accessors + class-EXPRESSION
-        // members ARE walked; class-DECLARATION members walk
-        // method/ctor/accessor bodies + prop initializers.
-        pass("checkInvalidAssignmentTargets") { checkInvalidAssignmentTargets() }
+        // 65'' (M0.4, round 642): checkInvalidAssignmentTargets (TS2364
+        // invalid assignment/compound-assignment targets + the
+        // destructuring private-identifier check) is ON THE SPINE —
+        // anchors at assignment-operator BinaryExpressions
+        // (spineIaEnterNode), gated by the shared-checkDepth INT-depth
+        // classifier spineIaDepth (the legacy checkInvalidAssignInExpr
+        // frame counter reproduced per node, prune past 200; NO
+        // right-spine absorption — both binary operands cost a frame).
+        // Fully syntactic — no ambient sandwich; the legacy
+        // binderResults driver → the spine's partition view, gated
+        // `--partitionCheck 2` EQUIVALENT ×8. No pass scans or retracts
+        // TS2364.
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -21474,6 +21494,7 @@ class Checker(
                 spineEvSetup(result)
                 spineUySetup(result)
                 spineSrSetup(result)
+                spineIaSetup(result)
                 // (M0.4) round 636: property-init anchors — active in every
                 // non-dts file (the legacy driver's only file gate).
                 spinePiActive = spinePiRunActive && !spineIsDts
@@ -21513,6 +21534,7 @@ class Checker(
                     spineEvTeardown()
                     spineUyTeardown()
                     spineSrTeardown()
+                    spineIaTeardown()
                     spinePiActive = false
                 }
                 spineResolveDeferredIterationChecks()
@@ -21749,6 +21771,11 @@ class Checker(
         // boolean carried as the classifier status; no frames/leave hook,
         // no ambient sandwich.
         if (spineSrActive) spineSrEnterNode(node)
+        // (M0.4) round 642: the invalid-assignment-target anchors
+        // (BinaryExpressions with an assignment operator) — reach is the
+        // shared-checkDepth INT-depth classifier (spineIaDepth); no
+        // frames/leave hook, no ambient sandwich.
+        if (spineIaActive) spineIaEnterNode(node)
         // INV.4(d) walker 7: the use-before-declaration pass — the per-list
         // ForwardRefs anchor + loop-header self-ref checks.
         if (spineUbdActive) spineUbdEnterNode(node)
@@ -159987,222 +160014,288 @@ interface DataView {
     // TS2364: Invalid assignment target
     // -----------------------------------------------------------------------
 
-    private fun checkInvalidAssignmentTargets() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            checkInvalidAssignInStatements(result.sourceFile.statements, source, fileName)
+    // (M0.4, round 642): the walk is ON THE SPINE — see spineIaEnterNode /
+    // spineIaDepth / spineIaEdge; the legacy driver +
+    // checkInvalidAssignInStatement(s)/-InExpr(Core) recursion are deleted.
+    // [emitInvalidAssignAtBinary] below is the anchor-called leaf;
+    // isValidAssignmentTarget + checkDestructuringPrivateIds survive
+    // unchanged.
+
+    /** Per-file spine setup: the legacy dts skip; depth-memo allocation. */
+    private fun spineIaSetup(result: BinderResult) {
+        spineIaActive = !spineIsDts
+        spineIaDepthMemo = if (!spineIaActive) ShortArray(0) else {
+            val n = result.sourceFile.nodeCount
+            if (n > 0) ShortArray(n) else ShortArray(0)
         }
     }
 
-    private fun checkInvalidAssignInStatements(stmts: List<Statement>, source: String, fileName: String) {
-        for (stmt in stmts) checkInvalidAssignInStatement(stmt, source, fileName)
+    private fun spineIaTeardown() {
+        spineIaActive = false
+        spineIaDepthMemo = ShortArray(0)
     }
 
-    private fun checkInvalidAssignInStatement(stmt: Statement, source: String, fileName: String) {
-        when (stmt) {
-            is ExpressionStatement -> checkInvalidAssignInExpr(stmt.expression, source, fileName)
-            is VariableStatement -> {
-                for (decl in stmt.declarationList.declarations) {
-                    decl.initializer?.let { checkInvalidAssignInExpr(it, source, fileName) }
-                }
+    /** ENTER dispatch: assignment-operator BinaryExpressions — the cheap
+     *  operator pre-gate runs BEFORE the reach climb. */
+    private fun spineIaEnterNode(node: Node) {
+        if ((node as NodeBase).kindId != NodeKind.BINARY_EXPRESSION) return
+        node as BinaryExpression
+        if (!isAssignmentOperator(node.operator)) return
+        if (spineIaDepth(node) < 0) return
+        emitInvalidAssignAtBinary(node, spineSource, spineFileName)
+    }
+
+    /**
+     * Memoized DEPTH classifier — the legacy SHARED `checkDepth` counter
+     * reproduced per node: -1 = unreached (a position the deleted walkers
+     * never visited, or an expression whose checkInvalidAssignInExpr call
+     * would bail past the 200 cap); otherwise the ambient counter value at
+     * the node's legacy visit (each expression call = one frame; statements
+     * and carrier positions inherit the ambient unchanged — including a
+     * statement list nested inside an expression, which inherits the
+     * expression's elevated ambient). Ascends to the first
+     * memoized/terminal ancestor, then folds [spineIaEdge] back down.
+     */
+    private fun spineIaDepth(node: Node): Int {
+        if (node is SourceFile) return 0
+        val memo = spineIaDepthMemo
+        run {
+            val id = (node as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) {
+                val m = memo[id].toInt()
+                if (m != 0) return m - 2
             }
-            is ReturnStatement -> stmt.expression?.let { checkInvalidAssignInExpr(it, source, fileName) }
-            is Block -> checkInvalidAssignInStatements(stmt.statements, source, fileName)
-            is IfStatement -> {
-                checkInvalidAssignInExpr(stmt.expression, source, fileName)
-                checkInvalidAssignInStatement(stmt.thenStatement, source, fileName)
-                stmt.elseStatement?.let { checkInvalidAssignInStatement(it, source, fileName) }
-            }
-            is ForStatement -> {
-                (stmt.initializer as? Expression)?.let { checkInvalidAssignInExpr(it, source, fileName) }
-                stmt.condition?.let { checkInvalidAssignInExpr(it, source, fileName) }
-                stmt.incrementor?.let { checkInvalidAssignInExpr(it, source, fileName) }
-                checkInvalidAssignInStatement(stmt.statement, source, fileName)
-            }
-            is ForInStatement -> {
-                checkInvalidAssignInExpr(stmt.expression, source, fileName)
-                checkInvalidAssignInStatement(stmt.statement, source, fileName)
-            }
-            is ForOfStatement -> {
-                checkInvalidAssignInExpr(stmt.expression, source, fileName)
-                checkInvalidAssignInStatement(stmt.statement, source, fileName)
-            }
-            is WhileStatement -> {
-                checkInvalidAssignInExpr(stmt.expression, source, fileName)
-                checkInvalidAssignInStatement(stmt.statement, source, fileName)
-            }
-            is DoStatement -> {
-                checkInvalidAssignInExpr(stmt.expression, source, fileName)
-                checkInvalidAssignInStatement(stmt.statement, source, fileName)
-            }
-            is SwitchStatement -> {
-                for (clause in stmt.caseBlock) {
-                    when (clause) {
-                        is CaseClause -> checkInvalidAssignInStatements(clause.statements, source, fileName)
-                        is DefaultClause -> checkInvalidAssignInStatements(clause.statements, source, fileName)
-                        else -> {}
-                    }
-                }
-            }
-            is TryStatement -> {
-                checkInvalidAssignInStatements(stmt.tryBlock.statements, source, fileName)
-                stmt.catchClause?.block?.let { checkInvalidAssignInStatements(it.statements, source, fileName) }
-                stmt.finallyBlock?.let { checkInvalidAssignInStatements(it.statements, source, fileName) }
-            }
-            is FunctionDeclaration -> stmt.body?.let { checkInvalidAssignInStatements(it.statements, source, fileName) }
-            is ClassDeclaration -> {
-                for (member in stmt.members) {
-                    when (member) {
-                        is MethodDeclaration -> member.body?.let { checkInvalidAssignInStatements(it.statements, source, fileName) }
-                        is Constructor -> member.body?.let { checkInvalidAssignInStatements(it.statements, source, fileName) }
-                        is GetAccessor -> member.body?.let { checkInvalidAssignInStatements(it.statements, source, fileName) }
-                        is SetAccessor -> member.body?.let { checkInvalidAssignInStatements(it.statements, source, fileName) }
-                        is PropertyDeclaration -> member.initializer?.let { checkInvalidAssignInExpr(it, source, fileName) }
-                        else -> {}
-                    }
-                }
-            }
-            is LabeledStatement -> checkInvalidAssignInStatement(stmt.statement, source, fileName)
-            is ThrowStatement -> stmt.expression?.let { checkInvalidAssignInExpr(it, source, fileName) }
-            is ExportAssignment -> checkInvalidAssignInExpr(stmt.expression, source, fileName)
-            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { checkInvalidAssignInStatements(it.statements, source, fileName) }
-            else -> {}
         }
+        val chain = spineIaChain
+        chain.clear()
+        var cur: Node = node
+        val anchor: Node?
+        var anchorDepth = -1
+        while (true) {
+            chain.add(cur)
+            val parent = (cur as NodeBase).parent
+            if (parent == null) { anchor = null; break } // detached/unindexed → unreached
+            if (parent is SourceFile) { anchor = parent; anchorDepth = 0; break }
+            val pid = (parent as NodeBase).nodeId
+            val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
+            if (pm != 0) { anchor = parent; anchorDepth = pm - 2; break }
+            cur = parent
+        }
+        var pNode: Node? = anchor
+        var pDepth = anchorDepth
+        var result = -1
+        for (i in chain.indices.reversed()) {
+            val c = chain[i]
+            result = if (pNode == null || pDepth < 0) -1 else spineIaEdge(pNode, pDepth, c)
+            val cid = (c as NodeBase).nodeId
+            if (cid >= 0 && cid < memo.size) memo[cid] = (result + 2).toShort()
+            pNode = c
+            pDepth = result
+        }
+        chain.clear()
+        return result
     }
 
-    private fun checkInvalidAssignInExpr(expr: Expression, source: String, fileName: String) {
-        if (checkDepth > maxCheckDepth) return
-        checkDepth++
-        try {
-        checkInvalidAssignInExprCore(expr, source, fileName)
-        } finally { checkDepth-- }
+    /** An expression-CALL position at ambient [v]: the legacy
+     *  `checkDepth > maxCheckDepth` bail — the subtree prunes past 200. */
+    private fun spineIaExpr(v: Int): Int = if (v > maxCheckDepth) -1 else v
+
+    /**
+     * The edge rules — the deleted checkInvalidAssignInStatement(s)
+     * statement arms and checkInvalidAssignInExprCore expression arms
+     * verbatim. An EXPRESSION parent's children were called from its core
+     * at ambient pDepth+1 (its own frame); statement/carrier parents pass
+     * pDepth through. [spineIaExpr] applies at every checkInvalidAssignInExpr
+     * call position; statement-list/member/carrier positions never bail.
+     * Unlisted edges are the legacy `else -> {}`s: the switch SUBJECT and
+     * case EXPRESSIONS, for-head DECLARATION-LIST initializers, for-in/of
+     * initializers, enum member initializers, class heritage, computed
+     * property names, parameter defaults, decorators, type positions.
+     * Unlike spineArgEdge there is NO right-spine absorption — both binary
+     * operands cost a frame, so deep chains prune at the cap.
+     */
+    private fun spineIaEdge(parent: Node, pDepth: Int, child: Node): Int = when (parent) {
+        // ---- statement arms (no frame) ----
+        is SourceFile -> if (child is Statement) pDepth else -1
+        is Block -> if (child is Statement) pDepth else -1
+        is ModuleBlock -> if (child is Statement) pDepth else -1
+        is CaseClause -> if (child is Statement) pDepth else -1
+        is DefaultClause -> if (child is Statement) pDepth else -1
+        is SwitchStatement -> if (child is CaseClause || child is DefaultClause) pDepth else -1
+        is ExpressionStatement -> if (child === parent.expression) spineIaExpr(pDepth) else -1
+        is VariableStatement -> if (child === parent.declarationList) pDepth else -1
+        is VariableDeclarationList -> if (child is VariableDeclaration) pDepth else -1
+        is VariableDeclaration -> if (child === parent.initializer) spineIaExpr(pDepth) else -1
+        is ReturnStatement -> if (child === parent.expression) spineIaExpr(pDepth) else -1
+        is ThrowStatement -> if (child === parent.expression) spineIaExpr(pDepth) else -1
+        is ExportAssignment -> if (child === parent.expression) spineIaExpr(pDepth) else -1
+        is IfStatement -> when {
+            child === parent.expression -> spineIaExpr(pDepth)
+            child === parent.thenStatement || child === parent.elseStatement -> pDepth
+            else -> -1
+        }
+        is ForStatement -> when {
+            // The for-head initializer is walked as a bare EXPRESSION only —
+            // a declaration-list initializer (and its declarations'
+            // initializers) was never visited.
+            child === parent.initializer -> if (child is Expression) spineIaExpr(pDepth) else -1
+            child === parent.condition || child === parent.incrementor -> spineIaExpr(pDepth)
+            child === parent.statement -> pDepth
+            else -> -1
+        }
+        is ForInStatement -> when {
+            child === parent.expression -> spineIaExpr(pDepth)
+            child === parent.statement -> pDepth
+            else -> -1
+        }
+        is ForOfStatement -> when {
+            child === parent.expression -> spineIaExpr(pDepth)
+            child === parent.statement -> pDepth
+            else -> -1
+        }
+        is WhileStatement -> when {
+            child === parent.expression -> spineIaExpr(pDepth)
+            child === parent.statement -> pDepth
+            else -> -1
+        }
+        is DoStatement -> when {
+            child === parent.expression -> spineIaExpr(pDepth)
+            child === parent.statement -> pDepth
+            else -> -1
+        }
+        is LabeledStatement -> if (child === parent.statement) pDepth else -1
+        is TryStatement ->
+            if (child === parent.tryBlock || child === parent.finallyBlock ||
+                child === parent.catchClause) pDepth else -1
+        is CatchClause -> if (child === parent.block) pDepth else -1
+        is FunctionDeclaration -> if (child === parent.body) pDepth else -1
+        is ClassDeclaration ->
+            if (child is MethodDeclaration || child is Constructor ||
+                child is GetAccessor || child is SetAccessor ||
+                child is PropertyDeclaration) pDepth else -1
+        is ModuleDeclaration -> if (child === parent.body && child is ModuleBlock) pDepth else -1
+        // ---- member/carrier arms (the owner's ambient is baked into the
+        //      member's stored value by the owner edge) ----
+        is MethodDeclaration -> if (child === parent.body) pDepth else -1
+        is Constructor -> if (child === parent.body) pDepth else -1
+        is GetAccessor -> if (child === parent.body) pDepth else -1
+        is SetAccessor -> if (child === parent.body) pDepth else -1
+        is PropertyDeclaration -> if (child === parent.initializer) spineIaExpr(pDepth) else -1
+        is PropertyAssignment -> if (child === parent.initializer) spineIaExpr(pDepth) else -1
+        is ShorthandPropertyAssignment ->
+            if (child === parent.objectAssignmentInitializer) spineIaExpr(pDepth) else -1
+        is SpreadAssignment -> if (child === parent.expression) spineIaExpr(pDepth) else -1
+        is TemplateSpan -> if (child === parent.expression) spineIaExpr(pDepth) else -1
+        // ---- expression arms (children called from the core at pDepth+1) ----
+        is BinaryExpression ->
+            if (child === parent.left || child === parent.right)
+                spineIaExpr(pDepth + 1) else -1
+        is ConditionalExpression ->
+            if (child === parent.condition || child === parent.whenTrue ||
+                child === parent.whenFalse) spineIaExpr(pDepth + 1) else -1
+        is ParenthesizedExpression -> if (child === parent.expression) spineIaExpr(pDepth + 1) else -1
+        is ArrowFunction -> when {
+            child !== parent.body -> -1
+            child is Block -> pDepth + 1
+            else -> spineIaExpr(pDepth + 1)
+        }
+        is FunctionExpression -> if (child === parent.body) pDepth + 1 else -1
+        is CallExpression ->
+            if (child === parent.expression || parent.arguments.any { it === child })
+                spineIaExpr(pDepth + 1) else -1
+        is TaggedTemplateExpression -> when {
+            child === parent.tag -> spineIaExpr(pDepth + 1)
+            // The template is a CARRIER (never itself an expr call): its
+            // spans were iterated from the tagged core at ambient pDepth+1,
+            // which the TemplateExpression arm's +1 reproduces from a stored
+            // value of pDepth.
+            child === parent.template && child is TemplateExpression -> pDepth
+            else -> -1
+        }
+        is TemplateExpression -> if (child is TemplateSpan) pDepth + 1 else -1
+        is PrefixUnaryExpression -> if (child === parent.operand) spineIaExpr(pDepth + 1) else -1
+        is PostfixUnaryExpression -> if (child === parent.operand) spineIaExpr(pDepth + 1) else -1
+        is SpreadElement -> if (child === parent.expression) spineIaExpr(pDepth + 1) else -1
+        is ArrayLiteralExpression ->
+            if (parent.elements.any { it === child }) spineIaExpr(pDepth + 1) else -1
+        is ObjectLiteralExpression -> when (child) {
+            is PropertyAssignment, is ShorthandPropertyAssignment, is SpreadAssignment,
+            is MethodDeclaration, is GetAccessor, is SetAccessor -> pDepth + 1
+            else -> -1
+        }
+        is AsExpression -> if (child === parent.expression) spineIaExpr(pDepth + 1) else -1
+        is SatisfiesExpression -> if (child === parent.expression) spineIaExpr(pDepth + 1) else -1
+        is NonNullExpression -> if (child === parent.expression) spineIaExpr(pDepth + 1) else -1
+        is TypeAssertionExpression -> if (child === parent.expression) spineIaExpr(pDepth + 1) else -1
+        is NewExpression ->
+            if (child === parent.expression || parent.arguments?.any { it === child } == true)
+                spineIaExpr(pDepth + 1) else -1
+        is ElementAccessExpression ->
+            if (child === parent.expression || child === parent.argumentExpression)
+                spineIaExpr(pDepth + 1) else -1
+        is PropertyAccessExpression -> if (child === parent.expression) spineIaExpr(pDepth + 1) else -1
+        is AwaitExpression -> if (child === parent.expression) spineIaExpr(pDepth + 1) else -1
+        is YieldExpression -> if (child === parent.expression) spineIaExpr(pDepth + 1) else -1
+        is VoidExpression -> if (child === parent.expression) spineIaExpr(pDepth + 1) else -1
+        is DeleteExpression -> if (child === parent.expression) spineIaExpr(pDepth + 1) else -1
+        is TypeOfExpression -> if (child === parent.expression) spineIaExpr(pDepth + 1) else -1
+        is CommaListExpression ->
+            if (parent.elements.any { it === child }) spineIaExpr(pDepth + 1) else -1
+        is ClassExpression ->
+            if (child is MethodDeclaration || child is Constructor ||
+                child is GetAccessor || child is SetAccessor ||
+                child is PropertyDeclaration) pDepth + 1 else -1
+        else -> -1
     }
-    private fun checkInvalidAssignInExprCore(expr: Expression, source: String, fileName: String) {
-        when (expr) {
-            is BinaryExpression -> {
-                // COMPOUND assignments (`0 ^= …`) run tsc's checkReferenceExpression too —
-                // a non-reference LHS is TS2364 (destructuring literals are only valid for
-                // plain `=`; a zero-width missing-Identifier LHS is silent, being an
-                // Identifier). constructorWithIncompleteTypeAnnotation's `var any = 0 ^= `.
-                if (expr.operator != SyntaxKind.Equals && isAssignmentOperator(expr.operator)) {
-                    val left = expr.left
-                    val validForCompound = isValidAssignmentTarget(left) &&
-                        left !is ArrayLiteralExpression && left !is ObjectLiteralExpression
-                    if (!validForCompound) {
-                        val start = left.pos
-                        val length = (expressionTrueEnd(left) - start).coerceAtLeast(1)
-                        val (line, character) = getLineAndCharacterOfPosition(source, start)
-                        diagnostics.add(Diagnostic(
-                            message = "The left-hand side of an assignment expression must be a variable or a property access.",
-                            category = DiagnosticCategory.Error,
-                            code = 2364,
-                            fileName = fileName, line = line, character = character,
-                            start = start, length = length,
-                        ))
-                    }
-                }
-                // Check if this is an assignment
-                if (expr.operator == SyntaxKind.Equals) {
-                    if (!isValidAssignmentTarget(expr.left)) {
-                        val start = expr.left.pos
-                        val length = expressionTrueEnd(expr.left) - start
-                        val (line, character) = getLineAndCharacterOfPosition(source, start)
-                        diagnostics.add(Diagnostic(
-                            message = "The left-hand side of an assignment expression must be a variable or a property access.",
-                            category = DiagnosticCategory.Error,
-                            code = 2364,
-                            fileName = fileName,
-                            line = line,
-                            character = character,
-                            start = start,
-                            length = length,
-                        ))
-                    } else {
-                        // Destructuring patterns: check for private identifiers as direct elements.
-                        // E.g. `[#abc] = x` — `#abc` (Identifier whose text starts with `#`) is not
-                        // a valid assignment target outside of a `this.#abc` member-access chain.
-                        checkDestructuringPrivateIds(expr.left, source, fileName)
-                    }
-                }
-                checkInvalidAssignInExpr(expr.left, source, fileName)
-                checkInvalidAssignInExpr(expr.right, source, fileName)
+
+    /**
+     * The legacy checkInvalidAssignInExprCore BinaryExpression emissions,
+     * verbatim. COMPOUND assignments (`0 ^= …`) run tsc's
+     * checkReferenceExpression too — a non-reference LHS is TS2364
+     * (destructuring literals are only valid for plain `=`; a zero-width
+     * missing-Identifier LHS is silent, being an Identifier) —
+     * constructorWithIncompleteTypeAnnotation's `var any = 0 ^= `. A plain
+     * `=` with a VALID destructuring target runs the private-identifier
+     * element check: `[#abc] = x` — `#abc` (Identifier whose text starts
+     * with `#`) is not a valid assignment target outside a `this.#abc`
+     * member-access chain.
+     */
+    private fun emitInvalidAssignAtBinary(expr: BinaryExpression, source: String, fileName: String) {
+        if (expr.operator != SyntaxKind.Equals && isAssignmentOperator(expr.operator)) {
+            val left = expr.left
+            val validForCompound = isValidAssignmentTarget(left) &&
+                left !is ArrayLiteralExpression && left !is ObjectLiteralExpression
+            if (!validForCompound) {
+                val start = left.pos
+                val length = (expressionTrueEnd(left) - start).coerceAtLeast(1)
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "The left-hand side of an assignment expression must be a variable or a property access.",
+                    category = DiagnosticCategory.Error,
+                    code = 2364,
+                    fileName = fileName, line = line, character = character,
+                    start = start, length = length,
+                ))
             }
-            is ConditionalExpression -> {
-                checkInvalidAssignInExpr(expr.condition, source, fileName)
-                checkInvalidAssignInExpr(expr.whenTrue, source, fileName)
-                checkInvalidAssignInExpr(expr.whenFalse, source, fileName)
+        }
+        if (expr.operator == SyntaxKind.Equals) {
+            if (!isValidAssignmentTarget(expr.left)) {
+                val start = expr.left.pos
+                val length = expressionTrueEnd(expr.left) - start
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "The left-hand side of an assignment expression must be a variable or a property access.",
+                    category = DiagnosticCategory.Error,
+                    code = 2364,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
+            } else {
+                checkDestructuringPrivateIds(expr.left, source, fileName)
             }
-            is ParenthesizedExpression -> checkInvalidAssignInExpr(expr.expression, source, fileName)
-            is ArrowFunction -> {
-                when (val body = expr.body) {
-                    is Block -> checkInvalidAssignInStatements(body.statements, source, fileName)
-                    is Expression -> checkInvalidAssignInExpr(body, source, fileName)
-                    else -> {}
-                }
-            }
-            is FunctionExpression -> expr.body.let { checkInvalidAssignInStatements(it.statements, source, fileName) }
-            is CallExpression -> {
-                checkInvalidAssignInExpr(expr.expression, source, fileName)
-                for (arg in expr.arguments) checkInvalidAssignInExpr(arg, source, fileName)
-            }
-            is TaggedTemplateExpression -> {
-                checkInvalidAssignInExpr(expr.tag, source, fileName)
-                if (expr.template is TemplateExpression) {
-                    for (span in (expr.template).templateSpans) checkInvalidAssignInExpr(span.expression, source, fileName)
-                }
-            }
-            is PrefixUnaryExpression -> checkInvalidAssignInExpr(expr.operand, source, fileName)
-            is PostfixUnaryExpression -> checkInvalidAssignInExpr(expr.operand, source, fileName)
-            is SpreadElement -> checkInvalidAssignInExpr(expr.expression, source, fileName)
-            is ArrayLiteralExpression -> {
-                for (el in expr.elements) checkInvalidAssignInExpr(el, source, fileName)
-            }
-            is ObjectLiteralExpression -> {
-                for (prop in expr.properties) {
-                    when (prop) {
-                        is PropertyAssignment -> checkInvalidAssignInExpr(prop.initializer, source, fileName)
-                        is ShorthandPropertyAssignment -> prop.objectAssignmentInitializer?.let { checkInvalidAssignInExpr(it, source, fileName) }
-                        is SpreadAssignment -> checkInvalidAssignInExpr(prop.expression, source, fileName)
-                        is MethodDeclaration -> prop.body?.let { checkInvalidAssignInStatements(it.statements, source, fileName) }
-                        is GetAccessor -> prop.body?.let { checkInvalidAssignInStatements(it.statements, source, fileName) }
-                        is SetAccessor -> prop.body?.let { checkInvalidAssignInStatements(it.statements, source, fileName) }
-                        else -> {}
-                    }
-                }
-            }
-            is TemplateExpression -> {
-                for (span in expr.templateSpans) checkInvalidAssignInExpr(span.expression, source, fileName)
-            }
-            is AsExpression -> checkInvalidAssignInExpr(expr.expression, source, fileName)
-            is SatisfiesExpression -> checkInvalidAssignInExpr(expr.expression, source, fileName)
-            is NonNullExpression -> checkInvalidAssignInExpr(expr.expression, source, fileName)
-            is TypeAssertionExpression -> checkInvalidAssignInExpr(expr.expression, source, fileName)
-            is NewExpression -> {
-                checkInvalidAssignInExpr(expr.expression, source, fileName)
-                expr.arguments?.forEach { checkInvalidAssignInExpr(it, source, fileName) }
-            }
-            is ElementAccessExpression -> {
-                checkInvalidAssignInExpr(expr.expression, source, fileName)
-                checkInvalidAssignInExpr(expr.argumentExpression, source, fileName)
-            }
-            is PropertyAccessExpression -> checkInvalidAssignInExpr(expr.expression, source, fileName)
-            is AwaitExpression -> checkInvalidAssignInExpr(expr.expression, source, fileName)
-            is YieldExpression -> expr.expression?.let { checkInvalidAssignInExpr(it, source, fileName) }
-            is VoidExpression -> checkInvalidAssignInExpr(expr.expression, source, fileName)
-            is DeleteExpression -> checkInvalidAssignInExpr(expr.expression, source, fileName)
-            is TypeOfExpression -> checkInvalidAssignInExpr(expr.expression, source, fileName)
-            is CommaListExpression -> for (e in expr.elements) checkInvalidAssignInExpr(e, source, fileName)
-            is ClassExpression -> for (m in expr.members) when (m) {
-                is MethodDeclaration -> m.body?.let { checkInvalidAssignInStatements(it.statements, source, fileName) }
-                is Constructor -> m.body?.let { checkInvalidAssignInStatements(it.statements, source, fileName) }
-                is GetAccessor -> m.body?.let { checkInvalidAssignInStatements(it.statements, source, fileName) }
-                is SetAccessor -> m.body?.let { checkInvalidAssignInStatements(it.statements, source, fileName) }
-                is PropertyDeclaration -> m.initializer?.let { checkInvalidAssignInExpr(it, source, fileName) }
-                else -> {}
-            }
-            else -> {}
         }
     }
 
