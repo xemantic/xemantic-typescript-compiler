@@ -5541,6 +5541,23 @@ class Checker(
         // non-Identifier-receiver writes never collected. Fully syntactic —
         // no ambient sandwich; the legacy binderResults driver → the
         // spine's partition view, gated `--partitionCheck 2` EQUIVALENT ×8.
+        // 12' (M0.4 slot-move pre-gate, round 644): checkStrictModeIdentifiers
+        // (TS1100 restricted-name bindings + TS2630 eval-assign + TS1215
+        // module-file restricted names + the top-level `var eval` TS2300/
+        // TS6203 lib-collision pair) moved intact from slot 12 ahead of its
+        // spine migration. Fully syntactic + self-contained (grep-verified:
+        // the family reads no checker ambient — options + AST only); the
+        // ONLY diagnostics-list consumer of its codes anywhere is
+        // checkStyledComponentsInstantiationLimit's corpus-unique TS1100
+        // wipe, which dispatches long AFTER both slots; the 12→12b relative
+        // order (TS1210-owns-class-bodies) is preserved (12b stays put).
+        // Scope map for the migrator: per file — module files route ALL
+        // statements through checkModuleStrictModeInStatements (TS1215);
+        // globally-strict or "use strict"-prologue files through
+        // checkStrictModeInStatements (TS1100/TS2630) + the top-level
+        // `var eval` TS2300 pair; other files through
+        // checkFunctionLocalStrictMode (fn bodies with their OWN prologue).
+        pass("checkStrictModeIdentifiers") { checkStrictModeIdentifiers() }
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -5740,9 +5757,9 @@ class Checker(
         pass("checkCatchClauseRedeclarations") { checkCatchClauseRedeclarations() }
         // 11. Check export assignment conflicts (TS2309)
         pass("checkExportAssignmentConflicts") { checkExportAssignmentConflicts() }
-        // 12. Check strict mode identifier restrictions (TS1100)
-        // Runs unconditionally — per-file strict mode detection inside
-        pass("checkStrictModeIdentifiers") { checkStrictModeIdentifiers() }
+        // 12. checkStrictModeIdentifiers (TS1100/TS2630/TS1215 + the var-eval
+        // TS2300/TS6203 pair) moved to the post-spine slot — see the
+        // pass("checkSpine") site (M0.4 slot-move pre-gate, round 644).
         // 12b. Check class body strict mode (TS1210) — class bodies are always strict
         pass("checkClassStrictModeIdentifiers") { checkClassStrictModeIdentifiers() }
         // 12c. TS1042/TS1184 (modifiers on object-literal members) migrated to
