@@ -20,6 +20,64 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 643 (2026-07-22) — (M0.4) twentieth tail-pass migration:
+checkTypeParameterDefaults (TS2368 reserved TP names + TS2744
+forward/self TP default references + the circularDefaultTypeParamCount
+side-set; 150 ms at the round-641 table — the #20 per-file tail pass,
+slot 59b) is SPLIT: the emissions are ON THE SPINE, the side-set write
+stays pre-spine; the legacy driver + walkTParamDefaultsInStmts/-InStmt/
+-InClassMember/-InExpr/-InType recursion (~250 lines) DELETED;
+validateTParamDefaultsEmit (+ findForwardTParamRef) survives as the
+anchor-called leaf.** The SPLIT-PRODUCER variant (new template move,
+round-642's scope map held): a pass with ONE side-set whose consumer is
+cross-file/earlier-in-file (the `Name` → `Name<any, ...>` no-args
+display in formatTypeForDisplay) cannot ride the spine walk — the write
+splits into the pre-spine producer populateCircularTpDefaults (still
+slot 59b; COLLECTOR discipline, binderResults) while the emissions
+anchor at the ten TP-list-bearing construct kinds (fn/class/interface/
+alias declarations, arrow/fn-expr/class-expr/objlit+member methods,
+FunctionType/ConstructorType) over the memoized BINARY reach classifier
+spineTdStatus/spineTdEdge with a cheap non-empty-typeParameters
+pre-gate. TWO structural firsts: (1) the producer FILTERS its
+candidates through the SAME frozen classifier the spine emissions use —
+one edge set serves both halves, no walker clone to drift; (2) the
+candidate set is PARSE-RECORDED (SourceFile.typeAliasesWithTpDefaults,
+the moduleSpecifiers pattern: appended at parseTypeAliasDeclaration
+when any TP carries a default; a speculative-parse discard classifies
+unreached via its DETACHED parent chain, so over-collection is
+harmless) — the producer runs at 0.4 ms where the legacy row was
+150 ms. Producer-scan lesson (measured, do not repeat): re-scanning the
+tree for candidates via a forEachChild worklist costs MORE than the
+walk it replaces (264 ms raw; 218 ms with an exact TypeNode-subtree
+prune — type positions can never contain a legacy-reachable alias since
+type-member bodies are parser-discarded) — parse-time recording is the
+shape for future split producers. Frozen reach quirks pinned both
+directions: if CONDITIONS, switch SUBJECT + case EXPRESSIONS, for-in/of
+heads, expression-bodied arrow BODIES, objlit ACCESSORS (class accessor
+bodies ARE walked), enum member initializers, heritage clauses,
+call/new TYPE ARGUMENTS, TP constraint/default INTERIORS (a FunctionType
+inside a TP default is never validated; findForwardTParamRef's own-TP
+inner-scope skip pinned separately), computed names, static blocks, and
+mapped/keyof interiors all silent; for-head initializer(decl-list AND
+expression)/condition/incrementor, declare-namespace bodies (NO declare
+gate, unlike ac), catch blocks, template spans, ternary CONDITIONS
+(unlike ac), and As/Satisfies/TypeAssertion type positions reached.
+Fully syntactic emissions — no ambient sandwich (the legacy
+currentFileLocals install fed only the side-set write). The legacy
+binderResults driver → the spine's partition view, gated
+`--partitionCheck 2` EQUIVALENT ×8. Gates: 56 local pins
+(M04TpDefaultsSpineMigrationTest) green against the LEGACY pass FIRST
+(all 55 initial pins on the first run); suite 11,892 → 11,948/0;
+`--listAll` ×8 byte-identical (sorted, non-time lines) vs the round-642
+HEAD baseline; partitionCheck ×8 EQUIVALENT (46/46/46/46/46/46/46/94);
+pass table 419 → 419 (checkTypeParameterDefaults 150 ms →
+populateCircularTpDefaults 0.4 ms; checkSpine 19.9 s single-run —
+in-band); warning-clean (--rerun-tasks, zero `w:`). M0.4 running total:
+top TWENTY tail passes migrated. After #20 by cost:
+checkExpandoFunctionNestedReads 99 ms, checkStrictModeIdentifiers
+96 ms, checkConstLiteralComparisons 95 ms, checkSuperInObjectLiterals
+91 ms.**
+
 **Round 642 (2026-07-22) — (M0.4) nineteenth tail-pass migration:
 checkInvalidAssignmentTargets (TS2364 invalid assignment/
 compound-assignment targets + the destructuring private-identifier
@@ -559,76 +617,6 @@ TS2564 list op elsewhere is checkInKeywordTypeguard's whole-file
 wipe-and-pin, which runs after both slots — no ordering hazard. NEXT
 session starts at its migration.**
 
-**Round 634 (2026-07-21) — (M0.4) slot-move pre-gate for #12:
-checkProtectedMemberReadAccess (B446 — TS2445/TS2446 protected READ
-access, ~103 ms) moved intact to the post-spine slot; suite 11,629/0,
-listAll ×8 byte-identical.** No TS2445/TS2446 dedup scans exist
-(checkDivergentAccessorVisibility and B377 emit the codes but are
-GATE-disjoint — accessor pairs / free-function writes — and never scan
-the list); pmrInClassMethod/pmrLexicalClass are pass-local save/restore
-state; the hoist crosses ~116 passes (resolution first-touch is the
-gated risk class). Map for the migrator: driver iterates binderResults
-(→ add the `--partitionCheck 2` gate like round 633), skips dts AND
-js-like files; per file a topVars prepass (top-level class-typed vars,
-annotation OR `new C()`-inferred) feeds ONLY the top-level
-ExpressionStatement expression walks (state cleared:
-pmrInClassMethod=false, lexical=null); pmrScanContainer descends
-top-level FunctionDeclarations, var-initializer fn-exprs/arrows
-(Block-bodied only), class-member bodies (lexical=true), and namespace
-ModuleBlocks — NOT bare blocks/if-bodies at top level;
-pmrProcessFunctionLike computes thisClass (`this:` param via
-pmrResolveClass through TP constraints, else the lexical class) + a
-param-annotation varClasses map, save-set-restores the two pmr fields,
-then pmrWalkStmt/pmrWalkExpr thread (thisClass, enclosing, vars)
-DOWNWARD. OPEN QUESTION to settle before choosing the template variant:
-does pmrWalkStmt MUTATE `vars` in statement order (body-local
-`const a = new A()` registrations → the push-based order-dependent
-variant) or is the context pure-downward (→ the round-626 pull-based
-fold with per-boundary memo)?**
-
-**Round 633 (2026-07-21) — (M0.4) eleventh tail-pass migration:
-checkNullTypeAssertionOverlap (TS2352 null/objlit/class-instance cast
-overlap + the four AsExpression TS2352/TS1355 emitters, ~104 ms — the
-#11 tail pass) is ON THE SPINE; the legacy driver + the
-`inNullCastOverlapPass` flag + the flag-gated arm in the SHARED walker
-are deleted.** The FLAG-ARM-LIFT variant of the round-630 shared-walker
-template: the pass's emissions lived in two places — the
-TypeAssertion-callback (`emitTS2352IfNullCast`, bundling the
-nullish-cast core, the B448 object-literal overlap, and the
-class-instance-to-sig-interface cast) and four emitters INLINE in the
-shared walkTypeAssertionsInExpr AsExpression arm behind the
-`inNullCastOverlapPass` flag (the AsExpression gotcha's double-fire
-guard). Both lift onto the EXISTING round-630 anchors: spineCoEnterNode
-now runs the null-cast callback after the two co leaves at
-TypeAssertionExpression enters (matching the post-slot-move legacy pass
-order) and gained an AsExpression anchor arm running the four flag
-emitters in the arm's order — the reach classifier (spineCoStatus/
-spineCoEdge) is REUSED verbatim (same shared walker, so identical
-reach), and deleting the flag from the walker leaves only the
-type-param sibling's `inTypeParamCastPass` inline arm there. Per-anchor
-interleave vs the legacy whole-file walk is order-IDENTICAL within a
-file (one walk, enters = pre-order). Same ambient sandwich
-(currentCheckFileName + nulled currentFlowGraph). The
-binderResults-vs-checkedResults caveat from the round-632 scoping was
-gated explicitly: `--partitionCheck 2` EQUIVALENT on ALL 8 profiles
-(the spine form walks the partition view where the legacy driver walked
-binderResults — equivalent because a partition worker's diagnostics are
-merged from exactly its assigned files either way). Gates: 15 local
-pins (M04NullCastSpineMigrationTest — the seven emitters' gates +
-shared-walker reach both directions: objlit-method/arrow/class-expr
-bodies fire, parameter DEFAULTS don't) green against the LEGACY pass
-first; suite 11,614 → 11,629/0; `--listAll` ×8 byte-identical;
-partitionCheck ×8 EQUIVALENT; pass table 428 → 427 (the row gone;
-checkSpine 19,511.6 ms — in-band); warning-clean. M0.4 running total:
-top ELEVEN tail passes migrated. NEXT: the #12-by-cost row
-(checkCrossFileModuleAugmentationDuplicates, 114 ms) is a CROSS-FILE
-aggregation pass (program-wide ownExports map over checkedResults +
-hub/related-info accumulation across files) — NOT per-file spine
-material; SKIP it in the M0.4 worklist. The next per-file candidates by
-cost: checkProtectedMemberReadAccess (~103 ms) and
-checkPropertyInitialization (~99 ms) — scope shape + consumers before
-the slot-move.**
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 (Restored 2026-07-12, round 481 — the queue/backlog/inventory sections had been
@@ -911,14 +899,21 @@ structural item instead of landing alone.**
   elevated ambient — and NO right-spine absorption, so deep chains prune
   at the 200 cap, pinned at the exact boundary; the orphaned checkDepth
   counter deleted from Checker + CheckerState);
+  checkTypeParameterDefaults 150 ms — **MIGRATED round 643** (the
+  SPLIT-PRODUCER variant + the first PARSE-RECORDED candidate set: a
+  pass whose side-set write cannot ride the spine — cross-file/
+  earlier-in-file display consumption — SPLITS: the TS2368/TS2744
+  emissions anchor at the ten TP-list-bearing construct kinds over a
+  binary reach classifier, and the pre-spine producer consumes
+  SourceFile.typeAliasesWithTpDefaults (recorded at the parse site,
+  moduleSpecifiers-style — no tree walk; 0.4 ms vs the legacy 150 ms
+  row) FILTERED through the SAME classifier — one frozen edge set
+  serves both halves, and a speculative-parse discard classifies
+  unreached via its detached parent chain. Producer-scan lesson: a
+  forEachChild worklist re-scan of the tree costs MORE than the legacy
+  walk it replaces (264 ms raw, 218 ms TypeNode-pruned) — parse-time
+  recording is the shape for future split producers);
   next per-file candidates by cost (round-642 table):
-  checkTypeParameterDefaults 150 ms — already a round-555 pre-spine
-  hoist (no slot-move to make); the VERIFIED producer scope map + split
-  treatment (keep the tiny circularDefaultTypeParamCount side-set
-  producer pre-spine, migrate the resolution-FREE TS2368/TS2744
-  emissions) is in the round-642 session note — the pass does NOT
-  materialize TypeParam fields (that is checkGenericDefaultsValidation's
-  checkTpListDefaults, a different pass); then
   checkExpandoFunctionNestedReads 99 ms, checkStrictModeIdentifiers
   96 ms, checkConstLiteralComparisons 95 ms, checkSuperInObjectLiterals
   91 ms (98 passes >20 ms carry 5.3 s of the 6.2 s). Migration protocol per

@@ -1,3 +1,73 @@
+**Round 634 (2026-07-21) — (M0.4) slot-move pre-gate for #12:
+checkProtectedMemberReadAccess (B446 — TS2445/TS2446 protected READ
+access, ~103 ms) moved intact to the post-spine slot; suite 11,629/0,
+listAll ×8 byte-identical.** No TS2445/TS2446 dedup scans exist
+(checkDivergentAccessorVisibility and B377 emit the codes but are
+GATE-disjoint — accessor pairs / free-function writes — and never scan
+the list); pmrInClassMethod/pmrLexicalClass are pass-local save/restore
+state; the hoist crosses ~116 passes (resolution first-touch is the
+gated risk class). Map for the migrator: driver iterates binderResults
+(→ add the `--partitionCheck 2` gate like round 633), skips dts AND
+js-like files; per file a topVars prepass (top-level class-typed vars,
+annotation OR `new C()`-inferred) feeds ONLY the top-level
+ExpressionStatement expression walks (state cleared:
+pmrInClassMethod=false, lexical=null); pmrScanContainer descends
+top-level FunctionDeclarations, var-initializer fn-exprs/arrows
+(Block-bodied only), class-member bodies (lexical=true), and namespace
+ModuleBlocks — NOT bare blocks/if-bodies at top level;
+pmrProcessFunctionLike computes thisClass (`this:` param via
+pmrResolveClass through TP constraints, else the lexical class) + a
+param-annotation varClasses map, save-set-restores the two pmr fields,
+then pmrWalkStmt/pmrWalkExpr thread (thisClass, enclosing, vars)
+DOWNWARD. OPEN QUESTION to settle before choosing the template variant:
+does pmrWalkStmt MUTATE `vars` in statement order (body-local
+`const a = new A()` registrations → the push-based order-dependent
+variant) or is the context pure-downward (→ the round-626 pull-based
+fold with per-boundary memo)?**
+
+**Round 633 (2026-07-21) — (M0.4) eleventh tail-pass migration:
+checkNullTypeAssertionOverlap (TS2352 null/objlit/class-instance cast
+overlap + the four AsExpression TS2352/TS1355 emitters, ~104 ms — the
+#11 tail pass) is ON THE SPINE; the legacy driver + the
+`inNullCastOverlapPass` flag + the flag-gated arm in the SHARED walker
+are deleted.** The FLAG-ARM-LIFT variant of the round-630 shared-walker
+template: the pass's emissions lived in two places — the
+TypeAssertion-callback (`emitTS2352IfNullCast`, bundling the
+nullish-cast core, the B448 object-literal overlap, and the
+class-instance-to-sig-interface cast) and four emitters INLINE in the
+shared walkTypeAssertionsInExpr AsExpression arm behind the
+`inNullCastOverlapPass` flag (the AsExpression gotcha's double-fire
+guard). Both lift onto the EXISTING round-630 anchors: spineCoEnterNode
+now runs the null-cast callback after the two co leaves at
+TypeAssertionExpression enters (matching the post-slot-move legacy pass
+order) and gained an AsExpression anchor arm running the four flag
+emitters in the arm's order — the reach classifier (spineCoStatus/
+spineCoEdge) is REUSED verbatim (same shared walker, so identical
+reach), and deleting the flag from the walker leaves only the
+type-param sibling's `inTypeParamCastPass` inline arm there. Per-anchor
+interleave vs the legacy whole-file walk is order-IDENTICAL within a
+file (one walk, enters = pre-order). Same ambient sandwich
+(currentCheckFileName + nulled currentFlowGraph). The
+binderResults-vs-checkedResults caveat from the round-632 scoping was
+gated explicitly: `--partitionCheck 2` EQUIVALENT on ALL 8 profiles
+(the spine form walks the partition view where the legacy driver walked
+binderResults — equivalent because a partition worker's diagnostics are
+merged from exactly its assigned files either way). Gates: 15 local
+pins (M04NullCastSpineMigrationTest — the seven emitters' gates +
+shared-walker reach both directions: objlit-method/arrow/class-expr
+bodies fire, parameter DEFAULTS don't) green against the LEGACY pass
+first; suite 11,614 → 11,629/0; `--listAll` ×8 byte-identical;
+partitionCheck ×8 EQUIVALENT; pass table 428 → 427 (the row gone;
+checkSpine 19,511.6 ms — in-band); warning-clean. M0.4 running total:
+top ELEVEN tail passes migrated. NEXT: the #12-by-cost row
+(checkCrossFileModuleAugmentationDuplicates, 114 ms) is a CROSS-FILE
+aggregation pass (program-wide ownExports map over checkedResults +
+hub/related-info accumulation across files) — NOT per-file spine
+material; SKIP it in the M0.4 worklist. The next per-file candidates by
+cost: checkProtectedMemberReadAccess (~103 ms) and
+checkPropertyInitialization (~99 ms) — scope shape + consumers before
+the slot-move.**
+
 **Round 632 (2026-07-21) — (M0.4) tenth tail-pass migration:
 checkConstEnumDiagnostics (the const-enum cluster TS2474/2475/2476/2477/
 2478/2567, ~123 ms — the #10 tail pass) is ON THE SPINE; the legacy driver
