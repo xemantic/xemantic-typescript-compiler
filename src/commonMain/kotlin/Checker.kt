@@ -5211,6 +5211,23 @@ class Checker(
         // rule). The only TS2564 list op elsewhere is
         // checkInKeywordTypeguard's whole-file wipe-and-pin, still after
         // this slot (emitters-before-wipe preserved).
+        // 64d4' (M0.4 slot-move pre-gate, round 636): checkGenericIndexWrite
+        // (TS2862 index-WRITE on a generic type-parameter receiver, the gIdx
+        // walker) moved intact from its pre-spine slot 64d4 ahead of its
+        // spine migration. Fully SYNTACTIC + self-contained (constrainedTpNames/
+        // bareTypeParamRefName/collectParamTpRefs/collectTpLocalsMap are pure
+        // AST reads — no type caches, no ambient); no TS2862 dedup/scan
+        // consumers exist (checkGenericRecordCastAccess emits the code but is
+        // gate-disjoint — Record-cast local receivers — and never scans the
+        // list). Scope for the migrator: a DOWNWARD-context recursion — the
+        // (tparams, tpProps, refs) triple REBUILDS at class/fn boundaries
+        // (constrainedTpNames + param refs) with a body-WIDE locals PREPASS
+        // (collectTpLocalsMap over the whole body before the scan — NOT
+        // statement-ordered, so pull-based levels reproduce it); anchors are
+        // `=` BinaryExpressions whose LHS is an ElementAccess (the round-626
+        // downward-map variant, likely with the round-628 per-boundary
+        // levels).
+        pass("checkGenericIndexWrite") { checkGenericIndexWrite() }
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -5924,8 +5941,8 @@ class Checker(
         pass("checkIncDecTypeParamOperands") { checkIncDecTypeParamOperands() }
         // 64d3b (B265). Mixin class-expression extending a type-param-typed value (TS2507/TS2545/TS2322)
         pass("checkMixinClassExtendsTypeParam") { checkMixinClassExtendsTypeParam() }
-        // 64d4. Check index-WRITE on a generic type-parameter receiver (TS2862)
-        pass("checkGenericIndexWrite") { checkGenericIndexWrite() }
+        // 64d4. checkGenericIndexWrite (TS2862) moved to the post-spine slot —
+        // see the pass("checkSpine") site (M0.4 slot-move pre-gate, round 636).
         // 72a4 (B167): TS2322 for `obj[x] = undefined` on a generic mapped-INTERSECTION alias
         pass("checkMappedIntersectionIndexWrite") { checkMappedIntersectionIndexWrite() }
         // 72a4b (B251): TS2551/TS2339 + TS2862 for writes on a `Record<keyof TP | "lit", V>`-cast local

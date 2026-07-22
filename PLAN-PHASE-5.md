@@ -66,12 +66,24 @@ driver iterated binderResults → the spine's partition view); pass table
 426 → 425 (the row gone; checkSpine 20.2–20.5 s single runs — box
 up-drift, the same-interleave whole-run walls are pre 29.70 s vs post
 29.81 s = 0.35%); warning-clean (--rerun-tasks, zero `w:`). M0.4 running
-total: top THIRTEEN tail passes migrated. NEXT per-file candidates by
-cost (post-636 table): checkGenericIndexWrite 117.3 ms,
-checkArgumentsCollision 116.8 ms, then checkEvolvingEmptyArrayImplicitAny
+total: top THIRTEEN tail passes migrated. SESSION TAIL: the
+checkGenericIndexWrite (#14, 117.3 ms — TS2862 index-WRITE on a generic
+type-parameter receiver, the gIdx walker) slot-move pre-gate LANDED
+(moved intact from its pre-spine slot 64d4 to the post-spine slot; suite
+11,701/0, listAll ×8 byte-identical). Scope map for the migrator: fully
+SYNTACTIC + self-contained (constrainedTpNames/bareTypeParamRefName/
+collectParamTpRefs/collectTpLocalsMap are pure AST reads — no type
+caches, no ambient); no TS2862 dedup/scan consumers
+(checkGenericRecordCastAccess emits the code but is gate-disjoint and
+never scans the list); a DOWNWARD-context recursion — the (tparams,
+tpProps, refs) triple REBUILDS at class/fn boundaries with a body-WIDE
+locals PREPASS (collectTpLocalsMap over the whole body before the scan,
+NOT statement-ordered → pull-based per-boundary levels reproduce it, the
+round-626/628 shape); anchors are `=` BinaryExpressions with an
+ElementAccess LHS. NEXT session starts at its migration; after it by
+cost: checkArgumentsCollision 116.8 ms, checkEvolvingEmptyArrayImplicitAny
 103.2 ms (checkCrossFileModuleAugmentationDuplicates 114.1 ms stays
-SKIPPED — cross-file aggregation) — scope shape + consumers before the
-slot-move.**
+SKIPPED — cross-file aggregation).**
 
 **Round 635 (2026-07-21) — (M0.4) twelfth tail-pass migration:
 checkProtectedMemberReadAccess (B446 — TS2445/TS2446 protected READ
