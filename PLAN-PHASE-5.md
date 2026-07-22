@@ -73,9 +73,28 @@ HEAD baseline; partitionCheck ×8 EQUIVALENT (46/46/46/46/46/46/46/94);
 pass table 419 → 419 (checkTypeParameterDefaults 150 ms →
 populateCircularTpDefaults 0.4 ms; checkSpine 19.9 s single-run —
 in-band); warning-clean (--rerun-tasks, zero `w:`). M0.4 running total:
-top TWENTY tail passes migrated. After #20 by cost:
-checkExpandoFunctionNestedReads 99 ms, checkStrictModeIdentifiers
-96 ms, checkConstLiteralComparisons 95 ms, checkSuperInObjectLiterals
+top TWENTY tail passes migrated. SESSION TAIL: the
+checkExpandoFunctionNestedReads (#21, 99 ms — TS2339 for an
+expando-function property read inside a NESTED function, B431)
+slot-move pre-gate LANDED (moved intact from the B431 slot to the
+post-spine slot; suite 11,948/0; listAll ×8 byte-identical vs the
+migrated baseline; the only diagnostics-list consumer between the
+slots, ctaPostFilters, touches TS2322/TS7030 and reads TS2304/TS2314 —
+TS2339 is invisible to it). Scope map for the migrator (verified
+against source): THREE per-file walks — (a) a TOP-LEVEL-only statement
+scan building funcNames/nameCount/merged (candidates = uniquely-named
+top-level fns not merged with any other decl kind); (b)
+collectExpandoDecls, the file-scope `Foo.prop =` write collector
+walking statements + expression positions (if/for/while/switch HEADS
+and case EXPRESSIONS included) but NEVER descending into
+function-likes; (c) visitExpandoStmt/-Expr, the read walk carrying TWO
+downward values — the inNestedFn flag (flips true inside fn-like
+bodies AND param defaults) and the ChainedNameSet shadow chain (param
+names + fn-body locals; a fn-expr's own name too) — likely the UY/SR
+status-carried-flag shape with per-boundary shadow levels (the
+round-628 downward-SETS rebuild). NEXT session starts at that
+migration; after it by cost: checkStrictModeIdentifiers 96 ms,
+checkConstLiteralComparisons 95 ms, checkSuperInObjectLiterals
 91 ms.**
 
 **Round 642 (2026-07-22) — (M0.4) nineteenth tail-pass migration:
@@ -914,7 +933,9 @@ structural item instead of landing alone.**
   walk it replaces (264 ms raw, 218 ms TypeNode-pruned) — parse-time
   recording is the shape for future split producers);
   next per-file candidates by cost (round-642 table):
-  checkExpandoFunctionNestedReads 99 ms, checkStrictModeIdentifiers
+  checkExpandoFunctionNestedReads 99 ms — slot-move pre-gate LANDED
+  round 643 (scope map in the round-643 session note; next session
+  starts at its migration), then checkStrictModeIdentifiers
   96 ms, checkConstLiteralComparisons 95 ms, checkSuperInObjectLiterals
   91 ms (98 passes >20 ms carry 5.3 s of the 6.2 s). Migration protocol per
   pass (the round-624 template): slot-move pre-gate commit (intact pass to the
