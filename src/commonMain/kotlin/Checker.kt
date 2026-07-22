@@ -3842,6 +3842,43 @@ class Checker(
     /** Reusable ascent buffer for [spineTdStatus]. */
     private val spineTdChain = ArrayList<Node>()
 
+    // ── (M0.4) round 644: checkExpandoFunctionNestedReads on the spine ─────
+    // The B431 TS2339 pass (an expando-function property read inside a
+    // NESTED function where the property was never declared by a file-scope
+    // `Foo.prop =` write) — the legacy driver + visitExpandoStmt/-Expr read
+    // walk + ChainedNameSet are deleted; the candidate scan + the write
+    // collector [collectExpandoDecls] survive as per-file SETUP leaves
+    // (the round-632 file-gated shape: the collector never descends
+    // function-likes, so its whole-file run at [spineExSetup] is bounded by
+    // top-level expression code, and the completed `declared` map lets the
+    // anchors emit INLINE — no buffering). Reach is the memoized 3-state
+    // classifier [spineExStatus] over [spineExFold] — EX_TOP/EX_NESTED are
+    // the SAME walk carrying the legacy inNestedFn boolean as the status
+    // (fn-decl/fn-expr/arrow param INITIALIZERS and bodies reset to
+    // EX_NESTED; everything else preserves). The shadow chain rebuilds
+    // pull-based per anchor ([spineExShadowed] — every fn-like ancestor of
+    // a reached anchor was entered through its walked interior, so each
+    // contributes its layer: params + top-level body var/fn/class names +
+    // a fn-expression's own name; anchors are rare — the candidate-receiver
+    // text pre-gate runs first). Frozen quirks: class/namespace/enum
+    // bodies, objlit METHODS/accessors/computed names, template spans,
+    // tagged templates, typeof/delete/void operands, for-in/of loop-head
+    // INITIALIZERS, catch variables, decorators, and class expressions are
+    // never walked; the collector additionally never reaches yield/await
+    // operands; a write via element access / compound assignment / a
+    // non-Identifier receiver is never collected. Anchors:
+    // PropertyAccessExpressions whose receiver Identifier is a candidate.
+    // Fully syntactic — no ambient sandwich. Fields PRE-init.
+    private var spineExActive = false
+    /** The current file's expando candidates (uniquely-named top-level fns). */
+    private var spineExCands: Set<String> = emptySet()
+    /** candidate → file-scope-declared property names (the collector's output). */
+    private var spineExDeclared: Map<String, HashSet<String>> = emptyMap()
+    /** Per-file nodeId memo for [spineExStatus] — 0 unknown, else EX_*. */
+    private var spineExReachMemo = ByteArray(0)
+    /** Reusable ascent buffer for [spineExStatus]. */
+    private val spineExChain = ArrayList<Node>()
+
     // ── INV.4(d) walker 6 (round 535): checkArgumentCounts on the spine ────
     // The function-call arity pass (TS2554/TS2555/TS2575) — the recursion
     // walkers (checkArgCountInStatements/-InStatement/-InExpr(Core)) are
@@ -5486,27 +5523,24 @@ class Checker(
         // binderResults driver → the spine's partition view, gated
         // `--partitionCheck 2` EQUIVALENT ×8. No pass scans or retracts
         // TS2364.
-        // B431' (M0.4 slot-move pre-gate, round 643):
-        // checkExpandoFunctionNestedReads (TS2339 for an expando-function
-        // property read inside a NESTED function where it was never
-        // declared at file scope) moved intact from the B431 slot ahead of
-        // its spine migration. Fully syntactic + self-contained (pure AST
-        // name sets — no type caches, no ambient, no side-set consults; the
-        // only diagnostics-list consumer between the slots, ctaPostFilters,
-        // touches TS2322/TS7030 and reads TS2304/TS2314 only — TS2339 is
-        // invisible to it). Scope map for the migrator: THREE per-file
-        // walks — (a) a TOP-LEVEL-only statement scan building
-        // funcNames/nameCount/merged (candidates = uniquely-named top-level
-        // fns not merged with any other decl kind); (b) collectExpandoDecls,
-        // the file-scope `Foo.prop =` write collector that walks statements
-        // + expression positions (if/for/while/switch HEADS and case
-        // EXPRESSIONS included) but NEVER descends into function-likes;
-        // (c) visitExpandoStmt/-Expr, the read walk carrying TWO downward
-        // values — the inNestedFn flag (flips true inside fn-like bodies
-        // AND param defaults) and the ChainedNameSet shadow chain (param
-        // names + fn-body var/fn declarations shadow candidates) — the
-        // emission fires only at inNestedFn PropertyAccess reads.
-        pass("checkExpandoFunctionNestedReads") { checkExpandoFunctionNestedReads() }
+        // B431'' (M0.4, round 644): checkExpandoFunctionNestedReads (TS2339
+        // for an expando-function property read inside a NESTED function
+        // where it was never declared at file scope) is ON THE SPINE —
+        // anchors at PropertyAccessExpressions with a candidate-receiver
+        // text pre-gate (spineExEnterNode), gated by the 3-state classifier
+        // spineExStatus carrying the legacy inNestedFn boolean AS the
+        // status (EX_TOP/EX_NESTED; fn-like param initializers + bodies
+        // reset to EX_NESTED); the TOP-LEVEL candidate scan + the
+        // collectExpandoDecls write collector run at per-file setup
+        // (spineExSetup — the collector never descends function-likes, so
+        // the anchors consult the COMPLETE declared map and emit inline);
+        // the ChainedNameSet shadow chain rebuilds pull-based per anchor
+        // (spineExShadowed). Frozen: class/namespace bodies, objlit
+        // METHODS, template spans, typeof operands, for-in/of loop-head
+        // INITIALIZERS never walked; element-access/compound-assignment/
+        // non-Identifier-receiver writes never collected. Fully syntactic —
+        // no ambient sandwich; the legacy binderResults driver → the
+        // spine's partition view, gated `--partitionCheck 2` EQUIVALENT ×8.
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -5627,8 +5661,7 @@ class Checker(
         // (TS2322) and `this.prop.<member>` (TS2339) are type-checked against T.
         pass("checkJsAmbientDeclaredClassProperties") { checkJsAmbientDeclaredClassProperties() }
         // B431: checkExpandoFunctionNestedReads (TS2339 expando nested reads)
-        // moved to the post-spine slot — see the pass("checkSpine") site
-        // (M0.4 slot-move pre-gate, round 643).
+        // rides the spine since round 644 — see spineExEnterNode.
         // B437: TS2345 for args passed to a JS function with a JSDoc primitive rest param
         // (`@param {...number} a`) — dedicated walker (the `.js` checkCallExpressionTypes
         // skip is load-bearing). JS-like files only.
@@ -21550,6 +21583,7 @@ class Checker(
                 spineSrSetup(result)
                 spineIaSetup(result)
                 spineTdSetup(result)
+                spineExSetup(result)
                 // (M0.4) round 636: property-init anchors — active in every
                 // non-dts file (the legacy driver's only file gate).
                 spinePiActive = spinePiRunActive && !spineIsDts
@@ -21591,6 +21625,7 @@ class Checker(
                     spineSrTeardown()
                     spineIaTeardown()
                     spineTdTeardown()
+                    spineExTeardown()
                     spinePiActive = false
                 }
                 spineResolveDeferredIterationChecks()
@@ -21839,6 +21874,12 @@ class Checker(
         // populateCircularTpDefaults; no frames/leave hook, no ambient
         // sandwich.
         if (spineTdActive) spineTdEnterNode(node)
+        // (M0.4) round 644: the expando-nested-read anchors
+        // (PropertyAccessExpressions with a candidate-receiver text
+        // pre-gate) — active only in files with expando candidates; the
+        // write collector ran at file setup, so anchors emit inline; no
+        // frames/leave hook, no ambient sandwich.
+        if (spineExActive) spineExEnterNode(node)
         // INV.4(d) walker 7: the use-before-declaration pass — the per-list
         // ForwardRefs anchor + loop-header self-ref checks.
         if (spineUbdActive) spineUbdEnterNode(node)
@@ -29439,45 +29480,251 @@ class Checker(
         }
     }
 
-    private fun checkExpandoFunctionNestedReads() {
-        for (result in binderResults) {
-            val sf = result.sourceFile
-            val fileName = sf.fileName
-            if (isDtsFile(fileName)) continue
-            val funcNames = HashSet<String>()
-            val nameCount = HashMap<String, Int>()
-            val merged = HashSet<String>()
-            for (stmt in sf.statements) {
-                when (stmt) {
-                    is FunctionDeclaration -> stmt.name?.text?.let {
-                        funcNames.add(it); nameCount[it] = (nameCount[it] ?: 0) + 1
-                    }
-                    is ModuleDeclaration -> (stmt.name as? Identifier)?.text?.let { merged.add(it) }
-                    is InterfaceDeclaration -> merged.add(stmt.name.text)
-                    is ClassDeclaration -> stmt.name?.text?.let { merged.add(it) }
-                    is EnumDeclaration -> merged.add(stmt.name.text)
-                    is TypeAliasDeclaration -> merged.add(stmt.name.text)
-                    is ImportEqualsDeclaration -> merged.add(stmt.name.text)
-                    is VariableStatement -> stmt.declarationList.declarations.forEach {
-                        (it.name as? Identifier)?.text?.let { n -> merged.add(n) }
-                    }
-                    else -> {}
+    // -----------------------------------------------------------------------
+    // (M0.4) round 644: checkExpandoFunctionNestedReads (B431 TS2339 expando
+    // nested reads) is ON THE SPINE — PropertyAccessExpression anchors gated
+    // by [spineExStatus]; the candidate scan + the write collector run as
+    // per-file setup ([spineExSetup]). The legacy driver + the
+    // visitExpandoStmt/-Expr read walk + ChainedNameSet are deleted.
+    // -----------------------------------------------------------------------
+
+    /** Per-file setup: the legacy driver's dts skip + TOP-LEVEL candidate
+     *  scan (uniquely-named top-level fns not merged with any other decl
+     *  kind) + the file-scope write collector [collectExpandoDecls] — run
+     *  BEFORE the walk so the anchors consult the COMPLETE `declared` map
+     *  (a write below a read still declares; the collector never descends
+     *  function-likes, so this whole-file leg is bounded by top-level
+     *  expression code). */
+    private fun spineExSetup(result: BinderResult) {
+        spineExActive = false
+        spineExCands = emptySet()
+        spineExDeclared = emptyMap()
+        spineExReachMemo = ByteArray(0)
+        if (spineIsDts) return
+        val sf = result.sourceFile
+        val funcNames = HashSet<String>()
+        val nameCount = HashMap<String, Int>()
+        val merged = HashSet<String>()
+        for (stmt in sf.statements) {
+            when (stmt) {
+                is FunctionDeclaration -> stmt.name?.text?.let {
+                    funcNames.add(it); nameCount[it] = (nameCount[it] ?: 0) + 1
                 }
-            }
-            if (funcNames.isEmpty()) continue
-            val candidates = funcNames.filterTo(HashSet()) { it !in merged && (nameCount[it] ?: 0) == 1 }
-            if (candidates.isEmpty()) continue
-            val declared = HashMap<String, HashSet<String>>()
-            candidates.forEach { declared[it] = HashSet() }
-            for (stmt in sf.statements) collectExpandoDecls(stmt, candidates, declared)
-            val source = sf.text
-            for (stmt in sf.statements) {
-                visitExpandoStmt(stmt, false, candidates, declared, ChainedNameSet.EMPTY, source, fileName)
+                is ModuleDeclaration -> (stmt.name as? Identifier)?.text?.let { merged.add(it) }
+                is InterfaceDeclaration -> merged.add(stmt.name.text)
+                is ClassDeclaration -> stmt.name?.text?.let { merged.add(it) }
+                is EnumDeclaration -> merged.add(stmt.name.text)
+                is TypeAliasDeclaration -> merged.add(stmt.name.text)
+                is ImportEqualsDeclaration -> merged.add(stmt.name.text)
+                is VariableStatement -> stmt.declarationList.declarations.forEach {
+                    (it.name as? Identifier)?.text?.let { n -> merged.add(n) }
+                }
+                else -> {}
             }
         }
+        if (funcNames.isEmpty()) return
+        val candidates = funcNames.filterTo(HashSet()) { it !in merged && (nameCount[it] ?: 0) == 1 }
+        if (candidates.isEmpty()) return
+        val declared = HashMap<String, HashSet<String>>()
+        candidates.forEach { declared[it] = HashSet() }
+        for (stmt in sf.statements) collectExpandoDecls(stmt, candidates, declared)
+        spineExActive = true
+        spineExCands = candidates
+        spineExDeclared = declared
+        spineExReachMemo = if (sf.nodeCount > 0) ByteArray(sf.nodeCount) else ByteArray(0)
     }
 
-    /** Pass 1: collect file-scope `Foo.prop =` writes (NOT descending into function-likes). */
+    private fun spineExTeardown() {
+        spineExActive = false
+        spineExCands = emptySet()
+        spineExDeclared = emptyMap()
+        spineExReachMemo = ByteArray(0)
+    }
+
+    /** ENTER dispatch: PropertyAccessExpression anchors. The RARE
+     *  candidate-receiver text pre-gate runs before the reach climb; the
+     *  shadow chain recomputes per anchor (memo-free — the round-625
+     *  rare-anchor rule). */
+    private fun spineExEnterNode(node: Node) {
+        if ((node as NodeBase).kindId != NodeKind.PROPERTY_ACCESS_EXPRESSION) return
+        node as PropertyAccessExpression
+        val recv = node.expression as? Identifier ?: return
+        val name = recv.text
+        if (name !in spineExCands) return
+        val prop = node.name.text
+        if (prop in (spineExDeclared[name] ?: emptySet<String>())) return
+        if (prop in RUNTIME_PROPERTIES) return
+        val pos = node.name.pos
+        if (pos < 0) return
+        if (spineExStatus(node) != EX_NESTED) return
+        if (spineExShadowed(node, name)) return
+        val (line, character) = getLineAndCharacterOfPosition(spineSource, pos)
+        diagnostics.add(Diagnostic(
+            message = "Property '$prop' does not exist on type 'typeof $name'.",
+            category = DiagnosticCategory.Error, code = 2339,
+            fileName = spineFileName, line = line, character = character,
+            start = pos, length = prop.length,
+        ))
+    }
+
+    /** The legacy ChainedNameSet reproduced pull-based: every fn-like
+     *  ancestor of a REACHED anchor was entered through its walked interior
+     *  (a param initializer or the body — the only walked edges out of a
+     *  fn-like), so each contributes its shadow layer. */
+    private fun spineExShadowed(node: Node, name: String): Boolean {
+        var cur: Node? = (node as NodeBase).parent
+        while (cur != null && cur !is SourceFile) {
+            when (cur) {
+                is FunctionDeclaration -> if (spineExFnShadows(name, cur.parameters, cur.body)) return true
+                is FunctionExpression -> if (cur.name?.text == name ||
+                    spineExFnShadows(name, cur.parameters, cur.body)) return true
+                is ArrowFunction -> if (spineExFnShadows(name, cur.parameters, cur.body)) return true
+                else -> {}
+            }
+            cur = (cur as NodeBase).parent
+        }
+        return false
+    }
+
+    /** The deleted collectExpandoFnLocals as an allocation-free membership
+     *  test: param names + TOP-LEVEL body var/fn/class declaration names
+     *  (a nested-block local never shadows — frozen). */
+    private fun spineExFnShadows(name: String, params: List<Parameter>, body: Node?): Boolean {
+        for (p in params) if ((p.name as? Identifier)?.text == name) return true
+        val stmts = (body as? Block)?.statements ?: return false
+        for (st in stmts) when (st) {
+            is VariableStatement -> for (d in st.declarationList.declarations)
+                if ((d.name as? Identifier)?.text == name) return true
+            is FunctionDeclaration -> if (st.name?.text == name) return true
+            is ClassDeclaration -> if (st.name?.text == name) return true
+            else -> {}
+        }
+        return false
+    }
+
+    /** Memoized reach classifier — ascends to the first memoized/terminal
+     *  ancestor, then folds [spineExFold] back down (the spineSrStatus
+     *  pattern). The SourceFile anchor carries the transient EX_ROOT status
+     *  (never memoized) whose sole edge is `child is Statement` → EX_TOP. */
+    private fun spineExStatus(node: Node): Int {
+        if (node is SourceFile) return EX_ROOT
+        val memo = spineExReachMemo
+        run {
+            val id = (node as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) {
+                val m = memo[id].toInt()
+                if (m != 0) return m
+            }
+        }
+        val chain = spineExChain
+        chain.clear()
+        var cur: Node = node
+        val anchor: Node?
+        var anchorStatus = EX_NONE
+        while (true) {
+            chain.add(cur)
+            val parent = (cur as NodeBase).parent
+            if (parent == null) { anchor = null; break } // detached/unindexed
+            if (parent is SourceFile) { anchor = parent; anchorStatus = EX_ROOT; break }
+            val pid = (parent as NodeBase).nodeId
+            val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
+            if (pm != 0) { anchor = parent; anchorStatus = pm; break }
+            cur = parent
+        }
+        var pNode: Node? = anchor
+        var pStatus = anchorStatus
+        var result = EX_NONE
+        for (i in chain.indices.reversed()) {
+            val c = chain[i]
+            result = when {
+                pNode == null -> EX_NONE
+                pStatus == EX_ROOT -> if (c is Statement) EX_TOP else EX_NONE
+                else -> spineExFold(pNode, pStatus, c)
+            }
+            val cid = (c as NodeBase).nodeId
+            if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
+            pNode = c
+            pStatus = result
+        }
+        chain.clear()
+        return result
+    }
+
+    /** The deleted visitExpandoStmt/-Expr arms, verbatim, as (parent,
+     *  parent-status) → child-status transitions — EX_TOP/EX_NESTED are the
+     *  SAME walk carrying the inNestedFn boolean as the status; fn-like
+     *  param INITIALIZERS and bodies reset to EX_NESTED, everything else
+     *  preserves. Unlisted (parent, status) pairs are the legacy
+     *  `else -> {}`s: class/namespace/enum bodies, objlit METHODS/
+     *  accessors/shorthand/computed names, template spans, tagged
+     *  templates, typeof/delete/void operands, for-in/of loop-head
+     *  INITIALIZERS, catch variables, decorators, class expressions, and
+     *  every type position. */
+    private fun spineExFold(pNode: Node, pStatus: Int, child: Node): Int = when (pStatus) {
+        EX_TOP, EX_NESTED -> when (pNode) {
+            // ---- visitExpandoStmt arms ----
+            is ExpressionStatement -> if (child === pNode.expression) pStatus else EX_NONE
+            is ReturnStatement -> if (child === pNode.expression) pStatus else EX_NONE
+            is ThrowStatement -> if (child === pNode.expression) pStatus else EX_NONE
+            is VariableStatement -> if (child === pNode.declarationList) pStatus else EX_NONE
+            is VariableDeclarationList -> if (child is VariableDeclaration) pStatus else EX_NONE
+            is VariableDeclaration -> if (child === pNode.initializer) pStatus else EX_NONE
+            is IfStatement -> if (child === pNode.expression || child === pNode.thenStatement ||
+                child === pNode.elseStatement) pStatus else EX_NONE
+            is Block -> if (child is Statement) pStatus else EX_NONE
+            // The for-INITIALIZER is walked BOTH as a bare expression and as
+            // a declaration list (whose declarations walk initializers).
+            is ForStatement -> if (child === pNode.initializer || child === pNode.condition ||
+                child === pNode.incrementor || child === pNode.statement) pStatus else EX_NONE
+            is ForInStatement -> if (child === pNode.expression || child === pNode.statement) pStatus else EX_NONE
+            is ForOfStatement -> if (child === pNode.expression || child === pNode.statement) pStatus else EX_NONE
+            is WhileStatement -> if (child === pNode.expression || child === pNode.statement) pStatus else EX_NONE
+            is DoStatement -> if (child === pNode.expression || child === pNode.statement) pStatus else EX_NONE
+            is SwitchStatement -> if (child === pNode.expression || child is CaseClause ||
+                child is DefaultClause) pStatus else EX_NONE
+            is CaseClause -> if (child === pNode.expression || child is Statement) pStatus else EX_NONE
+            is DefaultClause -> if (child is Statement) pStatus else EX_NONE
+            is TryStatement -> if (child === pNode.tryBlock || child === pNode.finallyBlock ||
+                child is CatchClause) pStatus else EX_NONE
+            is CatchClause -> if (child === pNode.block) pStatus else EX_NONE
+            is LabeledStatement -> if (child === pNode.statement) pStatus else EX_NONE
+            is FunctionDeclaration -> if (child is Parameter || child === pNode.body) EX_NESTED else EX_NONE
+            // ---- visitExpandoExpr arms ----
+            is Parameter -> if (child === pNode.initializer) pStatus else EX_NONE
+            is PropertyAccessExpression -> if (child === pNode.expression) pStatus else EX_NONE
+            is ElementAccessExpression -> if (child === pNode.expression ||
+                child === pNode.argumentExpression) pStatus else EX_NONE
+            is BinaryExpression -> if (child === pNode.left || child === pNode.right) pStatus else EX_NONE
+            is ParenthesizedExpression -> if (child === pNode.expression) pStatus else EX_NONE
+            is CallExpression -> if (child === pNode.expression ||
+                pNode.arguments.any { it === child }) pStatus else EX_NONE
+            is NewExpression -> if (child === pNode.expression ||
+                pNode.arguments?.any { it === child } == true) pStatus else EX_NONE
+            is ConditionalExpression -> if (child === pNode.condition || child === pNode.whenTrue ||
+                child === pNode.whenFalse) pStatus else EX_NONE
+            is PrefixUnaryExpression -> if (child === pNode.operand) pStatus else EX_NONE
+            is PostfixUnaryExpression -> if (child === pNode.operand) pStatus else EX_NONE
+            is ArrayLiteralExpression -> if (pNode.elements.any { it === child }) pStatus else EX_NONE
+            is ObjectLiteralExpression -> if (child is PropertyAssignment ||
+                child is SpreadAssignment) pStatus else EX_NONE
+            is PropertyAssignment -> if (child === pNode.initializer) pStatus else EX_NONE
+            is SpreadAssignment -> if (child === pNode.expression) pStatus else EX_NONE
+            is SpreadElement -> if (child === pNode.expression) pStatus else EX_NONE
+            is AsExpression -> if (child === pNode.expression) pStatus else EX_NONE
+            is TypeAssertionExpression -> if (child === pNode.expression) pStatus else EX_NONE
+            is NonNullExpression -> if (child === pNode.expression) pStatus else EX_NONE
+            is SatisfiesExpression -> if (child === pNode.expression) pStatus else EX_NONE
+            is YieldExpression -> if (child === pNode.expression) pStatus else EX_NONE
+            is AwaitExpression -> if (child === pNode.expression) pStatus else EX_NONE
+            is FunctionExpression -> if (child is Parameter || child === pNode.body) EX_NESTED else EX_NONE
+            is ArrowFunction -> if (child is Parameter || child === pNode.body) EX_NESTED else EX_NONE
+            else -> EX_NONE
+        }
+        else -> EX_NONE
+    }
+
+    /** The expando write collector ([spineExSetup]-called): file-scope
+     *  `Foo.prop =` writes, NOT descending into function-likes. */
     private fun collectExpandoDecls(s: Statement?, cands: Set<String>, declared: MutableMap<String, HashSet<String>>) {
         when (s) {
             null -> {}
@@ -29552,141 +29799,6 @@ class Checker(
             is TypeAssertionExpression -> collectExpandoDeclsExpr(e.expression, cands, declared)
             is NonNullExpression -> collectExpandoDeclsExpr(e.expression, cands, declared)
             is SatisfiesExpression -> collectExpandoDeclsExpr(e.expression, cands, declared)
-            else -> {}
-        }
-    }
-
-    /** Collect parameter + top-level-body local names that would shadow a candidate inside a function-like. */
-    private fun collectExpandoFnLocals(params: List<Parameter>, body: Node?): MutableSet<String> {
-        val s = HashSet<String>()
-        for (p in params) (p.name as? Identifier)?.text?.let { s.add(it) }
-        val stmts = (body as? Block)?.statements ?: return s
-        for (st in stmts) when (st) {
-            is VariableStatement -> st.declarationList.declarations.forEach { (it.name as? Identifier)?.text?.let { n -> s.add(n) } }
-            is FunctionDeclaration -> st.name?.text?.let { s.add(it) }
-            is ClassDeclaration -> st.name?.text?.let { s.add(it) }
-            else -> {}
-        }
-        return s
-    }
-
-    /**
-     * Read-only parent-chain name set for the expando (TS2339) walker's `shadowed`
-     * set. The base is empty and each nested function contributes only its own locals,
-     * so [child] links a new layer WITHOUT copying the accumulated ancestors (round
-     * 487 — the former `HashSet(parent)` copies were the walker's whole set-allocation
-     * cost, ~1% of compiler-profile samples). Membership walks the chain; the walker
-     * consults it only for a property access whose receiver is a top-level expando
-     * candidate (rare), so the walk cost is negligible while the per-nested-function
-     * copy is eliminated entirely.
-     */
-    private class ChainedNameSet private constructor(
-        private val own: Set<String>,
-        private val parent: ChainedNameSet?,
-    ) {
-        operator fun contains(name: String): Boolean {
-            var c: ChainedNameSet? = this
-            while (c != null) { if (name in c.own) return true; c = c.parent }
-            return false
-        }
-        fun child(own: Set<String>): ChainedNameSet = ChainedNameSet(own, this)
-        companion object { val EMPTY = ChainedNameSet(emptySet(), null) }
-    }
-
-    /** Pass 2: emit TS2339 for nested-function accesses of undeclared expando props. */
-    private fun visitExpandoStmt(s: Statement?, inNestedFn: Boolean, cands: Set<String>, declared: Map<String, HashSet<String>>, shadowed: ChainedNameSet, source: String, fileName: String) {
-        when (s) {
-            null -> {}
-            is ExpressionStatement -> visitExpandoExpr(s.expression, inNestedFn, cands, declared, shadowed, source, fileName)
-            is ReturnStatement -> visitExpandoExpr(s.expression, inNestedFn, cands, declared, shadowed, source, fileName)
-            is ThrowStatement -> visitExpandoExpr(s.expression, inNestedFn, cands, declared, shadowed, source, fileName)
-            is VariableStatement -> s.declarationList.declarations.forEach { visitExpandoExpr(it.initializer, inNestedFn, cands, declared, shadowed, source, fileName) }
-            is IfStatement -> { visitExpandoExpr(s.expression, inNestedFn, cands, declared, shadowed, source, fileName); visitExpandoStmt(s.thenStatement, inNestedFn, cands, declared, shadowed, source, fileName); visitExpandoStmt(s.elseStatement, inNestedFn, cands, declared, shadowed, source, fileName) }
-            is Block -> s.statements.forEach { visitExpandoStmt(it, inNestedFn, cands, declared, shadowed, source, fileName) }
-            is ForStatement -> {
-                s.initializer?.let { if (it is Expression) visitExpandoExpr(it, inNestedFn, cands, declared, shadowed, source, fileName) else if (it is VariableDeclarationList) it.declarations.forEach { d -> visitExpandoExpr(d.initializer, inNestedFn, cands, declared, shadowed, source, fileName) } }
-                visitExpandoExpr(s.condition, inNestedFn, cands, declared, shadowed, source, fileName); visitExpandoExpr(s.incrementor, inNestedFn, cands, declared, shadowed, source, fileName); visitExpandoStmt(s.statement, inNestedFn, cands, declared, shadowed, source, fileName)
-            }
-            is ForInStatement -> { visitExpandoExpr(s.expression, inNestedFn, cands, declared, shadowed, source, fileName); visitExpandoStmt(s.statement, inNestedFn, cands, declared, shadowed, source, fileName) }
-            is ForOfStatement -> { visitExpandoExpr(s.expression, inNestedFn, cands, declared, shadowed, source, fileName); visitExpandoStmt(s.statement, inNestedFn, cands, declared, shadowed, source, fileName) }
-            is WhileStatement -> { visitExpandoExpr(s.expression, inNestedFn, cands, declared, shadowed, source, fileName); visitExpandoStmt(s.statement, inNestedFn, cands, declared, shadowed, source, fileName) }
-            is DoStatement -> { visitExpandoExpr(s.expression, inNestedFn, cands, declared, shadowed, source, fileName); visitExpandoStmt(s.statement, inNestedFn, cands, declared, shadowed, source, fileName) }
-            is SwitchStatement -> {
-                visitExpandoExpr(s.expression, inNestedFn, cands, declared, shadowed, source, fileName)
-                for (c in s.caseBlock) when (c) {
-                    is CaseClause -> { visitExpandoExpr(c.expression, inNestedFn, cands, declared, shadowed, source, fileName); c.statements.forEach { visitExpandoStmt(it, inNestedFn, cands, declared, shadowed, source, fileName) } }
-                    is DefaultClause -> c.statements.forEach { visitExpandoStmt(it, inNestedFn, cands, declared, shadowed, source, fileName) }
-                    else -> {}
-                }
-            }
-            is TryStatement -> {
-                s.tryBlock.statements.forEach { visitExpandoStmt(it, inNestedFn, cands, declared, shadowed, source, fileName) }
-                s.catchClause?.block?.statements?.forEach { visitExpandoStmt(it, inNestedFn, cands, declared, shadowed, source, fileName) }
-                s.finallyBlock?.statements?.forEach { visitExpandoStmt(it, inNestedFn, cands, declared, shadowed, source, fileName) }
-            }
-            is LabeledStatement -> visitExpandoStmt(s.statement, inNestedFn, cands, declared, shadowed, source, fileName)
-            is FunctionDeclaration -> {
-                val inner = shadowed.child(collectExpandoFnLocals(s.parameters, s.body))
-                s.parameters.forEach { visitExpandoExpr(it.initializer, true, cands, declared, inner, source, fileName) }
-                s.body?.statements?.forEach { visitExpandoStmt(it, true, cands, declared, inner, source, fileName) }
-            }
-            else -> {}
-        }
-    }
-
-    private fun visitExpandoExpr(e: Expression?, inNestedFn: Boolean, cands: Set<String>, declared: Map<String, HashSet<String>>, shadowed: ChainedNameSet, source: String, fileName: String) {
-        when (e) {
-            null -> {}
-            is PropertyAccessExpression -> {
-                val recv = e.expression as? Identifier
-                if (inNestedFn && recv != null && recv.text in cands && recv.text !in shadowed) {
-                    val prop = e.name.text
-                    if (prop !in (declared[recv.text] ?: emptySet()) && prop !in RUNTIME_PROPERTIES) {
-                        val pos = e.name.pos
-                        if (pos >= 0) {
-                            val (line, character) = getLineAndCharacterOfPosition(source, pos)
-                            diagnostics.add(Diagnostic(
-                                message = "Property '$prop' does not exist on type 'typeof ${recv.text}'.",
-                                category = DiagnosticCategory.Error, code = 2339,
-                                fileName = fileName, line = line, character = character,
-                                start = pos, length = prop.length,
-                            ))
-                        }
-                    }
-                }
-                visitExpandoExpr(e.expression, inNestedFn, cands, declared, shadowed, source, fileName)
-            }
-            is ElementAccessExpression -> { visitExpandoExpr(e.expression, inNestedFn, cands, declared, shadowed, source, fileName); visitExpandoExpr(e.argumentExpression, inNestedFn, cands, declared, shadowed, source, fileName) }
-            is BinaryExpression -> { visitExpandoExpr(e.left, inNestedFn, cands, declared, shadowed, source, fileName); visitExpandoExpr(e.right, inNestedFn, cands, declared, shadowed, source, fileName) }
-            is ParenthesizedExpression -> visitExpandoExpr(e.expression, inNestedFn, cands, declared, shadowed, source, fileName)
-            is CallExpression -> { visitExpandoExpr(e.expression, inNestedFn, cands, declared, shadowed, source, fileName); e.arguments.forEach { visitExpandoExpr(it, inNestedFn, cands, declared, shadowed, source, fileName) } }
-            is NewExpression -> { visitExpandoExpr(e.expression, inNestedFn, cands, declared, shadowed, source, fileName); e.arguments?.forEach { visitExpandoExpr(it, inNestedFn, cands, declared, shadowed, source, fileName) } }
-            is ConditionalExpression -> { visitExpandoExpr(e.condition, inNestedFn, cands, declared, shadowed, source, fileName); visitExpandoExpr(e.whenTrue, inNestedFn, cands, declared, shadowed, source, fileName); visitExpandoExpr(e.whenFalse, inNestedFn, cands, declared, shadowed, source, fileName) }
-            is PrefixUnaryExpression -> visitExpandoExpr(e.operand, inNestedFn, cands, declared, shadowed, source, fileName)
-            is PostfixUnaryExpression -> visitExpandoExpr(e.operand, inNestedFn, cands, declared, shadowed, source, fileName)
-            is ArrayLiteralExpression -> e.elements.forEach { visitExpandoExpr(it, inNestedFn, cands, declared, shadowed, source, fileName) }
-            is ObjectLiteralExpression -> e.properties.forEach { p -> when (p) { is PropertyAssignment -> visitExpandoExpr(p.initializer, inNestedFn, cands, declared, shadowed, source, fileName); is SpreadAssignment -> visitExpandoExpr(p.expression, inNestedFn, cands, declared, shadowed, source, fileName); else -> {} } }
-            is SpreadElement -> visitExpandoExpr(e.expression, inNestedFn, cands, declared, shadowed, source, fileName)
-            is AsExpression -> visitExpandoExpr(e.expression, inNestedFn, cands, declared, shadowed, source, fileName)
-            is TypeAssertionExpression -> visitExpandoExpr(e.expression, inNestedFn, cands, declared, shadowed, source, fileName)
-            is NonNullExpression -> visitExpandoExpr(e.expression, inNestedFn, cands, declared, shadowed, source, fileName)
-            is SatisfiesExpression -> visitExpandoExpr(e.expression, inNestedFn, cands, declared, shadowed, source, fileName)
-            is YieldExpression -> visitExpandoExpr(e.expression, inNestedFn, cands, declared, shadowed, source, fileName)
-            is AwaitExpression -> visitExpandoExpr(e.expression, inNestedFn, cands, declared, shadowed, source, fileName)
-            is FunctionExpression -> {
-                val inner = shadowed.child(collectExpandoFnLocals(e.parameters, e.body).also { own -> e.name?.text?.let { own.add(it) } })
-                e.parameters.forEach { visitExpandoExpr(it.initializer, true, cands, declared, inner, source, fileName) }
-                e.body.statements.forEach { visitExpandoStmt(it, true, cands, declared, inner, source, fileName) }
-            }
-            is ArrowFunction -> {
-                val inner = shadowed.child(collectExpandoFnLocals(e.parameters, e.body))
-                e.parameters.forEach { visitExpandoExpr(it.initializer, true, cands, declared, inner, source, fileName) }
-                when (val b = e.body) {
-                    is Block -> b.statements.forEach { visitExpandoStmt(it, true, cands, declared, inner, source, fileName) }
-                    is Expression -> visitExpandoExpr(b, true, cands, declared, inner, source, fileName)
-                    else -> {}
-                }
-            }
             else -> {}
         }
     }
@@ -47936,6 +48048,17 @@ class Checker(
         private const val TD_REACHED = 1
         private const val TD_NONE = 2
         private const val TD_ROOT = 3
+
+        // (M0.4) round 644: spineExStatus states
+        // (checkExpandoFunctionNestedReads reach — the legacy inNestedFn
+        // boolean carried AS the status + the transient SourceFile root).
+        // EX_TOP = a read-walk position at file scope (anchors silent);
+        // EX_NESTED = a read-walk position inside a fn-like body or param
+        // default (anchors fire).
+        private const val EX_NONE = 1
+        private const val EX_ROOT = 2
+        private const val EX_TOP = 3
+        private const val EX_NESTED = 4
 
         // (M0.4) round 631: spineB94Status states (checkBindingPatternComputedIndexSig
         // reach — binary + the transient SourceFile root).
