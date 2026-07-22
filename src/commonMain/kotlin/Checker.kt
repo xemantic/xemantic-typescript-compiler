@@ -5595,6 +5595,29 @@ class Checker(
         // corpus-unique TS1100 wipe — dispatches long after the spine; the
         // 12→12b relative order (TS1210-owns-class-bodies) is preserved
         // (the spine slot precedes 12b).
+        // B98.r101' (M0.4 slot-move pre-gate, round 645):
+        // checkConstLiteralComparisons (TS2367 for a `const`-literal
+        // compared to a DIFFERENT literal) moved intact from its early slot
+        // (after checkDtsImportEqualsAliasResolved) ahead of its spine
+        // migration. Fully syntactic + self-contained (the walk reads
+        // options + AST + the file source only — the currentFileLocals
+        // consult nearby belongs to the arithmetic pass's separate TS2367
+        // emitter); no pass scans/dedups TS2367 from the diagnostics list,
+        // and the wipe-and-pin walkers (checkOperationsAvailableOnPromisedType,
+        // checkStyledComponentsInstantiationLimit) dispatch after BOTH
+        // slots. Scope map for the migrator: a per-statement-LIST walker
+        // with a downward const-literal MAP — walkConstLitStatements does a
+        // whole-list SHADOW prepass (any VariableStatement decl name
+        // REMOVES an inherited entry — order-independent, a pure function
+        // of the list) then walks statements; ONLY the ForStatement arm
+        // ADDS entries (for-INIT `const x = <bare literal>`, no annotation,
+        // scoped to cond/incr/body — block consts deliberately never
+        // track); fn-decl/fn-expr/arrow boundaries REMOVE param names from
+        // a copied map. The map is a pure function of the ancestor
+        // list-owner chain → the round-637 pull-based per-boundary-memo
+        // shape. Anchors: ==/===/!=/!== binaries (the walk's left-spine
+        // iteration dissolves into plain edges).
+        pass("checkConstLiteralComparisons") { checkConstLiteralComparisons() }
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -5763,8 +5786,9 @@ class Checker(
         // (INV.4(c)(iii) batch 2, spineUResDispatch) — checkUnresolvedNames
         // remains only as the declarationOnly-mode driver.
         pass("checkDtsImportEqualsAliasResolved") { checkDtsImportEqualsAliasResolved() }
-        // B98.r101: TS2367 for a const-literal compared to a different literal.
-        pass("checkConstLiteralComparisons") { checkConstLiteralComparisons() }
+        // B98.r101: checkConstLiteralComparisons (TS2367 const-literal vs
+        // different-literal comparisons) moved to the post-spine slot — see
+        // the pass("checkSpine") site (M0.4 slot-move pre-gate, round 645).
         // 9. Check JSX elements for missing type definitions (TS7026)
         // TS7026 is an implicit-any diagnostic, so only fire when noImplicitAny/strict is on.
         // With @strict: false or @noImplicitAny: false, implicit any is allowed → no TS7026.
