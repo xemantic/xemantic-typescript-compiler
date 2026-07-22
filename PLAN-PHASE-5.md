@@ -20,6 +20,59 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 636 (2026-07-22) — (M0.4) thirteenth tail-pass migration:
+checkPropertyInitialization (TS2564 strict-property-initialization,
+~99 ms — the #13 per-file tail pass) is ON THE SPINE; the normal-mode
+pass dispatch is deleted, the recursion walkers SURVIVE for the B439
+declarationOnly direct dispatch (the round-630 shared-walker rule:
+spinePiEdge mirrors their arms and must stay IN SYNC — pointer KDoc on
+both sides).** The MULTIPLICITY variant (new template move): the legacy
+ClassDeclaration statement arm walks method/ctor/accessor member bodies
+TWICE — once via checkClassPropertyInit's own nested recursion, once via
+the arm's member loop — so a class nested in such a body has its TS2564s
+emitted 2^depth times (the duplicates reach the output; no dedup exists
+for fileName-carrying diagnostics — pinned ×2 and ×4), while
+ClassExpression member bodies, static-block bodies, and property
+initializers are single-walked. Reproduced as an INT-valued reach
+classifier that returns a VISIT COUNT: spinePiMult is a bottom-up
+ancestor climb multiplying per-edge factors {0, 1, 2} — every factor is
+LOCAL to one parent→child edge, so no multi-state fold is needed; the
+one context-dependent case (an arrow/fn-EXPRESSION body Block walks only
+its DIRECT ExpressionStatement/ReturnStatement/VariableStatement
+children) resolves by peeking at the Block's parent. Anchors
+(ClassDeclaration/ClassExpression enters) repeat the split-out
+checkClassPropertyInitEmit that many times; the legacy checkClassPropertyInit
+= emit + nested recursion, byte-identical for the declarationOnly path.
+No frames, no memo (anchors rare — the round-625 rule), no ambient
+sandwich (the emission is syntactic — typeIncludesUndefined's Node
+overload is a pure union scan, NOT type-resolving as the round-635 scope
+map guessed — plus the pure getTypeParamInfo/resolveAlias memos only).
+Pin surprise: the expression walker's Abstract-ClassExpression gate is
+UNREACHABLE via parse (parseClassExpression never sets modifiers;
+`= abstract class C {}` error-recovers `abstract` as an identifier with
+the class re-parsed as a STATEMENT-level ClassDeclaration) — the gate is
+kept frozen, the recovery shape pinned instead. Gates: 33 local pins
+(M04PropertyInitSpineMigrationTest — the emitter's gates incl.
+ctor-param properties / literal computed names / option gates, the reach
+battery both directions (if/ternary conditions, for-in heads, enum
+members, param defaults, nested arrow blocks unreached; namespace/
+fn-body/switch/try/catch/template-span/objlit positions reached), and
+the multiplicity pins: method-body ×2, two-level ×4, static-block ×1,
+class-expr-body ×1, prop-initializer ×1) green against the LEGACY pass
+first; suite 11,668 → 11,701/0; `--listAll` ×8 byte-identical (only the
+wall-time header differs — zero TS2564 on all 8 profiles, so the gate
+pins pure non-perturbation); partitionCheck ×8 EQUIVALENT (the legacy
+driver iterated binderResults → the spine's partition view); pass table
+426 → 425 (the row gone; checkSpine 20.2–20.5 s single runs — box
+up-drift, the same-interleave whole-run walls are pre 29.70 s vs post
+29.81 s = 0.35%); warning-clean (--rerun-tasks, zero `w:`). M0.4 running
+total: top THIRTEEN tail passes migrated. NEXT per-file candidates by
+cost (post-636 table): checkGenericIndexWrite 117.3 ms,
+checkArgumentsCollision 116.8 ms, then checkEvolvingEmptyArrayImplicitAny
+103.2 ms (checkCrossFileModuleAugmentationDuplicates 114.1 ms stays
+SKIPPED — cross-file aggregation) — scope shape + consumers before the
+slot-move.**
+
 **Round 635 (2026-07-21) — (M0.4) twelfth tail-pass migration:
 checkProtectedMemberReadAccess (B446 — TS2445/TS2446 protected READ
 access + the class-method WRITE check, ~103 ms — the #12 per-file tail
@@ -510,59 +563,6 @@ pull fold with per-boundary memo); anchors are the TS2469 binary/unary
 `+` operands and TS2731 template-span expressions. Next after:
 checkDefiniteAssignmentViaFlowGraph (105 ms).**
 
-**Round 626 (2026-07-21) — (M0.4) fourth tail-pass migration: checkFnTypedParamCalls
-(B128/B215 — TS2558/TS2345 fn-typed-param calls, generic-method calls,
-`.apply`; 119 ms, the #4 tail pass) is ON THE SPINE; the legacy recursion
-(checkFnTypedParamCalls / fnParamScanStmts / fnParamScanStmt /
-fnParamScanExpr, ~106 lines) DELETED.** The session ALSO landed the
-owner-requested dependency refresh FIRST, as its own commit: Kotlin 2.4.0 →
-2.4.10, kotlinx-io 0.9.1, kotlinx-serialization 1.11.0, jreleaser 1.25.0,
-asm 9.10.1, maven-publish 0.37.0 (coroutines/dokka/versions-plugin/xemantic
-libs already latest; checked against Maven Central; no version-catalog-update
-plugin added — the existing ben-manes `dependencyUpdates` target plus a
-manual toml edit covered it), gated on warning-clean (--rerun-tasks, zero
-`w:`) + the full corpus suite 11,449/0 BEFORE the migration started, so any
-later diff attributes cleanly. The migration is the DOWNWARD-MAP variant of
-the template: a pass threading a pure ancestor-chain-derived context OBJECT
-(FnParamCtx — fnParams/tpVarRefs/classInstVarRefs REBUILT from params at
-every fn-like boundary, tparams/tpAst/fnParamsAccum ACCUMULATED through
-boundaries with param-name shadowing on the accum, the class-prop-INITIALIZER
-edge KEEPING the parent maps while adding class TPs via fnParamAddTps)
-reproduces as the pull-based per-anchor fold WITH a per-boundary-child ctx
-memo (spineFpCtxFor, keyed by the body/initializer nodeId) — anchors are
-every Identifier-callee / Identifier-receiver-PropertyAccess call, too
-frequent for the round-625 memo-free form. Reach is a memoized BINARY
-classifier (spineFpStatus/spineFpEdge + the transient FP_ROOT for the
-SourceFile edge) — no multi-state statuses needed because every (parent
-kind, child slot) pair decides descent unambiguously. Legacy quirks pinned
-verbatim: a nested arrow does NOT see the outer fn's fn-typed params (the
-rebuild), the B215 accum shadowing, the reach silences (void/template
-operands, case-clause EXPRESSIONS, for-in/of LEFT sides, class EXPRESSIONS,
-objlit non-PropertyAssignment members), the class-prop-init map keep, and
-TP accumulation across nested fns/arrows. Ambient sandwich =
-currentFileLocals only (the spine-entry resting value = the post-spine
-slot's ambient; everything else the emitters read is save-restored per
-dispatch by the other handlers). 17 local pins
-(M04FnTypedParamSpineMigrationTest) verified green against the LEGACY
-walker first, then the migrated code. Gates: suite 11,449 → 11,466/0;
-`--listAll` ×8 byte-identical (pre captured from the stashed dep-update
-HEAD, post from the migration — all 8 profiles at the 46/94 env-legit
-artifact lines); pass table 435 → 434 (the checkFnTypedParamCalls row gone;
-checkSpine 18.5 s single-run, within the round-625 18.0–19.0 band — not
-inflated); warning-clean. M0.4 running total: top FOUR tail passes
-migrated; next by cost: checkAbstractClassInstantiation (113 ms),
-checkSymbolToStringConversions (108 ms). SESSION TAIL: the
-checkAbstractClassInstantiation (#5) SLOT-MOVE pre-gate landed (corpus +
-listAll ×8 identical; the pass is self-contained — reads
-binderResults/globals/fileResults only, no side-set consults, no TS2511
-retract/dedup consumers) — the next session starts directly at its
-migration commit. Its legacy shape for the migrator: a per-FILE
-four-collector prepass (collectAbstractClassNames + the merged-globals
-scan + collectImportedAbstractClassAliases + collectTypeAliases →
-collectTypeofAbstractVars) feeding a statement walk — the collectors are
-file-scoped, not statement-ordered, so they reproduce as per-file
-spine-setup state, not frames.**
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 (Restored 2026-07-12, round 481 — the queue/backlog/inventory sections had been
@@ -766,12 +766,22 @@ structural item instead of landing alone.**
   persist across top-level statements; the `=`-LHS write skip is an edge
   (LHS subtree never read-walked, the write check fires at the
   BinaryExpression anchor under the frame-maintained pmrInClassMethod
-  gate)); next per-file candidate: checkPropertyInitialization
-  ~99 ms — slot-move pre-gate LANDED round 635 (hoisted from its
-  PRE-spine slot 6; scope map in the round-635 session note: stateless
-  declare-gated recursion, type-resolving, and the B439 declarationOnly
-  second dispatch means the recursion walkers must SURVIVE — the
-  round-630 shared-walker rule);
+  gate)), then
+  checkPropertyInitialization ~99 ms — **MIGRATED round 636** (the
+  MULTIPLICITY variant: the legacy ClassDeclaration statement arm
+  double-walks member bodies — checkClassPropertyInit's nested recursion
+  PLUS the arm's own member loop — so nested classes emit 2^depth
+  duplicate TS2564s, reproduced by an INT-valued reach classifier
+  returning a VISIT COUNT (spinePiMult: a bottom-up climb multiplying
+  per-edge factors {0,1,2}; every factor local to one edge, no
+  multi-state fold — the arrow/fn-expr partial-body restriction resolves
+  by peeking at the Block's parent); the anchors repeat the split-out
+  checkClassPropertyInitEmit that many times; the recursion walkers
+  SURVIVE for the B439 declarationOnly dispatch — the round-630
+  shared-walker rule, spinePiEdge mirrors them);
+  next per-file candidates by cost: checkGenericIndexWrite 117.3 ms,
+  checkArgumentsCollision 116.8 ms, checkEvolvingEmptyArrayImplicitAny
+  103.2 ms — scope shape + consumers before the slot-move;
   98 passes >20 ms carry 5.3 s of the
   6.2 s). Migration protocol per
   pass (the round-624 template): slot-move pre-gate commit (intact pass to the

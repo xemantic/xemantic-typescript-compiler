@@ -3638,6 +3638,20 @@ class Checker(
     )
     private val spinePmrFrames = ArrayList<PmrFrame>()
 
+    // (M0.4) round 636: checkPropertyInitialization (TS2564) on the spine.
+    // Anchors at ClassDeclaration/ClassExpression enters; reach is the
+    // INT-valued MULTIPLICITY climb [spinePiMult] over [spinePiEdge] (the
+    // SURVIVING checkPropertyInitInStatements/-InExpr walker arms mirrored —
+    // they stay alive for the B439 declarationOnly dispatch, so per the
+    // round-630 shared-walker rule any walker-arm change must be mirrored in
+    // spinePiEdge). The ClassDeclaration statement arm's member-body DOUBLE
+    // walk (checkClassPropertyInit recursion + the arm's own loop) is the
+    // factor-2 edge — nested classes in such bodies emit 2^depth duplicates,
+    // exactly as legacy. No frames, no memo (anchors are rare — the
+    // round-625 rule); no ambient sandwich (syntactic + pure memos only).
+    private var spinePiActive = false
+    private var spinePiRunActive = false
+
     // ── INV.4(d) walker 6 (round 535): checkArgumentCounts on the spine ────
     // The function-call arity pass (TS2554/TS2555/TS2575) — the recursion
     // walkers (checkArgCountInStatements/-InStatement/-InExpr(Core)) are
@@ -4986,8 +5000,10 @@ class Checker(
         // (which DEDUPS against the set pass's emitted positions) and the B223
         // try/catch walker follow it, preserving the legacy relative order.
         // See the pass("checkSpine") site.
-        // 6. checkPropertyInitialization (TS2564) moved to the post-spine slot —
-        // see the pass("checkSpine") site (M0.4 slot-move pre-gate, round 635).
+        // 6. checkPropertyInitialization (TS2564) is ON THE SPINE (M0.4, round
+        // 636) — see the comment at the pass("checkSpine") site and
+        // spinePiEnterNode; the B439 declarationOnly direct dispatch above
+        // still routes through the surviving legacy walkers.
         // 6a. TS2540 for `const x = cond ? a : b; x.p = v` where p is readonly in a
         // union constituent (readonlyPropertySubtypeRelationDirected). Not strict-gated
         // (readonly is structural).
@@ -5175,22 +5191,26 @@ class Checker(
         // and B377 are gate-disjoint and never scan the list); the legacy
         // driver iterated binderResults → the spine's partition view, gated
         // `--partitionCheck 2` EQUIVALENT ×8 (the round-633 rule).
-        // 6' (M0.4 slot-move pre-gate, round 635): checkPropertyInitialization
-        // (TS2564 strict-property-initialization) moved intact from its
-        // pre-spine slot 6 ahead of its spine migration. Self-contained:
-        // stateless declare-gated statement recursion + per-class emission
-        // (walker-local sets only, no ambient reads at the driver level); the
-        // only TS2564 list op elsewhere is checkInKeywordTypeguard's
-        // whole-file wipe-and-pin, which runs AFTER both slots (emitters-
-        // before-wipe preserved). TYPE-RESOLVING (property annotations +
-        // typeIncludesUndefined + lib-availability suppression) — the hoist
-        // crosses the spine, so first-touch order is the risk class the
-        // corpus + listAll ×8 gates decide. The SECOND, declarationOnly
-        // dispatch (B439) is untouched — the eventual migration must keep the
-        // recursion walkers alive for it (the round-630 shared-walker rule).
-        if (!options.strictExplicitlyFalse && !options.strictPropertyInitializationExplicitlyFalse) {
-            pass("checkPropertyInitialization") { checkPropertyInitialization() }
-        }
+        // 6' (M0.4, round 636): checkPropertyInitialization (TS2564
+        // strict-property-initialization) is ON THE SPINE — see
+        // spinePiEnterNode/spinePiMult/spinePiEdge. The anchors are
+        // ClassDeclaration/ClassExpression enters; the reach classifier is an
+        // INT-valued MULTIPLICITY climb (the legacy ClassDeclaration
+        // statement arm walked method/ctor/accessor bodies TWICE — once via
+        // checkClassPropertyInit's nested recursion, once via the arm's
+        // member loop — so nested classes in such bodies emit 2^depth
+        // duplicates, reproduced exactly). The recursion walkers
+        // (checkPropertyInitInStatements/-InExpr/checkClassPropertyInit)
+        // SURVIVE for the B439 declarationOnly direct dispatch (the
+        // round-630 shared-walker rule: spinePiEdge mirrors their arms and
+        // must stay IN SYNC); the spine anchors call the split-out
+        // checkClassPropertyInitEmit. No ambient sandwich (the emission is
+        // syntactic + the pure getTypeParamInfo/resolveAlias memos only).
+        // The legacy driver iterated binderResults → the spine's partition
+        // view, gated `--partitionCheck 2` EQUIVALENT ×8 (the round-633
+        // rule). The only TS2564 list op elsewhere is
+        // checkInKeywordTypeguard's whole-file wipe-and-pin, still after
+        // this slot (emitters-before-wipe preserved).
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -19067,6 +19087,14 @@ class Checker(
         ))
     }
 
+    /**
+     * (M0.4) round 636: this walker family (checkPropertyInitInStatements /
+     * checkPropertyInitInExpr / checkClassPropertyInit) survives ONLY for the
+     * B439 declarationOnly direct dispatch — the normal-mode pass rides the
+     * spine ([spinePiEnterNode]), whose reach classifier [spinePiEdge] mirrors
+     * these arms verbatim. ANY descent-arm change here MUST be mirrored there
+     * (the round-630 shared-walker rule) or the spine reach silently diverges.
+     */
     private fun checkPropertyInitInStatements(
         statements: List<Statement>,
         source: String,
@@ -19277,6 +19305,44 @@ class Checker(
         source: String,
         fileName: String,
     ) {
+        checkClassPropertyInitEmit(members, source, fileName)
+
+        // Recurse into nested class elements for inner classes
+        for (member in members) {
+            when (member) {
+                is MethodDeclaration -> member.body?.let {
+                    checkPropertyInitInStatements(it.statements, source, fileName)
+                }
+                is Constructor -> member.body?.let {
+                    checkPropertyInitInStatements(it.statements, source, fileName)
+                }
+                is GetAccessor -> member.body?.let {
+                    checkPropertyInitInStatements(it.statements, source, fileName)
+                }
+                is SetAccessor -> member.body?.let {
+                    checkPropertyInitInStatements(it.statements, source, fileName)
+                }
+                is ClassStaticBlockDeclaration -> {
+                    checkPropertyInitInStatements(member.body.statements, source, fileName)
+                }
+                else -> {}
+            }
+        }
+    }
+
+    /**
+     * (M0.4) round 636: the per-class TS2564 emission, split out of
+     * [checkClassPropertyInit] so the spine anchors ([spinePiEnterNode]) can
+     * run it without the nested-class recursion (nested classes get their own
+     * anchors); the legacy walkers (kept for the B439 declarationOnly
+     * dispatch) still route through [checkClassPropertyInit] and are
+     * byte-identical.
+     */
+    private fun checkClassPropertyInitEmit(
+        members: List<ClassElement>,
+        source: String,
+        fileName: String,
+    ) {
         // Find the constructor and collect assigned properties
         val constructorAssigned = mutableSetOf<String>()
         // Collect all class member names (for typeof-reference check below)
@@ -19402,28 +19468,6 @@ class Checker(
                 start = start,
                 length = length,
             ))
-        }
-
-        // Recurse into nested class elements for inner classes
-        for (member in members) {
-            when (member) {
-                is MethodDeclaration -> member.body?.let {
-                    checkPropertyInitInStatements(it.statements, source, fileName)
-                }
-                is Constructor -> member.body?.let {
-                    checkPropertyInitInStatements(it.statements, source, fileName)
-                }
-                is GetAccessor -> member.body?.let {
-                    checkPropertyInitInStatements(it.statements, source, fileName)
-                }
-                is SetAccessor -> member.body?.let {
-                    checkPropertyInitInStatements(it.statements, source, fileName)
-                }
-                is ClassStaticBlockDeclaration -> {
-                    checkPropertyInitInStatements(member.body.statements, source, fileName)
-                }
-                else -> {}
-            }
         }
     }
 
@@ -21090,6 +21134,10 @@ class Checker(
         spineB94RestingLocals = currentFileLocals
         spineItRunActive = options.noImplicitThis || options.strict ||
             !options.strictExplicitlyFalse
+        // (M0.4) round 636: the property-init anchors' run gate (the legacy
+        // dispatch gate, verbatim).
+        spinePiRunActive = !options.strictExplicitlyFalse &&
+            !options.strictPropertyInitializationExplicitlyFalse
         // INV.4(d) walker 9: the const-assignment anchors' B116 param-typing
         // rebuild starts from the PRE-SPINE resting bases.
         spineCaRestingLocalTypes = currentLocalTypes
@@ -21195,6 +21243,9 @@ class Checker(
                 spineB94Setup(result)
                 spineCeSetup(result)
                 spinePmrSetup(result)
+                // (M0.4) round 636: property-init anchors — active in every
+                // non-dts file (the legacy driver's only file gate).
+                spinePiActive = spinePiRunActive && !spineIsDts
                 spineUResAuditActive = unresolvedAuditEnabled && spineUResActive
                 try {
                     spineWalkFile(sf)
@@ -21226,6 +21277,7 @@ class Checker(
                     spineB94Teardown()
                     spineCeTeardown()
                     spinePmrTeardown()
+                    spinePiActive = false
                 }
                 spineResolveDeferredIterationChecks()
                 // (M0.4) round 629: the flow-graph definite-assignment pass
@@ -21436,6 +21488,11 @@ class Checker(
         // push-based boundary frames — active in every non-dts/non-js file;
         // no ambient sandwich.
         if (spinePmrActive) spinePmrEnterNode(node)
+        // (M0.4) round 636: the property-init anchors (ClassDeclaration/
+        // ClassExpression enters) — the TS2564 per-class emission, repeated
+        // per the legacy walk's multiplicity; no frames/leave hook, no
+        // ambient sandwich.
+        if (spinePiActive) spinePiEnterNode(node)
         // INV.4(d) walker 7: the use-before-declaration pass — the per-list
         // ForwardRefs anchor + loop-header self-ref checks.
         if (spineUbdActive) spineUbdEnterNode(node)
@@ -63450,6 +63507,174 @@ interface DataView {
             else -> PMR_NONE
         }
         else -> PMR_NONE
+    }
+
+    /**
+     * (M0.4) round 636: the checkPropertyInitialization (TS2564) anchors —
+     * per-class emissions at ClassDeclaration/ClassExpression enters, run
+     * [spinePiMult] times (the legacy walk's visit multiplicity: the
+     * ClassDeclaration statement arm walks method/ctor/accessor bodies TWICE,
+     * so nested classes there emit duplicates — reproduced exactly). The
+     * anchor-side gates are the legacy arms' own: a `declare` class is
+     * skipped, an Abstract-modifier ClassExpression is skipped (frozen —
+     * unreachable via parse, parseClassExpression never sets modifiers).
+     */
+    private fun spinePiEnterNode(node: Node) {
+        when ((node as NodeBase).kindId) {
+            NodeKind.CLASS_DECLARATION -> {
+                node as ClassDeclaration
+                if (ModifierFlag.Declare in node.modifiers) return
+                repeat(spinePiMult(node)) {
+                    checkClassPropertyInitEmit(node.members, spineSource, spineFileName)
+                }
+            }
+            NodeKind.CLASS_EXPRESSION -> {
+                node as ClassExpression
+                if (ModifierFlag.Abstract in node.modifiers) return
+                repeat(spinePiMult(node)) {
+                    checkClassPropertyInitEmit(node.members, spineSource, spineFileName)
+                }
+            }
+            else -> {}
+        }
+    }
+
+    /**
+     * How many times the legacy property-init walk visits [node]'s position —
+     * 0 when unreached. A bottom-up climb multiplying [spinePiEdge] factors
+     * (every factor is local to one parent→child edge, so no multi-state
+     * fold is needed); anchors are rare, so no memo (the round-625 rule).
+     */
+    private fun spinePiMult(node: Node): Int {
+        var child: Node = node
+        var mult = 1
+        while (true) {
+            val parent = (child as NodeBase).parent ?: return 0 // detached/unindexed
+            if (parent is SourceFile) return if (child is Statement) mult else 0
+            val f = spinePiEdge(parent, child)
+            if (f == 0) return 0
+            mult *= f
+            child = parent
+        }
+    }
+
+    /**
+     * The SURVIVING checkPropertyInitInStatements/checkPropertyInitInExpr/
+     * checkClassPropertyInit descent arms as per-edge visit FACTORS (0 =
+     * unreached, 1 = walked once, 2 = the ClassDeclaration member-body double
+     * walk). MUST STAY IN SYNC with those walkers (they remain live for the
+     * B439 declarationOnly dispatch — the round-630 shared-walker rule).
+     * Notable non-reaches, mirrored from the walkers: if/ternary CONDITIONS,
+     * for-in/for-of binding heads, heritage clauses, decorators, parameter
+     * defaults, computed member names, enum members, and everything inside an
+     * arrow/fn-expression body except its DIRECT ExpressionStatement/
+     * ReturnStatement/VariableStatement-initializer statements.
+     */
+    private fun spinePiEdge(parent: Node, child: Node): Int = when (parent) {
+        // ── the statement walker's ClassDeclaration arm + checkClassPropertyInit's
+        //    nested recursion: member bodies walked by BOTH → factor 2; property
+        //    initializers (arm loop only) and static blocks (recursion only) → 1.
+        is ClassDeclaration -> when {
+            ModifierFlag.Declare in parent.modifiers -> 0
+            child is MethodDeclaration || child is Constructor ||
+                child is GetAccessor || child is SetAccessor -> 2
+            child is PropertyDeclaration -> 1
+            child is ClassStaticBlockDeclaration -> 1
+            else -> 0
+        }
+        // ── the expression walker's ClassExpression arm: property initializers
+        //    walked regardless of the (parse-unreachable) Abstract modifier;
+        //    member bodies + static blocks via checkClassPropertyInit only → 1.
+        is ClassExpression -> when {
+            child is PropertyDeclaration -> 1
+            ModifierFlag.Abstract in parent.modifiers -> 0
+            child is MethodDeclaration || child is Constructor ||
+                child is GetAccessor || child is SetAccessor ||
+                child is ClassStaticBlockDeclaration -> 1
+            else -> 0
+        }
+        is MethodDeclaration -> if (child === parent.body) 1 else 0
+        is Constructor -> if (child === parent.body) 1 else 0
+        is GetAccessor -> if (child === parent.body) 1 else 0
+        is SetAccessor -> if (child === parent.body) 1 else 0
+        is ClassStaticBlockDeclaration -> if (child === parent.body) 1 else 0
+        is PropertyDeclaration -> if (child === parent.initializer) 1 else 0
+        // ── statement arms ──
+        is ModuleDeclaration -> if (ModifierFlag.Declare !in parent.modifiers &&
+            child === parent.body && child is ModuleBlock) 1 else 0
+        is ModuleBlock -> if (child is Statement) 1 else 0
+        is FunctionDeclaration -> if (ModifierFlag.Declare !in parent.modifiers &&
+            child === parent.body) 1 else 0
+        is Block -> {
+            // An arrow/fn-EXPRESSION body Block walks only its DIRECT
+            // ExpressionStatement/ReturnStatement/VariableStatement children
+            // (the walkers' partial fn-body arms); every other Block is a
+            // full statement-list walk.
+            val gp = parent.parent
+            if ((gp is ArrowFunction && parent === gp.body) ||
+                (gp is FunctionExpression && parent === gp.body)
+            ) {
+                if (child is ExpressionStatement || child is ReturnStatement ||
+                    child is VariableStatement) 1 else 0
+            } else if (child is Statement) 1 else 0
+        }
+        is IfStatement -> if (child === parent.thenStatement || child === parent.elseStatement) 1 else 0
+        is VariableStatement -> if (child === parent.declarationList) 1 else 0
+        is VariableDeclarationList -> if (child is VariableDeclaration) 1 else 0
+        is VariableDeclaration -> if (child === parent.initializer) 1 else 0
+        is ExpressionStatement -> if (child === parent.expression) 1 else 0
+        is ReturnStatement -> if (child === parent.expression) 1 else 0
+        is ForStatement -> if (child === parent.statement || child === parent.initializer ||
+            child === parent.condition || child === parent.incrementor) 1 else 0
+        is ForInStatement -> if (child === parent.statement || child === parent.expression) 1 else 0
+        is ForOfStatement -> if (child === parent.statement || child === parent.expression) 1 else 0
+        is WhileStatement -> if (child === parent.expression || child === parent.statement) 1 else 0
+        is DoStatement -> if (child === parent.statement || child === parent.expression) 1 else 0
+        is SwitchStatement -> if (child === parent.expression ||
+            child is CaseClause || child is DefaultClause) 1 else 0
+        is CaseClause -> if (child === parent.expression || child is Statement) 1 else 0
+        is DefaultClause -> if (child is Statement) 1 else 0
+        is TryStatement -> if (child === parent.tryBlock || child === parent.catchClause ||
+            child === parent.finallyBlock) 1 else 0
+        is CatchClause -> if (child === parent.block) 1 else 0
+        is LabeledStatement -> if (child === parent.statement) 1 else 0
+        is ThrowStatement -> if (child === parent.expression) 1 else 0
+        is ExportAssignment -> if (child === parent.expression) 1 else 0
+        // ── expression arms ──
+        is ParenthesizedExpression -> if (child === parent.expression) 1 else 0
+        is AsExpression -> if (child === parent.expression) 1 else 0
+        is TypeAssertionExpression -> if (child === parent.expression) 1 else 0
+        is SatisfiesExpression -> if (child === parent.expression) 1 else 0
+        is NonNullExpression -> if (child === parent.expression) 1 else 0
+        is ConditionalExpression -> if (child === parent.whenTrue || child === parent.whenFalse) 1 else 0
+        is BinaryExpression -> if (child === parent.left || child === parent.right) 1 else 0
+        is CallExpression -> if (child === parent.expression ||
+            parent.arguments.any { it === child }) 1 else 0
+        is NewExpression -> if (child === parent.expression ||
+            parent.arguments?.any { it === child } == true) 1 else 0
+        is ArrayLiteralExpression -> if (parent.elements.any { it === child }) 1 else 0
+        is SpreadElement -> if (child === parent.expression) 1 else 0
+        is PrefixUnaryExpression -> if (child === parent.operand) 1 else 0
+        is PostfixUnaryExpression -> if (child === parent.operand) 1 else 0
+        is AwaitExpression -> if (child === parent.expression) 1 else 0
+        is YieldExpression -> if (child === parent.expression) 1 else 0
+        is VoidExpression -> if (child === parent.expression) 1 else 0
+        is DeleteExpression -> if (child === parent.expression) 1 else 0
+        is TypeOfExpression -> if (child === parent.expression) 1 else 0
+        is TemplateExpression -> if (child is TemplateSpan) 1 else 0
+        is TemplateSpan -> if (child === parent.expression) 1 else 0
+        is TaggedTemplateExpression -> if (child === parent.tag ||
+            (child === parent.template && child is TemplateExpression)) 1 else 0
+        is CommaListExpression -> if (parent.elements.any { it === child }) 1 else 0
+        is PropertyAccessExpression -> if (child === parent.expression) 1 else 0
+        is ElementAccessExpression -> if (child === parent.expression ||
+            child === parent.argumentExpression) 1 else 0
+        is ObjectLiteralExpression -> if (child is PropertyAssignment || child is SpreadAssignment) 1 else 0
+        is PropertyAssignment -> if (child === parent.initializer) 1 else 0
+        is SpreadAssignment -> if (child === parent.expression) 1 else 0
+        is ArrowFunction -> if (child === parent.body) 1 else 0
+        is FunctionExpression -> if (child === parent.body) 1 else 0
+        else -> 0
     }
 
     /** Extract the parameter list from any signature-bearing AST declaration node. */
