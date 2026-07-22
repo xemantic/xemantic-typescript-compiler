@@ -5290,6 +5290,27 @@ class Checker(
         // TS1215 emitter checkModuleStrictModeInStatements covers NAME
         // bindings — its FunctionDeclaration arm deliberately skips params,
         // deferring to this pass — and never scans the list).
+        // 37a3' (M0.4 slot-move pre-gate, round 638):
+        // checkEvolvingEmptyArrayImplicitAny (TS7034 at the decl + TS7005 at
+        // each read of an un-annotated `let/var x = []` evolving array,
+        // round-316 family incl. the single-array/branch-merge/snapshot push
+        // checks) moved intact from its pre-spine slot 37a3 ahead of its
+        // spine migration. Fully SYNTACTIC + self-contained (pure AST scope
+        // simulation — no type caches, no ambient); no TS7034/TS7005
+        // dedup/scan consumers exist (checkUninitializedLetCapturedReads
+        // emits the same codes but is gate-disjoint BY CONSTRUCTION — the
+        // trigger-B split gives it captured reads of uninitialized lets,
+        // this pass same-scope reads — and never scans the list; their
+        // relative order flip across this move is therefore immaterial).
+        // Scope for the migrator: a per-STATEMENT-LIST scope pass — each
+        // scope (file / fn / method / accessor body, via evRecurseScopes)
+        // processes its DIRECT VariableStatement candidates with a
+        // whole-LIST simulation (evUseStmt over all statements of the list —
+        // order-independent collection, per-candidate state), then runs the
+        // three push checks per scope; likely migrates as per-LIST-owner
+        // dispatch at scope-owner enters (the round-627/634 shape), not
+        // per-anchor.
+        pass("checkEvolvingEmptyArrayImplicitAny") { checkEvolvingEmptyArrayImplicitAny() }
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -5804,10 +5825,9 @@ class Checker(
         // 37a2. Cross-namespace class-heritage TDZ: a class in top-level namespace A
         //       extending `B.X` where namespace B is declared AFTER A (TS2449).
         pass("checkCrossNamespaceClassHeritageUBD") { checkCrossNamespaceClassHeritageUBD() }
-        // 37a3. Evolving empty-array implicit-any: `let x = []` (no annotation) that is
-        //       only ever READ (never concretized via push/assign/element-write/etc.)
-        //       under noImplicitAny/strict — TS7034 at decl + TS7005 at each read.
-        pass("checkEvolvingEmptyArrayImplicitAny") { checkEvolvingEmptyArrayImplicitAny() }
+        // 37a3. checkEvolvingEmptyArrayImplicitAny (TS7034/TS7005) moved to
+        // the post-spine slot — see the pass("checkSpine") site (M0.4
+        // slot-move pre-gate, round 638).
         // 37a4. B337: uninitialized `let x;` captured reads (TS7034/TS7005).
         pass("checkUninitializedLetCapturedReads") { checkUninitializedLetCapturedReads() }
         // 37a5. B353: object-rest destructuring from a class instance — methods,

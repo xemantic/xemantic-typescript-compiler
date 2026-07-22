@@ -62,8 +62,33 @@ FIRST; suite 11,732 → 11,757/0; `--listAll` ×8 byte-identical (time
 header only); partitionCheck ×8 EQUIVALENT; pass table 424 → 423 (the
 row gone; checkSpine 19,665 ms single-run — in-band); warning-clean
 (--rerun-tasks, zero `w:`). M0.4 running total: top FIFTEEN tail passes
-migrated. NEXT: checkEvolvingEmptyArrayImplicitAny (103.2 ms) — scope
-shape + consumers before its slot-move.**
+migrated. SESSION TAIL: the checkEvolvingEmptyArrayImplicitAny (#16,
+103.2 ms — TS7034/TS7005 evolving empty-array implicit-any, the
+round-316 family incl. the single-array/branch-merge/snapshot push
+checks) slot-move pre-gate LANDED (moved intact from pre-spine slot
+37a3 to the post-spine slot; suite 11,757/0; listAll ×8
+byte-identical). Scope map for the migrator: a per-STATEMENT-LIST scope
+pass — each scope (file / fn / method / accessor body, via
+evRecurseScopes) processes its DIRECT VariableStatement candidates with
+a whole-LIST simulation (evUseStmt over ALL statements of the list —
+order-independent collection, per-candidate EvState) then runs the
+three push checks per scope; no TS7034/TS7005 dedup consumers
+(checkUninitializedLetCapturedReads emits the same codes but the
+trigger-B split is gate-disjoint BY CONSTRUCTION — captured reads of
+uninitialized lets vs this pass's same-scope reads — so the order flip
+across the move is immaterial); likely migrates as per-LIST-owner
+dispatch at scope-owner enters (the round-627/634 shape), not
+per-anchor. PROCESS NOTE (a trap worth remembering): waiting for a
+background suite by XML COUNT is unsound — `rm -rf
+build/test-results/jvmTest/binary` keeps the previous run's 472 XMLs
+and gradle deletes them only when the test task STARTS (after the
+multi-minute compile), so a count-based wait "passed" on STALE results
+and a `./gradlew --stop` issued then KILLED the in-flight compile
+(empty classes dir → 8 ClassNotFoundException captures + a corrupted
+in-progress-results-generic.bin needing a test-state wipe). Rule: wipe
+the WHOLE build/test-results/jvmTest dir before a suite whose
+completion is awaited by file checks, and never --stop/pkill while a
+gradle client exists. NEXT session starts at the eafs migration.**
 
 **Round 637 (2026-07-22) — (M0.4) fourteenth tail-pass migration:
 checkGenericIndexWrite (TS2862 "Type 'T' is generic and can only be
