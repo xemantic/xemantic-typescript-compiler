@@ -20,6 +20,79 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 645 (2026-07-22) — (M0.4) twenty-second tail-pass migration:
+checkStrictModeIdentifiers (TS1100 restricted-name bindings + TS2630 eval
+inc/dec + TS1215 module-file restricted names + the top-level `var eval`
+TS2300/TS6203 lib-collision pair; 96 ms at the round-642 table — the #22
+per-file tail pass) is ON THE SPINE; the legacy driver + the THREE
+routing walks (checkModuleStrictModeInStatements /
+checkStrictModeInStatements/-InStatement/-InExpr/-InClassElement / the
+checkFunctionLocalStrictMode family, ~430 lines) DELETED; the bounded
+leaves survive anchor-called (checkStrictModeName/-BindingName/
+-InTypeNode, checkModuleStrictModeName, hasPrologueUseStrict,
+emitTs2630EvalAssign, + the split-out
+checkStrictModeInterfaceMemberParams / emitStrictVarEvalDuplicate).**
+The MODE-ROUTED variant (new template move): the first pass whose
+SourceFile ROOT EDGES route by a per-file MODE decided at setup
+(spineSmSetup — dts → off; isModuleFile → MODULE; strict/alwaysStrict
+option or a "use strict" FIRST statement → STRICT; else FNLOCAL), and
+whose classifier statuses carry the WALK IDENTITY across two interleaved
+walk FAMILIES: the strict emission walk (SM_SSTMT/SM_SEXPR) and the
+fn-local SEARCHING walk (SM_FSTMT/SM_FEXPR, emission-free), with
+prologue-tested FLIPS at fn-body edges (a fn-decl/fn-expr/arrow-Block
+body under the searching walk flips to SM_SSTMT iff hasPrologueUseStrict;
+the module top-level specials SM_MVAR/SM_MFN continue INTO the strict
+walk at initializer/body edges; SM_SDECL/SM_FDECL carry the decl-list →
+initializer channel). Observed simplification: CLASS subtrees are
+unreached BY CONSTRUCTION — the legacy class-element walk ran with an
+EMPTY restricted set (restricted − {arguments,eval}, the
+TS1210-owns-class-bodies split), so it could never emit; no fold arm,
+pinned. Nine anchor kinds (VariableStatement / fn-decl / interface /
+fn-expr / arrow / assignment binary / ++,-- prefix+postfix / for-head /
+try-catch), every arm pre-gated on restricted-name presence (or an
+annotated decl for the type-node leaf) BEFORE the climb; the TS2300 pair
+rides the VariableStatement anchor (STRICT mode + parent-is-SourceFile +
+var-kind + `eval`). Frozen quirks pinned both directions: module
+top-level fn PARAMS unchecked (checkArgumentsCollision territory) + var
+TYPE annotations unwalked while the module ELSE-arm takes the full
+strict walk (`export {}; if (1) { var eval }` IS TS1100); strict arms
+walk no loop heads/conditions, no for-in/of heads, no for-head decl
+INITIALIZERS (names check at the For anchor), no switch subjects/case
+exprs, no throw exprs, no object/array literals, no conditional exprs,
+no arrow EXPRESSION bodies; the fn-local search descends only fn-decl
+bodies / expression statements / var initializers / blocks / if
+branches / ModuleBlocks (loops/switch/try/call-args never searched) and
+a prologue fn's OWN name/params are never checked; the prologue test is
+FIRST-statement-only; `let eval` draws no TS2300. Fully syntactic — no
+ambient sandwich; the legacy binderResults driver → the spine's
+partition view, gated `--partitionCheck 2` EQUIVALENT ×8. Gates: 52
+local pins (M04StrictModeSpineMigrationTest) green against the LEGACY
+pass FIRST (52/52 on the first run); suite 11,981 → 12,033/0;
+`--listAll` ×8 byte-identical (sorted, non-time lines) vs the
+pre-migration baseline; pass table 418 → 417 (the 96 ms row gone;
+checkSpine 21.6 s single-run — in-band; compiler-profile wall parity
+29.8 s vs 29.4 s pre); warning-clean. M0.4 running total: top TWENTY-TWO
+tail passes migrated. SESSION TAIL: the checkConstLiteralComparisons
+(#23, 95 ms — B98.r101 TS2367 const-literal vs different-literal
+comparisons) slot-move pre-gate LANDED (moved intact from its early
+slot — after checkDtsImportEqualsAliasResolved — to the post-spine
+slot; suite 12,033/0; listAll ×8 byte-identical; TS2367 has sibling
+emitters but no diagnostics-list scan/dedup consumers — grep-verified —
+the wipe-and-pin walkers dispatch after BOTH slots, and the pass is
+fully syntactic: options + AST + file source only, the
+currentFileLocals consult nearby belongs to the arithmetic pass's
+separate TS2367 emitter).
+Scope map for the migrator: a per-statement-LIST walker with a downward
+const-literal MAP — walkConstLitStatements does a whole-list SHADOW
+prepass (any VariableStatement name REMOVES an inherited entry — order-
+independent, a pure function of the list) then walks statements; only
+the ForStatement arm ADDS entries (for-INIT `const x = <bare literal>`
+scoped to cond/incr/body — block consts deliberately never track); the
+map is a pure function of the ancestor list-owner chain → the round-637
+pull-based per-boundary-memo shape. Anchors: `==`/`===`/`!=`/`!==`
+binaries whose operand resolves through the map. NEXT session starts at
+that migration; after it: checkSuperInObjectLiterals 91 ms.**
+
 **Round 644 (2026-07-22) — (M0.4) twenty-first tail-pass migration:
 checkExpandoFunctionNestedReads (B431 — TS2339 for an expando-function
 property read inside a NESTED function where the property was never
@@ -568,71 +641,6 @@ FunctionDeclaration arm deliberately defers params to this pass) and
 scans no lists. NEXT session starts at its migration; after it by cost:
 checkEvolvingEmptyArrayImplicitAny 103.2 ms.**
 
-**Round 636 (2026-07-22) — (M0.4) thirteenth tail-pass migration:
-checkPropertyInitialization (TS2564 strict-property-initialization,
-~99 ms — the #13 per-file tail pass) is ON THE SPINE; the normal-mode
-pass dispatch is deleted, the recursion walkers SURVIVE for the B439
-declarationOnly direct dispatch (the round-630 shared-walker rule:
-spinePiEdge mirrors their arms and must stay IN SYNC — pointer KDoc on
-both sides).** The MULTIPLICITY variant (new template move): the legacy
-ClassDeclaration statement arm walks method/ctor/accessor member bodies
-TWICE — once via checkClassPropertyInit's own nested recursion, once via
-the arm's member loop — so a class nested in such a body has its TS2564s
-emitted 2^depth times (the duplicates reach the output; no dedup exists
-for fileName-carrying diagnostics — pinned ×2 and ×4), while
-ClassExpression member bodies, static-block bodies, and property
-initializers are single-walked. Reproduced as an INT-valued reach
-classifier that returns a VISIT COUNT: spinePiMult is a bottom-up
-ancestor climb multiplying per-edge factors {0, 1, 2} — every factor is
-LOCAL to one parent→child edge, so no multi-state fold is needed; the
-one context-dependent case (an arrow/fn-EXPRESSION body Block walks only
-its DIRECT ExpressionStatement/ReturnStatement/VariableStatement
-children) resolves by peeking at the Block's parent. Anchors
-(ClassDeclaration/ClassExpression enters) repeat the split-out
-checkClassPropertyInitEmit that many times; the legacy checkClassPropertyInit
-= emit + nested recursion, byte-identical for the declarationOnly path.
-No frames, no memo (anchors rare — the round-625 rule), no ambient
-sandwich (the emission is syntactic — typeIncludesUndefined's Node
-overload is a pure union scan, NOT type-resolving as the round-635 scope
-map guessed — plus the pure getTypeParamInfo/resolveAlias memos only).
-Pin surprise: the expression walker's Abstract-ClassExpression gate is
-UNREACHABLE via parse (parseClassExpression never sets modifiers;
-`= abstract class C {}` error-recovers `abstract` as an identifier with
-the class re-parsed as a STATEMENT-level ClassDeclaration) — the gate is
-kept frozen, the recovery shape pinned instead. Gates: 33 local pins
-(M04PropertyInitSpineMigrationTest — the emitter's gates incl.
-ctor-param properties / literal computed names / option gates, the reach
-battery both directions (if/ternary conditions, for-in heads, enum
-members, param defaults, nested arrow blocks unreached; namespace/
-fn-body/switch/try/catch/template-span/objlit positions reached), and
-the multiplicity pins: method-body ×2, two-level ×4, static-block ×1,
-class-expr-body ×1, prop-initializer ×1) green against the LEGACY pass
-first; suite 11,668 → 11,701/0; `--listAll` ×8 byte-identical (only the
-wall-time header differs — zero TS2564 on all 8 profiles, so the gate
-pins pure non-perturbation); partitionCheck ×8 EQUIVALENT (the legacy
-driver iterated binderResults → the spine's partition view); pass table
-426 → 425 (the row gone; checkSpine 20.2–20.5 s single runs — box
-up-drift, the same-interleave whole-run walls are pre 29.70 s vs post
-29.81 s = 0.35%); warning-clean (--rerun-tasks, zero `w:`). M0.4 running
-total: top THIRTEEN tail passes migrated. SESSION TAIL: the
-checkGenericIndexWrite (#14, 117.3 ms — TS2862 index-WRITE on a generic
-type-parameter receiver, the gIdx walker) slot-move pre-gate LANDED
-(moved intact from its pre-spine slot 64d4 to the post-spine slot; suite
-11,701/0, listAll ×8 byte-identical). Scope map for the migrator: fully
-SYNTACTIC + self-contained (constrainedTpNames/bareTypeParamRefName/
-collectParamTpRefs/collectTpLocalsMap are pure AST reads — no type
-caches, no ambient); no TS2862 dedup/scan consumers
-(checkGenericRecordCastAccess emits the code but is gate-disjoint and
-never scans the list); a DOWNWARD-context recursion — the (tparams,
-tpProps, refs) triple REBUILDS at class/fn boundaries with a body-WIDE
-locals PREPASS (collectTpLocalsMap over the whole body before the scan,
-NOT statement-ordered → pull-based per-boundary levels reproduce it, the
-round-626/628 shape); anchors are `=` BinaryExpressions with an
-ElementAccess LHS. NEXT session starts at its migration; after it by
-cost: checkArgumentsCollision 116.8 ms, checkEvolvingEmptyArrayImplicitAny
-103.2 ms (checkCrossFileModuleAugmentationDuplicates 114.1 ms stays
-SKIPPED — cross-file aggregation).**
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 (Restored 2026-07-12, round 481 — the queue/backlog/inventory sections had been
@@ -938,9 +946,18 @@ structural item instead of landing alone.**
   fn-like ancestor of a reached anchor was entered through its walked
   interior, so each contributes its layer; anchors pre-gate on the
   candidate-receiver TEXT, so the memo-free rare-anchor rule applies);
+  checkStrictModeIdentifiers 96 ms — **MIGRATED round 645** (the
+  MODE-ROUTED variant: the first pass whose SourceFile root edges
+  route by a per-file MODE decided at setup — module/strict/fn-local —
+  and whose statuses carry the walk IDENTITY across two interleaved
+  families: the strict emission walk and the fn-local SEARCHING walk,
+  with prologue-tested flips at fn-body edges; the module top-level
+  specials continue INTO the strict walk at initializer/body edges;
+  class subtrees unreached by construction — the legacy class-element
+  walk ran with an EMPTIED restricted set, so it could never emit; the
+  `var eval` TS2300/TS6203 pair rides the VariableStatement anchor);
   next per-file candidates by cost (round-642 table):
-  checkStrictModeIdentifiers
-  96 ms, checkConstLiteralComparisons 95 ms, checkSuperInObjectLiterals
+  checkConstLiteralComparisons 95 ms, checkSuperInObjectLiterals
   91 ms (98 passes >20 ms carry 5.3 s of the 6.2 s). Migration protocol per
   pass (the round-624 template): slot-move pre-gate commit (intact pass to the
   post-spine slot, corpus + listAll ×8), then the migration commit (frames at

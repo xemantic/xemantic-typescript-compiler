@@ -1,3 +1,68 @@
+**Round 636 (2026-07-22) — (M0.4) thirteenth tail-pass migration:
+checkPropertyInitialization (TS2564 strict-property-initialization,
+~99 ms — the #13 per-file tail pass) is ON THE SPINE; the normal-mode
+pass dispatch is deleted, the recursion walkers SURVIVE for the B439
+declarationOnly direct dispatch (the round-630 shared-walker rule:
+spinePiEdge mirrors their arms and must stay IN SYNC — pointer KDoc on
+both sides).** The MULTIPLICITY variant (new template move): the legacy
+ClassDeclaration statement arm walks method/ctor/accessor member bodies
+TWICE — once via checkClassPropertyInit's own nested recursion, once via
+the arm's member loop — so a class nested in such a body has its TS2564s
+emitted 2^depth times (the duplicates reach the output; no dedup exists
+for fileName-carrying diagnostics — pinned ×2 and ×4), while
+ClassExpression member bodies, static-block bodies, and property
+initializers are single-walked. Reproduced as an INT-valued reach
+classifier that returns a VISIT COUNT: spinePiMult is a bottom-up
+ancestor climb multiplying per-edge factors {0, 1, 2} — every factor is
+LOCAL to one parent→child edge, so no multi-state fold is needed; the
+one context-dependent case (an arrow/fn-EXPRESSION body Block walks only
+its DIRECT ExpressionStatement/ReturnStatement/VariableStatement
+children) resolves by peeking at the Block's parent. Anchors
+(ClassDeclaration/ClassExpression enters) repeat the split-out
+checkClassPropertyInitEmit that many times; the legacy checkClassPropertyInit
+= emit + nested recursion, byte-identical for the declarationOnly path.
+No frames, no memo (anchors rare — the round-625 rule), no ambient
+sandwich (the emission is syntactic — typeIncludesUndefined's Node
+overload is a pure union scan, NOT type-resolving as the round-635 scope
+map guessed — plus the pure getTypeParamInfo/resolveAlias memos only).
+Pin surprise: the expression walker's Abstract-ClassExpression gate is
+UNREACHABLE via parse (parseClassExpression never sets modifiers;
+`= abstract class C {}` error-recovers `abstract` as an identifier with
+the class re-parsed as a STATEMENT-level ClassDeclaration) — the gate is
+kept frozen, the recovery shape pinned instead. Gates: 33 local pins
+(M04PropertyInitSpineMigrationTest — the emitter's gates incl.
+ctor-param properties / literal computed names / option gates, the reach
+battery both directions (if/ternary conditions, for-in heads, enum
+members, param defaults, nested arrow blocks unreached; namespace/
+fn-body/switch/try/catch/template-span/objlit positions reached), and
+the multiplicity pins: method-body ×2, two-level ×4, static-block ×1,
+class-expr-body ×1, prop-initializer ×1) green against the LEGACY pass
+first; suite 11,668 → 11,701/0; `--listAll` ×8 byte-identical (only the
+wall-time header differs — zero TS2564 on all 8 profiles, so the gate
+pins pure non-perturbation); partitionCheck ×8 EQUIVALENT (the legacy
+driver iterated binderResults → the spine's partition view); pass table
+426 → 425 (the row gone; checkSpine 20.2–20.5 s single runs — box
+up-drift, the same-interleave whole-run walls are pre 29.70 s vs post
+29.81 s = 0.35%); warning-clean (--rerun-tasks, zero `w:`). M0.4 running
+total: top THIRTEEN tail passes migrated. SESSION TAIL: the
+checkGenericIndexWrite (#14, 117.3 ms — TS2862 index-WRITE on a generic
+type-parameter receiver, the gIdx walker) slot-move pre-gate LANDED
+(moved intact from its pre-spine slot 64d4 to the post-spine slot; suite
+11,701/0, listAll ×8 byte-identical). Scope map for the migrator: fully
+SYNTACTIC + self-contained (constrainedTpNames/bareTypeParamRefName/
+collectParamTpRefs/collectTpLocalsMap are pure AST reads — no type
+caches, no ambient); no TS2862 dedup/scan consumers
+(checkGenericRecordCastAccess emits the code but is gate-disjoint and
+never scans the list); a DOWNWARD-context recursion — the (tparams,
+tpProps, refs) triple REBUILDS at class/fn boundaries with a body-WIDE
+locals PREPASS (collectTpLocalsMap over the whole body before the scan,
+NOT statement-ordered → pull-based per-boundary levels reproduce it, the
+round-626/628 shape); anchors are `=` BinaryExpressions with an
+ElementAccess LHS. NEXT session starts at its migration; after it by
+cost: checkArgumentsCollision 116.8 ms, checkEvolvingEmptyArrayImplicitAny
+103.2 ms (checkCrossFileModuleAugmentationDuplicates 114.1 ms stays
+SKIPPED — cross-file aggregation).**
+
 **Round 635 (2026-07-21) — (M0.4) twelfth tail-pass migration:
 checkProtectedMemberReadAccess (B446 — TS2445/TS2446 protected READ
 access + the class-method WRITE check, ~103 ms — the #12 per-file tail
